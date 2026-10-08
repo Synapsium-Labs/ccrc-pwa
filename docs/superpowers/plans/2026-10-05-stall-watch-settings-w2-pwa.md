@@ -99,8 +99,8 @@ The prototype of every task was built and measured on branch `proto/sws-w2`:
 1. **The spec and this plan are on `origin/main`.**
    - `git show origin/main:docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md | grep -c 'APPROVED by the
      operator 2026-10-05 17:46 UTC'` prints `1`.
-   - `git ls-tree origin/main` on this plan's own path prints one line. This plan alone defines D-4035 and D-4036 and, since fix round 1,
-     the number for `malformed-optional-block-is-dropped`; the tasks write them, with D-4033 and D-4034, into tracked comments.
+   - `git ls-tree origin/main` on this plan's own path prints one line. This plan alone defines D-4035 and D-4036 and, since fix rounds 1 and 2,
+     the numbers for `malformed-optional-block-is-dropped` and `unanswered-write-has-its-own-l0-line`; the tasks write them, with D-4033 and D-4034, into tracked comments.
 2. **W1 has merged on `main`.** Each of these prints the number shown:
    - `git show origin/main:server/src/coord/stallsettings.ts | grep -c '^export function stallWriteEffect'` → `1`;
    - `git show origin/main:server/src/coord/routes.ts | grep -cE "app\.(get|post)\('/api/coord/stall-watch'"` → `2`;
@@ -230,7 +230,8 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
     `typecheck-tests`. On the PWA side under load, the prototype measured `contrast`, `swap-sheet`, `session-pickers`
     and `fleet-screen`.
 - **Deviation numbers.**
-  - This plan defines exactly three: D-4035, D-4036 and the one for `malformed-optional-block-is-dropped` (fix round 1).
+  - This plan defines exactly four: D-4035, D-4036, the one for `malformed-optional-block-is-dropped` (fix round 1) and
+    the one for `unanswered-write-has-its-own-l0-line` (fix round 1's F1, numbered by fix round 2).
   - It cites D-4033, D-4034, D-4037 and D-4038, which the W1 plan defines.
   - The coordinator holds this programme's reserve numbers. A departure found during this wave goes into the
     wave-done mail by slug, and the coordinator assigns its number then.
@@ -3640,6 +3641,21 @@ and the coordinator assigns its number.
   - **Cost if wrong:** if the operator wants a malformed `next` or `filesExceed` to fail the read, the section shows
     "could not be read" (or the last good view, stale) instead of a reading missing one block. That is a two-line change
     in `readEffective` and the inversion of G8's expectation.
+- **D-4043** — `unanswered-write-has-its-own-l0-line` (Task 3; added by fix round 1, F1, and numbered by fix round 2)
+  - **Departs from:** spec §12's enumeration of `STALL_CONFIRM_TEXT`'s keys (≈:1147), which ends "and the refusal toast
+    `refused`" and has no key for a write that got no answer.
+  - **What W2 does:** `STALL_CONFIRM_TEXT` gains one key, `unanswered` ("Not confirmed — the server did not answer; the
+    screen will re-check."), in W1's stall-watch block of `shared/api.ts`. The section toasts it for a rejection that
+    is not an `ApiError` (a network failure), then re-reads. The 2xx-unreadable arm keeps `UNCONFIRMED_TEXT`.
+  - **Why:** fix round 1's F1. A write whose answer never arrived may still have landed, so "Nothing was changed" is
+    false for it, and `UNCONFIRMED_TEXT` ("Saved — the server's answer could not be read") is false the other way: the
+    server did not answer at all. Neither existing line is true of it, and the section's strings are all L0 constants.
+  - **Pinned by:** `pwa/test/settings-screen.test.tsx`'s "a write whose answer never arrived says it was not
+    confirmed, never "Saved" or "Nothing was changed", and re-reads" (mutations F1a, X48, X60) and the two 2xx rows
+    that assert the new line is absent (F1b).
+  - **Cost if wrong:** if the operator wants the network arm to read `UNCONFIRMED_TEXT` after all, it is the key's
+    removal and one line in `StallWatchSection`'s `write`, with the same rows retargeted. If the key is wanted but the
+    wording is not, it is one L0 string.
 
 **Numbers this wave cites but does not define.** The W1 plan defines all four. Defining any of them here too would red
 `deviation-refs`' two-plans row.
@@ -3654,7 +3670,7 @@ and the coordinator assigns its number.
   reader fault over a listed registry never answers `{ measured: false }`. W2 renders what arrives (Residue, below).
 
 **Departures found during this wave's execution** are numbered by the coordinator at wave-done, from the programme's
-reserve. None beyond the fix-round entry above is defined here, and none is written as a number in code or commits before then: a departure goes into
+reserve. None beyond the two fix-round entries above is defined here, and none is written as a number in code or commits before then: a departure goes into
 the wave-done mail by slug only.
 
 **Candidates the coordinator may number at wave-done.** The tasks made each of these choices where the spec was silent.
@@ -3665,10 +3681,10 @@ Each is pinned, and the plan takes no number for any of them:
   neighbouring drop of a malformed `next` or `filesExceed` is a numbered departure of its own
   (`malformed-optional-block-is-dropped`, above).
 - `unanswered-write-reads-unconfirmed` (Tasks 1 and 3). A rejection that is not an `ApiError` (a network failure,
-  after which the POST may have landed) reads as `unconfirmed`: the section toasts `STALL_CONFIRM_TEXT.unanswered`
-  ("Not confirmed — …", added by fix round 1, F1) and re-reads, and never says "Nothing was changed" (G18, X48, X60).
-  The 2xx-unreadable arm, which §15's "A write's reply cannot be read" row words, keeps `UNCONFIRMED_TEXT` and re-reads
-  too. X48 and X60 are retargeted to the network arm's new line.
+  after which the POST may have landed) reads as `unconfirmed`, never as a refusal: the section re-reads and never says
+  "Nothing was changed" (G18, X48, X60). The line it toasts is a numbered departure of its own
+  (`unanswered-write-has-its-own-l0-line`, above). The 2xx-unreadable arm, which §15's "A write's reply cannot be
+  read" row words, keeps `UNCONFIRMED_TEXT` and re-reads too.
 - `quiet-select-shows-no-unanswered-value` (Task 3). A stored quiet time the list does not hold selects one empty,
   hidden, disabled option (X38). The one stored value that is not "unanswered" is a quiet time equal to the built-in,
   as a number: the server keeps it apart from the built-in (`quietSource: 'chosen'`; a `default` write over it is a

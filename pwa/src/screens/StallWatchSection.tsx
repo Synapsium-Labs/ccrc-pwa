@@ -294,8 +294,9 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   // that reads is settled, a 2xx the guard cannot read was answered and may have landed (UNCONFIRMED_TEXT, the
   // shared "Saved — the answer could not be read" line, then a re-read), a 409 the guard reads opens the sheet, and
   // any other refusal is toasted with the server's detail before a re-read. A rejection that never reached an
-  // answer (a network failure) may not even have left, so it gets its own line, STALL_CONFIRM_TEXT.unanswered,
-  // which never says "Saved" and never "Nothing was changed", then the same re-read.
+  // answer (a network failure) may not even have left, so it gets its own line, STALL_CONFIRM_TEXT.unanswered
+  // (`unanswered-write-has-its-own-l0-line` (D-4043)), which never says "Saved" and never "Nothing was changed",
+  // then the same re-read.
   const write = (request: StallWatchRequest, confirm?: string): void => {
     setBusy(true);
     void api.setStallWatch(confirm === undefined ? request : { ...request, confirm })
