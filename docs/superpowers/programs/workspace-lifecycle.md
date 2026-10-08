@@ -23,7 +23,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deployed (both boxes on v0.0.119, 10-07); the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
 | 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); DISPATCHED 2026-10-07 22:28 → `ccrc-pwa-swift-cove`; wave-done 10-08 04:3x, PR #328 @ `701839b52`; review run 339 (`ccrc-pwa-keen-summit`), no fix round; **merged 2026-10-08 (`669b8305`)**, prerelease v0.0.123; run 314 closed; deploy via ccrc's updater; the lane ships SHADOWED |
-| 5 | 3–4, follow-ups | FIRST: review 339's residue and the dead-coordinator lane's arming blockers; then the expiry lane's follow-ups: the kept-leaf reader, the `state-changed` reading, the answer to a repeating resumable failure, the in-lock window close | server (+ **AGENT-FIRST** if the window close lands in ccd) | wave 4; CCR-15 wave 6 (#326) merged | — | run 345 open (planned; the run's wave 6 of 6), block 4480–4495; to plan |
+| 5 | 3–4, follow-ups | FIRST: review 339's residue and the dead-coordinator lane's arming blockers; then the expiry lane's follow-ups: the kept-leaf reader, the `state-changed` reading, the answer to a repeating resumable failure, the in-lock window close | server (+ **AGENT-FIRST** if the window close lands in ccd) | wave 4; CCR-15 wave 6 (#326) merged | — | run 345 open (planned; the run's wave 6 of 6), block 4480–4495; plan drafted and verified (`30b841c01`, 13 tasks), being revised for the 20:00 rulings |
 
 ## Decisions & deviations
 
@@ -907,6 +907,51 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     act safety, replay, test honesty), an Opus reviser and a Sonnet replay verifier. The plan is
     `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md` on branch
     `docs/workspace-lifecycle-wave5-plan`. B4, the in-lock window close, edits ccd, so the wave is AGENT-FIRST.
+- **2026-10-08 20:00 — wave 5's plan is drafted and verified. CCR-15's overlap questions are answered (mail 4036). The
+  expiry lane never strands a row.**
+  - **The plan:** workflow wf_36dce1c9-36e, seven agents over 6.7 h. The draft is `30fae386e`. Four Opus lenses (spec,
+    act safety, replay, test honesty) reviewed it, and the revision `30b841c01` applies every finding and rejects
+    none. The Sonnet replay verifier says PASS:
+    - all 119 anchors matched on `origin/main` `226bb881c` (docs-only drift);
+    - every count agreed, and 20 of 20 mutation rows went red;
+    - there is no new D-number and no docserver URL.
+    It has 13 tasks and 14 departure slugs against the 16 numbers.
+  - **Correction to the 12:02 entry (F5): "nothing resets it" is measured false.** In a fixture store, the next close of the
+    programme's last open run rewrites the row to `done` or `abandoned`. Question (f)'s framing in the Next-wave brief now
+    says so.
+  - **Restated: review 339's accepted item 3 window.** Wave 5's Task 6 reads the journal's trust before the claimant's
+    measure, so the claimant's tmux measure is now the last awaited step before the commit. The window narrows; it
+    never widens.
+  - **CCR-15 mails 4014 and 4033, answered in 4036.** Wave 7 is ruled as CCR-15's contract §14 (R65–R72), and its wave 8
+    (run 348) is in pre-flight. CCR-15's R69 asks this lane to adopt wave 8's persistent tier or to state the stranding.
+    - **One word reader, two carriers.**
+      - Wave 5 exports `keptLeafWord`: ccd's three words, with any other value read as `unmeasured`.
+      - CCR-15 wave 8's mirror carrier (word | unreported | truncated) imports it.
+      - Wave 5's done-document carrier keeps null (removed) apart from absence (`unreported`). The done document prints
+        null, so folding the two would narrow a distinction the adapter received.
+    - **Ruled, revising the 13:12 ruling: the expiry lane never strands a row in-process.** After B3's day of
+      resumable failures, the row moves to a persistent tier: one ask every 4 h, never stopping. The attention entry
+      stands until an attempt completes or the archive changes. A row parked at +∞ behind an expire breadcrumb would
+      need a server restart once the cause was fixed, and the operator prefers tolerance to freezing. Today's parser
+      reads `containment-refuted` as resumable (CCR-15 wave 7 pins that), so the word reaches the tier after a day.
+      Attention at once for it (CCR-15's `stuck` class) is wave 6's.
+    - **Ruled, so operator question (h) is withdrawn: a failed `state-changed` audits afresh,** which is the reclaim
+      side's meaning of "not resumable", rather than reading final. Its one expiry producer (B4) prints before the
+      breadcrumb, so nothing was deleted. The entry forgets its token, and a later audit mints a fresh one.
+    - **Routed to wave 6, question (k): the resumed arm's `probe-unmeasured`.** On a resumed expiry it prints after a
+      standing breadcrumb and reads final, which is `main`'s reading. Wave 6 sets CCR-15 wave 7's `crumb` on
+      ws-expire's resumed arm and reads `crumb:true` as resumable. Until then it is an arming blocker for the expiry
+      lane.
+    - Rung 8's change and the reason cap need nothing here.
+    - Order in `server/src/watch.ts`: wave 5 expects to land first, and the second lander merges main (CCR-15's R56).
+  - **The revision:** workflow wf_f00582c4-463, with an Opus reviser, an Opus act-safety lens on the delta, an Opus
+    fixer if the lens finds anything blocking, and a Sonnet replay verifier. It applies these rulings to the plan
+    branch. Then come the plan PR and run 345's dispatch.
+  - **The plan's operator questions continue the ledger's letters:**
+    - (g) F4's two halves: the plan keeps the run of passes, where the switch resets it;
+    - (i) kept entries live until a server restart;
+    - (j) B4 refuses a branch made inside the lock as well as one deleted.
+    (h) is ruled and (k) is routed.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -971,6 +1016,14 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   as resumable, so an act that never started is retried and reported only after the hour. Wave 5 measures the
   `state-changed` producers. If all print before the breadcrumb, the parser reads the word as not resumable, as
   CCR-15's 4457 does on the reclaim side; otherwise it waits for CCR-15 wave 7's `crumb` field.
+  - **Measured by wave 5's plan (2026-10-08 20:00):** `main` has no expiry producer. B4's new refusal is the only one,
+    on the fresh arm and before the breadcrumb, and a census of every occurrence in ccd/ccd holds that. **Ruled: it
+    audits afresh** (the 20:00 entry). Wave 5 closes this blocker.
+- **ARMING BLOCKER for the expiry lane: a resumed expiry's `probe-unmeasured` reads final** (wave 5's safety lens,
+  question (k); routed 2026-10-08 20:00). `_ws_expire_locked` prints it at its verdict point on every arm. On a resumed
+  expiry it therefore follows a standing breadcrumb, and the tree may be part-deleted, yet the parser stops the lane
+  for that archive until a restart. Wave 6 sets CCR-15 wave 7's `crumb` on ws-expire's resumed arm and reads
+  `crumb:true` as resumable.
 - **ARMING BLOCKERS for the dead-coordinator lane (review 339, ruled 2026-10-08 12:02):** F1, the lane's wiring of the
   fresh clock, has no red. F2: a repeated crash writes no second shadow row. F3: release and re-hold share one
   boolean. F13: a thrown act with nothing closed writes no feed row. The worker's open item 2: the mirror reads `ok`
@@ -1000,7 +1053,10 @@ Waves 1, 2, 3, 3b and 4 are merged: #229 `a7b9831c`, #233 `fe7b9775`, #286 `77c1
 operator creates `$REG/expire-lane-live` by hand. The dead-coordinator lane records "would end" and closes nothing until
 the operator creates `$REG/dead-coordinator-lane-live` by hand.
 
-**Wave 5 is run 345** (planned; the run's wave 6 of 6), with numbers 4480–4495, written bare. It is to be planned.
+**Wave 5 is run 345** (planned; the run's wave 6 of 6), with numbers 4480–4495, written bare. Its plan is
+`docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md` on
+`docs/workspace-lifecycle-wave5-plan`. It was verified at `30b841c01` and is being revised for the 20:00 rulings
+(wf_f00582c4-463). Then come the plan PR and the dispatch.
 - **Its FIRST commit is review 339's residue,** as ruled in the 2026-10-08 12:02 entry. First the dead-coordinator
   lane's arming blockers: F1, F2, F3, F13 and the worker's open item 2. Then F4, F5's spec sentence, F6's entry, and
   the plan corrections F7, F8, F10, F11 and F12. Review 339's report is
@@ -1016,7 +1072,8 @@ the operator creates `$REG/dead-coordinator-lane-live` by hand.
   10-07 the operator expired 15 archived workspaces by hand, which cuts most of (c), the backlog. (d) is in hand: the
   operator ends brisk-mesa's stray tmux server (see the entry after 06:05).
 - **Arming the expiry lane also waits on** a check of `_ws_expire_cwd_users`' merged newline fix (4458, in #326,
-  merged 13:07) and on wave 5's `state-changed` reading (Carried constraints, 08:06). Wave 4 closed
+  merged 13:07), on wave 5's `state-changed` reading (Carried constraints, 08:06), and on wave 6's reading of a
+  resumed expiry's `probe-unmeasured` (question (k), Carried constraints). Wave 4 closed
   its own blockers, and review 339 found each one red when mutated. Once #326 lands, the operator
   should also know two facts. An archived workspace whose branch is already gone now expires, with its work kept in
   the attic, where `main` stops at `pin-failed`. In that case, ignored and secret-shaped files go with the tree.
@@ -1025,6 +1082,14 @@ the operator creates `$REG/dead-coordinator-lane-live` by hand.
   (the 12:02 entry): a lane gap over ten minutes trips the breaker for every crashed coordinator at once, and a
   same-id revive in the act's last instant can still lose its runs.
 - **Operator question (f), from review 339's F5:** when a coordinator revived under a crashed id opens a new run
-  under its abandoned programme, should the programme row return to active? Today it stays `abandoned`.
+  under its abandoned programme, should the programme row return to active? Today it stays `abandoned` until the next
+  close of the programme's last open run rewrites it (measured in a fixture store). Meanwhile, `toId:'coordinator'` mail
+  without a `runId` is refused while nothing else is active, and is delivered to ANOTHER programme's coordinator when
+  exactly one other programme is active. Mail with a `runId` reaches the revived coordinator.
+- **The plan's other operator questions:** (g) F4's two halves; (i) the life of a kept-leaf entry; (j) B4's two
+  directions. (h) is ruled (the 20:00 entry).
+- **After wave 5 — wave 6, once CCR-15 wave 7 is on `main`:** ws-expire sets `crumb` on its resumed arm, and the
+  parser reads `crumb:true` as resumable (question (k), an arming blocker for the expiry lane). `containment-refuted`
+  gets attention at once (CCR-15's `stuck` class).
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
   L5's sentence.
