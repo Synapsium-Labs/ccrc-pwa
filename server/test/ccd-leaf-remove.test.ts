@@ -34,13 +34,15 @@ const remove = (root: string, id: string, opts: { devino?: string; pre?: string 
     + ` printf '%s\\x1f%s' "$rc" "$_WS_LEAF_WHY"`).split('\x1f');
   return { rc, why };
 };
-/** A leaf with files, a nested directory, and a mode-000 subdirectory holding a file. */
+/** A leaf with files, a nested directory, and a mode-0500 subdirectory holding a file: readable, so
+ *  the checkout scan reads it all (a mode-000 one is unmeasured, `ccd-leaf-checkouts.test.ts`), and
+ *  not writable, so `rm` cannot empty it unless the permission pass runs first. */
 const plantTree = (dir: string): void => {
   fs.mkdirSync(path.join(dir, 'cdk.out', 'deep'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'cdk.out', 'manifest.json'), '{}');
   fs.mkdirSync(path.join(dir, 'locked'));
   fs.writeFileSync(path.join(dir, 'locked', 'x'), 'x');
-  fs.chmodSync(path.join(dir, 'locked'), 0o000);
+  fs.chmodSync(path.join(dir, 'locked'), 0o500);
 };
 const unlock = (dir: string): void => { const l = path.join(dir, 'locked'); if (fs.existsSync(l)) fs.chmodSync(l, 0o755); };
 
@@ -52,7 +54,7 @@ describe('_ws_leaf_remove — removed, or absent: rc 0, PROVEN', () => {
     expect(fs.existsSync(rootOf()), 'the root itself is never removed').toBe(true);
   }, 60_000);
 
-  it('a directory leaf — files, a nested directory, a mode-000 subdirectory — is normalised, removed and proven gone', () => {
+  it('a directory leaf — files, a nested directory, a mode-0500 subdirectory — is normalised, removed and proven gone', () => {
     plantTree(leafOf());
     try {
       const a = remove(rootOf(), ID);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=496b74c726d2db67292ac9353b4a9f26fb988dd86364ae72e86babffdcfcc955
+# ccrc:generated 1 sha256=5954eddc08b61445a3b1925076acdf39b3994dd278a7d0c2170b934983dd970d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29065,6 +29065,156 @@ _ws_leaf_uid() {   # path -> the uid that owns the path ITSELF (`ls -dn`: numeri
   [[ "$u" =~ ^[0-9]+$ ]] || return 1
   printf '%s' "$u"
 }
+# ── does a leaf hold a checkout git records ELSEWHERE (child reclamation wave 6, spec §5.5, §5.6) ──
+WS_LEAF_CHECKOUTS_CAP=64   # the most `.git` entries one leaf's scan examines; more is unmeasured
+_WS_SMALL=''
+_ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline; 1 when it is
+  #                            not a regular file or cannot be read; 2 when it holds more than 4096 bytes
+  # A FILE READ AS A FILE, bounded: `-f` first, so a FIFO is never opened (it
+  # would block the act); the size before the bytes, so nothing larger than a
+  # path is ever read; and the read itself is the group's redirection, so a file
+  # that cannot be opened answers 1, never an empty value. A NUL becomes a
+  # newline, which every caller refuses inside a line — a command substitution
+  # would drop it and join the two halves into a path nobody wrote.
+  local f="$1" sz
+  _WS_SMALL=''
+  [[ -f "$f" ]] || return 1
+  { sz=$(LC_ALL=C wc -c < "$f"); } 2>/dev/null || return 1
+  sz="${sz//[!0-9]/}"
+  [[ -n "$sz" ]] || return 1
+  (( 10#$sz <= 4096 )) || return 2
+  { _WS_SMALL=$( { LC_ALL=C head -c 4096 | LC_ALL=C tr '\000' '\n'; } < "$f" && printf x); } 2>/dev/null || return 1
+  [[ "$_WS_SMALL" == *x ]] || { _WS_SMALL=''; return 1; }
+  _WS_SMALL="${_WS_SMALL%x}"
+  return 0
+}
+_WS_CHECKOUTS_WHY=''
+_ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 refused; 2 unmeasured (_WS_CHECKOUTS_WHY)
+  # ONE `.git` entry, asked without following it (`_ws_leaf_checkouts` says why).
+  local lp="$1" f="$2" d="${2%/.git}" buf gd rest adp rec rc
+  if [[ -L "$f" ]]; then
+    _WS_CHECKOUTS_WHY="$f is a symbolic link — git follows a .git link and ccd never does, so the tree at $d may be a checkout git records elsewhere"
+    return 1
+  elif [[ -d "$f" ]]; then
+    return 0   # a full clone: its repository is the tree itself, the leaf's own scratch
+  elif [[ ! -f "$f" ]]; then
+    _WS_CHECKOUTS_WHY="$f is neither a directory, a file nor a link, so what the tree at $d is was never asked"
+    return 2
+  fi
+  _ws_leaf_read_small "$f"; rc=$?
+  (( rc != 1 )) || { _WS_CHECKOUTS_WHY="$f could not be read, so which repository records the tree at $d was never asked"; return 2; }
+  (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$f holds more than 4096 bytes, so it is not one gitdir line ccd can read whole"; return 2; }
+  buf="$_WS_SMALL"
+  while [[ "$buf" == *[$'\r\n'] ]]; do buf="${buf%?}"; done
+  # git takes the WHOLE file, trailing CR and LF stripped; so does this, and a
+  # second line (or a NUL, read as one) is a file git and ccd would read apart.
+  [[ "$buf" == "gitdir: "?* && "$buf" != *$'\n'* ]] \
+    || { _WS_CHECKOUTS_WHY="$f is not one 'gitdir: <path>' line — git cannot tell what it names, so neither can ccd"; return 2; }
+  gd="${buf#gitdir: }"
+  # A RELATIVE gitdir is relative to the `.git` file's own directory (git's
+  # rule), which is physical here: `find -P` from a physical root walks no link.
+  # Its leading `..`s therefore read the same logically and physically; a `..`
+  # after any other component — and any `..` in an absolute one — does not (a
+  # link before it sends the kernel and a logical `cd` to two places), so it is
+  # unmeasured rather than resolved one way and believed.
+  rest="$gd"
+  if [[ "$gd" != /* ]]; then
+    while [[ "$rest" == ../* || "$rest" == ./* ]]; do rest="${rest#*/}"; done
+    [[ "$rest" != .. && "$rest" != . ]] || rest=''
+    gd="$d/$gd"
+  fi
+  case "/$rest/" in
+    */../*) _WS_CHECKOUTS_WHY="$f names its git directory through a '..' after another component, which a logical and a physical walk read apart — where it lands was never asked"; return 2 ;;
+  esac
+  _ws_reclaim_absent "$gd"; rc=$?
+  (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which no longer exists — git no longer records the tree at $d"; return 1; }
+  (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — where $f's git directory stands was never asked"; return 2; }
+  _ws_dir_physical "$gd" \
+    || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which cannot be resolved ($_WS_PHYS_WHY)"; return 2; }
+  adp="$_WS_PHYS"
+  # INSIDE THE LEAF: a submodule of a clone in the leaf, or a worktree of one.
+  [[ "$adp" != "$lp" && "$adp" != "${lp%/}/"* ]] || return 0
+  # OUTSIDE IT: only a linked worktree whose admin directory's `gitdir` names
+  # THIS `.git` back is the leaf's — rung 9's `_ws_reclaim_gitdir_own`, asked
+  # of any repository. Anything else is a tree git records elsewhere: moved
+  # here, or an admin name a later worktree recycled.
+  _ws_reclaim_absent "$adp/gitdir"; rc=$?
+  (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whose tree $adp records was never asked"; return 2; }
+  (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which lies outside the leaf and holds no record of which tree it belongs to — the tree at $d is not provably the leaf's own"; return 1; }
+  _ws_leaf_read_small "$adp/gitdir" \
+    || { _WS_CHECKOUTS_WHY="$adp/gitdir could not be read whole, so whose tree $adp records was never asked"; return 2; }
+  rec="$_WS_SMALL"
+  while [[ "$rec" == *$'\n' ]]; do rec="${rec%$'\n'}"; done
+  [[ "$rec" != "$f" ]] || return 0
+  _ws_dir_physical "$d" \
+    || { _WS_CHECKOUTS_WHY="$d cannot be resolved ($_WS_PHYS_WHY), so whether $adp records it was never asked"; return 2; }
+  [[ "$rec" != "${_WS_PHYS%/}/.git" ]] || return 0
+  _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which git records as $rec's — the tree at $d is a checkout git records elsewhere, not the leaf's own"
+  return 1
+}
+_ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records elsewhere; 1 refused; 2 unmeasured
+  #                         (each with _WS_CHECKOUTS_WHY naming the checkout, or why it was never asked)
+  # ANOTHER SESSION'S TREE MOVED INTO A LEAF IS NOT THE LEAF'S (spec §5.5, §5.6).
+  # A `mv` keeps a worktree's `.git` FILE, which still names the admin directory
+  # its repository keeps for it; git's record of the tree then reads
+  # `prunable`, and the recovery places its row by that record — so nothing
+  # else says the tree is here. `_ws_leaf_remove` asks this of every DIRECTORY
+  # leaf, at the instant of removal. Row-agnostic: no registry row is read.
+  # THE SCAN: `find -P` (no link is followed) from the leaf's PHYSICAL path,
+  # never across a file system (`-xdev`: the removal never crosses one either),
+  # `-mindepth 1`, so a tree moved AS the leaf is seen, bounded by
+  # `REAP_SCAN_SECONDS`; names are read NUL-separated, so one holding a newline
+  # is one name. A timeout, a non-zero exit or ANY stderr (a directory it could
+  # not read hides what is under it) is unmeasured. Not pruned at a `.git`
+  # directory: a tree can be parked inside a clone's `.git` as anywhere else,
+  # and the removal takes it too; the bound, not a prune, caps the walk.
+  # At most `WS_LEAF_CHECKOUTS_CAP` entries are examined: more is unmeasured.
+  # EACH `.git`, by `-L`, `-d`, `-f`, never followed: a link refuses (git
+  # would follow it, ccd never does); a directory passes (a full clone, the
+  # leaf's own); a regular file is read AS A FILE (never by running git inside
+  # the leaf) and must be one `gitdir: <path>` line, else unmeasured; the
+  # directory it names resolved physically — absent refuses (git no longer
+  # records the tree), unresolvable is unmeasured, inside the leaf passes;
+  # outside it passes only as a linked worktree whose admin `gitdir` names
+  # this `.git` back (literally, or by its directory's physical path), and
+  # refuses otherwise. Anything else named `.git` is unmeasured. A refusal
+  # outranks an unmeasured entry, whatever order the walk lists them in.
+  local lp outf errf err rc f why='' n=0
+  local -a gits=()
+  _WS_CHECKOUTS_WHY=''
+  _ws_dir_physical "$1" \
+    || { _WS_CHECKOUTS_WHY="$1 cannot be resolved ($_WS_PHYS_WHY), so the checkouts in it were never looked for"; return 2; }
+  lp="$_WS_PHYS"
+  outf=$(_plat_mktemp) || { _WS_CHECKOUTS_WHY="could not make a scratch file to walk $lp for checkouts"; return 2; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_CHECKOUTS_WHY="could not make a scratch file to walk $lp for checkouts"; return 2; }
+  _plat_timeout "$REAP_SCAN_SECONDS" find -P "$lp" -xdev -mindepth 1 -name .git -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 124 )); then
+    rm -f "$outf"
+    _WS_CHECKOUTS_WHY="the walk of $lp for checkouts did not finish within ${REAP_SCAN_SECONDS}s"
+    return 2
+  fi
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$outf"
+    _WS_CHECKOUTS_WHY="could not read all of $lp (find exit $rc${err:+: ${err%%$'\n'*}}), so a checkout under what it could not read was never seen"
+    return 2
+  fi
+  while IFS= read -r -d '' f; do
+    gits+=("$f"); n=$(( n + 1 ))
+    (( n <= WS_LEAF_CHECKOUTS_CAP )) || break
+  done < "$outf"
+  rm -f "$outf"
+  (( n <= WS_LEAF_CHECKOUTS_CAP )) \
+    || { _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git, so not every checkout in it was examined"; return 2; }
+  for f in ${gits[@]+"${gits[@]}"}; do
+    _ws_leaf_checkout_one "$lp" "$f"; rc=$?
+    (( rc != 1 )) || return 1
+    (( rc == 0 )) || [[ -n "$why" ]] || why="$_WS_CHECKOUTS_WHY"
+  done
+  _WS_CHECKOUTS_WHY="$why"
+  [[ -z "$why" ]] || return 2
+  return 0
+}
 _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
   #                       1 refused (_WS_LEAF_WHY); 2 unmeasured (_WS_LEAF_WHY)
   # THE ONE REMOVAL of `<root>/<id>`, a per-session leaf under a box-wide root:
@@ -29106,7 +29256,8 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   it runs dereferences its operand; bounded to this uid's own directory and
   #   to owner bits; `{} +`, because with `\;` find answers 0 over a chmod that
   #   failed): a mode-000 leaf would otherwise be kept for ever, never reached
-  #   by the pass below. It is normalised next
+  #   by the pass below. Then the CHECKOUT QUESTION (below), and only then is it
+  #   normalised
   #   (`_ws_reclaim_normalise`: an entry that stays unreadable REFUSES the whole
   #   leaf rather than leave a partial tree; a pass that could not run is
   #   unmeasured), then removed NEVER ACROSS A FILE-SYSTEM BOUNDARY
@@ -29127,6 +29278,25 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   `<root>/<id>` between them and the owner-bits `chmod` or the `rm` is
   #   chmodded or removed with it (the single-user trust model). Wave 7's
   #   collector closes this with a quarantine rename.
+  # - A LEAF HOLDING A CHECKOUT GIT RECORDS ELSEWHERE IS NEVER REMOVED (spec
+  #   §5.5, §5.6). "Inside the child" is all three trees the tail deletes: the
+  #   worktree, the clips directory and the temp root. Another session's tree
+  #   `mv`'d into a leaf keeps a `.git` file naming its repository's admin
+  #   directory, and git's record of it reads `prunable` — so the recovery
+  #   places its row, and nothing else says where the tree went. So every
+  #   DIRECTORY leaf is asked `_ws_leaf_checkouts` after the identity checks
+  #   above (owner, dev:ino, mount, physical path) and before the permission
+  #   pass, which writes: 1 refused, 2 unmeasured, `_WS_LEAF_WHY` naming the
+  #   checkout, and NOTHING more is touched. A caller keeps and records such a
+  #   leaf as it keeps any other (the tail's step (6): `clipsKept` and
+  #   `tmpRootKept`; the act completes). A link or file leaf is unlinked,
+  #   never scanned. THE LIMITS, STATED: (i) a tree stripped of its `.git`, or
+  #   content that is no checkout, parked in a leaf is not seen; (ii) the
+  #   question and the `rm` are two looks, not one — the same-uid
+  #   check-then-act window above, which wave 7's quarantine rename closes;
+  #   (iii) a clone, a submodule of one, or a worktree of one inside the leaf
+  #   is the leaf's own, and goes with it; (iv) a bind-mount alias spelling of
+  #   the leaf is not compared.
   local root="$1" id="$2" want="${3-}" rroot leaf me owner lreal have ldev rdev err rc
   _WS_LEAF_WHY=''
   if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$id" == . || "$id" == .. ]]; then
@@ -29164,6 +29334,8 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
       || { _WS_LEAF_WHY="$leaf cannot be entered, so where it resolves was never asked"; return 2; }
     [[ "$lreal" == "$leaf" ]] \
       || { _WS_LEAF_WHY="$leaf resolves to $lreal — ccd never removes a tree it would reach through another path"; return 1; }
+    _ws_leaf_checkouts "$leaf"; rc=$?
+    (( rc == 0 )) || { _WS_LEAF_WHY="$_WS_CHECKOUTS_WHY — nothing under $leaf was removed"; (( rc == 1 )) && return 1; return 2; }
     _ws_reclaim_normalise "$leaf"; rc=$?
     (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 2; }
     (( rc != 1 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 1; }
