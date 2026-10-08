@@ -2550,6 +2550,14 @@ describe('ccrc uninstall --purge and the history store (history spec §9.5, O42,
     expect(runVerb(bare, 'uninstall', [], SCRUB).stdout).not.toContain(KEPT_LINE);
   });
 
+  it('the kept-store promise has one literal: ccrc --help prints _uninst_history_kept_line\'s text (review 316 F40)', () => {
+    const r = sourced(mkTmp('ccrc-uninst-hist-usage-'), 'usage');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(KEPT_LINE);
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    expect(src.split('verbatim session text, including any secrets sessions printed').length - 1, 'spelled once, in _uninst_history_kept_line').toBe(1);
+  });
+
   it('_uninst_purge spells the store\'s names once, equal to lib.mjs STORE_FILES (O42, IV10)', async () => {
     const { STORE_FILES } = await import('../../ccd/history/lib.mjs');
     const lines = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8').split('\n');

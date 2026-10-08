@@ -213,9 +213,10 @@ describe('ccrc: dispatch and usage', () => {
     // split as every verb above: `server/test/ccrc-codex.test.ts` owns what it does.
     //
     // `history` joined it in the ccrc-history programme's W1-B1 (spec 2026-10-05 §5.1) — the one
-    // dispatch line that execs ccd/history/cli.mjs. It joins the line in place, last, and gets no row
-    // of its own in the usage body: every line of that body sits above ccd/ccrc's corpus cut and is
-    // cited by number elsewhere. `server/test/history-cli.test.ts` owns what it does.
+    // dispatch line that execs ccd/history/cli.mjs. It joins the line in place, last; its paragraph (review 316 F40) is
+    // _usage_history_paragraph, reached by a command substitution on the restamp paragraph's last line,
+    // because every line of the usage body sits above ccd/ccrc's corpus cut and is cited by number elsewhere.
+    // `server/test/history-cli.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
     expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|restamp\|version\|watchdog\|history\}/);
@@ -235,6 +236,9 @@ describe('ccrc: dispatch and usage', () => {
     // regenerator worker clause 16 names for a `ccrc:generated` stamp.
     // `server/test/ccrc-restamp.test.ts` owns what it does.
     expect(r.stdout).toMatch(/^ {2}restamp {3}re-stamp one file ccrc generated/m);
+    expect(r.stdout).toMatch(/^ {2}history {3}the session-history store on this box/m);
+    expect(r.stdout).toContain('~/.ccrc/history-off');
+    expect(r.stdout.indexOf('  history   ')).toBeLessThan(r.stdout.indexOf('-h, --help'));
     expect(r.stdout).toMatch(/^ {2}watchdog {2}\(server\/both, Linux; run by ccrc-update-watchdog\.timer/m);
     // …and its `ip` arm (stage 5, S10) is discoverable from the same
     // paragraph: no domain at all, caddy's internal CA, passphrase-only.

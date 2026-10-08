@@ -2199,7 +2199,7 @@ already running).
             still PRESERVES ~/.ccrc/memory (every project's durable memory:
             since 'ccrc memory --apply' it is the SOLE live copy, and a
             session's prose is not configuration) unless [--purge-memory]
-            is also given; kept: ~/.ccrc/history (verbatim session text, including any secrets sessions printed; --purge --purge-history removes it); never worktrees, never tmux state
+            is also given; $(_uninst_history_kept_line); never worktrees, never tmux state
   backup    take update's backup step standalone: coord.db snapshot, dists,
             ccd and the units to ~/ccrc-backups/<ts>/, then prune to the
             newest \$CCRC_BACKUP_KEEP (default 10) timestamped backups — never
@@ -2228,7 +2228,7 @@ already running).
             is reported SET/NOT SET, never printed)
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
             on ccd/ccd's line 2) after its body changed: the regenerator a
-            merge needs there. A file with no marker is refused, never adopted
+            merge needs there. A file with no marker is refused, never adopted$(_usage_history_paragraph)
 
   -h, --help   print this message and exit 0
 
@@ -23721,9 +23721,26 @@ _uninst_is_kept() {   # <name> [<glob>…] -> rc 0 iff <name> is in the kept set
 
 # The one spelling of what a kept history store holds (history spec §15.3 Q17,
 # its recommended wording; the ruling it words is unchanged). Printed by the
-# plain uninstall, by `--purge`'s close line and by its summary.
+# plain uninstall, by `--purge`'s close line, by its summary and by usage()'s
+# uninstall paragraph.
 _uninst_history_kept_line() {
   printf '%s' 'kept: ~/.ccrc/history (verbatim session text, including any secrets sessions printed; --purge --purge-history removes it)'
+}
+
+# The `history` verb's paragraph in usage() (review 316 F40). usage()'s heredoc
+# takes it through a command substitution on the restamp paragraph's last line,
+# because usage text gets its words on existing lines (a citation-corpus file);
+# the leading \n starts it on a line of its own. It repeats nothing the kept-store
+# line says: that promise has one spelling, _uninst_history_kept_line.
+_usage_history_paragraph() {
+  printf '\n%s' \
+    '  history   the session-history store on this box (fleet and both boxes,' \
+    '            Linux): ccd-history-sweep.timer copies the text of every' \
+    '            session into ~/.ccrc/history every 2 minutes, verbatim, secrets' \
+    '            a session printed included; touch ~/.ccrc/history-off to pause' \
+    '            it. status [--json] reports the store and its health. Its' \
+    '            writing passes (ccd-history-sweep --op import|migrate) belong' \
+    '            to the operator and refuse inside a session'
 }
 
 # `--purge --purge-history` with a LINKED `db/` (history spec §9.5): remove,
