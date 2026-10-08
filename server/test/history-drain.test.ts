@@ -1630,6 +1630,33 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
           expect(fs.existsSync(path.join(SPOOL(box.home), `${ID}.jsonl`))).toBe(true);
         } finally { fs.chmodSync(SPOOL(box.home), 0o700); moveDb(box, aside, hist(box.home, 'db')); }
       });
+
+      // FR2a (review 344 F4): hintedUuids' `.draining` half, `dirKind(P.draining) !== 'dir'`. A 0500 spool/ ends the drain
+      // before ensureSpoolDirs (spoolUnusable), so a link planted at `.draining` still stands when ingest lists the hints.
+      // Without the half, a name in the link's target hinted its id's $REG uuid, and that session's transcript was ingested.
+      it('a link at spool/.draining that a 0500 spool/ keeps from the drain hints nothing through it (FR2a, review 344 F4)', () => {
+        const outside = path.join(box.home, 'outside');
+        fs.mkdirSync(outside);
+        const draining = `${ID}.900.1.jsonl`;
+        fs.writeFileSync(path.join(outside, draining), `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID })}\n`);
+        const HINT_UUID = '0b8e2c1a-5555-4555-8555-666666666666';
+        const HINT_ROW = { parentUuid: null, isSidechain: false, cwd: '/home/u/tree', sessionId: HINT_UUID, type: 'user', message: { role: 'user', content: 'hint me' }, uuid: HINT_UUID, timestamp: '2026-10-05T10:00:00.000Z' };
+        expect(runSweep(box).code, 'a warm-up pass: the periodic scan has run, the next is 30 min away').toBe(0);
+        plantSession(box, ID, { uuid: HINT_UUID, generation: '0189abcd-1234-4678-9abc-0123456789ab', project: 'demo', workdir: '/home/u/tree' });
+        plantTranscript(box, Object.keys(box.accountHome)[0]!, '-home-u-tree', HINT_UUID, [HINT_ROW]);
+        fs.rmSync(DRAIN(box.home), { recursive: true });
+        fs.symlinkSync(outside, DRAIN(box.home));
+        fs.chmodSync(SPOOL(box.home), 0o500);
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+          expect(r.stderr.split(UNUSABLE).length - 1).toBe(1);
+          expect(fs.lstatSync(DRAIN(box.home)).isSymbolicLink(), 'the drain returned before ensureSpoolDirs: the link stood when the hints were listed').toBe(true);
+        } finally { fs.chmodSync(SPOOL(box.home), 0o700); }
+        const db = openStoreRO(box);
+        try { expect((db.prepare('SELECT count(*) AS n FROM entries WHERE uuid = ?').get(HINT_UUID) as { n: number }).n, 'an id named only by a draining name in the link\'s target is not hinted, so its transcript is not found (F4)').toBe(0); } finally { db.close(); }
+        expect(fs.readdirSync(outside), 'nothing observed or drained through the link').toEqual([draining]);
+      });
     });
 
     // FU8 (FP5, FPM9): a draining file whose bytes or sidecar the sweep cannot read is skipped for the pass, as FU3F's blocked
