@@ -1450,7 +1450,7 @@ describe('FR2-c: the {"rc":…} line is printed last on EVERY path, including a 
     expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
   });
 
-  // FU3 (M24), D-4347's named residual: a non-empty directory at `op` is kept (removeEntry never recurses), so every
+  // FU3 (M24), D-4347 (history-planted-entries-never-wedge)'s named residual: a non-empty directory at `op` is kept (removeEntry never recurses), so every
   // applying --op pass fails loudly at its marker write until the operator removes it; a dry --op import writes no
   // marker, and scheduled passes are unaffected.
   it('a non-empty directory at op: every applying --op pass (migrate, import --apply) fails loudly at the marker write (rc 1, EISDIR naming op); a dry --op import and a scheduled pass still exit 0', () => {
@@ -1525,7 +1525,7 @@ describe('Task 26F item 6: the journal audit says when it cannot read a month fi
     expect(counter(box, 'journal_audit_unreadable')).toBe(1);
   });
 
-  // FU4 M25 (D-4347's third clause): a symlink with a month file's name is never followed, even to a regular file holding valid
+  // FU4 M25 (D-4347 (history-planted-entries-never-wedge)'s third clause): a symlink with a month file's name is never followed, even to a regular file holding valid
   // journal records (another store's month, here a copy of this store's own placed outside the journal).
   it('a symlink with a month file\'s name, pointing at a regular file of valid records, is never followed: journal_audit_unreadable counts (M25)', () => {
     const box = boundBox('ccrc-hist-26f6c-');

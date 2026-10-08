@@ -288,9 +288,6 @@ export function readTxlog(file: string): TxEv[] {
 }
 export const writes = (e: TxEv, re: RegExp): boolean => e.kind === 'tx' && e.writes.some((w) => re.test(w));
 
-/** Run `fn` in this process and answer the directories it fsynced, in order (review 316 F23). Wraps `fs.openSync`
- *  (fd -> path), `fs.closeSync` (forgets the fd) and `fs.fsyncSync` (records the fd's path when it is a directory), and
- *  makes the named ESM imports of the history modules see them; all three are restored in `finally`. */
 /** Every fs.openSync call `fn` makes in this process: the path as given and its flags (a string flag such as 'r' is
  *  recorded as -1). store.mjs and sweep.mjs import openSync from node:fs, so syncBuiltinESMExports reaches them. */
 export function recordOpenFlags<T>(fn: () => T): { out: T; opens: Array<{ path: string; flags: number }> } {
@@ -309,6 +306,9 @@ export function recordOpenFlags<T>(fn: () => T): { out: T; opens: Array<{ path: 
   }
 }
 
+/** Run `fn` in this process and answer the directories it fsynced, in order (review 316 F23). Wraps `fs.openSync`
+ *  (fd -> path), `fs.closeSync` (forgets the fd) and `fs.fsyncSync` (records the fd's path when it is a directory), and
+ *  makes the named ESM imports of the history modules see them; all three are restored in `finally`. */
 export function recordDirFsyncs<T>(fn: () => T): { out: T; dirs: string[] } {
   const realOpen = fs.openSync; const realClose = fs.closeSync; const realFsync = fs.fsyncSync;
   const open = new Map<number, string>();

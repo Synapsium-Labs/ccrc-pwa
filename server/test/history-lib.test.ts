@@ -1064,7 +1064,7 @@ describe('decideEpochLine: the drain and replay take one verdict per line (O56, 
   });
 });
 
-describe('observationOk accepts exactly the observation observe() writes (review 316 F9; D-4347)', () => {
+describe('observationOk accepts exactly the observation observe() writes (review 316 F9; D-4347 (history-planted-entries-never-wedge))', () => {
   const SID = '11111111-1111-4111-8111-111111111111';
   const STORE = '22222222-2222-4222-8222-222222222222';
   const V = { v: 1, observedMs: 1000, uuid: { state: 'absent' }, generation: { state: 'absent' },
@@ -2312,6 +2312,11 @@ describe('redactForIndex: every JSON-escape reading before every index, kept onl
   it('at the bound, every span touching a backslash is the mark', () => {
     expect(libRows.redactForIndex(`head ${BS.repeat(1024)}n${v} tail`, idx)).toBe(`head ${M} tail`);
   });
+  // 2^8 backslashes converge on the 9th decode and 2^9 on the 10th, so a raise of INDEX_UNESCAPE_PASSES to 9 reds the first
+  // and to 10 reds both; at 8 each stops at the bound and its span is the mark (FU3F, FU1's value window).
+  it.each([[256], [512]])('a %i-backslash run still reaches the bound: the value is marked (FU3F)', (n) => {
+    expect(libRows.redactForIndex(`head ${BS.repeat(n)}n${v} tail`, idx)).toBe(`head ${M} tail`);
+  });
   it('at the bound, a JWT glued to an escape is marked whole, its payload and signature too', () => {
     const jwt = `eyJ${rndHex(10)}.eyJ${rndHex(20)}.${rndHex(16)}`;
     expect(libRows.redactForIndex(`x ${BS.repeat(1024)}n${jwt} y`, libRows.makePairIndex([]))).toBe(`x ${M} y`);
@@ -2357,7 +2362,10 @@ describe('redactForIndex: every JSON-escape reading before every index, kept onl
     // an empty pair set redacts no value, so the chain never reaches a mark and the decodes run to the bound
     expect(libRows.redactForIndex(s, many.idx) === `${M} ${body}`).toBe(true);
     // The bound is written out here on purpose: derived from the constant, a raise of it would raise the assertion too.
-    expect(many.asks()).toBe((8 + 1) * RUNS);
+    // FU3F (FU1 M2 minor): a ceiling written out as 8 (a raise reds it, and so does the 256- and 512-backslash value case
+    // below), so a LOWER bound still passes; `toBeGreaterThan(RUNS)` shows the passes ran.
+    expect(many.asks()).toBeLessThanOrEqual((8 + 1) * RUNS);
+    expect(many.asks()).toBeGreaterThan(RUNS);
   }, 60_000);
 });
 

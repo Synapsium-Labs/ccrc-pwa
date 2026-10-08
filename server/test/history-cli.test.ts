@@ -550,7 +550,7 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
   });
 
   // F2: the sweep's readSmall opens ONCE, nonblocking, and judges the type on the descriptor (the `_reg_read` lesson: a
-  // FIFO with no writer blocks in open(2) for ever; D-4347). status must do the same: a FIFO named *.obs returns within
+  // FIFO with no writer blocks in open(2) for ever; D-4347 (history-planted-entries-never-wedge)). status must do the same: a FIFO named *.obs returns within
   // a bound and is reported unmeasured.
   it('a FIFO named *.obs in spool/.draining does not hang status: it returns, FAIL status-unreadable naming spool/.draining', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-fifo-', { role: 'fleet', shim: true });
@@ -612,7 +612,7 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(words).not.toContain('status-unreadable');
   });
 
-  // review 316 F9 and F20 (D-4347): status judges a sidecar by the sweep's own predicate, and an orphan is not held.
+  // review 316 F9 and F20 (D-4347 (history-planted-entries-never-wedge)): status judges a sidecar by the sweep's own predicate, and an orphan is not held.
   const fullObs = (observedMs: number): Record<string, unknown> => ({
     v: 1, observedMs, uuid: { state: 'absent' }, generation: { state: 'absent' }, project: { state: 'absent' }, workdir: { state: 'absent' },
     late: null, journalT: null, journaled: null, heldMatches: {},

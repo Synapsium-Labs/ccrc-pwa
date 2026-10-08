@@ -928,7 +928,7 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
 
   // D-4347 (history-planted-entries-never-wedge): a planted or leftover entry at one of the sweep's own names in
   // .draining/ or the journal never wedges, blocks or redirects a pass (review 316 F8, F9, F20).
-  describe('a planted entry in .draining/ never wedges the drain (review 316 F8, F9, F20; D-4347)', () => {
+  describe('a planted entry in .draining/ never wedges the drain (review 316 F8, F9, F20; D-4347 (history-planted-entries-never-wedge))', () => {
     const PL = (): string => path.join(DRAIN(box.home), 'planted');
     /** The drain areas under .draining/planted/: one `<tickMs>.<pid>` directory per drain that set something aside (FU3). */
     const areas = (): string[] => (fs.existsSync(PL()) ? fs.readdirSync(PL()).sort() : []);
@@ -1836,7 +1836,7 @@ describe('a sidecar that cannot be written is the journal failure, held per file
       const name = SW.drainingName(id, T + i, 4242);
       fs.writeFileSync(path.join(DRAIN(box.home), name), `\n${JSON.stringify(start(id, U1, 'startup'))}\n`);
       fs.mkdirSync(path.join(DRAIN(box.home), `${SW.sidecarName(name)}.tmp`));   // no sidecar can be written, on any attempt
-      fs.writeFileSync(path.join(DRAIN(box.home), `${SW.sidecarName(name)}.tmp`, 'keep'), '');   // non-empty: removeEntry keeps it (D-4347)
+      fs.writeFileSync(path.join(DRAIN(box.home), `${SW.sidecarName(name)}.tmp`, 'keep'), '');   // non-empty: removeEntry keeps it (D-4347 (history-planted-entries-never-wedge))
       return name;
     });
     const r = SW.journalHalf(box.home, ids, T);
