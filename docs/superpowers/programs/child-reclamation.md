@@ -46,6 +46,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 01:42 — fix round 1 gets an addendum (mail 3962), after workspace-lifecycle's coordinator measured
+  the tip (3961; answered in 3963).** The binding text is the rulings file's final section.
+  - **F4 (4458) now covers three sites through one shared helper.** The helper uses `_ws_reclaim_resolve`'s sentinel
+    idiom and refuses a physical path holding a newline. The sites are `_ws_leaf_remove`'s root, `_ws_path_users`'
+    parent and `_ws_expire_cwd_users`' parent. Only that resolution changes in the third, which is
+    workspace-lifecycle's body: its owner consented in 3961, and ruled its twin an arming blocker for the expiry lane.
+  - **New number 4462 (`done-document-carries-kept-leaves`).** The tail's stdout done document gains additive
+    `clipsKept` and `tmpRootKept` keys. Each holds the kept word, or `null` when nothing was kept. An older ccd omits
+    both, and absence reads as unmeasured. Both server parsers read named keys only, so the keys are safe to ship
+    agent-first. Readers come later: the expiry lane's from workspace-lifecycle's next wave, the reclaim side's from
+    wave 7's collector. Without these keys, a leaf F1 keeps under ws-expire would reach the operator nowhere.
+  - **No new refusal word.** Rule 2's rows in a leaf refuse with `containment-unproven`, the NESTED word, which the
+    expiry lane's `ExpireToken` already holds as terminal.
+  - **Recorded, no change.** `_ws_reclaim_owned`'s moved-tree arm fails resumable on every resume while a foreign tree
+    stands in the child. It is fail-closed, and joins wave 7's carried "persistent per-child failures that retry for
+    ever".
+  - 4463 stays in reserve.
+
 - **2026-10-08 01:28 — run 291 goes to fix round 1 (mail 3955). The rulings are
   `ccr15-evidence-archive/reviews/fix-round-291-1-rulings.md`, and contract §13 gains R64.**
   - **How the ruling was checked.** Before ruling, the workflow `wf_a685fa5e-319` (two Opus agents, one Sonnet, all
