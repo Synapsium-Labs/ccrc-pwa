@@ -474,16 +474,19 @@ describe('armSignals — a persistent arm that collects the run and always exits
   // The harness child disarms BEFORE it prints the run, never after: a SIGTERM that arrives between the print
   // and the disarm is caught by libuv and then dropped once the last listener goes, and the child hangs
   // (measured). Every child also has a 15 s kill-after watchdog, so a mutant that never exits reads as SIGKILL.
-  type Variant = 'wait' | 'throw' | 'disarm' | 'noarm';
-  interface Armed { pid: number; run: string; exit: Promise<Exit> }
+  type Variant = 'wait' | 'slowexit' | 'throw' | 'disarm' | 'noarm';
+  interface Armed { child: ChildProcess; pid: number; run: string; exit: Promise<Exit> }
 
-  async function armed(base: string, variant: Variant, plant = 0): Promise<Armed> {
+  async function armed(base: string, variant: Variant): Promise<Armed> {
     const src = [
-      "import { writeFileSync } from 'node:fs';",
-      "import path from 'node:path';",
       `import * as m from ${JSON.stringify(MOD_URL)};`,
       'const o = await m.openRun(process.argv[1]);',
-      `for (let i = 0; i < ${plant}; i++) writeFileSync(path.join(o.run, ${JSON.stringify(RUN_TMP)}, 'f' + i), 'x');`,
+      // T4d's child only: its exit is deferred 3 s by wrapping `process.exit` (the arm itself is untouched), so
+      // the window between the first SIGTERM being handled and the exit is wide whatever the load. The arguments
+      // are passed on as given: `process.exit(undefined)` is not `process.exit()`, and would exit 0 (measured).
+      variant === 'slowexit'
+        ? 'const realExit = process.exit.bind(process); process.exit = (...a) => { setTimeout(() => realExit(...a), 3000); };'
+        : '',
       variant === 'noarm' ? '' : 'const disarm = m.armSignals(o.run);',
       variant === 'disarm' ? 'disarm();' : '',
       'console.log(JSON.stringify({ run: o.run }));',
@@ -498,7 +501,7 @@ describe('armSignals — a persistent arm that collects the run and always exits
     const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
     const line = await firstJsonLine<{ run: string }>(c.stdout!, exit)
       .catch((e: Error) => { throw new Error(`${e.message}\n--- child stderr ---\n${stderr}`); });
-    return { pid: c.pid!, run: line.run, exit };
+    return { child: c, pid: c.pid!, run: line.run, exit };
   }
 
   const clean = (run: string): boolean => !existsSync(run) && !existsSync(run + DEAD_SUFFIX);
@@ -524,16 +527,18 @@ describe('armSignals — a persistent arm that collects the run and always exits
     expect(clean(a.run)).toBe(true);
   });
 
-  it('T4d: a second SIGTERM while the removal is under way (GNU timeout\'s shape) does not kill it mid-rm', async () => {
-    // Two SIGTERMs sent back to back merge into one pending signal, so a `once` arm passes that shape. The
-    // second one is sent only once the rename has happened and the `rm` of 4,000 files is running.
-    const a = await armed(socketBase(), 'wait', 4000);
+  it('T4d: a second SIGTERM after the first was handled (GNU timeout\'s shape) cannot take the default action', async () => {
+    // GNU timeout signals its child, then the child's group, so main gets SIGTERM twice. Two sent back to back
+    // merge into one pending signal, which a `once` arm passes (measured); the real window — the first handler's
+    // `rm` plus the 1 ms exit timer — is a few milliseconds on Linux, too narrow to hit reliably under load. So
+    // this child defers its exit 3 s, and the second SIGTERM goes once the first has been handled: the run
+    // renamed away, the child still running.
+    const a = await armed(socketBase(), 'slowexit');
     process.kill(a.pid, 'SIGTERM');
     const t0 = Date.now();
-    while (!(existsSync(a.run + DEAD_SUFFIX) && !existsSync(a.run)) && Date.now() - t0 < 5000) {
-      await new Promise((r) => setTimeout(r, 2));
-    }
-    expect(existsSync(a.run + DEAD_SUFFIX), 'the removal was over before the second signal; plant more files').toBe(true);
+    while (existsSync(a.run) && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 2));
+    expect(existsSync(a.run), 'the first SIGTERM was never handled').toBe(false);
+    expect(running(a.child), 'the child exited before the second signal, so this case proves nothing').toBe(true);
     process.kill(a.pid, 'SIGTERM');
     expect(await a.exit).toEqual({ code: 143, signal: null });
     expect(clean(a.run)).toBe(true);

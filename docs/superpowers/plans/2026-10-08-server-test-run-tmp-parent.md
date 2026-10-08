@@ -437,12 +437,12 @@ Four numbers, issued by the allocator for this plan's four departures from #316'
   | T4a | SIGTERM | `{code: 143, signal: null}`; neither `run` nor `run.dead` exists |
   | T4b | SIGINT | 130; clean |
   | T4c | SIGHUP | 129; clean |
-  | T4d | the child plants 4,000 files in `run/tmp` before arming. SIGTERM, poll every 2 ms until `run` is gone and `run.dead` exists (the `rm` is under way), then a second SIGTERM | 143; clean |
+  | T4d | a child whose exit the harness defers 3 s (it wraps `process.exit`; the arm is untouched). SIGTERM, poll every 2 ms until `run` is gone (the first SIGTERM was handled) while the child still runs, then a second SIGTERM | 143; clean |
   | T4e | `'throw'` | code 1; clean (the `exit` listener) |
   | T4f | `'disarm'`, then SIGTERM | `{code: null, signal: 'SIGTERM'}`; `run` is still present |
   | T4g | positive control: a child that calls `openRun` but never arms, then SIGTERM | `signal: 'SIGTERM'`; `run` is present |
 
-  **Why T4d waits for the rename.** Two SIGTERMs sent back to back merge into one pending signal, so a `once` mutant passed 10 of 10 that way (measured). A second signal sent while the `rm` is running is the real `timeout` shape, and it is deterministic.
+  **Why T4d waits for the rename, and defers the exit.** Two SIGTERMs sent back to back merge into one pending signal, so a `once` mutant passed 10 of 10 that way (measured). The second must arrive after the first was handled and before the exit. The draft widened that window by planting 4,000 files for the `rm` to chew through; on Linux that `rm` is a few milliseconds, too narrow to hit reliably under CI load, so at Task 7 the harness instead defers the child's exit by 3 s (passing `process.exit`'s arguments on as given: `process.exit(undefined)` exits 0, measured). The window no longer depends on the machine.
 - [ ] **Step 2: Run, expecting red.** `armSignals is not a function`; T4g passes.
 - [ ] **Step 3: Implement** `armSignals(run)`: persistent `process.on` for each of `RUN_SIGNALS` (`SIGHUP: 1, SIGINT: 2, SIGTERM: 15`) and for `exit`; each signal condemns the run, sets `process.exitCode ??= 128 + n`, and calls `setTimeout(() => process.exit(), 1)`; `exit` condemns. It returns the disarm.
 - [ ] **Step 4: Run, expecting green.**
@@ -532,7 +532,7 @@ Four numbers, issued by the allocator for this plan's four departures from #316'
 | R7 | `reapRuns` | no per-entry `try` | T3l (rejects) |
 | R8 | `reapRuns` | skip an entry when `realpath(dir) !== join(base, name)` (a containment check by spelling) | T3k |
 | A1 | `armSignals` | return before registering | T4a–e |
-| A2 | `armSignals` | `process.once` | T4d (second signal mid-`rm`); report N/10 |
+| A2 | `armSignals` | `process.once` | T4d (the second SIGTERM after the first was handled); report N/10 |
 | A3 | `armSignals` | no `setTimeout(process.exit)` | T4a–d time out |
 | A4 | `armSignals` | no `exitCode` set | T4a–c (code 0) |
 | A5 | `RUN_SIGNALS` | drop SIGHUP | T4c, T5d |
