@@ -46,7 +46,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
-- **2026-10-08 14:15 — wave 7's pre-flight (run 347) is measured; its draft rulings are under attack.** The evidence
+- **2026-10-08 14:03 — wave 7's pre-flight (run 347) is measured; its draft rulings are under attack.** The evidence
   and the draft are in `ccr15-evidence-archive/wave7-preflight/`.
   - **How it was measured.** Workflow `wf_429ad81b-9cd` ran five Opus readers and a completeness critic, read-only, at
     `b0647d850`.
