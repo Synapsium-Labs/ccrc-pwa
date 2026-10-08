@@ -812,8 +812,10 @@ export function journalHalf(home, ids, nowMs) {
  *    O_EXCL open EEXIST), D-4338's hold, so the live file itself is moved into the area instead: `displaced`, never
  *    journaled by this drain (a hold pass may have journaled it already), its bytes kept, so one planted entry costs
  *    only that file's lines. When the live file cannot be moved either (the area cannot be made), the file is `blocked`:
- *    taken out of `live` so the other arms treat its sidecar names as not live, and never `displaced`. Any other entry at a sidecar-temp name, or at the sidecar name of a file that is not
- *    live, is the sweep's own debris and is removed uncounted (F20). Any other non-regular entry at a live file's
+ *    taken out of `live` so the arms after it treat its sidecar names as not live, and never `displaced`. The names are
+ *    visited in sorted order, so `<stem>.obs` comes before `<stem>.obs.tmp` and a blocked file keeps its regular sidecar
+ *    (FU6). Any other entry at a sidecar-temp name, or at the sidecar name of a file that is not live, is the sweep's own
+ *    debris and is removed uncounted (F20). Any other non-regular entry at a live file's
  *    sidecar name is removed and counted `non_regular`; a sidecar of a live file that fails `observationOk` is removed
  *    and counted `sidecar_malformed`, and the next `observe` re-observes it (F9).
  *  - A non-directory at `.draining/planted` or at the area is removed and counted `non_regular` when a set-aside needs it.
@@ -824,6 +826,11 @@ export function tidyDraining(home, tickMs, pid) {
   const out = { nonRegular: 0, malformed: 0, displaced: [], blocked: [], kept: [] };
   let names;
   try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return out; throw e; }
+  // FU6 (B3M10): loop 2 depends on this order. A file the blocked arm takes out of `live` keeps its regular sidecar only
+  // when `<stem>.obs` is visited BEFORE `<stem>.obs.tmp` (a prefix sorts first); the other way round the orphan arm would
+  // remove the sidecar of a file that is still there, and a hold pass's `journalT`/`journaled` in it with it. readdir's own
+  // order is the filesystem's, so it is stated here, not assumed.
+  names.sort();
   const typeOf = (n) => {
     let st;
     try { st = lstatSync(`${P.draining}/${n}`); } catch (e) { if (e && e.code === 'ENOENT') return 'gone'; throw e; }

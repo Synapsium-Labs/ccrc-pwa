@@ -1242,6 +1242,37 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
         } finally { fs.chmodSync(d, 0o700); }
       });
 
+      // FU6 (B3M10): loop 2 must see `<stem>.obs` before `<stem>.obs.tmp`, or the blocked arm, which takes the file out of
+      // `live`, makes the orphan arm remove the regular sidecar of a file that is still there. Node happens to list names sorted;
+      // tidyDraining sorts them itself, and this case hands it the listing reversed.
+      it('a blocked file keeps its regular sidecar whatever order readdir lists the names in (FU6, B3M10)', () => {
+        writeRegular();
+        const side = path.join(DRAIN(box.home), `${ID}.900.1.obs`);
+        fs.writeFileSync(side, JSON.stringify(validObs), { mode: 0o600 });   // a hold pass's sidecar: it may carry journalT and journaled
+        const d = plantDir(`${ID}.900.1.obs.tmp`, 'keep');
+        fs.chmodSync(d, 0o500);
+        fs.mkdirSync(PL());
+        fs.writeFileSync(path.join(PL(), 'keep'), '');
+        fs.chmodSync(PL(), 0o500);                                 // no area can be made: the file is blocked, not displaced
+        const live = fs as unknown as Record<string, unknown>;
+        const real = live['readdirSync'] as (...a: unknown[]) => unknown;
+        let reversed = 0;
+        live['readdirSync'] = (p: unknown, ...rest: unknown[]) => {
+          const r = real(p, ...rest);
+          if (path.resolve(String(p)) === path.resolve(DRAIN(box.home)) && Array.isArray(r)) { reversed += 1; return [...r].reverse(); }
+          return r;
+        };
+        syncBuiltinESMExports();
+        try {
+          const t = SW.tidyDraining(box.home, T, 1);
+          expect(reversed, 'the listing was handed over reversed').toBeGreaterThan(0);
+          expect(t.blocked).toEqual([`${ID}.900.1.jsonl`]);
+          expect(t.displaced).toEqual([]);
+          expect(fs.readFileSync(side, 'utf8'), 'the blocked file still has its sidecar, byte for byte').toBe(JSON.stringify(validObs));
+          expect(fs.existsSync(regularFile())).toBe(true);
+        } finally { live['readdirSync'] = real; syncBuiltinESMExports(); fs.chmodSync(PL(), 0o700); fs.chmodSync(d, 0o700); }
+      });
+
       it.each([['.obs'], ['.obs.tmp']])('an EMPTY 0500 directory at the sidecar name %s is removed and its file drains', (suffix) => {
         writeRegular();
         const d = path.join(DRAIN(box.home), `${ID}.900.1${suffix}`);

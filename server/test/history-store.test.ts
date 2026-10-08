@@ -783,7 +783,7 @@ describe('store.mjs: the migration executor', () => {
   });
 });
 
-describe('store.mjs: removeEntry (review 316 F8; D-4347)', () => {
+describe('store.mjs: removeEntry (review 316 F8; D-4347 (history-planted-entries-never-wedge))', () => {
   it('a regular file answers removed, an absent path absent, and a symlink to a directory removes only the link', () => {
     const d = mkTmp('ccrc-history-rm-');
     const f = path.join(d, 'f');
@@ -822,7 +822,7 @@ describe('store.mjs: removeEntry (review 316 F8; D-4347)', () => {
   });
 });
 
-describe('store.mjs: readBounded (review 316 F10, F18; D-4347)', () => {
+describe('store.mjs: readBounded (review 316 F10, F18; D-4347 (history-planted-entries-never-wedge))', () => {
   const STORE = path.resolve(__dirname, '../../ccd/history/store.mjs');
   const dir = (): string => mkTmp('ccrc-history-rb-');
 

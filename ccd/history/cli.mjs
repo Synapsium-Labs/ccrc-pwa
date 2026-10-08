@@ -461,10 +461,13 @@ function oldestUnjournaledMs(p) {
   let oldest = null;
   let unreadable = false;
   const present = new Set(names);
-  // D-4347 (history-planted-entries-never-wedge) / FU3F review F2: a directory at a file's sidecar or sidecar-temp name is the
-  // sweep's `blocked` condition (spool-planted, counted `spool_blocked` and named by its own WARN), not a journal hold: the
-  // journal is fine, the drain skips the file. (A directory at a name whose file is gone is not that condition.) Such a file's sidecar is neither held nor unreadable, whatever the order the
-  // listing names the two entries in, so judge the stems first. A name that cannot be lstat'd is left to the read below.
+  // D-4347 (history-planted-entries-never-wedge) / FU3F review F2, FU6: a directory at a live file's sidecar or sidecar-temp
+  // name is the condition the next drain either displaces (counted `spool_displaced`) or blocks (`spool_blocked`), both under
+  // WARN spool-planted: not a journal hold, so the file's sidecar is neither held nor unreadable. Status cannot tell the two
+  // arms apart (it cannot know whether `planted/` is usable, and judges no write), so it skips the file for either; the window
+  // is the time to the next drain, and a pass that only journals reports `journal-unwritable` itself where a DB is open.
+  // (A directory at a name whose file is gone is not that condition.) Judge the stems first, so the answer holds whatever
+  // order the listing names the two entries in. A name that cannot be lstat'd is left to the read below.
   const planted = new Set();
   for (const n of names) {
     const stem = n.endsWith('.obs.tmp') ? n.slice(0, -'.obs.tmp'.length) : n.endsWith('.obs') ? n.slice(0, -'.obs'.length) : null;

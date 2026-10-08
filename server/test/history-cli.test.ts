@@ -655,6 +655,42 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     }
   });
 
+  // FU6 (B3M11), measured: the FU3F two-entry fixture through the REAL sweep (blocked A, drained B), then status. A's regular
+  // sidecar still says `journaled: null` and is six hours old, but A is blocked (a non-empty directory at its sidecar-temp
+  // name, `planted/` unusable), so the only line status prints for it is WARN spool-planted: no FAIL journal-unwritable, no
+  // FAIL status-unreadable, no oldest-unjournaled age. This CONTROL pins that answer; the skip it rests on is the one the case
+  // above mutates. Root bypasses the 0500 modes, so the fixture cannot block there.
+  it.skipIf(process.getuid?.() === 0)('a blocked file and a drained one through the real sweep: status prints WARN spool-planted and no FAIL for the blocked file\'s age (FU6, B3M11 CONTROL)', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-blocked-real-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stop = (id: string): string => `\n${JSON.stringify({ v: 1, ev: 'Stop', id })}\n`;
+    healthFs.writeFileSync(healthPath.join(dir, 'claude-a-demo.900.1.jsonl'), stop('claude-a-demo'));        // A, first in drain order
+    healthFs.writeFileSync(healthPath.join(dir, 'claude-a-other.902.1.jsonl'), stop('claude-a-other'));      // B
+    healthFs.writeFileSync(healthPath.join(dir, 'claude-a-demo.900.1.obs'), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+    const tmp = healthPath.join(dir, 'claude-a-demo.900.1.obs.tmp');
+    healthFs.mkdirSync(tmp);
+    healthFs.writeFileSync(healthPath.join(tmp, 'keep'), '');
+    healthFs.chmodSync(tmp, 0o500);
+    const planted = healthPath.join(dir, 'planted');
+    healthFs.mkdirSync(planted);
+    healthFs.writeFileSync(healthPath.join(planted, 'keep'), '');
+    healthFs.chmodSync(planted, 0o500);                                                                       // no area can be made in it
+    try {
+      const r = healthHh.runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toContain('history-sweep: spool-blocked: claude-a-demo.900.1.jsonl\n');
+      expect(healthFs.readdirSync(dir).filter((n) => n.endsWith('.jsonl'))).toEqual(['claude-a-demo.900.1.jsonl']);   // B drained, A stays live
+      expect(healthFs.existsSync(healthPath.join(dir, 'claude-a-demo.900.1.obs')), 'A keeps its sidecar').toBe(true);
+      const h = statusOf(box).env!['health'];
+      expect(wordsOf(h['fail'])).not.toContain('journal-unwritable');
+      expect(wordsOf(h['fail'])).not.toContain('status-unreadable');
+      expect(wordsOf(h['warn'])).toContain('spool-planted');
+    } finally { healthFs.chmodSync(planted, 0o700); healthFs.chmodSync(tmp, 0o700); }
+  });
+
   it('an observation sidecar whose draining file is gone is not a held file, however old (review 316 F20)', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-orphan-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);
