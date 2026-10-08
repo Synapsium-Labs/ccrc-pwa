@@ -9196,7 +9196,7 @@ Re-derive at the tip:
 - **Darwin.** The accumulation of kept temp roots is stated in the spec (§5.2). No Darwin path removes a temp root.
 ## Deviations found
 
-Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open (2026-10-06). It is twenty-four single numbers: 4126, 4127, 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135, 4136, 4137, 4138, 4139, 4140, 4141, 4142, 4143, 4144, 4145, 4146, 4147, 4148 and 4149. None is written as a range. None appears as a `D-` token anywhere until the coordinator defines it in this section.
+Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open (2026-10-06). It is twenty-four single numbers: 4126, 4127, 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135, 4136, 4137, 4138, 4139, 4140, 4141, 4142, 4143, 4144, 4145, 4146, 4147, 4148 and 4149. None is written as a range. None appears as a `D-` token anywhere until the coordinator defines it in this section. Fix round 1 (review 335) defined eight more numbers the coordinator issued, listed singly: 4455, 4456, 4457, 4458, 4459, 4460, 4461 and 4462.
 
 - The worker never calls the allocator (worker clause 11; coordinator clause 10).
 - A departure from this plan is named by a short kebab-case slug in the wave-done mail. It is never given a number, and never written as a `D-` token.
@@ -9205,4 +9205,394 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
 - A session that cannot reach the coordinator names the slug in its report and says why.
 - The drafters' departures that the coordinator accepted before dispatch are ruling text, and Task 13's "§12 as built" note records them. They take a number only if the coordinator assigns one here. Those departures are `branch-absent-input-spelled-branchState`, `old-git-fails-closed-unmeasured-not-pin-failed`, `clips-kept-recorded`, `expire-probe-header-comment`, `witness-malformed-is-stale`, `witness-uid-by-owner-test`, `witness-refuses-dot-leading-id`, `create-row-never-read` and `expire-breadcrumb-not-recovered`.
 
-(No entries yet.)
+- **D-4126** `create-row-never-read` (Task 9) — R54's draft says a lifecycle `create` row "only corroborates" the
+  recovery's evidence. As built, nothing in the gone-directory recovery reads the lifecycle journal at all, so a
+  `create` row neither corroborates nor decides, and a row with a `create` row alone keeps the hold. Ruled at
+  dispatch. It fails closed: the cost is a hold kept where a `create` row could have corroborated. It is pinned by the
+  case "a lifecycle create row alone keeps the hold" and by the recovery scan's line that forbids a read of the
+  lifecycle journal.
+- **D-4127** `expire-breadcrumb-not-recovered` (Task 9) — the breadcrumb arm accepts only the phases `branch`,
+  `artifacts` or `clips`, and never an `expire:` phase, so an interrupted expiry's gone row still holds other
+  children, and ws-expire's own interrupted act is no evidence that releases it. Ruled at dispatch. It fails closed:
+  such a row holds until its expiry is resumed or its row is purged. It is pinned by the variant "an expiry's
+  breadcrumb (expire:branch) keeps the hold".
+- **D-4128** `leaf-mount-point-refused` (Task 5) — the plan's removal helper checks identity only. As built,
+  `_ws_leaf_remove` also refuses a leaf that is itself a mount point of another file system (its device is not its
+  root's), compared before any chmod or rm. `rm --one-file-system` measures from its own argument, so a session's own
+  FUSE or sshfs mount at its TMPDIR would have been emptied before the final rmdir failed. The coordinator accepted it
+  in principle in mail 3802. The limit is that both comparisons use `st_dev` alone: a bind mount of the same file
+  system at the leaf is not seen, and neither is a mount made at the leaf after the check, during the permission pass.
+- **D-4129** `leaf-root-empty-or-slash-refused` (Task 5) — the helper refuses an empty root and a root that resolves
+  to `/`, because the leaf would then be `/<id>`. The answer is unmeasured (rc 2). ccd never passes either, so the
+  guard is defence in depth, and a case reds when it is dropped. Fix round 1 extends the same refusal to a root whose
+  physical path holds a newline (`leaf-root-newline-refused`).
+- **D-4130** `leaf-reason-capped` (Task 5) — each kept leaf's reason reaches the journal as one short line: control
+  bytes and bytes 0x80 to 0xFF read "?", ccd's own dash is kept readable, and the line is cut at 300 bytes and marked
+  with a trailing "…". A reason can carry a name the session chose and the first line of `rm`'s stderr, and past the
+  journal's line cap the encoder drops the whole `meas` object, which would cost the row `childOf`, `branch`, `tip`
+  and both kept keys. The helper's `_WS_LEAF_WHY` stays raw, and the clean and the cut happen where the tail journals
+  it (`_ws_leaf_why_line`), because a cut at the source would cut the helper's own reasons on a long HOME. A later
+  caller, wave 7's collector among them, owes the same call. The limit: a non-ASCII name reads "?". The ladder's own
+  raw refusal detail is wave 3's code, uncapped, and carried.
+- **D-4131** `tmproot-wait-ask-cap` (Task 6) — the tail's wait for the pane's processes ends by the clock or after
+  `bound*4+1` asks, whichever comes first, where the plan ends it by the clock alone, which a backward step can
+  stretch without limit. The count never shortens a wait the clock allows. The cost: under a frozen clock with every
+  walk running out its 10 s bound, the wait reaches about 625 s. That is past the 240 s remote budget, but a remote
+  kill lands in the wait, before any deletion, and the breadcrumb resumes. The measured worst case with a working
+  clock is about 35 to 41 s.
+- **D-4132** `tmproot-link-refused-everywhere` (Task 7) — a linked `$REG/tmproots` is refused everywhere the plan
+  reaches it: the writer refuses it, the reader answers rc 2, and the remover warns and leaves what it reaches. The
+  plan gave only the writer a check. Review 335 (F7) added the record: the writer's two `tmproots/` link checks (`[[ !
+  -L "$dir" ]] || return 1` and `[[ -d "$dir" && ! -L "$dir" ]]`) are each other's defence in depth, because `mkdir
+  -p` through a dangling link fails with EEXIST. Deleting either one alone leaves the witness suite green, and
+  removing both reds it, so the two are pinned only together. That corrects the commit message of e5effb842, which
+  claimed each guard was pinned alone. It is recorded, not fixed.
+- **D-4133** `branch-state-consent-both-ways` (Task 8) — the plan's token carries `branchState=` and the locked
+  recomputation checks it, but the pin then reads the branch again on its own. Another actor may delete or create the
+  branch between the two reads, and the pin would act on what it read, not on what the token consented to. As built,
+  the two reads must agree in both directions, or the act stops before the tombstone as `state-changed`. The cost is
+  one retry. The limits: `ws-expire` keeps the recomputation-to-pin window, because `_ws_expire_locked` is
+  workspace-lifecycle's, so a branch created there is still adopted at its pinned tip. A tip that moves while the
+  branch stays present is still taken over, bounded by the delete's compare-and-swap.
+- **D-4134** `branchstate-mismatch-is-a-failed-line` (Task 8) — the ruling says "refuse `state-changed`". As built it
+  is a `failed` line carrying the token (`{"failed":"state-changed",…}`, exit 1, journaled `failed`), not a
+  `{"refused":…}` document at exit 0. The intent row is already journaled when the pin runs, the region's refusal
+  emits are pinned at exactly two by `ccd-refusal-scan` (a third is a refusal path that bypasses the verdict point),
+  and `pin-failed` already takes this shape at this point. `state-changed` is a `SENTENCES` key, so the vocabulary
+  scan accepts the literal, and the board renders a `failed` audit-token row as `deferred` with that token's sentence.
+  No breadcrumb is written, so the next attempt re-audits and mints over the true state. The server first read this
+  line as resumable, which was wrong, and `pre-breadcrumb-state-changed-not-resumable` corrects it.
+- **D-4135** `crumb-arm-proves-no-admin-entry` (Task 9) — the breadcrumb arm also proves that git holds no admin entry
+  for the tree, asked of the git-record arm's own reader. Git's list silently omits a record whose `gitdir` it cannot
+  read, so "no record" alone would read an unreadable record as none. An unreadable `gitdir` or `worktrees/` therefore
+  keeps the hold. It fails closed: the cost is a hold kept where the evidence cannot be read. The breadcrumb arm's
+  `gitdir:` loop has a red case: an admin `gitdir` of two lines holds the row.
+- **D-4136** `probe-unmeasured-word-scoped-to-attempt` (Task 10) — the `probe-unmeasured` sentence in
+  `LC_REFUSAL_WORD` is scoped to the attempt that measured it: "this attempt started nothing and removed nothing. The
+  next attempt measures again from the start." A resumed arm's earlier attempt may have removed something, so the
+  unscoped sentence was false there. The final fix round made the change, line-neutral in `shared/api.ts`, and the
+  comment on `branch-unmeasured` now names ws-reclaim and ws-expire, because expire shares the step that prints it. A
+  case pins that the word is true of both arms.
+- **D-4137** `strip-scan-arms-pinned` (Task 2) — the plan's verbatim CONTROL list and 13-row mutation table left three
+  arms of the environment-strip scan with no case that reds when the arm is deleted. Mutation-table discipline governs
+  over the verbatim text, so the scan's CONTROL plants a whole-environment copy through `Object.entries(process.env)`,
+  an `execFile` call, a `spawn` call and a double-quoted `'git'` command, with three more expected hits and three more
+  mutation rows. The git-spawn match accepts any quote, and the residual note in `gitEnvStrip.ts` also names
+  `GIT_TEMPLATE_DIR` and `GIT_EXEC_PATH`, kept variables outside git's local list that reach the fixture repositories.
+  The cost is three more CONTROL lines and rows. The strip's behaviour is unchanged.
+- **D-4138** `shim-unbound-under-set-u`, `tail-no-deref-pinned` (Task 3) — two plan-text corrections. The plan's
+  `SHIM` tests `"$3 $4"` whenever `$1 == -C`, and ccd is sourced under `set -uo pipefail`, so the first three-argument
+  `git -C <dir> <verb>` call (the pin phase's `write-tree` is one) aborted the shim with an unbound `$4`, and every
+  shim arm failed `pin-failed` before it reached the tail. The guard reads `"${3-} ${4-}"` in both comparisons. The
+  plan called the missing `--no-deref` pin on the branch compare-and-swaps a disclosed survivor, and mutation
+  discipline governs, so the tail scan now reds when either branch compare-and-swap drops `--no-deref`. Its classifier
+  also reads `update-ref` with `-d` after another flag, `update-ref --stdin`, `branch --delete` and a call split over
+  a line continuation, with a CONTROL that plants each spelling and the remaining blind spots named in its comment.
+  The ws-expire hook-run case gains the CONTROL the reclaim arms carry. The cost is two mutation rows and a few
+  assertions.
+- **D-4139** `path-users-fail-closed-pinned` (Task 4) — five guards of `_ws_path_users` that answer unmeasured had no
+  case that reds when the guard fails open: a locked thread whose stat does not parse, the same with its stat
+  unreadable, a `task/` that cannot be listed, a relisting that fails, and the catch-all. Mutation discipline governs
+  over the plan's text, so each has a fake-table case asserting rc 2 and a mutation row. Every C0 control byte and DEL
+  in a reported path now reads "?", where the plan cleaned a tab and a newline only. The unsearchable-parent case
+  asserts the absence guard's own words, so the `cd` behind it cannot stand in for it. The limits paragraph names
+  three more shapes: the environment is live memory, a leader caught inside its own exit, and a non-leader thread with
+  its own cwd or fd table.
+- **D-4140** `journalparse-line-neutral`, `helper-header-no-r57`, `leaf-remove-guards-pinned`, `leaf-why-dash-kept-readable`, `mount-check-after-identity` (Task 5) — five
+  plan-text corrections.
+  - **`journalparse-line-neutral`.** The plan inserts a new `tmpRootKept`/`clipsKept` line below `residueBytes` in
+    `journalparse.ts`. The two keys are appended onto the existing `residueBytes` line instead, so the frozen-cited
+    `refusal: s(o, 'refusal')` line keeps its number.
+  - **`helper-header-no-r57`.** The helper's header no longer ends "quarantine rename (R57)". The spec has no section
+    on the quarantine rename, so the rule is stated in words.
+  - **`leaf-remove-guards-pinned`.** Each guard in `_ws_leaf_remove` that could not ask (the root's resolution, this
+    uid, the owner, entering the leaf, its identity, the final proof) has a case that answers unmeasured for its own
+    reason. Dropped, a guard used to prove a leaf absent at `/` or to refuse for a reason that was not true. Every
+    purge-failure arm is pinned to carry both kept keys.
+  - **`leaf-why-dash-kept-readable`.** Before the `tr` that makes a kept reason printable ASCII, ccd's own dash is
+    mapped to "-", because the `tr` would otherwise turn it into "???". Other non-ASCII still reads "?".
+  - **`mount-check-after-identity`.** The mount check sits directly above the owner-bits pass, after the owner and
+    device-and-inode checks, where the ruling said "before any chmod or rm". Placed first in the arm it answered
+    before the device-and-inode read, and the case "the identity of" went red. Both orders refuse a mount before
+    anything is touched.
+- **D-4141** `step6-reasons-through-why-line`, `r49-cited-as-spec`, `tmproot-wait-bound-timed`, `m2-count-masks-x10-in-the-verb-case` (Task 6) — four
+  plan-text corrections.
+  - **`step6-reasons-through-why-line`.** The plan's step (6) stores raw reasons in `tmpwhy`. Task 5's fix rounds made
+    `_ws_leaf_why_line` the one way a kept reason reaches the done row, so all five assignments read
+    `tmpwhy=$(_ws_leaf_why_line "…")`, and the in-use sentence's dash is journaled as "-".
+  - **`r49-cited-as-spec`.** The plan's comment on the wait's constant and its two Darwin test comments cite the
+    contract's number for the wait's bound. They read "(spec §5.6)" instead, as a spelling rule.
+  - **`tmproot-wait-bound-timed`.** The plan's tests time the verb, which takes seconds of fixture work. The wait
+    itself is timed through a pre-wrapped `_ws_path_users` log, with a ×10 row, a row for the base-10 bound (`010` and
+    `08`), a frozen-clock pin and a pin that the clock ends a slow wait.
+  - **`m2-count-masks-x10-in-the-verb-case`.** The ×10 row reds only the slow-probe unit case added for it, not the
+    verb case, because the ask-count cap (`tmproot-wait-ask-cap`) masks it there. No code was bent.
+- **D-4142** `btime-stub-printf-dashdash`, plus mutation rows 11 and 20 re-cut (Task 7) — the plan's stub
+  `_plat_btime() { printf '%s' -- '${bt}'; }` prints `--0`, because `printf` takes its format first and `--` is an
+  argument. The writer would reject it and write nothing, so the two "keeps none" rows would fail whatever the code
+  did. The stub is `printf '%s' '${bt}'`. Row 11 (`|| bt=-`) survives green, because the next line's `^-?[0-9]+$`
+  rejects `-`, so it is re-cut to `|| bt=0`, which passes validation, is folded to `-` and writes a witness silently,
+  and it reds on the row's stated assertion that unmeasured must never become `-`. Row 20's walker `describe` finds
+  the witness through `_ws_tmproot_witness_file`, not the hard-coded `tmproots/<id>`, so `_reg_purge` is really asked
+  and takes the misplaced witness. The plan's second predicted red there (`_ws_slug_free` reading taken for free)
+  cannot occur, so row 20 pins the walker's blindness through `_reg_purge` only.
+- **D-4143** `branch-state-guards-pinned`, `old-git-shim-cases-partly-guarded` (Task 8) — two plan-text corrections.
+  The plan disclosed two guards in `_ws_reclaim_branch_state` as unpinnable equivalent mutants: an empty branch name
+  is never read as absent, and a sha that is not 40 hex is never read as present. A `PATH` git shim that lies at both
+  guards pins them, with mutation rows 19 and 20. The ruling said the old-git shim cases stay unconditional. Two of
+  the three need a real `show-ref --exists` answering 2 for their CONTROL (one also mints its token with real git), so
+  they run under a git of 2.43 or later. Only the case that reclaims a standing branch exactly as today needs none,
+  and it runs on every git.
+- **D-4144** `test-comments-cite-the-spec`, `prune-shim-spawn-takes-inherited-env`, `crumb-phase-list-named-per-verb`, `ladder-fixture-insertion-is-six-lines` (Task 9) — four
+  plan-text corrections.
+  - **`test-comments-cite-the-spec`.** The plan's test comments cite the contract. They cite the spec instead (§5.5
+    for R54 and for R31's stated cost of the hold), and the file-split rule is stated in words. This is a spelling
+    rule.
+  - **`prune-shim-spawn-takes-inherited-env`.** The prune-shim case's `execFileSync('sh', ['-c', 'command -v git'],
+    …)` passes `env: inheritedEnv()`, so `process.env` is never spread.
+  - **`crumb-phase-list-named-per-verb`.** The plan's file-header comment says the phase is `branch`, `artifacts` or
+    `clips`. ws-reap writes `children`, `worktree`, `branch` and `clips`, with no `artifacts` phase, so the comment
+    names the phases per verb. Only the comment changed.
+  - **`ladder-fixture-insertion-is-six-lines`.** The plan calls the ladder test's edit "one fixture line". The real
+    insertion after `fs.rmSync(otherWt, …)` is six lines, a three-line comment, the `git worktree prune` line and a
+    two-line CONTROL, and the block comment turns one line into two.
+- **D-4145** `verb-test-snapshots-carry-the-journal-line` (Task 10) — the plan's file list omits
+  `server/test/ccd-child-reclaim-verb.test.ts`, yet its Step 5 runs that file and expects it to pass. Five cases there
+  compare the verb's snapshot before and after the locked unmeasured answer, and the snapshot includes the lifecycle
+  journal's reclaim rows, which were empty and are now exactly one `failed probe-unmeasured ws-reclaim` row. One
+  test-local helper, `sansTheFailure`, asserts that the journal is exactly that one row and returns the snapshot with
+  it emptied, and the three call sites wrap their snapshot in it. Everything else the snapshot compares is still
+  compared with `toEqual`. A mutation row proves the helper is live.
+- **D-4146** `spec-hold-bullet-placement`, `spec-5-7-keep-wording` (Task 13) — two plan-text corrections, and fix
+  round 1 folds two findings of review 335 into this number.
+  - **`spec-hold-bullet-placement`.** The plan puts the recovery text in the middle of the spec's hold bullet,
+    directly after its first ledger citation. That rewraps the two lines that carry the existing ledger parentheses,
+    so they would read as added lines, and it leaves "it" in "ends it unsafely" pointing at the wrong thing. The text
+    goes after the bullet's last sentence, on its own lines, with the original lines byte-identical. The plan's §7
+    bullet about a branch created between the recomputation and the pin is replaced, because Task 8 now stops
+    `state-changed` there.
+  - **`spec-5-7-keep-wording`.** In §5.7 "keep" becomes "leave … alone", so the carved-out sentence stays coherent.
+  - **F5, the old-git residual, stated completely.** On a git older than 2.43, a resume whose branch is already gone
+    fails closed on every retry, at one of two places. At the tail's branch step it reads `unmeasured`
+    (`branch-unmeasured`). If the branch was present at the pin and someone deletes it after the tombstone, a resume
+    that enters at `children` or `worktree` never reaches that step. The settle's pin reads unmeasured and stops
+    `pin-failed` on every retry, with the tree, the breadcrumb and the row standing and nothing deleted: a leak,
+    retried for ever, on old git only. R53's "never `pin-failed`" therefore holds on the fresh path only. The "§12 as
+    built" note states both shapes, and the same sentence belongs in spec §7 item 6.
+  - **F14, comment-only truth fixes outside Task 13's Files list.** `_ws_reclaim_workdir_shared`'s header (two lines,
+    the breadcrumb arm's "compared as text" qualifier), `cmd_ws_reclaim`'s entry comment ("a shape ccrc mints" became
+    "a registry-safe charset (no `/`)"), the audit comment in `watch.ts`, and `childReclaimSweep.ts`'s "the one
+    window", which became "the windows". All sit below the 19109 boundary, and the citation census re-ran green.
+- **D-4147** `full-run-48-shards-big-files-by-describe`, `lc-refuse-comment-own-line`, `witness-suite-on-disposition-list` (Task 14) — the
+  first full run measured one departure from the brief and found two static scans that no task-level run exercised.
+  - **`full-run-48-shards-big-files-by-describe`.** The plan's Step 1 full run overran the 600 s foreground ceiling at
+    /12 and again at /24, so the whole set re-ran at /48. Two shards each held one unchanged file
+    (`ccrc-install.test.ts` and `ccrc-doctor.test.ts`) whose own wall time exceeds the cap, so those were run file by
+    file, the two big files by `-t` describe filter in two and four calls. Every test ran and passed (296 and 759).
+    That splits a shard, which the brief forbade, and it is recorded here.
+  - **`lc-refuse-comment-own-line`.** `cmd_ws_reclaim`'s run-id refusal carried a trailing comment, which the
+    `_lc_refuse` arity scan in `ccd-lifecycle-purge` read as a fifth positional. The comment moved to its own line
+    above, with ccd re-stamped.
+  - **`witness-suite-on-disposition-list`.** The witness suite names `_ws_slug_residue` in a case title and an
+    assertion, and the disposition census in `ccd-workspaces.test.ts` scans every server test line for that name, so
+    the suite gets one entry, counted at 2 lines.
+- **D-4148** `leaf-owner-bits-pass` (Task 5) — `_ws_leaf_remove` runs `find -P <leaf> -maxdepth 0 -type d -user <me> !
+  -perm -u=rwx -exec chmod u+rwx {} +` on a directory leaf before entering it, which the plan's helper does not.
+  Review 335 (F13) found it on neither list, and it is the largest plan-versus-tip difference in that function.
+  - **Why.** Asking the leaf's physical path means entering it, and a mode-000 leaf this uid owns would otherwise be
+    kept for ever, never reached by the normalise pass below it, so wave 7's collector would meet it on every pass.
+    The `{} +` form is deliberate: with `\;` find answers 0 over a chmod that failed, and now a failed chmod reaches
+    find's exit code and answers unmeasured for that reason.
+  - **Placement.** The pass follows the owner, device-and-inode and mount checks, so those refusals touch nothing. It
+    precedes the checkout question (`leaf-moved-checkout-refused`), which must enter the leaf, so a leaf that question
+    then refuses has had its own owner bits set and nothing beneath it.
+  - **The stated residual.** `find -P` never follows a link, but the chmod it runs dereferences its operand. The pass
+    is bounded to this uid's own directory and owner bits, and a same-uid rename onto the leaf between find's test and
+    the chmod is chmodded with it.
+- **D-4149** `leaf-moved-checkout-refused` (Fix round 1) — the removal helper refuses a directory leaf that holds a
+  checkout git links to somewhere else. This is Rule 1 of review 335's F1; Rule 2 is `leaf-rows-are-nested`.
+  - **The defect.** The gone-directory recovery let another workspace's tree be deleted once someone had moved it into
+    the child's temp root or clips directory. Git records the moved tree as prunable, the recovery places its row by
+    that record, the moved-tree question was asked only of the child's worktree, and step 6 removed both leaves whole.
+    On base the same shape held the child unmeasured. "Inside the child" means all three trees the tail deletes: the
+    worktree, `~/.cc-clips/<id>` and `~/.cc-tmp/<id>`.
+  - **Where it lives.** `_ws_leaf_remove` asks `_ws_leaf_checkouts` of every DIRECTORY leaf, after the identity checks
+    (real directory, owner, device and inode, mount, owner bits, physical path) and before it normalises or removes
+    anything. The question is row-agnostic and is asked at the instant of removal, so every caller inherits it: step
+    6's clips leaf, `_ws_tmproot_remove`, ws-expire's clips leaf and wave 7's collector. Rc 1 (refused) and rc 2
+    (unmeasured) leave the leaf untouched, with `_WS_LEAF_WHY` naming the checkout. Step 6's existing arms keep and
+    record it (`clipsKept` or `tmpRootKept`, `refused` or `unmeasured`) and the act completes: the leaf check never
+    fails the tail. A link or file leaf is unlinked and never scanned. The predicate runs before the normalise pass,
+    which writes.
+  - **The scan.** `find -P` from the leaf's physical path, `-xdev`, `-mindepth 1` (so a tree moved AS the leaf is
+    seen), bounded by `REAP_SCAN_SECONDS` under `_plat_timeout`. A timeout, any find error or stderr (an unreadable
+    directory hides what is under it), or a 65th entry named `.git` (the cap is 64) is unmeasured. It does not prune
+    at a `.git` directory, because a foreign tree can be parked inside a clone's `.git` as easily as anywhere else, so
+    the time bound caps the walk.
+  - **Each `.git` entry,** asked by `-L`, then `-d`, then `-f`, never followed, and git is never run inside a leaf.
+    - A link is refused (the controller's ruling F1a): git would follow it, ccd never does.
+    - A directory, a full clone, passes: it is the leaf's own scratch.
+    - A file must be exactly one `gitdir: <non-empty path>` line of at most 4096 bytes with no NUL, else it is
+      unmeasured (F1b: git reads the whole file). It is tested with `-f` before any read, so a FIFO is never opened.
+    - A relative path resolves against the `.git` file's own directory, as git does, and the admin directory is
+      resolved physically through `_ws_dir_physical` (F1c). One proven absent refuses, because git no longer records
+      the tree. One that cannot be resolved is unmeasured. A `..` after another component of a gitdir is unmeasured,
+      because behind a link `cd -L` and the kernel disagree.
+    - An admin directory whose physical path equals the leaf or begins `<leaf>/` passes (F1d): a submodule, or a
+      worktree of a clone in the leaf.
+    - One outside the leaf passes only as a linked worktree whose admin `gitdir` back-link names THIS `.git`,
+      literally or as its directory's physical path plus `/.git` (F1e), and refuses otherwise. An absent back-link
+      file refuses and an unreadable one is unmeasured. The same clause catches a recycled admin name, where a later
+      `ws-add` recreated `worktrees/<name>` for another workspace. The back-link is compared as a whole file with
+      trailing newlines stripped, as `_ws_reclaim_gitdir_own` reads it, and a relative back-link never matches, so it
+      refuses (the fleet runs git 2.43).
+    - A refusal outranks an unmeasured entry, whatever order find lists them in.
+  - **The stated limits.** (i) A tree stripped of its `.git`, or content that is no checkout, parked in a leaf is not
+    seen, and base held these only by accident, through the blanket hold on a gone row. (ii) The question and the `rm`
+    are two looks, not one, so a same-uid rename in between is removed with the leaf, which wave 7's quarantine rename
+    closes. (iii) A clone, a submodule of one, or a worktree of one inside a leaf is the leaf's own and goes with it.
+    (iv) The bind-mount alias spelling of a leaf is not compared, which is the existing residual.
+  - **The cost, two fail-closed leaks the ruling accepts.** A temp root that holds any unreadable subdirectory, more
+    than 64 `.git` entries, or a tree whose walk outlasts `REAP_SCAN_SECONDS` (30 s) is kept `unmeasured` on every
+    pass, where the permission pass used to normalise and remove it. A clips leaf is mostly spared the first, because
+    rung 8 normalises clips before the tail. The coordinator measured, on 2026-10-08, 47 `.git` entries in 6 of 45
+    temp roots and none in `~/.cc-clips`, every linked one self-back-linked, so the rule holds no root today and none
+    is near the cap.
+  - **Two existing cases changed.** `ccd-leaf-remove.test.ts` planted a mode-000 subdirectory and expected the helper
+    to remove it. The ruling makes a mode-000 directory inside a leaf unmeasured, so the fixture is now mode 0500
+    (`leaf-remove-fixture-mode-0500`). Both cases still red without the permission pass, and the mode-000 shape is
+    pinned as unmeasured in the new files.
+  - **One arm unpinned.** The resolved arm of the back-link compare is defence in depth with no case that reds it
+    alone, because `find -P` from a physical root walks no link, so the found path is already physical and the literal
+    arm answers first.
+- **D-4455** `leaf-rows-are-nested` (Fix round 1) — a registry row at, inside or through a child's clips or temp-root
+  leaf is NESTED. This is Rule 2 of review 335's F1, and it closes the pre-existing shape its lens named: a standing
+  row whose workdir lies inside the child's temp root was also taken with the leaf, on base and at the tip alike.
+  - **As built.** `_ws_reclaim_workdir_shared` compares every row, standing or recovered by either arm, against the
+    two leaf paths as well as the worktree, in ONE registry pass (a call per leaf would reset `_WS_RECORDED_GDIRS`
+    each time). It uses all four comparisons the worktree uses, literal equal or inside and resolved equal or inside,
+    plus THROUGH. Both the ladder and `_ws_reclaim_owned` reach it through the shared function, so ws-expire's ladder
+    is covered the same way.
+  - **The word.** A nested row refuses `containment-unproven`, terminal at reclaim and at expire alike through the
+    ladder's NESTED arm. No refusal word is added, because an unknown word reads "unreadable" to the expiry lane's
+    `ExpireToken`. Both NESTED detail sentences now read "…rooted inside it, or in its clips directory or temp root,
+    each another session's tree", with the substring `registry row(s) <ids> rooted inside` that existing tests match
+    kept (`nested-detail-names-the-leaves`).
+  - **Leaves.** A leaf proven absent is skipped, so a recovered row inside an absent leaf does NOT hold. A leaf whose
+    absence cannot be proven, or whose root cannot be resolved (or resolves to a `//`-leading path), answers the
+    function's rc 2 (the controller's ruling F1h).
+  - **Three choices the ruling left open, accepted.** A DIRECTORY leaf is placed by its root's physical path plus
+    `/<id>`, as the removal helper composes it, and never by entering the leaf, so a mode-000 temp root is no hold at
+    the ladder. A link or file leaf is compared by its spelling alone and is never "unresolvable": read literally, F1h
+    would hold every child whose temp root is a file or link leaf for ever, and the helper unlinks such a leaf and
+    follows nothing. A row at, inside or through a leaf goes into the same `_WS_NESTED_ROWS` as the worktree's nested
+    rows.
+  - **The cost.** An unprovable leaf, or a standing row at or inside a leaf, makes `_ws_reclaim_owned` fail resumable
+    `worktree-remove-failed` at the start of the tail, and so on every resume until the row or the leaf is fixed, with
+    nothing deleted. Fresh reclaims are held at the ladder. It is the same shape as the recorded moved-tree arm of
+    that function, and it is carried to wave 7 beside it.
+  - **Pin strength.** The mutation row that issues one `_ws_reclaim_workdir_shared` call per leaf reds only through
+    the placement and unprovable-leaf differences, because no constructible shape changes a verdict through the
+    `_WS_RECORDED_GDIRS` reset alone. The single pass is still what the ruling requires.
+- **D-4456** `walker-fd-esrch-is-vanished` (Fix round 1) — `_ws_path_users`' walker read each descriptor with
+  `os.readlink` and caught only `(FileNotFoundError, PermissionError)`. A same-uid process that exits between the
+  descriptor listing and that read answers ESRCH (`ProcessLookupError`), which escaped to the outer handler and made
+  the WHOLE walk unmeasured, so the tail kept a temp root nobody was using as `tmpRootKept=unmeasured` (the review
+  measured 43 of 122 walks under fd churn). The clause is now `except VANISHED + (PermissionError,):`, matching the
+  sibling walker, and the probe header's promise that a process is skipped only on proof it vanished (ENOENT or ESRCH)
+  holds at every read of the walker. The direction was fail-safe, a recorded leak and never a deletion. A fake process
+  table cannot produce ESRCH, because its readlink is a real file system's, so the red case injects it with a
+  `sitecustomize.py` on `PYTHONPATH` that raises `ProcessLookupError` for one process's descriptor path, with a
+  control that the injection reached the walker.
+- **D-4457** `pre-breadcrumb-state-changed-not-resumable` (Fix round 1) — `parseChildReclaimResult` read every
+  `failed` word except `probe-unmeasured` as `resumable`, so the feed said "the box resumes where it stopped" of the
+  consent binding's `state-changed`, which stops the act before the tombstone and the breadcrumb and is retried from
+  the start.
+  - **As built.** A named set of pre-breadcrumb `failed` words, `CHILD_RECLAIM_PRE_CRUMB_FAILED` (`probe-unmeasured`
+    and `state-changed`), reads `not-resumable`. It replaces the one-word `CHILD_RECLAIM_PROBE_UNMEASURED` and is
+    typed `as const satisfies readonly (LcRefusalToken | ChildReclaimToken)[]`, a union, because `state-changed` is a
+    `ChildReclaimToken` and not an `LcRefusalToken`; a typo in it is a compile error. `isChildReclaimKebab` admits
+    `probe-unmeasured` through the set's guard, so no second hand-kept literal exists. The comments and the doc of
+    `ChildReclaimResume` are updated.
+  - **`pin-failed` and `tombstone-unwritable` stay `resumable`.** Each is printed once in the fresh path's pin phase,
+    before the breadcrumb, and also by the tail after it (eight producers of `pin-failed` and five of
+    `tombstone-unwritable` in the tail), so the word alone cannot tell the two apart.
+  - **The stated residual.** The pre-breadcrumb case of both words reads `resumable`, so the feed says the box resumes
+    where it stopped of an act that is retried from the start. ws-expire's pin phase prints the same two words before
+    its own breadcrumb, so the residual covers that verb too, and its parser is workspace-lifecycle's and unchanged.
+    The fix is an additive `crumb:false` field on ccd's document, carried to wave 7.
+- **D-4458** `leaf-root-newline-refused` (Fix round 1) — the removal helper's root resolution, `rroot=$(cd -- "$root"
+  … && pwd -P)`, dropped every trailing newline of the physical path (review 335, F4). A root resolving to `<vol>\n`
+  read as `<vol>`, `lreal == leaf` passed because both sides were stripped, and `<vol>/<id>`, outside the root, was
+  removed with rc 0 while the real leaf stood. Base failed closed on the same shape. The final review's label for it,
+  "older code, carry", was wrong: `_ws_leaf_remove` is this wave's code.
+  - **The helper.** ONE shared function, `_ws_dir_physical <dir>`, resolves a directory's physical path. It sets
+    `_WS_PHYS`, or sets `_WS_PHYS_WHY` and answers non-zero when the directory cannot be entered, the sentinel suffix
+    is missing, or the physical path holds a newline anywhere. It uses `_ws_reclaim_resolve`'s idiom exactly: a
+    `POSIXLY_CORRECT` subshell with `unset -f builtin cd pwd printf`, then `CDPATH= builtin cd -L -- <dir> && builtin
+    pwd -P && builtin printf x`, then the `\nx` suffix checked and stripped. `_ws_reclaim_resolve` and
+    `_ws_reclaim_absent` are untouched.
+  - **Its three sites,** each mapping a non-zero answer into its own unmeasured arm with the helper's why:
+    `_ws_leaf_remove`'s root (rc 2), `_ws_path_users`' parent (rc 2, where a stripped newline used to fail OPEN:
+    nobody found, the leaf removed while in use), and `_ws_expire_cwd_users`' parent (`_ws_reclaim_unmeasured`, rc 1).
+    In `_ws_expire_cwd_users` only that resolution changed, because the rest of its body is workspace-lifecycle's. Its
+    coordinator, quiet-river, consented to the edit in mail 3961.
+  - **The leaf's own path takes no sentinel.** Under a newline-free physical root, with an id that holds none, a leaf
+    that is no link resolves to exactly `<root>/<id>`. Only a link swapped in between the link test and the `cd` could
+    differ, which is the same-uid window stated for the helper.
+  - **The red cases** are the review's `vol\n` case and one each for `_ws_path_users` and `_ws_expire_cwd_users`; each
+    must answer unmeasured, never "nobody" and never a removal.
+- **D-4459** `witness-dropped-on-proven-absent` (Fix round 1) — when the tail's temp-root leaf was already absent and
+  the in-use probe answered in-use or unmeasured (always unmeasured on Darwin), the witness stayed beside a
+  proven-absent leaf, and nothing would ever call `_ws_tmproot_remove` for that id again (review 335, F6).
+  - **As built.** The witness half of `_ws_tmproot_remove` (the id check, the linked-`tmproots/` warning, `rm -f`) is
+    split into `_ws_tmproot_witness_drop <id>`, and `_ws_tmproot_remove` calls it after its own rc 0. Step 6's in-use
+    and unmeasured arms call it ONLY when `_ws_reclaim_absent` proves the leaf absent (rc 0), and record nothing kept.
+    Rc 1 keeps the leaf as before. Rc 2 is read explicitly and records `unmeasured`, with the absence proof's why
+    through `_ws_leaf_why_line`, where the plan folded it into the `if`. Those arms never go through
+    `_ws_tmproot_remove`, whose leaf half would run an unprobed `rm` on a leaf re-created in the window.
+  - **The 2-for-2 comment retouch** (`witness-block-comment-retouched`). The sentence at the head of the witness
+    block, "DEATH belongs to `_ws_tmproot_remove` alone", was false once the drop was split out, so it was rewritten
+    two lines for two, naming the drop. It sits inside the witness block but outside the window workspace-lifecycle's
+    consent named.
+  - **The drop's warning on a bad id** (`drop-warns-on-a-bad-id`). The drop answers rc 1 for an id no witness is named
+    for and also warns on stderr ("is not an id a witness is named for, so no witness was touched"), where the brief
+    said only that it is refused. It sets no `_WS_LEAF_WHY`, because it is not a leaf act.
+  - **The stated re-create window.** A leaf re-created between the proof of absence and the drop leaves a leaf with no
+    witness: a leak and never a loss, because no collector takes an unwitnessed leaf. The case that pins it is named
+    THE WINDOW.
+- **D-4460** `review-335-pins` (Fix round 1) — three test-only pins, in `ccd-review-335-pins.test.ts`, for guards that
+  review 335 found unpinned.
+  - **F8.** A linked tombstone, a symlink to a byte-identical copy, must be held unmeasured by the breadcrumb arm's
+    `_ws_reclaim_recorded_crumb`, and the case reds when `! -L "$tomb"` is dropped, because `_ws_tomb_str` opens its
+    file through a link. The empty-`.uuid` guard (`-n "$tuuid"`) turned out pinnable and is pinned: an empty `.uuid`
+    reads rc 0 with an empty value through `_reg_read`, and the tombstone's `"uuid":""` reads as an empty value at rc
+    0, so with the guard dropped `"" == ""` passes and the breadcrumb arm places the row.
+  - **F9.** One rc-2 case per leaf, `clipswhy` and `tmpwhy`: an `rm` failure on a long, non-ASCII entry name must
+    journal the capped reason. Each reds when its call site journals the raw reason (the row is cut to fit and loses
+    its `meas`).
+  - **F10.** One vanished-arm consent-window case for `branch-state-consent-both-ways`: the worktree is absent and the
+    branch is deleted between the recomputation and the pin. The verb must stop `state-changed` with nothing deleted,
+    and the case reds when the consent check is skipped for an absent worktree.
+- **D-4461** `loadcold-high-water` (Fix round 1) — `RunsScreen.tsx`'s `loadCold` had no sequence guard, and this
+  wave's second trigger puts a second read in flight a tick or two behind the vanish read of the same reclaim, so an
+  older read that landed last overwrote the newer one and the row showed the stale "workspace pending" chip (review
+  335, F11). The board's cold read now takes a number per call (`issued` and `applied` refs), and only a read newer
+  than the last applied one sets `cold`. The `.catch` is guarded the same way. Rejections do not advance the mark,
+  because a rejection carries no reading to be newer than: a stale rejection after a newer success sets no error, and
+  a newer failure followed by an older success still lands the older success. The mark advances only after the body is
+  read, so a success whose body cannot be read still reaches the `.catch` and shows the error state, as before. The
+  race needed reordered or slow responses and healed at the next board load. A new test file pins it, with a mutation
+  row for each guard and for the rejection choice.
+- **D-4462** `done-document-carries-kept-leaves` (Fix round 1) — the tail's stdout done document (one `printf`, both
+  verbs) gains two additive keys, `clipsKept` and `tmpRootKept`. Each is the kept word (`refused`, `unmeasured` or
+  `in-use`), or `null` when nothing was kept.
+  - **Printed without an encoder.** A `case` over the three words prints each: an empty value prints `null`, and any
+    other value prints `"unmeasured"`, never `null`, so a kept leaf can never read as nothing kept. An earlier form
+    went through the JSON string encoder, and a failed `python3` printed `null` for a leaf that WAS kept.
+  - **Absence means unmeasured.** A document from an older ccd omits both keys, and a reader treats absence as
+    unmeasured, never as gone.
+  - **No server reader is added in this wave.** The expiry lane's reader is workspace-lifecycle's next wave, and the
+    reclaim side's reader is wave 7's collector. Both parsers, `parseChildReclaimResult` and `parseExpireResult`, read
+    named keys only, so the keys are safe to ship agent-first. The journal's `meas` keeps its own rule and omits a key
+    when nothing was kept.
