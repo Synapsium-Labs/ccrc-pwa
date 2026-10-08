@@ -18,7 +18,7 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | ccd reads docs: `shared/docs.ts`, `docs-index`/`docs-tree`/`docs-show`/`docs-fetch` and the embedded helper, the doctor's `docs` check | #301 | **merged** 2026-10-06 (`f03d83304`). Executed in the coordinator's session (subagent-driven, 19 tasks, per-task reviews, a six-lens final review, one fix round), not as a run |
-| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | run 315, dispatched 2026-10-07 10:39 UTC. Wave-done at `03826657e`. Review 317 found two defects, fixed in fix round 1, which reported done at `2190cc43f`. A scoped re-review (run 336) waits on the fleet's daily dispatch cap. Merge follows a clean ruling |
+| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | run 315, dispatched 2026-10-07 10:39 UTC. Wave-done at `03826657e`. Review 317 found two defects, fixed in fix round 1, which reported done at `2190cc43f`. Scoped re-review 336 closed both, and found the new scan too narrow in three places and too wide for W3's own code. Fix round 2 was sent 2026-10-08 02:00 UTC. A second scoped re-review follows, then the merge |
 | 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | — | plan written 2026-10-08 (`docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md`, 12 tasks, six deviations), awaiting the operator's review. Dispatch after W2 merges |
 | 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | — | parallel-eligible now. Its `ccd/ccrc-doctor-checks` edit waits on whichever claim holds that file (claim 1072, run 302, on 2026-10-07) |
 | 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06) | — | after W3 and W4 |
@@ -68,6 +68,15 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - **Settled by the review:** check 3's half-measured shape is covered by W2's deviation 4377. The second redaction pass's depth bound (4378) is beyond every failure body W1's helper emits. Thirty-two guards have no mutation row, but each went red when the reviewer mutated it, so coverage is complete.
   - **Deviations defined in W2's plan on its branch:** 4374 to 4378, written bare here until W2 merges.
 - **2026-10-07: W2 fix round 1.** Commits `52a884b01`, `64ebe8351` and `2190cc43f`. 163 rows measured as expected. No new deviation.
+- **2026-10-08: W2's scoped re-review (run 336, tip `2190cc43f`).** Five lenses, all returned. 23 findings raised, 17 survived, 0 unexamined. Both of review 317's findings are closed. Every suite, all 163 rows and the claim scope reproduced.
+  - **F1, important: fix now.** The one-reader scan blanks comments and strings, but it has no template or regex state. A `/*` inside either literal hides a second reader on a later line.
+  - **F2, minor: fix now.** Ordinary spellings evade the receiver match: an element access, a `!` after `)` or `]`, and a member chain split across lines.
+  - **F3, minor: fix now.** An arrow-form `ccdEnding` scopes its body past its own end.
+  - **F4, cosmetic: fix now.** One results note still says 161 rows.
+  - **F5: accepted.** One re-anchored row's plan fence keeps its pre-fix text, as four earlier rows already do.
+  - **Scope (coordinator, from W3): fix now.** W3's `lane.ts` reads AbortSignals (`w.signal`, `controller.signal`), and the scan reds every `.signal` read. A `.signal` read now counts only in a file that imports `lifecycle.ts`, and that set of importers is pinned. `.killed` stays checked everywhere. W3 then needs no edit to W2's scan.
+  - **Also accepted:** the scan's two allowances beyond `ccdEnding`: the four `ExecResult` reads in `ccd()` and the one bound `ending.signal`. A type-aware scan was considered and not chosen, because the installed TypeScript 7 exposes only an `unstable/*` JS API.
+  - **No new deviation:** each fix brings the scan into line with refinement (g)'s wording, "a read on a CcdResult".
 - **2026-10-08: W3 plan.** Written by a planning workflow: scouts, an architect, one writer per task prototyping on a scratch tree at W2's tip, a plan review and two fix passes.
   - **12 tasks.** Task 11 is the whole-branch review, run before Task 12's close. Task 12 pushes and opens the PR.
   - **Six departures from the spec's text,** defined by Task 9 Step 7 with the first six numbers of W3's block:
