@@ -118,6 +118,23 @@ describe('closeRun’s abandon arm, as the sweep runs it', () => {
     expect(b.handed, 'nothing closed, so nothing is reclaimed').toEqual([]);
   });
 
+  it('THE RE-MEASURE, for a run with NO session (planned, never dispatched): a revive of the SAME id keeps it open — nothing is acted on', async () => {
+    const b = build();
+    const r = b.coord.openRun({ program: 'p', title: 't', project: 'demo', wave: 2, waveOf: 3, claimedBy: CRASHED });
+    if (!('id' in r)) throw new Error('openRun refused');
+    expect(okRun(b.coord.run(r.id))).toMatchObject({ state: 'planned', sessionId: null });
+    let asked = 0;
+    const revived: SweepCloseGuard = { claimedBy: CRASHED,
+      stillCrashed: async () => { asked += 1; return { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' }; } };
+    expect(await closeRun(b.deps, r.id, { intent: 'abandon' }, 'sweep', revived)).toEqual({ ok: false, kind: 'sweep-stopped',
+      stop: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' }, released: false });
+    expect(asked).toBe(1);
+    expect(okRun(b.coord.run(r.id))!.state, 'the run stays planned under its revived coordinator').toBe('planned');
+    expect(b.coord.runEvents(r.id).some((e) => e.causedBy === 'sweep'), 'no sweep run event').toBe(false);
+    expect(b.calls, 'no runCcd call').toEqual([]);
+    expect(b.handed).toEqual([]);
+  });
+
   it('the operator’s abandon never asks a re-measure: it has no guard', async () => {
     const b = build();
     const id = b.working();
