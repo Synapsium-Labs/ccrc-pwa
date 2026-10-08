@@ -249,6 +249,7 @@ describe('the verb’s answer — box words told apart from composition errors (
       '_ws_expire_resume_eval refused state-changed',
       '_ws_expire_locked refused state-changed',
       '_ws_expire_locked failed probe-unmeasured',
+      '_ws_expire_locked failed state-changed',
     ]);
   });
 });
