@@ -12,7 +12,7 @@ import { mintClaimCode } from './files.js';
 /** What one claim step answers the route. A 200 carries the value, served from
  *  memory (the holder's pending slot via `valueOf`), never from the pending file. */
 export type ClaimStep =
-  | { status: 200; generation: string; value: string; nodeId: string }
+  | { status: 200; generation: string; value: string }
   | { status: 400 | 403 | 404 | 410 | 429; error: ClaimRefusal; generation: string | null };
 
 const sha256 = (s: string): Buffer => createHash('sha256').update(s, 'utf8').digest();
@@ -107,7 +107,7 @@ export class ClaimDoor {
         'which the server no longer holds; nothing was handed out');
       return { status: 404, error: 'no-claim', generation: reply.generation };
     }
-    return { status: 200, generation: reply.generation, value, nodeId: presented as string };
+    return { status: 200, generation: reply.generation, value };
   }
 
   private slotDigest(hex: string | undefined, i: number): Buffer {
@@ -131,7 +131,7 @@ export class ClaimDoor {
       if (this.lastReplayWarnAt !== null && now - this.lastReplayWarnAt < CLAIM_ALERT_EVERY_MS) return;
       this.lastReplayWarnAt = now;
       this.warn(`ccrc-server: box token: claim door code-used: a used claim code for generation ${alert.generation} was ` +
-        `presented again${who('by', nodes.presented)} (${this.alerts.replays} replay(s) since boot); refused, nothing discarded`);
+        `presented again${nodes.presented === null ? '' : ` by node ${nodes.presented}`} (${this.alerts.replays} replay(s) since boot); refused, nothing discarded`);
       return;
     }
     const expired = alert.kind === 'expired';

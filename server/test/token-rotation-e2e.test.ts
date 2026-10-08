@@ -872,6 +872,31 @@ describe('a mint is never asked of a boot that did not fail one (D-4409 item 3)'
   });
 });
 
+describe('the hand-out line names the node the code was bound to, and only a well-shaped id (F10)', () => {
+  it('a bound id that fails NODE_ID_RE is not printed: the driver re-checks it before the line', async () => {
+    const hostile = 'x\nccrc-server: forged line';
+    let rr: Rig | null = null;
+    // The door can never match a hostile id (a presented id must pass the shape), so the hand-out is recorded directly,
+    // for the generation `send` staged and bound to the hostile node: the line is the driver's own.
+    const link: TokenSyncLink = { async send() {
+      const r = rr as Rig;
+      const [g] = (await onDisk(r)).pending;
+      await r.driver.commitHandOut(g!.id, Date.now());
+      return { kind: 'lost', why: 'disconnected' };
+    } };
+    const r = await rig({ handMade: 'e'.repeat(64), link });
+    rr = r;
+    try {
+      r.rows.row = fleetRow({ nodeId: hostile });
+      await r.driver.tick();
+      const lines = r.printed.filter((l) => l.includes('claim door handed-out'));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^ccrc-server: box token: claim door handed-out: generation #\d+ handed out$/);
+      expect(r.printed.join('\n')).not.toContain('forged');
+    } finally { await r.app.close(); }
+  });
+});
+
 describe('a code never outlives its op (D-4409 item 4)', () => {
   it('a link that rejects still has its code revoked: presenting it afterwards is a miss, not a hand-out', async () => {
     const codes: string[] = [];

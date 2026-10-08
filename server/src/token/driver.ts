@@ -74,6 +74,8 @@ export class BoxTokenDriver implements TokenRouteDriver {
   private mintGuardWarned = false;
   // Final review (D-4409 item 6): the generations presented in a pending slot, and the slot layout they are read against.
   private readonly presentedPending = new Set<string>();
+  /** The node each in-flight generation's claim code was bound to (set in `send`, gone when the op ends): the hand-out line names it. */
+  private readonly boundNode = new Map<string, string>();
   private slotIds: string[] = [];
   private pendSeen: number[] = [0, 0, 0];
   // D-4412: the retired presentations already weighed, and when one last owed a rotation (in memory; the persisted
@@ -144,7 +146,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
 
   /** The claim door's hand-out, persisted (fsynced) BEFORE the 200 (D-4394). A failed write discards the
    *  generation, so it is never handed out, and rejects: the route answers 503. */
-  async commitHandOut(generation: string, at: number, nodeId?: string): Promise<void> {
+  async commitHandOut(generation: string, at: number): Promise<void> {
     const s = this.state;
     if (s === null || !s.pending.some((p) => p.id === generation && p.handedOutAt === null)) {
       throw new Error('commitHandOut: the generation is not staged');
@@ -157,8 +159,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
     try {
       await this.persist(next);
       const g = next.pending.find((p) => p.id === generation);
-      // Spec 7.1: the outcome's word and its node id, the id only once it passed NODE_ID_RE (the door passes the one it matched).
-      const to = nodeId !== undefined && NODE_ID_RE.test(nodeId) ? ` to node ${nodeId}` : '';
+      // Spec 7.1: the outcome's word and its node id: the node `send` bound this generation's code to, and only once it
+      // passed NODE_ID_RE (the gate's `nodeIdMeasured` is a flag, not the shape).
+      const bound = this.boundNode.get(generation);
+      const to = bound !== undefined && NODE_ID_RE.test(bound) ? ` to node ${bound}` : '';
       this.warn(`ccrc-server: box token: claim door handed-out: generation #${g?.seq} handed out${to}`);
     } catch (e) {
       await this.discard([generation]);
@@ -330,8 +334,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
     const link = this.deps.link;
     if (link === null) return;
     const code = this.door.issue(id, nodeId, this.now());
+    this.boundNode.set(id, nodeId);
     let r: SyncResult;
-    try { r = await link.send(code); } finally { this.door.revoke(id); }   // the code never outlives the op, however it ends
+    try { r = await link.send(code); } finally { this.door.revoke(id); this.boundNode.delete(id); }   // the code never outlives the op, however it ends
     const before = this.mustState();
     const out = applySyncResult(before, id, r, this.now());
     if (out.learned !== null) {

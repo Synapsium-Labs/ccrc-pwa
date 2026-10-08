@@ -13,7 +13,7 @@ import { CLAIM_BODY_LIMIT_BYTES, type BoxTokenView, type ClaimRefusal, type Rota
  */
 export interface TokenRouteDriver {
   readonly door: ClaimDoor;
-  commitHandOut(generation: string, at: number, nodeId?: string): Promise<void>;
+  commitHandOut(generation: string, at: number): Promise<void>;
   rotateNow(now: number): Promise<RotateAnswer>;
   view(): BoxTokenView;
 }
@@ -70,7 +70,7 @@ export function registerTokenRoutes(app: FastifyInstance, deps: Pick<Deps, 'toke
     const step = driver.door.claimNow(req.body, now);
     if (step.status !== 200) return refuse(reply, step.status, step.error);
     try {
-      await driver.commitHandOut(step.generation, now, step.nodeId);
+      await driver.commitHandOut(step.generation, now);
     } catch {
       console.warn(`ccrc-server: box token: the hand-out of generation ${step.generation} could not be ` +
         'recorded; answered 503 and the generation is discarded');

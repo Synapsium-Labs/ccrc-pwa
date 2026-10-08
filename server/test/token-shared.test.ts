@@ -29,10 +29,10 @@ import {
 } from '../../shared/box-token.js';
 import { PENDING_FILE_RE } from '../src/token/boot.js';
 import { localIO, type FleetIO } from '../src/io.js';
+import { readNodeFiles } from '../src/update/inventory.js';
 import { mkTmp } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
-import { readNodeFiles } from '../src/update/inventory.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BOX_TOKEN_TS = path.resolve(here, '..', '..', 'shared', 'box-token.ts');
@@ -232,20 +232,23 @@ describe('the verb-missing line against the tree\'s real ccd/ccrc (F8)', () => {
   // LIVE SAFETY rests on this: a fleet box whose ccrc has no `token` verb answers the agent's spawn with
   // `_ccrc_usage_die`'s line, and the driver maps it to the learned `verb-missing` hold instead of counting a failure.
   // Every other test types that literal by hand; this one runs the REAL script, read-only, under a fixture HOME with the
-  // poisoned tools first on PATH (never the live HOME, never an edit of ccd/), and holds its FIRST stderr line to L0's
-  // detector. PART B adds the `token` verb: this case is then replaced by the verb's own suite (ccrc-token-sync.test.ts).
+  // poisoned tools first on PATH (never the live HOME, never an edit of ccd/), with a verb that can never exist, so it
+  // holds for as long as ccrc's refusal of an unknown verb is spelled this way, whether or not ccrc later gains `token`.
+  // It holds the refusal's FIRST stderr line to the shape L0's detector reads, and the detector to that shape.
   const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
+  const NO_SUCH_VERB = 'ccrc-no-such-verb-zzz';
 
-  it('`ccrc token sync --from agent` with no token verb exits 2 and its FIRST stderr line is a verb-missing detail', () => {
+  it('an unknown verb exits 2 and its FIRST stderr line is exactly "ccrc: unknown argument: <verb>", which L0 reads as verb-missing for `token`', () => {
     const home = mkTmp('ccrc-verb-missing-');
     const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     assertNoRealTool(env, home);
     expect(env.HOME).toBe(home);
-    const r = spawnSync('bash', [CCRC, ...tokenSyncSpawnArgv()], { env, encoding: 'utf8', input: '' });
-    expect(r.status, 'a usage error, not the verb running').toBe(2);
+    const r = spawnSync('bash', [CCRC, NO_SUCH_VERB, ...tokenSyncSpawnArgv().slice(1)], { env, encoding: 'utf8', input: '' });
+    expect(r.status, 'a usage error').toBe(2);
     const first = (r.stderr ?? '').split('\n')[0]!;
-    expect(first, 'the FIRST line, because the agent reports its first stderr line as the detail').toMatch(/^ccrc: unknown argument: token/);
-    expect(isTokenVerbMissing(first)).toBe(true);
-    expect(isTokenVerbMissing(`usage: ${first}`), 'a usage line first would not map').toBe(false);
+    expect(first, 'the FIRST line, because the agent reports its first stderr line as the detail').toBe(`ccrc: unknown argument: ${NO_SUCH_VERB}`);
+    expect(isTokenVerbMissing(first.replace(NO_SUCH_VERB, 'token'))).toBe(true);
+    expect(isTokenVerbMissing(first), 'the detector is for the token verb only').toBe(false);
+    expect(isTokenVerbMissing(`usage: ccrc\n${first}`), 'a usage line first would not map').toBe(false);
   });
 });

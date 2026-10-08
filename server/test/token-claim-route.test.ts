@@ -49,7 +49,7 @@ const fakeDriver = (): FakeDriver => {
     door: new ClaimDoor({ valueOf: (g) => values.get(g) ?? null, warn: (l) => warnings.push(l) }),
     commits: [], failCommit: false, warnings,
     rotateAnswer: { ok: true, outcome: 'started', view: VIEW },
-    async commitHandOut(generation, at, _nodeId) {
+    async commitHandOut(generation, at) {
       if (d.failCommit) throw new Error('fsync failed');
       d.commits.push({ generation, at });
     },
@@ -62,10 +62,11 @@ const fakeDriver = (): FakeDriver => {
 const claim = (app: FastifyInstance, body: unknown) =>
   app.inject({ method: 'POST', url: TOKEN_CLAIM_PATH, payload: body as Record<string, unknown> });
 
-/** The `import ... from '<spec>'` statements of a source, each with the names it takes (a `type` marker dropped). */
+/** The `import { ... } from '<spec>'` statements of a source, each with the names it takes (a `type` marker dropped).
+ *  Either quote, and the closing `;` optional: a spelling the scan misses would be a spelling the allowlist never sees. */
 const importsOf = (src: string): { spec: string; names: string[] }[] =>
-  [...src.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+'([^']+)';/gm)].map((m) => ({
-    spec: m[2]!,
+  [...src.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+(['"])([^'"]+)\2;?/gm)].map((m) => ({
+    spec: m[3]!,
     names: m[1]!.split(',').map((n) => n.trim().replace(/^type\s+/, '')).filter((n) => n !== ''),
   }));
 
@@ -188,18 +189,6 @@ describe('POST /api/token/claim', () => {
     expect((await claim(a, { code, nodeId: NODE })).statusCode).toBe(200);
   });
 
-  it('the route hands the claim\'s node to commitHandOut, which logs it only once it passed NODE_ID_RE', async () => {
-    const d = fakeDriver();
-    const seen: (string | undefined)[] = [];
-    const orig = d.commitHandOut.bind(d);
-    d.commitHandOut = async (g, at, nodeId) => { seen.push(nodeId); await orig(g, at); };
-    const code = d.door.issue(GEN, NODE, Date.now());
-    const a = await open(d);
-    expect((await claim(a, { code, nodeId: NODE })).statusCode).toBe(200);
-    expect(seen).toEqual([NODE]);
-  });
-
-
   it('size: a 2 KiB body answers 413 with the same small body and no-store', async () => {
     const d = fakeDriver();
     d.door.issue(GEN, NODE, Date.now());
@@ -309,7 +298,7 @@ describe('ClaimDoor', () => {
     const code = d.issue(GEN, NODE, 1_000);
     const step = d.claimNow({ code, nodeId: NODE }, 1_001);
     expect(typeof (step as unknown as { then?: unknown }).then).toBe('undefined');
-    expect(step).toEqual({ status: 200, generation: GEN, value: VALUE, nodeId: NODE });
+    expect(step).toEqual({ status: 200, generation: GEN, value: VALUE });
   });
 
   it(`compares a FIXED ${MAX_PENDING} live + ${BURNED_CODES_KEPT} burned slots on every claim, live, burned or none`, () => {
@@ -403,10 +392,24 @@ describe('ClaimDoor', () => {
       expect(lines[0]).not.toContain(code);
     });
 
-    it('a 200 carries the node it was handed to, so the hand-out line can name it', () => {
-      const { d } = rig();
+    it('a bound id that fails NODE_ID_RE is never printed: the door re-checks it before it reaches a line', () => {
+      const { d, lines } = rig();
+      const hostile = 'x\nccrc-server: forged line';
+      const code = d.issue(GEN, hostile, 1_000);
+      expect(d.claimNow({ code, nodeId: OTHER }, 1_001)).toMatchObject({ status: 403, error: 'wrong-node' });
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).not.toContain('forged');
+      expect(lines[0]).not.toContain('bound to node');
+      expect(lines[0], 'the presenting node, which did pass the shape, is still named').toContain(`presented by node ${OTHER}`);
+    });
+
+    it('the replay line reads "presented again by node X"', () => {
+      const { d, lines } = rig();
       const code = d.issue(GEN, NODE, 1_000);
-      expect(d.claimNow({ code, nodeId: NODE }, 1_001)).toMatchObject({ status: 200, generation: GEN, nodeId: NODE });
+      d.claimNow({ code, nodeId: NODE }, 1_001);
+      lines.length = 0;
+      d.claimNow({ code, nodeId: OTHER }, 1_002);
+      expect(lines[0]).toContain(`was presented again by node ${OTHER} (`);
     });
 
     it('a node id that fails NODE_ID_RE is never printed: it is a malformed miss, with no id in its line', () => {
@@ -450,7 +453,9 @@ describe('ClaimDoor', () => {
     };
     const src = readFileSync(path.join(here, '..', 'src', 'token', 'door.ts'), 'utf8');
     const imports = importsOf(src);
-    expect(imports.length, 'the scan found door.ts\'s imports').toBeGreaterThan(5);
+    expect(imports.length, 'the scan parsed every import statement of door.ts, in whatever spelling')
+      .toBe([...src.matchAll(/^import\b/gm)].length);
+    expect(imports.length).toBeGreaterThan(5);
     for (const { spec, names } of imports) {
       expect(Object.keys(ALLOWED), `door.ts imports ${spec}`).toContain(spec);
       for (const n of names) expect(ALLOWED[spec], `door.ts takes ${n} from ${spec}`).toContain(n);
@@ -459,12 +464,16 @@ describe('ClaimDoor', () => {
       .not.toMatch(/^import\s+(?!type\s*\{|\{)|\bimport\s*\(|\brequire\s*\(/m);
   });
 
-  it('the import scan itself sees a writer taken from ./files.js (the mutation the allowlist exists for)', () => {
+  it('the import scan sees a writer in every spelling: single or double quotes, with or without the semicolon', () => {
     const planted = "import { mintClaimCode, writeStateFile } from './files.js';\nimport type { A } from './policy.js';\n";
     expect(importsOf(planted)).toEqual([
       { spec: './files.js', names: ['mintClaimCode', 'writeStateFile'] },
       { spec: './policy.js', names: ['A'] },
     ]);
+    for (const q of ['"', "'"]) for (const semi of [';', '']) {
+      const one = `import { mintClaimCode, writeValueFileAtomic } from ${q}./files.js${q}${semi}\n`;
+      expect(importsOf(one), one).toEqual([{ spec: './files.js', names: ['mintClaimCode', 'writeValueFileAtomic'] }]);
+    }
   });
 });
 
