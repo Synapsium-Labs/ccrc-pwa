@@ -23,7 +23,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deployed (both boxes on v0.0.119, 10-07); the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
 | 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); DISPATCHED 2026-10-07 22:28 → `ccrc-pwa-swift-cove`; wave-done 10-08 04:3x, PR #328 @ `701839b52`; review run 339 (`ccrc-pwa-keen-summit`), no fix round; **merged 2026-10-08 (`669b8305`)**, prerelease v0.0.123; run 314 closed; deploy via ccrc's updater; the lane ships SHADOWED |
-| 5 | 3–4, follow-ups | FIRST: review 339's residue and the dead-coordinator lane's arming blockers; then the expiry lane's follow-ups: the kept-leaf reader, the `state-changed` reading, the answer to a repeating resumable failure, the in-lock window close | server (+ **AGENT-FIRST** if the window close lands in ccd) | wave 4; CCR-15 wave 6 (#326) merged | — | run 345 open (planned; the run's wave 6 of 6), block 4480–4495; plan revised for the 20:00 rulings and verified (`f8ec01cc4`, 13 tasks), plan PR #333 |
+| 5 | 3–4, follow-ups | FIRST: review 339's residue and the dead-coordinator lane's arming blockers; then the expiry lane's follow-ups: the kept-leaf reader, the `state-changed` reading, the answer to a repeating resumable failure, the in-lock window close | server (+ **AGENT-FIRST** if the window close lands in ccd) | wave 4; CCR-15 wave 6 (#326) merged | — | run 345 DISPATCHED 2026-10-08 22:10 to ccrc-pwa-keen-hollow (the run's wave 6 of 6), block 4480–4495; plan merged #333 → `b2b438d0b` (13 tasks) |
 
 ## Decisions & deviations
 
@@ -987,6 +987,24 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **CCR-15 mail 4040 agrees.** Its wave 8 Task 1 MOVES `keptLeafWord` to L0 (`shared/api.ts`) as `leafKeptWord`
     once wave 5 lands. Answered in 4045: consent to L0. The word half reads null as `unmeasured`; null → null is the
     done-document carrier's arm. The plan's test now pins that.
+- **2026-10-08 22:10 — wave 5's plan merged (#333 → `b2b438d0b`), and run 345 is dispatched.**
+  - #333's gating legs all passed, both macOS legs included, at head `f8ec01cc4`. It merged at 22:09 with
+    `--admin --match-head-commit`.
+  - **Run 345 dispatched at 22:10** to `ccrc-pwa-keen-hollow`, on the first try (`skillState: present`). It has 13 items,
+    one per task.
+    - Routing is the worker row: Opus · high main loop, workflow off, compact 40; Sonnet · high implementers; an
+      Opus · high per-task reviewer holding the act-safety lens; Haiku scouts. Nothing in wave 4's evidence moves it.
+    - Numbers 4480–4493 go to the plan's fourteen slugs in order. 4494 and 4495 are held and reported unused.
+  - **Claims live at dispatch, named in the brief:**
+    - run 347 (`ccd/ccd`, `shared/api.ts`; claim 1113), which Tasks 11 and 9 need;
+    - run 320 (`README.md` 1115, `server/src/coord/routes.ts` 1116), which Tasks 7, 12 and 3 need;
+    - run 302 (`server/test/session-hook.test.ts` 1117), which the worker only runs.
+    The worker claims per task and asks a holder for a region split on a 409. Wave 5's ccd region is
+    `_ws_expire_locked` alone, and its `shared/api.ts` edit is one line in `ExpiryAttention.kind`.
+  - **Rulings carried in the brief:**
+    - `keptLeafWord`'s shape is a cross-programme contract (4040/4045).
+    - The standing-entry sentence and the in-use reading are as ruled at 21:55.
+    - The two lens minors stay stated, not fixed.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -1088,10 +1106,10 @@ Waves 1, 2, 3, 3b and 4 are merged: #229 `a7b9831c`, #233 `fe7b9775`, #286 `77c1
 operator creates `$REG/expire-lane-live` by hand. The dead-coordinator lane records "would end" and closes nothing until
 the operator creates `$REG/dead-coordinator-lane-live` by hand.
 
-**Wave 5 is run 345** (planned; the run's wave 6 of 6), with numbers 4480–4495, written bare. Its plan is
+**Wave 5 is run 345** (dispatched 2026-10-08 22:10 to ccrc-pwa-keen-hollow; the run's wave 6 of 6), with numbers 4480–4495, written bare. Its plan is
 `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md` on
 `docs/workspace-lifecycle-wave5-plan`. It was revised for the 20:00 rulings and verified again (the 21:55 entry,
-head `f8ec01cc4`), and is in plan PR #333. Then comes the dispatch.
+head `f8ec01cc4`), and merged as #333 (`b2b438d0b`). The brief is in the 22:10 entry.
 - **Its FIRST commit is review 339's residue,** as ruled in the 2026-10-08 12:02 entry. First the dead-coordinator
   lane's arming blockers: F1, F2, F3, F13 and the worker's open item 2. Then F4, F5's spec sentence, F6's entry, and
   the plan corrections F7, F8, F10, F11 and F12. Review 339's report is
