@@ -1055,10 +1055,11 @@ export function tidyDraining(home, tickMs, pid, countBefore) {
  *    drain order, never inverts when the block lifts (FU3F review F1).
  *  - A file whose bytes or sidecar cannot be read on this drain (SPOOL_UNREADABLE) is skipped the same way, counted
  *    `spool_unreadable` and named on stderr as `history-sweep: spool-unreadable: <name>: <reason>` (FU8, FP5, FPM9).
- *  - A node at a spool file's name that is not a regular file (a FIFO, a link, a directory: D-4418) is never renamed, read
- *    or followed; renameAndObserve names it on stderr. A drain whose loop ends without throwing (a `break` included)
- *    counts it `non_regular` after its renames (FR2c, F3). A drain whose loop throws leaves that count out: its journal half
- *    renames in the drain's place, names the node on stderr and does not count it (D-4418; review 351 F2). */
+ *  - A node at a spool file's name that is not a regular file (a FIFO, a link, a directory: D-4418) is never renamed, read or
+ *    followed; renameAndObserve names it on stderr once its renames complete. A drain whose loop ends without throwing (a
+ *    `break` included) counts it `non_regular` once those renames complete (FR2c, F3). A drain whose loop throws leaves that
+ *    count out: its journal half renames in the drain's place and, once its own renames complete, names the node on stderr
+ *    and does not count it (D-4418; review 351 F2). */
 export function drainSpool(db, c) {
   const tickMs = c.now();
   // FU8 (D-4347 (history-planted-entries-never-wedge)): no spool work through a spool/ that is not a real directory (FP3):
@@ -1175,9 +1176,10 @@ export function drainSpool(db, c) {
   const renamed = renameAndObserve(c.home, tickMs, c.now());
   if (renamed.failed && !failedCounted) countOutside(db, 'journal_write_failed');
   // D-4418 (history-spool-append-regular-file-only), FR2c (review 344 F3): each node the hook refuses at spool/<id>.jsonl,
-  // counted once per drain whose loop ends without throwing (a `break` included), as D-4347's planted entries are;
-  // renameAndObserve named it. A drain whose loop throws never reaches this line: the journal half above named the node on
-  // stderr and did not count it, so that drain's count is left out (review 351 F2).
+  // counted once per drain whose loop ends without throwing (a `break` included) and whose renames complete, as D-4347's
+  // planted entries are; renameAndObserve named it, after its rename loop. A drain whose loop throws never reaches this
+  // line: the journal half above named the node on stderr once its own renames completed and did not count it, so that
+  // drain's count is left out (review 351 F2).
   if (renamed.refused > 0) countOutside(db, 'non_regular', renamed.refused);
   return hints;
 }
