@@ -774,7 +774,8 @@ export function journalHalf(home, ids, nowMs) {
 
 /** Tidy `spool/.draining/` before a drain lists it (D-4347 (history-planted-entries-never-wedge)). Returns what it
  *  counted, `nonRegular` entries and `malformed` sidecars (the caller bumps the counters; `journalHalf` never calls this,
- *  because no DB holds a counter there, IV2), the draining files it `displaced`, and the draining names it `kept`.
+ *  because no DB holds a counter there, IV2), the draining files it `displaced`, the draining files it found `blocked`, and the
+ *  draining names it `kept`.
  *  - A directory is moved whole into this drain's own area, `.draining/planted/<tickMs>.<pid>/` (never recursed into,
  *    never deleted: a same-user process may have left content, or a mount, there). The area is new for each drain, so a
  *    name planted again never meets the one set aside before, and the name itself is unchanged (NAME_MAX, D-4303). One
@@ -787,7 +788,8 @@ export function journalHalf(home, ids, nowMs) {
  *    file's sidecar or sidecar-temp name would fail every sidecar write of that file (the rename onto it EISDIR, the
  *    O_EXCL open EEXIST), D-4338's hold, so the live file itself is moved into the area instead: `displaced`, never
  *    journaled by this drain (a hold pass may have journaled it already), its bytes kept, so one planted entry costs
- *    only that file's lines. Any other entry at a sidecar-temp name, or at the sidecar name of a file that is not
+ *    only that file's lines. When the live file cannot be moved either (the area cannot be made), the file is `blocked`:
+ *    taken out of `live` so the other arms treat its sidecar names as not live, and never `displaced`. Any other entry at a sidecar-temp name, or at the sidecar name of a file that is not
  *    live, is the sweep's own debris and is removed uncounted (F20). Any other non-regular entry at a live file's
  *    sidecar name is removed and counted `non_regular`; a sidecar of a live file that fails `observationOk` is removed
  *    and counted `sidecar_malformed`, and the next `observe` re-observes it (F9).
@@ -796,7 +798,7 @@ export function journalHalf(home, ids, nowMs) {
  *  A step that fails is left for the next drain. */
 export function tidyDraining(home, tickMs, pid) {
   const P = historyPaths(home);
-  const out = { nonRegular: 0, malformed: 0, displaced: [], kept: [] };
+  const out = { nonRegular: 0, malformed: 0, displaced: [], blocked: [], kept: [] };
   let names;
   try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return out; throw e; }
   const typeOf = (n) => {
@@ -845,7 +847,11 @@ export function tidyDraining(home, tickMs, pid) {
       if (t === 'gone') continue;
       if (t === 'dir') {
         out.nonRegular += 1;
-        if (!plantOrRemove(n) && live.has(file) && plant(file)) { live.delete(file); out.displaced.push(file); }
+        if (!plantOrRemove(n) && live.has(file)) {
+          live.delete(file);
+          if (plant(file)) out.displaced.push(file);
+          else out.blocked.push(file);   // D-4347 (history-planted-entries-never-wedge): neither the entry nor its file could move; the drain skips this file, never holds on it
+        }
         continue;
       }
       // D-4347 (history-planted-entries-never-wedge): a sidecar temp is always stale at a drain's start (writeSidecar
@@ -869,7 +875,10 @@ export function tidyDraining(home, tickMs, pid) {
  *    into `.draining/rejected/` and the drain goes on; any other SQLite failure ends the tick (D-4346,
  *    history-permanent-failures-classified).
  *  - A link or FIFO planted in .draining/ is removed and counted. A draining name tidyDraining `kept` is skipped, and a
- *    file it `displaced` is counted `spool_displaced` and named on stderr (D-4347 (history-planted-entries-never-wedge)). */
+ *    file it `displaced` is counted `spool_displaced` and named on stderr (D-4347 (history-planted-entries-never-wedge)). A file
+ *    it found `blocked` (its sidecar name is blocked and it could not move) is counted `spool_blocked`, named on stderr and
+ *    skipped like a kept name: never journaled by this drain, left in place, retried by the next drain's tidy, and every later
+ *    file drains. */
 export function drainSpool(db, c) {
   const tickMs = c.now();
   if (ensureSpoolDirs(c.home)) countOutside(db, 'non_regular');
@@ -880,7 +889,11 @@ export function drainSpool(db, c) {
     countOutside(db, 'spool_displaced', t.displaced.length);
     for (const n of t.displaced) process.stderr.write(`history-sweep: spool-displaced: ${n}\n`);
   }
-  const kept = new Set(t.kept);
+  if (t.blocked.length > 0) {
+    countOutside(db, 'spool_blocked', t.blocked.length);
+    for (const n of t.blocked) process.stderr.write(`history-sweep: spool-blocked: ${n}\n`);
+  }
+  const kept = new Set([...t.kept, ...t.blocked]);
   const hints = [];
   let failedCounted = false;
   for (const name of listDraining(c.home)) {

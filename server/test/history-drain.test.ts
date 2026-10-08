@@ -42,7 +42,7 @@ interface Sweep {
   journalHalf(home: string, ids: Ids | null, nowMs: number): { held: string[]; journalFailed: boolean };
   readDrainingText(path: string): { text: string; bytes: number };
   setAsideOversize(db: DatabaseSync, home: string, name: string): boolean;
-  tidyDraining(home: string, tickMs: number, pid: number): { nonRegular: number; malformed: number; displaced: string[]; kept: string[] };
+  tidyDraining(home: string, tickMs: number, pid: number): { nonRegular: number; malformed: number; displaced: string[]; blocked: string[]; kept: string[] };
   ensureSpoolDirs(home: string): boolean;
   renameSpoolFiles(home: string, tickMs: number, pid: number): string[];
 }
@@ -1166,6 +1166,49 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
           expect(counters(box)['spool_displaced']).toBe(1);
           expect(fs.statSync(d).isDirectory()).toBe(true);
           expect(areas().filter((a) => fs.readdirSync(path.join(PL(), a)).length === 0), 'a failed move leaves no empty area').toEqual([]);
+        } finally { fs.chmodSync(d, 0o700); }
+      });
+
+      // FU3F: with the set-aside area unmakeable too, the live file cannot be displaced; it is skipped, never a hold.
+      it.each([['.obs'], ['.obs.tmp']])('two planted entries — an unusable planted area and a non-empty directory at a live sidecar name %s — never hold the drain (FU3F)', (suffix) => {
+        writeRegular();                                            // A, first in drain order
+        fs.writeFileSync(path.join(DRAIN(box.home), `${ID2}.902.1.jsonl`), stopLine(ID2));   // B
+        const d = plantDir(`${ID}.900.1${suffix}`, 'keep');
+        fs.chmodSync(d, 0o500);
+        fs.mkdirSync(PL());
+        fs.writeFileSync(path.join(PL(), 'keep'), '');
+        fs.chmodSync(PL(), 0o500);                                 // non-empty, so it cannot be removed; no area can be made in it
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+          expect(counters(box)['journal_write_failed']).toBeUndefined();   // at HEAD~: 1, and B held
+          expect(r.stderr).toContain(`history-sweep: spool-blocked: ${ID}.900.1.jsonl\n`);
+          expect(counters(box)['spool_blocked']).toBe(1);
+          expect(counters(box)['spool_displaced']).toBeUndefined();
+          expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(`${ID2}.902.1.jsonl`, 1)]);   // B drained
+          expect(drainingNames(box.home)).toEqual([`${ID}.900.1.jsonl`]);   // A is still a live draining file
+          expect(fs.readFileSync(path.join(DRAIN(box.home), `${ID}.900.1.jsonl`), 'utf8')).toBe(stopLine(ID));
+          expect(journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'file').map((x) => x['name'])).toEqual([`${ID2}.902.1.jsonl`]);   // never journaled by this drain
+        } finally { fs.chmodSync(PL(), 0o700); fs.chmodSync(d, 0o700); }
+      });
+
+      it('CONTROL (FU3F): the same fixture with a usable planted/ displaces A, and B drains', () => {
+        writeRegular();
+        fs.writeFileSync(path.join(DRAIN(box.home), `${ID2}.902.1.jsonl`), stopLine(ID2));
+        const d = plantDir(`${ID}.900.1.obs`, 'keep');
+        fs.chmodSync(d, 0o500);
+        fs.mkdirSync(PL());
+        fs.writeFileSync(path.join(PL(), 'keep'), '');
+        fs.chmodSync(PL(), 0o700);
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+          expect(r.stderr).toContain(`history-sweep: spool-displaced: ${ID}.900.1.jsonl\n`);
+          expect(counters(box)['spool_displaced']).toBe(1);
+          expect(counters(box)['spool_blocked']).toBeUndefined();
+          expect(counters(box)['journal_write_failed']).toBeUndefined();
+          expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(`${ID2}.902.1.jsonl`, 1)]);
+          expect(drainingNames(box.home)).toEqual([]);
         } finally { fs.chmodSync(d, 0o700); }
       });
 
