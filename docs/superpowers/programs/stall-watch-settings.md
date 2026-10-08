@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `working`, fix round 3 from `6cef2ae46`; review run 338 closed (R29) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `451854d1d` after fix round 3; review run 340 waits at the cap (R30) |
 
 ## Decisions & deviations
 
@@ -510,6 +510,26 @@ time.
   - The round is bounded: the worker fixes exactly these, and the next review is scoped to this round's diff and the
     passages it edits.
   - Next: run 322 is back at `working` (fingerprint `6cef2ae46`), and the `fix-round` mail goes out.
+- **R30 (2026-10-08 06:14)**, fix round 3's wave-done is verified, and its review waits at the cap.
+  - Mail 3982 claims `451854d1d` and reports `suite: red`, `failure: unclear`.
+    - The first whole-PWA run timed out in eight files while the worker's own re-review ran mutations alongside it.
+    - Each of those files passed alone, a clean re-run at `451854d1d` was green (108 files, 3520 tests), and CI's
+      `test (pwa)` on run 37734778375 is green.
+    - The worker's clause 15 keeps the first run's signal. This session reads it as load, not code; the review
+      re-runs the suite alone.
+  - Re-measured:
+    - `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all read `451854d1d`, and the workspace is
+      clean.
+    - Every CI check is green except the advisory macOS legs, which were still running.
+    - The six commits touch only `StallWatchSection.tsx`, `settings-screen.test.tsx` and the W2 plan.
+    - `merge-tree` is clean against `origin/main`, `ws/swift-cove`, `ws/amber-river` and `ws/soft-delta`.
+    - The server took the fingerprint, and run 322 is `awaiting-review`.
+    - The child's evidence is copied to `w2-fix3-child-evidence/`. Claim 1101 is held.
+  - Review run 340 is open (planned). Its brief, `w2-fix3-review-brief.md`, is bounded as R29 said: the panel on
+    `6cef2ae46..<tip>`, R29's six items, and the passages this round edits. Untouched first-cut plan prose is
+    residue, never a finding. The whole wave gets only the property and lane checks.
+  - The cap reads 24 of 24, and the next age-out is 08:47:32 (run 306). A session-only wake at 08:47 starts the
+    timed attempt, which re-checks the preconditions and sends once at 08:47:34.
 
 ## Carried constraints (reviewers get these)
 
