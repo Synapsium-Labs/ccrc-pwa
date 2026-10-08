@@ -803,6 +803,13 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   line changes, and the second lander merges `origin/main` (never a rebase) keeping both sides. Measured on their side:
   at `ws/soft-delta` `ebef2fbfe` run 302's only change to the file is itself a 298-line end-of-file append. Forwarded
   to swift-cove (mail 3953); the "pins owed" path and the merge hold of mail 3949 no longer apply; 4454 stands.
+- **2026-10-08 01:39 — wave 6's effect on `ws-expire`, measured; item 8 re-ruled; one new arming blocker.** calm-mesa's
+  mail 3956 answered the carried question ("widened") and named two more `ws-expire` effects of wave 6. A read-only
+  workflow measured all three (3 Opus finders, a Sonnet refuter each; every serious claim upheld, two line numbers
+  corrected). Re-ruled under Carried constraints: the widening is kept in the attic (not a blocker); `_ws_expire_cwd_users`'
+  newline fail-open is an arming blocker; the kept-leaf silence is a follow-up. Findings for wave 6's own fix round went
+  to calm-mesa as mail 3961: `_ws_path_users` unfixed at the tip, a new wrong-target site in `_ws_leaf_remove`, a
+  new-word skew loop, a never-terminal tail retry. Its answer on the shared helper is pending.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -834,14 +841,36 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     `!inArchivedFold` (FM7).
   Wave 3 rewrites the archive's end of life, so its plan takes these up or rules them out.
 - **`ws-expire` has no recompute-to-pin branch-state check** (CCR-15's coordinator, mail 3939, 10-07, item 8 of
-  wave 6's X2 list; not carried by wave 6). `_ws_expire_locked` recomputes the fingerprint inside the lock
-  (`_ws_expire_fork`), then pins without re-reading the branch. So within that window:
-  - a branch deleted there proceeds as absent, where the merge base gave `pin-failed`;
-  - a branch created there is adopted at the pin's tip, into the attic, so nothing is lost.
-  - **Ruled:** a follow-up after CCR-15 wave 6 (#326) lands, reusing its three-way branch read and its
-    `state-changed` stop. Not run 314's: it edits ccd/ccd, which run 314 does not, and wave 6 holds that region.
-  - **Not an arming blocker** while it stays narrow and attic-preserving. Wave 6's reviewer is asked whether wave 6
-    widened or narrowed it; calm-mesa forwards the answer, and a "widened" re-opens this ruling.
+  wave 6's X2 list). `_ws_expire_locked` recomputes the fingerprint inside the lock (`_ws_expire_fork`), then pins
+  without re-reading the branch. **Re-ruled 2026-10-08 01:39** on wave 6's reviewer's "widened" (mail 3956), measured read-only at
+  `8c0f2cd94` against `origin/main` (wf_00681611-998):
+  - **The window widens in the deleted direction only, and more broadly than the reviewer said.** At wave 6's tip, an
+    expiry now completes where `main` stopped at `pin-failed` in three cases: a branch deleted inside the in-lock window,
+    a branch ALREADY ABSENT at mint, and a branch deleted between the fresh pin and the settle. The pin reads the branch
+    three ways and treats a proven-absent one as nothing to pin. A HEAD still symbolic to the deleted branch fails the
+    pin, as before.
+  - **The work is kept in refs, not reflogs.** Commits, the WIP commit, and every commit the worktree's reflogs name
+    are pinned under `refs/ccrc/attic/<id>/*` in the main repo. git gc never prunes those, and only the terminal-only
+    `ccd ws-attic --drop` removes them. In the widened cases, ignored and secret-shaped files go with the tree, as the
+    standing expiry policy (and the token's digests) says. `main` kept them only because its pin failed.
+  - **Ruled: not an arming blocker.** Closing the in-lock window (refuse `state-changed` on present→absent between the
+    fork and the pin's branch read) stays a follow-up after #326, reusing wave 6's three-way read. The operator gets
+    both behaviour facts with the arming question.
+- **ARMING BLOCKER for the expiry lane: `_ws_expire_cwd_users` fails open on a newline-ended path** (CCR-15 mail 3956
+  item 2, confirmed 2026-10-08 01:39). It resolves the worktree's parent with a bare `$(cd … && pwd -P)`, and command substitution
+  strips trailing newlines. A parent whose physical path ends in a newline then matches no `/proc` cwd, and a process
+  inside the tree reads as nobody. This is the expiry's only cwd-in-use guard, and its body is 3b's. Exposure on the
+  fleet box today is nil, measured. Wave 6 carries two twins: `_ws_path_users`, still unfixed at `8c0f2cd94` despite the
+  review's word, and `_ws_leaf_remove`'s root, a new site that can remove the wrong target. Both went to calm-mesa (mail
+  3961) with one question: does wave 6's fix round apply one shared sentinel helper at all three sites (this programme
+  consents to that one change to the body), or does lifecycle take its own after #326?
+- **Carried (a follow-up, not a blocker): a kept leaf is silent.** When ccd's shared tail keeps clips or the temp
+  root, `ws-expire` still prints `expired`. The server records "cleaned up" and raises no attention entry. The keep
+  lives only in the journal row's `detail`, which no PWA surface renders. CCR-15 is asked for additive
+  `clipsKept`/`tmpRootKept` keys on the done document. The server reads them into an attention entry in this
+  programme's next wave. Also on the CCR-15 side: if F1 mints a new nested word, `ExpireToken` gains it in the same PR,
+  or it reuses `containment-unproven`. Otherwise the audit reads `unreadable` and re-audits every pass through the
+  rollout skew. And the tail's moved-tree arm retries hourly forever, never terminal.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`, `~/.cc-limits`
   or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec whitelist; never print
   secret contents.
@@ -865,5 +894,9 @@ from spec §4 wave 4 and §5.4: the dead-coordinator lane (crash-only, one hour,
 - **The operator's questions before arming** are (b)–(d) in the 06:01 entry. (b), the confirm copy, is still open. On
   10-07 the operator expired 15 archived workspaces by hand, which cuts most of (c), the backlog. (d) is in hand: the
   operator ends brisk-mesa's stray tmux server (see the entry after 06:05).
+- **Arming the expiry lane also waits on** `_ws_expire_cwd_users`' newline fix (Carried constraints; this programme's
+  or wave 6's, per calm-mesa's answer to mail 3961) and on wave 4's own arming blockers. Once #326 lands, the operator
+  should also know two facts. An archived workspace whose branch is already gone now expires, with its work kept in
+  the attic, where `main` stops at `pin-failed`. In that case, ignored and secret-shaped files go with the tree.
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
   L5's sentence.
