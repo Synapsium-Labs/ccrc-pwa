@@ -341,6 +341,14 @@ export function idOk(id) {
   return typeof id === 'string' && id.length <= SPOOL_ID_MAX && ID_RE.test(id) && id !== '.' && id !== '..';
 }
 
+/** The id a name in spool/ spools for, `<id>.jsonl` with an id that passes idOk and no leading dot; null for any other
+ *  name, which no hook writes. The one grammar the sweep's rename and status's refused-node count both read (FR2c). */
+export function spoolFileIdOf(name) {
+  if (typeof name !== 'string' || name.startsWith('.') || !name.endsWith('.jsonl')) return null;
+  const id = name.slice(0, -'.jsonl'.length);
+  return idOk(id) ? id : null;
+}
+
 // ── the one role reader (§5.2, O53) ───────────────────────────────────────
 /** One key out of an env file's TEXT, by `ccd/ccrc`'s `_box_env_value` rules
  *  in its default (two-argument) mode, which every doctor caller uses — so the
@@ -2823,7 +2831,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
   'drain-rejected': `the files are kept in ~/.ccrc/history/spool/.draining/rejected/ and their lines in the journal, and nothing in this build drains them again; the refusal is in the sweep's log: ${SWEEP_LOG}`,
   // D-4347 (history-planted-entries-never-wedge). Never reset in B1, like drain-rejected and blob-undecodable: B2's repair owns resets.
-  'spool-planted': `remove a link or file that stands at ~/.ccrc/history/spool itself (the next pass makes the directory again) and the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; a file the sweep cannot read stays in .draining/ with its .obs sidecar until both are readable by this user (chmod 600, or chown them) or removed, and its id's later files drain once it does; the sweep's log names each one: ${SWEEP_LOG}`,
+  'spool-planted': `remove a link or file that stands at ~/.ccrc/history/spool itself (the next pass makes the directory again), any FIFO, link or directory that stands at ~/.ccrc/history/spool/<id>.jsonl (that id spools again once it is gone), and the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; a file the sweep cannot read stays in .draining/ with its .obs sidecar until both are readable by this user (chmod 600, or chown them) or removed, and its id's later files drain once it does; the sweep's log names each one: ${SWEEP_LOG}`,
 });
 
 const minutesOf = (ms) => Math.round(ms / 60_000);
@@ -3011,9 +3019,12 @@ export function deriveHealth(h) {
   // FU8 (FP5): a file the sweep could not read waits in place with its id's later files behind it, and is counted apart.
   // FU8 (FP3): a link or a file at spool/ itself stops the hook and the drain alike; status measures it (no counter), so the
   // clause clears when the entry goes.
-  if (h.spoolNotDirectory || h.spoolDisplaced + h.spoolBlocked + h.spoolUnreadable > 0) {
+  // FR2c (review 344 F3; D-4418 (history-spool-append-regular-file-only)): a node the hook refuses at spool/<id>.jsonl is
+  // measured by status's own lstat (no counter), so its clause clears when the node goes, as FP3's spool/ clause does.
+  if (h.spoolNotDirectory || h.spoolNodesRefused > 0 || h.spoolDisplaced + h.spoolBlocked + h.spoolUnreadable > 0) {
     const parts = [];
     if (h.spoolNotDirectory) parts.push('spool/ is not a real directory (a link or a file stands there), so no hook spools a line and no pass drains one while it stands');
+    if (h.spoolNodesRefused > 0) parts.push(`${h.spoolNodesRefused} node(s) at spool/<id>.jsonl are not regular files (a FIFO, a link or a directory), so the hook spools no line for that id while one stands`);
     if (h.spoolDisplaced + h.spoolBlocked > 0) parts.push(`${h.spoolDisplaced} spool file(s) set aside under .draining/planted/ and ${h.spoolBlocked} skipped drain(s) of a file whose sidecar name is blocked, because of entries planted in .draining/`);
     if (h.spoolUnreadable > 0) parts.push(`${h.spoolUnreadable} skipped drain(s) of a draining file or its sidecar the sweep could not read, whose id's later files wait behind it`);
     warn.push(item('spool-planted', parts.join('; ')));

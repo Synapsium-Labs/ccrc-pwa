@@ -789,6 +789,46 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(healthFs.existsSync(healthPath.join(outside, '.draining', 'x.900.1.obs'))).toBe(true);
   });
 
+  // FR2c (review 344 F3; D-4418 (history-spool-append-regular-file-only)): a node the hook refuses at spool/<id>.jsonl silences
+  // that id's spool lines until it is removed. Status counts such nodes under WARN spool-planted from its own lstat (no counter),
+  // never opening or following one, so the clause clears when the node goes; a regular sibling, a dot-name and a name outside
+  // the id grammar are not counted.
+  it.each([['a FIFO'], ['a dangling link'], ['a directory']])('%s at spool/<id>.jsonl is WARN spool-planted from status\'s own lstat, and the clause clears when it goes (FR2c, F3)', (kind) => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-spool-node-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const spoolDir = healthPath.join(box.home, '.ccrc', 'history', 'spool');
+    healthFs.mkdirSync(spoolDir, { recursive: true, mode: 0o700 });
+    const node = healthPath.join(spoolDir, `${ID}.jsonl`);
+    if (kind === 'a FIFO') healthCp.execFileSync('mkfifo', [node]);
+    else if (kind === 'a dangling link') healthFs.symlinkSync(healthPath.join(box.home, 'nowhere'), node);
+    else healthFs.mkdirSync(node);
+    healthFs.writeFileSync(healthPath.join(spoolDir, 'claude-a-other.jsonl'), '\n{}\n', { mode: 0o600 });   // a regular sibling
+    healthCp.execFileSync('mkfifo', [healthPath.join(spoolDir, '.hidden.jsonl')]);                            // a dot-name no hook writes
+    healthFs.mkdirSync(healthPath.join(spoolDir, 'not an id.jsonl'));                                           // outside the id grammar
+    const warn = (statusOf(box).env!['health']['warn'] as Array<{ word: string; detail: string; remedy: string }>).find((i) => i.word === 'spool-planted');
+    expect(warn?.detail).toContain('1 node(s) at spool/<id>.jsonl are not regular files');                   // at be9df58ba: no word names it
+    expect(warn?.remedy).toContain('~/.ccrc/history/spool/<id>.jsonl');
+    healthFs.rmSync(node, { recursive: true });                                                                  // CONTROL: removed, the clause clears
+    expect(wordsOf(statusOf(box).env!['health']['warn'])).not.toContain('spool-planted');
+  });
+
+  // FR2c: absent is not unreadable. A spool/ status cannot list (0300), or whose names it cannot lstat (0600, a node at a spool
+  // name planted first), is named unmeasured, never read as "no refused node". At 0600 spool/.draining is unreadable too.
+  it.skipIf(process.getuid?.() === 0).each([['0300', 'could not read spool/;'], ['0600', 'could not read spool/, spool/.draining;']])('a spool/ of mode %s is FAIL status-unreadable naming spool/, never "no refused node" (FR2c)', (m, said) => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-spool-unlisted-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const spoolDir = healthPath.join(box.home, '.ccrc', 'history', 'spool');
+    healthFs.mkdirSync(spoolDir, { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(healthPath.join(spoolDir, `${ID}.jsonl`), '\n{}\n', { mode: 0o600 });
+    healthFs.chmodSync(spoolDir, parseInt(m, 8));
+    try {
+      const fail = statusOf(box).env!['health']['fail'] as Array<{ word: string; detail: string }>;
+      expect(fail.find((i) => i.word === 'status-unreadable')?.detail).toContain(said);   // at be9df58ba, 0300: no status-unreadable at all
+    } finally { healthFs.chmodSync(spoolDir, 0o700); }
+  });
+
   it('an observation sidecar whose draining file is gone is not a held file, however old (review 316 F20)', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-orphan-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);

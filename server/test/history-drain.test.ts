@@ -1659,6 +1659,54 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       });
     });
 
+    // FR2c (review 344 F3; D-4418 (history-spool-append-regular-file-only)): a node the hook refuses at spool/<id>.jsonl (a FIFO,
+    // a link, dangling or not, a directory) silences that id's spool lines until the operator removes it. renameSpoolFiles never
+    // reads or moves one; a drain counts it non_regular once per drain that meets it, as D-4347's planted entries are, and each
+    // half names it on stderr, so the sweep's log and status say what to remove.
+    const NODE_REFUSED = `history-sweep: spool-refused: spool/${ID}.jsonl is not a regular file\n`;
+    const plantNode = (kind: string): string => {
+      const p = path.join(SPOOL(box.home), `${ID}.jsonl`);
+      if (kind === 'a FIFO') expect(spawnSync('mkfifo', [p]).status).toBe(0);
+      else if (kind === 'a dangling link') fs.symlinkSync(path.join(box.home, 'nowhere'), p);
+      else if (kind === 'a link to a regular file') { fs.writeFileSync(path.join(box.home, 'target.jsonl'), 'kept\n'); fs.symlinkSync(path.join(box.home, 'target.jsonl'), p); }
+      else fs.mkdirSync(p);
+      return p;
+    };
+
+    it.each([['a FIFO'], ['a dangling link'], ['a link to a regular file'], ['a directory']])('%s at spool/<id>.jsonl is counted non_regular and named once per drain while a regular sibling drains, and stays for the operator (FR2c, F3)', (kind) => {
+      const p = plantNode(kind);
+      spool(box.home, ID2, { v: 1, ev: 'Stop', id: ID2 });
+      for (const n of [1, 2]) {
+        const r = runSweep(box);
+        expect(r.code, `${kind}, pass ${n}: ${r.stderr}`).toBe(0);
+        expect(r.stderr.split(NODE_REFUSED).length - 1, `${kind}, pass ${n}: named once`).toBe(1);   // at be9df58ba: 0, nothing names it
+        expect(counters(box)['non_regular'], `${kind}, after drain ${n}`).toBe(n);                     // at be9df58ba: undefined
+      }
+      expect(receipts(box), 'the regular sibling drained').toHaveLength(1);
+      expect(fs.existsSync(path.join(SPOOL(box.home), `${ID2}.jsonl`))).toBe(false);
+      expect(fs.lstatSync(p).isFile(), 'the refused node is left where it is').toBe(false);
+      expect(drainingNames(box.home), 'nothing renamed out of it').toEqual([]);
+      if (kind === 'a link to a regular file') expect(fs.readFileSync(path.join(box.home, 'target.jsonl'), 'utf8'), 'its target is never read or moved').toBe('kept\n');
+      fs.rmSync(p, { recursive: true });                                                                   // CONTROL: removed, it is neither counted nor named
+      const r3 = runSweep(box);
+      expect(r3.code, r3.stderr).toBe(0);
+      expect(r3.stderr).not.toContain('history-sweep: spool-refused:');
+      expect(counters(box)['non_regular']).toBe(2);
+    });
+
+    it('a refused node at spool/<id>.jsonl under a hold: the journal half names it once and counts nothing (IV2), exit 5 (FR2c, F3)', () => {
+      const p = plantNode('a FIFO');
+      const aside = path.join(box.home, 'aside');
+      moveDb(box, hist(box.home, 'db'), aside);
+      try {
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(5);
+        expect(r.stderr.split(NODE_REFUSED).length - 1).toBe(1);                                          // at be9df58ba: 0
+      } finally { moveDb(box, aside, hist(box.home, 'db')); }
+      expect(counters(box)['non_regular']).toBeUndefined();
+      expect(fs.lstatSync(p).isFIFO()).toBe(true);
+    });
+
     // FU8 (FP5, FPM9): a draining file whose bytes or sidecar the sweep cannot read is skipped for the pass, as FU3F's blocked
     // file is, never a thrown pass: left in place with its sidecar, counted spool_unreadable on a drain and named on stderr, and
     // its own id's later files wait behind it; every file of another id drains. Root reads a mode-000 file, so these skip as root.

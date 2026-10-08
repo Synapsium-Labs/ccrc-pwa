@@ -536,6 +536,21 @@ function oldestUnjournaledMs(p) {
   return { oldest, unreadable };
 }
 
+/** How many names in spool/ that a hook spools to (lib's spoolFileIdOf) stand as something other than a regular file (a
+ *  FIFO, a link, dangling or not, a directory), by lstat, never followed or opened (FR2c, D-4418): the hook appends to none of
+ *  them. 0 when spool/ is absent; null when it is there but a listing or an lstat fails for any reason but ENOENT, which
+ *  status names as unmeasured (absent is not unreadable). A name gone between the listing and its lstat is not counted. */
+function refusedSpoolNodes(dir) {
+  let names;
+  try { names = healthFs.readdirSync(dir); } catch (e) { return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 0 : null; }
+  let n = 0;
+  for (const name of names) {
+    if (healthLib.spoolFileIdOf(name) === null) continue;
+    try { if (!healthFs.lstatSync(healthPath.join(dir, name)).isFile()) n += 1; } catch (e) { if (!(e && e.code === 'ENOENT')) return null; }
+  }
+  return n;
+}
+
 /** Regular `*.db` files directly in db/backups/, for store-missing's remedy. */
 function backupsOf(dir) {
   let names;
@@ -614,6 +629,10 @@ async function readHealthExtras(home, env, nowMs) {
   // FU8 (FP3): a link or a file at spool/ is measured by lstat, never followed, and no spool/.draining is read through it.
   let spoolNotDirectory = false;
   try { spoolNotDirectory = !healthFs.lstatSync(p.spool).isDirectory(); } catch { spoolNotDirectory = false; }
+  // FR2c (review 344 F3; D-4418 (history-spool-append-regular-file-only)): a node at spool/<id>.jsonl that is not a regular
+  // file, by lstat and never followed or opened, as the hook and the sweep judge it. Only through a real spool/.
+  const refusedNodes = spoolNotDirectory ? 0 : refusedSpoolNodes(p.spool);
+  if (refusedNodes === null) store.unmeasured.push('spool/');
   const held = env.exit === healthLib.EXIT.OK && !spoolNotDirectory ? oldestUnjournaledMs(p) : { oldest: null, unreadable: false };
   if (held.unreadable) store.unmeasured.push('spool/.draining');
   return {
@@ -621,6 +640,7 @@ async function readHealthExtras(home, env, nowMs) {
     modesWrong: healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
     rootIsSymlink,
     spoolNotDirectory,
+    spoolNodesRefused: refusedNodes ?? 0,
     dbPath,
     rosterUnreadable: !rosterReadable(p.accountsSh),
     journalUnwritable: healthLib.journalHeldTooLong(held.oldest, nowMs),
@@ -678,6 +698,7 @@ function healthInputsOf(env, x, nowMs) {
     spoolBlocked: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.spoolBlocked]) ?? 0),
     spoolUnreadable: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.spoolUnreadable]) ?? 0),
     spoolNotDirectory: x.spoolNotDirectory,
+    spoolNodesRefused: x.spoolNodesRefused,
     exportSegmentNewer: x.exportSegmentNewer,
     exportSegmentMissing: x.exportSegmentMissing,
     extrasUnmeasured: x.unmeasured,

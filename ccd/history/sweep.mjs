@@ -43,7 +43,7 @@ import { pathToFileURL } from 'node:url';
 import {
   CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, CONTROL_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
-  UUID_RE, WRITER_RE, drainingNameOk, drainingNameParts, drainingOrder, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
+  UUID_RE, WRITER_RE, drainingNameOk, drainingNameParts, drainingOrder, eventKey, historyPaths, idOk, spoolFileIdOf, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
@@ -541,9 +541,11 @@ const SPOOL_UNUSABLE_LINE = 'history-sweep: spool-refused: spool/ or spool/.drai
 
 /** Rename each regular spool/<id>.jsonl into .draining/ under a fresh name, chmod 0600 (uncounted, §9.2; the 0700
  *  directory is the protection, slug history-spool-mode-by-directory, D-4233). A name no hook writes (an id outside the
- *  grammar), a dot-file, a link or a FIFO stays where it is and is never read. A name already present in .draining/ (or
- *  its .obs) is never renamed onto: that spool file waits for the next half. */
-export function renameSpoolFiles(home, tickMs, pid) {
+ *  grammar) or a dot-file stays where it is and is never read. Any other node at a spool file's name that is not a regular
+ *  file (a FIFO, a link, dangling or not, a directory), which the hook refuses too, stays where it is and is never read or
+ *  followed; its name is pushed onto `refused` when the caller passes one (D-4418 (history-spool-append-regular-file-only),
+ *  FR2c). A name already present in .draining/ (or its .obs) is never renamed onto: that spool file waits for the next half. */
+export function renameSpoolFiles(home, tickMs, pid, refused = null) {
   const P = historyPaths(home);
   // FU8 (D-4347 (history-planted-entries-never-wedge)): only a real spool/ is read; through a link this renamed, and the
   // drain then unlinked, `<id>.jsonl` files outside the history root (FP3).
@@ -552,12 +554,14 @@ export function renameSpoolFiles(home, tickMs, pid) {
   try { names = readdirSync(P.spool).sort(); } catch (e) { if (e && e.code === 'ENOENT') return []; throw e; }
   const out = [];
   for (const n of names) {
-    if (n.startsWith('.') || !n.endsWith('.jsonl')) continue;
-    const id = n.slice(0, -'.jsonl'.length);
-    if (!idOk(id)) continue;
+    const id = spoolFileIdOf(n);
+    if (id === null) continue;
     let st;
     try { st = lstatSync(`${P.spool}/${n}`); } catch { continue; }
-    if (!st.isFile()) continue;
+    if (!st.isFile()) {   // D-4418 (history-spool-append-regular-file-only): never read, moved or followed; the caller counts and names it (FR2c, F3)
+      if (refused !== null) refused.push(n);
+      continue;
+    }
     ensureSpoolDirs(home);
     const to = drainingName(id, tickMs, pid);
     // §9.2 step 1: a draining name is never reused (D-4232's halves can run twice in one millisecond of one pass). An
@@ -576,12 +580,15 @@ export function renameSpoolFiles(home, tickMs, pid) {
   return out;
 }
 
-/** Rename this tick's spool files and observe each. True when a sidecar write failed (D-4338,
+/** Rename this tick's spool files and observe each. `failed` is true when a sidecar write failed (D-4338,
  *  history-sidecar-write-failure-holds): the renamed file stays in .draining/ without one, and the next journaling
- *  observes it. Every file is still tried, so one failure does not leave a later file unobserved. */
+ *  observes it. Every file is still tried, so one failure does not leave a later file unobserved. `refused` is how many
+ *  nodes at a spool file's name were not regular files (D-4418 (history-spool-append-regular-file-only), FR2c): each is
+ *  named on stderr here, on both halves, and only the drain counts them (`non_regular`; no DB holds a counter on a hold, IV2). */
 function renameAndObserve(home, tickMs, nowMs) {
   let failed = false;
-  for (const n of renameSpoolFiles(home, tickMs, process.pid)) {
+  const refused = [];
+  for (const n of renameSpoolFiles(home, tickMs, process.pid, refused)) {
     if (overSpoolCap(home, n)) continue;   // FU8 (FPM7): never observed; the drain sets it aside from its lstat (D-4337)
     try {
       observe(home, n, nowMs);
@@ -592,7 +599,8 @@ function renameAndObserve(home, tickMs, nowMs) {
       failed = true;
     }
   }
-  return failed;
+  for (const n of refused) process.stderr.write(`history-sweep: spool-refused: spool/${n} is not a regular file\n`);
+  return { failed, refused: refused.length };
 }
 
 /** A draining file's whole text. It is opened O_NOFOLLOW|O_NONBLOCK and must be a regular file, so a link or a FIFO
@@ -866,7 +874,7 @@ export function journalHalf(home, ids, nowMs) {
   // Rename first, so this pass's spool files are observed and journaled in this same pass (§9.2: "renames,
   // observes and journals each spool file as step 1 does"). A line a hook lands on the old inode after this
   // grows the file, and the next pass re-journals it under the same `t` (journalFile compares byte counts).
-  if (renameAndObserve(home, nowMs, nowMs)) journalFailed = true;   // D-4338 (history-sidecar-write-failure-holds)
+  if (renameAndObserve(home, nowMs, nowMs).failed) journalFailed = true;   // D-4338 (history-sidecar-write-failure-holds)
   const waiting = new Set();   // FU8 (FP5): an id whose earlier file could not be read waits behind it, as on the drain
   for (const name of listDraining(home)) {
     if (waiting.has(idOfDrainingName(name))) continue;
@@ -1044,7 +1052,9 @@ export function tidyDraining(home, tickMs, pid, countBefore) {
  *    file of another id drains. The blocked file's own id's later files wait behind it, so the epoch chain, which numbers in
  *    drain order, never inverts when the block lifts (FU3F review F1).
  *  - A file whose bytes or sidecar cannot be read on this drain (SPOOL_UNREADABLE) is skipped the same way, counted
- *    `spool_unreadable` and named on stderr as `history-sweep: spool-unreadable: <name>: <reason>` (FU8, FP5, FPM9). */
+ *    `spool_unreadable` and named on stderr as `history-sweep: spool-unreadable: <name>: <reason>` (FU8, FP5, FPM9).
+ *  - A node at a spool file's name that is not a regular file (a FIFO, a link, a directory: D-4418) is never renamed, read
+ *    or followed; renameAndObserve names it on stderr, and the drain counts it `non_regular` after its renames (FR2c, F3). */
 export function drainSpool(db, c) {
   const tickMs = c.now();
   // FU8 (D-4347 (history-planted-entries-never-wedge)): no spool work through a spool/ that is not a real directory (FP3):
@@ -1158,7 +1168,11 @@ export function drainSpool(db, c) {
   }
   // D-4338 (history-sidecar-write-failure-holds): a failed observation of this tick's renames is the same hold,
   // counted once for the tick; the renamed files wait without a sidecar and are observed at their next journaling.
-  if (renameAndObserve(c.home, tickMs, c.now()) && !failedCounted) countOutside(db, 'journal_write_failed');
+  const renamed = renameAndObserve(c.home, tickMs, c.now());
+  if (renamed.failed && !failedCounted) countOutside(db, 'journal_write_failed');
+  // D-4418 (history-spool-append-regular-file-only), FR2c (review 344 F3): each node the hook refuses at spool/<id>.jsonl,
+  // counted once per drain that meets it, as D-4347's planted entries are; renameAndObserve named it.
+  if (renamed.refused > 0) countOutside(db, 'non_regular', renamed.refused);
   return hints;
 }
 

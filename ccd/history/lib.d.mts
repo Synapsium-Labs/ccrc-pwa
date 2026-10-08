@@ -111,6 +111,7 @@ export type HealthClass = 'pass' | 'warn' | 'fail';
 export const HEALTH_WORDS: Readonly<Record<string, HealthClass>>;
 
 export function idOk(id: unknown): boolean;
+export function spoolFileIdOf(name: unknown): string | null;
 export function readBoxEnvValue(text: string, key: string): { found: boolean; value: string };
 export interface HistoryPaths {
   readonly root: string; readonly spool: string; readonly draining: string; readonly journalDir: string;
@@ -386,6 +387,8 @@ export interface HealthInputs {
   readonly spoolBlocked: number;
   readonly spoolUnreadable: number;
   readonly spoolNotDirectory: boolean;
+  /** FR2c (D-4418): nodes at spool/<id>.jsonl that are not regular files, by status's own lstat. */
+  readonly spoolNodesRefused: number;
   readonly exportSegmentNewer: readonly string[];
   readonly exportSegmentMissing: number;
   readonly journalUnwritable: boolean;
