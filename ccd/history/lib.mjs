@@ -56,8 +56,8 @@ const REASON_ROWS = [
     // `schema-newer` (Task 24): the newer-schema refusal of a WRITING pass — a scheduled pass prints it and exits 5,
     // and an `--op import` relays it; the CLI never needs it, because it reads a newer store (G9). Plan-chosen word.
     'schema-newer',
-    // `store-read-failed` (Task RF5b, review 316 F11; D-4171): status's read of a store the binding read admitted threw an
-    // SQLite error — a v1 table or column it names is missing, a corrupt file, an I/O error. Plan-chosen word.
+    // `store-read-failed` (Task RF5b, review 316 F11; D-4171, D-4313): status's read of a store the binding read admitted
+    // threw an SQLite error — a v1 table or column it names is missing, a corrupt file, an I/O error. Plan-chosen word.
     'store-read-failed',
   ]],
   [EXIT.FTS_UNAVAILABLE, ['fts5-absent', 'fts-pending']],
@@ -895,7 +895,7 @@ export function decideStatusRead({ userVersion, journalMode, recordedMigration }
   return { exit: EXIT.OK, migration };
 }
 
-/** §8.3 (review 316 F11; D-4171): what `status` answers when its read of a store the binding read admitted throws.
+/** §8.3 (review 316 F11; D-4171, D-4313): what `status` answers when its read of a store the binding read admitted throws.
  *  `storeWord` is a StoreError's word (the reader's open refused: the DB went missing, 0 bytes or unmeasured since it
  *  was measured), else null; `sqliteError` says SQLite raised it. Answers {exit: 5, reason}, or null for a throw
  *  that is neither — a defect the caller lets escape as exit 1. Three answers, never folded. */

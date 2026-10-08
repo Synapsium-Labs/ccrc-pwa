@@ -285,7 +285,7 @@ function readStore(env, P, nowMs) {
 
 /** readStore with its failure made an answer (§8.3: ONE envelope, exit 5, for a DB or schema error). The throw is
  *  MEASURED here (a StoreError's word; SQLite's ERR_SQLITE_ERROR) and lib's decideStatusReadFailure decides; the
- *  error's message goes to stderr. Anything else is a defect in this file and stays exit 1 (review 316 F11). */
+ *  error's message goes to stderr. Anything else is a defect in this file and stays exit 1 (review 316 F11; D-4313). */
 function readStoreAnswered(env, P, nowMs) {
   try {
     readStore(env, P, nowMs);
