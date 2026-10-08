@@ -4786,3 +4786,48 @@ describe('workspace lifecycle wave 3b: the expiry threshold is ccd’s, read thr
     expect(ALL.filter((f) => /['"]expiresAt['"]/.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/archivedExpiry.ts']);
   });
 });
+
+// WORKSPACE LIFECYCLE WAVE 4 (review 313, F3). APPENDED, for the reason the blocks above state. The seven-day pin above
+// reads numeric spellings only, so the expiry lane's operator text typed "past its seven days" and nothing reddened.
+// MEASURED before deciding how wide: a prose pin over every code line of `server/src` and `pwa/src` holds five files —
+// `wsaudit.ts` (ccd's own `not-expired` and `child` sentences, rendered verbatim), `watch.ts` and `coord/schema.ts`
+// (the deviation ledger's unrelated seven-day stale window, in a log line and a migration's SQL comment), and the PWA's
+// two archive confirms, which are the operator's copy. So the pin is scoped to the lane's own two files, where a
+// period in a sentence is the defect.
+describe('workspace lifecycle wave 4: the expiry lane’s own words type no period (review 313, F3)', () => {
+  const PROSE = /\b(?:seven|7)[ -]days?\b/i;
+  it('no seven-day prose on a code line of archivedExpiry.ts or coord/expireArchived.ts', () => {
+    expect(PROSE.test('`held (“x”) past its seven days`'), 'CONTROL').toBe(true);
+    expect(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts']
+      .filter((f) => PROSE.test(stallCode(path.join(ccrcRoot, f))))).toEqual([]);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 4 (spec 2026-09-24 §5.4, the coordinator's safety ruling (B)). APPENDED, for the reason the
+// blocks above state. The dead-coordinator lane SHIPS SHADOWED: until `$REG/dead-coordinator-lane-live` exists it
+// measures, anchors, trips its breaker and records "would end programme <slug> (<n> runs)", and never reaches
+// `closeRun`'s abandon arm. The file is the operator's to touch BY HAND in the registry the server reads, beside
+// `expire-lane-live`, `scope-sweep-live` and `stall-watch-live` above — so no line of shell names it, and its one TS
+// holder on a code line is its definer, an L1 file that reaches no `node:` module and so cannot write it.
+describe('workspace lifecycle wave 4: the dead-coordinator lane’s live switch has no writer in the tree', () => {
+  const NAME = 'dead-coordinator-lane-live';
+  const DEFINER = 'server/src/deadCoordinator.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
+  // without spelling its name. The files whose code names the constant are pinned, and none of them reaches a write.
+  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('DEAD_COORDINATOR_LANE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { TERMINAL_RUN_STATES } from '../../shared/api.js';
+import { deadCoordinatorBreakerFeedRow, deadCoordinatorFeedRows } from '../src/deadCoordinator.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
 
@@ -212,6 +213,42 @@ describe('measure-workspace-lifecycle.py', () => {
     expect(run(['--db', f.dbPath, '--cache', cache, '--now', String(NOW_S)]).status).toBe(0);
     expect(readFileSync(f.dbPath).equals(before)).toBe(true);
     expect(wal(), 'the -wal file is unchanged: no write landed there either').toBe(walBefore);
+  });
+
+  it('the dead-coordinator lane’s titles are the lane’s own — the second spelling is bound to the first', () => {
+    const src = readFileSync(SCRIPT, 'utf8');
+    const title = (k: string) => new RegExp(`^${k} = '([^']*)'$`, 'm').exec(src)?.[1];
+    const p = [{ slug: 'p', runIds: [1] }];
+    const ended = deadCoordinatorFeedRows('c', { kind: 'ended', programmes: p, open: [], stuck: [], stoppedBy: null }, 0)[0]!.title;
+    const partly = deadCoordinatorFeedRows('c', { kind: 'ended', programmes: p, open: p, stuck: [], stoppedBy: null }, 0)[0]!.title;
+    const would = deadCoordinatorFeedRows('c', { kind: 'would-end', programmes: p }, 0)[0]!.title;
+    const trip = deadCoordinatorBreakerFeedRow({ tripped: true, why: 'clustered', claimants: ['c', 'd'], since: 0, members: [] }).title;
+    expect([title('DC_ENDED'), title('DC_PARTLY'), title('DC_WOULD'), title('DC_BREAKER')]).toEqual([ended, partly, would, trip]);
+  });
+
+  it('spec §9’s stage-4 row: programmes the lane ended with their first-dead instants, breaker trips, slugs reopened', () => {
+    const f = fixture();
+    const feed = (atS: number, sessionId: string, row: { title: string; body: string }) => f.db.prepare(
+      'INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run('e', atS, atS * 1000, 'run', sessionId, row.title, row.body);
+    const p = (slug: string) => [{ slug, runIds: [1, 2] }];
+    const dead = (NOW_S - 3 * DAY) * 1000;
+    feed(NOW_S - 3 * DAY, 'demo-coord-a', deadCoordinatorFeedRows('demo-coord-a', { kind: 'would-end', programmes: p('alpha') }, dead)[0]!);
+    feed(NOW_S - 2 * DAY, 'demo-coord-a', deadCoordinatorFeedRows('demo-coord-a',
+      { kind: 'ended', programmes: p('alpha'), open: [], stuck: [], stoppedBy: null }, dead)[0]!);
+    feed(NOW_S - 2 * DAY, 'demo-coord-b', deadCoordinatorFeedRows('demo-coord-b',
+      { kind: 'ended', programmes: p('beta'), open: [{ slug: 'beta', runIds: [3] }], stuck: [], stoppedBy: null }, dead)[0]!);
+    feed(NOW_S - DAY, 'demo-coord-c', deadCoordinatorBreakerFeedRow({ tripped: true, why: 'clustered',
+      claimants: ['demo-coord-c', 'demo-coord-d'], since: dead, members: [] }));
+    const r = f.s.openRun({ program: 'alpha', title: 'A', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-coord-e' });
+    expect('id' in r).toBe(true);
+    f.db.prepare('UPDATE runs SET openedAt = ? WHERE program = ?').run((NOW_S - DAY) * 1000, 'alpha');
+    const out = run(['--db', f.dbPath, '--cache', writeCache(f.home, []), '--now', String(NOW_S)]);
+    expect(out.status, out.stderr).toBe(0);
+    expect(rows(out.stdout)).toMatchObject({ dead_coordinator_ended: '1', dead_coordinator_partly_ended: '1',
+      dead_coordinator_would_end: '1', dead_coordinator_breaker_trips: '1', dead_coordinator_slugs_reopened: '1' });
+    expect(out.stdout).toContain('alpha coordinator demo-coord-a dead since 2026-09-18 14:13 UTC');
+    expect(out.stdout).toContain('demo-coord-c, demo-coord-d');
   });
 
   it('refuses a snapshot that is not one', () => {

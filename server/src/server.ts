@@ -1649,6 +1649,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // It answers with its handle (workspace lifecycle §5.2): the coordination serialiser with the operator abandon inside
   // it, which the archive door below runs its `{programme:'end'}` on.
   const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
+  // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
+  // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
+  // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
+  watcher?.useCoordSerialiser?.(coordRoutes);
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
   // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
