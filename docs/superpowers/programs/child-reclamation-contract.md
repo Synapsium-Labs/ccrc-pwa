@@ -2104,3 +2104,171 @@ closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave7-prefligh
 
     Wave 8 and workspace-lifecycle wave 5 both edit `server/src/watch.ts`, and their order is agreed with quiet-river
     before either dispatches.
+
+## 15. Rulings, 2026-10-08 (wave 8's pre-flight) — binding; they AMEND sections 1–14
+
+Wave 8 (run 348) is reclaim's SERVER half (R65). It is server code and shared L0 only: no ccd, agent or PWA edit. Its
+SAFETY subject is "what `ws-reclaim` is licensed against". Its pre-flight was three Opus readers and a critic at
+`226bb881c`. The coordinator's draft rulings were then attacked by three Opus attackers, with SAFETY at xhigh. Every
+break they found is closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave8/` (`preflight.json`,
+`attack.json`).
+
+- **R73 — X1 is closed on the server.** ccd's binding alone does not close X1, because the executor audits and acts
+  back to back after the licence has waited in the queue (`childReclaimOutcome`). The server holds a chain of four
+  equal generations: the licence's, the one re-read before presence, the audit's `generation`, and the token's (ccd,
+  under its lock).
+  - **(a) The read.** For every MARKED row, the sweep reads `$REG/<id>.generation` with `readFileMeasured`.
+    - Nothing is stripped: no trim, no newline strip, no NUL strip. `fieldMeasured` is never used.
+    - A value is EXACTLY 36 characters matching L0's `REG_GENERATION_SHAPE`, with no `m` flag.
+    - The answer has three arms: `value`, `absent` (a proven ENOENT only) or `unreadable`.
+    - Every marked row's read is gathered concurrently BEFORE the per-child loop, so the loop stays synchronous and no
+      await sits between a row's entry read and its write.
+    - `REG_GENERATION_SHAPE` is pinned once BY NAME in single-definition, never by its text: `NODE_ID_RE` carries the
+      same text for another concept and is not merged with it. A separate test holds the regex text of ccd's
+      `_reg_generation_valid` equal to `REG_GENERATION_SHAPE.source`.
+    - **Stated residual.** The read follows symlinks on both adapters, and a dangling link answers `absent`. Neither
+      shape has a ccd writer. On a wave-7 ccd, either one ends in an audit `unmeasured`, never an act.
+  - **(b) The third key.** `ChildReclaimSweepEntry` and `childReclaimFirstSighting` carry the generation as a THIRD key,
+    a `value` or `absent`, beside `bornAt` and `markerRunId`. `childReclaimSameGeneration` requires equality: a value
+    matches an equal value, and absent matches absent.
+    - **An unreadable generation is not a key.** It makes the row's identity unmeasured, so the verdict is the existing
+      doubt word `identity-unmeasured`, visible on the chip.
+    - It never seeds an entry, and the entry and the hold-retired memory for the id are dropped.
+  - **(c) What each request carries.** Every sweep request carries `licenceGeneration`, the entry's key. Close's
+    requests carry `none`, and `none` skips (d) and is never compared in (e). That is safe because close queues only
+    when the minting row names this session and no other open run does, so no same-run re-mint can follow a close.
+  - **(d) The re-read before presence.** After step 2b and BEFORE step 3, the executor re-reads with (a)'s read, for
+    EVERY sweep request, licensed or not.
+    - A `value` or `absent` that differs from `licenceGeneration` defers with a NEW `ChildReclaimDeferWhy`,
+      `generation-changed`, which has its own sentence and kind-map pin.
+    - An unreadable re-read defers `marker-unreadable`, with its own detail, never `generation-changed`.
+  - **(e) The audit's key.** `parseChildReclaimAudit` reads the audit's `generation` by `hasOwnProperty`. On a
+    token-bearing document:
+    - a valid value equal to `licenceGeneration` proceeds;
+    - a valid value that differs defers `generation-changed`;
+    - `null` or a malformed value makes the document `unreadable`, so it is never spent (unreachable on a wave-7 ccd,
+      and pinned as defence in depth);
+    - an ABSENT key (an older ccd) never spends a LICENSED request: it defers `unsupported`, and the detail says the
+      host's `ws-audit` prints no generation. An unlicensed request relies on (d).
+
+    On a refused document the key is read for the record and gates nothing. No exit-1 audit token is ever spent.
+  - **What this leaves.** R63's "a licence never crosses a generation" holds as written. The stated residual: on an
+    older ccd, an UNLICENSED request keeps the gap between (d)'s read and the act. That is R62's residual, narrowed.
+- **R74 — X3: the hold-retired memory is keyed by generation.**
+  - The id-keyed Set becomes a Map from id to `{bornAt, markerRunId, generation}`, where `generation` is (a)'s value or
+    `absent`, never `unreadable`.
+  - ONE L1 predicate, `childReclaimSameGenerationKey`, decides: an EQUAL stored key is the second sighting, so the key is
+    deleted and the release is queued. No stored key, or an UNEQUAL one, is a first sighting, and the new key REPLACES the
+    stored one.
+  - Every delete and clear site of today's Set carries over.
+  - The release request carries the generation. `releaseRetiredChildHold` re-reads it with (a)'s read after its step 6,
+    nearest the argv: a different value, or `absent` against a value, answers `changed`, and an unreadable read answers
+    `failed`.
+  - X3's harm is pacing only. A re-mint's own hold is protected by its live minting run.
+- **R75 — R61's closure: the removal is a `purge`, and never the row's own.** The removal set is exactly the `{purge}`
+  `done` rows, derived once. `collect` never purges, so it is excluded by construction, and a case pins that. A purge
+  FOLLOWS the generation's opening create when all of these hold:
+  - its mirror id is higher;
+  - NOT (`end.at !== null && end.at < create.at`), so a purge that ccd's own clock proves came first does not count;
+  - it is not the row's OWN purge.
+    - A purge counts only when its `meas.uuid` differs from the listed row's current `.uuid`, or when it carries no
+      `meas.uuid`, which counts because doubt is the safe direction.
+    - A purge whose `meas.uuid` equals the row's `.uuid` is that row's own unfinished purge: ccd died between the emit
+      and the unlinks, or rc 3 left the row standing. It leaves the birth placed, so the sweep asks again and ccd
+      resumes from its breadcrumb.
+    - `childReclaimBornAt` takes the row's uuid from each of R40's four consumers.
+
+  A purge with a null `at` counts. A NEW store read, `lifecycleBirthEventsFor`, leaves `lifecycleCreatesFor` unchanged
+  for its second caller, and the placement pin is rewritten deliberately. An unplaced birth plus an old claim reads
+  "coordinated" downstream: each consumer is pinned, close's decline in that window is fail-safe, and it is a stated
+  residual. This amends R40's "The birth" bullet.
+- **R76 — the readers of wave 7's ccd fields.**
+  - **The failed arm of `parseChildReclaimResult`** reads the WORD first, then `crumb`:
+    - `containment-refuted` is the stuck class, whatever `crumb` says;
+    - `purge-incomplete` has its own feed tail: the reclaim completed and the row was purged, what stands is named, and
+      nothing retries it;
+    - otherwise `crumb === false` is not-resumable and `crumb === true` is resumable (the act had started);
+    - an absent or non-boolean `crumb` falls back to `CHILD_RECLAIM_PRE_CRUMB_FAILED`.
+
+    `ChildReclaimResume` gains exactly one value, `'stuck'`. `childReclaimFeedBody`'s failed tail becomes an exhaustive
+    switch with a `never` guard. Review 346's F4 comments are rewritten.
+  - **The audit arm.** On `!res.ok`, `childReclaimAudit` applies the identity rules (a JSON object, `id === sessionId`,
+    `mode === 'reclaim'`) and accepts ONLY `verdict === 'unmeasured'`.
+    - The answer is `failed` with the token `probe-unmeasured`. It is resumable when a non-empty `resume` string is
+      present, and not-resumable otherwise.
+    - Every other exit-1 shape stays `unreadable` with a null token. The arm can never return a token-bearing kind.
+  - **Kept leaves.**
+    - **What is shared with workspace-lifecycle.** ONLY the word classifier, `leafKeptWord(v): 'refused' | 'unmeasured' |
+      'in-use' | null`. It is defined once, and whichever wave lands first owns it.
+    - **Each source keeps its own reader, because the two wires give absence different meanings.** stdout (WL5's) reads
+      absence as `unreported` and an explicit `null` as nothing kept. The MIRROR reader (wave 8's) answers
+      `kept:<word>`, `none-or-unreported`, or `truncated` (event `truncated` with `meas` null).
+    - This amends R65's "absence is unmeasured" for the mirror.
+  - **The kept-leaf attention item.**
+    - **Source.** Per id, the latest reclaim row of the generation that carries the keys: the `done` row, or a `failed`
+      row whose token is `purge-incomplete`, `purge-mechanism-absent` or `purge-refused`. It is found by ONE bounded
+      store read over the last 7 days.
+    - **One item per id.** It is raised on `kept:<word>` for either leaf, and on `truncated`, whose sentence says the
+      line was cut, so whether a leaf was kept is not known, and the feed names it.
+    - **How it ends.** The temp-root half ends on a later `collect` `done` for the id. The clips half never ends that
+      way. Both end on a later PLACED `create` for the id, or 7 days after the row's `at`, and the sentence names that
+      horizon. The feed keeps the record.
+    - **Collapse.** Past `CHILD_RECLAIM_KEPT_MANY_OVER`, as `kept-many`, with a word no other kept-many line uses.
+  - **Review 341's F9.** Its line is re-aimed at the stuck set's admission, with a mutation row.
+- **R77 — R69's `stuck` class.**
+  - `containment-refuted` is `stuck`, spelled once in coord/childReclaim.ts and carried to L1 as a tier field.
+  - **Attention.** One item per child, at once. Its sentence carries the journal row's `detail`, which names the tree or
+    row the operator must fix; `ChildReclaimJournalRow` gains `detail`. With no detail, the sentence says the record
+    was cut and points to the feed. The retry clause is conditional: "while automatic reclamation runs, ccrc retries it
+    on its long backoff; the box resumes from its breadcrumb once the tree or row is fixed".
+  - **Precedence.** `terminal` outranks `stuck`. `stuck` outranks `kept`, `kept-many` and `failing`, and a `held`
+    verdict does not withhold it. `childReclaimKeptItems` excludes stuck ids.
+  - **The chip** shows `deferred`, R41's word for a failure line and an unsettled word in the PWA, with the stuck item's
+    sentence. It is never `refused`, which the PWA treats as settled and never re-reads. There is no new chip word and
+    no PWA edit.
+  - **The feed.** `childReclaimFeedQuiet` treats a listed stuck item like a failing one, so a tier retry that finds the
+    same word writes no new row.
+  - **The pin flip.** Only the `parseChildReclaimResult` assertion of wave 7's `containment-refuted-word.test.ts` is
+    flipped, in the same commit, to `resume: 'stuck'`. Its `parseExpireResult` assertion is workspace-lifecycle's.
+- **R78 — the persistent tier.**
+  - **Entry.** A child ENTERS (a) on a `stuck` answer, or (b) on its K-th consecutive failure carrying the SAME non-null
+    token. K = 4, where today's ramp first reaches the ceiling, counted in the entry on the monotonic clock. A null token,
+    every `CHILD_RECLAIM_PRE_LOCK_TOKEN` member, `flock-unavailable` and `lock-unopenable` never count toward (b).
+  - **Exit.** It LEAVES on `reclaimed`, `gone`, any refusal, or a failure with a different token.
+  - **Pace.** `min(TIER_CAP, ceiling × 2^j)`, where TIER_CAP = 4 h. There is no +∞ arm, and the pace is only ever slower
+    than today's (R39).
+  - **Restart.** At first sighting the lane walks the CURRENT generation's journal rows, past `intent`s, for the latest
+    token, whether it is stuck, and the count of consecutive same-token failures. It seeds membership and
+    `j = max(0, count − K)`, and leaves `lastFailedAt` NULL, so a re-created entry is asked once on its next due pass.
+    No clock is read. A memory clear costs at most one extra ask, never a fresh 4-hour wait.
+  - **Deferral.** A deferral keeps the tier state (membership, its token, j), and clears `lastFailedAt` and
+    `consecutiveFailures` exactly as today, so R39's lease, presence episode and licence are unchanged.
+  - **This amends R20.**
+  - **Stated residual.** A box-level cure, such as a fleet update, can wait up to TIER_CAP for a child already in the
+    tier. Rung 5/6's box-wide `probe-unmeasured` shares its token with rung 8's per-child one, so a long tmux-probe
+    outage can put children on the tier.
+- **R79 — the inheritances from wave 7, collected here.** The wave 7 plan cites a "Wave 8 inherits" list that does not
+  exist in it. These are the inheritances:
+  - T1 OPEN3: R77's pin flip;
+  - T3 OPEN5: the generation is read with absence permitted, R73(e);
+  - T2 OPEN4: `crumb:true` means the act had started, R76;
+  - rung 8's `probe-unmeasured` reaches the tier through R76's audit-arm token;
+  - on a wave-7 ccd, a reclaimable audit always carries a string `generation`, so R73(e)'s `null`-with-token case is
+    unreachable defence in depth;
+  - `ws-collect` documents carry no `crumb`, and the reclaim crumb reader is never applied to them;
+  - G9's audit budget stays wave 9's.
+- **R80 — overlaps, size and numbers.**
+  - **Workspace-lifecycle wave 5 (run 345).** It shares `server/src/watch.ts`, `server/src/coord/close.ts` and the
+    kept-leaf word classifier with wave 8. Its +∞ arm for `containment-refuted` is its own choice under R69: the same
+    tier, or the stranding stated. The order of the two waves is agreed with quiet-river before wave 8 dispatches.
+    Whichever lands second merges main (R56).
+  - **Wave 7 (run 347).** Its worker holds claims 1113 (`shared/api.ts`) and 1114 (the contract and the spec). Wave 8 is
+    built alongside it under this coordinator's line-disjointness agreement: append-only in its own `shared/api.ts`
+    regions. Its contract and spec text lands in its docs task, after wave 7 has merged. Wave 8 LANDS after wave 7, and
+    merges main first.
+  - **Claim 1110.** Edits to `single-definition.test.ts` and README.md wait for claim 1110 to end (hard expiry 21:28Z),
+    or for an agreement with run 320's coordinator. The shape's pin may go in a NEW test file.
+  - **Size.** About 29 to 35 files and 2.6k to 5.4k lines, server and shared only: one PR. This supersedes the ledger's
+    earlier estimate.
+  - **Numbers.** Run 348 holds two issued blocks, 16 numbers starting at 4534 and 16 starting at 4571, each listed
+    singly in the evidence archive.

@@ -47,6 +47,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 18:50 — wave 8's pre-flight is RULED: contract §15, R73 to R80.** Three Opus attackers (`wf_8b58bf16-6e8`,
+  SAFETY at xhigh) broke six of the draft's rulings and amended the rest. The attack is
+  `ccr15-evidence-archive/wave8/attack.json`. What changed:
+  - **X1 holds R63 literally.** On an older ccd, a LICENSED request is never spent: it defers `unsupported`.
+    - An unreadable generation becomes the existing doubt word `identity-unmeasured`, never a silent re-sighting.
+    - Close's requests skip the compare. That is safe, because close's minting run can never re-mint.
+    - The re-read sits before presence. An unreadable re-read defers `marker-unreadable`, never `generation-changed`.
+  - **R61's closure never unplaces a row by its OWN interrupted purge.** The discriminator is `meas.uuid`, which ccd's
+    purge row journals (measured).
+  - **One kept-leaf word classifier is shared with workspace-lifecycle.** Each wire keeps its own reader: stdout's null
+    and the mirror's dropped empties mean different things.
+  - **`stuck` shows the chip word `deferred`, never `refused`.** The PWA treats `refused` as settled and would never
+    re-read it.
+  - **The tier.** It is entered on `stuck`, or on 4 same-token failures counted on the monotonic clock. It is seeded at
+    first sighting from the generation's journal with `lastFailedAt` null, so a memory clear never starves a child.
+  - **Numbers.** A second block was issued to run 348: 16 numbers starting at 4571, beside the 16 starting at 4534.
+  - **Next.** Wave 8's plan drafting. quiet-river still owes answers to 4014 and 4033.
+
 - **2026-10-08 18:31 — wave 7 (run 347) is DISPATCHED to `ccrc-pwa-clear-summit` at 18:30:47,** on a free cap slot.
   - **Claim 1110.** Run 320's coordinator `ccrc-pwa-bright-river` AGREED under R56 in 4031, so the wave dispatched
     without waiting for the expiry. The terms: append-only edits in the worker's own regions, README anchors
