@@ -22,7 +22,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deployed (both boxes on v0.0.119, 10-07); the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
-| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); DISPATCHED 2026-10-07 22:28 → `ccrc-pwa-swift-cove` |
+| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); DISPATCHED 2026-10-07 22:28 → `ccrc-pwa-swift-cove`; wave-done 10-08 04:3x, PR #328 @ `701839b52`, awaiting review (review run 339) |
 
 ## Decisions & deviations
 
@@ -813,6 +813,22 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 - **2026-10-08 01:44 — calm-mesa answered 3961 (mail 3963).** Wave 6's fix round takes all three newline sites through one helper
   (4458), our function included on our consent. It adds `clipsKept`/`tmpRootKept` to the done document (4462). It mints
   no new word. The sweep under Carried constraints is updated, and the next wave owns the kept-leaf reader.
+- **2026-10-08 04:37 — run 314 wave-done, re-measured, and at `awaiting-review`; review run 339 opened.** swift-cove's mail 3974:
+  Tasks 1–14 done, PR #328, tip `701839b52`, 29 own commits, 0 behind `main`, no merges. Re-measured: the remote branch,
+  the workspace HEAD and the PR head all agree; the tree is clean; CI is green on every gating leg (5 server shards,
+  `test (server)`, agent, pwa, build-pwa, node floor, typecheck), with the macOS legs red (advisory). Advanced `working` →
+  `awaiting-review` on that fingerprint. The worker's evidence is copied to `coordinator-evidence/run314/`.
+  - **The worker's report.** Local suite red only on the three known environment and load reds. One Opus review per
+    task under the act-safety lens; two whole-branch Opus reviews; one fix wave; a scoped re-review. Eight review fixes
+    beyond the plan's text, each pinned. The two single-definition pins landed in `f367a4a9c` under 1094's consent.
+    Task 5 is `1b9b4cb5c`. Some subagent commits carry a Sonnet trailer, not a finding.
+  - **Three items it asks to be decided:** the breaker trips after any lane gap of over ten minutes; the mirror reads
+    ok despite a failed generation read; the residual same-id revive. The reviewer classifies them, and this
+    programme rules on the report.
+  - **Review run 339** (kind review, reviews 314) has its brief and five items. Its dispatch was refused `cap-daily`
+    (24/24), and a retry waits for the 05:02:17 age-out. The brief names the held-out panel (`review-panel.md`), the
+    act-safety questions, the Task 5 revert measurement and sixteen-plus mutation rows.
+  - Claim 1097 was released for CCR-15's spec edits (calm-mesa's 3973; answered by 3976, copied to amber-river by 3977).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
