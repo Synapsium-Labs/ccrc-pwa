@@ -4098,9 +4098,17 @@ export class FleetWatcher {
         return v;
       },
     };
+    // EACH claimant is measured at the instant it is measured — a fresh `Date.now()`, never the pass's `now`, which is
+    // older by every awaited read before it: a supervisor heartbeat landing mid-pass would read as a FUTURE stamp, and a
+    // coordinator being brought back would read crashed. That instant is that claimant's own through step five (its
+    // anchor, its hour, its sighting); the pass's `now` stays the instant of what is the pass's — the cadence stamp, the
+    // breaker's clock, the due test, the feed rows.
     const measured = new Map<string, Awaited<ReturnType<typeof measureClaimant>>>();
+    const measuredAt = new Map<string, number>();
     for (const id of ids) {
-      measured.set(id, await measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux }, id, now));
+      const at = Date.now();
+      measuredAt.set(id, at);
+      measured.set(id, await measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux }, id, at));
     }
     const dead = ids.filter((id) => measured.get(id)!.state === 'dead');
     let journalOf: (id: string) => DeadCoordinatorJournal;
@@ -4123,13 +4131,14 @@ export class FleetWatcher {
       const c = deadCoordinatorCrash(measured.get(id)!, journalOf(id));
       if (c.kind === 'unmeasurable') unmeasurable.push(id);
       if (c.kind === 'alive' || c.kind === 'stopped' || c.kind === 'deliberate') released.add(id);
-      let entry = deadCoordinatorSighted(this.deadCoordinatorState.get(id) ?? deadCoordinatorEntry(), c, now);
+      const at = measuredAt.get(id)!;
+      let entry = deadCoordinatorSighted(this.deadCoordinatorState.get(id) ?? deadCoordinatorEntry(), c, at);
       try {
         if (c.kind === 'crashed') {
-          const a = deadAnchorNext(anchors.get(id) ?? null, now);
+          const a = deadAnchorNext(anchors.get(id) ?? null, at);
           coord.setDeadAnchor(id, a);
           const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
-          crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, now), cause: c.cause });
+          crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, at), cause: c.cause });
         } else if (anchors.has(id)) {
           coord.deleteDeadAnchor(id);
         }

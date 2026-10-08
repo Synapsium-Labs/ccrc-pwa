@@ -43,6 +43,8 @@ const fixture = async (opts: {
   beforeAct?: () => void;
   /** The serialiser's act throws. */
   throwAct?: boolean;
+  /** Called as tmux is asked about a pane, before it answers — time passing, or a write landing, mid-pass. */
+  onHasSession?: (id: string) => void;
 } = {}) => {
   let clock = T0;
   vi.spyOn(Date, 'now').mockImplementation(() => clock);
@@ -54,6 +56,8 @@ const fixture = async (opts: {
   /** The panes tmux proves live; every other `has-session` answers tmux's one death message. */
   const live = new Set<string>();
   let tmuxDown = false;
+  /** While set, every `has-session` waits on it — a pass held in flight. */
+  let gate: Promise<void> | null = null;
   const tmuxAsked: string[] = [];
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
@@ -61,6 +65,8 @@ const fixture = async (opts: {
       if (args[0] !== 'has-session') return { code: 1, stdout: '', stderr: '' };
       const id = (args[2] ?? '').replace(/^=cc-/, '').replace(/:$/, '');
       tmuxAsked.push(id);
+      opts.onHasSession?.(id);
+      if (gate !== null) await gate;
       if (tmuxDown) return { code: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default' };
       return live.has(id) ? { code: 0, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
     }
@@ -126,7 +132,9 @@ const fixture = async (opts: {
     .deadCoordinatorAttentionList.map((a) => [a.kind, a.claimants] as const);
   return { home, reg, coord, deps, cfg, live, calls, tmuxAsked, plant, working, pass, next, touch, stateOf, feed, anchorOf,
     restart, journal, attention, acts: () => acts, advance: (ms: number) => { clock += ms; },
-    setTmuxDown: (v: boolean) => { tmuxDown = v; }, watcher: () => watcher };
+    setTmuxDown: (v: boolean) => { tmuxDown = v; }, watcher: () => watcher,
+    /** Hold every later `has-session` until the returned release is called. */
+    holdTmux: (): (() => void) => { let release = (): void => {}; gate = new Promise<void>((r) => { release = r; }); return () => { gate = null; release(); }; } };
 };
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
@@ -497,6 +505,71 @@ describe('wired by buildServer', () => {
       expect(f.coord.runEvents(r).at(-1)?.causedBy).toBe('sweep');
     } finally {
       await app.close();
+    }
+  });
+});
+
+describe('each claimant is measured at the instant it is measured', () => {
+  it('a heartbeat written after the pass began — while an EARLIER claimant was being measured — is a restarting coordinator, not a crashed one', async () => {
+    let beat = false;
+    const f: Fixture = await fixture({ onHasSession: (id) => {
+      if (id !== A || !beat) return;
+      f.advance(3000);   // the pass is three seconds old when B is measured, and B's supervisor has just beaten
+      writeFileSync(path.join(f.reg, `${B}.supervised`), String((T0 + 3000) / 1000));
+    } });
+    f.plant(A); f.plant(B);
+    f.working(A); f.working(B);
+    f.live.add(A);
+    beat = true;
+    await f.pass();
+    expect(f.tmuxAsked[0], 'A was asked first: the heartbeat landed mid-pass').toBe(A);
+    expect(f.anchorOf(B), 'restarting is no crash: no anchor written').toBeNull();
+    expect(f.watcher().currentDeadCoordinators().get(B)?.crashedPasses).toBe(0);
+    expect(f.attention()).toEqual([]);
+  });
+});
+
+describe('the pass guards', () => {
+  it('a tick inside the cadence window does not run the lane: nothing measured, no second crashed pass', async () => {
+    const f = await fixture();
+    f.plant(A);
+    f.working(A);
+    await f.pass();
+    const asked = f.tmuxAsked.length;
+    expect(f.watcher().currentDeadCoordinators().get(A)?.crashedPasses).toBe(1);
+    f.advance(CHILD_RECLAIM_SWEEP_MS - 1);
+    await f.pass();
+    expect(f.tmuxAsked.length, 'inside the window: not measured').toBe(asked);
+    expect(f.watcher().currentDeadCoordinators().get(A)?.crashedPasses, 'two ticks are not two passes').toBe(1);
+    f.advance(1);
+    await f.pass();
+    expect(f.watcher().currentDeadCoordinators().get(A)?.crashedPasses).toBe(2);
+  });
+
+  it('a tick while a pass is still IN FLIGHT does not start a second pass', async () => {
+    const f = await fixture();
+    f.plant(A);
+    f.working(A);
+    await f.watcher().sweepLifecycle();
+    const records = await readRegistry(f.deps.io, f.cfg);
+    const names = readdirSync(f.reg);
+    const release = f.holdTmux();
+    try {
+      const first = f.watcher().sweepDeadCoordinators(records, names);
+      for (let k = 0; k < 200 && f.tmuxAsked.length === 0; k += 1) await new Promise((r) => setTimeout(r, 5));
+      expect(f.tmuxAsked, 'the first pass is parked on tmux').toEqual([A]);
+      f.next();                                        // past the cadence window: only the in-flight flag can refuse it
+      await f.watcher().sweepLifecycle();              // the mirror is fresh again: a second pass would reach tmux
+      const second = await Promise.race([
+        f.watcher().sweepDeadCoordinators(records, names).then(() => 'returned'),
+        new Promise<string>((r) => setTimeout(() => r('started a second pass'), 100)),
+      ]);
+      expect(second).toBe('returned');
+      expect(f.tmuxAsked, 'one pass, one question').toEqual([A]);
+      release();
+      await first;
+    } finally {
+      release();
     }
   });
 });
