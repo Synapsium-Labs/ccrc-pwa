@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `7253060da` after fix round 1; review run 333 waits at the cap (R25) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `7253060da` after fix round 1; review run 333 dispatched (R26) |
 
 ## Decisions & deviations
 
@@ -375,6 +375,20 @@ time.
     `505ffbff4..<tip>`, R24's nine items, the whole-wave properties, the suites and the citation instrument. The
     rolling daily cap reads 24 of 24, and its next age-out is 22:20:17 (run 307), so one session-only wake at 22:21
     sends the payload once.
+- **R26 (2026-10-08 03:13)**, review run 333 is dispatched.
+  - The unchanged payload went out at 03:13:42 and was accepted. The reviewer is `ccrc-pwa-amber-meadow` (`adopted`
+    false, `skillState` present, brief queued). Its registry route reads opus, high effort, sonnet subagents,
+    workflow on and compact 40, so it can run the panel as a Workflow. Before the send, run 333 was still
+    `planned`, run 322 was still `awaiting-review`, and `origin/ws/calm-basin` was still `7253060da`.
+  - Three earlier sends were refused `cap-daily` and spawned nothing. Each time, another programme took the freed
+    slot first:
+    - at 22:21, child-reclamation's review run 335, at 22:20:33;
+    - at 22:28, workspace-lifecycle's run 314, at 22:28:10;
+    - at 01:34, native-docs-reader's review run 336, at 01:34:16.
+  - A timed background attempt for 01:33:21 was killed by the session's memory-pressure reaper while it slept, and
+    it sent nothing. The send that landed waited only seconds after a wake on the age-out minute (run 312, 03:13:12).
+  - Next: `review-done`, then this session advances run 333 to `working`, closes it with the reviewer's
+    `{reviewedTip, report}`, and rules. After that it asks the operator about merging PR #322.
 
 ## Carried constraints (reviewers get these)
 
