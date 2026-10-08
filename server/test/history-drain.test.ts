@@ -830,12 +830,42 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(fs.existsSync(ASIDE(OVER))).toBe(true);
     });
 
+    /** Counts the reads fs.readSync serves for one file (the pattern of history-ingest's FR2-d `failReads`); `onFirst` runs at its first read. */
+    const countReads = (target: string, onFirst?: () => void): { reads: () => number; restore: () => void } => {
+      const real = fs.readSync;
+      const want = fs.realpathSync(target);
+      let n = 0;
+      (fs as { readSync: unknown }).readSync = function readSync(fd: number, ...rest: unknown[]): number {
+        if (fs.readlinkSync(`/proc/self/fd/${fd}`) === want) { n += 1; if (n === 1 && onFirst) onFirst(); }
+        return (real as (...a: unknown[]) => number)(fd, ...rest);
+      };
+      syncBuiltinESMExports();
+      return { reads: () => n, restore: () => { (fs as { readSync: unknown }).readSync = real; syncBuiltinESMExports(); } };
+    };
+
     it('readDrainingText refuses it from the descriptor\'s size, before reading a byte', () => {
       const f = path.join(box.home, 'big.jsonl');
       sparse(f, SPOOL_FILE_MAX + 1);
-      expect(() => SW.readDrainingText(f)).toThrow(expect.objectContaining({ code: 'SPOOL_OVERSIZE' }));
-      sparse(f, 10);
-      expect(SW.readDrainingText(f).bytes).toBe(10);
+      const spy = countReads(f);
+      try {
+        expect(() => SW.readDrainingText(f)).toThrow(expect.objectContaining({ code: 'SPOOL_OVERSIZE' }));
+        expect(spy.reads(), 'no byte read before the refusal').toBe(0);
+        sparse(f, 10);
+        expect(SW.readDrainingText(f).bytes).toBe(10);
+        expect(spy.reads(), 'CONTROL: the spy sees this file\'s reads').toBeGreaterThan(0);
+      } finally { spy.restore(); }
+    });
+
+    it('readDrainingText refuses a file that grows past the cap while it is read (the read loop\'s guard)', () => {
+      const f = path.join(box.home, 'grows.jsonl');
+      sparse(f, SPOOL_FILE_MAX);
+      const spy = countReads(f, () => fs.appendFileSync(f, 'x'));
+      try {
+        expect(() => SW.readDrainingText(f)).toThrow(expect.objectContaining({ code: 'SPOOL_OVERSIZE' }));
+        expect(spy.reads(), 'the growth was planted').toBeGreaterThan(0);
+      } finally { spy.restore(); }
+      sparse(f, SPOOL_FILE_MAX);
+      expect(SW.readDrainingText(f).bytes, 'CONTROL: at the cap exactly, unchanged, the file reads whole').toBe(SPOOL_FILE_MAX);
     });
 
     describe('its line arm: a file within SPOOL_FILE_MAX holding more than SPOOL_FILE_LINES_MAX lines (review 316 F6)', () => {
@@ -1447,7 +1477,18 @@ describe('epochs and families, decided at drain (spec §6.1, §9.2 step 1, §9.1
     expect(candidatesOf(db)).toHaveLength(1);
     setReg(box, ID, 'uuid', U2);
     clock.ms += 60_000;
-    EP.confirmCandidates(db, c);
+    const commits: Array<{ sync: number; holds: boolean }> = [];
+    const realExec = db.exec.bind(db);
+    (db as unknown as { exec: (s: string) => void }).exec = (sql: string) => {
+      if (/^\s*COMMIT\b/i.test(sql)) commits.push({
+        sync: Number((db.prepare('PRAGMA synchronous').get() as { synchronous: number }).synchronous),
+        holds: db.prepare('SELECT 1 AS x FROM epochs WHERE cc_session_uuid = ?').get(U2) !== undefined });
+      return realExec(sql);
+    };
+    try { EP.confirmCandidates(db, c); } finally { delete (db as unknown as { exec?: unknown }).exec; }
+    const confirming = commits.find((x) => x.holds);
+    expect(confirming, JSON.stringify(commits)).toBeDefined();
+    expect(confirming!.sync, 'the confirming transaction commits under synchronous=FULL').toBe(2);
     expect(epochsOf(db, ID, G1)).toEqual([expect.objectContaining({ cc_session_uuid: U2, cause: 'startup', declared_by: 'hook' })]);
     expect(candidatesOf(db)).toEqual([]);
     expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').at(-1))

@@ -260,6 +260,9 @@ describe('O37: a journal failure is loud and holds', () => {
     // so the file ends in '\n' and the torn half sits on a line of its own.
     const added = torn.slice(before.length).split('\n').filter((l) => l !== '');
     expect(added.some((l) => { try { JSON.parse(l); return false; } catch { return true; } }), 'the seam left a torn record').toBe(true);
+    const kinds = added.flatMap((l) => { try { return [String((JSON.parse(l) as { k?: unknown }).k)]; } catch { return []; } });
+    expect(kinds, 'the tick record after the torn half is a line of its own (the newline fence)').toContain('tick');
+    expect(added.filter((l) => { try { JSON.parse(l); return false; } catch { return true; } }), 'exactly one torn line').toHaveLength(1);
     expect(runSweep(box).code).toBe(0);                             // space is back
     const after = fs.readFileSync(monthFile(), 'utf8');
     expect(after.startsWith(before), 'every line written before the failure is intact').toBe(true);
