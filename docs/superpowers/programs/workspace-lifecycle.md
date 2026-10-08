@@ -887,7 +887,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Measured by the reviewer:** Task 5 reverts in one plan hunk with every suite green, so the operator's (b)
     stays cheap either way. Migration 18 rolls back: the base build opens a version-18 `coord.db` and reads it. The
     expiry residue's blockers (T1–T3, 4454, the older-ccd arm) each go red when mutated.
-- **2026-10-08 13:16 — #326 merged (`b0647d850`, CCR-15 mail 4011); wave 5's plan is being drafted.** What lands for
+- **2026-10-08 13:12 — #326 merged (`b0647d850`, CCR-15 mail 4011); wave 5's plan is being drafted.** What lands for
   this programme: `_ws_dir_physical` at `_ws_expire_cwd_users`' parent (4458), so that arming blocker clears; check the
   merged lines before arming. The `clipsKept`/`tmpRootKept` keys (4462) are on the tail's done document for both verbs.
   F1's leaf rules reach ws-expire.
@@ -1009,7 +1009,7 @@ the operator creates `$REG/dead-coordinator-lane-live` by hand.
   an absent key reads unmeasured); the `state-changed` reading (Carried constraints, 08:06); the lane's answer to a
   repeating resumable failure; and the ws-expire in-lock window close, reusing CCR-15 wave 6's three-way read.
 - **Its plan reads main after #326,** which merged 2026-10-08 13:07 (`b0647d850`). That carries the kept-leaf keys (4462) and
-  the newline helper (4458). The plan is drafted by workflow wf_36dce1c9-36e (the 13:16 entry).
+  the newline helper (4458). The plan is drafted by workflow wf_36dce1c9-36e (the 13:12 entry).
 - **Wave 4 deploys through ccrc's updater** (the operator applies it from the console). Afterwards, check that both
   boxes report v0.0.123 or later, and that the feed shows the dead-coordinator lane's shadow rows.
 - **The operator's questions before arming** are (b)–(d) in the 06:01 entry. (b), the confirm copy, is still open. On
