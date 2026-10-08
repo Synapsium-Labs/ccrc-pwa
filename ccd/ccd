@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=940c020832a67341c33409cebc95291f5b1c5e900d33b9eed79f33c56d3cfc3b
+# ccrc:generated 1 sha256=c77512cd44a8af765c36882af982a115e082de557cba4aa933e24cedea7aae58
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23062,6 +23062,81 @@ _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 conte
 }
 
 _swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged (K deferred) | 3 the first action alone over budget (nothing touched) | other: failed
+  _carry_py walk "$@"
+}
+
+_carry_link_route() {   # a b -> the CALLER's local CARRY_ROUTE (via | a CARRY_CAUSES word), CARRY_A2, CARRY_B2. Always rc 0.
+  # THE LINK ROUTE (D-4500, issue #317): where two trees that link(2) refused
+  # can still be linked, and the cause in one word when they cannot.
+  #
+  # THE RULE IT ANSWERS, measured on a real kernel: link(2) answers EXDEV
+  # whenever its two paths resolve through different VFSMOUNTS, even when both
+  # are the same superblock (`do_linkat`'s `old_path.mnt != new_path.mnt`). On
+  # this fleet every account root is its own bind mount of one filesystem, so a
+  # carry between two accounts crosses mounts by construction: `cp -al` failed
+  # on every file and every carry since the move copied. The SAME link through
+  # a third mount — the filesystem mounted whole, read-write — succeeds, with
+  # one inode shared (measured: `ln` across the binds EXDEV, through the whole
+  # mount linked). This route finds that mount and names the two trees under it.
+  #
+  # LAZY: it is asked only AFTER a direct link has failed (the first carry's
+  # `cp -al`, the walk's `os.link` with EXDEV), so a box where linking works —
+  # one plain filesystem, macOS, a fixture — runs exactly the code it ran
+  # before, and the route costs a box nothing until it is needed. The walk
+  # asks once per sidecar and remembers the answer.
+  #
+  # THE TABLE IS THE KERNEL'S OWN, `/proc/self/mountinfo`, read directly — not
+  # `findmnt -J`: no util-linux dependency, no JSON schema to drift, and the
+  # mount namespace that answers is the one that will link. No table (macOS,
+  # a box without /proc) is `mounts-absent`; no special case per platform.
+  # A mount point's octal escapes are decoded; the answer comes back as three
+  # NUL-terminated fields, because a mount point may hold a newline.
+  #
+  # THE INODE PROOF IS THE SAFETY PROPERTY. A candidate alias is used only
+  # when its (st_dev, st_ino) equals the original's, for BOTH trees — so a
+  # stale table, an overmount, a forged `CCD_MOUNTINFO` or a decoy directory of
+  # the right shape can cost a COPY, never a write anywhere else (measured: a
+  # forged table aimed at a decoy left the decoy untouched). A mount stacked
+  # over an alias path skips that candidate, and a mount INSIDE either tree or
+  # under either alias rules it out (`root-mismatch`): the alias would show
+  # different content beneath that point (measured: a bind mount inside a
+  # source sidecar was carried correctly only because the route refused).
+  # The residue is TOCTOU: a mount operation between the proof and the link
+  # could still redirect it. Only root can make one, the window is a
+  # few syscalls wide, and nothing here defends against root.
+  #
+  # `CCD_MOUNTINFO` IS A HARNESS SEAM, like `CCD_RECLAIM_RESIDUE_ROOT`: the test
+  # suite points it at a fixture table so the CI host's own never decides a
+  # verdict. It meets the reason `CCD_DISK_FLOOR_GB`'s comment gives for an
+  # override (the "one environment override" sentence, stale in its count): it
+  # cannot aim a write at a different tree, because whatever table it names,
+  # the inode proof decides. There is deliberately NO `CCD_LINK_ROOT` knob to
+  # name the common mount by hand: whoever triggers a swap — a shell, the
+  # tick, the PWA — must not decide link versus copy; the kernel's table does.
+  #
+  # THE ANSWERS (CARRY_CAUSES, spelled once in `_carry_py`): `via` with the two
+  # alias paths, or `exdev-other-fs` (two filesystems), `exdev-no-root` (no
+  # read-write mount of the filesystem exposes both), `root-unreachable` (the
+  # alias could not be stat'ed), `root-mismatch` (the alias is another
+  # directory, or a mount sits inside a tree), `mounts-absent` /
+  # `mounts-unreadable`, `link-failed` (one mount holds both: the link failed
+  # for another reason, EMLINK, ENOSPC, EPERM), and `route-error` — this
+  # function's default, kept when python3 is missing or the program crashed or
+  # answered anything outside that shape. The CALLER sets `root-failed` when a
+  # link through a proved alias still fails. The variables are the caller's
+  # locals, `CARRY_SLOT_FD`'s idiom.
+  CARRY_ROUTE=route-error CARRY_A2="" CARRY_B2=""
+  command -v python3 >/dev/null 2>&1 || return 0
+  local kind="" x="" y=""
+  { IFS= read -r -d '' kind; IFS= read -r -d '' x; IFS= read -r -d '' y; } < <(_carry_py route "$1" "$2")
+  case "$kind" in
+    via)  if [[ -d "$x" && -d "$y" ]]; then CARRY_ROUTE=via CARRY_A2=$x CARRY_B2=$y; fi ;;
+    none) if [[ "$x" =~ ^[a-z][a-z-]*$ ]]; then CARRY_ROUTE=$x; fi ;;
+  esac
+  return 0
+}
+
+_carry_py() {   # walk src dst budget | route a b — the carry's ONE embedded program, two modes (the walk, below; the route, above)
   # THE WALK, one python3 process rather than a fork per file: the measured
   # sidecar census at planning ran to 6,142 files in one directory (p99 3,497),
   # and a `stat`+`cmp` pair per file would hold the unit down for that long.
@@ -23124,9 +23199,110 @@ _swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged (K def
   # rewrite too. A temp left by a killed walk is named `.ccd-carry-*` and
   # skipped on every later walk, as source and as destination.
   python3 /dev/fd/3 "$@" 3<<'PY'
-import os, stat, sys, shutil, tempfile
+import errno, os, re, stat, sys, shutil, tempfile
 
-src, dst, budget = sys.argv[1], sys.argv[2], int(sys.argv[3])
+# ── THE LINK ROUTE (`_carry_link_route`'s header above has the reasoning) ──
+# Every word the route, and a copy after it, may name. Spelled ONCE, here: the
+# bash side sets only its `route-error` default and `root-failed`, and
+# `ccd-carry-link-route.test.ts`'s census pins both against this tuple.
+CARRY_CAUSES = ('exdev-other-fs', 'exdev-no-root', 'root-unreachable', 'root-mismatch', 'root-failed', 'mounts-absent', 'mounts-unreadable', 'link-failed', 'route-error')
+
+def unesc(b):
+    """A mountinfo path field: the kernel writes space, tab, newline and backslash as \\NNN octal."""
+    return os.fsdecode(re.sub(rb'\\([0-7]{3})', lambda m: bytes([int(m.group(1), 8)]), b))
+
+def mounts():
+    """[(majmin, root, target, rw)] in table order, or the cause word when there is no usable table."""
+    try:
+        with open(os.environ.get('CCD_MOUNTINFO') or '/proc/self/mountinfo', 'rb') as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return 'mounts-absent'
+    except OSError:
+        return 'mounts-unreadable'
+    rows = []
+    for line in raw.split(b'\n'):
+        f = line.split(b' ')
+        if len(f) < 10 or b'-' not in f[6:]:
+            continue
+        rows.append((f[2], unesc(f[3]), unesc(f[4]), b'rw' in f[5].split(b',')))
+    return rows or 'mounts-unreadable'
+
+def under(p, anc):
+    """p is anc or below it, at a COMPONENT boundary: /home/.claude is not under /home/.cl."""
+    return anc == '/' or p == anc or p.startswith(anc + '/')
+
+def rel_of(p, anc):
+    return '' if p == anc else (p[1:] if anc == '/' else p[len(anc) + 1:])
+
+def join(base, r):
+    return os.path.join(base, r) if r else base
+
+def holder(rows, p):
+    """The mount p resolves through: the longest target above it, the LATER of two equal ones (the one on top)."""
+    best = None
+    for r in rows:
+        if under(p, r[2]) and (best is None or len(r[2]) >= len(best[2])):
+            best = r
+    return best
+
+def route(a, b):
+    """('via', a2, b2): a2 and b2 ARE a and b (proved by inode), under one read-write mount. Else ('none', cause)."""
+    sa, sb = os.stat(a), os.stat(b)
+    if sa.st_dev != sb.st_dev:
+        return ('none', 'exdev-other-fs')
+    rows = mounts()
+    if isinstance(rows, str):
+        return ('none', rows)
+    ra, rb = os.path.realpath(a), os.path.realpath(b)
+    ma, mb = holder(rows, ra), holder(rows, rb)
+    if ma is None or mb is None:
+        return ('none', 'mounts-unreadable')
+    if ma is mb:
+        return ('none', 'link-failed')
+    if ma[0] != mb[0]:
+        return ('none', 'exdev-other-fs')
+    va, vb = join(ma[1], rel_of(ra, ma[2])), join(mb[1], rel_of(rb, mb[2]))
+    cands = sorted((c for c in rows if c[0] == ma[0] and c[3] and under(va, c[1]) and under(vb, c[1])),
+                   key=lambda c: (-len(c[1]), c[2]))
+    seen = set()
+    for c in cands:
+        a2, b2 = join(c[2], rel_of(va, c[1])), join(c[2], rel_of(vb, c[1]))
+        if holder(rows, a2) is not c or holder(rows, b2) is not c:
+            continue                    # another mount is stacked over an alias path
+        if any(r[2] != p and under(r[2], p) for r in rows for p in (ra, rb, a2, b2)):
+            seen.add('root-mismatch')   # a mount INSIDE a tree: the alias would not show the same tree
+            continue
+        try:
+            ia, ib = os.stat(a2), os.stat(b2)
+        except OSError:
+            seen.add('root-unreachable')
+            continue
+        if (ia.st_dev, ia.st_ino) == (sa.st_dev, sa.st_ino) and (ib.st_dev, ib.st_ino) == (sb.st_dev, sb.st_ino):
+            return ('via', a2, b2)
+        seen.add('root-mismatch')
+    for cause in ('root-mismatch', 'root-unreachable'):
+        if cause in seen:
+            return ('none', cause)
+    return ('none', 'exdev-no-root')
+
+def safe_route(a, b):
+    """The route never takes the carry down with it: any exception is `route-error`, its cause on stderr."""
+    try:
+        return route(a, b)
+    except Exception as e:
+        print(f'ccd: carry route failed: {e!r}', file=sys.stderr)
+        return ('none', 'route-error')
+
+if sys.argv[1] == 'route':
+    # Three NUL-terminated BYTE fields — a mount point may hold a newline (\\012),
+    # and a path is bytes — never the walk's backslashreplace text stream.
+    r = safe_route(sys.argv[2], sys.argv[3])
+    sys.stdout.buffer.write(b''.join(os.fsencode(x) + b'\0' for x in (r + ('',))[:3]))
+    sys.exit(0)
+
+# ── THE WALK ──
+src, dst, budget = sys.argv[2], sys.argv[3], int(sys.argv[4])
 sys.stdout.reconfigure(errors='backslashreplace')   # a non-UTF-8 file name must not fail the report after the merge ran
 TMP = '.ccd-carry-'
 CHUNK = 1 << 20
