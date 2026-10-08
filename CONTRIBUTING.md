@@ -32,7 +32,10 @@ concluding a break is real. CI on a quiet runner is the arbiter.
 live service. `ccd`'s suites in particular drive real workspace operations, and `HOME` is
 the one isolation boundary they rely on — pointed at your own, they delete your work. Copy
 the harness idioms from a neighbouring test (`makeCcdHarness`, `ghContainedEnv`) rather
-than assembling one.
+than assembling one. Each server run also keeps every temp write under one
+`$TMPDIR/ccrc-testrun-XXXXXX` parent of its own, removed even when the run is killed; a
+`TMPDIR` too long for a unix socket prints `ccrc-test: per-run temp dir refused (<code>)`
+and falls back to loose fixtures.
 
 Node floor is `>=22.16.0`, identical across all three engines, and pinned by a test. Below
 22.13 the server fails to boot (it imports `node:sqlite` unconditionally); below 22.16 that
