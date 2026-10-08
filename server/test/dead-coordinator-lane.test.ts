@@ -365,6 +365,21 @@ describe('the act’s own re-measure', () => {
     expect(note[0]!.sentence).toContain('closed failed 1 run of programme alpha');
   });
 
+  it('an act that RELEASED a worker and then THREW, closing nothing, is recorded — a feed row, not only memory (review 339, F13)', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A, 'alpha');
+    // The commit throws AFTER the fleet act ran: the release happened, the close did not.
+    f.coord.closeRun = () => { throw new Error('database or disk is full'); };
+    await anHourDead(f);
+    expect(f.calls.filter((c) => c[0] === 'ws-release'), 'the CONTROL: the fleet act ran').toHaveLength(1);
+    expect(f.stateOf(r)).toBe('working');
+    const rows = f.coord.feedEvents(50).filter((e) => e.title === 'dead coordinator: act failed');
+    expect(rows.map((e) => e.sessionId), 'one row, in the coordination store — not only in the watcher memory a restart drops').toEqual([A]);
+    expect(rows[0]!.body).toContain(`before it closed any run; run ${r}'s abandon is the one that failed`);
+  });
+
   it('an act that THROWS is asked again only after the backoff, and listed', async () => {
     const f = await fixture({ throwAct: true });
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
@@ -374,6 +389,7 @@ describe('the act’s own re-measure', () => {
     const counts = [f.acts()];
     for (let k = 0; k < 2; k += 1) { f.next(); await f.pass(); counts.push(f.acts()); }
     expect(counts, 'once, then not on the next pass, then again after two minutes').toEqual([1, 1, 2]);
+    expect(f.feed().filter(([, t]) => t === 'dead coordinator: act failed'), 'each thrown act is one row').toHaveLength(2);
     expect(f.attention()).toEqual([['stuck', [A]]]);
   });
 });

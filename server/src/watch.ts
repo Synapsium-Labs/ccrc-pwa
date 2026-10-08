@@ -118,7 +118,7 @@ import {
 } from './deadCoordinator.js';
 import {
   DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker,
-  recordDeadCoordinatorFeed,
+  recordDeadCoordinatorFeed, recordDeadCoordinatorThrew,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
@@ -4254,6 +4254,9 @@ export class FleetWatcher {
       if (done !== null && done.programmes.length > 0) {
         recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, pick.since);
       }
+      // EVERY thrown act is recorded, whatever it had done (review 339, F13): one that released a worker and then threw,
+      // having closed nothing, is otherwise only an in-memory entry a restart loses.
+      recordDeadCoordinatorThrew({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, detail, pick.since);
       this.deadCoordinatorState.set(pick.id, deadCoordinatorThrew(e, detail, Date.now(), CHILD_RECLAIM_SWEEP_MS,
         done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], reheld: [], stop: null } : undefined));
       return null;

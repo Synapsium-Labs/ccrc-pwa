@@ -210,7 +210,7 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
     expect(err).toBeInstanceOf(DeadCoordinatorActThrew);
     expect((err as Error).message, 'the original message, so every reader of the error reads what it read').toBe('database or disk is full');
     expect((err as DeadCoordinatorActThrew).outcome).toEqual({ kind: 'ended', programmes: [{ slug: 'alpha', runIds: [a] }],
-      open: [{ slug: 'beta', runIds: [b] }], stuck: [], stoppedBy: null, failed: 'database or disk is full' });
+      open: [{ slug: 'beta', runIds: [b] }], stuck: [], stoppedBy: null, failed: 'database or disk is full', failedRun: b });
     expect([a, b].map(r.stateOf)).toEqual(['failed', 'working']);
   });
 

@@ -377,7 +377,10 @@ export type DeadCoordinatorActOutcome =
       readonly reheld?: readonly DeadCoordinatorProgramme[];
       /** Set only on the outcome a THROWN act hands back (`DeadCoordinatorActThrew`): what it had closed is real, and
        *  this is what failed. */
-      readonly failed?: string }
+      readonly failed?: string;
+      /** Set only with `failed`, when the throw came from one run's abandon: that run. Whether ITS fleet act ran before
+       *  the throw is not known — the abandon arm answered nothing (review 339, F13). */
+      readonly failedRun?: number }
   | { readonly kind: 'would-end'; readonly programmes: readonly DeadCoordinatorProgramme[] }
   | { readonly kind: 'paused-at-server'; readonly detail: string }
   | { readonly kind: 'store-unreadable'; readonly detail: string };
@@ -547,6 +550,24 @@ export function deadCoordinatorFeedRows(
     case 'paused-at-server': case 'store-unreadable':
       return [];
   }
+}
+
+/** The feed row for an act that THREW (review 339, F13), written for EVERY thrown act — beside the rows of any
+ *  programme it had closed — so a throw that closed nothing is still a durable record, not only an in-memory entry a
+ *  restart loses. It names what is known — the runs the act closed, the run whose abandon failed — and says nothing
+ *  more is. `done` is the executor's own outcome up to the throw, or `null` when the act failed before the executor
+ *  could say anything (the serialiser itself threw). */
+export function deadCoordinatorThrewFeedRow(
+  claimantId: string, done: Extract<DeadCoordinatorActOutcome, { kind: 'ended' }> | null, error: string, since: number,
+): { readonly title: string; readonly body: string } {
+  const closed = done === null || done.programmes.length === 0 ? 'before it closed any run'
+    : `after it closed failed ${done.programmes.map((x) => `${runs(x.runIds.length)} of programme ${x.slug}`).join(', ')}`;
+  const at = done?.failedRun === undefined ? ''
+    : `; run ${done.failedRun}'s abandon is the one that failed, and whether its worker was released or re-held before the failure is not known`;
+  return { title: 'dead coordinator: act failed',
+    body: `coordinator ${claimantId} crashed (dead since ${iso(since)}) and stayed dead an hour; the lane's act failed (${error}) `
+      + `${closed}${at}. Nothing more is known about which runs or workspaces moved — check its runs on /runs. It is asked `
+      + 'again only after a backoff.' };
 }
 
 /** One report's sentence. */

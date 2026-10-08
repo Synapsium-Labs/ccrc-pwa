@@ -12,7 +12,7 @@ import {
   DEAD_COORDINATOR_JOURNAL_MARGIN_MS, DEAD_COORDINATOR_JOURNAL_TRUSTED, deadAnchorNext, deadCoordinatorAttention,
   deadCoordinatorBackoffMs, deadCoordinatorBreaker, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerKey,
   deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorFeedRows, deadCoordinatorJournal,
-  deadCoordinatorNextEntry, deadCoordinatorReportSentence, deadCoordinatorSighted, deadCoordinatorSince,
+  deadCoordinatorNextEntry, deadCoordinatorReportSentence, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrewFeedRow,
   deadCoordinatorThrew, isDeadCoordinatorKebab,
   type ClaimantReading, type DeadCoordinatorJournal, type DeadCoordinatorJournalRow, type DeadCoordinatorJournalTrust,
 } from '../src/deadCoordinator.js';
@@ -401,6 +401,21 @@ describe('the words', () => {
     const sentence = deadCoordinatorReportSentence('demo-coord', n.report!);
     expect(sentence).toContain('re-held the worker of run 7 of programme alpha under a surviving run (it stays claimed)');
     expect(sentence).not.toMatch(/released|unheld/);
+  });
+
+  it('an act that THREW gets ONE row naming what is known, whatever it had done — and that nothing more is known (review 339, F13)', () => {
+    const none = deadCoordinatorThrewFeedRow('demo-coord', { kind: 'ended', programmes: [], open: [{ slug: 'alpha', runIds: [7] }],
+      stuck: [], stoppedBy: null, failed: 'database or disk is full', failedRun: 7 }, 'database or disk is full', NOW);
+    expect(none).toEqual({ title: 'dead coordinator: act failed',
+      body: 'coordinator demo-coord crashed (dead since 2026-09-21 14:13 UTC) and stayed dead an hour; the lane\'s act failed '
+        + '(database or disk is full) before it closed any run; run 7\'s abandon is the one that failed, and whether its worker was '
+        + 'released or re-held before the failure is not known. Nothing more is known about which runs or workspaces moved — '
+        + 'check its runs on /runs. It is asked again only after a backoff.' });
+    expect(deadCoordinatorThrewFeedRow('demo-coord', { kind: 'ended', programmes: [{ slug: 'alpha', runIds: [6] }],
+      open: [{ slug: 'beta', runIds: [7] }], stuck: [], stoppedBy: null, failed: 'x', failedRun: 7 }, 'x', NOW).body)
+      .toContain('failed (x) after it closed failed 1 run of programme alpha; run 7\'s abandon is the one that failed');
+    expect(deadCoordinatorThrewFeedRow('demo-coord', null, 'SQLITE_BUSY', NOW).body, 'the serialiser threw: nothing is known')
+      .toContain('failed (SQLITE_BUSY) before it closed any run. Nothing more is known');
   });
 
   it('an act that FAILED part-way keeps the rows of what it had closed, and says it failed', () => {

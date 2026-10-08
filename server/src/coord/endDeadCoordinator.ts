@@ -10,7 +10,7 @@ import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../../shared/api.js';
 import {
   DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
-  deadCoordinatorJournal,
+  deadCoordinatorJournal, deadCoordinatorThrewFeedRow,
   type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorJournal,
   type DeadCoordinatorJournalTrust, type DeadCoordinatorProgramme, type DeadCoordinatorStop,
 } from '../deadCoordinator.js';
@@ -165,15 +165,18 @@ export async function endDeadCoordinator(
   const stuck: { runId: number; why: string }[] = [];
   let stoppedBy: DeadCoordinatorStop | null = null;
   // What the act has done so far, as its outcome — also what a THROWN act hands back (`DeadCoordinatorActThrew`).
+  // The run whose abandon is in flight — what a throw names, since the arm answered nothing about it.
+  let current: number | null = null;
   const outcome = (failed?: string): Extract<DeadCoordinatorActOutcome, { kind: 'ended' }> => {
     const closed = new Set(ended.map((r) => r.id));
     return { kind: 'ended', programmes: byProgramme(ended), open: byProgramme(runs.filter((r) => !closed.has(r.id))),
       stuck, stoppedBy, ...(released.length === 0 ? {} : { released: byProgramme(released) }),
       ...(reheld.length === 0 ? {} : { reheld: byProgramme(reheld) }),
-      ...(failed === undefined ? {} : { failed }) };
+      ...(failed === undefined ? {} : { failed, ...(current === null ? {} : { failedRun: current }) }) };
   };
   try {
     for (const run of runs) {
+      current = run.id;
       const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId));
       if (out.ok) { ended.push(run); continue; }
       if (out.kind === 'sweep-stopped') {
@@ -193,6 +196,7 @@ export async function endDeadCoordinator(
       const why = closeRefusalOf(run.id, out);
       stuck.push({ runId: run.id, why: why.detail === undefined ? why.kind : `${why.kind}: ${why.detail}` });
     }
+    current = null;
   } catch (err) {
     // The runs that closed before the throw ARE closed: the lane records them, so the error carries them.
     throw new DeadCoordinatorActThrew(err, outcome(err instanceof Error ? err.message : String(err)));
@@ -241,6 +245,14 @@ export function recordDeadCoordinatorFeed(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, claimantId: string, o: DeadCoordinatorActOutcome, since: number,
 ): void {
   recordRows(deps, claimantId, deadCoordinatorFeedRows(claimantId, o, since), o.kind);
+}
+
+/** The feed row for an act that THREW — every one, whatever it had done (review 339, F13). */
+export function recordDeadCoordinatorThrew(
+  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, claimantId: string,
+  done: Extract<DeadCoordinatorActOutcome, { kind: 'ended' }> | null, error: string, since: number,
+): void {
+  recordRows(deps, claimantId, [deadCoordinatorThrewFeedRow(claimantId, done, error, since)], 'act failed');
 }
 
 /** The breaker's feed row, under its first claimant — written by the lane when the trip begins or names a new set. */
