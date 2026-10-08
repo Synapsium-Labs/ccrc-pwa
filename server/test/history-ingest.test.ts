@@ -2008,6 +2008,7 @@ describe('history ingest: secrets per tick (plan task 22)', () => {
 
 interface IxSweep {
   rederiveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<{ state: 'idle' | 'running' | 'completed'; reindexed: number }>;
+  reindexForValues(db: DatabaseSync, ctx: IxCtx, values: string[]): Promise<number>;
 }
 
 describe('history ingest: the FTS index (plan task 23)', () => {
@@ -2908,6 +2909,39 @@ describe('history ingest: the FTS index (plan task 23)', () => {
           expect(await S.rederiveFts(db, ctx, S.newBudget())).toEqual({ state: 'completed', reindexed: 0 });   // nothing left to delete: no change
           expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(1);
           expect((db.prepare("SELECT completed_ms AS c FROM derivation_state WHERE step = 'fts-merge'").get() as { c: number | null }).c).toBe(1);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    it('B4M1: the phrase path keeps no row for an over-cap blob an earlier store indexed in full, and re-indexes a within-cap blob holding the same value (D-4346)', async () => {
+      const { sweep: S, store, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-b4m1-');
+      try {
+        const v = `zqg${hex(12)}8`;
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+          IX.user(IX.uuidN(1), null, `note ${v} end`, 1),
+          IX.user(IX.uuidN(2), IX.uuidN(1), `other ${v} tail`, 2),
+        ]));
+        IX.sweepTwice(box);
+        const P = lib.historyPaths(box.home);
+        const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+        const db = store.openWriter(P.dbFile);
+        try {
+          const blobOf = (n: number): number => (db.prepare('SELECT blob_id AS id FROM entries WHERE uuid = ?').get(IX.uuidN(n)) as { id: number }).id;
+          expect(matches(db, `"${v}"`), 'CONTROL: both rows are indexed in full').toBe(2);
+          // a store written before ingest withheld an over-cap body: the blob's raw_len says over the cap, its index row is whole
+          db.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(lib.BLOB_DECODE_MAX + 1, blobOf(1));
+          expect(hasFtsRow(db, blobOf(1)), 'CONTROL: the over-cap blob holds a row before the call').toBe(true);
+          const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+          secretFile(box, 'g.env', `ZQ_G_VALUE=${v}\n`);
+          const secrets = S.secretsStep(db, ctx, []);
+          ctx.pairIdx = secrets.pairIdx;
+          ctx.fts = S.ftsPrepare(db, ctx.nowMs).tables;
+          // the pair is above the mark, the phrase finds both blobs, and no sweep ran: only this arm decides the over-cap one
+          expect(await S.reindexForValues(db, ctx, secrets.values)).toBe(2);
+          expect(hasFtsRow(db, blobOf(1)), 'the over-cap blob keeps no row, not an empty one').toBe(false);
+          expect(hasFtsRow(db, blobOf(2)), 'CONTROL: the within-cap blob is re-indexed').toBe(true);
+          expect(matches(db, `"${v}"`), 'CONTROL: the re-index redacted the value').toBe(0);
         } finally { db.close(); }
       } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     });

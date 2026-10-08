@@ -1324,8 +1324,10 @@ const bashExtra = [path.join(ccrcRoot, 'install.sh')].filter((f) => existsSync(f
 const BASH = [...bashRoots.flatMap(bashFiles), ...bashExtra];
 /** A bash line that is not a comment. Either path is discussed in prose all
  *  over these tools; only an actual line of shell is a reader or a writer. */
+/** One notion of a bash comment line, shared by every scan in this file that drops them (codeLines, the USAGE_PROSE describe's code()). */
+const isBashComment = (l: string): boolean => l.trim().startsWith('#');
 const codeLines = (f: string): string[] =>
-  readFileSync(f, 'utf8').split('\n').filter((l) => !l.trim().startsWith('#'));
+  readFileSync(f, 'utf8').split('\n').filter((l) => !isBashComment(l));
 const holdersOf = (needle: string): string[] =>
   BASH.filter((f) => codeLines(f).some((l) => l.includes(needle))).map(rel).sort();
 
@@ -4839,7 +4841,9 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   const needle = (name: string): string => `/${name}`;
   /** The help text NAMES the pause path for the operator; it neither reads nor writes the switch. The allowance is
    *  line-scoped: only the lines of `fn`'s body (its `fn() {` line to the next line that is exactly `}`) that hold a
-   *  needle in a single-quoted printf argument. Every other `file` line naming the path still reds the scan. */
+   *  needle in a single-quoted printf argument: a quoted line that belongs to the run of `\` continuations starting at
+   *  a `printf` line of `fn` (FU9, B4M2), so a continuation of any other command inside `fn` is not covered. Every
+   *  other `file` line naming the path still reds the scan. */
   const USAGE_PROSE = { file: 'ccd/ccrc', fn: '_usage_history_paragraph', needles: ['/history-off'] } as const;
   /** The line numbers of `fn`'s body the allowance covers, and the body itself (null when `fn` is not found). */
   const usageProse = (text: string): { body: string[] | null; allowed: Set<number> } => {
@@ -4849,9 +4853,14 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     let end = at + 1;
     while (end < lines.length && lines[end] !== '}') end += 1;
     const allowed = new Set<number>();
+    let inPrintf = false;   // true while the previous line was a printf line, or a quoted argument line, that ends in `\`
     for (let i = at + 1; i < end; i += 1) {
-      const m = /^\s*'([^']*)'(?:\s*\\)?$/.exec(lines[i]!);
-      if (m && USAGE_PROSE.needles.some((n) => m[1]!.includes(n))) allowed.add(i);
+      const l = lines[i]!;
+      const continues = /\\\s*$/.test(l);
+      if (/^\s*printf\b/.test(l)) { inPrintf = continues; continue; }
+      const m = /^\s*'([^']*)'(?:\s*\\)?$/.exec(l);
+      if (inPrintf && m && USAGE_PROSE.needles.some((n) => m[1]!.includes(n))) allowed.add(i);
+      inPrintf = inPrintf && m !== null && continues;
     }
     return { body: lines.slice(at + 1, end), allowed };
   };
@@ -4859,8 +4868,9 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
    *  holder count and the `writes()` classifier both skip it. */
   const code = (f: string): string[] => {
     if (!BASH.includes(f)) return stallCode(f).split('\n');
-    const skip = rel(f) === USAGE_PROSE.file ? usageProse(readFileSync(f, 'utf8')).allowed : new Set<number>();
-    return readFileSync(f, 'utf8').split('\n').filter((l, i) => !skip.has(i) && !l.trim().startsWith('#'));
+    const text = readFileSync(f, 'utf8');   // once per call: ccd/ccrc is about 24k lines
+    const skip = rel(f) === USAGE_PROSE.file ? usageProse(text).allowed : new Set<number>();
+    return text.split('\n').filter((l, i) => !skip.has(i) && !isBashComment(l));
   };
   /** A line READS a switch when it tests or reads the path. */
   const READ = /\[\[?\s+!?\s*-[efrs]\s|\b(?:existsSync|readFileSync|statSync|lstatSync)\s*\(/;
@@ -4912,8 +4922,14 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     expect(body!.join('\n')).toContain('~/.ccrc/history-off');
     expect(allowed.size).toBe(1);
     // The classifier: a single-quoted prose line is allowed, a code line that reads or writes the path is not.
-    const probe = (l: string): number => usageProse(`${USAGE_PROSE.fn}() {\n${l}\n}\n`).allowed.size;
-    expect(probe("    '            a session printed included; touch ~/.ccrc/history-off to pause' \\")).toBe(1);
+    const probe = (...l: string[]): number => usageProse(`${USAGE_PROSE.fn}() {\n${l.join('\n')}\n}\n`).allowed.size;
+    const PROSE = "    '            a session printed included; touch ~/.ccrc/history-off to pause' \\";
+    expect(probe("  printf '\\n%s' \\", PROSE)).toBe(1);
+    expect(probe(PROSE), 'a quoted line outside a printf run is not prose').toBe(0);
+    // FU9 (B4M2): a quoted line is covered only as the continuation of a printf line, never of another command.
+    expect(probe('  touch \\', "    '/abs/.ccrc/history-off'")).toBe(0);
+    expect(probe("  printf '\\n%s' \\", "    'one' \\", '  touch \\', "    '/abs/.ccrc/history-off'")).toBe(0);
+    expect(probe("  printf '\\n%s' \\", "    'one'", "    '/abs/.ccrc/history-off'"), 'a quoted line with no `\\` ends the run').toBe(0);
     expect(probe('    touch "$HOME/.ccrc/history-off"')).toBe(0);
     expect(probe('    [ -e "$HOME/.ccrc/history-off" ] && return 0')).toBe(0);
   });

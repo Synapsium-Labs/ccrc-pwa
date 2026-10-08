@@ -1265,6 +1265,26 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
         } finally { fs.chmodSync(d, 0o700); }
       });
 
+      // CONTROL (FU9, B4M7): pins D-4347's FU6 sentence "a displaced file never drains, so its id's later files drain without it".
+      // The it.each above displaces a file with ANOTHER id's file behind it; here the file behind it has the SAME id.
+      it('CONTROL: a displaced file\'s own id keeps draining: its later same-id file reaches the store, the displaced one stays under planted/, spool_displaced is 1 (FU9, B4M7)', () => {
+        writeRegular();                                                                  // A: <ID>.900.1
+        fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.902.1.jsonl`), stopLine(ID));   // A2: the same id, later
+        const d = plantDir(`${ID}.900.1.obs`, 'keep');
+        fs.chmodSync(d, 0o500);
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+          expect(r.stderr).toContain(`history-sweep: spool-displaced: ${ID}.900.1.jsonl\n`);
+          expect(counters(box)['spool_displaced']).toBe(1);
+          expect(counters(box)['spool_blocked']).toBeUndefined();
+          expect(receipts(box).map((x) => x.event_key), 'A2 drained, and A never did').toEqual([eventKey(`${ID}.902.1.jsonl`, 1)]);
+          expect(drainingNames(box.home), 'neither is left to drain').toEqual([]);
+          expect(fs.readFileSync(PLANTED(`${ID}.900.1.jsonl`), 'utf8'), 'A is kept whole under planted/').toBe(stopLine(ID));
+          expect(journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'file').map((x) => x['name'])).toEqual([`${ID}.902.1.jsonl`]);
+        } finally { fs.chmodSync(d, 0o700); }
+      });
+
       // FU8 (FP6): spool_displaced is committed before the move, as D-4337's set-asides are, so a kill or a failed commit never
       // loses the count of a file that left the drain; a count that cannot commit leaves the file where it is for the next drain.
       it('a displacement whose count cannot commit leaves the file where it is, skipped and unjournaled; the next drain counts it, then moves it (FU8, FP6)', () => {
@@ -1788,6 +1808,15 @@ const transcriptIn = (home: string, slug: string, uuid: string, text: string): s
   return path.join(dir, `${uuid}.jsonl`);
 };
 
+/** What `fn` writes to this process's stderr, captured instead of reaching the runner's output (FU9, B4M10). */
+const captureStderr = (fn: () => void): string[] => {
+  const real = process.stderr.write;
+  const lines: string[] = [];
+  (process.stderr as unknown as { write: unknown }).write = (s: unknown): boolean => { lines.push(String(s)); return true; };
+  try { fn(); } finally { (process.stderr as unknown as { write: unknown }).write = real; }
+  return lines;
+};
+
 describe('epochs and families, decided at drain (spec §6.1, §9.2 step 1, §9.14 verdicts)', () => {
   let box: HistoryBox;
   let ids: Ids;
@@ -1910,7 +1939,8 @@ describe('epochs and families, decided at drain (spec §6.1, §9.2 step 1, §9.1
     fs.writeFileSync(path.join(pl, 'keep'), '');
     fs.chmodSync(pl, 0o500);
     try {
-      SW.drainSpool(db, c); clock.ms += 1000; SW.drainSpool(db, c); clock.ms += 1000;
+      const said = captureStderr(() => { SW.drainSpool(db, c); clock.ms += 1000; SW.drainSpool(db, c); clock.ms += 1000; });
+      expect(said, 'each drain that meets the block names it on stderr').toContain(`history-sweep: spool-blocked: ${ID}.900.1.jsonl\n`);
       expect(counterOf(db, 'spool_blocked')).toBeGreaterThanOrEqual(1);
       expect(epochsOf(db, ID, G1), 'B waits behind A: nothing of the id drained').toEqual([]);
       expect(drainingNames(box.home)).toEqual([`${ID}.900.1.jsonl`, `${ID}.901.1.jsonl`]);

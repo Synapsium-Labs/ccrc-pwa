@@ -671,7 +671,8 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     const stop = (id: string): string => `\n${JSON.stringify({ v: 1, ev: 'Stop', id })}\n`;
     healthFs.writeFileSync(healthPath.join(dir, 'claude-a-demo.900.1.jsonl'), stop('claude-a-demo'));        // A, first in drain order
     healthFs.writeFileSync(healthPath.join(dir, 'claude-a-other.902.1.jsonl'), stop('claude-a-other'));      // B
-    healthFs.writeFileSync(healthPath.join(dir, 'claude-a-demo.900.1.obs'), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+    const plantedMs = Date.now() - 6 * 60 * 60_000;
+    healthFs.writeFileSync(healthPath.join(dir, 'claude-a-demo.900.1.obs'), JSON.stringify(fullObs(plantedMs)), { mode: 0o600 });
     const tmp = healthPath.join(dir, 'claude-a-demo.900.1.obs.tmp');
     healthFs.mkdirSync(tmp);
     healthFs.writeFileSync(healthPath.join(tmp, 'keep'), '');
@@ -686,6 +687,13 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
       expect(r.stderr).toContain('history-sweep: spool-blocked: claude-a-demo.900.1.jsonl\n');
       expect(healthFs.readdirSync(dir).filter((n) => n.endsWith('.jsonl'))).toEqual(['claude-a-demo.900.1.jsonl']);   // B drained, A stays live
       expect(healthFs.existsSync(healthPath.join(dir, 'claude-a-demo.900.1.obs')), 'A keeps its sidecar').toBe(true);
+      // FU9 (B4M6): the CONTROL's own precondition, measured after the sweep. The absence of a FAIL below means something only
+      // while A is still a held-looking file (`journaled: null`, the planted six-hour-old observation) that the sweep skipped
+      // unjournaled, and B (A's neighbour, another id) is gone from `.draining/` through the drain.
+      const obs = JSON.parse(healthFs.readFileSync(healthPath.join(dir, 'claude-a-demo.900.1.obs'), 'utf8')) as { journaled: unknown; observedMs: number };
+      expect(obs.journaled, 'A was skipped, never journaled').toBeNull();
+      expect(obs.observedMs, 'A\'s rename-time observation is the planted one').toBe(plantedMs);
+      expect(healthFs.readdirSync(dir).filter((n) => n.startsWith('claude-a-other')), 'B drained: nothing of it is left in .draining/').toEqual([]);
       const h = statusOf(box).env!['health'];
       expect(wordsOf(h['fail'])).not.toContain('journal-unwritable');
       expect(wordsOf(h['fail'])).not.toContain('status-unreadable');

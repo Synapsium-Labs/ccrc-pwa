@@ -10496,6 +10496,20 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
    *  [] = builtins only. Conservative by construction: what it cannot classify is reported, never passed. */
   const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
     const found: string[] = [];
+    /** FPM3: where does the `((` that starts at `p` end, if it is ARITHMETIC (its content balanced, closed by `))`)? -1 when
+     *  it is not: bash re-parses a `((` that closes any other way as two nested subshells (`$((` as a command
+     *  substitution holding one), and those fork. */
+    const arithEnd = (s: string, p: number): number => {
+      let depth = 0;
+      for (let k = p + 2; k < s.length && s[k] !== '\n'; k++) {
+        if (s[k] === '(') depth++;
+        else if (s[k] === ')') {
+          if (depth === 0) return s[k + 1] === ')' ? k + 2 : -1;
+          depth--;
+        }
+      }
+      return -1;
+    };
     const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
     // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
     let out = '';
@@ -10509,6 +10523,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
       }
       if (c === '`') { found.push('backtick'); out += '_'; continue; }
       if (c === '$' && src[i + 1] === '(' && src[i + 2] !== '(') { found.push('command substitution'); out += '__'; i++; continue; }
+      if (c === '$' && src[i + 1] === '(' && arithEnd(src, i + 1) < 0) { found.push('command substitution'); out += '$( '; i++; continue; }   // FPM3: `$((` that is no arithmetic is a substitution holding a subshell
       if (c === '"' || (c === '$' && src[i + 1] === '{')) {
         const stack: string[] = [c === '"' ? '"' : '}'];
         let j = c === '"' ? i + 1 : i + 2;
@@ -10517,7 +10532,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
           const top = stack[stack.length - 1];
           if (d === '\\') { j++; continue; }
           if (d === '`') found.push('backtick');
-          else if (d === '$' && src[j + 1] === '(' && src[j + 2] !== '(') found.push('command substitution');
+          else if (d === '$' && src[j + 1] === '(' && (src[j + 2] !== '(' || arithEnd(src, j + 1) < 0)) found.push('command substitution');
           else if (d === '$' && src[j + 1] === '{') { stack.push('}'); j++; }
           else if (d === "'" && top === '}' && !stack.includes('"')) { const k = src.indexOf("'", j + 1); j = k < 0 ? src.length : k; }   // B3M16: inside double quotes a ${…} word's single quotes are literal, so what they enclose is live
           else if (d === '"') { if (top === '"') stack.pop(); else stack.push('"'); }
@@ -10531,7 +10546,15 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     // 2. Process substitution is expanded even inside [[ ]], so it is looked for BEFORE step 3 blanks those.
     if (/[<>]\(/.test(out)) found.push('process substitution');
     // 3. Blank what may legally hold ( | & : [[ ]] tests, (( )) and $(( )) arithmetic, case patterns.
-    let m = out.replace(/\[\[ [^\n]*? \]\]/g, '[[ ]]').replace(/\$?\(\([^\n]*?\)\)/g, '(( ))');
+    //    FPM3: only a BALANCED `((…))` is arithmetic; any other `((` is two subshell openers and stays visible as such.
+    let m = out.replace(/\[\[ [^\n]*? \]\]/g, '[[ ]]');
+    for (let p = m.indexOf('(('); p >= 0; p = m.indexOf('((', p + 1)) {
+      const e = arithEnd(m, p);
+      if (e < 0) { m = `${m.slice(0, p)}( ${m.slice(p + 1)}`; continue; }
+      const from = m[p - 1] === '$' ? p - 1 : p;
+      m = `${m.slice(0, from)}(( ))${m.slice(e)}`;
+      p = from;
+    }
     m = m.replace(/(^|\n|;;|\bin)([ \t]*)[^\s();|&<>]+(?:\|[^\s();|&<>]+)*\)/g, '$1$2');
     // 4. What is left may hold none of these.
     const bare = m.replace(/\(\( \)\)/g, '');
@@ -10581,10 +10604,24 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     ['a program in a case arm on the case line', T, "_hs+='}'; case \"$src\" in clear) mkdir -p x ;; esac", 'command mkdir'],
     ['a substitution in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'$(id)\'}"', 'command substitution'],
     ['a backtick in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'`id`\'}"', 'backtick'],
+    // FPM3: bash re-parses a `((` / `$((` that is not balanced arithmetic as nested subshells / a substitution holding one.
+    ['a subshell spelled ((', T, "_hs+='}'; ((echo x) )", 'subshell'],
+    ['two subshells joined by && under ((', T, "_hs+='}'; ((true) && (mkdir x))", 'subshell'],
+    ['a subshell inside $( (', T, "_hs+='}'; _hs_x=$( (echo x) )", 'command substitution'],
+    ['a substitution spelled $((', T, "_hs+='}'; _hs_x=$((echo x) )", 'command substitution'],
+    ['a substitution spelled $(( inside double quotes', T, '_hs+=\'}\'; _hs_x="$((true) && (mkdir x))"', 'command substitution'],
   ];
   /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
   const INERT: Array<[string, string, string]> = [
     ['a substitution inside plain single quotes', A, "_hs_g='${CCRC_SESSION_GENERATION:-$(id)}'"],
+    // FU9 (B4M5): this row reaches the `${`-state's single-quote skip (B3M16), which the row above never does: its quotes
+    // enclose the whole `${…}`, so step 1's top-level arm masks it. Here the `${…}` sits outside double quotes and its
+    // word's single quotes are live, so bash prints `$(id)` literally (measured: C:$(echo SUB)).
+    ['a substitution in single quotes inside a ${} outside double quotes', A, "_hs_g=${CCRC_SESSION_GENERATION:-'$(id)'}"],
+    // FPM3: a balanced arithmetic form is no fork, in either spelling and inside double quotes.
+    ['a (( )) arithmetic command', T, "_hs+='}'; (( i++ ))"],
+    ['a $(( )) arithmetic expansion', T, "_hs+='}'; printf x $(( 1 + 2 ))"],
+    ['a $(( )) arithmetic expansion inside double quotes', T, '_hs+=\'}\'; printf "$(( 1 + (2 * 3) ))"'],
   ];
 
   it('S1 (syntax, F38): the spool block and every function it calls hold no fork form', () => {

@@ -1301,22 +1301,29 @@ describe('W1-j / §9.2 step 2: an unreadable roster skips the census', () => {
 
 describe('the statfs preload hides the host\'s managed settings from the census (Task 26 seam; review 316 F30)', () => {
   /** The 31-minute offset makes the census due again; the spy is loaded before the statfs preload, so the seam wraps it. */
-  const census = (prefix: string, real: boolean): string[] => {
+  const census = (prefix: string, real: boolean): { reads: string[]; box: HistoryBox } => {
     const box = boundBox(prefix);
     const rec = path.join(box.home, 'reads.txt');
     const r = runDriver(box, { offsetMs: 31 * MIN }, [], { preloads: [PRELOADS.readspy, PRELOADS.statfs], env: { HISTORY_TEST_READSPY: rec, ...(real ? { HISTORY_TEST_MANAGED_REAL: '1' } : {}) } });
     expect(r.code, r.stderr).toBe(0);
     const lines = fs.readFileSync(rec, 'utf8').split('\n');
     expect(lines, 'CONTROL: the census ran through the spied API').toContain(`openSync ${path.join(box.homes[0]!, 'settings.json')}`);
-    return lines.filter((l) => l.includes('/etc/claude-code'));
+    return { reads: lines.filter((l) => l.includes('/etc/claude-code')), box };
   };
 
   it('CONTROL: with the seam lifted, the spy sees both managed reads', () => {
-    expect(census('ccrc-hist-f30a-', true)).toEqual(expect.arrayContaining(['openSync /etc/claude-code/managed-settings.json', 'readdirSync /etc/claude-code/managed-settings.d']));
+    expect(census('ccrc-hist-f30a-', true).reads).toEqual(expect.arrayContaining(['openSync /etc/claude-code/managed-settings.json', 'readdirSync /etc/claude-code/managed-settings.d']));
   });
 
-  it('the census never reaches /etc/claude-code', () => {
-    expect(census('ccrc-hist-f30b-', false)).toEqual([]);
+  it('the census never reaches /etc/claude-code, and the box reads as having no managed settings: ENOENT, never unreadable (FPM4)', () => {
+    const { reads, box } = census('ccrc-hist-f30b-', false);
+    expect(reads).toEqual([]);
+    // The seam's purpose is the ABSENT answer: a managed file or directory that answered anything but ENOENT would read as
+    // unreadable, so each rostered home would be `unmeasured` and `retention_unmeasured` would count. Absent managed
+    // settings and no `cleanupPeriodDays` in the home leave the default (30) and no count.
+    expect(counter(box, 'retention_unmeasured'), 'managed settings read as absent, so nothing is unmeasured').toBe(0);
+    for (const h of box.homes) expect(metaOf(box, `retention_state:${h}`), h).toBe('default');
+    expect(metaOf(box, 'retention_min')).toBe('30');
   });
 });
 
