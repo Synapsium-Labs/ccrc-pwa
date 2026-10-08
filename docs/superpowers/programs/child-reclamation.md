@@ -69,7 +69,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     (`test (server)` included); the macOS legs are advisory. Main `669b83055` was an ancestor of the tip.
   - **Next.** Observe the release and the automatic agent-first deploy, read-only. Then open wave 7's run, and only
     then close run 291 `final:true`.
-  - **13:12.** The release v0.0.124 is published, and both boxes measured `[behind]` on v0.0.123. Wave 7's run,
+  - **13:10.** The release v0.0.124 is published, and both boxes measured `[behind]` on v0.0.123. Wave 7's run,
     **347**, is opened (`planned`, wave 7 of 8). Its plan, block and pre-flight come next. Amber-river (4010) and
     quiet-river (4011) were told of the merge.
 
