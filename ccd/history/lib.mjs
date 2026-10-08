@@ -130,9 +130,14 @@ export const OBS_FILE_MAX = 65536;
 export const CONTROL_FILE_MAX = 65536;
 /** D-4337 (history-spool-file-size-cap, its line arm): a draining spool file holding more than this many lines
  *  (splitSpoolText's ordinals: empty lines take none) is set aside like one over SPOOL_FILE_MAX, counted
- *  `spool_overlines`. A legitimate file holds fewer: each hook line is fenced `\n<json>\n` (D-4176) and at most
- *  SPOOL_LINE_MAX bytes, so SPOOL_FILE_MAX holds at most 65,408 of them. It refuses only the amplification the byte
- *  cap let through: 24 MiB of 2-byte lines (12.6 million) aborted every pass in a 1 GiB scope (review 316 F6). */
+ *  `spool_overlines`. Lines of at most SPOOL_LINE_MAX bytes bound a file's line count only from below (a real hook line
+ *  is about 30-200 bytes, so a file under SPOOL_FILE_MAX can hold millions); the real margin is the per-tick rename: a
+ *  spool file is renamed into `.draining` every tick (2 min), so a legitimate one holds the few lines one id writes
+ *  between two ticks, and reaching this many needs that many hook events for one id while no sweep renames its file, a
+ *  long outage (the timer stopped, or history-off while sessions keep writing; SessionStart's line is written whatever
+ *  history-off says). A file that reaches the cap that way is set aside unread, its bytes kept, as D-4337 says. What
+ *  the cap refuses is the amplification the byte cap let through: 24 MiB of 2-byte lines (12.6 million) aborted every
+ *  pass in a 1 GiB scope (review 316 F6). */
 export const SPOOL_FILE_LINES_MAX = SPOOL_FILE_MAX / SPOOL_LINE_MAX;   // 65536
 export const SPOOL_ID_MAX = 224;                    // `.draining/<id>.<ms>.<pid>.jsonl` fits 255
 export const STATFS_DEADLINE_MS = 5000;             // the writer's free-space probe (§9.3)
@@ -163,10 +168,12 @@ export function blobOverDecodeCap(rawLen) {
  *  and a `:` only follows a key, so a line holds at most 2 × units + 1 of them). A line over either is stored raw-only
  *  and never parsed: JSON.parse and canonicalJson hold every value at once, and 8.1 million nested arrays in a valid
  *  16,200,040-byte line, or 5.4 million empty objects side by side, aborted every pass in a 1 GiB scope (review 316 F7).
- *  Measured for a whole pass on Node 24.14.1: the heaviest admitted shape, 500,000 units of 30-character strings in one
+ *  Measured for a whole pass on Node 24.14.1: the heaviest structured shape, 500,000 units of 30-character strings in one
  *  16,499,914-byte line, peaked at 389,508 KiB, under half the carrier's MemoryMax=1G (D-4244's bound family), where
- *  999,013 units of 13-character strings peaked at 516,988 KiB, over it. A 4.3-million-line sample of this fleet's
- *  transcripts held at most 24,944 units, 15 deep. */
+ *  999,013 units of 13-character strings peaked at 516,988 KiB, over it. The heaviest admitted line measured is not a
+ *  structured one: a 16 MB user text of 8,000,000 one-letter words with a secret file loaded peaked at 783,640 KiB for a
+ *  whole pass in a 1 GiB scope (about 76% of MemoryMax=1G, completing), its cost being redaction and indexing, which this
+ *  bound does not reach (FU2). A 4.3-million-line sample of this fleet's transcripts held at most 24,944 units, 15 deep. */
 export const JSON_DEPTH_MAX = 100_000;
 export const JSON_NODES_MAX = 500_000;
 // 2 MiB, within §9.2's "≤16 MiB": the most headroom under O20's 256 MiB on Node 22.16.0 (whole sweep 172884 KiB; 4 MiB chunks: 210824 KiB, 247412 KiB once FTS indexes inline) (plan tasks 20, 23; D-4244).
