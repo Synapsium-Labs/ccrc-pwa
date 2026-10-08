@@ -494,10 +494,29 @@ export function RunsScreen({
     return () => { aliveRef.current = false; };
   }, []);
 
-  const loadCold = (): Promise<void> =>
-    loadRunsRef.current()
-      .then((r) => { if (aliveRef.current) { setCold(r.runs); setColdState('ok'); } })
-      .catch(() => { if (aliveRef.current) setColdState('error'); });
+  // THE RACE, AND ITS GUARD (spec §5.9). A reclaim now puts two archive reads in
+  // flight a tick or two apart: the vanish read (the child's session leaving the
+  // fleet frame) and the board's second trigger (the coord frame's newest reclaim
+  // end). Responses can arrive in any order, and `loadCold` used to apply
+  // whichever landed last, so a slow older read overwrote a newer one and the
+  // row showed the stale "workspace pending" chip again. Each call takes a
+  // sequence number from `issued`; a read may set `cold` only when it is NEWER
+  // than the last one applied (`applied`, the high-water mark). The `catch` is
+  // held to the same mark, so a rejection from a read older than an applied one
+  // cannot set `error` over the newer answer. A rejection does NOT advance the
+  // mark: it carries no reading to be newer than, so a newer success still wins
+  // over an older error in either arrival order, and an older success still
+  // lands after a newer failure (the freshest answer there is).
+  const issued = useRef(0);
+  const applied = useRef(0);
+  const loadCold = (): Promise<void> => {
+    const seq = ++issued.current;
+    return loadRunsRef.current()
+      .then((r) => {
+        if (aliveRef.current && seq > applied.current) { applied.current = seq; setCold(r.runs); setColdState('ok'); }
+      })
+      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); });
+  };
 
   useEffect(() => {
     // UNCONDITIONAL — the earlier gate (`if (store.getState().runs.length >
