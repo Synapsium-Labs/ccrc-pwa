@@ -16,7 +16,7 @@ spec's after wave 1.
 
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
-| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
+| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review next. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | — | **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
@@ -169,6 +169,45 @@ spec's after wave 1.
     suites, single-definition and the README census.
   - Run 320's fix round is not expected to touch those files except perhaps README or a test pin, and it keeps to its
     own lines.
+- **2026-10-08 20:57 UTC: fix round 1's wave-done (mail 4039), re-measured.**
+  - **Evidence:** the wave-done and `run-320-fix1-evidence.md` are copied under `.superpowers/btl-w1-evidence/`, and
+    the task reports are refreshed.
+  - **The claim, re-measured:**
+    - PR #330 is open and mergeable. Its head equals the fingerprint and the pushed tip, `fa384df19`.
+    - Seven fix commits sit on `f3d151e42`, each with the noreply identity, then a merge of `main` at `226bb881c`. The
+      merge brings exactly `main`'s three docs files, and `main` is an ancestor of the tip.
+    - The fix commits touch 19 files, all Part A File Structure paths, plus 4 lines in the plan's Deviations found.
+      The whole PR is still Part A's 43 paths plus the plan.
+    - Live claims: the run's own 1115 and 1116 (re-declared from 1110 and 1111 at the 8 h cap), and wave 7's 1113 and
+      1114, which share no path with them.
+    - CI: PR run 37835237897 and full run 37835240897 are green on every Linux leg. `full-suite` is red only through
+      the macOS legs, the same seven files as before, none this branch's.
+  - **Run 320 advanced to `awaiting-review`** at `fa384df19`.
+  - **The worker's readings, held for the scoped review to judge against the rulings:**
+    - Number 4413: `joined` only while a send runs, a promotion is recorded or a press's tick runs. A press during a
+      confirm wait answers `started`. The hold answers before `rate-limited`. Boot keeps up to three unverifiable
+      pending files.
+    - F4: an over-cap state reads `unusable` (why `over-cap`), and boot refuses with the file byte-identical.
+    - Number 4410, tightened:
+      - While a set-aside retired file exists, boot keeps the foreign-value posture; removing that file after a review
+        re-allows adoption.
+      - A failed listing of set-aside files refuses boot.
+      - The holder refreshes its retired list once an append lands.
+    - F8: the pin runs the real `ccd/ccrc` with a verb that can never exist, so part B's verb cannot red it.
+    - F10: the driver logs the node it bound for each generation. The door's interfaces are unchanged.
+    - F3: a successful stage resets backoff, and a closed gate spends a Rotate-now press.
+  - **Rulings on the worker's four questions:**
+    1. A second lost exit hand-out, or three unverifiable pending files at boot, leaves `pending-cap` until a
+       generation read names one. That is the ruling's shape: no value is dropped (G3), and the 24 h stall alert is
+       the backstop. It is recorded as a known limit, for wave 2's schedule to revisit.
+    2. Number 4411's early retirement logs "grace ended" verbatim, which is not true there. A distinct wording that
+       says the fleet confirmed a later generation is permitted. It is residue: the first commit of part B's run
+       carries it, with `server/src/token/driver.ts` admitted for that one line. The tip stays as it is.
+    3. Number 4412's once-per-`HOLD_REPROBE_MS` clock is held in memory, so a restart allows one extra owed rotation.
+       Accepted: it is still bounded, and the holder of the leaked value cannot cause a restart.
+    4. Rejected claim bodies past the miss budget answer 429, as other misses do. Accepted.
+  - **After the scoped review:** a confirmed finding of a bar class stops the merge and goes to the operator. Coverage
+    and prose findings become residue for part B's run.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
