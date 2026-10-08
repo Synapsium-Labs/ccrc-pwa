@@ -412,7 +412,9 @@ export const expiryReportIsFinal = (r: ExpiryReport | null): boolean =>
  *  as the condition lasts. The box's own verdicts (`refused`, `failing`, `no-evidence`) stand: they are about the box.
  *  A report so cleared also resets `nextAskAt` to 0: one transient ineligible pass (a store read that failed once, an
  *  identity unmeasured) must not hide a row that is due again behind the shadow wait the report carried — it is
- *  re-audited as soon as it is twice-observed eligible, and the twice-observed rule still gates that. */
+ *  re-audited as soon as it is twice-observed eligible, and the twice-observed rule still gates that. A hold that
+ *  REPLACES a would-expire, in-use or retryable failing report resets it for the same reason (a final report is kept,
+ *  wait and all). */
 export function archivedExpirySighted(
   entry: ArchivedExpiryEntry, v: ArchivedExpiryVerdict, held: string | null, nowMs: number,
 ): ArchivedExpiryEntry {
@@ -421,7 +423,13 @@ export function archivedExpirySighted(
     // A row the lane has stopped asking keeps its own report — listed with its reason while held and after the hold goes.
     if (expiryReportIsFinal(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };
     const at = entry.report?.kind === 'held' ? entry.report.at : nowMs;
-    return { ...entry, eligibleSince, inUseRun: 0, inUse: [], report: { kind: 'held', at, reason: held } };
+    // A hold that REPLACES a would-expire, in-use or retryable failing report ends it as an ineligible sighting does, so
+    // it resets `nextAskAt` the same way: the release clears the hold's own report, and left at the replaced report's
+    // wait (the shadow wait, a failure's backoff) the row would be unlisted and not due until that wait ran out — absent
+    // from the list the operator arms on. Re-audited as soon as it is due again; the twice-observed rule still gates it.
+    const replaces = entry.report?.kind === 'would-expire' || entry.report?.kind === 'in-use' || entry.report?.kind === 'failing';
+    return { ...entry, eligibleSince, inUseRun: 0, inUse: [], ...(replaces ? { nextAskAt: 0 } : {}),
+      report: { kind: 'held', at, reason: held } };
   }
   const ends = !v.eligible && (entry.report?.kind === 'would-expire' || entry.report?.kind === 'in-use');
   const report = entry.report?.kind === 'held' || ends ? null : entry.report;

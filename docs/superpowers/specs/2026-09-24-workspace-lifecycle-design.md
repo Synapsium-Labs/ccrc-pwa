@@ -473,8 +473,9 @@ each item is a departure named there).
   ccd's audit with no `expiresAt` key reads as no evidence first, never as a failure), and learn slots go in
   `nextAskAt` order; a failure ccd says will not resume is listed at once and never asked again for that archive; an
   ineligible sighting ends the row's would-expire, in-use and held reports and the row is re-audited as soon as it is
-  due again, while the verdicts the box itself gave (refused, failing, no evidence) stand and a hold never replaces a
-  report whose row the lane has stopped asking; a refusal whose audit names another archive is a row that moved; and the
+  due again, while the verdicts the box itself gave (refused, failing, no evidence) stand on a sighting that is not held;
+  a hold replaces a non-final report (a would-expire, an in-use or a retryable failing one) and the row is re-audited as
+  soon as it is due again after the release, and a hold never replaces a report whose row the lane has stopped asking; a refusal whose audit names another archive is a row that moved; and the
   held sentence names its instant (`due <instant>`), never a period.
 - **The attention list is the lane's own memory.** Child reclamation derives its list from the lifecycle mirror alone; the
   expiry's entries (a shadow `would-expire`, a `held` row past its instant, a standing `in-use`, a refusal, a failure, no

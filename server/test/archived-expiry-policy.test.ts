@@ -351,6 +351,35 @@ describe('the lane’s memory of one row', () => {
     expect(archivedExpirySighted(heldFailing, { eligible: true }, null, NOW + PASS).report).toBeNull();
   });
 
+  it('a hold that REPLACES a would-expire, in-use or retryable failing report resets nextAskAt, so the row is re-audited as soon as it is due after the release', () => {
+    // The hold ends the report the shadow list showed, and the release clears the hold's own: left at the old shadow
+    // wait (or the failure's backoff) the row would be unlisted and not due for up to an hour — absent from the list
+    // the operator arms on.
+    const inUse = [{ pid: 7, comm: 'sleep', cwd: '/w' }];
+    const WAIT = NOW + 15 * 60_000;
+    const replaced = [
+      ['would-expire', { kind: 'would-expire', at: NOW, sensitive: 0 }],
+      ['in-use', { kind: 'in-use', at: NOW, inUse, passes: 2 }],
+      ['a retryable failing', { kind: 'failing', at: NOW, detail: 'pin-failed' }],
+    ] as const;
+    for (const [what, report] of replaced) {
+      const x = { ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW - PASS, nextAskAt: WAIT, inUseRun: 2, inUse, report };
+      const held = archivedExpirySighted(x, { eligible: false, why: 'held' }, 'program:x wave:1/2', NOW + PASS);
+      expect(held.report, what).toMatchObject({ kind: 'held' });
+      expect(held.nextAskAt, `${what}: the wait goes with the report it ended`).toBe(0);
+      const e1 = archivedExpirySighted(held, { eligible: true }, null, NOW + 2 * PASS);
+      expect(e1.report, `${what}: the release clears the hold`).toBeNull();
+      expect(archivedExpiryDue(e1, NOW + 2 * PASS), `${what}: sighted once, not yet due`).toBe(false);
+      const e2 = archivedExpirySighted(e1, { eligible: true }, null, NOW + 3 * PASS);
+      expect(archivedExpiryDue(e2, NOW + 3 * PASS), `${what}: due on the second eligible pass after the release`).toBe(true);
+    }
+    // Held again and again, or never replacing anything, changes no wait; a final report keeps its infinite one.
+    const plain = { ...archivedExpiryEntry(1), nextAskAt: WAIT };
+    expect(archivedExpirySighted(plain, { eligible: false, why: 'held' }, 'r', NOW).nextAskAt, 'nothing replaced: the wait stands').toBe(WAIT);
+    const final = { ...archivedExpiryEntry(1), nextAskAt: Number.POSITIVE_INFINITY, report: { kind: 'failing', at: NOW, detail: 'x', final: true } } as const;
+    expect(archivedExpirySighted(final, { eligible: false, why: 'held' }, 'r', NOW).nextAskAt, 'a final report is kept, wait and all').toBe(Number.POSITIVE_INFINITY);
+  });
+
   const e = (over: Partial<ArchivedExpiryEntry> = {}): ArchivedExpiryEntry =>
     ({ ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW - PASS, ...over });
 

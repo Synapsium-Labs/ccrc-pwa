@@ -190,6 +190,28 @@ describe('the record follows the row (review 313, F1)', () => {
   });
 });
 
+describe('a hold that replaces a report (final review, B-F1)', () => {
+  it('would-expire, then held, then released: the row is listed again within the twice-observed passes — not fifteen minutes later', async () => {
+    const f = await fixture();
+    f.plant('demo-a');
+    await threePasses(f);
+    await f.watcher.tick();
+    const listed = () => f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind]);
+    expect(listed()).toEqual([['demo-a', 'would-expire']]);
+    const audits = f.verbsFor('ws-audit').length;
+    writeFileSync(path.join(f.reg, 'demo-a.hold'), 'program:x wave:1/2');
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(listed(), 'the hold replaces the report').toEqual([['demo-a', 'held']]);
+    rmSync(path.join(f.reg, 'demo-a.hold'));
+    f.next(); await f.pass();   // released: sighted once
+    f.next(); await f.pass();   // sighted twice: due, and not held back by the shadow wait the replaced report carried
+    await f.watcher.tick();
+    expect(f.verbsFor('ws-audit').length, 'audited again within the twice-observed passes').toBe(audits + 1);
+    expect(listed(), 'and listed again, never missing from the list the operator arms on').toEqual([['demo-a', 'would-expire']]);
+  });
+});
+
 describe('the lane SHIPS SHADOWED', () => {
   it('without `expire-lane-live`, a due row is audited and RECORDED — and ws-expire is never composed, however long', async () => {
     const f = await fixture();
