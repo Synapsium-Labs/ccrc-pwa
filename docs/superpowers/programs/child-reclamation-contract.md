@@ -1813,3 +1813,294 @@ This note amends; it edits no earlier text.
   - **R53, qualified.** "Never `pin-failed`" holds on the fresh path only. On git older than 2.43, a resume entering
     at `children` or `worktree`, after the branch was deleted past the pin, stops `pin-failed` at the settle on every
     retry. Nothing is deleted.
+
+## 14. Rulings, 2026-10-08 (wave 7's pre-flight) — binding; they AMEND sections 1–13
+
+Wave 7's pre-flight was measured at `b0647d850` by five Opus readers and a completeness critic. The coordinator then
+drafted these rulings, and four Opus attackers (SAFETY at xhigh) attacked the draft. Every break they constructed is
+closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave7-preflight/` (`preflight.json`, `attack.json`).
+
+- **R65 — the waves are re-cut, because R63 conflicts with R38/R48.**
+  - **Why.** X1, X3 and R61's closure are server code. X1 changes when `ws-reclaim` is licensed, which is a second
+    destructive subject, and R38/R48 allow one per SAFETY panel.
+  - **This amends** R48 (the lane becomes wave 9), R58 (renumbered), R63 (its lens assignment), spec §8 and the
+    ledger table.
+  - **Wave 7 (run 347): the collector verb** (R66–R68). ccd and the agent grant, AGENT-FIRST and inert. It also carries:
+    - the ccd halves in R69 and R70;
+    - the ccd half of X1, which binds the reclaim token to the workspace's generation: an additive audit field and a
+      token input, minted with the row and never rotated by `/clear` or a swap. Task 0 measures whether
+      `$REG/<id>.generation` is that value;
+    - R69's word, declared with its emission in one commit.
+  - **Wave 8: reclaim's server half.** Server code only. Its SAFETY subject is "what `ws-reclaim` is licensed
+    against". It carries:
+    - X1's server half (the queued licence is keyed on the generation) and X3;
+    - R61's closure. Its removal set is derived once, EXCLUDES the collector's act, and is pinned by a case;
+    - the `crumb` reader on the verb's failed document;
+    - the audit arm: `childReclaimAudit` reads an exit-1 audit document's `resume` before it folds to `unreadable`;
+    - the reclaim side's reader of `clipsKept`/`tmpRootKept`, which reads absence as unmeasured and lists a kept leaf
+      for the operator;
+    - R69's reader;
+    - the persistent-failure pacing tier;
+    - review 346's F4 (the two `childReclaim.ts` comments) and review 341's F9.
+
+    It may be built while wave 7 is in flight. It LANDS after wave 7: it merges main once wave 7 has merged, because
+    its R69 reader is typed against wave 7's `LcRefusalToken` member. It reads every new ccd field absence-permits.
+  - **Wave 9: the collector's lane** (the old R58). It is dispatched once the fleet's `ccd caps` advertises wave 7's
+    token AND wave 8 has merged, because both edit the sweep. R58's first gate is already met: workspace-lifecycle 3b
+    (#312) is on main.
+  - The path-identity follow-up comes after wave 9. Run 347 keeps `waveOf` 8, a display-only figure. Nothing edits a
+    run's `waveOf`.
+
+- **R66 — the collector's population and its quarantine record.**
+  - **The population** is every witnessed id (`$REG/tmproots/<id>` whose name passes `_ws_tmproot_id_ok`), plus every
+    QUARANTINE RECORD `$REG/tmpquarantine/<id>.<ns>.<pid>`.
+    - `tmpquarantine/` is a dotless registry subdirectory, on the `pools/` and `tmproots/` precedent. It is pinned
+      invisible to `_reg_purge`, `_ws_slug_free` and the server's registry read, and its census is pinned.
+    - A record's id is parsed EXACTLY: strip the two trailing all-digit dot-fields. A record is never matched by an
+      `<id>.*` prefix, because ids admit dots (a nested id is legal).
+    - The audit takes `.reap-<id>.lock` only for an id in that population, so it never takes a lock for a foreign name.
+  - **The record is resume authority; the journal is not.**
+    - Before any move, the verb writes the record (temp file, then rename). It holds the witness line it acted on, the
+      slot path and the pre-move token. A failed write refuses before the move.
+    - ccd has no journal reader, and D7 forbids the journal from gating an act. The lifecycle journal records the
+      intent and the outcome best-effort, and binds nothing.
+    - The record is same-uid writable, like the witness, and so shares its trust note.
+  - **Order:**
+    1. record;
+    2. slot;
+    3. move;
+    4. re-proofs;
+    5. remove the slot's leaf, and prove it absent;
+    6. rmdir the empty slot (never a recursive remove);
+    7. compare-and-drop the witness;
+    8. drop the record, LAST.
+
+    A crash at any point leaves the record. The next audit visits it, whatever the witness now says: rewritten by a
+    recycled spawn, dropped by a later tail, or absent.
+  - **No orphaned slot.** A witnessed id whose leaf is absent has its witness dropped only when no record names that
+    id. This amends R50's "a witness with no leaf is cleaned".
+  - **Compare-and-drop.** The witness is moved aside to a dot-leading name with `mv -T -n --no-copy`, re-read, and then
+    either unlinked (if it is the collected one) or moved back. It never races the writer's temp-file-then-`mv`.
+  - **Kept records.** A record that stays has an owner: the operator, as attention on every audit, never silent. The
+    shapes are:
+    - an original path retaken;
+    - a slot leaf that no longer matches;
+    - a probe answering someone.
+
+    No session acts on one (R59).
+  - **Unwitnessed leaves are never touched.** That covers:
+    - every leaf from before v0.0.124;
+    - the three kept by the first wave-6 reclaims;
+    - the eight row-less ones (2.87 GiB, measured 2026-10-08 13:45Z).
+
+    They are the operator's (R59). There is no re-witness pass ("§12 as built"), and nothing lists them in waves 7 to
+    9: the agent has no read grant on `~/.cc-tmp`, and adding one is a SECURITY decision for a later wave.
+  - **Kept clips leaves are out of the collector's scope**, and no clips witness is planned. They reach the operator
+    through wave 8's `clipsKept` reader. The 37 row-less clips directories (15.8 MiB) are the operator's (R59).
+  - **The collector's audit journals a terminal refusal only,** as ws-expire's audit does. `unmeasured` exits 1 and is
+    journaled nowhere. The verb's acts journal.
+
+- **R67 — the recycled-slug proof: quarantine by rename.** All of it runs under `$REG/.reap-<id>.lock`.
+  1. **Recompute and compare, before the move.** Recompute the token AND re-ask the idle floor and R68's row rule,
+     then compare the token with `--expect`.
+     - The move re-stamps the leaf's ctime. Measured on the fleet's ext4: ino, btime and mtime are kept; ctime is not.
+     - So neither the floor nor the tree token is ever asked after the move, and a leaf moved back waits a fresh floor.
+  2. **lstat the leaf.** It must be a real DIRECTORY matching the witness's dev, ino and btime.
+     - A link, a file or a mismatch at the original path is refused and offered to the operator.
+     - Anything that reaches a slot through the window before the move is moved back, or kept and listed. It is never
+       unlinked.
+     - `_ws_leaf_remove` is called on a slot's leaf only directly after an lstat in the same lock shows a real
+       directory with the witness's identity, so its link/file arm is unreachable from the collector.
+  3. **Check the quarantine directory and write the record.**
+     - Q = `<physical ~/.cc-tmp>/.ccd-quarantine` must be a real directory, not a link, owned by this uid, mode 0700.
+       If it is absent, make it with a plain `mkdir -m 0700`. Anything else answers unmeasured.
+     - Write the R66 record.
+     - Make the slot `Q/slot.<id>.<ns>.<pid>` with an exclusive `mkdir`. The `slot.` prefix keeps a slot name clear of
+       any rule keyed on a leaf's name; the box's `cdk-out-sweep` matches `cdk.out*` at this depth.
+  4. **Move the leaf into the slot.** Use one `renameat2(RENAME_NOREPLACE)`: `mv -T -n --no-copy`, inline in the
+     collector's Linux-only region, never a `_plat_` helper.
+     - The proof of the move is an lstat of `<slot>/leaf` matching dev, ino and btime, never mv's exit code.
+     - A missing `--no-copy` answers unmeasured. So does a cross-mount EXDEV, which `--no-copy` turns into a refusal
+       (measured). The verb never copies.
+  5. **Re-prove after the move.**
+     - `$REG/<id>.child` is asked by DIRECT lookup, the read `_child_tmpdir` makes, and must be absent.
+     - `_ws_slug_free` must answer free, AND a wildcarded listing of `$REG` must show the `.reap-<id>.lock` this verb
+       holds open. Otherwise the slug answer is unmeasured. Measured: with `$REG` searchable but not listable,
+       `_ws_slug_free` answers free over a standing `.child`.
+     - The in-use probe must answer nobody, on both spellings.
+     - Identity must still hold.
+     - R68's row rule must hold, on the pre-move spelling.
+     - `/proc/self/mountinfo` must list no mount point at or under `<slot>/leaf`.
+
+     Any doubt moves the leaf back with `mv -T -n --no-copy`. The restore is proven by lstat: the original path holds
+     the record's dev and ino, and the slot is empty. If that is not proven, the record and slot are kept and listed,
+     and nothing in them is removed.
+  6. **Remove the slot's leaf** with `_ws_leaf_remove <slotdir> leaf <witness dev:ino> <pre-move path>`, inheriting
+     R64 Rule 1's checkout question. Then follow R66's order to the end.
+  - **The checkout question across the move.**
+    - Inside the lock and BEFORE the move, the collector asks `_ws_leaf_checkouts` on the original path. Anything but
+      0 refuses, and nothing moves. The record notes each outside admin directory that passed by back-link, with its
+      back-link value.
+    - After the move, `_ws_leaf_remove` and `_ws_leaf_checkouts` take the same ADDITIVE alias argument, passed only by
+      the collector. Under it, a back-link naming the pre-move spelling counts as the leaf's own ONLY when both hold:
+      - (1) the same admin directory, with the same back-link value, was accepted by the pre-move ask in this lock;
+      - (2) `_ws_reclaim_absent` proves that nothing stands at that pre-move spelling now.
+    - Any other outside back-link refuses, as today. Measured: a recycled admin name otherwise passes, and deletes a
+      moved foreign worktree's uncommitted work.
+    - Every other caller is unchanged, and conditions (1) and (2) are each mutation-pinned.
+  - **Resume.** A resume never recomputes the tree token or the floor. Its authority is the record. It re-proves:
+    - the slot leaf's dev, ino and btime against the record;
+    - step 5's checks;
+    - a resume token over the id, the record name and those fields.
+
+    A forged slot or record fails one of these and is listed, never taken. There is a case for each.
+  - **Why it holds.** Every hand-out of `~/.cc-tmp/<id>` goes through `_child_tmpdir`, which has one call site and
+    needs `.child`. Step 5's direct lookup sees `.child` whether or not `$REG` can be listed. So:
+    - a spawn before the move is seen;
+    - a spawn after the move gets a new inode from `mkdir -p`;
+    - step 6 removes only the slot's inode, dev:ino-checked.
+
+    Task 0 pins three facts by scan, each measured red under mutation: one TMPDIR composer, one `.child` writer, and
+    the marker read placed before the `mkdir`. btime is never the SOLE guard of a race case. The witness stays v=1, and
+    whole-second btime closes by this proof.
+  - **Accepted residuals.**
+    - A new child on a recycled slug adopts an old leaf through `mkdir -p`, in two cases: the leaf is one the tail
+      deliberately KEPT, or the collector's own restore put it back before that child's `mkdir -p`. R64 Rule 1 still
+      guards every later removal.
+    - rename EBUSY on a mount point, and a same-file-system bind mount inside a leaf, cannot be measured without root
+      on this fleet. Step 5's mountinfo check covers the collector; the tail's share stays stated.
+
+- **R68 — the candidate rules, split between ccd and the server.**
+  - **ccd checks these at the audit, and again inside the lock BEFORE the move:**
+    - The witness matches dev, ino and btime. A btime of `-` is never taken, and witness reader rc 2 is never taken.
+      Measured: all 52 live leaves carry a real birth time.
+    - `_ws_slug_free` answers free.
+    - The in-use probe answers nobody.
+    - **No registry row lies at, inside or through the leaf.** This is R64 Rule 2, which `_ws_leaf_remove` does NOT
+      carry.
+      - It covers rows standing or placed by either R54 arm. It is asked in one registry pass by the four comparisons
+        `_ws_reclaim_workdir_shared` uses, plus THROUGH.
+      - An unlistable registry, or a row that cannot be placed, answers unmeasured.
+      - Measured: without this, a stopped session's clone inside a dead child's leaf is deleted.
+    - **The idle floor holds.**
+      - The NEWEST CTIME, in ns, over every entry under the leaf, the leaf included, is at least `max(24 h, knob)`
+        old.
+      - mtime is not consulted. It is user-settable, so a future mtime would hold a leaf forever, and every change
+        that moves mtime also stamps ctime.
+      - The walk is `find -P <leaf> -xdev`, run with LC_ALL=C. It never follows a link or crosses a file system, and
+        it is bounded by a 60 s timeout and a cap of 2,000,000 entries. Measured: the largest live leaf is 76,915
+        entries, in at most 4.8 s.
+      - A timeout, an unreadable entry or the cap answers unmeasured, and the audit document says which, so that wave
+        9 raises attention rather than retrying silently.
+      - Nothing writes inside the leaf before step 1's comparison: no normalise pass, no owner-bits pass, no chmod.
+    - The box is Linux, and `mv --no-copy` is present. Otherwise the answer is unmeasured.
+  - **The token** binds the id, the witness's dev, ino, btime, run and at, the newest ctime in ns, and the entry count.
+  - **Stated residuals:**
+    - atime is not consulted (a reader with no fd and no cwd at probe time);
+    - a nested mount's contents are not walked;
+    - a backwards clock step can delay the floor;
+    - the operator's `cdk-out-sweep` restarts a CDK-using orphan's floor until it has nothing left to remove.
+  - **The collector verb gets its own runner budget row of 240 s,** as ws-reclaim has.
+  - **The server (wave 9):**
+    - It finds its population with `io.readdir` of `<registryDir>/tmproots` and `<registryDir>/tmpquarantine`. Both
+      are new reads under the agent's `.cc-sessions` grant; the existing registry read does not enter subdirectories.
+    - It drops dot-leading names. It resolves a null listing with `statMeasured`: proven ENOENT is empty, and anything
+      else is unmeasured.
+    - It never reads `~/.cc-tmp`.
+    - It acts only after two observations with an unchanged token, at least one sweep interval apart on its monotonic
+      clock, keyed by (id, token).
+
+- **R69 — `containment-refuted`, one word for persistent proven failures, shared with workspace-lifecycle.**
+  - **The ccd side.** `_ws_reclaim_owned` becomes three-valued: 0 own, 1 PROVEN not own, 2 could not be asked.
+    - Every rc-2 sub-answer stays 2, including `_ws_reclaim_moved_check`'s rc 2, which is no longer folded into 1.
+    - The tail prints and journals `containment-refuted`, from its own literal call site, only on rc 1. That covers:
+      - a SHARED, NESTED or THROUGH row at, inside or through the worktree or either leaf;
+      - a gone row's moved tree inside the child;
+      - a workdir that is the main checkout or the project directory;
+      - a link or non-directory at the workdir;
+      - a tombstone workdir that is not one plain path.
+    - Everything else stays resumable `worktree-remove-failed`.
+    - Every refusal arm keeps a non-zero rc, pinned per arm.
+  - **Declaring it.** Wave 7 declares the word with its emission, in one commit: in `LcRefusalToken`,
+    `LC_REFUSAL_WORD` and `ALL_TOKENS`, and in whatever else the cross-language scans require. Its sentence says only
+    what is true under any server: the session was stopped, nothing further was deleted, and a retry finds the same
+    thing until the other tree or row is moved or removed.
+  - **Until wave 8 lands,** both parsers read the word as a resumable failure and retry it, which is safe: the resumed
+    tail deletes nothing before `_ws_reclaim_owned`.
+  - **Wave 8 reads it as a new class, `stuck`:**
+    - attention at once, with ccd's sentence;
+    - retried only on the persistent-failure tier, a long, capped backoff that never stops;
+    - excluded from the failing-past-ceiling list;
+    - the feed says the box resumes from its breadcrumb once the tree or row is fixed.
+
+    No door is needed: a fixed tree completes on a later pass. `POST /api/runs/:id/reclaim` is the programme takeover
+    door and is never used for this.
+  - **Workspace-lifecycle** maps the same literal. Its non-resumable arm (`nextAskAt` = +∞ until a restart) would
+    strand an archived row behind an expire breadcrumb, so quiet-river chooses the same tier or states the stranding.
+
+- **R70 — what else wave 7 carries.** These are reclaim-ladder and tail corrections, shared with ws-expire.
+  - **The ccd half of `crumb`.**
+    - `_ws_reclaim_failed_json` and `_ws_reclaim_fail` take an OPTIONAL crumb argument, and print the key only when a
+      caller passes one.
+    - `_ws_reclaim_locked` passes `false` before its breadcrumb and the resumed state after it. The shared tail passes
+      `true`.
+    - There is no new `_reg_get`.
+    - `_ws_expire_locked` is NOT edited: workspace-lifecycle wave 5 (run 345) edits it. So ws-expire's pre-breadcrumb
+      documents carry no `crumb`, which is absence, never a wrong value.
+    - The audit already prints `resume`, and is unchanged.
+  - **Rung 8's silent omission.**
+    - The fix is at the ladder's call site only, never inside `_ws_reclaim_record`, which has six callers. When the
+      record answers rc 1, the ladder asks `_ws_reclaim_log_of <main> tree <workdir> 0`, as the breadcrumb arm does.
+      A failure is unmeasured, and only a clean "no entry names it" stays `no-worktree-record`.
+    - The vanished arm, which proceeds today on rc 1, is measured under a silent omission. It takes the same ask, or
+      the plan states why it is safe.
+    - This turns a terminal word into a retried unmeasured answer on both lanes.
+  - **`_WS_NORMALISE_WHY` is capped** at 300 bytes of printable ASCII, through one shared cutter. Tokens are unchanged.
+  - **Prose and pins:** review 346's F1, F2 and F3 prose (ccd comments and plan text), and review 341's pins F4, F5,
+    F6 and F7.
+  - **The SAFETY bound.** Wave 7's SAFETY panel asks one bounded question of R69 and R70, for both verbs: no arm newly
+    reaches the pin, the settle or a removal, and none continues past a stop it used to make. R67 and R68 are the
+    panel's full subject.
+
+- **R71 — stated residuals, operator residue and amendments.**
+  - **Stated residuals:**
+    - the macOS `purge-refused` red, which has not recurred;
+    - the witness writer's temp files. Under its id's lock, while the slug reads free, the collector removes only
+      files matching exactly `^\.<id>\.[0-9]+\.[0-9]+\.tmp$` whose mtime is at least one hour old. A temp file of an
+      id with no witness is never visited.
+  - **R59, operator residue:**
+    - the 12 leaked `tmux: server` processes whose deleted cwd lies inside `ccrc-pwa-brisk-river`'s leaf (that
+      child's reclaim will keep its temp root while they live);
+    - the three kept leaves and the eight row-less ones;
+    - the 37 row-less clips directories;
+    - the 17 foreign names in `~/.cc-tmp`.
+  - **Amendments, in wave 7's docs task:**
+    - spec §5.6's "only the tail removes a witness" now includes the collector;
+    - R50's "a witness with no leaf is cleaned" now reads "only when no quarantine record of that id stands";
+    - R25 against R50/R57: the collector never takes a non-directory;
+    - R64: Rule 1 is inherited through the helper, while Rule 2 is asked by the collector itself (R68);
+    - spec §8's wave rows (waves 7, 8 and 9);
+    - R58's stale gate.
+
+- **R72 — overlaps (R56).**
+  - **#319 (docs W2)** appends to `REQUIRED_VERB_FLAG` and to the ccd block of `EXEC_WHITELIST`, adds `DOCS_CAP` after
+    `EXPIRE_CAP`, adds runner budgets in `server/src/remote/runner.ts`, adds a legit-whitelist entry, and takes bypass
+    fixtures g16 to g19. At dispatch, wave 7 measures each append point and appends after whatever is last. Whichever
+    lands second merges main and re-measures.
+  - **Run 320 (box-token)** holds live claim 1110, over `agent/src/whitelist.ts`, `README.md`, `CLAUDE.md`,
+    `agent/CLAUDE.md`, `single-definition.test.ts` and `whitelist-subset.test.ts`, all of them wave 7 sites. Wave 7 is
+    dispatched after 1110 ends, or under a line-disjointness agreement with run 320's coordinator recorded before
+    dispatch.
+  - **#322 (stall-watch W2)** edits `watch.ts` and `shared/api.ts`, line-disjoint. Whichever lands second merges main.
+  - **#325** is stale. It collides with any ccd/ccd edit at the line-2 stamp and above the 19109 boundary, so the
+    second lander restamps and re-measures the citation census.
+  - **CU W15** changes one platform-block line. Whichever lands second merges main.
+  - **Workspace-lifecycle (quiet-river; run 345's B4 edits the EXPIRE region).** Wave 7 does not edit
+    `_ws_expire_locked`. Quiet-river is told of four things:
+    - R69's word;
+    - `crumb`'s absence on ws-expire's pre-breadcrumb documents;
+    - the rung-8 verdict change;
+    - the reason cap.
+
+    Wave 8 and workspace-lifecycle wave 5 both edit `server/src/watch.ts`, and their order is agreed with quiet-river
+    before either dispatches.

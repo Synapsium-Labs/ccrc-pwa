@@ -23,8 +23,9 @@ removed on 2026-09-10 was not.
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
-| 7 | the temp-root collector verb, inert (R57): audit + token, destructive verb, cap token, agent grant, entry guard; witness-matched, slug-free, unused, idle 24 h, twice observed | **AGENT-FIRST** | — | **to plan**: its own run, block and pre-flight |
-| 8 | the collector's server lane (R58), after workspace-lifecycle wave 3b merges and the fleet advertises wave 7's token; SAFETY and SECURITY lenses | server | — | **to plan** |
+| 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | — | **pre-flight ruled** (contract §14); run 347; plan next |
+| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **to plan**: built alongside wave 7, lands after it |
+| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
@@ -45,6 +46,28 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-08 14:29 — wave 7's pre-flight is RULED: contract §14, R65 to R72.** Four Opus attackers (`wf_93877eb5-7f3`,
+  SAFETY at xhigh) broke the draft in nine places, and every break is closed in the binding text. The attack is
+  `ccr15-evidence-archive/wave7-preflight/attack.json`.
+  - **Resume authority** moves from the lifecycle journal to a quarantine record. ccd has no journal reader, and D7
+    forbids the journal from gating an act. The record is `$REG/tmpquarantine/<id>.<ns>.<pid>`, written before the
+    move and dropped LAST, so no slot can be orphaned.
+  - **The checkout alias is narrowed.** Measured: a recycled git admin name would otherwise pass, and delete a moved
+    foreign worktree's uncommitted work.
+  - **The token and the idle floor are asked only BEFORE the move.** Measured: the rename re-stamps the leaf's ctime.
+    The floor reads ctime alone, because a future mtime would hold a leaf forever.
+  - **The collector asks R64 Rule 2 itself.** Measured: without that, a stopped session's clone inside a dead child's
+    leaf is deleted.
+  - **Step 5 uses direct lookups.** It asks `.child` directly and checks the listing. Measured: `_ws_slug_free`
+    answers free over a standing `.child` when `$REG` is unlistable.
+  - **R69's word is `containment-refuted`.** It is terminal for attention, not for the lane: wave 8 retries it on a
+    persistent tier and needs no door. The door the draft named is the programme takeover door.
+  - **The waves are re-cut (R65).** Wave 8 is now reclaim's server half, built alongside wave 7 and landing after it.
+    The lane becomes wave 9.
+  - **Estimated size.** Wave 7 is about 55 to 70 files and 4.5k to 6k insertions, between ws-expire's addition and
+    wave 6. Wave 8 is about 15 to 22 files and 1.5k to 2.5k insertions.
+  - **Next.** quiet-river is told (R72). Then: wave 8's run, both blocks, and the wave 7 plan, prototype-first.
 
 - **2026-10-08 14:03 — wave 7's pre-flight (run 347) is measured; its draft rulings are under attack.** The evidence
   and the draft are in `ccr15-evidence-archive/wave7-preflight/`.
@@ -1996,20 +2019,13 @@ Then dispatch one fresh child:
 - **Task order:** Task 0, Tasks 1 to 12 in order, Task 13 (docs), Task 14 (whole-branch verification and the PR).
 - **Lenses:** the plan's SAFETY (Opus `xhigh`) and SECURITY lenses, both mandatory, beside the held-out panel.
 
-**Wave 7** (the collector verb, R57) and **wave 8** (its lane, R58) are new runs, each opened before the previous
-wave's run closes, each with its own block, plan and pre-flight. Wave 7 inherits: a kept clips leaf with no collector;
-whole-second `btime`; the recycled-slug quarantine proof; the witness writer's temp-file residue; the intermittent
-macOS `purge-refused` in the symbolic-ref reflogs case (decision 12:31); the closure of `kept-word-ends-on-late-birth`
-(R61, decision 12:39); X1 and X3 (R63); a persistent per-child failure's endless paced retry (decision 2026-10-07
-16:47), which now includes `_ws_reclaim_owned`'s moved-tree arm and a row at or inside a leaf; from wave 6's review 335
-round: rung 8 reading a silent omission as "no record", the uncapped `_WS_NORMALISE_WHY`, the additive `crumb` field
-on ccd's failed document (the pre-breadcrumb `pin-failed`/`tombstone-unwritable` sentence, and the resumed-arm
-`probe-unmeasured` on the verb and on the audit), and the collector calling `_ws_leaf_remove`; from review 341: the
-pins for F4 (writable `builtin`), F5 (the clips odd word), F6 (a FIFO at an outside admin `gitdir`), F7 (a fixed find
-order for row 17) and F9 (the vacuous kebab line) (decision 2026-10-08 12:03); from review 346: the four prose
-corrections (`_ws_dir_physical`'s bare-capture list, "only a back-linked tree" scoped to outside the leaf, the
-back-link caller's inner NUL reading refused, and the two `childReclaim.ts` comments naming the audit arm), and the
-server half of `crumb` (`childReclaimAudit` reading an audit's exit-1 document rather than mapping it to `unreadable`)
-(decision 2026-10-08 13:08). Wave 8 waits for
-workspace-lifecycle wave 3b and for the fleet's `ccd caps` to advertise wave 7's token. The path-identity follow-up
-programme comes after wave 8.
+**Waves 7, 8 and 9 (contract §14, R65).** Each is a new run, opened before the previous wave's run closes, with its
+own block, plan and pre-flight.
+- **Wave 7 (run 347): the collector verb**, R66 to R68, together with R69's and R70's ccd halves and X1's ccd input.
+- **Wave 8: reclaim's server half.** It covers X1 and X3, R61's closure, the `crumb` readers, the kept-keys reader,
+  R69's `stuck` class and the persistent-failure tier, plus review 346's F4 and review 341's F9. It is built
+  alongside wave 7 and lands after it.
+- **Wave 9: the lane.** It waits for the fleet's `ccd caps` to advertise wave 7's token, and for wave 8 to merge.
+
+**Stated residuals and operator residue are R71's.** The kept clips leaf is out of the collector's scope (R66). The
+macOS `purge-refused` red is a stated residual. The path-identity follow-up programme comes after wave 9.
