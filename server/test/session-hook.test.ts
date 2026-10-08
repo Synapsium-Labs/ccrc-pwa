@@ -10213,9 +10213,11 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(code).not.toContain('sha');
     // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
     expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the spool block (@P forks)').toBeNull();
-    // FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand is a literal or
-    // `${#name}`, and the S1 stopping line (the forms neither pin chases) is in forkForms' header.
-    const arith = [...code.matchAll(/\(\((.*?)\)\)/g)]
+    // FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of `(( ))` is an
+    // integer literal or `${#name}`; a substring offset or length, a subscript, or a compound-assignment key is an integer literal (a
+    // subscript may also be `@` or `*`); any `$[` is named. The S1 stopping line (the forms neither pin chases) is in forkForms'
+    // header.
+    const arith = [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
       .map((x) => x[1]!)
       .filter((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0')));
     expect(arith, 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)').toEqual([]);
@@ -10225,8 +10227,8 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
       'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
     ).toBeNull();
     expect(
-      code.match(/(?<![\w$])[A-Za-z_]\w*\[(?!-?\d+\]|[@*]\])/)?.[0] ?? null,
-      'a name[subscript] whose subscript is not a literal, @ or *: in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes, the whole word quoted or not (review 351 F1)',
+      code.match(/(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/)?.[0] ?? null,
+      'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
     ).toBeNull();
     expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');
     expect(code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null, 'let and an integer attribute evaluate arithmetic (review 351 F1)').toBeNull();
@@ -10513,15 +10515,20 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
   /** Every form in `code` that makes bash fork or run a program: command or process substitution, a backtick,
    *  a `${…@…}` parameter transformation (FR2a, review 344 F1: `@P` runs prompt expansion, and so command substitution),
    *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`; and
-   *  (FR3a, review 351 F1) arithmetic whose operand is anything but an integer literal or `${#name}`, in `(( ))`,
-   *  `$(( ))`, `$[ ]`, a `${name:offset:length}` or a `name[subscript]` anywhere (a `${…}`, an assignment, or a name
-   *  `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not), and the `-eq -ne -lt -le -gt -ge`
-   *  operators of `[[ ]]`: each evaluates its operands as arithmetic, so a variable holding `a[$(…)]` forks there.
-   *  Not chased (the S1 stopping line, review 351 F1): ${!x} indirection, [[ -v $v ]], and printf -v "$v" or
-   *  read -r "$v" with a dynamic name (a literal name with a variable subscript is named above); and a name split
-   *  from its `[` by a quote or a backslash (x"[v]", x'[v]', x\[v\]), which quote removal joins before the subscript
-   *  is read. Each forks when the name it reads holds a[$(…)], and each is a deliberate spelling; the spool block
-   *  uses none of them.
+   *  (FR3a, review 351 F1) an arithmetic operand bash may evaluate from a variable's text: an operand of `(( ))` or
+   *  `$(( ))` that is not an integer literal or `${#name}`; any `$[ ]`; a `${name:offset:length}` whose offset or length
+   *  is not an integer literal; a subscript that is not an integer literal, `@` or `*`, on a `name[…]` anywhere (a
+   *  `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a key
+   *  in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge` operators of `[[ ]]`. An indexed array's
+   *  subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an associative one is not, but the scan
+   *  cannot tell them apart and names both.
+   *  Not chased (the S1 stopping line, review 351 F1), each a deliberate spelling the spool block does not use: ${!x}
+   *  indirection; [[ -v $v ]], and printf -v "$v" or read -r "$v", with a dynamic name, which forks when the name holds
+   *  a[$(…)]; a dynamic name with a variable subscript there ($x[v], ${x}[v]), which forks through its subscript
+   *  whatever the name holds; a name split from its `[` by a quote, a backslash or a line continuation (x"[v]", x'[v]',
+   *  x\[v\], x\<newline>[v]), which bash joins before the subscript is read; an assignment, printf -v or read into
+   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); and text on a `#`-led line inside a quoted string
+   *  that spans lines, which the comment filter drops before either pin reads it.
    *  [] = builtins only. Conservative by construction: what it cannot classify is reported, never passed. */
   const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
     const found: string[] = [];
@@ -10561,11 +10568,13 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
       return close < 0 || !/^\s*-?\d+(?::\s*-?\d+)?$/.test(s.slice(p + m[0].length, close)) ? 'substring offset' : null;
     };
     const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
-    // FR3c (review 351 F1): a `name[subscript]` anywhere (a `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes,
-    // the whole word quoted or not) evaluates a subscript that is not a literal, `@` or `*` as arithmetic, so it is named on the
-    // whole source, before step 1 masks quoted text. An unbraced `$x[v]` is `$x` and literal text, no subscript, hence the `$` in
-    // the lookbehind. A name split from its `[` by a quote or a backslash is on the stopping line (forkForms' header).
-    if (/(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])/.test(src)) found.push('subscript');
+    // FR3c (review 351 F1): a subscript that is not an integer literal, `@` or `*` — on a `name[…]` anywhere (a `${…}`, an
+    // assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a compound-assignment key
+    // (`x=([v]=1)`, FR3d) — is named on the whole source, before step 1 masks quoted text: an indexed array evaluates it as
+    // arithmetic (an associative one does not, and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an
+    // expansion or an assignment is `$x` and literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name
+    // with a subscript, which is on the stopping line, as is a name split from its `[` (forkForms' header).
+    if (/(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/.test(src)) found.push('subscript');
     // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
     let out = '';
     for (let i = 0; i < src.length; i++) {
@@ -10717,6 +10726,9 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     ['a ? special parameter with a variable substring offset', A, '_hs_g=${?:_hs_g}', 'substring offset'],
     ['a - special parameter with a variable substring offset', A, '_hs_g=${-:_hs_g}', 'substring offset'],
     ['a let', T, "_hs+='}'; let _hs_g", 'command let'],
+    // Fix-round-3 whole-round review (#1/#5): a compound assignment's key is a subscript, and bash evaluates it as arithmetic.
+    ['a compound array assignment with a variable key', T, "_hs+='}'; _hs_x=([_hs_g]=1)", 'subscript'],
+    ['an appended compound assignment with a spaced variable key', T, "_hs+='}'; _hs_x+=( [_hs_g]=1 )", 'subscript'],
   ];
   /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
   const INERT: Array<[string, string, string]> = [
