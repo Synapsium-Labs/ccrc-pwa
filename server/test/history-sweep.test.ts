@@ -465,7 +465,7 @@ describe('ccd-history-sweep ships the way ccd-tmp-sweep does', () => {
     const d = directives('ccd-history-sweep.service');
     expect(d).toContain('Type=oneshot');
     expect(d).toContain('ExecStart=%h/.local/bin/ccd-history-sweep');
-    expect(d.some((l) => /^MemoryMax=\d+[KMG]$/.test(l)), 'no MemoryMax').toBe(true);
+    expect(d.filter((l) => l.startsWith('MemoryMax=')), 'the carrier\'s memory bound is exactly 1G: O20 asserts RSS at half of it (D-4244)').toEqual(['MemoryMax=1G']);
     expect(d).toContain('Nice=19');
     expect(d).toContain('IOSchedulingClass=idle');
     // a scheduled pass that finds the lock held exits 0 (§5.1): nothing to whitelist
