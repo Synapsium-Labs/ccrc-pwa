@@ -13,7 +13,7 @@ import {
   EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
-  expireTokenKind, expiryAttention, expiryInUseSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
+  expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
   type ArchivedExpiryEntry, type ArchivedExpiryInput,
 } from '../src/archivedExpiry.js';
 
@@ -237,6 +237,50 @@ describe('the lane’s memory of one row', () => {
       'an audit of a DIFFERENT archive teaches nothing').toMatchObject({ expiresAt: null, nextAskAt: NOW + PASS });
   });
 
+  it('an older ccd’s not-expired audit of a young archive (archivedAt null, no expiresAt key) is no evidence, not a failure', () => {
+    // That ccd prints archivedAt only after its seven-day age check, and prints no expiresAt at all: the document is
+    // told apart from the reap-in-progress breadcrumb (expiresAt: null) by the ABSENT key, and only an upgrade fixes it.
+    const e = archivedExpiryEntry(1_789_000_000);
+    const young = parseExpireAudit(ID, true, JSON.stringify({ session: ID, mode: 'expire', archivedAt: null, sensitive: [],
+      verdict: 'not-expired', detail: 'archived 3600 seconds ago; 7 days are required' }));
+    const r = archivedExpiryLearned(e, young, NOW, PASS);
+    expect(r).toMatchObject({ expiresAt: null, failures: 0, failingSince: null, nextAskAt: NOW + EXPIRE_NO_EVIDENCE_RETRY_MS,
+      report: { kind: 'no-evidence', at: NOW } });
+    const failing = archivedExpiryLearned(e, { kind: 'unreadable', detail: 'x' }, NOW, PASS);
+    expect(archivedExpiryLearned(failing, young, NOW + 2 * PASS, PASS), 'a failure run before it is cleared')
+      .toMatchObject({ failures: 0, failingSince: null, report: { kind: 'no-evidence' } });
+  });
+
+  it('a learn audit that cannot be read, or that read NO archive, backs off and is REPORTED (review 313, parked item 1)', () => {
+    // Such a row was asked again every pass, with no backoff and no attention entry — invisible in the shadow record,
+    // which is the operator's arming evidence. It now climbs the failure ladder, and the list says why.
+    const e = archivedExpiryEntry(1_789_000_000);
+    const unread = archivedExpiryLearned(e, { kind: 'unreadable', detail: 'ws-audit --expire printed no JSON document' }, NOW, PASS);
+    expect(unread).toMatchObject({ expiresAt: null, failures: 1, failingSince: NOW, nextAskAt: NOW + 2 * PASS });
+    expect(unread.report).toEqual({ kind: 'failing', at: NOW,
+      detail: 'its expiry could not be learned — ws-audit --expire printed no JSON document' });
+    const again = archivedExpiryLearned(unread, { kind: 'unreadable', detail: 'x' }, NOW + 2 * PASS, PASS);
+    expect(again).toMatchObject({ failures: 2, failingSince: NOW, nextAskAt: NOW + 2 * PASS + 4 * PASS });
+    expect(again.report?.at, 'since when, kept').toBe(NOW);
+    // A refusal ccd answered before it read the stamp — an interrupted ws-reap's breadcrumb — names no archive.
+    const crumb = parseExpireAudit(ID, true, JSON.stringify({ session: ID, mode: 'expire', archivedAt: null, expiresAt: null,
+      sensitive: [], verdict: 'reap-in-progress', detail: 'an interrupted ws-reap stands' }));
+    const r = archivedExpiryLearned(e, crumb, NOW, PASS);
+    expect(r).toMatchObject({ failures: 1, nextAskAt: NOW + 2 * PASS });
+    expect(r.report).toEqual({ kind: 'failing', at: NOW,
+      detail: 'its expiry could not be learned — ws-audit --expire read no archive (reap-in-progress: an interrupted ws-reap stands)' });
+  });
+
+  it('a learn that succeeds after failing clears the run and its report; a row that left the archive is not reported', () => {
+    const failing = archivedExpiryLearned(archivedExpiryEntry(1_789_000_000), { kind: 'unreadable', detail: 'x' }, NOW, PASS);
+    expect(archivedExpiryLearned(failing, learnedDoc(1_789_604_800), NOW + 2 * PASS, PASS))
+      .toMatchObject({ expiresAt: 1_789_604_800, failures: 0, failingSince: null, report: null });
+    const returned = parseExpireAudit(ID, true, JSON.stringify({ session: ID, mode: 'expire', archivedAt: null, expiresAt: null,
+      sensitive: [], verdict: 'not-archived', detail: '' }));
+    expect(archivedExpiryLearned(archivedExpiryEntry(1_789_000_000), returned, NOW, PASS),
+      'a return: the next pass drops the row').toMatchObject({ failures: 0, report: null, nextAskAt: NOW + PASS });
+  });
+
   it('twice observed: an eligible pass seeds, a later one makes it due, and any other verdict ends the run', () => {
     const e0 = { ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800 };
     const e1 = archivedExpirySighted(e0, { eligible: true }, null, NOW);
@@ -248,6 +292,29 @@ describe('the lane’s memory of one row', () => {
     expect(e3.eligibleSince).toBeNull();
   });
 
+  it('an ineligible sighting clears a would-expire or in-use report as well as a held one (review 313, F1)', () => {
+    // The shadow record is the operator's arming evidence: a row that stopped being eligible (a run bound it, a review
+    // opened, its identity went unmeasured) is never due again, so a report it kept would never be revisited.
+    const inUse = [{ pid: 7, comm: 'sleep', cwd: '/w' }];
+    const reports = [{ kind: 'would-expire', at: NOW, sensitive: 0 }, { kind: 'in-use', at: NOW, inUse, passes: 3 }] as const;
+    for (const report of reports) {
+      const x = { ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW, inUseRun: 3, inUse, report };
+      const y = archivedExpirySighted(x, { eligible: false, why: 'open-run' }, null, NOW + PASS);
+      expect(y.report, report.kind).toBeNull();
+      expect(y.inUseRun, `${report.kind}: the run of in-use answers ends with it`).toBe(0);
+      expect(archivedExpirySighted(x, { eligible: true }, null, NOW + PASS).report, `${report.kind}, still eligible`).toEqual(report);
+    }
+    const refused = { ...archivedExpiryEntry(1), report: { kind: 'refused', at: NOW, token: 'containment-unproven', detail: '' } } as const;
+    expect(archivedExpirySighted(refused, { eligible: false, why: 'open-run' }, null, NOW).report, 'the box’s own verdict stands')
+      .toEqual(refused.report);
+  });
+
+  it('the held sentence names the instant, never a period — the threshold is ccd’s (review 313, F3)', () => {
+    const s = expiryReportSentence({ kind: 'held', at: NOW, reason: 'program:x wave:1/2' }, 1_789_604_800);
+    expect(s).toBe('held (“program:x wave:1/2”) past its expiry (due 2026-09-17 00:26 UTC), so it is not cleaned up — '
+      + 'release the hold or restore it.');
+  });
+
   it('held past its instant is REPORTED with its reason, and the report goes with the hold', () => {
     const e0 = archivedExpiryEntry(1_789_000_000);
     const held = archivedExpirySighted(e0, { eligible: false, why: 'held' }, 'program:x wave:1/2', NOW);
@@ -255,6 +322,62 @@ describe('the lane’s memory of one row', () => {
     expect(archivedExpirySighted(held, { eligible: false, why: 'held' }, 'program:x wave:1/2', NOW + PASS).report?.at,
       'since when, kept').toBe(NOW);
     expect(archivedExpirySighted(held, { eligible: true }, null, NOW + PASS).report).toBeNull();
+  });
+
+  it('a hold never hides a row the lane has stopped asking: its report survives the hold and the release after it', () => {
+    // The report is such a row's only trace on the attention list — it is never asked again, so nothing would put it
+    // back once a hold replaced it and the release cleared that.
+    const base = { ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW - PASS };
+    const stopped = [
+      ['a non-resumable failure', { kind: 'failed', resumable: false, detail: 'ws-expire reported expiring demo-other' }],
+      ['a composition error', { kind: 'composition', detail: 'bad token' }],
+      ['a terminal refusal', { kind: 'refused', token: 'containment-unproven', detail: 'x', inUse: [] }],
+    ] as const;
+    for (const [what, outcome] of stopped) {
+      const x = archivedExpiryNextEntry(base, outcome, NOW, PASS)!;
+      expect(x.nextAskAt, `${what}: never asked again`).toBe(Number.POSITIVE_INFINITY);
+      const held = archivedExpirySighted(x, { eligible: false, why: 'held' }, 'program:x wave:1/2', NOW + PASS);
+      expect(held.report, `${what}: kept while held`).toEqual(x.report);
+      const released = archivedExpirySighted(held, { eligible: true }, null, NOW + 2 * PASS);
+      expect(released.report, `${what}: kept after the release`).toEqual(x.report);
+      expect(released.nextAskAt, `${what}: still never asked`).toBe(Number.POSITIVE_INFINITY);
+      expect(archivedExpirySighted(held, { eligible: false, why: 'open-run' }, null, NOW + 2 * PASS).report,
+        `${what}: kept through an ineligible sighting too`).toEqual(x.report);
+    }
+    // Unchanged: a resumable failing report is still replaced by a hold, and goes with it.
+    const failing = { ...base, report: { kind: 'failing', at: NOW, detail: 'pin-failed' } } as const;
+    const heldFailing = archivedExpirySighted(failing, { eligible: false, why: 'held' }, 'program:x wave:1/2', NOW);
+    expect(heldFailing.report).toMatchObject({ kind: 'held' });
+    expect(archivedExpirySighted(heldFailing, { eligible: true }, null, NOW + PASS).report).toBeNull();
+  });
+
+  it('a hold that REPLACES a would-expire, in-use or retryable failing report resets nextAskAt, so the row is re-audited as soon as it is due after the release', () => {
+    // The hold ends the report the shadow list showed, and the release clears the hold's own: left at the old shadow
+    // wait (or the failure's backoff) the row would be unlisted and not due for up to an hour — absent from the list
+    // the operator arms on.
+    const inUse = [{ pid: 7, comm: 'sleep', cwd: '/w' }];
+    const WAIT = NOW + 15 * 60_000;
+    const replaced = [
+      ['would-expire', { kind: 'would-expire', at: NOW, sensitive: 0 }],
+      ['in-use', { kind: 'in-use', at: NOW, inUse, passes: 2 }],
+      ['a retryable failing', { kind: 'failing', at: NOW, detail: 'pin-failed' }],
+    ] as const;
+    for (const [what, report] of replaced) {
+      const x = { ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW - PASS, nextAskAt: WAIT, inUseRun: 2, inUse, report };
+      const held = archivedExpirySighted(x, { eligible: false, why: 'held' }, 'program:x wave:1/2', NOW + PASS);
+      expect(held.report, what).toMatchObject({ kind: 'held' });
+      expect(held.nextAskAt, `${what}: the wait goes with the report it ended`).toBe(0);
+      const e1 = archivedExpirySighted(held, { eligible: true }, null, NOW + 2 * PASS);
+      expect(e1.report, `${what}: the release clears the hold`).toBeNull();
+      expect(archivedExpiryDue(e1, NOW + 2 * PASS), `${what}: sighted once, not yet due`).toBe(false);
+      const e2 = archivedExpirySighted(e1, { eligible: true }, null, NOW + 3 * PASS);
+      expect(archivedExpiryDue(e2, NOW + 3 * PASS), `${what}: due on the second eligible pass after the release`).toBe(true);
+    }
+    // Held again and again, or never replacing anything, changes no wait; a final report keeps its infinite one.
+    const plain = { ...archivedExpiryEntry(1), nextAskAt: WAIT };
+    expect(archivedExpirySighted(plain, { eligible: false, why: 'held' }, 'r', NOW).nextAskAt, 'nothing replaced: the wait stands').toBe(WAIT);
+    const final = { ...archivedExpiryEntry(1), nextAskAt: Number.POSITIVE_INFINITY, report: { kind: 'failing', at: NOW, detail: 'x', final: true } } as const;
+    expect(archivedExpirySighted(final, { eligible: false, why: 'held' }, 'r', NOW).nextAskAt, 'a final report is kept, wait and all').toBe(Number.POSITIVE_INFINITY);
   });
 
   const e = (over: Partial<ArchivedExpiryEntry> = {}): ArchivedExpiryEntry =>
@@ -310,11 +433,24 @@ describe('the lane’s memory of one row', () => {
 
   it('a failure backs off, and is reported once the run of failures has lasted the ceiling', () => {
     let x = e();
-    x = archivedExpiryNextEntry(x, { kind: 'failed', detail: 'pin-failed' }, NOW, PASS)!;
+    x = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW, PASS)!;
     expect(x.nextAskAt).toBe(NOW + 2 * PASS);
     expect(x.report).toBeNull();
-    x = archivedExpiryNextEntry(x, { kind: 'failed', detail: 'pin-failed' }, NOW + EXPIRE_FAILURE_CEILING_MS, PASS)!;
+    x = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW + EXPIRE_FAILURE_CEILING_MS, PASS)!;
     expect(x.report).toMatchObject({ kind: 'failing', at: NOW });
+  });
+
+  it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
+    // `ExpireVerbRead.failed.resumable` is carried through the outcome, never narrowed: a wrong-row `expired`, a word
+    // this build does not know, or `probe-unmeasured` is not something waiting cures — no hour of retries first.
+    const detail = 'ws-expire reported expiring demo-other, not demo-quiet-dune';
+    const x = archivedExpiryNextEntry(e(), { kind: 'failed', resumable: false, detail }, NOW, PASS)!;
+    expect(x.nextAskAt).toBe(Number.POSITIVE_INFINITY);
+    expect(x.report).toEqual({ kind: 'failing', at: NOW, detail, final: true });
+    expect(expiryReportSentence(x.report!, null)).toBe(`cleanup stopped: ${detail}. It is not asked again for this archive.`);
+    const c = archivedExpiryNextEntry(e(), { kind: 'composition', detail: 'bad token' }, NOW, PASS)!;
+    expect(expiryReportSentence(c.report!, null), 'a composition error is never retried either, and says so')
+      .toBe('cleanup stopped: the server composed a call ccd rejected: bad token. It is not asked again for this archive.');
   });
 
   it('a box word is reported at once — flock-unavailable will not pass by waiting', () => {

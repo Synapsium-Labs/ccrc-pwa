@@ -20,6 +20,7 @@ import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
 import { isStallKebab } from '../src/coord/stall.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
+import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -845,8 +846,15 @@ describe('the rejection table is total, in both directions', () => {
         // of an unarmed gate. None is a mail rejection or a run refusal: they
         // are admitted through the exported guard, never NOT_CODES, for the
         // reason every union above gives.
-        || isStallSettingsKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word or stall-watch settings word`).toBe(true);
+        || isStallSettingsKebab(tok)
+        // WORKSPACE LIFECYCLE WAVE 4: the FIFTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/endDeadCoordinator.ts` (the dead-coordinator lane's one executor) spells
+        // its outcome and report kinds, and `coord/close.ts` and `coord/store.ts` spell the compare-and-set refusal
+        // `claimant-changed`. None is a mail rejection or a run refusal — no route answers with one; they ride the lane's
+        // memory and the feed. Admitted through the exported guard, derived from `deadCoordinator.ts`'s Records, never
+        // NOT_CODES, for the reason every union above gives.
+        || isDeadCoordinatorKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word or dead-coordinator word`).toBe(true);
     }
   });
 });

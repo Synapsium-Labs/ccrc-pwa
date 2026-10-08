@@ -1,7 +1,8 @@
 // The reclaim row's small vocabulary (child-reclamation wave 4) — parallel
 // `Record<MarkerState, …>` tables, word and glyph, so no state is read out of
 // colour alone (coordWords.ts's own discipline), and the ONE reader for each of
-// the two `CoordStatus` fields this row renders.
+// the two `CoordStatus` fields this row renders, plus the one reader of a third,
+// `childReclaimDoneAt`, which nothing renders (wave 6).
 //
 // ITS OWN TABLES, not `MARKER_WORD`'s: those words are written for the
 // coordinator pause ("dispatch would refuse"), and `coordWords.ts` says a
@@ -118,4 +119,16 @@ export function childReclaimAttentionOf(coord: unknown): RenderedAttentionItem[]
     }
   }
   return items;
+}
+
+/** THE ONE READER of `CoordStatus.childReclaimDoneAt` (child-reclamation wave 6,
+ *  spec §5.9). Absence permits: a server older than the field, or one whose
+ *  mirror has committed no reclaim end since it started, omits it. Both read as
+ *  `null`, and the board treats `null` as no news, never as a change. Anything
+ *  that is not a finite number is `null` too; it is a trigger, so a junk value
+ *  must not fire one. */
+export function childReclaimDoneAtOf(coord: unknown): number | null {
+  if (typeof coord !== 'object' || coord === null) return null;
+  const v = (coord as { childReclaimDoneAt?: unknown }).childReclaimDoneAt;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }

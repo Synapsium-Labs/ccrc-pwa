@@ -4,7 +4,7 @@ import {
 } from '../../../shared/api.js';
 import type { FleetIO } from '../io.js';
 import { parseJournalLine, type JournalRow } from './journalparse.js';
-import { frameRead, lifecycleState, planSweep, shouldSweep } from './mirrorplan.js';
+import { childReclaimDoneHighWater, frameRead, lifecycleState, planSweep, shouldSweep } from './mirrorplan.js';
 import type { CoordStore } from './store.js';
 
 /**
@@ -52,6 +52,11 @@ export class JournalMirror {
    *  ONE gap row per name per process: the condition is standing, and a row
    *  every five seconds is an alarm nobody reads. */
   private readonly unorderableSeen = new Set<string>();
+  /** Child-reclamation wave 6 (spec §5.9): the newest `at` of a
+   *  `reclaim`/`done` row this mirror has COMMITTED, or null while it has
+   *  committed none. IN MEMORY: a restart reads null until the next reclaim
+   *  ends, and the board treats null as "no news", never as a change. */
+  private childReclaimDoneNewest: number | null = null;
 
   constructor(private deps: MirrorDeps) {}
 
@@ -160,6 +165,11 @@ export class JournalMirror {
   private commit(gen: string, lines: readonly string[], cursor: number, size: number, at: number): void {
     const rows: JournalRow[] = lines.map(parseJournalLine);
     this.deps.store.ingestJournal({ gen, rows, cursor, size, at });
+    // AFTER the ingest, never before it. The frame that carries this value
+    // tells the board to read GET /api/runs, which reads these rows from
+    // SQLite. A value raised before a commit that then threw would send the
+    // board to read a row that is not there yet.
+    this.childReclaimDoneNewest = childReclaimDoneHighWater(this.childReclaimDoneNewest, rows);
   }
 
   /** `$REG/.lifecycle/errors` — ccd's own counted append failures (D7). Read,
@@ -185,6 +195,12 @@ export class JournalMirror {
       ccdVerbs: this.deps.ccdVerbs(), lastOkAt: this.lastOkAt,
       nowMs: this.deps.now(), staleAfterMs: this.deps.staleAfterMs,
     });
+  }
+
+  /** `childReclaimDoneNewest`, read by `FleetWatcher.currentChildReclaimDoneAt` for
+   *  the coord frame. */
+  childReclaimDoneAt(): number | null {
+    return this.childReclaimDoneNewest;
   }
 
   health(): LifecycleHealth {

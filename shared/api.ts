@@ -3799,8 +3799,8 @@ export interface ChildReclaimKeptMember { readonly sessionId: string; readonly r
  *  - `terminal`: a TERMINAL reclaim refusal left the child standing.
  *  - `failing`: the child's reclaim has kept FAILING past the defer ceiling,
  *    and is still retried, backing off in between. The run of failures is made
- *    of `failed` lines, plus `refused` lines whose token is one of the two
- *    pre-lock tokens (`flock-unavailable`, `lock-unopenable`): those are
+ *    of `failed` lines, plus `refused` lines whose token is a pre-lock token
+ *    (`CHILD_RECLAIM_PRE_LOCK_TOKEN`, `server/src/childReclaimSweep.ts`): those are
  *    pre-lock dies that the server retries.
  *  - `kept`: one marked child the sweep keeps on purpose, named by a
  *    `ChildReclaimKeptWord`.
@@ -3872,6 +3872,19 @@ export interface ExpiryAttention {
   readonly at: number;
 }
 
+/** One report of the DEAD-COORDINATOR lane (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a claimant it WOULD end
+ *  the programme of while it runs shadowed (`would-end`), one it cannot tell crashed from put down on purpose
+ *  (`unmeasured`), one whose runs the abandon arm could not move (`stuck`), and the circuit breaker (`breaker`, naming
+ *  every claimant it holds). A REPORT, never a tap: the doors that act are the ones that already exist — revive,
+ *  reclaim, abandon. NEVER the child or expiry lane's list. `sentence` is the SERVER's; `at` (epoch ms, the server's
+ *  clock) is since when it stands, kept in the lane's memory and rebuilt on the passes after a restart. */
+export interface DeadCoordinatorAttention {
+  readonly kind: 'would-end' | 'unmeasured' | 'stuck' | 'breaker';
+  readonly claimants: readonly string[];
+  readonly sentence: string;
+  readonly at: number;
+}
+
 /** The three markers the coordination lane is governed by, read together
  *  because they come from one listing: `coordinator-paused` (spec §4.2 — the
  *  one file that stops a program mid-flight), `mail-disabled` (the injection
@@ -3881,17 +3894,33 @@ export interface ExpiryAttention {
  *  shown in the same banner row as the reclaim switch.
  *
  *  ADDITIVE on the wire (no `FLEET_PROTO` bump): a frame from a server that
- *  predates `reclaim`/`childReclaimAttention` omits both, and the PWA's ONE
- *  reader per field (`pwa/src/fleet/childReclaimWords.ts`) renders exactly
- *  what it rendered before. */
+ *  predates `reclaim`/`childReclaimAttention` omits both, a server older than
+ *  wave 6 omits `childReclaimDoneAt`, and the PWA's ONE reader per field
+ *  (`pwa/src/fleet/childReclaimWords.ts`) renders exactly what it rendered
+ *  before. */
 export interface CoordStatus {
   pause: MarkerState;
   mail: MarkerState;
   reclaim: MarkerState;
   childReclaimAttention: readonly ChildReclaimAttention[];
+  /** Child-reclamation wave 6 (spec §5.9): the `at` (ccd's clock, epoch ms)
+   *  of the newest `reclaim`/`done` journal row the server's mirror has
+   *  COMMITTED. It is a trigger and nothing renders it: the board re-reads its
+   *  archive once each time this value CHANGES while a finished row's reclaim
+   *  chip is unsettled, because the vanish re-read races the journal.
+   *
+   *  OPTIONAL, ADDITIVE, absence permits. It is OMITTED, never null, while
+   *  the server has committed none, which is always the case right after a
+   *  restart because the value lives in memory and only ever rises. A server
+   *  older than this field omits it too. The PWA's ONE reader is
+   *  `childReclaimDoneAtOf` (`pwa/src/fleet/childReclaimWords.ts`). */
+  childReclaimDoneAt?: number;
   /** The expiry lane's own list (wave 3b). OPTIONAL on the wire: an older server omits it, and the PWA's one reader
    *  (`pwa/src/fleet/expiryWords.ts`) reads absence as no items. */
   expiryAttention?: readonly ExpiryAttention[];
+  /** The dead-coordinator lane's own list (wave 4). OPTIONAL on the wire: an older server omits it, and the PWA's one
+   *  reader (`pwa/src/fleet/deadCoordinatorWords.ts`) reads absence as no items. */
+  deadCoordinatorAttention?: readonly DeadCoordinatorAttention[];
 }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
@@ -7640,6 +7669,17 @@ export interface LifecycleMeas {
    *  `meas.bytes` precedent) — never a fabricated 0. A `null` VALUE here means
    *  the key was absent: an act that is not a reclaim. */
   readonly residueBytes: string | null;
+  /** The per-session temp root (`$HOME/.cc-tmp/<id>`) a `reclaim` or `expire`
+   *  tail did not prove gone (child reclamation wave 6, spec §5.6): `in-use`
+   *  (a process of this uid still used it after the tail's bounded wait),
+   *  `unmeasured` (whether one did could not be measured, or a removal failed
+   *  part-way or was undone: kept means NOT PROVEN GONE, not untouched) or
+   *  `refused` (the helper refused it). The act COMPLETED, so this rides the
+   *  `done` row and a purge failure's; `detail` says why. Null: it went, or another act. */
+  readonly tmpRootKept: string | null;
+  /** The same for the session's clips directory (`$HOME/.cc-clips/<id>`):
+   *  `refused` or `unmeasured` only — nothing waits on a clips directory's users. */
+  readonly clipsKept: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -7661,7 +7701,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
-  unremoved: true, childOf: true, wip: true, residueBytes: true,
+  unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -7834,7 +7874,11 @@ export type LcRefusalToken =
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
-  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
+  | 'unit-still-active'       // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
+  | 'branch-unmeasured'       // ws-reclaim or ws-expire (spec §5.5): the tail's step 5 could not read whether the child's branch still exists, so it stopped before removing anything further — journaled `failed`, never `refused`
+  | 'probe-unmeasured'        // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
+  | 'token-malformed'         // ws-reclaim (spec §5.9): `--expect` is not 64 lowercase hex — journaled `refused` before the lock, once the session id is valid
+  | 'run-id-malformed';       // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7911,6 +7955,34 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // and a retry stops both again. True of every arm and cause: nothing FURTHER went.
   'unit-still-active':
     'ccrc could not prove this session’s service and its terminal pane had both stopped, so it stopped before deleting anything further. Reclamation tries again.',
+  // Child reclamation, wave 6 (spec §5.5). The tail's step 5 could not read
+  // whether the child's branch still exists: `git show-ref --exists` answered
+  // neither present nor absent. Only ever rides `_lc_fail`, after the act
+  // started. By step 5 the unit is stopped, the pane is gone and the tree was
+  // removed (or never stood, on the vanished arm), so the sentence promises
+  // nothing intact, only that nothing FURTHER went. The breadcrumb stays at the
+  // branch, and the retry resumes there.
+  'branch-unmeasured':
+    'ccrc could not read whether the branch still exists, so it stopped before removing anything further; it tries again.',
+  // Child reclamation, wave 6 (spec §5.9). A probe the reclaim ladder needs
+  // could not run, or its answer could not be read. That happens at audit time
+  // (`verb ws-audit`) or in ws-reclaim's locked recomputation
+  // (`verb ws-reclaim`). It only ever rides `_lc_fail`, with no intent before
+  // it. Two things are true of both arms: THIS attempt removed nothing (a
+  // resumed arm's earlier one may have), and the server's retry starts over
+  // (`parseChildReclaimResult` reads the verb's document as not-resumable).
+  'probe-unmeasured':
+    'ccrc could not finish measuring this workspace — a check it relies on could not run, or its answer could not be read — so this attempt started nothing and removed nothing. The next attempt measures again from the start.',
+  // Child reclamation, wave 6 (spec §5.9). These are the two argv dies of
+  // ws-reclaim that are tied to an id. Each is journaled through `_lc_refuse`
+  // before the lock, once the session id is valid. The server composes this
+  // argv itself, so either one is a ccrc defect. Both join wave 5's reader,
+  // which classes them as pre-lock FAILURES (`CHILD_RECLAIM_PRE_LOCK_TOKEN`),
+  // so the chip reads `deferred`, never `refused`.
+  'token-malformed':
+    'ccrc asked for this clean-up with a confirmation token that is not a shape ccd mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
+  'run-id-malformed':
+    'ccrc named the run this workspace belongs to with a run id that is not a shape ccrc mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
