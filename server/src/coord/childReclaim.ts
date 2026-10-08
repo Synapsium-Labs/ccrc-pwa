@@ -239,7 +239,9 @@ export type ChildReclaimWip =
  *  makes it unrepresentable:
  *   - `resumable`: ccd's own destructive tail genuinely started and left a
  *     breadcrumb — its own `{failed:…}` document at exit 1, or a call cut
- *     short with nothing printed. The next attempt resumes FROM there.
+ *     short with nothing printed. The next attempt resumes FROM there. A
+ *     `{failed:…}` word in `CHILD_RECLAIM_PRE_CRUMB_FAILED` is the exception:
+ *     it is printed before the breadcrumb exists, so it is `not-resumable`.
  *   - `not-resumable`: a substance refusal — `ws-audit --reclaim` itself (a
  *     non-destructive verb that never reaches the reap lock), an unrecognised
  *     refusal word, or a `reclaimed` document naming another session. ccd's
@@ -262,16 +264,33 @@ export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_RESUME, v);
 }
 
-/** The ONE ccd `{failed:…}` word `parseChildReclaimResult` gives its own
- *  treatment: the presence rungs' own in-lock tmux probe (spec §5.7,
- *  "Presence, and its bound" — rungs 5 and 6) failing BEFORE any act, which —
- *  because no breadcrumb can exist yet at that point (spec §5.6, "The tail,
- *  the breadcrumb and the resume") — unlike every other
- *  post-start failure word, free ccd text this file never compares against a
- *  literal — decides `ChildReclaimResume` itself (`not-resumable`, never
- *  `resumable`: nothing was left to resume from). Named so
- *  `isChildReclaimKebab` admits it without a second hand-kept literal. */
-const CHILD_RECLAIM_PROBE_UNMEASURED = 'probe-unmeasured' satisfies LcRefusalToken;
+/** The ccd `{failed:…}` words `parseChildReclaimResult` gives their own
+ *  treatment: the ones `cmd_ws_reclaim` prints BEFORE the tombstone and the
+ *  breadcrumb (spec §5.6, "The tail, the breadcrumb and the resume"), so
+ *  nothing had started and there is nothing to resume from. Unlike every other
+ *  post-start failure word — free ccd text this file never compares against a
+ *  literal — each of these decides `ChildReclaimResume` itself
+ *  (`not-resumable`, never `resumable`):
+ *   - `probe-unmeasured`: the presence rungs' own in-lock tmux probe (spec
+ *     §5.7, "Presence, and its bound" — rungs 5 and 6) failing before any act.
+ *   - `state-changed`: the consent binding (spec §5.5) — the in-lock recompute
+ *     and the pin read different branch states, so the act stopped before the
+ *     tombstone. Also a `refused` word (`CHILD_RECLAIM_TOKEN_KIND`), which is
+ *     why this set is typed against both vocabularies.
+ *  `pin-failed` is deliberately NOT here: it has eight producers after the
+ *  breadcrumb (the tail's per-deletion keeps), so the word alone cannot tell
+ *  them apart from the one printed before it. That pre-breadcrumb `pin-failed`
+ *  is a stated residual, read `resumable` and so told "the box resumes where
+ *  it stopped" when it is retried from the start; its fix is an additive
+ *  `crumb:false` field on ccd's document, carried to wave 7.
+ *  Named so `isChildReclaimKebab` admits `probe-unmeasured` without a second
+ *  hand-kept literal. */
+const CHILD_RECLAIM_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const satisfies
+  readonly (LcRefusalToken | ChildReclaimToken)[];
+
+function isChildReclaimPreCrumbFailed(v: unknown): boolean {
+  return typeof v === 'string' && (CHILD_RECLAIM_PRE_CRUMB_FAILED as readonly string[]).includes(v);
+}
 
 export type ChildReclaimOutcome =
   | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;
@@ -534,7 +553,7 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
  *  different meaning. */
 export function isChildReclaimKebab(v: unknown): boolean {
   return isChildReclaimToken(v) || isChildReclaimDeferWhy(v) || isChildReclaimResume(v)
-    || v === CHILD_RECLAIM_PROBE_UNMEASURED
+    || isChildReclaimPreCrumbFailed(v)
     || (typeof v === 'string' && (Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_NOT_WHY, v) || v === 'not-queued'));
 }
 
@@ -715,13 +734,17 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       // Fix round 2, review minor C: an empty `detail` must not render
       // "…failed: ." — omit the separator rather than leave it dangling.
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      // `probe-unmeasured` (spec §5.7's presence rungs, §5.6's breadcrumb) is the
-      // presence rungs' own in-lock tmux probe failing BEFORE any act — the
-      // destructive tail never started, so unlike every other post-start
-      // `{failed:…}` document there is no breadcrumb to resume from. A retry
-      // starts completely afresh, exactly as `not-resumable` already reads
-      // (`childReclaimFeedBody`'s tail text: "It is retried from the start.").
-      const resume: ChildReclaimResume = v.failed === CHILD_RECLAIM_PROBE_UNMEASURED ? 'not-resumable' : 'resumable';
+      // A word in `CHILD_RECLAIM_PRE_CRUMB_FAILED` (`probe-unmeasured`, the
+      // presence rungs' in-lock probe failing, spec §5.7; `state-changed`, the
+      // consent binding, spec §5.5) is printed BEFORE the tombstone and the
+      // breadcrumb (spec §5.6) — the destructive tail never started, so unlike
+      // every other post-start `{failed:…}` document there is no breadcrumb to
+      // resume from. A retry starts completely afresh, exactly as
+      // `not-resumable` already reads (`childReclaimFeedBody`'s tail text: "It
+      // is retried from the start."). `pin-failed` stays `resumable`: eight of
+      // its producers are post-breadcrumb, so the word cannot tell them apart,
+      // and the pre-breadcrumb one is a stated residual (see the set's doc).
+      const resume: ChildReclaimResume = isChildReclaimPreCrumbFailed(v.failed) ? 'not-resumable' : 'resumable';
       return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}`, token: v.failed };
     }
   }
