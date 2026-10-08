@@ -387,6 +387,22 @@ describe('the words', () => {
     expect(both[0]!.body).toContain('1 of 2 runs closed failed and 1 stay open — the act stopped: x; run 8\'s worker was released');
   });
 
+  it('a RE-HELD worker is worded as re-held and still claimed — never as released and unheld (review 339, F3)', () => {
+    const o = { kind: 'ended', programmes: [], open: [{ slug: 'alpha', runIds: [7] }], stuck: [], reheld: [{ slug: 'alpha', runIds: [7] }],
+      stoppedBy: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' } } as const;
+    const rows = deadCoordinatorFeedRows('demo-coord', o, NOW);
+    expect(rows).toEqual([{ title: 'dead coordinator: programme partly ended',
+      body: 'coordinator demo-coord crashed (dead since 2026-09-21 14:13 UTC) and stayed dead an hour; programme alpha was NOT ended: '
+        + '0 of 1 run closed failed and 1 stay open — the act stopped: re-measured alive: tmux reports the pane live; '
+        + 'run 7\'s worker was re-held under a surviving run and stays claimed.' }]);
+    expect(rows[0]!.body).not.toMatch(/released|unheld/);
+    const n = deadCoordinatorNextEntry({ ...deadCoordinatorEntry(), crashedPasses: 3 }, o, 'orphan', NOW, NOW, PASS);
+    expect(n.report, 'a re-hold alone is news: the act did something').toMatchObject({ kind: 'stuck', runs: [] });
+    const sentence = deadCoordinatorReportSentence('demo-coord', n.report!);
+    expect(sentence).toContain('re-held the worker of run 7 of programme alpha under a surviving run (it stays claimed)');
+    expect(sentence).not.toMatch(/released|unheld/);
+  });
+
   it('an act that FAILED part-way keeps the rows of what it had closed, and says it failed', () => {
     const o = { kind: 'ended', programmes: [{ slug: 'alpha', runIds: [7] }, { slug: 'beta', runIds: [8] }],
       open: [{ slug: 'beta', runIds: [9] }, { slug: 'gamma', runIds: [10] }], stuck: [], stoppedBy: null, failed: 'database or disk is full' } as const;
@@ -416,7 +432,7 @@ describe('the words', () => {
     const s = deadCoordinatorNextEntry(e, { ...o, stuck: [{ runId: 9, why: 'bad-transition' }] }, 'orphan', NOW, NOW, PASS);
     expect(deadCoordinatorReportSentence('demo-coord', s.report!)).toMatch(/run 9 \(bad-transition\) could not be moved[\s\S]*released the worker of run 9/);
     // A throw keeps what it had closed.
-    const t = deadCoordinatorThrew(e, 'SQLITE_FULL', NOW, PASS, { closed: [{ slug: 'alpha', runIds: [7] }], released: [], stop: null });
+    const t = deadCoordinatorThrew(e, 'SQLITE_FULL', NOW, PASS, { closed: [{ slug: 'alpha', runIds: [7] }], released: [], reheld: [], stop: null });
     expect(deadCoordinatorReportSentence('demo-coord', t.report!)).toMatch(/failed \(SQLITE_FULL\)[\s\S]*closed failed 1 run of programme alpha/);
   });
 

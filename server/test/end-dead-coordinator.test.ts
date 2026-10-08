@@ -173,10 +173,30 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
     expect([a, b].map(r.stateOf)).toEqual(['failed', 'working']);
   });
 
+  it('a revive after a RE-HOLD is carried as re-held, never as released (review 339, F3)', async () => {
+    let held = 0;
+    const r = await rig({ onVerb: (v) => { if (v === 'ws-hold') held = 1; },
+      verdict: () => (held === 1 ? { verdict: 'live' } : { verdict: 'gone' }) });
+    const a = r.working('alpha', 'demo-w1');
+    // ANOTHER open run on the same workspace — another programme's, under another coordinator — survives the abandon,
+    // so the arm hands the claim over with `ws-hold` under that run's reason instead of releasing.
+    const s = r.coord.openRun({ program: 'gamma', title: 'gamma', project: 'demo', wave: 1, waveOf: 2, claimedBy: HEIR });
+    if (!('id' in s)) throw new Error('openRun refused');
+    r.coord.markDispatched(s.id, 'demo-w1', 'demo-w1', 'ws/demo-w1', false);
+    for (const to of ['dispatched', 'working'] as const) expect(r.coord.advance(s.id, to, 'coordinator').ok).toBe(true);
+    const out = await endDeadCoordinator(r.deps, CRASHED, NOW);
+    expect(out).toMatchObject({ kind: 'ended', programmes: [], reheld: [{ slug: 'alpha', runIds: [a] }], stoppedBy: { kind: 'remeasured' } });
+    expect(out, 'nothing was released').not.toHaveProperty('released');
+    expect(r.calls.map((c) => c[0]), 'the CONTROL: the fleet act was a hold').toEqual(['ws-hold']);
+    expect(r.stateOf(a)).toBe('working');
+  });
+
   it('a stop BEFORE the fleet act released nothing: no `released` at all', async () => {
     const r = await rig({ verdict: () => ({ verdict: 'live' }) });
     r.working('alpha', 'demo-w1');
-    expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).not.toHaveProperty('released');
+    const out = await endDeadCoordinator(r.deps, CRASHED, NOW);
+    expect(out).not.toHaveProperty('released');
+    expect(out).not.toHaveProperty('reheld');
   });
 
   it('an act that THROWS part-way hands back what it had closed, with the failure — the executor never loses a closed run', async () => {

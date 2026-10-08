@@ -251,7 +251,7 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     // Reached only through the sweep's handle, never from a route: no route passes a sweep guard. Mapped so the
     // switch stays total.
     case 'claimant-changed': return reply.code(409).send({ ok: false, error: 'claimant-changed', claimedBy: r.claimedBy });
-    case 'sweep-stopped': return reply.code(409).send({ ok: false, error: 'sweep-stopped', stop: r.stop, released: r.released });
+    case 'sweep-stopped': return reply.code(409).send({ ok: false, error: 'sweep-stopped', stop: r.stop, fleetAct: r.fleetAct });
     default: {
       const _exhaustive: never = r;
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });

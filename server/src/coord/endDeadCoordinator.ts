@@ -161,6 +161,7 @@ export async function endDeadCoordinator(
   // 4 — each run: the abandon, with the compare-and-set and the re-measure inside the arm.
   const ended: { id: number; program: string }[] = [];
   const released: { id: number; program: string }[] = [];
+  const reheld: { id: number; program: string }[] = [];
   const stuck: { runId: number; why: string }[] = [];
   let stoppedBy: DeadCoordinatorStop | null = null;
   // What the act has done so far, as its outcome — also what a THROWN act hands back (`DeadCoordinatorActThrew`).
@@ -168,6 +169,7 @@ export async function endDeadCoordinator(
     const closed = new Set(ended.map((r) => r.id));
     return { kind: 'ended', programmes: byProgramme(ended), open: byProgramme(runs.filter((r) => !closed.has(r.id))),
       stuck, stoppedBy, ...(released.length === 0 ? {} : { released: byProgramme(released) }),
+      ...(reheld.length === 0 ? {} : { reheld: byProgramme(reheld) }),
       ...(failed === undefined ? {} : { failed }) };
   };
   try {
@@ -175,9 +177,11 @@ export async function endDeadCoordinator(
       const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId));
       if (out.ok) { ended.push(run); continue; }
       if (out.kind === 'sweep-stopped') {
-        // The stop came after the fleet act: the worker is released (or re-held) and its run stays open. A TYPED fact, so
-        // the lane records it whether or not the act closed anything (`released` on the outcome).
-        if (out.released) released.push(run);
+        // The stop came after the fleet act: the worker is released, or re-held under a surviving run, and its run stays
+        // open. A TYPED fact, carried as the act that ran, so the lane records it whether or not the act closed anything
+        // (`released` or `reheld` on the outcome) and words each as what it is (review 339, F3).
+        if (out.fleetAct === 'released') released.push(run);
+        else if (out.fleetAct === 're-held') reheld.push(run);
         stoppedBy = out.stop;
         break;
       }

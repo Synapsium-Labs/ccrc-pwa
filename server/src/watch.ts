@@ -4255,7 +4255,7 @@ export class FleetWatcher {
         recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, pick.since);
       }
       this.deadCoordinatorState.set(pick.id, deadCoordinatorThrew(e, detail, Date.now(), CHILD_RECLAIM_SWEEP_MS,
-        done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], stop: null } : undefined));
+        done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], reheld: [], stop: null } : undefined));
       return null;
     }
   }
