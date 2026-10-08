@@ -9405,12 +9405,15 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     find's exit code and answers unmeasured for that reason.
   - **Placement.** The pass follows the owner, device-and-inode and mount checks, so those refusals touch nothing. It
     precedes the checkout question (`leaf-moved-checkout-refused`), which must enter the leaf, so a leaf that question
-    then refuses has had its own owner bits set and nothing beneath it.
+    then refuses has had its own owner bits set and nothing beneath it. A foreign tree moved in AS the leaf has its
+    root's owner bits set (555 reads 755 afterwards) even when it is then refused.
   - **The stated residual.** `find -P` never follows a link, but the chmod it runs dereferences its operand. The pass
     is bounded to this uid's own directory and owner bits, and a same-uid rename onto the leaf between find's test and
     the chmod is chmodded with it.
-- **D-4149** `leaf-moved-checkout-refused` (Fix round 1) — the removal helper refuses a directory leaf that holds a
-  checkout git links to somewhere else. This is Rule 1 of review 335's F1; Rule 2 is `leaf-rows-are-nested`.
+- **D-4149** `leaf-moved-checkout-refused` (Fix round 1) — the removal helper declines to remove a directory leaf that
+  holds a checkout git links to somewhere else: it answers refused or unmeasured, and the tail keeps the leaf. This is
+  Rule 1 of review 335's F1; Rule 2 is `leaf-rows-are-nested`. Between them they close the two leaves. The worktree's
+  own moved-tree check is unchanged and still asks only of the worktree.
   - **The defect.** The gone-directory recovery let another workspace's tree be deleted once someone had moved it into
     the child's temp root or clips directory. Git records the moved tree as prunable, the recovery places its row by
     that record, the moved-tree question was asked only of the child's worktree, and step 6 removed both leaves whole.
@@ -9420,10 +9423,13 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     (real directory, owner, device and inode, mount, owner bits, physical path) and before it normalises or removes
     anything. The question is row-agnostic and is asked at the instant of removal, so every caller inherits it: step
     6's clips leaf, `_ws_tmproot_remove`, ws-expire's clips leaf and wave 7's collector. Rc 1 (refused) and rc 2
-    (unmeasured) leave the leaf untouched, with `_WS_LEAF_WHY` naming the checkout. Step 6's existing arms keep and
-    record it (`clipsKept` or `tmpRootKept`, `refused` or `unmeasured`) and the act completes: the leaf check never
-    fails the tail. A link or file leaf is unlinked and never scanned. The predicate runs before the normalise pass,
-    which writes.
+    (unmeasured) leave everything under the leaf untouched, with `_WS_LEAF_WHY` naming the checkout. Step 6's existing
+    arms keep and record it (`clipsKept` or `tmpRootKept`, `refused` or `unmeasured`, on the done row and in the done
+    document) and the act completes: the leaf check never fails the tail. A link or file leaf is unlinked and never
+    scanned. The question runs before the normalise pass and the `rm`, which reach the whole tree. The one write
+    before it is the owner-bits pass on the leaf itself (`leaf-owner-bits-pass`), which has to run so the leaf can be
+    entered. A foreign tree moved in AS the leaf therefore has its root's owner bits set (555 reads 755 afterwards)
+    even when it is then refused, and nothing below the leaf's root is touched.
   - **The scan.** `find -P` from the leaf's physical path, `-xdev`, `-mindepth 1` (so a tree moved AS the leaf is
     seen), bounded by `REAP_SCAN_SECONDS` under `_plat_timeout`. A timeout, any find error or stderr (an unreadable
     directory hides what is under it), or a 65th entry named `.git` (the cap is 64) is unmeasured. It does not prune
@@ -9436,8 +9442,9 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
       unmeasured (F1b: git reads the whole file). It is tested with `-f` before any read, so a FIFO is never opened.
     - A relative path resolves against the `.git` file's own directory, as git does, and the admin directory is
       resolved physically through `_ws_dir_physical` (F1c). One proven absent refuses, because git no longer records
-      the tree. One that cannot be resolved is unmeasured. A `..` after another component of a gitdir is unmeasured,
-      because behind a link `cd -L` and the kernel disagree.
+      the tree. One that cannot be resolved is unmeasured. A `..` after another component of a relative gitdir, or any
+      `..` in an absolute one, is unmeasured, because behind a link `cd -L` and the kernel disagree. Only a relative
+      gitdir's leading `../` and `./` are read.
     - An admin directory whose physical path equals the leaf or begins `<leaf>/` passes (F1d): a submodule, or a
       worktree of a clone in the leaf.
     - One outside the leaf passes only as a linked worktree whose admin `gitdir` back-link names THIS `.git`,
@@ -9447,11 +9454,21 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
       trailing newlines stripped, as `_ws_reclaim_gitdir_own` reads it, and a relative back-link never matches, so it
       refuses (the fleet runs git 2.43).
     - A refusal outranks an unmeasured entry, whatever order find lists them in.
-  - **The stated limits.** (i) A tree stripped of its `.git`, or content that is no checkout, parked in a leaf is not
-    seen, and base held these only by accident, through the blanket hold on a gone row. (ii) The question and the `rm`
-    are two looks, not one, so a same-uid rename in between is removed with the leaf, which wave 7's quarantine rename
-    closes. (iii) A clone, a submodule of one, or a worktree of one inside a leaf is the leaf's own and goes with it.
-    (iv) The bind-mount alias spelling of a leaf is not compared, which is the existing residual.
+  - **The stated limits.**
+    - (i) A tree stripped of its `.git`, or content that is no checkout, parked in a leaf is not seen, and base held
+      these only by accident, through the blanket hold on a gone row.
+    - (ii) The question and the `rm` are two looks, not one, so a same-uid rename in between is removed with the leaf,
+      which wave 7's quarantine rename closes. Beside it, a registry row placed into a leaf after `_ws_reclaim_owned`'s
+      ask at the start of the tail is not asked again at step 6. The removal-time question and the temp root's in-use
+      probe still stand, and the worktree has the same window class.
+    - (iii) A clone, a submodule of one, or a worktree of one inside a leaf is the leaf's own and goes with it. That
+      includes a foreign MAIN checkout, a `.git` DIRECTORY, moved into a leaf: with no registry row naming it, it
+      passes the question and is removed with its object store. The ruling accepts this, because a clone in a leaf is
+      the leaf's own. A registry row that names the moved tree's old path is a gone row, and the blanket hold on a
+      gone row keeps the child unmeasured.
+    - (iv) The bind-mount alias spelling of a leaf is not compared, which is the existing residual.
+    - Also stated: on a case-insensitive file system (Darwin APFS), a hand-renamed `.GIT` that git honours is missed
+      by `find -name .git`. Git never writes that name.
   - **The cost, two fail-closed leaks the ruling accepts.** A temp root that holds any unreadable subdirectory, more
     than 64 `.git` entries, or a tree whose walk outlasts `REAP_SCAN_SECONDS` (30 s) is kept `unmeasured` on every
     pass, where the permission pass used to normalise and remove it. A clips leaf is mostly spared the first, because
@@ -9487,10 +9504,10 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     would hold every child whose temp root is a file or link leaf for ever, and the helper unlinks such a leaf and
     follows nothing. A row at, inside or through a leaf goes into the same `_WS_NESTED_ROWS` as the worktree's nested
     rows.
-  - **The cost.** An unprovable leaf, or a standing row at or inside a leaf, makes `_ws_reclaim_owned` fail resumable
-    `worktree-remove-failed` at the start of the tail, and so on every resume until the row or the leaf is fixed, with
-    nothing deleted. Fresh reclaims are held at the ladder. It is the same shape as the recorded moved-tree arm of
-    that function, and it is carried to wave 7 beside it.
+  - **The cost.** An unprovable leaf, or a standing row at, inside or through a leaf, makes `_ws_reclaim_owned` fail
+    resumable `worktree-remove-failed` at the start of the tail, and so on every resume until the row or the leaf is
+    fixed, with nothing deleted. Fresh reclaims are held at the ladder. It is the same shape as the recorded
+    moved-tree arm of that function, and it is carried to wave 7 beside it.
   - **Pin strength.** The mutation row that issues one `_ws_reclaim_workdir_shared` call per leaf reds only through
     the placement and unprovable-leaf differences, because no constructible shape changes a verdict through the
     `_WS_RECORDED_GDIRS` reset alone. The single pass is still what the ruling requires.
@@ -9532,11 +9549,15 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     `POSIXLY_CORRECT` subshell with `unset -f builtin cd pwd printf`, then `CDPATH= builtin cd -L -- <dir> && builtin
     pwd -P && builtin printf x`, then the `\nx` suffix checked and stripped. `_ws_reclaim_resolve` and
     `_ws_reclaim_absent` are untouched.
-  - **Its three sites,** each mapping a non-zero answer into its own unmeasured arm with the helper's why:
-    `_ws_leaf_remove`'s root (rc 2), `_ws_path_users`' parent (rc 2, where a stripped newline used to fail OPEN:
-    nobody found, the leaf removed while in use), and `_ws_expire_cwd_users`' parent (`_ws_reclaim_unmeasured`, rc 1).
-    In `_ws_expire_cwd_users` only that resolution changed, because the rest of its body is workspace-lifecycle's. Its
-    coordinator, quiet-river, consented to the edit in mail 3961.
+  - **Three sites for the newline refusal,** each mapping a non-zero answer into its own unmeasured arm with the
+    helper's why: `_ws_leaf_remove`'s root (rc 2), `_ws_path_users`' parent (rc 2, where a stripped newline used to
+    fail OPEN: nobody found, the leaf removed while in use), and `_ws_expire_cwd_users`' parent
+    (`_ws_reclaim_unmeasured`, rc 1). In `_ws_expire_cwd_users` only that resolution changed, because the rest of its
+    body is workspace-lifecycle's. Its coordinator, quiet-river, consented to that one edit in mail 3961, and the
+    consent covers nothing else in the function.
+  - **Other callers.** Fix round 1's checkout question (`leaf-moved-checkout-refused`) also resolves through the same
+    helper: its leaf, each admin directory, and each back-link's directory. So does the leaf placement in
+    `_ws_reclaim_workdir_shared` (`leaf-rows-are-nested`). Each maps a failure to unmeasured.
   - **The leaf's own path takes no sentinel.** Under a newline-free physical root, with an id that holds none, a leaf
     that is no link resolves to exactly `<root>/<id>`. Only a link swapped in between the link test and the `cd` could
     differ, which is the same-uid window stated for the helper.
@@ -9553,8 +9574,10 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     `_ws_tmproot_remove`, whose leaf half would run an unprobed `rm` on a leaf re-created in the window.
   - **The 2-for-2 comment retouch** (`witness-block-comment-retouched`). The sentence at the head of the witness
     block, "DEATH belongs to `_ws_tmproot_remove` alone", was false once the drop was split out, so it was rewritten
-    two lines for two, naming the drop. It sits inside the witness block but outside the window workspace-lifecycle's
-    consent named.
+    two lines for two, naming the drop. It sits inside the witness block but outside the functions the `ccd/ccd` claim
+    holder, bright-harbor, named, and it rides that consent (mail 3959), which covered disjoint regions. Quiet-river's
+    consent (mail 3961) is not involved: it covers `leaf-root-newline-refused`'s one resolution in
+    `_ws_expire_cwd_users` and nothing else.
   - **The drop's warning on a bad id** (`drop-warns-on-a-bad-id`). The drop answers rc 1 for an id no witness is named
     for and also warns on stderr ("is not an id a witness is named for, so no witness was touched"), where the brief
     said only that it is refused. It sets no `_WS_LEAF_WHY`, because it is not a leaf act.
