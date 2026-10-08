@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `7253060da` after fix round 1; review run 333 dispatched (R26) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `working`, fix round 2 from `7253060da`; review run 333 closed (R27) |
 
 ## Decisions & deviations
 
@@ -389,6 +389,55 @@ time.
     it sent nothing. The send that landed waited only seconds after a wake on the age-out minute (run 312, 03:13:12).
   - Next: `review-done`, then this session advances run 333 to `working`, closes it with the reviewer's
     `{reviewedTip, report}`, and rules. After that it asks the operator about merging PR #322.
+- **R27 (2026-10-08 03:35)**, review 333 is accepted, and wave 2 goes back for a second fix round.
+  - Review run 333 (`ccrc-pwa-amber-meadow`, mail 3968) reviewed `7253060da` with the held-out panel (Workflow
+    `wf_4f19a26c-003`): 42 agents, no lens unverified, 11 confirmed, 2 refuted 3/3. They merge into seven
+    findings: F1 and F2 important, F3 to F7 minor.
+    - R24's nine items are addressed as ruled. Every mutation row the worker reported re-measured exactly.
+    - Every suite is green. The one PWA red, `contrast.test.ts`, passed twice in isolation, so it is load.
+    - The citation instrument reads `7 passed | 328 skipped (335)`, and `deviation-refs` 31.
+    - Lanes are clean, and `merge-tree` is clean against `origin/main`, `ws/amber-river` and `ws/soft-delta`.
+    - Run 333 closed `done` and released. The report is copied to `w2-review-333-report.md`.
+  - F1 (important): R24's shape for F3 was wrong, and this ruling replaces it. A stored 7 200 000 is a choice
+    pinned at that number, not the built-in: the server reports it as `chosen`, a `default` write over it is a real
+    change, and only NULL follows the built-in. Selecting the built-in option for it shows "Built-in" beside a quiet
+    line that says "chosen here". It also turns a one-write reset into two, and it would hide a pin if a later build
+    moved the built-in. Ruling: when the stored number equals the built-in, the select shows it as its own option,
+    labelled with the quiet line's wording (`chosenHere` over `quietText`, no new string). Picking Built-in from there
+    is then one change that writes `default`. The comment and the candidate entry are corrected, and a row pins the
+    one-write reset.
+  - F2 (important): `STALL_CONFIRM_TEXT.unanswered` is a key that spec §12's enumeration of that object does not
+    list, and three plan lines still say W2 adds no L0 string. Adding a key outside a list the spec enumerates is a
+    departure, not a silence, so it takes a number from this programme's wave 2 reserve. That number is
+    `unanswered-write-has-its-own-l0-line`, named to the worker by mail and defined in the W2 plan in this round. It
+    is cited at the key and at the section's use, and it is not written here until that definition is on `main`.
+    The three plan lines are amended to say the fix round adds one L0 key. The neighbouring candidate
+    `unanswered-write-reads-unconfirmed` keeps only its unnumbered half, reading a network failure as unconfirmed
+    rather than as a refusal.
+  - F3 (minor): the docstring's reading is accepted. The `HTTP <status>` fallback fills the server-answer detail
+    slot, as `apiErrorText`'s own `request failed (<status>)` floor already does; it is not section copy. The plan's
+    Task 1 sentence "No new string is added" is amended to say so, and it takes no number.
+  - F4 (minor): the `coord-db` needle `CREATE TABLE stall_settings` prefix-matches `stall_settings_new`, which is
+    SQLite's table-rebuild idiom, so a legitimate later migration would trip the row R24 meant to spare. The needle
+    must stop at the table name, with the reviewer's mutation (an appended `stall_settings_new` create-and-drop) as a
+    row measured green on the count and frozen rows. The existing second-`CREATE` row must stay red.
+  - F5 (minor): the plan prose that still contradicts what ships is amended in place:
+    - Task 1 at ≈:403-406 and Task 3's notes at ≈:1756-1758, both on the network arm.
+    - The Goal, Global Constraints and "Deliberately unchanged" lines on `shared/` and `server/src`. They are made
+      true of the whole wave: Tasks 1 to 4 add no L0 string, the fix round adds one key, and item 5's comment and
+      test edits are coordinator scope (R20, R21).
+    - The File Structure table gains `pwa/src/screens/settingsText.ts`, `shared/api.ts` and item 5's two test files.
+    - README's "phone-push bell", under "Deliberately unchanged" and as the first operator question, is already
+      reworded and pinned: it is marked as settled by the operator's 2026-10-05 directive.
+  - The worker's second observation is taken: the device-word scan also reads `settingsText.ts`, the module meant to
+    hold text the Settings sections share. One line in the scan's list, with a mutation row.
+  - F6 and F7: no change.
+    - F6: spec §13's `SettingsScreen.tsx ≈:72` is an unpinned approximate anchor in a spec outside this wave's lanes,
+      and anchors are snapshots.
+    - F7: an overstated commit subject on `8b66f4616`. History is not rewritten.
+  - F1's line for the operator stands as "Not confirmed — the server did not answer; the screen will re-check."
+  - Next: run 322 is back at `working` (fingerprint `7253060da`), and the `fix-round` mail goes out. The round ends
+    in a fresh wave-done, a new review run for the new tip, and then the operator's merge decision.
 
 ## Carried constraints (reviewers get these)
 
