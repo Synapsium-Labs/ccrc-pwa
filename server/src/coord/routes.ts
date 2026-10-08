@@ -577,7 +577,7 @@ export function registerCoordRoutes(
    * neither tolerance applies.
    */
   const requireMailToken = (req: FastifyRequest, reply: FastifyReply, route: string): boolean => {
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], route);
     if (verdict === 'ok') return true;
     const detail = verdict === 'legacy'
       ? `no box token presented — ${route} grants no legacy tolerance (that is /api/notify only)`
@@ -699,7 +699,7 @@ export function registerCoordRoutes(
     // `/api/notify` is still entitled to — `/api/mail` has no pre-existing
     // deployed caller a strict gate could strand, the identical argument
     // that already ruled out a `'legacy'` tolerance here.
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
         ? 'no box token presented — /api/mail grants no legacy tolerance (that is /api/notify only)'
@@ -1021,7 +1021,7 @@ export function registerCoordRoutes(
     // Same gate, same reasoning: see the ingress route above (fix-round
     // finding 3/5) — `/api/mail/:id/ack` has no legacy caller either, and
     // (fix-round finding 3 / D-39) no unconfigured-token pass-through either.
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail/:id/ack');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
         ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance (that is /api/notify only)'
@@ -2839,7 +2839,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2875,7 +2875,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/signals');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false, error: 'unauthenticated', verdict: session.verdict,
@@ -2924,7 +2924,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/items');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2981,7 +2981,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/feed');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3042,7 +3042,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/lifecycle');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3117,7 +3117,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/peers');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3467,7 +3467,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/claims');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -4006,7 +4006,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/asks');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,

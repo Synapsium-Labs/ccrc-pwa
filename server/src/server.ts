@@ -52,7 +52,7 @@ import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
-import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
+import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
@@ -303,8 +303,11 @@ export interface Deps {
    *  Optional the same way `push`/`notifyLog` are: a box with none configured
    *  keeps working, unauthenticated, and says so once at boot. NOT optional the
    *  way `queue` refuses to be — there is no fallback here that could quietly
-   *  construct a second, different token. */
-  mailToken?: string | null;
+   *  construct a second, different token. A `BoxTokenHolder` since the box-token
+   *  lifecycle (spec 4.2): the process's one accept-set, mutated in place by the
+   *  driver, so every lane reads it here at request time and a rotation needs no
+   *  restart. A literal string is what tests inject, with today's meaning. */
+  mailToken?: string | BoxTokenHolder | null;
   /** The coordination database (Build 7). Optional exactly like `push` and
    *  `notifyLog`: absent means the coord routes answer 501 and the mail lane
    *  never runs, which is what a box with no coordination configured should
@@ -1554,7 +1557,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // regex-routed its body INTO a session's chat stream — see `checkMailToken`
   // for the one-deploy-generation tolerance and for when it comes out.
   app.post('/api/notify', async (req, reply) => {
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/notify');
     if (verdict === 'bad') {
       // `Fastify({ logger: false })` (above) means a bare 401 leaves NOTHING
       // in the journal — three silent layers stack on top of it too
@@ -2805,7 +2808,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/pools/epoch');
         if (token !== 'ok') {
           return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: session.verdict });
         }
