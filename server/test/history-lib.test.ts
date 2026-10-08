@@ -2685,6 +2685,75 @@ describe('sidecarIndexText: the trailing-run drop is linear (D-4312, FR1-b)', ()
 });
 
 // ===========================================================================
+// FU7 (D-4419, final review FP2 and FP7): every index text is the first ENTRY_FTS_BYTES of its text after redactForIndex
+// has read a window ENTRY_REDACT_MARGIN larger, cut by the sidecar's one rule. redactForIndex reads up to nine times what
+// it is given, so over an entry's whole plain text (about 16 MB at LINE_MAX) one call outlived the carrier's 600 s kill
+// and a U+008F-dense line aborted every pass in a 1 GiB scope.
+// ===========================================================================
+describe('entryIndexText: redact a window ENTRY_REDACT_MARGIN past ENTRY_FTS_BYTES, then cut (D-4419, FU7)', () => {
+  const N = libRows.ENTRY_FTS_BYTES;
+  const W = N + libRows.ENTRY_REDACT_MARGIN;
+  const none = (): libRows.PairIndex => libRows.makePairIndex([]);
+  const HEADER = 'eyJhbGciOiJIUzI1NiJ9';
+  const PAYLOAD = 'eyJzdWIiOiJ1c2VyMTIzNDU2In0';
+  const SIG = 'abcDEF123_-xyzQRSTUV';
+
+  it('the window: ENTRY_FTS_BYTES is 1 MiB and its margin is the sidecar\'s', () => {
+    expect(libRows.ENTRY_FTS_BYTES).toBe(1024 * 1024);
+    expect(libRows.ENTRY_REDACT_MARGIN).toBe(libRows.SIDECAR_REDACT_MARGIN);
+  });
+  it('a text shorter than the window is redactForIndex\'s text, unchanged by the cut', () => {
+    const BS = String.fromCharCode(92);
+    const v = `fixtureNotARealTokenValue${historyCrypto.randomBytes(8).toString('hex')}`;
+    const idx = libRows.makePairIndex(libRows.secretPairs([v]).pairs);
+    for (const t of ['plain words', `a ${v} b`, `head ${BS.repeat(64)}n${v} tail`, `x \x1b[1m${v}\x1b[0m y`, 'a b '.repeat(200_000)]) {
+      expect(libRows.entryIndexText(t, idx) === libRows.redactForIndex(t, idx), JSON.stringify(t.slice(0, 24))).toBe(true);
+    }
+  });
+  it('a longer text keeps its first ENTRY_FTS_BYTES, its trailing partial run dropped', () => {
+    const out = libRows.entryIndexText('word '.repeat(3 << 18), none());   // 3.75 MiB; byte N falls one byte into a word
+    expect(out === 'word '.repeat(209_715)).toBe(true);
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(N);
+  });
+  it('the redaction reads the window and never the whole text (the cost bound: a count of value-layer asks, not time)', () => {
+    // The text holds no escape introducer and no backslash, so redactForIndex is one redaction, which asks the index once
+    // per run; every run is `ab`, so the asks of length 2 are the runs it read. Unwindowed it reads all 5,600,000.
+    let asks = 0;
+    const byLen = new Map<number, { has(sha256: string): boolean }>();
+    byLen.get = (len: number) => {
+      if (len === 2) asks += 1;
+      return undefined;
+    };
+    const text = 'ab '.repeat(5_600_000);   // 16.8 MB, 5,600,000 runs
+    const out = libRows.entryIndexText(text, { byLen });
+    expect(asks).toBeGreaterThan(W / 3 - 2);
+    expect(asks).toBeLessThanOrEqual(Math.ceil(W / 3));
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(N);
+  });
+  it.each([0, 1, 3])('a JWT the cut falls %i characters into the signature of leaves no header or payload: redaction precedes the cut', (into) => {
+    const jwtHead = `${HEADER}.${PAYLOAD}.`;
+    const text = `${' '.repeat(N - jwtHead.length - into)}${jwtHead}${SIG} tail ${'x '.repeat(W)}`;
+    expect(Buffer.from(text).subarray(0, N).toString('latin1').endsWith(`${jwtHead}${SIG.slice(0, into)}`), 'CONTROL: byte N lies inside the signature').toBe(true);
+    const out = libRows.entryIndexText(text, none());
+    expect(out.includes(HEADER)).toBe(false);
+    expect(out.includes(PAYLOAD)).toBe(false);
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(N);
+  });
+  it('one cut rule: sidecarIndexText and entryIndexText both end in cutIndexText, the only caller of dropTrailingRun', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../ccd/history/lib.mjs', import.meta.url)), 'utf8');
+    const body = (fn: string): string => {
+      const at = src.indexOf(`export function ${fn}(`);
+      expect(at, fn).toBeGreaterThan(-1);
+      return src.slice(at, src.indexOf('\n}\n', at));
+    };
+    expect(body('sidecarIndexText')).toMatch(/return cutIndexText\(text, w\.windowCut, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN\);/);
+    expect(body('entryIndexText')).toMatch(/return cutIndexText\(redactForIndex\(w\.text, idx\), w\.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN\);/);
+    expect((src.match(/\bdropTrailingRun\(/g) ?? []).length).toBe(2);   // its definition and cutIndexText's one call
+    expect((src.match(/\bfunction cutIndexText\(/g) ?? []).length).toBe(1);
+  });
+});
+
+// ===========================================================================
 // Task 25 review round 1 (F1): the op marker's one grammar, `<verb> <pid> <start_ms>` (§9.6 op-running). Task 28's
 // status reads it through this parser, and a pass's stale-marker sweep decides on its null.
 // ===========================================================================

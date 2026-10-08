@@ -1087,7 +1087,7 @@ const IX_RSS_PRELOAD = path.join(__dirname, 'fixtures', 'history', 'preload-rss.
  *  smaller chunks do not bring it under 256 MiB, so any other interpreter is held to 512 MiB, half the carrier's
  *  MemoryMax=1G (D-4244). DM47 (task 21) uses the same bound. */
 const IX_RSS_BOUND_KIB = process.version === 'v22.16.0' ? 256 * 1024 : 512 * 1024;
-/** half the carrier's MemoryMax=1G, D-4244's bound family; the heaviest STRUCTURED line measured 389,508 and 356,032 KiB whole-pass on Node 24.14.1 (D-4345; a plain-text line with a secret loaded peaked higher, which this bound does not reach). */
+/** half the carrier's MemoryMax=1G, D-4244's bound family; the heaviest STRUCTURED line measured 389,508 and 356,032 KiB whole-pass on Node 24.14.1 (D-4345), and since D-4419's window the heaviest plain-text line measured, an ESC 7-dense one, 372,204 KiB in a 1 GiB scope. */
 const IX_LINE_RSS_BOUND_KIB = 512 * 1024;
 /** The old-space cap the D-4345 RSS case gives its child. It is TIGHTER than the ~256 MiB of old space a 1 GiB carrier's cgroup gives V8
  *  (about physical/4), chosen for margin, so the pass is held to a stricter heap than production: V8 paces its heap from the cgroup
@@ -1276,6 +1276,36 @@ describe('history ingest: budget, backlog and the ticks row (plan task 20)', () 
       const db = openStoreRO(box);
       try { expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(2)}' AND parse_state = 'ok'`)).toBe(1); } finally { db.close(); }
       console.log(`D-4345 heaviest structured line peak RSS ${peak} KiB on ${process.version}`);
+      expect(peak).toBeLessThan(IX_LINE_RSS_BOUND_KIB);
+    } finally {
+      fs.rmSync(box.home, { recursive: true, force: true });
+    }
+  }, 300_000);
+
+  it('D-4419: a 16,400,072-byte line of U+008F, a letter and a space is a parsed, indexed row, and the pass peaks under 512 MiB with its old space capped at 192 MiB (before the window it aborted every pass, final review FP7)', async () => {
+    const { lib } = await IX.api();
+    const SS3 = String.fromCharCode(0x8f);   // the 8-bit single shift, written raw by JSON.stringify
+    const line = JSON.stringify(IX.user(IX.uuidN(2), IX.uuidN(1), `${SS3}a `.repeat(4_100_000), 2));
+    expect(Buffer.byteLength(line), 'CONTROL: under LINE_MAX').toBeLessThan(lib.LINE_MAX);
+    expect(lib.jsonWithinStructureBound(Buffer.from(line)), 'CONTROL: inside the structure bound').toBe(true);
+    const box = IX.newBox('ccrc-hist-fu7rss-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'one', 1), line]));
+      const nodeOptions = [`--max-old-space-size=${IX_LINE_HEAP_MIB}`, ...[PRELOADS.statfs, IX_RSS_PRELOAD].map((x) => `--import ${pathToFileURL(x).href}`)].join(' ');
+      let peak = 0;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const r = runSweep(box, [], { env: { NODE_OPTIONS: nodeOptions } });
+        expect(r.code, `${r.signal} ${r.stderr.slice(0, 400)}`).toBe(0);
+        const m = /history-test-maxrss-kib=(\d+)/.exec(r.stderr);
+        expect(m, 'the RSS preload printed nothing').not.toBeNull();
+        peak = Math.max(peak, Number(m![1]));
+      }
+      const db = openStoreRO(box);
+      try {
+        expect(IX.count(db, 'entries', `uuid = '${IX.uuidN(2)}' AND parse_state = 'ok'`)).toBe(1);
+        expect(IX.count(db, 'blobs', 'fts_indexed = 1')).toBe(2);
+      } finally { db.close(); }
+      console.log(`D-4419 U+008F line peak RSS ${peak} KiB on ${process.version}`);
       expect(peak).toBeLessThan(IX_LINE_RSS_BOUND_KIB);
     } finally {
       fs.rmSync(box.home, { recursive: true, force: true });
@@ -2404,6 +2434,42 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         expect(metaV(w, 'fts_reindex_rid')).toBe(String(rb));
         expect(matches(w, '"ezqn"*')).toBe(0);
       } finally { w.close(); }
+    });
+  });
+
+  describe('D-4419 (history-entry-index-text-windowed): an entry indexes its first ENTRY_FTS_BYTES, and every path writes that one text', () => {
+    it('an entry past the window: its head is searchable and its tail is not, and a value learned later inside the window is re-indexed through the same window', () => {
+      const box = IX.newBox('ccrc-hist-ewin-');
+      const v = `zqw${hex(12)}5`;
+      const text = `zqheadword note ${v} end ${'filler '.repeat(200_000)}zqtailword`;   // 1.4 MB: the tail lies past the window
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, text, 1)]));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try {
+        expect(matches(db, 'zqheadword')).toBe(1);
+        expect(matches(db, `"${v.slice(0, 6)}"*`)).toBe(1);   // CONTROL: the value is indexed in clear, its pair not known yet
+        expect(matches(db, 'zqtailword')).toBe(0);             // past ENTRY_FTS_BYTES
+        expect(IX.blobsHold(db, 'zqtailword')).toBe(true);     // the blob keeps it, verbatim
+      } finally { db.close(); }
+      secretFile(box, 'ewin.env', `ZQ_EWIN=${v}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(matches(db, `"${v.slice(0, 6)}"*`)).toBe(0);
+        expect(matches(db, 'zqheadword')).toBe(1);
+        expect(matches(db, 'zqtailword')).toBe(0);             // the phrase path and the re-derivation wrote the windowed text too
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
+      } finally { db.close(); }
+    });
+
+    it('census: sweep.mjs writes every index text through entryIndexText at its three insert sites, and never calls redactForIndex', () => {
+      const code = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n');
+      expect(code.match(/\bredactForIndex\(/g)).toBeNull();
+      expect((code.match(/\bentryIndexText\(/g) ?? []).length).toBe(3);
+      expect(code).toMatch(/f\.ins\.run\(blobId, entryIndexText\(text, pairIdx\)\)/);           // indexBlob: ingest, the backfill, a sidecar
+      expect(code).toMatch(/f\.ins\.run\(g\.id, entryIndexText\(g\.text, ctx\.pairIdx\)\)/);   // reindexForValues, the phrase fast path
+      expect(code).toMatch(/const final = entryIndexText\(t\.text, idx\);/);                  // rederiveFts
     });
   });
 

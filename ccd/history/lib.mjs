@@ -170,10 +170,10 @@ export function blobOverDecodeCap(rawLen) {
  *  16,200,040-byte line, or 5.4 million empty objects side by side, aborted every pass in a 1 GiB scope (review 316 F7).
  *  Measured for a whole pass on Node 24.14.1: the heaviest structured shape, 500,000 units of 30-character strings in one
  *  16,499,914-byte line, peaked at 389,508 KiB, under half the carrier's MemoryMax=1G (D-4244's bound family), where
- *  999,013 units of 13-character strings peaked at 516,988 KiB, over it. The heaviest admitted line measured is not a
- *  structured one: a 16 MB user text of 8,000,000 one-letter words with a secret file loaded peaked at 783,640 KiB for a
- *  whole pass in a 1 GiB scope (about 75% of MemoryMax=1G, completing), its cost being redaction and indexing, which this
- *  bound does not reach (FU2). A 4.3-million-line sample of this fleet's transcripts held at most 24,944 units, 15 deep. */
+ *  999,013 units of 13-character strings peaked at 516,988 KiB, over it. A plain-text line's cost is redaction and
+ *  indexing, which this bound does not reach and D-4419's window does: with the window, a 16 MB user text of 8,000,000
+ *  one-letter words with a secret file loaded peaks at 184,960 KiB for a whole pass in a 1 GiB scope (783,640 KiB before
+ *  it, FU2), and the heaviest plain-text line measured with it, an ESC 7-dense one, at 372,204 KiB. A 4.3-million-line sample of this fleet's transcripts held at most 24,944 units, 15 deep. */
 export const JSON_DEPTH_MAX = 100_000;
 export const JSON_NODES_MAX = 500_000;
 // 2 MiB, within §9.2's "≤16 MiB": the most headroom under O20's 256 MiB on Node 22.16.0 (whole sweep 172884 KiB; 4 MiB chunks: 210824 KiB, 247412 KiB once FTS indexes inline) (plan tasks 20, 23; D-4244).
@@ -193,6 +193,15 @@ export const SCAN_INTERVAL_MS = 30 * 60 * 1000;
 export const SIDECAR_FTS_BYTES = 512 * 1024;
 /** How far past SIDECAR_FTS_BYTES a sidecar is decoded and redacted before it is cut (D-4312). */
 export const SIDECAR_REDACT_MARGIN = 65536;
+/** The most UTF-8 bytes of an entry's plain text the FTS index holds (D-4419, history-entry-index-text-windowed; final
+ *  review 316 FP2, FP7). `entryIndexText` cuts every index text written or re-derived to its first ENTRY_FTS_BYTES after
+ *  `redactForIndex` has read ENTRY_REDACT_MARGIN bytes more. redactForIndex reads up to nine times what it is given, so
+ *  the window, not LINE_MAX, bounds one text's cost: one 16 MB line cost one call about 650-690 s, another aborted every
+ *  pass in a 1 GiB scope, and with the window the worst shape measured costs 34-43 s. Of 3,123,407 lines sampled from
+ *  this fleet's transcripts, two held more plain text than this (1,717,658 bytes each). */
+export const ENTRY_FTS_BYTES = 1024 * 1024;
+/** How far past ENTRY_FTS_BYTES an entry's text is redacted before it is cut: the sidecar's margin (D-4419). */
+export const ENTRY_REDACT_MARGIN = SIDECAR_REDACT_MARGIN;
 /** The most JSON-escape decodes redactForIndex reads past its first redaction (D-4343). A backslash run halves per
  *  decode and a backslash-u-005c chain loses one level, so 8 undo nesting far deeper than real tools write; the count
  *  bounds a pathological input's cost. */
@@ -1646,8 +1655,9 @@ export function makePairIndex(pairs) {
  *  an OWED pair: one whose redact_hashes rowid lies above `mark` (D-4344, history-reindex-mark-by-rederivation).
  *
  *  Why a count of owed hits proves a stored index row complete. An index text depends on the pair set only through
- *  `byLen.get(len)?.has(sha)`: `redactForIndex`, its joined belt and its decode readings included, is a
- *  deterministic function of those answers. A stored row was computed with its own pair set Q. By the mark's
+ *  `byLen.get(len)?.has(sha)`: `entryIndexText` (`redactForIndex` over a window the text alone fixes, its joined belt
+ *  and its decode readings included, then a cut the redacted text alone places, D-4419) is a deterministic function of
+ *  those answers. A stored row was computed with its own pair set Q. By the mark's
  *  invariant every pair at or below the mark is in Q, and Q is a subset of all pairs. Take a recomputation with all
  *  pairs that recorded no owed hit. Every query it answered yes was a non-owed pair, so it is in Q. Every query it
  *  answered no is also no in Q. So both computations asked the same queries and got the same answers, and the stored
@@ -2180,14 +2190,11 @@ function dropTrailingRun(s) {
  *  `bytes` filled the window, so more of the file may follow) and it fell inside a
  *  `[A-Za-z0-9_-]` run, that trailing partial run is dropped, because a run cut in half is a
  *  prefix no pair or shape can match. `idx` null redacts nothing (`ftsTextOf` calls it so: one cut
- *  rule). `bytes` is the file's first bytes, never more than the window is read. */
+ *  rule). `bytes` is the file's first bytes, never more than the window is read. The window and the cut are
+ *  `windowText` and `cutIndexText`, which an entry's index text shares (D-4419). */
 export function sidecarIndexText(bytes, idx) {
-  const window = SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN;
-  const windowCut = bytes.length >= window;
-  const part = bytes.length > window ? bytes.subarray(0, window) : bytes;
-  let text = new TextDecoder('utf-8').decode(part);
-  // The window cut inside a multi-byte character decodes to one U+FFFD; drop it.
-  if (windowCut) text = text.replace(/\uFFFD$/, '');
+  const w = windowText(bytes, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN);
+  let text = w.text;
   // D-4336 (history-sidecar-index-text-unescaped): redacted RAW, decoded, then redacted again. Decoding first is a
   // parser differential of its own (it can JOIN a secret's registered segments into one run no pair matches, and
   // `\"` changes where the JSON-form context rule sees a value end), so the raw pass runs first; every mark it
@@ -2199,18 +2206,47 @@ export function sidecarIndexText(bytes, idx) {
   if (idx !== null) text = redactField(text, idx);
   text = unescapeJsonText(text);
   if (idx !== null) text = redactForIndex(text, idx);
+  return cutIndexText(text, w.windowCut, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN);
+}
+
+/** The first `window` bytes of `bytes` decoded as UTF-8, and whether they filled the window: the window half of the one
+ *  cut rule both index texts share (D-4312, D-4419). A window cut inside a multi-byte character decodes to one U+FFFD,
+ *  which is dropped. */
+function windowText(bytes, window) {
+  const windowCut = bytes.length >= window;
+  const part = bytes.length > window ? bytes.subarray(0, window) : bytes;
+  const text = new TextDecoder('utf-8').decode(part);
+  return { text: windowCut ? text.replace(/\uFFFD$/, '') : text, windowCut };
+}
+
+/** The cut half of that one rule (D-4312, D-4336; D-4419 for an entry's text): `text`, already redacted, cut to `ftsBytes`
+ *  UTF-8 bytes, or, when its raw window was filled, to at most its length minus `margin`, a cut multi-byte character
+ *  dropped; a cut inside a `[A-Za-z0-9_-]` run drops that trailing partial run, because a run cut in half is a prefix
+ *  no pair or shape can match. */
+function cutIndexText(text, windowCut, ftsBytes, margin) {
   const enc = new TextEncoder().encode(text);
   // The window is raw bytes but `text` is the unescaped, redacted text, which an escape-dense JSON sidecar shrinks
   // by a byte per escape. A full window is the only case that can end in a secret redaction saw a prefix of, so the
-  // cut keeps SIDECAR_REDACT_MARGIN bytes of redacted text behind it: min(cut, length - margin) (D-4336, D-4312;
+  // cut keeps `margin` bytes of redacted text behind it: min(cut, length - margin) (D-4336, D-4312;
   // FR1 round 1 F1: a JWT straddling the raw window end leaked its header and payload past a cut that sat inside it).
-  const cutAt = windowCut ? Math.max(0, Math.min(SIDECAR_FTS_BYTES, enc.length - SIDECAR_REDACT_MARGIN)) : SIDECAR_FTS_BYTES;
-  if (enc.length > cutAt) {
-    let out = new TextDecoder('utf-8').decode(enc.subarray(0, cutAt)).replace(/\uFFFD$/, '');
-    if (cutAt > 0 && isRunByte(enc[cutAt - 1]) && isRunByte(enc[cutAt])) out = dropTrailingRun(out);
-    return out;
-  }
-  return text;
+  const cutAt = windowCut ? Math.max(0, Math.min(ftsBytes, enc.length - margin)) : ftsBytes;
+  if (enc.length <= cutAt) return text;
+  let out = new TextDecoder('utf-8').decode(enc.subarray(0, cutAt)).replace(/\uFFFD$/, '');
+  if (cutAt > 0 && isRunByte(enc[cutAt - 1]) && isRunByte(enc[cutAt])) out = dropTrailingRun(out);
+  return out;
+}
+
+/** Every FTS index text the sweep writes or re-derives (D-4419, history-entry-index-text-windowed; final review 316 FP2,
+ *  FP7): `redactForIndex` over the text's first ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN UTF-8 bytes, then cut to
+ *  ENTRY_FTS_BYTES by the sidecar's rule (`cutIndexText`), so one text's redaction reads at most the window, whatever
+ *  the line's length. ingest's indexBlob, the backfill, the phrase fast path and the re-derivation all call it, so they
+ *  index one text (D-4344's premise). A sidecar's text, `sidecarIndexText`'s, is shorter than the window and is
+ *  redacted whole. Text past the cut is not searchable. */
+export function entryIndexText(text, idx) {
+  const window = ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN;
+  // Every UTF-16 code unit is at least one UTF-8 byte, so the window's bytes lie in the text's first `window` units.
+  const w = windowText(new TextEncoder().encode(text.length > window ? text.slice(0, window) : text), window);
+  return cutIndexText(redactForIndex(w.text, idx), w.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN);
 }
 
 /** The second belt (§8.3): the final rendered stdout, stderr or `--json`

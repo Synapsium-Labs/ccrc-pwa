@@ -49,7 +49,7 @@ import {
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
-  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, redactForIndex, HEALTH_COUNTERS, RETENTION_STATE_META,
+  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, entryIndexText, HEALTH_COUNTERS, RETENTION_STATE_META,
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
@@ -3548,7 +3548,7 @@ export function secretsStep(db, ctx, secretFiles) {
 
 // ---------------------------------------------------------------------------------------------
 // The FTS index (§6.2 "FTS indexing", §9.1; plan task 23). The index is derived and blobs stay
-// verbatim. Its body is extracted plain text (never JSON), redacted by redactForIndex (D-4343)
+// verbatim. Its body is extracted plain text (never JSON), redacted by entryIndexText (D-4343, D-4419)
 // before it is a term, and only for blobs that a row of searchable provenance references. A pair
 // learned after its text was indexed is re-indexed before any FTS insert of that tick, and the obligation
 // outlives the pass that learned it: by quoted phrase on the same tick (reindexForValues), then by a hash
@@ -3687,12 +3687,13 @@ export function ftsPrepare(db, nowMs) {
 
 /** One blob into the index, inside the caller's transaction: its text REDACTED first
  *  (D-4243, history-fts-indexes-redacted-text; a secret known now is never a term, a prefix or an index
- *  byte), rowid = blob_id, and the blob marked indexed. The redaction is `redactForIndex`: every JSON-escape
- *  reading, a deeper one kept only when it redacts (D-4343), so a literal backslash-n in an entry's plain text
- *  never glues an `n` onto a value. */
+ *  byte), rowid = blob_id, and the blob marked indexed. The text is `entryIndexText`'s: `redactForIndex` (every
+ *  JSON-escape reading, a deeper one kept only when it redacts, D-4343, so a literal backslash-n in an entry's plain
+ *  text never glues an `n` onto a value) over the text's first ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN bytes, then cut
+ *  to ENTRY_FTS_BYTES (D-4419); a sidecar's text, already cut shorter, is redacted whole. */
 export function indexBlob(db, blobId, text, pairIdx, overCap = false) {
   const f = ftsStmts(db);
-  if (!overCap) f.ins.run(blobId, redactForIndex(text, pairIdx));   // an over-cap body gets no row, only the mark (B3M3, FU5: the state rederiveFts leaves it in)
+  if (!overCap) f.ins.run(blobId, entryIndexText(text, pairIdx));   // an over-cap body gets no row, only the mark (B3M3, FU5: the state rederiveFts leaves it in)
   f.mark.run(blobId);
 }
 
@@ -3797,7 +3798,7 @@ export async function reindexForValues(db, ctx, values) {
       for (const g of group) {
         const removed = Number(f.del.run(g.id).changes);
         if (g.undecodable && removed > 0) bad += 1;   // counted once: the row is gone, so no later re-index counts it again (D-4346)
-        if (g.text !== null) f.ins.run(g.id, redactForIndex(g.text, ctx.pairIdx));
+        if (g.text !== null) f.ins.run(g.id, entryIndexText(g.text, ctx.pairIdx));
       }
       if (bad > 0) bump(db, HEALTH_COUNTERS.blobUndecodable, bad);
       if (ids.size > 0) d.pending.run(MERGE_STEP, 1);
@@ -3821,7 +3822,7 @@ export async function reindexForValues(db, ctx, values) {
 
 /** The hash re-derivation that moves the re-index mark (§6.2 "A pair learned after its text was indexed", D-4344,
  *  history-reindex-mark-by-rederivation). A generation re-derives every FTS-indexed blob, in blob_id order, with the
- *  redaction's OWN code (`redactForIndex` over `ftsTextOfBlob`'s text, exactly as indexBlob does) through a probe
+ *  redaction's OWN code (`entryIndexText` over `ftsTextOfBlob`'s text, exactly as indexBlob does) through a probe
  *  index that counts the hits on pairs above the mark (lib's `makeProbeIndex`). A blob whose re-derivation hit an
  *  owed pair has its row deleted and re-inserted with the full redaction; one that hit none already equals it.
  *  Soundness is the argument at `makeProbeIndex`: the index text depends on the pair set only through the
@@ -3891,7 +3892,7 @@ export async function rederiveFts(db, ctx, budget) {
           // D-4346 (history-permanent-failures-classified): never skipped; its row cannot be shown free of an owed pair, so it is deleted and none inserted.
           group.push({ id: b.blob_id, text: null, undecodable: true });
         } else {
-          const final = redactForIndex(t.text, idx);
+          const final = entryIndexText(t.text, idx);
           if (idx.probe.hits > 0) { group.push({ id: b.blob_id, text: final }); chars += final.length; }
         }
       }
