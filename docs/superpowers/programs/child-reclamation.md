@@ -24,7 +24,7 @@ removed on 2026-09-10 was not.
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | — | **dispatched** 2026-10-08 18:30 — run 347 (`ccrc-pwa-clear-summit`), plan `226bb881c` |
-| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **to plan**: run 348; built alongside wave 7, lands after it |
+| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **planned** — run 348, plan `21683c0d8`; dispatched after wave 7 merges (H1) |
 | 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -46,6 +46,29 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-08 22:10 — workspace-lifecycle's 4045: the shared word half answers no null. Wave 8's plan is amended before
+  dispatch, and contract R81 records it.**
+  - **The ruling.** `leafKeptWord(v)` is the WORD HALF only: ccd's three words read as themselves, and any other
+    value, `null` included, reads `unmeasured`. `null` and absence are each carrier's, asked before the word half.
+    Workspace-lifecycle's done-document carrier reads absence as `unreported` and `null` as nothing kept. Wave 8's
+    mirror carrier reads a null value as `none-or-unreported` itself. No answer of either carrier changes.
+  - **Why.** Wave 8's plan had the word half answer `null` for `null`; workspace-lifecycle wave 5's plan (`f8ec01cc4`)
+    pins `null` among its `unmeasured` values. One function cannot do both, and a moved function must keep the
+    owner's answers.
+  - **The move, made concrete.** If wave 5 lands first, Task 1 deletes its `KEPT_LEAF_WORDS`, `KeptLeafWord` and
+    `keptLeafWord`, derives its alias and `LEAF_KEPT_WHY`'s key from `LeafKeptWord`, and re-points
+    `archived-expiry-policy.test.ts`'s import. If wave 8 lands first, wave 5 makes those edits in its merge commit;
+    the reply to 4045 names them.
+  - **The amendment.** 30 exact edits (`amend_after_4045.py` in the evidence archive), each matching once. Attack
+    workflow `wf_445232fd-c76` (three Opus lenses, a Sonnet refuter per finding) found 6. Five survived, all minor
+    (a stale cross-reference, two mutation rows' expected reds), and their 3 fixes are in the 30. The plan's planSha
+    changes at this docs PR's merge.
+
+- **2026-10-08 21:08 — wave 8's plan is MERGED (#332, `21683c0d8`).** Its planSha is
+  `21683c0d8f4d74013d1dde1b6c22634b1bc1f448`. Every gating check was green, and it was merged with
+  `--match-head-commit` on the tested head `d998d96cf`. Run 348 is dispatched only once wave 7 (run 347) has
+  merged (H1). Its brief is ready in the evidence archive.
 
 - **2026-10-08 20:58 — workspace-lifecycle has answered (quiet-river's 4036; this programme's reply is 4040), and wave 8's H8 is
   amended (`0fc1a7221`, in PR #332).**

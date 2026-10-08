@@ -101,13 +101,13 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
   - `childReclaimFirstSighting` takes the generation key as its fourth parameter.
 - **H6 — the tier state has four fields:** `{tier, tierToken, tierJ, tierRun}`, with `tier` and `tierJ` derived from `tierRun` by `childReclaimTierFrom`.
 - **H7 — one shared lane fixture.** A later task reuses an earlier task's lane fixture and never creates a second. Task 3's `server/test/childReclaimGenerationFixture.ts` is THE shared rig. Task 2's file-local rig in `child-reclaim-generation-lane.test.ts` predates it, is not shared, and stays as written. Every task after Task 3 uses Task 3's rig.
-- **H8 — the shared word classifier (amended after quiet-river's 4036).** ONE word classifier serves two carrier readers.
-  - **What is shared.** ONLY the word half: ccd's three words, any other value read as `'unmeasured'`, and null read as null.
-  - **What each wave keeps.** Each wave keeps its own carrier reader. Workspace-lifecycle's done-document reader answers word | null | `'unreported'`. This wave's mirror reader answers word | `'unreported'` | `'truncated'`. Neither is ever folded into the other.
+- **H8 — the shared word classifier (amended after quiet-river's 4036 and 4045).** ONE word classifier serves two carrier readers.
+  - **What is shared.** ONLY the word half: ccd's three words read as themselves, and ANY other value, `null` included, reads `'unmeasured'`. It never answers null (amended after 4045, before dispatch; contract R81). `null` and absence are each carrier's to read, BEFORE it calls the word half.
+  - **What each wave keeps.** Each wave keeps its own carrier reader. Workspace-lifecycle's done-document reader answers word | null | `'unreported'`: absence is `'unreported'` and `null` is nothing kept, both asked first. This wave's mirror reader answers `kept:<word>` | `none-or-unreported` | `truncated`, and reads a null value as `none-or-unreported` itself. Neither is ever folded into the other, and neither carrier's answers change with the move.
   - **The expected order.** Workspace-lifecycle wave 5 expects to land first and to own the word half as `keptLeafWord`, exported from `server/src/archivedExpiry.ts`. quiet-river consented in 4036 to this wave MOVING it to a neutral home: a move, never a second copy.
-  - **If wave 5 is on the branch.** Task 1 MOVES `keptLeafWord` into `shared/api.ts` as `leafKeptWord`, with `LeafKeptWord` and `LEAF_KEPT_WORDS`. It re-points every `server/src/archivedExpiry.ts` call site and every type-level spelling of the three words (`EXPIRE_LEAF_WORDS`, if present, the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type) in the same commit.
+  - **If wave 5 is on the branch.** Task 1 MOVES `keptLeafWord` into `shared/api.ts` as `leafKeptWord`, with `LeafKeptWord` and `LEAF_KEPT_WORDS`, and deletes wave 5's `KEPT_LEAF_WORDS`, `KeptLeafWord` and `keptLeafWord`. In the same commit it re-points every `server/src/archivedExpiry.ts` call site, every type-level spelling (the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type) and `server/test/archived-expiry-policy.test.ts`'s import of the word half (Step 4 (d)).
   - **The STOP rule.** If wave 5's word half answers differently from the shared word half above, Task 1 STOPS and reports `leaf-kept-word-owned-elsewhere`.
-  - **If this wave lands first.** It declares `leafKeptWord` in L0, and wave 5's worker imports it.
+  - **If this wave lands first.** It declares `leafKeptWord` in L0, and wave 5's worker imports it. Wave 5's merge of `main` then reds Task 1's census on its private names until wave 5 makes Step 4 (d)'s edits in its own merge commit; quiet-river has the list (the reply to 4045).
 - **The accepted departures, each numbered at the fix round:**
   - **Tasks 1 and 2:** `pass-clock-after-gather`, `an-overtaken-gather-decides-nothing`, `leaf-collapse-members-carry-a-run`, `marked-means-marker-reads-as-child`.
   - **Tasks 3 and 4:** `hold-retired-step-in-l1`, `refused-generation-not-carried`, `wave7-generation-pins-owed`.
@@ -122,7 +122,7 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
 - **Rulings after reconciliation:**
   - **`held`.** A stuck child the sweep HOLDS also shows no retry clause. Its sentence says ccrc does not retry it while the hold stands, and that the long backoff resumes once the hold lifts. This extends Task 8's kept rule to holds (R41).
   - **The `purge-incomplete` tail.** Contract R76's "nothing retries it" is amended by Task 10's "§15 as built" note, because Task 6's tail is conditional.
-  - **`leafKeptWord` against workspace-lifecycle's file.** H8 above governs, and quiet-river's consent to the move is recorded (4036). Every line of `server/src/archivedExpiry.ts` that spells the three words is re-pointed to L0 in Task 1's commit. That covers `keptLeafWord`'s body, `EXPIRE_LEAF_WORDS` if present, the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type; the plan branch at 30b841c01 shows the last three. Task 1's Step 1 greps for `keptLeafWord` as well as `leafKeptWord`, and its census `holders` must end at `['shared/api.ts']`.
+  - **`leafKeptWord` against workspace-lifecycle's file.** H8 above governs, and quiet-river's consent to the move is recorded (4036). Every line of `server/src/archivedExpiry.ts` that spells the three words is re-pointed to L0 in Task 1's commit. That covers `KEPT_LEAF_WORDS`, `KeptLeafWord` and `keptLeafWord` (deleted, because they move), the `ExpireLeafKept` alias, `LEAF_KEPT_WHY`'s key type, `expireLeafKept`'s call and `archived-expiry-policy.test.ts`'s import; wave 5's plan at `f8ec01cc4` (Task 9) shows all of them. Task 1's Step 1 greps for wave 5's names as well as `leafKeptWord`, its census `holders` must end at `['shared/api.ts']`, and its by-name case must find none of wave 5's names outside `shared/api.ts`.
   - **The shared lane rig (H7).** Its spellings are fixed, exactly:
     - `exec`;
     - `journal = (id: string, act: string, outcome: string, over: Readonly<Record<string, unknown>> = {}): void`;
@@ -164,6 +164,7 @@ Every file this wave touches, taken from each task's own **Files** block, which 
 |---|---|
 | `shared/api.ts` | 1 |
 | `server/src/archivedExpiry.ts` | 1, only under H8 (workspace-lifecycle's file, with recorded consent) |
+| `server/test/archived-expiry-policy.test.ts` | 1, only under H8 (its import of the word half) |
 | `server/src/childReclaimSweep.ts` | 2, 4, 5, 7, 8, 9 |
 | `server/src/coord/childReclaim.ts` | 2, 3, 4, 5, 6, 7, 8, 9 |
 | `server/src/coord/close.ts` | 2, 5 |
@@ -283,7 +284,11 @@ Three facts fix the shape of the edit:
   - one block appended after the file's last line (`} as const;` closing `STALL_SECTION_TEXT`, :9549).
 - Test (new): `server/test/child-reclaim-generation-shape.test.ts`
 - Test (new): `server/test/child-reclaim-attention-arms.test.ts`
-- Modify ONLY if workspace-lifecycle wave 5 (run 345) is on this branch with its private word list (Step 1's H8 grep prints an `EXPIRE_LEAF_WORDS` line): `server/src/archivedExpiry.ts`, to delete `EXPIRE_LEAF_WORDS` and re-point `expireLeafKept` at `leafKeptWord`, and to derive the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (Step 4 (d); W8-SEC-1: WL5's plan at `30b841c01` spells the three words on those two type-level lines too, and the census reds on either). Ruling H8; moved here from Task 7's Step 7, because this task's census case reds on that private list at this task's own commit.
+- Modify ONLY if workspace-lifecycle wave 5 (run 345) is on this branch with its own word half (Step 1's first H8 grep prints a line naming `KEPT_LEAF_WORDS`, `KeptLeafWord`, `keptLeafWord` or `EXPIRE_LEAF_WORDS`):
+  - `server/src/archivedExpiry.ts`, to delete `KEPT_LEAF_WORDS`, `KeptLeafWord` and `keptLeafWord` (they move here), re-point `expireLeafKept` at `leafKeptWord`, and derive the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord`;
+  - `server/test/archived-expiry-policy.test.ts`, to import the word half from `shared/api.ts` under its L0 name.
+
+  Step 4 (d) quotes each line, from wave 5's plan at `f8ec01cc4` (Task 9). Ruling H8 as amended after 4045, and W8-SEC-1; moved here from Task 7's Step 7, because this task's census case reds on wave 5's private names at this task's own commit.
 - Nothing else. No README edit, no `single-definition.test.ts` edit, and no `session-hook.test.ts` census edit: Step 6 proves none is owed. No PWA edit.
 
 **Interfaces:**
@@ -309,13 +314,13 @@ Three facts fix the shape of the edit:
   // ChildReclaimAttention = its four arms | ChildReclaimStuckAttention | ChildReclaimLeafKeptAttention | ChildReclaimLeafKeptMany
   export type LeafKeptWord = 'refused' | 'unmeasured' | 'in-use';
   export const LEAF_KEPT_WORDS: readonly LeafKeptWord[];          // derived from a total table
-  export function leafKeptWord(v: unknown): LeafKeptWord | null;  // null -> null; a word -> itself; anything else -> 'unmeasured'
+  export function leafKeptWord(v: unknown): LeafKeptWord;         // a word -> itself; anything else, null included -> 'unmeasured'
   ```
 - **The collapsed line's member type is `ChildReclaimKeptMember` (`runId: number`), not `runId: number | null`** (departure `leaf-collapse-members-carry-a-run`).
   - **Measured at planning:** a second `kept-many` arm whose member type differs breaks `pwa/test/child-reclaim-banner.test.tsx:373` and `:429` under the PWA's `tsc` (TS2322, through `Extract<ChildReclaimAttention, { kind: 'kept-many' }>`), and this wave makes no PWA edit.
   - **The reader agrees:** the PWA's reader drops a member whose `runId` is not a number anyway (`pwa/src/fleet/childReclaimWords.ts`, `isKeptMember`).
   - **What Task 7 must do:** keep a kept leaf whose run is unknown as a single `leaf-kept` item, which the PWA renders with a null run. It never collapses one.
-- For Task 7 (and workspace lifecycle): no file in `shared`, `server/src`, `pwa/src` or `agent/src` other than `shared/api.ts` may spell all three words on one code line. Index any table by `LeafKeptWord`, or iterate `LEAF_KEPT_WORDS`. If workspace-lifecycle wave 5 is already on this branch with its private `EXPIRE_LEAF_WORDS`, THIS task deletes it, re-points `expireLeafKept`, and derives that file's `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (Step 4 (d), H8, W8-SEC-1); Task 7 then only verifies.
+- For Task 7 (and workspace lifecycle): no file in `shared`, `server/src`, `pwa/src` or `agent/src` other than `shared/api.ts` may spell all three words on one code line. Index any table by `LeafKeptWord`, or iterate `LEAF_KEPT_WORDS`. If workspace-lifecycle wave 5 is already on this branch with its own word half (`KEPT_LEAF_WORDS`, `KeptLeafWord`, `keptLeafWord`), THIS task moves it here: it deletes those three, re-points `expireLeafKept` and `archived-expiry-policy.test.ts`, and derives that file's `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (Step 4 (d), H8, W8-SEC-1); Task 7 then only verifies.
 
 - [ ] **Step 1: Re-measure the anchors (read-only)**
 
@@ -329,16 +334,16 @@ grep -c 'shared/api\.ts:[0-9]' README.md                                  # 1
 grep -n "  | 'collect'" shared/api.ts                                     # one line: wave 7's act (H1)
 grep -c "'containment-refuted'" shared/api.ts                             # 2 or more: wave 7's word and its sentence (H1)
 ls server/test/containment-refuted-word.test.ts server/test/ccd-child-reclaim-row-generation.test.ts   # both: wave 7's tests (H1)
-grep -n "EXPIRE_LEAF_WORDS\|export function expireLeafKept" server/src/archivedExpiry.ts   # (H8) an EXPIRE_LEAF_WORDS line only if workspace-lifecycle wave 5 landed first
+grep -n "KEPT_LEAF_WORDS\|KeptLeafWord\|keptLeafWord\|EXPIRE_LEAF_WORDS\|export function expireLeafKept" server/src/archivedExpiry.ts   # (H8) lines naming wave 5's word half only if workspace-lifecycle wave 5 landed first
 grep -nE "ExpireLeafKept =|LEAF_KEPT_WHY" server/src/archivedExpiry.ts   # (H8, W8-SEC-1) WL5's two type-level spellings of the three words: lines only if wave 5 landed first
 ```
 
 STOP rules:
 - **`leafKeptWord` already exists.** Workspace lifecycle wave 5 (run 345) may land first, and R76 says whichever wave lands first owns the classifier. If any `grep` line names `leafKeptWord`, DO NOT declare a second copy. Import the existing one, and point Task 1's by-name pin at its home.
-  - If its answers differ from this task's table (null → null; the three words → themselves; anything else → `'unmeasured'`), STOP and report by slug `leaf-kept-word-owned-elsewhere`.
+  - If its answers differ from this task's table (the three words → themselves; anything else, `null` included → `'unmeasured'`), STOP and report by slug `leaf-kept-word-owned-elsewhere`.
 - **Any other count differs.** Report it by slug, and build nothing on a changed anchor.
 - **Wave 7's tree (H1).** Wave 7 (run 347) has merged, and Task 0 brought its tree onto this branch. If any of the three wave 7 checks above prints nothing (or `ls` fails), STOP and report `wave7-tree-missing`: Task 0 brought wave 7's tree (H1); no merge mid-wave. Its `shared/api.ts` edits are in `LcRefusalToken`/`LC_REFUSAL_WORD`/`LifecycleAct`, so this task's lines are disjoint from them, and its README re-pointing is already on this branch. Read README's numbers from README itself in Step 6, never from this plan.
-- **Workspace-lifecycle wave 5's private list (H8).** If the `archivedExpiry.ts` grep prints an `EXPIRE_LEAF_WORDS` line, wave 5 landed first with its own copy of the three words, and this task's census case would red on it at this commit. Step 4 (d) re-points it, in this task's commit. The second H8 grep (W8-SEC-1) prints the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s declaration. Each one that still spells `'refused' | 'unmeasured' | 'in-use'` is a code line naming all three words, which the census reds just as surely, so Step 4 (d) derives it from `LeafKeptWord` in the same commit. If the first grep prints only `expireLeafKept`, that function already calls `leafKeptWord`, and `grep -nF "'refused' | 'unmeasured' | 'in-use'" server/src/archivedExpiry.ts` prints nothing, nothing is owed.
+- **Workspace-lifecycle wave 5's word half (H8).** If the first `archivedExpiry.ts` grep prints a line naming `KEPT_LEAF_WORDS`, `KeptLeafWord`, `keptLeafWord` or `EXPIRE_LEAF_WORDS`, wave 5 landed first with its own word half, and this task's census case would red on it at this commit. Step 4 (d) moves it here, in this task's commit. The second H8 grep (W8-SEC-1) prints the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s declaration. Step 4 (d) derives each from `LeafKeptWord` in the same commit, whether it names `KeptLeafWord` or spells the three words. If the first grep prints only `expireLeafKept`'s line, that function already calls `leafKeptWord`, and `grep -nF "'refused' | 'unmeasured' | 'in-use'" server/src/archivedExpiry.ts` prints nothing, nothing is owed.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -473,9 +478,9 @@ describe('leafKeptWord, the one kept-leaf classifier (spec §5.6)', () => {
     expect([...LEAF_KEPT_WORDS].sort()).toEqual(['in-use', 'refused', 'unmeasured']);
   });
 
-  it.each<readonly [unknown, string | null]>([
+  it.each<readonly [unknown, string]>([
     ['refused', 'refused'], ['unmeasured', 'unmeasured'], ['in-use', 'in-use'],
-    [null, null],
+    [null, 'unmeasured'], // null is each carrier's to read, never the word half's (H8, after 4045)
     ['kept', 'unmeasured'], ['', 'unmeasured'], ['REFUSED', 'unmeasured'], ['toString', 'unmeasured'],
     [3, 'unmeasured'], [true, 'unmeasured'], [{}, 'unmeasured'], [undefined, 'unmeasured'],
   ])('%j -> %j', (v, word) => {
@@ -490,8 +495,10 @@ describe('leafKeptWord, the one kept-leaf classifier (spec §5.6)', () => {
     expect(SET("const W = ['refused', 'unmeasured', 'in-use'];"), 'CONTROL').toBe(true);
     const holders = ALL.filter((f) => codeOnly(readFileSync(f, 'utf8')).split('\n').some(SET)).map(rel);
     expect(holders).toEqual(['shared/api.ts']);
-    // H8: workspace lifecycle's private list, by NAME, so a copy wrapped over two lines is caught too.
-    expect(ALL.filter((f) => /\bEXPIRE_LEAF_WORDS\b/.test(codeOnly(readFileSync(f, 'utf8')))).map(rel),
+    // H8: workspace lifecycle's word half, by NAME (its list, its word type, its reader), so a copy wrapped over
+    // two lines is caught, and so is one the move left behind.
+    expect(ALL.filter((f) => /\b(?:EXPIRE_LEAF_WORDS|KEPT_LEAF_WORDS|KeptLeafWord|keptLeafWord)\b/
+      .test(codeOnly(readFileSync(f, 'utf8')))).map(rel),
       'a reader of the kept words with its own list').toEqual([]);
   });
 });
@@ -646,35 +653,51 @@ export type LeafKeptWord = 'refused' | 'unmeasured' | 'in-use';
 const LEAF_KEPT_WORD_TABLE: Readonly<Record<LeafKeptWord, true>> = { refused: true, unmeasured: true, 'in-use': true };
 export const LEAF_KEPT_WORDS: readonly LeafKeptWord[] = Object.keys(LEAF_KEPT_WORD_TABLE) as LeafKeptWord[];
 
-/** THE ONE CLASSIFIER of a kept-leaf value (spec §5.6), shared by child reclamation and workspace lifecycle:
- *  - `null` is nothing kept;
- *  - one of ccd's three words is itself;
- *  - ANY other value (a string ccd does not print, a number, `undefined`) is `unmeasured`, because ccd prints only
- *    its three words, so anything else means a leaf stood.
- *  ABSENCE IS NOT ITS QUESTION. Each source tells a missing key apart BEFORE it calls this, because the two wires
- *  give absence two meanings: a stdout document's missing key is an older ccd (`unreported`), while the mirror's
- *  meas has already folded a missing key into null. */
-export function leafKeptWord(v: unknown): LeafKeptWord | null {
-  if (v === null) return null;
+/** THE WORD HALF: the ONE classifier of a kept-leaf word (spec §5.6), shared by child reclamation and workspace
+ *  lifecycle. One of ccd's three words is itself; ANY other value (a string ccd does not print, `null`, a number,
+ *  `undefined`) is `unmeasured`, because ccd prints only its three words, so anything else means a leaf stood.
+ *  NULL AND ABSENCE ARE NOT ITS QUESTION. Each carrier asks them BEFORE it calls this, because the two wires give
+ *  them two meanings: on a stdout document a missing key is an older ccd (`unreported`) and `null` is nothing
+ *  kept, while the mirror's meas has already folded a missing key into `null`, which reads "nothing kept, or not
+ *  reported". */
+export function leafKeptWord(v: unknown): LeafKeptWord {
   return typeof v === 'string' && (LEAF_KEPT_WORDS as readonly string[]).includes(v) ? v as LeafKeptWord : 'unmeasured';
 }
 ```
 
 The block is L0: it imports nothing, and `ChildReclaimKeptMember` is declared above it in the same file. TypeScript resolves type names declared later in a file, so (b)'s forward references compile.
 
-(d) ONLY if Step 1's H8 greps printed an `EXPIRE_LEAF_WORDS` line, or an `ExpireLeafKept =` or `LEAF_KEPT_WHY` line that spells the three words (ruling H8, W8-SEC-1; this was Task 7's Step 7). In `server/src/archivedExpiry.ts`, make each bullet whose line is there, exactly as quoted. WL5's plan at `30b841c01` writes all three lines, at its `:2205`, `:2206` and `:2329`:
-- delete `const EXPIRE_LEAF_WORDS: readonly string[] = ['refused', 'unmeasured', 'in-use'];`;
-- replace `export type ExpireLeafKept = 'refused' | 'unmeasured' | 'in-use' | null | 'unreported';` with `export type ExpireLeafKept = LeafKeptWord | null | 'unreported';`;
-- replace `const LEAF_KEPT_WHY: Readonly<Record<'refused' | 'unmeasured' | 'in-use', string>> = {` with `const LEAF_KEPT_WHY: Readonly<Record<LeafKeptWord, string>> = {`;
-- add `leafKeptWord` to the file's `../../shared/api.js` import, and `type LeafKeptWord` beside it when either `replace` bullet above ran;
-- make `expireLeafKept`'s body:
+(d) ONLY if Step 1's first H8 grep printed a line naming `KEPT_LEAF_WORDS`, `KeptLeafWord`, `keptLeafWord` or `EXPIRE_LEAF_WORDS`, or its second printed an `ExpireLeafKept =` or `LEAF_KEPT_WHY` line that names `KeptLeafWord` or spells the three words (ruling H8 as amended after 4045, W8-SEC-1; this was Task 7's Step 7). Workspace-lifecycle wave 5 landed first, and this commit MOVES its word half to L0 (quiet-river's consent, 4036 and 4045): a move, never a copy. Wave 5's plan at `f8ec01cc4` (Task 9) writes the lines quoted below. Make each bullet whose line is there, exactly as quoted.
 
-```ts
-  if (!Object.prototype.hasOwnProperty.call(doc, key)) return 'unreported';
-  return leafKeptWord(doc[key]);
-```
+In `server/src/archivedExpiry.ts`:
+- delete `const KEPT_LEAF_WORDS = ['refused', 'unmeasured', 'in-use'] as const;`;
+- delete `export type KeptLeafWord = typeof KEPT_LEAF_WORDS[number];` and the one-line docstring above it (`/** ccd's three words for a leaf it kept. */`);
+- delete `export function keptLeafWord(v: unknown): KeptLeafWord {`, its one-line body, its closing brace and the docstring above it (`/** THE WORD HALF: …`);
+- replace `export type ExpireLeafKept = KeptLeafWord | null | 'unreported';` with `export type ExpireLeafKept = LeafKeptWord | null | 'unreported';`;
+- replace `const LEAF_KEPT_WHY: Readonly<Record<KeptLeafWord, string>> = {` with `const LEAF_KEPT_WHY: Readonly<Record<LeafKeptWord, string>> = {`;
+- in `expireLeafKept`, replace `  return v === null ? null : keptLeafWord(v);` with `  return v === null ? null : leafKeptWord(v);`;
+- in the docstrings of `ExpireLeafKept` and `expireLeafKept`, write `leafKeptWord` (`shared/api.ts`) wherever they name `keptLeafWord`;
+- add `leafKeptWord, type LeafKeptWord` to the file's `../../shared/api.js` import.
 
-Its answers are unchanged, because `leafKeptWord`'s non-absent arms are exactly the deleted ones (`null` → `null`, a word → itself, anything else → `'unmeasured'`). If wave 5's `expireLeafKept` answers differently from that, STOP and report `leaf-kept-word-owned-elsewhere`. The two type edits change no answer either: `LeafKeptWord` is the same three words, so `ExpireLeafKept` is the same union and `LEAF_KEPT_WHY` keeps its three keys (its `LEAF_KEPT_WHY[w]` index, narrowed past `null` and `'unreported'`, still type-checks, which Step 5's `tsc` shows). Tell quiet-river in the wave-done, naming all three lines. Task 7's Step 0 (e) then prints nothing, and Task 7 only verifies.
+In `server/test/archived-expiry-policy.test.ts`:
+- remove `keptLeafWord, ` from the `../src/archivedExpiry.js` import;
+- import `leafKeptWord` from `../../shared/api.js`, in the file's existing import from it if it has one;
+- rename every other `keptLeafWord` in the file to `leafKeptWord`. Its word-half case then pins the shared classifier, with `null` among its `'unmeasured'` values, unchanged.
+
+If wave 5 merged the earlier draft's shape instead (`30b841c01`: a private `EXPIRE_LEAF_WORDS` list, and the alias and `LEAF_KEPT_WHY`'s key type spelled as the three quoted words), delete that list, derive the alias and the key type from `LeafKeptWord` the same way, and make `expireLeafKept` ask absence (`'unreported'`) and then `null` (`null`) before it returns `leafKeptWord(v)`.
+
+Whatever shape landed, the end state is the same:
+- no file under `shared`, `server/src`, `pwa/src` or `agent/src` other than `shared/api.ts` names `KEPT_LEAF_WORDS`, `KeptLeafWord`, `keptLeafWord` or `EXPIRE_LEAF_WORDS` in code, or spells the three words on one code line (Task 1's census case);
+- `expireLeafKept` asks absence and then `null` before it calls `leafKeptWord`;
+- wave 5's three test files pass with the counts it left (Step 5).
+
+Every answer is unchanged. `expireLeafKept`'s carrier still asks absence, then `null`, and the word half it calls answers exactly as wave 5's did: the three words → themselves, any other value → `'unmeasured'`. The two type edits change no answer either: `LeafKeptWord` is the same three words, so `ExpireLeafKept` is the same union and `LEAF_KEPT_WHY` keeps its three keys (its `LEAF_KEPT_WHY[w]` index, narrowed past `null` and `'unreported'`, still type-checks, which Step 5's `tsc` shows).
+
+STOP rules:
+- If wave 5's word half answers differently from Task 1's table, STOP and report `leaf-kept-word-owned-elsewhere`.
+- If its lines differ from the ones quoted here but its answers agree, re-point by the end state above, and name the difference by slug `wl5-word-half-shape-differs` in the wave-done.
+
+Tell quiet-river in the wave-done which lines moved. Task 7's Step 0 (e) then prints `expireLeafKept`'s lines, the docstring lines that now name `leafKeptWord`, and the line of the `../../shared/api.js` import that now names `leafKeptWord`, but no line naming `KEPT_LEAF_WORDS`, `KeptLeafWord`, `keptLeafWord` or `EXPIRE_LEAF_WORDS`, and Task 7 only verifies.
 
 - [ ] **Step 5: Run the tests, both type-checks, and the neighbours**
 
@@ -692,7 +715,7 @@ Expected:
   - The PWA check is the reason the collapsed line's members are `ChildReclaimKeptMember`. With `runId: number | null` members, `pwa/test/child-reclaim-banner.test.tsx` reds TS2322 at its `keptMany` builder.
 - `single-definition` is exactly as green as at the base. Run it on the base first if anything is red: in the planning scratch export one LiteLLM case was red at the base itself, so it is not this task's.
 - `typecheck-tests` is a known load flake: re-run it in isolation before calling it red.
-- Only when Step 4 (d) ran: `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts test/expire-archived.test.ts test/archived-expiry-lane.test.ts )` is green, with the counts workspace-lifecycle wave 5 left (H8). Then `grep -nF "'refused' | 'unmeasured' | 'in-use'" server/src/archivedExpiry.ts` prints nothing (W8-SEC-1).
+- Only when Step 4 (d) ran: `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts test/expire-archived.test.ts test/archived-expiry-lane.test.ts )` is green, with the counts workspace-lifecycle wave 5 left (H8). Then `grep -nF "'refused' | 'unmeasured' | 'in-use'" server/src/archivedExpiry.ts` prints nothing (W8-SEC-1), and so does `grep -n "KEPT_LEAF_WORDS\|KeptLeafWord\|keptLeafWord\|EXPIRE_LEAF_WORDS" server/src/archivedExpiry.ts server/test/archived-expiry-policy.test.ts`.
 - Whatever landed first, the census case's `holders` is `['shared/api.ts']`: a red here naming `server/src/archivedExpiry.ts` is a type-level spelling Step 4 (d) missed, never a reason to widen the census.
 
 - [ ] **Step 6: Prove README and the citation census owe nothing (the README tax, paid as a measurement)**
@@ -726,14 +749,15 @@ Make each mutation alone, run its command, record the red, and revert before the
 | T1.2 | In `REG_GENERATION_SHAPE`, `{12}$` → `{11,12}$` | same | `2 failed \| 14 passed (16)`: `expected '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-…' to be '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-…'`, and `refuses 35 characters`: `expected true to be false` |
 | T1.3 | In `server/src/coord/childReclaim.ts`, directly above `/** Nothing the feed already says (spec §5.9): close's value, and any first attempt's. */`, add `const REG_GENERATION_SHAPE = /x/; void REG_GENERATION_SHAPE;` | same | `1 failed \| 15 passed (16)`: `is declared in shared/api.ts and nowhere else`: `expected [ 'shared/api.ts', …(1) ] to deeply equal [ 'shared/api.ts' ]` |
 | T1.4 | In `server/src/coord/store.ts`, replace `export const NODE_ID_RE = /^[0-9a-f]{8}-…{12}$/;` with `export { REG_GENERATION_SHAPE as NODE_ID_RE } from '../../../shared/api.js';` | same | `1 failed \| 15 passed (16)`: `expected 'import type { DatabaseSync } from \'n…' to match /^export const NODE_ID_RE = \/\^/m` |
-| T1.5 | In `leafKeptWord`, delete `  if (v === null) return null;` | `cd server && ./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `1 failed \| 15 passed (16)`: `null -> null`: `expected 'unmeasured' to be null` |
-| T1.6 | In `leafKeptWord`, `? v as LeafKeptWord : 'unmeasured';` → `? v as LeafKeptWord : null;` | same | `8 failed \| 8 passed (16)`. The rows `"kept"`, `""`, `"REFUSED"`, `"toString"`, `3`, `true`, `{}` and `undefined` each red `expected null to be 'unmeasured'` |
+| T1.5 | In `leafKeptWord`, add `  if (v === null) return 'refused';` as its first line (a word half that reads `null` itself) | `cd server && ./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `1 failed \| 15 passed (16)`: `null -> "unmeasured"`: `expected 'refused' to be 'unmeasured'`. Not measured at planning (H8, after 4045): measure it |
+| T1.6 | In `leafKeptWord`, `? v as LeafKeptWord : 'unmeasured';` → `? v as LeafKeptWord : 'refused';` | same | `9 failed \| 7 passed (16)`. The rows `null`, `"kept"`, `""`, `"REFUSED"`, `"toString"`, `3`, `true`, `{}` and `undefined` each red `expected 'refused' to be 'unmeasured'`. Not measured at planning in this form (H8, after 4045): measure it |
 | T1.7 | In `server/src/archivedExpiry.ts`, directly above its first `export ` line (`export const EXPIRE_LANE_LIVE_MARKER`), add `export const EXPIRE_LEAF_WORDS: readonly string[] = ['refused', 'unmeasured', 'in-use'];`, the second word list workspace lifecycle's wave-5 plan drafts | same | `1 failed \| 15 passed (16)`: `is declared once, in shared/api.ts, …`: `expected [ 'shared/api.ts', …(1) ] to deeply equal [ 'shared/api.ts' ]` |
 | T1.8 | `ChildReclaimGenerationKey = Extract<…>` → `ChildReclaimGenerationKey = ChildReclaimGeneration` | `cd server && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json` | `test/child-reclaim-attention-arms.test.ts(…): error TS2578: Unused '@ts-expect-error' directive.` (and `typecheck-tests.test.ts` reds with it) |
 | T1.9 | Delete ` \| ChildReclaimStuckAttention` from the union's last line | same | `error TS2322: Type '"stuck"' is not assignable to type '"failing" \| "kept" \| "kept-many" \| "leaf-kept" \| "terminal"'` |
 | T1.10 | Delete `'in-use': true` from `LEAF_KEPT_WORD_TABLE` | `cd server && ./node_modules/.bin/tsc --noEmit -p .` | `error TS2741: Property '"in-use"' is missing in type '{ refused: true; unmeasured: true; }' but required in type 'Readonly<Record<LeafKeptWord, true>>'` |
 | T1.11 | In `server/src/archivedExpiry.ts`, directly above `export const EXPIRE_LANE_LIVE_MARKER`, add the list wrapped over two lines: `export const EXPIRE_LEAF_WORDS: readonly string[] = ['refused', 'unmeasured',`, then on the next line `  'in-use'];` | `cd server && ./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `1 failed \| 15 passed (16)`: `is declared once, in shared/api.ts, …`: `a reader of the kept words with its own list: expected [ 'server/src/archivedExpiry.ts' ] to deeply equal []`. The one-line set check misses a wrapped copy; the name check catches it. Not measured at planning (added for H8): measure it |
-| T1.12 | In `server/src/archivedExpiry.ts`, directly above `export const EXPIRE_LANE_LIVE_MARKER`, add `export type ExpireLeafKeptCopy = ` followed, on the SAME line, by the three quoted words and `null` joined as a union: the type-level spelling WL5's plan drafts for its `ExpireLeafKept` alias (W8-SEC-1; Step 4 (d)'s second bullet quotes it) | `cd server && ./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `1 failed \| 15 passed (16)`: `is declared once, in shared/api.ts, …`: `expected [ 'shared/api.ts', …(1) ] to deeply equal [ 'shared/api.ts' ]`. A type-level copy is a code line naming all three words, so the set check catches it with no name to match. Not measured at planning (W8-SEC-1): measure it |
+| T1.12 | In `server/src/archivedExpiry.ts`, directly above `export const EXPIRE_LANE_LIVE_MARKER`, add `export type ExpireLeafKeptCopy = ` followed, on the SAME line, by the three quoted words and `null` joined as a union: the type-level spelling WL5's earlier draft (`30b841c01`) wrote for its `ExpireLeafKept` alias (W8-SEC-1; Step 4 (d)'s `30b841c01` paragraph describes it; WL5 at `f8ec01cc4` spells it `KeptLeafWord | null | 'unreported'`) | `cd server && ./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `1 failed \| 15 passed (16)`: `is declared once, in shared/api.ts, …`: `expected [ 'shared/api.ts', …(1) ] to deeply equal [ 'shared/api.ts' ]`. A type-level copy is a code line naming all three words, so the set check catches it with no name to match. Not measured at planning (W8-SEC-1): measure it |
+| T1.13 | In `server/src/archivedExpiry.ts`, directly above `export const EXPIRE_LANE_LIVE_MARKER`, add `export function keptLeafWord(v: unknown): unknown { return v; }`: a word reader the move left behind, spelling no word | `cd server && ./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `1 failed \| 15 passed (16)`: `is declared once, in shared/api.ts, …`: `a reader of the kept words with its own list: expected [ 'server/src/archivedExpiry.ts' ] to deeply equal []`. Not measured at planning (H8, after 4045): measure it |
 
 Revert each mutation, then re-run Step 5's first command green.
 
@@ -741,7 +765,7 @@ Revert each mutation, then re-run Step 5's first command green.
 
 ```bash
 git add shared/api.ts server/test/child-reclaim-generation-shape.test.ts server/test/child-reclaim-attention-arms.test.ts
-git add server/src/archivedExpiry.ts   # only when Step 4 (d) ran (H8)
+git add server/src/archivedExpiry.ts server/test/archived-expiry-policy.test.ts   # only when Step 4 (d) ran (H8)
 git commit -m "$(cat <<'MSG'
 feat(reclaim): L0 for reclaim's server half: the generation grammar, three attention arms, one leaf classifier
 
@@ -752,8 +776,8 @@ three answers (value, absent, unreadable), and a key is a read minus
 unreadable (spec §5.5). ChildReclaimAttention gains stuck, leaf-kept and
 the kept leaves' collapsed line, in kept-many's shape so the PWA renders it
 unchanged. leafKeptWord is the one classifier of a kept-leaf value, shared
-with workspace lifecycle (spec §5.6); a private copy of its words that
-workspace lifecycle landed first is re-pointed at it here (H8). Appended
+with workspace lifecycle (spec §5.6); if workspace lifecycle landed its
+word half first, it moves here and its readers are re-pointed (H8). Appended
 at the file's foot, with the
 two edits above it line for line, so README's anchors and the citation
 census are unchanged (measured).
@@ -5250,7 +5274,7 @@ So the mirror reader answers three things, never folded: `kept:<word>`, `none-or
 
 **Interfaces:**
 - Consumes (Task 1, L0 `shared/api.ts`; Step 0 checks each one; this task redeclares none of them):
-  - `export type LeafKeptWord = 'refused' | 'unmeasured' | 'in-use';` and `leafKeptWord(v: unknown): LeafKeptWord | null`. ccd's three words read as themselves, `null` reads `null` (nothing kept), and ANY other value reads `'unmeasured'`. That includes a string ccd does not print, `''`, a number, an object and `undefined`. A reader whose wire gives absence a meaning (WL5's stdout reader) asks `hasOwnProperty` BEFORE it calls the classifier. Task 1's `child-reclaim-attention-arms.test.ts` pins the classifier's behaviour and its one declaration (H8). This task only calls it, and types every kept-leaf word with `LeafKeptWord`.
+  - `export type LeafKeptWord = 'refused' | 'unmeasured' | 'in-use';` and `leafKeptWord(v: unknown): LeafKeptWord`, the word half. ccd's three words read as themselves, and ANY other value reads `'unmeasured'`. That includes `null`, a string ccd does not print, `''`, a number, an object and `undefined`. `null` and absence are each carrier's to read, BEFORE it calls the word half (H8, after 4045): WL5's stdout reader asks `hasOwnProperty` and then `null`; this task's mirror reader asks `null`, which on the mirror means nothing kept or not reported. Task 1's `child-reclaim-attention-arms.test.ts` pins the classifier's behaviour and its one declaration (H8). This task only calls it, and types every kept-leaf word with `LeafKeptWord`.
   - `export interface ChildReclaimLeafKeptAttention { readonly kind: 'leaf-kept'; readonly sessionId: string; readonly runId: number | null; readonly sentence: string; readonly at: number | null; }`, an arm of `ChildReclaimAttention`. This task's L1 block and its test import it from `shared/api.ts`.
   - `export interface ChildReclaimLeafKeptMany { readonly kind: 'kept-many'; readonly word: 'leaf-kept'; readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string; }`, a SEPARATE arm of the union. The existing `kept-many` arm keeps `word: ChildReclaimKeptWord`, unwidened. Members carry `runId: number` (Task 1's departure `leaf-collapse-members-carry-a-run`).
 - Consumes (wave 7, merged into this branch by Task 0): the `LifecycleAct` member `'collect'` and its `done` row (`_lc_done collect "$id" …`, wave 7 plan Task 7). ALSO consumes the existing `CHILD_RUN_ID` (`shared/api.ts:53`), the `LcRefusalToken` members `purge-refused`, `purge-incomplete` and `purge-mechanism-absent` (`:7873-7875`), `CHILD_RECLAIM_KEPT_MANY_OVER` and `childReclaimBySession` (`server/src/childReclaimSweep.ts:1071-1074`), `CoordStore`'s `LC_COLS`, `reviveLifecycleRow` and `placeholders` (`store.ts:1093`), and `recordChildReclaimKeptFeed`'s idiom.
@@ -5332,20 +5356,20 @@ grep -n "  | 'collect'" shared/api.ts                                    # (a) w
 grep -nE "export (function|const) leafKeptWord|export type LeafKeptWord\b" shared/api.ts   # (b) Task 1's classifier and its word type: TWO lines
 grep -n "readonly kind: 'leaf-kept'" shared/api.ts                       # (c) Task 1's arm: ONE line
 grep -n "^  readonly kind: 'kept-many'; readonly word: 'leaf-kept';$" shared/api.ts   # (d) ONE line: Task 1's ChildReclaimLeafKeptMany
-grep -n "EXPIRE_LEAF_WORDS\|export function expireLeafKept\|leafKeptWord" server/src/archivedExpiry.ts 2>/dev/null   # (e) WL5 on this branch? never EXPIRE_LEAF_WORDS (H8)
+grep -n "KEPT_LEAF_WORDS\|KeptLeafWord\|keptLeafWord\|EXPIRE_LEAF_WORDS\|export function expireLeafKept\|leafKeptWord" server/src/archivedExpiry.ts 2>/dev/null   # (e) WL5 on this branch? never its private names (H8)
 grep -nF "'refused' | 'unmeasured' | 'in-use'" server/src/archivedExpiry.ts 2>/dev/null   # (e2) never a line: WL5's alias and LEAF_KEPT_WHY derive from LeafKeptWord (W8-SEC-1)
 grep -n "export const laneFixture\|readonly exec?:\|readonly ccdVerbs?:\|readonly notifyLog?:\|readonly coord?:\|readonly home?:\|const journal = \|now: () => clock\|^let uidN" server/test/childReclaimGenerationFixture.ts   # (f) the shared lane rig (H7)
 grep -n "export const CHILD_RECLAIM_PURGE_INCOMPLETE" server/src/coord/childReclaim.ts   # (g) Task 6's word: ONE line
 ```
 
-(a) prints nothing → STOP and report: Task 0 brought wave 7's tree (H1); no merge mid-wave. Never declare `'collect'` here. If (b), (c) or (d) prints nothing, STOP and report to the coordinator: Task 1 owns every `shared/api.ts` insertion. (e) prints nothing unless workspace-lifecycle wave 5 (run 345) is on this branch. If it prints an `EXPIRE_LEAF_WORDS` line, STOP and report: the re-point is Task 1's (H8), and this task never makes it. (e2) prints a line → STOP and report the same way: Task 1's Step 4 (d) derives the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (W8-SEC-1). If it prints `expireLeafKept` and a `leafKeptWord` line, Step 7 runs WL5's tests. (f) must print `export const laneFixture`; if the file is missing, STOP: Task 3 owes it. Its other lines say which of Step 1's rig additions an earlier task (Task 5) already made. (g) prints nothing → STOP: Task 6 has not landed.
+(a) prints nothing → STOP and report: Task 0 brought wave 7's tree (H1); no merge mid-wave. Never declare `'collect'` here. If (b), (c) or (d) prints nothing, STOP and report to the coordinator: Task 1 owns every `shared/api.ts` insertion. (e) prints nothing unless workspace-lifecycle wave 5 (run 345) is on this branch. If it prints a line naming `KEPT_LEAF_WORDS`, `KeptLeafWord`, `keptLeafWord` or `EXPIRE_LEAF_WORDS`, STOP and report: the move is Task 1's (H8), and this task never makes it. (e2) prints a line → STOP and report the same way: Task 1's Step 4 (d) derives the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (W8-SEC-1). If it prints `expireLeafKept` and a `leafKeptWord` line, Step 7 runs WL5's tests. (f) must print `export const laneFixture`; if the file is missing, STOP: Task 3 owes it. Its other lines say which of Step 1's rig additions an earlier task (Task 5) already made. (g) prints nothing → STOP: Task 6 has not landed.
 
-**Who owns the classifier (H8).** It is defined once, in `shared/api.ts`. Whichever of workspace-lifecycle wave 5 and wave 8 lands first owns it, and the one that lands second adopts it. WL5's plan at `origin/docs/workspace-lifecycle-wave5-plan` (`30b841c01`, plan file `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`, Task 9, `:2205-2213` and `:2329`) defines NO `leafKeptWord`. It spells the three words on three code lines in `server/src/archivedExpiry.ts`: `EXPIRE_LEAF_WORDS` (`:2206`), the `ExpireLeafKept` alias (`:2205`) and `LEAF_KEPT_WHY`'s key type (`:2329`). `expireLeafKept`'s non-absent arms are exactly `leafKeptWord`'s (`null` → `null`, a word → itself, anything else → `'unmeasured'`). Task 1 does all of wave 8's share:
-- it declares the classifier, or imports WL5's if WL5 was re-planned to declare one in `shared/api.ts` and landed first;
+**Who owns the classifier (H8, amended after 4045).** It is defined once, in `shared/api.ts`. WL5's plan at `f8ec01cc4` (plan file `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`, Task 9) declares the word half in `server/src/archivedExpiry.ts`: `KEPT_LEAF_WORDS` (a non-exported `as const` list), `KeptLeafWord` and `keptLeafWord`, with `ExpireLeafKept = KeptLeafWord | null | 'unreported'` and `LEAF_KEPT_WHY: Readonly<Record<KeptLeafWord, string>>`; `server/test/archived-expiry-policy.test.ts` imports `keptLeafWord`. Its word half answers exactly as `leafKeptWord` does (a word → itself, anything else, `null` included → `'unmeasured'`), and its carrier, `expireLeafKept`, asks absence and `null` first. Task 1 does all of wave 8's share:
+- it declares the classifier in `shared/api.ts`, or, if WL5 landed first, MOVES WL5's word half there (quiet-river's consent, 4036 and 4045);
 - it pins the classifier's behaviour and its one declaration, in `child-reclaim-attention-arms.test.ts`;
-- if WL5 is on the branch at Task 0, in Task 1's own commit it deletes `EXPIRE_LEAF_WORDS`, re-points `expireLeafKept`, and derives the alias (`LeafKeptWord | null | 'unreported'`) and the record key (`Record<LeafKeptWord, string>`) from `LeafKeptWord`, because Task 1's census case reds any code line outside `shared/api.ts` that spells all three words, at that commit.
+- if WL5 is on the branch at Task 0, in Task 1's own commit it deletes `KEPT_LEAF_WORDS`, `KeptLeafWord` and `keptLeafWord`, re-points `expireLeafKept` and `archived-expiry-policy.test.ts`, and derives the alias (`LeafKeptWord | null | 'unreported'`) and the record key (`Record<LeafKeptWord, string>`) from `LeafKeptWord`, because Task 1's census case reds WL5's private names, and any code line outside `shared/api.ts` that spells all three words, at that commit.
 
-If wave 8 lands first, WL5's merge of `main` reds Task 1's census until WL5 makes those three edits in its own merge commit. The note to quiet-river names all three lines at `30b841c01` (`EXPIRE_LEAF_WORDS`, the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type) and that commit (H8, W8-SEC-1). This task only consumes the classifier and verifies (Step 0 (e), Step 7).
+If wave 8 lands first, WL5's merge of `main` reds Task 1's census until WL5 makes those edits in its own merge commit. The reply to quiet-river's 4045 names them. This task only consumes the classifier and verifies (Step 0 (e), Step 7).
 
 - [ ] **Step 1: Extend the shared lane rig, then write the failing tests.**
 
@@ -6027,8 +6051,9 @@ export function childReclaimMirrorLeaf(
   row: Pick<ChildReclaimLeafSourceRow, 'truncated' | 'meas'>, key: 'clipsKept' | 'tmpRootKept',
 ): ChildReclaimMirrorLeaf {
   if (row.meas === null) return row.truncated ? { kind: 'truncated' } : { kind: 'none-or-unreported' };
-  const word = leafKeptWord(row.meas[key]);
-  return word === null ? { kind: 'none-or-unreported' } : { kind: 'kept', word };
+  const v = row.meas[key];
+  // null is this carrier's to read, never the word half's (H8, after 4045): nothing kept, or an older ccd's silence.
+  return v === null ? { kind: 'none-or-unreported' } : { kind: 'kept', word: leafKeptWord(v) };
 }
 
 const LEAF_DONE: LifecycleOutcome = 'done';
@@ -6351,7 +6376,7 @@ In `childReclaimPublishAttention`, replace `this.childReclaimAttentionList = chi
 
 Then add one bullet to the `childReclaimAttentionList` field's docstring (`grep -n "private childReclaimAttentionList" server/src/watch.ts`): "- Its `leaf-kept` items, and their `kept-many` collapse, come from the mirror on every pass that gets past the fail-shut try. They are never filtered by the listing, and they yield to any other item for the same child."
 
-- [ ] **Step 7: Workspace lifecycle's reader: verify only (H8).** The re-point is Task 1's. If workspace-lifecycle wave 5 was on the branch at Task 0, Task 1's commit deleted its private `EXPIRE_LEAF_WORDS`, made `expireLeafKept` call `leafKeptWord`, and derived its `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (W8-SEC-1); Step 0 (e2) checked that no line there still spells the three words. This task edits nothing in `server/src/archivedExpiry.ts`. Only if Step 0 (e) printed `export function expireLeafKept`, run `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts test/expire-archived.test.ts test/archived-expiry-lane.test.ts )`. Expected: green, with the counts Task 1 left. If Step 0 (e) printed nothing, skip this step.
+- [ ] **Step 7: Workspace lifecycle's reader: verify only (H8).** The re-point is Task 1's. If workspace-lifecycle wave 5 was on the branch at Task 0, Task 1's commit moved its word half (`KEPT_LEAF_WORDS`, `KeptLeafWord`, `keptLeafWord`) to L0, made `expireLeafKept` and `archived-expiry-policy.test.ts` call `leafKeptWord`, and derived its `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (W8-SEC-1); Step 0 (e2) checked that no line there still spells the three words. This task edits nothing in `server/src/archivedExpiry.ts`. Only if Step 0 (e) printed `export function expireLeafKept`, run `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts test/expire-archived.test.ts test/archived-expiry-lane.test.ts )`. Expected: green, with the counts Task 1 left. If Step 0 (e) printed nothing, skip this step.
 
 - [ ] **Step 8: Run the tests to verify they pass, and the neighbours stay green.**
 
@@ -6431,6 +6456,7 @@ The banner keys the line `kept-many leaf-kept` (`ChildReclaimBanner.tsx:141`), w
 | T7.32 | `detailUnsafe`: delete its first disjunct, `c <= 0x1f`, with the or-operator after it | same | the same case: `a newline: expected true to be false`. Not measured at planning (W8-SEC-2): measure it (R-j) |
 | T7.33 | `detailUnsafe`: delete the disjunct `(c >= 0x202a && c <= 0x202e)`, with the or-operator before it | same | the same case: `a bidi override: expected true to be false`. Not measured at planning (W8-SEC-2): measure it (R-j) |
 | T7.34 | `childReclaimLeafKeptFeedBody`: replace `childReclaimDetailText(k.detail)` with `k.detail` | same | the same case: `expected 'demo-gone: s. ccd recorded: xxxxxxxxxx…' to be 'demo-gone: s. ccd recorded: xxxxxxxxxx…'`. Not measured at planning (W8-SEC-2): measure it (R-j) |
+| T7.35 | `childReclaimMirrorLeaf`: replace `return v === null ? { kind: 'none-or-unreported' } : { kind: 'kept', word: leafKeptWord(v) };` with `return { kind: 'kept', word: leafKeptWord(v) };` (the carrier hands `null` to the word half) | `./node_modules/.bin/vitest run test/child-reclaim-leaf-kept.test.ts` | "reads a word on the key as kept": `expected { kind: 'kept', word: 'unmeasured' } to deeply equal { kind: 'none-or-unreported' }`; "reads an absent key as none-or-unreported…" and "reads a cut line that kept its meas from its meas…" red the same way. So do the `childReclaimLeafKept` cases in this file whose rows leave a key absent (an absent key now reads `kept: unmeasured`), e.g. "raises nothing for a done row that kept nothing, or whose ccd did not say" (a non-empty list where `[]` is expected) and "lists a done row that kept the temp root…" (the clips half joins the sentence); record the measured count. The lane's cases are in `child-reclaim-leaf-kept-lane.test.ts`, which this command does not run. Not measured at planning (H8, after 4045): measure it (R-j) |
 
 Revert each mutation, then re-run Step 8's first command: green.
 
