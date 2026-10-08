@@ -110,6 +110,7 @@ const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 const isNumOrNull = (v: unknown): boolean => v === null || isNum(v);
 const isStrOrNull = (v: unknown): boolean => v === null || typeof v === 'string';
 const isSource = (v: unknown): boolean => v === 'pending' || v === 'previous';
+const DIGEST_RE = /^[0-9a-f]{64}$/;
 const isWrite = (v: unknown): boolean => isObj(v) && isNum(v.dev) && isNum(v.ino) && isNum(v.writtenAtMs);
 
 /** A shape check, not a schema: every field BoxTokenState declares must be present and null or its declared shape
@@ -142,6 +143,9 @@ function isBoxTokenState(v: unknown): v is BoxTokenState {
   const fp = v.fileProblem;   // optional (A9's re-read): absent and null both read; anything else must be the shape
   if (fp !== undefined && fp !== null && !(isObj(fp) && isNum(fp.at) && ['current', 'pending', 'previous'].includes(fp.file as string)
     && (TOKEN_FILE_PROBLEMS as readonly unknown[]).includes(fp.word))) return false;
+  // D-4410: the retiring record is optional (absent and null both read); anything else must be the shape, entry by entry.
+  const rt = v.retiring;
+  if (rt !== undefined && rt !== null && !(Array.isArray(rt) && rt.every((e) => isObj(e) && typeof e.sha256 === 'string' && DIGEST_RE.test(e.sha256) && isNum(e.at)))) return false;
   return true;
 }
 
@@ -169,8 +173,6 @@ export async function readState(p: string): Promise<StateRead> {
 export async function writeState(p: string, s: BoxTokenState): Promise<void> {
   await writeValueFileAtomic(p, `${JSON.stringify(s)}\n`);
 }
-
-const DIGEST_RE = /^[0-9a-f]{64}$/;
 
 interface RetiredEntry { len: number; sha256: string; at: number }
 
@@ -203,12 +205,29 @@ export async function appendRetired(p: string, valueDigest: string, at: number):
   if (!DIGEST_RE.test(valueDigest)) throw new RangeError('appendRetired: not a sha256 hex digest');
   let raw: string | null = null;
   try { raw = await fsp.readFile(p, 'utf8'); } catch (e) {
-    if (errno(e) !== 'ENOENT') throw new Error(`${p} is unusable; refusing to rewrite it`);   // unreadable: never rewritten
+    // Unreadable (EACCES, EIO, EISDIR...) is not unusable: two outcomes, two words (D-4410, D-4403 item 2). Neither is rewritten.
+    if (errno(e) !== 'ENOENT') throw Object.assign(new Error(`${p} is unreadable (${errno(e)}); refusing to rewrite it`), { code: errno(e) });
   }
   const entries = raw === null ? [] : parseRetired(raw);
-  if (entries === null) throw new Error(`${p} is unusable; refusing to rewrite it`);
+  if (entries === null) throw Object.assign(new Error(`${p} is unusable; refusing to rewrite it`), { code: 'unusable' });
   if (!entries.some((e) => e.sha256 === valueDigest)) entries.push({ len: 64, sha256: valueDigest, at });
   await writeValueFileAtomic(p, `${JSON.stringify({ v: 1, retired: entries })}\n`);
+}
+
+/** Sets an unusable file aside as `<p>.unusable-<tag>` (then `-1`, `-2`... when that name is taken), keeping every byte
+ *  and never overwriting: a hard link is made first, which refuses an existing name (EEXIST), and only then is the old
+ *  name removed. Answers the new path (D-4410). */
+export async function moveAsideUnusable(p: string, tag: string | number): Promise<string> {
+  for (let n = 0; n < 1000; n++) {
+    const to = `${p}.unusable-${tag}${n === 0 ? '' : `-${n}`}`;
+    try { await fsp.link(p, to); } catch (e) {
+      if (errno(e) === 'EEXIST') continue;
+      throw e;
+    }
+    await fsp.rm(p, { force: true });
+    return to;
+  }
+  throw new Error(`${p}: no free name to set it aside under`);
 }
 
 export function valueDigestHex(value: string): string {

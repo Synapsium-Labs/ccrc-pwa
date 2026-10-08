@@ -5,13 +5,13 @@
 // Fixture homes only (mkTmp); no secret file outside them is ever read.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs, {
-  chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  appendRetired, fileExists, fleetFileText, mintClaimCode, mintGenerationId, mintValue, readAgentEnvMarksFleet, readRetired,
+  appendRetired, fileExists, fleetFileText, mintClaimCode, mintGenerationId, mintValue, moveAsideUnusable, readAgentEnvMarksFleet, readRetired,
   readState, readValueFile, tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile, writeState,
   writeValueFileAtomic,
 } from '../src/token/files.js';
@@ -279,6 +279,89 @@ describe('box-token.json and box-token-retired.json', () => {
     const before = readFileSync(p);
     await expect(appendRetired(p, valueDigestHex(V), 4)).rejects.toThrow(/unusable/);
     expect(readFileSync(p).equals(before)).toBe(true);
+  });
+});
+
+// D-4410: the retiring record is a persisted field; box-token.json must accept it and stay strict about its shape.
+describe('box-token.json carries the retiring record (D-4410)', () => {
+  const base = () => mintedState(1000, { dev: 1, ino: 2, writtenAtMs: 1000 }, null, null, '0123456789abcdef');
+
+  it('retiring is optional: absent, null, [] or entries of the shape read as a state, unchanged', async () => {
+    const { dir } = fixture();
+    const p = path.join(dir, 'box-token.json');
+    for (const retiring of [undefined, null, [], [{ sha256: V, at: 5 }], [{ sha256: V, at: 5 }, { sha256: W, at: 6 }]]) {
+      const s = { ...base(), ...(retiring === undefined ? {} : { retiring }) };
+      writeFileSync(p, JSON.stringify(s));
+      expect(await readState(p), JSON.stringify(retiring)).toEqual({ kind: 'state', state: s });
+    }
+  });
+
+  it('anything but the shape reads unusable, never state: a non-array, a junk entry, a non-hex or upper-case digest', async () => {
+    const { dir } = fixture();
+    const p = path.join(dir, 'box-token.json');
+    const bad: [string, unknown][] = [
+      ['a string', 'x'], ['an object', { sha256: V, at: 1 }], ['a number', 3],
+      ['an entry that is a string', [V]], ['an entry with no sha256', [{ at: 1 }]], ['an entry with no at', [{ sha256: V }]],
+      ['a short digest', [{ sha256: 'a'.repeat(63), at: 1 }]], ['a long digest', [{ sha256: 'a'.repeat(65), at: 1 }]],
+      ['an upper-case digest', [{ sha256: 'A'.repeat(64), at: 1 }]], ['a non-hex digest', [{ sha256: 'g'.repeat(64), at: 1 }]],
+      ['at a string', [{ sha256: V, at: '1' }]], ['at NaN-like null', [{ sha256: V, at: null }]], ['one good, one bad', [{ sha256: V, at: 1 }, { sha256: 'x', at: 1 }]],
+    ];
+    for (const [name, retiring] of bad) {
+      writeFileSync(p, JSON.stringify({ ...base(), retiring }));
+      expect(await readState(p), name).toEqual({ kind: 'unusable' });
+    }
+  });
+});
+
+// D-4410: a retired file that cannot be READ is never "unusable" (boot refuses on the one, moves the other aside).
+describe('the retired file: unreadable is never unusable (D-4410, D-4403 item 2)', () => {
+  it('a read failure answers unreadable with the errno word, and appendRetired names it as unreadable, not unusable', async () => {
+    const { dir } = fixture();
+    const rp = path.join(dir, 'box-token-retired.json');
+    mkdirSync(rp);                                              // EISDIR: a read failure that holds as root too
+    expect(await readRetired(rp)).toEqual({ kind: 'unreadable', code: 'EISDIR' });
+    const err = await appendRetired(rp, valueDigestHex(V), 1).then(() => null, (e: unknown) => e as Error);
+    expect(err?.message).toContain('unreadable (EISDIR)');
+    expect(err?.message).not.toContain('unusable');
+  });
+
+  it.skipIf(isRoot)('EACCES reads unreadable too (never unusable), and appendRetired leaves the file alone', async () => {
+    const { dir } = fixture();
+    const rp = path.join(dir, 'box-token-retired.json');
+    await appendRetired(rp, valueDigestHex(V), 1);
+    chmodSync(rp, 0o000);
+    try {
+      expect(await readRetired(rp)).toEqual({ kind: 'unreadable', code: 'EACCES' });
+      await expect(appendRetired(rp, valueDigestHex(W), 2)).rejects.toThrow(/unreadable \(EACCES\)/);
+    } finally { chmodSync(rp, 0o600); }
+    expect(await readRetired(rp)).toEqual({ kind: 'retired', digests: [valueDigestHex(V)] });
+  });
+});
+
+describe('moveAsideUnusable: a file set aside under a new name, never overwritten (D-4410)', () => {
+  it('moves the bytes to <path>.unusable-<tag>, the original path is then absent', async () => {
+    const { dir } = fixture();
+    const rp = path.join(dir, 'box-token-retired.json');
+    writeFileSync(rp, '{not json', { mode: 0o600 });
+    const to = await moveAsideUnusable(rp, 1234);
+    expect(to).toBe(`${rp}.unusable-1234`);
+    expect(readFileSync(to, 'utf8')).toBe('{not json');
+    expect(statSync(to).mode & 0o777).toBe(0o600);
+    expect(existsSync(rp)).toBe(false);
+  });
+
+  it('never overwrites a file already holding the name: it takes the next free one and leaves the other byte-equal', async () => {
+    const { dir } = fixture();
+    const rp = path.join(dir, 'box-token-retired.json');
+    writeFileSync(rp, 'second');
+    writeFileSync(`${rp}.unusable-9`, 'first');
+    writeFileSync(`${rp}.unusable-9-1`, 'third');
+    const to = await moveAsideUnusable(rp, 9);
+    expect(to).toBe(`${rp}.unusable-9-2`);
+    expect(readFileSync(`${rp}.unusable-9`, 'utf8')).toBe('first');
+    expect(readFileSync(`${rp}.unusable-9-1`, 'utf8')).toBe('third');
+    expect(readFileSync(to, 'utf8')).toBe('second');
+    expect(existsSync(rp)).toBe(false);
   });
 });
 

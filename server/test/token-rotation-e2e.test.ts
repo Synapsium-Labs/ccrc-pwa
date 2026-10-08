@@ -12,7 +12,7 @@ import { bootBoxToken, type BootResult } from '../src/token/boot.js';
 import { BoxTokenDriver } from '../src/token/driver.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from '../src/token/link.js';
 import {
-  fileBothRoleWriter, fileTokenStore, readState, tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile,
+  fileBothRoleWriter, fileTokenStore, readRetired, readState, tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile,
 } from '../src/token/files.js';
 import {
   CONFIRM_DEADLINE_MS, GRACE_MS, HOLD_REPROBE_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, type GateNode, type SyncResult,
@@ -1353,5 +1353,291 @@ describe('F3: backoff applies on every route (review 349)', () => {
     expect(await b.driver.rotateNow(Date.now() + 10_000)).toMatchObject({ ok: true, outcome: 'started' });
     await b.driver.tick();
     expect(b.writes(), 'the backoff still gates the promote').toBe(1);
+  });
+});
+
+// ── fix round 1, batch 2: D-4410 (a retired digest is never lost), D-4411 (the third exit from Previous), D-4412 ───
+const retiredDigests = async (r: Rig): Promise<string[]> => {
+  const rd = await readRetired(tokPaths(r).retired);
+  return rd.kind === 'retired' ? rd.digests : [];
+};
+const stateOf = async (r: Rig) => {
+  const s = await readState(tokPaths(r).state);
+  if (s.kind !== 'state') throw new Error('no state');
+  return s.state;
+};
+const enospc = (): Error => Object.assign(new Error('injected'), { code: 'ENOSPC' });
+const writeBack = (home: string, value: string): void => {
+  const tok = path.join(home, '.ccrc', 'mail.token');
+  rmSync(tok);
+  writeFileSync(tok, `# an older deploy.sh shipped this\n${value}\n`, { mode: 0o600 });
+};
+
+describe('a retired value\'s digest is durable before it leaves the accept set (D-4410, review 349 sec-M2)', () => {
+  /** L adopted, one rotation, the new value presented: the next tick past grace retires L. */
+  async function throughGrace(r: Rig): Promise<string> {
+    await r.driver.tick();
+    const fresh = r.fleetValue() as string;
+    await r.lane(fresh);
+    r.clock.offset = GRACE_MS + 1000;
+    return fresh;
+  }
+
+  it("sec-M2's probe: ENOSPC on the append, then a restart with L written back: L is still refused, and the record lands later", async () => {
+    const L = 'e'.repeat(64);
+    const fail = { append: true };
+    const first = await rig({ handMade: L, wrap: (st) => ({ ...st, appendRetired: async (d, at) => {
+      if (fail.append) throw enospc();
+      return st.appendRetired(d, at);
+    } }) });
+    await throughGrace(first);
+    await first.driver.tick();                                           // retires L; the append fails
+    expect(first.printed.filter((l) => l.includes('could not record a retired digest'))).toHaveLength(1);
+    expect(await retiredDigests(first)).toEqual([]);                    // the file never got it
+    expect((await stateOf(first)).retiring).toEqual([{ sha256: valueDigestHex(L), at: expect.any(Number) }]);   // box-token.json did
+    expect(await first.lane(L)).toBe(401);                              // refused, and recognised as retired
+    expect(first.boot.holder.counters().retired).toBe(1);
+    await first.app.close();
+    writeBack(first.home, L);
+    const r = await rig({ home: first.home, fleetHome: first.fleetHome });
+    try {
+      expect(r.boot.holder.currentValue()).not.toBe(L);
+      expect(await r.lane(L)).toBe(401);
+      expect(r.driver.view()).toMatchObject({ origin: 'minted', owedWhy: 'retired-written-back' });
+      await r.driver.tick();                                             // the record lands in the (still absent) retired file
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      expect((await stateOf(r)).retiring ?? []).toEqual([]);
+      expect(await r.lane(L)).toBe(401);
+    } finally { await r.app.close(); }
+  });
+
+  it('a failed append is retried from the record on the next ticks, warned once while it keeps failing, and then settled', async () => {
+    const L = 'e'.repeat(64);
+    const fail = { append: true };
+    const r = await rig({ handMade: L, wrap: (st) => ({ ...st, appendRetired: async (d, at) => {
+      if (fail.append) throw enospc();
+      return st.appendRetired(d, at);
+    } }) });
+    try {
+      await throughGrace(r);
+      await r.driver.tick();
+      await r.driver.tick();
+      await r.driver.tick();
+      expect(r.printed.filter((l) => l.includes('could not record a retired digest'))).toHaveLength(1);
+      expect((await stateOf(r)).retiring).toHaveLength(1);
+      fail.append = false;
+      await r.driver.tick();
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      expect((await stateOf(r)).retiring ?? []).toEqual([]);
+      expect(await r.lane(L)).toBe(401);
+    } finally { await r.app.close(); }
+  });
+
+  it('the digest is in box-token.json BEFORE the value leaves the accept set', async () => {
+    const L = 'e'.repeat(64);
+    const seen: ('accepted' | 'refused')[] = [];
+    let rr: Rig | null = null;
+    const r = await rig({ handMade: L, wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (s.retiring?.some((e) => e.sha256 === valueDigestHex(L))) seen.push(rr?.boot.holder.match(L) === null ? 'refused' : 'accepted');
+      return st.writeState(s);
+    } }) });
+    rr = r;
+    try {
+      await throughGrace(r);
+      await r.driver.tick();
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen[0], 'the first write carrying the digest finds the value still accepted').toBe('accepted');
+      expect(await r.lane(L)).toBe(401);
+    } finally { await r.app.close(); }
+  });
+
+  it('a record that cannot be written keeps the value accepted, and the retirement is retried (a failure never drops the digest)', async () => {
+    const L = 'e'.repeat(64);
+    const fail = { record: true };
+    const r = await rig({ handMade: L, wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (fail.record && s.retiring && s.retiring.length > 0) throw enospc();
+      return st.writeState(s);
+    } }) });
+    try {
+      await throughGrace(r);
+      await r.driver.tick();                                             // the record fails: the tick throws and warns
+      expect(r.printed.some((l) => l.includes('a driver tick failed'))).toBe(true);
+      expect(await r.lane(L)).toBe(400);                                 // still accepted: it never left unrecorded
+      expect(existsSync(tokPaths(r).previous)).toBe(true);
+      fail.record = false;
+      await r.driver.tick();
+      expect(await r.lane(L)).toBe(401);
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      expect((await stateOf(r)).retiring ?? []).toEqual([]);
+    } finally { await r.app.close(); }
+  });
+
+  it("F1's sequence through the driver: an unusable retired file at retirement, then L written back and a restart: L is refused", async () => {
+    const L = 'e'.repeat(64);
+    const first = await rig({ handMade: L });
+    await first.driver.tick();
+    await first.lane(first.fleetValue() as string);
+    writeFileSync(tokPaths(first).retired, '{"v":2,"retired":[]}\n', { mode: 0o600 });   // a later format, or corruption
+    first.clock.offset = GRACE_MS + 1000;
+    await first.driver.tick();                                           // the append refuses the unusable file: the record stays
+    expect((await stateOf(first)).retiring).toEqual([{ sha256: valueDigestHex(L), at: expect.any(Number) }]);
+    expect(await first.lane(L)).toBe(401);
+    await first.app.close();
+    writeBack(first.home, L);
+    const r = await rig({ home: first.home, fleetHome: first.fleetHome });
+    try {
+      expect(await r.lane(L)).toBe(401);
+      expect(r.boot.holder.currentValue()).not.toBe(L);
+      expect(readdirSync(path.join(r.home, '.ccrc')).filter((n) => n.startsWith('box-token-retired.json.unusable-'))).toHaveLength(1);
+      await r.driver.tick();
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);     // the fresh list has it
+    } finally { await r.app.close(); }
+  });
+
+  it('nothing printed: the digest is never in a log line, the view, or any file but box-token.json and the retired file', async () => {
+    const L = 'e'.repeat(64);
+    const r = await rig({ handMade: L, wrap: (st) => ({ ...st, appendRetired: async () => { throw enospc(); } }) });
+    try {
+      await throughGrace(r);
+      await r.driver.tick();
+      const d = valueDigestHex(L);
+      expect([...r.printed, JSON.stringify(r.driver.view())].join('\n').includes(d)).toBe(false);
+      for (const n of readdirSync(path.join(r.home, '.ccrc'))) {
+        if (n === 'box-token.json' || n === 'box-token-retired.json' || n.includes('.tmp-')) continue;
+        const p = path.join(r.home, '.ccrc', n);
+        if (statSync(p).isFile() && n !== 'coord.db' && !n.startsWith('coord.db')) expect(readFileSync(p, 'utf8').includes(d), n).toBe(false);
+      }
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('a later generation the fleet confirmed retires a previous value early (D-4411, review 349 F2)', () => {
+  it("the probe's sequence: L is retired at the second promotion, with the retire line and its digest recorded, and is refused afterwards", async () => {
+    const L = 'e'.repeat(64);
+    const r = await rig({ handMade: L });
+    try {
+      await r.driver.tick();                                             // rotation 1: G1 is current, L is previous in grace
+      expect(await r.lane(L)).toBe(400);
+      const lines = r.printed.length;
+      r.clock.offset = 2 * 60_000;                                       // well inside GRACE_MS and the hard bound
+      expect(await r.driver.rotateNow(Date.now() + r.clock.offset)).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();                                             // rotation 2 is confirmed: the third exit
+      const g2 = r.fleetValue() as string;
+      expect(r.boot.holder.currentValue()).toBe(g2);
+      expect(await r.lane(L)).toBe(401);
+      expect(await r.lane(L)).toBe(401);
+      const after = r.printed.slice(lines).filter((l) => l.includes('the previous value was retired'));
+      expect(after, 'the same line the retire action logs').toHaveLength(1);
+      expect(after[0]).toContain('the previous value was retired and is refused');
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      expect(r.driver.view()).toMatchObject({ retiredRefused: true });
+      expect(existsSync(tokPaths(r).previous)).toBe(true);               // G1 is the previous now
+      expect(await r.lane(g2)).toBe(400);
+    } finally { await r.app.close(); }
+  });
+
+  it('the early retirement records its digest like any other: a failed append is kept in box-token.json and refused after a restart', async () => {
+    const L = 'e'.repeat(64);
+    const first = await rig({ handMade: L, wrap: (st) => ({ ...st, appendRetired: async () => { throw enospc(); } }) });
+    await first.driver.tick();
+    first.clock.offset = 2 * 60_000;
+    await first.driver.rotateNow(Date.now() + first.clock.offset);
+    await first.driver.tick();
+    expect((await stateOf(first)).retiring).toEqual([{ sha256: valueDigestHex(L), at: expect.any(Number) }]);
+    expect(await first.lane(L)).toBe(401);
+    await first.app.close();
+    writeBack(first.home, L);
+    const r = await rig({ home: first.home, fleetHome: first.fleetHome });
+    try {
+      expect(await r.lane(L)).toBe(401);
+      expect(r.boot.holder.currentValue()).not.toBe(L);
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('a retired presentation on a box-token lane owes one forward rotation, bounded (D-4412, state-machine I3)', () => {
+  /** L adopted, rotated, presented, retired: the box is idle with nothing owed. */
+  async function idleAfterRetirement(): Promise<{ r: Rig; L: string; fresh: string }> {
+    const L = 'e'.repeat(64);
+    const r = await rig({ handMade: L });
+    await r.driver.tick();
+    const fresh = r.fleetValue() as string;
+    await r.lane(fresh);
+    r.clock.offset = GRACE_MS + 1000;
+    await r.driver.tick();
+    expect(r.driver.view()).toMatchObject({ phase: 'idle', rotationOwed: false, retiredRefused: true });
+    return { r, L, fresh };
+  }
+
+  it("I3's fleet-only write-back is resynced through the code path, with no 401 after the first", async () => {
+    const { r, L, fresh } = await idleAfterRetirement();
+    try {
+      const fleetFile = path.join(r.fleetHome, '.cc-secrets', 'ccrc-mail.token');
+      await writeFleetTokenFile(fleetFile, L);                           // an older deploy.sh ran its agent arm: the fleet file alone
+      expect(r.driver.view().owedWhy).toBeNull();                        // the generation file still names current: not "behind"
+      const calls = r.agent.calls;
+      expect(await r.lane(L)).toBe(401);                                 // the first 401 (the fleet's own call)
+      await r.driver.tick();
+      expect(r.driver.view()).toMatchObject({ retiredPresented: 1 });
+      expect(r.agent.calls).toBe(calls + 1);                             // one rotation, owed for this word
+      expect(r.fleetValue()).toBe(r.boot.holder.currentValue());
+      expect(r.fleetValue()).not.toBe(fresh);
+      for (let i = 0; i < 3; i++) expect(await r.lane(r.fleetValue() as string)).toBe(400);   // resynced: no 401 after the first
+      expect(r.printed.some((l) => l.includes('retired-presented'))).toBe(true);
+    } finally { await r.app.close(); }
+  });
+
+  it('the owed word is retired-presented', async () => {
+    const { r, L } = await idleAfterRetirement();
+    try {
+      r.rows.linkUp = false;                                             // hold the gate so the owed state stands
+      await r.lane(L);
+      await r.driver.tick();
+      expect(r.driver.view()).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented', hold: 'link-down' });
+    } finally { await r.app.close(); }
+  });
+
+  it('a flood of retired presentations owes exactly one rotation per HOLD_REPROBE_MS', async () => {
+    const { r, L } = await idleAfterRetirement();
+    try {
+      const base = r.agent.calls;
+      const flood = async (n: number): Promise<void> => { for (let i = 0; i < n; i++) { expect(await r.lane(L)).toBe(401); await r.driver.tick(); } };
+      await flood(20);
+      expect(r.agent.calls, 'the first presentation owes one rotation; the flood owes no more').toBe(base + 1);
+      r.clock.offset += HOLD_REPROBE_MS - 5000;                          // just inside the bound
+      await flood(10);
+      expect(r.agent.calls).toBe(base + 1);
+      r.clock.offset += 10_000;                                          // past it
+      await flood(10);
+      expect(r.agent.calls, 'one more per bound').toBe(base + 2);
+      await flood(10);
+      expect(r.agent.calls).toBe(base + 2);
+    } finally { await r.app.close(); }
+  });
+
+  it('nothing new is owed while a rotation is owed: presentations during a held gate add no second rotation', async () => {
+    const { r, L } = await idleAfterRetirement();
+    try {
+      const base = r.agent.calls;
+      r.rows.linkUp = false;
+      for (let i = 0; i < 5; i++) { await r.lane(L); await r.driver.tick(); }
+      expect(r.agent.calls).toBe(base);
+      r.rows.linkUp = true;
+      await r.driver.tick();
+      expect(r.agent.calls, 'one rotation once the gate opens').toBe(base + 1);
+      expect(r.driver.view()).toMatchObject({ rotationOwed: false });
+    } finally { await r.app.close(); }
+  });
+
+  it('the gate still applies: a closed gate (a named hold) sends nothing for a retired presentation', async () => {
+    const { r, L } = await idleAfterRetirement();
+    try {
+      const base = r.agent.calls;
+      r.rows.row = fleetRow({ agentOps: ['update'] });                   // agent-predates-op
+      await r.lane(L);
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(base);
+      expect(r.driver.view()).toMatchObject({ hold: 'agent-predates-op', rotationOwed: true, owedWhy: 'retired-presented' });
+    } finally { await r.app.close(); }
   });
 });

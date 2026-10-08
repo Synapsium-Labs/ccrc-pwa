@@ -12,7 +12,7 @@ import { ClaimDoor } from './door.js';
 import {
   DRIVER_TICK_MS, FAILURES_FOR_BANNER, ROTATE_NOW_MIN_INTERVAL_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, applySyncResult,
   backoffMs, extendedGraceState, handedOutState, nextAction, owe, mintedState, phaseOf, promotedState, rotationGate,
-  pendingExitOpen, stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type SyncResult, type WriteRecord,
+  oweForRetiredPresentation, pendingExitOpen, retiringDigests, retiringLanded, retiringRecorded, stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type SyncResult, type WriteRecord,
 } from './policy.js';
 import type { BothRoleWriter, GateRowsSource, GenerationReader, TokenStore, TokenSyncLink } from './ports.js';
 import type { BoxTokenHolder, HolderSlots } from '../coord/token.js';
@@ -75,6 +75,13 @@ export class BoxTokenDriver implements TokenRouteDriver {
   private readonly presentedPending = new Set<string>();
   private slotIds: string[] = [];
   private pendSeen: number[] = [0, 0, 0];
+  // D-4412: the retired presentations already weighed, and when one last owed a rotation (in memory; the persisted
+  // owed flag is what survives a restart).
+  private retiredSeen = 0;
+  private retiredOwedAt: number | null = null;
+  // D-4410: a retired digest whose append keeps failing is warned about once while it stands.
+  private retiringWarned = false;
+  private retiredUnreadableWarned = false;
 
   constructor(private readonly deps: DriverDeps, boot: BootResult) {
     this.now = deps.now ?? Date.now;
@@ -203,8 +210,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
       this.lastReadySeen = ready;
     }
     await this.loadPrevious();
+    await this.settleRetiring();
     await this.drainDoorAlerts();
     await this.noteCounters();
+    await this.noteRetiredPresentations(this.now());
     await this.reread(this.now());
     this.noteUnaccounted(this.now());
     this.noteOwed(this.now());
@@ -363,8 +372,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
         return;
       }
     }
-    // A previous value still in grace is retired first: the fleet has confirmed a later one.
-    if (s0.previous !== null) await this.retireValue(s0);
+    // A previous value still in grace is retired first: the fleet has confirmed a later one. This is the third exit from
+    // Previous (D-4411, beside "grace passed and the new current presented" and the hard bound): it logs the retire
+    // action's line and records its digest exactly as that action does (D-4410).
+    if (s0.previous !== null) this.logRetired('grace', await this.retireValue());
     await this.commit({ ...this.mustState(), promoting: { id } });                                   // (a)
     const renamed = (await store.readValue(store.paths.pending(id))).kind === 'absent';
     let prevWrite = null;
@@ -415,36 +426,95 @@ export class BoxTokenDriver implements TokenRouteDriver {
   }
 
   private async retire(why: 'grace' | 'hard-bound'): Promise<void> {
-    const refused = await this.retireValue(this.mustState());
+    this.logRetired(why, await this.retireValue());
+  }
+
+  /** The retirement line (spec §7.1): one wording for the `retire` action and for the early retirement at a promotion. */
+  private logRetired(why: 'grace' | 'hard-bound', refused: boolean): void {
     this.warn(why === 'hard-bound'
       ? 'ccrc-server: box token: the previous value was retired at the hard bound, before the new value was presented'
       : `ccrc-server: box token: grace ended; the previous value was retired${refused ? ' and is refused' : ''}`);
   }
 
-  /** Retirement: the digest is kept, the file deleted, the slot emptied, then the check is run with the retiring
-   *  value and "retired value refused" recorded (spec §5, §10.3). Answers whether the self-check refused it, the
-   *  stamp it wrote being the only reading of "refused" (D-4407). */
-  private async retireValue(s: BoxTokenState): Promise<boolean> {
+  /** Retirement (D-4410): the digest is written to `box-token.json` (the `retiring` record) BEFORE the value leaves the
+   *  accept set, and stays there until the append to `box-token-retired.json` has landed; a failed append is retried
+   *  from that record on every tick and never drops the digest. If the record cannot be written, the value is not
+   *  retired (it stays accepted) and this throws, so the tick retries. Then the slot is emptied, the file deleted,
+   *  the check run with the retiring value and "retired value refused" recorded (spec §5, §10.3). Answers whether the
+   *  self-check refused it, the stamp it wrote being the only reading of "refused" (D-4407). */
+  private async retireValue(): Promise<boolean> {
     const store = this.deps.store;
     const now = this.now();
     let v = this.prev?.value ?? null;
     if (v === null) { const r = await store.readValue(store.paths.previous); v = r.kind === 'value' ? r.value : null; }
-    if (v !== null) {
-      try { await store.appendRetired(valueDigestHex(v), now); } catch (e) {
-        this.warn(`ccrc-server: box token: could not record a retired digest (${errno(e)}); the value is still removed`);
-      }
+    const digest = v === null ? null : valueDigestHex(v);
+    if (digest !== null) {
+      await this.commit(retiringRecorded(this.mustState(), digest, now));      // durable BEFORE the value leaves
     }
     await store.removeValue(store.paths.previous);
     this.prev = null;
     this.pushSlots();
-    const rr = await store.readRetired();
-    if (rr.kind === 'retired') this.deps.holder.setRetired(rr.digests);
-    else if (rr.kind === 'unreadable') {
-      this.warn(`ccrc-server: box token: ${store.paths.retired} cannot be read (${rr.code}); the retired list in memory is kept`);
-    }
+    await this.landRetiring();
     const refused = v !== null && this.deps.holder.match(v) === null && this.deps.holder.isRetired(v);
-    await this.commit({ ...s, previous: null, retiredRefusedAt: refused ? now : s.retiredRefusedAt });
+    await this.commit({ ...this.mustState(), previous: null, retiredRefusedAt: refused ? now : this.mustState().retiredRefusedAt });
     return refused;
+  }
+
+  /** The retired list in memory after a read of the file: its digests plus those still waiting in `box-token.json`
+   *  (D-4410). A file that cannot be read back keeps what memory already has and adds the waiting ones, so a transient
+   *  read error never forgets a retired value. */
+  private refreshRetired(rr: Awaited<ReturnType<TokenStore['readRetired']>>): void {
+    const waiting = this.state ? retiringDigests(this.state) : [];
+    if (rr.kind === 'retired') { this.retiredUnreadableWarned = false; this.deps.holder.setRetired([...rr.digests, ...waiting]); return; }
+    if (rr.kind === 'unreadable') {
+      if (!this.retiredUnreadableWarned) {
+        this.retiredUnreadableWarned = true;
+        this.warn(`ccrc-server: box token: ${this.deps.store.paths.retired} cannot be read (${rr.code}); the retired list in memory is kept`);
+      }
+    } else this.retiredUnreadableWarned = false;
+    this.deps.holder.addRetired(waiting);
+  }
+
+  /** Append every digest waiting in the `retiring` record to the retired file; the ones that land leave the record. A
+   *  failure keeps the record and is warned about once while it stands (never the digest, never the value). */
+  private async landRetiring(): Promise<void> {
+    const s = this.state;
+    const waiting = s ? retiringDigests(s) : [];
+    if (s === null || waiting.length === 0) { this.retiringWarned = false; return; }
+    const store = this.deps.store;
+    const landed: string[] = [];
+    for (const e of s.retiring ?? []) {
+      try { await store.appendRetired(e.sha256, e.at); landed.push(e.sha256); } catch (err) {
+        if (!this.retiringWarned) {
+          this.retiringWarned = true;
+          this.warn(`ccrc-server: box token: could not record a retired digest (${errno(err)}); it stays in ${store.paths.state} and the append is retried`);
+        }
+      }
+    }
+    const rr = await store.readRetired();
+    if (landed.length > 0) await this.commit(retiringLanded(this.mustState(), landed));
+    this.refreshRetired(rr);
+    if (retiringDigests(this.mustState()).length === 0) this.retiringWarned = false;
+  }
+
+  /** Every tick: a digest still waiting for its append is retried (D-4410). */
+  private async settleRetiring(): Promise<void> {
+    if (this.state === null || retiringDigests(this.state).length === 0) return;
+    await this.landRetiring();
+  }
+
+  /** D-4412: a retired value presented on any box-token lane makes one forward rotation owed with its own word, within
+   *  the policy's bound. The holder counts the presentations; `oweForRetiredPresentation` decides; this only feeds it. */
+  private async noteRetiredPresentations(now: number): Promise<void> {
+    const total = this.deps.holder.counters().retired;
+    const fresh = total - this.retiredSeen;
+    this.retiredSeen = total;
+    if (this.state === null || fresh <= 0) return;
+    const next = oweForRetiredPresentation({ state: this.state, fresh, busy: this.busy > 0, lastOwedAt: this.retiredOwedAt, now });
+    if (next === null) return;
+    this.retiredOwedAt = now;
+    this.warn('ccrc-server: box token: a retired value was presented on a box-token lane; a forward rotation is owed (retired-presented)');
+    await this.commit(next);
   }
 
   // ── bookkeeping ────────────────────────────────────────────────────────────

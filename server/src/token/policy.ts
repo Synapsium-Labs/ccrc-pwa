@@ -74,7 +74,13 @@ export interface BoxTokenState {
   lastBootRecovery: { at: number; source: 'pending' | 'previous' } | null;
   /** The driver's last run-time re-read finding (A9). Optional: absent in every state written before it. */
   fileProblem?: { at: number; file: 'current' | 'pending' | 'previous'; word: TokenFileProblem } | null;
+  /** D-4410: the sha256 hex of every value retired but not yet appended to `box-token-retired.json`. Written with the
+   *  state change that retires the value, BEFORE it leaves the accept set, and removed only once the append has landed:
+   *  the one exception to "a digest is persisted only in the retired file". Optional: absent reads as none. */
+  retiring?: RetiringDigest[];
 }
+/** One retired value's digest awaiting its append (D-4410). Never a value; never printed. */
+export interface RetiringDigest { sha256: string; at: number }
 
 /** A fresh state for a value this server just minted (boot, or the driver's mint retry). Pending and previous
  *  entries of a prior state are kept: boot re-reads their files, and a value the fleet may hold is not dropped.
@@ -91,6 +97,7 @@ export function mintedState(now: number, write: WriteRecord, prior: BoxTokenStat
     counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0 },
     retiredRefusedAt: prior?.retiredRefusedAt ?? null, mintFailedAt: null,
     lastBootRecovery: prior?.lastBootRecovery ?? null,
+    ...(prior?.retiring ? { retiring: prior.retiring } : {}),   // D-4410: a digest awaiting its append survives a re-mint
   };
 }
 
@@ -106,12 +113,49 @@ export function adoptedState(now: number, prior: BoxTokenState | null): BoxToken
     counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0 },
     retiredRefusedAt: prior?.retiredRefusedAt ?? null, mintFailedAt: null,
     lastBootRecovery: prior?.lastBootRecovery ?? null,
+    ...(prior?.retiring ? { retiring: prior.retiring } : {}),   // D-4410: a digest awaiting its append survives a re-mint
   };
 }
 
 /** Owe a forward rotation without clearing an earlier, still-standing reason. */
 export function owe(s: BoxTokenState, why: OwedReason): BoxTokenState {
   return s.rotationOwed ? s : { ...s, rotationOwed: true, owedWhy: why };
+}
+
+// ── D-4410: a retired value's record is never lost ──────────────────────────
+export const retiringDigests = (s: BoxTokenState): string[] => (s.retiring ?? []).map((e) => e.sha256);
+
+/** The retiring record for `sha256`, added once (the first stamp is kept). The caller persists this BEFORE the value
+ *  leaves the accept set. */
+export function retiringRecorded(s: BoxTokenState, sha256: string, at: number): BoxTokenState {
+  const have = s.retiring ?? [];
+  return have.some((e) => e.sha256 === sha256) ? s : { ...s, retiring: [...have, { sha256, at }] };
+}
+
+/** The digests whose append to the retired file has landed leave the record; every other entry stays. */
+export function retiringLanded(s: BoxTokenState, landed: readonly string[]): BoxTokenState {
+  return { ...s, retiring: (s.retiring ?? []).filter((e) => !landed.includes(e.sha256)) };
+}
+
+/** Whether boot must NOT keep the `mail.token` it found. With the retired file unusable, boot cannot tell a retired
+ *  value from any other, so only a current it can match to its own write record (`provedWrite`) stays; any other is
+ *  foreign: boot mints a fresh current and owes a rotation (D-4410, F1). A usable retired list decides as before. */
+export function foreignUnderUnusableRetired(i: { retiredUnusable: boolean; state: BoxTokenState | null; current: FileMetaLike }): boolean {
+  if (!i.retiredUnusable) return false;
+  return !(i.state !== null && provedWrite(i.current, i.state.current.write));
+}
+
+// ── D-4412: a retired value presented on a box-token lane owes one forward rotation, bounded ────────────────
+/** `fresh` is the retired presentations the holder counted since the driver last asked. The state returned owes a
+ *  rotation for the word `retired-presented`, or null when nothing new is owed: no new presentation; a rotation
+ *  already owed, staged, handed out, promoting or running (`busy`); or one already owed for this word within
+ *  `HOLD_REPROBE_MS`. The server cannot tell the fleet from the holder of the leaked value, so this bound is the
+ *  protection: the gate, the one-rotation-at-a-time rule and the backoff then apply as to every rotation. */
+export function oweForRetiredPresentation(i: { state: BoxTokenState; fresh: number; busy: boolean; lastOwedAt: number | null; now: number }): BoxTokenState | null {
+  const s = i.state;
+  if (i.fresh <= 0 || i.busy || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
+  if (i.lastOwedAt !== null && i.now - i.lastOwedAt < HOLD_REPROBE_MS) return null;
+  return owe(s, 'retired-presented');
 }
 
 // ── the rotation gate (spec §9.2) ────────────────────────────────────────────

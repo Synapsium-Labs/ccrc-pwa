@@ -30,7 +30,9 @@ export type ClaimResponse = { ok: true; value: string; generation: string } | { 
 export const TOKEN_ORIGINS = ['adopted', 'minted', 'rotated'] as const;
 export type TokenOrigin = (typeof TOKEN_ORIGINS)[number];
 export const OWED_REASONS = ['adopted', 'fleet-behind', 'confirm-deadline', 'retired-written-back', 'recovered',
-  'aux-unusable', 'unverifiable-files', 'code-used', 'claim-misbound'] as const;
+  'aux-unusable', 'unverifiable-files', 'code-used', 'claim-misbound',
+  /** D-4412: a retired value was presented on a box-token lane (additive). */
+  'retired-presented'] as const;
 export type OwedReason = (typeof OWED_REASONS)[number];
 export const TOKEN_HOLDS = ['update-in-flight', 'agent-predates-op', 'verb-missing', 'stale-client', 'fleet-rows',
   'node-id-unmeasured', 'link-down', 'pending-cap', 'no-coord', 'role-unrecorded', 'mint-failed'] as const;

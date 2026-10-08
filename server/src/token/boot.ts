@@ -13,15 +13,16 @@ import type { NodeRole } from '../../../shared/api.js';
 import type { FleetMode, RoleSource } from '../config.js';
 import { BoxTokenHolder, readMailToken, type HolderSlots } from '../coord/token.js';
 import {
-  fileExists, mintGenerationId, mintValue, readAgentEnvMarksFleet, readRetired, readState, readValueFile, renameOverAtomic,
+  fileExists, mintGenerationId, mintValue, moveAsideUnusable, readAgentEnvMarksFleet, readRetired, readState, readValueFile, renameOverAtomic,
   tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile, writeState, writeValueFileAtomic,
   type TokenPaths, type ValueRead,
 } from './files.js';
 import {
-  CONFIRM_DEADLINE_MS, GRACE_HARD_MS, GRACE_MS, PENDING_HARD_CAP, adoptedState, bothRoleWriterArmed, mintedState, owe, promotedState,
-  provedWrite, recoveryPlan, type BoxTokenState, type FileMetaLike, type WriteRecord,
+  CONFIRM_DEADLINE_MS, GRACE_HARD_MS, GRACE_MS, PENDING_HARD_CAP, adoptedState, bothRoleWriterArmed, foreignUnderUnusableRetired,
+  mintedState, owe, promotedState, provedWrite, recoveryPlan, retiringDigests, type BoxTokenState, type FileMetaLike, type WriteRecord,
 } from './policy.js';
 import { GENERATION_ID_RE, type OwedReason } from '../../../shared/box-token.js';
+import { GENERATION_ID_HEX } from '../../../shared/agent-protocol.js';
 
 export interface BootInput { mailTokenPath: string; home: string; role: NodeRole; roleSource: RoleSource; fleetMode: FleetMode; now: number }
 /** `agentEnvMarksFleet` is an addition to the contract's shape: the driver's gate needs the answer boot used. */
@@ -32,7 +33,8 @@ export interface BootResult {
 
 const W = (line: string): string => `ccrc-server: box token: ${line}`;
 const errno = (e: unknown): string => (e as NodeJS.ErrnoException)?.code ?? 'EIO';
-const PENDING_FILE_RE = /^mail-pending-([0-9a-f]{16})\.token$/;
+/** A pending value file's name, the id captured. The id's shape is L0's `GENERATION_ID_HEX`, never spelled here (F11). */
+export const PENDING_FILE_RE = new RegExp(`^mail-pending-(${GENERATION_ID_HEX})\\.token$`);
 
 function likeOf(r: ValueRead | null): FileMetaLike | null {
   if (r === null) return null;
@@ -68,10 +70,10 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
 
   const retiredRead = await readRetired(paths.retired);
   if (retiredRead.kind === 'unreadable') refuseUnreadable(paths.retired, retiredRead.code);
-  if (retiredRead.kind === 'unusable') warn(`${paths.retired} is unusable; a written-back retired value cannot be recognised until it is repaired`);
-  const retired = retiredRead.kind === 'retired' ? retiredRead.digests : [];
-  holder.setRetired(retired);
-  const isRetired = (v: string): boolean => retired.includes(valueDigestHex(v));
+  // D-4410: an UNUSABLE retired list (read, but not the shape) never lets boot adopt a value it cannot match to its own
+  // write record; it is set aside (never overwritten) once boot has decided, so a refused boot leaves it where it was.
+  // An UNREADABLE one (EACCES, EIO...) is not this: it refused above.
+  const retiredUnusable = retiredRead.kind === 'unusable';
 
   const agentEnvMarksFleet = await readAgentEnvMarksFleet(paths.agentEnv);   // D-4399
   const armed = bothRoleWriterArmed({ role: i.role, roleSource: i.roleSource, fleetMode: i.fleetMode, agentEnvMarksFleet });
@@ -83,6 +85,11 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   if (sr.kind === 'unusable' && sr.why === 'over-cap') throw new Error(`${paths.state}: unusable (over-cap); boot refuses rather than rewrite it`);
   ctx.state = sr.kind === 'state' ? sr.state : null;
   if (sr.kind === 'unusable') warn(`${paths.state} is unusable; value files beside it are treated as unverifiable`);
+
+  // The retired digests in force: the file's, and the ones still waiting in box-token.json for their append (D-4410).
+  const retired = [...(retiredRead.kind === 'retired' ? retiredRead.digests : []), ...(ctx.state ? retiringDigests(ctx.state) : [])];
+  holder.setRetired(retired);
+  const isRetired = (v: string): boolean => retired.includes(valueDigestHex(v));
 
   // 1. Finish a recorded promotion before anything reads mail.token (spec 4.2 step 1, §5).
   if (ctx.state?.promoting) ctx.state = await finishPromotion(ctx.state, paths, now, isRetired, warn);
@@ -124,6 +131,14 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   // 2.-6. mail.token and its arms.
   const cur = await readValueFile(paths.current);
   const s0 = ctx.state;
+  // D-4410: under an unusable retired list a current boot cannot match to its own write record is foreign: it is not
+  // adopted, a fresh current is minted and a rotation is owed (the fleet resyncs by code, which needs no box token).
+  let foreignMint = false;
+  const mintForeign = async (): Promise<void> => { foreignMint = true; await mint('retired-written-back', null); };
+  const adoptOrMint = async (r: ValueRead & { kind: 'value' }): Promise<void> => {
+    if (foreignUnderUnusableRetired({ retiredUnusable, state: s0, current: likeOf(r) as FileMetaLike })) await mintForeign();
+    else adopt(r.value);
+  };
   if (cur.kind === 'unreadable' || cur.kind === 'placeholder') refuseAsToday(paths.current, cur.kind);
   if (cur.kind === 'unusable') {
     const prevRead = s0?.previous ? await readValueFile(paths.previous) : null;
@@ -144,14 +159,16 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   } else if (isRetired(cur.value)) {
     await mint('retired-written-back', `${paths.current} held a retired value; it was not adopted, a fresh value was minted and a rotation is owed`);
   } else if (s0 === null) {
-    adopt(cur.value);
+    await adoptOrMint(cur);
   } else if (s0.recovering !== null && s0.previous !== null) {
     // A recovery that stopped after its write and before its record: mail.token already holds the sibling.
     const prevRead = await readValueFile(paths.previous);
     if (prevRead.kind === 'value' && prevRead.value === cur.value) await recover(s0, cur.value, recOf(cur));
-    else adopt(cur.value);
+    else await adoptOrMint(cur);
   } else if (s0.origin !== 'adopted' && !provedWrite(likeOf(cur) as FileMetaLike, s0.current.write)) {
-    adopt(cur.value);   // something other than the driver changed mail.token: adopted as today (spec 4.2)
+    await adoptOrMint(cur);   // something other than the driver changed mail.token: adopted as today (spec 4.2)
+  } else if (foreignUnderUnusableRetired({ retiredUnusable, state: s0, current: likeOf(cur) as FileMetaLike })) {
+    await mintForeign();      // an adopted current has no write record to match (D-4410)
   } else {
     ctx.current = cur.value;
   }
@@ -204,6 +221,20 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   } else if (i.role === 'both' && i.roleSource !== 'recorded' && i.fleetMode === 'local' && !agentEnvMarksFleet
     && !(await fileExists(paths.fleetFile))) {
     warn(`this box's role is not recorded as both, so the server will not write ${paths.fleetFile}; with no file there, notify.sh is refused (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
+  }
+
+  // D-4410: the unusable retired list is set aside last, under a new name, never overwritten; ONE warning covers it and, when
+  // it applies, the foreign value that was not adopted.
+  if (retiredUnusable) {
+    let aside: string;
+    try { aside = `it was set aside as ${path.basename(await moveAsideUnusable(paths.retired, now))} and a fresh list starts`; } catch (e) {
+      aside = `it could not be set aside (${errno(e)}), so appending to it is refused until it is repaired`;
+    }
+    const foreign = foreignMint
+      ? (ctx.mintFailed ? `; ${paths.current} holds a value this server did not write, so it was not adopted`
+        : `; ${paths.current} held a value this server did not write, so it was not adopted: a fresh value was minted and a rotation is owed`)
+      : '';
+    warn(`${paths.retired} is unusable; ${aside}; the values it held can no longer be recognised when written back${foreign}`);
   }
 
   if (st !== null) {

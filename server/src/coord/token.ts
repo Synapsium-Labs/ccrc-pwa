@@ -258,6 +258,17 @@ export class BoxTokenHolder {
   }
 
   setRetired(digestsHex: readonly string[]): void {
+    this.retired = BoxTokenHolder.decodeDigests(digestsHex);
+  }
+
+  /** Adds digests to the retired list in memory (deduplicated), keeping every one already held. The driver uses it for
+   *  the digests still waiting for their append (box-token.json's `retiring` record) when the file cannot be read back. */
+  addRetired(digestsHex: readonly string[]): void {
+    const have = new Set(this.retired.map((b) => b.toString('hex')));
+    this.retired = [...this.retired, ...BoxTokenHolder.decodeDigests(digestsHex.filter((d) => !have.has(d)))];
+  }
+
+  private static decodeDigests(digestsHex: readonly string[]): Buffer[] {
     const bufs = digestsHex.map((d) => Buffer.from(d, 'hex'));
     // A round trip, not a regex: a sha256 digest is 32 bytes whose lowercase hex
     // is exactly the string given (a malformed entry decodes short or differently).
@@ -266,7 +277,7 @@ export class BoxTokenHolder {
         throw new RangeError('BoxTokenHolder: a retired digest is not a lowercase sha256 hex digest');
       }
     });
-    this.retired = bufs;
+    return bufs;
   }
 
   hasCurrent(): boolean { return this.slots.current !== null; }

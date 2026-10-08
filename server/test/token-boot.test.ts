@@ -5,7 +5,7 @@
 // value here is random per run and is searched for in everything boot printed.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -270,6 +270,151 @@ describe('a retired value never returns (spec 4.2 step 3)', () => {
     expect(r.holder.counters().retiredByLane).toEqual({ 'POST /api/mail': 1 });
     expect(r.warnings.join('\n')).toContain('held a retired value; it was not adopted, a fresh value was minted and a rotation is owed');
     neverPrinted(r.printed, old, r.holder.currentValue() as string);
+  });
+});
+
+// D-4410 (review 349 F1 and sec-M2): a retired value's record is never lost, and an unusable retired file never lets a
+// foreign value in. Fixture homes only; every value is random per run.
+describe('an unusable retired file never lets boot adopt a value it did not write (D-4410)', () => {
+  const asides = (home: string): string[] => readdirSync(path.join(home, '.ccrc')).filter((n) => n.startsWith('box-token-retired.json.unusable-'));
+  /** One rotation done, the previous value retired and its record landed, then the retired file left unusable (v 2). */
+  async function retiredThenCorrupt(home: string): Promise<{ old: string; next: string; state: BoxTokenState }> {
+    const paths = P(home);
+    const { old, next, state } = await rotateOnce(home, await boot(home));
+    await appendRetired(paths.retired, valueDigestHex(old), Date.now());
+    rmSync(paths.previous);
+    const settled = { ...state, previous: null };
+    await writeState(paths.state, settled);
+    writeFileSync(paths.retired, '{"v":2,"retired":[]}\n', { mode: 0o600 });
+    return { old, next, state: settled };
+  }
+  const writeBack = (home: string, value: string): void => {
+    rmSync(P(home).current);
+    writeFileSync(P(home).current, `# an older deploy.sh shipped this\n${value}\n`, { mode: 0o600 });
+  };
+
+  it("F1's sequence: unusable retired file, L written back, restart: L is refused, a fresh value is minted and a rotation is owed", async () => {
+    const home = mkHome();
+    const { old } = await retiredThenCorrupt(home);
+    writeBack(home, old);
+    const r = await boot(home);
+    expect(checkMailToken(r.holder, old, 'POST /api/mail')).toBe('bad');
+    expect(r.holder.currentValue()).not.toBe(old);
+    expect(r.holder.currentValue()).toMatch(TOKEN_VALUE_RE);
+    expect(r.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
+    expect(readFileSync(P(home).current, 'utf8').trim()).toBe(r.holder.currentValue());
+    neverPrinted(r.printed, old, r.holder.currentValue() as string);
+  });
+
+  it('a mail.token the server did not write is not adopted either: no state at all, a hand-made value, an unusable retired file', async () => {
+    const home = mkHome();
+    const hand = mintValue();
+    writeFileSync(P(home).current, `${hand}\n`, { mode: 0o600 });
+    writeFileSync(P(home).retired, 'not json at all', { mode: 0o600 });
+    const r = await boot(home);
+    expect(checkMailToken(r.holder, hand)).toBe('bad');
+    expect(r.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
+    neverPrinted(r.printed, hand);
+  });
+
+  it('after a rotation a foreign value in mail.token (not a retired one) is not adopted while the list is unusable', async () => {
+    const home = mkHome();
+    await retiredThenCorrupt(home);
+    const foreign = mintValue();
+    writeBack(home, foreign);
+    const r = await boot(home);
+    expect(checkMailToken(r.holder, foreign)).toBe('bad');
+    expect(r.state).toMatchObject({ origin: 'minted', rotationOwed: true });
+  });
+
+  it('a server-written current stays current: no mint, nothing owed, the value unchanged', async () => {
+    const home = mkHome();
+    const { next } = await retiredThenCorrupt(home);
+    const r = await boot(home);
+    expect(r.holder.currentValue()).toBe(next);
+    expect(checkMailToken(r.holder, next)).toBe('ok');
+    expect(r.state).toMatchObject({ origin: 'rotated', rotationOwed: false });
+    expect(readFileSync(P(home).current, 'utf8').trim()).toBe(next);
+  });
+
+  it('the unusable file is moved aside under a new name, byte-equal, and warned about once; a fresh list starts', async () => {
+    const home = mkHome();
+    const { old } = await retiredThenCorrupt(home);
+    writeBack(home, old);
+    const r = await boot(home, { now: 777 });
+    expect(asides(home)).toEqual(['box-token-retired.json.unusable-777']);
+    expect(readFileSync(path.join(home, '.ccrc', asides(home)[0]), 'utf8')).toBe('{"v":2,"retired":[]}\n');
+    expect(existsSync(P(home).retired)).toBe(false);
+    expect(r.warnings.filter((w) => w.includes('box-token-retired.json'))).toHaveLength(1);
+    expect(r.warnings.join('\n')).toContain('unusable');
+  });
+
+  it('with the current server-written the warning is still one line and the file is still set aside', async () => {
+    const home = mkHome();
+    await retiredThenCorrupt(home);
+    const r = await boot(home, { now: 778 });
+    expect(asides(home)).toEqual(['box-token-retired.json.unusable-778']);
+    expect(r.warnings.filter((w) => w.includes('box-token-retired.json'))).toHaveLength(1);
+  });
+
+  it('the set-aside never overwrites a file already holding the name', async () => {
+    const home = mkHome();
+    await retiredThenCorrupt(home);
+    const taken = `${P(home).retired}.unusable-779`;
+    writeFileSync(taken, 'an earlier set-aside', { mode: 0o600 });
+    await boot(home, { now: 779 });
+    expect(readFileSync(taken, 'utf8')).toBe('an earlier set-aside');
+    expect(asides(home).sort()).toEqual(['box-token-retired.json.unusable-779', 'box-token-retired.json.unusable-779-1']);
+  });
+
+  it('a retired file that cannot be READ is unreadable, never unusable: boot refuses, moves nothing aside, writes nothing (EISDIR)', async () => {
+    const home = mkHome();
+    const v = mintValue();
+    writeFileSync(P(home).current, `${v}\n`, { mode: 0o600 });
+    mkdirSync(P(home).retired);
+    await expect(bootBoxToken(input(home))).rejects.toThrow('unreadable (EISDIR)');
+    expect(asides(home)).toEqual([]);
+    expect(statSync(P(home).retired).isDirectory()).toBe(true);
+  });
+
+  it.skipIf(isRoot)('EACCES on the retired file refuses boot the same way, and the file is not moved aside', async () => {
+    const home = mkHome();
+    const { old } = await retiredThenCorrupt(home);
+    writeBack(home, old);
+    chmodSync(P(home).retired, 0o000);
+    try {
+      const err = await bootBoxToken(input(home)).then(() => null, (e: unknown) => e as Error);
+      expect(err?.message).toBe(`${P(home).retired}: unreadable (EACCES); boot refuses rather than rewrite it`);
+    } finally { chmodSync(P(home).retired, 0o600); }
+    expect(asides(home)).toEqual([]);
+    expect(readFileSync(P(home).current, 'utf8')).toContain(old);          // nothing was written over mail.token
+  });
+
+  it("sec-M2's boot half: a digest still in box-token.json's retiring record refuses the value though the retired file lacks it", async () => {
+    const home = mkHome();
+    const paths = P(home);
+    const { old, state } = await rotateOnce(home, await boot(home));
+    rmSync(paths.previous);
+    await writeState(paths.state, { ...state, previous: null, retiring: [{ sha256: valueDigestHex(old), at: Date.now() }] });
+    writeBack(home, old);
+    const r = await boot(home);
+    expect(existsSync(paths.retired)).toBe(false);                            // the append never landed
+    expect(checkMailToken(r.holder, old, 'POST /api/mail')).toBe('bad');
+    expect(r.holder.counters().retiredByLane).toEqual({ 'POST /api/mail': 1 });
+    expect(r.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
+    expect(r.state?.retiring).toEqual([{ sha256: valueDigestHex(old), at: expect.any(Number) }]);   // still carried until it lands
+    neverPrinted(r.printed, old);
+  });
+
+  it('control: with no retiring record and no retired file the same write-back is adopted as a hand-made value (today\'s rule)', async () => {
+    const home = mkHome();
+    const paths = P(home);
+    const { old, state } = await rotateOnce(home, await boot(home));
+    rmSync(paths.previous);
+    await writeState(paths.state, { ...state, previous: null });
+    writeBack(home, old);
+    const r = await boot(home);
+    expect(r.state).toMatchObject({ origin: 'adopted', rotationOwed: true, owedWhy: 'adopted' });
   });
 });
 

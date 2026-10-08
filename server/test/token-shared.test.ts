@@ -12,7 +12,7 @@
 //  5. `readGenerationFile`, the ONE reader of `~/.ccrc/box-token-generation`: three outcomes, malformed is unreadable.
 import { describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -26,6 +26,7 @@ import {
   BOX_TOKEN_PHASES, CLAIM_BODY_LIMIT_BYTES, CLAIM_REFUSALS, FLEET_TOKEN_FILE_COMMENT, GENERATION_ID_RE, OWED_REASONS,
   TOKEN_CLAIM_PATH, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, TOKEN_VALUE_RE, readGenerationFile,
 } from '../../shared/box-token.js';
+import { PENDING_FILE_RE } from '../src/token/boot.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { readNodeFiles } from '../src/update/inventory.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -173,11 +174,26 @@ describe('shared/box-token.ts — the claim door, value and generation shapes, a
     expect(src.includes('{16}'), 'box-token.ts re-spells the generation id').toBe(false);
   });
 
+  // F11 (review 349, class 9): the shape scan reaches the server's token ring too, so a regex there that spells the
+  // generation id a second time reds. `PENDING_FILE_RE` is the one place a filename carries an id.
+  it('no file under server/src/token/ re-spells the generation id; PENDING_FILE_RE is built from GENERATION_ID_HEX', () => {
+    const dir = path.join(path.dirname(BOX_TOKEN_TS), '..', 'server', 'src', 'token');
+    const files = readdirSync(dir).filter((n) => n.endsWith('.ts'));
+    expect(files).toContain('boot.ts');
+    for (const f of files) {
+      expect(readFileSync(path.join(dir, f), 'utf8').includes('{16}'), `${f} re-spells the generation id`).toBe(false);
+    }
+    expect(PENDING_FILE_RE.source).toContain(GENERATION_ID_HEX);
+    expect(PENDING_FILE_RE.exec(`mail-pending-${'0123456789abcdef'}.token`)?.[1]).toBe('0123456789abcdef');
+    expect(PENDING_FILE_RE.exec('mail-pending-0123456789abcde.token')).toBeNull();
+    expect(PENDING_FILE_RE.exec('mail-pending-0123456789ABCDEF.token')).toBeNull();
+  });
+
   it('the closed vocabularies', () => {
     expect([...CLAIM_REFUSALS]).toEqual(['bad-request', 'wrong-node', 'no-claim', 'code-expired', 'code-used', 'rate-limited', 'unavailable']);
     expect([...TOKEN_ORIGINS]).toEqual(['adopted', 'minted', 'rotated']);
     expect([...OWED_REASONS]).toEqual(['adopted', 'fleet-behind', 'confirm-deadline', 'retired-written-back', 'recovered',
-      'aux-unusable', 'unverifiable-files', 'code-used', 'claim-misbound']);
+      'aux-unusable', 'unverifiable-files', 'code-used', 'claim-misbound', 'retired-presented']);   // 'retired-presented': D-4412 (additive)
     expect([...TOKEN_HOLDS]).toEqual(['update-in-flight', 'agent-predates-op', 'verb-missing', 'stale-client', 'fleet-rows',
       'node-id-unmeasured', 'link-down', 'pending-cap', 'no-coord', 'role-unrecorded', 'mint-failed']);
     expect([...BOX_TOKEN_PHASES]).toEqual(['unconfigured', 'idle', 'staged', 'handed-out', 'promoting', 'grace', 'held', 'failed']);

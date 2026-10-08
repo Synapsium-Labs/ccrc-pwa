@@ -11,6 +11,7 @@ import {
   HOLD_REPROBE_MS, MAX_PENDING, PENDING_HARD_CAP, applySyncResult, backoffMs, bothRoleWriterArmed, claimVerdict, codeExpiresAt,
   confirmedGeneration, extendedGraceState, handedOutState, mintedState, nextAction, phaseOf, promotedState,
   pendingExitOpen, recoveryPlan, retireDue, rotationGate, stagedState,
+  adoptedState, foreignUnderUnusableRetired, oweForRetiredPresentation, retiringDigests, retiringLanded, retiringRecorded,
   type BoxTokenState, type ClaimDoorState, type FileMetaLike, type GateInput, type GateNode, type GateVerdict,
 } from '../src/token/policy.js';
 import { CLAIM_CODE_TTL_MS } from '../../shared/agent-protocol.js';
@@ -564,5 +565,80 @@ describe('F3(c): the own-write promote waits out the backoff', () => {
 describe('F7: the timings that bound a live re-probe are pinned by value', () => {
   it('HOLD_REPROBE_MS is one hour (a 55-minute re-probe is faster than the plan, and reds here)', () => {
     expect(HOLD_REPROBE_MS).toBe(60 * 60_000);
+  });
+});
+
+// ── D-4410: the retired digest is durable in box-token.json until the retired file has it ──
+describe('D-4410: the retiring record (a digest in box-token.json until the append lands)', () => {
+  const D1 = 'a'.repeat(64);
+  const D2 = 'b'.repeat(64);
+
+  it('retiringRecorded adds a digest once; retiringLanded removes exactly the landed ones; neither touches the rest', () => {
+    const s = base();
+    const a = retiringRecorded(s, D1, 5000);
+    expect(a.retiring).toEqual([{ sha256: D1, at: 5000 }]);
+    expect(retiringRecorded(a, D1, 6000).retiring).toEqual([{ sha256: D1, at: 5000 }]);   // deduplicated, the first stamp kept
+    const b = retiringRecorded(a, D2, 6000);
+    expect(retiringDigests(b)).toEqual([D1, D2]);
+    expect(retiringLanded(b, [D1]).retiring).toEqual([{ sha256: D2, at: 6000 }]);
+    expect(retiringLanded(b, [D1, D2]).retiring).toEqual([]);
+    expect(retiringLanded(b, []).retiring).toEqual(b.retiring);
+    expect(retiringDigests(s)).toEqual([]);                                              // absent reads as empty
+  });
+
+  it('a minted or adopted state over a prior one keeps its retiring record (a digest is never dropped by a re-mint)', () => {
+    const prior = retiringRecorded(base(), D1, 5000);
+    expect(mintedState(9000, W(3), prior, 'recovered', 'd'.repeat(16)).retiring).toEqual([{ sha256: D1, at: 5000 }]);
+    expect(adoptedState(9000, prior).retiring).toEqual([{ sha256: D1, at: 5000 }]);
+  });
+
+  it('foreignUnderUnusableRetired: with an unusable retired file, only a current the server wrote stays; otherwise it is foreign', () => {
+    const w = W(7, 5000);
+    const proved: FileMetaLike = { meta: { dev: 7, ino: 7, mtimeMs: 4000, mode: 0o600, kind: 'regular' }, usable: true, placeholder: false, digest: 'c'.repeat(64) };
+    const rewritten: FileMetaLike = { ...proved, meta: { ...(proved.meta as NonNullable<FileMetaLike['meta']>), ino: 8 } };
+    const s: BoxTokenState = { ...base(), origin: 'rotated', current: { id: 'c'.repeat(16), seq: 2, since: 1, write: w } };
+    expect(foreignUnderUnusableRetired({ retiredUnusable: true, state: s, current: proved })).toBe(false);      // server-written: stays
+    expect(foreignUnderUnusableRetired({ retiredUnusable: true, state: s, current: rewritten })).toBe(true);    // written back by someone else
+    expect(foreignUnderUnusableRetired({ retiredUnusable: true, state: null, current: proved })).toBe(true);    // no write record at all
+    expect(foreignUnderUnusableRetired({ retiredUnusable: true, state: adoptedState(1, null), current: proved })).toBe(true);   // an adopted current has no record
+    expect(foreignUnderUnusableRetired({ retiredUnusable: false, state: s, current: rewritten })).toBe(false);  // a usable list decides as before
+    expect(foreignUnderUnusableRetired({ retiredUnusable: false, state: null, current: proved })).toBe(false);
+  });
+});
+
+// ── D-4412: a retired value presented on a box-token lane owes one forward rotation, within a bound ──
+describe('D-4412: a retired presentation owes one forward rotation, bounded', () => {
+  const idle = (): BoxTokenState => ({ ...base(), origin: 'rotated' });
+  const ask = (over: Partial<Parameters<typeof oweForRetiredPresentation>[0]> = {}) =>
+    oweForRetiredPresentation({ state: idle(), fresh: 1, busy: false, lastOwedAt: null, now: 10_000_000, ...over });
+
+  it('a new retired presentation on an idle, nothing-owed state owes the word retired-presented', () => {
+    expect(ask()).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
+  });
+
+  it('nothing is owed for no new presentation', () => {
+    expect(ask({ fresh: 0 })).toBeNull();
+  });
+
+  it('nothing new is owed while a rotation is already owed, and the standing reason is never replaced', () => {
+    expect(ask({ state: { ...idle(), rotationOwed: true, owedWhy: 'adopted' } })).toBeNull();
+  });
+
+  it.each([
+    ['a staged value', (s: BoxTokenState) => stagedState(s, '1'.repeat(16), 2000, W(2))],
+    ['a handed-out value', (s: BoxTokenState) => handedOutState(stagedState(s, '1'.repeat(16), 2000, W(2)), '1'.repeat(16), 2500)],
+    ['a recorded promotion', (s: BoxTokenState) => ({ ...s, promoting: { id: '1'.repeat(16) } })],
+  ])('nothing new is owed while a rotation is in flight: %s', (_n, mk) => {
+    expect(ask({ state: mk(idle()) })).toBeNull();
+  });
+
+  it('nothing new is owed while a send or a promotion is running (the driver feeds it)', () => {
+    expect(ask({ busy: true })).toBeNull();
+  });
+
+  it('at most one per HOLD_REPROBE_MS: just inside the bound owes nothing, at it owes again', () => {
+    const last = 8_000_000;
+    expect(ask({ lastOwedAt: last, now: last + HOLD_REPROBE_MS - 1 })).toBeNull();
+    expect(ask({ lastOwedAt: last, now: last + HOLD_REPROBE_MS })).toMatchObject({ owedWhy: 'retired-presented' });
   });
 });
