@@ -318,7 +318,8 @@ function countFirst(db, name) {
 // journaled, counted `drain_rejected` (D-4346); `planted/<tickMs>.<pid>/` holds planted non-regular entries, counted
 // `non_regular` (D-4347), and a live file whose sidecar name was planted (counted `spool_displaced`, or `spool_blocked`
 // and skipped when it cannot move either). After the loop, THIS tick's renames run (`renameAndObserve`), so a file is
-// read at the NEXT tick, never the one that renamed it.
+// read at the NEXT tick, never the one that renamed it. When the loop throws, the journal half runs instead, before its error
+// leaves: it renames, observes and journals, as a hold does (FU8, FPM8).
 // Nothing here runs through a `spool/` that is not a real directory (FU8, D-4347 (history-planted-entries-never-wedge)): a link
 // there is never followed, and the drain, the journal half and the tick's own mkdir refuse it (`spoolRefused`). Nor through a
 // `spool/` or `.draining` this user cannot read, write and search (`spoolUnusable`).
@@ -1067,68 +1068,86 @@ export function drainSpool(db, c) {
   const blockedIds = new Set();   // D-4347 (history-planted-entries-never-wedge): an id with a blocked file waits behind it, in order (FU3F review F1)
   const hints = [];
   let failedCounted = false;
-  for (const name of listDraining(c.home)) {
-    if (kept.has(name)) {   // D-4347 (history-planted-entries-never-wedge): counted once by tidyDraining, never observed (M17)
-      if (waitsBehind.has(name)) blockedIds.add(idOfDrainingName(name));
-      continue;
-    }
-    // The epoch chain numbers in drain order, so a blocked file's later same-id files must not drain before it (they would invert the chain once it drains).
-    // A kept name, or a displaced file (which never drains), loses lines but never reorders, so only a blocked file holds its id.
-    if (blockedIds.has(idOfDrainingName(name))) continue;
-    // D-4337 (history-spool-file-size-cap): an oversize file is decided from its stat and never opened.
-    if (setAsideOversize(db, c.home, name)) continue;
-    let j;
-    try {
-      j = journalFile(c.home, c.ids, name, c.now());
-    } catch (e) {
-      if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
-      if (e && e.code === 'SPOOL_OVERSIZE') {   // it grew between the stat and the read
-        setAsideOversize(db, c.home, name);
+  // FU8 (FPM8): a throw out of the loop is held until the journal half has run for the rest of this tick (below).
+  let thrown = null;
+  try {
+    for (const name of listDraining(c.home)) {
+      if (kept.has(name)) {   // D-4347 (history-planted-entries-never-wedge): counted once by tidyDraining, never observed (M17)
+        if (waitsBehind.has(name)) blockedIds.add(idOfDrainingName(name));
         continue;
       }
-      if (e && e.code === 'SPOOL_OVERLINES') {   // D-4337's line arm: decided by readDrainingText's count, never by a stat
-        dropOverlinesSidecar(c.home, name);    // FU8 (FPM7): first, so a set-aside that cannot move leaves no `journaled: null` sidecar
-        setAside(db, c.home, name, OVERSIZE_DIR, 'spool_overlines');
-        continue;
-      }
-      if (e && (e.code === 'ELOOP' || e.code === 'NON_REGULAR')) {
-        // journalFile observed before it read, so the planted name has a sidecar too. listDraining lists only
-        // `*.jsonl`, so a sidecar left here would never be removed.
-        // D-4347 (history-planted-entries-never-wedge): type-aware and never thrown; a race that tidyDraining (which runs first) did not meet is met again next drain.
-        try {
-          removeEntry(`${historyPaths(c.home).draining}/${name}`);
-          removeEntry(`${historyPaths(c.home).draining}/${sidecarName(name)}`);
-        } catch { /* left for the next drain: tidyDraining meets it first */ }
-        countOutside(db, 'non_regular');
-        continue;
-      }
-      if (e && e.code === 'SPOOL_UNREADABLE') {
-        // FU8 (FP5, FPM9; D-4347 (history-planted-entries-never-wedge)): skipped for this pass like a blocked file, never a
-        // thrown pass: left in place with its sidecar, read again by the next drain, and its own id's later files wait behind it.
-        countOutside(db, HEALTH_COUNTERS.spoolUnreadable);
-        process.stderr.write(`history-sweep: spool-unreadable: ${name}: ${e.reason}\n`);
-        blockedIds.add(idOfDrainingName(name));
-        continue;
-      }
-      if (e && e.code === 'ENOENT') continue;
-      throw e;
-    }
-    try {
-      hints.push(...drainFile(db, c, name, j.obs, j.text).hints);
-    } catch (e) {
-      if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
-      if (e && e.code === 'ERR_SQLITE_ERROR') {
-        // D-4346 (history-permanent-failures-classified): lib decides from the result code, never every SQLite error as a busy commit.
-        const arm = decideDrainFailure(e.errcode);
-        if (arm === 'defer') { countOutside(db, 'drain_deferred'); break; }
-        if (arm === 'reject') {
-          process.stderr.write(`history-sweep: drain-rejected: ${name}: ${e.message}\n`);
-          setAsideRejected(db, c.home, name);
+      // The epoch chain numbers in drain order, so a blocked file's later same-id files must not drain before it (they would invert the chain once it drains).
+      // A kept name, or a displaced file (which never drains), loses lines but never reorders, so only a blocked file holds its id.
+      if (blockedIds.has(idOfDrainingName(name))) continue;
+      // D-4337 (history-spool-file-size-cap): an oversize file is decided from its stat and never opened.
+      if (setAsideOversize(db, c.home, name)) continue;
+      let j;
+      try {
+        j = journalFile(c.home, c.ids, name, c.now());
+      } catch (e) {
+        if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
+        if (e && e.code === 'SPOOL_OVERSIZE') {   // it grew between the stat and the read
+          setAsideOversize(db, c.home, name);
           continue;
         }
+        if (e && e.code === 'SPOOL_OVERLINES') {   // D-4337's line arm: decided by readDrainingText's count, never by a stat
+          dropOverlinesSidecar(c.home, name);    // FU8 (FPM7): first, so a set-aside that cannot move leaves no `journaled: null` sidecar
+          setAside(db, c.home, name, OVERSIZE_DIR, 'spool_overlines');
+          continue;
+        }
+        if (e && (e.code === 'ELOOP' || e.code === 'NON_REGULAR')) {
+          // journalFile observed before it read, so the planted name has a sidecar too. listDraining lists only
+          // `*.jsonl`, so a sidecar left here would never be removed.
+          // D-4347 (history-planted-entries-never-wedge): type-aware and never thrown; a race that tidyDraining (which runs first) did not meet is met again next drain.
+          try {
+            removeEntry(`${historyPaths(c.home).draining}/${name}`);
+            removeEntry(`${historyPaths(c.home).draining}/${sidecarName(name)}`);
+          } catch { /* left for the next drain: tidyDraining meets it first */ }
+          countOutside(db, 'non_regular');
+          continue;
+        }
+        if (e && e.code === 'SPOOL_UNREADABLE') {
+          // FU8 (FP5, FPM9; D-4347 (history-planted-entries-never-wedge)): skipped for this pass like a blocked file, never a
+          // thrown pass: left in place with its sidecar, read again by the next drain, and its own id's later files wait behind it.
+          countOutside(db, HEALTH_COUNTERS.spoolUnreadable);
+          process.stderr.write(`history-sweep: spool-unreadable: ${name}: ${e.reason}\n`);
+          blockedIds.add(idOfDrainingName(name));
+          continue;
+        }
+        if (e && e.code === 'ENOENT') continue;
+        throw e;
       }
-      throw e;   // 'fail': the store itself failed; the tick ends with it, as ingest's SQLite errors do (D-4340)
+      try {
+        hints.push(...drainFile(db, c, name, j.obs, j.text).hints);
+      } catch (e) {
+        if (e instanceof JournalError) { countOutside(db, 'journal_write_failed'); failedCounted = true; break; }
+        if (e && e.code === 'ERR_SQLITE_ERROR') {
+          // D-4346 (history-permanent-failures-classified): lib decides from the result code, never every SQLite error as a busy commit.
+          const arm = decideDrainFailure(e.errcode);
+          if (arm === 'defer') { countOutside(db, 'drain_deferred'); break; }
+          if (arm === 'reject') {
+            process.stderr.write(`history-sweep: drain-rejected: ${name}: ${e.message}\n`);
+            setAsideRejected(db, c.home, name);
+            continue;
+          }
+        }
+        throw e;   // 'fail': the store itself failed; the tick ends with it, as ingest's SQLite errors do (D-4340)
+      }
     }
+  } catch (e) {
+    thrown = e;
+  }
+  if (thrown !== null) {
+    // FU8 (FPM8): the drain could not finish (D-4346's 'fail' arm: FULL, IOERR, CORRUPT, a foreign trigger; or any other
+    // throw), so the rest of this tick is the journal half's, as a hold's is (§9.2: "the journal half runs whenever the drain
+    // cannot"): this tick's spool files are renamed and observed (D-4232), and every draining file the loop did not reach is
+    // journaled. So no id's spool file grows toward SPOOL_FILE_LINES_MAX while the failure lasts, and no renamed file waits with a
+    // `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick than every file the loop
+    // met, so the journaling order holds. The loop's error is thrown after it, and an error of the journal half never replaces it.
+    try {
+      if (journalHalf(c.home, c.ids, c.now()).journalFailed && !failedCounted) countOutside(db, 'journal_write_failed');
+    } catch { /* the loop's error is the one this tick reports */ }
+    throw thrown;
   }
   // D-4338 (history-sidecar-write-failure-holds): a failed observation of this tick's renames is the same hold,
   // counted once for the tick; the renamed files wait without a sidecar and are observed at their next journaling.

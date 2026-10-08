@@ -584,6 +584,24 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     for (const n of [first, second]) expect(blocks.filter((b) => b.name === n), n).toHaveLength(1);
   });
 
+  it('a drain whose commit fails runs the journal half for the rest of its tick: this tick\'s spool files are renamed, observed and journaled (FU8, FPM8)', () => {
+    spool(box.home, ID2, { v: 1, ev: 'Stop', id: ID2 });
+    expect(runSweep(box).code).toBe(0);                                   // renamed: it drains at the next tick
+    const [first] = drainingNames(box.home);
+    spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+    const r = runSweep(box, [], faults({ HISTORY_TEST_FAIL_COMMIT: '1:13' }));   // the drain's FULL commit fails: D-4346's 'fail' arm
+    expect(r.code, r.stderr).toBe(1);
+    expect(fs.existsSync(path.join(SPOOL(box.home), `${ID}.jsonl`)), 'renamed by the failing tick').toBe(false);   // at cf544c151: left in spool/
+    const second = drainingNames(box.home).find((n) => n !== first);
+    expect(second).toMatch(new RegExp(`^${ID}\\.\\d+\\.\\d+\\.jsonl$`));
+    expect(fs.existsSync(path.join(DRAIN(box.home), second!.replace(/\.jsonl$/, '.obs'))), 'observed at its rename (D-4232)').toBe(true);
+    expect(obsOf(box.home, second!)['journaled'], 'journaled, as a hold journals it: no journaled:null sidecar for status').toMatchObject({ storeId: ids.storeId, writer: ids.writer });
+    expect(fileBlocks(journalOf(box.home, ids.storeId)).map((b) => b.name)).toEqual([first, second]);
+    expect(runSweep(box).code).toBe(0);
+    expect(receipts(box).map((x) => x.event_key).sort()).toEqual([eventKey(first!, 1), eventKey(second!, 1)].sort());
+    expect(drainingNames(box.home)).toEqual([]);
+  });
+
   it.each([['full disk', '1:13'], ['corrupt', '1:11'], ['I/O', '1:266'], ['no result code', '1']])('an injected %s commit failure fails the pass (exit 1) and keeps the file for the next pass', (_what, code) => {
     spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
     expect(runSweep(box).code).toBe(0);
