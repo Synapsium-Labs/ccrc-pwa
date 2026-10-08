@@ -1005,6 +1005,11 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - `keptLeafWord`'s shape is a cross-programme contract (4040/4045).
     - The standing-entry sentence and the in-use reading are as ruled at 21:55.
     - The two lens minors stay stated, not fixed.
+  - **CCR-15 mail 4047 (its contract R81) agrees on the word half.** `leafKeptWord` answers only the three words, and
+    null is `unmeasured`; null and absence belong to each carrier. In Order A, wave 5 lands first and CCR-15 wave 8's
+    Task 1 moves the function. In Order B, wave 8 lands first, and wave 5's merge of main makes the same edits,
+    importing `leafKeptWord` from `shared/api.ts`. CCR-15 asked for Order B as the second-lander rule. Run 345 had
+    already been dispatched, so it reached the worker as a brief addendum (mail 4050); CCR-15 was told in 4051.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
