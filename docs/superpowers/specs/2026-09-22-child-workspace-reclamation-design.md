@@ -649,7 +649,7 @@ snapshot is one tick stale, or when a crashed reclaim resumes. ccd already state
 destructive verb: every guard is evaluated on the box, at the instant of deletion.
 
 Default: running. Pausing stops reclamation fleet-wide, and — since workspace lifecycle wave 3b — the expiry of archived
-workspaces too: it is the fleet's one cleanup switch (`2026-09-24-workspace-lifecycle-design.md` §5.3). Nothing else;
+workspaces too, and — since wave 4 — the dead-coordinator lane: it is the fleet's one cleanup switch (`2026-09-24-workspace-lifecycle-design.md` §5.3). Nothing else;
 unpausing drains what queued.
 
 ### 5.9 What the operator sees

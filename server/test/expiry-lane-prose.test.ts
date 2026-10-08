@@ -29,9 +29,9 @@ describe('README: what happens to an archived workspace now', () => {
   });
   it('every other passage that names the switch says it stops the expiry too, and calls the row the cleanup row', () => {
     expect(readme).toContain('The cleanup row beneath it keeps the same discipline for `$REG/reclaim-paused`, the fleet\'s one cleanup switch');
-    expect(readme).toContain('it pauses every reclamation and every expiry fleet-wide');
+    expect(readme).toContain('it pauses every reclamation, every expiry and the dead-coordinator lane fleet-wide');
     expect(readme).toContain('and the expiry of archived workspaces stops too');
-    expect(readme).toContain('raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation and the expiry of archived workspaces)');
+    expect(readme).toContain('raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane)');
     expect(readme, 'the row is not the reclaim row any more').not.toContain('reclaim row on `/runs`');
   });
 });

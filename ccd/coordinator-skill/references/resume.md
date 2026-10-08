@@ -46,6 +46,13 @@ Everything else keeps working, which is what makes this easy to misread. Mail st
 id, the board still renders the program, and only this one call refuses. The wedge surfaces at the wave
 boundary, when the next run has to be opened.
 
+Unless the server ends the program first. Once the operator has armed the server's dead-coordinator lane,
+a coordinator that crashed — its pane gone with nothing bringing it back, and no stop, archive or other
+deliberate act since its last successful spawn — and has stayed dead an hour has its open runs closed
+`failed`, its workers cleaned up and its program retired for good, so a revive after that finds no run
+to pick up. Until the operator arms it, the lane only records what it would end. A revive within the
+hour keeps the program either way.
+
 A session id is minted once, at creation, from the account and the project — and it does not change
 afterwards. A session keeps the id it was born with across every account swap, so `claimedBy` may name
 an account that session no longer runs on. Re-creating the session from what the board renders TODAY

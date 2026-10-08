@@ -553,6 +553,53 @@ an hour; programme `<slug>` ended, `<n>` runs closed failed".
 60-second cadence. Each measurement is a registry listing, about 27 field reads and one tmux call, which is an
 agent frame in remote mode.
 
+**As wave 4 builds the lane** (amended with its plan, `docs/superpowers/plans/2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md`;
+each item is a departure named there).
+- **The lane ships shadowed** (the coordinator's safety ruling, the expiry lane's precedent). Until
+  `$REG/dead-coordinator-lane-live` exists — touched by the operator by hand in the registry the server reads (the fleet
+  box's through the agent in remote mode); nothing in the tree writes it — the lane measures, keeps its anchors, trips
+  its breaker and records "would end programme <slug> (<n> runs)" as a feed row and an attention entry, and never
+  reaches `closeRun`'s abandon arm or the reclaim port. The executor re-reads the file inside the serialiser.
+  `reclaim-paused` stops it entirely, shadow included.
+- **The last start is read off the spawn line itself.** ccd's encoder writes every `meas` value as a string and the
+  mirror keeps `meas.rc` only as a number, so the typed field is null on every real line; the clause reads the `spawn`
+  line's own bytes, strictly — `"0"` is a start, anything else proves none, and then every row in the horizon counts.
+- **Doubt in the journal is deliberate.** An act this build cannot name (`unknown`) and an `unsupervise` whose surface
+  cannot be read count as deliberate acts: doubt never reads as a crash.
+- **A journal that may have lost the act is unreadable.** The clause also reads the journal's own trust: the mirror's
+  health (`unavailable`, or not swept since a restart, or `stale` — the last two make a pass decide nothing at all), a
+  gap the mirror recorded in a generation not older than the claimant's last successful spawn, and a journal line ccd
+  counted as unwritten after it (`$REG/.lifecycle/errors`' instant). Each makes the claimant unmeasured: listed, never
+  acted on.
+- **A never-started row with no successful spawn never ran.** `never-started` is a crash only when the journal holds a
+  successful spawn for it; otherwise — an heir the operator reclaimed a programme onto and has not started yet reads so —
+  it is unmeasured. So is an `orphan` or `absent` claimant whose journal holds a spawn that failed and none that
+  succeeded (it was started and never ran); a horizon with no spawn row at all still reads crashed.
+- **The anchor restarts after a gap nobody measured.** `dead_claimants` carries `lastDeadAt` beside `firstDeadAt`; an
+  episode whose last crashed pass is older than ten minutes (a server down, an older build running after a rollback,
+  which never writes the table) starts again at the pass that measures it. The table is a new table and nothing else,
+  so a rolled-back build boots on it.
+- **The breaker holds the whole lane**, not only the claimants it names, and it **clears through the doors that
+  already exist**: the claimants fall back under the threshold when the operator revives them, reclaims their
+  programmes or abandons their runs. No new route.
+- **The breaker remembers.** It keeps each member's first-dead instant and releases a member only on evidence (alive,
+  stopped, a deliberate act) or when it leaves the population, so one pass that cannot measure a member — which deletes
+  that member's anchor — does not dissolve the cluster. "Fleet-wide" is what the pass measured: tmux not answering for
+  any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs.
+- **One claimant a pass**, the longest dead first, ARMED; in shadow every due claimant is recorded.
+- **The re-measure runs inside the arm.** A compare-and-set on `claimedBy` cannot see a revive of the same id, so the
+  abandon arm re-measures the claimant immediately before each run's fleet act and again after it, before the commit;
+  a revive that lands inside that last round trip is the residual. A re-measure that reads anything but a crash deletes
+  the anchor, as a pass's would.
+- **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
+  breaker, rebuilt over the passes after a restart, which can delay an act and never cause one.
+- **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
+  (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
+  coordinator; this lane's feed rows (each with the claimant's first-dead instant, and one per breaker trip) are records
+  of that incident and its entries are a list.
+- **Not changed:** the reclaim door and the stall watch ignore the verdict's new `cause`; landing reads a run the sweep
+  failed exactly as one the operator abandoned (it keys on open runs, never on `causedBy`).
+
 ## 6. What this changes outside itself
 
 - **Wire.** Stage 1 adds `FleetSession.releasedFrom` and `ReleasedFrom`. Stage 2 adds `ARCHIVE_REFUSALS` with six
@@ -570,7 +617,9 @@ agent frame in remote mode.
   4. Wave 3's "exactly ONE addition" to `ws-reap`'s resume fork: the `expire:` arm is a second (§5.3). Amended by
      this design's wave 3 (3965): CCR-15's §6 now names `ws-reap`'s `expire-in-progress` refusal beside its `reclaim:`
      mirror, and `ws-restore`'s refusal of an expiry in progress.
-  5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4).
+  5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4). Amended by this design’s wave 4: CCR-15's texts name no
+     `causedBy` vocabulary (measured); the set is written in the build-4 design (`2026-08-11-build4-conversation-and-controls-design.md`),
+     which now names the third word, and in `close.ts`'s `CloseCause`.
   6. Wave 4's lane gains a second population (§5.3). Amended by this design’s wave 3b, recorded by wave 4: the expiry
      lane is a SIBLING pass on the same tick, never a population inside `sweepChildReclaim`, so CCR-15's sweep and its
      text are unchanged.
