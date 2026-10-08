@@ -329,13 +329,16 @@ describe('the both-role boot write: recorded role only (spec 4.10)', () => {
 
   it('a recorded both box whose agent.env carries CCRC_AGENT_TOKEN (a fleet box): the planted file is untouched', async () => {
     const home = mkHome();
-    writeFileSync(P(home).agentEnv, `CCRC_SERVER_URL=ws://127.0.0.1:1\n${['CCRC', 'AGENT', 'TOKEN'].join('_')}=${mintValue()}\n`, { mode: 0o600 });
+    const agentEnv = `CCRC_SERVER_URL=ws://127.0.0.1:1\n${['CCRC', 'AGENT', 'TOKEN'].join('_')}=${mintValue()}\n`;
+    writeFileSync(P(home).agentEnv, agentEnv, { mode: 0o600 });
     mkdirSync(path.join(home, '.cc-secrets'), { mode: 0o700 });
     const planted = `${mintValue()}\n`;
     writeFileSync(P(home).fleetFile, planted, { mode: 0o600 });
     const r = await boot(home, { ...both, roleSource: 'recorded' });
     expect(r.bothWriterArmed).toBe(false);
     expect(readFileSync(P(home).fleetFile, 'utf8')).toBe(planted);
+    expect(readFileSync(P(home).agentEnv, 'utf8')).toBe(agentEnv);
+    expect(existsSync(P(home).generation)).toBe(false);
   });
 
   it('derived both with no fleet file warns once, naming the fleet path and the unrecorded role', async () => {
@@ -455,6 +458,31 @@ describe('boot hardening around a recorded promotion, a state-unknown write and 
     expect(checkMailToken(r.holder, rot.old), 'a stale previous file is not relabelled as the previous value').toBe('bad');
     expect(r.state?.previous).toBeNull();
     expect(existsSync(P(home).previous)).toBe(false);
+  });
+
+  it('a promotion finished over a torn mail.token the server wrote is a recovery: warned, recorded from pending, a rotation owed (D-4404 item 5)', async () => {
+    const home = mkHome();
+    const first = await boot(home);
+    const rot = await rotateOnce(home, first);
+    const second = await recordPromotion(home, { ...first, state: rot.state });
+    tornWrite(P(home).current);
+    const r = await boot(home);
+    expect(checkMailToken(r.holder, second.next)).toBe('ok');
+    expect(r.state).toMatchObject({ rotationOwed: true, owedWhy: 'recovered', promoting: null, current: { id: second.id } });
+    expect(r.state?.lastBootRecovery?.source).toBe('pending');
+    expect(r.warnings.join('\n')).toContain(`${P(home).current} carries no usable value, but this server wrote it (generation #${rot.state.current.seq}); `
+      + `recovered from ${P(home).pending(second.id)}, also written by this server. A forward rotation is owed now; `
+      + `the fleet box's calls may answer 401 until it confirms one.`);
+    neverPrinted(r.printed, second.next, rot.next, rot.old);
+  });
+
+  it('a promotion finished over an intact old mail.token is not a recovery: nothing owed, nothing recorded', async () => {
+    const home = mkHome();
+    const r0 = await boot(home);
+    await recordPromotion(home, r0);
+    const r = await boot(home);
+    expect(r.state).toMatchObject({ rotationOwed: false, owedWhy: null, lastBootRecovery: null });
+    expect(r.warnings.join('\n')).not.toContain('carries no usable value');
   });
 
   it('a recorded promotion over a placeholder mail.token still refuses boot, and renames nothing', async () => {

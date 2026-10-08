@@ -256,7 +256,13 @@ async function finishPromotion(state: BoxTokenState, paths: TokenPaths, now: num
       ? await writeValueFileAtomic(paths.previous, `${M.value}\n`)   // (b), safe to run again
       : null;
     await renameOverAtomic(paths.pending(id), paths.current);         // (c)
-    return done(promotedState(state, id, now, prevWrite));            // (d)
+    const promoted = promotedState(state, id, now, prevWrite);        // (d)
+    if (M.kind !== 'unusable') return done(promoted);
+    // mail.token was torn and proved server-written: this promotion was a recovery from the pending sibling
+    // (spec 4.2.1 act (c), D-4404 item 5): warn, owe a forward rotation, record the recovery.
+    warn(`${paths.current} carries no usable value, but this server wrote it (generation #${state.current.seq}); recovered from `
+      + `${paths.pending(id)}, also written by this server. A forward rotation is owed now; the fleet box's calls may answer 401 until it confirms one.`);
+    return done({ ...owe(promoted, 'recovered'), lastBootRecovery: { at: now, source: 'pending' } });
   }
   if (P.kind === 'absent' && M.kind === 'value' && M.meta.dev === g.write.dev && M.meta.ino === g.write.ino) {
     return done(promotedState(state, id, now, await prevFile()));     // (c) was already done
