@@ -10,7 +10,8 @@ import { CCD } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { EXP_ID, expireVerb, makeArchived } from './wsExpireFixture.js';
 import {
-  EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
+  EXPIRE_FAILURE_CEILING_MS, EXPIRE_FAILURE_GIVE_UP_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
+  EXPIRE_PERSISTENT_RETRY_MS,
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
   EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, keptLeafWord, parseExpireAudit, parseExpireResult, reviewKeeps,
@@ -547,6 +548,63 @@ describe('the lane’s memory of one row', () => {
     expect(x.report).toBeNull();
     x = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW + EXPIRE_FAILURE_CEILING_MS, PASS)!;
     expect(x.report).toMatchObject({ kind: 'failing', at: NOW });
+  });
+
+  it('a DAY of failures the box called resumable: the PERSISTENT TIER — a standing entry, asked every four hours, never stopping (wave 5)', () => {
+    let x = e();
+    let t = NOW;
+    for (let k = 0; k < 30 && t - NOW < EXPIRE_FAILURE_GIVE_UP_MS; k += 1) {
+      x = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: `worktree-remove-failed: try ${k + 1}` }, t, PASS)!;
+      expect(x.nextAskAt, `still backing off after ${k + 1}`).toBeLessThan(Number.POSITIVE_INFINITY);
+      expect((x.report as { attempts?: number } | null)?.attempts, `not yet standing after ${k + 1}`).toBeUndefined();
+      t = x.nextAskAt;
+    }
+    const DAY = NOW + EXPIRE_FAILURE_GIVE_UP_MS;
+    x = archivedExpiryNextEntry(x, { kind: 'box', word: 'lock-unopenable', detail: 'cannot open the reap lock at /r' }, DAY, PASS)!;
+    expect(x.nextAskAt, 'it asks again in four hours — never +∞').toBe(DAY + EXPIRE_PERSISTENT_RETRY_MS);
+    const attempts = x.failures;
+    expect(x.report).toEqual({ kind: 'failing', at: NOW, detail: 'cannot open the reap lock at /r', attempts });
+    expect(expiryReportSentence(x.report!, null)).toBe('cleanup has failed for a day in ways the box said it could resume: the '
+      + `first at 2026-09-21 14:13 UTC, ${attempts} attempts, the last: cannot open the reap lock at /r. It may have stopped part-way — `
+      + 'the box does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane asks again '
+      + 'every 4 hours and keeps this entry until an attempt completes, finds that none had begun or stops for good, or the '
+      + 'workspace is archived again.');
+    expect(expiryReportSentence(x.report!, null), 'it never suggests a destructive verb').not.toMatch(/ws-reap|ws-rm|ws-expire|delete|remove/);
+    // Each later failure updates the entry and keeps the cadence; the first failure's instant stands.
+    const later = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'worktree-remove-failed: still busy' }, x.nextAskAt, PASS)!;
+    expect(later.nextAskAt, 'and again four hours on').toBe(x.nextAskAt + EXPIRE_PERSISTENT_RETRY_MS);
+    expect(later.report).toEqual({ kind: 'failing', at: NOW, detail: 'worktree-remove-failed: still busy', attempts: attempts + 1 });
+    // A deferral asks nothing of the box: the entry and its run stand, and it is asked again next pass.
+    const deferred = archivedExpiryNextEntry(later, { kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' }, later.nextAskAt, PASS)!;
+    expect(deferred, 'a deferral ends nothing').toMatchObject({ report: later.report, failures: attempts + 1, failingSince: NOW,
+      nextAskAt: later.nextAskAt + PASS });
+    // Nor does any other answer that ends no attempt: a shadow audit (never a "nothing was deleted" said of a workspace
+    // that may be part-cleaned), a refusal the box retries (a hold the ACT met), an in-use, ccd's "not yet" and an older
+    // ccd's silence each keep the entry, its run and the learned instant.
+    const keeps: ReadonlyArray<readonly [string, Parameters<typeof archivedExpiryNextEntry>[1]]> = [
+      ['a shadow audit', { kind: 'would-expire', sensitive: 0 }],
+      ['a hold the act met', { kind: 'refused', token: 'held', detail: 'on hold', inUse: [] }],
+      ['an in-use', { kind: 'refused', token: 'in-use', detail: 'a process works in it', inUse: [] }],
+      ['ccd’s not-yet', { kind: 'refused', token: 'not-expired', detail: 'young', inUse: [] }],
+      ['an older ccd', { kind: 'no-evidence' }],
+    ];
+    for (const [what, o] of keeps) {
+      expect(archivedExpiryNextEntry(later, o, later.nextAskAt, PASS), `${what} ends nothing`)
+        .toMatchObject({ report: later.report, failures: attempts + 1, failingSince: NOW, expiresAt: later.expiresAt });
+    }
+    // A failed state-changed shows that none had begun (the fresh arm runs only while no breadcrumb stands): it ends the
+    // entry and starts over.
+    expect(archivedExpiryNextEntry(later, { kind: 'restart', detail: 'state-changed: moved' }, later.nextAskAt, PASS),
+      'a restart ends it').toMatchObject({ report: null, failures: 0, failingSince: null, expiresAt: null });
+    // A hold never takes its place nor resets its cadence; an attempt that completes finishes the row; a new archive starts afresh.
+    const held = archivedExpirySighted(later, { eligible: false, why: 'held' }, 'h', later.nextAskAt - PASS);
+    expect(held.report, 'a hold never hides it').toEqual(later.report);
+    expect(held.nextAskAt, 'nor resets its cadence').toBe(later.nextAskAt);
+    expect(archivedExpiryNextEntry(later, { kind: 'expired', kept: { clips: null, tmpRoot: null } }, later.nextAskAt, PASS),
+      'a completed attempt finishes it').toBeNull();
+    expect(archivedExpiryEntryFor(later, later.archivedAt + 1), 'a new archive starts afresh').toMatchObject({ failures: 0, report: null, nextAskAt: 0 });
+    expect(EXPIRE_FAILURE_GIVE_UP_MS).toBe(24 * EXPIRE_FAILURE_CEILING_MS);
+    expect(EXPIRE_PERSISTENT_RETRY_MS, 'the persistent cadence: four ceilings, inside the day').toBe(4 * EXPIRE_FAILURE_CEILING_MS);
   });
 
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {

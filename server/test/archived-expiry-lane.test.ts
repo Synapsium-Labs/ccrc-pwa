@@ -16,7 +16,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { ACTOR_FLAGS_CAP, EXPIRE_CAP } from '../src/ccdargv.js';
 import {
-  EXPIRE_AUDITS_PER_PASS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
+  EXPIRE_AUDITS_PER_PASS, EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
 } from '../src/archivedExpiry.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -181,6 +181,40 @@ describe('a failure that will not resume (review 313, parked item 4)', () => {
     expect(f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
     for (let k = 0; k < 70; k += 1) { f.next(); await f.pass(); }   // well past the one-hour ceiling
     expect(f.verbsFor('ws-expire'), 'stopped, never retried').toEqual(['demo-a']);
+  });
+});
+
+describe('a failure that keeps resuming (wave 5)', () => {
+  it('a day of resumable failures on one archive: then the persistent tier — asked every four hours, never stopping, and listed with the first failure, the attempts and the last', async () => {
+    const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'the tree is busy' }), stderr: '' }) });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    const hourly = async (): Promise<number> => {
+      const before = f.verbsFor('ws-expire').length;
+      f.advance(EXPIRE_FAILURE_CEILING_MS); f.next(); await f.pass();
+      return f.verbsFor('ws-expire').length - before;
+    };
+    for (let k = 0; k < 24; k += 1) await hourly();
+    // The first failure, then one an hour (the backoff's ceiling): the 25th lands a day after the first.
+    expect(f.verbsFor('ws-expire'), 'retried for a day').toHaveLength(25);
+    const dayTwo: number[] = [];
+    for (let k = 0; k < 24; k += 1) dayTwo.push(await hourly());
+    expect(dayTwo.join(''), 'then one every four hours, never stopping').toBe('000100010001000100010001');
+    const asked = f.verbsFor('ws-expire').length;
+    await f.watcher.tick();
+    const list = f.watcher.currentCoord()?.expiryAttention ?? [];
+    expect(list.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
+    expect(list[0]!.sentence).toContain(`${asked} attempts, the last: worktree-remove-failed: the tree is busy`);
+    expect(list[0]!.sentence).toContain('The lane asks again every 4 hours');
+    // The operator takes the arming away to look into it: the next act stops at the shadow, and the entry STANDS — never
+    // replaced by a "nothing was deleted" said of a workspace that may be part-cleaned.
+    rmSync(path.join(f.reg, EXPIRE_LANE_LIVE_MARKER));
+    const audits = f.verbsFor('ws-audit').length;
+    f.advance(4 * EXPIRE_FAILURE_CEILING_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-audit'), 'the act audited').toHaveLength(audits + 1);
+    expect(f.verbsFor('ws-expire'), 'and composed nothing: shadow').toHaveLength(asked);
+    expect(f.entry('demo-a')?.report, 'a shadow audit ends nothing').toMatchObject({ kind: 'failing', attempts: asked });
   });
 });
 
