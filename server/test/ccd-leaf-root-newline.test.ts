@@ -3,10 +3,14 @@
 // `$(cd -- "$root" && pwd -P)` read `<vol>\n` as `<vol>`: `_ws_leaf_remove`
 // then removed `<vol>/<id>`, a directory OUTSIDE the root, answered 0, and
 // left the real leaf standing; and `_ws_path_users` compared the wrong
-// physical spelling, found nobody, and so let a leaf in use be removed. Both
-// now read the resolution through an `x` sentinel, and refuse — unmeasured,
-// rc 2 — a physical path that holds a newline ANYWHERE: ccd mints no such
-// root, and a name that a line-oriented reader splits is never acted under.
+// physical spelling, found nobody, and so let a leaf in use be removed; the
+// expiry probe `_ws_expire_cwd_users` had the same twin. All three now resolve
+// through ONE helper, `_ws_dir_physical`, which reads `pwd -P` through an `x`
+// sentinel exactly as `_ws_reclaim_resolve` does, and refuses a physical path
+// that holds a newline ANYWHERE; each site maps that to its own unmeasured
+// answer (rc 2 for the first two, `_ws_reclaim_unmeasured` for the expiry
+// probe): ccd mints no such root, and a name a line-oriented reader splits is
+// never acted under.
 // FIXTURE HOME ONLY: every path is under the harness's HOME; only a same-uid
 // actor can make a root resolve so, which is what each case plants.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -106,6 +110,111 @@ describe('_ws_path_users: a parent whose physical path holds a newline is unmeas
       .toBe(`${t.real}\nx`);
     const a = users(path.join(t.root, ID), fake);
     expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('newline');
+  }, 60_000);
+});
+
+describe('_ws_expire_cwd_users: a parent whose physical path holds a newline is unmeasured — never "nobody"', () => {
+  const EXP = 'demo-quiet-dune';
+  const LEAF = 'quiet-dune';
+  /** The expiry probe's answer: its rc, and the verdict and detail it leaves (`_ws_reclaim_unmeasured`, `_reap_refuse`). */
+  const cwdUsers = (workdir: string, pre = ''): { rc: string; verdict: string; detail: string } => {
+    const [rc = '', verdict = '', detail = ''] = h.sh(`_ws_reclaim_reset; ${pre} _ws_expire_cwd_users ${EXP} "${workdir}"; rc=$?;`
+      + ` printf '%s\\x1f%s\\x1f%s' "$rc" "\${REAP_VERDICT-}" "\${REAP_DETAIL-}"`).split('\x1f');
+    return { rc, verdict, detail };
+  };
+  /** A fake /proc (the seam `_ws_expire_proc_root`), ccd's own `$$` listed first; `_fp <pid> <cwd> <ppid>`. */
+  const FAKE = [
+    'CCD_OS=linux; rm -rf "$HOME/fp"; mkdir -p "$HOME/fp/$$"; ln -sfn "$HOME" "$HOME/fp/$$/cwd";',
+    '_fp() { mkdir -p "$HOME/fp/$1"; ln -sfn "$2" "$HOME/fp/$1/cwd"; printf "%s (a b) S %s 1 1 0\\n" "$1" "$3" > "$HOME/fp/$1/stat"; };',
+    '_ws_expire_proc_root() { printf %s "$HOME/fp"; };',
+  ].join(' ');
+  /** `$HOME/<vol>/<leaf>` (the REAL worktree) and `$HOME/root -> $HOME/<vol>`; the workdir asked is `$HOME/root/<leaf>`. */
+  const plantWt = (vol: string): { workdir: string; real: string } => {
+    const real = path.join(h.home, vol, LEAF);
+    fs.mkdirSync(path.join(real, 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'vol', LEAF), { recursive: true });
+    fs.symlinkSync(path.join(h.home, vol), path.join(h.home, 'root'));
+    return { workdir: path.join(h.home, 'root', LEAF), real };
+  };
+
+  it('a FAKE process table on any host: a cwd in the real worktree under a parent resolving to `vol\\n` is unmeasured (rc 1), never nobody', () => {
+    const t = plantWt('vol\n');
+    const pre = `${FAKE} _fp 4242 "$HOME/vol"$'\\n'"/${LEAF}/sub" 1;`;
+    expect(h.sh(`${pre} readlink "$HOME/fp/4242/cwd"; printf x`), 'the CONTROL: 4242 works in the real worktree')
+      .toBe(`${t.real}/sub\nx`);
+    const a = cwdUsers(t.workdir, pre);
+    expect(a.rc, a.detail).toBe('1');
+    expect(a.verdict, a.detail).toBe('unmeasured');
+    expect(a.detail).toContain('newline');
+  }, 60_000);
+
+  it('CONTROL: the same process under a parent with no newline is found — in-use', () => {
+    const real = path.join(h.home, 'plain', LEAF);
+    fs.mkdirSync(path.join(real, 'sub'), { recursive: true });
+    const a = cwdUsers(real, `${FAKE} _fp 4242 "${real}/sub" 1;`);
+    expect(a.rc, a.detail).toBe('1');
+    expect(a.verdict, a.detail).toBe('in-use');
+    expect(a.detail).toContain('process 4242 ');
+  }, 60_000);
+
+  it.skipIf(!LINUX)('a LIVE process of this uid with its cwd in the real worktree, under a parent resolving to `vol\\n`: unmeasured, never nobody', () => {
+    const t = plantWt('vol\n');
+    const s = holdProc({ cwd: path.join(t.real, 'sub') });
+    held.push(s);
+    const a = cwdUsers(t.workdir);
+    expect(a.rc, a.detail).toBe('1');
+    expect(a.verdict, a.detail).toBe('unmeasured');
+    expect(a.detail).toContain('newline');
+  }, 60_000);
+});
+
+describe('_ws_dir_physical — the one physical resolution of a directory, read through an `x` sentinel', () => {
+  /** The helper's rc, `_WS_PHYS` and `_WS_PHYS_WHY`. */
+  const phys = (dir: string, pre = ''): { rc: string; phys: string; why: string } => {
+    const [rc = '', p = '', why = ''] = h.sh(`${pre} _ws_dir_physical "${dir}"; rc=$?;`
+      + ` printf '%s\\x1f%s\\x1f%s' "$rc" "$_WS_PHYS" "$_WS_PHYS_WHY"`).split('\x1f');
+    return { rc, phys: p, why };
+  };
+
+  it('CONTROL: a directory reached through a link answers its physical path — and a function named cd, pwd or printf cannot answer for it', () => {
+    const vol = path.join(h.home, 'vol');
+    fs.mkdirSync(vol);
+    fs.symlinkSync(vol, path.join(h.home, 'root'));
+    const a = phys(path.join(h.home, 'root'));
+    expect(a.rc, a.why).toBe('0');
+    expect(a.phys).toBe(fs.realpathSync(vol));
+    expect(a.why).toBe('');
+    const lying = phys(path.join(h.home, 'root'), 'cd() { :; }; pwd() { echo /elsewhere; }; printf() { if [[ "$*" == x ]]; then command printf y; else command printf "$@"; fi; };');
+    expect(lying.phys, 'the shadowing functions were never called').toBe(fs.realpathSync(vol));
+  }, 60_000);
+
+  it('a directory that cannot be entered (missing, or a regular file) answers 1 and says so, `_WS_PHYS` empty', () => {
+    fs.writeFileSync(path.join(h.home, 'file'), 'x');
+    for (const d of [path.join(h.home, 'missing'), path.join(h.home, 'file')]) {
+      const a = phys(d);
+      expect(a.rc, `${d}: ${a.why}`).toBe('1');
+      expect(a.phys).toBe('');
+      expect(a.why).toContain(`${d} cannot be entered`);
+    }
+  }, 60_000);
+
+  it('a read with no sentinel answers 1 and says so — a `builtin` function made readonly (BASH_ENV’s reach) prints no `x`', () => {
+    fs.mkdirSync(path.join(h.home, 'vol'));
+    // `unset -f builtin` fails on a readonly function, so `builtin printf x` reaches it: it prints `y`.
+    const pre = 'builtin() { if [[ "$1" == printf ]]; then command printf y; else command "$@"; fi; }; readonly -f builtin;';
+    const a = phys(path.join(h.home, 'vol'), pre);
+    expect(a.rc, a.why).toBe('1');
+    expect(a.phys).toBe('');
+    expect(a.why).toContain('sentinel');
+  }, 60_000);
+
+  it.each([['at its end', 'vol\n'], ['mid-path', 'a\nb']])('a physical path holding a newline %s answers 1 and says so, `_WS_PHYS` empty', (_label, vol) => {
+    fs.mkdirSync(path.join(h.home, vol));
+    fs.symlinkSync(path.join(h.home, vol), path.join(h.home, 'root'));
+    const a = phys(path.join(h.home, 'root'));
+    expect(a.rc, a.why).toBe('1');
+    expect(a.phys).toBe('');
     expect(a.why).toContain('newline');
   }, 60_000);
 });

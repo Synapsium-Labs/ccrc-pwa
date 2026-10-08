@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a68e9c4d609d42816c7e34b2b76109790955da7a0c7521fd1ef0eec86f038ae7
+# ccrc:generated 1 sha256=6b80b4e7417f829bae5acc09305629fa6c9275144a848b9d94905e0f53e17f1f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28742,6 +28742,38 @@ sys.stdout.write(str(len(v)))
 ' "$1" 2>/dev/null
 }
 
+# ── a directory's physical path, whole (child reclamation wave 6, spec §5.6) ──
+_WS_PHYS=''
+_WS_PHYS_WHY=''
+_ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
+  #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
+  # THE ONE PHYSICAL RESOLUTION of a directory a removal or an in-use probe
+  # acts under: `_ws_leaf_remove`'s root, `_ws_path_users`' parent and
+  # `_ws_expire_cwd_users`' parent. A bare `$(cd -- "$d" && pwd -P)` dropped
+  # EVERY trailing newline, so a root resolving to `<vol>\n` read as `<vol>`:
+  # the removal took `<vol>/<id>` outside the root, and both probes compared a
+  # spelling no process uses and answered "nobody". So this is
+  # `_ws_reclaim_resolve`'s own entry, exactly: POSIX mode by ASSIGNMENT, the
+  # functions named after every command it calls removed by the special
+  # builtin `unset`, `builtin cd -L` with `CDPATH` emptied, `builtin pwd -P`,
+  # then `builtin printf x` — and the read is whole only when it ends in that
+  # newline and `x`. A physical path holding a newline ANYWHERE is refused too:
+  # ccd mints none, and a line-oriented reader would split it. Each caller maps
+  # a non-zero answer to its own unmeasured one, never to "nobody" or "absent".
+  # Out of reach, as for `_ws_reclaim_resolve`: `BASH_ENV`, which can make a
+  # function `readonly` before ccd's first line — a missing sentinel is then
+  # the answer, never a guess.
+  local d="$1" r
+  _WS_PHYS=''; _WS_PHYS_WHY=''
+  r=$(POSIXLY_CORRECT=y; unset -f builtin cd pwd printf 2>/dev/null; \
+      CDPATH= builtin cd -L -- "$d" >/dev/null 2>&1 && builtin pwd -P 2>/dev/null && builtin printf x) \
+    || { _WS_PHYS_WHY="$d cannot be entered"; return 1; }
+  [[ "$r" == *$'\n'x ]] || { _WS_PHYS_WHY="the physical path of $d was not read whole (its sentinel is missing)"; return 1; }
+  r="${r%$'\n'x}"
+  [[ "$r" != *$'\n'* ]] || { _WS_PHYS_WHY="$d resolves to a physical path holding a newline"; return 1; }
+  _WS_PHYS="$r"
+}
+
 # ── who uses a path: the in-use probe (child reclamation wave 6, spec §5.6) ──
 # THE SEAM, as `_ws_expire_proc_root` is the expiry probe's: a test names a fake
 # process table, and the box answers /proc.
@@ -28832,15 +28864,11 @@ _ws_path_users() {   # path -> 0 when no process of this uid uses it; 1 when one
   if (( rc == 0 )); then
     phys="$p"   # nothing stands above the leaf: no cwd or fd can be in it; TMPDIR is a string
   else
-    # READ THROUGH AN `x` SENTINEL: a command substitution drops EVERY trailing
-    # newline, so a parent resolving to `<vol>\n` read as `<vol>`, the physical
-    # spelling named another directory, and a user of the real leaf went unseen.
-    # A physical parent holding a newline ANYWHERE is unmeasured, never "nobody".
-    preal=$(cd -- "$parent" >/dev/null 2>&1 && pwd -P && printf x) && [[ "$preal" == *$'\n'x ]] \
-      || { _WS_PATH_USERS_WHY="the directory $parent that holds $p cannot be resolved, so who uses $p was never asked"; return 2; }
-    preal="${preal%$'\n'x}"
-    [[ "$preal" != *$'\n'* ]] \
-      || { _WS_PATH_USERS_WHY="the directory $parent that holds $p resolves to a physical path holding a newline, so who uses $p was never asked"; return 2; }
+    # WHOLE, through `_ws_dir_physical`: a parent resolving to `<vol>\n` read as
+    # `<vol>` named another directory, and a user of the real leaf went unseen.
+    _ws_dir_physical "$parent" \
+      || { _WS_PATH_USERS_WHY="the directory $parent that holds $p cannot be resolved ($_WS_PHYS_WHY), so who uses $p was never asked"; return 2; }
+    preal="$_WS_PHYS"
     phys="${preal%/}/$name"
   fi
   root=$(_ws_path_users_proc_root)
@@ -29050,11 +29078,11 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   (`$HOME/.cc-tmp` is a bind mount on the fleet box). A root that is gone,
   #   PROVEN, holds no leaf: 0. A root that resolves to nothing or to `/` is
   #   never used (the leaf would be `/<id>`): 2. ccd never passes one. The
-  #   resolution is read through an `x` sentinel, as `_ws_reclaim_resolve`
-  #   reads its own: a command substitution drops EVERY trailing newline, so a
-  #   root resolving to `<vol>\n` read as `<vol>`, and `<vol>/<id>` — outside
-  #   the root — was removed while the real leaf stood. A physical root holding
-  #   a newline ANYWHERE is never used either: 2. The leaf's own resolution
+  #   resolution is `_ws_dir_physical`'s, read whole through its sentinel: a
+  #   bare `pwd -P` capture drops EVERY trailing newline, so a root resolving
+  #   to `<vol>\n` read as `<vol>`, and `<vol>/<id>` — outside the root — was
+  #   removed while the real leaf stood. A physical root holding a newline
+  #   ANYWHERE is never used either: 2. The leaf's own resolution
   #   needs no sentinel: under a newline-free physical root, with an id that
   #   holds none, a leaf that is no link (asked first) resolves to exactly
   #   `<root>/<id>`; only a link swapped in inside the window stated below
@@ -29107,11 +29135,9 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   _ws_reclaim_absent "$root"; rc=$?
   (( rc != 0 )) || return 0
   (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — whether $id stands under it was never asked"; return 2; }
-  rroot=$(cd -- "$root" >/dev/null 2>&1 && pwd -P && printf x) && [[ "$rroot" == *$'\n'x ]] \
-    || { _WS_LEAF_WHY="$root cannot be resolved, so whether $id stands under it was never asked"; return 2; }
-  rroot="${rroot%$'\n'x}"
-  [[ "$rroot" != *$'\n'* ]] \
-    || { _WS_LEAF_WHY="$root resolves to a physical path holding a newline, so whether $id stands under it was never asked"; return 2; }
+  _ws_dir_physical "$root" \
+    || { _WS_LEAF_WHY="$root cannot be resolved ($_WS_PHYS_WHY), so whether $id stands under it was never asked"; return 2; }
+  rroot="$_WS_PHYS"
   [[ -n "$rroot" && "$rroot" != / ]] || { _WS_LEAF_WHY="$root resolved to an unusable path"; return 2; }
   leaf="${rroot%/}/$id"
   if [[ -L "$leaf" || ( -e "$leaf" && ! -d "$leaf" ) ]]; then
@@ -30375,8 +30401,8 @@ _ws_expire_cwd_users() {   # id workdir -> 0 when no process has its working dir
   (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_ABSENT_WHY — whether a process works inside $workdir was never asked"; return 1; }
   (( rc != 0 )) || return 0
   leaf="${workdir##*/}"; parent="${workdir%/*}"; [[ -n "$parent" ]] || parent=/
-  preal=$(cd -- "$parent" >/dev/null 2>&1 && pwd -P) \
-    || { _ws_reclaim_unmeasured "the directory $parent that holds $workdir cannot be resolved, so whether a process works inside it was never asked"; return 1; }
+  _ws_dir_physical "$parent" && preal="$_WS_PHYS" \
+    || { _ws_reclaim_unmeasured "the directory $parent that holds $workdir cannot be resolved ($_WS_PHYS_WHY), so whether a process works inside it was never asked"; return 1; }
   wt="${preal%/}/$leaf"
   if [[ "$CCD_OS" == darwin ]]; then
     mode=lsof; listing=$(_ws_expire_lsof 2>/dev/null); rc=$?
