@@ -16,7 +16,7 @@ spec's after wave 1.
 
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
-| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | — | planned; deviation block 4388 to 4417 (30, shared with row 2); dispatch held on claims, see Carried constraints |
+| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | — | DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | — | — | to open before row 1 closes |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
@@ -51,6 +51,14 @@ spec's after wave 1.
   - Execution: "Dispatch to a worker". Run 320 goes to a worker, which runs subagent-driven-development, then the
     held-out review panel. Part B follows as the next run.
   - Numbers 4400 to 4417 stay reserved, written bare.
+- **2026-10-08 13:26 UTC: run 320 dispatched** to `ccrc-pwa-bright-mesa`, after one `cap-daily` refusal at 12:39.
+  - #324 merged on 2026-10-07 at 21:50 as `3c33d321`, putting the spec, ledger and plan on `main`.
+  - **A coordinator ruling: dispatched before #315 and #322 merged.** Their claims, 1078 on
+    `server/test/single-definition.test.ts` and 1083 on `README.md`, had lapsed, but both PRs were still in review after 13
+    hours. The leaked value stays live until this programme's first rotation, so waiting was the larger cost. The brief has
+    the worker merge `main` just before its edits to those two files and again before it pushes. A conflict there is
+    textual: keep both sides.
+  - Worker reserve: 4400 to 4409. Numbers 4410 to 4417 are the coordinator's.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
