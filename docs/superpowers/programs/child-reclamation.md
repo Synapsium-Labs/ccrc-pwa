@@ -46,6 +46,28 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 08:01 — fix round 1's wave-done verified (mail 3983); run 291 is at `awaiting-review` on
+  `750910110`.** The wave-done's fingerprint was re-measured, and the evidence is archived under
+  `ccr15-evidence-archive/wave6-fr1-done/`.
+  - **Measured.** The tip is pushed, PR #326's head equals it, and the merge-tree against main `3c33d3218` is clean.
+    CI on the new tip was still running.
+  - **Suite.** The full suite ran on code tip `bf8c542fb`, with server, agent and pwa all green apart from two reds:
+    - `tmp-sweep`'s "FAILS CLOSED", which is red on main too;
+    - `ccd-spawn-split`, a load flake that passes alone.
+
+    Six commits followed, five docs-only and one comment-only. The tests that read the docs re-ran on the final tip.
+  - **Numbers.** 32 numbers are defined singly in the plan. 4463 was not used, and no new departure was found.
+  - **Accepted.** The spec's §5.2 gained one witness sentence beyond the four regions, because 4459 had made the old
+    sentence false. It lies far from #328's §5.8 replace.
+  - **Ruled.** A `probe-unmeasured` on a RESUMED arm still reads not-resumable while a breadcrumb stands. Its
+    classification is unchanged in this round, and it is carried to wave 7 with the additive `crumb` field. The
+    scoped review checks the worker's claim that only the sentence is wrong, never the act. ws-expire's parser
+    (`archivedExpiry.ts:231`) has F3's twin, which is workspace-lifecycle's and goes to quiet-river.
+  - **Landing order.** #328 (run 314) and #325 (bright-harbor) overlap this PR's files. Under R56, whichever lands
+    second merges main and restamps, then re-runs `expiry-lane-prose`, `ccd-reg-get-census` and the session-hook
+    citation census.
+  - **Next.** A scoped review run.
+
 - **2026-10-08 04:35 — fix round 1's spec text waits on claim 1097 (asked in 3971, answered in 3975).** The round's
   code is done; its spec text is not applied. The spec is held by claim 1097: swift-cove, run 314, workspace-lifecycle
   wave 4's Task 13. That task touches the spec once, in a §5.8 replace. This round's text touches §5.5, §5.6, §5.9
