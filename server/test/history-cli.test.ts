@@ -794,8 +794,9 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
   // FR2c (review 344 F3; D-4418 (history-spool-append-regular-file-only)): a node the hook refuses at spool/<id>.jsonl silences
   // that id's spool lines until it is removed. Status counts such nodes under WARN spool-planted from its own lstat (no counter),
   // never opening or following one, so the clause clears when the node goes; a regular sibling, a dot-name and a name outside
-  // the id grammar are not counted.
-  it.each([['a FIFO'], ['a dangling link'], ['a directory']])('%s at spool/<id>.jsonl is WARN spool-planted from status\'s own lstat, and the clause clears when it goes (FR2c, F3)', (kind) => {
+  // the id grammar are not counted. A live link to a regular file is counted too, because status reads by lstat and never
+  // follows a link: a stat would call the target regular and count it as no node (review 351 F3).
+  it.each([['a FIFO'], ['a dangling link'], ['a link to a regular file'], ['a directory']])('%s at spool/<id>.jsonl is WARN spool-planted from status\'s own lstat, and the clause clears when it goes (FR2c, F3)', (kind) => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-spool-node-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);
     tickedStore(box, Date.now());
@@ -804,6 +805,11 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     const node = healthPath.join(spoolDir, `${ID}.jsonl`);
     if (kind === 'a FIFO') healthCp.execFileSync('mkfifo', [node]);
     else if (kind === 'a dangling link') healthFs.symlinkSync(healthPath.join(box.home, 'nowhere'), node);
+    else if (kind === 'a link to a regular file') {
+      const target = healthPath.join(box.home, 'spool-target.jsonl');
+      healthFs.writeFileSync(target, '\n{}\n', { mode: 0o600 });
+      healthFs.symlinkSync(target, node);
+    }
     else healthFs.mkdirSync(node);
     healthFs.writeFileSync(healthPath.join(spoolDir, 'claude-a-other.jsonl'), '\n{}\n', { mode: 0o600 });   // a regular sibling
     healthCp.execFileSync('mkfifo', [healthPath.join(spoolDir, '.hidden.jsonl')]);                            // a dot-name no hook writes
