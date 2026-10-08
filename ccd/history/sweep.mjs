@@ -580,6 +580,7 @@ export function renameSpoolFiles(home, tickMs, pid) {
 function renameAndObserve(home, tickMs, nowMs) {
   let failed = false;
   for (const n of renameSpoolFiles(home, tickMs, process.pid)) {
+    if (overSpoolCap(home, n)) continue;   // FU8 (FPM7): never observed; the drain sets it aside from its lstat (D-4337)
     try {
       observe(home, n, nowMs);
     } catch (e) {
@@ -635,15 +636,29 @@ const REJECTED_DIR = 'rejected';
  *  `planted/<tickMs>.<pid>/` (D-4347 (history-planted-entries-never-wedge)); `listDraining` never lists it. */
 const PLANTED_DIR = 'planted';
 
+/** True when `name` in `.draining/` is a regular file over SPOOL_FILE_MAX by its lstat (D-4337, history-spool-file-size-cap):
+ *  decided before any open, and before any observation (FU8, FPM7). No pass journals such a file, so an observation written
+ *  for it would only leave a `journaled: null` sidecar, which status reads as a journal hold. False for a file within the
+ *  cap, a link or a FIFO, which are not this function's. */
+function overSpoolCap(home, name) {
+  let st;
+  try { st = lstatSync(`${historyPaths(home).draining}/${name}`); } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; }
+  return st.isFile() && st.size > SPOOL_FILE_MAX;
+}
+
 /** Decide a draining file's oversize from its lstat BEFORE any open (D-4337, history-spool-file-size-cap): true when it
  *  is a regular file over SPOOL_FILE_MAX, which `setAside` has then moved aside or left for the next tick to count; the
  *  caller never journals it. False for a file that is not oversize, a link or a FIFO, which are not this function's. */
 export function setAsideOversize(db, home, name) {
-  const P = historyPaths(home);
-  let st;
-  try { st = lstatSync(`${P.draining}/${name}`); } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; }
-  if (!st.isFile() || st.size <= SPOOL_FILE_MAX) return false;
+  if (!overSpoolCap(home, name)) return false;
   return setAside(db, home, name, OVERSIZE_DIR, 'spool_oversize');
+}
+
+/** The observation sidecar of a file over SPOOL_FILE_LINES_MAX, removed whenever a pass meets the file (FU8, FPM7). No pass
+ *  journals such a file at its size, so its observation is never used, and a `journaled: null` sidecar left while its
+ *  set-aside waits (a pass that only journals, or a move that fails) would read as a journal hold in status. Never throws. */
+function dropOverlinesSidecar(home, name) {
+  try { removeEntry(`${historyPaths(home).draining}/${sidecarName(name)}`); } catch { /* the set-aside, or the next pass, removes it */ }
 }
 
 /** Move `<from>/<name>` into the directory `dir`, made on demand (0700). A name at `dir` that is not a directory (a stray
@@ -853,6 +868,9 @@ export function journalHalf(home, ids, nowMs) {
   const waiting = new Set();   // FU8 (FP5): an id whose earlier file could not be read waits behind it, as on the drain
   for (const name of listDraining(home)) {
     if (waiting.has(idOfDrainingName(name))) continue;
+    // FU8 (FPM7): an oversize file is decided from its lstat before it is observed, as the drain decides it (D-4337), so no
+    // sidecar of it reads `journaled: null` while the hold lasts.
+    if (overSpoolCap(home, name)) continue;
     try {
       observe(home, name, nowMs);
       if (ids !== null && !journalFailed) {
@@ -875,8 +893,9 @@ export function journalHalf(home, ids, nowMs) {
         continue;
       }
       // SPOOL_OVERSIZE or SPOOL_OVERLINES (D-4337): left where it is, unread. No DB holds a counter here (IV2), so the drain, which has one, sets
-      // it aside and counts it when the hold ends.
-      if (e && (e.code === 'ENOENT' || e.code === 'ELOOP' || e.code === 'NON_REGULAR' || e.code === 'SPOOL_OVERSIZE' || e.code === 'SPOOL_OVERLINES')) continue;
+      // it aside and counts it when the hold ends. An over-lines file's sidecar, written just above, goes (FU8, FPM7).
+      if (e && e.code === 'SPOOL_OVERLINES') { dropOverlinesSidecar(home, name); continue; }
+      if (e && (e.code === 'ENOENT' || e.code === 'ELOOP' || e.code === 'NON_REGULAR' || e.code === 'SPOOL_OVERSIZE')) continue;
       throw e;
     }
   }
@@ -1068,6 +1087,7 @@ export function drainSpool(db, c) {
         continue;
       }
       if (e && e.code === 'SPOOL_OVERLINES') {   // D-4337's line arm: decided by readDrainingText's count, never by a stat
+        dropOverlinesSidecar(c.home, name);    // FU8 (FPM7): first, so a set-aside that cannot move leaves no `journaled: null` sidecar
         setAside(db, c.home, name, OVERSIZE_DIR, 'spool_overlines');
         continue;
       }

@@ -828,10 +828,26 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(held.code, held.stderr).toBe(5);
       expect(drainingNames(box.home)).toEqual([OVER]);
       expect(fileBlocks(journalOf(box.home, ids.storeId))).toEqual([]);
+      expect(fs.existsSync(path.join(DRAIN(box.home), OVER.replace(/\.jsonl$/, '.obs'))), 'never observed: no journaled:null sidecar for status to read as a hold (FU8, FPM7)').toBe(false);
       moveDb(box, aside, hist(box.home, 'db'));
       expect(runSweep(box).code).toBe(0);
       expect(counters(box)['spool_oversize']).toBe(1);
       expect(fs.existsSync(ASIDE(OVER))).toBe(true);
+    });
+
+    it('under a hold a spool/ file over the cap is renamed but never observed; the drain sets it aside when the hold ends (FU8, FPM7)', () => {
+      sparse(hist(box.home, 'spool', `${ID}.jsonl`), SPOOL_FILE_MAX + 4096);
+      const aside = path.join(box.home, 'aside');
+      moveDb(box, hist(box.home, 'db'), aside);
+      const held = runSweep(box);
+      expect(held.code, held.stderr).toBe(5);
+      const [name] = drainingNames(box.home);
+      expect(name).toMatch(new RegExp(`^${ID}\\.\\d+\\.\\d+\\.jsonl$`));
+      expect(fs.existsSync(path.join(DRAIN(box.home), name!.replace(/\.jsonl$/, '.obs'))), 'no journaled:null sidecar written at its rename').toBe(false);   // at cf544c151: written
+      moveDb(box, aside, hist(box.home, 'db'));
+      expect(runSweep(box).code).toBe(0);
+      expect(counters(box)['spool_oversize']).toBe(1);
+      expect(fs.existsSync(ASIDE(name!))).toBe(true);
     });
 
     it('is decided from its stat before any open: an oversize file the sweep could not even open is still set aside', () => {
@@ -932,10 +948,24 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
         expect(held.code, held.stderr).toBe(5);
         expect(drainingNames(box.home)).toEqual([OVER]);
         expect(fileBlocks(journalOf(box.home, ids.storeId))).toEqual([]);
+        expect(fs.existsSync(path.join(DRAIN(box.home), OVER.replace(/\.jsonl$/, '.obs'))), 'no journaled:null sidecar left for status to read as a hold (FU8, FPM7)').toBe(false);   // at cf544c151: left
         moveDb(box, aside, hist(box.home, 'db'));
         expect(runSweep(box).code).toBe(0);
         expect(counters(box)['spool_overlines']).toBe(1);
         expect(fs.existsSync(ASIDE(OVER))).toBe(true);
+      });
+
+      it.skipIf(process.getuid?.() === 0)('a set-aside that cannot move leaves the file in place with no sidecar, so status never reads it as a journal hold (FU8, FPM7)', () => {
+        const dir = path.join(DRAIN(box.home), 'oversize');
+        fs.mkdirSync(dir, { mode: 0o500 });                               // a rename into it fails EACCES
+        try {
+          fs.writeFileSync(path.join(DRAIN(box.home), OVER), 'a\n'.repeat(SPOOL_FILE_LINES_MAX + 1), { mode: 0o600 });
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+          expect(fs.existsSync(path.join(DRAIN(box.home), OVER)), 'left in place').toBe(true);
+          expect(fs.existsSync(path.join(DRAIN(box.home), OVER.replace(/\.jsonl$/, '.obs')))).toBe(false);   // at cf544c151: a journaled:null sidecar, every tick
+          expect(counters(box)['spool_overlines']).toBe(1);
+        } finally { fs.chmodSync(dir, 0o700); }
       });
 
       it('readDrainingText throws SPOOL_OVERLINES past the line cap and reads a file at it', () => {
