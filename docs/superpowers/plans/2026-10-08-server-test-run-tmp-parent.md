@@ -548,3 +548,83 @@ Four numbers, issued by the allocator for this plan's four departures from #316'
 | U2 | `run-tmp.globalsetup.mjs` | gains a `process.kill` | the narrowed D-3533 pin |
 | L1 | `shared/lifecycle.ts` | delete the row | the new `lifecycle.test.ts` case |
 | L2 | `shared/lifecycle.ts` | `root` without `ccrc-testrun-` | the same case |
+
+## Execution record (2026-10-08)
+
+Executed on `669b8305` (Tasks 0–4, 6 and 7; Task 5 dropped by ruling 4). `origin/main` moved to `b0647d85` during the gate; the branch merges onto it cleanly, and `deviation-refs.test.ts` and `dtbd.test.ts` are green against it.
+
+**Task 0.** `timeout 25 vitest run test/ccrc-doctor.test.ts` under a fresh `TMPDIR`: rc 124, 11 entries (10 `ccrc-*` fixture dirs and vitest's `<nanoid>`), 15 MB. Green baselines: `tmpfixtures` + `lifecycle` 62/62; the five citation cases 5 passed.
+
+**Amendments to the draft, each found while executing:**
+
+1. **C3's errno is the platform's.** Node 26's `rm` on macOS reports ENOTEMPTY for a 0500 subdir, not EACCES; C3 and T3j assert `left:E…`.
+2. **T3l is new.** `condemn` and `probeRun` never throw, so T3j cannot see R7 (no per-entry `try`). T3l (a base that lists but cannot be searched, two run-named entries) is what reds it.
+3. **T5c also asserts the setup reap.** Without it S4 (no reap at setup) is green, because teardown's reap removes the run anyway; the third run's worker now records that it never saw the dead run.
+4. **The D-3533 pin is narrowed** (D-4499's amendment). It sits in a `describeLinux` block, so it is red on Linux once the config is wired: measured on Linux Node 22 in Docker, and on macOS by a temporary `describe` switch that was not committed.
+5. **Node 22 truncates an overlong socket path** (D-4497's amendment): T2i, T2j and T5f were red on Linux Node 22.23.3 until the length check landed; T2k is new.
+6. **Children are signalled only through their live `ChildProcess` handles**, never by a pid that may have been reused; a detached group is signalled as a group.
+7. **T4d defers the child's exit** instead of racing the `rm` (see Task 3).
+
+**Measured mutation table** (macOS Node 26 unless marked; each row applied with `cp`/`cmp` around it and restored):
+
+| Row | Red | Cases |
+|---|---|---|
+| M1 | 1/1 | T2i |
+| M2 | 1/1 | T2h (macOS read `unmeasurable:ENOTSOCK`) |
+| M3 | 1/1 | T2e |
+| M4 | 1/1 | T2j, T2k, T5f |
+| M5 | 1/1 | C2, C3 |
+| M6 | 1/1 | C2 |
+| M7 | Linux Node 22 1/1; macOS 0/1 | T2j, T2k, T5f (Node 26's `listen` refuses by itself) |
+| M8 | 1/1 on both | T2k |
+| M9 | Linux Node 22 1/1; macOS 0/1 | T2i |
+| R1 | 1/1 | T3c, T3d, T3i |
+| R2 | 1/1 | T3f |
+| R3 | 1/1 | T3g |
+| R4 | 1/1 | T3h |
+| R5 | 1/1 | T3e |
+| R6 | 1/1 | T3i |
+| R7 | 1/1 | T3l |
+| R8 | 1/1 | T3f, T3k's symlink spelling (the firmlink spelling stays green: `realpath` does not unify it) |
+| A1 | 1/1 | T4a–T4e |
+| A2 | **10/10**; Linux Node 22 5/5 | T4d |
+| A3 | 1/1 | T4a–T4d, T5d |
+| A4 | 1/1 | T4a–T4d |
+| A5 | 1/1 | T4c, T5d |
+| A6 | 1/1 | T4e |
+| A7 | 1/1 | T4f |
+| S1 | 1/1 | T1, T5a–T5f |
+| S2 | 1/1 | T1, T5a |
+| S3 | 1/1 | T5b, T5c, T5e |
+| S4 | 1/1 | T5c |
+| S5 | 1/1 | T5e |
+| S6 | 1/1 | T5f |
+| U1 | 1/1 | the narrowed pin (the config naming `laneReaper.ts`; wired as a real entry, vitest fails to start) |
+| U2 | 1/1 | the narrowed pin (`… carries signal authority`) |
+| L1 | 1/1 | the lifecycle case |
+| L2 | 1/1 | the lifecycle case |
+
+**`run-tmp.test.ts`:** 41 passed, 1 skipped on macOS Node 26 (the Linux bind-mount case) and on Linux Node 22 (the macOS firmlink case); the Linux `unshare -Urm` case ran there. With real `strace`, `ci-trace-run.test.ts`'s traced runs are green on Linux Node 22 under the wired config.
+
+**Leak drills (macOS).** `timeout 25` on `ccrc-doctor`: rc 124, and the base holds only vitest's own `<nanoid>` dir (5.6 MB; the dropped Task 5). `timeout -s KILL 25`: rc 137, one `ccrc-testrun-*` left; a rerun under the default window leaves it, and one with `CCRC_TEST_RUN_QUIET_S=0` prints `ccrc-test: reaped 1 dead test-run dir(s) …` and removes it.
+
+**The gate: the full server suite on macOS.** Both runs shared a loaded machine (load average 11–43).
+
+| | `origin/main` `669b8305` | this branch |
+|---|---|---|
+| `TMPDIR` (real path) | 29 chars | 56 chars, the macOS default's length |
+| files: failed / passed / skipped | 16 / 521 / 2 | 11 / 527 / 2 |
+| tests: failed / passed / skipped | 66 / 25,127 / 750 | 28 / 25,207 / 751 |
+| left in `TMPDIR` after the complete run | 57 entries, 2.6 MB | 0 |
+
+- **Failed in both (22),** pre-existing on this machine: `build-release` and `release-main` (BSD tar), two `ccd-docs-tree` rows, one `child-reclaim-paused-at-server` row, `session-hook`'s SessionStart cost ratio, one `update-spawn` row, and `typecheck-tests` (no `agent/` dependencies installed in the worktree; `tsc -p test/tsconfig.tests.json` was run by hand and reports nothing in this change).
+- **Failed on this branch only (7), none caused by it.** `ccrc-account`'s D-2221 deadline case fails the same way with the `globalSetup` removed under the same load, and is green 3/3 at lower load. `ccrc-codex` L0a (a 1,000 ms wait) is green 4/4 in isolation. `platform-hazards`' FIFO-EOF probe is red 2/5 both with and without the `globalSetup` (its own comment records reds on unchanged trees). `session-hook-merge-deny`'s 100 KB bound, and three `session-hook` cases (a known load-flake suite), are green in isolation.
+- **The three watched path-length cases,** alone at a 56-character base: the `ccd-entry-install` shebang case, `session-hook`'s scratch-slug cases and `delegation-rig` are green, and the base is empty afterwards.
+- **Observed: nested runs inside the suite refuse on macOS.** `ci-shards.test.ts` spawns four real vitest runs of the server config. Their base is the outer run's `tmp/` (80 characters at the macOS default), past the envelope, so each refuses by design and prints its `ccrc-test:` line. Their fixtures land in the outer run's `tmp/` and go with it. On Linux the nested base is 28 characters, and each nested run gets a parent of its own.
+
+**Follow-ups:**
+
+- **Proposal 3, a sweeper** (its own issue). It would cover loose dirs leaked before this change, `TMPDIR`s no later run visits, children with a minimal env, and a SIGKILLed run's vitest `tmpDir`.
+- **Task 5:** vitest's own `TestProject.tmpDir` in the arm, 5.6 MB per killed run.
+- **Optional:** a run that finds itself inside another run (`CCRC_TEST_RUN_DIR` inherited, its base that run's `tmp/`) could use it silently instead of refusing. That would remove the four macOS lines above.
+- #172, the orphan processes.
