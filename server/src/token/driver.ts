@@ -112,16 +112,17 @@ export class BoxTokenDriver implements TokenRouteDriver {
     return this.running;
   }
 
-  /** "Rotate now". `joined` only while a rotation is actually under way: a send or a promotion running, a promotion
-   *  recorded and not finished, or a press whose stage has not run yet (D-4413), or, with the gate open, a staged value
-   *  about to be sent or a handed-out one inside its confirm deadline. At the pending cap with nothing in flight the
-   *  answer is the `pending-cap` hold, not `joined`: nothing will ever run to finish that "rotation". */
+  /** "Rotate now". `joined` only while a send or a promotion is actually in flight (D-4413): a send running, a promotion
+   *  running or recorded, or an unspent press whose tick is still running. A press during a confirm wait or an own-write
+   *  backoff is a new request (`started`); it may stage one more rotation once that wait ends. At the pending cap the
+   *  `pending-cap` hold answers first, before the rate limit; with nothing in flight that is the answer, not `joined`. */
   async rotateNow(now: number): Promise<RotateAnswer> {
     const s = this.state;
-    if (this.busy > 0 || s?.promoting != null || this.rotateRequested) return { ok: true, outcome: 'joined', view: this.view() };
+    if (this.busy > 0 || s?.promoting != null || (this.rotateRequested && this.running !== null)) {
+      return { ok: true, outcome: 'joined', view: this.view() };
+    }
     const gate = this.gate(now);
-    const underway = s?.pending.some((p) => p.handedOutAt === null || (p.confirmBy !== null && now <= p.confirmBy)) ?? false;
-    if (gate.open && underway) return { ok: true, outcome: 'joined', view: this.view() };
+    if (!gate.open && gate.hold === 'pending-cap') return { ok: false, error: 'held', hold: gate.hold, node: gate.node, view: this.view() };
     const since = now - this.lastRotateStart;
     if (since < ROTATE_NOW_MIN_INTERVAL_MS) {
       return { ok: false, error: 'rate-limited', retryAfterS: Math.ceil((ROTATE_NOW_MIN_INTERVAL_MS - since) / 1000) };

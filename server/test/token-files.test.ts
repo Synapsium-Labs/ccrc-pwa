@@ -237,9 +237,14 @@ describe('box-token.json and box-token-retired.json', () => {
       expect((await readState(p)).kind, `${n} pending`).toBe('state');
     }
     writeFileSync(p, JSON.stringify(withN(PENDING_HARD_CAP + 1)));
-    expect(await readState(p)).toEqual({ kind: 'unusable' });
+    expect(await readState(p)).toEqual({ kind: 'unusable', why: 'over-cap' });
     s = withN(PENDING_HARD_CAP + 3);
     writeFileSync(p, JSON.stringify(s));
+    expect(await readState(p)).toEqual({ kind: 'unusable', why: 'over-cap' });
+    // any other malformed content keeps D-4403's plain unusable arm, over-cap or not
+    writeFileSync(p, JSON.stringify({ ...withN(PENDING_HARD_CAP + 1), origin: 'stolen' }));
+    expect(await readState(p)).toEqual({ kind: 'unusable' });
+    writeFileSync(p, '{"v":1,"pending":[1,2,3,4]}');
     expect(await readState(p)).toEqual({ kind: 'unusable' });
   });
 

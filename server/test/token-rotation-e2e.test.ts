@@ -1107,15 +1107,41 @@ describe('the pending cap has an exit (D-4413)', () => {
     } finally { await r.app.close(); }
   });
 
-  it('Rotate now below the cap joins a handed-out value that is inside its confirm deadline, and sets no flag', async () => {
+  it('at the cap the pending-cap hold answers before the rate limit, within a minute of an earlier press', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    const at = clock();
+    try {
+      await twoLost(r, at);
+      at(2 * CONFIRM_DEADLINE_MS + 2000);
+      expect(await r.driver.rotateNow(Date.now())).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();                                           // the exit's hand-out is lost: three handed out
+      expect((await onDisk(r)).pending).toHaveLength(3);
+      at(2 * CONFIRM_DEADLINE_MS + 2000 + 5000);                       // five seconds after the press that started it
+      expect(await r.driver.rotateNow(Date.now())).toMatchObject({ ok: false, error: 'held', hold: 'pending-cap' });
+    } finally { await r.app.close(); }
+  });
+
+  it('Rotate now during a confirm wait answers started, not joined: the operator asked for a rotation (ruling letter)', async () => {
     const r = await rig({ handMade: 'e'.repeat(64) });
     try {
       r.agent.mode = 'claim-only';
       await r.driver.tick();                                           // G1 handed out, its result lost: waiting for its confirmation
-      expect(await r.driver.rotateNow(Date.now())).toMatchObject({ ok: true, outcome: 'joined' });
-      r.agent.mode = 'normal';
+      expect(await r.driver.rotateNow(Date.now())).toMatchObject({ ok: true, outcome: 'started' });
       await r.driver.tick();
-      expect(r.agent.calls, 'a joined press staged nothing of its own').toBe(1);
+      expect(r.agent.calls, 'it stages nothing while G1 is inside its deadline').toBe(1);
+    } finally { await r.app.close(); }
+  });
+
+  it('Rotate now answers joined to a second press while the first press\'s tick is still running', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    try {
+      const t = Date.now();
+      const first = await r.driver.rotateNow(t);
+      const second = await r.driver.rotateNow(t + 1);
+      expect(first).toMatchObject({ ok: true, outcome: 'started' });
+      expect(second).toMatchObject({ ok: true, outcome: 'joined' });
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(1);
     } finally { await r.app.close(); }
   });
 
@@ -1317,5 +1343,15 @@ describe('F3: backoff applies on every route (review 349)', () => {
     await b.driver.tick();                                             // the press bypasses the backoff: staged and promoted at once
     expect(b.writes()).toBe(1);
     expect(b.driver.view()).toMatchObject({ origin: 'rotated', rotationOwed: false });
+  });
+
+  it('a press during an own-write backoff answers started, not joined (ruling letter)', async () => {
+    const b = await bothBox({ writerFails: true });
+    await b.driver.tick();                                             // staged, the fleet-file write fails: a backoff stands
+    expect(b.writes()).toBe(1);
+    b.off(10_000);
+    expect(await b.driver.rotateNow(Date.now() + 10_000)).toMatchObject({ ok: true, outcome: 'started' });
+    await b.driver.tick();
+    expect(b.writes(), 'the backoff still gates the promote').toBe(1);
   });
 });

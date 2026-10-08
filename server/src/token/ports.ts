@@ -31,7 +31,11 @@ export type ValueRead =
 /** Absent (a proven ENOENT), unusable (read, but not the shape) and unreadable (the read itself failed: EACCES, EIO,
  *  EISDIR...) are three outcomes with three remedies, never folded (D-4403 item 2): an unreadable file is never
  *  treated as "no history" and never written over. */
-export type StateRead = { kind: 'state'; state: BoxTokenState } | { kind: 'absent' } | { kind: 'unusable' } | { kind: 'unreadable'; code: string };
+export type StateRead = { kind: 'state'; state: BoxTokenState } | { kind: 'absent' }
+  /** `why: 'over-cap'` (D-4413, F4): otherwise a valid state whose `pending` list is longer than `PENDING_HARD_CAP`. It is
+   *  additive: every other malformed content carries no `why`, and boot refuses the one and takes D-4403's arm for the other. */
+  | { kind: 'unusable'; why?: 'over-cap' }
+  | { kind: 'unreadable'; code: string };
 export type RetiredRead = { kind: 'retired'; digests: string[] } | { kind: 'absent' } | { kind: 'unusable' } | { kind: 'unreadable'; code: string };
 
 /** The driver's file store. Every write is the atomic, fsynced, 0600-from-birth write. `removeValue` treats ENOENT as success. `renameOver` is one atomic replace followed by a

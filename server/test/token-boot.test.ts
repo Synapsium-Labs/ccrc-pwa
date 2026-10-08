@@ -305,10 +305,10 @@ describe('auxiliary files', () => {
     expect(existsSync(paths.pending(b))).toBe(false);
   });
 
-  // F4 (review 349) with D-4413: a state file with more pending entries than the cap reads unusable, so boot takes the
-  // unusable-state path (a warning, the usable mail.token adopted as unverifiable) and never reaches the holder's
-  // RangeError, which killed the process before. Three handed-out entries (the cap with the exit's slot) boot normally.
-  it('pending entries at the cap boot with every slot filled; one more than the cap is an unusable state, never a RangeError (F4)', async () => {
+  // F4 (review 349) with D-4413: a state file with more pending entries than the cap reads unusable (why: over-cap) and
+  // boot REFUSES it, naming the path and the word, never with the holder's RangeError and never writing over the file.
+  // Three handed-out entries (the cap with the exit's slot) boot normally.
+  it('pending entries at the cap boot with every slot filled; one more than the cap refuses boot cleanly, never a RangeError (F4)', async () => {
     const seed = async (n: number): Promise<{ home: string; values: string[] }> => {
       const home = mkHome();
       const paths = P(home);
@@ -329,9 +329,28 @@ describe('auxiliary files', () => {
     expect(r.state?.pending).toHaveLength(PENDING_HARD_CAP);
     for (const v of ok.values) expect(checkMailToken(r.holder, v)).toBe('ok');
     const over = await seed(PENDING_HARD_CAP + 1);
-    const r2 = await boot(over.home);                                  // resolves: no RangeError from setSlots
-    expect(r2.warnings.join('\n')).toContain(`${P(over.home).state} is unusable`);
-    expect(r2.state).toMatchObject({ origin: 'adopted', rotationOwed: true });
+    const before = readFileSync(P(over.home).state);
+    const err = await bootBoxToken(input(over.home)).then(() => null, (e: unknown) => e);   // refuses: no RangeError from setSlots
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(RangeError);
+    expect((err as Error).message).toContain(P(over.home).state);
+    expect((err as Error).message).toContain('over-cap');
+    for (const v of over.values) expect((err as Error).message.includes(v)).toBe(false);
+    expect(readFileSync(P(over.home).state).equals(before), 'nothing is written over the file').toBe(true);
+  });
+
+  // D-4413 boot clause: three unverifiable pending files are normal now (the exit's value is the third), so none is dropped.
+  it('value files with no state record: up to the cap of three pending files stay accepted, a fourth is not read', async () => {
+    const home = mkHome();
+    await boot(home);
+    rmSync(P(home).state);
+    const ids = ['a', 'b', 'c', 'd'].map((c) => c.repeat(16));
+    const vals = ids.map(() => mintValue());
+    for (let i = 0; i < ids.length; i++) await writeValueFileAtomic(P(home).pending(ids[i]), `${vals[i]}\n`);
+    const r = await boot(home);
+    expect(r.state?.pending.map((p) => p.id)).toEqual(ids.slice(0, PENDING_HARD_CAP));
+    for (const v of vals.slice(0, PENDING_HARD_CAP)) expect(checkMailToken(r.holder, v)).toBe('ok');
+    expect(checkMailToken(r.holder, vals[PENDING_HARD_CAP])).toBe('bad');
   });
 
   // Review Focus 1, its restart sub-case (plan assembly): the server restarts between the claim's 200 (the hand-out

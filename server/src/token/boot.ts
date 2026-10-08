@@ -18,7 +18,7 @@ import {
   type TokenPaths, type ValueRead,
 } from './files.js';
 import {
-  CONFIRM_DEADLINE_MS, GRACE_HARD_MS, GRACE_MS, adoptedState, bothRoleWriterArmed, mintedState, owe, promotedState,
+  CONFIRM_DEADLINE_MS, GRACE_HARD_MS, GRACE_MS, PENDING_HARD_CAP, adoptedState, bothRoleWriterArmed, mintedState, owe, promotedState,
   provedWrite, recoveryPlan, type BoxTokenState, type FileMetaLike, type WriteRecord,
 } from './policy.js';
 import { GENERATION_ID_RE, type OwedReason } from '../../../shared/box-token.js';
@@ -78,6 +78,9 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
 
   const sr = await readState(paths.state);
   if (sr.kind === 'unreadable') refuseUnreadable(paths.state, sr.code);
+  // D-4413 (F4): more pending values than the cap is a state this server never wrote; boot refuses it, naming the path and
+  // the word only, and writes nothing (adopting around it would rewrite the hand-out record).
+  if (sr.kind === 'unusable' && sr.why === 'over-cap') throw new Error(`${paths.state}: unusable (over-cap); boot refuses rather than rewrite it`);
   ctx.state = sr.kind === 'state' ? sr.state : null;
   if (sr.kind === 'unusable') warn(`${paths.state} is unusable; value files beside it are treated as unverifiable`);
 
@@ -291,7 +294,7 @@ async function unverifiable(paths: TokenPaths, now: number, isRetired: (v: strin
   const pending: { gen: BoxTokenState['pending'][number]; value: string }[] = [];
   for (const n of names.sort()) {
     const m = PENDING_FILE_RE.exec(n);
-    if (m === null || pending.length >= 2) continue;
+    if (m === null || pending.length >= PENDING_HARD_CAP) continue;
     const r = await readValueFile(path.join(paths.dir, n));
     const rec = recOf(r);
     if (r.kind !== 'value' || rec === null || isRetired(r.value)) continue;

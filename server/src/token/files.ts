@@ -145,6 +145,13 @@ function isBoxTokenState(v: unknown): v is BoxTokenState {
   return true;
 }
 
+/** A state that is valid in every respect except that `pending` is longer than the cap (D-4413, F4): checked by
+ *  validating it with the list cut to the cap, so no other malformed content can be called over-cap. */
+function overCap(v: unknown): boolean {
+  return isObj(v) && Array.isArray(v.pending) && v.pending.length > PENDING_HARD_CAP
+    && isBoxTokenState({ ...v, pending: v.pending.slice(0, PENDING_HARD_CAP) });
+}
+
 export async function readState(p: string): Promise<StateRead> {
   let raw: string;
   try { raw = await fsp.readFile(p, 'utf8'); } catch (e) {
@@ -152,7 +159,8 @@ export async function readState(p: string): Promise<StateRead> {
   }
   try {
     const v: unknown = JSON.parse(raw);
-    return isBoxTokenState(v) ? { kind: 'state', state: v } : { kind: 'unusable' };
+    if (isBoxTokenState(v)) return { kind: 'state', state: v };
+    return overCap(v) ? { kind: 'unusable', why: 'over-cap' } : { kind: 'unusable' };
   } catch { return { kind: 'unusable' }; }
 }
 
