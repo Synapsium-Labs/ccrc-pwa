@@ -101,7 +101,13 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
   - `childReclaimFirstSighting` takes the generation key as its fourth parameter.
 - **H6 — the tier state has four fields:** `{tier, tierToken, tierJ, tierRun}`, with `tier` and `tierJ` derived from `tierRun` by `childReclaimTierFrom`.
 - **H7 — one shared lane fixture.** A later task reuses an earlier task's lane fixture and never creates a second. Task 3's `server/test/childReclaimGenerationFixture.ts` is THE shared rig. Task 2's file-local rig in `child-reclaim-generation-lane.test.ts` predates it, is not shared, and stays as written. Every task after Task 3 uses Task 3's rig.
-- **H8 — `leafKeptWord`.** Whichever of this wave and workspace-lifecycle wave 5 lands first owns `leafKeptWord`. The other adopts it.
+- **H8 — the shared word classifier (amended after quiet-river's 4036).** ONE word classifier serves two carrier readers.
+  - **What is shared.** ONLY the word half: ccd's three words, any other value read as `'unmeasured'`, and null read as null.
+  - **What each wave keeps.** Each wave keeps its own carrier reader. Workspace-lifecycle's done-document reader answers word | null | `'unreported'`. This wave's mirror reader answers word | `'unreported'` | `'truncated'`. Neither is ever folded into the other.
+  - **The expected order.** Workspace-lifecycle wave 5 expects to land first and to own the word half as `keptLeafWord`, exported from `server/src/archivedExpiry.ts`. quiet-river consented in 4036 to this wave MOVING it to a neutral home: a move, never a second copy.
+  - **If wave 5 is on the branch.** Task 1 MOVES `keptLeafWord` into `shared/api.ts` as `leafKeptWord`, with `LeafKeptWord` and `LEAF_KEPT_WORDS`. It re-points every `server/src/archivedExpiry.ts` call site and every type-level spelling of the three words (`EXPIRE_LEAF_WORDS`, if present, the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type) in the same commit.
+  - **The STOP rule.** If wave 5's word half answers differently from the shared word half above, Task 1 STOPS and reports `leaf-kept-word-owned-elsewhere`.
+  - **If this wave lands first.** It declares `leafKeptWord` in L0, and wave 5's worker imports it.
 - **The accepted departures, each numbered at the fix round:**
   - **Tasks 1 and 2:** `pass-clock-after-gather`, `an-overtaken-gather-decides-nothing`, `leaf-collapse-members-carry-a-run`, `marked-means-marker-reads-as-child`.
   - **Tasks 3 and 4:** `hold-retired-step-in-l1`, `refused-generation-not-carried`, `wave7-generation-pins-owed`.
@@ -116,7 +122,7 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
 - **Rulings after reconciliation:**
   - **`held`.** A stuck child the sweep HOLDS also shows no retry clause. Its sentence says ccrc does not retry it while the hold stands, and that the long backoff resumes once the hold lifts. This extends Task 8's kept rule to holds (R41).
   - **The `purge-incomplete` tail.** Contract R76's "nothing retries it" is amended by Task 10's "§15 as built" note, because Task 6's tail is conditional.
-  - **`leafKeptWord` against workspace-lifecycle's file.** If workspace-lifecycle wave 5 landed first, it spells the three words on three code lines in `server/src/archivedExpiry.ts`: `EXPIRE_LEAF_WORDS`, the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type (its plan branch at 30b841c01). Task 1 re-points all three to `leafKeptWord` and `LeafKeptWord` in one commit. It does so only under quiet-river's consent as recorded in the brief; otherwise it STOPS and reports `leaf-kept-word-owned-elsewhere`.
+  - **`leafKeptWord` against workspace-lifecycle's file.** H8 above governs, and quiet-river's consent to the move is recorded (4036). Every line of `server/src/archivedExpiry.ts` that spells the three words is re-pointed to L0 in Task 1's commit. That covers `keptLeafWord`'s body, `EXPIRE_LEAF_WORDS` if present, the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type; the plan branch at 30b841c01 shows the last three. Task 1's Step 1 greps for `keptLeafWord` as well as `leafKeptWord`, and its census `holders` must end at `['shared/api.ts']`.
   - **The shared lane rig (H7).** Its spellings are fixed, exactly:
     - `exec`;
     - `journal = (id: string, act: string, outcome: string, over: Readonly<Record<string, unknown>> = {}): void`;
