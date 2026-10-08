@@ -160,6 +160,15 @@ spec's after wave 1.
       red; F8 pinned against the tree's real `ccd/ccrc`; F9 counts Fastify-rejected claim bodies as misses; F10 door
       lines carry the node id; F11 derives from L0, with the scan widened; F12's sentence corrected.
   - The worker reserve for the round is 4414 to 4417. A scoped review of the fix range follows the wave-done.
+- **2026-10-08 18:13 UTC: R56 consent given to child-workspace reclamation's wave 7 (run 347) on six paths of claim
+  1110** (mail 4030 asked, 4031 answered, 4032 told the worker). Those paths are `agent/src/whitelist.ts`,
+  `README.md`, `CLAUDE.md`, `agent/CLAUDE.md`, `server/test/single-definition.test.ts` and
+  `server/test/whitelist-subset.test.ts`.
+  - Wave 7 only appends in its own regions, and re-points README anchors by content.
+  - Whichever PR lands second merges `main` (a merge, never a rebase), keeps both sides, and re-runs the whitelist
+    suites, single-definition and the README census.
+  - Run 320's fix round is not expected to touch those files except perhaps README or a test pin, and it keeps to its
+    own lines.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
