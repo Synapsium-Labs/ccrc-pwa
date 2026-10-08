@@ -513,7 +513,11 @@ export function RunsScreen({
     const seq = ++issued.current;
     return loadRunsRef.current()
       .then((r) => {
-        if (aliveRef.current && seq > applied.current) { applied.current = seq; setCold(r.runs); setColdState('ok'); }
+        // The body is read BEFORE the mark moves: a success whose body cannot be
+        // read (a `null` answer) throws here, reaches the `catch` below as an
+        // error for this same `seq`, and so cannot advance the mark first.
+        const rows = r.runs;
+        if (aliveRef.current && seq > applied.current) { applied.current = seq; setCold(rows); setColdState('ok'); }
       })
       .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); });
   };

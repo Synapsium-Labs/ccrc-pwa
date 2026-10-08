@@ -244,9 +244,11 @@ export type ChildReclaimWip =
  *     it is printed before the breadcrumb exists, so it is `not-resumable`.
  *   - `not-resumable`: a substance refusal — `ws-audit --reclaim` itself (a
  *     non-destructive verb that never reaches the reap lock), an unrecognised
- *     refusal word, or a `reclaimed` document naming another session. ccd's
- *     own ladder never advanced this session's state, but a plain retry MIGHT
- *     still succeed (a race, a version gap this build cannot name yet).
+ *     refusal word, or a `reclaimed` document naming another session — or a
+ *     `{failed:…}` word printed before the breadcrumb
+ *     (`CHILD_RECLAIM_PRE_CRUMB_FAILED`). ccd's own ladder never advanced this
+ *     session's state, but a plain retry MIGHT still succeed (a race, a
+ *     version gap this build cannot name yet).
  *   - `pre-lock-die`: a recognised PRE-LOCK die of `cmd_ws_reclaim` (a usage
  *     error, a malformed token/run id/session id, a missing `python3`, a
  *     missing `flock` binary, or an unopenable lock file — ccd's RECLAIM
@@ -277,12 +279,17 @@ export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
  *     and the pin read different branch states, so the act stopped before the
  *     tombstone. Also a `refused` word (`CHILD_RECLAIM_TOKEN_KIND`), which is
  *     why this set is typed against both vocabularies.
- *  `pin-failed` is deliberately NOT here: it has eight producers after the
- *  breadcrumb (the tail's per-deletion keeps), so the word alone cannot tell
- *  them apart from the one printed before it. That pre-breadcrumb `pin-failed`
- *  is a stated residual, read `resumable` and so told "the box resumes where
- *  it stopped" when it is retried from the start; its fix is an additive
- *  `crumb:false` field on ccd's document, carried to wave 7.
+ *  `pin-failed` and `tombstone-unwritable` are deliberately NOT here, for one
+ *  reason: each is printed once in the fresh path's pin phase, before the
+ *  breadcrumb, and also by the tail after it, so the word alone cannot tell the
+ *  two apart. `pin-failed` has eight tail producers (the settle's re-pin and
+ *  the per-deletion keeps); `tombstone-unwritable` has five (the tail's reads
+ *  and updates of the tombstone). The pre-breadcrumb case of BOTH words is a
+ *  stated residual: each reads `resumable`, so the feed says "the box resumes
+ *  where it stopped" of an act that is retried from the start. ws-expire's pin
+ *  phase prints the same two words before its own breadcrumb, so the residual
+ *  covers that verb as well. The fix is an additive `crumb:false` field on
+ *  ccd's document, which covers both words, carried to wave 7.
  *  Named so `isChildReclaimKebab` admits `probe-unmeasured` without a second
  *  hand-kept literal. */
 const CHILD_RECLAIM_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const satisfies
@@ -741,9 +748,10 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       // every other post-start `{failed:…}` document there is no breadcrumb to
       // resume from. A retry starts completely afresh, exactly as
       // `not-resumable` already reads (`childReclaimFeedBody`'s tail text: "It
-      // is retried from the start."). `pin-failed` stays `resumable`: eight of
-      // its producers are post-breadcrumb, so the word cannot tell them apart,
-      // and the pre-breadcrumb one is a stated residual (see the set's doc).
+      // is retried from the start."). `pin-failed` and `tombstone-unwritable`
+      // stay `resumable`: each also has post-breadcrumb producers, so the word
+      // cannot tell them apart, and the pre-breadcrumb case of both is a stated
+      // residual (see the set's doc).
       const resume: ChildReclaimResume = isChildReclaimPreCrumbFailed(v.failed) ? 'not-resumable' : 'resumable';
       return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}`, token: v.failed };
     }
@@ -1306,10 +1314,12 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
         ? 'ccd refused the call before anything started; nothing was touched, and it refuses the same way every time until that changes.'
         // `resumable`: ccd's own tail genuinely started and left a
         // breadcrumb. `not-resumable`: an audit failure (never reached the
-        // destructive path) or a verb answer that is a REFUSAL in substance
-        // (an unrecognised word, or `reclaimed` naming another session) —
-        // neither advanced this session's state, so neither has anything to
-        // resume, but unlike a pre-lock die a plain retry MIGHT still work.
+        // destructive path), a verb answer that is a REFUSAL in substance
+        // (an unrecognised word, or `reclaimed` naming another session), or a
+        // `{failed:…}` word printed before the breadcrumb
+        // (`CHILD_RECLAIM_PRE_CRUMB_FAILED`) — none advanced this session's
+        // state, so none has anything to resume, but unlike a pre-lock die a
+        // plain retry MIGHT still work.
         : o.resume === 'resumable' ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.';
       return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} ${tail}${wait}`;
     }

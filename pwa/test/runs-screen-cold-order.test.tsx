@@ -115,4 +115,15 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     await older.resolve([finished('reclaimed')]);
     expect(chipWord()).toBe('reclaimed');
   });
+
+  it('a success whose body cannot be read is an error, not a silent drop: the mark moves only after the read', async () => {
+    // No frame has landed, so the board knows nothing and shows the error state when the read fails.
+    // A `null` answer throws when the body is read. If the mark had already moved to this read, the
+    // `catch` would see a read that is no longer newer than the mark and drop the failure, leaving
+    // the board on "Loading…" for good.
+    const store = makeStore();
+    const loadRuns = vi.fn(async () => null as unknown as { runs: RunSummary[] });
+    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    await waitFor(() => expect(document.querySelector('.runs-empty')?.getAttribute('data-state')).toBe('error'));
+  });
 });
