@@ -196,7 +196,7 @@ describe('store.mjs: open, schema v1, pragmas', () => {
     const text = Buffer.from(Array.from({ length: 4000 }, (_, i) => `line ${i % 97} of a transcript body\n`).join(''));
     const z = brotli(text);
     expect(CODEC).toBe('br5');
-    expect(unbrotli(z).equals(text)).toBe(true);
+    expect(unbrotli(z, text.length).equals(text)).toBe(true);
     const q5 = brotliCompressSync(text, { params: { [Z.BROTLI_PARAM_QUALITY]: 5, [Z.BROTLI_PARAM_SIZE_HINT]: text.length } });
     const q11 = brotliCompressSync(text);
     expect(z.equals(q5)).toBe(true);

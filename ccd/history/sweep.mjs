@@ -2530,7 +2530,7 @@ export function storedBody(s, blobId) {
   const r = s.blobZ.get(blobId);
   if (r === undefined || r.z === null) return null;
   if (blobOverDecodeCap(r.raw_len)) return null;   // D-4346 (history-permanent-failures-classified): an over-cap body is never decoded whole for the variant compare
-  try { return parseStoredJson(unbrotli(r.z)); } catch { return null; }
+  try { return parseStoredJson(unbrotli(r.z, r.raw_len)); } catch { return null; }
 }
 
 /** The tool_use a tool_result answers, when it was written in an earlier tick: walked up the
@@ -2545,7 +2545,7 @@ export function pairedFromStore(db, toolUseId, parentUuid) {
     if (r.z !== null) {
       if (blobOverDecodeCap(r.raw_len)) { uuid = r.parent_uuid; continue; }   // D-4346: an over-cap body is never decoded whole; walk on to its parent
       try {
-        const u = toolUsesOf(parseStoredJson(unbrotli(r.z))).find((x) => x.id === toolUseId);
+        const u = toolUsesOf(parseStoredJson(unbrotli(r.z, r.raw_len))).find((x) => x.id === toolUseId);
         if (u !== undefined) return u;
       } catch { /* a raw-only body pairs nothing */ }
     }
@@ -3264,7 +3264,7 @@ export function toolResultCandidates(db, transcriptPk, names) {
     // raw-only line-too-long blob of unbounded raw_len; it is never decompressed whole, and names no sidecar.
     if (blobOverDecodeCap(r.raw_len)) continue;
     let body;
-    try { body = parseStoredJson(unbrotli(r.z)); } catch { continue; }
+    try { body = parseStoredJson(unbrotli(r.z, r.raw_len)); } catch { continue; }
     const ids = toolResultIdsOf(body);
     if (ids.length === 0) continue;
     const text = ftsTextOf(body, 'entry');
@@ -3645,7 +3645,7 @@ const UNDECODABLE = Object.freeze({ text: null, decoded: 0, undecodable: true })
  *  its body, at most SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN bytes of output, never the whole
  *  decompressed blob (O20's RSS bound). A body's plain text is small and decompressed whole
  *  (D-4195, history-fts-body-plain-text). A blob whose stored bytes do not decode (any throw of its decompress
- *  call, which depends on those bytes alone) answers `undecodable: true` with `text: null` and is never thrown; a
+ *  call, which depends on those bytes alone, a decode past its raw_len included: unbrotli is bounded by it, FPM10) answers `undecodable: true` with `text: null` and is never thrown; a
  *  body that decodes but does not parse indexes nothing (`text: ''`, `undecodable: false`). A body whose stored
  *  raw_len is over BLOB_DECODE_MAX is never decompressed (blobOverDecodeCap): it indexes nothing and is not counted, so
  *  a raw line-too-long line reached by a uuid collision cannot exhaust a pass's memory (D-4346,
@@ -3661,7 +3661,7 @@ export async function ftsTextOfBlob(z, isSidecar, pairIdx, rawLen) {
   }
   if (blobOverDecodeCap(rawLen)) return { text: '', decoded: 0, undecodable: false, overCap: true };   // D-4346: over BLOB_DECODE_MAX; never decompressed whole, marked indexed with no row, uncounted
   let bytes;
-  try { bytes = unbrotli(z); } catch { return UNDECODABLE; }
+  try { bytes = unbrotli(z, rawLen); } catch { return UNDECODABLE; }
   try { return { text: ftsTextOf(parseStoredJson(bytes), 'entry'), decoded: bytes.length, undecodable: false }; } catch { return { text: '', decoded: bytes.length, undecodable: false }; }
 }
 

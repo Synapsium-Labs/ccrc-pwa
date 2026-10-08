@@ -3007,6 +3007,22 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       } finally { db.close(); }
     });
 
+    it('FPM10: a blob whose stored bytes decode past its raw_len is undecodable; unbrotli refuses a call with no bound', async () => {
+      const { sweep: S, store, lib } = await IX.api();
+      const big = Buffer.alloc(4 << 20, 0x61);                         // 4 MiB of one byte: a few bytes compressed
+      const z = brotliCompressSync(big);
+      expect(z.length, 'CONTROL: the crafted blob is small').toBeLessThan(1024);
+      expect(store.unbrotli(z, big.length).equals(big)).toBe(true);    // CONTROL: its true length decodes
+      // node:zlib itself stops the decode at the bound (ERR_BUFFER_TOO_LARGE), never a whole decode checked afterwards.
+      let code: unknown = 'no throw';
+      try { store.unbrotli(z, 16); } catch (e) { code = (e as { code?: unknown }).code; }
+      expect(code).toBe('ERR_BUFFER_TOO_LARGE');
+      expect(() => (store.unbrotli as unknown as (z: Uint8Array) => Buffer)(z)).toThrow(TypeError);
+      expect(store.unbrotli(brotliCompressSync(Buffer.alloc(0)), 0).length).toBe(0);   // an empty body at raw_len 0
+      expect(() => store.unbrotli(brotliCompressSync(Buffer.from('x')), 0)).toThrow(RangeError);
+      expect(await S.ftsTextOfBlob(z, false, lib.makePairIndex([]), 16)).toMatchObject({ text: null, undecodable: true });
+    });
+
     it('census: every decompression of a stored blob in sweep.mjs is guarded, and only ftsTextOfBlob decodes for the index', () => {
       const lines = fs.readFileSync(SWEEP, 'utf8').split('\n');
       const hits: Array<{ fn: string; line: string; prev: string }> = [];
@@ -3021,6 +3037,8 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       expect([...new Set(hits.map((h) => h.fn))].sort()).toEqual(['ftsTextOfBlob', 'pairedFromStore', 'storedBody', 'toolResultCandidates']);
       for (const h of hits) expect(/\btry\b/.test(h.line) || /\btry\b/.test(h.prev), h.line).toBe(true);
       expect(hits.filter((h) => h.fn === 'ftsTextOfBlob')).toHaveLength(2);   // CONTROL
+      // FPM10: every whole-body decode is bounded by that blob's own stored raw_len.
+      for (const h of hits.filter((x) => /\bunbrotli\(/.test(x.line))) expect(h.line, h.line).toMatch(/\bunbrotli\((?:r\.z, r\.raw_len|z, rawLen)\)/);
       // D-4346: every blob SELECT a whole-body reader decodes from carries raw_len, and each reader checks it before it decodes.
       const sel = lines.filter((l) => /^\s*(?:blobZ|pairSel|blobForFts): db\.prepare\(/.test(l));
       expect(sel).toHaveLength(4);

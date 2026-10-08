@@ -155,7 +155,9 @@ export const LINE_MAX = 16 * 1024 * 1024;           // a longer transcript line 
  *  A body-reader reaches a raw line-too-long blob when a later row's uuid collides with the raw row's rawRowKey;
  *  decompressing it whole inside the chunk transaction could exhaust the carrier's memory on every ingest of that
  *  uuid (review 316 F7 sibling). A reader that meets one passes it over: the variant compare gets no body (cause
- *  `unknown`), the FTS index text is empty, and the paired-tool-use walk goes on to its parent.
+ *  `unknown`), the FTS index text is empty, and the paired-tool-use walk goes on to its parent. The check reads the
+ *  stored raw_len, so the decode itself is bounded by that same raw_len too (store's unbrotli): a blob whose bytes
+ *  decode past it does not decode, never an allocation past the cap (final review 316 FPM10).
  *  D-4346 (history-permanent-failures-classified). */
 export const BLOB_DECODE_MAX = LINE_MAX;
 /** Is a stored blob's decompressed size over BLOB_DECODE_MAX, so that a whole-body reader must refuse it before it

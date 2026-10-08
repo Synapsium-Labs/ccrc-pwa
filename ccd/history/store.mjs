@@ -321,8 +321,17 @@ export function brotli(buf) {
   });
 }
 
-export function unbrotli(z) {
-  return brotliDecompressSync(z);
+/** A stored blob's whole body, its output bounded by `maxLen`, the blob's own stored raw_len (final review 316 FPM10).
+ *  BLOB_DECODE_MAX is checked against that column before any caller decodes, so without this bound a blob whose bytes
+ *  decode past its raw_len (a corrupt or foreign z) was decompressed whole whatever its size: node:zlib stops at
+ *  `maxOutputLength` and throws ERR_BUFFER_TOO_LARGE, a RangeError, which every caller already answers as a blob that
+ *  does not decode. A body longer than `maxLen` throws a RangeError too (maxOutputLength cannot be 0, so an empty
+ *  body's bound is checked after), and a call with no bound throws a TypeError, never an unbounded decode. */
+export function unbrotli(z, maxLen) {
+  if (!Number.isSafeInteger(maxLen) || maxLen < 0) throw new TypeError('history: unbrotli needs the blob\'s stored raw_len as its bound');
+  const out = brotliDecompressSync(z, { maxOutputLength: Math.max(1, maxLen) });
+  if (out.length > maxLen) throw new RangeError(`history: a blob decoded past its stored length ${maxLen}`);
+  return out;
 }
 
 /** Output of one decompressor read, and so the most `unbrotliPrefix` can decode past its bound. */
