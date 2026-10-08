@@ -2595,13 +2595,15 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
 describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
   const sectionSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'StallWatchSection.tsx'), 'utf8');
   const hookSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'useStallWatchView.ts'), 'utf8');
+  const textSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'settingsText.ts'), 'utf8');
   const DEVICE_WORD = /\b(phones?|mobiles?|desktops?|tablets?|laptops?|iphones?|ipads?|android|touchscreens?|handsets?)\b/i;
   const DEVICE_BRANCH = /matchMedia|useMediaQuery|userAgent|maxTouchPoints|ontouchstart|pointer:\s*coarse|innerWidth/;
   const l0Strings = (v: unknown): string[] =>
     typeof v === 'string' ? [v] : typeof v === 'object' && v !== null ? Object.values(v).flatMap(l0Strings) : [];
 
   it('P6: the section and its hook have no device branch and no device word', () => {
-    for (const [name, src] of [['StallWatchSection.tsx', sectionSrc], ['useStallWatchView.ts', hookSrc]]) {
+    // settingsText.ts holds the text the Settings screen and its sections share, so it is scanned with them.
+    for (const [name, src] of [['StallWatchSection.tsx', sectionSrc], ['useStallWatchView.ts', hookSrc], ['settingsText.ts', textSrc]]) {
       expect(src, name).not.toMatch(DEVICE_BRANCH);
       expect(src, name).not.toMatch(DEVICE_WORD);
     }
