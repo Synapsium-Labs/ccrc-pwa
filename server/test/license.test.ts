@@ -245,6 +245,16 @@ describe('third-party code: the lossless-claw MIT notice travels with the copied
     expect(roots.some((r) => rel === r || rel.startsWith(`${r}/`)), `${rel} is outside every PATHSPEC root`).toBe(true);
   });
 
+  it('V4 records what became of upstream\'s refusals of a missing, non-regular or unopenable database path (review 316 F41)', () => {
+    const v4 = provenance().find((e) => /\(V4\)/.test(e.item));
+    expect(v4).toBeDefined();
+    expect(v4!.changed).toMatch(/non-regular/);
+    expect(v4!.changed).toMatch(/\bRETAINED\b/);
+    expect(v4!.changed).toMatch(/\bREPLACED\b/);
+    expect(v4!.changed).toMatch(/DATABASE_OPEN_FAILED[^;]*\bREPLACED\b/);
+    expect(v4!.changed).toContain('store-read-failed');
+  });
+
   it('every PROVENANCE entry is complete, names an existing file, and that file carries the matching comment', () => {
     const entries = provenance();
     expect(entries.length, 'ccd/history/PROVENANCE lists no entry').toBeGreaterThan(0);

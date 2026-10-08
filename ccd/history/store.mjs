@@ -245,9 +245,12 @@ export function openWriter(dbPath) {
 }
 
 /** The read-only handle — derived from lossless-claw src/cli/database.ts @ e05d8d3, MIT, see LICENSE.lossless-claw.
- *  Changed: a 0-byte file is refused as the writer refuses it, and busy_timeout
- *  is set. `query_only` makes even a statement the readOnly flag would let
- *  through (a `temp.` create) a refusal. */
+ *  Changed: upstream's refusal of a missing or non-regular path is kept, from an
+ *  lstat (a link at the file is refused, not followed), as three words
+ *  (refuseUnlessPresent: store-missing, store-zero-byte, store-unmeasured);
+ *  a failing open is not wrapped here: each caller answers it (status: exit 5
+ *  store-read-failed); busy_timeout is set. `query_only` makes even a
+ *  statement the readOnly flag would let through (a `temp.` create) a refusal. */
 export function openReader(dbPath) {
   refuseUnlessPresent(dbPath);
   const db = new DatabaseSync(dbPath, { readOnly: true });
