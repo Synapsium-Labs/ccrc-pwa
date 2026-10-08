@@ -775,12 +775,14 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     healthFs.mkdirSync(healthPath.join(outside, '.draining'), { recursive: true, mode: 0o700 });
     healthFs.writeFileSync(healthPath.join(outside, '.draining', 'x.900.1.jsonl'), '', { mode: 0o600 });
     healthFs.writeFileSync(healthPath.join(outside, '.draining', 'x.900.1.obs'), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+    healthCp.execFileSync('mkfifo', [healthPath.join(outside, `${ID}.jsonl`)]);               // a refused node in the link's target (FR2f)
     healthFs.rmSync(spoolDir, { recursive: true, force: true });
     if (kind === 'a link to a directory') healthFs.symlinkSync(outside, spoolDir);
     else healthFs.writeFileSync(spoolDir, 'stray');
     const h = statusOf(box).env!['health'];
     const warn = (h['warn'] as Array<{ word: string; detail: string }>).find((i) => i.word === 'spool-planted');
     expect(warn?.detail).toContain('spool/ is not a real directory');                     // at cf544c151: no word names it
+    expect(warn?.detail, 'nothing is counted through a link at spool/ (FR2f, whole-round review #2)').not.toContain('node(s) at spool/<id>.jsonl');
     expect(wordsOf(h['fail']), 'nothing read through it').not.toContain('journal-unwritable');   // at cf544c151, the link: FAIL, read through it
     expect(wordsOf(h['fail'])).not.toContain('status-unreadable');                        // at cf544c151, the file: FAIL, its readdir ENOTDIR
     healthFs.rmSync(spoolDir, { recursive: true, force: true });                         // a link is removed, never its target
