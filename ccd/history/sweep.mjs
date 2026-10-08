@@ -878,7 +878,8 @@ export function tidyDraining(home, tickMs, pid) {
  *    file it `displaced` is counted `spool_displaced` and named on stderr (D-4347 (history-planted-entries-never-wedge)). A file
  *    it found `blocked` (its sidecar name is blocked and it could not move) is counted `spool_blocked`, named on stderr and
  *    skipped like a kept name: never journaled by this drain, left in place, retried by the next drain's tidy, and every later
- *    file drains. */
+ *    file of another id drains. The blocked file's own id's later files wait behind it, so the epoch chain, which numbers in
+ *    drain order, never inverts when the block lifts (FU3F review F1). */
 export function drainSpool(db, c) {
   const tickMs = c.now();
   if (ensureSpoolDirs(c.home)) countOutside(db, 'non_regular');
@@ -894,10 +895,17 @@ export function drainSpool(db, c) {
     for (const n of t.blocked) process.stderr.write(`history-sweep: spool-blocked: ${n}\n`);
   }
   const kept = new Set([...t.kept, ...t.blocked]);
+  const blockedIds = new Set();   // D-4347 (history-planted-entries-never-wedge): an id with a blocked file waits behind it, in order (FU3F review F1)
   const hints = [];
   let failedCounted = false;
   for (const name of listDraining(c.home)) {
-    if (kept.has(name)) continue;   // D-4347 (history-planted-entries-never-wedge): counted once by tidyDraining, never observed (M17)
+    if (kept.has(name)) {   // D-4347 (history-planted-entries-never-wedge): counted once by tidyDraining, never observed (M17)
+      if (t.blocked.includes(name)) blockedIds.add(idOfDrainingName(name));
+      continue;
+    }
+    // The epoch chain numbers in drain order, so a blocked file's later same-id files must not drain before it (they would invert the chain once it drains).
+    // A kept name, or a displaced file (which never drains), loses lines but never reorders, so only a blocked file holds its id.
+    if (blockedIds.has(idOfDrainingName(name))) continue;
     // D-4337 (history-spool-file-size-cap): an oversize file is decided from its stat and never opened.
     if (setAsideOversize(db, c.home, name)) continue;
     let j;

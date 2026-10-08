@@ -461,8 +461,19 @@ function oldestUnjournaledMs(p) {
   let oldest = null;
   let unreadable = false;
   const present = new Set(names);
+  // D-4347 (history-planted-entries-never-wedge) / FU3F review F2: a directory at a file's sidecar or sidecar-temp name is the
+  // sweep's `blocked` condition (spool-planted, counted `spool_blocked` and named by its own WARN), not a journal hold: the
+  // journal is fine, the drain skips the file. (A directory at a name whose file is gone is not that condition.) Such a file's sidecar is neither held nor unreadable, whatever the order the
+  // listing names the two entries in, so judge the stems first. A name that cannot be lstat'd is left to the read below.
+  const planted = new Set();
+  for (const n of names) {
+    const stem = n.endsWith('.obs.tmp') ? n.slice(0, -'.obs.tmp'.length) : n.endsWith('.obs') ? n.slice(0, -'.obs'.length) : null;
+    if (stem === null || !present.has(`${stem}.jsonl`)) continue;   // a live file's names only: a directory at an orphan name stays unreadable
+    try { if (healthFs.lstatSync(healthPath.join(p.draining, n)).isDirectory()) planted.add(stem); } catch { /* judged by the read below */ }
+  }
   for (const n of names) {
     if (!n.endsWith('.obs')) continue;
+    if (planted.has(n.slice(0, -'.obs'.length))) continue;
     const file = healthPath.join(p.draining, n);
     // ONE nonblocking open with the type judged on the descriptor, as the sweep's readSmall does (store.mjs
     // `readBounded`, the `_reg_read` lesson; D-4347 (history-planted-entries-never-wedge)): a FIFO named *.obs would block a plain read in open(2) for

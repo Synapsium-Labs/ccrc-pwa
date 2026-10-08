@@ -631,6 +631,30 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
   });
 
+  // FU3F review F2: a blocked file (a directory at its sidecar name, planted/ unusable) is spool-planted, never a journal hold or an unmeasured read.
+  it.each([['.obs.tmp'], ['.obs']])('a file blocked by a directory at %s is not a held file however old, and the counted block is WARN spool-planted (FU3F review F2)', (suffix) => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-blocked-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const db = healthStore.openWriter(dbFile(box));
+    try { db.prepare('INSERT INTO counters (name, n) VALUES (?, ?)').run('spool_blocked', 1); } finally { healthStore.closeWriter(db); }
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.jsonl'), '');
+    const planted = healthPath.join(dir, `x.900.1${suffix}`);
+    healthFs.mkdirSync(planted);
+    healthFs.writeFileSync(healthPath.join(planted, 'keep'), '');
+    if (suffix === '.obs.tmp') healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.obs'), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+    const h = statusOf(box).env!['health'];
+    expect(wordsOf(h['fail'])).not.toContain('journal-unwritable');
+    expect(wordsOf(h['fail'])).not.toContain('status-unreadable');
+    expect(wordsOf(h['warn'])).toContain('spool-planted');
+    if (suffix === '.obs.tmp') {   // CONTROL: the same sidecar with no directory beside it is a hold
+      healthFs.rmSync(planted, { recursive: true });
+      expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
+    }
+  });
+
   it('an observation sidecar whose draining file is gone is not a held file, however old (review 316 F20)', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-orphan-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);

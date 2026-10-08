@@ -1490,6 +1490,32 @@ describe('epochs and families, decided at drain (spec §6.1, §9.2 step 1, §9.1
     expect(epochsOf(db, ID, G1).map((e) => e.cc_session_uuid)).toEqual([U1]);
   });
 
+  // FU3F round 1, F1: a blocked file's id waits, in order, so no id's later file drains before its earlier one (the epoch chain numbers in drain order).
+  it.skipIf(process.getuid?.() === 0)('a blocked file holds back its own id\'s later files, so the epoch chain keeps its order once the block lifts (FU3F review F1)', () => {
+    setReg(box, ID, 'uuid', U2); setReg(box, ID, 'generation', G1);
+    const dr = DRAIN(box.home);
+    fs.mkdirSync(dr, { recursive: true });
+    fs.writeFileSync(path.join(dr, `${ID}.900.1.jsonl`), `\n${JSON.stringify(start(ID, U1, 'startup', { reg: U1 }))}\n`);   // A, blocked
+    fs.writeFileSync(path.join(dr, `${ID}.901.1.jsonl`), `\n${JSON.stringify(start(ID, U2, 'clear'))}\n`);                  // B, the same id, later
+    const d = path.join(dr, `${ID}.900.1.obs`);
+    fs.mkdirSync(d);
+    fs.writeFileSync(path.join(d, 'keep'), '');
+    fs.chmodSync(d, 0o500);
+    const pl = path.join(dr, 'planted');
+    fs.mkdirSync(pl);
+    fs.writeFileSync(path.join(pl, 'keep'), '');
+    fs.chmodSync(pl, 0o500);
+    try {
+      SW.drainSpool(db, c); clock.ms += 1000; SW.drainSpool(db, c); clock.ms += 1000;
+      expect(counterOf(db, 'spool_blocked')).toBeGreaterThanOrEqual(1);
+      expect(epochsOf(db, ID, G1), 'B waits behind A: nothing of the id drained').toEqual([]);
+      expect(drainingNames(box.home)).toEqual([`${ID}.900.1.jsonl`, `${ID}.901.1.jsonl`]);
+    } finally { fs.chmodSync(pl, 0o700); fs.chmodSync(d, 0o700); }
+    for (let i = 0; i < 3; i++) { SW.drainSpool(db, c); clock.ms += 1000; }   // the block lifted: the next tidy sets the entry aside
+    expect(drainingNames(box.home)).toEqual([]);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, U1, 'startup'], [2, U2, 'clear']]);
+  });
+
   it('a gen-less clear line on that row joins the same family: one family, the clear chained after the resume (DM19b CONTROL)', () => {
     setReg(box, ID, 'uuid', U2); setReg(box, ID, 'generation', G1);
     spool(box.home, ID, start(ID, U1, 'resume', { reg: U1 }));
