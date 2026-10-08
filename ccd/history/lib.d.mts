@@ -154,6 +154,9 @@ export type GenerationVia = 'line' | 'registry' | 'absent' | 'unreadable';
 export const GENERATION_VIA: readonly GenerationVia[];
 export const DRAINING_NAME_MAX: 253;
 export function drainingNameOk(name: unknown): boolean;
+export interface DrainingNameParts { readonly id: string; readonly tickMs: number; readonly pid: number }
+export function drainingNameParts(name: unknown): DrainingNameParts | null;
+export function drainingOrder(a: { readonly name: string; readonly parts: DrainingNameParts }, b: { readonly name: string; readonly parts: DrainingNameParts }): number;
 /** A record's own fields — everything but `v`, `k` and `t`. */
 export type JournalFields = Readonly<Record<string, unknown>>;
 export interface JournalRecord { readonly v: 1; readonly k: JournalKind; readonly t: number; readonly [field: string]: unknown }

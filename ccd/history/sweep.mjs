@@ -43,7 +43,7 @@ import { pathToFileURL } from 'node:url';
 import {
   CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, CONTROL_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
-  UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
+  UUID_RE, WRITER_RE, drainingNameOk, drainingNameParts, drainingOrder, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
@@ -326,7 +326,6 @@ const REG_LOG_MAX = 4 * 1024 * 1024;
  *  is a different value under its own name, `ABSENT_CODES`, so the module never declares `ABSENT` twice. */
 const ABSENT = Object.freeze({ state: 'absent' });
 const UNREADABLE = Object.freeze({ state: 'unreadable' });
-const DRAINING_RE = /^(.+)\.([0-9]+)\.([0-9]+)\.jsonl$/;
 
 /** `<id>.<tickMs>.<pid>.jsonl`. At SPOOL_ID_MAX (224) with a 7-digit pid, it is 252 bytes, within lib's
  *  DRAINING_NAME_MAX (253, D-4303); its sidecar is 250 and the sidecar's temp 254, under the 255-byte NAME_MAX (§5.1). */
@@ -336,11 +335,9 @@ export function drainingName(id, tickMs, pid) { return `${id}.${tickMs}.${pid}.j
  *  this shape is not a draining file. The grammar is lib's `drainingNameOk` (an id passing idOk, a tick of at most
  *  16 digits, a pid of at most 10, DRAINING_NAME_MAX = 253 bytes in all, D-4303), the one the journal's `file` and `drained` records are checked
  *  against: a name it refuses is never listed, journaled or drained, so it can never make journalRecord throw
- *  mid-tick. DRAINING_RE only splits a name that grammar already admitted. */
+ *  mid-tick. lib's `drainingNameParts` is that grammar's one split (FU8), which status's held-file walk shares. */
 export function parseDrainingName(name) {
-  if (!drainingNameOk(name)) return null;
-  const m = DRAINING_RE.exec(name);
-  return { id: m[1], tickMs: Number(m[2]), pid: Number(m[3]) };
+  return drainingNameParts(name);
 }
 
 export function idOfDrainingName(name) {
@@ -478,10 +475,10 @@ export function listDraining(home) {
   let names;
   try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return []; throw e; }
   return names
-    .map((n) => ({ n, p: parseDrainingName(n) }))
-    .filter((x) => x.p !== null)
-    .sort((a, b) => a.p.tickMs - b.p.tickMs || a.p.pid - b.p.pid || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0))
-    .map((x) => x.n);
+    .map((n) => ({ name: n, parts: drainingNameParts(n) }))
+    .filter((x) => x.parts !== null)
+    .sort(drainingOrder)
+    .map((x) => x.name);
 }
 
 /** spool/ and spool/.draining/, 0700. Only a bound, open store makes them, and the hook spools only into an

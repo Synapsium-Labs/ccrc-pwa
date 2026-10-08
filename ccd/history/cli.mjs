@@ -453,7 +453,10 @@ function rosterReadable(file) {
  *  rule: absent and unreadable are not one null). A MEASUREMENT only: lib.mjs's
  *  journalHeldTooLong decides whether `oldest` is a hold (§9.6
  *  `journal-unwritable`). Read only while a bound store exists: a hold with no
- *  binding never reaches here (exit 5 answers first). */
+ *  binding never reaches here (exit 5 answers first). A draining file the drain
+ *  skips without a journal failure (a directory at its sidecar name, an open that
+ *  fails, a sidecar it cannot read) is not a held file, and neither is any later
+ *  file of its id, which the drain holds behind it (FU8). */
 function oldestUnjournaledMs(p) {
   const absent = (e) => e !== null && typeof e === 'object' && e.code === 'ENOENT';
   let names;
@@ -461,22 +464,50 @@ function oldestUnjournaledMs(p) {
   let oldest = null;
   let unreadable = false;
   const present = new Set(names);
-  // D-4347 (history-planted-entries-never-wedge) / FU3F review F2, FU6: a directory at a live file's sidecar or sidecar-temp
-  // name is the condition the next drain either displaces (counted `spool_displaced`) or blocks (`spool_blocked`), both under
-  // WARN spool-planted: not a journal hold, so the file's sidecar is neither held nor unreadable. Status cannot tell the two
-  // arms apart (it cannot know whether `planted/` is usable, and judges no write), so it skips the file for either; the window
-  // is the time to the next drain, and a pass that only journals reports `journal-unwritable` itself where a DB is open.
-  // (A directory at a name whose file is gone is not that condition.) Judge the stems first, so the answer holds whatever
-  // order the listing names the two entries in. A name that cannot be lstat'd is left to the read below.
+  // D-4347 (history-planted-entries-never-wedge) / FU3F review F2, FU6, FU8 (FPM13): a directory at a live file's sidecar or
+  // sidecar-temp name is not a journal hold, so the file's sidecar is neither held nor unreadable. The next drain usually moves
+  // that directory into its area (counted `non_regular`) and drains the file; only when the directory cannot be moved does it
+  // displace the file (`spool_displaced`) or block it (`spool_blocked`), both under WARN spool-planted. Status cannot tell which
+  // (it cannot know whether the directory or `planted/` will move, and judges no write), so it skips the file for all three;
+  // the window is the time to the next drain, and a pass that only journals reports `journal-unwritable` itself where a DB is
+  // open. (A directory at a name whose file is gone is not that condition.) Judge the stems first, so the answer holds
+  // whatever order the listing names the two entries in. A name that cannot be lstat'd is left to the read below.
   const planted = new Set();
   for (const n of names) {
     const stem = n.endsWith('.obs.tmp') ? n.slice(0, -'.obs.tmp'.length) : n.endsWith('.obs') ? n.slice(0, -'.obs'.length) : null;
     if (stem === null || !present.has(`${stem}.jsonl`)) continue;   // a live file's names only: a directory at an orphan name stays unreadable
     try { if (healthFs.lstatSync(healthPath.join(p.draining, n)).isDirectory()) planted.add(stem); } catch { /* judged by the read below */ }
   }
+  // FU8 (FP5; D-4347 (history-planted-entries-never-wedge)): the drain skips, never journals, a live file whose sidecar name
+  // is planted (above), one it cannot open, and one whose sidecar it cannot read, and holds every later file of the same id
+  // behind it, so the epoch chain keeps its order. None of those is a journal hold, so status walks the stems in the drain's
+  // journaling order (lib's `drainingOrder`) and skips the rest of an id once it has such a file. A stem outside the draining
+  // grammar is walked last and judged as before: its sidecar is still read, so a FIFO or a mode-000 one reads unreadable.
+  const stems = new Set();
   for (const n of names) {
-    if (!n.endsWith('.obs')) continue;
-    if (planted.has(n.slice(0, -'.obs'.length))) continue;
+    if (n.endsWith('.obs')) stems.add(n.slice(0, -'.obs'.length));
+    else if (healthLib.drainingNameParts(n) !== null) stems.add(n.slice(0, -'.jsonl'.length));
+  }
+  const walk = [...stems].map((s) => ({ s, name: `${s}.jsonl`, parts: healthLib.drainingNameParts(`${s}.jsonl`) }));
+  const inGrammar = walk.filter((x) => x.parts !== null).sort(healthLib.drainingOrder);
+  const outside = walk.filter((x) => x.parts === null).sort((a, b) => (a.s < b.s ? -1 : a.s > b.s ? 1 : 0));
+  // The drain's own open (readDrainingText: nonblocking, never following a link). ENOENT and ELOOP are not a skipped file
+  // (gone, or a link the drain removes and counts), so the sidecar read below decides those.
+  const unopenable = (f) => {
+    const C = healthFs.constants;
+    try { healthFs.closeSync(healthFs.openSync(f, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK | C.O_NOCTTY)); return false; } catch (e) { return !(absent(e) || (e && e.code === 'ELOOP')); }
+  };
+  const waiting = new Set();
+  for (const { s, name, parts } of [...inGrammar, ...outside]) {
+    const id = parts === null ? null : parts.id;
+    if (id !== null && waiting.has(id)) continue;
+    const live = present.has(name);
+    if (live && (planted.has(s) || (id !== null && unopenable(healthPath.join(p.draining, name))))) {
+      if (id !== null) waiting.add(id);
+      continue;
+    }
+    const n = `${s}.obs`;
+    if (!present.has(n)) continue;
     const file = healthPath.join(p.draining, n);
     // ONE nonblocking open with the type judged on the descriptor, as the sweep's readSmall does (store.mjs
     // `readBounded`, the `_reg_read` lesson; D-4347 (history-planted-entries-never-wedge)): a FIFO named *.obs would block a plain read in open(2) for
@@ -485,12 +516,16 @@ function oldestUnjournaledMs(p) {
     // rewrites the sidecar), so no read of it can say whether a record was held.
     const r = healthStore.readBounded(file, healthLib.OBS_FILE_MAX, true);
     if (r.state === 'absent') continue;             // the sweep unlinked it between the listing and the read
-    if (r.state === 'unreadable') { unreadable = true; continue; }
+    if (r.state === 'unreadable') {
+      unreadable = true;
+      if (live && id !== null) waiting.add(id);   // FU8: the drain skips this file and holds its id's later files behind it
+      continue;
+    }
     if (r.state === 'over-cap') continue;           // content the sweep re-observes, as it does unparseable content
     const text = r.value;
     // D-4347 (history-planted-entries-never-wedge): an orphan the sweep's next drain removes is not a held file. This is
     // judged AFTER the read, so a FIFO, directory or mode-000 sidecar still reads unreadable, as above.
-    if (!present.has(`${n.slice(0, -'.obs'.length)}.jsonl`)) continue;
+    if (!live) continue;
     let o;
     try { o = JSON.parse(text); } catch { continue; }   // unparseable CONTENT the sweep's own reader also skips (readSidecar: null, then re-observed); a non-regular entry it does NOT skip, see above
     // The sweep's own predicate (lib's observationOk, D-4347 (history-planted-entries-never-wedge)): a sidecar the sweep would not use is not a held record;

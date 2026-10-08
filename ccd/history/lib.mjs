@@ -658,9 +658,22 @@ export const DRAINING_NAME_MAX = 253;
  *  gates on it first, so a name refused here is never listed, journaled or
  *  drained. The sweep's own renames reach 252 bytes at most (D-4303). */
 export function drainingNameOk(name) {
-  if (typeof name !== 'string' || Buffer.byteLength(name, 'utf8') > DRAINING_NAME_MAX) return false;
+  return drainingNameParts(name) !== null;
+}
+
+/** A draining name's three parts, `{ id, tickMs, pid }`, or null for a name `drainingNameOk` refuses (FU8): this grammar's one
+ *  split, shared by sweep.mjs's `parseDrainingName` and status's held-file walk. */
+export function drainingNameParts(name) {
+  if (typeof name !== 'string' || Buffer.byteLength(name, 'utf8') > DRAINING_NAME_MAX) return null;
   const m = /^(.+)\.([0-9]{1,16})\.([0-9]{1,10})\.jsonl$/.exec(name);
-  return m !== null && idOk(m[1]);
+  return m !== null && idOk(m[1]) ? { id: m[1], tickMs: Number(m[2]), pid: Number(m[3]) } : null;
+}
+
+/** Journaling order (rev 3.2 review, DI9; FU8): tick ms, then pid, then name, of two `{ name, parts }` whose `parts` are
+ *  `drainingNameParts(name)`. readdir order is a hash order, and lexical order puts tick 1000 before tick 900. sweep.mjs's
+ *  `listDraining` and status's held-file walk sort by this one rule, so status knows which files the drain holds behind which. */
+export function drainingOrder(a, b) {
+  return a.parts.tickMs - b.parts.tickMs || a.parts.pid - b.parts.pid || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }
 
 const isGen = (x) => x === '' || isUuid(x);

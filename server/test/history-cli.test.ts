@@ -693,6 +693,69 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     } finally { healthFs.chmodSync(planted, 0o700); healthFs.chmodSync(tmp, 0o700); }
   });
 
+  // FU8 (FP5): the drain skips a draining file whose bytes or sidecar it cannot read, and holds its id's later files behind it;
+  // none of them is a journal hold. Status walks the drain's journaling order, so `x.1000.1`, which sorts before `x.900.1`
+  // lexically, is still known to wait behind it. Root opens a mode-000 file, so these skip as root.
+  describe.skipIf(process.getuid?.() === 0)('a draining file or sidecar the sweep cannot read (FU8, FP5)', () => {
+    it.each([['file'], ['sidecar']])('an unreadable %s and its id\'s later file are not held files however old; the counted skip is WARN spool-planted', (what) => {
+      const box = healthHh.makeHistoryBox('ccrc-history-health-unreadable-', { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 60 * 60_000);
+      tickedStore(box, Date.now());
+      const db = healthStore.openWriter(dbFile(box));
+      try { db.prepare('INSERT INTO counters (name, n) VALUES (?, ?)').run('spool_unreadable', 1); } finally { healthStore.closeWriter(db); }
+      const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+      healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      for (const stem of ['x.900.1', 'x.1000.1']) {
+        healthFs.writeFileSync(healthPath.join(dir, `${stem}.jsonl`), '', { mode: 0o600 });
+        healthFs.writeFileSync(healthPath.join(dir, `${stem}.obs`), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+      }
+      const locked = healthPath.join(dir, what === 'file' ? 'x.900.1.jsonl' : 'x.900.1.obs');
+      healthFs.chmodSync(locked, 0o000);
+      try {
+        const h = statusOf(box).env!['health'];
+        expect(wordsOf(h['fail'])).not.toContain('journal-unwritable');   // at cf544c151: FAIL journal-unwritable, a journal-space remedy
+        if (what === 'file') expect(wordsOf(h['fail'])).not.toContain('status-unreadable');
+        else expect(wordsOf(h['fail']), 'a sidecar status cannot read stays unmeasured').toContain('status-unreadable');
+        const warn = (h['warn'] as Array<{ word: string; detail: string }>).find((i) => i.word === 'spool-planted');
+        expect(warn?.detail).toContain('1 skipped drain(s) of a draining file or its sidecar the sweep could not read');
+        healthFs.chmodSync(locked, 0o600);                                   // CONTROL: readable, both are held files
+        expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
+      } finally { healthFs.chmodSync(locked, 0o600); }
+    });
+  });
+
+  // FU8: a directory at a live file's sidecar name holds its id's later files too (the drain blocks or defers that file and
+  // holds the id behind it, or moves the directory and drains them all in order), so none of them is a held file before that
+  // drain; and a link at a draining name is no unopenable file (the drain removes it, counted non_regular, and drains the
+  // id's later files), so it holds nothing behind it.
+  const heldPair = (prefix: string): { box: healthHh.HistoryBox; dir: string } => {
+    const box = healthHh.makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const dir = healthPath.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+    healthFs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(healthPath.join(dir, 'x.1000.1.jsonl'), '', { mode: 0o600 });
+    healthFs.writeFileSync(healthPath.join(dir, 'x.1000.1.obs'), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+    return { box, dir };
+  };
+
+  it('a directory at a draining file\'s sidecar-temp name skips its id\'s later file too, however old; without it both are held files (FU8)', () => {
+    const { box, dir } = heldPair('ccrc-history-health-planted-later-');
+    healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.jsonl'), '', { mode: 0o600 });
+    healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.obs'), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+    const planted = healthPath.join(dir, 'x.900.1.obs.tmp');
+    healthFs.mkdirSync(planted);
+    expect(wordsOf(statusOf(box).env!['health']['fail'])).not.toContain('journal-unwritable');   // at cf544c151: FAIL, x.1000.1 read as a held file
+    healthFs.rmSync(planted, { recursive: true });                                                 // CONTROL: no planted entry, both are held files
+    expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
+  });
+
+  it('a link at a draining name holds nothing behind it: its id\'s later file is still a held file (FU8 CONTROL)', () => {
+    const { box, dir } = heldPair('ccrc-history-health-link-later-');
+    healthFs.symlinkSync(healthPath.join(box.home, 'nowhere'), healthPath.join(dir, 'x.900.1.jsonl'));
+    expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
+  });
+
   it('an observation sidecar whose draining file is gone is not a held file, however old (review 316 F20)', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-orphan-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);
