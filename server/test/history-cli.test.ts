@@ -253,12 +253,14 @@ describe('ccrc history status (Linux)', () => {
   // FU4 M30 (review 316 F11): readStoreAnswered classifies ONLY a StoreError and SQLite's own error (code ERR_SQLITE_ERROR) as a
   // store word; any other throw is a defect in the reader and stays exit 1 with no envelope. The preload fails the preparation of
   // the counters read, which only readStore (past the binding read) issues.
-  it('M30: a plain TypeError out of the status read is a programming defect: exit 1, no envelope, never store-read-failed', () => {
+  // FU6 (B3M7): cli.mjs's catch prints only `e.message` (never the error's class), so the injected message names no class and
+  // what is asserted is that the defect ESCAPED: the internal-error exit code, an empty stdout, and the message on stderr.
+  it('M30: a plain TypeError out of the status read is a programming defect: exit 1, no envelope, its message on stderr, never store-read-failed', () => {
     const box = boundBox('ccrc-hist-cli-m30a-');
     const r = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'TypeError@FROM counters' } });
     expect(r.code, r.stderr).toBe(1);
     expect(r.stdout.trim(), 'no envelope is answered for a defect').toBe('');
-    expect(r.stderr).toContain('ccrc history: internal error: TypeError: injected programming defect');
+    expect(r.stderr).toContain('ccrc history: internal error: fixture-planted');
     expect(r.stderr).not.toContain('store-read-failed');
   });
 

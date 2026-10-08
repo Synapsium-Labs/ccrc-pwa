@@ -244,7 +244,7 @@ export interface DriverDeps {
   /** The first statfs call never settles after it has appended afterFirstStatfs's lines (FU4 M27: a dead volume). */
   hangAfterAppend?: boolean;
   /** Once the first statfs call has answered, the first <times> (default 1) calls of fs.<fn> on a path holding <needle> throw <code> (FU4 M26). */
-  throwOnceAfterFirstStatfs?: { fn: string; needle: string; code: string; times?: number };
+  throwTimesAfterFirstStatfs?: { fn: string; needle: string; code: string; times?: number };
   /** The word an --op pass's store open answers instead of opening (FU4 M28), handed to sweep.mjs as deps.openStore. */
   openStoreWord?: string;
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];

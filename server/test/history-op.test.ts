@@ -754,7 +754,7 @@ describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-423
     // a second run of the half, from the catch the throw used to land in, meets the second fault and escapes to the wrapper:
     // two `internal error` lines. Run once, the half's throw escapes to the wrapper alone: one line, and the line count is
     // also what proves the first fault was the half's (a body throw would reach the half, and the second fault, too).
-    const op = runDriver(box, { extraMigrations: [V2], afterFirstStatfs: mid, throwOnceAfterFirstStatfs: { fn: 'readdirSync', needle: '/history/spool', code: 'EIO', times: 2 } },
+    const op = runDriver(box, { extraMigrations: [V2], afterFirstStatfs: mid, throwTimesAfterFirstStatfs: { fn: 'readdirSync', needle: '/history/spool', code: 'EIO', times: 2 } },
       ['--op', 'import', '--apply']);
     expect(op.code, op.stderr).toBe(1);
     expect(op.stderr.match(/history-sweep: internal error/g) ?? [], op.stderr).toHaveLength(1);

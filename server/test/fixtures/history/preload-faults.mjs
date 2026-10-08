@@ -308,7 +308,7 @@ import { DatabaseSync as DatabaseSyncM30 } from 'node:sqlite';
     const realPrepareM30 = protoM30.prepare;
     protoM30.prepare = function prepareM30(sql) {
       if (needleM30 !== '' && String(sql).includes(needleM30)) {
-        if (kindM30 === 'TypeError') throw new TypeError('TypeError: injected programming defect (test preload)');
+        if (kindM30 === 'TypeError') throw new TypeError('fixture-planted');
         if (kindM30.startsWith('StoreError:')) throw new StoreErrorM30(kindM30.slice('StoreError:'.length), 'injected store refusal (test preload)');
         throw new Error(`preload-faults: HISTORY_TEST_THROW_PREPARE kind ${kindM30} is not TypeError or StoreError:<word>`);
       }

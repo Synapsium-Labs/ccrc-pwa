@@ -14,7 +14,7 @@
 //                      is the probe right after the lock-take journal half
 //   hangAfterAppend    true: the first statfs call, after appending afterFirstStatfs's lines, never settles (a dead volume the
 //                      line landed before, FU4 M27); the pass's own bounded probe then answers store-unreachable
-//   throwOnceAfterFirstStatfs
+//   throwTimesAfterFirstStatfs
 //                      {fn, needle, code, times?}: once the first statfs call has answered, the first <times> (default 1) calls
 //                      of node:fs's sync function <fn> on a path containing <needle> throw an error carrying <code> (FU4 M26:
 //                      a non-JournalError out of the half at release; a second run of the half meets the fault again); every
@@ -54,9 +54,9 @@ if (typeof spec.sizeBytes === 'number') deps.measureSize = () => spec.sizeBytes;
 if (Array.isArray(spec.sizeBytesSeq)) { let k = 0; deps.measureSize = () => spec.sizeBytesSeq[Math.min(k++, spec.sizeBytesSeq.length - 1)]; }
 if (Array.isArray(spec.managedSettings)) deps.managedSettings = spec.managedSettings;
 if (typeof spec.openStoreWord === 'string') deps.openStore = () => ({ word: spec.openStoreWord });
-if (Array.isArray(spec.afterFirstStatfs) || spec.throwOnceAfterFirstStatfs !== undefined) {
+if (Array.isArray(spec.afterFirstStatfs) || spec.throwTimesAfterFirstStatfs !== undefined) {
   let fired = false;
-  const armed = spec.throwOnceAfterFirstStatfs;
+  const armed = spec.throwTimesAfterFirstStatfs;
   deps.statfs = async (p) => {
     const r = await fs.promises.statfs(p);
     if (!fired) {
@@ -69,7 +69,7 @@ if (Array.isArray(spec.afterFirstStatfs) || spec.throwOnceAfterFirstStatfs !== u
       if (armed !== undefined) {
         const real = fs[armed.fn];
         let thrown = 0;
-        fs[armed.fn] = function throwOnce(...args) {
+        fs[armed.fn] = function throwTimes(...args) {
           if (thrown < (armed.times ?? 1) && String(args[0]).includes(armed.needle)) {
             thrown += 1;
             throw Object.assign(new Error(`${armed.code}: injected, ${armed.fn} '${args[0]}'`), { code: armed.code });

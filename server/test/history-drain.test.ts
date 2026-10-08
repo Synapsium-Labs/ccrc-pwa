@@ -1863,6 +1863,7 @@ describe('epochs and families, decided at drain (spec §6.1, §9.2 step 1, §9.1
       // this case's own showing rather than a mutation's: U1's epoch exists, still unconfirmed, and nothing says "location" yet.
       expect(faulted, 'the fault fired in the second tick\'s walk').toBe(1);
       expect(epochsOf(db, ID, G1).filter((e) => e.cc_session_uuid === U1)).toEqual([expect.objectContaining({ cause: 'clear', confirmed_ms: null })]);
+      expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed' && v['cc_session_uuid'] === U1), 'no verdict yet').toEqual([]);   // B3M6
       clock.ms += 60_000;
       await EP.tick(db, ctx);                                         // a FRESH walk finds it
     });

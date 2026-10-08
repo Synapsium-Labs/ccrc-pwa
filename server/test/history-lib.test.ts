@@ -63,6 +63,11 @@ describe('lib.mjs is L1: its import block is node:crypto and nothing else (spec 
 // dropped, and so is a trailing ` //` comment. Comment LINES are dropped, never a block-comment span by regex:
 // lib.mjs holds `'.cc-secrets/*'` as a string literal, and a span regex would eat the code between it and the
 // next block end. A `https://` inside a string survives (it is not preceded by whitespace).
+// KNOWN WIDTH (FU6, B3M25), the scanner's stopping line, evasions it does NOT see: (1) a code line that starts with `*`
+// (`* require('x')`) is dropped as if it were a comment continuation; (2) everything after a whitespace-preceded ` //` is
+// stripped even inside a string literal (`' //'; require('y')`); (3) the cases that glob files read only `.mjs`, so a `.js` or
+// `.cjs` module or preload is outside the census. A ring defect hidden in one of these three forms would pass. They are named
+// so a reader does not take the census for a proof of the ring.
 const codeOf = (src: string): string => src.split('\n').filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
 // Every module specifier a source imports: `from '…'` (named, default, namespace, multi-line, export-from) and a side-effect `import '…';`.
 const specsOf = (src: string): string[] => {
@@ -83,7 +88,10 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
     'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
   };
   /**
-   * - A preload is a seam from outside (D-4247). It imports only node builtins, never the module graph it patches.
+   * - A preload is a seam from outside (D-4247). It imports only node builtins, never the module graph it patches, with ONE allowance
+   *   (FU6, B3M21/B3M22): a lazy `import()` that LAZY_IMPORTS names for that file, exactly. preload-faults.mjs reads store.mjs's
+   *   StoreError that way, past its patches, so that a fault it injects is the error class the reader really classifies. A test
+   *   preload reading a shipped error class crosses no shipped ring, and the list is per file and exact, never a switch.
    * - run-pass imports the three history modules and node builtins, never `node:sqlite`, so it reaches SQLite only through store.mjs.
    */
   const FIXTURE_RING = (name: string): ((s: string) => boolean) | null =>
@@ -117,6 +125,17 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
     expect(Object.keys(RINGS).filter((m) => specsOf(readFileSync(join(HIST, m), 'utf8')).includes('node:sqlite'))).toEqual(['store.mjs']);
   });
 
+  /** What each `import … from '../compact-card.mjs'` and each `export … from '../compact-card.mjs'` takes (FU6, B3M25: a re-export reaches the module as an import does). */
+  const compactCardForms = (src: string): string[] =>
+    [...codeOf(src).matchAll(/\b(?:import|export)\s+([^'";]*?)\s+from\s+['"]\.\.\/compact-card\.mjs['"]/g)].map((x) => x[1]!.replace(/\s+/g, ' ').trim());
+
+  it('CONTROL (B3M25): the compact-card form reader sees an import, an export-from and a star re-export, and not a comment', () => {
+    expect(compactCardForms("import { isBoundaryLine } from '../compact-card.mjs';")).toEqual(['{ isBoundaryLine }']);
+    expect(compactCardForms("export { CARD_PREFIX } from '../compact-card.mjs';")).toEqual(['{ CARD_PREFIX }']);
+    expect(compactCardForms("export * from '../compact-card.mjs';")).toEqual(['*']);
+    expect(compactCardForms("// export { X } from '../compact-card.mjs';")).toEqual([]);
+  });
+
   it('only L4 imports ../compact-card.mjs, and at most isBoundaryLine', () => {
     let seen = 0;
     for (const m of Object.keys(RINGS)) {
@@ -124,7 +143,7 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
       if (!specsOf(src).includes('../compact-card.mjs')) continue;
       seen += 1;
       expect(RINGS[m]!.ring, m).toBe('L4');
-      const imports = [...codeOf(src).matchAll(/import\s+([^'";]*?)\s+from\s+['"]\.\.\/compact-card\.mjs['"]/g)].map((x) => x[1]!.replace(/\s+/g, ' ').trim());
+      const imports = compactCardForms(src);
       expect(imports.length, `${m}: the import form was not read`).toBeGreaterThan(0);
       for (const i of imports) expect(i, m).toBe('{ isBoundaryLine }');
     }
@@ -145,7 +164,6 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
       expect(dynamic, `${n}: dynamic imports`).toEqual(LAZY_IMPORTS[n] ?? []);
       expect([...codeOf(src).matchAll(/(?<![.\w])import\s*\(/g)].length, `${n}: an import( with a non-literal specifier`).toBe(dynamic.length);
       expect(otherDoors(src).filter((d) => d !== String(DOORS[1])), n).toEqual([]);
-      if (!(n in LAZY_IMPORTS)) expect(otherDoors(src), n).toEqual([]);
     }
   });
 });
