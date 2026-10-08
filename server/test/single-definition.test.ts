@@ -4843,7 +4843,7 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
    *  line-scoped: only the lines of `fn`'s body (its `fn() {` line to the next line that is exactly `}`) that hold a
    *  needle in a single-quoted printf argument: a quoted line that belongs to the run of `\` continuations starting at
    *  a `printf` line of `fn` (FU9, B4M2), so a continuation of any other command inside `fn` is not covered. Every
-   *  other `file` line naming the path still reds the scan. */
+   *  other `file` line naming the path still reds the scan. The allowance departs from spec O13: D-4550. */
   const USAGE_PROSE = { file: 'ccd/ccrc', fn: '_usage_history_paragraph', needles: ['/history-off'] } as const;
   /** The line numbers of `fn`'s body the allowance covers, and the body itself (null when `fn` is not found). */
   const usageProse = (text: string): { body: string[] | null; allowed: Set<number> } => {
