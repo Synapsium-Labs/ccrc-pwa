@@ -39,9 +39,12 @@ from the server's answer, never from the tap. In the same wave:
 - `SettingsScreen.tsx` renders `<StallWatchSection/>` after `<NotificationsSection/>`. Its header and "ONE poll"
   comments now name three sections and two reads.
 - `QuickConfirm`'s `consequence` widens to `string | string[]`. Every existing caller is unchanged.
-- W2 does not touch `shared/`, `server/src`, `agent/` or `ccd/`. W1's L0 block is complete, and W2 adds no string to
-  it. The one server-side file is a new test, `server/test/stall-settings-readme.test.ts`, which ties README's new
-  sentence to the L0 labels and the L1 bounds.
+- Tasks 1 to 4 do not touch `shared/`, `server/src`, `agent/` or `ccd/`. W1's L0 block is complete, and they add no
+  string to it. Their one server-side file is a new test, `server/test/stall-settings-readme.test.ts`, which ties
+  README's new sentence to the L0 labels and the L1 bounds. Fix round 1 adds one key to W1's block
+  (`unanswered-write-has-its-own-l0-line`, below). The review's item 5 edits are the coordinator's scope (ledger R20,
+  R21): comments in `server/src/watch.ts`, the header of `shared/api.ts`'s stall-watch block, and tests in
+  `server/test/coord-db.test.ts` and `server/test/stall-sweep.test.ts`.
 
 **Tech Stack:** React and TypeScript in the PWA (Vite build, `tsc --noEmit && vite build`). Tests run on vitest with
 jsdom and Testing Library (`pwa/test/`), and the README pin on vitest in `server/test/`. Node `>=22.13.0`. Mutation
@@ -194,9 +197,10 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
   `confirm`. A 409 `confirm-required` that passes `asStallConfirm` opens the sheet from the server's `effect`. Set
   re-sends the same body with `confirm: effectKey`. Cancel sends nothing. The section never previews a choice.
 - **The server's answer is what is shown, never the tap; never optimistic** (§13, P2). A 2xx view is installed with
-  `settle(view)`. An unreadable 2xx gives `toast(UNCONFIRMED_TEXT)`, then `reload()`. So does a write whose answer
-  never arrived (a network failure after the POST may have left): it may have landed, so it never says "Nothing was
-  changed" (§15's "A write's reply cannot be read" row). Any other refusal gives `STALL_CONFIRM_TEXT.refused` with its
+  `settle(view)`. An unreadable 2xx gives `toast(UNCONFIRMED_TEXT)`, then `reload()`. A write whose answer
+  never arrived (a network failure after the POST may have left) gives `toast(STALL_CONFIRM_TEXT.unanswered)` (fix
+  round 1, F1), then `reload()`: it may have landed, so it never says "Nothing was changed" (§15's "A write's reply
+  cannot be read" row). Any other refusal gives `STALL_CONFIRM_TEXT.refused` with its
   detail (the server's `detail`, else the 500 body's `message`, else the error's own text), then `reload()`. The
   controls are locked while a write is in flight or its sheet is open.
 - **Not-configured wins over a landed view** (§13, D-4035). Only 501 `not-configured` and 404 `not-found` map to
@@ -207,8 +211,10 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
 - **One reader per field** (§14 item 10): `asStallWatchView` reads the view and `asStallConfirm` reads the 409 body. A
   malformed answer is a failed read, never a level.
 - **Single definition** (§14 item 12, P9). Every section string is an L0 `STALL_*` constant, filled by `fillStallText`.
-  The section spells no level id, copies no stall constant's value and keeps no short form of a level label. W2 adds no
-  L0 string.
+  The section spells no level id, copies no stall constant's value and keeps no short form of a level label. Tasks 1
+  to 4 add no L0 string; fix round 1 adds one key (`unanswered-write-has-its-own-l0-line`, below). The review's item 5
+  comment and test edits in `server/src/watch.ts`, `shared/api.ts`'s block header, `server/test/coord-db.test.ts` and
+  `server/test/stall-sweep.test.ts` are the coordinator's scope (ledger R20, R21).
 - **`QuickConfirm` keeps every existing caller unchanged** (§13). A string renders one `<p className="qc-consequence">`
   as before. A list renders one per line, with the same class.
 - **CSS:** only existing classes in `fleet.css` (§13). No new CSS.
@@ -312,18 +318,28 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
 | `pwa/test/settings-screen.test.tsx` | the label pin (≈1771) moved; the new import (≈33); three describes, 51 rows (26 helpers, 22 section, 3 scans) (688/1) | 3 |
 | `README.md` | the Settings paragraph gains "Settings has a third section, **Stall watch** …" (one line becomes seventeen; ≈953 at `77f8d63a5`, ≈960 at `d12b5aba0`) | 4 |
 | `server/test/stall-settings-readme.test.ts` | **new** (81 lines, 5 rows): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word (the PWA's own device-word list) | 4 |
+| `pwa/src/screens/settingsText.ts` | **new** (fix round 1, F4): `UNCONFIRMED_TEXT` and its docstring, imports nothing; `SettingsScreen.tsx` re-exports it and `StallWatchSection.tsx` imports it, so the two screens no longer import each other | fix round 1 |
+| `shared/api.ts` | one key, `STALL_CONFIRM_TEXT.unanswered`, inside W1's stall-watch block (`unanswered-write-has-its-own-l0-line`); the review's item 5 edit to the block's header comment is the coordinator's (ledger R20, R21) | fix round 1 |
+| `server/test/coord-db.test.ts` | the stall_settings slot found by its DDL, not hard-coded (fix round 1, Q); the review's item 5 edit is the coordinator's (ledger R20, R21) | fix round 1 |
+| `server/test/stall-sweep.test.ts` | the review's item 5 test edit, the coordinator's scope (ledger R20, R21) | coordinator |
+| `server/src/watch.ts` | the review's item 5 comment lines only (no behaviour), the coordinator's scope (ledger R20, R21) | coordinator |
 
 **Deliberately unchanged** (measured):
-- **`shared/api.ts`.** W1's L0 holds every string the section shows.
-- **`server/src/**`, `agent/`, `ccd/` and `server/src/coord/schema.ts`.**
+- **`shared/api.ts`, by Tasks 1 to 4.** W1's L0 holds every string the section shows. Fix round 1 adds one key,
+  `STALL_CONFIRM_TEXT.unanswered` (`unanswered-write-has-its-own-l0-line`, below); the review's item 5 edit to the
+  block's header comment is the coordinator's scope (ledger R20, R21).
+- **`server/src/**`, `agent/`, `ccd/` and `server/src/coord/schema.ts`, by Tasks 1 to 4.** Item 5's comment-only edits
+  in `server/src/watch.ts` are the coordinator's scope (ledger R20, R21). `schema.ts` is untouched over the whole wave.
 - **`server/test/stall-settings.test.ts` and `single-definition.test.ts`.** W1's `stall-settings.test.ts` tail still
   moves under W1's own tasks, so Task 4's README pin lives in its own file.
 - **`fleet.css`.** No new class.
 - **`pwa/src/fleet/AbandonSheet.tsx` :8 and `pwa/src/fleet/SwapSheet.tsx` :459.** Each cites `QuickConfirm.tsx:33-34`,
   already one line off at `77f8d63a5`. They stay as history, and no test pins them.
 - **README ≈951 (≈958 at `d12b5aba0`), "the phone-push bell for this browser".** Spec §13 measured that README does
-  not spell the renamed label, and §18 gives W2's README edit as the third-section sentence only. It is put to the
-  operator under "Open questions for the operator" below.
+  not spell the renamed label, and §18 gives W2's README edit as the third-section sentence only. It was put to the
+  operator under "Open questions for the operator" below. **Settled by the operator's 2026-10-05 directive** (no
+  device distinction): README already reads "the push bell for this browser" (`a5771e471`), and
+  `stall-settings-readme.test.ts`'s device row pins it. The paragraph is kept here as the history of why it was asked.
 - **README ≈3751, the strict runbook's "`rm` it to go back".** That residue is W1's (§20, coordinator lens).
 
 ---
@@ -402,11 +418,13 @@ export function useStallWatchView(pollMs?: number): StallWatchPoll;
   `request failed (<status>)` floor does, and is not section copy; it is not an L0 string.
 - **A rejection that is not an `ApiError`** (a network failure, after which the POST may have landed) is
   `{ kind: 'unconfirmed' }`, never a refusal: "Nothing was changed" would be a claim nobody measured. The section
-  answers it as it answers an unreadable 2xx (Task 3). W1's L0 has no text of its own for this case and W2 adds none,
-  so the section uses the PWA's one existing text for an answer that could not be read, `UNCONFIRMED_TEXT`, which
-  spec §13 step 3 and §15's "A write's reply cannot be read" row already prescribe, followed by a re-read that shows
-  what was stored. Its lead word, "Saved", overstates a request that never left; the re-read corrects it within one
-  answer, and the wording is listed for the operator under "Open questions for the operator".
+  answers it with a toast and a re-read (Task 3). W1's L0 had no text of its own for this case, and the PWA's one
+  existing text for an answer that could not be read, `UNCONFIRMED_TEXT` (spec §13 step 3, §15's "A write's reply
+  cannot be read" row), leads with "Saved", which overstates a request that never left. Fix round 1 (F1) therefore
+  gave the network arm its own L0 line, `STALL_CONFIRM_TEXT.unanswered` ("Not confirmed — the server did not answer;
+  the screen will re-check."), numbered as `unanswered-write-has-its-own-l0-line`. The 2xx-unreadable arm keeps
+  `UNCONFIRMED_TEXT`, and the re-read shows what was stored either way. The wording is listed for the operator under
+  "Open questions for the operator".
 - **The wire guard's two choices §12 leaves open.** A present but malformed `next` or `filesExceed` is dropped and read
   as not stated, like a missing one, with the one `console.warn` that also counts dropped `counts` elements. A present
   but malformed `fallback` refuses the whole answer, because reading it as `null` would claim the choice applies when
@@ -1756,8 +1774,8 @@ export function StallWatchSection(): ReactNode;
   empty and a 500 names its cause. The section calls it and adds nothing. Pinned by "P2: a 500 toasts the cause the
   server named in its message…" (X59).
 - **A write whose answer never arrived** (a network failure): Task 1 reads it as `unconfirmed`, and the section
-  toasts `UNCONFIRMED_TEXT` and re-reads, as for an unreadable 2xx, never "Nothing was changed". Pinned by "a write
-  whose answer never arrived…" (X48, X60).
+  toasts `STALL_CONFIRM_TEXT.unanswered` (fix round 1, F1; an unreadable 2xx keeps `UNCONFIRMED_TEXT`) and re-reads,
+  never "Nothing was changed". Pinned by "a write whose answer never arrived…" (X48, X60).
 - **The lock** (§13 item 3): `busy || pending !== null` disables both fieldsets, and `choose` refuses to write while
   locked, because a dispatched event can still reach a disabled control's handler (measured: with the guard deleted,
   that row's change on the disabled select and click on a disabled radio each send a write, 3 calls where 1 is
@@ -3232,7 +3250,8 @@ with W1's `quiet-raise-asks-nothing` (D-4037): a stage turning on, leaving the f
 the one before (never a raise), and every write while the registry cannot be listed. The paragraph's existing "the
 phone-push bell" (≈951) is left as it is: §13 measured that nothing in README spells the Notifications row's label, so
 `notifications-label-says-push` (D-4036) reaches no README line, and row 5 scans the third section's sentences only.
-That phrase is put to the operator under "Open questions for the operator".
+That phrase was put to the operator under "Open questions for the operator"; it is settled there (README now reads
+"push bell").
 
 **README is in the citation corpus.** The edit adds 16 lines inside one paragraph. The citation instrument stays
 `7 passed | 328 skipped (335)`, measured before and after:
@@ -3772,8 +3791,10 @@ Two of the remaining items reach this wave's screen unchanged, and the section d
 ## Open questions for the operator
 
 Neither blocks the wave; each is the operator's to rule on, and the wave-done mail repeats them.
-- **README ≈951 (≈958 at `d12b5aba0`), "the phone-push bell for this browser".** It is in the Settings paragraph W2
-  edits, but outside D-4036 (which renames the Notifications row's label, a string README never spells) and outside
+- **README ≈951 (≈958 at `d12b5aba0`), "the phone-push bell for this browser".** **Settled by the operator's
+  2026-10-05 directive** (no device distinction): README already reads "the push bell for this browser" (`a5771e471`),
+  and `stall-settings-readme.test.ts`'s device row pins it. Nothing is left to rule; the question stays below as
+  history. It is in the Settings paragraph W2 edits, but outside D-4036 (which renames the Notifications row's label, a string README never spells) and outside
   §18's README edit list (the third-section sentence only). Rewording it to "the push bell for this browser" would
   carry the 2026-10-05 "no device distinction" directive into README.
 - **`UNCONFIRMED_TEXT` for a write whose answer never arrived.** Its lead word, "Saved —", overstates a request that
