@@ -22,7 +22,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deployed (both boxes on v0.0.119, 10-07); the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
-| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); DISPATCHED 2026-10-07 22:28 → `ccrc-pwa-swift-cove`; wave-done 10-08 04:3x, PR #328 @ `701839b52`, awaiting review (review run 339, dispatched 10:39 → `ccrc-pwa-keen-summit`) |
+| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); DISPATCHED 2026-10-07 22:28 → `ccrc-pwa-swift-cove`; wave-done 10-08 04:3x, PR #328 @ `701839b52`; review run 339 (`ccrc-pwa-keen-summit`), no fix round; **merged 2026-10-08 (`669b8305`)**; run 314 closed; deploy via ccrc's updater; the lane ships SHADOWED |
+| 5 | 3–4, follow-ups | FIRST: review 339's residue and the dead-coordinator lane's arming blockers; then the expiry lane's follow-ups: the kept-leaf reader, the `state-changed` reading, the answer to a repeating resumable failure, the in-lock window close | server (+ **AGENT-FIRST** if the window close lands in ccd) | wave 4; CCR-15 wave 6 (#326) merged | — | run 345 open (planned; the run's wave 6 of 6), block 4480–4495; to plan |
 
 ## Decisions & deviations
 
@@ -846,6 +847,46 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 - **2026-10-08 10:39 — review run 339 dispatched** to `ccrc-pwa-keen-summit` (brief queued, skill present, no resume).
   The retry lost the 08:47, 09:58 and 10:34 age-outs to other programmes' dispatches before taking the 10:39 slot.
   Run 314 stays at `awaiting-review` on `701839b52` until the review-done arrives.
+- **2026-10-08 12:02 — review 339 ruled; wave 4 MERGED (#328 → `669b8305`); run 345 opened for wave 5.** keen-summit's
+  review-done 4002 at `701839b52`, the tip unchanged. The held-out panel ran as written: three Opus lenses, a Sonnet
+  refute pass per finding, 45 agents, none lost. 13 findings, one important. 35 mutation rows, 34 red, 1 survivor
+  (F1). Every finding is safe while both lanes are shadowed, so wave 4 merges with no fix round. Its residue is wave
+  5's first commit, as review 313's was wave 4's. The report is `coordinator-evidence/run314/review-339-701839b5.md`.
+  Run 339 closed `done`, run 345 opened (planned, block 4480–4495), and run 314 closed merged and final. The worker's
+  child workspace is queued for reclaim. The PR body was corrected first: it claimed every review fix had a red, and
+  F1 is the exception.
+  - **Arming blockers for the dead-coordinator lane, fixed in wave 5's first commit:**
+    - **F1 (important):** the lane's wiring of the executor's fresh clock (`watch.ts:4202`) survives mutation. Add a
+      lane case where a heartbeat lands between the pass's measure and the act, plus its mutation row.
+    - **F2:** in shadow, a crash, revive and second crash writes no second feed row. A sighting that ends the episode
+      clears `lastOutcome`. The shadow record is the operator's arming evidence, as review 313's F1 was.
+    - **F3:** `sweep-stopped.released` folds a release and a re-hold into one boolean. Carry which act ran and word
+      each (an overloaded value at a seam).
+    - **F13:** an act that throws after a fleet act, having closed nothing, writes no feed row. Every thrown act
+      writes one, naming what is known.
+    - **The worker's open item 2:** the mirror reads `ok` after an unreadable generation. A persistent failure must
+      be measured and reported.
+  - **F4, ruled: the stop keeps its anchor.** A mirror that turns `stale`/`unknown` between the pass and the act stops
+    the act like the switch does. The anchor and the run of passes are kept, because the adapter's own contract says
+    "a slow mirror never deletes an anchor". The port carries `.hold` as well as `.trust`. This fails safe today, so
+    it is not a blocker.
+  - **F5, ruled: both texts are true; the spec gains the missing sentence.** The programme row reads `abandoned`, and
+    nothing resets it (§5.4's "permanently"). A coordinator revived under the crashed id can still open a new run
+    under its fenced slug (resume.md), and that run's programme row still reads `abandoned`. Wave 5 amends §5.4's
+    bullet to say both, and its plan measures what the board and `toId:'coordinator'` mail do in that state. Whether
+    a new run should reset the row is a new decision: operator question (f).
+  - **F6, ruled: re-word 4348's entry** to state the qualified rule (an older ccd's audit with no `expiresAt` reads
+    `no-evidence`). This follows the 2026-10-07 ruling that the arm implements the spec's own design.
+  - **The plan corrections, in the same commit:** F7 (4454's "none minted" tail), F8 ("twenty" → twenty-one), F10
+    and F11 (stale counts), and F12 (write T6.30–T6.33 and the review-fix rows into the plan). F9 sits in a commit
+    message that the squash dropped, so nothing is owed.
+  - **The worker's open items 1 and 3 are accepted** and go to the operator with the arming question. Item 1 (A-I3):
+    a lane gap over ten minutes re-anchors every crashed coordinator together. The breaker then holds, and no shadow
+    row is written, until all but one are revived, reclaimed or abandoned. Item 3 (ruling (G)): a same-id revive
+    inside the act's last re-measure window, sub-second to one agent round trip, can still lose its runs.
+  - **Measured by the reviewer:** Task 5 reverts in one plan hunk with every suite green, so the operator's (b)
+    stays cheap either way. Migration 18 rolls back: the base build opens a version-18 `coord.db` and reads it. The
+    expiry residue's blockers (T1–T3, 4454, the older-ccd arm) each go red when mutated.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -910,6 +951,10 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   as resumable, so an act that never started is retried and reported only after the hour. Wave 5 measures the
   `state-changed` producers. If all print before the breadcrumb, the parser reads the word as not resumable, as
   CCR-15's 4457 does on the reclaim side; otherwise it waits for CCR-15 wave 7's `crumb` field.
+- **ARMING BLOCKERS for the dead-coordinator lane (review 339, ruled 2026-10-08 12:02):** F1, the lane's wiring of the
+  fresh clock, has no red. F2: a repeated crash writes no second shadow row. F3: release and re-hold share one
+  boolean. F13: a thrown act with nothing closed writes no feed row. The worker's open item 2: the mirror reads `ok`
+  after an unreadable generation. Wave 5's first commit takes all five; check the merged lines before arming.
 - **Carried (a follow-up, not a blocker): a kept leaf is silent.** When ccd's shared tail keeps clips or the temp
   root, `ws-expire` still prints `expired`. The server records "cleaned up" and raises no attention entry. The keep
   lives only in the journal row's `detail`, which no PWA surface renders. CCR-15 is asked for additive
@@ -930,27 +975,37 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 
 ## Next-wave brief
 
-Waves 1, 2, 3 and 3b are merged: #229 `a7b9831c`, #233 `fe7b9775`, #286 `77c11245` and #312 `9b074208`. The
-expiry lane ships SHADOWED: it audits archived workspaces and records "would expire", and composes no `ws-expire`
-until the operator creates `$REG/expire-lane-live` by hand.
+Waves 1, 2, 3, 3b and 4 are merged: #229 `a7b9831c`, #233 `fe7b9775`, #286 `77c11245`, #312 `9b074208` and #328
+`669b8305`. Both lanes ship SHADOWED. The expiry lane records "would expire" and composes no `ws-expire` until the
+operator creates `$REG/expire-lane-live` by hand. The dead-coordinator lane records "would end" and closes nothing until
+the operator creates `$REG/dead-coordinator-lane-live` by hand.
 
-**Wave 4 is run 314** (planned; the run's wave 5 of 5), with numbers 4348–4363 and 4430–4433, written bare. It is to be planned
-from spec §4 wave 4 and §5.4: the dead-coordinator lane (crash-only, one hour, no successor, a circuit breaker).
-- **Its FIRST commit is review 313's residue and the lane's three arming blockers**, as ruled in the 2026-10-07 06:01
-  entry: parked items 1 and 4, then F1 to F7, O1, O2 and parked item 3. Review 313's report is
-  `.superpowers/sdd/coordinator-evidence/run290/review-313-3990aaad.md` in the coordinator's worktree.
-- **Its plan reads main as it stands after #312.** Child reclamation wave 6 (run 291, `ws/amber-river`) also edits
-  ccd/ccd, the expire tail's shared functions and README. Whichever lands second merges, re-stamps and re-points by
-  content (R56).
-- **3b's deploy is AGENT-FIRST through ccrc's updater** (the operator applies it from the console). Afterwards, check
-  that both boxes report the merge's tag and that the server's feed shows the lane's shadow rows.
+**Wave 5 is run 345** (planned; the run's wave 6 of 6), with numbers 4480–4495, written bare. It is to be planned.
+- **Its FIRST commit is review 339's residue,** as ruled in the 2026-10-08 12:02 entry. First the dead-coordinator
+  lane's arming blockers: F1, F2, F3, F13 and the worker's open item 2. Then F4, F5's spec sentence, F6's entry, and
+  the plan corrections F7, F8, F10, F11 and F12. Review 339's report is
+  `.superpowers/sdd/coordinator-evidence/run314/review-339-701839b5.md` in the coordinator's worktree.
+- **Then the expiry lane's follow-ups:** the kept-leaf reader (`clipsKept`/`tmpRootKept` become an attention entry, and
+  an absent key reads unmeasured); the `state-changed` reading (Carried constraints, 08:06); the lane's answer to a
+  repeating resumable failure; and the ws-expire in-lock window close, reusing CCR-15 wave 6's three-way read.
+- **Its plan reads main after #326** (CCR-15 wave 6, run 291; fix round 1 at `750910110`, scoped review 341 queued).
+  It carries the kept-leaf keys (4462) and the newline helper (4458). The plan checks `_ws_expire_cwd_users`' merged
+  lines before citing them. If #326 has not merged when planning starts, the plan waits for it.
+- **Wave 4 deploys through ccrc's updater** (the operator applies it from the console). Afterwards, check that both
+  boxes report the merge's tag, and that the feed shows the dead-coordinator lane's shadow rows.
 - **The operator's questions before arming** are (b)–(d) in the 06:01 entry. (b), the confirm copy, is still open. On
   10-07 the operator expired 15 archived workspaces by hand, which cuts most of (c), the backlog. (d) is in hand: the
   operator ends brisk-mesa's stray tmux server (see the entry after 06:05).
-- **Arming the expiry lane also waits on** `_ws_expire_cwd_users`' newline fix (Carried constraints; wave 6 carries it
-  as 4458, so it clears when #326 merges), on wave 4's own arming blockers, and on wave 5's `state-changed` reading
-  (Carried constraints, 08:06). Once #326 lands, the operator
+- **Arming the expiry lane also waits on** `_ws_expire_cwd_users`' newline fix (CCR-15 wave 6 carries it as 4458,
+  so it clears when #326 merges) and on wave 5's `state-changed` reading (Carried constraints, 08:06). Wave 4 closed
+  its own blockers, and review 339 found each one red when mutated. Once #326 lands, the operator
   should also know two facts. An archived workspace whose branch is already gone now expires, with its work kept in
   the attic, where `main` stops at `pin-failed`. In that case, ignored and secret-shaped files go with the tree.
+- **Arming the dead-coordinator lane waits on** wave 5's first commit (Carried constraints, 12:02) and, in the
+  recommended order, on the expiry lane being armed first. The operator should know the worker's open items 1 and 3
+  (the 12:02 entry): a lane gap over ten minutes trips the breaker for every crashed coordinator at once, and a
+  same-id revive in the act's last instant can still lose its runs.
+- **Operator question (f), from review 339's F5:** when a coordinator revived under a crashed id opens a new run
+  under its abandoned programme, should the programme row return to active? Today it stays `abandoned`.
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
   L5's sentence.
