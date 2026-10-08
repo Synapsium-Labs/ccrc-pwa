@@ -7139,6 +7139,10 @@ export type LifecycleAct =
                     // teardown, server-composed seven days after its archive. Its own act,
                     // never `reclaim`'s: the population, the token and the deciding rung
                     // differ, and stage 4's crash clause reads a deliberate removal by act.
+  | 'collect'       // ws-collect (spec 2026-09-22 §5.10): a witnessed child TEMP ROOT whose
+                    // workspace is already gone, moved aside and removed. Its own act, never
+                    // `reclaim`'s: it removes no workspace and puts down no session (no row
+                    // stands for the id when it acts), so no removal set counts it.
   | 'rehome'        // A session's HOME account moving. TWO EMITTERS, both
                     // landed (account pools, wave 2b): the 5-second tick's
                     // own re-seed (`_auto_swap_check`, §5.5.4 — grep
@@ -7184,7 +7188,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, reclaim: true, expire: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, reclaim: true, expire: true, collect: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true, unarchive: true,
   unknown: true,
 };
