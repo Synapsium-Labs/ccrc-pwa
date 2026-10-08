@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=94ec47c20aaf07dc2b3253186add2505d06799522fafa51e32666b4ccbc464ba
+# ccrc:generated 1 sha256=c5427013549014054ead417837a708ba2c75a9adab5585d9617c6a40d82e6607
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28802,8 +28802,12 @@ _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
   # THE ONE PHYSICAL RESOLUTION of a directory a removal or an in-use probe
-  # acts under: `_ws_leaf_remove`'s root, `_ws_path_users`' parent and
-  # `_ws_expire_cwd_users`' parent. A bare `$(cd -- "$d" && pwd -P)` dropped
+  # acts under, and of the leaf a placement or a checkout question is asked
+  # about. Seven callers. The three newline sites: `_ws_leaf_remove`'s root,
+  # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
+  # leaf-question sites: `_ws_reclaim_workdir_shared`'s leaf placement,
+  # `_ws_leaf_checkouts`' leaf, and `_ws_leaf_checkout_one`'s admin directory
+  # and checkout directory. A bare `$(cd -- "$d" && pwd -P)` dropped
   # EVERY trailing newline, so a root resolving to `<vol>\n` read as `<vol>`:
   # the removal took `<vol>/<id>` outside the root, and both probes compared a
   # spelling no process uses and answered "nobody". So this is

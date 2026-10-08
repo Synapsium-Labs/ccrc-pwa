@@ -268,17 +268,22 @@ export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
 
 /** The ccd `{failed:…}` words `parseChildReclaimResult` gives their own
  *  treatment: the ones `cmd_ws_reclaim` prints BEFORE the tombstone and the
- *  breadcrumb (spec §5.6, "The tail, the breadcrumb and the resume"), so
- *  nothing had started and there is nothing to resume from. Unlike every other
- *  post-start failure word — free ccd text this file never compares against a
- *  literal — each of these decides `ChildReclaimResume` itself
- *  (`not-resumable`, never `resumable`):
- *   - `probe-unmeasured`: the presence rungs' own in-lock tmux probe (spec
- *     §5.7, "Presence, and its bound" — rungs 5 and 6) failing before any act.
+ *  breadcrumb on the FRESH arm (spec §5.6, "A failure printed before the
+ *  breadcrumb"), so nothing had started and there is nothing to resume from.
+ *  Unlike every other post-start failure word — free ccd text this file never
+ *  compares against a literal — each of these decides `ChildReclaimResume`
+ *  itself (`not-resumable`, never `resumable`):
+ *   - `probe-unmeasured`: on the fresh arm, the presence rungs' own in-lock
+ *     tmux probe (spec §5.7, "Presence, and its bound" — rungs 5 and 6)
+ *     failing before any act. It is pre-breadcrumb on the fresh arm ONLY: on
+ *     the RESUMED arm the locked recomputation prints it for any unmeasured
+ *     verdict (an unreadable tombstone, for one) while an earlier attempt's
+ *     breadcrumb stands. See the residual below.
  *   - `state-changed`: the consent binding (spec §5.5) — the in-lock recompute
  *     and the pin read different branch states, so the act stopped before the
- *     tombstone. Also a `refused` word (`CHILD_RECLAIM_TOKEN_KIND`), which is
- *     why this set is typed against both vocabularies.
+ *     tombstone. Printed on the fresh arm only, because only the fresh arm runs
+ *     the pin phase. Also a `refused` word (`CHILD_RECLAIM_TOKEN_KIND`), which
+ *     is why this set is typed against both vocabularies.
  *  `pin-failed` and `tombstone-unwritable` are deliberately NOT here, for one
  *  reason: each is printed once in the fresh path's pin phase, before the
  *  breadcrumb, and also by the tail after it, so the word alone cannot tell the
@@ -290,6 +295,12 @@ export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
  *  phase prints the same two words before its own breadcrumb, so the residual
  *  covers that verb as well. The fix is an additive `crumb:false` field on
  *  ccd's document, which covers both words, carried to wave 7.
+ *  The mirror image is also a stated residual (spec §7, item 6): a
+ *  `probe-unmeasured` printed on the RESUMED arm, with an earlier attempt's
+ *  breadcrumb standing, reads `not-resumable` here, so the feed says "It is
+ *  retried from the start" while the box's next attempt resumes from that
+ *  breadcrumb. A wrong sentence, never a wrong act. Wave 7's additive `crumb`
+ *  field tells the two cases apart.
  *  Named so `isChildReclaimKebab` admits `probe-unmeasured` without a second
  *  hand-kept literal. */
 const CHILD_RECLAIM_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const satisfies
@@ -744,12 +755,17 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       // A word in `CHILD_RECLAIM_PRE_CRUMB_FAILED` (`probe-unmeasured`, the
       // presence rungs' in-lock probe failing, spec §5.7; `state-changed`, the
       // consent binding, spec §5.5) is printed BEFORE the tombstone and the
-      // breadcrumb (spec §5.6) — the destructive tail never started, so unlike
-      // every other post-start `{failed:…}` document there is no breadcrumb to
-      // resume from. A retry starts completely afresh, exactly as
-      // `not-resumable` already reads (`childReclaimFeedBody`'s tail text: "It
-      // is retried from the start."). `pin-failed` and `tombstone-unwritable`
-      // stay `resumable`: each also has post-breadcrumb producers, so the word
+      // breadcrumb on the FRESH arm (spec §5.6) — the destructive tail never
+      // started, so unlike every other post-start `{failed:…}` document there
+      // is no breadcrumb to resume from. A retry starts completely afresh,
+      // exactly as `not-resumable` already reads (`childReclaimFeedBody`'s tail
+      // text: "It is retried from the start."). On the RESUMED arm the locked
+      // recomputation prints `probe-unmeasured` too, while an earlier
+      // attempt's breadcrumb stands: it still reads `not-resumable` here, so
+      // the feed's "retried from the start" is wrong there (a wrong sentence,
+      // never a wrong act), and wave 7's additive `crumb` field tells the two
+      // apart (spec §7, item 6). `pin-failed` and `tombstone-unwritable` stay
+      // `resumable`: each also has post-breadcrumb producers, so the word
       // cannot tell them apart, and the pre-breadcrumb case of both is a stated
       // residual (see the set's doc).
       const resume: ChildReclaimResume = isChildReclaimPreCrumbFailed(v.failed) ? 'not-resumable' : 'resumable';
