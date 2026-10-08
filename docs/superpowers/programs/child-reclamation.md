@@ -24,7 +24,7 @@ removed on 2026-09-10 was not.
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | — | **dispatched** 2026-10-08 18:30 — run 347 (`ccrc-pwa-clear-summit`), plan `226bb881c` |
-| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **planned** — run 348, plan `21683c0d8`; dispatched after wave 7 merges (H1) |
+| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **planned** — run 348, plan `0d9f1b042`; dispatched after wave 7 merges (H1) |
 | 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -46,6 +46,22 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-08 22:22 — the wave 8 amendment is MERGED (#334, `0d9f1b042`), and claim 1113 is split for workspace-lifecycle
+  wave 5.**
+  - **planSha** `0d9f1b042d71070a142bc88b1833304c7871bd9b`. Every gating check was green, including the macOS legs,
+    and it was merged with `--match-head-commit` on the tested head `362ba8245`. Wave 8's brief carries the new
+    planSha and R81.
+  - **Workspace-lifecycle wave 5 is merged as a plan (#333, `b2b438d0b`), and run 345 is dispatched** to keen-hollow
+    (quiet-river's 4048 and 4049). Its word half is byte-identical to `f8ec01cc4`, the commit the amendment quotes.
+  - **Claim 1113 (wave 7's) is split, ruled before either worker asked.** Run 345 may edit two regions inside it
+    without a claim of its own: `_ws_expire_locked` in `ccd/ccd` (wave 7 never edits it, R72), and the one in-place
+    line where `ExpiryAttention.kind` gains `kept` in `shared/api.ts` (disjoint from wave 7's `LcRefusalToken`,
+    `LC_REFUSAL_WORD` and `LifecycleAct`). R56 binds both: the second lander merges `main`, re-stamps `ccd/ccd` and
+    re-runs the shared suites. The consent went to quiet-river (4052), and a no-action note to clear-summit (4055);
+    the note says a changed `_ws_expire_locked` hash after that merge is wave 5's edit, not a stop.
+  - **Order B is covered on wave 5's side.** quiet-river agreed to R81 (4051) and sent the second-lander edits to
+    its worker as brief addendum 4050, with its T9.8 row re-targeted at `leafKeptWord`'s line.
 
 - **2026-10-08 22:10 — workspace-lifecycle's 4045: the shared word half answers no null. Wave 8's plan is amended before
   dispatch, and contract R81 records it.**
