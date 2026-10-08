@@ -13,7 +13,7 @@ import {
   EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
-  expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
+  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
   type ArchivedExpiryEntry, type ArchivedExpiryInput,
 } from '../src/archivedExpiry.js';
 
@@ -178,6 +178,76 @@ describe('the verb’s answer — box words told apart from composition errors (
       .toEqual({ kind: 'failed', resumable: false, detail: 'probe-unmeasured: x' });
     expect(parseExpireResult(ID, '', '')).toMatchObject({ kind: 'failed', resumable: true });
     expect(parseExpireResult(ID, JSON.stringify({ expired: 'other' }), '').kind, 'another row’s expiry').toBe('failed');
+  });
+
+  it('a `failed` state-changed is printed before the breadcrumb: read `restart` (audit afresh), never final — probe-unmeasured stays final, pin-failed and tombstone-unwritable resumable (wave 5)', () => {
+    expect(parseExpireResult(ID, JSON.stringify({ failed: 'state-changed', detail: 'x' }), ''))
+      .toEqual({ kind: 'restart', detail: 'state-changed: x' });
+    expect(parseExpireResult(ID, JSON.stringify({ failed: 'probe-unmeasured', detail: 'x' }), ''))
+      .toEqual({ kind: 'failed', resumable: false, detail: 'probe-unmeasured: x' });
+    expect(parseExpireResult(ID, JSON.stringify({ failed: 'tombstone-unwritable', detail: 'x' }), ''))
+      .toEqual({ kind: 'failed', resumable: true, detail: 'tombstone-unwritable: x' });
+    expect([...EXPIRE_PRE_CRUMB_FAILED].sort()).toEqual(['probe-unmeasured', 'state-changed']);
+  });
+
+  it('THE CENSUS: every site of either word in ccd/ccd is placed, and the expiry’s failed state-changed is on its FRESH arm, before the breadcrumb (wave 5)', () => {
+    // A STOPPING LINE, not a spelling. EVERY non-comment occurrence of either word anywhere in ccd/ccd is placed: by the
+    // function that holds it, and by what the line does with it — `failed` (`_ws_reclaim_fail "<id>" "<lctx>" <word>`
+    // or `_ws_reclaim_failed_json <word>`), `refused` (`_reap_refuse <word>`, or a `{"refused":"<word>"` printf) or
+    // `journal` (ws-audit's `_lc_fail reclaim … <word>` row). The whole list is held exactly, so a producer spelled any
+    // other way — a quoted word, the word on a continuation line, a raw printf, a variable that carries it — still
+    // carries the bare token, reads `unplaced`, and reds; so does a new site of a placed shape anywhere else (the
+    // shared tail, a pin, a helper an expiry calls). The one shape no text scan sees is a word assembled at run time
+    // from parts; ccd has none. `_ws_reclaim_locked` is ws-reclaim's own verb, which an expiry never reaches.
+    //   `_ws_expire_locked`'s failed `state-changed` must lie on its FRESH arm — after `if [[ -z "$phase" ]]` and
+    // before the `expire:` breadcrumb write — so nothing this verb started stands when it prints. Its
+    // `probe-unmeasured` prints at the verdict point, on EVERY arm: on a fresh expiry before anything, and on a
+    // RESUMED one after an earlier attempt's breadcrumb (`_ws_expire_resume_eval`'s unmeasured exits). That is main's
+    // reading, a known gap routed to this programme's wave 6 (an arming blocker until then), and this census records it
+    // rather than hides it.
+    const fnStarts = [...ccd.matchAll(/\n([A-Za-z_][A-Za-z0-9_]*)\(\) \{/g)].map((m) => ({ name: m[1]!, at: m.index! }));
+    const holder = (at: number): string => fnStarts.filter((f) => f.at < at).at(-1)?.name ?? '';
+    const lockedAt = ccd.indexOf('\n_ws_expire_locked() {');
+    const freshAt = ccd.indexOf('\n  if [[ -z "$phase" ]]; then', lockedAt);
+    const crumbAt = ccd.indexOf('_reg_set "$id" reaping "expire:$start"', lockedAt);
+    expect(lockedAt, 'the expiry\'s locked body').toBeGreaterThan(-1);
+    expect(freshAt, 'its fresh arm').toBeGreaterThan(lockedAt);
+    expect(crumbAt, 'its breadcrumb write, on that arm').toBeGreaterThan(freshAt);
+    const shape = (w: string, pre: string): string =>
+      new RegExp(`(?:_ws_reclaim_fail "[^"\\n]*" "[^"\\n]*" |_ws_reclaim_failed_json )${w}$`).test(pre) ? 'failed'
+        : new RegExp(`(?:_reap_refuse |\\{"refused":")${w}$`).test(pre) ? 'refused'
+          : new RegExp(`_lc_fail reclaim "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'journal' : 'unplaced';
+    const word = new RegExp(`(?<![\\w-])(${EXPIRE_PRE_CRUMB_FAILED.join('|')})(?![\\w-])`, 'g');
+    const placed: string[] = [];
+    let at = 0;
+    for (const l of ccd.split('\n')) {
+      if (!/^\s*#/.test(l)) {
+        for (const m of l.matchAll(word)) {
+          const w = m[1]!;
+          const where = at + m.index!;
+          const fn = holder(where);
+          const kind = shape(w, l.slice(0, m.index! + w.length));
+          if (fn === '_ws_expire_locked' && kind === 'failed' && w === 'state-changed') {
+            expect(where, 'state-changed in _ws_expire_locked is not on its fresh arm').toBeGreaterThan(freshAt);
+            expect(where, 'state-changed in _ws_expire_locked prints after the breadcrumb').toBeLessThan(crumbAt);
+          }
+          placed.push(`${fn} ${kind} ${w}`);
+        }
+      }
+      at += l.length + 1;
+    }
+    expect(placed).toEqual([
+      'cmd_ws_audit journal probe-unmeasured',
+      '_ws_reap_locked refused state-changed',
+      '_ws_reap_locked refused state-changed',
+      '_ws_reap_tail refused state-changed',
+      '_ws_reclaim_locked refused state-changed',
+      '_ws_reclaim_locked failed probe-unmeasured',
+      '_ws_reclaim_locked failed state-changed',
+      '_ws_expire_resume_eval refused state-changed',
+      '_ws_expire_locked refused state-changed',
+      '_ws_expire_locked failed probe-unmeasured',
+    ]);
   });
 });
 
@@ -393,6 +463,17 @@ describe('the lane’s memory of one row', () => {
     const c = archivedExpiryNextEntry(e(), { kind: 'composition', detail: 'bad token' }, NOW, PASS)!;
     expect(c.nextAskAt).toBe(Number.POSITIVE_INFINITY);
     expect(c.report).toMatchObject({ kind: 'failing' });
+  });
+
+  it('a failed state-changed (`restart`) starts over: the instant and the sightings are forgotten and learned afresh — no report, never final (wave 5)', () => {
+    // The coordinator's ruling on the wave-5 plan's question (h): the reclaim side's "not resumable" means start over.
+    // Nothing was deleted, so nothing is listed; a run of failures before it is about a state that no longer stands.
+    const failing = archivedExpiryNextEntry(e(), { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW - EXPIRE_FAILURE_CEILING_MS, PASS)!;
+    const x = archivedExpiryNextEntry({ ...failing, report: { kind: 'failing', at: NOW - EXPIRE_FAILURE_CEILING_MS, detail: 'pin-failed' } },
+      { kind: 'restart', detail: 'state-changed: moved' }, NOW, PASS)!;
+    expect(x).toMatchObject({ expiresAt: null, eligibleSince: null, nextAskAt: NOW + PASS, report: null, failures: 0,
+      failingSince: null, lastOutcome: 'restart' });
+    expect(archivedExpiryDue(x, NOW + PASS), 'not due: it is learned again first').toBe(false);
   });
 
   it('a `not-expired` at the act learns the AUDIT’s instant and starts the twice-observed rule again', () => {

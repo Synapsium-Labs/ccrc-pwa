@@ -116,6 +116,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
       return EXPIRE_TOKEN_KIND[verb.token] === 'gone' ? answer({ kind: 'gone' })
         : answer({ kind: 'refused', token: verb.token, detail: verb.detail, inUse: [] });
     case 'failed': return answer({ kind: 'failed', resumable: verb.resumable, detail: verb.detail });
+    case 'restart': return answer({ kind: 'restart', detail: verb.detail });
     case 'box': return answer({ kind: 'box', word: verb.word, detail: verb.detail });
     case 'composition': return answer({ kind: 'composition', detail: verb.detail });
   }
@@ -214,6 +215,7 @@ const FEED_TITLE: Readonly<Record<ArchivedExpiryOutcome['kind'], string>> = {
   refused: 'archived workspace cleanup refused',
   gone: 'archived workspace gone',
   failed: 'archived workspace cleanup failed',
+  restart: 'archived workspace changed under its cleanup',
   box: 'archived workspace cleanup failed',
   composition: 'archived workspace cleanup failed',
   'no-evidence': 'archived workspace cleanup has no evidence',
@@ -238,6 +240,8 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
     case 'gone': return `${who} left the archive before it was cleaned up.`;
     case 'failed': return `${who}: failed — ${r.detail}. ${r.resumable ? 'It is retried, backing off in between.'
       : 'It is not retried: the box said it will not resume, so the lane stops asking for this archive.'}`;
+    case 'restart': return `${who}: the workspace changed under the expiry's consent — its branch was deleted or made `
+      + `inside the lock (${r.detail}) — so nothing was deleted, and the lane audits it afresh.`;
     case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.`;
     case 'composition': return `${who}: ccd rejected the call this server composed — ${r.detail}. It is not retried.`;
     case 'no-evidence': return `${who}: the fleet box's ccd does not say when this archive expires; nothing was composed.`;

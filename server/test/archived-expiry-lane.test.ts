@@ -143,6 +143,33 @@ describe('learning: slots in nextAskAt order, an unlearnable row backed off and 
   });
 });
 
+describe('a failed state-changed is audited afresh (wave 5)', () => {
+  it('the lane forgets what it learned, audits again, and composes again only once seen eligible twice — no attention entry; the feed row says why', async () => {
+    let n = 0;
+    const f = await fixture({ expire: (id) => (n += 1) === 1
+      ? { code: 1, stdout: JSON.stringify({ failed: 'state-changed', detail: `ws/${id} read present when the token was checked inside the lock, but absent when the pin read it again` }), stderr: '' }
+      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.entry('demo-a'), 'back to learning').toMatchObject({ expiresAt: null, eligibleSince: null, report: null });
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention ?? [], 'nothing was deleted: nothing is listed').toEqual([]);
+    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace changed under its cleanup')?.body)
+      .toContain('its branch was deleted or made inside the lock (state-changed: ws/demo-a read present');
+    const audits = f.verbsFor('ws-audit').length;
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-audit'), 'the next pass learns the instant afresh').toHaveLength(audits + 1);
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'seen eligible once: not yet').toEqual(['demo-a']);
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'seen twice: composed again, with its own fresh audit’s token').toEqual(['demo-a', 'demo-a']);
+    expect(f.verbsFor('ws-audit'), 'the act audited first').toHaveLength(audits + 2);
+    expect(f.entry('demo-a'), 'and finished').toBeUndefined();
+  });
+});
+
 describe('a failure that will not resume (review 313, parked item 4)', () => {
   it('a wrong-row `expired` is reported at once and never asked again for this archive — not after an hour', async () => {
     const f = await fixture({ expire: () => ({ code: 0, stdout: JSON.stringify({ expired: 'demo-other', archivedAt: OLD, wip: null }), stderr: '' }) });

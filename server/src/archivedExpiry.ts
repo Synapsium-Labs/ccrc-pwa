@@ -196,6 +196,32 @@ function lockUnopenable(err: string): string | null {
   return lines.slice(0, -1).every((l) => bashLine.test(l)) ? last.slice('ccd: '.length) : null;
 }
 
+/** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
+ *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Each is
+ *  READ its own way (`parseExpireResult`):
+ *   - `probe-unmeasured`: `_ws_expire_locked`'s unmeasured verdict, printed at its verdict point, before any intent —
+ *     on EVERY arm. Read FINAL: reported at once and not asked again for this archive (review 313's parked item 4).
+ *     On a fresh expiry nothing stands. On a RESUMED one an earlier attempt's breadcrumb stands and its tree may be
+ *     part-deleted (`_ws_expire_resume_eval`'s unmeasured exits: a tombstone it cannot read, or a tmux probe that did
+ *     not answer), and the word reads final there too. That is main's reading, kept in this wave: the fix is this
+ *     programme's wave 6, once CCR-15 wave 7 is on main — `_ws_expire_locked` sets wave 7's `crumb` on its resumed
+ *     arm, and a failed document with `crumb: true` reads resumable — and until then it is an ARMING BLOCKER for the
+ *     expiry lane;
+ *   - `state-changed`: the consent binding — the in-lock recompute and the pin read the branch differently — printed
+ *     on the FRESH arm only, after the pin (which only keeps) and before the tombstone and the breadcrumb (workspace
+ *     lifecycle wave 5). Read `restart`: the reclaim side's "not resumable", which means START OVER, never final —
+ *     the lane forgets what it learned of the row and audits it afresh (the coordinator's ruling on the wave-5 plan's
+ *     question (h)). Also a REFUSAL word (`EXPIRE_TOKEN_KIND`, retried), which is a different document:
+ *     `{"refused":…}` at exit 0.
+ *  MEASURED, not assumed: `archived-expiry-policy.test.ts` places every occurrence of either word in ccd/ccd, by its
+ *  function and its shape, and holds the expiry's `failed` `state-changed` on its fresh arm, before the breadcrumb.
+ *  `pin-failed` and `tombstone-unwritable` are NOT here: the shared tail prints each after the breadcrumb (eight and
+ *  five producers), so the word alone cannot say nothing started — they stay resumable until that `crumb` field. */
+export const EXPIRE_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const;
+
+/** Is this `{"failed":…}` word one printed before this attempt's tombstone and breadcrumb (`EXPIRE_PRE_CRUMB_FAILED`)? */
+export const isExpirePreCrumbFailed = (word: string): boolean => (EXPIRE_PRE_CRUMB_FAILED as readonly string[]).includes(word);
+
 /** `ccd ws-expire …`'s answer (wave 3's plan, "Wave 3b inherits", the verb). Three documents — `expired` and
  *  `refused` at exit 0, `failed` at exit 1 (the breadcrumb is kept and the next attempt resumes it) — and three
  *  conditions that are no document: the two BOX words, and a COMPOSITION error. Anything else with an empty stdout is
@@ -205,6 +231,10 @@ export type ExpireVerbRead =
       readonly secretsDropped: number | 'unreadable' }
   | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string }
   | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  /** A `failed` document the lane must START OVER from (wave 5, the coordinator's ruling on question (h)): ccd printed
+   *  it before anything started, and what it consented to has changed, so neither a retry of this attempt nor a final
+   *  report is the truth — a fresh audit of what stands is (`state-changed`, `EXPIRE_PRE_CRUMB_FAILED`). */
+  | { readonly kind: 'restart'; readonly detail: string }
   | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
   | { readonly kind: 'composition'; readonly detail: string };
 
@@ -228,7 +258,10 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
     }
     if (typeof v.failed === 'string') {
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      return { kind: 'failed', resumable: v.failed !== 'probe-unmeasured', detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
+      const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
+      if (!isExpirePreCrumbFailed(v.failed)) return { kind: 'failed', resumable: true, detail: said };
+      // Printed before this attempt's tombstone and breadcrumb: `state-changed` starts over, `probe-unmeasured` is final.
+      return v.failed === 'state-changed' ? { kind: 'restart', detail: said } : { kind: 'failed', resumable: false, detail: said };
     }
   }
   const err = stderr.trim();
@@ -461,12 +494,15 @@ export type ArchivedExpiryOutcome =
    *  parked item 4): `false` — a wrong-row `expired`, a refusal word this build does not know, `probe-unmeasured` — is
    *  not something waiting cures, so the row is reported and not asked again for this archive. */
   | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  /** ccd stopped before anything started because what the expiry consented to changed (`ExpireVerbRead.restart`):
+   *  the lane forgets what it learned of the row and audits it afresh (wave 5). */
+  | { readonly kind: 'restart'; readonly detail: string }
   | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
   | { readonly kind: 'composition'; readonly detail: string }
   | { readonly kind: 'no-evidence' };
 
 const EXPIRY_OUTCOME_KINDS: Readonly<Record<ArchivedExpiryOutcome['kind'], true>> = {
-  expired: true, 'would-expire': true, deferred: true, refused: true, gone: true, failed: true, box: true,
+  expired: true, 'would-expire': true, deferred: true, refused: true, gone: true, failed: true, restart: true, box: true,
   composition: true, 'no-evidence': true,
 };
 const EXPIRY_DEFER_WHYS: Readonly<Record<ArchivedExpiryDeferWhy, true>> = {
@@ -555,6 +591,12 @@ export function archivedExpiryNextEntry(
         report: nowMs - failingSince >= EXPIRE_FAILURE_CEILING_MS || o.kind === 'box'
           ? { kind: 'failing', at: failingSince, detail: o.detail } : null };
     }
+    case 'restart':
+      // START OVER (wave 5, question (h) ruled): ccd stopped before anything started because what the expiry consented
+      // to changed. The instant learned and the sightings are forgotten — the row goes back to learning, on the
+      // learning audit's own cadence and backoff, and is asked again only once seen eligible twice past its instant,
+      // with a token a fresh audit minted over what stands. No report: nothing was deleted (the feed row says so).
+      return { ...base, ...steady, expiresAt: null, eligibleSince: null, nextAskAt: nowMs + passMs, report: null };
     case 'composition':
       return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
         report: { kind: 'failing', at: nowMs, detail: `the server composed a call ccd rejected: ${o.detail}`, final: true } };
