@@ -46,6 +46,28 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 14:15 — wave 7's pre-flight (run 347) is measured; its draft rulings are under attack.** The evidence
+  and the draft are in `ccr15-evidence-archive/wave7-preflight/`.
+  - **How it was measured.** Workflow `wf_429ad81b-9cd` ran five Opus readers and a completeness critic, read-only, at
+    `b0647d850`.
+  - **The collector has nothing to collect yet.** `$REG/tmproots` does not exist: the witness writer first shipped
+    in v0.0.124, and no child has spawned since.
+  - **What `~/.cc-tmp` holds.** It is a bind mount on a different device from `$REG`, 17 GiB in all:
+    - 52 directories: 27 with rows, 8 ccd-shaped with no row (2.87 GiB), and 17 foreign;
+    - 124 loose files.
+  - **Every kept leaf is unwitnessed.** Today's first three wave-6 reclaims each KEPT their temp root: amber-river and
+    warm-basin as `in-use`, clear-summit as `refused`. None can ever be collected, so all three are R59 operator
+    residue.
+  - **No lock serialises a spawn against a collector.** `_child_tmpdir` runs `mkdir -p` with no lock on a
+    non-archived spawn. A check-then-`rm` collector is therefore unsafe; the design moves the leaf into a quarantine
+    by rename, then re-checks.
+  - **R63 conflicts with R38/R48.** X1, X3 and R61's closure are server code, and X1 is a second destructive subject.
+    The draft re-cuts the waves.
+  - **The draft is not binding yet.** Rulings R65 to R72 are drafted, and workflow `wf_93877eb5-7f3` (four Opus
+    attackers, SAFETY at xhigh) is attacking them before they bind.
+  - **One rule breach.** A pre-flight reader ran `git fetch` in the home repo. It wrote remote-tracking refs only;
+    nothing was checked out or committed. Later briefs say that a fetch is a write.
+
 - **2026-10-08 13:40 — wave 6 DEPLOYED as v0.0.124 (`b0647d850`); run 291 closed `done` (`final:true`).** The
   automatic updater moved both boxes, observed read-only with `ccrc rollout --to v0.0.124 --check` every two minutes:
   - the fleet box was `[current]` at 13:38:04, while the server read `[incomplete]`;
