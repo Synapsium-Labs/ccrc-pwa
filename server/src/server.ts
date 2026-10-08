@@ -1554,10 +1554,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   //
   // AUTHENTICATED SINCE BUILD 7 (operator ruling, spec:150-155). This was the
   // one box->server ingress carrying zero identity while the server
-  // regex-routed its body INTO a session's chat stream — see `checkMailToken`
-  // for the one-deploy-generation tolerance and for when it comes out.
+  // regex-routed its body INTO a session's chat stream. FAIL-SHUT since the
+  // box-token lifecycle (spec 4.3): the one-deploy-generation `legacy`
+  // tolerance and the `unconfigured` pass-through are both gone, so every
+  // verdict but `'ok'` is a 401 here exactly as on every other box-token lane.
   app.post('/api/notify', async (req, reply) => {
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/notify');
+    if (verdict === 'legacy' || verdict === 'unconfigured') {
+      // Logged for the same reason the wrong-token arm below is: three silent
+      // layers (notify.sh's `|| true`, ccd's `/dev/null`, `logger: false`) sit
+      // between this refusal and any operator.
+      console.warn(verdict === 'legacy'
+        ? 'ccrc-server: /api/notify refused a request with NO box token (401) — the fleet box\'s ' +
+          'notify.sh has no token file to read'
+        : 'ccrc-server: /api/notify refused a request: this server holds no box token (401)');
+      return reply.code(401).send({ ok: false, error: 'unauthenticated' });
+    }
     if (verdict === 'bad') {
       // `Fastify({ logger: false })` (above) means a bare 401 leaves NOTHING
       // in the journal — three silent layers stack on top of it too
@@ -1571,10 +1583,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       console.warn('ccrc-server: /api/notify refused a request with the WRONG box token (401) — ' +
         'check that deploy/ccrc-mail.token matches on both boxes byte-for-byte');
       return reply.code(401).send({ ok: false, error: 'unauthenticated' });
-    }
-    if (verdict === 'legacy') {
-      console.warn('ccrc-server: /api/notify accepted a request with NO box token (legacy ' +
-        'tolerance, one deploy generation) — deploy the agent to ship the new notify.sh');
     }
     const body = (req.body ?? {}) as { message?: unknown };
     if (typeof body.message !== 'string') {

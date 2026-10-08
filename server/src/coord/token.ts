@@ -48,9 +48,10 @@ export function extractToken(raw: string): string | null {
  *  this is PRESENT-but-unusable, the same class of state the non-`ENOENT`
  *  arm below already refuses to collapse into "never configured", and for
  *  the identical reason — `checkMailToken(null, …)` answers `'unconfigured'`,
- *  which `/api/notify` still treats as a pass-through, so answering `null`
- *  here would disarm THAT gate too on a truncated `openssl rand -hex 32 > …`
- *  redirect, with nothing red anywhere. Deliberately NOT caught anywhere:
+ *  which `/api/notify` treated as a pass-through until the box-token lifecycle
+ *  removed it, so answering `null` here would have disarmed THAT gate too on a
+ *  truncated `openssl rand -hex 32 > …` redirect, with nothing red anywhere.
+ *  Deliberately NOT caught anywhere:
  *  `index.ts` lets it kill the process, the same stance `coord/db.ts`'s
  *  `CoordDbUnmigratable` takes for a 0-byte `coord.db` (Task 2/D-24 is the precedent this mirrors — a
  *  refusal, not a default). NOT what an un-edited `ccrc-mail.token.example`
@@ -314,11 +315,11 @@ export class BoxTokenHolder {
  *
  * `'legacy'` means "no token was presented, but the server HAS one" and is
  * deliberately its own state rather than folded into `'bad'` — but it is
- * NOT, by itself, a license to proceed. It is a state precisely because
- * exactly ONE caller, `/api/notify`, is granted a tolerance for it: the
+ * NOT a license to proceed for ANY caller. It became a state because exactly
+ * ONE caller, `/api/notify`, was once granted a tolerance for it: the
  * operator ruling's one-deploy-generation window (spec:150-155), because a
- * fleet host still running yesterday's `notify.sh` presents NO token and the
- * hook must not go dark between the server deploy and the agent deploy.
+ * fleet host still running yesterday's `notify.sh` presented NO token. That
+ * tolerance is removed (see REMOVED below); every caller now refuses it.
  *
  * `'unconfigured'` means "the server itself was never given a token"
  * (`expected === null`) and is ALSO its own state, split out from `'ok'`
@@ -330,13 +331,10 @@ export class BoxTokenHolder {
  * `deploy/ccrc-mail.token` file was never minted — reachable by omission
  * (a fresh checkout, `ship_secret`'s only guard is `[ -f "$local_file" ]`,
  * `deploy.sh` exits 0), not by an operator's active choice, and permanent
- * rather than a rollout window. `/api/notify` DOES still treat
- * `'unconfigured'` as pass-through — it has a pre-existing deployed caller
- * (`notify.sh`) that must not go dark before a token is ever minted, the
- * same reason it gets `'legacy'` — so `server.ts`'s `/api/notify` handler is
- * UNCHANGED by this split: neither of its `if (verdict === 'bad' | ===
- * 'legacy')` arms matches `'unconfigured'`, so it falls through to the same
- * silent accept `'ok'` used to give it.
+ * rather than a rollout window. `/api/notify` went on treating
+ * `'unconfigured'` as pass-through after this split, for its pre-existing
+ * deployed caller (`notify.sh`), until the box-token lifecycle removed that
+ * arm too (REMOVED, below).
  *
  * FIX-ROUND FINDING 3/5 (Task 6) + FINDING 3 (Task 7, D-39): `/api/mail` and
  * `/api/mail/:id/ack` are NOT grantees of EITHER tolerance and must treat
@@ -357,15 +355,16 @@ export class BoxTokenHolder {
  * closing for the `'legacy'` arm; leaving `'unconfigured'` open was the other
  * half of the identical hole.
  *
- * REMOVE `/api/notify`'S `'legacy'` TOLERANCE ONE DEPLOY AFTER THIS SHIPS. It
- * is not a permanent accommodation: while it stands, that one ingress is
- * still open to anything on the tailnet presenting no token, which is the
- * hole this whole task exists to close. The README's coordination section
- * names the deploy that removes it. `/api/notify`'s `'unconfigured'`
- * pass-through has no such removal date — it is the honest "this box has
- * never been told a secret" state, not a rollout artefact — and
- * `/api/mail`/`/api/mail/:id/ack` never had either hole open, so they have
- * nothing to remove.
+ * REMOVED: `/api/notify`'s `'legacy'` tolerance AND its `'unconfigured'`
+ * pass-through (box-token lifecycle, spec 4.3 and the decision row "/api/notify
+ * tolerance: remove both arms"). This paragraph used to schedule the removal of
+ * `'legacy'` one deploy after it shipped, and to say `'unconfigured'` had no
+ * removal date because it was the honest "this box has never been told a
+ * secret" state. That reason is gone: the server mints its own token at boot,
+ * so a server with no current value is one whose mint FAILED, and every lane,
+ * `/api/notify` included, answers 401 there until a mint succeeds. No caller
+ * of this function grants either tolerance any more; the two words stay
+ * distinct so a refusal can say which condition it met.
  *
  * `timingSafeEqual` needs equal lengths, so the length check comes first and
  * leaks only the length — which a caller can measure anyway by sending one.

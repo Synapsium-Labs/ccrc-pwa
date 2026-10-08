@@ -90,18 +90,15 @@ import type { SessionStore } from './sessions.js';
  *     cookieless from the fleet host — and, for the newest members, why
  *     `ccd-pool-sync.timer` can pull the account-pool projection cookieless too, and
  *     why a fleet node's timer will pull its own update projection the same way.
- *     And `/api/notify` still passes `'legacy'` (no token
- *     presented) and `'unconfigured'` (this box was never given one) THROUGH, by
- *     the operator's one-deploy-generation rollout ruling — `/api/pools/epoch` and
- *     `/api/updates/intent/:nodeId` do NOT carry this tolerance; each 401s on neither
- *     credential. So `/api/notify`
- *     stays the one exempt route that a caller with no credential at all can still
- *     reach on a box mid-rollout. That tolerance has a scheduled removal —
- *     `coord/token.ts:207`, "REMOVE `/api/notify`'S `'legacy'` TOLERANCE ONE
- *     DEPLOY AFTER THIS SHIPS" — and this exemption inherits its lifetime: the
- *     day the tolerance goes, this entry is a plain box-token lane like the
- *     rest. Session-gating it instead is not the fix, because the caller
- *     genuinely has no cookie; the fix is the removal already scheduled.
+ *     `/api/notify` is now a plain box-token lane like the rest. It used to pass
+ *     `'legacy'` (no token presented) and `'unconfigured'` (this box was never
+ *     given one) THROUGH, by the operator's rollout ruling, and this exemption
+ *     was said to inherit that tolerance's lifetime. The box-token lifecycle
+ *     removed both arms (spec 4.3): the server mints its own token at boot, so
+ *     "never given one" is no longer a state a box is left in, and the route
+ *     refuses every verdict but `'ok'`. No exempt route in this reason can be
+ *     reached by a caller with no credential at all. The entry stays because
+ *     its caller still has no cookie; session-gating it was never the fix.
  *
  *     ORDER-PINNED PARAGRAPH. `box-token-census.test.ts` reads the number words
  *     above IN SEQUENCE — the box-token lane count first, the total second — so
@@ -201,8 +198,8 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'gated one fails every deploy the moment the flag is armed'],
 
   ['POST /api/notify',
-    'ccd notify.sh on the fleet host — checks the box token but still tolerates `legacy`/`unconfigured` ' +
-    'for one deploy generation (coord/token.ts:207 schedules the removal); it has no cookie jar either way'],
+    'ccd notify.sh on the fleet host — box-token gated like the mail ingress, every verdict but `ok` ' +
+    'refused (the rollout tolerance for an absent or unconfigured token is gone); it has no cookie jar'],
   ['POST /api/mail',
     'the mail ingress — box-token gated and every refusal recorded (coord/routes.ts check 1)'],
   ['POST /api/mail/:id/ack',

@@ -1183,7 +1183,7 @@ step 10 of
 What is gated, and what is not: **everything except** `/health` (deploy's own
 liveness gate reads the shipped sha out of it), the twenty-seven machine lanes the
 fleet host reaches (twenty-four box-token-consulting coordination routes plus
-`/api/notify`, which still tolerates an absent token for one deploy generation,
+`/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
@@ -4004,15 +4004,14 @@ has. None of the lanes enumerated above tolerates a missing token — a request
 with none is `401 unauthenticated`, full stop. (The operator doors excepted just
 above are the other half of that sentence, and they are not an oversight in it:
 they are reachable from a phone precisely because the party a wedge locks out is
-the party holding the box token.) `/api/notify` alone still accepts a request
-with **no** token header, logged as `legacy`
-(`ccrc-server: /api/notify accepted a request with NO box token …`) so a
-fleet host whose `notify.sh` predates its token read cannot go dark; it was
-meant as a one-deploy rollout bridge and has not been removed yet. A request
-carrying the WRONG token is refused `401` and logged as such. And on a server
-with no token file at all, every token-gated lane above refuses every caller
-while `/api/notify` passes everything — the boot line
-`ccrc-server: no box token at …` says so.
+the party holding the box token.) `/api/notify` is no exception any more: it
+once accepted a request with **no** token header (logged as `legacy`) and passed
+everything on a server with no token, as a rollout bridge for a fleet host whose
+`notify.sh` predated its token read, and the box-token lifecycle removed both. A
+request with no token, or with the WRONG token, is refused `401` and logged as
+such (`ccrc-server: /api/notify refused …`). And on a server that holds no token
+value, every token-gated lane above, `/api/notify` included, refuses every
+caller, and the server says so at boot.
 **Minting the token file matters as much as having one:**
 `deploy/ccrc-mail.token.example`'s own placeholder value line
 must actually be replaced — copying the example verbatim is refused loudly

@@ -580,7 +580,7 @@ export function registerCoordRoutes(
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], route);
     if (verdict === 'ok') return true;
     const detail = verdict === 'legacy'
-      ? `no box token presented — ${route} grants no legacy tolerance (that is /api/notify only)`
+      ? `no box token presented — ${route} grants no legacy tolerance`
       : verdict === 'unconfigured'
         ? `no box token is configured on this server — ${route} fails shut on an unconfigured token, ` +
           'it does not fail open'
@@ -699,10 +699,14 @@ export function registerCoordRoutes(
     // `/api/notify` is still entitled to — `/api/mail` has no pre-existing
     // deployed caller a strict gate could strand, the identical argument
     // that already ruled out a `'legacy'` tolerance here.
+    //
+    // HISTORY since the box-token lifecycle (spec 4.3): `/api/notify` lost both
+    // tolerances too and now refuses the same three verdicts; the contrast above
+    // records why this route never had either.
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
-        ? 'no box token presented — /api/mail grants no legacy tolerance (that is /api/notify only)'
+        ? 'no box token presented — /api/mail grants no legacy tolerance'
         : verdict === 'unconfigured'
           ? 'no box token is configured on this server — /api/mail fails shut on an unconfigured ' +
             'token, it does not fail open (fix-round finding 3)'
@@ -1024,7 +1028,7 @@ export function registerCoordRoutes(
     const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail/:id/ack');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
-        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance (that is /api/notify only)'
+        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance'
         : verdict === 'unconfigured'
           ? 'no box token is configured on this server — /api/mail/:id/ack fails shut on an ' +
             'unconfigured token, it does not fail open (fix-round finding 3)'
