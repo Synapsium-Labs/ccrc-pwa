@@ -4815,7 +4815,9 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // SWITCHES is the one sanctioned definer (the stall-watch MARKERS precedent above); the hook and the shim read
   // `history-off` with a bash test. `_uninst_purge` spells its kept set as the globs `history` and `history-*`
   // and doctor names the cap file from `status --json`, so neither is a holder. B2 adds the skill's files to
-  // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen.
+  // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
+  // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
+  // and nothing else, and a split spelling is pinned by the case that reads the literal back.
   // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
   // `sweep.mjs` (`--op recall-off`, spec :1863 and the :2007 lifecycle row), which ships in W2. B1 holds the half
   // it can: the last case below reds when any corpus file but `ccd/history/sweep.mjs` writes it. The other half,
@@ -4835,8 +4837,31 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
    *  exit-2 reason `history-off` (REASONS, Task 3; decideOpGate's refusal, Task 6) names the CONDITION, and
    *  lib.mjs spells it as a reason word, never as the file. */
   const needle = (name: string): string => `/${name}`;
-  /** A file's code lines, comment lines dropped in either language. */
-  const code = (f: string): string[] => (BASH.includes(f) ? codeLines(f) : stallCode(f).split('\n'));
+  /** The help text NAMES the pause path for the operator; it neither reads nor writes the switch. The allowance is
+   *  line-scoped: only the lines of `fn`'s body (its `fn() {` line to the next line that is exactly `}`) that hold a
+   *  needle in a single-quoted printf argument. Every other `file` line naming the path still reds the scan. */
+  const USAGE_PROSE = { file: 'ccd/ccrc', fn: '_usage_history_paragraph', needles: ['/history-off'] } as const;
+  /** The line numbers of `fn`'s body the allowance covers, and the body itself (null when `fn` is not found). */
+  const usageProse = (text: string): { body: string[] | null; allowed: Set<number> } => {
+    const lines = text.split('\n');
+    const at = lines.indexOf(`${USAGE_PROSE.fn}() {`);
+    if (at < 0) return { body: null, allowed: new Set() };
+    let end = at + 1;
+    while (end < lines.length && lines[end] !== '}') end += 1;
+    const allowed = new Set<number>();
+    for (let i = at + 1; i < end; i += 1) {
+      const m = /^\s*'([^']*)'(?:\s*\\)?$/.exec(lines[i]!);
+      if (m && USAGE_PROSE.needles.some((n) => m[1]!.includes(n))) allowed.add(i);
+    }
+    return { body: lines.slice(at + 1, end), allowed };
+  };
+  /** A file's code lines, comment lines dropped in either language. The one allowance is applied here, so the
+   *  holder count and the `writes()` classifier both skip it. */
+  const code = (f: string): string[] => {
+    if (!BASH.includes(f)) return stallCode(f).split('\n');
+    const skip = rel(f) === USAGE_PROSE.file ? usageProse(readFileSync(f, 'utf8')).allowed : new Set<number>();
+    return readFileSync(f, 'utf8').split('\n').filter((l, i) => !skip.has(i) && !l.trim().startsWith('#'));
+  };
   /** A line READS a switch when it tests or reads the path. */
   const READ = /\[\[?\s+!?\s*-[efrs]\s|\b(?:existsSync|readFileSync|statSync|lstatSync)\s*\(/;
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -4876,6 +4901,21 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     // The reason word is not the file: REASON_ROWS' `'history-off'` names no switch path.
     expect("'irreversible-in-pane', 'history-off', 'span-pruned',".includes(needle('history-off'))).toBe(false);
     expect('[ -e "$HOME/.ccrc/history-off" ] && exit 0'.includes(needle('history-off'))).toBe(true);
+  });
+
+  it('USAGE_PROSE: the allowance covers one real spelling, the literal path, and exactly one line (FU5)', () => {
+    const text = readFileSync(path.join(ccrcRoot, USAGE_PROSE.file), 'utf8');
+    const { body, allowed } = usageProse(text);
+    expect(body, `${USAGE_PROSE.file} has no ${USAGE_PROSE.fn}`).not.toBeNull();
+    // A split spelling (`local off=history-off`, `~/.ccrc/$off`) would hold no needle and so pass the scan blind:
+    // the help text must carry the path whole, so a future split fails here.
+    expect(body!.join('\n')).toContain('~/.ccrc/history-off');
+    expect(allowed.size).toBe(1);
+    // The classifier: a single-quoted prose line is allowed, a code line that reads or writes the path is not.
+    const probe = (l: string): number => usageProse(`${USAGE_PROSE.fn}() {\n${l}\n}\n`).allowed.size;
+    expect(probe("    '            a session printed included; touch ~/.ccrc/history-off to pause' \\")).toBe(1);
+    expect(probe('    touch "$HOME/.ccrc/history-off"')).toBe(0);
+    expect(probe('    [ -e "$HOME/.ccrc/history-off" ] && return 0')).toBe(0);
   });
 
   it('SWITCHES names every switch, so the rows below compare against a real definer', () => {

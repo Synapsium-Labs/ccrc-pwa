@@ -23732,15 +23732,13 @@ _uninst_history_kept_line() {
 # because usage text gets its words on existing lines (a citation-corpus file);
 # the leading \n starts it on a line of its own. It repeats nothing the kept-store
 # line says: that promise has one spelling, _uninst_history_kept_line.
+# Help prose names the operator's pause path (as README does); single-definition.test.ts allows exactly this function's lines (FU5).
 _usage_history_paragraph() {
-  # The pause file is named through a variable: this is prose in a help text, neither a reader nor a writer of the
-  # switch, and single-definition.test.ts's operator-switch scan counts any code line that spells the path.
-  local off=history-off
   printf '\n%s' \
     '  history   the session-history store on this box (fleet and both boxes,' \
     '            Linux): ccd-history-sweep.timer copies the text of every' \
     '            session into ~/.ccrc/history every 2 minutes, verbatim, secrets' \
-    "            a session printed included; touch ~/.ccrc/$off to pause" \
+    '            a session printed included; touch ~/.ccrc/history-off to pause' \
     '            it. status [--json] reports the store and its health. Its' \
     '            writing passes (ccd-history-sweep --op import|migrate) belong' \
     '            to the operator and refuse inside a session'
