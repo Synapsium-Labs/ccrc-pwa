@@ -411,6 +411,30 @@ describe('an unusable retired file never lets boot adopt a value it did not writ
     expect(r.state).toMatchObject({ origin: 'adopted', rotationOwed: true, owedWhy: 'adopted' });
   });
 
+  // Listing a directory needs READ permission; opening a file inside needs only search. A -wx ~/.ccrc lists nothing yet boot
+  // can read everything else, so a failed listing must refuse (D-4403 item 2), never mean "no set-aside file".
+  it.skipIf(isRoot)('a set-aside listing that fails (mode 0300 directory, EACCES) refuses boot, naming the path and errno, writing nothing', async () => {
+    const home = mkHome();
+    const v = mintValue();
+    writeFileSync(P(home).current, `${v}\n`, { mode: 0o600 });
+    const dir = path.join(home, '.ccrc');
+    chmodSync(dir, 0o300);
+    try {
+      const err = await bootBoxToken(input(home)).then(() => null, (e: unknown) => e as Error);
+      expect(err?.message).toBe(`${dir}: unreadable (EACCES); boot refuses rather than rewrite it`);
+      expect(err?.message).not.toContain(v);
+    } finally { chmodSync(dir, 0o700); }
+    expect(existsSync(P(home).state)).toBe(false);                            // nothing was written
+    expect(readFileSync(P(home).current, 'utf8')).toBe(`${v}\n`);
+  });
+
+  it('a missing directory (ENOENT) still means no set-aside file', async () => {
+    const home = mkHome();
+    rmSync(path.join(home, '.ccrc'), { recursive: true });
+    const r = await bootBoxToken(input(home));                                // no listing refusal: it boots, and only the mint fails
+    expect(r.mintFailed).toBe(true);
+  });
+
   it("the set-aside file's content is never read: an unreadable one (mode 000) is only counted by its name", async () => {
     if (isRoot) return;
     const home = mkHome();

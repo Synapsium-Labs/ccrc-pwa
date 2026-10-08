@@ -13,7 +13,7 @@ import type { NodeRole } from '../../../shared/api.js';
 import type { FleetMode, RoleSource } from '../config.js';
 import { BoxTokenHolder, readMailToken, type HolderSlots } from '../coord/token.js';
 import {
-  fileExists, mintGenerationId, mintValue, moveAsideUnusable, readAgentEnvMarksFleet, readRetired, readState, readValueFile, renameOverAtomic,
+  fileExists, mintGenerationId, mintValue, moveAsideUnusable, SET_ASIDE_MARK, readAgentEnvMarksFleet, readRetired, readState, readValueFile, renameOverAtomic,
   tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile, writeState, writeValueFileAtomic,
   type TokenPaths, type ValueRead,
 } from './files.js';
@@ -76,7 +76,7 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   const retiredUnusable = retiredRead.kind === 'unusable';
   // D-4410 (review of batch 2): the digests that had landed in a set-aside file are not read back, so while ANY set-aside
   // retired file stands boot keeps the unusable posture on every boot. METADATA ONLY: names, never the file's content.
-  const asideNames = await setAsideRetiredNames(paths);
+  const asideNames = await setAsideRetiredNames(paths);   // a listing that fails (other than ENOENT) refuses boot
   const foreignPosture = retiredUnusable || asideNames.length > 0;
 
   const agentEnvMarksFleet = await readAgentEnvMarksFleet(paths.agentEnv);   // D-4399
@@ -253,11 +253,15 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
 }
 
 /** The names of the retired files an earlier boot set aside (`moveAsideUnusable`'s `box-token-retired.json.unusable-*`).
- *  A directory listing only: their content is never read. An unlistable directory answers none (the mail.token read that
- *  follows would fail first). */
+ *  A directory listing only: their content is never read. Only a proven ENOENT of the directory means none; any other
+ *  failure (EACCES on a -wx directory, which opens its files but cannot list them; EMFILE; ENOMEM) refuses boot, naming the
+ *  path and errno (D-4403 item 2): answering "none" there would drop the foreign posture and re-open the write-back hole. */
 async function setAsideRetiredNames(paths: TokenPaths): Promise<string[]> {
-  const prefix = `${path.basename(paths.retired)}.unusable-`;
-  try { return (await fsp.readdir(paths.dir)).filter((n) => n.startsWith(prefix)).sort(); } catch { return []; }
+  const prefix = `${path.basename(paths.retired)}${SET_ASIDE_MARK}`;
+  try { return (await fsp.readdir(paths.dir)).filter((n) => n.startsWith(prefix)).sort(); } catch (e) {
+    if (errno(e) === 'ENOENT') return [];
+    return refuseUnreadable(paths.dir, errno(e));
+  }
 }
 
 /** Spec 4.2.1's act: (a) record recovering, (b) write the sibling's value into mail.token, (c) record it as

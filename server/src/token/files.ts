@@ -214,12 +214,15 @@ export async function appendRetired(p: string, valueDigest: string, at: number):
   await writeValueFileAtomic(p, `${JSON.stringify({ v: 1, retired: entries })}\n`);
 }
 
+/** What `moveAsideUnusable` appends to a file's name before its tag; boot's listing of set-aside files uses the same word. */
+export const SET_ASIDE_MARK = '.unusable-';
+
 /** Sets an unusable file aside as `<p>.unusable-<tag>` (then `-1`, `-2`... when that name is taken), keeping every byte
  *  and never overwriting: a hard link is made first, which refuses an existing name (EEXIST), and only then is the old
  *  name removed. Answers the new path (D-4410). */
 export async function moveAsideUnusable(p: string, tag: string | number): Promise<string> {
   for (let n = 0; n < 1000; n++) {
-    const to = `${p}.unusable-${tag}${n === 0 ? '' : `-${n}`}`;
+    const to = `${p}${SET_ASIDE_MARK}${tag}${n === 0 ? '' : `-${n}`}`;
     try { await fsp.link(p, to); } catch (e) {
       if (errno(e) === 'EEXIST') continue;
       throw e;
