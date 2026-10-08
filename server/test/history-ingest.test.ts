@@ -1806,7 +1806,7 @@ describe('history ingest: sidecars (plan task 21)', () => {
 interface IxSweep {
   ftsPrepare(db: DatabaseSync, nowMs: number): { state: string; tables: boolean };
   deriveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<void>;
-  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown, rawLen: number): Promise<{ text: string; decoded: number; undecodable: false } | { text: null; decoded: number; undecodable: true }>;
+  ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown, rawLen: number): Promise<{ text: string; decoded: number; undecodable: false; overCap?: true } | { text: null; decoded: number; undecodable: true }>;
 }
 interface IxSweep {
   secretsStep(db: DatabaseSync, ctx: IxCtx, secretFiles: string[]): { pairIdx: unknown; newValues: string[]; values: string[] };
@@ -2742,8 +2742,62 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const { sweep: S, lib } = await IX.api();
       const idx = lib.makePairIndex([]);
       const small = brotliCompressSync(Buffer.from(JSON.stringify([{ type: 'text', text: 'zqoversentinel' }])), { params: { [zc.BROTLI_PARAM_QUALITY]: 5 } });
-      await expect(S.ftsTextOfBlob(small, false, idx, lib.BLOB_DECODE_MAX + 1)).resolves.toEqual({ text: '', decoded: 0, undecodable: false });
+      await expect(S.ftsTextOfBlob(small, false, idx, lib.BLOB_DECODE_MAX + 1)).resolves.toEqual({ text: '', decoded: 0, undecodable: false, overCap: true });
       expect((await S.ftsTextOfBlob(small, false, idx, 1000)).text).toBe('zqoversentinel');   // CONTROL
+    });
+
+    it('F7 sibling (D-4346): a row whose canonical body is over BLOB_DECODE_MAX while its line is within LINE_MAX is stored and indexes nothing at ingest, as the backfill and the re-derivation index it', async () => {
+      const { lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-f7-sib-');
+      try {
+        const marker = `zqovc${hex(6)}`;
+        const SLOT = 'ZQ-SLOT';
+        const frame = Buffer.from(JSON.stringify(IX.user(IX.uuidN(2), IX.uuidN(1), SLOT, 2)));
+        const cut = frame.indexOf(SLOT);
+        // 6,000,000 invalid UTF-8 bytes: each reads as U+FFFD, three bytes in the canonical body, so the body is ~18 MB
+        // (over the 16 MiB cap) while the line stays ~6 MB (under LINE_MAX).
+        const line = Buffer.concat([frame.subarray(0, cut), Buffer.from(marker), Buffer.alloc(6_000_000, 0xff), frame.subarray(cut + SLOT.length), Buffer.from('\n')]);
+        expect(line.length, 'CONTROL: the line is within LINE_MAX').toBeLessThan(lib.LINE_MAX);
+        const small = Buffer.from(IX.jsonl([IX.user(IX.uuidN(1), null, 'zqsmallctl words', 1)]));
+        const dir = path.join(box.homes[0]!, 'projects', IX.SLUG);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, `${IX.U}.jsonl`), Buffer.concat([small, line]));
+        IX.sweepTwice(box);
+        const db = openStoreRO(box);
+        try {
+          const row = db.prepare('SELECT b.raw_len AS len FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?').get(IX.uuidN(2)) as { len: number } | undefined;
+          expect(row, 'CONTROL: the row was stored').toBeDefined();
+          expect(row!.len).toBeGreaterThan(lib.BLOB_DECODE_MAX);
+          expect(matches(db, 'zqsmallctl')).toBe(1);   // CONTROL: the index is on and indexes a small row
+          expect(matches(db, `"${marker}"`)).toBe(0);
+          expect(ftsBytes(db).includes(marker)).toBe(false);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    }, 180_000);
+
+    it('a late pair glued inside an over-cap row that an earlier store indexed in full: the re-derivation deletes its index row, uncounted, and the mark advances (D-4344, D-4346)', async () => {
+      const { lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-overcap-late-');
+      const v = `zqd${hex(12)}4`;
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note é${v} end`, 1)]));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try { expect(matches(db, '"ezqd"*')).toBe(1); } finally { db.close(); }   // CONTROL: the row is indexed in full
+      const w = openWriter(historyPaths(box.home).dbFile);
+      try {
+        // a store written before ingest withheld an over-cap body: the row's raw_len says over the cap, its index row is whole
+        w.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(lib.BLOB_DECODE_MAX + 1, IX.uuidN(1));
+      } finally { closeWriter(w); }
+      secretFile(box, 'd.env', `ZQ_D_VALUE=${v}\n`);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(matches(db, '"ezqd"*')).toBe(0);
+        expect(ftsBytes(db).includes(v.slice(3, 15))).toBe(false);
+        expect(metaV(db, 'fts_reindex_rid')).toBe(String(maxRid(db)));
+        expect(counters(box)[HEALTH_COUNTERS.blobUndecodable] ?? 0).toBe(0);   // uncounted: an over-cap body is not an undecodable one
+      } finally { db.close(); }
     });
 
     it('census: every decompression of a stored blob in sweep.mjs is guarded, and only ftsTextOfBlob decodes for the index', () => {

@@ -2382,7 +2382,10 @@ export function prepareLines(lines, ctx, st) {
     // parts sit in another order than the one rederiveFts re-derives (a PEM run to end-of-text masks a different
     // part). Reading the canonical form makes the two texts equal, which makeProbeIndex's soundness argument
     // assumes (D-4344, review 316 F1; `json` is the string compressed below).
-    const ftsText = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance) ? ftsTextOf(JSON.parse(json), 'entry') : null;
+    // D-4346 (history-permanent-failures-classified): an over-cap canonical body indexes nothing here too, so ingest, the backfill and the re-derivation give one text (review 316 F7 sibling; FU2).
+    // The length is the one compressMissing stores as the blob's raw_len, and the gate precedes the parse.
+    const ftsText = ctx.fts !== true || !SEARCHABLE_PROVENANCE.includes(provenance) ? null
+      : blobOverDecodeCap(Buffer.byteLength(json, 'utf8')) ? '' : ftsTextOf(JSON.parse(json), 'entry');
     rows.push({ kind: 'row', at, entry, provenance, sha: sha256Bytes(json), json, boundary, kept, ftsText });
     if (st.firstPending) {
       st.firstPending = false;
@@ -3380,7 +3383,9 @@ const UNDECODABLE = Object.freeze({ text: null, decoded: 0, undecodable: true })
  *  body that decodes but does not parse indexes nothing (`text: ''`, `undecodable: false`). A body whose stored
  *  raw_len is over BLOB_DECODE_MAX is never decompressed (blobOverDecodeCap): it indexes nothing and is not counted, so
  *  a raw line-too-long line reached by a uuid collision cannot exhaust a pass's memory (D-4346,
- *  history-permanent-failures-classified). `rawLen` is the blob's stored raw_len; sidecars are exempt, their prefix
+ *  history-permanent-failures-classified). It answers `overCap: true` (a distinct word: `text: ''` also means "did not
+ *  parse"), and ingest indexes such a row empty too, so a re-derivation deletes any index row it finds for one
+ *  (rederiveFts, FU2). `rawLen` is the blob's stored raw_len; sidecars are exempt, their prefix
  *  decoder being bounded already. */
 export async function ftsTextOfBlob(z, isSidecar, pairIdx, rawLen) {
   if (isSidecar) {
@@ -3388,7 +3393,7 @@ export async function ftsTextOfBlob(z, isSidecar, pairIdx, rawLen) {
     try { p = await unbrotliPrefix(z, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN); } catch { return UNDECODABLE; }
     return { text: sidecarIndexText(p.bytes, pairIdx), decoded: p.decoded, undecodable: false };
   }
-  if (blobOverDecodeCap(rawLen)) return { text: '', decoded: 0, undecodable: false };   // D-4346: over BLOB_DECODE_MAX; never decompressed whole, indexed empty, uncounted
+  if (blobOverDecodeCap(rawLen)) return { text: '', decoded: 0, undecodable: false, overCap: true };   // D-4346: over BLOB_DECODE_MAX; never decompressed whole, indexed empty, uncounted
   let bytes;
   try { bytes = unbrotli(z); } catch { return UNDECODABLE; }
   try { return { text: ftsTextOf(parseStoredJson(bytes), 'entry'), decoded: bytes.length, undecodable: false }; } catch { return { text: '', decoded: bytes.length, undecodable: false }; }
@@ -3620,7 +3625,10 @@ export async function rederiveFts(db, ctx, budget) {
       } else {
         idx.probe.hits = 0;
         const t = await ftsTextOfBlob(row.z, row.is_sidecar === 1, idx, row.raw_len);
-        if (t.undecodable) {
+        if (t.overCap === true) {
+          // D-4346 (history-permanent-failures-classified): an over-cap body indexes nothing, and a row written before that rule may hold its full text; never skipped, so the row is deleted and none inserted, uncounted (FU2).
+          group.push({ id: b.blob_id, text: null });
+        } else if (t.undecodable) {
           // D-4346 (history-permanent-failures-classified): never skipped; its row cannot be shown free of an owed pair, so it is deleted and none inserted.
           group.push({ id: b.blob_id, text: null, undecodable: true });
           reindexed += 1;
