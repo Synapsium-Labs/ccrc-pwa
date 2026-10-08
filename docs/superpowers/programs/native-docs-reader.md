@@ -18,8 +18,8 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | ccd reads docs: `shared/docs.ts`, `docs-index`/`docs-tree`/`docs-show`/`docs-fetch` and the embedded helper, the doctor's `docs` check | #301 | **merged** 2026-10-06 (`f03d83304`). Executed in the coordinator's session (subagent-driven, 19 tasks, per-task reviews, a six-lens final review, one fix round), not as a run |
-| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | — | plan approved by the operator 2026-10-07 and merged in #306 (`a17e14bc0`). **Run 315** opened 2026-10-07 (wave 2/7). **Dispatched** 2026-10-07 10:39 UTC to a fresh child. Task 2 waits until claim 1073 ends or the claim agreement is confirmed (Decisions, 2026-10-07) |
-| 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | — | after W2 |
+| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | run 315, dispatched 2026-10-07 10:39 UTC. Wave-done at `03826657e`. Review 317 found two defects, fixed in fix round 1, which reported done at `2190cc43f`. A scoped re-review (run 336) waits on the fleet's daily dispatch cap. Merge follows a clean ruling |
+| 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | — | plan written 2026-10-08 (`docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md`, 12 tasks, six deviations), awaiting the operator's review. Dispatch after W2 merges |
 | 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | — | parallel-eligible now. Its `ccd/ccrc-doctor-checks` edit waits on whichever claim holds that file (claim 1072, run 302, on 2026-10-07) |
 | 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06) | — | after W3 and W4 |
 | 6 | mockups | — | after W5 |
@@ -60,8 +60,37 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 
   The brief rules both as mechanical re-anchors.
 - **2026-10-07: claim overlap with run 302.** Claim 1073 (programme `ccrc-history`, wave 2 B1) holds `server/test/single-definition.test.ts` and `server/test/lifecycle.test.ts`. B1 only appends at the end of both; W2 appends at the end of both and edits one line in place in each (the archive door pin's `want` line, and the `../src/lifecycle.js` import). The coordinator proposed a scoped agreement to run 302's coordinator in mail 3812: each side edits only its own lines, and the second to merge takes `main` and keeps both blocks. Run 302's coordinator was busy, so W2 was dispatched before the reply. Task 1 edits neither file. Before Task 2 the worker claims the two files again, and edits them only once claim 1073 has ended or the coordinator has confirmed the agreement by mail.
+- **2026-10-07 11:21 UTC: claim ruling (operator).** W2 edits the two files under claim 1073 within the proposed scope, without waiting for run 302's coordinator. W2's worker was told by mail. So were the claim's holder (the protocol's address, named by the claim's own `mailHint`) and its coordinator.
+- **2026-10-07: W2's `sd-shape` invariant (coordinator).** Task 9's checker compares each commit with its parent, and two review fixes inserted lines inside W2's own appended block. Measured net against the base, `single-definition.test.ts` changes by exactly the in-place `want` line plus one end-of-file block, and the citation census is green. The FAIL is recorded as it stands, without a re-run or a checker edit. The wave-done keeps `suite: unrun`. This is not a deviation.
+- **2026-10-07: W2's held-out review (run 317, tip `03826657e`).** 8 lenses, all returned. 18 findings raised, 2 survived the refute pass, 0 unexamined. Every Task 9 suite reproduced, and all 161 mutation rows red as recorded.
+  - **F1, important: fixed.** Check 8 coerced a non-string `onRef`. An array passed as ok, and a throwing `toString` rejected the port's promise.
+  - **F2, minor: fixed now.** Refinement (g)'s single reader of `killed` and `signal` had no scan that went red on a second reader.
+  - **Settled by the review:** check 3's half-measured shape is covered by W2's deviation 4377. The second redaction pass's depth bound (4378) is beyond every failure body W1's helper emits. Thirty-two guards have no mutation row, but each went red when the reviewer mutated it, so coverage is complete.
+  - **Deviations defined in W2's plan on its branch:** 4374 to 4378, written bare here until W2 merges.
+- **2026-10-07: W2 fix round 1.** Commits `52a884b01`, `64ebe8351` and `2190cc43f`. 163 rows measured as expected. No new deviation.
+- **2026-10-08: W3 plan.** Written by a planning workflow: scouts, an architect, one writer per task prototyping on a scratch tree at W2's tip, a plan review and two fix passes.
+  - **12 tasks.** Task 11 is the whole-branch review, run before Task 12's close. Task 12 pushes and opens the PR.
+  - **Six departures from the spec's text,** defined by Task 9 Step 7 with the first six numbers of W3's block:
+    - (d) router-level 414/400 refusals;
+    - (i) the composition built in `buildServer`, with no `index.ts` edit;
+    - (j) abandonment measured on the response's close;
+    - (s) the latency test on a bare Fastify;
+    - (v) the fetch lane's own FIFO instead of a second `KeyedQueue`;
+    - (w) a JSON file reply serving the bytes check 8 verified.
+  - **Why (w) counts (coordinator, 2026-10-08):** §3.5 says "wraps these answers unchanged", and the served field differs for an answer outside ccd's contract.
+  - **What W3 settles:** every item W2's reviews carried to W3, and review 317's notes.
+- **2026-10-07/08: two coordinator lessons.**
+  - A long workflow keeps this session "busy" to the mail gate. Review 317's report sat queued for nine hours, so check mail on every wake.
+  - `mail list --to <id>` lists only outstanding mail. A send that timed out and was later acked looked unsent, and was sent twice. Verify a send through the feed or `--all`.
 
 ## Carried constraints (reviewers get these)
+
+- **W3's accepted residue, from its plan:**
+  - The fetch lane's generation map grows by one short entry per distinct project refreshed. It is session-gated and cannot be pruned safely.
+  - `policy.ts`'s `lowerAscii` duplicates a private L0 helper. It is pinned by a parity case and goes to W7.
+  - The second redaction pass rewrites values, not key names. This is latent, and the fix belongs to L3.
+  - The `JSON.parse` cost inside `ccdsource.ts` is deferred.
+- **W2's parked minors** are in its SDD ledger, and none blocks W3.
 
 - **SEC-3:** a helper killed from outside leaves git's process group running. W2 pins the budget invariant, so ccd is never killed in normal operation. The real fix is unscheduled.
 - **SEC-4:** fetch stamps accumulate, one per distinct branch name (W5 housekeeping).
