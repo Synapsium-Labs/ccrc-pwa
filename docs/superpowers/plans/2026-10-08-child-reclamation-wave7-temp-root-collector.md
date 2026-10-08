@@ -118,7 +118,7 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
 - **Each word is declared in the commit of its first literal journal site:**
   - `containment-refuted` in Task 1;
   - `witness-mismatch` and `quarantine-kept` in Task 5;
-  - `not-witnessed`, `registered` and `not-idle` in Task 6.
+  - `not-witnessed`, `registered` and `changed-recently` in Task 6.
   - The audit's held lock answers the existing word `in-progress`.
 - **The move is ONE function** in the COLLECT region, exempted BY NAME in `macos-platform.test.ts`.
 - **The floor has one function,** `_ws_collect_floor_s`, which prints `max(86400, WS_COLLECT_IDLE_FLOOR_S)`. A test lowers the floor only by redefining that function in its sourced harness, never through the knob.
@@ -5825,7 +5825,7 @@ Expected: all green. The measured figures from the export:
 - Inside that lock it asks, in a fixed order, each of these words:
   - `registered`;
   - `witness-mismatch` (TERMINAL);
-  - `not-idle`;
+  - `changed-recently`;
   - `in-use`;
   - `containment-unproven` (TERMINAL);
   - `paused`.
@@ -5908,7 +5908,7 @@ The whole evaluation is ONE function, `_ws_collect_fork`, so the token printed i
   _ws_collect_reset                            # clears every answer below
   ```
   - **The fork's answer:**
-    - `REAP_VERDICT` is one of `collectable`, `registered`, `not-witnessed`, `witness-mismatch`, `not-idle`, `in-use`, `containment-unproven`, `paused`, `quarantine-kept` or `unmeasured`.
+    - `REAP_VERDICT` is one of `collectable`, `registered`, `not-witnessed`, `witness-mismatch`, `changed-recently`, `in-use`, `containment-unproven`, `paused`, `quarantine-kept` or `unmeasured`.
     - `REAP_DETAIL` carries the reason. `REAP_TOKEN` is 64 lowercase hex, and is set on `collectable` only.
     - `_WS_COLLECT_PROBE` is set on unmeasured only, to one of `registry`, `records`, `leaf`, `identity`, `idle:<why>`, `clock`, `in-use`, `checkouts`, `rows`, `quarantine`, `slot`, `token` or `eval`. The audit adds five more before the fork runs: `platform`, `witness`, `mv`, `flock` and `lock`.
     - `_WS_COLLECT_PHASE` is `''` on the fresh path, or `unmoved`, `moved` or `removed`.
@@ -5930,11 +5930,11 @@ The whole evaluation is ONE function, `_ws_collect_fork`, so the token printed i
     - `newestCtimeNs` is a string, because ns are past 2^53.
   - **The journal:** `_lc_emit collect refused "$id" "" verb ws-audit refusal <word>` for exactly `witness-mismatch`, `quarantine-kept` and `containment-unproven`. Its `detail` is cut by `_ws_leaf_why_line`.
   - **L0:** `LcRefusalToken` and `LC_REFUSAL_WORD` gain `'witness-mismatch'` and `'quarantine-kept'`.
-  - **Declared later, in Task 6's commit:** `not-witnessed`, `registered` and `not-idle`, with the verb's literal journal sites (see the departure `retryable-collect-words-declared-with-the-verb`).
+  - **Declared later, in Task 6's commit:** `not-witnessed`, `registered` and `changed-recently`, with the verb's literal journal sites (see the departure `retryable-collect-words-declared-with-the-verb`).
 
 **Ruled detail this task carries, beyond the task text (each named in the wave-done by slug):**
 - `collect-audit-lock-held-answers-in-progress`. The fixed vocabulary names no word for "another ccd process holds the reap lock", the one fact the audit's own `flock -n` can meet. The audit answers ws-reap's and ws-expire's existing `SENTENCES` word `in-progress` ("Another cleanup of this workspace is already running."). It is retryable, exit 0 and unjournaled. `reap-in-progress` and `reclaim-in-progress` are not reachable from this audit: a breadcrumb is a registry file, so `registered` answers first.
-- `retryable-collect-words-declared-with-the-verb`. `ccd-refusal-scan.test.ts` holds every `LcRefusalToken` set-equal, in both directions, to a LITERAL journal call site. The audit journals only its terminal words (R66), so `not-witnessed`, `registered` and `not-idle` have no literal site in this commit. This task prints them on stdout only. Task 6 declares them (`LcRefusalToken`, `LC_REFUSAL_WORD`, `ALL_TOKENS` and the count) in the commit that journals them at the verb's literal sites.
+- `retryable-collect-words-declared-with-the-verb`. `ccd-refusal-scan.test.ts` holds every `LcRefusalToken` set-equal, in both directions, to a LITERAL journal call site. The audit journals only its terminal words (R66), so `not-witnessed`, `registered` and `changed-recently` have no literal site in this commit. This task prints them on stdout only. Task 6 declares them (`LcRefusalToken`, `LC_REFUSAL_WORD`, `ALL_TOKENS` and the count) in the commit that journals them at the verb's literal sites.
 - `witness-without-leaf-collectable-at-the-audit`. R66 ("no orphaned slot") and R50 as amended let the collector drop a witness whose leaf is proven absent, when no record names the id. The audit answers that state `collectable` with the `mode=collect-absent` token, so the verb has a consent to spend.
 - `collect-act-declared-before-its-first-emitter`. Realised by ruling G1: the `collect` act is declared in Task 4's first part, so it is in the tree before this task (see **Needs**).
 
@@ -6307,9 +6307,9 @@ describe('on Darwin the collector measures nothing: unmeasured `platform`, exit 
 });
 
 describe.skipIf(!LINUX)('the journal: a TERMINAL refusal, act collect, verb ws-audit, and nothing else', () => {
-  it('witness-mismatch is journaled; not-idle, through the REAL walk, is not', () => {
+  it('witness-mismatch is journaled; changed-recently, through the REAL walk, is not', () => {
     makeOrphan(h);
-    expect(verdictOf(collectAudit(h)), 'a fresh leaf').toBe('not-idle');
+    expect(verdictOf(collectAudit(h)), 'a fresh leaf').toBe('changed-recently');
     expect(readJournal(h.home), 'a retryable word is never journaled').toEqual([]);
     replaceLeaf(h);
     expect(verdictOf(collectAudit(h, { pre: AGED }))).toBe('witness-mismatch');
@@ -6406,7 +6406,7 @@ Create `server/test/ccd-collect-audit-rungs.test.ts`:
 
 ```ts
 // `ws-audit --collect`'s FRESH rungs, one by one and in order (the temp-root collector, spec §5.10): registered,
-// witness-mismatch, not-idle, in-use, containment-unproven, paused. The first that does not pass ends the
+// witness-mismatch, changed-recently, in-use, containment-unproven, paused. The first that does not pass ends the
 // evaluation, and a probe that cannot answer ends it as unmeasured, naming itself. A witness whose leaf is proven
 // gone is its own answer. FIXTURE HOME ONLY (`collectFixture.ts`). Linux only: the collector measures nothing
 // elsewhere, and the in-use cases run real processes.
@@ -6543,13 +6543,13 @@ describe.skipIf(!LINUX)('a witness whose leaf is PROVEN gone: collectable at onc
   }, 60_000);
 });
 
-describe.skipIf(!LINUX)('not-idle: the newest CTIME under the leaf, against max(24 h, the knob)', () => {
-  it('a fresh leaf, through the REAL walk: not-idle, with the instant it turns collectable', () => {
+describe.skipIf(!LINUX)('changed-recently: the newest CTIME under the leaf, against max(24 h, the knob)', () => {
+  it('a fresh leaf, through the REAL walk: changed-recently, with the instant it turns collectable', () => {
     makeOrphan(h);
     const before = Math.floor(Date.now() / 1000);
     const a = collectAudit(h);
     expect(a.code, a.stderr).toBe(0);
-    expect(verdictOf(a)).toBe('not-idle');
+    expect(verdictOf(a)).toBe('changed-recently');
     const c = collectOf(a);
     expect(c['entries'], 'the leaf itself, cdk.out and its manifest').toBe(3);
     expect(Number(c['idleAt'])).toBeGreaterThanOrEqual(before + 86_400 - 5);
@@ -6558,29 +6558,29 @@ describe.skipIf(!LINUX)('not-idle: the newest CTIME under the leaf, against max(
     expect(readJournal(h.home)).toEqual([]);
   }, 60_000);
 
-  it('the boundary: five seconds short of the floor is not-idle, five seconds past it is collectable', () => {
+  it('the boundary: five seconds short of the floor is changed-recently, five seconds past it is collectable', () => {
     makeOrphan(h);
-    expect(verdictOf(collectAudit(h, { pre: walkAt(secondsAgoNs(86_400 - 5)) }))).toBe('not-idle');
+    expect(verdictOf(collectAudit(h, { pre: walkAt(secondsAgoNs(86_400 - 5)) }))).toBe('changed-recently');
     expect(verdictOf(collectAudit(h, { pre: walkAt(secondsAgoNs(86_400 + 5)) }))).toBe('collectable');
   }, 60_000);
 
   it('the knob RAISES the floor', () => {
     makeOrphan(h);
     const a = collectAudit(h, { pre: `WS_COLLECT_IDLE_FLOOR_S=200000; ${AGED}` });
-    expect(verdictOf(a)).toBe('not-idle');
+    expect(verdictOf(a)).toBe('changed-recently');
     expect(collectOf(a)['floorS']).toBe(200_000);
   }, 60_000);
 
   it.each(['60', '0', '-5', 'abc', '1e9', ''])('the knob %j never LOWERS it', (k) => {
     makeOrphan(h);
     const a = collectAudit(h, { pre: `WS_COLLECT_IDLE_FLOOR_S='${k}'; ${walkAt(secondsAgoNs(3600))}` });
-    expect(verdictOf(a)).toBe('not-idle');
+    expect(verdictOf(a)).toBe('changed-recently');
     expect(collectOf(a)['floorS']).toBe(86_400);
   }, 60_000);
 
-  it('a newest change in the FUTURE (a clock stepped back) is not-idle, never idle', () => {
+  it('a newest change in the FUTURE (a clock stepped back) is changed-recently, never idle', () => {
     makeOrphan(h);
-    expect(verdictOf(collectAudit(h, { pre: walkAt(secondsAgoNs(-3600)) }))).toBe('not-idle');
+    expect(verdictOf(collectAudit(h, { pre: walkAt(secondsAgoNs(-3600)) }))).toBe('changed-recently');
   }, 60_000);
 
   it('a clock that cannot be read is unmeasured `clock`, never idle (Task 4’s `_ws_collect_floor_held` answers 2)', () => {
@@ -6592,11 +6592,11 @@ describe.skipIf(!LINUX)('not-idle: the newest CTIME under the leaf, against max(
     expect(a.doc!['token']).toBeUndefined();
   }, 60_000);
 
-  it('mtime is never read: a leaf whose every mtime is years old is still not-idle (the REAL walk)', () => {
+  it('mtime is never read: a leaf whose every mtime is years old is still changed-recently (the REAL walk)', () => {
     const { leaf } = makeOrphan(h);
     const old = new Date('2020-01-01T00:00:00Z');
     for (const p of [path.join(leaf, 'cdk.out', 'manifest.json'), path.join(leaf, 'cdk.out'), leaf]) fs.utimesSync(p, old, old);
-    expect(verdictOf(collectAudit(h))).toBe('not-idle');
+    expect(verdictOf(collectAudit(h))).toBe('changed-recently');
   }, 60_000);
 });
 
@@ -6690,7 +6690,7 @@ describe.skipIf(!LINUX)('paused: read inside the lock, the last rung', () => {
 });
 
 describe.skipIf(!LINUX)('the order: the first rung that does not pass ends the evaluation', () => {
-  it('witness-mismatch outranks not-idle, in-use, containment and the pause', () => {
+  it('witness-mismatch outranks changed-recently, in-use, containment and the pause', () => {
     const { leaf } = makeOrphan(h);
     replaceLeaf(h);
     plantForeignCheckout(leaf);
@@ -6698,11 +6698,11 @@ describe.skipIf(!LINUX)('the order: the first rung that does not pass ends the e
     try { expect(verdictOf(collectAudit(h, { pre: PAUSE }))).toBe('witness-mismatch'); } finally { p.stop(); }
   }, 60_000);
 
-  it('not-idle (the REAL walk) outranks in-use, containment and the pause', () => {
+  it('changed-recently (the REAL walk) outranks in-use, containment and the pause', () => {
     const { leaf } = makeOrphan(h);
     plantForeignCheckout(leaf);
     const p = holdCwd(leaf);
-    try { expect(verdictOf(collectAudit(h, { pre: PAUSE }))).toBe('not-idle'); } finally { p.stop(); }
+    try { expect(verdictOf(collectAudit(h, { pre: PAUSE }))).toBe('changed-recently'); } finally { p.stop(); }
   }, 60_000);
 
   it('in-use outranks containment and the pause', () => {
@@ -7094,7 +7094,7 @@ Expected: FAIL.
 #     standing row (measured);
 #   witness-mismatch (TERMINAL) — the witness unreadable, without a birth
 #     time, or not the real directory at the id by dev, ino and birth time;
-#   not-idle — the newest CTIME over every entry under the leaf, the leaf
+#   changed-recently — the newest CTIME over every entry under the leaf, the leaf
 #     included, younger than the floor (Task 4's `_ws_collect_floor_held`
 #     against `_ws_collect_floor_s`); mtime is never read;
 #   in-use — `_ws_path_users` (cwd, open file, TMPDIR);
@@ -7217,7 +7217,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   _WS_COLLECT_IDLE_AT=$(( (10#$_WS_COLLECT_NEWEST_NS + floor * 1000000000 + 999999999) / 1000000000 ))
   _ws_collect_floor_held "$_WS_COLLECT_NEWEST_NS"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured clock "this box's clock could not be read, so how long $leaf has been idle is unknown"; return 1; }
-  (( rc != 1 )) || { _ws_collect_refuse not-idle "the newest change under $leaf is less than ${floor}s old — it is collectable from epoch $_WS_COLLECT_IDLE_AT, if nothing changes it first"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse changed-recently "the newest change under $leaf is less than ${floor}s old — it is collectable from epoch $_WS_COLLECT_IDLE_AT, if nothing changes it first"; return 1; }
   _ws_path_users "$leaf"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $leaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
@@ -7481,7 +7481,7 @@ In `shared/api.ts`:
     'A temporary directory ccrc set aside to remove, or the record of it, is not as ccrc left it, so ccrc keeps both exactly as they stand and will not finish removing it on its own. Nothing further was removed; it is listed for you to look at.',
 ```
 
-`not-witnessed`, `registered` and `not-idle` are NOT declared here (the departure `retryable-collect-words-declared-with-the-verb`). Each would red `ccd-refusal-scan.test.ts`'s "declared journal-only tokens with no literal ccd call-site argument" until Task 6 journals it.
+`not-witnessed`, `registered` and `changed-recently` are NOT declared here (the departure `retryable-collect-words-declared-with-the-verb`). Each would red `ccd-refusal-scan.test.ts`'s "declared journal-only tokens with no literal ccd call-site argument" until Task 6 journals it.
 
 - [ ] **Step 6: Re-stamp, run the tests to pass, and run the gates**
 
@@ -7536,7 +7536,7 @@ The runner keys its budget on argv[0] (`server/src/remote/runner.ts:49`, `'ws-au
        for (let f = 0; f < 200; f += 1) fs.writeFileSync(path.join(dir, `f${f}`), '');
      }
      let t = Date.now();
-     expect(verdictOf(collectAudit(h))).toBe('not-idle');                   // the REAL walk, over 20 103 entries
+     expect(verdictOf(collectAudit(h))).toBe('changed-recently');                   // the REAL walk, over 20 103 entries
      const walkMs = Date.now() - t;
      t = Date.now();
      expect(verdictOf(collectAudit(h, { pre: AGED }))).toBe('collectable'); // every later probe real
@@ -7564,7 +7564,7 @@ Make each mutation on its own, run the command, see the red, and revert it befor
 | 8 | Replace `_ws_collect_mv_ok \|\| {` with `true \|\| {` | COLLECT `-t 'a box whose mv has no'` | `expected +0 to be 1` |
 | 9 | In `_ws_collect_audit_doc`, change the `return 1` after the `measured nothing` echo to `return 0` | COLLECT `-t 'the idle walk answers'` | `expected +0 to be 1`, in all four rows |
 | 10 | Delete the `witness-mismatch)` arm of the journal `case` | COLLECT `-t 'witness-mismatch is journaled'` | `expected [] to deeply equal [ { act: 'collect', token: 'witness-mismatch' } ]` |
-| 11 | Widen the `containment-unproven)` pattern to `containment-unproven\|not-idle\|in-use\|registered\|paused)` | COLLECT `-t 'is journaled nowhere'` | `expected [ { v: 1, … } ] to deeply equal []`, in three rows |
+| 11 | Widen the `containment-unproven)` pattern to `containment-unproven\|changed-recently\|in-use\|registered\|paused)` | COLLECT `-t 'is journaled nowhere'` | `expected [ { v: 1, … } ] to deeply equal []`, in three rows |
 | 12 | Replace `cut=$(_ws_leaf_why_line "$REAP_DETAIL")` with `cut="$REAP_DETAIL"` | COLLECT `-t 'ONE line cut at 300'` | `expected 'xxxx…' not to contain '\n'` |
 | 13 | Replace `REAP_TOKEN=$(_ws_collect_token "$id")` with `REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect "id=$id")` | COLLECT `-t 'the token moves with each fact'` | `the newest change: expected '<t0>' not to be '<t0>'` |
 | 14 | In `_ws_collect_audit_contained`, replace `_ws_collect_fork "$id" \|\| :` with `_ws_collect_reset; _ws_collect_eval "$id" \|\| :` | RESUME `-t 'unmoved: the record stands'` | `expected 1 to be 0`: the fresh path walks, and the `NO_WALK` stub answers unmeasured |
@@ -7575,8 +7575,8 @@ Make each mutation on its own, run the command, see the red, and revert it befor
 | 19 | Replace the fresh eval's `[[ -d "$leaf" && ! -L "$leaf" ]] \` with `true \` | RUNGS `-t 'a link at the id'` | `expected '<leaf> is <d:i> born …' to contain 'is a link or not a directory'`. The identity compare still refuses, so this red is on the reason: defence in depth |
 | 20 † | Replace the fresh eval's `(( rc == 0 )) \` (the one followed by `\|\| { _ws_collect_refuse witness-mismatch "$leaf is`) with `true \` | RUNGS `-t 'a directory of another inode'` | `expected 'collectable' to be 'witness-mismatch'` |
 | 21 | Replace `if (( rc == 0 )); then` (directly above `# A WITNESS WITH NO LEAF`) with `if false; then` | RUNGS `-t 'exists false, no walk'` | `expected { … verdict: 'witness-mismatch' … } to match object { exists: false, verdict: 'collectable' }` |
-| 22 † | In the fresh eval, replace `(( rc != 1 )) \|\| { _ws_collect_refuse not-idle` with `true \|\| { _ws_collect_refuse not-idle` | RUNGS `-t 'a fresh leaf, through the REAL walk'` | `expected 'collectable' to be 'not-idle'` |
-| 23 † | In Task 4's `_ws_collect_floor_s` (the one definition, ruling G4), replace `(( 10#$o > b ))` with `(( 10#$o >= 0 ))` | RUNGS `-t 'never LOWERS'` | `expected 'collectable' to be 'not-idle'` (rows `'60'` and `'0'`) |
+| 22 † | In the fresh eval, replace `(( rc != 1 )) \|\| { _ws_collect_refuse changed-recently` with `true \|\| { _ws_collect_refuse changed-recently` | RUNGS `-t 'a fresh leaf, through the REAL walk'` | `expected 'collectable' to be 'changed-recently'` |
+| 23 † | In Task 4's `_ws_collect_floor_s` (the one definition, ruling G4), replace `(( 10#$o > b ))` with `(( 10#$o >= 0 ))` | RUNGS `-t 'never LOWERS'` | `expected 'collectable' to be 'changed-recently'` (rows `'60'` and `'0'`) |
 | 24 | In the fresh eval, replace `(( rc != 1 )) \|\| { _ws_collect_refuse in-use "a process of this uid still uses $leaf` with `true \|\| { _ws_collect_refuse in-use "a process of this uid still uses $leaf` | RUNGS `-t 'a process whose cwd is in the leaf'` | `expected 'collectable' to be 'in-use'` |
 | 25 | In the fresh eval, delete `(( rc != 2 )) \|\| { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }` | RUNGS `-t 'never "nobody"'` | `expected +0 to be 1` (rc 2 passes `(( rc != 1 ))`, and the leaf is collectable) |
 | 26 | In the fresh eval, delete `(( rc != 1 )) \|\| { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }` | RUNGS `-t 'whose admin directory is gone'` | `expected 'collectable' to be 'containment-unproven'` |
@@ -7600,7 +7600,7 @@ Make each mutation on its own, run the command, see the red, and revert it befor
 | 45 | Delete the resume eval's `_ws_collect_paused \|\| return 1` | RESUME `-t 'the pause holds a resume'` | `expected { … verdict: 'collectable' … } to match object { resume: 'moved', verdict: 'paused' }` |
 | 46 | Remove `'quarantine-kept'` from the union, the map and `ALL_TOKENS` (lower the count by one) | `(cd server && ./node_modules/.bin/vitest run test/ccd-refusal-scan.test.ts)` | `tokens no vocabulary owns: expected [ 'quarantine-kept' ] to deeply equal []` |
 | 47 † | In `_ws_collect_paused`, append ` \|\| _reap_refuse paused "x"` to its last line | COLLECT `-t 'spells no word in a shape'` | `expected [ '…_reap_refuse paused "x"…' ] to deeply equal []`. `ccd-wsaudit-nonpoison` stays green: this task cuts the COLLECT region out of its 55 (ruling G2), and `paused` is already among its 67 |
-| 48 † | In the fresh eval, delete `(( rc != 2 )) \|\| { _ws_collect_unmeasured clock "this box's clock could not be read, so how long $leaf has been idle is unknown"; return 1; }` | RUNGS `-t 'a clock that cannot be read'` | `expected +0 to be 1`: rc 2 passes the not-idle test, and the leaf is collectable |
+| 48 † | In the fresh eval, delete `(( rc != 2 )) \|\| { _ws_collect_unmeasured clock "this box's clock could not be read, so how long $leaf has been idle is unknown"; return 1; }` | RUNGS `-t 'a clock that cannot be read'` | `expected +0 to be 1`: rc 2 passes the changed-recently test, and the leaf is collectable |
 | 49 † | In `_ws_collect_resume_eval`, replace `    leaf:absent) phase=moved ;;` with `    leaf:*)      phase=moved ;;` | RESUME `-t 'a path retaken since the move'` | `expected { … verdict: 'registered' … } to match object { verdict: 'quarantine-kept' }` |
 | 50 † | In `_ws_collect_resume_eval`, move its three `_ws_collect_registered` lines back to directly under `shift` | same | same red: the retake's own `.child` answers the retryable `registered` first |
 | 51 † | In `_ws_collect_audit_doc`'s journal `case`, add the arm `in-use) _lc_emit collect refused "$id" "" verb ws-audit refusal in-use detail "$cut" ;;` | `(cd server && ./node_modules/.bin/vitest run test/ccd-refusal-scan.test.ts -t 'collector audit')` | `expected [ …(4) ] to have a length of 3 but got 4` |
@@ -7667,7 +7667,7 @@ MSG
 
 **Files:**
 - Modify: `ccd/ccd` — ONE contiguous block, far below the frozen citation boundary, inside the COLLECT region Task 4 opened: below Task 5's `ws-audit --collect` block and directly above the region's end marker (Step 4 says where).
-- Modify: `shared/api.ts` — `LcRefusalToken` and `LC_REFUSAL_WORD` gain `not-witnessed`, `registered` and `not-idle`, declared in the commit of their first journal sites (ruling G2).
+- Modify: `shared/api.ts` — `LcRefusalToken` and `LC_REFUSAL_WORD` gain `not-witnessed`, `registered` and `changed-recently`, declared in the commit of their first journal sites (ruling G2).
 - Modify: `server/test/lifecycle-refusal-word.test.ts` — `ALL_TOKENS` gains the three words; its count rises 21 -> 24.
 - Modify: `README.md`, only if Step 5's citation case reds on it: its `shared/api.ts:` anchors are re-pointed BY CONTENT (Step 4b).
 - Modify: `server/test/ccd-refusal-scan.test.ts` — the seventh destructive verb, its two sanctioned dies, its emit count, its die-free locked functions, and the COLLECT region's two literal refusal positions in the cross-language harvest (ruling G2).
@@ -7721,7 +7721,7 @@ MSG
                                                         #   moved proven restoring removed emptied witnessed dropped
   ```
   - Journal (act `collect`, verb `ws-collect`, best-effort, never gating): `intent` before the move (or as a resume or the witness-only arm starts acting; `meas.resumed` = the record's name on a resume), `done` after the record's drop (after the witness's, on the witness-only arm), `refused` (every refusal, at the one refusal point, ruling G11: the verdict point with no tx; with the intent's tx, a refusal after a PROVEN restore, and what is KEPT terminally — anything not the witnessed leaf that reached a slot, or an original path retaken since the move, rulings T8 OPEN5 and OPEN4; the flock decline), `failed` (`probe-unmeasured`, including after a PROVEN restore of an unmeasured doubt, ruling T6 OPEN8; `quarantine-kept` whenever a record stays that a later pass can finish from, ruling T6 OPEN7). No `meas.` key is added; every `detail` that carries another function's reason (a session-chosen name, a line of stderr) is cut by `_ws_leaf_why_line` first.
-- Produces (L0, ruling G2): `not-witnessed`, `registered` and `not-idle` in `LcRefusalToken` and `LC_REFUSAL_WORD`, each with a sentence true under any server, and `ALL_TOKENS` 21 -> 24 — declared in this commit because this commit journals them first.
+- Produces (L0, ruling G2): `not-witnessed`, `registered` and `changed-recently` in `LcRefusalToken` and `LC_REFUSAL_WORD`, each with a sentence true under any server, and `ALL_TOKENS` 21 -> 24 — declared in this commit because this commit journals them first.
 - Produces (tests): `wsCollectFixture.ts` — `COL_ID`, `COL_RUN`, `WRONG_TOKEN`, `IDLE_FLOOR_SEAM`, `GAP_LOG`, `gapAt`, `crashAt`, `evalSays`, `PROBE_STUB`, `ROWS_STUB`, `ROWS_CLEAR`, `MOUNTS_SEAM`, `realMounts`, `makeOrphan`, `collectAudit`, `collectToken`, `collectVerb`, `docOf`, and the path helpers. Task 8 has its own fixture (`collectRaceFixture.ts`); the two are never merged.
 
 **Entry conditions, checked before Step 1 from the repository root** (line numbers in this task are hints at `b0647d850`; Tasks 1–5 move them, so locate code by the grep beside each):
@@ -7739,7 +7739,7 @@ grep -n '^_ws_collect_qdir() {' ccd/ccd; grep -c '_WS_Q_WHY' ccd/ccd
 grep -n '_WS_CHECKOUTS_ACCEPTED' ccd/ccd | head -3       # (E4) Task 4's accepted-pairs global, set by _ws_leaf_checkouts
 grep -n "'witness-mismatch'\|'quarantine-kept'" shared/api.ts
                                                          # (E5) each in LcRefusalToken AND LC_REFUSAL_WORD (Task 5)
-grep -c "'not-witnessed'\|'registered'\|'not-idle'" shared/api.ts
+grep -c "'not-witnessed'\|'registered'\|'changed-recently'" shared/api.ts
                                                          # (E5a) 0: this task declares them (ruling G2)
 sed -n '/^_LC_ACTS=(/,/)/p' ccd/ccd | grep -cw collect   # (E5b) 1: `collect` in ccd's _LC_ACTS, declared by Task 4 (ruling G1) ...
 grep -c 'collect: true' shared/api.ts                    #        ... and >= 1: in L0's LIFECYCLE_ACT_MAP
@@ -8097,7 +8097,7 @@ describe('off Linux, or without --no-copy, nothing moves', () => {
 });
 
 describe('the three RETRYABLE words are declared with their first journal sites, each with a sentence true under any server', () => {
-  it.each(['not-witnessed', 'registered', 'not-idle'] as const)('%s', (t) => {
+  it.each(['not-witnessed', 'registered', 'changed-recently'] as const)('%s', (t) => {
     expect(isLcRefusalToken(t)).toBe(true);
     expect(LC_REFUSAL_WORD[t]).toMatch(/Nothing was removed/);
   });
@@ -8972,7 +8972,7 @@ Replace with:
 
 The five floors in (g), and (b)'s 3800, are the draft's. Ruling G3's rewrite moved the move, its proof, the identity and the registry question out of this block, so the functions shrank: Step 5 re-measures every slice and writes each floor from that measurement.
 
-(h) In `it('holds literal refusal arguments set-equal to the vocabularies in both directions', …)`, directly BELOW the line `    for (const m of src.matchAll(/_lc_emit\s+[a-z-]+\s+refused\s+"[^"]*"\s+""\s+verb\s+[a-z-]+\s+refusal\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);`, insert the lines below. Ruling G2: `not-witnessed`, `registered` and `not-idle` are declared in this commit, and `registered` and `not-idle` reach the journal through a VARIABLE at the verb's one refusal point (ruling G11), so their literal sites are the evaluation's `_ws_collect_refuse <word>` lines in Task 5's block, inside the COLLECT region:
+(h) In `it('holds literal refusal arguments set-equal to the vocabularies in both directions', …)`, directly BELOW the line `    for (const m of src.matchAll(/_lc_emit\s+[a-z-]+\s+refused\s+"[^"]*"\s+""\s+verb\s+[a-z-]+\s+refusal\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);`, insert the lines below. Ruling G2: `not-witnessed`, `registered` and `changed-recently` are declared in this commit, and `registered` and `changed-recently` reach the journal through a VARIABLE at the verb's one refusal point (ruling G11), so their literal sites are the evaluation's `_ws_collect_refuse <word>` lines in Task 5's block, inside the COLLECT region:
 
 ```ts
     // THE COLLECTOR (child reclamation wave 7). `ws-collect` journals every refusal at its ONE refusal point,
@@ -9002,11 +9002,11 @@ cd server && ./node_modules/.bin/vitest run test/ccd-refusal-scan.test.ts
 
 Expected: FAIL.
 - **The five collect files:** every case that calls the verb reads `bash: cmd_ws_collect: command not found` as rc 127, so it fails as `expected 127 to be 0` (or `… to be 1`), or `docOf` throws `Unexpected end of JSON input` on an empty stdout. The encoder case fails `expected '127' to be '1'` (`_ws_collect_mounts_clear: command not found`). The three declaration cases fail `expected false to be true`. The verb file's first CONTROL case PASSES already: it pins Task 5's evaluation (`collectable|<ino>||present`), and so does "the registry question itself" (Task 5's `_ws_collect_registered`). If either fails, STOP — E2's contract does not hold.
-- **`ccd-refusal-scan`:** `cmd_ws_collect's body could not be sliced (looked for _ws_collect_locked): expected 0 to be greater than 3800`; `a sanctioned die that no longer exists: expected [ 'die "usage: ccd ws-collect …"', 'die "python3 unavailable — cannot quote the collection record safely"' ] to deeply equal []`; the emit count `expected [] to have a length of 2`; `_ws_collect_locked could not be sliced`; and the harvest, which now reads Task 5's `_ws_collect_refuse` lines, `tokens no vocabulary owns: expected [ 'not-idle', 'not-witnessed', 'registered' ] to deeply equal []`.
+- **`ccd-refusal-scan`:** `cmd_ws_collect's body could not be sliced (looked for _ws_collect_locked): expected 0 to be greater than 3800`; `a sanctioned die that no longer exists: expected [ 'die "usage: ccd ws-collect …"', 'die "python3 unavailable — cannot quote the collection record safely"' ] to deeply equal []`; the emit count `expected [] to have a length of 2`; `_ws_collect_locked could not be sliced`; and the harvest, which now reads Task 5's `_ws_collect_refuse` lines, `tokens no vocabulary owns: expected [ 'changed-recently', 'not-witnessed', 'registered' ] to deeply equal []`.
 
 - [ ] **Step 4: Implement the verb**
 
-Insert the block below into `ccd/ccd` as ONE contiguous block, far below the frozen boundary `B` (E9), INSIDE the COLLECT region Task 4 opened: directly ABOVE the line that starts `# ── end temp-root collection` and ends `COLLECT-END ──` (`grep -n 'COLLECT-END' ccd/ccd`, one line by E6b), and so below Task 5's `ws-audit --collect` block, which ends `WS-AUDIT-COLLECT-CLOSE ──`. NEVER inside `RECLAIM-BEGIN…RECLAIM-END`, `MIRROR-BEGIN…MIRROR-END` or `EXPIRE-BEGIN…EXPIRE-END` (`grep -n 'RECLAIM-BEGIN\|RECLAIM-END\|MIRROR-BEGIN\|MIRROR-END\|EXPIRE-BEGIN\|EXPIRE-END' ccd/ccd`). `cmd_ws_collect` and `_ws_collect_locked` must stay adjacent, in that order: `ccd-refusal-scan` slices one up to the other. The block spells no `_reap_refuse <word>` and no literal `"refused":"<word>"` but the flock decline's `in-progress`, which `SENTENCES` already owns, so `wsaudit.test.ts` and `ccd-wsaudit-nonpoison.test.ts` count nothing new. Its refusal words sit at two literal positions the cross-language harvest reads — `_ws_reclaim_fail`'s third argument and `_ws_collect_refused`'s third argument (Step 2 (h)) — and a word it journals through a variable (`registered`, `not-idle`, from the evaluation or the re-proof) has its literal site at Task 5's `_ws_collect_refuse <word>`, which (h) reads too. No code line spells `tmpquarantine`: `$(_ws_collect_qrec_dir)` names it.
+Insert the block below into `ccd/ccd` as ONE contiguous block, far below the frozen boundary `B` (E9), INSIDE the COLLECT region Task 4 opened: directly ABOVE the line that starts `# ── end temp-root collection` and ends `COLLECT-END ──` (`grep -n 'COLLECT-END' ccd/ccd`, one line by E6b), and so below Task 5's `ws-audit --collect` block, which ends `WS-AUDIT-COLLECT-CLOSE ──`. NEVER inside `RECLAIM-BEGIN…RECLAIM-END`, `MIRROR-BEGIN…MIRROR-END` or `EXPIRE-BEGIN…EXPIRE-END` (`grep -n 'RECLAIM-BEGIN\|RECLAIM-END\|MIRROR-BEGIN\|MIRROR-END\|EXPIRE-BEGIN\|EXPIRE-END' ccd/ccd`). `cmd_ws_collect` and `_ws_collect_locked` must stay adjacent, in that order: `ccd-refusal-scan` slices one up to the other. The block spells no `_reap_refuse <word>` and no literal `"refused":"<word>"` but the flock decline's `in-progress`, which `SENTENCES` already owns, so `wsaudit.test.ts` and `ccd-wsaudit-nonpoison.test.ts` count nothing new. Its refusal words sit at two literal positions the cross-language harvest reads — `_ws_reclaim_fail`'s third argument and `_ws_collect_refused`'s third argument (Step 2 (h)) — and a word it journals through a variable (`registered`, `changed-recently`, from the evaluation or the re-proof) has its literal site at Task 5's `_ws_collect_refuse <word>`, which (h) reads too. No code line spells `tmpquarantine`: `$(_ws_collect_qrec_dir)` names it.
 
 The draft of this block was exercised in a scratch fixture HOME with Task 4's and Task 5's functions stubbed (the happy path; a crash at `slotted`, `moved`, `removed`, `emptied` and `witnessed`, each resumed; a restore on each re-proof; a retaken path; a pre-existing slot; a copying, a no-op and an EXDEV `mv`; a rewritten and a racing witness; the temp-file shapes; `$REG` at 0300 with and without the listing control). The reconciliation of rulings G1–G12 and of the Task 6 and Task 8 rulings then rewrote steps 2 to 5, the restore, the resume and the witness-only arm onto Task 4's and Task 5's canonical functions WITHOUT re-running that harness: every case below is the worker's to measure, and a case that disagrees with this text is reported, never bent.
 
@@ -9686,7 +9686,7 @@ In `shared/api.ts`:
 ```ts
   | 'not-witnessed'           // ws-audit --collect and ws-collect (spec §5.2): no witness and no quarantine record names the id — RETRYABLE: there is nothing to collect
   | 'registered'              // ws-audit --collect and ws-collect (spec §5.6): a registry row stands for the id again (`.child`, `.uuid`, or what the slug still holds) — RETRYABLE: the temp root is that workspace's
-  | 'not-idle';               // ws-audit --collect and ws-collect (spec §5.6): the newest change under the temp root is younger than the idle floor — RETRYABLE
+  | 'changed-recently';               // ws-audit --collect and ws-collect (spec §5.6): the newest change under the temp root is younger than the idle floor — RETRYABLE
 ```
 
 - **The map.** Directly above the `};` that closes `LC_REFUSAL_WORD`, below Task 5's two collector entries, add:
@@ -9699,11 +9699,11 @@ In `shared/api.ts`:
     'ccrc has no record of handing out a temporary directory under this id, so there is nothing for it to clean up. Nothing was removed.',
   'registered':
     'A workspace is registered under this id again, so the temporary directory there belongs to that workspace and ccrc will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
-  'not-idle':
+  'changed-recently':
     'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
 ```
 
-In `server/test/lifecycle-refusal-word.test.ts`: in `ALL_TOKENS`, directly below Task 5's `  'witness-mismatch': true, 'quarantine-kept': true,`, add `  'not-witnessed': true, 'registered': true, 'not-idle': true,`, and raise `expect(TOKENS.length).toBe(…)` by THREE from what your tree reads: 21 → 24.
+In `server/test/lifecycle-refusal-word.test.ts`: in `ALL_TOKENS`, directly below Task 5's `  'witness-mismatch': true, 'quarantine-kept': true,`, add `  'not-witnessed': true, 'registered': true, 'changed-recently': true,`, and raise `expect(TOKENS.length).toBe(…)` by THREE from what your tree reads: 21 → 24.
 
 **THE CITATION CASE.** The three union lines sit above README's `shared/api.ts` map anchors, as Task 5's did. Repair them BY CONTENT, exactly as Task 5's Step 6 does: find the sentence with `grep -n 'shared/api.ts:[0-9]' README.md`, read the cited lines' new numbers with the `grep -n` that step names, re-point the sentence, and re-run `cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored'` until it is green. If anything other than README reds there, STOP and report: a frozen-corpus census is never adjusted here.
 
@@ -9747,7 +9747,7 @@ sed -n "3,${B}p" ccd/ccd | sha256sum      # equals E9b: nothing at or above the 
 
 Expected:
 - All five collect files pass in full on Linux. On macOS (advisory legs) only the cases not marked Linux run — `off Linux, or without --no-copy, nothing moves`'s first case, `the registry question itself` and the three declarations — and they pass; the rest skip.
-- `ccd-refusal-scan` passes: the seventh verb's body and its five locked functions are sliced above their re-measured floors, the sanctioned set is exactly 16 and every member stands, the two emits are counted, and the cross-language harvest finds every declared word at a literal site — `not-witnessed`, `registered` and `not-idle` among them, through (h)'s COLLECT harvest — and no word outside the vocabularies.
+- `ccd-refusal-scan` passes: the seventh verb's body and its five locked functions are sliced above their re-measured floors, the sanctioned set is exactly 16 and every member stands, the two emits are counted, and the cross-language harvest finds every declared word at a literal site — `not-witnessed`, `registered` and `changed-recently` among them, through (h)'s COLLECT harvest — and no word outside the vocabularies.
 - `wsaudit` and `ccd-wsaudit-nonpoison` pass with no edit here: the verb's one literal refusal object is the flock decline's `in-progress`, already counted, and Task 5's commit taught the nonpoison scan the COLLECT block (ruling G2). `lifecycle-refusal-word` passes at 24.
 - `ccd-die-containment` passes unchanged: its pinned `_`-prefixed can-die set does not grow (only `cmd_ws_collect` dies, before the lock, and it is never captured in `$( )`).
 - `ccd-lifecycle-contain` passes unchanged: the verb writes `meas.resumed` alone, already declared.
@@ -9815,8 +9815,8 @@ One mutation at a time, each reverted before the next. Files: V `ccd-ws-collect-
 | 51 | `_ws_collect_resume`'s `moved)` arm: its identity `case`'s `1)` arm → `1) : ;;` | S | "a slot whose leaf is not the one its record names…": `the verb journaled no second intent: expected [ …2 items ] to have a length of 1` (step 5's identity backstops the act: still nothing removed) |
 | 52 | `_ws_collect_resume`: the `unmoved)` arm → `unmoved) _ws_collect_finish "$id" "$rec" "$slot" "$lctx" "$name"; return ;;` | S | "died before the move…": `expected undefined to be 'state-changed'` (it answers collected while the leaf stands, and drops its witness) |
 | 53 | `_ws_collect_fresh`: add a line `die "x"` above `# 4 — THE MOVE`; then, separately, add a second `_lc_emit collect refused "$id" "" verb ws-collect refusal paused` line in `_ws_collect_locked` | RS | "the collector's locked functions contain NO die…": `expected [ 'die "x"' ] to deeply equal []`; "holds the collection emits at exactly two…": `expected [ …3 items ] to have a length of 2` |
-| 54 | RS: delete the `_ws_collect_refuse` harvest line Step 2 (h) adds | RS | "holds literal refusal arguments set-equal…": `declared journal-only tokens with no literal ccd call-site argument: expected [ 'not-idle', 'registered' ] to deeply equal []` |
-| 55 | Remove `'not-idle'` from the union, the map and `ALL_TOKENS` (lower the count by one) | RS | "holds literal refusal arguments set-equal…": `tokens no vocabulary owns: expected [ 'not-idle' ] to deeply equal []` |
+| 54 | RS: delete the `_ws_collect_refuse` harvest line Step 2 (h) adds | RS | "holds literal refusal arguments set-equal…": `declared journal-only tokens with no literal ccd call-site argument: expected [ 'changed-recently', 'registered' ] to deeply equal []` |
+| 55 | Remove `'changed-recently'` from the union, the map and `ALL_TOKENS` (lower the count by one) | RS | "holds literal refusal arguments set-equal…": `tokens no vocabulary owns: expected [ 'changed-recently' ] to deeply equal []` |
 | 56 | `_ws_collect_fresh` step 4: replace the `_ws_collect_move …; rc=$?` line with `mv -T -n --no-copy -- "$orig" "$slot/leaf"; rc=$?` | P | "ccd/ccd carries no un-shimmed GNU call": `expected [ 'mv -T: mv -T -n --no-copy -- "$orig" "$slot/leaf"' ] to deeply equal []` (the one exempt spelling is Task 4's `_ws_collect_mv`, by name) |
 | 57 | `cmd_ws_collect`: replace the `flock -n "$lfd" \|\| { … }` block with `:` | V | "another holder of the reap lock…": `expected undefined to be 'in-progress'` (the act runs unserialised) |
 | 58 | `_ws_collect_putback`: in its `(( mrc == 0 ))` arm, replace `_ws_collect_unwind "$slot" "$rec" && return 0` with `return 0` | R | "a child marker after the move…": `its slot is gone: expected [ 'slot.demo-quiet-reef.…' ] to deeply equal []` |
@@ -9854,7 +9854,7 @@ alias; then the empty slot is rmdir'd, the witness is compared and
 dropped, the witness writer's dead temp files of this id are reaped, and
 the record is dropped last. A record left by a run that died is the
 resume authority, and a witness whose leaf is gone is dropped alone.
-L0 declares not-witnessed, registered and not-idle with these, their
+L0 declares not-witnessed, registered and changed-recently with these, their
 first journal sites. Inert: nothing composes the verb yet.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -9883,7 +9883,7 @@ A missed shape or a wrong grant stays silent until the fleet runs it.
 
 This task owns the CAP, and declares NO act and NO refusal word:
 - Task 4's first part declares the `collect` act (ruling G1).
-- Task 5 owns `witness-mismatch` and `quarantine-kept`, and Task 6 owns `not-witnessed`, `registered` and `not-idle`: their `LcRefusalToken` / `LC_REFUSAL_WORD` / `ALL_TOKENS` entries (ruling G2).
+- Task 5 owns `witness-mismatch` and `quarantine-kept`, and Task 6 owns `not-witnessed`, `registered` and `changed-recently`: their `LcRefusalToken` / `LC_REFUSAL_WORD` / `ALL_TOKENS` entries (ruling G2).
 - Task 1 owns `containment-refuted`.
 - Task 10 carries the `CLAUDE.md` and `agent/CLAUDE.md` text for `ws-collect` and its prose pin, modelled on `ws-expire-prose.test.ts`, which also pins that no skill corpus names the verb (ruling T7 OPEN4). This task edits no prose.
 
@@ -9937,7 +9937,7 @@ This task owns the CAP, and declares NO act and NO refusal word:
     - Any other `--collect` shape dies with a `ccd: usage: ccd ws-audit --session <id> [… --collect …]` line at rc 1.
   - Task 4: the COLLECT region in `ccd/ccd`, from `# ── temp-root collection: ws-collect (spec 2026-09-22 §5.2, §5.6) ─── COLLECT-BEGIN ──` to `# ── end temp-root collection ─── COLLECT-END ──`. Task 5's audit block and Task 6's `cmd_ws_collect() {` sit inside it, above `COLLECT-END`. The quarantine RECORD directory is `$REG/tmpquarantine/` (`_ws_collect_qrec_dir`); the quarantine itself is `<physical ~/.cc-tmp>/.ccd-quarantine`.
   - Task 4 (its first part, ruling G1): the `collect` journal act — `_LC_ACTS`, `LifecycleAct`, `LIFECYCLE_ACT_MAP`, `ACT_WORD.collect = 'temp root collected'`, `NEUTRAL_ACTS`, and out of the dead-coordinator lists — pinned by `server/test/ws-collect-act.test.ts`.
-  - Tasks 1, 5 and 6 have already declared their refusal words in `shared/api.ts` (ruling G2): `containment-refuted` (Task 1), `witness-mismatch` and `quarantine-kept` (Task 5), `not-witnessed`, `registered` and `not-idle` (Task 6).
+  - Tasks 1, 5 and 6 have already declared their refusal words in `shared/api.ts` (ruling G2): `containment-refuted` (Task 1), `witness-mismatch` and `quarantine-kept` (Task 5), `not-witnessed`, `registered` and `changed-recently` (Task 6).
   - Test side:
     - `CCD`, `ghContainedEnv`, `installDirectEntry` and `DirectEntry` (`server/test/ccdWsHelpers.ts`);
     - `makePrHarness` (`server/test/ccdPrHelpers.ts`), `inheritedEnv` (`server/test/gitEnvStrip.ts`) and `itLinux` (`server/test/platformFixtures.ts`);
@@ -12138,7 +12138,7 @@ Expected:
 
   Stop and report the point to the coordinator. This task adds no `ccd/ccd` line.
 - **When `_ws_collect_mountinfo` does not print a path `_ws_collect_mounts_clear` opens**, every mount case reads the table as unreadable: the CONTROL reds with `expected undefined to be 'demo-calm-mesa'`. Stop and report it, as above.
-- **When every case's first `tokenOf` reds** with `the CONTROL: the audit minted a token: …: expected '' to match /^[0-9a-f]{64}$/` (the audit answers `not-idle`), the audit is not judging the floor through `_ws_collect_floor_s`, the one floor function `FLOOR0` redefines (ruling G4). Stop and report it, as for any other red.
+- **When every case's first `tokenOf` reds** with `the CONTROL: the audit minted a token: …: expected '' to match /^[0-9a-f]{64}$/` (the audit answers `changed-recently`), the audit is not judging the floor through `_ws_collect_floor_s`, the one floor function `FLOOR0` redefines (ruling G4). Stop and report it, as for any other red.
 - **Any other red** is a case's expectation meeting Tasks 4, 5 and 6. Find which of the assumptions (a) through (j) listed under **Interfaces** it rests on, then STOP and report the case, its output and that assumption to the coordinator. A SAFETY suite is never loosened to fit the code. If the coordinator rules that the code is right, the case changes under a named departure in the wave-done.
 
 - [ ] **Step 10: No `ccd/ccd` edit (ruling G7)**

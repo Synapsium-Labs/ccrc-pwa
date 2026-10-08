@@ -47,6 +47,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 17:44 — wave 7's plan attack is back; the fixes are being applied.** The attack is
+  `ccr15-evidence-archive/wave7/plan-attack.json`.
+  - **The run.** Workflow `wf_aec6389c-9aa` ran 32 agents: four lenses and two refuters per serious finding. It raised
+    33 findings.
+  - **Confirmed, and important:**
+    - **A leak (SEC-1).** A dead child's leaf holding a clone AND a linked worktree of it (git's default absolute
+      gitdir) was licensed by the audit and then refused by the verb after every move, for ever. That shape is common:
+      leftover test fixtures. The fix extends the alias to the inside-the-leaf arm.
+    - **An unsourceable block.** One apostrophe inside a `${…}` in Task 1's `_ws_reclaim_owned` would not parse.
+    - **Entry checks red on main itself.** Task 0's, Task 5's and Task 6's matched pre-existing text.
+    - **A sentence that echoes its own token.** The sentence for `registered` names the word, which a test forbids.
+  - **The word `not-idle` is renamed `changed-recently`.** `'not-idle'` already belongs to the mail gate's and the
+    lease vocabularies in `shared/api.ts`.
+  - **Rulings applied in the text itself.** The refuters dismissed "ruling not applied" findings because the rulings
+    bind over the text. They are applied anyway (R-a, R-c, R-d, R-f), so a worker who pastes a block ships the ruled
+    code.
+  - **Next.** Workflow `wf_a9399c29-92b` runs five scoped appliers that turn every surviving finding into exact edits.
+
 - **2026-10-08 16:54 — wave 7's plan is ASSEMBLED, and its attack runs.** The plan is
   `docs/superpowers/plans/2026-10-08-child-reclamation-wave7-temp-root-collector.md`, 12,969 lines, at `7c7a46867`.
   - **Reconciliation.** Workflow `wf_157a236e-61a` applied 327 edits, with no misses and no duplicates. The 46 items
