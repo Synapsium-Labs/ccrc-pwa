@@ -1718,7 +1718,8 @@ export function rederivePlan(mark, top, maxBlobId, state) {
  *  the tick itself recorded. An open generation re-derives every indexed blob up to its end, so a search on each of
  *  its ticks only re-indexed, every tick until it ended, each blob a phrase still found: a value glued to a
  *  neighbour by `_` or `-`, which §8.3's run grammar leaves in place. A pair recorded while a generation is open
- *  keeps its recording-tick search; one a dead pass recorded waits for the next tick no generation is open. */
+ *  keeps its recording-tick search; one a dead pass recorded, or one recorded on a tick with no FTS (which runs no
+ *  search), waits for the next tick no generation is open. */
 export function phraseValues(mark, state, values, fresh) {
   return rederiveOpen(mark, state) ? fresh : values;
 }

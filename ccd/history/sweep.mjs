@@ -541,10 +541,11 @@ const SPOOL_UNUSABLE_LINE = 'history-sweep: spool-refused: spool/ or spool/.drai
 
 /** Rename each regular spool/<id>.jsonl into .draining/ under a fresh name, chmod 0600 (uncounted, §9.2; the 0700
  *  directory is the protection, slug history-spool-mode-by-directory, D-4233). A name no hook writes (an id outside the
- *  grammar) or a dot-file stays where it is and is never read. Any other node at a spool file's name that is not a regular
- *  file (a FIFO, a link, dangling or not, a directory), which the hook refuses too, stays where it is and is never read or
- *  followed; its name is pushed onto `refused` when the caller passes one (D-4418 (history-spool-append-regular-file-only),
- *  FR2c). A name already present in .draining/ (or its .obs) is never renamed onto: that spool file waits for the next half. */
+ *  grammar) or a dot-file stays where it is and is never read. Any other node at a spool file's name that is not a
+ *  regular file (a FIFO, a link, dangling or not, a directory), which the hook refuses too, stays where it is and is
+ *  never read or followed; its name is pushed onto `refused` when the caller passes one (D-4418
+ *  (history-spool-append-regular-file-only), FR2c). A name already present in .draining/ (or its .obs) is never renamed
+ *  onto: that spool file waits for the next half. */
 export function renameSpoolFiles(home, tickMs, pid, refused = null) {
   const P = historyPaths(home);
   // FU8 (D-4347 (history-planted-entries-never-wedge)): only a real spool/ is read; through a link this renamed, and the
@@ -584,7 +585,8 @@ export function renameSpoolFiles(home, tickMs, pid, refused = null) {
  *  history-sidecar-write-failure-holds): the renamed file stays in .draining/ without one, and the next journaling
  *  observes it. Every file is still tried, so one failure does not leave a later file unobserved. `refused` is how many
  *  nodes at a spool file's name were not regular files (D-4418 (history-spool-append-regular-file-only), FR2c): each is
- *  named on stderr here, on both halves, and only the drain counts them (`non_regular`; no DB holds a counter on a hold, IV2). */
+ *  named on stderr here, on both halves, and only the drain counts them (`non_regular`; no DB holds a counter on a
+ *  hold, IV2). */
 function renameAndObserve(home, tickMs, nowMs) {
   let failed = false;
   const refused = [];
@@ -1157,10 +1159,9 @@ export function drainSpool(db, c) {
     // for a failure the drain meets, no id's spool file grows toward SPOOL_FILE_LINES_MAX while it lasts, and no renamed file
     // waits with a `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick than every
     // file the loop met, so the journaling order holds. The loop's error is thrown after it, and an error of the journal half
-    // never replaces it. A failure met at a write the pass makes before the drain (the pass's own meta and counter writes before
-    // the tick: the migration verdict, the capture pause and its counters, the mode-drift count; the outbox flushes, the
-    // secrets step, the FTS probe, the phrase re-index and the re-derivation) ends the pass before drainSpool, so this half never
-    // runs for it (FR2a, review 344 F5).
+    // never replaces it. A store failure thrown at a write the pass makes before the drain (the migration verdict's meta write,
+    // the secrets step or the FTS probe, among others) ends the pass before drainSpool, so this half never runs for it; a
+    // journal-append failure at an outbox flush is counted and the pass goes on to the drain (FR2a, review 344 F5).
     try {
       // failedCounted is always false here: the loop sets it only right before a `break`, and countOutside never throws.
       if (journalHalf(c.home, c.ids, c.now()).journalFailed) countOutside(db, 'journal_write_failed');
@@ -1959,11 +1960,12 @@ export async function tick(db, ctx) {
   const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
   ictx.pairIdx = secrets.pairIdx;
   // §9.1 the probe at every open, then §6.2: every pair whose re-index is still owed (a pair learned this tick, or
-  // one a dead pass committed) re-indexes before any FTS insert, in two steps (D-4344, history-reindex-mark-by-rederivation).
-  // First the phrase fast path over the values this tick loaded, or, while a generation is open, over those whose
-  // pairs this tick recorded; then the hash re-derivation of every indexed blob, which alone moves the durable mark.
-  // Both run before any FTS insert of the tick and under any pause; the one slice of the run budget the two share
-  // keeps capture going (review 344 F2).
+  // one a dead pass committed) re-indexes before any FTS insert, within the tick's re-index slice, in two steps
+  // (D-4344, history-reindex-mark-by-rederivation). First the phrase fast path over the values this tick loaded, or,
+  // while a generation is open, over those whose pairs this tick recorded; then the hash re-derivation of every
+  // indexed blob, which alone moves the durable mark. Both run before any FTS insert of the tick and under any
+  // pause; the one slice of the run budget the two share keeps capture going, and what the slice leaves is finished
+  // on later ticks by the re-derivation (review 344 F2).
   ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
   const slice = rederiveSlice(ctx.budget);
   await reindexForValues(db, ictx, secrets.values, secrets.newValues, ctx.budget, slice);
@@ -3594,10 +3596,11 @@ export function secretsStep(db, ctx, secretFiles) {
 // The FTS index (§6.2 "FTS indexing", §9.1; plan task 23). The index is derived and blobs stay verbatim.
 // Its body is extracted plain text (never JSON), redacted by entryIndexText (D-4343, D-4419) before it is
 // a term, and only for blobs that a row of searchable provenance references. A pair learned after its
-// text was indexed is re-indexed before any FTS insert of that tick, and the obligation outlives the pass
-// that learned it: by quoted phrase (reindexForValues: on every tick no re-derivation generation is open,
-// which is the tick that learned the pair or, after a pass that died first, a later one; while one is
-// open, only for the pairs that tick recorded; charged to the slice it shares with the re-derivation,
+// text was indexed is re-indexed before any FTS insert of that tick, within the tick's re-index slice,
+// and what the slice leaves is finished on later ticks by the re-derivation; the obligation outlives the
+// pass that learned it: by quoted phrase (reindexForValues: on every tick no re-derivation generation is
+// open, which is the tick that learned the pair or, after a pass that died first, a later one; while one
+// is open, only for the pairs that tick recorded; charged to the slice it shares with the re-derivation,
 // review 344 F2), then by a hash re-derivation of every indexed blob (rederiveFts), which alone moves
 // meta fts_reindex_rid (D-4344, history-reindex-mark-by-rederivation). The bytes a contentless delete
 // leaves in blobs_fts_data are purged by bounded merge steps; a whole-table 'optimize' never runs in a
@@ -3818,12 +3821,14 @@ export function resetFtsPending(db) {
  *  (`secretUnits`: the value when it is one run, else each of its 12+-char segments), so a blob that holds only a
  *  segment is found too. In one transaction per group, each such blob's row is deleted and re-inserted with the
  *  now-complete index, and merge steps are registered to purge the deleted bytes. It NEVER moves the mark: a phrase
- *  finds only a blob whose term is the value alone, so it cannot show the index complete (a value glued to a
- *  neighbour, a hash-only pair and a value no source loaded this tick are all invisible to it). Only `rederiveFts`
- *  moves the mark (D-4344, history-reindex-mark-by-rederivation, which supersedes D-4311's mark clause). While a
- *  generation is open it searches only `fresh`, the values whose pairs this tick recorded (lib's `phraseValues`), and
- *  every blob it reads is charged to `slice` and `budget` as rederiveFts charges one, so it never runs unbudgeted ahead
- *  of the step that ends the generation; a blob a spent budget leaves waits for the re-derivation (review 344 F2).
+ *  finds a blob whose term is the value alone, and one whose value a `_` or `-` glues to a neighbour (unicode61 splits
+ *  at both; §8.3's run grammar leaves that value in place, so the blob is found and re-indexed with the value still in
+ *  it), so it cannot show the index complete (a value glued by a letter or digit, inside one index term, a hash-only
+ *  pair and a value no source loaded this tick are all invisible to it). Only `rederiveFts` moves the mark (D-4344,
+ *  history-reindex-mark-by-rederivation, which supersedes D-4311's mark clause). While a generation is open it searches
+ *  only `fresh`, the values whose pairs this tick recorded (lib's `phraseValues`), and every blob it reads is charged
+ *  to `slice` and `budget` as rederiveFts charges one, so it never runs unbudgeted ahead of the step that ends the
+ *  generation; a blob a spent budget leaves waits for the re-derivation (review 344 F2).
  *  Values are never written anywhere. Returns how many blobs were re-indexed. */
 export async function reindexForValues(db, ctx, values, fresh, budget, slice = rederiveSlice(budget)) {
   if (ctx.fts !== true) return 0;
