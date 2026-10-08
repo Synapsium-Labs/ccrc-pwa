@@ -501,8 +501,10 @@ export function deadCoordinatorReportSentence(claimantId: string, r: DeadCoordin
         return `the lane's act on coordinator ${claimantId} failed (${r.error}); it is asked again only after a backoff — `
           + 'check its runs on /runs and abandon them by hand if it keeps failing.';
       }
-      return `coordinator ${claimantId} crashed and its programme was ended, but ${r.runs.map((x) => `run ${x.runId} (${x.why})`)
-        .join(', ')} could not be moved. It is asked again only after a backoff — abandon ${r.runs.length === 1 ? 'it' : 'them'} by hand.`;
+      // The report knows only the runs the act could not move — never that every other run closed — so it never says the
+      // programme ended: the feed row for the same act says NOT ended, and the operator reads both.
+      return `coordinator ${claimantId} crashed and the lane tried to end its programme, but ${r.runs.map((x) => `run ${x.runId} (${x.why})`)
+        .join(', ')} could not be moved, so the programme is NOT ended (runs the lane did close stay closed). It is asked again only after a backoff — abandon ${r.runs.length === 1 ? 'it' : 'them'} by hand.`;
   }
 }
 

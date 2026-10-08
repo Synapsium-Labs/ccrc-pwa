@@ -313,6 +313,16 @@ describe('the words', () => {
       stoppedBy: { kind: 'switch', why: 'x' } }, NOW), 'nothing closed: no row').toEqual([]);
   });
 
+  it('the `stuck` sentence of a partly-ended programme never reads as ended — the feed row says NOT ended, so must this', () => {
+    const stuck = deadCoordinatorReportSentence('demo-coord', { kind: 'stuck', at: NOW,
+      runs: [{ runId: 8, why: 'bad-transition' }, { runId: 9, why: 'stale-tip' }] });
+    expect(stuck).not.toMatch(/was ended|programme was ended|has been ended/);
+    expect(stuck).toContain('the programme is NOT ended');
+    expect(stuck).toContain('run 8 (bad-transition), run 9 (stale-tip) could not be moved');
+    expect(stuck).toContain('abandon them by hand');
+    expect(deadCoordinatorReportSentence('demo-coord', { kind: 'stuck', at: NOW, runs: [{ runId: 8, why: 'x' }] })).toContain('abandon it by hand');
+  });
+
   it('the would-end sentence names the cause, the instant and what an armed lane would end — and the doors that keep it', () => {
     const s = deadCoordinatorReportSentence('demo-coord', { kind: 'would-end', at: NOW, cause: 'orphan', since: NOW,
       programmes: [{ slug: 'alpha', runIds: [7, 8] }] });
