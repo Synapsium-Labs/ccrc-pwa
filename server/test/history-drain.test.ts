@@ -1694,6 +1694,24 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       expect(counters(box)['non_regular']).toBe(2);
     });
 
+    it('two refused nodes in one drain are counted non_regular once each, by the count the rename step returns (FR2e, F3 multiplicity)', () => {
+      const ID3 = 'claude-a-third';
+      const pFifo = plantNode('a FIFO');
+      const pDir = path.join(SPOOL(box.home), `${ID3}.jsonl`);
+      fs.mkdirSync(pDir);
+      spool(box.home, ID2, { v: 1, ev: 'Stop', id: ID2 });
+      const NAMED_DIR = `history-sweep: spool-refused: spool/${ID3}.jsonl is not a regular file\n`;
+      for (const n of [1, 2]) {                                     // as the FR2c rows: the sibling drains by the second pass
+        const r = runSweep(box);
+        expect(r.code, `pass ${n}: ${r.stderr}`).toBe(0);
+        expect(r.stderr.split(NODE_REFUSED).length - 1, `pass ${n}: the FIFO is named once`).toBe(1);
+        expect(r.stderr.split(NAMED_DIR).length - 1, `pass ${n}: the directory is named once`).toBe(1);
+        expect(counters(box)['non_regular'], `after drain ${n}: each drain counts both nodes, so 2 per drain`).toBe(2 * n);
+      }
+      expect(receipts(box), 'the regular sibling drained').toHaveLength(1);
+      expect(fs.lstatSync(pFifo).isFIFO() && fs.lstatSync(pDir).isDirectory(), 'both nodes are left where they are').toBe(true);
+    });
+
     it('a refused node at spool/<id>.jsonl under a hold: the journal half names it once and counts nothing (IV2), exit 5 (FR2c, F3)', () => {
       const p = plantNode('a FIFO');
       const aside = path.join(box.home, 'aside');

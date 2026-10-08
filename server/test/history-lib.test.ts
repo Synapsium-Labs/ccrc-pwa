@@ -3284,3 +3284,18 @@ describe('blobOverDecodeCap (D-4346, history-permanent-failures-classified)', ()
     for (const v of [undefined, null, '5']) expect(healthLib.blobOverDecodeCap(v), String(v)).toBe(true);
   });
 });
+
+describe('phraseValues: the same-tick phrase path searches `fresh` only while a re-derivation generation is open (D-4344, FR2b; review 344 F2)', () => {
+  const values = ['loaded-a', 'loaded-b'];
+  const fresh = ['loaded-b'];
+  const MARK = 4;
+  const ROWS: Array<[string, number, string | undefined, string[]]> = [
+    ['no state: every loaded value', MARK, undefined, values],
+    ['a closed generation (target equals the mark): every loaded value', MARK, `${MARK} 0 9`, values],
+    ['an open generation (target above the mark): only the fresh values', MARK, `${MARK + 1} 0 9`, fresh],
+  ];
+  it.each(ROWS)('%s', (_name, mark, text, want) => {
+    const state = healthLib.parseRederiveState(text);
+    expect(healthLib.phraseValues(mark, state, values, fresh)).toBe(want);
+  });
+});
