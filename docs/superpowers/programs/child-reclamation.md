@@ -47,6 +47,22 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 16:54 — wave 7's plan is ASSEMBLED, and its attack runs.** The plan is
+  `docs/superpowers/plans/2026-10-08-child-reclamation-wave7-temp-root-collector.md`, 12,969 lines, at `7c7a46867`.
+  - **Reconciliation.** Workflow `wf_157a236e-61a` applied 327 edits, with no misses and no duplicates. The 46 items
+    it left were ruled in the plan's "Rulings that amend the task text" (R-a through R-j).
+  - **Rulings worth naming:**
+    - The record reader answers four ways, so it never overloads rc 2 at a seam.
+    - The idle walk's bound is 30 s, not 60 s (`idle-walk-bound-30s`), so the audit fits the 90 s `ws-audit` runner
+      row.
+    - The docstring edit in `deadCoordinator.ts`, which is workspace-lifecycle's file, is dropped.
+    - A retaken original path is terminal only while it is retaken.
+  - **A pre-existing hazard, now guarded.** Measured on git 2.43: `git update-ref` with an all-zero value exits 0 and
+    DELETES the named ref. So an admin `HEAD` read at mode 000 could have unpinned an attic ref on the vanished arm.
+    Task 2 guards it, and the wave-done reports whether any arm reached it before.
+  - **The attack.** Workflow `wf_aec6389c-9aa` runs four Opus lenses: collector safety (xhigh), reclaim safety (xhigh),
+    security, and executability. Two Sonnet refuters check each critical or important finding.
+
 - **2026-10-08 15:58 — wave 7's task drafts are in and ruled; reconciliation runs.**
   - **The drafts.** Workflow `wf_cf7b2003-df7` ran nine Opus drafters on Tasks 1 to 9, about 12,000 lines in all, with
     87 open items and 13 departures. Every one is ruled in `ccr15-evidence-archive/wave7/drafts-rulings.md`.
