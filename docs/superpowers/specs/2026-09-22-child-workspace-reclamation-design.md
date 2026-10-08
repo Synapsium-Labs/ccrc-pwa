@@ -367,7 +367,7 @@ Two limits follow, and both are stated so neither is discovered later:
   a reclaim, says ccd removed a present tree, and which git no longer records: the arm also proves that no
   admin entry names the tree, so a `worktrees/` or a `gitdir` that cannot be read keeps the hold. An
   interrupted expiry's breadcrumb is not such evidence, a lifecycle `create` row never decides, and an
-  unreadable record is never read as no record. No checkout inside the child may resolve its git directory to
+  unreadable record is never read as no record. No checkout inside the child's worktree may resolve its git directory to
   the admin directory a recovered row named. That refusal reuses `containment-unproven`, whose sentence
   describes such a moved tree only approximately. The recovery creates nothing, prunes nothing and purges no
   row. Only the git-record arm needs the parent to resolve complete. The breadcrumb arm places the row by its
@@ -377,6 +377,24 @@ Two limits follow, and both are stated so neither is discovered later:
 - **A `complete` resolution places the spelling as it reads now, not the session.** An alias re-pointed after a
   session entered through it resolves complete and outside, and so does a spelling through a bind mount. Both are
   pre-existing and left to a follow-up (D-3735).
+
+**Another session's tree can be moved into a leaf.** The tail deletes three trees: the worktree, the clips
+directory and the per-session temp root. The check above guards the worktree, and only the worktree. A tree that
+someone moves into the clips directory or the temp root keeps a `.git` file that names the admin directory its
+repository holds for it, and git reads that record as prunable. So the recovery above places the moved tree's row by
+that record, and nothing the check above looks at says where the tree went. Two rules close the two leaves:
+- **A leaf that holds a checkout git records elsewhere is kept, never removed.** The removal helper asks this of
+  every directory leaf at the instant of removal, whatever rows the registry holds (§5.6 gives the question). It
+  never refuses the act: the helper answers refused or unmeasured, the tail keeps the leaf and records it, on the
+  `done` row and in the done document, and the act completes.
+- **A registry row at, inside or through a leaf is nested.** The nested-row comparison the worktree gets, literal
+  and resolved, equal or inside, and through, is made against the clips directory and the temp root as well, for
+  every row, standing or recovered by either arm, in one registry pass. Such a row refuses the act with
+  `containment-unproven`, at reclaim and at expiry alike, as a nested row of the worktree does, and no word is
+  added. A leaf proven absent is skipped, so a recovered row inside an absent leaf does not hold. A leaf whose
+  absence cannot be proven, or whose root cannot be resolved, reads unmeasured. A link or file leaf is compared by
+  its spelling alone, because the helper unlinks it and follows nothing. This also closes an older shape: a
+  standing row whose directory lay inside the temp root was removed with it.
 
 Rungs 8 and 9 are the two places this design **refuses rather than proceeds**, and they are a deliberate
 reading of the operator's ruling rather than a softening of it. The ruling authorises overriding
@@ -489,19 +507,28 @@ at or under the leaf, its working directory is there, or it holds a file there o
 uid, or a same-uid process the kernel will not let ccd read, is skipped, as a stated limit. A probe that
 could not look answers unmeasured, never "nobody". The clips and temp-root leaves go through one removal
 helper. It:
-- validates the id, resolves the root physically, and never uses a root that resolves to nothing or to `/`;
+- validates the id, resolves the root physically, and never uses a root that resolves to nothing or to `/`. One
+  function reads that physical path whole, so a root whose physical path holds a newline is never used either: the
+  helper answers unmeasured. A bare path capture would drop the newline and name a directory outside the root;
 - unlinks a link or file leaf without following it;
 - takes a directory leaf only when it is a real directory this uid owns, at exactly root/id (and at the
   expected device and inode when a caller names them), and whose device is its root's: a mount of another
   file system at the leaf is refused before anything is changed, and a same-file-system bind mount at it is
   not seen, as inside it (§7);
-- sets the leaf's own owner bits so a mode-000 leaf can be entered, normalises the permissions beneath it,
-  and removes it without crossing a file-system boundary, reading every exit code;
+- sets the leaf's own owner bits so a mode-000 leaf can be entered, asks whether the leaf holds a checkout git
+  records elsewhere (below), and only then normalises the permissions beneath it and removes it without crossing a
+  file-system boundary, reading every exit code;
 - proves the leaf absent.
 
 It answers removed, refused with a reason, or unmeasured. A temp root still in use, or unmeasured, when the
-wait ends, and a leaf the helper refuses or cannot measure, is kept with its witness. The act completes,
-and its `done` row records what was kept and why. Each kept reason is cut at 300 bytes of printable ASCII
+wait ends, and a leaf the helper refuses or cannot measure, is kept with its witness. The exception is a temp root
+the tail finds already absent: a probe that answers in use, or unmeasured (always, on Darwin), over a leaf the tail
+proves absent keeps nothing, and the witness is dropped. If that absence cannot be proven, the leaf is kept and
+recorded unmeasured, and its witness stays. The act completes, and its `done` row records what was kept and why.
+The tail's stdout done document, on both verbs, carries the same two words as additive keys, `clipsKept` and
+`tmpRootKept`: the kept word (`refused`, `unmeasured` or `in-use`), or `null` when nothing was kept. A document from
+an older ccd omits both keys, and a reader treats absence as unmeasured, never as gone. Each kept reason is cut at
+300 bytes of printable ASCII
 and marked with a trailing "…". That is not a refusal. What the worktree removal deletes is unchanged. Every
 deleting git call the tail makes
 runs under the reclaim's git containment: the worktree removal, `update-ref -d` and the branch delete. So
@@ -511,6 +538,55 @@ inherited `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG` and `GIT_CONFIG_COUNT`, so its o
 system config file (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`, and `HOME` or
 `XDG_CONFIG_HOME`) names this uid's own files and sits below the pins' command-line precedence; it stays a
 stated residual (§7). `ws-expire` runs the same tail.
+
+**The checkout question.** Another session's tree moved into a leaf (§5.5) is what the helper asks about. It asks of
+every directory leaf, after the identity checks and the owner-bits pass, and before it normalises or removes
+anything. It reads no registry row. The answer is clean (rc 0), refused (rc 1) or unmeasured (rc 2). Either of the
+last two leaves everything under the leaf untouched, and the tail keeps and records the leaf as it keeps any other,
+so the question never fails the tail. A link or file leaf is unlinked and never scanned. The owner-bits pass is the
+one write before the question: it sets the owner bits of the leaf itself, never of anything under it, so a foreign
+tree moved in AS the leaf has its root's owner bits set (555 reads 755 afterwards) even when it is then refused.
+- **The scan.** It walks the leaf's physical path without following a link or crossing a file system, from depth 1
+  (so a tree moved AS the leaf is seen), and it is bounded by the same scan limit the ladder's own scans use. A
+  timeout, any error from the walk (an unreadable directory hides what is under it) and more than 64 entries named
+  `.git` read unmeasured. It does not prune at a `.git` directory: a foreign tree can be parked inside a clone's
+  `.git` as easily as anywhere else, so the time bound caps the walk.
+- **Each `.git`** is asked without being followed, and git is never run inside a leaf. A link is refused. A
+  directory, a full clone, passes. A file must be exactly one `gitdir: <path>` line of at most 4096 bytes, else it
+  reads unmeasured. The admin directory it names is resolved physically, a relative path against the `.git` file's
+  own directory as git does. A `..` after another component of a relative path, or any `..` in an absolute one,
+  reads unmeasured. One proven absent refuses, because git no longer records the tree, and one that cannot be
+  resolved is unmeasured. One inside the leaf passes: a submodule, or a worktree of a clone in the leaf. One outside
+  the leaf passes only as a linked worktree whose admin `gitdir` names this `.git` back, literally or by its
+  directory's physical path, and refuses otherwise. That last clause also catches a recycled admin name, where a
+  later `ws-add` recreated `worktrees/<name>` for another workspace. A refusal outranks an unmeasured entry.
+- **Its limits, stated.**
+  - A tree stripped of its `.git`, or content that is no checkout, parked in a leaf is not seen. The base held
+    these only by accident, through the blanket hold on a gone row.
+  - The question and the `rm` are two looks, not one. A same-uid rename in between is removed with the leaf, which
+    wave 7's quarantine rename closes. Beside it, a registry row placed into a leaf after the ownership check the
+    tail makes at its start is not asked again at step 6. The removal-time question and the temp root's in-use probe
+    still stand, and the worktree has the same window class.
+  - A clone, a submodule of one, or a worktree of one inside a leaf is the leaf's own, and goes with it. That
+    includes a foreign main checkout, a `.git` directory, moved into a leaf: with no registry row naming it, it
+    passes the question and is removed with its object store. This is ruled, because a clone in a leaf is the leaf's
+    own. A registry row that names the moved tree's old path is a gone row, and the blanket hold on a gone row keeps
+    the child unmeasured.
+  - The bind-mount alias spelling of a leaf is not compared. This is the existing residual (§7).
+  - On a case-insensitive file system (Darwin APFS), a hand-renamed `.GIT` that git honours is missed by the walk's
+    name match. Git never writes that name.
+
+**The witness of an absent leaf.** Only the tail removes a witness, and only its own leaf's. The witness is dropped
+by a function of its own, called after the leaf's removal and, in the kept arms above, only when the leaf is proven
+absent. Those arms never go through the leaf's removal itself, because its leaf half would run an unprobed `rm` on a
+leaf re-created in the window. A leaf re-created between the proof that it is absent and the drop leaves a leaf with
+no witness: a leak, never a loss, because the collector takes only a witnessed leaf.
+
+**A failure printed before the breadcrumb is retried from the start.** `probe-unmeasured` and the consent binding's
+`state-changed` (§5.5) are printed before the tombstone and the breadcrumb, so nothing had started. The server reads
+those two words as not resumable, and its feed says the act is retried from the start, not that the box resumes
+where it stopped. `pin-failed` and `tombstone-unwritable` stay resumable, because each is printed once in the pin
+phase, before the breadcrumb, and also by the tail after it, so the word alone cannot tell the two apart (§7).
 
 ### 5.7 When reclaim happens
 
@@ -762,7 +838,8 @@ child leaves the fleet frame. It re-reads again whenever the newest reclaim `don
 mirror has ingested changes, while some finished row's chip is still unsettled; that value rides the
 coordination frame and is omitted until there is one. A child leaving the registry listing also brings
 the mirror's next sweep forward, and the tick does not wait for it. Each re-read follows one measured fact,
-so it is not a polling cadence. A board mounted after its child left, whose first read lands between the
+so it is not a polling cadence. The board keeps the newest read it has applied, so an older read that lands last,
+or fails last, changes nothing. A board mounted after its child left, whose first read lands between the
 registry purge and the journal's `done`, keeps a null chip until its next load.
 
 **The chip says why the sweep leaves a child alone.** The sweep keeps each marked child's last verdict in
@@ -941,6 +1018,9 @@ approved on a narrow one.
      inode matches its witness. The collector's recycled-slug proof (wave 7) owns this.
    - A clips leaf the helper refuses or cannot measure is kept, recorded, and collected by nothing yet. Wave 7's
      pre-flight owns it.
+   - A temp-root leaf re-created between the tail's proof that it is absent and the drop of its witness, or by a
+     process that outlives the wait after `done`, is a leaf with no witness. It is a leak, never a loss, because the
+     collector takes only a witnessed leaf.
    - A board mounted after its child left, whose first read lands between the registry purge and the
      journal's `done`, keeps a null chip until its next load.
    - A ccd that dies between the registry purge and the journal's `done` leaves a null chip and no attention
@@ -960,6 +1040,32 @@ approved on a narrow one.
      `<root>/<id>` between the two is removed with it. Wave 7's quarantine rename closes this for the
      collector. The owner-bits `chmod` that lets the helper enter a mode-000 leaf dereferences its operand,
      bounded to this uid's own files and their owner bits.
+   - The checkout question (§5.6) sees checkouts and nothing else. A tree stripped of its `.git`, or content that is
+     no checkout, parked in a clips directory or a temp root is not seen. The base held these only by accident,
+     through the blanket hold on a gone row. A clone, a submodule of one, or a worktree of one inside a leaf is the
+     leaf's own and goes with it, and so does a foreign main checkout, a `.git` directory, moved into a leaf with no
+     registry row naming it: it is removed with its object store. A row that names the moved tree's old path is a
+     gone row, and the blanket hold keeps the child unmeasured. The bind-mount alias spelling of a leaf is not
+     compared. The question and the `rm` are two looks, and the same-uid rename window above covers both. A registry
+     row placed into a leaf after the ownership check the tail makes at its start is not asked again at step 6;
+     the removal-time question and the temp root's in-use probe still stand, and the worktree has the same window
+     class. On a case-insensitive file system (Darwin APFS), a hand-renamed `.GIT` that git honours is missed by the
+     walk's name match, and git never writes that name. The question's one write before it answers is the owner bits
+     of the leaf itself, so a foreign tree moved in AS the leaf has its root's owner bits set even when it is then
+     refused.
+   - The checkout question fails closed, and it leaks. A temp root that holds a directory ccd cannot read, more
+     than 64 entries named `.git`, or a tree whose walk outlasts the scan bound is kept unmeasured on every pass,
+     where the permission pass used to normalise it and remove it. A clips leaf is mostly spared the first shape,
+     because the ladder normalises clips before the tail. Measured on one fleet, 47 such entries sat in 6 of 45
+     temp roots and none in clips.
+   - An unprovable leaf, or a standing row at, inside or through a leaf (§5.5), makes the tail fail resumable
+     `worktree-remove-failed` at its start, and so on every resume, until the row or the leaf is fixed. So does a
+     foreign tree that stands in the child, at the tail's moved-tree check. Nothing is deleted, and a fresh reclaim
+     is held at the ladder. These are persistent per-child failures that retry for ever, and wave 7 carries them.
+   - A `pin-failed` or `tombstone-unwritable` printed in the pin phase, before the breadcrumb, reads resumable to the
+     server (§5.6), so the feed says the box resumes where it stopped of an act that is retried from the start.
+     `ws-expire`'s pin phase prints the same two words before its own breadcrumb, and its reader reads them the same
+     way. An additive field on ccd's document will tell the two cases apart. Wave 7 carries it.
    - The in-use probe reads each process's environment as exec'd, so a TMPDIR set after exec is not seen.
      - A cwd or fd reached through another mount of the same directory has a spelling neither of its compared
        spellings names. `~/.cc-tmp` is a bind mount on the fleet box, and the TMPDIR arm compares ccd's own
@@ -967,9 +1073,12 @@ approved on a narrow one.
      - A pid reused within one walk is read once.
      - A process table whose churn outlasts the walk's time limit reads unmeasured, never nobody.
      - Same-uid non-dumpable processes and other uids' processes are not read.
-   - On a git older than 2.43, a reclaim resumed after its own branch delete, whose branch is already gone,
-     reads `branch-unmeasured` at the tail's branch step on every retry until the branch is recreated. The fleet
-     runs 2.43.
+   - On a git older than 2.43, a resume whose branch is already gone fails closed on every retry, at one of two
+     places. A reclaim resumed after its own branch delete reads `branch-unmeasured` at the tail's branch step until
+     the branch is recreated. A resume that enters at `children` or `worktree`, whose branch was present at the pin
+     and was deleted by someone after the tombstone, never reaches that step: the settle's pin reads unmeasured and
+     stops `pin-failed` on every retry, with the tree, the breadcrumb and the row standing and nothing deleted. Both
+     are leaks. The fleet runs 2.43.
    - A branch whose tip moves while it stays present, between the in-lock recomputation and the pin, is still
      taken over at its pinned tip; the delete's compare-and-swap at that tip bounds it. `ws-expire` keeps the
      recomputation-to-pin window for the branch's state too, because its locked recomputation is workspace
