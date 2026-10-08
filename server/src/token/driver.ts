@@ -491,9 +491,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
         }
       }
     }
-    const rr = await store.readRetired();
+    // The holder learns the list BEFORE the record is cleared: an append that landed is a retired value from then on, even if
+    // the commit below throws and a later tick finds nothing waiting (review of batch 2).
+    this.refreshRetired(await store.readRetired());
     if (landed.length > 0) await this.commit(retiringLanded(this.mustState(), landed));
-    this.refreshRetired(rr);
     if (retiringDigests(this.mustState()).length === 0) this.retiringWarned = false;
   }
 

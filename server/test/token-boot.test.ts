@@ -367,6 +367,64 @@ describe('an unusable retired file never lets boot adopt a value it did not writ
     expect(asides(home).sort()).toEqual(['box-token-retired.json.unusable-779', 'box-token-retired.json.unusable-779-1']);
   });
 
+  // Review of batch 2 (D-4410, Important): the digests that had landed in the set-aside file are forgotten, so on boot 2
+  // and after a written-back earlier-retired value would be adopted. While ANY set-aside retired file stands, boot keeps
+  // the unusable posture: a mail.token it cannot match to its own write record is never adopted.
+  it('boot 2 and after: while a set-aside retired file stands, a written-back earlier-retired value is still not adopted', async () => {
+    const home = mkHome();
+    const { old, next } = await retiredThenCorrupt(home);
+    const r1 = await boot(home, { now: 880 });                                // boot 1: sets it aside, the server-written current stays
+    expect(r1.holder.currentValue()).toBe(next);
+    expect(asides(home)).toEqual(['box-token-retired.json.unusable-880']);
+    expect(existsSync(P(home).retired)).toBe(false);
+    writeBack(home, old);
+    const r2 = await boot(home, { now: 881 });                                // boot 2: the retired file is merely absent now
+    expect(checkMailToken(r2.holder, old, 'POST /api/mail')).toBe('bad');
+    expect(r2.holder.currentValue()).not.toBe(old);
+    expect(r2.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
+    expect(asides(home)).toEqual(['box-token-retired.json.unusable-880']);   // still there, untouched, not read into the list
+    const w = r2.warnings.filter((x) => x.includes('box-token-retired.json.unusable-880'));
+    expect(w).toHaveLength(1);                                                // warned once, naming the set-aside file
+    expect(w[0]).toContain('removing');
+    neverPrinted(r2.printed, old, r2.holder.currentValue() as string);
+  });
+
+  it('while a set-aside file stands, a server-written current stays current and boot says nothing new', async () => {
+    const home = mkHome();
+    const { next } = await retiredThenCorrupt(home);
+    await boot(home, { now: 882 });
+    const r = await boot(home, { now: 883 });
+    expect(r.holder.currentValue()).toBe(next);
+    expect(r.state).toMatchObject({ origin: 'rotated', rotationOwed: false });
+    expect(r.warnings.filter((x) => x.includes('unusable-882'))).toHaveLength(0);
+  });
+
+  it('with the set-aside file removed, a genuinely hand-made value is adopted as before', async () => {
+    const home = mkHome();
+    await retiredThenCorrupt(home);
+    await boot(home, { now: 884 });
+    rmSync(path.join(home, '.ccrc', 'box-token-retired.json.unusable-884'));
+    const hand = mintValue();
+    writeBack(home, hand);
+    const r = await boot(home, { now: 885 });
+    expect(checkMailToken(r.holder, hand)).toBe('ok');
+    expect(r.state).toMatchObject({ origin: 'adopted', rotationOwed: true, owedWhy: 'adopted' });
+  });
+
+  it("the set-aside file's content is never read: an unreadable one (mode 000) is only counted by its name", async () => {
+    if (isRoot) return;
+    const home = mkHome();
+    const { old } = await retiredThenCorrupt(home);
+    await boot(home, { now: 886 });
+    const aside = path.join(home, '.ccrc', 'box-token-retired.json.unusable-886');
+    chmodSync(aside, 0o000);
+    try {
+      writeBack(home, old);
+      const r = await boot(home, { now: 887 });
+      expect(checkMailToken(r.holder, old)).toBe('bad');
+    } finally { chmodSync(aside, 0o600); }
+  });
+
   it('a retired file that cannot be READ is unreadable, never unusable: boot refuses, moves nothing aside, writes nothing (EISDIR)', async () => {
     const home = mkHome();
     const v = mintValue();

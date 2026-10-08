@@ -1472,6 +1472,23 @@ describe('a retired value\'s digest is durable before it leaves the accept set (
     } finally { await r.app.close(); }
   });
 
+  it('a landed append whose record cannot be cleared still teaches the holder the retired value (review of batch 2)', async () => {
+    const L = 'e'.repeat(64);
+    const fail = { clear: true };
+    const r = await rig({ handMade: L, wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (fail.clear && s.retiring !== undefined && s.retiring.length === 0) { fail.clear = false; throw enospc(); }
+      return st.writeState(s);
+    } }) });
+    try {
+      await throughGrace(r);
+      await r.driver.tick();                                             // the append lands; the commit that clears the record throws
+      expect(r.printed.some((l) => l.includes('a driver tick failed'))).toBe(true);
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      expect(await r.lane(L)).toBe(401);
+      expect(r.boot.holder.counters().retired, 'recognised as retired, not a plain bad value').toBe(1);
+    } finally { await r.app.close(); }
+  });
+
   it("F1's sequence through the driver: an unusable retired file at retirement, then L written back and a restart: L is refused", async () => {
     const L = 'e'.repeat(64);
     const first = await rig({ handMade: L });

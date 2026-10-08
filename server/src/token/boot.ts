@@ -74,6 +74,10 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   // write record; it is set aside (never overwritten) once boot has decided, so a refused boot leaves it where it was.
   // An UNREADABLE one (EACCES, EIO...) is not this: it refused above.
   const retiredUnusable = retiredRead.kind === 'unusable';
+  // D-4410 (review of batch 2): the digests that had landed in a set-aside file are not read back, so while ANY set-aside
+  // retired file stands boot keeps the unusable posture on every boot. METADATA ONLY: names, never the file's content.
+  const asideNames = await setAsideRetiredNames(paths);
+  const foreignPosture = retiredUnusable || asideNames.length > 0;
 
   const agentEnvMarksFleet = await readAgentEnvMarksFleet(paths.agentEnv);   // D-4399
   const armed = bothRoleWriterArmed({ role: i.role, roleSource: i.roleSource, fleetMode: i.fleetMode, agentEnvMarksFleet });
@@ -136,7 +140,7 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   let foreignMint = false;
   const mintForeign = async (): Promise<void> => { foreignMint = true; await mint('retired-written-back', null); };
   const adoptOrMint = async (r: ValueRead & { kind: 'value' }): Promise<void> => {
-    if (foreignUnderUnusableRetired({ retiredUnusable, state: s0, current: likeOf(r) as FileMetaLike })) await mintForeign();
+    if (foreignUnderUnusableRetired({ retiredUnusable: foreignPosture, state: s0, current: likeOf(r) as FileMetaLike })) await mintForeign();
     else adopt(r.value);
   };
   if (cur.kind === 'unreadable' || cur.kind === 'placeholder') refuseAsToday(paths.current, cur.kind);
@@ -167,7 +171,7 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
     else await adoptOrMint(cur);
   } else if (s0.origin !== 'adopted' && !provedWrite(likeOf(cur) as FileMetaLike, s0.current.write)) {
     await adoptOrMint(cur);   // something other than the driver changed mail.token: adopted as today (spec 4.2)
-  } else if (foreignUnderUnusableRetired({ retiredUnusable, state: s0, current: likeOf(cur) as FileMetaLike })) {
+  } else if (foreignUnderUnusableRetired({ retiredUnusable: foreignPosture, state: s0, current: likeOf(cur) as FileMetaLike })) {
     await mintForeign();      // an adopted current has no write record to match (D-4410)
   } else {
     ctx.current = cur.value;
@@ -223,7 +227,7 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
     warn(`this box's role is not recorded as both, so the server will not write ${paths.fleetFile}; with no file there, notify.sh is refused (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
   }
 
-  // D-4410: the unusable retired list is set aside last, under a new name, never overwritten; ONE warning covers it and, when
+  // D-4410: the unusable retired list is set aside after boot's decisions (just before the state is recorded), under a new name, never overwritten; ONE warning covers it and, when
   // it applies, the foreign value that was not adopted.
   if (retiredUnusable) {
     let aside: string;
@@ -235,6 +239,9 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
         : `; ${paths.current} held a value this server did not write, so it was not adopted: a fresh value was minted and a rotation is owed`)
       : '';
     warn(`${paths.retired} is unusable; ${aside}; the values it held can no longer be recognised when written back${foreign}`);
+  } else if (foreignMint && asideNames.length > 0) {
+    warn(`${paths.current} held a value this server did not write while ${asideNames.join(', ')} stands set aside, so it was not adopted`
+      + `${ctx.mintFailed ? '' : ': a fresh value was minted and a rotation is owed'}; removing the set-aside file after review is what allows a hand-made value to be adopted again`);
   }
 
   if (st !== null) {
@@ -243,6 +250,14 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
     }
   }
   return { holder, state: st, mintFailed: ctx.mintFailed, bothWriterArmed: armed, agentEnvMarksFleet, warnings: ctx.warnings };
+}
+
+/** The names of the retired files an earlier boot set aside (`moveAsideUnusable`'s `box-token-retired.json.unusable-*`).
+ *  A directory listing only: their content is never read. An unlistable directory answers none (the mail.token read that
+ *  follows would fail first). */
+async function setAsideRetiredNames(paths: TokenPaths): Promise<string[]> {
+  const prefix = `${path.basename(paths.retired)}.unusable-`;
+  try { return (await fsp.readdir(paths.dir)).filter((n) => n.startsWith(prefix)).sort(); } catch { return []; }
 }
 
 /** Spec 4.2.1's act: (a) record recovering, (b) write the sibling's value into mail.token, (c) record it as
