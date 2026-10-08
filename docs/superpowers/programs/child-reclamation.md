@@ -47,6 +47,26 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 20:56 — wave 8's plan is FINAL for review (8,666 lines).**
+  - **The attack.** Workflow `wf_a12b1b0b-30d` ran four lenses with refuters. The SAFETY lens on the licence chain
+    found NO defect; it measured every route with a re-mint at each point of a request's life and found it caught
+    before the act. Three important findings survived the refuters, and all three are fixed:
+    - Task 8 had not applied the `held` ruling;
+    - Task 1's word census would red on workspace-lifecycle wave 5's two type-level spellings;
+    - two of Task 0's entry checks could not print what they stated.
+  - **The minor findings, also fixed:**
+    - the generation-changed sentence is worded by what was measured;
+    - ccd's `detail` reaches the PWA bounded, with control and bidi characters replaced;
+    - the truncated kept-leaf sentence;
+    - the tier seed agrees with live memory on a box retry refusal;
+    - the shared rig's spellings;
+    - two steps that could not run;
+    - a corrected file table;
+    - Task 10's missing items.
+  - **How.** Workflow `wf_fb511ab1-f12` applied 100 edits, every one cleanly, and the coordinator edited the frame.
+  - **Next.** A docs PR (both plans' ledger, contract §15, and the plan). Run 348 is dispatched only after wave 7
+    merges (H1).
+
 - **2026-10-08 20:15 — wave 8's plan is ASSEMBLED, and its attack runs.** The plan is
   `docs/superpowers/plans/2026-10-08-child-reclamation-wave8-reclaim-server-half.md`, 8,371 lines, at `740a2f220`.
   - **The drafts.** Workflow `wf_3a0bcd5e-8ba` ran seven Opus drafters.
