@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c77512cd44a8af765c36882af982a115e082de557cba4aa933e24cedea7aae58
+# ccrc:generated 1 sha256=1d8fe46ce849e24970986729998e67b96324ebdc1ecfd6f251207b7b6077852f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23044,11 +23044,15 @@ _swap_carry_jsonl() {   # srccfg dstcfg uuid mdir sanitize(0|1)
 # only through the merge walk, so a carry whose sidecars are ALL first carries
 # (today's `cp -al`/`cp -a` path, unchanged) takes no slot, but a first carry
 # that sorts AFTER a merge in the same call runs inside the slot already held.
-# That is a NAMED COST, kept: its `cp -al` -> `cp -a` fallback (an EXDEV on
-# every carry on this fleet, and not covered by CARRY_MERGE_BUDGET) can copy
-# for as long as it takes, and every other carry on the box that reaches an
-# existing destination meanwhile logs `(kept: busy)` and is left for its next
-# visit — the same bounded, never-waiting answer, only for longer.
+# That is a NAMED COST, kept: its `cp -al` -> `cp -a` fallback (not covered by
+# CARRY_MERGE_BUDGET) can copy for as long as it takes, and every other carry on
+# the box that reaches an existing destination meanwhile logs `(kept: busy)` and
+# is left for its next visit — the same bounded, never-waiting answer, only for
+# longer. HISTORY, dated: from 2026-09-22 that fallback ran on EVERY carry on this
+# fleet (each account root its own bind mount, so `cp -al` answered EXDEV). Since
+# D-4500 a failed `cp -al` first links through a verified common mount, so the
+# copy — and this cost — remains only where no such mount exists, and the log
+# names it: `(copy: <cause> <bytes> bytes)` (D-4501).
 CARRY_MERGE_BUDGET=536870912    # bytes one sidecar's merge walk may read + copy per visit (512 MiB); what does not fit is deferred
 
 _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
@@ -23492,17 +23496,24 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   # because sidecars exist in project dirs with no .jsonl for the same uuid, and
   # each lands at the mirror of its OWN source dir.
   #
-  # A FIRST CARRY (no destination yet) is `cp -al` — a hardlink tree — with
-  # `cp -a` as the fallback the moment linking fails. NOT WRITE-ONCE, measured
-  # (session continuity, Task 1): an `agent-*.jsonl` and a run's `journal.jsonl`
-  # are APPENDED IN PLACE (same inode, growing; `workflows/<runId>.json` is
-  # written whole at the run's end), so a linked tree would share those appends
-  # between the two accounts. That is harmless — both names are this session's own
-  # record, and a later merge reads a shared inode as equal — and on this fleet
-  # it no longer happens at all: every account root is its own bind mount, and
-  # link(2) across two mounts answers EXDEV even on one filesystem (measured),
-  # so every carry since the move logs `(copy)`. The mode is logged so the
-  # evidence exists if a future defect implicates a shared file.
+  # A FIRST CARRY (no destination yet) is `cp -al` — a hardlink tree — then,
+  # when that fails, the same `cp -al` through the link route, then `cp -a`.
+  # NOT WRITE-ONCE, measured (session continuity, Task 1): an `agent-*.jsonl`
+  # and a run's `journal.jsonl` are APPENDED IN PLACE (same inode, growing;
+  # `workflows/<runId>.json` is written whole at the run's end), so a linked
+  # tree shares those appends between the two accounts. That is harmless —
+  # both names are this session's own record, and a later merge reads a shared
+  # inode as equal. HISTORY, dated: from
+  # 2026-09-22 every account root on the fleet was its own bind mount, link(2)
+  # across two mounts answers EXDEV even on one filesystem (measured), and every
+  # carry logged `(copy)`. Since D-4500 a failed `cp -al` asks `_carry_link_route`
+  # for a read-write mount of that filesystem exposing both trees, and links
+  # through it, logged `(link: via-mount)`; only when there is none, or the link
+  # through it fails too (`root-failed`), does it copy. The mode is logged so the
+  # evidence exists if a future defect implicates a shared file, and a copy logs
+  # WHY and HOW MUCH (D-4501): `(copy: <cause> <bytes|?> bytes)`, one
+  # `CARRY_CAUSES` word, with the same sentence on stderr. A bare `(copy)` is
+  # what a carry before D-4501 wrote; the stage-1 instrument still reads it.
   #
   # AN EXISTING DESTINATION IS MERGED, NOT LEFT ALONE (C8, reversing this
   # branch's old rule): `_swap_carry_merge_walk` above, under the carry slot and
@@ -23512,8 +23523,8 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   # partial is repaired by the same walk — it simply finds the missing files
   # absent — so `(kept)` is no longer permanent.
   #
-  # THE FIRST-CARRY PATH IS UNCHANGED, and so is its anti-nesting guard:
-  # `_sidecar_matches` strips the source's trailing slash, and `$dst` (the
+  # THE FIRST CARRY'S DIRECT `cp -al` IS UNCHANGED, and so is its anti-nesting
+  # guard: `_sidecar_matches` strips the source's trailing slash, and `$dst` (the
   # `<uuid>` directory itself) must not exist before `cp -al` runs — measured:
   # `cp -al src/<uuid> dst/<uuid>` (and `cp -a`) onto an ALREADY-EXISTING
   # destination nests the tree inside itself. `mkdir -p` below only creates the
@@ -23522,15 +23533,18 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   # The fallback does not start clean on its own: `cp -al` builds the
   # destination skeleton before it fails on the first unlinkable file (measured:
   # a cross-device `$dst` gets every subdirectory and no file), and `cp -a` onto
-  # that survivor would nest. So the fallback clears any partial `$dst` first.
+  # that survivor would nest. So the fallback clears any partial `$dst` first —
+  # after the direct `cp -al` AND after a failed one through the route.
   # Success is read from `cp`'s own exit status, not `[[ -d "$dst" ]]`, so the
-  # logged mode never overstates what is shared: `(link)` only when the whole
-  # tree is hardlinks, `(copy)` whenever any part needed a real copy.
+  # logged mode never overstates what is shared: `(link)` or `(link: via-mount)`
+  # only when the whole tree is hardlinks, `(copy: …)` whenever any part needed a
+  # real copy.
   #
   # C-collated sort: no destination is ever contested, so ordering changes only
   # the order of the swap.log lines a human reads, which is kept reproducible.
-  local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc
+  local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc b
   local slot="" slot_rc=0 wout wrc line n r dv k dfr bud CARRY_SLOT_FD=""
+  local CARRY_ROUTE="" CARRY_A2="" CARRY_B2=""
   local -a sidecars=() rows=()
   mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
   (( ${#sidecars[@]} )) || return 0
@@ -23591,12 +23605,37 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
     mode=link
     cp -al "$src" "$dst" 2>/dev/null; rc=$?
     if (( rc != 0 )); then
-      mode=copy
       # $dst may already exist here — a partial skeleton the failed `cp -al`
       # left behind — and `cp -a` onto an existing $dst nests instead of
       # landing at the real path. Clear it first every time, unconditionally.
       [[ -e "$dst" ]] && rm -rf "$dst"
-      cp -a "$src" "$dst" 2>/dev/null; rc=$?
+      # THE ROUTE (D-4500), asked only now that the direct link has failed:
+      # the same `cp -al`, through a read-write mount that exposes both trees
+      # under one vfsmount, each alias proved by inode. `$CARRY_B2/$uuid` IS
+      # `$dst` (proved: B2 is the destination's parent), so the anti-nesting
+      # rule holds through it, and a failure there clears `$dst` AGAIN — that
+      # `cp -al` builds its skeleton before it fails exactly as the first did.
+      _carry_link_route "$src" "$dstcfg/projects/$pdir"
+      if [[ "$CARRY_ROUTE" == via ]]; then
+        cp -al "$CARRY_A2" "$CARRY_B2/$uuid" 2>/dev/null; rc=$?
+        if (( rc == 0 )); then
+          mode="link: via-mount"
+        else
+          [[ -e "$dst" ]] && rm -rf "$dst"
+          CARRY_ROUTE=root-failed
+        fi
+      fi
+      if (( rc != 0 )); then
+        cp -a "$src" "$dst" 2>/dev/null; rc=$?
+        # A COPY SAYS WHY AND HOW MUCH (D-4501): the route's cause word and the
+        # tree's apparent bytes, `?` when `_plat_bytes` refuses (a partial total
+        # is a refusal there, never a smaller number).
+        b=$(_plat_bytes "$dst" 2>/dev/null) && [[ "$b" =~ ^[0-9]+$ ]] || b='?'
+        mode="copy: $CARRY_ROUTE $b bytes"
+        if (( rc == 0 )); then
+          echo "ccd: warn: sidecar $uuid carried to $dst as a COPY ($CARRY_ROUTE, $b bytes)" >&2
+        fi
+      fi
     fi
     if (( rc == 0 )); then
       echo "$(date '+%F %T') sidecar $uuid -> $dst ($mode)" >> "$REG/swap.log"

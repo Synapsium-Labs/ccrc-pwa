@@ -27,11 +27,13 @@
  * and probe-gated. Fixture HOMEs only.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness, CCD } from './ccdWsHelpers.js';
-import { bindFixture, mountRow } from './fixtures/fakeMountKernel.js';
+import { bindFixture, mountRow, plantFakeKernel, type BindOpts } from './fixtures/fakeMountKernel.js';
+import { IS_LINUX } from './platformFixtures.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-carry-route-'); });
@@ -159,5 +161,194 @@ describe('_carry_link_route: the geometry', () => {
     const causes = carryCauses();
     expect(causes.length, 'ccd spells CARRY_CAUSES').toBeGreaterThan(0);
     for (const w of new Set(words)) expect([...causes, 'via'], w).toContain(w);
+  });
+});
+
+// ── the carry ─────────────────────────────────────────────────────────────────
+const UUID = 'b7001948-3333-4bcc-b60b-0cfc0dc3d199';
+const PDIR = '-w-quiet-mesa';
+const R_JSON = 'tool-results/r.json';
+const BODY = 'RESULT\n';   // 7 bytes
+
+const side = (root: string, rel = ''): string => path.join(h.home, root, 'projects', PDIR, UUID, rel);
+const ino = (p: string): number => fs.statSync(p).ino;
+const put = (p: string, body: string): string => {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, body);
+  return p;
+};
+/** A source sidecar with one tool result, and the destination's project dir. */
+const plantSource = (): void => {
+  put(side('.claude', R_JSON), BODY);
+  fs.mkdirSync(path.join(h.home, '.claude-d', 'projects', PDIR), { recursive: true });
+};
+/** The geometry plus the fake kernel: the env and the `cp()` stub every faked case runs under. */
+const rig = (o: BindOpts = {}): { env: Record<string, string>; stub: string } => {
+  const k = plantFakeKernel(h.home);
+  return { env: { ...bindFixture(h.home, o), ...k.env }, stub: k.cpStub };
+};
+const carry = (r: { env: Record<string, string>; stub?: string }): void => {
+  h.sh(`${r.stub ?? ''} _swap_carry_sidecars "$HOME/.claude" "$HOME/.claude-d" ${UUID} 2>>"$HOME/carry.stderr"`, r.env);
+};
+const swapLog = (): string => {
+  const p = path.join(h.home, '.cc-sessions', 'swap.log');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+};
+const stderr = (): string => {
+  const p = path.join(h.home, 'carry.stderr');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+};
+/** The one verdict for our destination, `(…)`. */
+const verdict = (): string => {
+  const rows = swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> ${side('.claude-d')} (`))
+    .map((l) => l.replace(/^.* \(/, '('));
+  expect(rows, swapLog()).toHaveLength(1);
+  return rows[0]!;
+};
+/** `(copy: <cause> <N> bytes)` -> [cause, N]; fails the case on any other shape. */
+const copied = (): [string, number] => {
+  const m = /^\(copy: ([a-z-]+) (\d+) bytes\)$/.exec(verdict());
+  expect(m, verdict()).not.toBeNull();
+  return [m![1]!, Number(m![2])];
+};
+/** Every entry under a directory, relative, with a trailing `/` on directories. */
+const listing = (dir: string): string[] =>
+  fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+    .map((e) => path.relative(dir, path.join(e.parentPath, e.name)) + (e.isDirectory() ? '/' : ''))
+    .sort();
+
+describe('the first carry: a failed cp -al routes before it copies (D-4500), and a copy says why (D-4501)', () => {
+  it('C1 links through the common mount: (link: via-mount), one inode, no nest, no warning', () => {
+    plantSource();
+    carry(rig());
+    expect(verdict()).toBe('(link: via-mount)');
+    expect(ino(side('.claude-d', R_JSON))).toBe(ino(side('.claude', R_JSON)));
+    expect(fs.existsSync(side('.claude-d', UUID)), 'a <uuid>/<uuid> nest').toBe(false);
+    expect(stderr()).not.toContain('COPY');
+  });
+
+  it('C2 no second mount of the filesystem: (copy: exdev-no-root N bytes), N at least what was planted', () => {
+    plantSource();
+    carry(rig({ common: 'none' }));
+    const [cause, n] = copied();
+    expect(cause).toBe('exdev-no-root');
+    expect(n).toBeGreaterThanOrEqual(BODY.length);
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+    expect(ino(side('.claude-d', R_JSON))).not.toBe(ino(side('.claude', R_JSON)));
+  });
+
+  it('C3 the second mount is read-only: exdev-no-root', () => {
+    plantSource();
+    carry(rig({ common: 'ro' }));
+    expect(copied()[0]).toBe('exdev-no-root');
+  });
+
+  it('C4 the alias is a DECOY of the right shape: root-mismatch, the real bytes land, the decoy is untouched', () => {
+    plantSource();
+    const r = rig({ decoy: true });
+    const before = listing(path.join(h.home, 'vol'));
+    carry(r);
+    expect(copied()[0]).toBe('root-mismatch');
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+    expect(listing(path.join(h.home, 'vol')), 'nothing was written through the alias').toEqual(before);
+    expect(before.filter((e) => !e.endsWith('/')), 'the decoy holds no file').toEqual([]);
+  });
+
+  it('C5 no mount table: mounts-absent', () => {
+    plantSource();
+    const r = rig();
+    carry({ ...r, env: { ...r.env, CCD_MOUNTINFO: path.join(h.home, 'no-such-table') } });
+    expect(copied()[0]).toBe('mounts-absent');
+  });
+
+  it('C6 a mount point holding a space and a backslash is decoded (\\040, \\134): via-mount', () => {
+    plantSource();
+    carry(rig({ vol: 'my vol\\x' }));
+    expect(verdict()).toBe('(link: via-mount)');
+  });
+
+  it('C7 a mount INSIDE the source sidecar rules the alias out: root-mismatch, the content still lands', () => {
+    plantSource();
+    carry(rig({ extra: [mountRow({ id: 40, parent: 31, majmin: '0:99',
+      root: `/home/.claude/projects/${PDIR}/${UUID}/tool-results`, target: side('.claude', 'tool-results') })] }));
+    expect(copied()[0]).toBe('root-mismatch');
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('C8 the alias cannot be stat\'ed (no search permission): root-unreachable', () => {
+    plantSource();
+    const r = rig();
+    fs.chmodSync(path.join(h.home, 'vol', 'home'), 0o000);
+    carry(r);
+    expect(copied()[0]).toBe('root-unreachable');
+  });
+
+  it('C9 the link through a PROVED alias fails too: root-failed, the destination cleared again (no nest), the content lands', () => {
+    plantSource();
+    const r = rig();
+    carry({ ...r, env: { ...r.env, FAKE_CP_AL_FAIL: '1' } });
+    expect(copied()[0]).toBe('root-failed');
+    expect(fs.existsSync(side('.claude-d', UUID)), 'a <uuid>/<uuid> nest').toBe(false);
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+  });
+
+  it('C10 LAZY: a direct cp -al that works is never routed, even over a routable table — (link)', () => {
+    plantSource();
+    carry({ env: bindFixture(h.home) });
+    expect(verdict()).toBe('(link)');
+    expect(ino(side('.claude-d', R_JSON))).toBe(ino(side('.claude', R_JSON)));
+  });
+
+  it('C11 a copy says so on stderr, with its cause and its bytes', () => {
+    plantSource();
+    carry(rig({ common: 'none' }));
+    const [cause, n] = copied();
+    expect(stderr()).toContain(`ccd: warn: sidecar ${UUID} carried to ${side('.claude-d')} as a COPY (${cause}, ${n} bytes)`);
+  });
+});
+
+// THE REAL KERNEL, where it can be had: an unprivileged user namespace with its
+// own mount namespace mounts a tmpfs whole and binds two of its directories as
+// the account roots — the fleet's geometry — and ccd reads that namespace's own
+// `/proc/self/mountinfo` (`CCD_MOUNTINFO=''`). Probe-gated: GitHub's
+// ubuntu-24.04 runners restrict unprivileged user namespaces, so CI skips it,
+// and macOS has none.
+const userns = ((): boolean => {
+  if (!IS_LINUX) return false;
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-userns-'));
+  try {
+    execFileSync('unshare', ['-Urm', 'sh', '-c', 'mount -t tmpfs t "$1"', '_', d], { stdio: 'ignore' });
+    return true;
+  } catch { return false; } finally { fs.rmSync(d, { recursive: true, force: true }); }
+})();
+
+describe('the real kernel (Linux, unprivileged user namespaces only)', () => {
+  it.skipIf(!userns)('binds of one tmpfs: a direct ln is EXDEV, and both the first carry and a merge link via the whole mount', () => {
+    const script = path.join(h.home, 'realk.sh');
+    fs.writeFileSync(script, [
+      'set -u',
+      'W="$HOME/whole vol"; S="projects/' + PDIR + '/' + UUID + '"',
+      'mkdir -p "$W" "$HOME/.claude" "$HOME/.claude-d"',
+      'mount -t tmpfs t "$W"',
+      'mkdir -p "$W/home/.claude/$S/tool-results" "$W/home/.claude-d/projects/' + PDIR + '"',
+      'printf RESULT > "$W/home/.claude/$S/tool-results/r.json"',
+      'mount --bind "$W/home/.claude" "$HOME/.claude"',
+      'mount --bind "$W/home/.claude-d" "$HOME/.claude-d"',
+      'if ln "$HOME/.claude/$S/tool-results/r.json" "$HOME/.claude-d/direct" 2>/dev/null; then echo "control: linked"; else echo "control: refused"; fi',
+      'source "$1"',
+      'CCD_MOUNTINFO="" _swap_carry_sidecars "$HOME/.claude" "$HOME/.claude-d" ' + UUID,
+      'printf NEW > "$HOME/.claude/$S/tool-results/s.json"',
+      'CCD_MOUNTINFO="" _swap_carry_sidecars "$HOME/.claude" "$HOME/.claude-d" ' + UUID,
+      'for f in r s; do echo "$f $(stat -c %i "$HOME/.claude/$S/tool-results/$f.json") $(stat -c %i "$HOME/.claude-d/$S/tool-results/$f.json")"; done',
+    ].join('\n'));
+    const out = h.sh(`unshare -Urm bash "${script}" "${CCD}" 2>&1`);
+    expect(out).toContain('control: refused');
+    for (const f of ['r', 's']) {
+      const m = new RegExp(`^${f} (\\d+) (\\d+)$`, 'm').exec(out);
+      expect(m, out).not.toBeNull();
+      expect(m![1], `${f}.json shares one inode`).toBe(m![2]);
+    }
+    const modes = swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> `)).map((l) => l.replace(/^.* \(/, '('));
+    expect(modes).toEqual(['(link: via-mount)', '(merged +1 ~0 !0, via-mount 1)']);
   });
 });
