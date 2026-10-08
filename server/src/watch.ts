@@ -30,7 +30,7 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  ChildMark, ChildReclaimAttention, ChildReclaimKeptWord, CoordStatus, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
+  ChildMark, ChildReclaimAttention, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
   LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
@@ -109,6 +109,18 @@ import {
   type ArchivedExpiryEntry, type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
+import {
+  deadAnchorNext, deadCoordinatorAttention, deadCoordinatorBreaker,
+  deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal,
+  deadCoordinatorNextEntry, deadCoordinatorOutcomeKey, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrew,
+  type ClaimantDeadCause, type DeadAnchor, type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker,
+  type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal,
+} from './deadCoordinator.js';
+import {
+  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker,
+  recordDeadCoordinatorFeed,
+} from './coord/endDeadCoordinator.js';
+import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -1127,6 +1139,22 @@ export class FleetWatcher {
   private archivedExpirySweeping = false;
   /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
   private archivedExpiryBoxRefused: string | null = null;
+  /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock; ONE PASS AT A TIME, the expiry lane's reason;
+   *  its memory per claimant (IN MEMORY: the run of crashed passes, the backoff, the last outcome and the report — the
+   *  durable half, the first-dead anchor, is `coord.db`'s `dead_claimants`); its breaker as the last pass measured it;
+   *  and its attention list, which `emitCoord` reads. */
+  private lastDeadCoordinatorSweep = 0;
+  private deadCoordinatorSweeping = false;
+  private deadCoordinatorState = new Map<string, DeadCoordinatorEntry>();
+  private deadCoordinatorBreakerState: DeadCoordinatorBreaker = { tripped: false };
+  /** The breaker's memory: the members it holds with their ORIGINAL first-dead instants, released only on evidence
+   *  (`breaker-remembers-its-cluster`); and the key of the trip its feed row last recorded. */
+  private deadCoordinatorBreakerHeld: readonly DeadCoordinatorBreakerMember[] = [];
+  private deadCoordinatorBreakerRecorded: string | null = null;
+  private deadCoordinatorAttentionList: readonly DeadCoordinatorAttention[] = [];
+  /** The coordination serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`), handed over by `buildServer`
+   *  once `registerCoordRoutes` has built it. Until then the lane measures and records, and ends nothing. */
+  private deadCoordinatorSerial: CoordRoutesHandle['withSweepAbandon'] | null = null;
   /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
    *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
    *  and `currentPools()` sends NOTHING while it is: a fabricated empty map
@@ -1651,6 +1679,17 @@ export class FleetWatcher {
     return this.archivedExpiryState;
   }
 
+  /** The dead-coordinator lane's memory, read-only (wave 4) — for its tests. */
+  currentDeadCoordinators(): ReadonlyMap<string, DeadCoordinatorEntry> {
+    return this.deadCoordinatorState;
+  }
+
+  /** `buildServer` hands the lane the coordination serialiser's sweep handle (workspace lifecycle spec §5.4: "the lane
+   *  runs on the coordination serialiser, exported from `registerCoordRoutes`"). The lane's ONLY way to end a run. */
+  useCoordSerialiser(h: Pick<CoordRoutesHandle, 'withSweepAbandon'>): void {
+    this.deadCoordinatorSerial = h.withSweepAbandon;
+  }
+
   /** The last measured project-pool sweep, or null if none has been taken yet
    *  — same reasoning as `currentCoord()`'s null. */
   currentPools(): ProjectPoolsWire | null {
@@ -1852,6 +1891,11 @@ export class FleetWatcher {
       // NEVER awaited, the child lane's reasons: the EXPIRY lane (workspace lifecycle wave 3b) — a SIBLING pass on
       // the same tick's registry read, at the same cadence, under the same switch, sharing nothing else.
       void this.sweepArchivedExpiry(records, registryRead.names)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the DEAD-COORDINATOR lane (workspace lifecycle wave 4) — a third sibling on
+      // this tick's registry read, cadence and switch, sharing nothing else; its act waits on the coordination
+      // serialiser behind whatever write route is running.
+      void this.sweepDeadCoordinators(records, registryRead.names)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
@@ -2184,11 +2228,13 @@ export class FleetWatcher {
   private emitCoord(names: readonly string[] | null): void {
     const status: CoordStatus = names === null
       ? { pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable',
-          childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList }
+          childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList,
+          deadCoordinatorAttention: this.deadCoordinatorAttentionList }
       : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
           mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear',
           reclaim: names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear',
-          childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList };
+          childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList,
+          deadCoordinatorAttention: this.deadCoordinatorAttentionList };
     const json = JSON.stringify(status);
     if (json === this.lastCoordJson) return;
     this.lastCoordJson = json;
@@ -3914,14 +3960,15 @@ export class FleetWatcher {
       });
       entry = archivedExpirySighted(entry, v, r.held, now);
       this.archivedExpiryState.set(r.id, entry);
-      if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt && learn.length < EXPIRE_AUDITS_PER_PASS) {
-        learn.push(r.id);
-      }
+      if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt) learn.push(r.id);
       if (archivedExpiryDue(entry, now)) due.push(r.id);
     }
     for (const id of [...this.archivedExpiryState.keys()]) if (!seen.has(id)) this.archivedExpiryState.delete(id);
-    // THREE — learn: one audit at a time, each on its session's queue.
-    for (const id of learn) {
+    // THREE — learn: one audit at a time, each on its session's queue. The slots go in `nextAskAt` order — a row never
+    // asked (0) first, then the rows asked longest ago — never registry order, so rows that keep failing cannot take
+    // every slot from a row behind them (review 313, parked item 1). The sort is stable: ties keep registry order.
+    learn.sort((a, b) => this.archivedExpiryState.get(a)!.nextAskAt - this.archivedExpiryState.get(b)!.nextAskAt);
+    for (const id of learn.slice(0, EXPIRE_AUDITS_PER_PASS)) {
       try {
         const read = await this.deps.queue.run(id, () => learnExpiry(this.deps, id));
         const e = this.archivedExpiryState.get(id);
@@ -3964,6 +4011,224 @@ export class FleetWatcher {
     if (!past || openWorker || openClaimant) return { ok: true, openWorker, openClaimant, reviewing: false };
     const review = expiryReviewing(coord, id);
     return review.ok ? { ok: true, openWorker, openClaimant, reviewing: review.reviewing } : review;
+  }
+
+  /**
+   * THE DEAD-COORDINATOR LANE (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a coordinator that CRASHED and has
+   * stayed dead an hour, with no successor, has its open runs closed `failed` — and CCR-15 then reclaims its marked
+   * children. A THIRD SIBLING of `sweepChildReclaim` on the same tick, with its registry read, its cadence
+   * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, the fleet's one cleanup switch) — and nothing else:
+   * its own memory, verdicts (`deadCoordinator.ts`, L1), executor (`endDeadCoordinator`), feed rows and attention list
+   * (the expiry lane's shape, `expiry-lane-is-a-sibling-pass`).
+   *
+   * IT SHIPS SHADOWED (the coordinator's safety ruling (B)). Until the operator touches `$REG/dead-coordinator-lane-live`
+   * by hand, a due claimant is RECORDED — "would end programme <slug> (<n> runs)", a feed row and an attention entry —
+   * and `closeRun`'s abandon arm is never reached; the executor re-reads the file inside the serialiser. The anchors and
+   * the breaker are kept in shadow too, so the operator sees them before arming. `reclaim-paused` stops it ENTIRELY.
+   *
+   * WHO IT MEASURES: the distinct claimants of non-terminal runs, each with the reclaim door's own ladder
+   * (`measureClaimant`, its dead arm carrying `cause`), plus ONE store read of the journal clause for the dead ones.
+   * A crash, and only a crash, writes the durable first-dead anchor; any other answer deletes it — and a journal the
+   * lane cannot trust to hold every deliberate act is no crash. DUE when an hour has passed since
+   * `max(firstDeadAt, .supervised)` and the two latest passes both measured it crashed. Armed, AT MOST ONE claimant is
+   * acted on per pass, the longest dead first; in shadow every due one is recorded; never while the circuit breaker
+   * stands.
+   *
+   * IT NEVER PUSHES. The stall watch is what notifies about a dead coordinator: per stalled worker, its r3
+   * (`coordinator-dead`, "Reclaim the run") and — once its wave-2 arms are armed — `coord-deaf` for a worker's unacked
+   * ball-passing mail, each naming the worker's workspace and the coordinator. This lane's rows are records and
+   * attention entries keyed by the same claimant id, so they read as that incident's outcome, never a second one.
+   */
+  async sweepDeadCoordinators(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.deadCoordinatorSweeping) return;
+    const now = Date.now();
+    if (this.lastDeadCoordinatorSweep !== 0 && now - this.lastDeadCoordinatorSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastDeadCoordinatorSweep = now;
+    this.deadCoordinatorSweeping = true;
+    try {
+      await this.deadCoordinatorPass(coord, records, names, now);
+    } finally {
+      this.deadCoordinatorSweeping = false;
+    }
+  }
+
+  /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
+  private async deadCoordinatorPass(
+    coord: CoordStore, records: readonly SessionRecord[], names: readonly string[], now: number,
+  ): Promise<void> {
+    const forget = (): void => {
+      for (const [id, e] of this.deadCoordinatorState) {
+        if (e.crashedPasses !== 0) this.deadCoordinatorState.set(id, { ...e, crashedPasses: 0 });
+      }
+    };
+    // ONE — the switch. `reclaim-paused` stops the lane entirely, shadow included: nothing is measured, recorded or
+    // written. The run of crashed passes is forgotten, so a lowered switch needs two FRESH passes; the durable anchors
+    // stand (the next crashed pass continues them, or the gap restarts them).
+    if (names.includes(RECLAIM_PAUSE_MARKER)) { forget(); return; }
+    // TWO — the journal's own trust (`readDeadCoordinatorJournalTrust`): a mirror not swept yet, or gone stale,
+    // decides NOTHING this pass — no anchor is written or deleted, and the run of crashed passes starts again.
+    const journal = await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth());
+    if (journal.hold !== null) {
+      console.warn(`ccrc-server: sweepDeadCoordinators: ${journal.hold} — no decisions this pass`);
+      forget();
+      return;
+    }
+    // THREE — the population, the anchors: one statement each. Either failing decides nothing this pass.
+    let ids: string[];
+    let anchors: ReadonlyMap<string, DeadAnchor>;
+    try {
+      ids = [...new Set(coord.openCoordinatorIds())].sort();
+      const a = coord.deadAnchors();
+      if (!a.ok) throw new Error(a.detail);
+      anchors = a.anchors;
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDeadCoordinators could not read the coordination store (${err instanceof Error ? err.message : String(err)}) — no decisions this pass`);
+      forget();
+      return;
+    }
+    // FOUR — each claimant, measured by the reclaim door's own ladder, one at a time, through a tmux port that notes
+    // a tmux that did not answer (a FLEET-wide doubt the breaker reads); then the journal clause for the dead ones in
+    // ONE store read. A read that throws is `unreadable` for each of them — never "no history".
+    const fleetDoubt: string[] = [];
+    const tmux = {
+      sessionVerdict: async (id: string) => {
+        const v = await this.deps.tmux.sessionVerdict(id);
+        if (v.verdict === 'unknown') fleetDoubt.push(`tmux did not answer for ${id}: ${v.detail}`);
+        return v;
+      },
+    };
+    // EACH claimant is measured at the instant it is measured — a fresh `Date.now()`, never the pass's `now`, which is
+    // older by every awaited read before it: a supervisor heartbeat landing mid-pass would read as a FUTURE stamp, and a
+    // coordinator being brought back would read crashed. That instant is that claimant's own through step five (its
+    // anchor, its hour, its sighting); the pass's `now` stays the instant of what is the pass's — the cadence stamp, the
+    // breaker's clock, the due test, the feed rows.
+    const measured = new Map<string, Awaited<ReturnType<typeof measureClaimant>>>();
+    const measuredAt = new Map<string, number>();
+    for (const id of ids) {
+      const at = Date.now();
+      measuredAt.set(id, at);
+      measured.set(id, await measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux }, id, at));
+    }
+    const dead = ids.filter((id) => measured.get(id)!.state === 'dead');
+    let journalOf: (id: string) => DeadCoordinatorJournal;
+    try {
+      const rows = coord.deadCoordinatorJournalRows(dead);
+      journalOf = (id) => {
+        const j = rows.get(id);
+        return j === undefined ? { kind: 'no-history' } : deadCoordinatorJournal(j.rows, j.hasHistory, journal.trust);
+      };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      journalOf = () => ({ kind: 'unreadable', detail });
+    }
+    // FIVE — a crash and only a crash keeps (or starts) the durable anchor; any other answer deletes it.
+    const crashed: { id: string; firstDeadAt: number; since: number; cause: Exclude<ClaimantDeadCause, 'stopped'> }[] = [];
+    const unmeasurable: string[] = [];
+    /** Claimants this pass gave EVIDENCE about — alive, stopped, a deliberate act: the breaker releases them. */
+    const released = new Set<string>();
+    for (const id of ids) {
+      const c = deadCoordinatorCrash(measured.get(id)!, journalOf(id));
+      if (c.kind === 'unmeasurable') unmeasurable.push(id);
+      if (c.kind === 'alive' || c.kind === 'stopped' || c.kind === 'deliberate') released.add(id);
+      const at = measuredAt.get(id)!;
+      let entry = deadCoordinatorSighted(this.deadCoordinatorState.get(id) ?? deadCoordinatorEntry(), c, at);
+      try {
+        if (c.kind === 'crashed') {
+          const a = deadAnchorNext(anchors.get(id) ?? null, at);
+          coord.setDeadAnchor(id, a);
+          const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
+          crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, at), cause: c.cause });
+        } else if (anchors.has(id)) {
+          coord.deleteDeadAnchor(id);
+        }
+      } catch (err) {
+        // An anchor this pass could not write is an hour nobody can count: the run of crashed passes starts again.
+        console.warn(`ccrc-server: sweepDeadCoordinators could not keep ${id}'s anchor (${err instanceof Error ? err.message : String(err)})`);
+        entry = { ...entry, crashedPasses: 0 };
+      }
+      this.deadCoordinatorState.set(id, entry);
+    }
+    // A claimant that left the population (its runs closed, or reclaimed by an heir) is forgotten, anchor and all.
+    for (const id of [...this.deadCoordinatorState.keys()]) if (!ids.includes(id)) this.deadCoordinatorState.delete(id);
+    for (const id of anchors.keys()) {
+      if (!ids.includes(id)) {
+        try { coord.deleteDeadAnchor(id); } catch { /* the next pass deletes it */ }
+      }
+    }
+    // SIX — the circuit breaker, evaluated in shadow too, WITH ITS MEMORY: a member stays held until this pass gave
+    // evidence about it or it left the population; a pass that only doubted it keeps it, at its first instant.
+    const held = this.deadCoordinatorBreakerHeld.filter((m) => ids.includes(m.id) && !released.has(m.id));
+    const breaker = deadCoordinatorBreaker(crashed, held, unmeasurable, ids.length,
+      fleetDoubt.length === 0 ? null : fleetDoubt.join('; '), now);
+    this.deadCoordinatorBreakerState = breaker;
+    this.deadCoordinatorBreakerHeld = breaker.tripped ? breaker.members : [];
+    const key = deadCoordinatorBreakerKey(breaker);
+    if (breaker.tripped && key !== this.deadCoordinatorBreakerRecorded) {
+      recordDeadCoordinatorBreaker({ coord, notifyLog: this.deps.notifyLog }, breaker);
+    }
+    this.deadCoordinatorBreakerRecorded = key;
+    // SEVEN — the act, never while the breaker stands, the longest dead first. ARMED, at most ONE claimant a pass. In
+    // SHADOW every due claimant is recorded — a would-end touches nothing on the box, and the shadow list is what the
+    // operator arms on (the shadow half of `one-dead-coordinator-per-pass`). The executor decides shadow from its own listing, so
+    // an outcome that is not a would-end ends the pass however this pass's listing read.
+    if (!breaker.tripped) {
+      const due = crashed.filter((c) => {
+        const e = this.deadCoordinatorState.get(c.id)!;
+        return deadCoordinatorDue(c.since, e.crashedPasses, now) && now >= e.nextAskAt;
+      }).sort((a, b) => a.since - b.since || (a.id < b.id ? -1 : 1));
+      const armed = deadCoordinatorLaneArmed(names);
+      for (const pick of due) {
+        const out = await this.deadCoordinatorAct(coord, pick, now);
+        if (armed || out?.kind !== 'would-end') break;
+      }
+    }
+    // EIGHT — the attention list, from the lane's memory and its breaker alone.
+    this.deadCoordinatorAttentionList = deadCoordinatorAttention(this.deadCoordinatorState, this.deadCoordinatorBreakerState);
+  }
+
+  /** The act — or its shadow — for one due claimant, on the coordination serialiser. Its outcome, or `null` when it
+   *  was not asked (no serialiser) or threw. */
+  private async deadCoordinatorAct(
+    coord: CoordStore, pick: { id: string; since: number; cause: Exclude<ClaimantDeadCause, 'stopped'> }, now: number,
+  ): Promise<DeadCoordinatorActOutcome | null> {
+    const serial = this.deadCoordinatorSerial;
+    if (serial === null) {
+      console.warn(`ccrc-server: sweepDeadCoordinators: ${pick.id} is due, but no coordination serialiser is wired — nothing ended or recorded`);
+      return null;
+    }
+    const deps = { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, notifyLog: this.deps.notifyLog,
+      // Each re-measure reads the clock as it measures (the watcher's own source, `Date.now`), never the pass's `now`.
+      now: (): number => Date.now(),
+      journalTrust: async () => (await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg },
+        this.lifecycleHealth())).trust };
+    try {
+      const out = await serial(coord, (abandon) => endDeadCoordinator({ ...deps, abandon }, pick.id, now));
+      const e = this.deadCoordinatorState.get(pick.id) ?? deadCoordinatorEntry();
+      // An act is always news; a shadow record or a pause is written when it CHANGES.
+      if (out.kind === 'ended' || deadCoordinatorOutcomeKey(out) !== e.lastOutcome) {
+        recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, out, pick.since);
+      }
+      this.deadCoordinatorState.set(pick.id, deadCoordinatorNextEntry(e, out, pick.cause, pick.since, Date.now(), CHILD_RECLAIM_SWEEP_MS));
+      // A re-measure that found it NOT crashed is evidence: its hour starts again from the next crash (ruling E: any
+      // answer but a crash deletes the anchor, and `deadCoordinatorNextEntry` forgets the run of crashed passes).
+      if (out.kind === 'ended' && out.stoppedBy?.kind === 'remeasured') {
+        try { coord.deleteDeadAnchor(pick.id); } catch { /* the next pass's own answer deletes or keeps it */ }
+      }
+      return out;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(`ccrc-server: sweepDeadCoordinators: the act on ${pick.id} threw (${detail}) — asked again after a backoff`);
+      const e = this.deadCoordinatorState.get(pick.id) ?? deadCoordinatorEntry();
+      // The runs the act closed before it threw ARE closed: their feed rows are written, and the entry says what closed.
+      const done = err instanceof DeadCoordinatorActThrew ? err.outcome : null;
+      if (done !== null && done.programmes.length > 0) {
+        recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, pick.since);
+      }
+      this.deadCoordinatorState.set(pick.id, deadCoordinatorThrew(e, detail, Date.now(), CHILD_RECLAIM_SWEEP_MS,
+        done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], stop: null } : undefined));
+      return null;
+    }
   }
 
   /** The hold-release job's own executor: `releaseRetiredChildHold` on the

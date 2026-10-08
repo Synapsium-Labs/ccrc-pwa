@@ -3140,9 +3140,9 @@ what it cannot.
    an unmeasured marker must not read as "running". The cleanup row beneath it
    keeps the same discipline for `$REG/reclaim-paused`, the fleet's one cleanup
    switch (`POST /api/coord/reclaim-pause`), and lists the children reclamation
-   could not clean up (**The reclaim sweep, and how to stop it**, below) and the
+   could not clean up (**The reclaim sweep, and how to stop it**, below), the
    archived workspaces the expiry lane reports (the expiry lane, further
-   below).
+   below) and the coordinators the dead-coordinator lane reports (just after it).
 2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
    It **releases** the hold; it never archives, and there is no archive
    control anywhere on the sheet. A CHILD goes further: an abandon finishes
@@ -3485,6 +3485,37 @@ server, a tmux or fsmonitor daemon) is refused `in-use` on every pass and, after
 its command and its path. The lane never kills: find out what the process is first — the fleet's own tmux server is
 also a `tmux: server`. A workspace held past its seven days is listed, never touched.
 
+**A coordinator that crashed is ended after an hour** (workspace lifecycle spec §5.4). A coordinator whose pane is
+gone with nothing bringing it back (`orphan`, `never-started`), or whose registry row is gone, with no deliberate act
+journaled since its last successful spawn — a stop, an archive, a reap, a destroy, a purge, a forget, a reclaim, an
+expiry, or an unsupervise somebody declared — and that has stayed so for an hour on two passes in a row, has its open
+runs closed `failed` by the server once the operator has armed the lane with `$REG/dead-coordinator-lane-live`; until
+then the lane only records what it would end. The hour counts from the first pass that measured the crash, kept in
+`coord.db` across restarts and raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten
+minutes (a restart, a pause, a stale mirror) starts the hour afresh, and trips the breaker when two or more coordinators
+were crashed, since each re-anchors on the same pass. A stopped coordinator is never
+ended, nor one a supervisor is bringing back, nor one the server cannot measure. A coordinator whose journal the
+server cannot trust to hold every deliberate act — the lifecycle mirror `unavailable` (the fleet's ccd does not journal), a gap it recorded since the
+coordinator's last start, a journal line ccd could not write — is listed and never acted on, and so are one with no
+registry row and no journal history, one that never started, and one whose journal holds a failed spawn and no successful one; while the mirror has not swept since a restart, or has
+gone stale, a pass decides nothing at all. The act runs on the coordination serialiser: it re-measures the coordinator
+immediately before each run's fleet act and again before its commit, and commits only while the run still names it, so
+a successor is never failed and a coordinator revived meanwhile keeps its programme — all but a revive that lands
+inside that last round trip.
+Each closed run's event says the sweep did it (`causedBy: sweep`), CCR-15 reclaims each marked worker whose run closed
+(a worker mid-turn loses its turn; its work is pinned in the attic), an unmarked worker is released, and one feed row
+per programme says so. **The lane ships shadowed**: until the operator touches `$REG/dead-coordinator-lane-live` by
+hand in the registry the server reads (the fleet box's, through the agent, when the server runs `CCRC_FLEET=remote`;
+nothing in this tree writes it), a due coordinator is recorded — a feed row and an entry in the cleanup row on `/runs`
+naming the programmes it would end — and no run is closed. Two or more coordinators first seen crashed within ten
+minutes of each other trip a circuit breaker: the lane ends nothing at all, lists them once, and resumes when fewer
+than two remain — revive them, reclaim their programmes or abandon their runs. A coordinator it holds stays held
+through a pass that cannot measure it, and a pass on which tmux does not answer trips it too. Armed, at most one
+coordinator is ended per pass; in shadow every due one is recorded. `$REG/reclaim-paused` stops this lane too, shadow
+included. It never pushes: the stall watch's pushes about a dead coordinator's stalled workers — one per worker, each
+naming the coordinator — are the notifications, and this lane's rows (each with the instant the coordinator was first
+seen dead, and one when the breaker trips) are records of the same incident.
+
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
 an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely
@@ -3634,7 +3665,7 @@ raised and that nobody is viewing it in the PWA; the box then defers rather than
 act on a pane a terminal is attached to, a hold, `$REG/reclaim-paused` (raised
 and lowered by `ccd reclaim-pause --state on|off` — from the cleanup row on
 `/runs` through `POST /api/coord/reclaim-pause`, or on the fleet host — it
-pauses every reclamation and every expiry fleet-wide), a git operation in progress, a lock, or
+pauses every reclamation, every expiry and the dead-coordinator lane fleet-wide), a git operation in progress, a lock, or
 a token gone stale, and refuses outright what waiting will not change — not a
 child, containment unproven, a directory git does not record as a worktree.
 Every outcome but `gone` is a feed row naming its condition, and pinned work
@@ -4064,7 +4095,7 @@ hold, a human's included, keeps the child. The sweep's switch is
 `/runs` (`POST /api/coord/reclaim-pause`, session-gated, no box token), or run
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, `ws-reclaim` itself
-refuses `paused` on the box, and the expiry of archived workspaces stops too. The same row lists the children that need a
+refuses `paused` on the box, and the expiry of archived workspaces stops too, as does the dead-coordinator lane. The same row lists the children that need a
 human's eye: each under a terminal refusal, each whose reclaim has kept failing
 for 15 minutes, and each the sweep keeps for a person while its reason stands.
 
@@ -4763,8 +4794,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7833-7835`), each with an operator sentence of its own at `:7875`,
-`:7883` and `:7896`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7849-7851`), each with an operator sentence of its own at `:7891`,
+`:7899` and `:7912`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5163,7 +5194,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-reclaim …` | the server's removal of a CHILD workspace a run minted — never run by hand or by a session |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
-| `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation and the expiry of archived workspaces); tag / untag a project's pool |
+| `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p>` | open the workspace's PR — the one PR write; read PR state |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane, on the box (the agent grants no `account-pane`) |
 | `caps` · `version` | the verbs this copy implements; this box's build stamp |

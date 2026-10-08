@@ -25,7 +25,7 @@ import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
-import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -248,6 +248,10 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
+    // Reached only through the sweep's handle, never from a route: no route passes a sweep guard. Mapped so the
+    // switch stays total.
+    case 'claimant-changed': return reply.code(409).send({ ok: false, error: 'claimant-changed', claimedBy: r.claimedBy });
+    case 'sweep-stopped': return reply.code(409).send({ ok: false, error: 'sweep-stopped', stop: r.stop, released: r.released });
     default: {
       const _exhaustive: never = r;
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
@@ -442,6 +446,14 @@ export interface CoordRoutesHandle {
     abandon: (runId: number) => Promise<CloseOutcome>,
     refusalOf: (runId: number) => Extract<CloseOutcome, { ok: false }> | null,
   ) => Promise<T>): Promise<T>;
+  /** The SAME hold, handed `closeRun`'s abandon arm as the DEAD-COORDINATOR LANE runs it (workspace lifecycle spec
+   *  2026-09-24 §5.4): `causedBy: 'sweep'`, never the operator's word; the compare-and-set on `claimedBy` against the
+   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; CCR-15 wave
+   *  3's `childReclaim` port wired exactly as the abandon route wires it. The lane's only way to end a run, so the
+   *  reclaim door — which runs inside this serialiser — can never interleave with it. */
+  withSweepAbandon<T>(coord: CoordStore, fn: (
+    abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
+  ) => Promise<T>): Promise<T>;
 }
 
 /**
@@ -525,6 +537,13 @@ export function registerCoordRoutes(
     { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
       childReclaim: childReclaimPort(deps, coord) },
     runId, { intent: 'abandon' }, 'operator'), (runId) => abandonRefusal(coord, runId)));
+
+  /** The dead-coordinator lane's abandon (workspace lifecycle spec §5.4) — `withAbandon`'s deps, `'sweep'` and the
+   *  crashed id, inside the same `coordMutex`. Handed to the watcher by `buildServer`. */
+  const withSweepAbandon: CoordRoutesHandle['withSweepAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId, crashedId, stillCrashed) => closeRun(
+    { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
+      childReclaim: childReclaimPort(deps, coord) },
+    runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillCrashed })));
 
   // The process's ONE `LedgerLog` (the parts-B handoff): the file half of the
   // allocator's MAX(file, db) recovery, held here and handed into
@@ -4038,5 +4057,5 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, asks: read.asks });
   });
 
-  return { withAbandon };
+  return { withAbandon, withSweepAbandon };
 }

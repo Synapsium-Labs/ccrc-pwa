@@ -3872,6 +3872,19 @@ export interface ExpiryAttention {
   readonly at: number;
 }
 
+/** One report of the DEAD-COORDINATOR lane (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a claimant it WOULD end
+ *  the programme of while it runs shadowed (`would-end`), one it cannot tell crashed from put down on purpose
+ *  (`unmeasured`), one whose runs the abandon arm could not move (`stuck`), and the circuit breaker (`breaker`, naming
+ *  every claimant it holds). A REPORT, never a tap: the doors that act are the ones that already exist — revive,
+ *  reclaim, abandon. NEVER the child or expiry lane's list. `sentence` is the SERVER's; `at` (epoch ms, the server's
+ *  clock) is since when it stands, kept in the lane's memory and rebuilt on the passes after a restart. */
+export interface DeadCoordinatorAttention {
+  readonly kind: 'would-end' | 'unmeasured' | 'stuck' | 'breaker';
+  readonly claimants: readonly string[];
+  readonly sentence: string;
+  readonly at: number;
+}
+
 /** The three markers the coordination lane is governed by, read together
  *  because they come from one listing: `coordinator-paused` (spec §4.2 — the
  *  one file that stops a program mid-flight), `mail-disabled` (the injection
@@ -3892,6 +3905,9 @@ export interface CoordStatus {
   /** The expiry lane's own list (wave 3b). OPTIONAL on the wire: an older server omits it, and the PWA's one reader
    *  (`pwa/src/fleet/expiryWords.ts`) reads absence as no items. */
   expiryAttention?: readonly ExpiryAttention[];
+  /** The dead-coordinator lane's own list (wave 4). OPTIONAL on the wire: an older server omits it, and the PWA's one
+   *  reader (`pwa/src/fleet/deadCoordinatorWords.ts`) reads absence as no items. */
+  deadCoordinatorAttention?: readonly DeadCoordinatorAttention[];
 }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
