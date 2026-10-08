@@ -287,3 +287,33 @@ import { DatabaseSync as DatabaseSyncF28 } from 'node:sqlite';
     syncF28();
   }
 }
+
+// ── FU4 M30: a status read that throws something other than SQLite's own error ──────────────────────
+// HISTORY_TEST_THROW_PREPARE=<kind>@<substring>: preparing a statement whose SQL contains <substring> throws. <kind> is
+//   `TypeError`  a plain TypeError, with no `code` — a programming defect in the reader, which `readStoreAnswered`
+//                (cli.mjs) must let escape as exit 1 rather than answer as a store word, or
+//   `StoreError:<word>`  a store.mjs StoreError carrying <word> (the reader's open refused), which it answers as that word.
+//   Every other statement runs for real. The substring is chosen past the binding read, so only readStore meets it.
+import { syncBuiltinESMExports as syncM30 } from 'node:module';
+import { DatabaseSync as DatabaseSyncM30 } from 'node:sqlite';
+{
+  const specM30 = process.env.HISTORY_TEST_THROW_PREPARE ?? '';
+  const atM30 = specM30.indexOf('@');
+  if (atM30 > 0) {
+    const kindM30 = specM30.slice(0, atM30);
+    const needleM30 = specM30.slice(atM30 + 1);
+    // Imported here, never at the top: a preload that merely loads must not evaluate store.mjs before the patches above.
+    const { StoreError: StoreErrorM30 } = await import('../../../../ccd/history/store.mjs');
+    const protoM30 = DatabaseSyncM30.prototype;
+    const realPrepareM30 = protoM30.prepare;
+    protoM30.prepare = function prepareM30(sql) {
+      if (needleM30 !== '' && String(sql).includes(needleM30)) {
+        if (kindM30 === 'TypeError') throw new TypeError('TypeError: injected programming defect (test preload)');
+        if (kindM30.startsWith('StoreError:')) throw new StoreErrorM30(kindM30.slice('StoreError:'.length), 'injected store refusal (test preload)');
+        throw new Error(`preload-faults: HISTORY_TEST_THROW_PREPARE kind ${kindM30} is not TypeError or StoreError:<word>`);
+      }
+      return realPrepareM30.call(this, sql);
+    };
+    syncM30();
+  }
+}

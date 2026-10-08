@@ -250,6 +250,47 @@ describe('ccrc history status (Linux)', () => {
     expect(r.stdout).toContain('exit 5 store-read-failed');
   });
 
+  // FU4 M30 (review 316 F11): readStoreAnswered classifies ONLY a StoreError and SQLite's own error (code ERR_SQLITE_ERROR) as a
+  // store word; any other throw is a defect in the reader and stays exit 1 with no envelope. The preload fails the preparation of
+  // the counters read, which only readStore (past the binding read) issues.
+  it('M30: a plain TypeError out of the status read is a programming defect: exit 1, no envelope, never store-read-failed', () => {
+    const box = boundBox('ccrc-hist-cli-m30a-');
+    const r = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'TypeError@FROM counters' } });
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stdout.trim(), 'no envelope is answered for a defect').toBe('');
+    expect(r.stderr).toContain('ccrc history: internal error: TypeError: injected programming defect');
+    expect(r.stderr).not.toContain('store-read-failed');
+  });
+
+  it('M30: a StoreError out of the status read answers its own word (store-missing), exit 5, one envelope', () => {
+    const box = boundBox('ccrc-hist-cli-m30b-');
+    const r = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'StoreError:store-missing@FROM counters' } });
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.stdout.trim().split('\n')).toHaveLength(1);
+    expect([r.env.exit, r.env.reason]).toEqual([5, 'store-missing']);
+    expect(r.env.store_id).toBe(storeIdOf(box));
+  });
+
+  // FU4 M31 (review 316 F11 named "corrupt"): a bound store with the page at offset 2 * 4096 destroyed, the WAL checkpointed
+  // first. MEASURED: the damage is caught BEFORE readStoreAnswered, by measureStoreFacts' peekStoreId (its read of the db's own
+  // meta.store_id, the binding read), which fails: store-unmeasured, never store-read-failed (that word is
+  // the F11 cases above, whose binding read passes). Either way it is ONE envelope with exit 5, not exit 1 with empty stdout.
+  it('M31: a bound store with a page destroyed past the header answers ONE envelope, exit 5, never exit 1 with empty stdout', () => {
+    const box = boundBox('ccrc-hist-cli-m31-');
+    const db = new DatabaseSync(dbFile(box));
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');   // every page is in the main file, so the damage is what a read meets
+    db.close();
+    const fd = fs.openSync(dbFile(box), 'r+');
+    try { fs.writeSync(fd, Buffer.alloc(4096, 0xa5), 0, 4096, 2 * 4096); } finally { fs.closeSync(fd); }
+    const r = status(box);
+    expect(r.code, r.stderr).toBe(5);
+    expect(r.stdout.trim(), 'one JSON envelope, never an empty stdout').not.toBe('');
+    expect(r.stdout.trim().split('\n')).toHaveLength(1);
+    expect(r.env.exit).toBe(5);
+    expect(r.env.reason, r.stderr).toBe('store-unmeasured');
+    expect(r.env.store_id).toBe(storeIdOf(box));
+  });
+
   it('an unreadable store.writer is a binding read that failed: 5 store-unmeasured with its store_id, never a healthy 0 (§5.3 "Binding reads")', () => {
     const box = boundBox('ccrc-hist-cli-writer-');
     fs.writeFileSync(hist(box, 'store.writer'), 'not a writer token\n');   // off WRITER_RE: measured unreadable

@@ -1524,4 +1524,24 @@ describe('Task 26F item 6: the journal audit says when it cannot read a month fi
     expect(r.code, r.stderr).toBe(0);
     expect(counter(box, 'journal_audit_unreadable')).toBe(1);
   });
+
+  // FU4 M25 (D-4347's third clause): a symlink with a month file's name is never followed, even to a regular file holding valid
+  // journal records (another store's month, here a copy of this store's own placed outside the journal).
+  it('a symlink with a month file\'s name, pointing at a regular file of valid records, is never followed: journal_audit_unreadable counts (M25)', () => {
+    const box = boundBox('ccrc-hist-26f6c-');
+    const dir = path.join(paths(box).journal, fs.readFileSync(paths(box).storeId, 'utf8').trim());
+    const own = fs.readdirSync(dir).filter((n) => /^[0-9]{4}-[0-9]{2}\.[0-9a-f]{8}\.jsonl$/.test(n));
+    expect(own.length, 'CONTROL: the store has a month file of its own to copy').toBeGreaterThan(0);
+    const target = path.join(box.home, 'elsewhere', 'month-copy.jsonl');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(path.join(dir, own[0]!), target);
+    expect(fs.readFileSync(target, 'utf8'), 'CONTROL: the target holds valid records').toMatch(/^\{"v":1,"k":"head"/m);
+    fs.symlinkSync(target, path.join(dir, '2020-01.00000000.jsonl'));   // sorts before the store's own month file
+    const before = metaOf(box, 'journal_audit_ms');
+    expect(before, 'CONTROL: the creating pass audited').toMatch(/^[0-9]+$/);
+    const r = runDriver(box, { offsetMs: 31 * MIN, managedSettings: [] });
+    expect(r.code, r.stderr).toBe(0);
+    expect(counter(box, 'journal_audit_unreadable'), 'the link was refused, not read').toBe(1);
+    expect(metaOf(box, 'journal_audit_ms'), 'a followed link would have let the audit finish and advance its clock').toBe(before);
+  });
 });

@@ -1718,6 +1718,10 @@ describe('epochs and families, decided at drain (spec §6.1, §9.2 step 1, §9.1
       return real(p, ...rest);
     } }, async () => {
       await EP.tick(db, ctx);                                         // its walk skips projects/x: the clear epoch waits
+      // FU4 M32: the fault HAS cost this tick the confirmation (it is no other walker's miss), so "misses only that tick" is
+      // this case's own showing rather than a mutation's: U1's epoch exists, still unconfirmed, and nothing says "location" yet.
+      expect(faulted, 'the fault fired in the second tick\'s walk').toBe(1);
+      expect(epochsOf(db, ID, G1).filter((e) => e.cc_session_uuid === U1)).toEqual([expect.objectContaining({ cause: 'clear', confirmed_ms: null })]);
       clock.ms += 60_000;
       await EP.tick(db, ctx);                                         // a FRESH walk finds it
     });
