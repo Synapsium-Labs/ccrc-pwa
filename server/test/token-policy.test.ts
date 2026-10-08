@@ -287,6 +287,15 @@ describe('one rotation', () => {
     expect([p.origin, p.rotationOwed, p.owedWhy, p.fleetConfirmed, p.lastRotationAt, p.promoting]).toEqual(['rotated', false, null, G, 5000, null]);
   });
 
+  // Final review I2 (D-4409 item 6): the policy decides what a promotion counts as a presentation of the new current.
+  it('promotedState: an own-write promotion, or a generation already presented while pending, records the new current as presented', () => {
+    expect(promotedState(handed(), G, 5000, W(9)).previous?.currentPresented).toBe(false);
+    expect(promotedState(handed(), G, 5000, W(9), { via: 'op-result', presented: false }).previous?.currentPresented).toBe(false);
+    expect(promotedState(handed(), G, 5000, W(9), { via: 'own-write' }).previous?.currentPresented).toBe(true);
+    expect(promotedState(handed(), G, 5000, W(9), { via: 'op-result', presented: true }).previous?.currentPresented).toBe(true);
+    expect(promotedState(handed(), G, 5000, W(9), { via: 'generation-read', presented: true }).previous?.currentPresented).toBe(true);
+  });
+
   it.each<[string, Parameters<typeof applySyncResult>[2], Partial<BoxTokenState>, string | null]>([
     ['stale-client is a learned hold, not a failure', { kind: 'refused', word: 'stale-client', detail: null }, { failures: 0 }, 'stale-client'],
     ['a ccrc without the verb is a learned hold (D-4395)', { kind: 'refused', word: 'spawn-failed', detail: 'ccrc: unknown argument: token' }, { failures: 0 }, 'verb-missing'],

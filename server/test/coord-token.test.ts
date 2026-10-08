@@ -33,8 +33,8 @@ describe('checkMailToken', () => {
     // returned `'ok'` unconditionally — indistinguishable from a caller that
     // actually presented the right secret. `/api/mail`/`/api/mail/:id/ack`
     // read anything but `'ok'` as a refusal (`routes.ts`), so this split is
-    // what lets them fail shut on an unconfigured server while `/api/notify`
-    // (which still treats `'unconfigured'` as a pass-through) is unaffected.
+    // what lets them fail shut on an unconfigured server (`/api/notify` did
+    // not, until the box-token lifecycle made it refuse the same three verdicts).
     expect(checkMailToken(null, undefined)).toBe('unconfigured');
     expect(checkMailToken(null, '')).toBe('unconfigured');
     expect(checkMailToken(null, TOKEN)).toBe('unconfigured');       // even the "right-shaped" guess

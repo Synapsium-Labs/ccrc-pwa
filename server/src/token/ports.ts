@@ -28,8 +28,11 @@ export type ValueRead =
   | { kind: 'unusable'; meta: FileMeta }
   | { kind: 'placeholder' }
   | { kind: 'unreadable'; code: string };
-export type StateRead = { kind: 'state'; state: BoxTokenState } | { kind: 'absent' } | { kind: 'unusable' };
-export type RetiredRead = { kind: 'retired'; digests: string[] } | { kind: 'absent' } | { kind: 'unusable' };
+/** Absent (a proven ENOENT), unusable (read, but not the shape) and unreadable (the read itself failed: EACCES, EIO,
+ *  EISDIR...) are three outcomes with three remedies, never folded (D-4403 item 2): an unreadable file is never
+ *  treated as "no history" and never written over. */
+export type StateRead = { kind: 'state'; state: BoxTokenState } | { kind: 'absent' } | { kind: 'unusable' } | { kind: 'unreadable'; code: string };
+export type RetiredRead = { kind: 'retired'; digests: string[] } | { kind: 'absent' } | { kind: 'unusable' } | { kind: 'unreadable'; code: string };
 
 /** The driver's file store. Every write is the atomic, fsynced, 0600-from-birth write. `removeValue` treats ENOENT as success. `renameOver` is one atomic replace followed by a
  *  directory fsync (promotion step (c), spec §5). A rejection BEFORE the rename leaves the target unchanged; a

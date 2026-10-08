@@ -127,6 +127,23 @@ describe('mint, adopt and the hand-made refusals (spec 4.2)', () => {
     await expect(bootBoxToken(input(home))).rejects.toMatchObject({ code: 'EACCES' });
   });
 
+  // Conventions I1 (D-4403 item 2): a state or retired file that cannot be READ is not a malformed one. Boot must not
+  // treat it as "no state" (that rewrites box-token.json and loses the history); it refuses, naming the path and errno.
+  it.each([['state', 'box-token.json'], ['retired', 'box-token-retired.json']] as const)(
+    'an unreadable %s file refuses boot, naming the path and the errno only, and writes nothing over it', async (_n, file) => {
+      const home = mkHome();
+      const v = mintValue();
+      writeFileSync(P(home).current, `${v}\n`, { mode: 0o600 });
+      const target = path.join(home, '.ccrc', file);
+      mkdirSync(target);                                                  // EISDIR on read
+      const err = await bootBoxToken(input(home)).then(() => null, (e: unknown) => e as Error);
+      expect(err).toBeInstanceOf(Error);
+      expect(err?.message).toBe(`${target}: unreadable (EISDIR); boot refuses rather than rewrite it`);
+      expect(err?.message).not.toContain(v);
+      expect(statSync(target).isDirectory()).toBe(true);                  // nothing was written over it
+      expect(readFileSync(P(home).current, 'utf8')).toBe(`${v}\n`);
+    });
+
   it.skipIf(isRoot)('a failed mint boots with no current value: every lane answers unconfigured, and the mint is retried', async () => {
     const home = mkHome();
     chmodSync(path.join(home, '.ccrc'), 0o500);

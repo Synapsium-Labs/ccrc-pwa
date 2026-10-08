@@ -147,7 +147,7 @@ function isBoxTokenState(v: unknown): v is BoxTokenState {
 export async function readState(p: string): Promise<StateRead> {
   let raw: string;
   try { raw = await fsp.readFile(p, 'utf8'); } catch (e) {
-    return errno(e) === 'ENOENT' ? { kind: 'absent' } : { kind: 'unusable' };
+    return errno(e) === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable', code: errno(e) };
   }
   try {
     const v: unknown = JSON.parse(raw);
@@ -182,7 +182,7 @@ function parseRetired(raw: string): RetiredEntry[] | null {
 export async function readRetired(p: string): Promise<RetiredRead> {
   let raw: string;
   try { raw = await fsp.readFile(p, 'utf8'); } catch (e) {
-    return errno(e) === 'ENOENT' ? { kind: 'absent' } : { kind: 'unusable' };
+    return errno(e) === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable', code: errno(e) };
   }
   const entries = parseRetired(raw);
   return entries === null ? { kind: 'unusable' } : { kind: 'retired', digests: entries.map((e) => e.sha256) };

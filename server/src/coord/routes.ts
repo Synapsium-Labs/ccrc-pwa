@@ -696,8 +696,8 @@ export function registerCoordRoutes(
     //
     // `'unconfigured'` (Task 7 fix-round finding 3 / D-39): a server whose
     // token file was never minted must not run this route open, the way
-    // `/api/notify` is still entitled to — `/api/mail` has no pre-existing
-    // deployed caller a strict gate could strand, the identical argument
+    // `/api/notify` was entitled to until the box-token lifecycle —
+    // `/api/mail` has no pre-existing deployed caller a strict gate could strand, the identical argument
     // that already ruled out a `'legacy'` tolerance here.
     //
     // HISTORY since the box-token lifecycle (spec 4.3): `/api/notify` lost both

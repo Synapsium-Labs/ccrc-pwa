@@ -12,7 +12,7 @@ import { bootBoxToken, type BootResult } from '../src/token/boot.js';
 import { BoxTokenDriver } from '../src/token/driver.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from '../src/token/link.js';
 import {
-  fileTokenStore, readState, tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile,
+  fileBothRoleWriter, fileTokenStore, readState, tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile,
 } from '../src/token/files.js';
 import {
   CONFIRM_DEADLINE_MS, GRACE_MS, HOLD_REPROBE_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, type GateNode, type SyncResult,
@@ -670,10 +670,10 @@ describe('a directory-fsync rejection leaves the target unknown, never assumed u
 
 describe('the door\'s alerts are acted on (D-4406)', () => {
   /** A rig whose gate closes the moment a generation is staged: the staged value is left pending and not handed out. */
-  async function stagedAndHeld() {
+  async function stagedAndHeld(extra: (st: TokenStore) => Partial<TokenStore> = () => ({})) {
     let rr: Rig | null = null;
     let closeOnStage = false;
-    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st, writeState: async (s) => {
+    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st, ...extra(st), writeState: async (s) => {
       if (closeOnStage && rr !== null && s.pending.length > 0 && s.pending.every((p) => p.handedOutAt === null)) {
         rr.rows.row = fleetRow({ agentOps: ['update'] });
       }
@@ -702,6 +702,25 @@ describe('the door\'s alerts are acted on (D-4406)', () => {
       expect((await onDisk(r)).pending).toEqual([]);
       expect(r.driver.door.alerts[kind]).toEqual([]);
       expect(r.driver.view()).toMatchObject(kind === 'wrongNode' ? { rotationOwed: true, owedWhy: 'claim-misbound' } : { rotationOwed: false });
+    } finally { await r.app.close(); }
+  });
+
+  // Final review M3 (D-4409 item 7): the value leaves the holder and the state BEFORE its file is deleted.
+  it('a staged file that cannot be deleted leaves an orphan file only: the value is out of the holder and out of box-token.json, and the tick survives', async () => {
+    let failRemove = false;
+    const { r, id } = await stagedAndHeld((st) => ({ removeValue: async (p) => {
+      if (failRemove && p.includes('mail-pending-')) throw Object.assign(new Error('injected'), { code: 'EACCES' });
+      return st.removeValue(p);
+    } }));
+    try {
+      failRemove = true;
+      r.driver.door.alerts.expired.push(id);
+      await r.driver.tick();
+      expect(r.printed.some((l) => l.includes('a driver tick failed'))).toBe(false);
+      expect(r.boot.holder.pendingValue(id)).toBeNull();              // no longer accepted
+      expect((await onDisk(r)).pending).toEqual([]);                  // and no longer on record: a restart cannot bring it back
+      expect(existsSync(tokPaths(r).pending(id))).toBe(true);         // only an orphan file remains (boot treats it as unverifiable)
+      expect(r.printed.some((l) => l.includes('could not delete') && l.includes('EACCES'))).toBe(true);
     } finally { await r.app.close(); }
   });
 
@@ -861,6 +880,127 @@ describe('a code never outlives its op (D-4409 item 4)', () => {
       const claim = await r.app.inject({ method: 'POST', url: '/api/token/claim', payload: { code: codes[0], nodeId: NODE } });
       expect([claim.statusCode, claim.json().error]).toEqual([404, 'no-claim']);
       expect((await onDisk(r)).pending.every((p) => p.handedOutAt === null)).toBe(true);
+    } finally { await r.app.close(); }
+  });
+});
+
+// ── the final whole-branch review (D-4403 item 2, D-4409 items 5 to 7); each run red first ──
+
+describe('the hand-out lands in memory before its write (D-4409 item 5)', () => {
+  /** A rig whose link claims over the door and then loses the op result while the hand-out record is still being
+   *  written: the write is held open on a gate that the test releases. */
+  async function heldHandOut() {
+    let rr: Rig | null = null;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((res) => { release = res; });
+    let entered: () => void = () => {};
+    const enteredP = new Promise<void>((res) => { entered = res; });
+    let claim: Promise<{ statusCode: number; json(): { value: string; generation: string } }> | null = null;
+    const link: TokenSyncLink = { async send(code) {
+      claim = Promise.resolve((rr as Rig).app.inject({ method: 'POST', url: '/api/token/claim', payload: { code, nodeId: NODE } })) as never;
+      await enteredP;                                                  // the claim is burned and its record is in flight
+      await new Promise((res) => setTimeout(res, 15));
+      return { kind: 'lost', why: 'disconnected' };                    // the link drops during that write
+    } };
+    const r = await rig({ handMade: 'e'.repeat(64), link, wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (s.pending.some((p) => p.handedOutAt !== null) && gateOpen.value) { gateOpen.value = false; entered(); await gate; }
+      return st.writeState(s);
+    } }) });
+    rr = r;
+    return { r, release, getClaim: () => claim as NonNullable<typeof claim> };
+  }
+  const gateOpen = { value: true };
+
+  it('a lost op result while the hand-out is being written keeps the value accepted; the 200 carries it; a later generation read promotes it', async () => {
+    gateOpen.value = true;
+    const { r, release, getClaim } = await heldHandOut();
+    try {
+      const tick = r.driver.tick();
+      await new Promise((res) => setTimeout(res, 40));                // the op result is lost and folded meanwhile
+      release();
+      await tick;
+      const res = await getClaim();
+      expect(res.statusCode).toBe(200);
+      const { value, generation } = res.json();
+      expect(await r.lane(value)).toBe(400);                           // still accepted (400 = query missing): no 401
+      expect((await onDisk(r)).pending.map((p) => [p.id, p.handedOutAt !== null])).toEqual([[generation, true]]);
+      expect(pendingFiles(r)).toEqual([`mail-pending-${generation}.token`]);
+      // The fleet's verb went on: it wrote the value and the generation. A later read naming it promotes it.
+      await writeGenerationFile(path.join(r.fleetHome, '.ccrc', 'box-token-generation'), generation);
+      r.clock.offset += 1000;
+      await r.driver.tick();
+      expect(r.boot.holder.currentValue()).toBe(value);
+      expect(r.printed.filter((l) => l.includes('a promotion named no pending value'))).toEqual([]);
+    } finally { release(); await r.app.close(); }
+  });
+});
+
+describe('a promotion naming a pending entry with no value drops it, once (D-4409 item 5)', () => {
+  it('the entry leaves pending (persisted), one warning, and the next ticks do not repeat it', async () => {
+    const ghost = '0123456789abcdef';
+    const r = await rig({ handMade: 'e'.repeat(64), mutateBoot: (b) => ({ ...b, state: { ...(b.state as NonNullable<BootResult['state']>),
+      rotationOwed: false, owedWhy: null,
+      pending: [{ id: ghost, seq: 9, stagedAt: 1, handedOutAt: 1, confirmBy: 1 + CONFIRM_DEADLINE_MS, write: { dev: 0, ino: 0, writtenAtMs: 0 } }] } }) });
+    try {
+      await writeGenerationFile(path.join(r.fleetHome, '.ccrc', 'box-token-generation'), ghost);
+      r.agent.mode = 'verb-missing';                                   // nothing may rotate behind the guard
+      for (let i = 0; i < 5; i++) { r.clock.offset += 60_000; await r.driver.tick(); }
+      expect(r.printed.filter((l) => l.includes('a promotion named no pending value'))).toHaveLength(1);
+      expect((await onDisk(r)).pending.map((p) => p.id)).not.toContain(ghost);
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('an idle both box rotates once, not every grace (D-4409 item 6)', () => {
+  it('a recorded both box, adopted value, an hour of idle ticks: exactly one promotion', async () => {
+    const home = mkTmp('ccrc-token-e2e-both-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const paths = tokenPaths(path.join(home, '.ccrc', 'mail.token'), home);
+    writeFileSync(paths.current, `${'a'.repeat(64)}\n`, { mode: 0o600 });
+    let off = 0;
+    const now = (): number => Date.now() + off;
+    const printed: string[] = [];
+    const boot = await bootBoxToken({ mailTokenPath: paths.current, home, role: 'both', roleSource: 'recorded', fleetMode: 'local', now: now() });
+    const own: GateNode = { nodeId: 'x', nodeIdMeasured: true, label: 'self', role: 'both', reachable: true, os: 'linux',
+      caps: ['token-sync'], agentOps: null, updateState: 'idle', reportedPhase: null };
+    const driver = new BoxTokenDriver({ store: fileTokenStore(paths), holder: boot.holder, link: null, generation: null,
+      rows: { nodes: () => [own], linkUp: () => false, lastReadyAt: () => null },
+      env: { fleetMode: 'local', role: 'both', roleSource: 'recorded', agentEnvMarksFleet: false },
+      bothWriter: fileBothRoleWriter(paths), now, warn: (l) => printed.push(l) }, boot);
+    for (let m = 0; m < 60; m++) { await driver.tick(); off += 60_000; }
+    expect(printed.filter((l) => l.includes('and promoted'))).toHaveLength(1);
+    expect(printed.some((l) => l.includes('grace extended'))).toBe(false);
+    const st = await readState(paths.state);
+    expect(st.kind === 'state' && [st.state.previous, st.state.rotationOwed]).toEqual([null, false]);   // retired at grace end
+  });
+
+  it('a fleet proof call against the pending value counts as the new current being presented: grace ends with a retirement, not an extension', async () => {
+    const leaked = 'e'.repeat(64);
+    const r = await rig({ handMade: leaked });
+    try {
+      await r.driver.tick();                                           // the fake agent proves G (a pending-slot match) before promotion
+      expect((await onDisk(r)).previous?.currentPresented).toBe(true);
+      r.clock.offset = GRACE_MS + 1000;                                // nobody presents the promoted current afterwards
+      await r.driver.tick();
+      expect(r.printed.some((l) => l.includes('grace extended'))).toBe(false);
+      expect(await r.lane(leaked)).toBe(401);
+      expect(r.agent.calls).toBe(1);
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('an unreadable retired list is kept in memory at retirement (D-4403 item 2)', () => {
+  it('a retired file that cannot be read at grace end: one warning, the tick survives, the previous value is still retired', async () => {
+    const leaked = 'e'.repeat(64);
+    const r = await rig({ handMade: leaked });
+    try {
+      await r.driver.tick();
+      mkdirSync(tokPaths(r).retired);                                  // EISDIR on every read from here on
+      r.clock.offset = GRACE_MS + 1000;
+      await r.driver.tick();
+      expect(r.printed.some((l) => l.includes('a driver tick failed'))).toBe(false);
+      expect(r.printed.filter((l) => l.includes('cannot be read (EISDIR); the retired list in memory is kept'))).toHaveLength(1);
+      expect(await r.lane(leaked)).toBe(401);                          // out of the accept-set
     } finally { await r.app.close(); }
   });
 });

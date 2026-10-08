@@ -217,6 +217,24 @@ describe('box-token.json and box-token-retired.json', () => {
     }
   });
 
+  // Conventions I1 (D-4403 item 2): a read FAILURE is not malformed content; the two need different handling.
+  it('a state or retired file that cannot be read answers unreadable with the errno word, never unusable (D-4403)', async () => {
+    const { dir } = fixture();
+    const sp = path.join(dir, 'box-token.json');
+    const rp = path.join(dir, 'box-token-retired.json');
+    mkdirSync(sp);                                   // EISDIR on read: a read failure that holds as root too
+    mkdirSync(rp);
+    expect(await readState(sp)).toEqual({ kind: 'unreadable', code: 'EISDIR' });
+    expect(await readRetired(rp)).toEqual({ kind: 'unreadable', code: 'EISDIR' });
+    // Still told apart from the other two outcomes.
+    expect(await readState(path.join(dir, 'nope.json'))).toEqual({ kind: 'absent' });
+    expect(await readRetired(path.join(dir, 'nope.json'))).toEqual({ kind: 'absent' });
+    const bad = path.join(dir, 'bad.json');
+    writeFileSync(bad, '{not json');
+    expect(await readState(bad)).toEqual({ kind: 'unusable' });
+    expect(await readRetired(bad)).toEqual({ kind: 'unusable' });
+  });
+
   it('retired digests append once each, and an unusable file is never rewritten', async () => {
     const { dir } = fixture();
     const p = path.join(dir, 'box-token-retired.json');

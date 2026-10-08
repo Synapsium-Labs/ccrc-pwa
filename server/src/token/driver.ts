@@ -69,6 +69,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
   private owedSince: number | null = null;
   private mintFailedSince: number | null;
   private mintGuardWarned = false;
+  // Final review (D-4409 item 6): the generations presented in a pending slot, and the slot layout they are read against.
+  private readonly presentedPending = new Set<string>();
+  private slotIds: string[] = [];
+  private pendSeen: number[] = [0, 0];
 
   constructor(private readonly deps: DriverDeps, boot: BootResult) {
     this.now = deps.now ?? Date.now;
@@ -83,6 +87,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
       if (v !== null) this.pend.set(p.id, v);
     }
     this.presentedBase = deps.holder.counters().matched.current;
+    this.slotIds = [...this.pend.keys()];
   }
 
   start(): void {
@@ -128,9 +133,12 @@ export class BoxTokenDriver implements TokenRouteDriver {
       throw new Error('commitHandOut: the generation is not staged');
     }
     const next = handedOutState(s, generation, at);
+    // In memory FIRST, in the same synchronous step as the check above, as `commit()` does (final review, D-4409 item 5):
+    // a lost op result folded while the write below is in flight must see the value handed out and keep it. Assigning
+    // this snapshot after the await would overwrite whatever that fold wrote, and drop a value the fleet is about to hold.
+    this.state = next;
     try {
       await this.persist(next);
-      this.state = next;
       const g = next.pending.find((p) => p.id === generation);
       this.warn(`ccrc-server: box token: generation #${g?.seq} handed out`);
     } catch (e) {
@@ -317,8 +325,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (g === undefined || value === null) {
       // `promotedState` throws on an id that left `pending`, and `nextAction` returns `promote` from a persisted
       // `promoting.id` unchecked: clear it (persisted), promote nothing this tick, owe a rotation, and say so once
-      // (no value).
-      await this.commit(owe({ ...s0, promoting: null }, 'recovered'));
+      // (no value). An entry that is still pending but has no value in memory is dropped too (persisted): left in
+      // `pending`, a generation read naming it would select this same promotion every tick, forever (D-4409 item 5).
+      await this.discard([id]);
+      await this.commit(owe({ ...this.mustState(), promoting: null }, 'recovered'));
       this.warn('ccrc-server: box token: a promotion named no pending value; it was abandoned and a rotation is owed');
       return;
     }
@@ -361,7 +371,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
     }
     const now = this.now();
     const before = this.mustState();
-    let next = promotedState({ ...before, promoting: null }, id, now, prevWrite);                    // (d)
+    this.attributePending();   // a presentation of G while it was pending counts for the new current (D-4409 item 6)
+    let next = promotedState({ ...before, promoting: null }, id, now, prevWrite,                       // (d)
+      { via, presented: this.presentedPending.has(id) });
     if (via === 'own-write') next = { ...next, fleetConfirmed: id };
     if (currentWrite !== null) next = { ...next, current: { ...next.current, write: currentWrite } };
     // Only the values that actually left `pending` are discarded: promotedState keeps a LATER handed-out one (D-4400).
@@ -370,6 +382,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     this.prev = this.cur !== null && next.previous !== null ? { value: this.cur, until: next.previous.hardUntil } : null;
     this.cur = value;
     this.pend.delete(id);
+    this.presentedPending.delete(id);
     this.state = next;
     // The base is taken in the same synchronous step as the swap, BEFORE it: the new current is accepted from
     // `pushSlots`, so a presentation of it during the commit below must count (D-4409).
@@ -404,6 +417,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
     this.pushSlots();
     const rr = await store.readRetired();
     if (rr.kind === 'retired') this.deps.holder.setRetired(rr.digests);
+    else if (rr.kind === 'unreadable') {
+      this.warn(`ccrc-server: box token: ${store.paths.retired} cannot be read (${rr.code}); the retired list in memory is kept`);
+    }
     const refused = v !== null && this.deps.holder.match(v) === null && this.deps.holder.isRetired(v);
     await this.commit({ ...s, previous: null, retiredRefusedAt: refused ? now : s.retiredRefusedAt });
     return refused;
@@ -424,24 +440,49 @@ export class BoxTokenDriver implements TokenRouteDriver {
     this.prev = r.kind === 'value' ? { value: r.value, until: s.previous.hardUntil } : null;
   }
 
+  /** Final review, D-4409 item 6: which handed-out generations were presented in a PENDING slot. The holder counts per
+   *  slot index, so each delta is attributed to the generation that held that slot before the layout changes. The
+   *  driver only records; `promotedState` decides what it means (spec §5: the fleet's own proof call presents it). */
+  private attributePending(): void {
+    const m = this.deps.holder.counters().matched;
+    const counts = [m.pending0, m.pending1];
+    this.slotIds.forEach((id, i) => {
+      if ((counts[i] ?? 0) > (this.pendSeen[i] ?? 0) && (this.state?.pending.find((p) => p.id === id)?.handedOutAt ?? null) !== null) {
+        this.presentedPending.add(id);
+      }
+    });
+    this.pendSeen = counts;
+  }
+
   private pushSlots(): void {
+    this.attributePending();
     const slots: HolderSlots = {
       current: this.cur,
       pending: (this.state?.pending ?? []).filter((p) => this.pend.has(p.id)).map((p) => ({ id: p.id, value: this.pend.get(p.id) as string })),
       previous: this.prev ?? null,
     };
+    this.slotIds = slots.pending.map((p) => p.id);
     this.deps.holder.setSlots(slots);
   }
 
   private async discard(ids: readonly string[]): Promise<void> {
     if (ids.length === 0) return;
+    // The value leaves the code door, the holder and the state (persisted) BEFORE its file is deleted (final review,
+    // D-4409 item 7): a delete that fails (EACCES, EIO) then leaves only an orphan file, which boot treats as
+    // unverifiable, instead of a dropped value (e.g. one an outside party claimed) still accepted and recorded.
+    for (const id of ids) { this.door.revoke(id); this.pend.delete(id); this.presentedPending.delete(id); }
+    if (this.state !== null) {
+      this.state = { ...this.state, pending: this.state.pending.filter((p) => !ids.includes(p.id)) };
+      this.pushSlots();
+      try { await this.persist(this.state); } catch (e) {
+        this.warn(`ccrc-server: box token: could not record a discarded generation (${errno(e)}); the value is still dropped from memory`);
+      }
+    } else this.pushSlots();
     for (const id of ids) {
-      this.door.revoke(id);
-      this.pend.delete(id);
-      await this.deps.store.removeValue(this.deps.store.paths.pending(id));
+      try { await this.deps.store.removeValue(this.deps.store.paths.pending(id)); } catch (e) {
+        this.warn(`ccrc-server: box token: could not delete the file of a discarded generation (${errno(e)}); the value is no longer accepted`);
+      }
     }
-    if (this.state !== null) this.state = { ...this.state, pending: this.state.pending.filter((p) => !ids.includes(p.id)) };
-    this.pushSlots();
   }
 
   /** The door's alerts, ACTED on (D-4406): a generation whose code expired or was presented from the wrong node was
@@ -471,6 +512,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
   private async noteCounters(): Promise<void> {
     const s = this.state;
     if (s === null) return;
+    this.attributePending();
     const c = this.deps.holder.counters();
     let next = s;
     if (s.previous !== null && !s.previous.currentPresented && c.matched.current > this.presentedBase) {

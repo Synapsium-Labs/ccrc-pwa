@@ -50,6 +50,13 @@ function refuseAsToday(p: string, detail: string): never {
   throw new Error(`${p}: ${detail}`);
 }
 
+/** A state or retired file that cannot be READ (EACCES, EIO, EISDIR...) is not an unusable one: reading it as "no
+ *  history" would rewrite box-token.json and lose the hand-out record, the retired history and the owed reason on a
+ *  transient error. Boot refuses instead, naming the path and the errno only (D-4403 item 2). */
+function refuseUnreadable(p: string, code: string): never {
+  throw new Error(`${p}: unreadable (${code}); boot refuses rather than rewrite it`);
+}
+
 interface Ctx { state: BoxTokenState | null; current: string | null; mintFailed: boolean; warnings: string[] }
 
 export async function bootBoxToken(i: BootInput): Promise<BootResult> {
@@ -60,6 +67,7 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   const warn = (line: string): void => { ctx.warnings.push(W(line)); };
 
   const retiredRead = await readRetired(paths.retired);
+  if (retiredRead.kind === 'unreadable') refuseUnreadable(paths.retired, retiredRead.code);
   if (retiredRead.kind === 'unusable') warn(`${paths.retired} is unusable; a written-back retired value cannot be recognised until it is repaired`);
   const retired = retiredRead.kind === 'retired' ? retiredRead.digests : [];
   holder.setRetired(retired);
@@ -69,6 +77,7 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   const armed = bothRoleWriterArmed({ role: i.role, roleSource: i.roleSource, fleetMode: i.fleetMode, agentEnvMarksFleet });
 
   const sr = await readState(paths.state);
+  if (sr.kind === 'unreadable') refuseUnreadable(paths.state, sr.code);
   ctx.state = sr.kind === 'state' ? sr.state : null;
   if (sr.kind === 'unusable') warn(`${paths.state} is unusable; value files beside it are treated as unverifiable`);
 

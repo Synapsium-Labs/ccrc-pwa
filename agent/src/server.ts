@@ -778,9 +778,10 @@ function isStringArray(v: unknown): v is string[] {
 
 /** `validateReq`'s answer for a well-shaped op whose ARGUMENT failed its guard
  *  (design 2026-09-20 §10). The message handler sends it as
- *  `failUpdate(id, refuse)` before any case body runs. It is not `null`,
- *  because the handler answers `null` with `bad-request`, which from the
- *  `update` op must mean exactly one thing: this agent predates it. */
+ *  `fail(req.id, req.refuse)` before any case body runs. It covers the `update`
+ *  op (`bad-tag`, `bad-kind`) and the `token-sync` op (`bad-code`). It is not
+ *  `null`, because the handler answers `null` with `bad-request`, which from
+ *  either op must mean exactly one thing: this agent predates it. */
 export interface ReqRefusal {
   refuse: Extract<UpdateOpError, 'bad-tag' | 'bad-kind'> | Extract<TokenSyncOpError, 'bad-code'>;
   id: number;

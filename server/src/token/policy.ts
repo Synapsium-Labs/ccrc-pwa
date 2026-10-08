@@ -347,11 +347,20 @@ export function handedOutState(state: BoxTokenState, id: string, at: number): Bo
   return { ...state, pending: state.pending.map((p) => (p.id === id ? { ...p, handedOutAt: at, confirmBy: at + CONFIRM_DEADLINE_MS } : p)) };
 }
 
+/** Whether a promotion already counts as a presentation of the new current (final review, D-4409 item 6): an own-write
+ *  promotion does (the server's own write of the fleet file is the presentation), and so does a generation that was
+ *  presented in its pending slot after its hand-out (spec §5: "the fleet's own proof call does that"). The driver
+ *  only counts; this is the decision. */
+export function promotionPresentsCurrent(p: { via?: 'op-result' | 'generation-read' | 'own-write'; presented?: boolean }): boolean {
+  return p.via === 'own-write' || p.presented === true;
+}
+
 /** Promotion step (d): G is current, the old current is previous with its grace deadline, and the owed flag clears.
  *  Every other pending value is discarded except one handed out AFTER G (a later seq): that value may be the one the
  *  fleet holds, so it stays accepted (D-4400). `previousWrite` is null only when the old current could not be
  *  copied (a promotion finished at boot over a broken file): then no previous slot is kept. */
-export function promotedState(state: BoxTokenState, id: string, now: number, previousWrite: WriteRecord | null): BoxTokenState {
+export function promotedState(state: BoxTokenState, id: string, now: number, previousWrite: WriteRecord | null,
+  presentation: { via?: 'op-result' | 'generation-read' | 'own-write'; presented?: boolean } = {}): BoxTokenState {
   const g = state.pending.find((p) => p.id === id);
   if (g === undefined) throw new RangeError('promotedState: the generation is not pending');
   return {
@@ -361,7 +370,7 @@ export function promotedState(state: BoxTokenState, id: string, now: number, pre
     // is confirmed or the fleet reports the code used; D-4400). Earlier and never-handed-out values go.
     pending: state.pending.filter((p) => p.handedOutAt !== null && p.seq > g.seq),
     previous: previousWrite === null ? null : { id: state.current.id, seq: state.current.seq, graceUntil: now + GRACE_MS,
-      hardUntil: now + GRACE_HARD_MS, currentPresented: false, write: previousWrite },
+      hardUntil: now + GRACE_HARD_MS, currentPresented: promotionPresentsCurrent(presentation), write: previousWrite },
     promoting: null, recovering: null, fleetConfirmed: g.id, lastRotationAt: now,
     failures: 0, lastFailure: null, hold: null, holdNode: null,
   };

@@ -301,8 +301,10 @@ export interface Deps {
    *  reads `performance.now()`. A test sets it. */
   monotonicMs?: () => number;
   /** The box token every fleet->server POST must carry (coord/token.ts).
-   *  Optional the same way `push`/`notifyLog` are: a box with none configured
-   *  keeps working, unauthenticated, and says so once at boot. NOT optional the
+   *  Optional the same way `push`/`notifyLog` are in what a test must supply: a
+   *  box with none configured (no holder, or a holder with no current value
+   *  because its mint failed) refuses every box-token lane with a 401, verdict
+   *  `unconfigured`, and boot says so; there is no unauthenticated mode. NOT optional the
    *  way `queue` refuses to be — there is no fallback here that could quietly
    *  construct a second, different token. A `BoxTokenHolder` since the box-token
    *  lifecycle (spec 4.2): the process's one accept-set, mutated in place by the
@@ -1582,8 +1584,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // (notify.sh's own `|| true`, and ccd invoking it with its output
       // redirected to `/dev/null`), so this line is the only place a wrong
       // token — a stray trailing space, a stale copy after a rotation — ever
-      // becomes visible to an operator, the same way `legacy` already is
-      // below. Never logs the presented value: that would put the secret
+      // becomes visible to an operator, the same way `legacy` and
+      // `unconfigured` already are above (they refuse too). Never logs the presented value: that would put the secret
       // (or a caller's guess at it) in a log file readable by anyone who can
       // read the log.
       console.warn('ccrc-server: /api/notify refused a request with the WRONG box token (401) — ' +
