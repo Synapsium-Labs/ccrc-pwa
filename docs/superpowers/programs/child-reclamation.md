@@ -58,6 +58,9 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - **The worker.** Run 291 closed on the merged fingerprint, and the server queued amber-river's own child
     reclaim. Its evidence was archived first, under `wave6-done/`, `wave6-fr1-done/` and `wave6-int-done/`.
   - **Next.** Merge the docs PR #329, then plan wave 7 (run 347): the collector verb, with its block and pre-flight.
+  - **13:56.** Docs PR #329 MERGED as `a3a8f62bc`, at its tested head `0529c969d`, with every gating check green.
+    Contract §13 (R60 to R64) and this ledger through wave 6's deploy are on main. Wave 7's pre-flight workflow
+    (`wf_429ad81b-9cd`, read-only) was started at 13:42.
 
 - **2026-10-08 13:08 — review 346 ruled clean of class (a); #326 MERGED as `b0647d850` at the reviewed tip
   `d12b6467e`.** The report is `ccr15-evidence-archive/reviews/review-346-d12b6467.md`, and run 346 closed `done`.
