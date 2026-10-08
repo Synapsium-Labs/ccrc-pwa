@@ -21,8 +21,8 @@ removed on 2026-09-10 was not.
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
-| 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **in fix round 1** — run 260; review 285 found no safety defect (2 important, 29 minor); a scoped review follows; lands before wave 6 dispatches (R56) |
-| 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | — | **planned** — run 291, its 24-number block (listed singly in the brief below); plan `2026-10-06-child-reclamation-wave6-reclaim-repairs.md` + contract §12; dispatched after #290 merges |
+| 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
+| 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57): audit + token, destructive verb, cap token, agent grant, entry guard; witness-matched, slug-free, unused, idle 24 h, twice observed | **AGENT-FIRST** | — | **to plan**: its own run, block and pre-flight |
 | 8 | the collector's server lane (R58), after workspace-lifecycle wave 3b merges and the fleet advertises wave 7's token; SAFETY and SECURITY lenses | server | — | **to plan** |
 
@@ -46,6 +46,451 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 13:40 — wave 6 DEPLOYED as v0.0.124 (`b0647d850`); run 291 closed `done` (`final:true`).** The
+  automatic updater moved both boxes, observed read-only with `ccrc rollout --to v0.0.124 --check` every two minutes:
+  - the fleet box was `[current]` at 13:38:04, while the server read `[incomplete]`;
+  - the server was `[current]` at 13:40:06.
+
+  So the fleet box went first, as wave 6 requires. Nothing was rolled out by hand.
+  - **R59's last item is resolved.** `expoAI-assistant-calm-mesa`, held since wave 5 because its branch was gone,
+    reclaimed at 13:39:31, on the first attempt after the fleet box took the gone-branch pin. The row reads `reclaim`
+    `done`: nothing kept in clips or the temp root, and residue 0. The paced retry loop has ended.
+  - **The worker.** Run 291 closed on the merged fingerprint, and the server queued amber-river's own child
+    reclaim. Its evidence was archived first, under `wave6-done/`, `wave6-fr1-done/` and `wave6-int-done/`.
+  - **Next.** Merge the docs PR #329, then plan wave 7 (run 347): the collector verb, with its block and pre-flight.
+
+- **2026-10-08 13:08 — review 346 ruled clean of class (a); #326 MERGED as `b0647d850` at the reviewed tip
+  `d12b6467e`.** The report is `ccr15-evidence-archive/reviews/review-346-d12b6467.md`, and run 346 closed `done`.
+  - **Review 346.**
+    - The merge's code resolution is an exact union of both sides.
+    - `ccd/ccd` and `ccd/ccrc` have no non-comment change beyond the stamp, proven four ways.
+    - SAFETY found no merged path from main that composes `ws-reclaim` or `ws-expire`, carries their tokens, or
+      queues a child reclaim outside wave 6's checks. Every path is tabled.
+    - The README departure was forced, and its anchors are right.
+  - **Its four class (b) findings are comment and plan prose, all fail-safe. Three repeat sentences this coordinator
+    dictated. None goes back; each is carried to wave 7, which edits these regions anyway:**
+    - (F1) `_ws_dir_physical`'s list of bare captures is not exhaustive, and two of them are label prefixes only;
+    - (F2) "only a back-linked tree passes" holds outside the leaf only;
+    - (F3) an inner NUL reads refused, not unmeasured, for the back-link caller;
+    - (F4) the two `childReclaim.ts` comments still state the audit-failure clause without the arm. The spec, the
+      contract and 4457 already carry the widened residual.
+  - **Wave 7's brief also names the server half of the `crumb` fix:** `childReclaimAudit` maps an audit's exit 1 to
+    `unreadable` before it parses stdout.
+  - **Record (class c).** Main's dead-coordinator journal clause counts a child's pre-start `failed`
+    `probe-unmeasured` reclaim row as deliberate, so the lane abstains. That is fail-safe, and it goes to quiet-river.
+  - **The merge.** `gh pr merge 326 --squash --admin --match-head-commit d12b6467e`. Every gating check was green
+    (`test (server)` included); the macOS legs are advisory. Main `669b83055` was an ancestor of the tip.
+  - **Next.** Observe the release and the automatic agent-first deploy, read-only. Then open wave 7's run, and only
+    then close run 291 `final:true`.
+  - **13:10.** The release v0.0.124 is published, and both boxes measured `[behind]` on v0.0.123. Wave 7's run,
+    **347**, is opened (`planned`, wave 7 of 8). Its plan, block and pre-flight come next. Amber-river (4010) and
+    quiet-river (4011) were told of the merge.
+
+- **2026-10-08 12:22 — the integration round's wave-done is verified (mail 4007); run 291 is at `awaiting-review` on
+  `d12b6467e`, and scoped review run 346 is opened.** The evidence is under `ccr15-evidence-archive/wave6-int-done/`.
+  - **Measured.** The tip is pushed, PR #326's head equals it, and main `669b83055` is an ancestor. The round has two
+    commits:
+    - `de01c465d` merges main. `ccd/ccd` and `ccd/ccrc` are unchanged by it.
+    - `d12b6467e` holds the text fixes. Its `ccd/ccd` change is line-count-neutral, and `mark --check` exits 0.
+
+    The R56 gates, the status readers and `tsc` are green, as the worker reports. CI on the tip was still running.
+  - **The README hunk takes no number.** It was one sentence whose `shared/api.ts` anchors both sides had re-pointed,
+    so keeping both texts would have printed it twice, each copy with stale anchors. The worker's
+    `readme-api-anchors-remeasured-on-merge` points it at the merged file's lines instead. That departs from the
+    integration ruling's "byte for byte", not from the plan, so it takes no deviation number. 4463 stays unused, and
+    the block ends there.
+  - **Review run 346.** Its brief is `ccr15-evidence-archive/review-291-int-brief.md`, scoped to the two commits. It
+    adds a SAFETY lens at xhigh asking whether #328's merged code composes or queues `ws-reclaim` or `ws-expire` on a
+    path wave 6's checks do not expect. Its dispatch waited on the daily cap, and it was dispatched at 12:39 to
+    `ccrc-pwa-warm-basin`, on the first freed slot.
+
+- **2026-10-08 12:03 — review 341 ruled: wave 6 is accepted on its code; an integration round merges main (mail
+  4004).** Rulings: `ccr15-evidence-archive/reviews/integration-291-rulings.md`.
+  - **Review 341.** It read fix round 1 at `750910110`. 41 findings were raised by 139 agents, and 11 survived the
+    refute pass, which merge into 9. None is class (a). F1's SAFETY property holds:
+    - review 335's case keeps the leaf under reclaim and under expire, in the temp root and in clips;
+    - so do the four shapes;
+    - the straggler races found 0 removals in 94 runs.
+
+    The review run closed `done` on the reviewer's `{reviewedTip, report}`.
+  - **Rulings.**
+    - The three prose findings (F1, F2, F3) and F8's record are fixed as text in the integration round, folded into
+      4457, 4149 and 4458.
+    - F4, F5, F6, F7 and F9 are pins, recorded and carried to wave 7.
+    - F1's code fix rides wave 7's `crumb` field. Its residual now names the audit path too.
+  - **Integration.** #328 (workspace lifecycle wave 4) landed first, as `669b83055`. #326 conflicts in one hunk of
+    `server/src/watch.ts` (the coord status literal) and one of `README.md`, and `ccd/ccd` is unchanged on main.
+    - Under R56, wave 6 is the second lander: the worker merges main and keeps both sides, then runs the R56 gates
+      and the status readers.
+    - The full suite is not re-run: PR CI's selection on the merged tree is the arbiter.
+    - Run 291 is back at `working`.
+  - **Next.** A scoped review reads only the merge resolution and the text fixes. Then the merge, then the deploy.
+
+- **2026-10-08 08:01 — fix round 1's wave-done verified (mail 3983); run 291 is at `awaiting-review` on
+  `750910110`.** The wave-done's fingerprint was re-measured, and the evidence is archived under
+  `ccr15-evidence-archive/wave6-fr1-done/`.
+  - **Measured.** The tip is pushed, PR #326's head equals it, and the merge-tree against main `3c33d3218` is clean.
+    CI on the new tip was still running.
+  - **Suite.** The full suite ran on code tip `bf8c542fb`, with server, agent and pwa all green apart from two reds:
+    - `tmp-sweep`'s "FAILS CLOSED", which is red on main too;
+    - `ccd-spawn-split`, a load flake that passes alone.
+
+    Six commits followed, five docs-only and one comment-only. The tests that read the docs re-ran on the final tip.
+  - **Numbers.** 32 numbers are defined singly in the plan. 4463 was not used, and no new departure was found.
+  - **Accepted.** The spec's §5.2 gained one witness sentence beyond the four regions, because 4459 had made the old
+    sentence false. It lies far from #328's §5.8 replace.
+  - **Ruled.** A `probe-unmeasured` on a RESUMED arm still reads not-resumable while a breadcrumb stands. Its
+    classification is unchanged in this round, and it is carried to wave 7 with the additive `crumb` field. The
+    scoped review checks the worker's claim that only the sentence is wrong, never the act. ws-expire's parser
+    (`archivedExpiry.ts:231`) has F3's twin, which is workspace-lifecycle's and goes to quiet-river.
+  - **Landing order.** #328 (run 314) and #325 (bright-harbor) overlap this PR's files. Under R56, whichever lands
+    second merges main and restamps, then re-runs `expiry-lane-prose`, `ccd-reg-get-census` and the session-hook
+    citation census.
+  - **Next.** Scoped review run **341** is opened, and its brief is
+    `ccr15-evidence-archive/review-291-fr1-brief.md`. The panel is held out, with lens 0 SAFETY at xhigh on F1. Its
+    dispatch waits on the rolling daily cap; the next slot is 08:47Z. F3's twin went to quiet-river (3984), and
+    amber-river was told to stay idle (3985).
+  - **10:34 — run 341 dispatched to `ccrc-pwa-clear-summit`.** The cap refused it twice first, at 08:47 and 09:58,
+    each time another dispatch taking the freed slot.
+
+- **2026-10-08 04:35 — fix round 1's spec text waits on claim 1097 (asked in 3971, answered in 3975).** The round's
+  code is done; its spec text is not applied. The spec is held by claim 1097: swift-cove, run 314, workspace-lifecycle
+  wave 4's Task 13. That task touches the spec once, in a §5.8 replace. This round's text touches §5.5, §5.6, §5.9
+  and §7 item 6, so the two are disjoint and git merges them cleanly.
+  - Consent was asked of quiet-river, as run 314's coordinator, in 3973.
+  - On consent, the text is applied before the wave-done. Only the tests that read the spec re-run on that
+    docs-only commit.
+  - Without consent, the wave-done ships the text as an artifact, which the scoped review reads. It is applied in one
+    docs-only commit after the review closes, never during it, and that commit is measured before the merge.
+  - **Settled the same minute (3976, relayed to amber-river in 3978).** Claim 1097 was already released, and
+    quiet-river's answer was yes in any case. So the first path applies. Run 314 is at wave-done (PR #328): whichever
+    of #326 and #328 lands second merges main and re-runs `expiry-lane-prose.test.ts`.
+
+- **2026-10-08 01:42 — fix round 1 gets an addendum (mail 3962), after workspace-lifecycle's coordinator measured
+  the tip (3961; answered in 3963).** The binding text is the rulings file's final section.
+  - **F4 (4458) now covers three sites through one shared helper.** The helper uses `_ws_reclaim_resolve`'s sentinel
+    idiom and refuses a physical path holding a newline. The sites are `_ws_leaf_remove`'s root, `_ws_path_users`'
+    parent and `_ws_expire_cwd_users`' parent. Only that resolution changes in the third, which is
+    workspace-lifecycle's body: its owner consented in 3961, and ruled its twin an arming blocker for the expiry lane.
+  - **New number 4462 (`done-document-carries-kept-leaves`).** The tail's stdout done document gains additive
+    `clipsKept` and `tmpRootKept` keys. Each holds the kept word, or `null` when nothing was kept. An older ccd omits
+    both, and absence reads as unmeasured. Both server parsers read named keys only, so the keys are safe to ship
+    agent-first. Readers come later: the expiry lane's from workspace-lifecycle's next wave, the reclaim side's from
+    wave 7's collector. Without these keys, a leaf F1 keeps under ws-expire would reach the operator nowhere.
+  - **No new refusal word.** Rule 2's rows in a leaf refuse with `containment-unproven`, the NESTED word, which the
+    expiry lane's `ExpireToken` already holds as terminal.
+  - **Recorded, no change.** `_ws_reclaim_owned`'s moved-tree arm fails resumable on every resume while a foreign tree
+    stands in the child. It is fail-closed, and joins wave 7's carried "persistent per-child failures that retry for
+    ever".
+  - 4463 stays in reserve.
+
+- **2026-10-08 01:28 — run 291 goes to fix round 1 (mail 3955). The rulings are
+  `ccr15-evidence-archive/reviews/fix-round-291-1-rulings.md`, and contract §13 gains R64.**
+  - **How the ruling was checked.** Before ruling, the workflow `wf_a685fa5e-319` (two Opus agents, one Sonnet, all
+    read-only) checked the F1 design. It corrected the coordinator's draft, which had a breadcrumb trigger with
+    "refuse on any `.git`". That draft would have held about 13% of temp roots and missed a tree moved AS the leaf, a
+    recycled admin name, and the resumed arms.
+  - **F1, numbers 4149 and 4455.**
+    - Rule 1 is row-agnostic and lives INSIDE `_ws_leaf_remove`. A directory leaf holding a `.git` file that links
+      to an admin directory outside the leaf is refused, unless that admin directory's back-link names the
+      checkout. An unreadable scan answers unmeasured. A clone, or a submodule inside the leaf, passes. No git runs
+      inside a leaf.
+    - Step 6 keeps and records that leaf, and the act completes. Every caller, wave 7's collector included,
+      inherits the rule.
+    - On today's 45 temp roots it holds none.
+    - Rule 2: rows at, inside or through either leaf are NESTED, compared in one registry pass.
+  - **The minor findings.** F2 is 4456, F3 4457, F4 4458, F6 4459, the pins (F8, F9, F10) 4460 and F11 4461.
+    - F5 and F14 fold into 4146, and F7 into 4132.
+    - F12 is recorded here: the witness costs four execs, about 15 ms per spawn.
+    - F13 is 4148.
+  - **Numbers.** The allocator issued 4455, 4456, 4457, 4458, 4459, 4460, 4461, 4462 and 4463 for this round, after
+    the wave's block ran short. 4462 and 4463 are reserve.
+  - **Carried to wave 7.** The pre-breadcrumb `pin-failed` feed sentence, fixed by an additive `crumb` field. The
+    collector must call `_ws_leaf_remove`, so that it inherits Rule 1.
+  - **Workspace-lifecycle (3956).** Quiet-river was told:
+    - X2 item 8's measurement: the window is widened in the deleted direction only, and nothing is deleted wrongly;
+    - the fail-open newline twin in `_ws_expire_cwd_users`, which is theirs to fix;
+    - that F1's fix reaches ws-expire through the shared helper.
+  - **The run.** Run 291 is back at `working`.
+- **2026-10-08 01:12 — review 335 is closed (`done`, released); wave 6 is NOT accepted as it stands.**
+  - **The report.** Mail 3954, archived as `reviews/review-335-8c0f2cd9.md`. The panel and the plan's lenses ran 183
+    agents with no errors: 56 findings, 17 confirmed, 39 refuted, none unexamined. After merging duplicates, that
+    leaves 14 findings.
+  - **F1 is a SAFETY regression.** The lens rated it critical; two refuters who reproduced it rate it important.
+    - Task 9's recovery makes another workspace's tree deletable once that tree has been `mv`'d into the child's
+      temp root or clips leaf. Its uncommitted file is lost.
+    - Base held the same shape `unmeasured`. The reviewer reproduced both at the tip and at base, and ws-expire's
+      clips path is reached too.
+  - **Thirteen minor findings:**
+    - F2: the walker's ESRCH;
+    - F3: pre-breadcrumb `state-changed` read as resumable;
+    - F4: a newline-ended root;
+    - F5: the old-git resume, wider than R53 says;
+    - F6: the witness left beside an absent leaf;
+    - F7, F8, F9 and F10: unpinned guards;
+    - F11: the `loadCold` race;
+    - F12: the witness's exec count;
+    - F13 and F14: two departures on neither list.
+  - **What the lenses found clean.**
+    - The races: 70 seeds under reclaim and 50 under expire, with 0 removals while a user lived.
+    - The 9 × 6 ref-state table, and 104 gone-row rows with 0 prunes.
+    - All 13 of the plan's mutation rows red.
+    - SECURITY and derivation found nothing.
+  - **X2 item 8.** Wave 6 widened ws-expire's window in the deleted direction only, and nothing was deleted wrongly.
+  - **Suites.** Green, apart from `tmp-sweep` (red on main) and the `boot` load flake.
+  - **Before ruling.** The workflow `wf_a685fa5e-319` checks the F1 fix design: the moved-tree question asked of all
+    three trees, plus rows inside the leaves treated as nested. It runs one Opus feasibility agent, one Opus adversary
+    and one Sonnet agent for the minor fixes. 6 of 45 live temp roots hold a scratch checkout, so "keep any leaf that
+    holds a checkout" would leak about 13% of them.
+- **2026-10-07 22:20 — review run 335 is dispatched to `ccrc-pwa-brisk-basin`.** The daily cap refused at 24 of 24,
+  and the background retry dispatched at the 22:20 age-out. The brief is
+  `ccr15-evidence-archive/review-291-brief.md`: the held-out panel, plus the plan's four lenses (SAFETY and SECURITY
+  mandatory), and the a/b/c classes. Each finding is classed (a) shipped behaviour, (b) shipped prose or
+  (c) record only. X2 item 8 went to quiet-river (3939).
+- **2026-10-07 21:57 — wave 6's wave-done (3938) is verified; run 291 is at `awaiting-review`; the departures are
+  numbered.**
+  - **The claim, re-measured.** `ws/amber-river` at `8c0f2cd94` is PR #326's head, and the PR is open. The branch
+    carries #290 and one merge of main (`4e4d47bea`, after #312). `git merge-tree` against main `3c33d3218` is clean.
+    CI is running.
+  - **The run.** `advance` moved run 291 through `working` to `awaiting-review`. Its 15 items are settled done.
+  - **The suite.** `red`, failure `shallow`:
+    - two static-scan breaks, both fixed on the branch;
+    - `tmp-sweep` FAILS CLOSED, red on main;
+    - load flakes green in isolation (`boot`, `ccrc-codex`, `ccd-spawn-split`, `session-hook`);
+    - agent 465 and pwa 3446, green.
+  - **Numbers.** The worker named 37 slugs. Each substantive departure has its own number: 4126 and 4127 (ruled at
+    dispatch), and 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135 and 4136 (fail-closed additions). Each task's
+    plan-text corrections share one number: 4137, 4138, 4139, 4140, 4141, 4142, 4143, 4144, 4145, 4146 and 4147.
+    4148 and 4149 are reserve. The table is `ccr15-evidence-archive/wave6-done/deviation-numbers.md`. Each number is
+    defined in the plan at the fix round.
+  - **For workspace-lifecycle (X2, item 8).** `_ws_expire_locked` has no recompute-to-pin branch-state check, so
+    `ws-expire` keeps that window in both directions. This goes to quiet-river.
+  - **Two wave-3 defects found by wave 6's reviews** go to wave 7's pre-flight:
+    - rung 8 reads git's silent omission of an unreadable gitdir or `worktrees/` as "no record";
+    - the ladder's `_WS_NORMALISE_WHY` refusal detail is uncapped.
+- **2026-10-07 16:47 — the operator's fleet disk cleanup reaches CCR-15 (ops notice 3890; no reply wanted).**
+  - **What it did here.** It removed reclaim-row-placement-safety's review scratch and run 174's
+    `swift-hollow` scratch directory. It hand-ran `ws-expire` on four archived, unmarked
+    workspaces of this programme's era: `amber-summit`, `keen-hollow`, `plain-ridge` and `warm-hollow`. Their attic
+    refs and tombstones are kept.
+    - It also removed `expoAI-assistant-calm-mesa`'s `node_modules` and its `~/.cc-tmp` leaf, keeping the worktree.
+    - Nothing of this session's was touched.
+  - **`expoAI-assistant-calm-mesa`'s reclaim loop, measured.**
+    - 249 attempts since 10-05 14:04, every one `pin-failed` ("refs/heads/ws/calm-mesa does not resolve — there is no
+      branch tip to pin").
+    - It is paced at one attempt every 15.5 min, about 190 journal rows a day. That is harmless, and it ends when wave
+      6's gone-branch pin deploys.
+    - **Ruling: R59 stands.** No session recreates the branch. The notice's suggestion, recreating `ws/calm-mesa` at
+      `af784dbff290`, remains the operator's own option to end it sooner.
+  - **Carried to wave 7's pre-flight.** A deterministic per-child failure, such as `pin-failed` on a missing branch,
+    retries for ever at the sweep's pacing. Whether a persistent failure should back off further, or stop journaling
+    each repeat, is a question for that pre-flight.
+  - **The `rescue/B9-*` branches** in the home repo are kept. They are additive and cost nothing.
+- **2026-10-07 16:18 — stall-watch-settings W1 merged (#320, `7f7bf4afc`). Its wave 2 (run 322) is granted
+  comment and residue edits to W1's own lines inside claim 1070 (mail 3871, on 3815's terms).**
+  - **The lines granted.** `shared/api.ts` :9251, inside W1's appended block. In `watch.ts`: `StallResolution`,
+    `sweepStalls`' outer catch comment, and `stallResolveNow`'s docstring and returns.
+  - **Measured on run 291's tip `9bdcb0d2a`, which now carries Task 12.** Its `watch.ts` and `shared/api.ts` hunks
+    are nowhere near those lines. `git merge-tree` against main `7f7bf4afc` is clean.
+- **2026-10-07 14:53 — no objection to W1's `judgeStall` edit in `watch.ts` (mail 3858).** It was left out of 3830's
+  list: `judgeStall`'s signature and its `StallInput` literal, between `sweepStalls` and `sweepMail`. Re-measured:
+  `git merge-tree` of `ws/swift-meadow` (`ccd3eced1`, PR #320) against run 291's tip `a1e62db41` is clean, and wave 6
+  had not yet edited `watch.ts`. It is none of Task 12's sites.
+- **2026-10-07 11:33 — stall-watch-settings W1 may also co-edit `server/src/watch.ts` inside claim 1070, in exactly its
+  listed regions (mail 3830, granted on 3815's terms).**
+  - **W1's regions:** its own imports, the stall constants, the fields after `stallWarned`, and the bodies of
+    `sweepStalls` and `sweepMail`.
+  - **Measured:** wave 6 had not edited `watch.ts` at `899e4f12a`. Its Task 12 sites are the `childReclaim.js` import,
+    the accessor after `currentChildMarks()`, `tick()`'s `childMarks` lines and `emitCoord`. The nearest pair is two
+    import lines about 18 lines apart.
+  - amber-river was told to keep Task 12 to its planned sites.
+- **2026-10-07 10:03 — stall-watch-settings W1 (run 295) may co-edit `shared/api.ts` inside claim 1070 by appending at
+  its end (mail 3813, granted).**
+  - **The grant.** W1 appends one block at the very end and changes no line above it. Claim 1070 stands, and wave 6
+    changes nothing. The second lander resolves structural adjacency only, and a same-sentence collision comes back
+    to both coordinators.
+  - **Measured on run 291's tip `e5effb842`.** Wave 6's `shared/api.ts` edits are all interior (`CoordStatus`,
+    `LcRefusalToken` and `LC_REFUSAL_WORD`, `LifecycleMeas`), so an end-append shifts none of them or README's anchors.
+  - **Not granted.** `server/src/watch.ts` is not in the grant. W1 asks again at its Task 5.
+  - amber-river was told.
+- **2026-10-07 08:55 — wave 6 progress (mail 3801; confirmed in 3802).**
+  - **Done so far.** Tasks 0 to 6 are committed on `ws/amber-river`, each past its task review. Task 6 reproduced the
+    swift-hollow race red, then closed it.
+  - **Main absorbed once.** #312 (workspace-lifecycle 3b) landed first, so the worker merged main (`4e4d47bea`). The
+    stamp was restamped, `_ws_expire_cwd_users` keeps 3b's body under wave 6's header, the README anchors are
+    re-pointed, and the R56 checks are green.
+  - **Two calls confirmed:**
+    - guards the plan's mutation tables missed are pinned, by the brief's SAFETY rule;
+    - `leaf-mount-point-refused` (Task 5 refuses a leaf that is itself a mount point, because
+      `rm --one-file-system` measures from its argument) is accepted in principle and numbered at wave-done.
+  - **Claims.** 1057 and 1058 lapsed at the 8 h cap, and were re-taken as 1070 and 1071.
+- **2026-10-07 05:02 — workspace-lifecycle's PR #312 (wave 3b, run 290) edits two passages of our spec (mail 3796,
+  answered in 3797).**
+  - **The two passages.** §5.8: `reclaim-paused` now also stops the expiry of archived workspaces, making it the
+    fleet's one cleanup switch. The wave-3 qualification near §6: `ws-restore` also refuses an unreadable `expire:`
+    breadcrumb. Both are true for our programme, and neither conflicts with wave 6's planned spec text. Task 13's
+    §7 sentence sits beside the :807 line, so it is a text merge.
+  - **Measured against run 291's local tip `4abb87010`** (not pushed). `git merge-tree` finds two textual conflicts:
+    `ccd/ccd`'s generated stamp line, and README's `shared/api.ts:` anchors in the purge-refusal sentence. Both are
+    the second lander's R56 work: a re-stamp, and re-pointing by content. `_ws_expire_cwd_users` auto-merges.
+  - **Arming.** 3b's expiry lane ships shadowed, until `$REG/expire-lane-live` exists.
+- **2026-10-06 20:21 — delegation-broker's overlap is closed (mail 3755).** Its wave 1 (#284) landed second, as
+  `22b4eabda`, after #290. `git merge-tree` against `b27fabc15` was clean. Its coordinator ran
+  `session-hook.test.ts` (335/335), `typecheck-tests` and the hook suites on that exact merged tree. Nothing is owed
+  between the two programmes.
+- **2026-10-06 20:18 — workspace-lifecycle answers 3657/3666 (mail 3749; the delay was its mail gate).**
+  - **Measured from wave 3b's plan** (`docs/workspace-lifecycle-wave3b-plan` @`335c0e7c`):
+    - 3b edits none of `_ws_reclaim_tail`, `_ws_reclaim_contained`, `_ws_reclaim_ladder`,
+      `_ws_reclaim_workdir_shared`, `_ws_reclaim_owned` or the platform block.
+    - In ccd it touches the EXPIRE region, the MIRROR block, the return verbs' gate lines, `_ws_reap_locked`'s first
+      line, ws-gc's advisory arms and the `_reg_get` census sentence.
+  - **The one shared function** is `_ws_expire_cwd_users`. Wave 6 corrects its header comment, and 3b rewrites its
+    body. The second lander keeps both.
+  - **Every X2 item is agreed** under 3622, including expire breadcrumbs never being placement evidence.
+  - **Order:** 3b dispatches after its plan PR merges, re-verified on `b27fabc15`. Neither wave waits.
+  - The worker was told (status mail).
+- **2026-10-06 19:49 — run 302's overlap is settled (mail 3745 from `ccrc-pwa-quiet-ridge`).**
+  - R56 is agreed.
+  - Run 302 does not edit `ccd/ccrc`'s platform block; it only calls `_plat_timeout`. Its README edits sit after
+    `## License` and in the floor and SAFETY prose.
+  - The claimant consents to wave 6's two edits inside claim 1055.
+  - So no sequencing is needed, and the worker was told in a status mail.
+- **2026-10-06 19:12 — the first live reclaims on wave 5, observed read-only. Both children are gone; one took two
+  passes.**
+  - **`ccrc-pwa-quiet-meadow`** (run 260's child, a recycled slug) was reclaimed in one pass: intent 19:05:50, done
+    19:06:07.
+  - **`ccrc-pwa-brisk-meadow`** (archived by hand on 09-28; the one child R40 moves) was reclaimed on the second pass.
+    - **The first attempt failed closed.** It started at 19:05:51 and stopped at 19:06:05 on
+      `worktree-remove-failed`, with the breadcrumb at `reclaim:children` and the session unsupervised. The reason:
+      "registry row(s) ccrc-pwa-quiet-meadow name a workdir that cannot be resolved completely". The two reclaims ran
+      concurrently. ccd had already removed quiet-meadow's tree, but its row and breadcrumb stood until its purge,
+      two seconds later. So brisk-meadow's check of the other rows was unmeasured, and it stopped before deleting
+      anything further.
+    - **The resume succeeded.** It ran at 19:11:18 and finished at 19:11:26 (`purge done`, `reclaim done`). The
+      worktree and the breadcrumb are gone.
+  - **What this shows.**
+    - The fail-closed arm and the breadcrumb resume work live.
+    - The state the race exposed is exactly what wave 6's Task 9 breadcrumb arm (R54) places. That is a row whose
+      tree ccd's own `git worktree remove` took, with a `branch`, `artifacts` or `clips` phase beside its tombstone.
+      So after wave 6 this race passes in one pass instead of two, and no instruction to the worker is needed.
+  - **R59's first live-residue item is resolved.** `brisk-meadow` moved when wave 5 deployed, as R59 said it would.
+- **2026-10-06 19:05 — wave 5 is LIVE (v0.0.105), and run 260 is closed.**
+  - **The deploy, observed read-only.** The updater dispatched the fleet box at 19:01:42 and the server box at
+    19:04:14. `ccrc rollout --to v0.0.105 --check` then read both `[current]` at `b27fabc1`. Nothing was rolled out by
+    hand.
+  - **The close.** First the merge was proven: `gh pr view 290` reads MERGED, with its head at `9aa20cb2b`, equal to
+    the `handoffCommit`. Then `runs close 260` with `final:true` answered `done`, `released:true`,
+    `childReclaim:"queued"`. Run 291 keeps the programme open.
+  - **Children to watch, read-only.**
+    - `ccrc-pwa-quiet-meadow`, the slug recycled from 10-05, whose earlier reclaim finished: its reclaim is queued
+      behind the sweep's presence lease.
+    - `ccrc-pwa-brisk-meadow` is the one child R40 moves. It had no reclaim event at 19:05.
+    - If either stays kept past the bound, it is reported, not acted on (R59).
+- **2026-10-06 18:51 — #290 merged (`b27fabc15`); wave 6 dispatched (run 291 → `ccrc-pwa-amber-river`).**
+  - **The merge.** `gh pr merge 290 --squash --admin --match-head-commit 9aa20cb2b…` at 18:50. Every required check
+    was green after re-running the failed jobs: `ccrc-sweep-window` W21 passed, so it was a flake. Only macOS 2/2 was
+    still running, and it is advisory.
+  - **The deploy.** Through the updater only, observed read-only. v0.0.105 is building, and the fleet box is on
+    v0.0.104 until it moves. Run 260 closes once the server box converges.
+  - **Wave 6's dispatch.**
+    - Brief: `ccr15-evidence-archive/wave6-brief.md`, with planSha `26e3318b` and 15 items (Tasks 0 to 14).
+    - Route: opus · xhigh, subagent sonnet, workflows on, compact 40.
+    - The brief also carries review 303's Task 13 additions (G1, G4) and the overlaps as re-read: run 302's claim 1055
+      on `ccd/ccrc` and `README.md`; workspace-lifecycle wave 3b (run 290) and stall-watch-settings W1 (run 295), both
+      planned. R56 governs all three.
+  - **The conditions this dispatch waived.** quiet-river never answered 3657/3666: both are still queued behind its
+    `not-idle` gate. Waiting on them gains nothing, because its wave 3b is planned and R56 already binds both sides.
+    The X2 list reaches it durably once its gate opens.
+- **2026-10-06 18:40 — R47's pre-landing line for the operator (`r40-pre-landing-class-list`), measured read-only on
+  the fleet box before #290 lands.**
+  - **What R40 moves.** Of the 29 marked children, `ccrc-pwa-brisk-meadow` is the only one any run names
+    `claimedBy`. Its eight runs (10, 12, 14, 16, 18, 19, 28 and 30) are all `done`, the last closed 2026-09-04 14:53.
+    Its current birth is 2026-09-26 09:09 (run 171's dispatch). So it **would move**, and it is the only one. No other
+    child needs telling. Not listed: the API cannot read displacement rows.
+  - **The widening.** Once the server box converges, R39 and R40 widen what reaches the destructive path, with no
+    capability gate.
+  - **F6's residual, as measured.** None of git's 15 local environment variables (`git rev-parse --local-env-vars`)
+    appears by name in the user manager's environment, in any `ccrc*` unit, or in the running agent's environment.
+  - **The operator's stop.** `reclaim-pause`, on the Runs screen.
+  - **The PR body.** It names `ccrc-pwa-brisk-meadow` and `reclaim-pause` and asks for no hand rollout.
+- **2026-10-06 18:40 — review 303 closed (`done`, released); wave 5 is accepted at `9aa20cb2b` with no fix round.**
+  - **The report.** 3734, archived as `reviews/review-303-9aa20cb2.md`. The panel ran 28 agents, and none died. It
+    found 4 confirmed findings, all record-only, with no shipped-behaviour defect and no broken shipped prose.
+  - **SAFETY.**
+    - F4's cross-run window is closed: the reviewer's own probe is red on `e79b1da7` and under both mutations, and
+      green at the tip.
+    - F1's gate and F2's run key change no decision (R41 holds).
+    - F11 makes no child eligible.
+  - **The rulings** (`reviews/review-303-rulings.md`):
+    - G1 (the docstring's "PLACES") and G4 (spec §5.7's "Each is kept") go to wave 6's Task 13, as additions in its
+      brief.
+    - G2: the record's true count is 18. The widening mutation reds 18, not 24, because the six terminal-refusal cases
+      answer before `marked`. The plan is not edited.
+    - G3 is ruled as contract §13 R62.
+    - X1 (a queued licensed request reaching the same run's re-minted workspace; SAFETY class) and X3 (the
+      hold-retired memory keyed by id) are pre-existing since wave 4. They go to wave 7's pre-flight as R63.
+  - **CI on #290.** Server shard 1/5 failed on `ccrc-sweep-window` W21, a centralised-update test that came in with
+    the merge of main. The failed jobs are re-running. #290 lands only on a green `test (server)`.
+  - **Overlap.** Run 302 (ccrc-history wave 2) claims `ccd/ccrc` and `README.md`, both of which wave 6 edits. The R56
+    rule is proposed to `ccrc-pwa-quiet-ridge` (3736, corrected in 3737).
+  - **quiet-river.** It has been `not-idle` since 08:35, with 3657, 3666 and five other mails still queued. Its
+    wave 3b (run 290) is still `planned`, so R56 alone governs that overlap.
+- **2026-10-06 17:16 — run 260's fix round 1 is verified; scoped review run 303 is opened (wave-done 3728).**
+  - **The claim.** `ws/quiet-meadow` at `9aa20cb2b` is PR #290's head, and the PR is open. It contains the merge
+    `19441194b` of `77c11245a`, and `git merge-tree` against today's main (`4db20aa17`) is clean.
+  - **The run.** `advance` moved run 260 to `awaiting-review`, and all 19 items read done.
+  - **Numbers.** 3926, 3927, 3928, 3929, 3930, 3931, 3932, 3933, 3934, 3935, 3936, 3937, 3938, 3939, 3940, 3941, 3942,
+    3943 and 3944 are defined in the plan. 3945 is unused.
+  - **The suite.** `red`, with no real break: load reds that are green alone, plus three files red on a clean
+    origin/main.
+  - **Review run 303.** Its brief is `ccr15-evidence-archive/review-260fr1-brief.md`. It covers F1, F2/F18, F4 (with
+    the SAFETY lens, Opus xhigh) and F11/F12, then the merge's `--remerge-diff`, then the rest of the round's diff.
+    Each finding is classed as shipped behaviour, shipped prose or record only.
+  - **Dispatch.** The rolling daily cap refused at 24 of 24. The background retry dispatched it at 17:32:11, once
+    the oldest dispatch aged out, to `ccrc-pwa-brisk-delta` (the skill is present).
+- **2026-10-06 12:39 — `kept-word-ends-on-late-birth` is a stated residual, number 3944 (mail 3695, ruled in 3696).**
+  - **The finding.** quiet-meadow found it during fix round 1 while making F11 true. A recycled slug's new `create`
+    may not be placed yet. If its minting run is already past `minting-run-open`, a pass judges the new marker against
+    the older birth (`childReclaimBornAt` reads `create` events only). It can then answer
+    `minting-run-postdates-child`, a kept word, for a child that turns eligible seconds later.
+  - **What it affects.** Display only, and the eventual reclaim is correct.
+  - **Ruling: option A.** Number 3944 is defined in the wave-5 plan, and no code or ruled sentence changes.
+    - B is rejected: it would weaken a promise that is true everywhere else.
+    - C as worded is rejected: comparing the birth with the run's dispatch would fold every true postdating run into
+      doubt.
+  - **What carries forward.** The closure goes to wave 7's pre-flight: the last placed create counts as unplaced
+      when a placed removal follows it.
+  - **The contract.** Contract §13 is appended. R60 moves `child-birth-unplaced` to doubt, amending R41's table
+    (F11, number 3941). R61 records the residual. 3945 stays in reserve.
+- **2026-10-06 12:31 — a macOS red is ours, intermittent, and carried to wave 7's pre-flight (mail 3691, answered in 3692).**
+  - **The red.** In full CI run 37456924516 (PR #295, not ours), test-macos 2/4 (job 112246816971) failed wave 4's
+    case "reclaims through a SYMBOLIC ref and a stale empty `.lock`". The reclaim completed, but the purge answered
+    `purge-refused` because `.demo-quiet-basin.compactions.lock` was unavailable. COMPACT_LOCK_WHY was empty, so this
+    was contention: a `flock -w 5` timeout, or a failed alias `link` or open.
+  - **It is intermittent.** The same case passed on test-macos in the last three daily full runs on main: jobs
+    112094297477, 111606033808 and 111362458510.
+  - **Ruling.** No gate (the macOS ruling). Wave 6's plan does not touch the purge lock. The cause is carried to
+    wave 7's pre-flight as a residual, unmeasured. If the stable gate needs it green first, the answer is a full
+    re-run.
+- **2026-10-06 11:42 — stall-watch-settings W1 (run 295, `ccrc-pwa-calm-harbor`) is sequenced after run 260 (mail 3674).**
+  - **Their wave.** Run 295 waits for run 260 to release its claims on `shared/api.ts`, `coord/store.ts`, `watch.ts`
+    and `coord/routes.ts`.
+  - **The overlap with wave 6.** Wave 6 (run 291) also touches `shared/api.ts` (additive tokens, meas keys and one
+    optional `CoordStatus` field) and `watch.ts` (a small change). It leaves `store.ts` and `routes.ts` alone.
+  - **The proposed rule (mail 3675), the same as 3622.**
+    - Both proceed once run 260 releases its claims, and neither waits on the other.
+    - Edits stay additive.
+    - The second lander merges main, then re-runs `single-definition`, `typecheck-tests`, the citation cases and
+      `deviation-refs`.
+- **2026-10-06 10:50 — #293 merged (`26e3318b`); wave 6's brief is ready; dispatch waits for #290 and quiet-river.**
+  - **The PR.** The required checks passed on `372e663b`: server 4/4, agent, pwa, build, typecheck. macOS is
+    advisory. The squash merge is `26e3318b`, and the plan, the contract and this ledger on main equal the tested
+    tree.
+  - **planSha** is `26e3318b3ee3f66cd21a875b58946aab2d205208`. The brief, about 4 KB, is in the evidence archive as
+    `wave6-brief.md`.
+  - **quiet-river** got the full X2 list in status mail 3666. Mail 3657's question stays open: does WL 3b edit the
+    tail, the containment, the ladder or the platform block?
+  - **Dispatch** follows #290's merge, the answer to that question, and a fresh claims read.
 - **2026-10-06 10:40 — wave 6's plan is written, attack-reviewed and corrected. Contract §12 is appended. The docs PR
   is next.**
   - **Drafting.**
@@ -1528,6 +1973,18 @@ Then dispatch one fresh child:
 
 **Wave 7** (the collector verb, R57) and **wave 8** (its lane, R58) are new runs, each opened before the previous
 wave's run closes, each with its own block, plan and pre-flight. Wave 7 inherits: a kept clips leaf with no collector;
-whole-second `btime`; the recycled-slug quarantine proof; the witness writer's temp-file residue. Wave 8 waits for
+whole-second `btime`; the recycled-slug quarantine proof; the witness writer's temp-file residue; the intermittent
+macOS `purge-refused` in the symbolic-ref reflogs case (decision 12:31); the closure of `kept-word-ends-on-late-birth`
+(R61, decision 12:39); X1 and X3 (R63); a persistent per-child failure's endless paced retry (decision 2026-10-07
+16:47), which now includes `_ws_reclaim_owned`'s moved-tree arm and a row at or inside a leaf; from wave 6's review 335
+round: rung 8 reading a silent omission as "no record", the uncapped `_WS_NORMALISE_WHY`, the additive `crumb` field
+on ccd's failed document (the pre-breadcrumb `pin-failed`/`tombstone-unwritable` sentence, and the resumed-arm
+`probe-unmeasured` on the verb and on the audit), and the collector calling `_ws_leaf_remove`; from review 341: the
+pins for F4 (writable `builtin`), F5 (the clips odd word), F6 (a FIFO at an outside admin `gitdir`), F7 (a fixed find
+order for row 17) and F9 (the vacuous kebab line) (decision 2026-10-08 12:03); from review 346: the four prose
+corrections (`_ws_dir_physical`'s bare-capture list, "only a back-linked tree" scoped to outside the leaf, the
+back-link caller's inner NUL reading refused, and the two `childReclaim.ts` comments naming the audit arm), and the
+server half of `crumb` (`childReclaimAudit` reading an audit's exit-1 document rather than mapping it to `unreadable`)
+(decision 2026-10-08 13:08). Wave 8 waits for
 workspace-lifecycle wave 3b and for the fleet's `ccd caps` to advertise wave 7's token. The path-identity follow-up
 programme comes after wave 8.
