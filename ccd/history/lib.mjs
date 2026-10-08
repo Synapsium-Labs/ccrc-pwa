@@ -1693,12 +1693,26 @@ export function parseRederiveState(text) {
 export function formatRederiveState(s) {
   return `${s.target} ${s.cursor} ${s.end}`;
 }
+/** Whether a re-derivation generation is open: its saved target lies above the mark (D-4344,
+ *  history-reindex-mark-by-rederivation). The one test of it, read by rederivePlan and phraseValues. */
+function rederiveOpen(mark, state) {
+  return state !== null && state.target > mark;
+}
 /** Continue a generation whose target lies above the mark; else start one when a pair lies above it; else nothing.
  *  A malformed state restarts from 0, which is conservative (D-4344, history-reindex-mark-by-rederivation). */
 export function rederivePlan(mark, top, maxBlobId, state) {
-  if (state !== null && state.target > mark) return state;
+  if (rederiveOpen(mark, state)) return state;
   if (top > mark) return { target: top, cursor: 0, end: maxBlobId };
   return null;
+}
+/** The values the same-tick phrase fast path searches (D-4344, history-reindex-mark-by-rederivation; review 344 F2):
+ *  every value the tick loaded while no generation is open, and while one is, only `fresh`, the values whose pairs
+ *  the tick itself recorded. An open generation re-derives every indexed blob up to its end, so a search on each of
+ *  its ticks only re-indexed, every tick until it ended, each blob a phrase still found: a value glued to a
+ *  neighbour by `_` or `-`, which §8.3's run grammar leaves in place. A pair recorded while a generation is open
+ *  keeps its recording-tick search; one a dead pass recorded waits for the next tick no generation is open. */
+export function phraseValues(mark, state, values, fresh) {
+  return rederiveOpen(mark, state) ? fresh : values;
 }
 
 /** The JWT shape arm, `\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}`

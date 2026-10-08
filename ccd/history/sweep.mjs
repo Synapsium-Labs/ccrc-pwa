@@ -50,7 +50,8 @@ import {
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, entryIndexText, HEALTH_COUNTERS, RETENTION_STATE_META,
-  makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
+  makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
+  REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
 } from './lib.mjs';
@@ -1902,9 +1903,10 @@ export function discoverAndPlan(db, c, uuids) {
  *     ticks row;
  *  3. `secretsStep`: every pair committed and journaled before any drain or FTS insert, and the context's pairIdx;
  *  4. `ftsPrepare`: §9.1's probe at every open, which sets the context's `fts`;
- *  5. `reindexForValues`: the same-tick phrase fast path over the values this tick loaded; it never moves the mark;
+ *  5. `reindexForValues`: the same-tick phrase fast path over the values this tick loaded, or, while a generation is
+ *     open, over those whose pairs this tick recorded; it never moves the mark;
  *  6. `rederiveFts`: the hash re-derivation of every indexed blob, which alone moves the durable reindex mark
- *     (D-4344); it runs under any pause, in a per-tick slice of the run budget;
+ *     (D-4344); it runs under any pause, and it and step 5 share one per-tick slice of the run budget (review 344 F2);
  *  7. `drainSpool`: the journal-first drain of the spool (§9.14), whose hints feed the ingest; the per-tick first-row
  *     cache (`newFirstRowCache`) is made just before it and shared by the drain's location rule and step 8's;
  *  8. `confirmCandidates`: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
@@ -1943,12 +1945,14 @@ export async function tick(db, ctx) {
   ictx.pairIdx = secrets.pairIdx;
   // §9.1 the probe at every open, then §6.2: every pair whose re-index is still owed (a pair learned this tick, or
   // one a dead pass committed) re-indexes before any FTS insert, in two steps (D-4344, history-reindex-mark-by-rederivation).
-  // First the phrase fast path over the values this tick loaded; then the hash re-derivation of every indexed blob,
-  // which alone moves the durable mark. Both run before any FTS insert of the tick and under any pause; the
-  // re-derivation's slice of the run budget keeps capture going.
+  // First the phrase fast path over the values this tick loaded, or, while a generation is open, over those whose
+  // pairs this tick recorded; then the hash re-derivation of every indexed blob, which alone moves the durable mark.
+  // Both run before any FTS insert of the tick and under any pause; the one slice of the run budget the two share
+  // keeps capture going (review 344 F2).
   ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
-  await reindexForValues(db, ictx, secrets.values);
-  await rederiveFts(db, ictx, ctx.budget);
+  const slice = rederiveSlice(ctx.budget);
+  await reindexForValues(db, ictx, secrets.values, secrets.newValues, ctx.budget, slice);
+  await rederiveFts(db, ictx, ctx.budget, slice);
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   // F16: one transcript index and one first-row memory per tick, shared by the drain's location rule and the candidates' (confirmClear) below
@@ -3554,8 +3558,10 @@ export function recordPairs(db, home, ids, pairs, nowMs) {
 /** The secrets step of a tick (§9.2, D-4224 history-tick-order), third after the outbox flush and the
  *  migration verdict. It returns this tick's redaction index (every pair ever recorded), the values
  *  whose pairs are new this tick (`newValues`), and every value this tick loaded (`values`), which
- *  task 23's phrase fast path reads against its durable mark, so a pair committed by a pass that died
- *  before its re-index is still re-indexed by the next. The caller drops the values when the tick ends. */
+ *  task 23's phrase fast path reads against its durable mark (while a D-4344 generation is open, only
+ *  `newValues`: review 344 F2), so a pair committed by a pass that died before its re-index is still
+ *  searched at the next tick no generation is open, and re-derived by the generation whose target covers
+ *  it. The caller drops the values when the tick ends. */
 export function secretsStep(db, ctx, secretFiles) {
   const loaded = loadSecrets(ctx.home, secretFiles);
   const fresh = new Set(recordPairs(db, ctx.home, ctx.ids, loaded.pairs, ctx.nowMs).map((p) => `${p.len}:${p.sha256}`));
@@ -3797,15 +3803,19 @@ export function resetFtsPending(db) {
  *  now-complete index, and merge steps are registered to purge the deleted bytes. It NEVER moves the mark: a phrase
  *  finds only a blob whose term is the value alone, so it cannot show the index complete (a value glued to a
  *  neighbour, a hash-only pair and a value no source loaded this tick are all invisible to it). Only `rederiveFts`
- *  moves the mark (D-4344, history-reindex-mark-by-rederivation, which supersedes D-4311's mark clause). Values are
- *  never written anywhere. Returns how many blobs were re-indexed. */
-export async function reindexForValues(db, ctx, values) {
+ *  moves the mark (D-4344, history-reindex-mark-by-rederivation, which supersedes D-4311's mark clause). While a
+ *  generation is open it searches only `fresh`, the values whose pairs this tick recorded (lib's `phraseValues`), and
+ *  every blob it reads is charged to `slice` and `budget` as rederiveFts charges one, so it never runs unbudgeted ahead
+ *  of the step that ends the generation; a blob a spent budget leaves waits for the re-derivation (review 344 F2).
+ *  Values are never written anywhere. Returns how many blobs were re-indexed. */
+export async function reindexForValues(db, ctx, values, fresh, budget, slice = rederiveSlice(budget)) {
   if (ctx.fts !== true) return 0;
   const d = derivStmts(db);
   const mark = Number(getMeta(db, REINDEX_META) ?? 0);
   const top = d.pairTop.get().rid ?? 0;
   if (top <= mark) return 0;
-  const owed = values.filter((v) => secretPairs([v]).pairs
+  const searched = phraseValues(mark, parseRederiveState(getMeta(db, REDERIVE_META)), values, fresh);
+  const owed = searched.filter((v) => secretPairs([v]).pairs
     .some((p) => (d.pairRid.get(p.len, Buffer.from(p.sha256, 'hex'))?.rid ?? 0) > mark));
   const f = ftsStmts(db);
   const ids = new Set();
@@ -3830,18 +3840,32 @@ export async function reindexForValues(db, ctx, values) {
     group = [];
     chars = 0;
   };
+  let done = 0;
   for (const id of rows) {
+    // Review 344 F2: charged as rederiveFts charges; a blob a spent budget leaves waits for the re-derivation.
+    if (!budgetLeft(slice) || !budgetLeft(budget)) break;
     const b = d.blobForFts.get(id);
     // A tombstone keeps no index row; nor does a blob whose bytes no longer decode (D-4346, history-permanent-failures-classified).
     const t = b === undefined || b.z === null ? null : await ftsTextOfBlob(b.z, b.is_sidecar === 1, ctx.pairIdx, b.raw_len);
     const undecodable = t !== null && t.undecodable;
     const text = t === null || undecodable || t.overCap === true ? null : t.text;   // an over-cap body keeps no row on this path either (B3M3, FU5)
     group.push({ id, text, undecodable });
+    const zlen = b === undefined || b.z === null ? 0 : b.z.length;
+    slice.bytes += zlen;
+    budget.bytes += zlen;
+    done += 1;
     chars += text === null ? 0 : text.length;
     if (chars >= FTS_GROUP_CHARS) commit();
   }
   commit();
-  return ids.size;
+  return done;
+}
+
+/** One tick's slice of the run budget for the re-index (REDERIVE_SLICE_*, D-4344): the tick makes one and charges
+ *  the phrase path and the re-derivation to it, so the two together never take more of a tick than one slice
+ *  (review 344 F2). */
+function rederiveSlice(budget) {
+  return newBudget(budget.now, { maxMs: REDERIVE_SLICE_MS, maxBytes: REDERIVE_SLICE_BYTES });
 }
 
 /** The hash re-derivation that moves the re-index mark (§6.2 "A pair learned after its text was indexed", D-4344,
@@ -3857,13 +3881,14 @@ export async function reindexForValues(db, ctx, values) {
  *  generation's start, fixed, and a blob indexed later already carries every pair up to the target (the pair index
  *  of its own tick), so a busy ingest cannot keep a generation from completing. The mark moves only to the
  *  generation's own target, never to a pair learned mid-generation; that pair opens the next generation. Each call
- *  takes a slice of the run budget (REDERIVE_SLICE_*) so a generation never starves capture, charges each blob's
- *  compressed bytes as the backfill does, and commits its groups with the cursor, so a dead pass resumes. It runs
+ *  is charged to a slice of the run budget (REDERIVE_SLICE_*; from tick, the slice it shares with the phrase path,
+ *  review 344 F2) so a generation never starves capture, charges each blob's compressed bytes as the backfill does,
+ *  and commits its groups with the cursor, so a dead pass resumes. It runs
  *  under any pause, like the phrase path and the merge steps (D-4242): it frees the very bytes a late pair put
  *  at risk, and the group's merge registration purges the deleted ones. A tombstoned blob keeps no index row.
  *  Three distinct words: 'idle' (nothing owed or FTS off), 'running' (budget spent, the cursor saved) and
  *  'completed' (the mark moved), with how many blobs were re-indexed. */
-export async function rederiveFts(db, ctx, budget) {
+export async function rederiveFts(db, ctx, budget, slice = rederiveSlice(budget)) {
   if (ctx.fts !== true) return { state: 'idle', reindexed: 0 };
   const d = derivStmts(db);
   const mark = Number(getMeta(db, REINDEX_META) ?? 0);
@@ -3872,7 +3897,6 @@ export async function rederiveFts(db, ctx, budget) {
   // Built per call: pairs can grow between calls.
   const idx = makeProbeIndex(d.pairRows.all().map((r) => ({ rid: r.rid, len: r.len, sha256: Buffer.from(r.sha256).toString('hex') })), mark);
   const f = ftsStmts(db);
-  const slice = newBudget(budget.now, { maxMs: REDERIVE_SLICE_MS, maxBytes: REDERIVE_SLICE_BYTES });
   let cursor = plan.cursor;
   let reindexed = 0;
   let group = [];

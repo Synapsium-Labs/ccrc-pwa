@@ -2007,8 +2007,8 @@ describe('history ingest: secrets per tick (plan task 22)', () => {
 });
 
 interface IxSweep {
-  rederiveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<{ state: 'idle' | 'running' | 'completed'; reindexed: number }>;
-  reindexForValues(db: DatabaseSync, ctx: IxCtx, values: string[]): Promise<number>;
+  rederiveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget, slice?: IxBudget): Promise<{ state: 'idle' | 'running' | 'completed'; reindexed: number }>;
+  reindexForValues(db: DatabaseSync, ctx: IxCtx, values: string[], fresh: string[], budget: IxBudget, slice?: IxBudget): Promise<number>;
 }
 
 describe('history ingest: the FTS index (plan task 23)', () => {
@@ -2435,6 +2435,99 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         expect(metaV(w, 'fts_reindex_rid')).toBe(String(rb));
         expect(matches(w, '"ezqn"*')).toBe(0);
       } finally { w.close(); }
+    });
+
+    it('F2 (review 344): while a generation is open the phrase path searches only the values whose pairs its tick recorded, so a blob it cannot clean is not re-indexed on every tick', async () => {
+      const { sweep: S, store, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-f2p-');
+      try {
+        const v = `zqf${hex(12)}2`;   // glued by _ or -: §8.3's run grammar leaves it, and a phrase still finds it
+        const u = `zqu${hex(12)}5`;   // stand-alone: the redaction removes it
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+          IX.user(IX.uuidN(1), null, `note ${u} end`, 1),
+          IX.user(IX.uuidN(2), IX.uuidN(1), `note ${v}_tail end`, 2),
+          IX.user(IX.uuidN(3), IX.uuidN(2), `note ${v}-tail end`, 3),
+          IX.user(IX.uuidN(4), IX.uuidN(3), `note ${v}_tail two end`, 4),
+        ]));
+        IX.sweepTwice(box);
+        const P = lib.historyPaths(box.home);
+        const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+        const w = store.openWriter(P.dbFile);
+        try {
+          expect(IX.count(w, 'blobs', 'fts_indexed = 1'), 'CONTROL: four indexed blobs, so a one-blob slice keeps the generation open for three ticks').toBe(4);
+          const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+          ctx.fts = S.ftsPrepare(w, ctx.nowMs).tables;
+          // The tick's secrets step, then its two re-index steps in its order; the re-derivation reads one blob a tick.
+          const tick = async (): Promise<number> => {
+            const secrets = S.secretsStep(w, ctx, []);
+            ctx.pairIdx = secrets.pairIdx;
+            const n = await S.reindexForValues(w, ctx, secrets.values, secrets.newValues, S.newBudget());
+            await S.rederiveFts(w, ctx, S.newBudget(Date.now, { maxBytes: 1 }));
+            return n;
+          };
+          secretFile(box, 'v.env', `ZQ_V=${v}\n`);
+          const seen: number[] = [];
+          seen.push(await tick());                                    // the opening tick: no generation is open yet
+          const ra = maxRid(w);
+          expect(lib.parseRederiveState(metaV(w, 'fts_rederive'))?.target, 'CONTROL: the generation is open').toBe(ra);
+          expect(matches(w, `"${u}"`), 'CONTROL: u is indexed in clear, its blob behind the cursor').toBe(1);
+          expect(rowidOf(w, `"${u}"`), 'CONTROL: u\'s blob lies behind the cursor').toBeLessThanOrEqual(lib.parseRederiveState(metaV(w, 'fts_rederive'))!.cursor);
+          secretFile(box, 'u.env', `ZQ_U=${u}\n`);                   // learned mid-generation
+          seen.push(await tick());
+          expect(matches(w, `"${u}"`), 'the recording tick searched the value learned mid-generation').toBe(0);
+          seen.push(await tick());
+          seen.push(await tick());                                    // this tick's re-derivation completes the generation
+          expect(metaV(w, 'fts_reindex_rid')).toBe(String(ra));
+          seen.push(await tick());                                    // u is owed again, and its blob is already clean
+          expect(seen).toEqual([3, 1, 0, 0, 0]);
+          expect(matches(w, `"${v}"`), 'CONTROL: the shape: the glued value stays in the index, a phrase still finds all three').toBe(3);
+        } finally { w.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    it.each([['the run budget', 'run'], ['the slice', 'slice']] as const)('F2 (review 344): the phrase path is charged to %s, and the blobs a cut run leaves are the generation\'s', async (_name, cut) => {
+      const { sweep: S, store, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-f2b-');
+      try {
+        const v = `zqb${hex(12)}3`;
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+          IX.user(IX.uuidN(1), null, `note ${v} end`, 1),
+          IX.user(IX.uuidN(2), IX.uuidN(1), `other ${v} tail`, 2),
+          IX.user(IX.uuidN(3), IX.uuidN(2), `third ${v} word`, 3),
+        ]));
+        IX.sweepTwice(box);
+        const P = lib.historyPaths(box.home);
+        const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+        const w = store.openWriter(P.dbFile);
+        try {
+          expect(matches(w, `"${v}"`), 'CONTROL: three rows hold the value in clear').toBe(3);
+          const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+          ctx.fts = S.ftsPrepare(w, ctx.nowMs).tables;
+          secretFile(box, 'b.env', `ZQ_B=${v}\n`);
+          const secrets = S.secretsStep(w, ctx, []);
+          ctx.pairIdx = secrets.pairIdx;
+          const tiny = () => S.newBudget(Date.now, { maxBytes: 1 });
+          const run = cut === 'run' ? tiny() : S.newBudget();
+          const slice = cut === 'slice' ? tiny() : undefined;
+          expect(await S.reindexForValues(w, ctx, secrets.values, secrets.newValues, run, slice), 'one blob, then the budget is spent').toBe(1);
+          expect(matches(w, `"${v}"`)).toBe(2);
+          expect(await S.rederiveFts(w, ctx, run, slice), 'the generation opens on what is left, and saves its cursor').toEqual({ state: 'running', reindexed: 0 });
+          const again = S.secretsStep(w, ctx, []);
+          expect(await S.reindexForValues(w, ctx, again.values, again.newValues, S.newBudget()), 'open, and nothing recorded this tick').toBe(0);
+          expect((await S.rederiveFts(w, ctx, S.newBudget())).state).toBe('completed');
+          expect(matches(w, `"${v}"`), 'the generation re-indexed what the cut run left').toBe(0);
+          expect(metaV(w, 'fts_reindex_rid')).toBe(String(maxRid(w)));
+        } finally { w.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    it('F2 (review 344): the tick charges the phrase path and the re-derivation to one shared slice of its run budget', () => {
+      const src = fs.readFileSync(SWEEP, 'utf8');
+      const at = src.indexOf('export async function tick(db, ctx) {');
+      const body = src.slice(at, src.indexOf('\n}\n', at));
+      expect(body).toMatch(/\n {2}const slice = rederiveSlice\(ctx\.budget\);\n/);
+      expect(body).toMatch(/\n {2}await reindexForValues\(db, ictx, secrets\.values, secrets\.newValues, ctx\.budget, slice\);\n/);
+      expect(body).toMatch(/\n {2}await rederiveFts\(db, ictx, ctx\.budget, slice\);\n/);
     });
   });
 
@@ -2938,7 +3031,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
           ctx.pairIdx = secrets.pairIdx;
           ctx.fts = S.ftsPrepare(db, ctx.nowMs).tables;
           // the pair is above the mark, the phrase finds both blobs, and no sweep ran: only this arm decides the over-cap one
-          expect(await S.reindexForValues(db, ctx, secrets.values)).toBe(2);
+          expect(await S.reindexForValues(db, ctx, secrets.values, secrets.newValues, S.newBudget())).toBe(2);
           expect(hasFtsRow(db, blobOf(1)), 'the over-cap blob keeps no row, not an empty one').toBe(false);
           expect(hasFtsRow(db, blobOf(2)), 'CONTROL: the within-cap blob is re-indexed').toBe(true);
           expect(matches(db, `"${v}"`), 'CONTROL: the re-index redacted the value').toBe(0);

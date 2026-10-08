@@ -293,6 +293,7 @@ export interface RederiveState { target: number; cursor: number; end: number }
 export function parseRederiveState(text: string | undefined): RederiveState | null;
 export function formatRederiveState(s: RederiveState): string;
 export function rederivePlan(mark: number, top: number, maxBlobId: number, state: RederiveState | null): RederiveState | null;
+export function phraseValues(mark: number, state: RederiveState | null, values: string[], fresh: string[]): string[];
 export const LEAD_PREFIXES_MAX: number;
 export const LEAD_READINGS_MAX: number;
 export function redactField(text: string, idx: PairIndex): string;
