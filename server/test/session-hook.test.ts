@@ -10489,4 +10489,112 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(ts).toBe(999999999999999);
     expect(Number.isSafeInteger(ts)).toBe(true);
   });
+
+  // ── review 316 F38: S1 as SYNTAX — the spool block, and every function it calls, fork nothing ──
+  /** Every form in `code` that makes bash fork or run a program: command or process substitution, a backtick,
+   *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`.
+   *  [] = builtins only. Conservative by construction: what it cannot classify is reported, never passed. */
+  const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
+    const found: string[] = [];
+    const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
+    // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
+    let out = '';
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i]!;
+      if (c === '\\') { out += '__'; i++; continue; }
+      if (c === "'") {
+        const j = src.indexOf("'", i + 1);
+        if (j < 0) { found.push('unterminated quote'); break; }
+        out += "''"; i = j; continue;
+      }
+      if (c === '`') { found.push('backtick'); out += '_'; continue; }
+      if (c === '$' && src[i + 1] === '(' && src[i + 2] !== '(') { found.push('command substitution'); out += '__'; i++; continue; }
+      if (c === '"' || (c === '$' && src[i + 1] === '{')) {
+        const stack: string[] = [c === '"' ? '"' : '}'];
+        let j = c === '"' ? i + 1 : i + 2;
+        for (; j < src.length && stack.length > 0; j++) {
+          const d = src[j]!;
+          const top = stack[stack.length - 1];
+          if (d === '\\') { j++; continue; }
+          if (d === '`') found.push('backtick');
+          else if (d === '$' && src[j + 1] === '(' && src[j + 2] !== '(') found.push('command substitution');
+          else if (d === '$' && src[j + 1] === '{') { stack.push('}'); j++; }
+          else if (d === "'" && top === '}') { const k = src.indexOf("'", j + 1); j = k < 0 ? src.length : k; }
+          else if (d === '"') { if (top === '"') stack.pop(); else stack.push('"'); }
+          else if (d === '}' && top === '}') stack.pop();
+        }
+        if (stack.length > 0) found.push('unterminated quote');
+        out += c === '"' ? '""' : '$V'; i = j - 1; continue;
+      }
+      out += c;
+    }
+    // 2. Process substitution is expanded even inside [[ ]], so it is looked for BEFORE step 3 blanks those.
+    if (/[<>]\(/.test(out)) found.push('process substitution');
+    // 3. Blank what may legally hold ( | & : [[ ]] tests, (( )) and $(( )) arithmetic, case patterns.
+    let m = out.replace(/\[\[ [^\n]*? \]\]/g, '[[ ]]').replace(/\$?\(\([^\n]*?\)\)/g, '(( ))');
+    m = m.replace(/(^|\n|;;|\bin)([ \t]*)[^\s();|&<>]+(?:\|[^\s();|&<>]+)*\)/g, '$1$2');
+    // 4. What is left may hold none of these.
+    const bare = m.replace(/\(\( \)\)/g, '');
+    const FORMS: Array<[RegExp, string]> = [
+      [/<</, 'here-document'], [/\bcoproc\b/, 'coproc'],
+      [/(?<!\()\((?!\()/, 'subshell'], [/(?<!\|)\|(?!\|)/, 'pipeline'], [/(?<![&>])&(?![&>])/, 'background'],
+    ];
+    for (const [re, name] of FORMS) if (re.test(bare)) found.push(name);
+    // 5. The first word of every simple command, past its assignments and redirections, must be allowed. The
+    //    split drops the words that open a command position (`if`, `elif`, `then`, `else`, `do`, `!`, a `case WORD in`
+    //    header), so the command after each of them is checked rather than hidden behind an allowed keyword.
+    const LEAD = /^(?:[A-Za-z_][A-Za-z0-9_]*\+?=\S*|\d*[<>]+&?\S*)\s*/;
+    for (const seg of m.split(/;;|&&|\|\||;|\n|\{|\}|!|\bcase\s+\S+\s+in\b|\bif\b|\belif\b|\bthen\b|\bdo\b|\belse\b/)) {
+      let s = seg.trim();
+      for (let a = LEAD.exec(s); a && a[0].length > 0; a = LEAD.exec(s)) s = s.slice(a[0].length);
+      const w = /^\S+/.exec(s)?.[0];
+      if (w !== undefined && !allowed.has(w)) found.push(`command ${w}`);
+    }
+    return found;
+  };
+  /** Bash keywords and builtins the block may run. None of them forks. */
+  const SPOOL_BUILTINS: ReadonlySet<string> = new Set(['if', 'then', 'elif', 'else', 'fi', 'case', 'esac', '[[', '((', 'printf', 'read', 'return', 'true']);
+  /** The hook functions the block calls. Each body is scanned too, against the builtins alone. */
+  const SPOOL_FUNCS = ['_ct_read'] as const;
+  const spoolBlock = (src: string): string => src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'));
+  const hookFnBody = (src: string, name: string): string | null => new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)^\\}`, 'm').exec(src)?.[1] ?? null;
+  const A = '_hs_g="${CCRC_SESSION_GENERATION:-}"';
+  const T = "_hs+='}'";
+  const ROWS: Array<[string, string, string, string]> = [
+    ['a command substitution', A, '_hs_g="$(printf x)"', 'command substitution'],
+    ['a backtick', A, '_hs_g=`printf x`', 'backtick'],
+    ['a substitution inside ${}', A, '_hs_g="${CCRC_SESSION_GENERATION:-$(printf x)}"', 'command substitution'],
+    ['a subshell', "{ printf '\\n%s\\n'", "( printf '\\n%s\\n'", 'subshell'],
+    ['a pipeline', '2>/dev/null || true', '2>/dev/null | true', 'pipeline'],
+    ['a background job', '2>/dev/null || true', '2>/dev/null & true', 'background'],
+    ['an input process substitution', T, "_hs+='}'; read -r _hs_x < <(printf x)", 'process substitution'],
+    ['an output process substitution', T, "_hs+='}'; printf x > >(read -r _hs_x)", 'process substitution'],
+    ['a process substitution inside [[ ]]', T, "_hs+='}'; [[ -e <(printf x) ]] && true", 'process substitution'],
+    ['a coproc', T, "_hs+='}'; coproc true", 'coproc'],
+    ['a trailing &', T, "_hs+='}'; true &", 'background'],
+    ['a here-string', T, "_hs+='}'; read -r _hs_x <<< x", 'here-document'],
+    ['an external program', T, "_hs+='}'; mkdir -p x", 'command mkdir'],
+    ['a path-spelled program', T, "_hs+='}'; /bin/true", 'command /bin/true'],
+    ['a variable command word', T, '_hs+=\'}\'; "$_hs_x" x', 'command ""'],
+    ['a program as an if condition', T, "_hs+='}'; if mkdir -p x; then true; fi", 'command mkdir'],
+    ['a program as an elif condition', T, "_hs+='}'; if [[ -n x ]]; then true; elif /bin/true; then true; fi", 'command /bin/true'],
+    ['a program in a case arm on the case line', T, "_hs+='}'; case \"$src\" in clear) mkdir -p x ;; esac", 'command mkdir'],
+  ];
+
+  it('S1 (syntax, F38): the spool block and every function it calls hold no fork form', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(forkForms(spoolBlock(src), new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]))).toEqual([]);
+    for (const f of SPOOL_FUNCS) {
+      const body = hookFnBody(src, f);
+      expect(body, f + ' is not defined in the hook').not.toBeNull();
+      expect(forkForms(body!, SPOOL_BUILTINS), f).toEqual([]);
+    }
+  });
+
+  it.each(ROWS)('S1 (syntax, F38): %s planted in the spool block is named', (_label, anchor, replacement, form) => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
+    expect(block).toContain(anchor);
+    expect(forkForms(block.replace(anchor, replacement), allowed)).toContain(form);
+  });
 });
