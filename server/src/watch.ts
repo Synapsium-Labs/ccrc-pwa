@@ -4189,6 +4189,8 @@ export class FleetWatcher {
       return null;
     }
     const deps = { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, notifyLog: this.deps.notifyLog,
+      // Each re-measure reads the clock as it measures (the watcher's own source, `Date.now`), never the pass's `now`.
+      now: (): number => Date.now(),
       journalTrust: async () => (await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg },
         this.lifecycleHealth())).trust };
     try {

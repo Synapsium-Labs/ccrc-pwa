@@ -49,6 +49,10 @@ export interface EndDeadCoordinatorDeps {
   notifyLog?: NotifyLog;
   journalTrust: () => Promise<DeadCoordinatorJournalTrust>;
   abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>;
+  /** The lane's clock, read at the moment each re-measure measures. A re-measure NEVER takes the pass's instant: a
+   *  supervisor heartbeat stamped after that instant would read "from the future", not fresh, and a RESTARTING
+   *  coordinator (heartbeat written before its pane is up) would read `orphan` — crashed. */
+  now: () => number;
 }
 
 /**
@@ -77,9 +81,13 @@ export async function readDeadCoordinatorJournalTrust(
     return untrusted(`the mirror's recorded gaps could not be read (${err instanceof Error ? err.message : String(err)})`, false);
   }
   let lastWriteErrorAt: number | 'unknown' | null = null;
-  if (health.writeErrors !== null && health.writeErrors > 0) {
+  // The mirror's `writeErrors` is `null` for an ABSENT errors file AND for one it has not been able to read since this
+  // process started — two conditions, one value. ccd writes that file ONLY when it counts a failure, so its existence
+  // alone means one was counted: a `null` is therefore measured here, and only a PROVEN absence (ENOENT) is "none".
+  if (health.writeErrors === null || health.writeErrors > 0) {
     const st = await deps.io.statMeasured(path.join(deps.cfg.registryDir, LC_DIR_NAME, LC_ERRORS_NAME));
-    lastWriteErrorAt = st.ok ? st.mtimeMs : 'unknown';
+    if (st.ok) lastWriteErrorAt = st.mtimeMs;
+    else if (!(health.writeErrors === null && st.reason === 'absent')) lastWriteErrorAt = 'unknown';
   }
   return { hold: null, trust: { untrusted: null, gapGens, lastWriteErrorAt } };
 }
@@ -108,13 +116,13 @@ export function deadCoordinatorJournalOf(coord: CoordStore, id: string, trust: D
 
 /** Is the claimant STILL crashed, and is the lane still armed and unpaused? `null` when it may go on; otherwise why
  *  it stops — typed (`DeadCoordinatorStop`), so the lane never re-splits the prose. */
-export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string, nowMs: number): Promise<DeadCoordinatorStop | null> {
+export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Promise<DeadCoordinatorStop | null> {
   let names: readonly string[] | null;
   try { names = await deps.io.readdir(deps.cfg.registryDir); } catch { names = null; }
   if (names === null) return { kind: 'switch', why: `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   if (names.includes(RECLAIM_PAUSE_MARKER)) return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
   if (!deadCoordinatorLaneArmed(names)) return { kind: 'switch', why: 'the lane was disarmed during the act' };
-  const m = await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, nowMs);
+  const m = await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.now());
   const c = deadCoordinatorCrash(m, deadCoordinatorJournalOf(deps.coord, id, await deps.journalTrust()));
   switch (c.kind) {
     case 'crashed': return null;
@@ -125,8 +133,10 @@ export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string, now
   }
 }
 
+/** `_passNowMs` is the pass's instant, kept on the signature for the lane's call and for what is genuinely the pass's
+ *  (anchors, feed rows — both the lane's). NO re-measure here may use it: each reads `deps.now()` as it measures. */
 export async function endDeadCoordinator(
-  deps: EndDeadCoordinatorDeps, claimantId: string, nowMs: number,
+  deps: EndDeadCoordinatorDeps, claimantId: string, _passNowMs: number,
 ): Promise<DeadCoordinatorActOutcome> {
   // 1 — the switches, from ONE listing, nearest the act.
   let names: readonly string[] | null;
@@ -153,7 +163,7 @@ export async function endDeadCoordinator(
   const stuck: { runId: number; why: string }[] = [];
   let stoppedBy: DeadCoordinatorStop | null = null;
   for (const run of runs) {
-    const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId, nowMs));
+    const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId));
     if (out.ok) { ended.push(run); continue; }
     if (out.kind === 'sweep-stopped') {
       stoppedBy = out.released

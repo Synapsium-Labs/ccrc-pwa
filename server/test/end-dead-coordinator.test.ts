@@ -8,7 +8,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { closeRun, type CloseOutcome } from '../src/coord/close.js';
-import { endDeadCoordinator, recordDeadCoordinatorFeed, type EndDeadCoordinatorDeps } from '../src/coord/endDeadCoordinator.js';
+import { endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorFeed, type EndDeadCoordinatorDeps } from '../src/coord/endDeadCoordinator.js';
 import {
   DEAD_COORDINATOR_JOURNAL_TRUSTED, DEAD_COORDINATOR_LANE_LIVE_MARKER, type DeadCoordinatorJournalTrust,
 } from '../src/deadCoordinator.js';
@@ -16,6 +16,7 @@ import { parseJournalLine } from '../src/coord/journalparse.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { SessionVerdict } from '../src/exec.js';
 import type { Runner } from '../src/exec.js';
+import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
@@ -35,6 +36,8 @@ interface Opts {
   onVerb?: (verb: string) => void;
   /** The lane's reading of the journal itself (default: trusted). */
   trust?: DeadCoordinatorJournalTrust;
+  /** The executor's clock at each re-measure (default: the pass's own instant, `NOW`). */
+  clockAt?: number;
 }
 
 const rig = async (o: Opts = {}) => {
@@ -59,6 +62,7 @@ const rig = async (o: Opts = {}) => {
     io: o.unlistable === true ? { ...base.io, readdir: async () => null } : base.io,
     tmux: { sessionVerdict: async () => { asked += 1; o.onMeasure?.(asked); return o.verdict?.(asked) ?? { verdict: 'gone' }; } },
     journalTrust: async () => o.trust ?? DEAD_COORDINATOR_JOURNAL_TRUSTED,
+    now: () => o.clockAt ?? NOW,
     // The sweep's abandon exactly as the serialiser's handle runs it (`routes.ts`'s `withSweepAbandon`): the REAL
     // `closeRun`, `'sweep'`, the crashed id and the executor's re-measure.
     abandon: (runId, crashedId, stillCrashed): Promise<CloseOutcome> => {
@@ -213,6 +217,21 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
     expect(r.calls, 'and no release was composed for its worker').toEqual([]);
   });
 
+  it('a RESTARTING coordinator is alive: a heartbeat written AFTER the pass instant (the clock has moved on) stops the act — nothing closed, no worker released', async () => {
+    // `ccd supervise` stamps `.supervised` BEFORE it spawns the pane, so the heartbeat lands after the instant the lane's
+    // pass captured. The re-measure reads the clock as it measures: against the pass's instant that heartbeat would be
+    // "from the future", not fresh, and the restarting coordinator would read `orphan`.
+    for (const [where, beat] of [['5 s AFTER the pass instant', SEC + 5], ['5 s BEFORE it (the control)', SEC - 5]] as const) {
+      const r = await rig({ clockAt: NOW + 10_000 });
+      writeFileSync(path.join(r.reg, `${CRASHED}.supervised`), String(beat));   // the supervisor stamped it; the pane is not up
+      const a = r.working('alpha', 'demo-w1');
+      expect(await endDeadCoordinator(r.deps, CRASHED, NOW), where).toMatchObject({ kind: 'ended', programmes: [], open: [{ slug: 'alpha', runIds: [a] }],
+        stoppedBy: { kind: 'remeasured', why: expect.stringContaining('restarting') } });
+      expect(r.stateOf(a), where).toBe('working');
+      expect(r.calls, `${where}: no release composed`).toEqual([]);
+    }
+  });
+
   it('a run the abandon arm cannot move is listed, and the next one is still tried', async () => {
     const r = await rig();
     const a = r.working('alpha', 'demo-w1');
@@ -232,5 +251,36 @@ describe('the feed', () => {
     const rows = r.coord.feedEvents(10).filter((e) => e.sessionId === CRASHED);
     expect(rows.map((e) => [e.title, e.body, e.runId])).toEqual([['dead coordinator: programme ended',
       `coordinator ${CRASHED} crashed (dead since 2026-09-21 13:13 UTC) and stayed dead an hour; programme alpha ended, 2 runs closed failed.`, null]]);
+  });
+});
+
+describe('the journal-trust adapter — the errors file ccd writes only when it counts a failure', () => {
+  const OK: LifecycleHealth = { state: 'ok', newestAt: 1, horizon: 1, rows: 1, generations: 1, gaps: 0, writeErrors: null, lastOk: 1 };
+  const errorsFile = (r: Awaited<ReturnType<typeof rig>>) => path.join(r.reg, LC_DIR_NAME, LC_ERRORS_NAME);
+
+  it('a null count with NO errors file is a PROVEN absence: trusted, no write failure', async () => {
+    const r = await rig();
+    expect(await readDeadCoordinatorJournalTrust(r.deps, OK)).toEqual({ hold: null,
+      trust: { untrusted: null, gapGens: [], lastWriteErrorAt: null } });
+  });
+
+  it('a null count with an errors file PRESENT (the mirror could not read it) places the last failure at its mtime', async () => {
+    const r = await rig();
+    mkdirSync(path.dirname(errorsFile(r)), { recursive: true });
+    writeFileSync(errorsFile(r), '3\n');
+    const t = await readDeadCoordinatorJournalTrust(r.deps, OK);
+    expect(t.trust.untrusted).toBeNull();
+    expect(typeof t.trust.lastWriteErrorAt).toBe('number');
+  });
+
+  it('a COUNTED failure whose errors file has vanished is `unknown` too — absence only clears a null count', async () => {
+    const r = await rig();
+    expect((await readDeadCoordinatorJournalTrust(r.deps, { ...OK, writeErrors: 2 })).trust).toMatchObject({ untrusted: null, lastWriteErrorAt: 'unknown' });
+  });
+
+  it('a null count whose errors file cannot be statted — present, unreadable — is `unknown`, never "none"', async () => {
+    const r = await rig();
+    const io = { ...r.deps.io, statMeasured: async () => ({ ok: false as const, reason: 'unreadable' as const }) };
+    expect((await readDeadCoordinatorJournalTrust({ ...r.deps, io }, OK)).trust).toMatchObject({ untrusted: null, lastWriteErrorAt: 'unknown' });
   });
 });
