@@ -54,9 +54,10 @@
 **HARD BOUNDARY.** This wave edits only these files:
 - `ccd/ccd`:
   - a new COLLECT region below line 19109;
-  - the RECLAIM region, for Tasks 1 to 3;
+  - the RECLAIM region, for Tasks 1 to 3, and for Task 6's one comment amendment above `_WS_RCL_CRUMB=''` (ruling R-g);
   - the entry guard and the caps line, line-count-neutral;
   - the `ws-audit` hand-off, line-count-neutral;
+  - `cmd_ws_audit`'s reclaim printf (Task 3, X1's `generation` key), its two lines rewritten in place, line-count-neutral;
 - `ccd/ccd-entry.py` (`is_protected`);
 - `agent/src/whitelist.ts`, and the agent tests it needs;
 - `server/src/ccdargv.ts` (`COLLECT_CAP`, with no composer);
@@ -88,7 +89,7 @@ Each line binds every task.
 - **No destructive verb against the live host:** `ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`/`ws-restore`, `ws-reclaim`, `ws-expire` and `ws-collect`. The live residue in `~/.cc-tmp` stays the operator's (R59, R71). That covers every unwitnessed leaf, the three kept leaves, the row-less ones, the clips orphans, and the leaked tmux servers in `ccrc-pwa-brisk-river`'s leaf.
 - **Re-stamp after EVERY `ccd/ccd` edit:** run `bash ccd/ccrc restamp ccd/ccd`, then `node shared/mark.mjs --check ccd/ccd` (exit 0) and `server/test/ownership.test.ts`. Never commit an unstamped `ccd/ccd`.
 - **The 19109 boundary and the citation tax.**
-  - An edit at or above `ccd/ccd:19109` keeps the LINE COUNT unchanged, or re-measures the session-hook census with the instrument, never by hand. That covers the platform block, the entry guard, the LC act list, `_ws_slug_free`, the caps line and the `ws-audit` hand-off.
+  - An edit at or above `ccd/ccd:19109` keeps the LINE COUNT unchanged, or re-measures the session-hook census with the instrument, never by hand. That covers the platform block, the entry guard, the LC act list, `_ws_slug_free`, the caps line, the `ws-audit` hand-off, and Task 3's `cmd_ws_audit` reclaim printf (X1's `generation` key, its two lines rewritten in place).
   - `ccd/ccd` lines 1 to 1221 are a platform block, byte-identical with `ccd/ccrc`'s. This wave adds no `_plat_` helper: the move primitive is inline in the COLLECT region, on its Linux arm.
   - Each insertion into `shared/api.ts` re-points README's `shared/api.ts:` anchors BY CONTENT, in the same task's commit.
 - **R56's overlap rule (contract §14 R72).**
@@ -153,6 +154,9 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
   - The pre-existing hazard is measured on git 2.43: `git update-ref` with an all-zero new value exits 0 and DELETES the named ref.
   - The wave-done reports, in its own paragraph, whether any arm reached that before this wave.
 - **R-i: Task 4 names the alias.** Task 4's 4E ends `_ws_leaf_checkout_one`'s "OUTSIDE IT" sentence with the alias clause, so Task 9's pointer reaches a complete sentence.
+- **R-k: an all-zero tip is never a compare-and-swap.** The measurement: `git update-ref -d --no-deref <ref> <forty zeros>` exits 0 and deletes the ref whatever it names. Task 2 therefore also rejects forty zeros at the tail's two `^[0-9a-f]{40}$` shape checks (the tip and the recorded head the branch deletes compare against): such a value answers unmeasured and stops before any delete. Red first: a tombstone whose tip is forty zeros. Plus a mutation row.
+- **R-l: a record that vanishes inside the lock is a retry.** In Task 6's `_ws_collect_resume`, the reader's rc 1 (the record vanished between the evaluation and the verb, inside the lock) answers `refused state-changed`, retried, never the terminal `quarantine-kept`. The reasoning is R-f's: only an actor that does not take the reap lock removes it, and the next audit reads the id afresh. A case and a mutation row.
+- **R-m: Task 10 amends spec §5.5 for the zero head.** On the vanished arm, a record whose `HEAD` is symbolic to a branch that no longer exists now answers unmeasured at the audit, where §5.5 says it "stays pin-failed". Task 10 amends that sentence and states both all-zero shapes.
 - **R-j: counts are measured, never copied.** Every count, mutation row's red text and wall time a draft marks as derived, predicted or unmeasured is measured by the worker. The measured value replaces the draft's, and a mismatch in a count is not a departure.
 
 ## Review Focus (the five failure modes most likely to bite)
@@ -166,6 +170,8 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
    - a recycled git admin name makes a moved worktree look like the leaf's own;
    - a stopped session's clone sits inside a dead child's leaf;
    - a link or file swapped in at the id.
+
+   Its mirror is a leak, not a loss: a leaf holding a clone AND a linked worktree of it (git's default absolute gitdir, the shape leftover test fixtures leave) must still be collected after the move, through the alias's inside-the-leaf arm, never refused for ever. Pinned by Task 4's 4E (a3) cases and Task 8's CLONE case.
 
    Pinned by Task 4's alias conditions (1) and (2), by `_ws_collect_rows_clear`, by Task 6's step 2, and by Task 8's full-verb cases for each.
 4. **The idle floor or the token is wrong.** Three shapes:
@@ -350,15 +356,13 @@ If (d3) prints a number other than 19109, read every "19109" in this plan as tha
 gh pr view 319 --json state -q .state                                                               # (e2) MERGED or OPEN: record it
 grep -n 'REQUIRED_VERB_FLAG' agent/src/whitelist.ts | head -3                                       # (e3) the object Task 7 appends to: record its last entry
 grep -n "export const EXPIRE_CAP\|export const DOCS_CAP" server/src/ccdargv.ts                     # (e4) record which constant is last
-ls server/test/fixtures | grep -oE '^g[0-9]+' | sort -V | tail -1                                   # (e5) the highest bypass fixture: Task 7 takes the next
+ls agent/test/types/bypasses | grep -oE '^g[0-9]+' | sort -V | tail -1                                   # (e5) g15 on main; g19 if #319 landed — Task 7 takes the next (g20)
 ```
-
-Read (e5)'s directory from the bypass suite's own fixture root if `server/test/fixtures` is not it. Locate that suite by content: `grep -ln 'g15' server/test/*.ts`.
 
 - [ ] **Step 6: Nothing of this wave exists yet**
 
 ```bash
-grep -c 'ws-collect\|_ws_collect_\|tmpquarantine\|containment-refuted\|collect-v1\|_ws_reclaim_generation\|_WS_RCL_CRUMB' ccd/ccd   # (f1) 0
+grep -v '_ws_collect_ignored' ccd/ccd | grep -c 'ws-collect\|_ws_collect_\|tmpquarantine\|containment-refuted\|collect-v1\|_ws_reclaim_generation\|_WS_RCL_CRUMB'   # (f1) 0 (the reap helper _ws_collect_ignored predates this wave and is excluded)
 grep -c "'collect'\|containment-refuted\|not-witnessed\|witness-mismatch\|quarantine-kept" shared/api.ts                     # (f2) 0
 grep -c 'ws-collect' agent/src/whitelist.ts server/src/ccdargv.ts server/src/remote/runner.ts ccd/ccd-entry.py              # (f3) 0 in each
 ```
@@ -367,7 +371,7 @@ grep -c 'ws-collect' agent/src/whitelist.ts server/src/ccdargv.ts server/src/rem
 
 ```bash
 grep -n '_child_tmpdir ' ccd/ccd | grep -v '^[0-9]*:_child_tmpdir()' | grep -v '^[0-9]*: *#'        # (g1) exactly one call site
-grep -n '\.child"' ccd/ccd | grep -E '>|printf|_reg_set|touch' | head                               # (g2) one writer, in ws-add
+grep -n '_reg_set "\$id" child ' ccd/ccd                               # (g2) one line, inside cmd_ws_add (b0647d850: 7366) — the one .child writer
 awk '/^_child_tmpdir\(\)/,/^}/' ccd/ccd | grep -n '_reg_get\|mkdir -p'                              # (g3) the marker read's line comes before the mkdir's
 ```
 
@@ -1197,7 +1201,7 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
     case "$rc" in
       0) : ;;
       1) _WS_OWNED_WHY="$_WS_MOVED_WHY"; return 1 ;;
-      *) _WS_OWNED_WHY="${_WS_MOVED_WHY:-the moved-tree check answered $rc, an answer it never gives, so whether a gone row's tree was moved inside $wd was never asked}"; return 2 ;;
+      *) _WS_OWNED_WHY="${_WS_MOVED_WHY:-the moved-tree check answered $rc, an answer it never gives, so whether the tree of a gone row was moved inside $wd was never asked}"; return 2 ;;
     esac
   fi
   return 0
@@ -1205,6 +1209,8 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
 ```
 
 Every `_WS_OWNED_WHY` text is today's, byte for byte, so every existing `detail` assertion still holds. Only the rc of six arms changes (absent, record, no-record, registry, scan and moved-check rc 2, from 1 to 2). The moved-check call is no longer an `||` fold, and it gains the `*)` arm.
+
+**No apostrophe inside a `${…:-…}` fallback.** The `*)` arm's fallback text says "the tree of a gone row", never the possessive. Inside a double-quoted `${…:-…}`, bash reads `'` as the start of a single-quoted string, which never closes, so the whole file fails `bash -n` (measured, bash 5.2.21: `W="${M:-a gone row's tree}"` gives `unexpected EOF while looking for matching`). Keep that wording if you retype the line. An apostrophe in a plain double-quoted string, as in `$main's worktree list`, is fine.
 
 - [ ] **Step 4: The tail names the two refusals apart, and the word is declared**
 
@@ -1266,9 +1272,10 @@ Directly after the `'run-id-malformed':` entry of `LC_REFUSAL_WORD` (its sentenc
 
 - [ ] **Step 5: Run the tests to verify they pass, then the gates**
 
-Every vitest call runs in the FOREGROUND, timeout ≥ 600000 ms:
+Every vitest call runs in the FOREGROUND, timeout ≥ 600000 ms. The syntax check runs FIRST. If `ccd/ccd` does not parse, every harness `source "$CCD"` dies, and every suite below would red for that reason alone.
 
 ```bash
+bash -n ccd/ccd && echo syntax-ok
 cd server && ./node_modules/.bin/vitest run test/ccd-reclaim-owned-rc.test.ts
 cd server && ./node_modules/.bin/vitest run test/ccd-reclaim-tail-refuted.test.ts
 cd server && ./node_modules/.bin/vitest run test/ccd-expire-tail-refuted.test.ts
@@ -1290,6 +1297,7 @@ cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every 
 ```
 
 Expected:
+- `bash -n ccd/ccd` exits 0 and prints `syntax-ok`. If it does not, fix the parse before reading any suite's red.
 - All green.
 - `ccd-refusal-scan`'s set-equality holds in both directions: the literal `_ws_reclaim_fail "$id" "$lctx" containment-refuted` is found, and the word is declared.
 - `wsaudit` stays green with NO edit, because a `failed` document is no `refused` literal.
@@ -1417,8 +1425,9 @@ This is the departure `rung8-asks-the-admin-walk-not-log-of`, ACCEPTED by the co
 
 So proceeding is SAFE today: it stops at the pin phase, before anything is destroyed. But it licenses a destructive call over a misread, journals an intent and a `pin-failed` on every pass, and reads as resumable. **Ruled here: the vanished arm takes the same ask.** Its stop moves EARLIER, to the audit (`unmeasured`, no intent). No arm newly reaches the pin. A tree git truly no longer records (pruned) still proceeds, because no entry names it.
 
-**The all-zero recorded HEAD (ruling T2, from OPEN5: a guard this task adds).** The table's last row: git lists a record whose admin `HEAD` is at mode 000 with the all-zero object id, so `_ws_reclaim_record` answers rc 0 with `RECLAIM_REC_HEAD` = `0000…`. On the vanished arm that id becomes `RECLAIM_HEAD` (:27273), the token's `head=` input and the pin's `recordhead`. `grep -n 'RECLAIM_REC_HEAD' ccd/ccd` lists the reset in `_ws_reclaim_reset` (:25763), `_ws_reclaim_record`'s header, reset and parser (:25980, :25996, :26005), two `local` shadows (:26389, :26432) and exactly ONE read, :27273. The present arm takes its HEAD from `rev-parse` inside the tree, never from the record. So the guard sits at that one read, inside `_ws_reclaim_eval_absent` and never inside `_ws_reclaim_record`: an all-zero `RECLAIM_REC_HEAD` answers `unmeasured`, retried, before any token is minted. The vanished arm is shared, so `ws-expire` answers the same. Red first: an admin `HEAD` at mode 000 on the vanished arm (Step 13's all-zero case). Measured by the plan's author with git 2.43.0 in a throwaway repository, and re-measured by the worker in Step 16:
+**The all-zero recorded HEAD (ruling T2, from OPEN5: a guard this task adds).** The table's last row: git lists a record whose admin `HEAD` is at mode 000 with the all-zero object id, so `_ws_reclaim_record` answers rc 0 with `RECLAIM_REC_HEAD` = `0000…`. That is NOT the only cause. git 2.43 prints the same `HEAD 0000…` for a record whose admin `HEAD` reads fine but is symbolic to a branch that no longer exists. That record keeps its `branch refs/heads/<b>` line (measured: tree removed, then `update-ref -d` on its branch). The guard below catches both shapes, and its comment and detail name both. On the vanished arm, the deleted-branch shape now answers `unmeasured` at the audit. Before this task it minted a token and then stopped `pin-failed` at the pin, which is the outcome spec §5.5 states ("A worktree whose HEAD is still symbolic to a branch proven gone stays pin-failed"). Task 10's §5.5 edit must say so, and Step 22 reports it. On the vanished arm that id becomes `RECLAIM_HEAD` (:27273), the token's `head=` input and the pin's `recordhead`. `grep -n 'RECLAIM_REC_HEAD' ccd/ccd` lists the reset in `_ws_reclaim_reset` (:25763), `_ws_reclaim_record`'s header, reset and parser (:25980, :25996, :26005), two `local` shadows (:26389, :26432) and exactly ONE read, :27273. The present arm takes its HEAD from `rev-parse` inside the tree, never from the record. Ruling R-h asks for that arm to be MEASURED, not asserted, and Step 13 measures it. With the tree standing and its admin `HEAD` at mode 000, git lists `HEAD 0000…` with no `branch` line, and `git -C <wt> rev-parse --git-common-dir` exits 128. So the ladder answers `unmeasured` ("…records a worktree at <wt>, but git cannot resolve the directory's repository") before `RECLAIM_REC_HEAD` is read. A RESUMED tail at `worktree` runs no ladder. It passes `_ws_reclaim_owned` (rc 0) and stops `pin-failed` at the settle ("could not read the git directory of <wt> …", `crumb:true`), with the tree, its files, the branch and the breadcrumb all standing. Neither standing shape can pin a zero id, so the guard is not extended to that arm. The plan's attack measured this at `b0647d850` and again with Tasks 1-3 applied; the worker re-measures the ladder half in Step 13's standing case. So the guard sits at that one read, inside `_ws_reclaim_eval_absent` and never inside `_ws_reclaim_record`: an all-zero `RECLAIM_REC_HEAD` answers `unmeasured`, retried, before any token is minted. The vanished arm is shared, so `ws-expire` answers the same. Red first: an admin `HEAD` at mode 000 on the vanished arm (Step 13's all-zero case). Measured by the plan's author with git 2.43.0 in a throwaway repository, and re-measured by the worker in Step 16:
 - `git update-ref <ref> <all-zero id>` exits 0 and DELETES the ref it names (an existing `refs/ccrc/attic/t/<sha>` was gone afterwards);
+- an all-zero OLD value is no compare-and-swap either. `update-ref -d --no-deref <ref> <all-zero id>` exits 0 and deletes the ref whatever it names, while a wrong non-zero old value exits 1 and keeps it. `update-ref <ref> <new> <all-zero id>` over an existing ref exits 128 ("reference already exists"). ws-reap's own (g) comment already records the first of these for its CAS (`grep -n 'BOTH delete unconditionally' ccd/ccd`);
 - today the zero id never reaches it. `_ws_reclaim_attic_extra` (`grep -n '^_ws_reclaim_attic_extra() {' ccd/ccd`) asks `git cat-file -e "<id>^{commit}"` first, which exits 128 on the zero id, so the verb stops `pin-failed`. The one ref such a call would name is `refs/ccrc/attic/<id>/<all-zero id>`, which no pin creates (each pin is named for the commit it pins).
 
 Step 22 states both in their own paragraph.
@@ -1430,7 +1439,7 @@ Step 22 states both in their own paragraph.
 `_ws_expire_locked` (:31003) is NOT edited (R72; workspace-lifecycle run 345's B4 edits it). So `ws-expire`'s pre-breadcrumb documents carry no `crumb`: its direct `_ws_reclaim_failed_json probe-unmeasured` (:31014) and its `pin-failed` and `tombstone-unwritable` (:31043, :31051). That is absence, never a wrong value. The worker names all five in the wave-done for quiet-river: crumb's absence there, the rung-8 verdict change, the vanished-arm change, the all-zero-HEAD guard (ruling T2 OPEN5), and the reason cap.
 
 **Files:**
-- Modify `ccd/ccd`. Every edit is BELOW ccd/ccd:19109, so the frozen citation census is untouched. Only line 2 (the restamp) changes above it. The measured line count went from 35185 to 35267 (+82) before the all-zero-HEAD guard (ruling T2 OPEN5) was added. The guard adds about 9 more lines; re-measure and state the figure. The line numbers below are hints at `b0647d850`; locate each edit by its quoted text. If Task 1 has landed first, its edits to the tail and to `_ws_reclaim_owned` move these lines, and only the anchors hold.
+- Modify `ccd/ccd`. Every edit is BELOW ccd/ccd:19109, so the frozen citation census is untouched. Only line 2 (the restamp) changes above it. The measured line count went from 35185 to 35267 (+82) before the all-zero-HEAD guard (ruling T2 OPEN5) was added. The guard adds about 11 more lines (its comment names both all-zero shapes); re-measure and state the figure. The line numbers below are hints at `b0647d850`; locate each edit by its quoted text. If Task 1 has landed first, its edits to the tail and to `_ws_reclaim_owned` move these lines, and only the anchors hold.
   1. **A:** the global plus `_ws_reclaim_failed_json` (:28620-28625, `grep -n '^_ws_reclaim_failed_json() {' ccd/ccd`).
   2. **A:** `_ws_reclaim_locked`, two insertions: after `phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"` (:30257, the FIRST of its two hits; the second, :31008, is `_ws_expire_locked`'s and is never touched), and before `phase="$start"` (:30340, the hit directly under `reaping "reclaim:$start"`).
   3. **A:** `_ws_reclaim_tail`, one insertion after `[[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; …` (:29553).
@@ -1440,7 +1449,7 @@ Step 22 states both in their own paragraph.
   7. **C:** `_ws_reclaim_log_of` (:28029). Its `local` line (:28057) loses `d g real n`. Its gone-arm walk (:28084 to the function's closing `}` at :28110) MOVES, byte for byte, into `_ws_reclaim_admin_entries`, which `_ws_reclaim_log_of` now calls. `_ws_reclaim_no_record` is inserted after it, directly above `_ws_reclaim_reflog_ids() {` (:28112).
 - Modify `server/test/ccd-child-reclaim-verb.test.ts`: one line (:453, `grep -n "toEqual({ failed: 'pin-failed', detail: 'the disk is full' })"`).
 - Modify `server/test/ccd-child-reclaim-unmeasured-journal.test.ts`: `printedBy` (:35-39).
-- Test (new): `server/test/ccd-child-reclaim-crumb.test.ts`, `server/test/ccd-child-reclaim-why-cap.test.ts`, `server/test/ccd-child-reclaim-silent-omission.test.ts`. They are three files because of R56's 600 s foreground ceiling. Measured together: 26 cases in about 20 s, before the all-zero-HEAD case was added (27 with it).
+- Test (new): `server/test/ccd-child-reclaim-crumb.test.ts`, `server/test/ccd-child-reclaim-why-cap.test.ts`, `server/test/ccd-child-reclaim-silent-omission.test.ts`. They are three files because of R56's 600 s foreground ceiling. Measured together: 26 cases in about 20 s, before the all-zero-HEAD case was added. With it and the two R-h cases (the standing arm's admin `HEAD` at mode 000, and the deleted-branch shape), the drafted figure is 29; measure it (R-j).
 
 **Interfaces:**
 - Consumes (at `b0647d850`):
@@ -1472,7 +1481,7 @@ Step 22 states both in their own paragraph.
                                                  # Shadows _WS_LOGS and _WS_KEEP_WHY.
   _WS_NORMALISE_WHY                              # now always ONE line: <= 300 bytes printable ASCII, plus "…" when cut
   ```
-  - Verdicts: under a silent omission, the ladder answers `unmeasured` where it answered `no-worktree-record` (tree standing) or `reclaimable` (vanished arm). `no-worktree-record` stays TERMINAL where no admin entry names the tree. On the vanished arm, a record git lists with the all-zero HEAD also answers `unmeasured` (ruling T2 OPEN5), where the ladder minted a token over `head=0000…`.
+  - Verdicts: under a silent omission, the ladder answers `unmeasured` where it answered `no-worktree-record` (tree standing) or `reclaimable` (vanished arm). `no-worktree-record` stays TERMINAL where no admin entry names the tree. On the vanished arm, a record git lists with the all-zero HEAD also answers `unmeasured` (ruling T2 OPEN5), where the ladder minted a token over `head=0000…`. This covers both shapes git prints that id for: an admin `HEAD` it cannot read, and a `HEAD` symbolic to a branch that no longer exists. The standing arm is unchanged. With its admin `HEAD` unreadable, it already answered `unmeasured` at the `rev-parse` rung (R-h, measured in Step 13).
   - Wave 8 reads `crumb` absence-permits, and reads `true` as "printed past the act's breadcrumb: the act had started" (ruling T2 OPEN4), never as "a breadcrumb stands now": the tail's `purge-*` failures print `true` after `_reg_purge` took the row and its `.reaping` file. Task 1's `containment-refuted`, printed through `_ws_reclaim_fail` in the tail, carries `crumb:true` with no edit of its own, because the tail sets `_WS_RCL_CRUMB=true`.
   - Later, Task 6's `cmd_ws_collect` shadows `_WS_RCL_CRUMB` to `''` with `local`, so a collection's documents carry no crumb. Task 6 then amends this task's comment above `_WS_RCL_CRUMB=''` to say so. At this task's commit the comment's "and by nothing else" is true as written.
 
@@ -1999,15 +2008,19 @@ Create `server/test/ccd-child-reclaim-silent-omission.test.ts`:
 //   - no entry names it, every entry read        -> no-worktree-record (TERMINAL), as before.
 // The ladder is SHARED: the change reaches `ws-expire` too (a case below). And
 // the vanished arm, where "no record" proceeds, takes the same ask. There, too,
-// a record git lists with the all-zero HEAD (its admin `HEAD` unreadable) names
-// no commit that was read, so it is unmeasured, never the head the pin keeps.
+// a record git lists with the all-zero HEAD names no commit that was read — git
+// prints it for an admin `HEAD` it cannot read, and for a `HEAD` symbolic to a
+// branch that no longer exists — so it is unmeasured, never the head the pin
+// keeps. The STANDING arm never reads the record's HEAD: with its admin `HEAD`
+// unreadable, git cannot resolve the tree's repository, and the ladder answers
+// unmeasured before that (a case below measures it).
 // FIXTURE HOMEs ONLY: every ccd call runs through the harness, never against $HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
-import { CHILD_STUBS, CHILD_ID, evalOf, makeChild } from './childReclaimFixture.js';
+import { CHILD_BRANCH, CHILD_STUBS, CHILD_ID, evalOf, makeChild } from './childReclaimFixture.js';
 import { expireAudit, expireEvalOf, makeArchived } from './wsExpireFixture.js';
 
 let h: PrHarness;
@@ -2051,6 +2064,17 @@ describe('the ladder’s record check, over a STANDING tree', () => {
     const r = evalOf(h, { pre: LIST_OMITS });
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.detail).toContain('omitted a record that exists');
+  }, 60_000);
+
+  it('the STANDING arm with its admin HEAD at mode 000 mints nothing: unmeasured before the record HEAD is read', () => {
+    // Spec §5.5. git lists this record as `HEAD 0000…` with no branch line, but
+    // the standing arm takes its HEAD from `rev-parse` inside the tree, and
+    // that cannot resolve the tree's repository, so no zero id reaches a token.
+    const { main } = makeChild(h);
+    const r = withMode(path.join(adminOf(main, 'quiet-basin'), 'HEAD'), 0o000, () => evalOf(h));
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain("git cannot resolve the directory's repository");
   }, 60_000);
 
   it('the TERMINAL word stands where nothing names the tree: the admin entry is gone, every other entry read', () => {
@@ -2102,6 +2126,17 @@ describe('the vanished arm: "no record" proceeds there, so it takes the same ask
     expect(r.detail).toContain('all-zero HEAD');
   }, 60_000);
 
+  it('a gone tree whose HEAD names a branch that no longer exists (git lists the all-zero HEAD with its branch line): unmeasured, never pinned', () => {
+    const { main, wt } = makeChild(h);
+    fs.rmSync(wt, { recursive: true, force: true });
+    h.git(main, 'update-ref', '-d', `refs/heads/${CHILD_BRANCH}`);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain('all-zero HEAD');
+    expect(r.detail).toContain('names a branch that no longer exists');
+  }, 60_000);
+
   it('a gone tree git truly no longer records (pruned), every entry read: still reclaimable', () => {
     const { main, wt } = makeChild(h);
     fs.rmSync(wt, { recursive: true, force: true });
@@ -2139,13 +2174,14 @@ describe('ws-expire runs the same ladder, so it answers the same', () => {
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-silent-omission.test.ts
 ```
-Expected: `Tests  8 failed | 5 passed (13)`.
+Expected: `Tests  9 failed | 6 passed (15)` (drafted; R-j: measure it).
 - The three standing-tree cases (gitdir, `worktrees/`, list-omits) red with `<main> has no worktree record for <wt>: expected 'no-worktree-record' to be 'unmeasured'`.
 - The audit case reds with `expected +0 to be 1`: today the audit exits 0 with a terminal refusal.
-- The three vanished cases (admin `gitdir`, `worktrees/`, and the all-zero HEAD) red with `expected 'reclaimable' to be 'unmeasured'`. The all-zero case's red is drafted from the measured table row (`0 (HEAD 0000000) / 0`, tree gone); if it is green here, STOP and report, because the guard would then pin nothing.
+- The four vanished cases (admin `gitdir`, `worktrees/`, the all-zero HEAD, and the HEAD that names a deleted branch) red with `expected 'reclaimable' to be 'unmeasured'`. The all-zero case's red is drafted from the measured table row (`0 (HEAD 0000000) / 0`, tree gone). The deleted-branch case's red is drafted from the plan attack's measurement at `b0647d850` (`reclaimable`, then the verb stopped `pin-failed`). If either is green here, STOP and report, because the guard would then pin nothing for it.
 - The expiry case reds with `… worktrees/demo/quiet-dune: expected 'no-worktree-record' to be 'unmeasured'`.
 - Green already:
   - both CONTROLS;
+  - the STANDING arm with its admin `HEAD` at mode 000 (ruling R-h): `unmeasured` at the `rev-parse` rung, before `RECLAIM_REC_HEAD` is read. It pins today's behaviour, and this task must not change it. If it is NOT green here, STOP and report: the standing arm can then reach the record's HEAD, and R-h's "the same guard covers it" applies;
   - the TERMINAL case (admin entry removed);
   - the pruned vanished case;
   - the `_ws_reclaim_log_of` gone-arm case, which pins the walk this task moves.
@@ -2249,12 +2285,14 @@ The vanished arm (`_ws_reclaim_eval_absent`, :27244). Directly under its `(( rec
     _ws_reclaim_no_record "$mainreal" "$workdir" \
       || { _ws_reclaim_unmeasured "$_WS_NOREC_WHY"; return 1; }
   fi
-  # AN ALL-ZERO HEAD NAMES NO COMMIT THAT WAS READ (spec §5.5, rung 8's rule):
-  # git lists a record whose admin `HEAD` it cannot read with the null id. As
-  # the pin's recorded head it would bind the token, then stop the pin; so it
+  # AN ALL-ZERO HEAD NAMES NO COMMIT THAT WAS READ (spec §5.5, rung 8's rule).
+  # git lists the null id for a record in TWO shapes (measured, git 2.43): an
+  # admin `HEAD` it cannot read (no `branch` line), and a `HEAD` symbolic to a
+  # branch that no longer exists (its `branch` line kept). As the pin's
+  # recorded head it would bind the token, then stop the pin; so either shape
   # is unmeasured here, at the one read of `RECLAIM_REC_HEAD`, and retried.
   if (( rec == 0 )) && [[ "$RECLAIM_REC_HEAD" =~ ^0+$ ]]; then
-    _ws_reclaim_unmeasured "git's worktree record of $workdir names the all-zero HEAD — git lists a record whose admin HEAD it cannot read that way, so the commit it holds was never read"
+    _ws_reclaim_unmeasured "git's worktree record of $workdir names the all-zero HEAD — git prints that for a record whose admin HEAD it cannot read, or whose HEAD names a branch that no longer exists — so no commit of it was read and none could be pinned"
     return 1
   fi
 ```
@@ -2272,17 +2310,34 @@ sha=$(git -C "$z" rev-parse HEAD); zero=$(printf '0%.0s' {1..40})
 git -C "$z" update-ref "refs/ccrc/attic/t/$sha" "$sha"
 git -C "$z" update-ref "refs/ccrc/attic/t/$sha" "$zero"; echo "rc=$?"; git -C "$z" for-each-ref refs/ccrc/
 git -C "$z" cat-file -e "$zero^{commit}" 2>/dev/null; echo "rc=$?"
+git -C "$z" update-ref refs/heads/q "$sha"
+git -C "$z" update-ref -d --no-deref refs/heads/q "$zero"; echo "rc=$?"; git -C "$z" for-each-ref refs/heads/q
+git -C "$z" update-ref refs/heads/q "$sha"
+git -C "$z" update-ref refs/heads/q "$sha" "$zero" 2>/dev/null; echo "rc=$?"
 rm -rf "$z"
 ```
 
-Expected (measured with git 2.43.0): `rc=0` and NOTHING listed, because a zero new value DELETES the ref it names; then `rc=128`, which is `_ws_reclaim_attic_extra`'s `cat-file -e "${sha}^{commit}"` refusing the zero id before its `update-ref` runs. Re-read `_ws_reclaim_attic_extra` on your tree and confirm that check still precedes the `update-ref`. Step 22 states both results.
+Expected (measured with git 2.43.0):
+1. `rc=0` and NOTHING listed under `refs/ccrc/`, because a zero NEW value DELETES the ref it names.
+2. `rc=128`: `_ws_reclaim_attic_extra`'s `cat-file -e "${sha}^{commit}"` refuses the zero id before its `update-ref` runs.
+3. `rc=0` and NOTHING listed for `refs/heads/q`: a zero OLD value turns `update-ref -d --no-deref` from a compare-and-swap into an UNCONDITIONAL delete. The tail's two branch deletes take this form.
+4. `rc=128`: a zero OLD value on a create-or-update over an EXISTING ref refuses ("reference already exists"). `_ws_reclaim_keep_reflogs`' CAS takes this form.
+
+Then list EVERY `update-ref` call in the RECLAIM region of your tree, comment lines excluded: `awk '/RECLAIM-BEGIN/,/RECLAIM-END/' ccd/ccd | grep -n 'update-ref' | grep -v '^[0-9]*:[[:space:]]*#'`. At `b0647d850` there are four:
+- `_ws_reclaim_attic_extra`'s pin, `update-ref "refs/ccrc/attic/$id/$sha" "$sha"` (a NEW value);
+- `_ws_reclaim_keep_reflogs`' CAS, `update-ref "$ref" "$c" "$prev"` (a NEW value, plus an OLD value);
+- the tail's nested-branch delete, `update-ref -d --no-deref "refs/heads/$cbr" "$chead"` (an OLD value);
+- the tail's branch delete, `update-ref -d --no-deref "refs/heads/$branch" "$tip"` (an OLD value).
+
+For each one, read on your tree where its value comes from and which shape check comes before it. Step 22 answers for all four. If your list differs, answer for what your tree has, and name the difference.
 
 - [ ] **Step 17: Run it to pass, and every suite that reaches the ladder, the record or the walk**
 
 Run each line on its own, in the foreground, with a timeout of at least 600000 ms. The figures are measured at `b0647d850` plus this task:
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-silent-omission.test.ts      # 13 passed, ~15 s
+bash -n ccd/ccd && echo syntax-ok                                                                 # syntax-ok, before any suite
+cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-silent-omission.test.ts      # 15 passed (drafted; measure it), ~15 s
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-ladder.test.ts               # 145 passed
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-recovery.test.ts             # 25 passed
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-hardening.test.ts            # 98 passed
@@ -2308,8 +2363,10 @@ cd server && ./node_modules/.bin/vitest run test/ccd-ws-audit.test.ts           
 | C4 | Delete the vanished arm's `  if (( rec == 1 )); then … fi` block | same `-t 'vanished arm'` | 2 failed: "a gone tree whose admin gitdir is unreadable" and "… worktrees/ unlistable" (`expected 'reclaimable' to be 'unmeasured'`) |
 | C5 | In `_ws_reclaim_log_of`, replace `  _ws_reclaim_admin_entries "$common" "$arg" "$recorded"` with `  return 0` | same `-t 'gone arm'` | `expected '0' to be '1'` |
 | C6 | Make `_ws_reclaim_no_record` always unmeasured: insert `  _WS_NOREC_WHY=x; return 2` above its `_ws_reclaim_admin_entries` call | same `-t 'TERMINAL\|pruned'` | 2 failed: "the TERMINAL word stands …" (`x: expected 'unmeasured' to be 'no-worktree-record'`) and "… (pruned) …: still reclaimable" (`expected 'unmeasured' to be 'reclaimable'`) |
-| C7 | Delete the vanished arm's guard `  if (( rec == 0 )) && [[ "$RECLAIM_REC_HEAD" =~ ^0+$ ]]; then … fi` (four lines) | same `-t 'all-zero'` | "a gone tree whose record git lists with the all-zero HEAD …": `expected 'reclaimable' to be 'unmeasured'` (drafted from the measured table row; measure it) |
+| C7 | Delete the vanished arm's guard `  if (( rec == 0 )) && [[ "$RECLAIM_REC_HEAD" =~ ^0+$ ]]; then … fi` (four lines) | same `-t 'all-zero'` | 2 failed: "a gone tree whose record git lists with the all-zero HEAD …" and "a gone tree whose HEAD names a branch that no longer exists …", each `expected 'reclaimable' to be 'unmeasured'` (drafted from the measured table row and the attack's measurement; measure it) |
 | C8 | Change `[[ "$RECLAIM_REC_HEAD" =~ ^0+$ ]]` to `[[ "$RECLAIM_REC_HEAD" =~ ^0* ]]` (matches every head) | same `-t 'vanished arm'` | the CONTROL "a gone tree git still records (prunable) is reclaimable …": `expected 'unmeasured' to be 'reclaimable'` (the pruned case stays green: its `rec` is 1). Drafted, not measured; measure it |
+| C9 | Narrow the guard to the unreadable-HEAD shape only: `[[ "$RECLAIM_REC_HEAD" =~ ^0+$ ]]` becomes `[[ "$RECLAIM_REC_HEAD" =~ ^0+$ && -z "$RECLAIM_REC_BRANCH" ]]` | same `-t 'names a branch that no longer exists'` | `expected 'reclaimable' to be 'unmeasured'` (the unreadable-HEAD case stays green: git prints no `branch` line for it). Drafted from the attack's measurement; measure it |
+| C10 | In the guard's detail, delete `, or whose HEAD names a branch that no longer exists` | same `-t 'names a branch that no longer exists'` | `expected '…' to contain 'names a branch that no longer exists'` |
 
 - [ ] **Step 19: Re-stamp, gates, commit (Part C)**
 
@@ -2331,8 +2388,10 @@ an entry that cannot be read, or one naming the tree, answers unmeasured and
 is retried; only a tree no entry names keeps no-worktree-record. No arm
 reaches the pin that did not before; the vanished arm stops earlier.
 The vanished arm also answers unmeasured on a record git lists with the
-all-zero HEAD (an admin HEAD it cannot read), instead of binding that id
-as the head the pin keeps.
+all-zero HEAD (an admin HEAD it cannot read, or a HEAD that names a
+deleted branch), instead of binding that id as the head the pin keeps.
+The standing arm never reads that id: measured, an unreadable admin HEAD
+already answers unmeasured at its rev-parse rung.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -2361,16 +2420,28 @@ A difference is a defect of this task, never a figure to update.
 
 - [ ] **Step 22: Wave-done notes (for the coordinator and quiet-river)**
 
-Name these five in the wave-done, for workspace-lifecycle:
+Name these five in the wave-done, for workspace-lifecycle (the fourth bullet carries both all-zero shapes):
 - `crumb` is absent on `ws-expire`'s pre-breadcrumb documents and `true` on its tail's.
 - Over a standing tree, rung 8's silent omission now answers `unmeasured` (expiry audit exit 1, journaled nowhere) where it answered `no-worktree-record`.
 - On the vanished arm, a silent omission now answers `unmeasured` where the ladder minted a token over `record=1` and the verb then stopped `pin-failed` at its pin.
-- On the vanished arm, a record git lists with the all-zero HEAD (an admin `HEAD` it cannot read) now answers `unmeasured` where the ladder minted a token over `head=0000…` and the verb then stopped `pin-failed` at its pin (ruling T2 OPEN5).
+- On the vanished arm, a record git lists with the all-zero HEAD now answers `unmeasured` where the ladder minted a token over `head=0000…` and the verb then stopped `pin-failed` at its pin (ruling T2 OPEN5). git prints that id for two shapes, and the guard catches both: an admin `HEAD` it cannot read, and a `HEAD` symbolic to a branch that no longer exists. Spec §5.5 says the second shape "stays pin-failed". On the vanished arm it now stops earlier, at the audit, with no intent journaled, and Task 10's §5.5 edit says so.
 - The permission-pass reason is capped.
 
 On reclaim, the omission shape now journals one `failed probe-unmeasured` per audit pass, which R20's backoff bounds and wave 8's pacing tier carries.
 
-**What a zero id does at `update-ref` (its own paragraph, ruling T2 OPEN5).** State Step 16's measurement: `git update-ref <ref> <all-zero id>` exits 0 and DELETES the ref it names. Before this task no zero id reached it: `_ws_reclaim_attic_extra` asks `cat-file -e "<id>^{commit}"` first (rc 128 on the zero id), and the one ref such a call would name, `refs/ccrc/attic/<id>/<all-zero id>`, is one no pin creates, so no existing attic ref could be deleted through it. After this task the vanished arm answers `unmeasured` on such a record before any pin runs. If your measurement differs (a zero id reaches `update-ref`, or any attic ref was deleted), say so here and STOP for a ruling.
+**The STANDING arm, measured (its own paragraph, ruling R-h).** State Step 13's standing-arm case. With the admin `HEAD` at mode 000, git lists `HEAD 0000…` with no `branch` line, and the ladder answers `unmeasured` because git cannot resolve the tree's repository. That happens before `RECLAIM_REC_HEAD` is ever read. A resumed tail at `worktree` runs no ladder. It passes `_ws_reclaim_owned` and stops `pin-failed` at the settle, with the tree, its files, the branch and the breadcrumb all standing. No zero id reaches a token or a pin on the standing arm, so the guard is not extended there. If your measurement differs, say so here and STOP for a ruling, because R-h then requires the same guard on that arm.
+
+**What a zero id does at `update-ref` (its own paragraph, rulings T2 OPEN5 and R-h).** State Step 16's four measurements:
+- a zero NEW value DELETES the ref it names (rc 0);
+- a zero OLD value makes `update-ref -d --no-deref` an UNCONDITIONAL delete (rc 0);
+- a zero OLD value on an update over an existing ref refuses (rc 128).
+
+Then answer for EVERY `update-ref` site Step 16 listed: could any arm reach it with a zero value before this wave?
+- `_ws_reclaim_attic_extra`'s pin (a new value): no. It asks `cat-file -e "<id>^{commit}"` first, which exits 128 on the zero id. The one ref such a call would name, `refs/ccrc/attic/<id>/<all-zero id>`, is one no pin creates, so no existing attic ref could be deleted through it.
+- `_ws_reclaim_keep_reflogs`' CAS (`"$c" "$prev"`): no. `$c` is a commit it just wrote and shape-checked. `$prev` is read from `for-each-ref`, so it is a live id or empty. A zero `$prev` over an existing ref would refuse (rc 128), not delete.
+- The tail's two branch deletes (`-d --no-deref … "$chead"` and `… "$tip"`): no ccd writer reaches them with a zero value, before or after this wave. Their shape checks (`[[ … =~ ^[0-9a-f]{40}$ ]]`) admit forty zeros. But `tip` and `chead` are read from the tombstone, and ccd writes those only from `rev-parse --verify`, which never answers zeros. A hand-edited tombstone could put zeros there. That case sits under the tombstone's same-uid trust note, and this wave does not change it.
+
+After this task, the vanished arm answers `unmeasured` on a zero record HEAD before any pin runs. If your measurements differ, say so here and STOP for a ruling. That includes a zero id reaching any `update-ref`, any ref being deleted, and a site on your tree that is not listed here. Hardening the two shape checks against forty zeros would edit the shared tail, so it needs a coordinator ruling and is not done here.
 
 `crumb:true` means "printed past the act's breadcrumb: the act had started", never "a breadcrumb stands now" (ruling T2 OPEN4); wave 8's reader takes it so. A stray non-directory entry under `<common>/worktrees/` now also holds every silent-omission ask unmeasured; Task 10 widens the existing stray-entry residual sentence to say so (ruling T2 OPEN6).
 
@@ -2397,10 +2468,10 @@ On reclaim, the omission shape now journals one `failed probe-unmeasured` per au
 - **`/clear` does not touch it.** The hook's `SessionStart source=clear` arm (session-hook.sh:3019) writes nothing to it.
 - **The `uuid` is NOT the value.** `_sync_uuid` (ccd/ccd:15813) rewrites `$REG/<id>.uuid` within a row: "Claude Code rotates the active session uuid during normal operation (/clear, compaction)".
 - **Only `_reg_purge` (ccd/ccd:3849) removes it.** Its callers are `ws-rm` (:7935), `ws-reap` (:14892), `ws-gc --prune` (:15474), `forget` (:25469) and the reclaim/expire tail (:30075). Each of them ends a row. A later row on the same id is minted afresh with a new UUID.
-- **The read is `_reg_generation_read` (ccd/ccd:3752).** It answers 0 + `REG_GENERATION`, 1 when present but invalid, or 2 when genuinely absent. It reads through an owned hard-link alias on a held descriptor and rechecks the inode, and it is the one reader. No new `_reg_get` is added.
+- **The read is `_reg_generation_read` (ccd/ccd:3752).** It answers 0 + `REG_GENERATION`, 2 when genuinely absent, or 1 for everything else. Its rc 1 is wider than "present but invalid". It also covers: a link or a file it cannot read; no `link` command; an alias name it cannot find (eight collisions); an alias it cannot create (an unwritable or full `$REG`); an open failure; and a canonical file replaced mid-read (`_compact_lock_same`). It reads through an owned hard-link alias on a held descriptor and rechecks the inode, and it is the one reader. No new `_reg_get` is added. The read creates and unlinks one transient `$REG/.<id>.generation-read.*` hard link and leaves nothing behind.
 
 **Decisions this task makes:**
-- **Absent or invalid is unmeasured, never a value.** `_ws_reclaim_generation` answers rc 2 for both. The ladder then answers `unmeasured` (exit 1, retried) and mints no token.
+- **Absent, invalid or unreadable is unmeasured, never a value.** `_ws_reclaim_generation` answers rc 2 for all three, which are all of `_reg_generation_read`'s non-zero answers. The ladder then answers `unmeasured` (exit 1, retried) and mints no token.
   - ccd's own writers never leave either state on a `.child` row: `cmd_ws_add` mints first and dies otherwise.
   - A `.child` row without one is either pre-mechanism or hand-made. Binding `generation=` (empty) would hand that row a licence that no re-mint could invalidate.  - **The liveness residual is zero today (ruling T3 OPEN2).** Such a row can never be reclaimed by the sweep: it answers `unmeasured` on every pass, which is retried and never terminal. `cmd_ensure` heals an absent one at the next supervised respawn, and an invalid one never heals, by design. The coordinator measured the fleet read-only at 2026-10-08 15:56Z, and all 35 `.child` rows carry a 36-byte generation. Task 10 states the residual and that figure. This task measures nothing on the live fleet.
 - **The read happens at rungs 1–2 (identity), after the marker and before the binding.** So the terminal refusals `no-such-session`, `not-a-workspace` and `not-a-child` are unchanged for every existing row.
@@ -2430,7 +2501,7 @@ On reclaim, the omission shape now journals one `failed probe-unmeasured` per au
 
 **Interfaces:**
 - Consumes (at `b0647d850`):
-  - `_reg_generation_read <id>`: rc 0 with `REG_GENERATION` set; rc 1 present but invalid; rc 2 genuinely absent. ccd/ccd:3752.
+  - `_reg_generation_read <id>`: rc 0 with `REG_GENERATION` set; rc 2 genuinely absent; rc 1 for every other failure: present but invalid, a link or unreadable file, no `link` command, an alias it cannot name or create, an open failure, or a file replaced mid-read. ccd/ccd:3752.
   - `_reg_generation_valid <value>`: 0 iff exactly the 36-byte lowercase UUID grammar. ccd/ccd:3731.
   - `_reg_generation_init <id>`, used only by the tests to model a re-mint and a respawn's re-init. ccd/ccd:3814.
   - `_compact_lock_acquire <id> <wait>` / `_compact_lock_release <fd>` / `COMPACT_LOCK_FD`, used by the tests only. This is the lock row creation takes around the mint.
@@ -2445,7 +2516,8 @@ On reclaim, the omission shape now journals one `failed probe-unmeasured` per au
 - Produces:
   ```bash
   _ws_reclaim_generation <id>   # prints the row's generation (36 bytes, no LF), rc 0; prints nothing, rc 2 when it
-                                #   could not be read as one (absent, or present and not the grammar)
+                                #   could not be read as one (absent; present and not the grammar; or not readable
+                                #   through its owned alias)
   RECLAIM_GENERATION            # the generation as READ by the ladder's rungs 1-2 or the resume eval; '' = never read
                                 #   (reset by `_ws_reclaim_reset`)
   ```
@@ -2459,7 +2531,7 @@ On reclaim, the omission shape now journals one `failed probe-unmeasured` per au
 
 ```bash
 grep -n '^_reg_generation_read()\|^_reg_generation_mint()\|^_reg_generation_init()' ccd/ccd   # three lines
-grep -n '_reg_generation_init "' ccd/ccd          # four call sites + 3822 inside init: ws-add, restore, start, ensure
+grep -n '_reg_generation_init "' ccd/ccd          # four lines: ws-add (7278), restore (10452), start (22345), ensure (22572) — init's own body calls _reg_generation_read/_reg_generation_mint, not init
 grep -n 'rm -f "\$REG/\$id.generation"' ccd/ccd   # one line, inside _reg_purge
 grep -n '"mode=reclaim" "id=\$id" "childOf=\$RECLAIM_CHILDOF" "deferExpired=\$RECLAIM_DEFER")' ccd/ccd   # one line
 grep -n '"mode=reclaim-resume" "id=\$id" "childOf=\$mark"' ccd/ccd   # one line
@@ -2729,18 +2801,22 @@ Expected, before Step 4:
 ```bash
 
 _ws_reclaim_generation() {   # id -> prints the row's generation (`$REG/<id>.generation`, spec §5.5), rc 0;
-  #                               prints nothing, rc 2, when it could not be read as one: absent, or
-  #                               present and not the 36-byte grammar
+  #                               prints nothing, rc 2, when it could not be read as one: absent,
+  #                               present and not the 36-byte grammar, or not readable through its alias
   # THE ONE READER, `_reg_generation_read`: an owned hard-link alias on a held
   # descriptor and a same-inode recheck, never `_reg_get` or a bare `cat`, which
   # name the path twice. The generation is minted with the row (`cmd_ws_add`,
   # before any row field) and removed last by `_reg_purge`; nothing else writes
   # it — not `/clear`, which rewrites `uuid` (`_sync_uuid`), not a swap, not a
   # respawn's re-init, which mints only into absence. So it is the one value
-  # that differs between a row and a re-mint of its id. ABSENT AND INVALID ARE
-  # BOTH 2, never a value: `cmd_ws_add` dies before it writes `.child` when it
-  # cannot mint, so neither is a state ccd's own writers leave on a child, and a
-  # token bound to `generation=` would be one no re-mint could invalidate.
+  # that differs between a row and a re-mint of its id. ABSENT, INVALID AND
+  # UNREADABLE ARE ALL 2, never a value. The reader's rc 1 is wider than
+  # "invalid": a link or unreadable file, no `link`, an alias it cannot make
+  # (a registry it cannot write), or a file replaced mid-read is a read that
+  # did not run, and is retried. Absent and invalid are no state ccd's own
+  # writers leave on a child (`cmd_ws_add` dies before it writes `.child`
+  # when it cannot mint), and a token bound to `generation=` would be one no
+  # re-mint could invalidate.
   _reg_generation_read "$1" || return 2
   printf '%s' "$REG_GENERATION"
 }
@@ -2754,7 +2830,7 @@ _ws_reclaim_generation() {   # id -> prints the row's generation (`$REG/<id>.gen
   # whatever else matches. Asked after rungs 1-2, so their terminal words are
   # unchanged; unreadable, it mints no token (`_ws_reclaim_generation`).
   RECLAIM_GENERATION=$(_ws_reclaim_generation "$id") \
-    || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation (absent, or not one 36-byte lowercase UUID) — which row a token would bind is unknown"; return 1; }
+    || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation (absent; present but not one 36-byte lowercase UUID; or not readable through its owned alias: a link, a file it cannot read, no link command, a registry it cannot write, or a file replaced mid-read) — which row a token would bind is unknown"; return 1; }
   _WS_LADDER_BIND=("mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" "deferExpired=$RECLAIM_DEFER" "generation=$RECLAIM_GENERATION")
 ```
 
@@ -2773,7 +2849,7 @@ _ws_reclaim_generation() {   # id -> prints the row's generation (`$REG/<id>.gen
 ```bash
   RECLAIM_CHILDOF="$mark"
   RECLAIM_GENERATION=$(_ws_reclaim_generation "$id") \
-    || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation (absent, or not one 36-byte lowercase UUID) — an interrupted reclaim does not finish on a row it cannot identify"; return 1; }
+    || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation (absent; present but not one 36-byte lowercase UUID; or not readable through its owned alias: a link, a file it cannot read, no link command, a registry it cannot write, or a file replaced mid-read) — an interrupted reclaim does not finish on a row it cannot identify"; return 1; }
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
 ```
 
@@ -2799,7 +2875,7 @@ with exactly two lines:
 ```
 
 - No `_json_str` is added. The value is printed raw only after `_reg_generation_valid` admits it (36 bytes of `[0-9a-f-]`), exactly as `childOf` is printed raw after `_child_runid_valid`. So the "Nineteen `_json_str` substitutions" comment in `cmd_ws_audit` stays as true as it was.
-- No comment is added here. The RECLAIM region's "WS-AUDIT --RECLAIM" note says why the audit's code may not grow; extend it below the boundary only if you want, with one sentence: "The document carries `generation`, the row's generation the ladder bound into the token, or null where rungs 1-2 refused before reading it."
+- No comment is added here. The RECLAIM region's "WS-AUDIT --RECLAIM" note (below the boundary; `grep -n '^# WS-AUDIT --RECLAIM' ccd/ccd`) says why the audit's code may not grow. It also calls the audit read-only except for its owner-bit normalise, saying "Nothing is destroyed or created". The generation read makes that untrue, so extend the note there. This is NOT optional. Add two sentences: "The document carries `generation`, the row's generation the ladder bound into the token, or null where rungs 1-2 refused before reading it. Reading it creates and unlinks one transient hard link, `$REG/.<id>.generation-read.*` (`_reg_generation_read`'s owned alias), and leaves nothing behind."
 - Then verify: `grep -n '^_ws_attic_pin() {' ccd/ccd` prints the number Step 1 noted. If it does not, the edit added a line above the boundary: undo it and redo it in place.
 
 - [ ] **Step 5: Run the tests to verify they pass, then the gates**
@@ -2807,6 +2883,7 @@ with exactly two lines:
 Run each in the FOREGROUND, every call under 600 s:
 
 ```bash
+bash -n ccd/ccd && echo syntax-ok   # before any suite sources it
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-row-generation.test.ts
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-audit.test.ts
 cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-ladder.test.ts
@@ -2900,7 +2977,8 @@ MSG
   - Measured on the fleet (ext4, coreutils 9.4): the rename keeps ino, the nanosecond btime and mtime, and stamps ctime. It refuses an existing empty directory with rc 1, where a plain `mv -T` and python's `os.rename` replace it.
   - coreutils 9.2 changed what `mv -n` answers on a skip, so the exit code proves nothing.
   - `server/test/macos-platform.test.ts` refuses `mv -T` outside the platform block (its `gnuOnly` row `'mv -T'`). It gains a one-function exemption for `_ws_collect_mv`, pinned exactly as the hook's `_hook_epoch_ms` exemption is pinned.
-- **4C — the idle walk, the floor and the token** (R68). The walk takes the newest CTIME, in ns, over the whole leaf, never mtime: a future mtime would hold a leaf forever (attack, measured). It is GNU `find -P <leaf> -xdev` under `LC_ALL=C`, bounded at 60 s and 2,000,000 entries; the largest live leaf measured 76,915 entries in at most 4.8 s.
+- **4C — the idle walk, the floor and the token** (R68). The walk takes the newest CTIME, in ns, over the whole leaf, never mtime: a future mtime would hold a leaf forever (attack, measured). It is GNU `find -P <leaf> -xdev` under `LC_ALL=C`, bounded at 30 s and 2,000,000 entries; the largest live leaf measured 76,915 entries in at most 4.8 s.
+  - The bound is 30 s, not R68's 60 (ruling R-d, departure `idle-walk-bound-30s`). With the in-use probe's 10 s (`WS_PATH_USERS_SCAN_S`) and the checkout scan's 30 s (`REAP_SCAN_SECONDS`), the fresh audit spends at most 70 s plus the row pass, inside `ws-audit`'s 90 s runner row. A timeout answers unmeasured, and the leaf is retried. 4C's bound case pins the value, and the sum against the runner row.
   - The floor is max(24 h, `WS_COLLECT_IDLE_FLOOR_S`), and the knob only raises it.
   - `_ws_collect_floor_s` is the floor's ONE definition (ruling G4). The knob only raises the floor; the one test-only seam that lowers it is redefining `_ws_collect_floor_s` in a sourced harness (`_ws_collect_floor_s() { echo 0; };`), never the knob. `_ws_collect_now_ns` stays a clock seam: a case may name the instant, as `_ws_expire_now` is named.
   - The token is `_ws_reclaim_fingerprint`'s encoding over `mode=collect` and R68's inputs.
@@ -2914,6 +2992,7 @@ MSG
   - Each condition has its own measured break, and each is mutation-pinned:
     - without (1), a foreign worktree moved into an orphan leaf passes, and its uncommitted work is deleted, once a recycled slug's `git worktree add` re-creates its pruned admin name at the pre-move spelling and that child's temp root is later removed;
     - without (2), the leaf's own worktree passes while a recycled slug's LIVE worktree holds the same admin name with the same back-link value.
+  - The alias also answers the INSIDE-THE-LEAF shape (attack safety-collector F3 and security SEC-1, both measured on git 2.43): a clone in the leaf with a linked worktree also in the leaf, whose `.git` file names its git directory ABSOLUTELY by the leaf's pre-move spelling (`git worktree add`'s default). The pre-move ask passes it as the leaf's own. After the move that spelling is gone, so without the alias the removal refuses it (`which no longer exists`) before the INSIDE THE LEAF rule is reached; the verb then puts the leaf back and journals `containment-unproven`, and the audit licenses it again after every fresh floor. Under the alias such a git directory is read at the leaf's new place, only while nothing stands at its own pre-move spelling, PROVEN. No accepted pair is asked: the inside rule never needed one (4E Step 3 (a3)).
   - Every other caller passes no alias and is answered exactly as before.
 
 **Not in this task.** These are Task 6's, and Task 6 composes them from what this task produces:
@@ -2940,9 +3019,9 @@ The `collect` act is declared here (4-act), and no ccd code in this task journal
 - Modify: `server/test/git-env-strip.test.ts` (4A, ruling G12). Widen `SCOPE` (`grep -n 'const SCOPE = ' server/test/git-env-strip.test.ts`), one line for one, and add this wave's collector suites and fixtures to the `later` array of the case `SCOPE names every new ccd suite and fixture …`, red first.
 - Modify (4-act, ruling G1; Task 7 Part A's files, moved here):
   - `shared/api.ts`: the `LifecycleAct` union, after the `'expire'` member (`grep -n "  | 'expire'        // ws-expire" shared/api.ts`), and `LIFECYCLE_ACT_MAP`'s third line (`grep -n "'attic-drop': true, reap: true, reclaim: true, expire: true," shared/api.ts`);
-  - `pwa/src/session/journalWords.ts:32` (`grep -n "reclaim: 'reclaimed', expire: 'expired'" pwa/src/session/journalWords.ts`), one `ACT_WORD` entry. `pwa/test/journal-words.test.ts` is run, unchanged. G1 admits both to the HARD BOUNDARY;
+  - `pwa/src/session/journalWords.ts:32` (`grep -n "reclaim: 'reclaimed', expire: 'expired'" pwa/src/session/journalWords.ts`), one `ACT_WORD` entry. `pwa/test/journal-words.test.ts` is run, unchanged. Ruling R-c admits both to the HARD BOUNDARY;
   - `deploy/measure-workspace-lifecycle.py`: `NEUTRAL_ACTS` and its comment (`grep -n '^NEUTRAL_ACTS' deploy/measure-workspace-lifecycle.py`). This task rules the instrument's class: NEUTRAL;
-  - `server/src/deadCoordinator.ts`: the `DEAD_COORDINATOR_DELIBERATE_ACTS` docstring only, the list unchanged (`grep -n '^export const DEAD_COORDINATOR_DELIBERATE_ACTS' server/src/deadCoordinator.ts`). The plan frame's HARD BOUNDARY does not list this file yet: the coordinator admits it, or this docstring edit is dropped;
+  - NOT `server/src/deadCoordinator.ts` (ruling R-c; R72: the file is workspace-lifecycle's). The docstring edit drafted here is DROPPED. `collect`'s absence from `DEAD_COORDINATOR_DELIBERATE_ACTS` and `DEAD_COORDINATOR_JOURNAL_ACTS` is pinned by `server/test/ws-collect-act.test.ts` alone. Mutation ACT6 edits the file transiently and is reverted, and Step act-4 proves the file untouched;
   - the cardinals `collect` moves, each in place: `server/test/lifecycle-acts.test.ts:18`, `:33`, `:54`; `server/test/lifecycle-vocabulary.test.ts:149`; `server/test/ccd-lifecycle-emit.test.ts:28`; `server/test/single-definition.test.ts:3077` (a CITED file: a digit replaced in place);
   - only if Step act-4 reds on it: `README.md`, its `shared/api.ts:` anchors re-pointed BY CONTENT (README is under claim 1110 until it ends, Task 0).
 - Test (all new; R56):
@@ -2995,8 +3074,10 @@ The `collect` act is declared here (4-act), and no ccd code in this task journal
                                          #   path (G5): `v=1 id= dev= ino= btime= run= at= token= checkouts=<enc admin>=<enc back-link>[,…]`
   _ws_collect_record_read <file>         # 0 sets _WS_QREC_ID _WS_QREC_SLOT(DERIVED: $_WS_QPATH/slot.<file name>) _WS_QREC_DEV
                                          #   _WS_QREC_INO _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS(still
-                                         #   encoded) | 1 absent | 2 malformed (a body id= that is not the name's id included), or no
-                                         #   quarantine path could be resolved
+                                         #   encoded) | 1 absent | 2 malformed (a body id= that is not the name's id, and a bad
+                                         #   checkouts= encoding, included): callers read quarantine-kept | 3 unmeasured: the
+                                         #   physical ~/.cc-tmp cannot be resolved, so no slot is derived (_WS_QPATH_WHY): callers
+                                         #   read unmeasured, keep the record and retry (ruling R-a)
   _ws_collect_records_of <id>            # 0 + _WS_QRECS[] (also printed, one per line; none when the dir is PROVEN absent) | 2 (_WS_QRECS_WHY)
   _ws_collect_record_drop <file>         # 0 gone, PROVEN | 1 not a record path, untouched | 2 not proven gone (_WS_QREC_WHY)
   WS_COLLECT_RECORD_MAX=65536
@@ -3011,7 +3092,7 @@ The `collect` act is declared here (4-act), and no ccd code in this task journal
   _ws_collect_move <src> <dst> <dev:ino> <btime> # 0 PROVEN moved (dst is it AND src proven absent) | 1 PROVEN not moved (src is
                                          #   still it) | 2 unmeasured (_WS_MOVE_WHY) — the restore uses the same call, reversed
   # 4C
-  WS_COLLECT_IDLE_SCAN_S=60  WS_COLLECT_IDLE_CAP=2000000
+  WS_COLLECT_IDLE_SCAN_S=30  WS_COLLECT_IDLE_CAP=2000000   # 30 s, not R68's 60: ruling R-d, departure idle-walk-bound-30s
   _ws_collect_idle <leaf>                # 0 + _WS_IDLE_NEWEST_NS _WS_IDLE_COUNT _WS_IDLE_LEAF | 2 + _WS_IDLE_WHY ∈ {timeout, unreadable,
                                          #   cap, walk-failed} and _WS_IDLE_DETAIL (Darwin, and a link/file/absent leaf: walk-failed)
   _ws_collect_floor_s                    # stdout: 86400, or WS_COLLECT_IDLE_FLOOR_S when a whole number ABOVE it — the floor's ONE
@@ -3033,6 +3114,8 @@ The `collect` act is declared here (4-act), and no ccd code in this task journal
     - The leaf's PHYSICAL pre-move spelling is `${_WS_Q%/.ccd-quarantine}/$id`. Task 6 moves it to `$_WS_SLOT/leaf`, and passes the same string as the alias, because git back-links the physical path (measured in 4E's first case).
     - The removal is `_ws_leaf_remove "$_WS_SLOT" leaf "$dev:$ino" "<alias>" "$_WS_QREC_CHECKOUTS"`.
     - On a resume the slot is the record's `_WS_QREC_SLOT`, DERIVED from the record's name under `_ws_collect_qpath` (G5); no record body names it.
+    - The reader's four answers bind every caller (ruling R-a): rc 1 absent; rc 2, a record ccd does not write, is `quarantine-kept` (terminal); rc 3, a physical `~/.cc-tmp` that cannot be resolved, is UNMEASURED: the record is kept and the id is retried, never `quarantine-kept`.
+    - `_ws_collect_ident`'s rc 1 is both "something else stands" and "nothing stands, PROVEN". A caller that must tell them apart asks `_ws_reclaim_absent` itself: Task 6's step 2 answers a leaf that vanished after the evaluation saw it `state-changed`, retried, never `witness-mismatch` (ruling R-f).
     - The row rule is `_ws_collect_rows_clear "$id" "$HOME/.cc-tmp/$id"` (the spelling `_child_tmpdir` hands out), asked contained.
     - A forward `_ws_collect_move` answering anything but 0 is the verb's unmeasured answer (`probe-unmeasured`): rc 1 is "not moved, proven", which is how EXDEV under `--no-copy` and a NOREPLACE refusal both read. A restore answering anything but 0 keeps the record and the slot.
 
@@ -3191,17 +3274,7 @@ NEUTRAL_ACTS = ('attic-drop', 'claim', 'enable', 'gc', 'hold', 'release', 'renam
                 'supervise', 'unsupervise', 'collect')
 ```
 
-**`server/src/deadCoordinator.ts`.** The list is UNCHANGED. Replace its docstring with:
-
-```ts
-/** The acts that put a session down ON PURPOSE (spec §5.4): ccd's `stop`, `archive`, `reap`, `destroy`, `purge` and
- *  `forget` (`_LC_ACTS`), CCR-15's `reclaim` and stage 3's `expire`. An `unsupervise` counts when it carries a
- *  DECLARED surface — `_ws_unsupervise`'s `dec.surface`, which reads `none` when ccd acted on its own account.
- *  `collect` (child reclamation spec 2026-09-22 §5.6) is deliberately NOT one, and the clause's store read never
- *  fetches it: the collector acts only where no registry row and no child marker stands, so it removes a dead id's
- *  leftover temp root and says nothing about how the session ended. Read as a put-down it would hide a crash and keep
- *  a dead programme open; `ws-collect-act.test.ts` pins it out. */
-```
+**`server/src/deadCoordinator.ts` is NOT edited** (ruling R-c; R72: it is workspace-lifecycle's). Its docstring edit is DROPPED. `collect`'s exclusion from `DEAD_COORDINATOR_DELIBERATE_ACTS` and `DEAD_COORDINATOR_JOURNAL_ACTS` is pinned by `ws-collect-act.test.ts`'s case "the dead-coordinator clause never reads it as a deliberate put-down …" alone, and that case is green before and after this part.
 
 - [ ] **Step act-4: Re-stamp, run green, and run the gates**
 
@@ -3216,9 +3289,10 @@ node shared/mark.mjs --check ccd/ccd; echo "mark rc=$?"                       # 
 (cd pwa && ./node_modules/.bin/vitest run test/journal-words.test.ts)
 (cd pwa && ./node_modules/.bin/tsc --noEmit)
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND')
+git status --porcelain -- server/src/deadCoordinator.ts               # prints nothing: never edited (R-c, R72)
 ```
 
-Expected: every suite green, `tsc` silent in both packages, `mark rc=0` and `ownership` green.
+Expected: every suite green, `tsc` silent in both packages, `mark rc=0` and `ownership` green, and the `git status` line prints nothing.
 
 **The citation cases.** The four lines added to `shared/api.ts` sit above README's one `shared/api.ts:` sentence (`grep -n 'shared/api.ts:[0-9]' README.md`, one hit; at `b0647d850` README.md:4797 cites `:7873-7875`, `:7919`, `:7927` and `:7940`). Task 1 has moved them, so treat them as hints. This part pays README's `shared/api.ts:` re-pointing for the four `LifecycleAct` lines in its own commit; Tasks 5 and 6 repair from there.
 
@@ -3243,13 +3317,13 @@ README is under claim 1110 until it ends (Task 0). If anything OTHER than README
 | ACT5 | Delete `, 'collect'` from `NEUTRAL_ACTS` | `(cd server && ./node_modules/.bin/vitest run test/measure-workspace-lifecycle.test.ts)` | `its act lists classify every one of ccd’s _LC_ACTS exactly once`: `expected [ … ] to deeply equal [ …, 'collect', … ]` |
 | ACT6 | Append `'collect'` to `DEAD_COORDINATOR_DELIBERATE_ACTS` | `(cd server && ./node_modules/.bin/vitest run test/ws-collect-act.test.ts)` | `expected [ …, 'collect' ] not to include 'collect'`, then `expected { kind: 'deliberate', act: 'collect', … } to deeply equal { kind: 'quiet', started: true }` |
 
-Revert each mutation, re-stamp, and re-run Step act-4's commands green.
+Revert each mutation, re-stamp, and re-run Step act-4's commands green. ACT6 is the only edit this part makes to `server/src/deadCoordinator.ts`, and it is reverted: Step act-4's `git status` line prints nothing before the commit (R-c).
 
 - [ ] **Step act-6: Commit**
 
 ```bash
 git add ccd/ccd shared/api.ts pwa/src/session/journalWords.ts deploy/measure-workspace-lifecycle.py \
-  server/src/deadCoordinator.ts server/test/ws-collect-act.test.ts server/test/lifecycle-acts.test.ts \
+  server/test/ws-collect-act.test.ts server/test/lifecycle-acts.test.ts \
   server/test/lifecycle-vocabulary.test.ts server/test/ccd-lifecycle-emit.test.ts server/test/single-definition.test.ts
 git add README.md   # only if Step act-4 re-pointed its shared/api.ts anchors
 git commit -m "$(cat <<'MSG'
@@ -3444,7 +3518,7 @@ describe('_ws_collect_record_write: one line, temp file then rename, proven by r
   });
 });
 
-describe('_ws_collect_record_read: parsed, absent, or malformed — three answers, every field cleared first', () => {
+describe('_ws_collect_record_read: parsed, absent, malformed or unmeasured — four answers, every field cleared first', () => {
   it('rc 0 sets every field; the slot is DERIVED from the name under the physical quarantine, and the checkouts stay spelled', () => {
     plant(GOOD().replace('checkouts=', 'checkouts=/a%20b=/c'));
     expect(read(recPath())).toBe(`[rc=0] ${ID}|${slotOf()}|2064|35|1791468463|7|1791470480213|${TOKEN}|/a%20b=/c`);
@@ -3454,10 +3528,13 @@ describe('_ws_collect_record_read: parsed, absent, or malformed — three answer
     expect(read(recPath())).toBe(`[rc=1] ${EMPTY}`);
   });
 
-  it('rc 2 when the physical quarantine cannot be resolved — the slot is derived, never read from the body', () => {
+  it('rc 3 when the physical quarantine cannot be resolved — UNMEASURED, never malformed: the slot is derived, never read from the body', () => {
     plant(GOOD());
     fs.rmSync(path.join(h.home, '.cc-tmp'), { recursive: true, force: true });
-    expect(h.sh(`_ws_collect_record_read '${recPath()}'; echo "[rc=$?]"`)).toBe('[rc=2]');
+    const [got = '', why = ''] = h.sh(`_ws_collect_record_read '${recPath()}'; printf '[rc=%s] %s\\x1f%s' "$?" ${FIELDS} "$_WS_QPATH_WHY"`)
+      .split('\x1f');
+    expect(got, 'a sound record whose slot cannot be derived now is retried, never kept as malformed').toBe(`[rc=3] ${EMPTY}`);
+    expect(why, 'the resolver’s reason is left for the caller').toContain('cannot be resolved');
   });
 
   it.each([
@@ -3814,7 +3891,10 @@ _ws_collect_qpath() {   # -> 0 with _WS_QPATH = `<physical ~/.cc-tmp>/.ccd-quara
   #                        2 (_WS_QPATH_WHY) when ~/.cc-tmp cannot be resolved
   # ONE RESOLUTION, NO WRITE (G5). `_ws_collect_qdir` makes the quarantine
   # under this path; the record reader only DERIVES a slot under it, and the
-  # audit that reads records is read-only. `_ws_dir_physical`'s eighth caller.
+  # audit that reads records is read-only. `_ws_dir_physical`'s eighth call
+  # site, and the COLLECT region's only one: the quarantine maker, the record
+  # writer and the record reader all ask it here, and so must every later
+  # collector function that needs the physical `~/.cc-tmp`.
   local root="$HOME/.cc-tmp"
   _WS_QPATH=''; _WS_QPATH_WHY=''
   _ws_dir_physical "$root" || { _WS_QPATH_WHY="$root cannot be resolved ($_WS_PHYS_WHY)"; return 2; }
@@ -3872,10 +3952,16 @@ _ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by readi
 
 _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO
   #                               _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS)
-  #                               | 1 absent | 2 unreadable or malformed
-  # THREE ANSWERS, as the witness reader's: a link, a directory, a dot-leading
-  # or unparseable NAME, and a `tmpquarantine/` that is itself a link all answer
-  # 2. Every field is cleared first. The content's id must be the one its own
+  #                               | 1 absent | 2 unreadable or malformed | 3 unmeasured: the physical
+  #                               ~/.cc-tmp cannot be resolved, so no slot is derived (_WS_QPATH_WHY)
+  # FOUR ANSWERS, NEVER AN OVERLOADED 2. As the witness reader's, a link, a
+  # directory, a dot-leading or unparseable NAME, a `checkouts=` list in no
+  # spelling ccd writes and a `tmpquarantine/` that is itself a link all answer
+  # 2: the record is not one ccd writes, and its caller keeps it. The body is
+  # judged first, and only a well-formed one asks for its slot: a physical
+  # `~/.cc-tmp` that cannot be resolved says nothing against the record, only
+  # that its slot cannot be derived now, so that is 3, unmeasured, and its
+  # caller retries. Every field is cleared first. The content's id must be the one its own
   # name parses to (rc 2 otherwise, G5). The body names NO path: `_WS_QREC_SLOT`
   # is DERIVED, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`, through
   # `_ws_collect_qpath`, which makes nothing, so a record never names another
@@ -3902,7 +3988,7 @@ _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT
   [[ "${m[1]}" == "$_WS_REC_ID" ]] || return 2
   _child_runid_valid "${m[5]}" || return 2
   _ws_collect_pairs_ok "${m[8]}" || return 2
-  _ws_collect_qpath || return 2
+  _ws_collect_qpath || return 3
   _WS_QREC_ID="${m[1]}"; _WS_QREC_SLOT="$_WS_QPATH/slot.$name"; _WS_QREC_DEV="${m[2]}"; _WS_QREC_INO="${m[3]}"
   _WS_QREC_BTIME="${m[4]}"; _WS_QREC_RUN="${m[5]}"; _WS_QREC_AT="${m[6]}"; _WS_QREC_TOKEN="${m[7]}"
   _WS_QREC_CHECKOUTS="${m[8]}"
@@ -4003,7 +4089,8 @@ Apply each mutation alone to `ccd/ccd`, run the command, see the red, revert. Co
 | A4 | In `_ws_collect_record_write`, replace `"${_WS_WIT_BTIME-}" =~ ^[1-9][0-9]*$` with `-n "${_WS_WIT_BTIME-}"` | "refuses a witness with no birth time" | `expected '…did not read back as it was written…' to contain 'no witness of'` (the reader still refuses `btime=-`: defence in depth, red on the reason) |
 | A5 | In `_ws_collect_record_write`, replace `  if ! _ws_collect_record_read "$f" \|\| [[ "$_WS_QREC_TOKEN" != "$token" \|\| "$_WS_QREC_SLOT" != "$slot" ]]; then` with `  if false; then` | "a record that does not read back is removed, and answers 1" | `expected '0' to be '1'` |
 | A6 | In `_ws_collect_record_read`, delete `  [[ "${m[1]}" == "$_WS_REC_ID" ]] \|\| return 2` | "rc 2 for another id in the body" | `expected '[rc=0] demo-quiet-reef\|…' to be '[rc=2] \|\|\|\|\|\|\|\|'` |
-| A7 | In `_ws_collect_record_read`, replace `  _ws_collect_qpath \|\| return 2` with `  _WS_QPATH=/elsewhere/.ccd-quarantine` (a slot not derived from the physical quarantine) | "rc 0 sets every field; the slot is DERIVED …", "rc 2 when the physical quarantine cannot be resolved …" | `expected '[rc=0] demo-quiet-mesa\|/elsewhere/.ccd-quarantine/…' to be '[rc=0] demo-quiet-mesa\|<physical>/.ccd-quarantine/…'`; `expected '[rc=0]' to be '[rc=2]'` (G5; re-measure the exact text) |
+| A7 | In `_ws_collect_record_read`, replace `  _ws_collect_qpath \|\| return 3` with `  _WS_QPATH=/elsewhere/.ccd-quarantine` (a slot not derived from the physical quarantine) | 11 cases, measured: every writer case that reads its record back, the five invisibility cases, "CONTROL: what the writer writes, the reader reads", and the two named here, "rc 0 sets every field; the slot is DERIVED …" and "rc 3 when the physical quarantine cannot be resolved …" | `expected '[rc=0] demo-quiet-mesa\|/elsewhere/.ccd-quarantine/…' to be '[rc=0] demo-quiet-mesa\|<physical>/.ccd-quarantine/…'`; `a sound record whose slot cannot be derived now is retried, never kept as malformed: expected '[rc=0] demo-quiet-mesa\|/elsewhere/…' to be '[rc=3] \|\|\|\|\|\|\|\|'` (G5; re-measure the exact text) |
+| A7b | In `_ws_collect_record_read`, replace `  _ws_collect_qpath \|\| return 3` with `  _ws_collect_qpath \|\| return 2` (the overloaded rc ruling R-a forbids) | "rc 3 when the physical quarantine cannot be resolved …" | `a sound record whose slot cannot be derived now is retried, never kept as malformed: expected '[rc=2] \|\|\|\|\|\|\|\|' to be '[rc=3] \|\|\|\|\|\|\|\|'` |
 | A8 | In `_ws_collect_record_read`, delete `  [[ ! -L "${f%/*}" ]] \|\| return 2` | "rc 2 for a directory, a link to a GOOD record, and a linked tmpquarantine/" | `expected '[rc=0]' to be '[rc=2]'` |
 | A9 | In `_ws_collect_record_read`, delete its two field-clearing lines (`_WS_QREC_ID=''; …` and `_WS_QREC_RUN=''; …`) | 14 cases (17 at drafting, less the four `slot=` rows, plus G5's slot row), the first "rc 1 when nothing stands there" | `expected '[rc=1] demo-good-seed\|…' to be '[rc=1] \|\|\|\|\|\|\|\|'` |
 | A10 | In `_ws_collect_records_of`, replace `  if (( rc != 0 )) \|\| [[ -n "$err" ]]; then` with `  if false; then` | "a tmpquarantine/ that cannot be LISTED answers 2" | `expected '0' to be '2'` |
@@ -4517,7 +4604,7 @@ _ws_collect_move() {   # src dst dev:ino btime -> 0 PROVEN moved: dst is that di
   # and checkout directory. A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
 ```
 
-with these ten:
+with these eleven:
 
 ```bash
   # THE ONE PHYSICAL RESOLUTION its eight callers share: a directory a removal
@@ -4526,9 +4613,10 @@ with these ten:
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
   # leaf-question sites: `_ws_reclaim_workdir_shared`'s leaf placement,
   # `_ws_leaf_checkouts`' leaf, and `_ws_leaf_checkout_one`'s admin directory
-  # and checkout directory. The eighth is the collector's quarantine
-  # (`_ws_collect_qpath`, one call site: `_ws_collect_qdir` makes the
-  # quarantine under it, and the record reader only derives a slot there).
+  # and checkout directory. The eighth is the collector's quarantine path,
+  # `_ws_collect_qpath`: the quarantine maker, the record writer and the
+  # record reader all reach this function through it, never directly, so
+  # the census stays eight.
   # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
 ```
 
@@ -4627,6 +4715,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { CCD } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 
@@ -4878,20 +4967,35 @@ describe('_ws_collect_token — named inputs, mode=collect first; an unmeasured 
     expect(b.out).not.toBe(a.out);
   });
 });
+
+describe('the walk’s bound fits ws-audit’s runner row (departure idle-walk-bound-30s)', () => {
+  it('WS_COLLECT_IDLE_SCAN_S is 30: with the in-use probe and the checkout scan, 70 s before the row pass, inside the row', () => {
+    const [idle = '', probe = '', scan = ''] = h.sh('printf "%s:%s:%s" "${WS_COLLECT_IDLE_SCAN_S-}" "${WS_PATH_USERS_SCAN_S-}" "${REAP_SCAN_SECONDS-}"').split(':');
+    expect(idle, 'the idle walk’s bound').toBe('30');
+    expect([probe, scan], 'the CONTROL: the two bounds the fresh audit spends beside it').toEqual(['10', '30']);
+    const runner = fs.readFileSync(path.join(path.dirname(CCD), '..', 'server', 'src', 'remote', 'runner.ts'), 'utf8');
+    const row = /^\s*'ws-audit': ([0-9_]+),$/m.exec(runner);
+    expect(row, 'the CONTROL: ws-audit’s runner row was read').not.toBeNull();
+    expect((Number(idle) + Number(probe) + Number(scan)) * 1000, 'the bounds the fresh audit spends in sequence, in ms')
+      .toBeLessThan(Number(row![1]!.replace(/_/g, '')));
+  });
+});
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-collect-idle-token.test.ts`
 
-Expected: `Tests  26 failed (26)`. The walk cases throw `Error: Command failed: bash -c source … _ws_collect_idle '…'` (`command not found`, then `_WS_IDLE_NEWEST_NS: unbound variable`). The floor and token cases read rc 127: `expected { rc: '127', out: '' } to deeply equal { rc: '2', out: '' }`.
+Expected: `Tests  27 failed (27)` (re-measure, R-j). The walk cases throw `Error: Command failed: bash -c source … _ws_collect_idle '…'` (`command not found`, then `_WS_IDLE_NEWEST_NS: unbound variable`). The floor and token cases read rc 127: `expected { rc: '127', out: '' } to deeply equal { rc: '2', out: '' }`. The bound case fails with `the idle walk’s bound: expected '' to be '30'`.
 
 - [ ] **Step 3: Implement**
 
 In `ccd/ccd`, directly ABOVE `# ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──` (so after 4B's functions), insert one blank line and then exactly this:
 
 ```bash
-WS_COLLECT_IDLE_SCAN_S=60     # bound on one leaf's idle walk (measured 2026-10-08: the largest live leaf, 76,915 entries, in at most 4.8 s)
+WS_COLLECT_IDLE_SCAN_S=30     # bound on one leaf's idle walk (departure idle-walk-bound-30s: with the in-use probe's 10 s and the
+                              # checkout scan's 30 s, the audit fits ws-audit's 90 s runner row; measured 2026-10-08: the largest
+                              # live leaf, 76,915 entries, in at most 4.8 s). A timeout is unmeasured, and the leaf is retried.
 WS_COLLECT_IDLE_CAP=2000000   # the most entries one walk counts; more is unmeasured
 _WS_IDLE_NEWEST_NS=''; _WS_IDLE_COUNT=''; _WS_IDLE_WHY=''; _WS_IDLE_DETAIL=''; _WS_IDLE_LEAF=''
 _ws_collect_idle() {   # leaf -> 0 with _WS_IDLE_NEWEST_NS = the newest CTIME under leaf, leaf included, in epoch ns,
@@ -4990,7 +5094,7 @@ _ws_collect_token() {   # id -> the collector's token on stdout; rc 2, nothing p
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-collect-idle-token.test.ts`
 
-Expected: 26 passed. The timeout case takes about 3 s: the shim sleeps 30 s, and `WS_COLLECT_IDLE_SCAN_S=1` plus a 2 s kill grace cuts it.
+Expected: 27 passed (re-measure, R-j). The timeout case takes about 3 s: the shim sleeps 30 s, and `WS_COLLECT_IDLE_SCAN_S=1` plus a 2 s kill grace cuts it.
 
 - [ ] **Step 5: Mutation check**
 
@@ -5012,6 +5116,7 @@ Command: `cd server && ./node_modules/.bin/vitest run test/ccd-collect-idle-toke
 | C12 | In `_ws_collect_token`, delete `&& "${_WS_IDLE_LEAF-}" == */"$id" ` | "a walk of ANOTHER leaf" | `expected { rc: '0', …(1) } to deeply equal { rc: '2', out: '' }` |
 | C13 | Delete `_ws_collect_idle`'s Darwin arm (its three-line `if [[ "$CCD_OS" == darwin ]]; then … fi`) | "_ws_collect_idle on Darwin: is unmeasured, `walk-failed`" | `expected { rc: '0', …(5) } to match object { rc: '2', why: 'walk-failed', …(2) }` |
 | C14 | In `_ws_collect_floor_held`, replace `  fl=$(_ws_collect_floor_s)` with `  fl=86400` (a second definition of the floor) | "the floor is read through `_ws_collect_floor_s` …" | `redefined to 0: the newest instant itself is idle: expected '1' to be '0'` |
+| C15 | Replace `WS_COLLECT_IDLE_SCAN_S=30` with `WS_COLLECT_IDLE_SCAN_S=60` (R68's drafted bound) | "WS_COLLECT_IDLE_SCAN_S is 30: … inside the row" | `the idle walk’s bound: expected '60' to be '30'` (measured) |
 
 THE STDERR ARM HAS NO RED OF ITS OWN. Replacing `  if [[ "$frc" != 0 \|\| -n "$err" ]]; then` with `  if [[ "$frc" != 0 ]]; then` leaves "an UNREADABLE entry" green, because GNU find exits 1 whenever it reports an unreadable directory. It is defence in depth for a find that writes to stderr and still answers 0, as wave 6's checkout walk states for the same arm.
 
@@ -5027,8 +5132,10 @@ feat(ccd): the collector's idle walk, its floor and its token
 
 The newest CTIME, in ns, over every entry under the leaf, the leaf
 included, by GNU find -P -xdev under LC_ALL=C; mtime is never read, so
-a future mtime holds nothing. A timeout (60 s), an unreadable entry, the
-cap (2,000,000) and any other failure are unmeasured, each in its own
+a future mtime holds nothing. A timeout (30 s, so that the audit fits
+ws-audit's 90 s runner row: the departure idle-walk-bound-30s), an
+unreadable entry, the cap (2,000,000) and any other failure are
+unmeasured, each in its own
 word. The floor is max(24 h, WS_COLLECT_IDLE_FLOOR_S): the knob only
 raises it; the one test-only seam that lowers it is a sourced harness
 redefining _ws_collect_floor_s, and _ws_collect_now_ns stays a clock
@@ -5351,6 +5458,11 @@ Create `server/test/ccd-leaf-checkouts-alias.test.ts`:
 // recycled slug's `git worktree add` re-creates its pruned admin name at the
 // pre-move spelling and its tree is later removed; without (2), the leaf's own
 // worktree passes while a recycled slug's live worktree holds its admin name.
+// The alias also answers a clone in the leaf whose linked worktree is in the
+// leaf too: git names that worktree's git directory ABSOLUTELY, by the leaf's
+// pre-move spelling, and under the alias it is read at the leaf's new place
+// while nothing stands at that spelling, PROVEN — measured: without it the
+// moved leaf refuses for ever, a leaf the pre-move ask passed.
 // Every other caller passes no alias and is answered exactly as before.
 //
 // FIXTURE HOMES ONLY (`makePrHarness`): every repository, leaf and slot is under
@@ -5552,6 +5664,64 @@ describe('condition (2): nothing stands at the pre-move spelling — the measure
   }, 60_000);
 });
 
+describe('a clone and its worktree BOTH inside the leaf — git spells the worktree’s git directory ABSOLUTELY, by the pre-move path', () => {
+  /** A clone at L/repo and its linked worktree at L/wt (`git worktree add`'s default). The pre-move ask
+   *  passes both as the leaf's own (INSIDE THE LEAF) and records nothing: no admin directory lies outside it. */
+  const cloneAndWorktree = (): { alias: string; gitdir: string } => {
+    fs.mkdirSync(L(), { recursive: true });
+    h.git(L(), 'init', '-q', '-b', 'main', 'repo');
+    h.git(path.join(L(), 'repo'), 'commit', '-q', '--allow-empty', '-m', 'init');
+    h.git(path.join(L(), 'repo'), 'worktree', 'add', '-q', '-b', 'inner', path.join(L(), 'wt'));
+    const alias = path.join(fs.realpathSync(root()), ID);
+    const gitdir = path.join(alias, 'repo', '.git', 'worktrees', 'wt');
+    expect(fs.readFileSync(path.join(L(), 'wt', '.git'), 'utf8').trim(), 'the CONTROL: git spells it absolutely, by the pre-move path')
+      .toBe(`gitdir: ${gitdir}`);
+    expect(ask(L()), 'the CONTROL: the pre-move ask passes it, and records nothing').toEqual({ rc: '0', why: '', accepted: '' });
+    return { alias, gitdir };
+  };
+
+  it('CONTROL — no alias: after the move the worktree names a git directory that is gone, and refuses, as today: 1', () => {
+    cloneAndWorktree();
+    moveToSlot();
+    const a = ask(moved());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('which no longer exists');
+  }, 60_000);
+
+  it('with the alias: the git directory’s pre-move spelling is read inside the moved leaf — 0 — and _ws_leaf_remove removes the leaf, proven gone', () => {
+    const { alias } = cloneAndWorktree();
+    moveToSlot();
+    const a = ask(moved(), { path: alias, accepted: '' });
+    expect(a.rc, a.why).toBe('0');
+    const r = remove(`'${slot()}' leaf '${devino(moved())}' '${alias}' ''`);
+    expect(r.rc, r.why).toBe('0');
+    expect(fs.existsSync(moved())).toBe(false);
+  }, 60_000);
+
+  it('something standing again at the git directory’s pre-move spelling refuses: 1 — an empty recycled leaf at the alias alone does not', () => {
+    const { alias, gitdir } = cloneAndWorktree();
+    moveToSlot();
+    fs.mkdirSync(L());   // a recycled slug's spawn: a new, empty leaf at the pre-move spelling
+    expect(ask(moved(), { path: alias, accepted: '' }).rc, 'the CONTROL: only the git directory’s own spelling is asked').toBe('0');
+    fs.mkdirSync(gitdir, { recursive: true });   // … and something at that git directory's very spelling
+    const a = ask(moved(), { path: alias, accepted: '' });
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('where something stands again');
+    const r = remove(`'${slot()}' leaf '${devino(moved())}' '${alias}' ''`);
+    expect(r.rc, r.why).toBe('1');
+    expect(fs.existsSync(path.join(moved(), 'wt', '.git')), 'nothing was removed').toBe(true);
+  }, 60_000);
+
+  it.skipIf(ROOT_USER)('the git directory’s pre-move spelling under a parent that cannot be searched is unmeasured: 2', () => {
+    const { alias } = cloneAndWorktree();
+    moveToSlot();
+    chmodFor(root(), 0o600);
+    const a = ask(moved(), { path: alias, accepted: '' });
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('was never asked');
+  }, 60_000);
+});
+
 describe('the alias itself is checked before it is believed', () => {
   it.each([
     ['a relative pre-move spelling', 'tmp/x', ''],
@@ -5567,8 +5737,8 @@ describe('the alias itself is checked before it is believed', () => {
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-leaf-checkouts-alias.test.ts`
 
-Expected: `Tests  11 failed | 1 passed (12)`.
-- Each of the eleven throws `Error: Command failed: bash -c source … _ws_leaf_checkouts '…'` on `_WS_CHECKOUTS_ACCEPTED: unbound variable`. ccd runs under `set -u`, and every case that asks before it removes prints that global.
+Expected: `Tests  15 failed | 1 passed (16)` (re-measure, R-j).
+- Each of the fifteen throws `Error: Command failed: bash -c source … _ws_leaf_checkouts '…'` on `_WS_CHECKOUTS_ACCEPTED: unbound variable`. ccd runs under `set -u`, and every case that asks before it removes prints that global.
 - The one green case is the control "_ws_leaf_remove WITHOUT the alias … refuses exactly as before", which is green before and after by design.
 
 - [ ] **Step 3: Implement**
@@ -5619,6 +5789,35 @@ with these three, so the sentence Task 9's `_ws_leaf_read_small` pointer defers 
   # the two conditions below admit. Anything else is a tree git records
   # elsewhere: moved here, or an admin name a later worktree recycled.
 ```
+
+(a3) In `_ws_leaf_checkout_one`, directly ABOVE its git-directory absence ask, the two lines `  _ws_reclaim_absent "$gd"; rc=$?` and `  (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which no longer exists — …"; return 1; }` (`grep -nF '_ws_reclaim_absent "$gd"; rc=$?' ccd/ccd`: one hit, :29187 at `b0647d850`), so after the relative-gitdir block and its `..` case, insert exactly this:
+
+```bash
+  # THE COLLECTOR'S ALIAS, INSIDE THE LEAF (spec §5.6). A linked worktree of a
+  # clone that is itself in the leaf names its git directory ABSOLUTELY, git's
+  # default, by the leaf's PRE-MOVE spelling, which the collector's move took
+  # away. Under the alias that spelling is read at the leaf's new place, and
+  # only while nothing stands at it again, PROVEN; the INSIDE THE LEAF rule
+  # below then answers for the tree exactly as the pre-move ask did, so no
+  # accepted pair is needed. A relative gitdir was joined to the tree's own
+  # directory above and never begins with the alias, and an absolute one
+  # holding a `..` was refused above.
+  if [[ -n "$alias" && ( "$gd" == "${alias%/}" || "$gd" == "${alias%/}/"* ) ]]; then
+    _ws_reclaim_absent "$gd"; rc=$?
+    (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whether anything stands again at $gd, the git directory $f names in the leaf's pre-move spelling, was never asked"; return 2; }
+    (( rc != 1 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, in the leaf's pre-move spelling, where something stands again — not the leaf's own"; return 1; }
+    gd="${lp%/}${gd#"${alias%/}"}"
+  fi
+```
+
+This is the one block reconciled from the attack's two drafts (safety-collector F3, security SEC-1). It asks the absence of the git directory's OWN pre-move spelling, as condition (2) asks the tree's own, not the whole alias, so a recycled slug's spawn that only re-made an empty leaf at the alias does not refuse a leaf it never touched. It is measured in a fixture HOME (git 2.43, the export with 4E's alias threading and this block applied):
+- with no alias, the moved worktree answers 1, `which no longer exists`;
+- with the alias, it answers 0, and `_ws_leaf_remove` removes the slot's leaf;
+- with something re-made at the git directory's pre-move spelling, it answers 1;
+- with an empty leaf re-made at the alias alone, it answers 0;
+- with that spelling's parent unsearchable, it answers 2.
+
+A re-spelled git directory that is not in the moved leaf still refuses at the absence ask under the block (`which no longer exists`), and one that is answers through the INSIDE THE LEAF rule, exactly as before the move.
 
 (b) In `_ws_leaf_checkout_one`, replace its last six lines (from `  [[ "$rec" != "$f" ]] || return 0` to its closing `}`)
 
@@ -5688,8 +5887,10 @@ with
   # path BEFORE the collector moved it, and `accepted` the record's list of what
   # that pre-move ask let pass (`_WS_CHECKOUTS_ACCEPTED`'s spelling). With them,
   # a back-link naming the pre-move spelling is the leaf's own under the two
-  # conditions `_ws_leaf_checkout_one` states. Every other caller passes
-  # neither, and nothing it is answered changes.
+  # conditions `_ws_leaf_checkout_one` states, and a git directory spelled
+  # absolutely inside the pre-move leaf is read at the leaf's new place while
+  # nothing stands at that spelling. Every other caller passes neither, and
+  # nothing it is answered changes.
   local lp outf errf err rc f why='' n=0 alias="${2-}" accepted="${3-}"
   local -a gits=()
   _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''
@@ -5737,7 +5938,7 @@ cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-done-kept.tes
 cd server && ./node_modules/.bin/vitest run test/ccd-ws-expire-verb.test.ts
 ```
 
-Expected: the alias file has 12 passed, and every other suite is green UNCHANGED. Measured on the export: 174 cases across the five leaf and witness files, 31 across the four leaf-moved and leaf-rows files, 110 across the tail, done-kept and tmproot-wait files, and 32 in ws-expire's verb. The tail, `ws-expire`'s tail and `_ws_tmproot_remove` call `_ws_leaf_remove` with two or three arguments, so they reach no alias.
+Expected: the alias file has 16 passed (re-measure, R-j), and every other suite is green UNCHANGED. Measured on the export: 174 cases across the five leaf and witness files, 31 across the four leaf-moved and leaf-rows files, 110 across the tail, done-kept and tmproot-wait files, and 32 in ws-expire's verb. The tail, `ws-expire`'s tail and `_ws_tmproot_remove` call `_ws_leaf_remove` with two or three arguments, so they reach no alias.
 
 - [ ] **Step 5: Mutation check**
 
@@ -5755,6 +5956,11 @@ Command: `cd server && ./node_modules/.bin/vitest run test/ccd-leaf-checkouts-al
 | E8 | In the alias arm, delete `      (( rc != 2 )) \|\| { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whether anything stands again at $pre, …"; return 2; }` | "the pre-move spelling under a parent that cannot be searched is unmeasured: 2" | `expected '1' to be '2'` (unmeasured read as a refusal) |
 | E9 | In the alias arm, replace `      _ws_reclaim_absent "$pre"; rc=$?` with `      _ws_reclaim_absent "$pre/nothing-here"; rc=$?` (ask the wrong path) | "a recycled slug's LIVE worktree …: rc 1" | `expected '0' to be '1'` |
 | E10 | Replace `  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''` with `  _WS_CHECKOUTS_WHY=''` (no reset per ask) | "a clone, and nothing at all, record nothing — and a second ask in the same shell starts from nothing" | `expected '<enc admin>=<enc back-link>' to be ''` |
+| E11 | Delete (a3)'s block: from `  if [[ -n "$alias" && ( "$gd" == "${alias%/}" \|\| "$gd" == "${alias%/}/"* ) ]]; then` through its `  fi` | "with the alias: the git directory’s pre-move spelling is read inside the moved leaf …"; "something standing again …" (its CONTROL) | `expected '1' to be '0'` (`… which no longer exists — git no longer records the tree …`); `the CONTROL: only the git directory’s own spelling is asked: expected '1' to be '0'`. Measured in a fixture HOME: this is the leaf the audit licenses and the verb, without the block, moves back as `containment-unproven` |
+| E12 | In (a3)'s block, delete `    (( rc != 1 )) \|\| { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, in the leaf's pre-move spelling, where something stands again — not the leaf's own"; return 1; }` | "something standing again at the git directory’s pre-move spelling refuses: 1 …" | `expected '0' to be '1'` (measured: the re-spelled path is the moved clone's own admin directory, so it passes) |
+| E13 | In (a3)'s block, delete `    (( rc != 2 )) \|\| { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whether anything stands again at $gd, …"; return 2; }` | "the git directory’s pre-move spelling under a parent that cannot be searched is unmeasured: 2" | `expected '0' to be '2'` (measured: unmeasured falls through to the re-spelling) |
+
+THE `/` IN (a3)'S PREFIX HAS NO RED OF ITS OWN. Matching `"${alias%/}"*` instead of `"${alias%/}/"*` would also take a nested id's sibling leaf (`<alias>.v2-x/…`), but its re-spelling lands BESIDE the moved leaf, outside it, and the block or the absence ask under it refuses it, as without the alias. It is exactness, stated rather than pinned.
 
 - [ ] **Step 6: Re-stamp and commit**
 
@@ -5773,8 +5979,11 @@ recorded list. Under it, a back-link naming the pre-move spelling counts
 as the leaf's own only when the same admin directory with the same
 back-link value was accepted before the move, and nothing stands at the
 pre-move spelling now, proven. A recycled admin name fails one or the
-other and refuses, as it does with no alias; every other caller passes
-no alias and is answered exactly as before.
+other and refuses, as it does with no alias. A git directory spelled
+absolutely inside the pre-move leaf, a worktree of a clone in the leaf,
+is read at the leaf's new place while nothing stands at that spelling,
+proven. Every other caller passes no alias and is answered exactly as
+before.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -5805,7 +6014,7 @@ cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --
 Without agent modules, the agent's own `ws` errors appear in that output and are not this task's.
 
 Expected: all green. The measured figures from the export:
-- the five new files and `macos-platform`: 238 passed, 11 skipped at drafting (G5 takes 4A to 52 cases and G4 takes 4C to 26, so the sum holds; re-measure);
+- the five new files and `macos-platform`: 243 passed, 11 skipped (238 at drafting; G5 takes 4A to 52 cases, G4 and R-d take 4C to 27, and the inside-the-leaf describe takes 4E to 16; re-measure, R-j);
 - the act part's line and `git-env-strip`: green;
 - `ccd-workspaces`: 81;
 - the session-hook citation cases: 13, so the frozen corpus is untouched;
@@ -5883,7 +6092,7 @@ The whole evaluation is ONE function, `_ws_collect_fork`, so the token printed i
   - `_lc_emit` (ccd/ccd:4944), `_json_str` (:4254) and `die` (:1644).
   - From Task 4:
     - `_ws_collect_records_of <id>`: matching record PATHS, one per line, by exact parse; rc 0, or rc 2 when `tmpquarantine/` cannot be listed;
-    - `_ws_collect_record_read <file>`: 0, setting `_WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS`; 1 absent; 2 malformed, including a body whose `id=` is not the id its name parses to. The body carries no `slot=` (ruling G5): `_WS_QREC_SLOT` is DERIVED from the record's file name and the physical quarantine directory, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`; `_WS_QREC_CHECKOUTS` stays encoded;
+    - `_ws_collect_record_read <file>`: 0, setting `_WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS`; 1 absent; 2 malformed, including a body whose `id=` is not the id its name parses to and a bad `checkouts=` encoding (read here as the TERMINAL `quarantine-kept`); 3 unmeasured, when the physical `~/.cc-tmp` cannot be resolved, so the slot cannot be derived (read here as the retried unmeasured `quarantine`, ruling R-a). The body carries no `slot=` (ruling G5): `_WS_QREC_SLOT` is DERIVED from the record's file name and the physical quarantine directory, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`; `_WS_QREC_CHECKOUTS` stays encoded;
     - `_ws_collect_idle <leaf>`: 0 with `_WS_IDLE_NEWEST_NS`, `_WS_IDLE_COUNT` and `_WS_IDLE_LEAF` (the leaf walked), or 2 with `_WS_IDLE_WHY` ∈ {timeout, unreadable, cap, walk-failed} and `_WS_IDLE_DETAIL`. Any stub of it (the fixture's `walkAt`, `walkUnmeasured`, `NO_WALK`, and the inline stubs) sets all five;
     - `_ws_collect_token <id>`, which binds the `_WS_WIT_*` and `_WS_IDLE_*` this evaluation just read, and answers rc 2 with nothing printed unless `_WS_IDLE_LEAF` ends `/<id>`;
     - `_ws_collect_rows_clear <id> <leafpath>`: 0, 1 or 2, with `_WS_COLLECT_ROWS_WHY`;
@@ -5945,6 +6154,8 @@ The whole evaluation is ONE function, `_ws_collect_fork`, so the token printed i
 - **T8 OPEN4, as ruled under Task 6.** A record whose leaf stands in its slot while anything stands at the original path is `quarantine-kept`: TERMINAL, journaled, and answered on every audit. It is asked BEFORE the registry, because a retake usually brings a `.child`, whose retryable `registered` would otherwise hide it. It is read off the disk, so it clears once the original path is free again.
 - **G2.** This commit is the first to spell words in the COLLECT region, so it teaches `ccd-wsaudit-nonpoison.test.ts` and `ccd-refusal-scan.test.ts` that region.
 - **G9.** Step 6b measures the audit's worst case against the inherited 90 s `ws-audit` row, and states it. No runner row changes.
+- **R-a.** The record reader answers four ways. `_ws_collect_resume_eval` reads its rc 2 as the TERMINAL `quarantine-kept`, and its rc 3 (the physical `~/.cc-tmp` cannot be resolved, so the slot cannot be derived) as unmeasured `quarantine`: exit 1, journaled nowhere, retried. The resume suite's case "a record whose slot cannot be derived" and mutation rows 52 and 53 pin it.
+- **R-d.** `WS_COLLECT_IDLE_SCAN_S` is 30 (the departure `idle-walk-bound-30s`), so Step 6b's bound sum is 30 + 10 + 30 = 70 s plus the row pass, inside the 90 s row.
 
 - [ ] **Step 1: Entry check**
 
@@ -5957,7 +6168,7 @@ for f in _ws_collect_idle _ws_collect_token _ws_collect_rows_clear _ws_collect_r
 awk '/^_LC_ACTS=\(/,/\)/' ccd/ccd | grep -cw collect                                          # (a2) 1: Task 4's first part declared the act (ruling G1); 0 -> STOP
 grep -c 'COLLECT-BEGIN ──\|COLLECT-END ──' ccd/ccd                                              # (a6) 2: Task 4's region markers, and no other line spells them
 grep -c "'containment-refuted'" shared/api.ts                                                   # (a3) 2 or more: Task 1 landed
-grep -c '_ws_collect_audit\|WS-AUDIT-COLLECT\|--collect' ccd/ccd                                # (a4) 0
+grep -c '_ws_collect_audit\|WS-AUDIT-COLLECT\|\$3 != --collect' ccd/ccd                        # (a4) 0: no collect audit and no collect hand-off yet (systemd-run's own --collect, six lines on b0647d850, is not this)
 grep -n '"WS-AUDIT --EXPIRE", EXPIRE region' ccd/ccd                                            # (a5) one line, < 19109: the hand-off line this task extends in place
 ```
 
@@ -6980,6 +7191,27 @@ describe.skipIf(!LINUX)('a moved leaf is re-proven: registered, in use under eit
     expect(a.code).toBe(1);
     expect(collectOf(a)['unmeasured']).toBe('quarantine');
   }, 60_000);
+
+  it('a record whose slot cannot be derived — the physical ~/.cc-tmp cannot be resolved — is unmeasured `quarantine`: exit 1, never kept, journaled nowhere (ruling R-a)', () => {
+    // The record is well formed; only its slot, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`, cannot be derived.
+    // A later pass may resolve it (a bind mount not up yet, `~/.cc-tmp` not yet remade), so the record reader answers
+    // rc 3 and the resume answers the retried unmeasured — never the TERMINAL `quarantine-kept`, journaled every pass.
+    const { ident } = setup();
+    const rec = plantOwn(ident);
+    fs.rmSync(path.join(h.home, '.cc-tmp'), { recursive: true, force: true });
+    const a = collectAudit(h);
+    expect(a.code).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('quarantine');
+    expect(String(a.doc!['detail'])).toContain('was never derived');
+    expect(collectOf(a)['records'], 'the record is still listed').toEqual([recName()]);
+    expect(readJournal(h.home)).toEqual([]);
+    expect(fs.existsSync(rec), 'the record stands').toBe(true);
+    // Read off the disk: once ~/.cc-tmp stands again, the same record resumes. Its leaf went with ~/.cc-tmp, and its
+    // slot was never made, so it stands at neither: `removed`.
+    fs.mkdirSync(path.join(h.home, '.cc-tmp'), { mode: 0o700 });
+    expect(collectAudit(h).doc).toMatchObject({ resume: 'removed', verdict: 'collectable' });
+  }, 60_000);
 });
 ```
 
@@ -7253,6 +7485,13 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # would otherwise hide it on every pass. A `moved` resume re-proves,
   # read-only, what the verb proves after a move: nobody uses either spelling,
   # and no registry row lies at, inside or through the PRE-MOVE spelling.
+  # THE RECORD READER ANSWERS FOUR WAYS (ruling R-a): 0 parsed; 1 absent (it
+  # vanished between the listing and the read: unmeasured `records`); 2
+  # malformed, the TERMINAL `quarantine-kept`; 3 the physical `~/.cc-tmp`
+  # cannot be resolved, so the slot was never derived: unmeasured
+  # `quarantine`, journaled nowhere and asked again by the next pass — a bind
+  # mount not up yet is no fault of the record's, and keeping it would journal
+  # a retryable fact on every audit.
   local id="$1" rec name q='' slot sleaf orig="$HOME/.cc-tmp/$1" rc sstate=absent ostate=other phase ents
   shift
   (( $# == 1 )) \
@@ -7260,6 +7499,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   rec="$1"; name="${rec##*/}"; _WS_COLLECT_RECORD="$rec"
   _ws_collect_record_read "$rec"; rc=$?
   (( rc != 1 )) || { _ws_collect_unmeasured records "the quarantine record $rec vanished while it was read"; return 1; }
+  (( rc != 3 )) || { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-the physical ~/.cc-tmp could not be resolved}, so the slot of $rec was never derived — the record stands as it is, and the next pass asks again"; return 1; }
   (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
   [[ "${_WS_QREC_ID-}" == "$id" ]] \
     || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
@@ -7268,8 +7508,8 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   _ws_reclaim_absent "$HOME/.cc-tmp"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured quarantine "$_WS_ABSENT_WHY"; return 1; }
   if (( rc != 0 )); then
-    _ws_dir_physical "$HOME/.cc-tmp" || { _ws_collect_unmeasured quarantine "$_WS_PHYS_WHY"; return 1; }
-    q="$_WS_PHYS/.ccd-quarantine"
+    _ws_collect_qpath || { _ws_collect_unmeasured quarantine "$_WS_QPATH_WHY"; return 1; }
+    q="$_WS_QPATH"
     if [[ -L "$q" ]] || { [[ -e "$q" ]] && { [[ ! -d "$q" ]] || [[ ! -O "$q" ]]; }; }; then
       _ws_collect_unmeasured quarantine "$q is a link, not a directory, or not this uid's — ccd never reads a slot through it"
       return 1
@@ -7520,12 +7760,12 @@ If anything other than README reds there, STOP and report: a frozen-corpus censu
 
 The runner keys its budget on argv[0] (`server/src/remote/runner.ts:49`, `'ws-audit': 90_000`), so `ws-audit --collect` inherits the plain audit's 90 s. This step measures and states the worst case. It changes no runner row: a mode-keyed budget, if the figure needs one, is wave 9's, carried and not built here.
 
-1. **The bounds, read from the tree.** The fresh path can spend these in sequence: the idle walk (`WS_COLLECT_IDLE_SCAN_S`, 60 s), the in-use probe (`WS_PATH_USERS_SCAN_S`, 10 s), the checkout scan (`REAP_SCAN_SECONDS`, 30 s), then the row pass. Print them:
+1. **The bounds, read from the tree.** The fresh path can spend these in sequence: the idle walk (`WS_COLLECT_IDLE_SCAN_S`, 30 s, ruling R-d, the departure `idle-walk-bound-30s`), the in-use probe (`WS_PATH_USERS_SCAN_S`, 10 s), the checkout scan (`REAP_SCAN_SECONDS`, 30 s), then the row pass, which no bound of its own caps. Print them; the first grep prints `WS_COLLECT_IDLE_SCAN_S=30` (if it prints 60, Task 4 did not apply R-d: STOP and report it):
    ```bash
    grep -n '^WS_COLLECT_IDLE_SCAN_S=\|^WS_PATH_USERS_SCAN_S=\|^REAP_SCAN_SECONDS=' ccd/ccd
    grep -n "'ws-audit':" server/src/remote/runner.ts
    ```
-   On those bounds, the walk, the probe and the scan alone sum to 100 s, past the 90 s row, before the row pass is counted. State the sum.
+   On those bounds, the walk, the probe and the scan sum to 30 + 10 + 30 = 70 s, inside the 90 s row, plus the row pass. So the audit fits the row unless the row pass takes 20 s or more. State the sum, and the row pass's measured time from (2).
 2. **The real figure, on the largest fixture.** Add this case at the END of `ccd-collect-audit-rungs.test.ts`, run it alone, and record the line it prints. Then DELETE it before Step 8: `grep -c 'G9 MEASUREMENT' server/test/ccd-collect-audit-rungs.test.ts` must print 0.
    ```ts
    it.skipIf(!LINUX)('G9 MEASUREMENT (never committed)', () => {
@@ -7546,7 +7786,7 @@ The runner keys its budget on argv[0] (`server/src/remote/runner.ts:49`, `'ws-au
    ```bash
    (cd server && ./node_modules/.bin/vitest run test/ccd-collect-audit-rungs.test.ts -t 'G9 MEASUREMENT')
    ```
-3. **The wave-done states** both measured figures, the bound sum from (1), and whether either reaches 90 s. If the bound sum does (on the bounds above, it does), the wave-done says so in its own paragraph: a box whose walk runs to its bound would exceed the runner's budget, which the server reads as a failed audit and retries. Wave 9 carries the remedy (G9).
+3. **The wave-done states** both measured figures, the bound sum from (1) (70 s plus the measured row pass), and whether either reaches 90 s, and it names the departure `idle-walk-bound-30s`. On R-d's bounds the sum stays inside the row unless the row pass takes 20 s or more. If a measured figure, or 70 s plus the measured row pass, reaches 90 s, the wave-done says so in its own paragraph: a box whose probes run to their bounds would exceed the runner's budget, which the server reads as a failed audit and retries. Wave 9 carries the remedy (G9), and may still key a budget on the mode.
 
 - [ ] **Step 7: Mutation check**
 
@@ -7604,13 +7844,15 @@ Make each mutation on its own, run the command, see the red, and revert it befor
 | 49 † | In `_ws_collect_resume_eval`, replace `    leaf:absent) phase=moved ;;` with `    leaf:*)      phase=moved ;;` | RESUME `-t 'a path retaken since the move'` | `expected { … verdict: 'registered' … } to match object { verdict: 'quarantine-kept' }` |
 | 50 † | In `_ws_collect_resume_eval`, move its three `_ws_collect_registered` lines back to directly under `shift` | same | same red: the retake's own `.child` answers the retryable `registered` first |
 | 51 † | In `_ws_collect_audit_doc`'s journal `case`, add the arm `in-use) _lc_emit collect refused "$id" "" verb ws-audit refusal in-use detail "$cut" ;;` | `(cd server && ./node_modules/.bin/vitest run test/ccd-refusal-scan.test.ts -t 'collector audit')` | `expected [ …(4) ] to have a length of 3 but got 4` |
+| 52 † | In `_ws_collect_resume_eval`, delete the line `  (( rc != 3 )) \|\| { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-…}, so the slot of $rec was never derived …"; return 1; }` (ruling R-a) | RESUME `-t 'slot cannot be derived'` | `expected +0 to be 1`: rc 3 falls to `(( rc == 0 ))`'s TERMINAL `quarantine-kept`, which exits 0 and is journaled (the shape measured on a scratch fixture HOME: exit 0, `quarantine-kept`, one journal file; the vitest text is not) |
+| 53 † | In Task 4's `_ws_collect_record_read`, replace `  _ws_collect_qpath \|\| return 3` with `  _ws_collect_qpath \|\| return 2` (the overloaded rc 2 R-a retired) | same | same red: the resume reads 2 as `quarantine-kept` |
 
 **Five arms have no red of their own, each stated:**
 - `[[ "$id" == *-* ]]`: every collector id is `<project>-<slug>`.
 - The `leaf:match` arm: one directory cannot stand at two paths. Row 38 reaches it only through a mutation.
 - The `_ws_collect_ident` failure arms: a stat of a directory just tested fails only on a race.
 - The fresh eval's `not-witnessed` arm: a witness dropped between the population check and the lock. Measured: rewriting its word leaves every case green.
-- The original path's absence probe answering 2 in the resume (`_ws_collect_unmeasured leaf`): an unreadable `~/.cc-tmp` fails the record's own derived slot first (not measured).
+- The original path's absence probe answering 2 in the resume (`_ws_collect_unmeasured leaf`): a `~/.cc-tmp` that cannot be searched cannot be entered either, so the record reader answers rc 3 first and the resume answers unmeasured `quarantine` (ruling R-a; row 52's case reaches that arm, not this one; not measured).
 
 Revert every mutation, re-stamp (`bash ccd/ccrc restamp ccd/ccd`, `node shared/mark.mjs --check ccd/ccd`, then `ownership.test.ts`), and re-run Step 6 green.
 
@@ -7666,7 +7908,7 @@ MSG
 - **Mirrored, not edited:** `cmd_ws_expire` (`ccd/ccd:30940`, `grep -n '^cmd_ws_expire() {' ccd/ccd`) for the argv, the reap lock and the flock decline; `_ws_expire_locked` (`:31003`) for the verdict point. Neither is touched (workspace-lifecycle's region). Nothing is edited above the frozen citation boundary, and no `_reg_get` call is added (`.child` and `.uuid` are asked by `_ws_collect_registered`'s direct lookup).
 
 **Files:**
-- Modify: `ccd/ccd` — ONE contiguous block, far below the frozen citation boundary, inside the COLLECT region Task 4 opened: below Task 5's `ws-audit --collect` block and directly above the region's end marker (Step 4 says where).
+- Modify: `ccd/ccd` — ONE contiguous block, far below the frozen citation boundary, inside the COLLECT region Task 4 opened: below Task 5's `ws-audit --collect` block and directly above the region's end marker (Step 4 says where). Plus ONE comment-only edit in the RECLAIM region, also far below the boundary: Task 2's comment above `_WS_RCL_CRUMB=''` is amended to name this task's `local` shadow (Step 4c, ruling R-g, which licenses this one RECLAIM-region touch; no code line there changes).
 - Modify: `shared/api.ts` — `LcRefusalToken` and `LC_REFUSAL_WORD` gain `not-witnessed`, `registered` and `changed-recently`, declared in the commit of their first journal sites (ruling G2).
 - Modify: `server/test/lifecycle-refusal-word.test.ts` — `ALL_TOKENS` gains the three words; its count rises 21 -> 24.
 - Modify: `README.md`, only if Step 5's citation case reds on it: its `shared/api.ts:` anchors are re-pointed BY CONTENT (Step 4b).
@@ -7678,7 +7920,7 @@ MSG
 **Interfaces:**
 - Consumes (Task 4, the canonical names):
   - `_ws_collect_record_write <id> <slot> <token>` — writes `$(_ws_collect_qrec_dir)/<name>` (`$REG/tmpquarantine/<name>`), where `<name>` is the slot's basename without its `slot.` prefix (`<id>.<ns>.<pid>`), from the witness fields the current shell holds (`_WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_AT`) and `_WS_CHECKOUTS_ACCEPTED`; rc 0 written and read back, 1 not (`_WS_QREC_WHY`). The body carries no `slot=` field (ruling G5).
-  - `_ws_collect_record_read <file>` → rc 0 with `_WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS`, the slot DERIVED from the record's NAME and the physical quarantine (`<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`); 1 absent; 2 malformed, including a body whose `id=` is not the id its name parses to (ruling G5).
+  - `_ws_collect_record_read <file>` → rc 0 with `_WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS`, the slot DERIVED from the record's NAME and the physical quarantine (`<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`); 1 absent; 2 malformed, including a body whose `id=` is not the id its name parses to (ruling G5) and a bad `checkouts=` encoding (ruling R-b); 3 UNMEASURED: the physical `~/.cc-tmp` could not be resolved, so no slot was derived (`_WS_QPATH_WHY`, ruling R-a). This task reads 2 as `quarantine-kept` and 3 as a retried `failed probe-unmeasured` (Step 4's `_ws_collect_resume`).
   - `_ws_collect_qrec_dir` (prints `$REG/tmpquarantine`); `_ws_collect_records_of <id>` (exact parse, one path per line); `_ws_collect_record_drop <file>` (rc 0 only when the record is proven gone).
   - `_ws_collect_rows_clear <id> <leafpath>` → 0 / 1 (`_WS_COLLECT_ROWS_WHY`) / 2 — asked here AFTER the move, of the LOGICAL pre-move spelling `"$HOME/.cc-tmp/$id"` (the one `_child_tmpdir` hands out), while nothing stands there, always under `_ws_reclaim_contained` (ruling G10). It compares that spelling LITERALLY even when nothing stands there (ruling G6, pinned by Task 4's 4D case "AFTER the move … still refuses"); the step-5 case "is asked AFTER the move…" pins the call, "the real rule" case the answer.
   - The quarantine directory: `_ws_collect_qdir` → rc 0 with `_WS_Q` = `<physical ~/.cc-tmp>/.ccd-quarantine` (made `mkdir -m 0700` when PROVEN absent; else a real directory, not a link, this uid, 0700), rc 2 with `_WS_Q_WHY`.
@@ -7689,7 +7931,7 @@ MSG
   - The floor's one test-only seam (ruling G4): `_ws_collect_floor_s`, redefined in a sourced harness (`_ws_collect_floor_s() { echo 0; };`); the production knob only raises the floor (E6).
   - The `collect` act, declared by Task 4's first part (ruling G1): ccd's `_LC_ACTS` and L0's `LifecycleAct`/`LIFECYCLE_ACT_MAP`.
 - Consumes (Task 5): `_ws_collect_fork <id>` — the ONE evaluation `ws-audit --collect` runs, run here inside the reap lock: a standing record goes to `_ws_collect_resume_eval`, else to `_ws_collect_eval` (the FRESH rungs only). It sets `REAP_VERDICT` (`collectable`, a refusal word, or `unmeasured`), `REAP_TOKEN` (the tree token on a fresh arm, a `mode=collect-absent` token on a witness whose leaf is PROVEN absent, the resume token on a record), `REAP_DETAIL`, `_WS_COLLECT_LEAF` (`present` | `absent` on a fresh arm, `''` on a resume), `_WS_COLLECT_RECORD` (the record it resumes, `''` on a fresh arm), `_WS_COLLECT_PHASE` (`unmoved` | `moved` | `removed` on a resume) and `_WS_COLLECT_SLOT`, and leaves `_WS_WIT_*` (fresh) or `_WS_QREC_*` (resume) in the CURRENT shell. `_ws_collect_registered <id>` → 0 free | 1 a row stands | 2 unmeasured (`_WS_COLLECT_REG_WHY`): `.child` and `.uuid` by DIRECT lookup, then `_ws_slug_free` believed only when the wildcard `"$REG/.reap-$id".lo[c]k` lists the held lock; the caller holds the lock. `_ws_collect_paused` → 0 | 1 with `REAP_VERDICT=paused` and `REAP_DETAIL` set. `cmd_ws_audit --session <id> --collect` prints `{"verdict":"collectable",…,"token":…}` (on a record, a resume token) and `quarantine-kept` for a slot whose leaf is not its record's. Task 5 declares `witness-mismatch` and `quarantine-kept` (ruling G2). This task's refusal point keeps its name `_ws_collect_refused`, one letter from Task 5's `_ws_collect_refuse`: every regex that reads either requires `\s` right after the name (Step 2 (h) does).
-- Consumes (Task 2): `_WS_RCL_CRUMB`, read by `_ws_reclaim_failed_json` (`''` omits the key; `cmd_ws_collect` shadows it to `''`, which Task 2's comment above `_WS_RCL_CRUMB=''` names); `_ws_leaf_why_line` as the 300-byte cutter.
+- Consumes (Task 2): `_WS_RCL_CRUMB`, read by `_ws_reclaim_failed_json` (`''` omits the key; `cmd_ws_collect` shadows it to `''` with `local`, and Step 4c amends Task 2's comment above `_WS_RCL_CRUMB=''` to name that shadow, ruling R-g — at Task 2's commit the comment still says "and by nothing else"); `_ws_leaf_why_line` as the 300-byte cutter.
 - Consumes (shipped, at `b0647d850`): `_ws_reclaim_fail id lctx token detail` (`:28658`, journals `_lc_fail "$_WS_RCL_ACT" … verb "ws-$_WS_RCL_ACT"`), `_ws_reclaim_failed_json` (`:28620`), `_ws_reclaim_absent` (`:26646`), `_ws_path_users` (`:28842`), `_ws_leaf_checkouts` (`:29213`), `_ws_leaf_remove` (`:29276`), `_ws_leaf_read_small` (`:29129`), `_ws_leaf_why_line` (`:29473`), `_ws_tmproot_witness_file`/`_id_ok`/`_read`/`_write` (`:20808`–`:20864`), `_plat_mtime` (stat WITHOUT `-L`: an lstat), `_lc_emit`/`_lc_intent`/`_lc_done`/`_lc_refuse`/`_lc_tx`/`_lc_surface_norm`/`_lc_dec_ok`, `_json_str`, `_ws_reclaim_contained` (`:27346`).
 - Produces (ccd):
   ```bash
@@ -7739,8 +7981,14 @@ grep -n '^_ws_collect_qdir() {' ccd/ccd; grep -c '_WS_Q_WHY' ccd/ccd
 grep -n '_WS_CHECKOUTS_ACCEPTED' ccd/ccd | head -3       # (E4) Task 4's accepted-pairs global, set by _ws_leaf_checkouts
 grep -n "'witness-mismatch'\|'quarantine-kept'" shared/api.ts
                                                          # (E5) each in LcRefusalToken AND LC_REFUSAL_WORD (Task 5)
-grep -c "'not-witnessed'\|'registered'\|'changed-recently'" shared/api.ts
-                                                         # (E5a) 0: this task declares them (ruling G2)
+sed -n "/^export type LcRefusalToken =/,/^  | '[^']*';/p" shared/api.ts | grep -c "'not-witnessed'\|'registered'\|'changed-recently'"
+                                                         # (E5a) 0: this task declares them (ruling G2). Read INSIDE the
+                                                         #   LcRefusalToken union only (from its `export type` line to its
+                                                         #   `;`-ended last member): other unions and lists in shared/api.ts
+                                                         #   spell words of their own (main's 'not-idle' sits at three), and
+                                                         #   an unscoped grep would STOP this task for a word it never owns
+sed -n '/^export const LC_REFUSAL_WORD/,/^};/p' shared/api.ts | grep -c "^  'not-witnessed':\|^  'registered':\|^  'changed-recently':"
+                                                         # (E5c) 0: nor does LC_REFUSAL_WORD carry their sentences yet
 sed -n '/^_LC_ACTS=(/,/)/p' ccd/ccd | grep -cw collect   # (E5b) 1: `collect` in ccd's _LC_ACTS, declared by Task 4 (ruling G1) ...
 grep -c 'collect: true' shared/api.ts                    #        ... and >= 1: in L0's LIFECYCLE_ACT_MAP
 grep -n '^_ws_collect_floor_s() {' ccd/ccd               # (E6) ONE line: the floor's only definition, the fixture's seam (ruling G4)
@@ -7758,7 +8006,7 @@ LC_ALL=C mv --help | grep -c -- '--no-copy'              # (E10) 1 on this box (
 
 - If **E1b**, **E1c**, **E2** or **E3** differ, STOP and report: Step 4 composes Task 4's records directory, slot, move and identity and Task 5's evaluation, registry question and pause reader by these exact names (rulings G3, G5, T5 OPEN2), and defines no second of any. A second `_ws_collect_ident` (E1c above 1) is the reconciliation's CRITICAL gap: bash keeps the last definition, and a one-argument form would let `_ws_collect_move` read any readable directory at its destination as "PROVEN moved". The verb test's first CONTROL case pins the evaluation's contract.
 - If **E4** prints nothing, find Task 4's name (`grep -n '^_ws_collect_\|^_ws_leaf_checkouts() {' ccd/ccd`) and use it where `_ws_collect_record_write` reads the accepted pairs. Name the substitution in the wave-done; never add a second helper.
-- If **E5**, **E5a** or **E5b** fails, STOP: the cross-language scans red on a literal `quarantine-kept` this task writes, a word declared twice reds `tsc`, and every journal assertion below filters on act `collect`.
+- If **E5**, **E5a**, **E5c** or **E5b** fails, STOP: the cross-language scans red on a literal `quarantine-kept` this task writes, a word declared twice reds `tsc`, and every journal assertion below filters on act `collect`.
 - **E6:** the fixture's `IDLE_FLOOR_SEAM` (Step 1) redefines exactly that function, the ONE test-only seam that lowers the floor (ruling G4); the production knob `WS_COLLECT_IDLE_FLOOR_S` only raises it and is never used to lower it.
 - If **E6b** prints anything but 1 and 1, STOP: every COLLECT slicer (Task 4's census, the scans Task 5 taught, Step 2 (h)'s harvest) reads the FIRST `COLLECT-END`, and this task's block must read as inside the region. Task 5's own block ends `WS-AUDIT-COLLECT-CLOSE ──`.
 
@@ -7913,7 +8161,7 @@ import { decOf, eventsOf } from './lifecycleHelpers.js';
 import { LC_REFUSAL_WORD, isLcRefusalToken } from '../../shared/api.js';
 import {
   COL_ID, GAP_LOG, IDLE_FLOOR_SEAM, WRONG_TOKEN, collectToken, collectVerb, docOf, evalSays, gaps, inoAt,
-  leafOf, makeOrphan, quarantineOf, records, regOf, slots, witnessOf,
+  leafOf, makeOrphan, quarantineOf, records, recordsDir, regOf, slots, witnessOf,
 } from './wsCollectFixture.js';
 
 let h: PrHarness;
@@ -8057,6 +8305,20 @@ describe.skipIf(!LINUX)('the pause, the lock, and never a lock for a foreign nam
     expect(eventsOf(h.home, 'collect').map((e) => [e['id'], e['refusal']])).toEqual([['demo-quiet-none', 'not-witnessed']]);
   });
 
+  it('no witness, and records that cannot be listed: failed probe-unmeasured BEFORE any lock — none is created for a name that may be foreign', () => {
+    // `tmpquarantine/` is a link, which the record lister never follows: it answers 2, never "no record". With no
+    // witness either, nothing proves the id the collector's, so its reap lock is never opened (and so never made).
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    fs.symlinkSync(path.join(h.home, 'elsewhere'), recordsDir(h));
+    const r = collectVerb(h, WRONG_TOKEN);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(fs.existsSync(path.join(regOf(h), `.reap-${COL_ID}.lock`)), 'the reap lock file').toBe(false);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toContain('no lock was taken');
+    expect(rows()).toEqual([['failed', 'probe-unmeasured']]);
+  });
+
   it('argv: four positionals only, no --defer-expired; a malformed or dot-leading id and a bad token die first, journaling nothing', () => {
     makeOrphan(h);
     for (const [args, err] of [
@@ -8100,6 +8362,7 @@ describe('the three RETRYABLE words are declared with their first journal sites,
   it.each(['not-witnessed', 'registered', 'changed-recently'] as const)('%s', (t) => {
     expect(isLcRefusalToken(t)).toBe(true);
     expect(LC_REFUSAL_WORD[t]).toMatch(/Nothing was removed/);
+    expect(LC_REFUSAL_WORD[t], `${t} echoes its own token at a person`).not.toContain(t);
   });
 });
 ```
@@ -8117,8 +8380,8 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import {
-  GAP_LOG, collectToken, collectVerb, docOf, gapAt, gaps, inoAt, leafOf, linesOf, makeOrphan, origOf,
-  quarantineOf, records, slots, witnessOf,
+  COL_ID, GAP_LOG, WRONG_TOKEN, collectToken, collectVerb, docOf, evalSays, gapAt, gaps, inoAt, leafOf, linesOf,
+  makeOrphan, origOf, quarantineOf, records, slots, witnessOf,
 } from './wsCollectFixture.js';
 
 let h: PrHarness;
@@ -8145,6 +8408,40 @@ describe.skipIf(!LINUX)('step 2 — a real directory with the witness’s identi
       expect(() => fs.lstatSync(leafOf(h)), `${what} still stands where it was`).not.toThrow();
     });
   }
+});
+
+describe.skipIf(!LINUX)('step 2 — a leaf that VANISHED after the evaluation saw it is a retry, never witness-mismatch (ruling R-f)', () => {
+  it('nothing stands at step 2’s lstat: refused state-changed before any record — and the next audit takes the witness-without-leaf arm', () => {
+    const o = makeOrphan(h);
+    const r = collectVerb(h, collectToken(h), { pre: gapAt('consented', 'mv "$HOME/.cc-tmp/$2" "$HOME/real"') });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(docOf(r.stdout)['refused']).toBe('state-changed');
+    expect(gaps(h), 'refused before the record').toEqual(['locked', 'consented']);
+    expect(records(h)).toEqual([]);
+    expect(slots(h)).toEqual([]);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness stands, unchanged').toBe(o.witness);
+    expect(eventsOf(h.home, 'collect').map((e) => [e['outcome'], e['refusal']])).toEqual([['refused', 'state-changed']]);
+    expect(docOf(collectVerb(h, collectToken(h)).stdout), 'the retry: the witness alone is compared and dropped')
+      .toEqual({ collected: COL_ID, record: null, resumed: false, witness: 'dropped' });
+    expect(fs.readFileSync(path.join(h.home, 'real', 'scratch.txt'), 'utf8'), 'what moved away is never touched')
+      .toBe('scratch\n');
+  });
+
+  it('an absence that cannot be proven: failed probe-unmeasured at exit 1, never witness-mismatch — nothing moves', () => {
+    const o = makeOrphan(h);
+    // step 2's lstat answers "not it", and the absence proof that follows cannot be made. The stub replaces
+    // `_ws_reclaim_absent` only from INSIDE step 2, after `_ws_collect_qdir` has asked it.
+    const blind = '_ws_collect_ident() { _ws_reclaim_absent() { _WS_ABSENT_WHY=\'stub: the parent cannot be searched\'; return 2; };'
+      + ' return 1; };';
+    const r = collectVerb(h, WRONG_TOKEN, { pre: `${evalSays(WRONG_TOKEN)} ${blind}` });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toContain('stub: the parent cannot be searched');
+    expect(records(h)).toEqual([]);
+    expect(slots(h)).toEqual([]);
+    expect(inoAt(o.leaf)).toBe(o.ino);
+  });
 });
 
 describe.skipIf(!LINUX)('step 3a — the checkout question, of the ORIGINAL path, before anything moves', () => {
@@ -8831,6 +9128,28 @@ describe.skipIf(!LINUX)('a run that died resumes FROM ITS RECORD', () => {
     expect(inoAt(o.leaf)).toBe(o.ino);
     expect(records(h)).toEqual([]);
   });
+
+  it('a record whose slot cannot be derived (the reader’s rc 3, ruling R-a): failed probe-unmeasured and retried — never quarantine-kept, nothing touched', () => {
+    const o = makeOrphan(h);
+    expect(collectVerb(h, collectToken(h), { pre: crashAt('moved') }).code).toBe(137);
+    const rec = recPath();
+    const slot = slotDir();
+    // the physical ~/.cc-tmp stops resolving between `_ws_collect_qdir` and the resume's read: Task 4's reader answers 3
+    const unresolved = '_ws_collect_record_read() { [[ -e "$1" ]] || return 1;'
+      + ' _WS_QPATH_WHY=\'stub: ~/.cc-tmp cannot be resolved\'; return 3; };';
+    const r = collectVerb(h, WRONG_TOKEN, { pre: `${evalSays(WRONG_TOKEN, rec)} ${unresolved}` });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toContain('was never derived');
+    expect(records(h), 'the record stands').toHaveLength(1);
+    expect(inoAt(path.join(slot, 'leaf')), 'the slot’s leaf, untouched').toBe(o.ino);
+    expect(eventsOf(h.home, 'collect').at(-1)!['refusal']).toBe('probe-unmeasured');
+    expect(eventsOf(h.home, 'collect').filter((e) => e['outcome'] === 'intent'), 'no second intent: it acted on nothing')
+      .toHaveLength(1);
+    expect(docOf(collectVerb(h, collectToken(h)).stdout), 'resolvable again, the next pass finishes from the record')
+      .toMatchObject({ collected: COL_ID, resumed: true });
+  });
 });
 
 describe.skipIf(!LINUX)('a record that is not provably this verb’s is never taken', () => {
@@ -9379,11 +9698,22 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
   local name slot rec rc why
   # 2 — LSTAT THE LEAF (Task 4's `_ws_collect_ident`): a real directory with
   # the witness's identity. A link, a file or a mismatch is never moved and
-  # never unlinked: it is the operator's.
+  # never unlinked: it is the operator's. NOTHING standing there, PROVEN, is
+  # no mismatch: the leaf the evaluation saw in this lock is gone, which is a
+  # retry (`state-changed`), and the next audit takes the witness-without-leaf
+  # arm (ruling R-f). An absence that cannot be proven is unmeasured.
   _ws_collect_ident "$orig" "$dev:$ino" "$bt"; rc=$?
   case "$rc" in
     0) : ;;
-    1) _ws_collect_refused "$id" "" witness-mismatch \
+    1) _ws_reclaim_absent "$orig"; rc=$?
+       if (( rc == 0 )); then
+         _ws_collect_refused "$id" "" state-changed \
+           "$orig, which the evaluation in this lock saw, is gone — nothing was moved; the next audit judges its witness alone" \
+           "$surface" "$actor" "$reason"
+         return 0
+       fi
+       (( rc != 2 )) || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${_WS_ABSENT_WHY:-whether anything stands at $orig could not be asked} — nothing was moved")"; return 1; }
+       _ws_collect_refused "$id" "" witness-mismatch \
          "$orig is not the real directory its witness names ($dev:$ino, born $bt) — a leaf that is not the witnessed one is never moved and never unlinked; it is the operator's" \
          "$surface" "$actor" "$reason"
        return 0 ;;
@@ -9479,9 +9809,22 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
   # moment ago (`_ws_collect_resume_eval`); the verb never re-derives it.
   local id="$1" rec="$2" q="$3" orig="$4" lctx="$5" surface="$6" actor="$7" reason="$8" name slot rc
   name="${rec##*/}"
-  # The reader answers 2 for a body naming another id and DERIVES the slot from
-  # the record's name (ruling G5): the compare is defence in depth.
-  if ! _ws_collect_record_read "$rec" || [[ "${_WS_QREC_ID-}" != "$id" || "${_WS_QREC_SLOT-}" != "$q/slot.$name" ]]; then
+  # THE READER'S FOUR ANSWERS (ruling R-a). 3 is UNMEASURED: the physical
+  # ~/.cc-tmp could not be resolved, so no slot was derived (it resolved at
+  # `_ws_collect_qdir` a moment ago, so only a race reaches this). That is a
+  # retry: `failed probe-unmeasured`, the record and its slot standing where
+  # they are, nothing moved or removed; never the operator's terminal word.
+  _ws_collect_record_read "$rec"; rc=$?
+  if (( rc == 3 )); then
+    _ws_reclaim_fail "$id" "" probe-unmeasured \
+      "$(_ws_leaf_why_line "the slot of record $name was never derived: the physical $HOME/.cc-tmp could not be resolved${_WS_QPATH_WHY:+ ($_WS_QPATH_WHY)} — the record and its slot stand; nothing was moved or removed")"
+    return 1
+  fi
+  # Every other failure (2 for a body naming another id, or a bad
+  # `checkouts=`), and a field that is not this id's, is `quarantine-kept`.
+  # The reader DERIVES the slot from the record's name (ruling G5): the
+  # compare is defence in depth.
+  if (( rc != 0 )) || [[ "${_WS_QREC_ID-}" != "$id" || "${_WS_QREC_SLOT-}" != "$q/slot.$name" ]]; then
     _ws_collect_refused "$id" "" quarantine-kept \
       "$rec is not a quarantine record this verb wrote for $id at $q/slot.$name — a record not provably this verb's is the operator's, never taken" \
       "$surface" "$actor" "$reason"
@@ -9588,6 +9931,15 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
       "$lc_surface" "$lc_actor" "$lc_reason"
     return 0
   fi
+  # ...and records that could not be listed, with no witness standing, never
+  # prove the id the collector's: unmeasured, BEFORE the lock, which is never
+  # opened (and so never made) for a name that may be foreign. A witness that
+  # stands puts the id in the population whatever the listing said.
+  if [[ ! -e "$wf" && ! -L "$wf" ]] && (( rrc != 0 )); then
+    _ws_reclaim_fail "$id" "" probe-unmeasured \
+      "no lock was taken: no witness stands for $id ($wf) and its quarantine records could not be listed, so whether the collector may lock $id was never asked — nothing was moved or removed"
+    return 1
+  fi
   # THE SHARED LOCK: `$REG/.reap-<id>.lock`, the one ws-reap, ws-reclaim,
   # ws-expire and ws-restore take, so none of them runs on this id at once.
   local lock="$REG/.reap-$id.lock" lfd rc=0
@@ -9665,17 +10017,17 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 
 The block's guards, and the case that pins each (Step 6 mutates every one):
 - **The pause** is read inside the lock by Task 5's `_ws_collect_paused`, before the evaluation and before the arms split, so a resume and a witness-only drop stop on it too.
-- **The population check** comes before the lock: no witness name and no record → `not-witnessed`, and `.reap-<id>.lock` is never created for a foreign name.
+- **The population check** comes before the lock: no witness name and no record → `not-witnessed`; no witness name and records that could NOT be listed (`_ws_collect_records_of` rc 2) → `failed probe-unmeasured` at exit 1. Either way `.reap-<id>.lock` is never opened, so never created, for a name that may be foreign.
 - **Step 1** compares `--expect` with the evaluation's token (`_ws_collect_fork`); `unmeasured` (or no verdict at all) is a `failed probe-unmeasured` with no intent; any other word passes through the ONE refusal point (ruling G11). Then `_ws_collect_mv_ok`: off Linux, or without `--no-copy`, nothing moves.
 - **The witness-only arm** (Task 5's DEP3): a fresh verdict with `_WS_COLLECT_LEAF=absent` and no record is compare-and-drop and the temp-file reap alone — no quarantine, record or slot.
-- **Step 2** (`_ws_collect_ident` on the physical leaf) never moves or unlinks a link, a file or a mismatch.
+- **Step 2** (`_ws_collect_ident` on the physical leaf) never moves or unlinks a link, a file or a mismatch: `refused witness-mismatch`, TERMINAL. NOTHING standing there, PROVEN by `_ws_reclaim_absent`, is the leaf the evaluation saw vanishing since: `refused state-changed`, retried, and the next audit takes the witness-without-leaf arm (ruling R-f). An absence that cannot be proven is `failed probe-unmeasured`.
 - **Step 3a** asks `_ws_leaf_checkouts` of the ORIGINAL path; the accepted pairs ride the record into step 6's alias.
 - **Step 3b–3c:** the slot is NAMED (`_ws_collect_slot_path`), the record is written under `$(_ws_collect_qrec_dir)` and READ BACK field for field, then the slot is made by `_ws_collect_slot_make` (exclusive); a slot name that stood is not this verb's, so only the record is dropped.
 - **Step 4** is Task 4's `_ws_collect_move`: 0 proven moved; 1 proven NOT moved → the empty slot and the record are cleared, `failed probe-unmeasured`; 2 → whatever reached the slot is KEPT with its record, `refused quarantine-kept` (ruling T8 OPEN5), and an empty slot is cleared.
 - **Step 5** asks, in order: the registry (`_ws_collect_registered`: `.child` and `.uuid` by direct lookup, the slug behind the wildcard-listing control); the probe on the TMPDIR spelling and on the slot's leaf; the row rule on the LOGICAL pre-move spelling (ruling G6); the mount table (a mount is unmeasured, ruling T6 OPEN8); identity LAST, whose failure KEEPS the slot's leaf (`refused quarantine-kept`, never moved back). Any other doubt → `_ws_collect_putback`: Task 4's move reversed with the RECORD's identity, then the empty slot and the record are cleared; an original path retaken since the move → `refused quarantine-kept`, TERMINAL (ruling T8 OPEN4); otherwise `failed quarantine-kept`.
 - **Step 6** passes the witness's dev:ino and the alias (ruling G8); a refusal (`1`, nothing under the leaf removed) moves it back (ruling T6 OPEN11); an unmeasured answer (`2`, possibly part-removed) KEEPS the record so the next pass resumes.
 - **The order:** the slot's leaf proven gone → `rmdir` of the slot (never recursive) → compare-and-drop → the temp-file reap → the record dropped LAST; any step that cannot complete keeps the record (`quarantine-kept`) so the next pass finishes from it.
-- **The resume** re-reads the record (its id this id, its slot DERIVED as `<Q>/slot.<record name>`, ruling G5) and branches on Task 5's phase: `moved` → the slot's leaf asked again (anything else → `quarantine-kept`, untouched), then steps 5 and 6; `unmoved` → the slot and record cleared, the witness KEPT, `refused state-changed` (ruling T6 OPEN10); `removed` → the order from the slot's rmdir.
+- **The resume** re-reads the record (its id this id, its slot DERIVED as `<Q>/slot.<record name>`, ruling G5). The reader's rc 3 (the physical `~/.cc-tmp` could not be resolved, ruling R-a) is `failed probe-unmeasured` at exit 1, the record and its slot standing, nothing moved or removed; rc 1, rc 2 or a field that is not this id's is `refused quarantine-kept`. The reader's two other callers here already answer any non-0 as a retried failure, never a terminal refusal: step 3b's read-back drops the record it just wrote and answers `failed probe-unmeasured` before anything moves, and `_ws_collect_after_move` keeps the record (`failed quarantine-kept`, ruling T6 OPEN7). Then it branches on Task 5's phase: `moved` → the slot's leaf asked again (anything else → `quarantine-kept`, untouched), then steps 5 and 6; `unmoved` → the slot and record cleared, the witness KEPT, `refused state-changed` (ruling T6 OPEN10); `removed` → the order from the slot's rmdir.
 - **`set -u`:** every global another task sets (`REAP_*`, `_WS_WIT_*`, `_WS_QREC_*`, `_WS_Q`, `_WS_COLLECT_*`, `_WS_MOVE_WHY`, `_WS_COLLECT_ROWS_WHY`) is read as `${X-}`, so an evaluation or reader that leaves one unset ends in a refusal or a failure document, never an unbound-variable exit mid-lock.
 
 - [ ] **Step 4b: Declare the three RETRYABLE words in L0 (the commit of their first journal sites, ruling G2)**
@@ -9698,14 +10050,40 @@ In `shared/api.ts`:
   'not-witnessed':
     'ccrc has no record of handing out a temporary directory under this id, so there is nothing for it to clean up. Nothing was removed.',
   'registered':
-    'A workspace is registered under this id again, so the temporary directory there belongs to that workspace and ccrc will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
+    'A workspace with this id exists again, so the temporary directory there belongs to that workspace and ccrc will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
   'changed-recently':
     'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
 ```
 
+Each sentence is checked against `lifecycle-refusal-word`'s "no bare token echoed back" case: none of the three may contain its own token. `'not-witnessed'` and `'changed-recently'` do not (the second says "changed recently", with a space, which is not its token); `'registered'` must never say "registered".
+
 In `server/test/lifecycle-refusal-word.test.ts`: in `ALL_TOKENS`, directly below Task 5's `  'witness-mismatch': true, 'quarantine-kept': true,`, add `  'not-witnessed': true, 'registered': true, 'changed-recently': true,`, and raise `expect(TOKENS.length).toBe(…)` by THREE from what your tree reads: 21 → 24.
 
 **THE CITATION CASE.** The three union lines sit above README's `shared/api.ts` map anchors, as Task 5's did. Repair them BY CONTENT, exactly as Task 5's Step 6 does: find the sentence with `grep -n 'shared/api.ts:[0-9]' README.md`, read the cited lines' new numbers with the `grep -n` that step names, re-point the sentence, and re-run `cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'every line citation is anchored'` until it is green. If anything other than README reds there, STOP and report: a frozen-corpus census is never adjusted here.
+
+- [ ] **Step 4c: Name the shadow in Task 2's comment above `_WS_RCL_CRUMB=''` (ruling R-g)**
+
+`cmd_ws_collect`'s `local _WS_RCL_ACT=collect _WS_RCL_CRUMB=''` makes Task 2's "Set by `_ws_reclaim_locked` and by the shared tail, and by nothing else" false. Ruling R-g licenses this ONE comment-only edit in the RECLAIM region, above `_ws_reclaim_failed_json` (`:28620` at `b0647d850`, far below `B`; locate it with `grep -n '^_WS_RCL_CRUMB=' ccd/ccd`, one line). No code line changes, and the edit adds one line below the boundary, so the boundary hash (E9b) is unchanged.
+
+In `ccd/ccd`, replace the comment's last four lines, from the line that starts `# that absence as unmeasured, never as either value.` through the line `# exported value can never reach a document.` (directly above `_WS_RCL_CRUMB=''`), with:
+
+```bash
+# that absence as unmeasured, never as either value. Set by `_ws_reclaim_locked`
+# and by the shared tail; `cmd_ws_collect` shadows it to '' with `local` (a
+# collection has no breadcrumb). So `ws-expire`'s own pre-breadcrumb documents,
+# and every `ws-collect` document, carry no key. Assigned here, when ccd is
+# read, so an exported value can never reach a document.
+```
+
+Then measure it:
+
+```bash
+grep -cF '`cmd_ws_collect` shadows it to' ccd/ccd                  # 1: the comment names the shadow
+grep -cF 'and by the shared tail, and by nothing else' ccd/ccd      # 0: the false clause is gone
+grep -c "^  local _WS_RCL_ACT=collect _WS_RCL_CRUMB=''$" ccd/ccd    # 1: the shadow it names
+```
+
+No mutation row: a comment is not a guard. The shadow itself is pinned by row 5.
 
 - [ ] **Step 5: Run the tests to verify they pass, then the gates**
 
@@ -9748,7 +10126,7 @@ sed -n "3,${B}p" ccd/ccd | sha256sum      # equals E9b: nothing at or above the 
 Expected:
 - All five collect files pass in full on Linux. On macOS (advisory legs) only the cases not marked Linux run — `off Linux, or without --no-copy, nothing moves`'s first case, `the registry question itself` and the three declarations — and they pass; the rest skip.
 - `ccd-refusal-scan` passes: the seventh verb's body and its five locked functions are sliced above their re-measured floors, the sanctioned set is exactly 16 and every member stands, the two emits are counted, and the cross-language harvest finds every declared word at a literal site — `not-witnessed`, `registered` and `changed-recently` among them, through (h)'s COLLECT harvest — and no word outside the vocabularies.
-- `wsaudit` and `ccd-wsaudit-nonpoison` pass with no edit here: the verb's one literal refusal object is the flock decline's `in-progress`, already counted, and Task 5's commit taught the nonpoison scan the COLLECT block (ruling G2). `lifecycle-refusal-word` passes at 24.
+- `wsaudit` and `ccd-wsaudit-nonpoison` pass with no edit here: the verb's one literal refusal object is the flock decline's `in-progress`, already counted, and Task 5's commit taught the nonpoison scan the COLLECT block (ruling G2). `lifecycle-refusal-word` passes at 24, its echo check included: none of the three new sentences contains its own token (the draft's `registered` sentence did, which would red that check at this task's own gate).
 - `ccd-die-containment` passes unchanged: its pinned `_`-prefixed can-die set does not grow (only `cmd_ws_collect` dies, before the lock, and it is never captured in `$( )`).
 - `ccd-lifecycle-contain` passes unchanged: the verb writes `meas.resumed` alone, already declared.
 - `ccd-reg-get-census` passes unchanged: no `_reg_get` was added.
@@ -9772,7 +10150,7 @@ One mutation at a time, each reverted before the next. Files: V `ccd-ws-collect-
 | 8 | `cmd_ws_collect`: `_ws_reclaim_contained _ws_collect_locked "$token" …` → `_ws_collect_locked "$token" …` | V | "the locked body runs CONTAINED…": `expected '…' to match /\n  _ws_reclaim_contained _ws_collect_locked "\$token" "\$id" /` |
 | 9 | `_ws_collect_locked`: delete the `_ws_collect_mv_ok \` / `\|\| { …; return 1; }` statement | V | "a box that is not Linux…" and "a box whose mv offers no --no-copy…": `the quarantine: expected true to be false` (the quarantine is made, and only `_ws_collect_move`'s own `_ws_collect_mv_ok` stops the move) |
 | 10 | `_ws_collect_locked`: in that statement, replace the detail with `mv cannot be used — nothing was moved` | V | "a box whose mv offers no --no-copy…": `expected 'mv cannot be used — nothing was moved' to contain '--no-copy'` |
-| 11 | `_ws_collect_fresh` step 2: replace the `1) _ws_collect_refused "$id" "" witness-mismatch …; return 0 ;;` arm with `1) : ;;` | M | "a symbolic link…" and "another directory…": `refused before the record: expected [ 'locked', 'consented', 'recorded', 'slotted', … ] to deeply equal [ 'locked', 'consented' ]` (what moves is not proven the witnessed leaf; the file case is backstopped: the checkout question cannot resolve a file and answers unmeasured) |
+| 11 | `_ws_collect_fresh` step 2: replace the whole `1)` arm (from `1) _ws_reclaim_absent "$orig"; rc=$?` through its last `return 0 ;;`) with `1) : ;;` | M | "a symbolic link…" and "another directory…": `refused before the record: expected [ 'locked', 'consented', 'recorded', 'slotted', … ] to deeply equal [ 'locked', 'consented' ]` (what moves is not proven the witnessed leaf; the file case is backstopped: the checkout question cannot resolve a file and answers unmeasured) |
 | 12 | `_ws_collect_fresh` step 3a: delete `_ws_leaf_checkouts "$orig"; rc=$?` and its `case … esac` | M | "a refusal: containment-unproven…": `expected [ '…/.ccd-quarantine/slot.…/leaf' ] to deeply equal [ '…/demo-quiet-reef' ]` (only the helper's own question, of the moved tree, is asked) |
 | 13 | step 3b: `_ws_collect_record_write "$id" "$slot" "$token" \` / `\|\| { …; return 1; }` → `_ws_collect_record_write "$id" "$slot" "$token" \|\| :` | M | "a record that cannot be written…": `expected '…did not read back as written…' to contain 'could not be written'` (the read-back backstops the act; the detail reds) |
 | 14 | step 3b: delete the read-back `if ! _ws_collect_record_read "$rec" \|\| … fi` block | M | "a record that does not read back as written…": `expected '…could not be read back after the move…' to contain 'did not read back as written'` (the leaf was moved, and the record is kept) |
@@ -9824,6 +10202,11 @@ One mutation at a time, each reverted before the next. Files: V `ccd-ws-collect-
 | 60 | `_ws_collect_after_move`: delete the `if (( rc == 1 )) && [[ "$_WS_REPROVE_WORD" == quarantine-kept ]]; then … fi` block | R | "the slot's leaf swapped after the move…": `expected 1 to be 0` (what the slot held is moved to the id's path, and the restore cannot be proven) |
 | 61 | `_ws_collect_putback`: delete its `if (( mrc == 1 && arc == 1 )); then … fi` block (the retaken path) | R | "a path retaken since the move is never clobbered…": `expected 1 to be 0` (kept as a `failed`, not the terminal refusal ruling T8 OPEN4 rules) |
 | 62 | `_ws_collect_after_move`: delete `_ws_collect_gap proven "$id" "$slot"`; then, separately, `_ws_collect_finish`: delete `_ws_collect_gap dropped "$id" "$slot"` | V | "passes every step, in order…": `expected [ …, 'moved', 'removed', … ] to deeply equal [ …, 'moved', 'proven', 'removed', … ]`, then `expected [ …, 'witnessed' ] to deeply equal [ …, 'witnessed', 'dropped' ]` |
+| 63 | `_ws_collect_fresh` step 2's `1)` arm: delete the `if (( rc == 0 )); then … fi` block (ruling R-f's vanished leaf) | M | "nothing stands at step 2's lstat…": `expected 'witness-mismatch' to be 'state-changed'` (a retry journaled as the terminal word) |
+| 64 | `_ws_collect_fresh` step 2's `1)` arm: delete `(( rc != 2 )) \|\| { _ws_reclaim_fail "$id" "" probe-unmeasured …; return 1; }` | M | "an absence that cannot be proven…": `expected 0 to be 1` (it falls to the terminal `refused witness-mismatch`) |
+| 65 | `_ws_collect_resume`: delete the `if (( rc == 3 )); then … fi` block (ruling R-a) | S | "a record whose slot cannot be derived…": `expected 0 to be 1` (the reader's rc 3 falls to the terminal `refused quarantine-kept`) |
+| 66 | `cmd_ws_collect`: delete the `if [[ ! -e "$wf" && ! -L "$wf" ]] && (( rrc != 0 )); then … fi` block | V | "no witness, and records that cannot be listed…": `the reap lock file: expected true to be false` (the lock is opened, and so made, for a name outside the population; the evaluation then answers unmeasured inside it) |
+| 67 | Step 4b: restore the draft's `'registered'` sentence, `'A workspace is registered under this id again, …'` | V | "the three RETRYABLE words…" › `registered`: `registered echoes its own token at a person: expected 'A workspace is registered under this id again…' not to contain 'registered'` (`lifecycle-refusal-word`'s echo case reds the same way) |
 
 Revert each mutation, re-stamp (`bash ccd/ccrc restamp ccd/ccd`), and re-run Step 5's commands green.
 
@@ -10618,7 +11001,7 @@ At the end of `EXEC_WHITELIST.ccd`, directly after the last grant from (c2), add
 **`server/src/remote/runner.ts`.** Directly after `'ws-expire': 240_000,`, add:
 
 ```ts
-  // The child temp-root collector (spec 2026-09-22 §5.6): a walk bounded at 60 s, a quarantine move, and the removal of
+  // The child temp-root collector (spec 2026-09-22 §5.6): a walk bounded at 30 s, a quarantine move, and the removal of
   // a tree that can hold gigabytes, all under the reap lock. It earns ws-reclaim's budget, not the flat 90 s it would
   // silently inherit without this row. Its audit is `ws-audit` and keeps that verb's row.
   'ws-collect': 240_000,
@@ -10707,6 +11090,7 @@ MSG
   - A registry at 0300.
   - A `cdk.out` project.
   - The measured recycled-admin-name case through the full verb.
+  - A clone and its own linked worktree, BOTH inside the leaf, collected through the full verb: git spells the worktree's admin directory ABSOLUTELY, by the leaf's pre-move path (findings safety-collector F3, security SEC-1).
 - **The three scan pins** R67 requires: one TMPDIR composer, one `.child` writer, and the marker read placed before the `mkdir`. R67 says "Task 0 pins three facts by scan". This plan's Task 0 is the coordinator's entry-condition task, so the pins live here instead. That is the departure `scan-pins-in-task-8`. Each pin was measured red under its mutation against `b0647d850`'s `ccd/ccd` while this task was drafted.
 - **How an interleaving is forced.** `_ws_collect_gap <point> <id>` is a no-op on the box, which the verb calls at each named step boundary. The precedent is `_ws_expire_return_gap` (`ccd/ccd:31241`; `grep -n '^_ws_expire_return_gap() { :; }' ccd/ccd`), forced by `server/test/ccd-ws-expire-return-race.test.ts:33` (`grep -n 'const GAP = ' server/test/ccd-ws-expire-return-race.test.ts`). A case redefines the seam:
   - to run an injection in a subshell (`gapAt`);
@@ -10714,7 +11098,7 @@ MSG
   - or to SIGKILL every shell from the seam up to the top `bash -c` (`crashAt`). This was measured to stop the verb dead, even with nested subshells in between.
 
   The seam is Task 6's code, and so is `_ws_collect_mountinfo` (ruling G7). This task adds no `ccd/ccd` line, and its entry conditions stop it when either seam is missing.
-- **What is asserted:** what stands on disk, by inode. That means the new child's leaf, the kept slot, the record, the witness, and a decoy. It is never the verb's word alone. The words are the coordinator's rulings (T8 OPEN4 and OPEN5, applied in Task 6). A spawn at the `locked` boundary answers `registered`. A file or link swapped in answers `witness-mismatch` before the move, and `quarantine-kept` once it reached a slot; the cases here swap at `slotted`, so it reaches one. A mount point at or under the slot's leaf answers `failed` `probe-unmeasured` after a proven restore. A record whose original path is retaken is `quarantine-kept`: terminal for the verb, kept for the operator, and answered on every audit. The disk assertion still carries each mutation's red.
+- **What is asserted:** what stands on disk, by inode. That means the new child's leaf, the kept slot, the record, the witness, and a decoy. It is never the verb's word alone. The words are the coordinator's rulings (T8 OPEN4 and OPEN5, applied in Task 6). A spawn at the `locked` boundary answers `registered`. A file or link swapped in answers `witness-mismatch` before the move, and `quarantine-kept` once it reached a slot; the cases here swap at `slotted`, so it reaches one. A leaf that is merely GONE at step 2's lstat, after the evaluation saw it, is no swap: it answers `state-changed` and is retried, never `witness-mismatch`, and the next audit takes the witness-without-leaf arm (ruling R-f; Task 6's own suite pins it, and no case here forces it). Only something ELSE standing at the id is `witness-mismatch`. A mount point at or under the slot's leaf answers `failed` `probe-unmeasured` after a proven restore. A record whose original path is retaken is `quarantine-kept`: terminal for the verb, kept for the operator, and answered on every audit. The disk assertion still carries each mutation's red.
 - **Where it runs.** Linux only, and only where `mv` has `--no-copy` (R68). A runner without it would skip silently, so a CONTROL case reds on any Linux runner that lacks it. Cases that need an unlistable registry skip under uid 0.
 - **R56.** Every case is in a new file. Each file is sized to finish well under 500 s alone (estimates: the pins about 3 s, the crash file about 200 s, each other file under 150 s). Step 11 measures this.
 
@@ -10725,7 +11109,7 @@ MSG
 - Create: `server/test/ccd-collect-race-forge.test.ts`: forged record and slot, and the file and link swaps.
 - Create: `server/test/ccd-collect-race-substrate.test.ts`: EXDEV, no `--no-copy`, and mountinfo.
 - Create: `server/test/ccd-collect-race-ids.test.ts`: the nested id, the 0300 registry, and `cdk.out`.
-- Create: `server/test/ccd-collect-race-admin.test.ts`: the recycled admin name through the full verb.
+- Create: `server/test/ccd-collect-race-admin.test.ts`: the recycled admin name through the full verb, and a clone with its own linked worktree inside the leaf, collected.
 - Create: `server/test/ccd-collect-recycle-pins.test.ts`: R67's three scan pins.
 - No `ccd/ccd` edit. The seams this suite drives are Task 6's (ruling G7), in the COLLECT region Task 4 opened.
 - Test, as regressions: `server/test/ccd-child-tmpdir.test.ts`, `ccd-child-tmproot-witness.test.ts`, `ccd-leaf-remove.test.ts`, `ccd-leaf-checkouts.test.ts`, `typecheck-tests.test.ts`.
@@ -10766,12 +11150,13 @@ MSG
   - (b) A restore that is NOT proven keeps the record and the slot. Where the original path is RETAKEN (something stands there), or a slot holds anything that is not the witnessed leaf, the verb answers `refused` `quarantine-kept` at exit 0: terminal, kept for the operator, answered on every audit (rulings T8 OPEN4 and OPEN5). Any other unproven restore (an `mv` that claims a move and does not make it, a restore landing elsewhere) answers `failed` `quarantine-kept` at exit 1 (ruling T6 OPEN7); no case here forces that shape.
   - (c) A move that never happened leaves the leaf at the id with the record's inode and the slot empty. It is undone like (a): rmdir the slot, drop the record. On a RESUME whose move never happened, the verb then answers `refused` `state-changed`, the witness kept (ruling T6 OPEN10), and the next audit judges the leaf afresh.
   - (d) The audit answers a kept or malformed record before it judges the id's leaf. `quarantine-kept` is journaled as `collect` `refused` with verb `ws-audit`. A record whose original path is retaken answers `quarantine-kept` on every audit while that path stands (ruling T8 OPEN4). These cases read it state-based: once the recycled child's own tail has removed its leaf, the record resumes, as (i) says.
-  - (e) `_ws_collect_record_read` answers rc 2 when the record's `id=` differs from its file name's id (ruling G5; Task 4's mutation A6 pins it). The record carries no `slot=`: its slot is derived from the record's NAME and the physical quarantine directory. Every path is taken from the record's NAME, never its body: the witness's own trust rule.
+  - (e) `_ws_collect_record_read` answers rc 2 when the record's `id=` differs from its file name's id (ruling G5; Task 4's mutation A6 pins it). Its four answers are ruling R-a's: 0 parsed; 1 absent; 2 malformed, this id mismatch and a bad `checkouts=` encoding included, which every caller reads as `quarantine-kept`; 3 unmeasured, when the physical `~/.cc-tmp` cannot be resolved, which every caller reads as unmeasured and retries, never as kept. The audit's caller words its rc-2 refusal "… cannot be read as ccd writes it …". The COPIED case asserts that wording, so that the READER is shown to have refused it, not a later compare. No case here forces rc 3. The record carries no `slot=`: its slot is derived from the record's NAME and the physical quarantine directory. Every path is taken from the record's NAME, never its body: the witness's own trust rule.
   - (f) A record and its slot share one `<ns>.<pid>` suffix.
   - (g) The `--no-copy` check is Task 4's `_ws_collect_mv_ok`: it asks `mv` for the option (its `--help`), not for its version. It runs at the audit and inside the lock before the record is written. The leaf's move and the restore are both Task 4's `_ws_collect_move`, through the ONE exempted rename function `_ws_collect_mv` (ruling G3). It and the check call `mv` by name, so a shim on PATH meets them.
   - (h) The witness writer's stale temp files are reaped during a collection of their own id.
   - (i) While a recycled child holds the slug, no audit offers a token for its record. Once the child's own tail has removed its leaf and dropped the witness, the record resumes.
   - (j) A resume never compares a tree token recomputed over the slot's leaf (the move re-stamps its ctime).
+  - (k) The alias also covers a git directory that lies INSIDE the leaf's pre-move spelling. A linked worktree of a clone that is itself in the leaf names its admin directory absolutely, by the pre-move path. After the move, `_ws_leaf_checkout_one` reads that spelling inside the moved leaf, but only while nothing stands at the pre-move spelling (Task 4's 4E, findings safety-collector F3 and security SEC-1). Without it, the gitdir's absence ask refuses the leaf's own tree in the slot, the leaf is put back as `containment-unproven`, and the audit licenses it again after every fresh floor.
 - Produces: `server/test/collectRaceFixture.ts`, for these suites and for any later ccd-side collector case:
   ```ts
   export const LINUX: boolean; export const NO_COPY: boolean; export const ROOT_USER: boolean;
@@ -11399,7 +11784,10 @@ describe.skipIf(!LINUX || !NO_COPY)('a forged record or slot is never taken — 
     const other = orphanLeaf(h, OTHER);
     const forged = `${OTHER}.${c.rec.slice(COL_ID.length + 1)}`;
     fs.copyFileSync(path.join(recordDirOf(h), c.rec), path.join(recordDirOf(h), forged));
-    expect(docOf(collectAudit(h, OTHER).stdout)['verdict'], 'the id in the body is not the id in the name').toBe('quarantine-kept');
+    const copied = docOf(collectAudit(h, OTHER).stdout);
+    expect(copied['verdict'], 'the id in the body is not the id in the name').toBe('quarantine-kept');
+    // The READER refused it (rc 2, ruling R-a), not the resume eval's or the verb's later id compare, which backstop it.
+    expect(String(copied['detail']), 'refused by the reader, not by a later compare').toContain('cannot be read as ccd writes it');
     // The genuine record still resumes its own id; the copy touches neither id's leaf.
     expect(lastVerdict(settle(h)), 'the genuine id finishes').toBe('not-witnessed');
     expect(devinoOf(c.kept)).toBeNull();
@@ -11813,6 +12201,8 @@ describe.skipIf(!LINUX || !NO_COPY)('a project named `cdk.out`', () => {
 
 - [ ] **Step 7: Write the recycled-admin suite**
 
+The suite also collects a clone and its own linked worktree, both inside the leaf, through the full verb. git writes that worktree's `.git` file with an ABSOLUTE gitdir that spells the leaf's pre-move path, measured on git 2.43 in a fixture HOME (findings safety-collector F3 and security SEC-1). An interrupted test run leaves this shape in a child's TMPDIR, and assumption (k) is what lets it go.
+
 git prunes and recycles the admin name for real, inside the gaps. This was measured with git in a scratch directory while the task was drafted. After `worktree prune` drops the moved tree's admin directory, a `worktree add` at `<id>/still-harbor` re-creates `worktrees/still-harbor` with the back-link `<id>/still-harbor/.git`, the pre-move spelling. The leaf's own `wt` case re-creates `worktrees/wt` with the very back-link value the pre-move ask accepted.
 
 Create `server/test/ccd-collect-race-admin.test.ts`:
@@ -11903,6 +12293,24 @@ describe.skipIf(!LINUX || !NO_COPY)('the checkout question across the move', () 
     expect(docOf(r.stdout)['refused'], r.stdout).toBe('quarantine-kept');
     expect(fs.readFileSync(path.join(keptLeaf(), 'wt', 'g1.txt'), 'utf8'), 'the kept tree is whole').toBe('the dead child\'s own scratch\n');
     expect(fs.existsSync(path.join(o.leaf, 'wt', '.git')), 'and the recycled tree is untouched').toBe(true);
+  }, 240_000);
+
+  it('a CLONE and its own linked worktree, BOTH inside the leaf — git spells the admin directory ABSOLUTELY, by the pre-move path — collected', () => {
+    const o = orphanLeaf(h);
+    const origin = h.makeRepo('demo2');
+    const repo = path.join(o.leaf, 'repo');
+    h.git(h.home, 'clone', '-q', origin, repo);
+    h.git(repo, 'worktree', 'add', '-q', '-b', 'ws/g1', path.join(o.leaf, 'wt'));
+    expect(fs.readFileSync(path.join(o.leaf, 'wt', '.git'), 'utf8').trim(),
+      'the CONTROL: the worktree names its admin directory absolutely, under the leaf\'s pre-move path')
+      .toBe(`gitdir: ${fs.realpathSync(path.join(repo, '.git', 'worktrees', 'wt'))}`);
+    const r = collectVerb(h, tokenOf(h), COL_ID);
+    expect(docOf(r.stdout)['collected'], r.stdout).toBe(COL_ID);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(devinoOf(o.leaf), 'the leaf went, the clone and its worktree with it').toBeNull();
+    expect(slotsOf(h)).toEqual([]);
+    expect(recordsOf(h)).toEqual([]);
+    expect(fs.existsSync(path.join(origin, 'README.md')), 'the clone\'s origin, outside the leaf, is untouched').toBe(true);
   }, 240_000);
 });
 ```
@@ -12130,7 +12538,7 @@ cd server && ./node_modules/.bin/vitest run test/ccd-collect-race-admin.test.ts
 
 Expected:
 - **The pins** pass, 11 of 11. They read only premises that existed at `b0647d850`. A red there means Tasks 4, 5, 6 or 7 added a TMPDIR composer, a `.child` writer or a variable-field `_reg_set`. Each is a real finding: review it before you touch the pin.
-- **Every file** passes (59 cases). The suite pins what Tasks 4, 5 and 6 built, so its red is Step 12's table.
+- **Every file** passes (60 cases: the 59 drafted plus the clone-and-worktree case; R-j, so the count is measured, never copied). The suite pins what Tasks 4, 5 and 6 built, so its red is Step 12's table.
 - **When a seam point is not where these cases expect it** (Task 6 owns `_ws_collect_gap` and its points, ruling G7), these red:
   - the trace case: `expected [ … ] to deeply equal [ [ 'locked', '10001' ], … ]`;
   - an injection case: `the CONTROL: at its point: expected [ … ] to include '<point>'` (or a `gapErrorsOf`/disk assertion first);
@@ -12163,7 +12571,7 @@ cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
 ```
 
 Expected:
-- PASS everywhere: 59 new cases, and the regressions unchanged.
+- PASS everywhere: 60 new cases (R-j: measured), and the regressions unchanged.
 - Each new file's `Duration` is under 500 s. If one is not, move its slowest `describe` into another new file (`ccd-collect-race-<subject>-b.test.ts`) and re-run both. Never raise a case's timeout to make a file fit.
 - `typecheck-tests` is green. The new files type-check under `test/tsconfig.tests.json`, as they did against `b0647d850`'s helpers while this task was drafted.
 - Record the seven durations for the wave-done.
@@ -12190,7 +12598,7 @@ Each row is ONE edit to `ccd/ccd`. The file is clean at this point (Task 7's com
 | 10 | Answer a record whose slot holds no leaf `quarantine-kept` | same | the `recorded`, `slotted`, `removed`, `emptied` and `witnessed` crash cases: `<rounds>: expected 'quarantine-kept' to be 'not-witnessed'` |
 | 11 | In the resume's re-proof (the function the audit and the verb share), skip the slot leaf's dev, ino and btime comparison with the record | `cd server && ./node_modules/.bin/vitest run test/ccd-collect-race-forge.test.ts` | the FORGED SLOT LEAF case: `<rounds>: expected '<verdict>' to be 'quarantine-kept'`, and then the planted tree is gone |
 | 12 | Retired by ruling G5: the record carries no `slot=`, so there is no body path to take, and the OUTSIDE case is deleted. The number is kept so that the other rows keep theirs. | — | — |
-| 13 | In `_ws_collect_record_read`, drop the check that `id=` equals the file name's id | same | the COPIED case: `the id in the body is not the id in the name: expected '<verdict>' to be 'quarantine-kept'` |
+| 13 | In `_ws_collect_record_read`, drop the check that `id=` equals the file name's id | same | the COPIED case: `refused by the reader, not by a later compare: expected 'the quarantine record …/demo-quiet-river.<ns>.<pid> names demo-calm-mesa, not demo-quiet-river — …' to contain 'cannot be read as ccd writes it'`. Under this mutation the verdict stays `quarantine-kept`, because the resume eval's own id compare backstops it, so the detail assertion is what reds. |
 | 14 | In `_ws_collect_record_read`'s caller at the audit, read rc 2 (malformed) as rc 1 (absent) | same | the MALFORMED case: `<rounds>: expected '<verdict>' to be 'quarantine-kept'` (the audit judged the leaf and minted a token) |
 | 15 | Add a slot listing to the audit's population: each `Q/slot.<id>.<ns>.<pid>` with no record is resumed by its own leaf's identity | same | the FORGED SLOT case: `ENOENT … precious.txt`. The unrecorded slot was taken. |
 | 16 | Prove the move by `mv`'s exit status: in `_ws_collect_move`, return 0 when `_ws_collect_mv` answers 0, before `_ws_collect_ident` is asked of `<slot>/leaf` | same | the REACHED-THE-SLOT case: `the move was never proven: expected [ …, 'moved', … ] not to include 'moved'`. The FILE and LINK cases red too: `nothing that is not the witnessed directory is taken: …: expected 'demo-calm-mesa' to be undefined` (the swapped-in entry reached `_ws_leaf_remove`'s link/file arm and was unlinked), or `expected '<word>' to be 'quarantine-kept'`. |
@@ -12210,6 +12618,7 @@ Each row is ONE edit to `ccd/ccd`. The file is clean at this point (Task 7's com
 | 30 | At step 6, pass `_ws_leaf_remove` no alias | `cd server && ./node_modules/.bin/vitest run test/ccd-collect-race-admin.test.ts` | the CONTROL: `expected undefined to be 'demo-calm-mesa'`. The leaf's own worktree was refused after the move. |
 | 31 | Drop the alias's condition (1), "the same admin directory with the same back-link value was accepted by the pre-move ask" | same | the MEASURED case: `expected 'demo-calm-mesa' to be undefined`. The session's uncommitted work was deleted. |
 | 32 | Drop the alias's condition (2), "`_ws_reclaim_absent` proves nothing stands at the pre-move spelling" | same | the condition-2 case: `expected undefined to be 'quarantine-kept'` |
+| 32a | In `_ws_leaf_checkout_one`, delete Task 4's INSIDE-THE-LEAF alias arm: the `if [[ -n "$alias" … "${alias%/}/"* … ]]; then … fi` block directly above the gitdir's `_ws_reclaim_absent "$gd"` ask (Task 4's 4E, assumption (k)) | same | the CLONE case: `expected undefined to be 'demo-calm-mesa'`. The worktree's absolute gitdir still spells the pre-move path, which no longer exists, so the helper refused the leaf's own tree in the slot and the verb put the leaf back (`containment-unproven`). |
 | 33 | In `cmd_ensure`, add the line `  : "$(_child_tmpdir "$id")"` directly under `cmd_ensure() {` | `cd server && ./node_modules/.bin/vitest run test/ccd-collect-recycle-pins.test.ts` | `` `_child_tmpdir` is called from exactly ONE line…``: `expected [ …(2) ] to deeply equal [ Array(1) ]` (measured at `b0647d850`) |
 | 34 | In `_spawn`, add the line `  export TMPDIR="$HOME/.cc-tmp/$1"` directly under `_spawn() {` | same | `no other line composes a TMPDIR…`: `expected [ …(2) ] to deeply equal [ Array(1) ]` (measured) |
 | 35 | In `cmd_ws_restore`, add the line `  _reg_set "$id" child "$run"` directly under `cmd_ws_restore() {` | same | `the marker is set by name at one line…`: `expected [ …(2) ] to have a length of 1 but got 2` (measured) |
@@ -12251,7 +12660,8 @@ are kept and listed. A file or a link swapped in at the id is never
 unlinked. EXDEV and a mv without --no-copy copy nothing. A mount under
 the slot's leaf sends it back. A nested id, an unlistable registry and
 a cdk.out project are never mistaken. A recycled admin name never makes
-a moved foreign worktree the leaf's own.
+a moved foreign worktree the leaf's own, and a clone with its own linked
+worktree inside the leaf is collected whole.
 
 The three premises the proof rests on are pinned by scan: one TMPDIR
 composer, one .child writer, and the marker read before the mkdir.
@@ -12333,7 +12743,7 @@ MSG
   # from the tail's containment proof. So this is
   ```
 
-  The next line (`` # `_ws_reclaim_resolve`'s own entry, exactly: POSIX mode by ASSIGNMENT, ``) stays as it is. If an earlier task of this wave already reworded this sentence, keep that wording and apply only this scoping: the sentence speaks for the eight callers (Task 4's 4B made the census eight, adding `_ws_collect_qdir`), the names are examples, and the two `wdreal`s are label prefixes. Report it in the wave-done.
+  The next line (`` # `_ws_reclaim_resolve`'s own entry, exactly: POSIX mode by ASSIGNMENT, ``) stays as it is. If an earlier task of this wave already reworded this sentence, keep that wording and apply only this scoping: the sentence speaks for the eight callers (Task 4's 4B made the census eight; the eighth is `_ws_collect_qpath`, the COLLECT region's only call site), the names are examples, and the two `wdreal`s are label prefixes. Report it in the wave-done.
 
 - [ ] **Step 2: Correct `_ws_leaf_read_small`'s header (F2, F3)**
 
@@ -12710,6 +13120,8 @@ MSG
 - Modify: `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md`
 - Modify: `docs/superpowers/programs/child-reclamation-contract.md` (append "### §14 as built (wave 7, run 347)" at the end of §14 ONLY; sections 1 to 14 are never edited)
 - Modify: `README.md`, `CLAUDE.md`, `agent/CLAUDE.md`
+- Create: `server/test/ws-collect-prose.test.ts`, the prose pin Task 7 hands this task (ruling T7 OPEN4), modelled on `server/test/ws-expire-prose.test.ts`
+- Test, as regressions: `server/test/ws-expire-prose.test.ts` and `server/test/child-reclaim-prose.test.ts`, which pin the CLAUDE.md SAFETY text and the README paragraph this task edits
 
 **Interfaces:**
 - Consumes: the code of Tasks 1 to 9, as built.
@@ -12723,6 +13135,9 @@ Write in the spec's voice. The spec cites no contract rule and carries no `D-` t
     - the candidate rules, and which are ccd's and which the lane's;
     - the token's inputs;
     - the seven steps and the record order;
+    - a leaf gone at step 2's lstat, after the evaluation saw it, is a retry (`state-changed`), never `witness-mismatch`; only something else standing at the id is a mismatch;
+    - the quarantine record's four readings: parsed; absent; malformed (an `id=` that is not its name's id, a bad `checkouts=` encoding), which is kept for the operator as `quarantine-kept`; and unmeasured, when the physical `~/.cc-tmp` cannot be resolved, which is retried;
+    - the idle walk's 30 s bound (`WS_COLLECT_IDLE_SCAN_S`): with the in-use probe's 10 s and the checkout scan's 30 s, the audit spends at most 70 s plus the row pass, inside `ws-audit`'s 90 s runner budget, and a walk that times out answers unmeasured and is retried;
     - the restore and its lstat proof;
     - resume from the record;
     - the checkout question across the move;
@@ -12740,32 +13155,116 @@ Write in the spec's voice. The spec cites no contract rule and carries no `D-` t
   - **§8.** The waves table reads 7 (this wave), 8 (reclaim's server half) and 9 (the lane). R58's stale gate (workspace-lifecycle 3b) is met.
 - [ ] **Step 2: The contract's "§14 as built" note**
   - Append one note at the end of §14, in the style of "§12 as built". It states where the code narrowed or spelled out R65 to R72.
-  - Every departure named by slug in this wave gets one sentence.
+  - Every departure named by slug in this wave gets one sentence. That includes `idle-walk-bound-30s`: R68's 60 s idle-walk bound became 30 s, so the audit fits `ws-audit`'s 90 s row (30 + 10 + 30 = 70 s, plus the row pass).
+  - It says that the `collect` act's exclusion from `server/src/deadCoordinator.ts`'s deliberate put-down set is pinned by a test only, and that the file is unedited (it is workspace-lifecycle's, R72).
   - Write each number singly, never as a range.
+- [ ] **Step 2b: The prose pin, red first (ruling T7 OPEN4, finding executability F9)**
+
+Create `server/test/ws-collect-prose.test.ts` before Step 3 writes the prose:
+
+```ts
+// Child reclamation wave 7 — who may run the temp-root collector (spec 2026-09-22 §5.10). Narrowed, never widened:
+// every destructive verb stays forbidden to every session, `ws-reap` stays human-only literally, and `ws-collect` is the
+// SERVER's act on an orphaned, witnessed temp root only, behind a token re-proved on the box. The skill corpora never
+// name the verb — `ws-expire-prose.test.ts`'s argument, made again: a skill that names a verb has given a model a reason
+// to reach for it.
+import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const flat = (f: string): string => readFileSync(path.join(root, f), 'utf8').replace(/\s+/g, ' ');
+
+/** Every file under a skill's directory, recursively — SKILL.md and every reference it ships. */
+const filesUnder = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
+  const p = path.join(dir, n);
+  return statSync(p).isDirectory() ? filesUnder(p) : [p];
+});
+const SKILLS = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];
+
+describe('CLAUDE.md’s SAFETY bullet', () => {
+  const md = flat('CLAUDE.md');
+  it('still forbids all five destructive verbs, and keeps ws-reap human-only, literally', () => {
+    expect(md).toContain('All five forbidden; `ws-reap` is **human-only by contract**.');
+  });
+  it('forbids ws-collect to every session, and says whose act it is and on what', () => {
+    expect(md).toContain('**`ws-collect` is forbidden to every session too**');
+    expect(md).toContain('it is the SERVER\'s act on an ORPHANED, WITNESSED temp root only');
+    expect(md).toContain('behind a token re-proved on the box — never a session\'s verb');
+  });
+});
+
+describe('agent/CLAUDE.md’s gated verbs', () => {
+  it('names ws-collect beside ws-expire, on its confirmation token', () => {
+    expect(flat('agent/CLAUDE.md')).toContain('`ws-collect` requires `--expect` (the collection token, which binds the witnessed temp root;');
+  });
+});
+
+describe('the skill corpora never name the verb', () => {
+  const files = SKILLS.flatMap((d) => filesUnder(path.join(root, d)));
+  it('reads every skill file there is — an empty corpus would pass vacuously', () => {
+    expect(files.length).toBeGreaterThanOrEqual(SKILLS.length);
+  });
+  it.each(SKILLS)('%s never names ws-collect', (dir) => {
+    const own = files.filter((p) => p.startsWith(path.join(root, dir) + path.sep));
+    expect(own.length, `${dir} has files to read — an empty directory would pass vacuously`).toBeGreaterThan(0);
+    for (const f of own) {
+      expect(readFileSync(f, 'utf8'), path.relative(root, f)).not.toContain('ws-collect');
+    }
+  });
+});
+```
+
+Run it in the FOREGROUND, from inside the package, with a timeout of at least 600000 ms:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/ws-collect-prose.test.ts)
+```
+
+Expected before Step 3: `Tests  2 failed | 5 passed (7)`. The two reds are `forbids ws-collect to every session…` (`expected '# ccrc …' to contain '**`ws-collect` is forbidden to every …'`) and `names ws-collect beside ws-expire…`. The three skill-corpus cases pass from the start: they pin an absence, so their red is Step 6's mutation row P3. Measured on `b0647d850` while this step was drafted: 2 failed and 5 passed before the prose, and 7 passed after it.
+
 - [ ] **Step 3: README, CLAUDE.md and agent/CLAUDE.md**
-  - CLAUDE.md's SAFETY section names the verb, beside `ws-reclaim` and `ws-expire`: "`ws-collect` is forbidden to every session too: it is the SERVER's act on an ORPHANED, WITNESSED temp root only, behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test."
-  - agent/CLAUDE.md: the new grant, as ws-expire's was added.
+  - CLAUDE.md's SAFETY section names the verb, directly after `ws-expire`'s sentence in the same bullet: "**`ws-collect` is forbidden to every session too**: it is the SERVER's act on an ORPHANED, WITNESSED temp root only, behind a token re-proved on the box — never a session's verb, and never run against the live host from a shell or a test." It is bold, as `ws-reclaim`'s and `ws-expire`'s are. Step 2b's pin reads it whitespace-flattened.
+  - agent/CLAUDE.md: the new grant, added as ws-expire's was. After `ws-expire`'s parenthesis, its "Gated verbs" bullet gains: "`ws-collect` requires `--expect` (the collection token, which binds the witnessed temp root; only the server composes it, for an orphaned temp root with no human in the path)".
   - README: the verb's paragraph beside ws-expire's, and the citation tax this wave's `shared/api.ts` insertions owe, re-pointed by content.
   - CLAUDE.md, README.md and agent/CLAUDE.md are claim-1110 paths (R72): append only, in their own region, and if the claim still lives, edit only under the agreement the brief records.
 - [ ] **Step 4: Run the docs scanners**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts \
-  test/expiry-lane-prose.test.ts test/box-token-census.test.ts
+(cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts \
+  test/expiry-lane-prose.test.ts test/box-token-census.test.ts test/ws-collect-prose.test.ts test/ws-expire-prose.test.ts \
+  test/child-reclaim-prose.test.ts)
 ```
 
-Expected: PASS. A red names its sentence; fix the text, never the test.
+Expected: PASS, with `ws-collect-prose` at 7 of 7. A red names its sentence; fix the text, never the test.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md docs/superpowers/programs/child-reclamation-contract.md README.md CLAUDE.md agent/CLAUDE.md
+git add docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md docs/superpowers/programs/child-reclamation-contract.md README.md CLAUDE.md agent/CLAUDE.md \
+  server/test/ws-collect-prose.test.ts
 git commit -F - <<'EOF'
 docs(collect): the temp-root collector and the tail's corrections, as built
+
+The prose pin holds CLAUDE.md's ws-collect SAFETY sentence, agent/CLAUDE.md's
+--expect grant, and that no skill corpus names the verb.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
+
+- [ ] **Step 6: Mutation check (after the commit, so each edit is reverted with `git checkout -- <file>`)**
+
+Run `(cd server && ./node_modules/.bin/vitest run test/ws-collect-prose.test.ts)` once per row, revert the edit, and record the red in the wave-done.
+
+| # | Mutation (exact edit) | Expected red |
+|---|---|---|
+| P1 | In `CLAUDE.md`, delete the sentence `**`ws-collect` is forbidden to every session too**: …` | `forbids ws-collect to every session…`: `expected '# ccrc …' to contain '**`ws-collect` is forbidden to every …'` |
+| P2 | In `agent/CLAUDE.md`, delete the clause `` `ws-collect` requires `--expect` (…) `` | `names ws-collect beside ws-expire…`: `expected '…' to contain '`ws-collect` requires `--expect` (the collection token…'` |
+| P3 | Append the line `ws-collect` to `ccd/reviewer-skill/SKILL.md` | `ccd/reviewer-skill never names ws-collect`: `ccd/reviewer-skill/SKILL.md: expected '---\nname: ccrc-reviewer…' not to contain 'ws-collect'` (measured on `b0647d850`) |
+
+After the last row, `git diff --quiet -- CLAUDE.md agent/CLAUDE.md ccd/reviewer-skill/SKILL.md && echo clean` prints `clean`.
 
 ---
 
@@ -12798,20 +13297,22 @@ cd pwa    && npm ci && npm run test
 
 - [ ] **Step 2: Type-check, build, and the deviation and token cross-checks**
 
+Run every line from the workspace root. Each `cd` lives in its own subshell, so no line depends on where the one before it left the shell, and each line prints its OWN exit status:
+
 ```bash
-cd server && ./node_modules/.bin/tsc --noEmit -p .
-cd agent  && npx tsc --noEmit -p . 2>/dev/null || (cd agent && npm run build)
-cd pwa    && npm run build
+(cd server && ./node_modules/.bin/tsc --noEmit -p .); echo "server tsc rc=$?"
+(cd agent && { [[ -x node_modules/.bin/tsc ]] || npm ci; } && ./node_modules/.bin/tsc --noEmit -p .); echo "agent tsc rc=$?"
+(cd pwa && npm run build); echo "pwa build rc=$?"
 git fetch origin main
-cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts \
-  test/single-definition.test.ts test/topology-clean.test.ts test/lifecycle-refusal-word.test.ts test/ccd-refusal-scan.test.ts
+(cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts \
+  test/single-definition.test.ts test/topology-clean.test.ts test/lifecycle-refusal-word.test.ts test/ccd-refusal-scan.test.ts)
 git log origin/main..HEAD --format=%B | grep -cE 'D-[0-9]'
 git log origin/main..HEAD --format=%B | grep -cE '[0-9]{4} ?(–|\.\.|-) ?[0-9]{4}'
 git diff origin/main...HEAD | grep -nE '^\+.*D-[0-9]+ ?(–|\.\.|-) ?(D-)?[0-9]+'
 ```
 
 Expected:
-- every type-check and build exits 0;
+- `server tsc rc=0`, `agent tsc rc=0` and `pwa build rc=0`: every type-check and build exits 0, each measured by its own rc and never covered by another command;
 - the vitest files PASS;
 - both `grep -c` lines print `0`;
 - the last line prints nothing.
@@ -12830,14 +13331,14 @@ git diff --numstat origin/main...HEAD -- ccd/ccrc
 
 Expected:
 - `mark rc=0`;
-- `delta above 19109: 0`. The printed hunks are the stamp (line 2), the entry guard, the caps line, the `ws-audit` hand-off and any LC-act line, each with equal old and new counts;
+- `delta above 19109: 0`. The printed hunks are the stamp (line 2), the entry guard, the caps line, the `ws-audit` hand-off, Task 3's `cmd_ws_audit` reclaim printf (X1's `generation` key, two lines rewritten in place) and any LC-act line, each with equal old and new counts;
 - `ccd/ccrc`'s numstat is empty: this wave never edits it;
 - `ownership` and the citation cases PASS, and `session-hook.test.ts` PASSES in full.
 
 - [ ] **Step 4: The hard boundary, and inertness**
 
 ```bash
-git diff --name-only origin/main...HEAD | grep -vE '^(ccd/ccd|ccd/ccd-entry\.py|agent/src/whitelist\.ts|agent/test/|server/src/ccdargv\.ts|server/src/remote/runner\.ts|shared/api\.ts|server/test/|pwa/src/session/journalWords\.ts|pwa/test/journal-words\.test\.ts|deploy/measure-workspace-lifecycle\.py|README\.md|CLAUDE\.md|agent/CLAUDE\.md|docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design\.md|docs/superpowers/programs/child-reclamation-contract\.md)'
+git diff --name-only origin/main...HEAD | grep -vE '^(ccd/ccd|ccd/ccd-entry\.py|agent/src/whitelist\.ts|server/src/ccdargv\.ts|server/src/remote/runner\.ts|shared/api\.ts|pwa/src/session/journalWords\.ts|pwa/test/journal-words\.test\.ts|deploy/measure-workspace-lifecycle\.py|README\.md|CLAUDE\.md|agent/CLAUDE\.md|docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design\.md|docs/superpowers/programs/child-reclamation-contract\.md)$|^(agent/test/|server/test/)'
 grep -n '^cmd_ws_[a-z_]*()' <(git show origin/main:ccd/ccd) | sed 's/^[0-9]*://' | sort > /tmp/w7-verbs-main
 grep -n '^cmd_ws_[a-z_]*()' ccd/ccd | sed 's/^[0-9]*://' | sort | comm -13 /tmp/w7-verbs-main -
 grep -rn "'ws-collect'" server/src | grep -v 'ccdargv.ts\|remote/runner.ts'
@@ -12847,7 +13348,7 @@ rm -f /tmp/w7-verbs-main
 ```
 
 Expected:
-- the first command prints nothing;
+- the first command prints nothing. Each admitted file is matched whole, and only `agent/test/` and `server/test/` are admitted as directory prefixes, so a stray edit to another `ccd/` script (`ccd/ccd-account-auth`, say) or a `CLAUDE.md.bak` is printed;
 - the second prints exactly `cmd_ws_collect() {` plus its argv comment;
 - the third prints nothing: no composer;
 - the fourth prints nothing, and the fifth prints only `pwa/src/session/journalWords.ts` and `pwa/test/journal-words.test.ts`.
@@ -12856,10 +13357,10 @@ Expected:
 
 ```bash
 git push -u origin HEAD
-gh pr create --base main --title "Child reclamation wave 7: the temp-root collector (ws-collect), inert, and the reclaim tail's ccd corrections" --body-file <your body file>
+gh pr create --base main --title "Child reclamation wave 7: the temp-root collector (ws-collect), inert, and the reclaim tail's ccd corrections" --body-file "$PR_BODY"
 ```
 
-The body lists:
+`PR_BODY` is the path of the body file you wrote, in your own scratch directory, never under the workspace. The body lists:
 - the tasks;
 - the boundary;
 - the suite verdict;
@@ -12908,10 +13409,12 @@ The destructive subject is this one alone (R65). Read the COLLECT region whole, 
 - **Crash and resume (R66).**
   - Kill the verb after every step. Confirm that the next audit finds the record whatever the witness says, that no slot is orphaned, and that a resume removes nothing but the record's inode.
   - Confirm that a forged record or slot is never taken.
+- **A vanished leaf (ruling R-f).** A leaf absent at step 2's lstat, after the evaluation saw it, answers `state-changed` and is retried, never the terminal, journaled `witness-mismatch`. Something else standing there stays `witness-mismatch`.
 - **The restore.** It is proven by lstat, never by mv's exit code. An unproven restore keeps the record and the slot whole: never a recursive remove.
 - **The checkout question across the move.**
   - The alias's conditions (1) and (2) each red under mutation.
   - The recycled-admin-name case refuses through the full verb.
+  - A clone and its own linked worktree, BOTH inside the leaf, are collected through the full verb (git spells the worktree's admin directory absolutely, by the pre-move path), and the inside-the-leaf alias arm reds under mutation (Task 8 row 32a). An audit that licenses a leaf the verb then always puts back is a loop, not a refusal.
 - **Rule 2.** A stopped session's clone inside a dead child's leaf answers `containment-unproven`, before the move and on the pre-move spelling after it.
 - **The floor and the token.**
   - Neither is asked after the move.
@@ -12928,6 +13431,7 @@ The destructive subject is this one alone (R65). Read the COLLECT region whole, 
 - **The authority files.** The record, the witness and the slot are same-uid writable. Confirm the trust note in each header, and that no path is ever taken from a file body: every path derives from the id.
 - **Parsing.**
   - A record's exact id parse holds for nested and dotted ids.
+  - The record reader's four answers (ruling R-a). A malformed record, an id mismatch and a bad `checkouts=` encoding are rc 2, kept as `quarantine-kept`. An unresolvable physical `~/.cc-tmp` is rc 3: unmeasured and retried, never kept, and never folded into rc 2.
   - Dot-leading names are never ids.
   - The temp-file sweep's exact regex.
   - The mountinfo parse, including escaped spaces and `\012` in a mount path.
@@ -12944,7 +13448,8 @@ The destructive subject is this one alone (R65). Read the COLLECT region whole, 
 
 - **The token.** Its derivation, its comparison at spend, and its stability across a no-op re-audit.
 - **The declarations.**
-  - The new refusal words, `containment-refuted` and the `collect` act, each in `LcRefusalToken` and `LC_REFUSAL_WORD`, and in every scan that holds ccd's literals against them, in both directions.
+  - The new refusal words (`containment-refuted`, `witness-mismatch`, `quarantine-kept`, `not-witnessed`, `registered` and `changed-recently`), each in `LcRefusalToken`, `LC_REFUSAL_WORD` and `lifecycle-refusal-word.test.ts`'s `ALL_TOKENS` (its count measured, R-j), and in every scan that holds ccd's literals against them, in both directions.
+  - The `collect` act, declared in ccd's `_LC_ACTS`, `LifecycleAct`, `LIFECYCLE_ACT_MAP`, the PWA's `ACT_WORD` and the instrument's `NEUTRAL_ACTS`, and never in `LcRefusalToken`. Its exclusion from `server/src/deadCoordinator.ts`'s deliberate put-down set is pinned by a test only, and that file is unedited (ruling R-c).
   - `COLLECT_CAP` and the caps line.
 - **X1.**
   - The generation key and token input.
@@ -12955,7 +13460,7 @@ The destructive subject is this one alone (R65). Read the COLLECT region whole, 
 
 ### 3. Cost and platform (sonnet, high)
 
-- **The idle walk's cost.** Measure it on the largest fixture, and one cold-cache measurement where possible.
+- **The idle walk's cost.** Measure it on the largest fixture, and one cold-cache measurement where possible. Its bound is 30 s (`WS_COLLECT_IDLE_SCAN_S`, ruling R-d, departure `idle-walk-bound-30s`). Confirm that the audit's sequential bounds, 30 + 10 + 30 = 70 s plus the row pass, fit `ws-audit`'s 90 s runner row, and that a walk that times out answers unmeasured and is retried.
 - **The audit's cost per id.**
 - **Platform.**
   - Every Darwin path answers unmeasured.
