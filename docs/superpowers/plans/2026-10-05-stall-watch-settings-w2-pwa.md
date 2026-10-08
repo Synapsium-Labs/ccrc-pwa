@@ -397,8 +397,9 @@ export function useStallWatchView(pollMs?: number): StallWatchPoll;
   the body's `message` (Fastify's 500 carries the cause the route threw: "stall settings unreadable, nothing written:
   …" or "… changed outside the server twice during one write; nothing written"), and `apiErrorText(err)`, the app's
   existing floor: the error code (`confirm-required`, `bad-request`), Fastify's `Internal Server Error` when its
-  `message` is blank, or `request failed (<status>)` for a non-JSON body. No new string is added, and L0 is not
-  touched.
+  `message` is blank, or `request failed (<status>)` for a non-JSON body. When all of those are blank, the detail is
+  `HTTP ${status}` (fix round 1, F9). That string fills the server-answer detail slot, as `apiErrorText`'s
+  `request failed (<status>)` floor does, and is not section copy; it is not an L0 string.
 - **A rejection that is not an `ApiError`** (a network failure, after which the POST may have landed) is
   `{ kind: 'unconfirmed' }`, never a refusal: "Nothing was changed" would be a claim nobody measured. The section
   answers it as it answers an unreadable 2xx (Task 3). W1's L0 has no text of its own for this case and W2 adds none,
