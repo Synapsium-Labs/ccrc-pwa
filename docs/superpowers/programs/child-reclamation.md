@@ -47,6 +47,22 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 18:01 — wave 7's plan is FINAL for review, and its docs PR opens.** The plan is 13,474 lines.
+  - **The fix pass.** Workflow `wf_a9399c29-92b` applied 144 edits, every one cleanly. The coordinator applied the
+    rest by hand:
+    - Task 5 resolves the quarantine path through `_ws_collect_qpath` alone, which keeps the census at eight callers;
+    - the stale "60 s" in Task 7 is corrected;
+    - the Review Focus names the clone-and-worktree leak.
+  - **Three more rulings:**
+    - **R-k.** An all-zero tip is never a compare-and-swap. Measured: `update-ref -d --no-deref <ref> <forty zeros>`
+      deletes unconditionally, so the tail's two shape checks reject forty zeros.
+    - **R-l.** A record that vanishes inside the lock is a retry.
+    - **R-m.** Task 10 amends spec §5.5 for the zero head.
+  - **Main merged.** Main's #329 is this branch's own squashed docs, so the merge took this branch's side throughout.
+    The merged tree is identical to the pre-merge branch.
+  - **Next.** CI, the merge, and planSha. Run 347 is dispatched once claim 1110 has ended (hard expiry 21:28Z) and
+    #319's state is measured.
+
 - **2026-10-08 17:44 — wave 7's plan attack is back; the fixes are being applied.** The attack is
   `ccr15-evidence-archive/wave7/plan-attack.json`.
   - **The run.** Workflow `wf_aec6389c-9aa` ran 32 agents: four lenses and two refuters per serious finding. It raised
