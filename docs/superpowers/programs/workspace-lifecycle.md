@@ -887,6 +887,26 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Measured by the reviewer:** Task 5 reverts in one plan hunk with every suite green, so the operator's (b)
     stays cheap either way. Migration 18 rolls back: the base build opens a version-18 `coord.db` and reads it. The
     expiry residue's blockers (T1–T3, 4454, the older-ccd arm) each go red when mutated.
+- **2026-10-08 13:16 — #326 merged (`b0647d850`, CCR-15 mail 4011); wave 5's plan is being drafted.** What lands for
+  this programme: `_ws_dir_physical` at `_ws_expire_cwd_users`' parent (4458), so that arming blocker clears; check the
+  merged lines before arming. The `clipsKept`/`tmpRootKept` keys (4462) are on the tail's done document for both verbs.
+  F1's leaf rules reach ws-expire.
+  - **The cross-side record (review 346's safety lens, class c), ruled: no code change.** The dead-coordinator journal
+    clause counts any non-refused `reclaim` row as deliberate. A child's pre-start `reclaim` `failed`
+    `probe-unmeasured` row therefore reads deliberate, and the lane abstains. Abstention ends nothing, so this fails
+    safe. Wave 5 states it in §5.4 as an accepted abstention, reachable only by a marked child that becomes a claimant
+    or heir before any successful reclaim.
+  - **Ruled: the lane's answer to a repeating resumable failure.** After 24 hours of continuous resumable failure on
+    one archive, the report becomes final, and the lane stops asking for that archive until the archive changes. The
+    entry names the first failure, the attempts and the last detail; it never suggests a destructive verb. A restart
+    re-learns, because the lane's memory is in-memory. CCR-15 wave 7's shared terminal word maps to not-resumable when
+    it arrives.
+  - **The kept-leaf reader's lean:** a kept word raises an attention entry. An absent key (an older ccd) reads
+    unmeasured and is recorded in the feed row only, so the rollout skew does not alarm on every expiry.
+  - **The plan:** workflow wf_36dce1c9-36e. An Opus drafter prototypes on `origin/main`, with four Opus lenses (spec,
+    act safety, replay, test honesty), an Opus reviser and a Sonnet replay verifier. The plan is
+    `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md` on branch
+    `docs/workspace-lifecycle-wave5-plan`. B4, the in-lock window close, edits ccd, so the wave is AGENT-FIRST.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -988,16 +1008,15 @@ the operator creates `$REG/dead-coordinator-lane-live` by hand.
 - **Then the expiry lane's follow-ups:** the kept-leaf reader (`clipsKept`/`tmpRootKept` become an attention entry, and
   an absent key reads unmeasured); the `state-changed` reading (Carried constraints, 08:06); the lane's answer to a
   repeating resumable failure; and the ws-expire in-lock window close, reusing CCR-15 wave 6's three-way read.
-- **Its plan reads main after #326** (CCR-15 wave 6, run 291; fix round 1 at `750910110`, scoped review 341 queued).
-  It carries the kept-leaf keys (4462) and the newline helper (4458). The plan checks `_ws_expire_cwd_users`' merged
-  lines before citing them. If #326 has not merged when planning starts, the plan waits for it.
+- **Its plan reads main after #326,** which merged 2026-10-08 13:07 (`b0647d850`). That carries the kept-leaf keys (4462) and
+  the newline helper (4458). The plan is drafted by workflow wf_36dce1c9-36e (the 13:16 entry).
 - **Wave 4 deploys through ccrc's updater** (the operator applies it from the console). Afterwards, check that both
   boxes report v0.0.123 or later, and that the feed shows the dead-coordinator lane's shadow rows.
 - **The operator's questions before arming** are (b)–(d) in the 06:01 entry. (b), the confirm copy, is still open. On
   10-07 the operator expired 15 archived workspaces by hand, which cuts most of (c), the backlog. (d) is in hand: the
   operator ends brisk-mesa's stray tmux server (see the entry after 06:05).
-- **Arming the expiry lane also waits on** `_ws_expire_cwd_users`' newline fix (CCR-15 wave 6 carries it as 4458,
-  so it clears when #326 merges) and on wave 5's `state-changed` reading (Carried constraints, 08:06). Wave 4 closed
+- **Arming the expiry lane also waits on** a check of `_ws_expire_cwd_users`' merged newline fix (4458, in #326,
+  merged 13:07) and on wave 5's `state-changed` reading (Carried constraints, 08:06). Wave 4 closed
   its own blockers, and review 339 found each one red when mutated. Once #326 lands, the operator
   should also know two facts. An archived workspace whose branch is already gone now expires, with its work kept in
   the attic, where `main` stops at `pin-failed`. In that case, ignored and secret-shaped files go with the tree.
