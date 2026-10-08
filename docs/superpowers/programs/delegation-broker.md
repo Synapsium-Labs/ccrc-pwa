@@ -1,27 +1,29 @@
 # Program: delegation-broker
 
 Spec: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` (approved 2026-10-05, revisions R1–R9 included)
-Plans: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md` (wave 1). Wave 2 is a close-out run
-driven by that plan's own sections and this ledger's rulings. Waves 3–7 are planned one at a time from the measured
-fields, each before its run dispatches
+Plans: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md` (waves 1–2) and
+`docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` (wave 3, awaiting operator approval). Waves
+4–7 are planned one at a time from the measured fields, each before its run dispatches
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-soft-basin` (the session that wrote the spec; claimant of run 271)
 Workspace: **a fresh child per wave**
 
 **What this program is.** A coordinator that delegates through generic `Agent` / `Workflow` calls or a raw
 `git worktree add` leaves nothing ccrc can see: no run edge, no hold, no history, no cleanup owner (spec §1). The
-program adds a server-owned delegation broker in six stages, each shipping dark or report-only and enabled
+program adds a server-owned delegation broker in six design stages, each shipping dark or report-only and enabled
 separately: measure what Claude Code actually emits (1), observe it into a journal and a store (2), project it into
 the fleet tree (3), adopt provable work and let a coordinator promote it into a real run (4), audit leftover
-worktrees in shadow (5), and finally clean them through the existing safety spine (6). It never forbids `Agent` or
-`Workflow`, never forces isolation, and never links work by a name, a path, a time or a working directory.
+worktrees in shadow (5), and finally clean them through the existing safety spine (6). The programme delivers those
+six stages in seven waves because wave 2 is a separate close-out of stage 1; programme wave 3 therefore owns design
+stage 2, and every later stage is offset by one. It never forbids `Agent` or `Workflow`, never forces isolation, and
+never links work by a name, a path, a time or a working directory.
 
 ## Waves
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
-| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **fix round (review 332)**: run 306 dispatched 2026-10-07 08:46 UTC to `ccrc-pwa-plain-hollow` (operator decision: the cross-check folds into a close-out wave); PR #321 carries fix rounds for reviews 318, 324, 328 and 332 |
-| 3 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | 2 | — | to plan once wave 2's cross-check is in the measurement section |
+| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **accepted at exact tip, not merged**: review 334 independently accepted `e183237e59f481ac85730bc06ca5cef29dea1d15`; run 306 remains `awaiting-review` and PR #321 remains open until wave 3 is approved and opened |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | — | plan written and focused independent plan review folded into `docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md`; awaiting operator approval; open as `wave:3`, `waveOf:7` before run 306 closes |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
@@ -527,13 +529,13 @@ Amendments the cross-check forces (each a difference from the rig; `slug — sen
   occurs. Once the retained evidence set at opening is fixed, neither the qualifying join's kind or order nor the
   time of a positive meta read contributes a hash component or selects among those retained events. Timing can affect
   which events remain retained before opening only through the pruning contract below: an occurrence pruned before
-  any qualifying join is durably applied is gone permanently as evidence (review 332 F1). A bare occurrence never
+  any qualifying join for that id is durably applied is gone permanently as evidence (review 332 F1). A bare occurrence never
   opens an activity, but once a join is known it may be that earliest event (a refinement of review 318 F1's wording,
   ruled with review 324). The other source kinds keep the first event naming their upstream id. A meta is a join, not
   a journal event, and nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never
   changes: it is part of the checkpointed applied state, reconstruction restores it verbatim and never re-selects it
   from the journal left after pruning, pruning cannot pass an identity event before a durable checkpoint holds its
-  id, and a bare occurrence pruned before any qualifying join is durably applied never becomes one (review 328 F1;
+  id, and a bare occurrence pruned before any qualifying join for that id is durably applied never becomes one (review 328 F1;
   spec §5.2, §5.12). The observe stage's parser (wave 3) must not use the presence of `agent_type` to decide whether
   an event qualifies — spec §5.2 activity id, §5.3, §5.4 rung 3 (a non-empty `agent_id` does not by itself place an
   event inside a subagent).
@@ -559,9 +561,11 @@ opened as that stage's run and is now the close-out's.
   from the lease's tip; only the server journal creates a lease; rungs 3 and 4 narrowed; hour-bucketed spool; a
   separate read-only `ws-lease-audit`; admission rung 6 replaced; a `delegation` frame; carriers and the audit ship
   in stage 4; a worker's leases nest under the top coordinator "via <worker>".
-- **2026-10-05 — planning shape.** Wave 1 is planned in full now. Waves 2–6 are planned one at a time, each from the
-  fields wave 1 measured, because the spec forbids a contract on an unmeasured field (§8.1). Each wave's plan is
-  written and reviewed before its run opens.
+- **2026-10-05 — planning shape (historical six-stage numbering).** Wave 1 was planned in full; later design stages
+  are planned one at a time from measured fields because the spec forbids a contract on an unmeasured field (§8.1).
+  Since the 2026-10-07 close-out decision, six design stages are delivered through seven programme waves. Each
+  implementation wave's plan is written and reviewed before its run dispatches; wave 3 returns to opening only after
+  operator plan approval.
 - **2026-10-05 — operator decision: the programme runs through ccrc** — wave 1 is dispatched as run 271 to a fresh
   child worker executing subagent-driven, not run in the spec-writing session (§10). The operator approved merging
   this ledger's docs PR once its checks are green. #280 merged 2026-10-05 as `1eda8630a`, every check green.
@@ -760,8 +764,9 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     read) and an unreadable `gitdir` (read as absent), are no positive cleanup or adoption evidence.
   - An activity id is selected once, at open; a checkpointed id is restored, never re-hashed after pruning. Whichever
     wave builds the journal's checkpoint, pruning and reconstruction keeps each selected id in the checkpointed
-    applied state, restores it verbatim, derives one only for an activity the checkpoint does not hold, and prunes no
-    event before a durable checkpoint covers it and no identity event before a durable checkpoint holds its id (spec
+    applied state, restores it verbatim, and derives one only for an activity the checkpoint does not hold. Wave 3
+    physically prunes no journal record; its planning holds preserve checkpoint, lease, lineage and identity dependencies
+    for the later separately approved compaction protocol (spec
     §5.2, §5.12 and §8.4's row; amendment `tool-agent-id-alone-is-unjoined-evidence`, review 328 F1).
   - All eight real-lane amendment slugs carry into wave 3: `agent-input-keys-are-the-callers`,
     `post-turn-subagentstop-is-unpaired`, `real-payloads-carry-scratchpad-dir`,
@@ -769,48 +774,106 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     `workflow-phase-is-not-always-written`, `teardown-hook-event-names-another-session` and
     `tool-agent-id-alone-is-unjoined-evidence`.
 
-### Review-332 observations awaiting the owning implementation plan or an operator decision
+### Review-332 implementation questions answered by the wave-3 plan, pending operator approval
 
-Five questions the activity-identity contract (spec §5.2, §5.12; review 328 F1) leaves open. They are unresolved
-implementation questions, not requirements, and they change nothing in the approved contract; the plan that owns each
-one must decide it, or ask the operator (raised by the review-328 round's per-task review, recorded by review 332
-F3).
+These five points originated as implementation questions in review 332 F3; they were not requirements of the approved
+spec and this ledger does not rewrite them into retroactive requirements. The wave-3 plan proposes the following exact
+answers. Operator approval of that plan approves them; rejection of one blocks its owning durability task rather than
+licensing a weaker fallback.
 
-1. **A meta-opened activity before its first checkpoint.** A meta gains no journal event, so losing `coord.db` and
-   the positive meta before that checkpoint can lose the open. The first wave that writes an activity id into any
-   durable carrier must decide whether the activity must be checkpointed before its id escapes.
-2. **Pruning during reconstruction.** The replay and pruning plan must decide, and test, whether pruning is held off
-   until reconstruction has replayed the retained suffix and re-established its holds.
-3. **Where the checkpoint lives.** The checkpoint plan must name where it lives, how it survives the loss of
-   `coord.db`, and whether `ccrc backup` includes it; the current spec implies it is outside `coord.db` but does not
-   settle the backup mechanism.
-4. **Matching a checkpointed activity on replay.** Replay must decide, and test, how a checkpointed activity is
-   matched by its natural key rather than by recomputing a hash whose identity event may have been pruned.
-5. **"Durably applied".** The implementation plan must define it for a journalled join and for a positive meta. The
-   likely readings (the journal append and the checkpoint, respectively) are observations, not rulings.
+1. **ID escape (O1).** A meta-opened activity id cannot be returned, inserted into `coord.db`, logged as an outcome or
+   included in a report until an atomic checkpoint contains its natural-key mapping and activity row.
+2. **Pruning during reconstruction (O2).** Pruning is disabled from reconstruction entry through checkpoint
+   validation, all retained evidence applicable to a checkpoint-missing activity, retained-suffix replay, natural-key
+   restoration and restoration of every pruning hold. A failure leaves state `reconstructing` and pruning disabled.
+3. **Checkpoint and backup (O3).** The authoritative sidecars are `~/.ccrc/delegation-events.log` and
+   `~/.ccrc/delegation-checkpoint.json`; every coordination backup/update snapshot and fallback server-deploy snapshot
+   includes them, the existing consistent `coord.db` snapshot when present and commit marker
+   `coordination-snapshot.json`. Restore fails closed unless the manifest, pair, pre-anchor evidence and retained suffix
+   agree; its anchor is `(sequence, journalId, digest)`, because the journal also carries non-hook lease records.
+   Ordinary tree rollback never restores the authoritative sidecars.
+4. **Immutable mapping (O4).** The checkpoint persists `(parent id, parent incarnation, source kind, upstream id)` to
+   the selected activity id. The hash input names the accepted retained naming record’s `journalId`, not its raw envelope
+   `eventId`. Recovery restores that exact id and never hashes a later event because the selected event was pruned.
+5. **Durable application (O5).** Apply in order: append one complete journal record; fsync the journal; build next
+   state; write and fsync a checkpoint temp in the same directory; atomic rename; fsync the parent directory; only
+   then repair/commit `coord.db`. A positive meta has no journal event and becomes durable through the same checkpoint
+   replacement. SQLite commit alone is not durable application.
+
+**Retained-before-checkpoint reconstruction trap (review 334 observation).** If event E1 at journal sequence 10 is
+still retained, the checkpoint position is sequence 20, and the corresponding activity is absent from the checkpoint,
+E1 remains eligible to be the selected identity event. Recovery therefore inspects all retained evidence applicable
+to a checkpoint-missing activity, including evidence before `appliedJournalSequence`; “retained journal” never means
+only the suffix after the checkpoint.
+
+### Focused wave-3 plan review folded before operator approval
+
+One focused independent Opus plan review completed against the tracked wave-3 plan. It reported 0 critical, 16
+important and 0 minor findings; it ran no tests. All 16 findings survived source/spec verification and are folded into
+the plan rather than deferred:
+
+- Journal identity is nonrecursive: RFC 8785 canonical JSON fixes `journalId` from the record without `journalId` or
+  `digest`, then fixes `digest` from the record including `journalId` but excluding `digest`. Fixed vectors own both.
+- Activity identity uses the accepted naming record’s `journalId`. Every spool line binds the parent incarnation read at
+  write time, and the server derives event identity from owner, incarnation, UTC bucket, byte offsets and raw-line hash.
+- The spool is a closed lifecycle union covering compact `SessionStart.source`, `SessionEnd.reason`, normalized Agent and
+  Workflow launches, and normalized terminal task notifications. It excludes arbitrary response data, prompt/result/
+  diagnostics, Agent `outputFile` and `scratchpad_dir`; approved Workflow `transcriptDir` and `scriptPath` remain closed fields.
+- Existing `readFrom` is widened additively with bounded `maxBytes` and canonical `dataB64`; old decoded-only peers are
+  unmeasured for spool ingestion. Activity sources (`agent|workflow|bash-worktree`) remain distinct from carrier
+  provenance (`agent|workflow|raw|attached`).
+- Pure policy returns only measured lease-identity input. The serialized journal adapter deduplicates, then owns
+  `randomUUID()`, deterministic lineage identity, generation-0 append with replay-stable observation/opening time,
+  checkpoint and projection. Rung-1 run-child agreement is a distinct `run-child-owned` report and can never create a lease.
+- Lease identity uniqueness applies only while unreleased; the exact tuple is reusable after release. Rows preserve both
+  creating and current journal sequence. Attempts may have a null path unless linked. Projection replacement uses an
+  explicit foreign-key-safe delete/insert order and rolls back atomically.
+- Observation health and explicit coordinator intent are checkpoint-owned and survive SQLite deletion/reprojection;
+  direct SQLite writes are never their authority. Per-session/per-incarnation UTC-hour intervals are retained for at least
+  seven complete days. A dedicated `delegation-hooks` doctor task owns every-home hook and spool-directory readiness,
+  role-aware SKIP, foreign Worktree-hook warning and remedies.
+- The repaired recapture path is actually run against current lane versions before parser implementation. Wave 3 plans
+  retention holds but performs no physical journal compaction; a later approved plan must supply the crash-safe rewrite
+  protocol before truncation can exist.
+
+These are plan refinements and proposed implementation decisions under the approved design; they do not retroactively
+change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
 
-**Wave 2 — the measurement close-out (run 306), dispatched 2026-10-07.** In order:
-1. Review 304's residue, as ruled above, with the F12 re-capture script first.
-2. A capture of every Claude Code version the fleet runs that the corpus lacks, read at the start: 2.1.292 at least.
-3. The real-lane cross-check, run by the worker under wave 1's plan "After the merge" standing rules. Its reduced
-   tables go into the measurement section under "Real-lane cross-check", each difference as an amendment slug.
+**Review 334 accepted wave 2 at its exact tip; it has not merged.** Reviewer `ccrc-pwa-keen-summit` accepted
+`e183237e59f481ac85730bc06ca5cef29dea1d15` in immutable report
+`.superpowers/sdd/delegation-broker-programme/review-334-e183237e.md`: 36 panel agents, 0 errors, 0 empty, 0 skipped,
+2 confirmed minor findings, 9 refuted and 0 unexamined. Review 332 F1 and F3 are closed. F1 is only an immutable
+commit-message overstatement; the tree already matches the ruling, so there is no tree change and no history rewrite.
+F2 is the two “for that id” ledger corrections above. The reviewer measured handoff 874/874, isolated
+`session-hook.test.ts` 335/335, docs-sensitive subset 492/492, `git diff --check origin/HEAD...HEAD` rc 0 and
+exact-head CI run 37688188835 success; the full-suite red remains explicitly unwaived.
 
-One PR from a fresh child. A review run on the held-out panel follows.
-
-**Wave 3 — observe (report-only)** comes next:
-- It is planned only once wave 2's cross-check is in the measurement section, from the measured fields only.
-- Its contents: the spool, ingestion and cursors, the one `delegation_*` migration, the census extension, correlation
-  and reconciliation (report-only), the coordinator-intent route, and coordinator clause 17.
-- It carries the spool-line constraint: a listing of about 3.9 KB nearly fills the 4 KiB line.
-- Its plan starts from the carried constraints above, which wave 2's review rounds added: the first
-  implementation commit (the red-first `-t "$TMUX_PANE"` ownership correction); the turn-marker `paid` reader's
-  phantom-main-thread case; the three re-capture tooling obligations, closed before any capture relies on
-  `--missing` (D-3999); D-4008's three folds as no positive cleanup or adoption evidence; activity ids restored from
-  the checkpoint, never re-hashed after pruning; and the eight real-lane amendment slugs. It also reads the
-  review-332 observations above as open questions for whichever plan owns each, not as requirements.
-- Its plan is Markdown, `docs/superpowers/plans/<date>-<topic>.md`: plans stay Markdown under the operator's
-  2026-10-07 ruling, and ccrc-pwa's deviation and ledger guards, which read `*.md` plans, are one reason (review 328
-  F2).
-- The operator reviews the plan before its run dispatches.
+**Wave 3 — observe (report-only)** is planned at
+`docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md`, pending operator approval:
+- Its contents are the exact-pane correction as the first implementation commit; the separate turn-marker correction;
+  the re-capture tooling obligations followed by a mandatory current-lane capture; bounded incarnation-bound owner
+  spools; byte-exact ingestion/cursors through a named pure/framing plus serialized-durability boundary; one six-table
+  `delegation_*` migration; canonical journal/checkpoint/backup/recovery; the existing census extension; exact-evidence
+  correlation; report-only reconciliation; checkpoint-owned health and coordinator intent; `delegation-hooks` doctor;
+  and coordinator clause 17.
+- It carries the 3.9 KiB listing/strict-under-4-KiB line constraint, all eight real-lane amendment slugs, D-4008's
+  folds as no positive evidence, the retained-before-checkpoint trap, and O1–O5 above as proposed decisions awaiting
+  operator approval.
+- Its one migration creates the complete future-facing six-table schema required by spec §5.2, including inert lease
+  disposition, clock, cleanup-population/evidence and carrier-generation fields; later waves add code only. Wave 3's
+  serialized server journal adapter alone mints a deduplicated linked lease identity at generation 0; pure policy has no
+  UUID authority, rung-1 run-child agreement remains under existing ownership, and closed policy prevents carrier writes,
+  transitions, clocks, audit tokens, cleanup admission or executable effects.
+- It retains the complete journal in wave 3. Physical compaction is explicitly deferred until a later approved plan
+  specifies serialized temp rewrite, durability, rename, append-FD reopening and fault injection.
+- It defines named red tests for every wave-3-applicable spec §8.4 mutation and every verified plan-review correction,
+  and explicitly defers fleet/PWA
+  projection, adoption, carrier, promotion, audit-token and cleanup behavior to waves 4–7.
+- It allocates no deviation number, opens no run, dispatches no worker, merges no PR, deploys nothing and invokes no
+  cleanup. The operator reviews and approves the tracked plan first.
+- After approval, allocate the wave-3 block and open a fresh run as `wave:3`, `waveOf:7`, with no inherited worker
+  `sessionId`, before closing run 306. Then advance run 306 to `merging`, remeasure PR #321's exact head and required
+  CI, enqueue it through `gh pr merge <n> --match-head-commit <handoffCommit>`, verify the accepted tip landed, close
+  run 306 `final:true`, and dispatch the fresh wave-3 worker from merged `main`.
