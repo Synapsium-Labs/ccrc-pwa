@@ -603,19 +603,56 @@ describe('the second redaction pass bounds its depth (final-review I1)', () => {
 
 // ---- Docs W2 fix round 1, F2: refinement (g)'s one reader of `killed` and `signal`, as a mechanism ----
 
-/** Source with comments and the insides of '...' and "..." literals blanked, newlines kept so a line number survives. */
+/** Whether a `/` met in code, with `before` the current line so far (comments and literals already blanked), starts a
+ *  regex literal rather than a division: after `(`, `,`, `=`, `:`, `[`, `!`, `&`, `|`, `?`, `{`, `}`, `;`, an operator
+ *  that cannot end an operand, a keyword that precedes an expression (`return`, `typeof`, ...), or at line start. */
+function startsRegex(before: string): boolean {
+  const b = before.trimEnd();
+  if (b === '') return true;
+  const last = b[b.length - 1]!;
+  if ('(,=:[!&|?{};'.includes(last)) return true;
+  if ('<>+-*%~^'.includes(last)) return !/(?:\+\+|--)$/.test(b);
+  return /(?:^|[^\w$.])(?:return|typeof|void|throw|case|delete|in|of|else|yield|await)$/.test(b);
+}
+
+/**
+ * Source with comments and the insides of '...', "..." and `...` literals and /regex/ literals blanked, newlines kept
+ * so a line number and every offset survive. Three states beyond the line and block comments:
+ *  - a template literal blanks its text but keeps each `${...}` expression AS CODE (`${res.killed}` is a real read),
+ *    counting braces so `${ {a: 1}.a }` ends at its own `}`, and entering the template state again for a template
+ *    nested in an expression;
+ *  - a regex literal starts where a `/` cannot be division ({@link startsRegex}), and ends at its own unescaped `/`
+ *    outside a `[...]` class, so a `/*`, `//` or quote inside one opens nothing;
+ *  - a '...' or "..." string ends at its quote or its line.
+ */
 function blankCommentsAndStrings(text: string): string {
+  const blank = (ch: string): string => (ch === '\n' ? '\n' : ' ');
+  const braces: number[] = [];
+  let template = false;
   let out = '';
   let i = 0;
   while (i < text.length) {
     const c = text[i]!;
+    if (template) {
+      if (c === '\\') {
+        out += ' '; i++;
+        if (i < text.length) { out += blank(text[i]!); i++; }
+      } else if (c === '`') {
+        out += c; i++; template = false;
+      } else if (c === '$' && text[i + 1] === '{') {
+        out += '${'; i += 2; braces.push(0); template = false;
+      } else { out += blank(c); i++; }
+      continue;
+    }
     const two = text.slice(i, i + 2);
     if (two === '//') {
       while (i < text.length && text[i] !== '\n') { out += ' '; i++; }
     } else if (two === '/*') {
       const end = text.indexOf('*/', i + 2);
       const stop = end === -1 ? text.length : end + 2;
-      for (; i < stop; i++) out += text[i] === '\n' ? '\n' : ' ';
+      for (; i < stop; i++) out += blank(text[i]!);
+    } else if (c === '`') {
+      out += c; i++; template = true;
     } else if (c === "'" || c === '"') {
       out += c; i++;
       while (i < text.length && text[i] !== c && text[i] !== '\n') {
@@ -623,10 +660,57 @@ function blankCommentsAndStrings(text: string): string {
         out += ' '; i++;
       }
       if (i < text.length && text[i] === c) { out += c; i++; }
+    } else if (c === '/' && startsRegex(out.slice(out.lastIndexOf('\n') + 1))) {
+      out += c; i++;
+      let inClass = false;
+      while (i < text.length && text[i] !== '\n') {
+        const r = text[i]!;
+        if (r === '\\') {
+          out += ' '; i++;
+          if (i < text.length && text[i] !== '\n') { out += ' '; i++; }
+        } else if (!inClass && r === '/') {
+          out += r; i++;
+          break;
+        } else {
+          if (r === '[') inClass = true;
+          else if (r === ']') inClass = false;
+          out += ' '; i++;
+        }
+      }
+    } else if (c === '{') {
+      if (braces.length > 0) braces[braces.length - 1]!++;
+      out += c; i++;
+    } else if (c === '}') {
+      out += c; i++;
+      if (braces.length > 0) {
+        if (braces[braces.length - 1] === 0) { braces.pop(); template = true; }
+        else braces[braces.length - 1]!--;
+      }
     } else { out += c; i++; }
   }
   return out;
 }
+
+/** The scanned files that import `lifecycle.js` (a static `import` or `export ... from`, a bare `import 'x'`, or a
+ *  dynamic `import('x')`), found in code only, never in a comment or a string; `lifecycle.ts` itself always counts. */
+function lifecycleImporters(files: readonly { name: string; text: string }[]): string[] {
+  return files.filter(({ name, text }) => importsLifecycle(name, text)).map((f) => f.name).sort();
+}
+function importsLifecycle(name: string, text: string): boolean {
+  if (name.endsWith('lifecycle.ts')) return true;
+  const blanked = blankCommentsAndStrings(text);
+  // Offsets agree between `blanked` and `text`, so the opening quote found in code names the specifier in the source.
+  for (const m of blanked.matchAll(/(?:^[ \t]*(?:import|export)\b[^;'"`]*?\bfrom\s*|^[ \t]*import\s*(?=['"])|\bimport\s*\(\s*)(['"])/gm)) {
+    const open = m.index + m[0].length - 1;
+    const close = text.indexOf(text[open]!, open + 1);
+    if (close !== -1 && /(?:^|\/)lifecycle\.js$/.test(text.slice(open + 1, close))) return true;
+  }
+  return false;
+}
+
+/** The scanned files that may import `lifecycle.js`: a `.signal` read is a problem only in these (a `CcdResult`'s half),
+ *  so another module's `AbortSignal` is not. A new importer reds the scan until it is named here. */
+const LIFECYCLE_IMPORTERS = ['src/docs/ccdsource.ts', 'src/lifecycle.ts'] as const;
 
 /** The lines (0-based, inclusive) of the function whose declaration matches `decl`, to the first later line that is
  *  a closing brace at the declaration's own indentation; null when there is no such declaration. */
@@ -655,9 +739,21 @@ const CCD_PIN = ['r.killed', 'r.killed', 'r.signal', 'r.signal'] as const;
  * (at least one of each read inside `ccdEnding`) and the `ccd()` pin (exactly the four) are also reported as problems,
  * so the scan cannot pass on nothing.
  *
- * DELIBERATELY NOT CAUGHT: bracket access (`res['killed']`), destructuring (`const { killed } = res`), and a `.killed`
- * inside a template literal whose quote or `//` confuses the blanker. A text guard stops at the ordinary spellings,
- * and these are named here instead of chased.
+ * Scope: a `.signal` read is checked only in a scanned file that imports `lifecycle.js` (`lifecycle.ts` itself counts),
+ * because `signal` is also an `AbortSignal`'s name (`w.signal`, `controller.signal`) and only a `CcdResult` carries the
+ * half this rule is about; the set of such files is pinned in `LIFECYCLE_IMPORTERS`, so a new importer reds until it is
+ * named. `.killed` is checked in every scanned file. A receiver is an identifier (with `!` or `?.`), a parenthesised
+ * identifier, any `)` or `]` (a call or an element access, with or without a `!`), or, on a line that starts with
+ * `.killed`, `?.killed` or `.signal`, the identifier that ends the line before; the name printed for a `)` or `]`
+ * receiver is that bracket.
+ *
+ * DELIBERATELY NOT CAUGHT, and no more than this:
+ *  - bracket access (`res['killed']`, also through an alias key) and destructuring (`const { killed } = res`);
+ *  - for `.signal`, a `CcdResult` that reaches a file which never imports `lifecycle.js`, through an inferred type
+ *    (a function result the file never names): the scope rule cannot see it;
+ *  - a regex literal the blanker takes for a division, because it follows `)`, `]` or an identifier (`if (x) /'/.test(s)`),
+ *    and a division at the start of a line, which it takes for a regex. A text guard stops at the ordinary spellings,
+ *    and these are named here instead of chased.
  */
 function oneReaderProblems(files: readonly { name: string; text: string }[]): string[] {
   const problems: string[] = [];
@@ -667,7 +763,11 @@ function oneReaderProblems(files: readonly { name: string; text: string }[]): st
   let sawCcd = false;
   for (const { name, text } of files) {
     const lines = blankCommentsAndStrings(text).split('\n');
-    const ending = name.endsWith('lifecycle.ts') ? bodyOf(lines, /^export (?:function|const) ccdEnding\b/) : null;
+    const importer = importsLifecycle(name, text);
+    if (importer && !(LIFECYCLE_IMPORTERS as readonly string[]).includes(name)) {
+      problems.push(`scope: ${name} imports lifecycle.js and is not in the pinned importer set [${LIFECYCLE_IMPORTERS.join(', ')}]`);
+    }
+    const ending = name.endsWith('lifecycle.ts') ? bodyOf(lines, /^export function ccdEnding\b/) : null;
     const ccdBody = name.endsWith('lifecycle.ts') ? bodyOf(lines, /^export (?:async )?function ccd\(/) : null;
     sawEnding ||= ending !== null;
     sawCcd ||= ccdBody !== null;
@@ -677,14 +777,23 @@ function oneReaderProblems(files: readonly { name: string; text: string }[]): st
     const assigns = lines.filter((l) => /(?<![\w$.])ending\s*=(?![=>])/.test(l));
     const endingBound = isAdapter && bindings.length === 1 && /\bconst ending = ccdEnding\(/.test(bindings[0]!) && assigns.length === 1;
     const endingReads: string[] = [];
+    const read = (n: number, receiver: string, prop: 'killed' | 'signal'): void => {
+      if (prop === 'signal' && !importer) return;
+      if (ending && n >= ending[0] && n <= ending[1]) { inEnding[prop]++; return; }
+      if (ccdBody && n >= ccdBody[0] && n <= ccdBody[1] && receiver === 'r') { inCcd.push(`${receiver}.${prop}`); return; }
+      if (receiver === 'ending' && prop === 'signal' && endingBound) { endingReads.push(`${name}:${n + 1}`); return; }
+      problems.push(`${name}:${n + 1}: ${receiver}.${prop}`);
+    };
     lines.forEach((l, n) => {
-      for (const m of l.matchAll(/(?:\(\s*([A-Za-z_$][\w$]*)\s*\)|([A-Za-z_$][\w$]*)\s*!?|(\)))\s*\??\.\s*(killed|signal)\b/g)) {
-        const receiver = m[1] ?? m[2] ?? m[3]!;
-        const prop = m[4] as 'killed' | 'signal';
-        if (ending && n >= ending[0] && n <= ending[1]) { inEnding[prop]++; continue; }
-        if (ccdBody && n >= ccdBody[0] && n <= ccdBody[1] && receiver === 'r') { inCcd.push(`${receiver}.${prop}`); continue; }
-        if (receiver === 'ending' && prop === 'signal' && endingBound) { endingReads.push(`${name}:${n + 1}`); continue; }
-        problems.push(`${name}:${n + 1}: ${receiver}.${prop}`);
+      for (const m of l.matchAll(/(?:\(\s*([A-Za-z_$][\w$]*)\s*\)|([A-Za-z_$][\w$]*)|(\))|(\]))\s*!?\s*\??\.\s*(killed|signal)\b/g)) {
+        read(n, m[1] ?? m[2] ?? m[3] ?? m[4]!, m[5] as 'killed' | 'signal');
+      }
+      // A member chain broken across lines: this line starts with the property, the receiver ends the line before.
+      const lead = /^\s*\??\.\s*(killed|signal)\b/.exec(l);
+      if (lead) {
+        const before = lines.slice(0, n).reverse().find((x) => x.trim() !== '') ?? '';
+        const tail = /([A-Za-z_$][\w$]*|\)|\])\s*!?\s*$/.exec(before);
+        read(n, tail ? tail[1]! : '?', lead[1] as 'killed' | 'signal');
       }
     });
     if (isAdapter && endingBound && endingReads.length !== 1) {
@@ -759,10 +868,10 @@ describe('refinement (g): killed and signal have one reader, ccdEnding', () => {
     expect(oneReaderProblems(files)).toEqual(['pin: src/docs/ccdsource.ts reads ending.signal 2 times, wanted exactly 1']);
   });
 
-  it('CONTROL: ending.signal outside ccdsource.ts is a reader', () => {
-    const files = withPlanted('src/docs/policy.ts', 'export ', '  const s = ending.signal;');
-    const line = files.find((f) => f.name === 'src/docs/policy.ts')!.text.split('\n').findIndex((l) => l === '  const s = ending.signal;') + 1;
-    expect(oneReaderProblems(files)).toEqual([`src/docs/policy.ts:${line}: ending.signal`]);
+  it('CONTROL: ending.signal outside ccdsource.ts, in a file that imports lifecycle.js, is a reader', () => {
+    const files = withPlanted('src/lifecycle.ts', '  const ending = ccdEnding(r);', '  const s = ending.signal;');
+    const line = files.find((f) => f.name === 'src/lifecycle.ts')!.text.split('\n').findIndex((l) => l === '  const s = ending.signal;') + 1;
+    expect(oneReaderProblems(files)).toEqual([`src/lifecycle.ts:${line}: ending.signal`]);
   });
 
   it('CONTROL: a third read planted inside ccd() reds the ccd() pin', () => {
@@ -778,6 +887,141 @@ describe('refinement (g): killed and signal have one reader, ccdEnding', () => {
     expect(oneReaderProblems(none)).toEqual(['floor: ccdEnding holds 0 .killed and 0 .signal reads, wanted at least one of each']);
     const noKilled = real().map((f) => edit(f, /  if \(r\.killed === true\) return \{ kind: 'deadline' \};\n/, ''));
     expect(oneReaderProblems(noKilled)).toEqual(['floor: ccdEnding holds 0 .killed and 3 .signal reads, wanted at least one of each']);
+  });
+
+  // ---- Docs W2 fix round 2 ----
+  const lineOf = (files: { name: string; text: string }[], file: string, exact: string): number =>
+    files.find((f) => f.name === file)!.text.split('\n').findIndex((l) => l === exact) + 1;
+  const CLASSIFY = 'src/docs/ccdsource.ts';
+  const READER_NEXT = "  if (res.killed === true) return fail('ccd-timeout');";
+  // After the `ending` binding: a literal that swallowed the binding line is caught by the binding pin, which is not the hole.
+  const AFTER_BINDING = "  if (!res.ok && res.stdout !== '') return fail('answer-overflow');";
+
+  describe('SCOPE: a .signal read is a problem only in a scanned file that imports lifecycle.js', () => {
+    const W3_LANE = [
+      "import { laneAdmit } from './policy.js';",
+      'export function lane(w: { signal: AbortSignal }, found: { controller: AbortController }, f: { controller: AbortController }): void {',
+      '  void laneAdmit; void w.signal; void found.controller.signal; void f.controller.signal;',
+      '}',
+    ].join('\n');
+    it('CONTROL: a file under the docs glob with no lifecycle import and the three W3 AbortSignal reads passes clean', () => {
+      expect(oneReaderProblems([...real(), { name: 'src/docs/lane.ts', text: W3_LANE }])).toEqual([]);
+    });
+    it('CONTROL: the same file with an import from lifecycle.js and a res.signal read reds, and the new importer is named by the pin', () => {
+      const text = ["import { ccdEnding } from '../lifecycle.js';", 'export function lane(res: unknown): void {', '  void ccdEnding; const g = res.signal; void g;', '}'].join('\n');
+      const line = 3;
+      expect(oneReaderProblems([...real(), { name: 'src/docs/lane.ts', text }])).toEqual([
+        'scope: src/docs/lane.ts imports lifecycle.js and is not in the pinned importer set [src/docs/ccdsource.ts, src/lifecycle.ts]',
+        `src/docs/lane.ts:${line}: res.signal`,
+      ]);
+    });
+    it('CONTROL: an import spelled over several lines, or as export-from or a dynamic import, still makes a file an importer', () => {
+      for (const imp of ["import {\n  ccdEnding,\n} from '../lifecycle.js';", "export { ccdEnding } from '../lifecycle.js';", "const m = await import('../lifecycle.js');"]) {
+        const probs = oneReaderProblems([...real(), { name: 'src/docs/lane.ts', text: `${imp}\nconst g = res.signal;` }]);
+        expect(probs[0], imp).toMatch(/^scope: src\/docs\/lane\.ts imports lifecycle\.js/);
+      }
+    });
+    it('CONTROL: .killed stays checked in a file that imports nothing', () => {
+      const files = withPlanted('src/docs/policy.ts', 'export ', '  const k = res.killed;');
+      const line = lineOf(files, 'src/docs/policy.ts', '  const k = res.killed;');
+      expect(oneReaderProblems(files)).toEqual([`src/docs/policy.ts:${line}: res.killed`]);
+    });
+    it('NEAR-MISS: a comment or a string naming lifecycle.js does not make a file an importer', () => {
+      const text = ["// import { ccdEnding } from '../lifecycle.js';", "const s = \"import x from '../lifecycle.js'\";", 'const g = w.signal;'].join('\n');
+      expect(oneReaderProblems([...real(), { name: 'src/docs/lane.ts', text }])).toEqual([]);
+    });
+    it('PIN: today exactly ccdsource.ts and lifecycle.ts are the scanned files that import lifecycle.js', () => {
+      expect(lifecycleImporters(real())).toEqual(['src/docs/ccdsource.ts', 'src/lifecycle.ts']);
+    });
+  });
+
+  describe('F1: the blanker keeps a template expression as code, and blanks a regex literal', () => {
+    it('CONTROL: a /* inside a template literal does not swallow the reader on the next line', () => {
+      const planted = ['  const glob = `${res.stderr}/*.md`; void glob;', READER_NEXT].join('\n');
+      const files = withPlanted(CLASSIFY, AFTER_BINDING, planted);
+      expect(oneReaderProblems(files)).toEqual([`${CLASSIFY}:${lineOf(files, CLASSIFY, READER_NEXT)}: res.killed`]);
+    });
+    it('CONTROL: a /* inside a regex literal does not swallow the reader on the next line', () => {
+      const planted = ["  const trimmed = res.stderr.replace(/\\/*$/, '');", READER_NEXT].join('\n');
+      const files = withPlanted(CLASSIFY, AFTER_BINDING, planted);
+      expect(oneReaderProblems(files)).toEqual([`${CLASSIFY}:${lineOf(files, CLASSIFY, READER_NEXT)}: res.killed`]);
+    });
+    it('CONTROL: a ${...} expression is code, so a read inside it is named (nested braces and nested templates too)', () => {
+      for (const planted of [
+        '  const a = `x ${res.killed} y`;',
+        '  const a = `x ${ { k: 1 }.k + (res.killed ? 1 : 0) } y`;',
+        '  const a = `x ${ `inner ${res.killed} text` } y`;',
+        '  const a = `x ${ `inner ${ `deep ${res.killed}` }` } y`;',
+      ]) {
+        const files = withPlanted(CLASSIFY, CLASSIFY_ANCHOR, planted);
+        expect(oneReaderProblems(files), planted).toEqual([`${CLASSIFY}:${lineOf(files, CLASSIFY, planted)}: res.killed`]);
+      }
+    });
+    it('blanker: template text is blanked, ${} is kept, and a quote, //, or /* in template text opens nothing', () => {
+      expect(blankCommentsAndStrings("a`it's // /* ${b} ${ {c:`d`}.c } \\` e`f")).toBe('a`           ${b} ${ {c:` `}.c }     `f');
+      expect(blankCommentsAndStrings('x`a\nb`y')).toBe('x` \n `y');
+    });
+    it('blanker: regex literals start where a slash cannot be division, honour escapes and character classes, and end at their own slash', () => {
+      expect(blankCommentsAndStrings("x(/a'b/)")).toBe('x(/   /)');
+      expect(blankCommentsAndStrings('x = /a\\/b/g')).toBe('x = /    /g');
+      expect(blankCommentsAndStrings('x = /[/*]/;')).toBe('x = /    /;');
+      expect(blankCommentsAndStrings('return /"/.test(s)')).toBe('return / /.test(s)');
+      expect(blankCommentsAndStrings('f(a, /\'/, b)')).toBe('f(a, / /, b)');
+      expect(blankCommentsAndStrings('if (!/\'/.test(s)) {}')).toBe('if (!/ /.test(s)) {}');
+      expect(blankCommentsAndStrings('/x\'y/.test(s)')).toBe('/   /.test(s)');
+    });
+    it("blanker: a slash after an operand is division, not a regex", () => {
+      // `a / b / 'c'` would blank ` b ` as a regex; the string after it must still be the only blanked span
+      expect(blankCommentsAndStrings("const q = a / b / 'cc';")).toBe("const q = a / b / '  ';");
+      expect(blankCommentsAndStrings("const q = (a + 1) / 2 + x[0] / 'dd'.length;")).toBe("const q = (a + 1) / 2 + x[0] / '  '.length;");
+    });
+  });
+
+  describe('F2: wider receivers', () => {
+    it('CONTROL: an element-access receiver is a reader (all[0].killed, all[0]!.killed, rs[0].signal)', () => {
+      for (const [spelling, receiver] of [['all[0].killed', '].killed'], ['all[0]!.killed', '].killed'], ['rs[0].signal', '].signal']] as const) {
+        const planted = `  if (${spelling}) return fail('ccd-timeout');`;
+        const files = withPlanted(CLASSIFY, CLASSIFY_ANCHOR, planted);
+        expect(oneReaderProblems(files), spelling).toEqual([`${CLASSIFY}:${lineOf(files, CLASSIFY, planted)}: ${receiver}`]);
+      }
+    });
+    it('CONTROL: a non-null assertion after a call or an index is a reader (id(res)!.killed, [res].at(0)!.killed)', () => {
+      for (const [spelling, receiver] of [['id(res)!.killed', 'res.killed'], ['[res].at(0)!.killed', ').killed']] as const) {
+        const planted = `  if (${spelling}) return fail('ccd-timeout');`;
+        const files = withPlanted(CLASSIFY, CLASSIFY_ANCHOR, planted);
+        expect(oneReaderProblems(files), spelling).toEqual([`${CLASSIFY}:${lineOf(files, CLASSIFY, planted)}: ${receiver}`]);
+      }
+    });
+    it('CONTROL: a member chain broken across lines is a reader (.killed, ?.killed, .signal on a line of its own)', () => {
+      for (const [line2, prop] of [['    .killed', 'killed'], ['    ?.killed', 'killed'], ['    .signal', 'signal']] as const) {
+        const planted = ['  const k = res', line2, '    ;'].join('\n');
+        const files = withPlanted(CLASSIFY, CLASSIFY_ANCHOR, planted);
+        expect(oneReaderProblems(files), line2).toEqual([`${CLASSIFY}:${lineOf(files, CLASSIFY, line2)}: res.${prop}`]);
+      }
+    });
+    it('CONTROL: a regex literal holding a quote no longer blanks the reader behind it on the same line', () => {
+      const planted = "  if (/[\"']/.test(res.stderr) || res.killed === true) return fail('ccd-timeout');";
+      const files = withPlanted(CLASSIFY, CLASSIFY_ANCHOR, planted);
+      expect(oneReaderProblems(files)).toEqual([`${CLASSIFY}:${lineOf(files, CLASSIFY, planted)}: res.killed`]);
+    });
+    it('NEAR-MISS: a spread and a leading-dot number are not readers', () => {
+      const planted = ['  const a = [...rest, .5];', '  const c = { ...signalOpts };'].join('\n');
+      expect(oneReaderProblems(withPlanted(CLASSIFY, CLASSIFY_ANCHOR, planted))).toEqual([]);
+    });
+  });
+
+  describe('F3: ccdEnding is located only by its function form', () => {
+    it('CONTROL: ccdEnding rewritten as a const arrow answers "no ccdEnding body found" (never an over-long body)', () => {
+      const files = real().map((f) => {
+        if (f.name !== 'src/lifecycle.ts') return f;
+        const arrow = f.text
+          .replace('export function ccdEnding(r: CcdResult): CcdEnding {', 'export const ccdEnding = (r: CcdResult): CcdEnding => {')
+          .replace("  return { kind: 'exited' };\n}\n", "  return { kind: 'exited' };\n};\n");
+        expect(arrow, 'the const-form rewrite applied').not.toBe(f.text);
+        return { ...f, text: arrow };
+      });
+      expect(oneReaderProblems(files)).toContain('lifecycle.ts: no ccdEnding body found');
+    });
   });
 
   it('NEAR-MISS: a comment, a string, a type member, an object key and ending.signal are not readers', () => {
