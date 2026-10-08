@@ -1128,6 +1128,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **2026-10-08 12:42 UTC — v0.0.123 auto-converged unattended.** No action was taken.
       - STATUS: fleet and server v0.0.123, newest v0.0.123, backups fleet 144M/server 588M, disk free fleet 216G/work
         volume 268G/server 33G, no anomalies.
+    - **2026-10-08 14:42 UTC — v0.0.124 and v0.0.125 auto-converged unattended.** No action was taken. They carry
+      child-reclamation wave 6 (#326) and that programme's docs (#329).
+      - STATUS: fleet and server v0.0.125, newest v0.0.125, backups fleet 145M/server 594M, disk free fleet 216G/work
+        volume 271G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
