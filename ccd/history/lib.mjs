@@ -1762,8 +1762,21 @@ const SEQ_FILL_RE = new RegExp(`[${SEQ_FILL_SRC}]`);
 const ESCAPE_INTRODUCER_RE = /[\x1b\x8e\x8f\x90\x9b]/;
 /** The most distinct lead prefixes tried in front of one span (D-4307; security review of ee55098c2). Stacked
  *  colour codes give a few (`ESC[0m` `ESC[01;34m` gives three); past this many the span is marked unread instead
- *  (fail closed), which bounds the lead reading's cost to a fixed multiple of the field. */
+ *  (fail closed), which bounds the lead reading's cost to a fixed multiple of the field. An offset with no span
+ *  text after it is never marked: its prefixes alone cost no more than its sequences (security review of
+ *  2a8c791bf). */
 export const LEAD_PREFIXES_MAX = 8;
+/** The most readings of one span the lead reading tests (D-4307; security review of 2a8c791bf). A span's readings
+ *  are every combination of one reading per sequence in it (spanReadings), a product; past this many, the span's
+ *  plain sequences (PLAIN_SEQ_RE) are read two ways only, all stripped or all cut, and past this many readings of
+ *  the others the span is marked unread (fail closed). The readings of a span are each about the span's length, so
+ *  this bounds their cost to a fixed multiple of the field. */
+export const LEAD_READINGS_MAX = 16;
+/** A plain sequence, the kind colour and cursor output emits (D-4307; security review of 2a8c791bf): a CSI (`ESC [`
+ *  with nothing between them, or the 8-bit 0x9B) with neither a C0 control nor an intermediate byte, or an `ESC`
+ *  sequence that opens with an intermediate byte other than a space (a charset designation, `ESC(B`). A stray `ESC`
+ *  right before a word is not plain: it reads as a bare `ESC` and a final byte, a single shift or a DCS header. */
+const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
 
 /** One run through all three layers, failing closed. V8 runs these patterns
  *  by backtracking on a bounded stack, so over a run of several MiB `replace`
@@ -1774,17 +1787,21 @@ export const LEAD_PREFIXES_MAX = 8;
  *  cannot finish is replaced whole by the mark (§8.3 is fail-closed), never
  *  printed or indexed unredacted. The catch spans every layer, not the shape
  *  loop alone, because the JSON-form throw is layer 2's. Only a RangeError is
- *  caught: any other throw is a defect and propagates. */
-function redactRun(segment, idx) {
+ *  caught: any other throw is a defect and propagates. `context` false skips
+ *  layer 2, for the lead reading's candidates (D-4307; security review of
+ *  2a8c791bf): they hold only `[A-Za-z0-9_.-]` and `\n`, and every layer-2
+ *  pattern needs a `"`, `=`, `:`, `?` or `&`, so it can match nothing there,
+ *  while on a span of short dotted words it is the costliest layer. */
+function redactRun(segment, idx, context = true) {
   try {
-    return redactLayers(segment, idx);
+    return redactLayers(segment, idx, context);
   } catch (e) {
     if (e instanceof RangeError) return REDACTED_MARK;
     throw e;
   }
 }
 
-function redactLayers(segment, idx) {
+function redactLayers(segment, idx, context) {
   // Layer 1: values, by (length, sha256) of each [A-Za-z0-9_-]+ run. A value
   // glued to other run characters (`<secret>_file`) is not a run and is not
   // matched here: that is §8.3's chosen grammar, since a substring search
@@ -1800,13 +1817,15 @@ function redactLayers(segment, idx) {
   // word boundary inside a long run of [A-Za-z0-9_.-] rescans to the run's
   // end, which is quadratic (a 2 MiB base64url blob measured 90.8 s, bounded
   // 139 ms), and one large tool_result would outlive the carrier's kill.
-  s = s.replace(/"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"((?:[^"\\]|\\.)+)"/g,
-    (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
-  s = s.replace(/\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'`,;&]+)/g,
-    (all, name, sep, quote, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `${name}${sep}${quote}${REDACTED_MARK}` : all));
-  s = s.replace(/(Authorization:[ \t]*Bearer[ \t]+)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
-  s = s.replace(/(x-ccrc-mail-token:[ \t]*)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
-  s = s.replace(/([?&]token=)([^&\s"'#]+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+  if (context) {
+    s = s.replace(/"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"((?:[^"\\]|\\.)+)"/g,
+      (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
+    s = s.replace(/\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'`,;&]+)/g,
+      (all, name, sep, quote, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `${name}${sep}${quote}${REDACTED_MARK}` : all));
+    s = s.replace(/(Authorization:[ \t]*Bearer[ \t]+)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+    s = s.replace(/(x-ccrc-mail-token:[ \t]*)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+    s = s.replace(/([?&]token=)([^&\s"'#]+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+  }
   // Layer 3: shapes.
   for (const re of SECRET_SHAPE_RES) s = s.replace(re, REDACTED_MARK);
   return redactJwtShapes(s);
@@ -1841,29 +1860,127 @@ function spanEnd(s, p) {
 /** How many characters of lead candidates are tested in one pass (D-4307): the lead reading's memory bound. */
 const LEAD_BATCH_CHARS = 1 << 20;
 
-/** The lead reading (D-4307; security review of ee55098c2): the offsets of `plain` (the stripped text) whose span
- *  a sequence's own trailing characters complete into something redaction removes. `leads` is flat, three numbers
- *  per sequence: its offset in `plain`, then its start and end in `raw`. Every distinct prefix of the sequences at
- *  one offset (leadPrefixes) is tried in front of the span up to the next sequence (the sequence read as a
- *  separator, as the per-fragment reading reads it) and, when that span reaches the next sequence and the character
- *  before the offset is outside the span class, in front of the whole joined span (the sequence stripped but for the
- *  prefix, every later sequence in the span stripped). Only an offset at a span's start reads past the next
- *  sequence, and spans are disjoint, so the candidates total at most LEAD_PREFIXES_MAX times twice `plain` plus the
- *  sequences: linear. A candidate holds only span-class characters, so a newline between two is a boundary no layer
- *  reads across, and candidates are tested LEAD_BATCH_CHARS at a time, each alone only when its batch redacts. An
- *  offset with more than LEAD_PREFIXES_MAX distinct prefixes is returned untested (fail closed). Returned
- *  ascending, each offset once. */
+/** The end of the `[A-Za-z0-9_-]` run of `s` that starts at `p` (the value layer's unit). */
+function runEnd(s, p) {
+  let e = p;
+  while (e < s.length && isRunByte(s.charCodeAt(e))) e += 1;
+  return e;
+}
+
+/** Test every combination of `lists` (one reading per sequence, at `offs`) as one candidate, the span `plain[a..b]`
+ *  with each sequence replaced by its reading (D-4307; security review of 2a8c791bf). A sequence whose only reading
+ *  is stripped joins its neighbours and is not a position. `skipFirst` skips the combination of every first reading.
+ *  A candidate that redacts is flagged at the offset of `plain` its first redacted character came from: a character
+ *  a sequence put back came from that sequence's offset. */
+function readCombinations(plain, a, b, offs0, lists0, skipFirst, test) {
+  const keep = lists0.map((l) => l.length > 1 || l[0] !== '');
+  const offs = offs0.filter((_, m) => keep[m]);
+  const lists = lists0.filter((_, m) => keep[m]);
+  const total = lists.reduce((n, l) => n * l.length, 1);
+  for (let r = skipFirst ? 1 : 0; r < total; r += 1) {
+    let rest = r;
+    const ins = lists.map((l) => {
+      const x = l[rest % l.length];
+      rest = Math.floor(rest / l.length);
+      return x;
+    });
+    let c = '';
+    let at = a;
+    for (let n = 0; n < ins.length; n += 1) {
+      c += plain.slice(at, offs[n]) + ins[n];
+      at = offs[n];
+    }
+    test(c + plain.slice(at, b), (q) => {
+      let pos = 0;
+      let from = a;
+      for (let n = 0; n < ins.length; n += 1) {
+        if (q < pos + offs[n] - from) return from + q - pos;
+        pos += offs[n] - from;
+        from = offs[n];
+        if (q < pos + ins[n].length) return from;
+        pos += ins[n].length;
+      }
+      return Math.min(from + q - pos, b);
+    });
+  }
+}
+
+/** The readings of one span (D-4307; security review of 2a8c791bf): `plain[a..b]`, a maximal `[A-Za-z0-9_.-]` span
+ *  of the stripped text, and the sequences at offsets `a` to `b` (`leads[i..j]`, flat as in leadOffsets). Each
+ *  sequence is read one of these ways: stripped; as a cut (`\n`, the per-fragment reading); as one of its lead
+ *  prefixes (leadPrefixes) put back in the text; or as a cut and then one of them (the sequence's other bytes a
+ *  boundary). A reading the span's ends make identical to another is not listed: the first sequence at `a` takes
+ *  no cut, the last at `b` no bare cut. Every combination is one candidate, the whole span, so the value and shape
+ *  layers apply their own boundaries inside it (a value after a `.` is a run of its own there). The all-stripped
+ *  candidate is the joined reading's own text, so it is skipped. Over LEAD_READINGS_MAX combinations, the plain
+ *  sequences (PLAIN_SEQ_RE) are read two ways only, all stripped or all cut, each with every combination of the
+ *  others (all cut with the others stripped is no other reading's text, so it is tested); over LEAD_READINGS_MAX
+ *  combinations of the others, the span is flagged at `a`, untested (fail closed). */
+function spanReadings(plain, raw, leads, i, j, a, b, test, flagged) {
+  const offs = [];
+  const lists = [];
+  const plainSeq = [];
+  for (let k = i; k < j; k += 3) {
+    const seq = raw.slice(leads[k + 1], leads[k + 2]);
+    const P = leadPrefixes(seq);
+    const cuts = P.map((x) => `\n${x}`);
+    offs.push(leads[k]);
+    lists.push(k === i && leads[k] === a ? ['', ...P] : k + 3 === j && leads[k] === b ? ['', ...P, ...cuts] : ['', '\n', ...P, ...cuts]);
+    plainSeq.push(P.length === 0 || PLAIN_SEQ_RE.test(seq));
+  }
+  const product = (ls) => ls.reduce((n, l) => Math.min(n * l.length, LEAD_READINGS_MAX + 1), 1);
+  if (product(lists) <= LEAD_READINGS_MAX) { readCombinations(plain, a, b, offs, lists, true, test); return; }
+  const others = lists.map((l, m) => (plainSeq[m] ? [''] : l));
+  const readings = product(others);
+  if (readings > LEAD_READINGS_MAX) { flagged.add(a); return; }
+  // With plain sequences alone, the two readings are the joined and the per-fragment ones, both read already.
+  if (readings === 1) return;
+  readCombinations(plain, a, b, offs, others, true, test);
+  readCombinations(plain, a, b, offs, lists.map((l, m) => (plainSeq[m] ? ['\n'] : l)), false, test);
+}
+
+/** The lead reading (D-4307; security review of ee55098c2 and of 2a8c791bf): the offsets of `plain` (the stripped
+ *  text) whose span a sequence's own trailing characters complete into something redaction removes. `leads` is
+ *  flat, three numbers per sequence: its offset in `plain`, then its start and end in `raw`. Two passes.
+ *  - Each offset alone: every distinct prefix of the sequences at one offset (leadPrefixes) is tried in front of
+ *    the span up to the next sequence (the sequence read as a separator) and, when that span reaches the next
+ *    sequence, in front of the rest of the span (from a span's start) or of the rest of the `[A-Za-z0-9_-]` run
+ *    (from a run's start inside a span, after a `.`), every later sequence stripped. Only a span's or a run's start
+ *    reads past the next sequence, and spans and runs are disjoint, so the candidates total at most
+ *    LEAD_PREFIXES_MAX times three times `plain` plus the sequences. An offset with span text after it and more
+ *    than LEAD_PREFIXES_MAX distinct prefixes is flagged untested (fail closed); with none after it, its candidates
+ *    are its prefixes alone, which total at most three times its sequences' length, so it is never flagged unread
+ *    (a spinner's stack of cursor and colour sequences before its glyph).
+ *  - Each span: every combination of its sequences' readings (spanReadings), fewer than twice LEAD_READINGS_MAX
+ *    candidates of the span's length plus its sequences' bytes each, spans disjoint.
+ *  So the candidates are linear in `plain` plus the sequences. A candidate holds only span-class characters and
+ *  `\n`, a boundary no layer reads across, so candidates are tested LEAD_BATCH_CHARS at a time, joined by `\n`,
+ *  each alone only when its batch redacts, and without the context layer, which can match nothing in them
+ *  (redactRun). A sequence at an offset with a non-span character on both sides belongs
+ *  to no span and is read by the first pass alone. Returned ascending, each offset once. */
 function leadOffsets(plain, raw, leads, idx) {
   const flagged = new Set();
   let batch = [];
   let size = 0;
   const flush = () => {
-    const all = batch.filter((_, k) => k % 2 === 1).join('\n');
-    if (redactRun(all, idx) !== all) {
-      for (let k = 0; k < batch.length; k += 2) if (redactRun(batch[k + 1], idx) !== batch[k + 1]) flagged.add(batch[k]);
+    const all = batch.filter((_, k) => k % 2 === 0).join('\n');
+    if (redactRun(all, idx, false) !== all) {
+      for (let k = 0; k < batch.length; k += 2) {
+        const c = batch[k];
+        const r = redactRun(c, idx, false);
+        if (r === c) continue;
+        let q = 0;
+        while (q < c.length && c.charCodeAt(q) === r.charCodeAt(q)) q += 1;
+        flagged.add(batch[k + 1](q));
+      }
     }
     batch = [];
     size = 0;
+  };
+  const test = (c, flagAt) => {
+    batch.push(c, flagAt);
+    size += c.length + 1;
+    if (size >= LEAD_BATCH_CHARS) flush();
   };
   for (let i = 0; i < leads.length;) {
     const p = leads[i];
@@ -1873,23 +1990,32 @@ function leadOffsets(plain, raw, leads, idx) {
     const next = j < leads.length ? leads[j] : plain.length;
     i = j;
     if (prefixes.size === 0) continue;
-    if (prefixes.size > LEAD_PREFIXES_MAX) { flagged.add(p); continue; }
     let fragEnd = p;
     while (fragEnd < next && isSpanByte(plain.charCodeAt(fragEnd))) fragEnd += 1;
-    const atStart = p === 0 || !isSpanByte(plain.charCodeAt(p - 1));
-    const ends = fragEnd === next && atStart ? [fragEnd, spanEnd(plain, fragEnd)] : [fragEnd];
-    if (ends.length === 2 && ends[1] === fragEnd) ends.pop();
+    // With no span character after it, an offset's candidates are its prefixes alone, as long as the sequences.
+    if (prefixes.size > LEAD_PREFIXES_MAX && fragEnd > p) { flagged.add(p); continue; }
+    const atSpanStart = p === 0 || !isSpanByte(plain.charCodeAt(p - 1));
+    const atRunStart = atSpanStart || !isRunByte(plain.charCodeAt(p - 1));
+    const far = fragEnd < next ? fragEnd : atSpanStart ? spanEnd(plain, fragEnd) : atRunStart ? runEnd(plain, p) : fragEnd;
+    const at = () => p;
     for (const x of prefixes) {
-      for (const e of ends) {
-        const c = x + plain.slice(p, e);
-        batch.push(p, c);
-        size += c.length + 1;
-        if (size >= LEAD_BATCH_CHARS) flush();
-      }
+      test(x + plain.slice(p, fragEnd), at);
+      if (far > fragEnd) test(x + plain.slice(p, far), at);
     }
   }
+  for (let i = 0; i < leads.length;) {
+    const o = leads[i];
+    if (!(o > 0 && isSpanByte(plain.charCodeAt(o - 1))) && !(o < plain.length && isSpanByte(plain.charCodeAt(o)))) { i += 3; continue; }
+    let a = o;
+    while (a > 0 && isSpanByte(plain.charCodeAt(a - 1))) a -= 1;
+    const b = spanEnd(plain, o);
+    let j = i;
+    while (j < leads.length && leads[j] <= b) j += 3;
+    spanReadings(plain, raw, leads, i, j, a, b, test, flagged);
+    i = j;
+  }
   if (batch.length > 0) flush();
-  return [...flagged].sort((a, b) => a - b);
+  return [...flagged].sort((x, y) => x - y);
 }
 
 /** `plain` with the span at each flagged offset replaced by the mark (an empty span gets the mark inserted). */
@@ -1925,13 +2051,15 @@ function markSpansAt(plain, offsets) {
  *  sequences removed (`P`, accumulated from the fragments themselves, never by
  *  re-matching an escape in `A`), and runs the layers once more (`C`). The
  *  LEAD reading (leadOffsets) puts back what a sequence may have taken from
- *  the text after it, its trailing run-class characters, in front of the
- *  fragment after it and, at the start of a span, in front of the whole joined
- *  span: a bare `ESC` before a secret coloured in part (`ESC` + `S` + `ECR` +
- *  a CSI + `ET`) loses its `S` to the joined reading and keeps the CSI's
- *  remnant glued on in the raw one, a DCS header or a single shift takes a
- *  value's first characters. A span the lead reading finds is marked in `P`
- *  before `C` is computed. `C === P` (nothing new, no lead found) returns `A`
+ *  the text after it, its trailing span-class characters, one offset at a
+ *  time and, per span, in every combination of its sequences' readings
+ *  (spanReadings), so a value two sequences each took a character of, or one
+ *  right after a `.`, is read whole: a bare `ESC` before a secret coloured in
+ *  part (`ESC` + `S` + `ECR` + a CSI + `ET`) loses its `S` to the joined
+ *  reading and keeps the CSI's remnant glued on in the raw one, a DCS header
+ *  or a single shift takes a value's first characters. Text the lead reading
+ *  finds is marked in `P`, from its first character to its span's end, before
+ *  `C` is computed. `C === P` (nothing new, no lead found) returns `A`
  *  with its colours; otherwise `C` is returned, the sequences dropped from
  *  that one field's output (presentation only, the stored blob stays
  *  verbatim). A field with no escape introducer takes the plain path alone,
@@ -1943,7 +2071,7 @@ function markSpansAt(plain, offsets) {
  *  `[` as a CSI opener, a final byte or a shifted character and split the
  *  mark. `ANSI_ESCAPE_RE` therefore never takes a mark's first character as
  *  any of them.
- *  D-4307 (history-redaction-csi-joined-belt, amended: review 316 F1 and M1, security review of ee55098c2) */
+ *  D-4307 (history-redaction-csi-joined-belt, amended: review 316 F1 and M1, security reviews of ee55098c2 and 2a8c791bf) */
 export function redactField(text, idx) {
   if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx);
   const raw = redactRun(text, idx);

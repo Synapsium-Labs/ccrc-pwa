@@ -1955,6 +1955,115 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       expect(out === s).toBe(true);
     }
   });
+  it('FU1S: a value right after a `.` whose first character a sequence took, split by a later sequence, is redacted (the span reading)', () => {
+    const s = 'S' + rndHex(16);
+    expect(libRedact.redactField(`foo.\x1b${s.slice(0, 8)}\x1b[31m${s.slice(8)}\x1b[0m bar`, idxOf([s]))).toBe(`foo.${M} bar`);
+    const a = 'a' + rndHex(16);
+    expect(libRedact.redactField(`foo.\x1b[${a.slice(0, 8)}\x1b[31m${a.slice(8)} bar`, idxOf([a]))).toBe(`foo.${M} bar`);
+    const o = 'O' + rndHex(16);
+    expect(libRedact.redactField(`x.\x1bO${o.slice(1, 8)}\x1b[1m${o.slice(8)}`, idxOf([o]))).toBe(`x.${M}`);
+  });
+  it('FU1S: past LEAD_READINGS_MAX readings, a plain sequence right after a `.` that took a value\'s first character is read to the end of the value\'s run (the offset reading)', () => {
+    const a = 'a' + rndHex(16);
+    expect(libRedact.redactField(`foo.\x1b[${a.slice(0, 8)}\x1b[1m\x1b[31m${a.slice(8)}\x1b[0m\x1b[K bar`, idxOf([a]))).toBe(`foo.${M} bar`);
+  });
+  it('FU1S: a value two sequences each took a character of, coloured between them, is redacted (the span reading)', () => {
+    const v = 'S' + rndHex(16);
+    const idx = idxOf([v]);
+    expect(libRedact.redactField(`\x1b${v.slice(0, 6)}\x1b[31m${v.slice(6, 10)}\x1b${v.slice(10)}\x1b[0m`, idx)).toBe(M);
+    expect(libRedact.redactField(`x \x1b${v.slice(0, 6)}\x1b[31m${v.slice(6, 10)}\x1bO${v.slice(10)} y`, idx)).toBe(`x ${M} y`);
+    expect(libRedact.redactField(`x \x1b${v.slice(0, 6)}\x1b[31m${v.slice(6, 10)}\x1bP${v.slice(10)} y`, idx)).toBe(`x ${M} y`);
+    expect(libRedact.redactField(`x \x1b${v.slice(0, 6)}\x1b[31m${v.slice(6, 10)}\x8f${v.slice(10)} y`, idx)).toBe(`x ${M} y`);
+    expect(libRedact.redactField(`pre.\x1b${v.slice(0, 6)}\x1b[31m${v.slice(6, 10)}\x1b${v.slice(10)}\x1b[0m`, idx)).toBe(`pre.${M}`);
+    const a = 'a' + rndHex(16);
+    expect(libRedact.redactField(`\x1b[${a.slice(0, 6)}\x1b${a.slice(6)}`, idxOf([a]))).toBe(M);
+    const r = 'S' + rndHex(16);
+    expect(libRedact.redactField(`abc\x1b${r.slice(0, 6)}\x1b[31m${r.slice(6)} y`, idxOf([r]))).toBe(`abc${M} y`);
+  });
+  it('FU1S: past LEAD_READINGS_MAX readings the plain sequences are also read all as cuts, so a value a colour code sets apart from the text before it is redacted when another sequence took a character of it or splits it', () => {
+    const v = 'S' + rndHex(16);
+    const idx = idxOf([v]);
+    expect(libRedact.redactField(`foo\x1b[1m${v.slice(0, 8)}\x1b${v.slice(8)}\x1b[0m`, idx)).toBe(`foo${M}`);
+    expect(libRedact.redactField(`x foo\x1b[1m${v.slice(0, 8)}\x1bO${v.slice(8)} y`, idx)).toBe(`x foo${M} y`);
+    expect(libRedact.redactField(`x foo\x1b[1m${v.slice(0, 8)}\x8f${v.slice(8)} y`, idx)).toBe(`x foo${M} y`);
+    // `ESC 7` saves the cursor and shows nothing: read stripped, with the colour code before the value read as a cut.
+    expect(libRedact.redactField(`foo\x1b[1m${v.slice(0, 8)}\x1b7${v.slice(8)}\x1b[0m`, idx)).toBe(`foo${M}`);
+  });
+  it('FU1S: past LEAD_READINGS_MAX readings of a span\'s other sequences the span is marked unread (fail closed); its plain sequences never count', () => {
+    const none = libRedact.makePairIndex([]);
+    expect(libRedact.LEAD_READINGS_MAX).toBe(16);
+    // `ESC S` first in its span reads 2 ways, `ESC 7` and `ESC 8` inside it 4 ways each: 32 readings.
+    expect(libRedact.redactField('x \x1bSab\x1b7cd\x1b8ef y', none)).toBe(`x ${M} y`);
+    // `ESC P a` first in its span reads 3 ways (stripped, `Pa`, `a`), `ESC 7` inside it 4: 12, all tested, nothing found.
+    expect(libRedact.redactField('x \x1bPab\x1b7cd y', none)).toBe('x \x1bPab\x1b7cd y');
+    // A word every letter of which tput coloured (sgr0 is `ESC(B ESC[m`), then `ESC 7`: past the cap the plain
+    // sequences are read stripped, which leaves `ESC 7`'s 3 readings.
+    const rainbow = [...'refresh_token'].map((ch, i) => `\x1b[3${(i % 7) + 1}m${ch}\x1b(B\x1b[m`).join('');
+    expect(libRedact.redactField(`a ${rainbow}\x1b7 b`, none)).toBe(`a ${rainbow}\x1b7 b`);
+    // A sequence that takes no span character is plain too: four string terminators (`ESC` and a backslash) read
+    // 16 ways together and `ESC 7` 4 ways; past the cap the terminators are read all stripped or all cut, which
+    // leaves `ESC 7`'s 4 readings, all tested.
+    expect(libRedact.redactField('x a\x1b\\b\x1b\\c\x1b\\d\x1b\\e\x1b7f y', none)).toBe('x a\x1b\\b\x1b\\c\x1b\\d\x1b\\e\x1b7f y');
+  });
+  it('FU1S: colour and cursor output of common tools comes back as it came', () => {
+    const none = libRedact.makePairIndex([]);
+    for (const s of [
+      // grep --color=always -n: a match inside a word
+      '\x1b[32m\x1b[K5\x1b[m\x1b[K\x1b[36m\x1b[K:\x1b[m\x1b[Kapi.example.com/v1/\x1b[01;31m\x1b[Ktok\x1b[m\x1b[Kens?scope=read.write status=200 \x1b[01;31m\x1b[Ktok\x1b[m\x1b[Kens_used=1234',
+      // ls --color
+      '\x1b[0m\x1b[01;34mnode_modules\x1b[0m  \x1b[01;32mrun.sh\x1b[0m*  \x1b[00;38;5;244m\x1b[m\x1b[00;38;5;241mREADME.md\x1b[0m',
+      // git diff --word-diff=color
+      'const \x1b[31mtokenValue\x1b[m\x1b[32mtokenValues\x1b[m = \x1b[31mloadToken(config.path);\x1b[m\x1b[32mloadTokens(config.paths);\x1b[m',
+      // tput on xterm: setaf, bold, then sgr0 (`ESC(B ESC[m`)
+      '\x1b[31m\x1b[1mERROR\x1b(B\x1b[m: config.yaml missing',
+      // tput sc/cup/rc around a progress line, and apt's progress line
+      '\x1b7\x1b[24;1H\x1b[42m\x1b[30mProgress: [ 45%]\x1b(B\x1b[m [##########..........]\x1b8',
+      '\x1b7\x1b[24;0f\x1b[42m\x1b[30mProgress: [ 45%]\x1b[49m\x1b[39m [####################......................] \x1b8',
+      // pytest's progress line, vitest's summary lines
+      'tests/test_auth.py \x1b[32m.\x1b[0m\x1b[32m.\x1b[0m\x1b[31mF\x1b[0m\x1b[32m.\x1b[0m\x1b[33ms\x1b[0m\x1b[32m    [100%]\x1b[0m',
+      ' \x1b[32m+\x1b[39m demo.test.ts \x1b[2m(\x1b[22m\x1b[2m2 tests\x1b[22m\x1b[2m | \x1b[22m\x1b[31m1 failed\x1b[39m\x1b[2m)\x1b[22m\x1b[33m 18\x1b[2mms\x1b[22m\x1b[39m',
+      '\x1b[2m   Duration \x1b[22m 1.45s\x1b[2m (transform 1.05s, setup 0ms, import 893ms, tests 13.53s)\x1b[22m',
+      // a spinner frame: cursor hidden, a line erased, then the frame's glyph (nine prefixes, no span after them)
+      '\x1b[?25l\x1b[1A\x1b[2K\x1b[G\x1b[36m|\x1b[39m Installing dependencies...',
+    ]) expect(libRedact.redactField(s, none), JSON.stringify(s)).toBe(s);
+  });
+  it('FU1S: the span reading stays linear', () => {
+    const none = libRedact.makePairIndex([]);
+    for (const s of [
+      '\x1bS' + 'x'.repeat(1 << 19) + '\x1b7' + 'x'.repeat(1 << 19),
+      '\x1bP12a' + 'x'.repeat(1 << 19) + '\x1b7' + 'x'.repeat(1 << 19),
+      '\x1b[a' + 'x'.repeat(1 << 19) + '\x1b[31m' + 'x'.repeat(1 << 19),
+      '\x1bSab\x1b[1mcd \x1b[0m'.repeat(1 << 15),
+      '\x1bP12a' + 'a.'.repeat(1 << 16) + '\x1b7' + 'a.'.repeat(1 << 16),
+      Array.from({ length: 1 << 15 }, (_, i) => `\x1b[3${(i % 7) + 1}m${'abcdefg'[i % 7]}\x1b(B\x1b[m`).join(''),
+      '\x1bP12a' + 'x\x1b[1m'.repeat(1 << 15) + '\x1b7' + 'x\x1b[1m'.repeat(1 << 15),
+    ]) {
+      const t0 = Date.now();
+      const out = libRedact.redactField(s, none);
+      expect(Date.now() - t0, JSON.stringify(s.slice(0, 8))).toBeLessThan(LINEAR_MS);
+      expect(out === s).toBe(true);
+    }
+  });
+  it('FU1S: the lead reading\'s candidates skip the context layer, which can match nothing in them, so a span of short dotted words costs a few redactions of it', () => {
+    const none = libRedact.makePairIndex([]);
+    const body = 'a.'.repeat(1 << 15);
+    const s = `\x1bP12a${body}\x1b7${body}`;
+    const plain = `P12a${body}7${body}`;
+    let tOne = Infinity;
+    let tLead = Infinity;
+    for (let round = 0; round < 3; round += 1) {
+      let t0 = performance.now();
+      libRedact.redactField(plain, none);
+      tOne = Math.min(tOne, performance.now() - t0);
+      t0 = performance.now();
+      const out = libRedact.redactField(s, none);
+      tLead = Math.min(tLead, performance.now() - t0);
+      expect(out === s).toBe(true);
+    }
+    // The span's 15 readings and the offset reading's 6 candidates: measured 3.7-4.6x one redaction of the field
+    // without the context layer, 24-28x with it (8.7-9.6x at 2a8c791bf). Interleaved, each kept at its minimum.
+    expect(tLead).toBeLessThan(12 * tOne);
+  }, 60_000);
   it('the mark holds no JSON- or XML-special character, and the final belt applies the same layers', () => {
     expect(M).not.toMatch(/["\\<>&]/);
     const tok = rndHex(32);
