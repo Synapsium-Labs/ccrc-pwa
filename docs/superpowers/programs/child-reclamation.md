@@ -23,7 +23,7 @@ removed on 2026-09-10 was not.
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
-| 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | — | **pre-flight ruled** (contract §14); run 347; plan next |
+| 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | — | **dispatched** 2026-10-08 18:30 — run 347 (`ccrc-pwa-clear-summit`), plan `226bb881c` |
 | 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **to plan**: run 348; built alongside wave 7, lands after it |
 | 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** |
 
@@ -46,6 +46,24 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-08 18:31 — wave 7 (run 347) is DISPATCHED to `ccrc-pwa-clear-summit` at 18:30:47,** on a free cap slot.
+  - **Claim 1110.** Run 320's coordinator `ccrc-pwa-bright-river` AGREED under R56 in 4031, so the wave dispatched
+    without waiting for the expiry. The terms: append-only edits in the worker's own regions, README anchors
+    re-pointed by content, run 320's lines never rewritten, and the second lander merges main and re-runs the
+    whitelist suites, single-definition and the README census. The fallback dispatch armed for 21:29Z was stopped.
+    The brief as dispatched is `ccr15-evidence-archive/wave7-brief-as-dispatched.md`.
+  - **A live instance of R67's adoption residual.** The slug was recycled from review 341's reviewer, whose
+    2.21 GiB temp root the wave-6 tail KEPT at 13:42, refused over a planted `.git`. The new child's `_child_tmpdir`
+    ran `mkdir -p` onto that leaf: its birth time is 10:34:45, the reviewer's spawn, and run 347's fresh witness now
+    binds that old inode. Nothing is lost, because R64 Rule 1 still refuses the planted `.git` at every later
+    removal, so the leaf stays the operator's. Measured read-only: four witnesses now stand in `$REG/tmproots`, all
+    for children spawned since v0.0.124.
+  - **Wave 8.** Its pre-flight is back (`ccr15-evidence-archive/wave8/preflight.json`). Its main finding: wave 7's
+    ccd binding does NOT close X1 alone, because the executor audits and acts back to back after the licence has
+    waited in the queue. The server must carry the licensed generation and compare it before the audit. Quiet-river
+    was asked three things about wave 5 (4033): one shared kept-leaf reader, the never-stopping tier for
+    `containment-refuted`, and the order in `watch.ts`.
 
 - **2026-10-08 18:14 — wave 7's plan is MERGED (#331, `226bb881c`), so its planSha is
   `226bb881ce6da8c914e66e52a905b92045aa6909`.** Every gating check was green, and the merge used `--match-head-commit`
