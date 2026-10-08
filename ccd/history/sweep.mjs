@@ -1158,7 +1158,7 @@ export function drainSpool(db, c) {
     // waits with a `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick than every
     // file the loop met, so the journaling order holds. The loop's error is thrown after it, and an error of the journal half
     // never replaces it. A failure met at a write the pass makes before the drain (the pass's own meta and counter writes before
-    // the tick: the migration verdict, the capture pause and its counters, the mode-drift count; then the outbox flush, the
+    // the tick: the migration verdict, the capture pause and its counters, the mode-drift count; the outbox flushes, the
     // secrets step, the FTS probe, the phrase re-index and the re-derivation) ends the pass before drainSpool, so this half never
     // runs for it (FR2a, review 344 F5).
     try {
@@ -3595,12 +3595,13 @@ export function secretsStep(db, ctx, secretFiles) {
 // Its body is extracted plain text (never JSON), redacted by entryIndexText (D-4343, D-4419) before it is
 // a term, and only for blobs that a row of searchable provenance references. A pair learned after its
 // text was indexed is re-indexed before any FTS insert of that tick, and the obligation outlives the pass
-// that learned it: by quoted phrase (reindexForValues: on the tick that learned the pair, or, while a
-// re-derivation generation is open, only for the pairs that tick recorded; charged to the slice it shares
-// with the re-derivation, review 344 F2), then by a hash re-derivation of every indexed blob
-// (rederiveFts), which alone moves meta fts_reindex_rid (D-4344, history-reindex-mark-by-rederivation).
-// The bytes a contentless delete leaves in blobs_fts_data are purged by bounded merge steps; a
-// whole-table 'optimize' never runs in a scheduled pass.
+// that learned it: by quoted phrase (reindexForValues: on every tick no re-derivation generation is open,
+// which is the tick that learned the pair or, after a pass that died first, a later one; while one is
+// open, only for the pairs that tick recorded; charged to the slice it shares with the re-derivation,
+// review 344 F2), then by a hash re-derivation of every indexed blob (rederiveFts), which alone moves
+// meta fts_reindex_rid (D-4344, history-reindex-mark-by-rederivation). The bytes a contentless delete
+// leaves in blobs_fts_data are purged by bounded merge steps; a whole-table 'optimize' never runs in a
+// scheduled pass.
 // ---------------------------------------------------------------------------------------------
 
 const FTS_STEP = 'fts';
