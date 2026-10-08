@@ -43,6 +43,10 @@ const fixture = async (opts: {
   beforeAct?: () => void;
   /** The serialiser's act throws. */
   throwAct?: boolean;
+  /** The n-th abandon of an act throws (1-based), after the earlier ones committed. */
+  abandonThrowsAt?: number;
+  /** Called as a ccd verb is composed (the fleet act) — a revive that lands mid-act. */
+  onCcd?: (args: string[]) => void;
   /** Called as tmux is asked about a pane, before it answers — time passing, or a write landing, mid-pass. */
   onHasSession?: (id: string) => void;
 } = {}) => {
@@ -71,6 +75,7 @@ const fixture = async (opts: {
       return live.has(id) ? { code: 0, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: `can't find session: cc-${id}` };
     }
     calls.push(args);
+    opts.onCcd?.(args);
     return { code: 0, stdout: '', stderr: '' };
   };
   const dbPath = path.join(home, '.ccrc', 'coord.db');
@@ -90,8 +95,12 @@ const fixture = async (opts: {
         acts += 1;
         if (opts.throwAct === true) throw new Error('database or disk is full');
         opts.beforeAct?.();
-        return fn((runId, crashedId, stillCrashed) => closeRun(
-          { coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillCrashed }));
+        let abandons = 0;
+        return fn((runId, crashedId, stillCrashed) => {
+          abandons += 1;
+          if (opts.abandonThrowsAt === abandons) throw new Error('database or disk is full');
+          return closeRun({ coord: c, io: deps.io, cfg, runCcd: deps.runCcd }, runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillCrashed });
+        });
       } });
     }
     return w;
@@ -285,6 +294,39 @@ describe('the act’s own re-measure', () => {
     expect(f.stateOf(r), 'a fresh hour, not the pre-revive one').toBe('working');
     expect(f.anchorOf(A), 'the episode restarted at the first crashed pass after the revive')
       .toMatchObject({ firstDeadAt: T0 + HOUR - 60_000 + 2 * (CHILD_RECLAIM_SWEEP_MS + 1) });
+  });
+
+  it('a revive that lands AFTER the worker was released is recorded: a feed row and an attention entry, though no run was closed', async () => {
+    const f: Fixture = await fixture({ onCcd: (args) => { if (args[0] === 'ws-release') f.live.add(A); } });
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A, 'alpha');
+    await f.pass(); await walk(f, HOUR - 60_000);
+    f.next(); await f.pass();
+    expect(f.stateOf(r), 'the run stays open under the coordinator that came back').toBe('working');
+    expect(f.calls.filter((c) => c[0] === 'ws-release'), 'its worker WAS released').toHaveLength(1);
+    expect(f.feed().filter(([, t]) => t.startsWith('dead coordinator: programme'))).toEqual([[A, 'dead coordinator: programme partly ended']]);
+    const note = (f.watcher() as unknown as { deadCoordinatorAttentionList: readonly { kind: string; sentence: string }[] }).deadCoordinatorAttentionList;
+    expect(note.map((a) => a.kind)).toEqual(['stuck']);
+    expect(note[0]!.sentence).toContain('the programme is NOT ended');
+    expect(note[0]!.sentence).toContain(`released the worker of run ${r} of programme alpha`);
+    expect(f.anchorOf(A), 'evidence it came back: the anchor goes').toBeNull();
+  });
+
+  it('an act that THROWS after closing a programme keeps that programme’s feed row, and the attention entry says what closed', async () => {
+    const f = await fixture({ abandonThrowsAt: 2 });
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r1 = f.working(A, 'alpha');
+    const r2 = f.working(A, 'beta');
+    await f.pass(); await walk(f, HOUR - 60_000);
+    f.next(); await f.pass();
+    expect([r1, r2].map(f.stateOf)).toEqual(['failed', 'working']);
+    expect(f.feed().filter(([, t]) => t.startsWith('dead coordinator: programme'))).toEqual([[A, 'dead coordinator: programme ended']]);
+    const note = (f.watcher() as unknown as { deadCoordinatorAttentionList: readonly { kind: string; sentence: string }[] }).deadCoordinatorAttentionList;
+    expect(note.map((a) => a.kind)).toEqual(['stuck']);
+    expect(note[0]!.sentence).toContain('failed (database or disk is full)');
+    expect(note[0]!.sentence).toContain('closed failed 1 run of programme alpha');
   });
 
   it('an act that THROWS is asked again only after the backoff, and listed', async () => {

@@ -367,10 +367,25 @@ export type DeadCoordinatorActOutcome =
   | { readonly kind: 'ended'; readonly programmes: readonly DeadCoordinatorProgramme[];
       readonly open: readonly DeadCoordinatorProgramme[];
       readonly stuck: readonly { readonly runId: number; readonly why: string }[];
-      readonly stoppedBy: DeadCoordinatorStop | null }
+      readonly stoppedBy: DeadCoordinatorStop | null;
+      /** The runs whose WORKER the act released and whose run it then left open — the stop came after the fleet act, so
+       *  the worker is unheld until its coordinator re-holds it. Absent when the act released none: a fact the act did,
+       *  recorded whether or not it closed anything. */
+      readonly released?: readonly DeadCoordinatorProgramme[];
+      /** Set only on the outcome a THROWN act hands back (`DeadCoordinatorActThrew`): what it had closed is real, and
+       *  this is what failed. */
+      readonly failed?: string }
   | { readonly kind: 'would-end'; readonly programmes: readonly DeadCoordinatorProgramme[] }
   | { readonly kind: 'paused-at-server'; readonly detail: string }
   | { readonly kind: 'store-unreadable'; readonly detail: string };
+
+/** What an act DID before it stopped or failed, for the attention list: the runs it closed failed (by programme), the
+ *  workers it released (their runs stay open), and why it stopped (`null`: it threw, and which run moved is unknown). */
+export interface DeadCoordinatorProgress {
+  readonly closed: readonly DeadCoordinatorProgramme[];
+  readonly released: readonly DeadCoordinatorProgramme[];
+  readonly stop: string | null;
+}
 
 /** What the attention list says about one claimant, before it is worded. */
 export type DeadCoordinatorReport =
@@ -379,7 +394,10 @@ export type DeadCoordinatorReport =
   | { readonly kind: 'unmeasured'; readonly at: number; readonly why: string }
   | { readonly kind: 'stuck'; readonly at: number; readonly runs: readonly { readonly runId: number; readonly why: string }[];
       /** The act itself failed (it threw) — nothing is known about which runs moved. */
-      readonly error?: string };
+      readonly error?: string;
+      /** What the act had done when it stopped or failed — present only when it did something (closed a run or released
+       *  a worker). With no `runs` and no `error` this IS the report: an act a revive cut short. */
+      readonly after?: DeadCoordinatorProgress };
 
 /** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half): a restart can only delay. */
 export interface DeadCoordinatorEntry {
@@ -433,12 +451,19 @@ export function deadCoordinatorNextEntry(
     case 'ended': {
       const stop = o.stoppedBy?.kind;
       const crashedPasses = stop === 'remeasured' || stop === 'switch' ? 0 : e.crashedPasses;
+      const at = e.report?.kind === 'stuck' ? e.report.at : nowMs;
+      // An act that STOPPED having closed a run or released a worker is news the operator reads (the stop's feed row
+      // is only for a programme with a closed run): what it did, and that the programme is NOT ended.
+      const released = o.released ?? [];
+      const after: DeadCoordinatorProgress | undefined = o.stoppedBy !== null && (o.programmes.length > 0 || released.length > 0)
+        ? { closed: o.programmes, released, stop: o.stoppedBy.why } : undefined;
       if (o.stuck.length === 0) {
-        return { ...base, crashedPasses, attempts: 0, nextAskAt: stop === 'switch' ? nowMs + passMs : 0, report: null };
+        return { ...base, crashedPasses, attempts: 0, nextAskAt: stop === 'switch' ? nowMs + passMs : 0,
+          report: after === undefined ? null : { kind: 'stuck', at, runs: [], after } };
       }
       const attempts = e.attempts + 1;
       return { ...base, crashedPasses, attempts, nextAskAt: nowMs + deadCoordinatorBackoffMs(attempts, passMs),
-        report: { kind: 'stuck', at: e.report?.kind === 'stuck' ? e.report.at : nowMs, runs: o.stuck } };
+        report: { kind: 'stuck', at, runs: o.stuck, ...(after === undefined ? {} : { after }) } };
     }
     case 'paused-at-server': case 'store-unreadable':
       // Nothing was measured or moved: the sighting is forgotten, so a lowered switch needs two FRESH passes.
@@ -449,10 +474,13 @@ export function deadCoordinatorNextEntry(
 /** The entry after an act that THREW (a store commit that failed after the fleet act, an agent that dropped): what
  *  moved is unknown, so it is reported and asked again only after the backoff — never every pass, re-composing the
  *  fleet act each time (spec §5.4: "not retried beyond the lane's backoff"). */
-export function deadCoordinatorThrew(e: DeadCoordinatorEntry, error: string, nowMs: number, passMs: number): DeadCoordinatorEntry {
+export function deadCoordinatorThrew(
+  e: DeadCoordinatorEntry, error: string, nowMs: number, passMs: number, after?: DeadCoordinatorProgress,
+): DeadCoordinatorEntry {
   const attempts = e.attempts + 1;
   return { ...e, attempts, nextAskAt: nowMs + deadCoordinatorBackoffMs(attempts, passMs),
-    report: { kind: 'stuck', at: e.report?.kind === 'stuck' ? e.report.at : nowMs, runs: [], error } };
+    report: { kind: 'stuck', at: e.report?.kind === 'stuck' ? e.report.at : nowMs, runs: [], error,
+      ...(after === undefined ? {} : { after }) } };
 }
 
 // ── the words ────────────────────────────────────────────────────────────────
@@ -479,18 +507,29 @@ export function deadCoordinatorFeedRows(
       return o.programmes.map((p) => ({ title: 'dead coordinator: programme would be ended',
         body: `would end programme ${p.slug} (${runs(p.runIds.length)}): ${dead} and stayed dead an hour, and the lane `
           + 'is not armed (shadow), so nothing was ended.' }));
-    case 'ended':
-      return o.programmes.map((p) => {
-        const left = o.open.find((x) => x.slug === p.slug)?.runIds.length ?? 0;
-        if (left === 0) {
-          return { title: 'dead coordinator: programme ended',
-            body: `${dead} and stayed dead an hour; programme ${p.slug} ended, ${runs(p.runIds.length)} closed failed.` };
+    case 'ended': {
+      // A programme with a closed run, then one the act only RELEASED a worker of: its record is the same fact — the
+      // programme is NOT ended, and its worker is unheld.
+      const released = o.released ?? [];
+      const slugs = [...o.programmes, ...released.filter((r) => !o.programmes.some((p) => p.slug === r.slug))];
+      return slugs.flatMap((s) => {
+        const closed = o.programmes.find((x) => x.slug === s.slug)?.runIds.length ?? 0;
+        const left = o.open.find((x) => x.slug === s.slug)?.runIds.length ?? 0;
+        if (closed > 0 && left === 0) {
+          return [{ title: 'dead coordinator: programme ended',
+            body: `${dead} and stayed dead an hour; programme ${s.slug} ended, ${runs(closed)} closed failed.` }];
         }
-        const why = o.stoppedBy !== null ? `the act stopped: ${o.stoppedBy.why}` : 'the abandon arm could not move the rest';
-        return { title: 'dead coordinator: programme partly ended',
-          body: `${dead} and stayed dead an hour; programme ${p.slug} was NOT ended: ${p.runIds.length} of `
-            + `${runs(p.runIds.length + left)} closed failed and ${left} stay open — ${why}.` };
+        const rel = released.find((x) => x.slug === s.slug)?.runIds ?? [];
+        const base = o.failed !== undefined ? `the act then failed: ${o.failed}`
+          : o.stoppedBy !== null ? `the act stopped: ${o.stoppedBy.why}` : 'the abandon arm could not move the rest';
+        const why = rel.length === 0 ? base
+          : `${base}; ${rel.map((id) => `run ${id}'s worker`).join(', ')} ${rel.length === 1 ? 'was' : 'were'} released and `
+            + `${rel.length === 1 ? 'is' : 'are'} unheld until its coordinator re-holds it`;
+        return [{ title: 'dead coordinator: programme partly ended',
+          body: `${dead} and stayed dead an hour; programme ${s.slug} was NOT ended: ${closed} of `
+            + `${runs(closed + left)} closed failed and ${left} stay open — ${why}.` }];
       });
+    }
     case 'paused-at-server': case 'store-unreadable':
       return [];
   }
@@ -506,16 +545,33 @@ export function deadCoordinatorReportSentence(claimantId: string, r: DeadCoordin
     case 'unmeasured':
       return `coordinator ${claimantId} cannot be told crashed from put down on purpose — ${r.why} — so the lane lists `
         + 'it and never acts on it. Reclaim or abandon its programme by hand.';
-    case 'stuck':
+    case 'stuck': {
+      const done = r.after === undefined ? '' : ` ${progressSentence(r.after)}`;
       if (r.error !== undefined) {
         return `the lane's act on coordinator ${claimantId} failed (${r.error}); it is asked again only after a backoff — `
-          + 'check its runs on /runs and abandon them by hand if it keeps failing.';
+          + `check its runs on /runs and abandon them by hand if it keeps failing.${done}`;
+      }
+      if (r.runs.length === 0 && r.after !== undefined) {
+        // An act a revive (or a pause) cut short: nothing to move by hand, but the record of what it did.
+        return `coordinator ${claimantId} crashed and the lane tried to end its programme, but the act stopped`
+          + `${r.after.stop === null ? '' : ` (${r.after.stop})`}, so the programme is NOT ended.${done}`;
       }
       // The report knows only the runs the act could not move — never that every other run closed — so it never says the
       // programme ended: the feed row for the same act says NOT ended, and the operator reads both.
       return `coordinator ${claimantId} crashed and the lane tried to end its programme, but ${r.runs.map((x) => `run ${x.runId} (${x.why})`)
-        .join(', ')} could not be moved, so the programme is NOT ended (runs the lane did close stay closed). It is asked again only after a backoff — abandon ${r.runs.length === 1 ? 'it' : 'them'} by hand.`;
+        .join(', ')} could not be moved, so the programme is NOT ended (runs the lane did close stay closed). It is asked again only after a backoff — abandon ${r.runs.length === 1 ? 'it' : 'them'} by hand.${done}`;
+    }
   }
+}
+
+/** What an act did before it stopped or failed, in words: "Before it stopped it closed failed … and released …". */
+function progressSentence(p: DeadCoordinatorProgress): string {
+  const parts: string[] = [];
+  if (p.closed.length > 0) parts.push(`closed failed ${p.closed.map((x) => `${runs(x.runIds.length)} of programme ${x.slug}`).join(', ')}`);
+  for (const x of p.released) {
+    parts.push(`released the worker of run ${x.runIds.join(', ')} of programme ${x.slug} (it is unheld until its coordinator re-holds it)`);
+  }
+  return parts.length === 0 ? '' : `Before it ${p.stop === null ? 'failed' : 'stopped'} the act ${parts.join(' and ')}.`;
 }
 
 /** The breaker's ONE item. */

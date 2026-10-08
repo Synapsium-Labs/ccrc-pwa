@@ -117,7 +117,7 @@ import {
   type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal,
 } from './deadCoordinator.js';
 import {
-  deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker,
+  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker,
   recordDeadCoordinatorFeed,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
@@ -4220,7 +4220,13 @@ export class FleetWatcher {
       const detail = err instanceof Error ? err.message : String(err);
       console.warn(`ccrc-server: sweepDeadCoordinators: the act on ${pick.id} threw (${detail}) — asked again after a backoff`);
       const e = this.deadCoordinatorState.get(pick.id) ?? deadCoordinatorEntry();
-      this.deadCoordinatorState.set(pick.id, deadCoordinatorThrew(e, detail, Date.now(), CHILD_RECLAIM_SWEEP_MS));
+      // The runs the act closed before it threw ARE closed: their feed rows are written, and the entry says what closed.
+      const done = err instanceof DeadCoordinatorActThrew ? err.outcome : null;
+      if (done !== null && done.programmes.length > 0) {
+        recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, pick.since);
+      }
+      this.deadCoordinatorState.set(pick.id, deadCoordinatorThrew(e, detail, Date.now(), CHILD_RECLAIM_SWEEP_MS,
+        done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], stop: null } : undefined));
       return null;
     }
   }

@@ -160,28 +160,54 @@ export async function endDeadCoordinator(
   if (!deadCoordinatorLaneArmed(names)) return { kind: 'would-end', programmes: byProgramme(runs) };
   // 4 — each run: the abandon, with the compare-and-set and the re-measure inside the arm.
   const ended: { id: number; program: string }[] = [];
+  const released: { id: number; program: string }[] = [];
   const stuck: { runId: number; why: string }[] = [];
   let stoppedBy: DeadCoordinatorStop | null = null;
-  for (const run of runs) {
-    const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId));
-    if (out.ok) { ended.push(run); continue; }
-    if (out.kind === 'sweep-stopped') {
-      stoppedBy = out.released
-        ? { ...out.stop, why: `${out.stop.why} — after run ${run.id}'s worker was released, so it is unheld until its coordinator re-holds it` }
-        : out.stop;
-      break;
+  // What the act has done so far, as its outcome — also what a THROWN act hands back (`DeadCoordinatorActThrew`).
+  const outcome = (failed?: string): Extract<DeadCoordinatorActOutcome, { kind: 'ended' }> => {
+    const closed = new Set(ended.map((r) => r.id));
+    return { kind: 'ended', programmes: byProgramme(ended), open: byProgramme(runs.filter((r) => !closed.has(r.id))),
+      stuck, stoppedBy, ...(released.length === 0 ? {} : { released: byProgramme(released) }),
+      ...(failed === undefined ? {} : { failed }) };
+  };
+  try {
+    for (const run of runs) {
+      const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId));
+      if (out.ok) { ended.push(run); continue; }
+      if (out.kind === 'sweep-stopped') {
+        // The stop came after the fleet act: the worker is released (or re-held) and its run stays open. A TYPED fact, so
+        // the lane records it whether or not the act closed anything (`released` on the outcome).
+        if (out.released) released.push(run);
+        stoppedBy = out.stop;
+        break;
+      }
+      if (out.kind === 'claimant-changed') {
+        stoppedBy = { kind: 'successor',
+          why: `run ${run.id}'s programme has a coordinator again (${out.claimedBy ?? 'none'}) — no successor may be failed` };
+        break;
+      }
+      const why = closeRefusalOf(run.id, out);
+      stuck.push({ runId: run.id, why: why.detail === undefined ? why.kind : `${why.kind}: ${why.detail}` });
     }
-    if (out.kind === 'claimant-changed') {
-      stoppedBy = { kind: 'successor',
-        why: `run ${run.id}'s programme has a coordinator again (${out.claimedBy ?? 'none'}) — no successor may be failed` };
-      break;
-    }
-    const why = closeRefusalOf(run.id, out);
-    stuck.push({ runId: run.id, why: why.detail === undefined ? why.kind : `${why.kind}: ${why.detail}` });
+  } catch (err) {
+    // The runs that closed before the throw ARE closed: the lane records them, so the error carries them.
+    throw new DeadCoordinatorActThrew(err, outcome(err instanceof Error ? err.message : String(err)));
   }
-  const closed = new Set(ended.map((r) => r.id));
-  return { kind: 'ended', programmes: byProgramme(ended), open: byProgramme(runs.filter((r) => !closed.has(r.id))),
-    stuck, stoppedBy };
+  return outcome();
+}
+
+/** A THROWN act, carrying what it had done: `message` is the original's, so every reader of the error reads what it read,
+ *  and `outcome` is the executor's own answer up to the throw (`failed` says what failed). The lane records its closed
+ *  programmes before it backs off — the throw loses the act's error, never its record. */
+export class DeadCoordinatorActThrew extends Error {
+  readonly outcome: Extract<DeadCoordinatorActOutcome, { kind: 'ended' }>;
+  readonly original: unknown;
+  constructor(original: unknown, outcome: Extract<DeadCoordinatorActOutcome, { kind: 'ended' }>) {
+    super(original instanceof Error ? original.message : String(original));
+    this.name = 'DeadCoordinatorActThrew';
+    this.outcome = outcome;
+    this.original = original;
+  }
 }
 
 /** Feed rows, recorded and never pushed: `kind: 'run'` with no run and a claimant as the session. A missing log

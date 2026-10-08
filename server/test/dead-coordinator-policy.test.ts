@@ -335,6 +335,58 @@ describe('the words', () => {
       stoppedBy: { kind: 'switch', why: 'x' } }, NOW), 'nothing closed: no row').toEqual([]);
   });
 
+  it('an act that RELEASED a worker and stopped is recorded though it closed nothing: one row naming the worker, and that the programme is NOT ended', () => {
+    const o = { kind: 'ended', programmes: [], open: [{ slug: 'alpha', runIds: [7] }], stuck: [], released: [{ slug: 'alpha', runIds: [7] }],
+      stoppedBy: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' } } as const;
+    expect(deadCoordinatorFeedRows('demo-coord', o, NOW)).toEqual([{ title: 'dead coordinator: programme partly ended',
+      body: 'coordinator demo-coord crashed (dead since 2026-09-21 14:13 UTC) and stayed dead an hour; programme alpha was NOT ended: '
+        + '0 of 1 run closed failed and 1 stay open — the act stopped: re-measured alive: tmux reports the pane live; '
+        + 'run 7\'s worker was released and is unheld until its coordinator re-holds it.' }]);
+    // A programme the act closed in full is announced as ended, and the OTHER programme's released worker is not lost.
+    const two = { kind: 'ended', programmes: [{ slug: 'alpha', runIds: [7] }], open: [{ slug: 'beta', runIds: [9] }], stuck: [],
+      released: [{ slug: 'beta', runIds: [9] }], stoppedBy: { kind: 'remeasured', why: 'x' } } as const;
+    expect(deadCoordinatorFeedRows('demo-coord', two, NOW).map((r) => [r.title, /programme (\S+) (?:ended|was NOT ended)/.exec(r.body)?.[1]]))
+      .toEqual([['dead coordinator: programme ended', 'alpha'], ['dead coordinator: programme partly ended', 'beta']]);
+    // A programme that closed one run AND released the next worker says both.
+    const both = deadCoordinatorFeedRows('demo-coord', { kind: 'ended', programmes: [{ slug: 'alpha', runIds: [7] }],
+      open: [{ slug: 'alpha', runIds: [8] }], stuck: [], released: [{ slug: 'alpha', runIds: [8] }], stoppedBy: { kind: 'remeasured', why: 'x' } }, NOW);
+    expect(both).toHaveLength(1);
+    expect(both[0]!.body).toContain('1 of 2 runs closed failed and 1 stay open — the act stopped: x; run 8\'s worker was released');
+  });
+
+  it('an act that FAILED part-way keeps the rows of what it had closed, and says it failed', () => {
+    const o = { kind: 'ended', programmes: [{ slug: 'alpha', runIds: [7] }, { slug: 'beta', runIds: [8] }],
+      open: [{ slug: 'beta', runIds: [9] }, { slug: 'gamma', runIds: [10] }], stuck: [], stoppedBy: null, failed: 'database or disk is full' } as const;
+    const rows = deadCoordinatorFeedRows('demo-coord', o, NOW);
+    expect(rows.map((r) => r.title)).toEqual(['dead coordinator: programme ended', 'dead coordinator: programme partly ended']);
+    expect(rows[1]!.body).toContain('programme beta was NOT ended: 1 of 2 runs closed failed and 1 stay open — the act then failed: database or disk is full.');
+  });
+
+  it('the attention entry for a stopped act names what it did and that the programme is NOT ended; a clean finish leaves none', () => {
+    const e = { ...deadCoordinatorEntry(), crashedPasses: 3 };
+    const o = { kind: 'ended', programmes: [{ slug: 'alpha', runIds: [7, 8] }], open: [{ slug: 'beta', runIds: [9] }], stuck: [],
+      released: [{ slug: 'beta', runIds: [9] }], stoppedBy: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' } } as const;
+    const n = deadCoordinatorNextEntry(e, o, 'orphan', NOW, NOW, PASS);
+    expect(n.report).toMatchObject({ kind: 'stuck', at: NOW, runs: [] });
+    const sentence = deadCoordinatorReportSentence('demo-coord', n.report!);
+    expect(sentence).toContain('the programme is NOT ended');
+    expect(sentence).toContain('re-measured alive: tmux reports the pane live');
+    expect(sentence).toContain('closed failed 2 runs of programme alpha');
+    expect(sentence).toContain('released the worker of run 9 of programme beta');
+    expect(sentence).not.toMatch(/could not be moved/);
+    expect(deadCoordinatorAttention(new Map([['demo-coord', n]]), { tripped: false }).map((a) => [a.kind, a.claimants]))
+      .toEqual([['stuck', ['demo-coord']]]);
+    // Nothing closed and nothing released is not news (the old `forgets` row): no entry.
+    expect(deadCoordinatorNextEntry(e, { kind: 'ended', programmes: [], open: [{ slug: 'p', runIds: [1] }], stuck: [],
+      stoppedBy: { kind: 'remeasured', why: 'x' } }, 'orphan', NOW, NOW, PASS).report).toBeNull();
+    // A run the arm could not move keeps its report AND the progress.
+    const s = deadCoordinatorNextEntry(e, { ...o, stuck: [{ runId: 9, why: 'bad-transition' }] }, 'orphan', NOW, NOW, PASS);
+    expect(deadCoordinatorReportSentence('demo-coord', s.report!)).toMatch(/run 9 \(bad-transition\) could not be moved[\s\S]*released the worker of run 9/);
+    // A throw keeps what it had closed.
+    const t = deadCoordinatorThrew(e, 'SQLITE_FULL', NOW, PASS, { closed: [{ slug: 'alpha', runIds: [7] }], released: [], stop: null });
+    expect(deadCoordinatorReportSentence('demo-coord', t.report!)).toMatch(/failed \(SQLITE_FULL\)[\s\S]*closed failed 1 run of programme alpha/);
+  });
+
   it('the `stuck` sentence of a partly-ended programme never reads as ended — the feed row says NOT ended, so must this', () => {
     const stuck = deadCoordinatorReportSentence('demo-coord', { kind: 'stuck', at: NOW,
       runs: [{ runId: 8, why: 'bad-transition' }, { runId: 9, why: 'stale-tip' }] });

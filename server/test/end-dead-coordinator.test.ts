@@ -8,7 +8,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { closeRun, type CloseOutcome } from '../src/coord/close.js';
-import { endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorFeed, type EndDeadCoordinatorDeps } from '../src/coord/endDeadCoordinator.js';
+import { DeadCoordinatorActThrew, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorFeed, type EndDeadCoordinatorDeps } from '../src/coord/endDeadCoordinator.js';
 import {
   DEAD_COORDINATOR_JOURNAL_TRUSTED, DEAD_COORDINATOR_LANE_LIVE_MARKER, type DeadCoordinatorJournalTrust,
 } from '../src/deadCoordinator.js';
@@ -151,15 +151,47 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
     expect(r.calls, 'no release was composed for its worker').toEqual([]);
   });
 
-  it('a revive DURING the fleet act is seen after it, before the commit: the run stays open, and the stop says its worker was released', async () => {
+  it('a revive DURING the fleet act is seen after it, before the commit: the run stays open, and the outcome says its worker was released', async () => {
     let releasedAt = 0;
     const r = await rig({ onVerb: (v) => { if (v === 'ws-release') releasedAt = 1; },
       verdict: () => (releasedAt === 1 ? { verdict: 'live' } : { verdict: 'gone' }) });
     const a = r.working('alpha', 'demo-w1');
     const out = await endDeadCoordinator(r.deps, CRASHED, NOW);
     expect(out).toMatchObject({ kind: 'ended', programmes: [], open: [{ slug: 'alpha', runIds: [a] }],
-      stoppedBy: { kind: 'remeasured', why: expect.stringContaining(`after run ${a}'s worker was released`) } });
+      released: [{ slug: 'alpha', runIds: [a] }], stoppedBy: { kind: 'remeasured' } });
     expect(r.stateOf(a), 'never failed under a coordinator that came back').toBe('working');
+  });
+
+  it('a stop after the release on the FIRST run of a SECOND programme names that programme’s worker — the first programme closed in full', async () => {
+    // alpha: asked before its fleet act and after it (gone, gone). beta: asked before (gone), released, asked after: live.
+    const r = await rig({ verdict: (n) => (n >= 4 ? { verdict: 'live' } : { verdict: 'gone' }) });
+    const a = r.working('alpha', 'demo-w1');
+    const b = r.working('beta', 'demo-w2');
+    const out = await endDeadCoordinator(r.deps, CRASHED, NOW);
+    expect(out).toMatchObject({ kind: 'ended', programmes: [{ slug: 'alpha', runIds: [a] }], open: [{ slug: 'beta', runIds: [b] }],
+      released: [{ slug: 'beta', runIds: [b] }], stoppedBy: { kind: 'remeasured' } });
+    expect([a, b].map(r.stateOf)).toEqual(['failed', 'working']);
+  });
+
+  it('a stop BEFORE the fleet act released nothing: no `released` at all', async () => {
+    const r = await rig({ verdict: () => ({ verdict: 'live' }) });
+    r.working('alpha', 'demo-w1');
+    expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).not.toHaveProperty('released');
+  });
+
+  it('an act that THROWS part-way hands back what it had closed, with the failure — the executor never loses a closed run', async () => {
+    const r = await rig();
+    const a = r.working('alpha', 'demo-w1');
+    const b = r.working('beta', 'demo-w2');
+    const real = r.deps.abandon;
+    let n = 0;
+    r.deps.abandon = (...args) => { n += 1; if (n === 2) throw new Error('database or disk is full'); return real(...args); };
+    const err = await endDeadCoordinator(r.deps, CRASHED, NOW).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(DeadCoordinatorActThrew);
+    expect((err as Error).message, 'the original message, so every reader of the error reads what it read').toBe('database or disk is full');
+    expect((err as DeadCoordinatorActThrew).outcome).toEqual({ kind: 'ended', programmes: [{ slug: 'alpha', runIds: [a] }],
+      open: [{ slug: 'beta', runIds: [b] }], stuck: [], stoppedBy: null, failed: 'database or disk is full' });
+    expect([a, b].map(r.stateOf)).toEqual(['failed', 'working']);
   });
 
   it('a deliberate act journaled since the pass — the operator stopped it — ends the act too', async () => {
