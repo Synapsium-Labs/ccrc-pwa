@@ -1147,7 +1147,8 @@ export function drainSpool(db, c) {
     // `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick than every file the loop
     // met, so the journaling order holds. The loop's error is thrown after it, and an error of the journal half never replaces it.
     try {
-      if (journalHalf(c.home, c.ids, c.now()).journalFailed && !failedCounted) countOutside(db, 'journal_write_failed');
+      // failedCounted is always false here: the loop sets it only right before a `break`, and countOutside never throws.
+      if (journalHalf(c.home, c.ids, c.now()).journalFailed) countOutside(db, 'journal_write_failed');
     } catch { /* the loop's error is the one this tick reports */ }
     throw thrown;
   }

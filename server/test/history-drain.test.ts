@@ -603,8 +603,9 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
   });
 
   // FU10 (B5M3): the journal half the failing drain runs is best effort. Its own throw (here an EACCES-class rename fault on
-  // the spool file it renames) never replaces the drain's error, and `journal_write_failed` is never counted twice in a tick.
-  it('a drain whose commit fails AND whose journal half throws reports the commit\'s error, not the half\'s, and counts journal_write_failed at most once (FU10, B5M3)', () => {
+  // the spool file it renames) never replaces the drain's error. The half throws at its rename, before it journals anything,
+  // so nothing counts journal_write_failed in this tick.
+  it('a drain whose commit fails AND whose journal half throws reports the commit\'s error, not the half\'s (FU10, B5M3)', () => {
     spool(box.home, ID2, { v: 1, ev: 'Stop', id: ID2 });
     expect(runSweep(box).code).toBe(0);                                   // renamed: it drains at the next tick
     spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });                    // renamed by the failing tick's journal half
@@ -613,7 +614,7 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     expect(r.code, r.stderr).toBe(1);
     expect(r.stderr, 'the pass reports the commit\'s error').toContain('Error: injected commit failure');   // run-pass.mjs has no main(): the pass's own throw ends the process, so this is its uncaught-error text
     expect(r.stderr, 'never the journal half\'s').not.toContain('EACCES');
-    expect((counters(box)['journal_write_failed'] ?? 0), 'counted at most once in the tick').toBeLessThanOrEqual(1);
+    expect(counters(box)['journal_write_failed'], 'the half threw at its rename, before it journaled anything').toBeUndefined();
     expect(fs.existsSync(path.join(SPOOL(box.home), `${ID}.jsonl`)), 'the half\'s rename was the one that threw').toBe(true);
   });
 
