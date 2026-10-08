@@ -798,6 +798,11 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   review goes ahead, and the merge waits for that commit and a scoped re-review of it. No relocation to another file.
   Consent asked of run 302's coordinator `ccrc-pwa-quiet-ridge` (mail 3950). The worker's new departure — a hold no
   longer overwrites a final or terminal expiry report (a Task 2 review fix) — was issued 4454 by the allocator.
+- **2026-10-08 00:50 — consent given; the merge gate is lifted.** `ccrc-pwa-quiet-ridge` answered (mail 3951): run 314 may
+  append both describes at the end of `single-definition.test.ts` under claim 1094, on two conditions — no existing
+  line changes, and the second lander merges `origin/main` (never a rebase) keeping both sides. Measured on their side:
+  at `ws/soft-delta` `ebef2fbfe` run 302's only change to the file is itself a 298-line end-of-file append. Forwarded
+  to swift-cove (mail 3953); the "pins owed" path and the merge hold of mail 3949 no longer apply; 4454 stands.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
