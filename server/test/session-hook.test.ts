@@ -10195,6 +10195,9 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     return f;
   };
   const PARTIAL = '{"v":1,"ev":"Sto';
+  /** FR3c/FR3d (review 351 F1): a subscript that is not an integer literal, `@` or `*`, on a `name[…]` or as a
+   *  compound-assignment key. Both S1 pins read it: the string case on the block's text, forkForms on its whole source. */
+  const SUBSCRIPT_FORK = /(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/;
 
   it('S1: the block is builtins only — no $(, backtick, jq, sha, cat or other external — and sits below the turn marker, above the StopFailure exit', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
@@ -10227,7 +10230,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
       'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
     ).toBeNull();
     expect(
-      code.match(/(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/)?.[0] ?? null,
+      code.match(SUBSCRIPT_FORK)?.[0] ?? null,
       'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
     ).toBeNull();
     expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');
@@ -10529,7 +10532,8 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
    *  x\[v\], x\<newline>[v]), which bash joins before the subscript is read; an assignment, printf -v or read into
    *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); and text on a `#`-led line inside a quoted string
    *  that spans lines, which the comment filter drops before either pin reads it.
-   *  [] = builtins only. Conservative by construction: what it cannot classify is reported, never passed. */
+   *  [] = builtins only. Conservative by construction, outside the stopping line above: what it cannot classify is
+   *  reported, never passed. */
   const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
     const found: string[] = [];
     /** FPM3: where does the `((` that starts at `p` end, if it is ARITHMETIC (its content balanced, closed by `))`)? -1 when
@@ -10574,7 +10578,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     // arithmetic (an associative one does not, and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an
     // expansion or an assignment is `$x` and literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name
     // with a subscript, which is on the stopping line, as is a name split from its `[` (forkForms' header).
-    if (/(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/.test(src)) found.push('subscript');
+    if (SUBSCRIPT_FORK.test(src)) found.push('subscript');
     // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
     let out = '';
     for (let i = 0; i < src.length; i++) {
