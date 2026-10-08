@@ -140,6 +140,9 @@ describe('a whole rotation', () => {
       const s = await readState(tokenPaths(path.join(r.home, '.ccrc', 'mail.token'), r.home).state);
       expect(s.kind === 'state' && [s.state.origin, s.state.rotationOwed, s.state.current.id]).toEqual(['rotated', false, genOf(r.fleetHome)]);
       expect(r.driver.view()).toMatchObject({ phase: 'grace', fleetConfirmed: 'current', fleetTransport: 'https', lastSync: { word: 'synced' } });
+      // F10 (spec 7.1): the real claim door's hand-out line carries the outcome's word and the node id.
+      expect(r.printed.filter((l) => l.includes('claim door handed-out')), 'one hand-out line').toEqual([
+        `ccrc-server: box token: claim door handed-out: generation #${s.kind === 'state' ? s.state.current.seq : '?'} handed out to node ${NODE}`]);
       // past grace, after the new value was presented (the lane call above): retired, and refused for good
       r.clock.offset = GRACE_MS + 1000;
       await r.driver.tick();

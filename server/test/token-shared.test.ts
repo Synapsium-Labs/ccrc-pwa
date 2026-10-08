@@ -12,6 +12,7 @@
 //  5. `readGenerationFile`, the ONE reader of `~/.ccrc/box-token-generation`: three outcomes, malformed is unreadable.
 import { describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,8 +29,10 @@ import {
 } from '../../shared/box-token.js';
 import { PENDING_FILE_RE } from '../src/token/boot.js';
 import { localIO, type FleetIO } from '../src/io.js';
-import { readNodeFiles } from '../src/update/inventory.js';
 import { mkTmp } from './tmpHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool } from './containedTools.js';
+import { readNodeFiles } from '../src/update/inventory.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BOX_TOKEN_TS = path.resolve(here, '..', '..', 'shared', 'box-token.ts');
@@ -222,5 +225,27 @@ describe('shared/box-token.ts — the claim door, value and generation shapes, a
     const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
     expect(new Set(specs)).toEqual(new Set(['./api.js', './agent-protocol.js']));
     expect(/\brequire\(|import\(|['"]node:/.test(src), 'a require, a dynamic import or a node: specifier').toBe(false);
+  });
+});
+
+describe('the verb-missing line against the tree\'s real ccd/ccrc (F8)', () => {
+  // LIVE SAFETY rests on this: a fleet box whose ccrc has no `token` verb answers the agent's spawn with
+  // `_ccrc_usage_die`'s line, and the driver maps it to the learned `verb-missing` hold instead of counting a failure.
+  // Every other test types that literal by hand; this one runs the REAL script, read-only, under a fixture HOME with the
+  // poisoned tools first on PATH (never the live HOME, never an edit of ccd/), and holds its FIRST stderr line to L0's
+  // detector. PART B adds the `token` verb: this case is then replaced by the verb's own suite (ccrc-token-sync.test.ts).
+  const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
+
+  it('`ccrc token sync --from agent` with no token verb exits 2 and its FIRST stderr line is a verb-missing detail', () => {
+    const home = mkTmp('ccrc-verb-missing-');
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
+    assertNoRealTool(env, home);
+    expect(env.HOME).toBe(home);
+    const r = spawnSync('bash', [CCRC, ...tokenSyncSpawnArgv()], { env, encoding: 'utf8', input: '' });
+    expect(r.status, 'a usage error, not the verb running').toBe(2);
+    const first = (r.stderr ?? '').split('\n')[0]!;
+    expect(first, 'the FIRST line, because the agent reports its first stderr line as the detail').toMatch(/^ccrc: unknown argument: token/);
+    expect(isTokenVerbMissing(first)).toBe(true);
+    expect(isTokenVerbMissing(`usage: ${first}`), 'a usage line first would not map').toBe(false);
   });
 });

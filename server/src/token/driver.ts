@@ -9,6 +9,7 @@
 // numbers, words and node labels only.
 import { valueDigestHex } from './files.js';
 import { ClaimDoor } from './door.js';
+import { NODE_ID_RE } from '../coord/store.js';
 import {
   DRIVER_TICK_MS, FAILURES_FOR_BANNER, ROTATE_NOW_MIN_INTERVAL_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, applySyncResult,
   backoffMs, extendedGraceState, handedOutState, nextAction, owe, mintedState, phaseOf, promotedState, rotationGate,
@@ -143,7 +144,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
 
   /** The claim door's hand-out, persisted (fsynced) BEFORE the 200 (D-4394). A failed write discards the
    *  generation, so it is never handed out, and rejects: the route answers 503. */
-  async commitHandOut(generation: string, at: number): Promise<void> {
+  async commitHandOut(generation: string, at: number, nodeId?: string): Promise<void> {
     const s = this.state;
     if (s === null || !s.pending.some((p) => p.id === generation && p.handedOutAt === null)) {
       throw new Error('commitHandOut: the generation is not staged');
@@ -156,7 +157,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
     try {
       await this.persist(next);
       const g = next.pending.find((p) => p.id === generation);
-      this.warn(`ccrc-server: box token: generation #${g?.seq} handed out`);
+      // Spec 7.1: the outcome's word and its node id, the id only once it passed NODE_ID_RE (the door passes the one it matched).
+      const to = nodeId !== undefined && NODE_ID_RE.test(nodeId) ? ` to node ${nodeId}` : '';
+      this.warn(`ccrc-server: box token: claim door handed-out: generation #${g?.seq} handed out${to}`);
     } catch (e) {
       await this.discard([generation]);
       this.warn(`ccrc-server: box token: the hand-out of a generation could not be recorded (${errno(e)}); it was discarded`);

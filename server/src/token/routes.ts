@@ -13,7 +13,7 @@ import { CLAIM_BODY_LIMIT_BYTES, type BoxTokenView, type ClaimRefusal, type Rota
  */
 export interface TokenRouteDriver {
   readonly door: ClaimDoor;
-  commitHandOut(generation: string, at: number): Promise<void>;
+  commitHandOut(generation: string, at: number, nodeId?: string): Promise<void>;
   rotateNow(now: number): Promise<RotateAnswer>;
   view(): BoxTokenView;
 }
@@ -35,8 +35,10 @@ const refuse = (reply: FastifyReply, status: number, error: ClaimRefusal): Fasti
  * it authenticates by a single-use code the server issued itself over the agent
  * link. Its route `bodyLimit` is 1 KiB, because the server's default 1 MiB would
  * let a handler-side check come too late. `Cache-Control: no-store` is set in
- * `onRequest`, so it rides every answer, Fastify's own 413 and JSON-parse 400
- * included, which the route `errorHandler` reshapes into the same small body.
+ * `onRequest`, so it rides every answer, Fastify's own 413, 415 and JSON-parse 400
+ * included. The route `errorHandler` reshapes them into the same small body and
+ * charges each to the door's miss budget (spec 4.6), so none escapes the count,
+ * the 429 or the log.
  * Every refusal has that one body shape and none says whether a rotation is
  * under way; with no driver the door answers `no-claim` for the same reason.
  *
@@ -50,8 +52,14 @@ export function registerTokenRoutes(app: FastifyInstance, deps: Pick<Deps, 'toke
     onRequest: async (_req, reply) => { reply.header('cache-control', NO_STORE); },
     errorHandler: (err, _req, reply) => {
       const status = (err as { statusCode?: number }).statusCode;
-      if (status === 413) return refuse(reply, 413, 'bad-request');
-      if (status !== undefined && status >= 400 && status < 500) return refuse(reply, 400, 'bad-request');
+      if (status !== undefined && status >= 400 && status < 500) {
+        // A body Fastify refused before the handler (a parse 400, a 415, a 413) is a malformed claim: it is charged to
+        // the miss budget and logged like the door's other misses, exactly as a malformed body the handler sees (spec 4.6).
+        // Past the budget it is a 429, as every other miss is. With no driver there is no door to charge.
+        const step = deps.tokenDriver?.door.claimNow(null, Date.now());
+        if (step !== undefined && step.status === 429) return refuse(reply, 429, 'rate-limited');
+        return refuse(reply, status === 413 ? 413 : 400, 'bad-request');
+      }
       console.warn('ccrc-server: box token: the claim door failed unexpectedly; answered 503');
       return refuse(reply, 503, 'unavailable');
     },
@@ -62,7 +70,7 @@ export function registerTokenRoutes(app: FastifyInstance, deps: Pick<Deps, 'toke
     const step = driver.door.claimNow(req.body, now);
     if (step.status !== 200) return refuse(reply, step.status, step.error);
     try {
-      await driver.commitHandOut(step.generation, now);
+      await driver.commitHandOut(step.generation, now, step.nodeId);
     } catch {
       console.warn(`ccrc-server: box token: the hand-out of generation ${step.generation} could not be ` +
         'recorded; answered 503 and the generation is discarded');

@@ -49,7 +49,7 @@ const fakeDriver = (): FakeDriver => {
     door: new ClaimDoor({ valueOf: (g) => values.get(g) ?? null, warn: (l) => warnings.push(l) }),
     commits: [], failCommit: false, warnings,
     rotateAnswer: { ok: true, outcome: 'started', view: VIEW },
-    async commitHandOut(generation, at) {
+    async commitHandOut(generation, at, _nodeId) {
       if (d.failCommit) throw new Error('fsync failed');
       d.commits.push({ generation, at });
     },
@@ -61,6 +61,13 @@ const fakeDriver = (): FakeDriver => {
 
 const claim = (app: FastifyInstance, body: unknown) =>
   app.inject({ method: 'POST', url: TOKEN_CLAIM_PATH, payload: body as Record<string, unknown> });
+
+/** The `import ... from '<spec>'` statements of a source, each with the names it takes (a `type` marker dropped). */
+const importsOf = (src: string): { spec: string; names: string[] }[] =>
+  [...src.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+'([^']+)';/gm)].map((m) => ({
+    spec: m[2]!,
+    names: m[1]!.split(',').map((n) => n.trim().replace(/^type\s+/, '')).filter((n) => n !== ''),
+  }));
 
 const JUNK = (i: number): string => `junk${String(i).padStart(39, '0')}`;   // 43 chars, a well-shaped miss
 
@@ -167,6 +174,32 @@ describe('POST /api/token/claim', () => {
     expect((await claim(a, { code, nodeId: NODE })).statusCode).toBe(200);
   });
 
+  it('a malformed body CHARGES the miss budget (F5): the budget is spent by malformed bodies alone, then 429', async () => {
+    const d = fakeDriver();
+    const code = d.door.issue(GEN, NODE, Date.now());
+    const a = await open(d);
+    // Exactly the budget of malformed bodies: each is a 400 and each is one miss. A door that answers a malformed
+    // body before `claimVerdict` charges none of them, and the well-shaped junk claim below is a 404, not a 429.
+    for (let i = 0; i < CLAIM_MISS_BUDGET; i++) expect((await claim(a, { code: 7, nodeId: NODE })).statusCode).toBe(400);
+    expect((await claim(a, { code: JUNK(1), nodeId: NODE })).statusCode, 'the budget was spent by the malformed bodies').toBe(429);
+    expect((await claim(a, { code: 7, nodeId: NODE })).statusCode, 'a malformed body past the budget is a 429 too').toBe(429);
+    expect(d.warnings.filter((w) => w.includes('miss'))).toHaveLength(1);
+    // A live code is still answered: the compare runs before the budget, and a miss never burns a code.
+    expect((await claim(a, { code, nodeId: NODE })).statusCode).toBe(200);
+  });
+
+  it('the route hands the claim\'s node to commitHandOut, which logs it only once it passed NODE_ID_RE', async () => {
+    const d = fakeDriver();
+    const seen: (string | undefined)[] = [];
+    const orig = d.commitHandOut.bind(d);
+    d.commitHandOut = async (g, at, nodeId) => { seen.push(nodeId); await orig(g, at); };
+    const code = d.door.issue(GEN, NODE, Date.now());
+    const a = await open(d);
+    expect((await claim(a, { code, nodeId: NODE })).statusCode).toBe(200);
+    expect(seen).toEqual([NODE]);
+  });
+
+
   it('size: a 2 KiB body answers 413 with the same small body and no-store', async () => {
     const d = fakeDriver();
     d.door.issue(GEN, NODE, Date.now());
@@ -177,6 +210,45 @@ describe('POST /api/token/claim', () => {
     expect(res.statusCode).toBe(413);
     expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
     expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  describe('bodies Fastify rejects before the handler are misses too (F9, spec 4.6)', () => {
+    const rejected: [string, string, string, number][] = [
+      ['a JSON-parse failure', 'application/json', '{"code":', 400],
+      ['an unsupported media type (a 415, reshaped to 400)', 'application/xml', '<code/>', 400],
+      ['a body over the 1 KiB bound', 'application/json', JSON.stringify({ code: 'x'.repeat(2048), nodeId: NODE }), 413],
+    ];
+    it.each(rejected)('%s charges the miss budget, logs like a miss, keeps no-store, and reaches 429', async (_n, type, payload, status) => {
+      const d = fakeDriver();
+      const code = d.door.issue(GEN, NODE, Date.now());
+      const a = await open(d);
+      const send = () => a.inject({ method: 'POST', url: TOKEN_CLAIM_PATH, headers: { 'content-type': type }, payload });
+      for (let i = 0; i < CLAIM_MISS_BUDGET; i++) {
+        const res = await send();
+        expect(res.statusCode).toBe(status);
+        expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+        expect(res.headers['cache-control']).toBe('no-store');
+      }
+      expect(d.warnings.filter((w) => w.includes('miss')), 'a rejected body is logged like the door\'s other misses').toHaveLength(1);
+      expect(d.warnings.join('\n')).toMatch(/refused 1 miss/);
+      // The budget was spent by rejected bodies alone: a well-shaped junk claim and one more rejected body are both 429.
+      const junk = await claim(a, { code: JUNK(3), nodeId: NODE });
+      expect(junk.statusCode, 'the rejected bodies spent the budget').toBe(429);
+      const more = await send();
+      expect(more.statusCode).toBe(429);
+      expect(more.json()).toEqual({ ok: false, error: 'rate-limited' });
+      expect(more.headers['cache-control']).toBe('no-store');
+      // The compare still runs before the budget: the live code is served and a miss never burned it.
+      expect((await claim(a, { code, nodeId: NODE })).statusCode).toBe(200);
+    });
+
+    it('with no driver a rejected body is still the same small 400 with no-store, and nothing throws', async () => {
+      const a = await open();
+      const res = await a.inject({ method: 'POST', url: TOKEN_CLAIM_PATH, headers: { 'content-type': 'application/json' }, payload: '{"code":' });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(res.headers['cache-control']).toBe('no-store');
+    });
   });
 
   it("headers: Fastify's own JSON-parse 400 and media-type refusal are reshaped and carry no-store too", async () => {
@@ -237,7 +309,7 @@ describe('ClaimDoor', () => {
     const code = d.issue(GEN, NODE, 1_000);
     const step = d.claimNow({ code, nodeId: NODE }, 1_001);
     expect(typeof (step as unknown as { then?: unknown }).then).toBe('undefined');
-    expect(step).toEqual({ status: 200, generation: GEN, value: VALUE });
+    expect(step).toEqual({ status: 200, generation: GEN, value: VALUE, nodeId: NODE });
   });
 
   it(`compares a FIXED ${MAX_PENDING} live + ${BURNED_CODES_KEPT} burned slots on every claim, live, burned or none`, () => {
@@ -288,6 +360,65 @@ describe('ClaimDoor', () => {
     expect(d.claimNow({ code, nodeId: NODE }, 1_001 + BURNED_CODE_KEEP_MS)).toMatchObject({ status: 404, error: 'no-claim' });
   });
 
+  describe('outcome lines carry the word and the node id, never the code (F10, spec 7.1)', () => {
+    const LINE = /^ccrc-server: box token: /;
+    const rig = () => {
+      const lines: string[] = [];
+      const d = new ClaimDoor({ valueOf: () => VALUE, warn: (l) => lines.push(l) });
+      return { d, lines };
+    };
+
+    it('code-expired names the word, the bound node and the presenting node', () => {
+      const { d, lines } = rig();
+      const code = d.issue(GEN, NODE, 1_000);
+      expect(d.claimNow({ code, nodeId: NODE }, 1_000 + CLAIM_CODE_TTL_MS + 1)).toMatchObject({ status: 410, error: 'code-expired' });
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(LINE);
+      expect(lines[0]).toContain('code-expired');
+      expect(lines[0]).toContain(GEN);
+      expect(lines[0]).toContain(NODE);
+      expect(lines[0]).not.toContain(code);
+    });
+
+    it('wrong-node names the word and BOTH nodes: the one it was bound to and the one that presented it', () => {
+      const { d, lines } = rig();
+      const code = d.issue(GEN, NODE, 1_000);
+      expect(d.claimNow({ code, nodeId: OTHER }, 1_001)).toMatchObject({ status: 403, error: 'wrong-node' });
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('wrong-node');
+      expect(lines[0]).toContain(NODE);
+      expect(lines[0]).toContain(OTHER);
+      expect(lines[0]).not.toContain(code);
+    });
+
+    it('code-used (a replay) names the word and the presenting node', () => {
+      const { d, lines } = rig();
+      const code = d.issue(GEN, NODE, 1_000);
+      d.claimNow({ code, nodeId: NODE }, 1_001);
+      lines.length = 0;
+      expect(d.claimNow({ code, nodeId: OTHER }, 1_002)).toMatchObject({ status: 410, error: 'code-used' });
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('code-used');
+      expect(lines[0]).toContain(OTHER);
+      expect(lines[0]).not.toContain(code);
+    });
+
+    it('a 200 carries the node it was handed to, so the hand-out line can name it', () => {
+      const { d } = rig();
+      const code = d.issue(GEN, NODE, 1_000);
+      expect(d.claimNow({ code, nodeId: NODE }, 1_001)).toMatchObject({ status: 200, generation: GEN, nodeId: NODE });
+    });
+
+    it('a node id that fails NODE_ID_RE is never printed: it is a malformed miss, with no id in its line', () => {
+      const { d, lines } = rig();
+      const code = d.issue(GEN, NODE, 1_000);
+      const hostile = 'x\nccrc-server: forged line';
+      d.claimNow({ code, nodeId: hostile }, 1_001);
+      expect(lines.join('\n')).not.toContain('forged');
+      expect(lines.join('\n')).not.toContain('\nccrc-server: forged');
+    });
+  });
+
   it('door.ts spells neither the code TTL nor the burned-code age: both come from policy.ts (D-4405)', () => {
     const src = readFileSync(path.join(here, '..', 'src', 'token', 'door.ts'), 'utf8');
     const code = src.split('\n').filter((l) => !/^\s*(\/\/|\/\*\*|\*)/.test(l)).join('\n');
@@ -301,6 +432,39 @@ describe('ClaimDoor', () => {
     const code = src.split('\n').filter((l) => !/^\s*(\/\/|\/\*\*|\*)/.test(l)).join('\n');
     expect(code).not.toMatch(/from 'node:fs/);
     expect(code, 'the door awaits: its claim step is no longer one synchronous step').not.toMatch(/\bawait\b|\basync\b/);
+  });
+
+  it('door.ts imports an ALLOWLIST of names, so no import can persist a code (F6)', () => {
+    // `./files.js` exports every disk writer, and `../coord/store.js` a database: a door that imports one of their
+    // writers could persist a code and the in-memory case above would stay green. So each module the door may import
+    // is named here WITH the names it may take from it; anything else is a red, with the module and the name.
+    const ALLOWED: Record<string, readonly string[]> = {
+      'node:crypto': ['createHash', 'randomBytes', 'timingSafeEqual'],
+      '../../../shared/agent-protocol.js': ['isClaimCode'],
+      '../../../shared/box-token.js': ['ClaimRefusal'],
+      '../coord/token.js': ['matchDigestSlots'],
+      '../coord/store.js': ['NODE_ID_RE'],
+      './policy.js': ['BURNED_CODES_KEPT', 'CLAIM_ALERT_EVERY_MS', 'MAX_PENDING', 'claimVerdict', 'codeExpiresAt', 'keepBurned',
+        'ClaimDoorState', 'ClaimMatch'],
+      './files.js': ['mintClaimCode'],   // a pure random-bytes mint: it writes nothing
+    };
+    const src = readFileSync(path.join(here, '..', 'src', 'token', 'door.ts'), 'utf8');
+    const imports = importsOf(src);
+    expect(imports.length, 'the scan found door.ts\'s imports').toBeGreaterThan(5);
+    for (const { spec, names } of imports) {
+      expect(Object.keys(ALLOWED), `door.ts imports ${spec}`).toContain(spec);
+      for (const n of names) expect(ALLOWED[spec], `door.ts takes ${n} from ${spec}`).toContain(n);
+    }
+    expect(src, 'a side-effect, namespace, default or dynamic import is outside the allowlist')
+      .not.toMatch(/^import\s+(?!type\s*\{|\{)|\bimport\s*\(|\brequire\s*\(/m);
+  });
+
+  it('the import scan itself sees a writer taken from ./files.js (the mutation the allowlist exists for)', () => {
+    const planted = "import { mintClaimCode, writeStateFile } from './files.js';\nimport type { A } from './policy.js';\n";
+    expect(importsOf(planted)).toEqual([
+      { spec: './files.js', names: ['mintClaimCode', 'writeStateFile'] },
+      { spec: './policy.js', names: ['A'] },
+    ]);
   });
 });
 

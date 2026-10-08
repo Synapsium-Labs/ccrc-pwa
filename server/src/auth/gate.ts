@@ -94,11 +94,13 @@ import type { SessionStore } from './sessions.js';
  *     `'legacy'` (no token presented) and `'unconfigured'` (this box was never
  *     given one) THROUGH, by the operator's rollout ruling, and this exemption
  *     was said to inherit that tolerance's lifetime. The box-token lifecycle
- *     removed both arms (spec 4.3): the server mints its own token at boot, so
- *     "never given one" is no longer a state a box is left in, and the route
- *     refuses every verdict but `'ok'`. No exempt route in this reason can be
- *     reached by a caller with no credential at all. The entry stays because
- *     its caller still has no cookie; session-gating it was never the fix.
+ *     removed both arms (spec 4.3): the server mints its own token at boot, and
+ *     the route refuses every verdict but `'ok'`. A boot whose mint failed still
+ *     leaves a box "never given one": it is unconfigured until the driver's retry
+ *     mints, and the route refuses that state too. No exempt route in this
+ *     reason can be reached by a caller with no credential at all. The entry
+ *     stays because its caller still has no cookie; session-gating it was never
+ *     the fix.
  *
  *     ORDER-PINNED PARAGRAPH. `box-token-census.test.ts` reads the number words
  *     above IN SEQUENCE — the box-token lane count first, the total second — so

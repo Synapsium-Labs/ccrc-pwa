@@ -12,7 +12,7 @@ import { mintClaimCode } from './files.js';
 /** What one claim step answers the route. A 200 carries the value, served from
  *  memory (the holder's pending slot via `valueOf`), never from the pending file. */
 export type ClaimStep =
-  | { status: 200; generation: string; value: string }
+  | { status: 200; generation: string; value: string; nodeId: string }
   | { status: 400 | 403 | 404 | 410 | 429; error: ClaimRefusal; generation: string | null };
 
 const sha256 = (s: string): Buffer => createHash('sha256').update(s, 'utf8').digest();
@@ -89,9 +89,14 @@ export class ClaimDoor {
         : i < MAX_PENDING ? { kind: 'live', index: i }
           : { kind: 'burned', index: i - MAX_PENDING };
     }
-    const { reply, next, alert } = claimVerdict(this.state, match, wellShaped ? (b.nodeId as string) : '', now);
+    // The presented id is printable only once it passed NODE_ID_RE (`wellShaped`); the bound id is read before the
+    // verdict burns the slot, and is re-checked here too: a log line never carries a string that failed the shape (F10).
+    const presented = wellShaped ? (b.nodeId as string) : null;
+    const boundRaw = match.kind === 'live' ? this.state.live[match.index]?.nodeId : undefined;
+    const bound = boundRaw !== undefined && NODE_ID_RE.test(boundRaw) ? boundRaw : null;
+    const { reply, next, alert } = claimVerdict(this.state, match, presented ?? '', now);
     this.state = next;
-    if (alert !== null) this.report(alert, now);
+    if (alert !== null) this.report(alert, now, { presented, bound });
     if (reply.status !== 200) return { status: reply.status, error: reply.error, generation: reply.generation };
     const value = this.valueOf(reply.generation);
     if (value === null) {
@@ -102,14 +107,15 @@ export class ClaimDoor {
         'which the server no longer holds; nothing was handed out');
       return { status: 404, error: 'no-claim', generation: reply.generation };
     }
-    return { status: 200, generation: reply.generation, value };
+    return { status: 200, generation: reply.generation, value, nodeId: presented as string };
   }
 
   private slotDigest(hex: string | undefined, i: number): Buffer {
     return hex === undefined ? this.dummies[i]! : Buffer.from(hex, 'hex');
   }
 
-  private report(alert: NonNullable<ReturnType<typeof claimVerdict>['alert']>, now: number): void {
+  private report(alert: NonNullable<ReturnType<typeof claimVerdict>['alert']>, now: number,
+    nodes: { presented: string | null; bound: string | null }): void {
     if (alert.kind === 'misses') {
       if (this.lastMissWarnAt !== null && now - this.lastMissWarnAt < CLAIM_ALERT_EVERY_MS) return;
       this.lastMissWarnAt = now;
@@ -117,17 +123,21 @@ export class ClaimDoor {
         '(no live code matched; misses never burn a code)');
       return;
     }
+    // Spec 7.1: a claim-door outcome is logged with its word and its node id. The ids are NODE_ID_RE-shaped by now
+    // (`claimNow` passes null for one that is not), and the line never carries a code or a digest.
+    const who = (label: string, id: string | null): string => (id === null ? '' : `; ${label} node ${id}`);
     if (alert.kind === 'replay') {
       this.alerts.replays++;
       if (this.lastReplayWarnAt !== null && now - this.lastReplayWarnAt < CLAIM_ALERT_EVERY_MS) return;
       this.lastReplayWarnAt = now;
-      this.warn(`ccrc-server: box token: a used claim code for generation ${alert.generation} was presented again ` +
-        `(${this.alerts.replays} replay(s) since boot); refused, nothing discarded`);
+      this.warn(`ccrc-server: box token: claim door code-used: a used claim code for generation ${alert.generation} was ` +
+        `presented again${who('by', nodes.presented)} (${this.alerts.replays} replay(s) since boot); refused, nothing discarded`);
       return;
     }
-    (alert.kind === 'expired' ? this.alerts.expired : this.alerts.wrongNode).push(alert.generation);
-    this.warn(`ccrc-server: box token: a claim code for generation ${alert.generation} was presented ` +
-      (alert.kind === 'expired' ? 'after its TTL' : 'from a node it was not bound to') +
-      '; it was burned and the generation will be discarded');
+    const expired = alert.kind === 'expired';
+    (expired ? this.alerts.expired : this.alerts.wrongNode).push(alert.generation);
+    this.warn(`ccrc-server: box token: claim door ${expired ? 'code-expired' : 'wrong-node'}: a claim code for generation ` +
+      `${alert.generation} was presented ${expired ? 'after its TTL' : 'from a node it was not bound to'}` +
+      `${who('bound to', nodes.bound)}${who('presented by', nodes.presented)}; it was burned and the generation will be discarded`);
   }
 }

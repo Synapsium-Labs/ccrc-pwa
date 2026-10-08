@@ -4,6 +4,9 @@
 // tolerance and the unconfigured pass-through with it (spec 4.3), so this
 // route fails shut like every other box-token lane.
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { BoxTokenHolder } from '../src/coord/token.js';
@@ -100,5 +103,26 @@ describe('POST /api/notify with a box token', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     app = await buildServer({ ...testDeps(mkTmp('ccrc-')), mailToken: new BoxTokenHolder() });
     expect((await post(app, { 'x-ccrc-mail-token': TOKEN })).statusCode).toBe(401);
+  });
+});
+
+describe('gate.ts reason 2 says what is true about an unconfigured box (F12)', () => {
+  const gate = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'auth', 'gate.ts'), 'utf8');
+  const para = gate.slice(gate.indexOf('`/api/notify` is now a plain box-token lane'), gate.indexOf('ORDER-PINNED PARAGRAPH'));
+
+  it('the notify paragraph is found', () => {
+    expect(para.length).toBeGreaterThan(200);
+  });
+
+  it('it does not claim "never given one" cannot happen: a failed boot mint leaves exactly that state', () => {
+    expect(para.replace(/\s*\n\s*\*\s*/g, ' ')).not.toMatch(/no longer a state a box is left in/);
+  });
+
+  it('it says a failed boot mint leaves the box unconfigured until the retry mints, and that notify refuses it', () => {
+    const flat = para.replace(/\s*\n\s*\*\s*/g, ' ');
+    expect(flat).toMatch(/boot whose mint failed/);
+    expect(flat).toMatch(/unconfigured/);
+    expect(flat).toMatch(/until the (?:driver's )?retry mints/);
+    expect(flat).toMatch(/refuses (?:that state|it)/);
   });
 });
