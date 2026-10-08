@@ -438,26 +438,31 @@ merge-parse block), `server/test/ccd-swap-carry-merge.test.ts`, and the new rout
 
 ## Mutation-table plan
 
-Every row is re-measured on the branch; the measured table travels with the PR.
+Every row was re-measured on the branch (macOS; each mutation applied alone, the named suites run, then restored).
+The predicted reds all held; the measured column adds what else went red.
 
-| guard | mutation | reds (predicted) |
-|---|---|---|
-| inode proof | `if True:` | C4 decoy |
-| `rw` filter | drop `c[3]` | C3 |
-| a mount inside a tree | `if False:` | C7 |
-| component boundary | `p.startswith(anc)` | R3, R5, C2, C3, M2 |
-| octal decoding | `unesc` = identity | C6 |
-| stacked mounts, later row wins | `>=` → `>` | R4 |
-| only `EXDEV` routes | `if True:` | M3 |
-| the second clear | drop it | C9: nest present |
-| `realpath` | `ra, rb = a, b` | R2 |
-| alias holder check | `if False:` | R5 |
-| byte count | drop `$b bytes` | C2–C9 |
-| route-crash containment | `safe_route` → `route` | M5: becomes `(kept: error)` |
-| laziness | route before the direct `cp -al` | C10 |
-| the walker's via link | drop it | M1 |
-| the harness seam | drop the `CCD_MOUNTINFO` default | the ccd-swap nest case on Linux, which turns into `link-failed` (macOS is green either way) |
-| the instrument's parse | the old `MERGED` | Task 5 cases |
+| guard | mutation | reds (predicted) | measured |
+|---|---|---|---|
+| inode proof | `if True:` | C4 decoy | C4 |
+| `rw` filter | drop `c[3]` | C3 | C3 |
+| a mount inside a tree | `if False:` | C7 | C7 |
+| component boundary | `p.startswith(anc)` | R3, R5, C2, C3, M2 | R3, R5, C2, C3, M2, M6 |
+| octal decoding | `unesc` = identity | C6 | C6 |
+| stacked mounts, later row wins | `>=` → `>` | R4 | R4 |
+| only `EXDEV` routes | `if True:` | M3 | M3 |
+| the second clear | drop it | C9: nest present | C9 |
+| `realpath` | `ra, rb = a, b` | R2 | R2 |
+| alias holder check | `if False:` | R5 | R5 |
+| byte count | drop `$b bytes` | C2–C9 | C2–C5, C7–C9, C11, and ccd-swap's nest case (C6 links) |
+| route-crash containment | `safe_route` → `route` in the walk | M5: becomes `(kept: error)` | M5 |
+| laziness | route before the direct `cp -al` | C10 | C10 |
+| the walker's via link | drop it | M1 | M1, M4 |
+| the copy warnings | drop the first carry's / the merge's `echo … >&2` | C11 / M2 | C11 / M2 |
+| the merge copy clause | drop `csuf+=…` | M2 | M2, M3, M5, M6, and measure-continuity's end-to-end case (the `/dev/shm` case is Linux-only) |
+| a cause outside the vocabulary | the final `exdev-no-root` misspelt | R10 | R3, R5, R10, C2, C3, M2, M6 |
+| the bash census | `CARRY_ROUTE=root-failed` misspelt | R10b | R10b, C9 |
+| the harness seam | drop the `CCD_MOUNTINFO` default | the ccd-swap nest case on Linux, which turns into `link-failed` (macOS is green either way) | on macOS: ccd-swap green, as predicted, but R1–R9b red (they write their table at the seam's default path) |
+| the instrument's parse | the old `MERGED` | Task 5 cases | both Task 5 cases |
 
 ## Edge cases, macOS, back-compat
 
