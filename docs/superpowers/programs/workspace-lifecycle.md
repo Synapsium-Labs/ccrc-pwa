@@ -787,6 +787,17 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   freshly spawned; the worker skill was present. The retry lost the 22:20 age-out to another coordinator and took the
   22:27:47 one. Route: Opus · high, workflow off, compact 40, Sonnet implementers, an Opus act-safety reviewer per task.
   14 items.
+- **2026-10-08 00:49 — run 314 asks about a claim it does not hold; ruled (b) with a merge gate; one number issued.**
+  swift-cove (mail 3948, progress: Tasks 1–12 committed locally, each with an Opus per-task review) asked whether it may
+  append two describes at the end of `server/test/single-definition.test.ts` — Task 3's type-no-period pin and Task 13's
+  dead-coordinator no-writer pin — while run 302's claim 1094 holds that file (its mail 3942 to soft-delta sat
+  undelivered behind a busy gate). Ruled (mail 3949): not without the holder's consent, which is run 302's to give,
+  not this programme's; the plan's overlap text (ruling J) settles how the appends merge, not whether a live claim may
+  be crossed. The pins stay staged and land, appended and adjacent, as their own commit once claim 1094 is released or
+  lapses or consent is forwarded; if they are still out when the rest is done, the PR and the wave-done say so, the
+  review goes ahead, and the merge waits for that commit and a scoped re-review of it. No relocation to another file.
+  Consent asked of run 302's coordinator `ccrc-pwa-quiet-ridge` (mail 3950). The worker's new departure — a hold no
+  longer overwrites a final or terminal expiry report (a Task 2 review fix) — was issued 4454 by the allocator.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
