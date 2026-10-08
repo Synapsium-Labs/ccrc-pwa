@@ -47,6 +47,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 18:14 — wave 7's plan is MERGED (#331, `226bb881c`), so its planSha is
+  `226bb881ce6da8c914e66e52a905b92045aa6909`.** Every gating check was green, and the merge used `--match-head-commit`
+  on the tested head `252de6dda`.
+  - **Dispatch waits on claim 1110.** Run 347 needs six paths that claim 1110 holds for run 320 (box-token
+    lifecycle): `agent/src/whitelist.ts`, `README.md`, `CLAUDE.md`, `agent/CLAUDE.md` and two test pins. Its hard
+    expiry is 21:28Z. Run 320's coordinator, `ccrc-pwa-bright-river`, was asked for R56 consent (4030), since wave 7
+    only appends there. With no answer, run 347 is dispatched after 21:28Z.
+  - **Wave 8's pre-flight runs.** Workflow `wf_6ed785db-77e` runs three Opus readers and a critic, read-only, at
+    `226bb881c`.
+
 - **2026-10-08 18:01 — wave 7's plan is FINAL for review, and its docs PR opens.** The plan is 13,474 lines.
   - **The fix pass.** Workflow `wf_a9399c29-92b` applied 144 edits, every one cleanly. The coordinator applied the
     rest by hand:
