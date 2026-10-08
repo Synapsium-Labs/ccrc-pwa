@@ -1077,9 +1077,15 @@ approved on a narrow one.
    - A `probe-unmeasured` printed on the resumed arm reads not resumable to the server (§5.6), though an earlier
      attempt's breadcrumb stands. The locked recomputation prints it for any unmeasured verdict, and on a resume that
      verdict can come from the resume's own reads (an unreadable tombstone, for one). The feed says the act is retried
-     from the start, but the box's next attempt resumes from that breadcrumb and completes. This is the mirror image
-     of the residual above: the same kind of fault, a wrong sentence and never a wrong act, and the same additive field
-     tells the cases apart. Wave 7 carries it.
+     from the start, but the box's next attempt resumes from that breadcrumb and completes.
+     - The audit path reaches it too, and first. `ws-audit --reclaim` runs before the verb and goes through the same
+       `_ws_reclaim_resume_eval`. Over a standing breadcrumb with an unreadable tombstone it exits 1 with
+       `{"resume":…,"verdict":"unmeasured"}` and journals `probe-unmeasured`. The server maps the audit's non-zero
+       exit to `unreadable` (`childReclaimAudit`), and the executor then reads not resumable. So the feed says the act
+       is retried from the start on every attempt while the tombstone stays unreadable, yet ccd's next attempt resumes
+       from the breadcrumb. The verb arm is reached only in an audit-to-verb race.
+     - This is the mirror image of the residual above: the same kind of fault, a wrong sentence and never a wrong act,
+       and the same additive field (`crumb`) tells the cases apart. Wave 7 carries it.
    - The in-use probe reads each process's environment as exec'd, so a TMPDIR set after exec is not seen.
      - A cwd or fd reached through another mount of the same directory has a spelling neither of its compared
        spellings names. `~/.cc-tmp` is a bind mount on the fleet box, and the TMPDIR arm compares ccd's own

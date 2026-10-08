@@ -9435,11 +9435,21 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     directory hides what is under it), or a 65th entry named `.git` (the cap is 64) is unmeasured. It does not prune
     at a `.git` directory, because a foreign tree can be parked inside a clone's `.git` as easily as anywhere else, so
     the time bound caps the walk.
+    - **The two unmeasured triggers (review 341, F8).** A non-zero `find` exit and any stderr are each other's defence
+      in depth, because every shipped case that reaches the arm (a mode-000 directory) produces both. Deleting either
+      one alone leaves the leaf-checkouts suite green, and removing both reds it, so the two are pinned only together.
+      It is recorded, not fixed.
   - **Each `.git` entry,** asked by `-L`, then `-d`, then `-f`, never followed, and git is never run inside a leaf.
     - A link is refused (the controller's ruling F1a): git would follow it, ccd never does.
     - A directory, a full clone, passes: it is the leaf's own scratch.
-    - A file must be exactly one `gitdir: <non-empty path>` line of at most 4096 bytes with no NUL, else it is
-      unmeasured (F1b: git reads the whole file). It is tested with `-f` before any read, so a FIFO is never opened.
+    - A file must be exactly one `gitdir: <non-empty path>` line of at most 4096 bytes, else it is unmeasured (F1b:
+      git reads the whole file). It is tested with `-f` before any read, so a FIFO is never opened.
+      - **The NUL reading (review 341, F2; recorded, the code stays).** Each NUL is read as a newline. A NUL inside the
+        line splits it, so it reads unmeasured. A TRAILING NUL is read as a line end and stripped with the trailing
+        CRs and LFs, so `gitdir: <A>\0` and `gitdir: <A>\n\0` both read as A. A foreign tree still refuses on its
+        back-link, and only a tree git back-links passes.
+      - For `gitdir: <A>\n\0`, git itself reads `A\n` and fails, so ccd and git read that file apart, and ccd still
+        answers measured. This is safe, because what passes is back-linked by git's own record.
     - A relative path resolves against the `.git` file's own directory, as git does, and the admin directory is
       resolved physically through `_ws_dir_physical` (F1c). One proven absent refuses, because git no longer records
       the tree. One that cannot be resolved is unmeasured. A `..` after another component of a relative gitdir, or any
@@ -9548,6 +9558,14 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     `crumb` field, which marks a document with or without a breadcrumb and so covers both directions. The
     classification is unchanged in wave 6. It agrees with `probe-unmeasured-word-scoped-to-attempt`, whose sentence
     says only what THIS attempt did and started.
+  - **The audit path reaches the same residual, and first (review 341, F1).** `ws-audit --reclaim` runs before the verb
+    and goes through the same `_ws_reclaim_resume_eval`. Over a standing breadcrumb with an unreadable tombstone it
+    exits 1 with `{"resume":…,"verdict":"unmeasured"}` and journals `probe-unmeasured`. The server maps the audit's
+    non-zero exit to `unreadable` (`childReclaimAudit`), and the executor then reads not resumable. So the feed says
+    "retried from the start" on every attempt while the tombstone stays unreadable, yet ccd's next attempt resumes from
+    the breadcrumb. The verb arm is reached only in an audit-to-verb race. A wrong sentence, never a wrong act, carried
+    to wave 7 with the same `crumb` field. The two comments in `childReclaim.ts` that state the set's rule now say "on
+    the fresh arm".
 - **D-4458** `leaf-root-newline-refused` (Fix round 1) — the removal helper's root resolution, `rroot=$(cd -- "$root"
   … && pwd -P)`, dropped every trailing newline of the physical path (review 335, F4). A root resolving to `<vol>\n`
   read as `<vol>`, `lreal == leaf` passed because both sides were stripped, and `<vol>/<id>`, outside the root, was
@@ -9568,6 +9586,10 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
   - **Other callers.** Fix round 1's checkout question (`leaf-moved-checkout-refused`) also resolves through the same
     helper: its leaf, each admin directory, and each checkout's own directory for the back-link compare. So does the leaf placement in
     `_ws_reclaim_workdir_shared` (`leaf-rows-are-nested`). Each maps a failure to unmeasured.
+  - **Other captures stay bare (review 341, F3).** The helper is the one resolution its seven callers share, not the
+    only capture on a removal path. The other bare `$(cd … && pwd -P)` captures on removal paths stay bare and fail
+    closed, because a truncated root makes the containment proof refuse: the tail's `wdreal`,
+    `_ws_reclaim_nested_proven`'s `real`, and the pin's `wdreal`. The header of `_ws_dir_physical` says so.
   - **The leaf's own path takes no sentinel.** Under a newline-free physical root, with an id that holds none, a leaf
     that is no link resolves to exactly `<root>/<id>`. Only a link swapped in between the link test and the `cd` could
     differ, which is the same-uid window stated for the helper.

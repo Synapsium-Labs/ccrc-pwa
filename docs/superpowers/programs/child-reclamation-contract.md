@@ -1526,6 +1526,12 @@ This note amends; it edits no earlier text.
       `pin-failed` case: the same kind of fault, a wrong sentence and never a wrong act. The classification is unchanged in
       wave 6. It agrees with the scoped sentence of `LC_REFUSAL_WORD['probe-unmeasured']` ("this attempt started
       nothing and removed nothing"), which says only what THIS attempt did.
+    - **The audit path reaches the same residual, and first.** `ws-audit --reclaim` runs before the verb and goes through
+      the same `_ws_reclaim_resume_eval`. Over a standing breadcrumb with an unreadable tombstone it exits 1 with
+      `{"resume":…,"verdict":"unmeasured"}` and journals `probe-unmeasured`. The server maps the audit's non-zero exit to
+      `unreadable` (`childReclaimAudit`), and the executor then reads not resumable. So the feed says "retried from the
+      start" on every attempt while the tombstone stays unreadable, yet ccd's next attempt resumes from the breadcrumb.
+      The verb arm is reached only in an audit-to-verb race. Wave 7's `crumb` field carries it.
   - `die "bad run id"` was reclaim's alone, so the sanctioned unjournaled set narrows by one.
 - **R31's stated cost.** A row whose directory is gone now holds only while neither arm of R54 places it.
   - Two interrupted children whose trees the tail removed release each other through the breadcrumb arm.
@@ -1746,4 +1752,7 @@ This note amends; it edits no earlier text.
       fixed. A fresh reclaim is held at the ladder instead, and nothing is deleted in either case.
     - The pre-breadcrumb `pin-failed` and `tombstone-unwritable`, and the resumed arm's `probe-unmeasured` (see R43
       above), wait for the additive `crumb:false` field. That field marks a document with or without a breadcrumb, so
-      it covers both directions.
+      it covers both directions. The resumed arm's `probe-unmeasured` is reached through the audit path too:
+      `ws-audit --reclaim` over a standing breadcrumb with an unreadable tombstone exits 1, the server reads it
+      `unreadable`, and the executor reads not resumable, so the feed's "retried from the start" is wrong there on
+      every attempt while the tombstone stays unreadable. A wrong sentence, never a wrong act.

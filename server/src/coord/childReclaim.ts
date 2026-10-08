@@ -241,14 +241,18 @@ export type ChildReclaimWip =
  *     breadcrumb — its own `{failed:…}` document at exit 1, or a call cut
  *     short with nothing printed. The next attempt resumes FROM there. A
  *     `{failed:…}` word in `CHILD_RECLAIM_PRE_CRUMB_FAILED` is the exception:
- *     it is printed before the breadcrumb exists, so it is `not-resumable`.
+ *     it is printed before the breadcrumb exists ON THE FRESH ARM, so it is
+ *     `not-resumable`. On the RESUMED arm `probe-unmeasured` is printed while
+ *     an earlier attempt's breadcrumb stands (the set's doc names it).
  *   - `not-resumable`: a substance refusal — `ws-audit --reclaim` itself (a
  *     non-destructive verb that never reaches the reap lock), an unrecognised
  *     refusal word, or a `reclaimed` document naming another session — or a
- *     `{failed:…}` word printed before the breadcrumb
+ *     `{failed:…}` word printed before the breadcrumb on the FRESH arm
  *     (`CHILD_RECLAIM_PRE_CRUMB_FAILED`). ccd's own ladder never advanced this
- *     session's state, but a plain retry MIGHT still succeed (a race, a
- *     version gap this build cannot name yet).
+ *     session's state on that arm, but a plain retry MIGHT still succeed (a
+ *     race, a version gap this build cannot name yet). On the RESUMED arm
+ *     the same word reads here too, while the breadcrumb stands: a wrong
+ *     feed sentence, never a wrong act (the set's doc, and spec §7 item 6).
  *   - `pre-lock-die`: a recognised PRE-LOCK die of `cmd_ws_reclaim` (a usage
  *     error, a malformed token/run id/session id, a missing `python3`, a
  *     missing `flock` binary, or an unopenable lock file — ccd's RECLAIM
@@ -1332,10 +1336,13 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
         // breadcrumb. `not-resumable`: an audit failure (never reached the
         // destructive path), a verb answer that is a REFUSAL in substance
         // (an unrecognised word, or `reclaimed` naming another session), or a
-        // `{failed:…}` word printed before the breadcrumb
+        // `{failed:…}` word printed before the breadcrumb on the FRESH arm
         // (`CHILD_RECLAIM_PRE_CRUMB_FAILED`) — none advanced this session's
         // state, so none has anything to resume, but unlike a pre-lock die a
-        // plain retry MIGHT still work.
+        // plain retry MIGHT still work. On the RESUMED arm `probe-unmeasured`
+        // is printed while an earlier attempt's breadcrumb stands, so there
+        // "retried from the start" is a wrong sentence, never a wrong act
+        // (wave 7's `crumb` field carries it; spec §7 item 6).
         : o.resume === 'resumable' ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.';
       return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} ${tail}${wait}`;
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c5427013549014054ead417837a708ba2c75a9adab5585d9617c6a40d82e6607
+# ccrc:generated 1 sha256=ab04ef1b665ad2152558bcdb7fc68069a64bb0d88acaddf7aac3f7eb27e3667f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28801,26 +28801,26 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION of a directory a removal or an in-use probe
-  # acts under, and of the leaf a placement or a checkout question is asked
-  # about. Seven callers. The three newline sites: `_ws_leaf_remove`'s root,
+  # THE ONE PHYSICAL RESOLUTION its seven callers share: a directory a removal
+  # or an in-use probe acts under, or a leaf a placement or a checkout question
+  # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
   # leaf-question sites: `_ws_reclaim_workdir_shared`'s leaf placement,
   # `_ws_leaf_checkouts`' leaf, and `_ws_leaf_checkout_one`'s admin directory
-  # and checkout directory. A bare `$(cd -- "$d" && pwd -P)` dropped
-  # EVERY trailing newline, so a root resolving to `<vol>\n` read as `<vol>`:
-  # the removal took `<vol>/<id>` outside the root, and both probes compared a
-  # spelling no process uses and answered "nobody". So this is
-  # `_ws_reclaim_resolve`'s own entry, exactly: POSIX mode by ASSIGNMENT, the
-  # functions named after every command it calls removed by the special
-  # builtin `unset`, `builtin cd -L` with `CDPATH` emptied, `builtin pwd -P`,
-  # then `builtin printf x` — and the read is whole only when it ends in that
-  # newline and `x`. A physical path holding a newline ANYWHERE is refused too:
-  # ccd mints none, and a line-oriented reader would split it. Each caller maps
-  # a non-zero answer to its own unmeasured one, never to "nobody" or "absent".
-  # Out of reach, as for `_ws_reclaim_resolve`: `BASH_ENV`, which can make a
-  # function `readonly` before ccd's first line — a missing sentinel is then
-  # the answer, never a guess.
+  # and checkout directory. A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
+  # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
+  # removal took `<vol>/<id>` and both probes answered "nobody". Other bare
+  # captures on removal paths stay bare and fail closed (a truncated root makes
+  # the containment proof refuse): the tail's `wdreal`,
+  # `_ws_reclaim_nested_proven`'s `real` and the pin's `wdreal`. So this is
+  # `_ws_reclaim_resolve`'s own entry, exactly: POSIX mode by ASSIGNMENT,
+  # `unset` of the functions named after every command it calls, `builtin cd -L`
+  # with `CDPATH` emptied, `builtin pwd -P`, `builtin printf x`; the read is
+  # whole only when it ends in that newline and `x`. A physical path holding a
+  # newline ANYWHERE is refused too (ccd mints none; a line reader would split
+  # it). Each caller maps a non-zero answer to its own unmeasured, never
+  # "nobody" or "absent". Out of reach, as there: `BASH_ENV` can make a function
+  # `readonly` first; a missing sentinel is then the answer, never a guess.
   local d="$1" r
   _WS_PHYS=''; _WS_PHYS_WHY=''
   r=$(POSIXLY_CORRECT=y; unset -f builtin cd pwd printf 2>/dev/null; \
@@ -29128,12 +29128,12 @@ WS_LEAF_CHECKOUTS_CAP=64   # the most `.git` entries one leaf's scan examines; m
 _WS_SMALL=''
 _ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read as a newline; 1 when it is
   #                            not a regular file or cannot be read; 2 when it holds more than 4096 bytes
-  # A FILE READ AS A FILE, bounded: `-f` first, so a FIFO is never opened (it
-  # would block the act); the size before the bytes, so nothing larger than a
-  # path is ever read; and the read itself is the group's redirection, so a file
-  # that cannot be opened answers 1, never an empty value. A NUL becomes a
-  # newline, which every caller refuses inside a line — a command substitution
-  # would drop it and join the two halves into a path nobody wrote.
+  # A FILE READ AS A FILE, bounded: `-f` first (a FIFO would block), the size
+  # before the bytes, and the read is the group's redirection (an unopenable file
+  # answers 1). A NUL becomes a newline, never dropped: INSIDE a line it splits
+  # it, unmeasured; a TRAILING one is a line end the caller strips, so `gitdir:
+  # A\0` and `gitdir: A\n\0` both read as A. Git reads the second as `A\n` and
+  # fails; ccd answers measured, safely: only a back-linked tree passes.
   local f="$1" sz
   _WS_SMALL=''
   [[ -f "$f" ]] || return 1
@@ -29164,8 +29164,8 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 re
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$f holds more than 4096 bytes, so it is not one gitdir line ccd can read whole"; return 2; }
   buf="$_WS_SMALL"
   while [[ "$buf" == *[$'\r\n'] ]]; do buf="${buf%?}"; done
-  # git takes the WHOLE file, trailing CR and LF stripped; so does this, and a
-  # second line (or a NUL, read as one) is a file git and ccd would read apart.
+  # git takes the WHOLE file, trailing CR and LF stripped; so does this, a NUL read
+  # as LF. A second line or an inner NUL is unmeasured; a trailing NUL is stripped.
   [[ "$buf" == "gitdir: "?* && "$buf" != *$'\n'* ]] \
     || { _WS_CHECKOUTS_WHY="$f is not one 'gitdir: <path>' line — git cannot tell what it names, so neither can ccd"; return 2; }
   gd="${buf#gitdir: }"
