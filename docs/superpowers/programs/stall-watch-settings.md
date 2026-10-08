@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `451854d1d` after fix round 3; review run 340 dispatched (R30) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `451854d1d`; review 340 accepted; merge awaits the operator (R31) |
 
 ## Decisions & deviations
 
@@ -541,6 +541,36 @@ time.
     09:58:44. The reviewer is `ccrc-pwa-keen-mesa` (`adopted` false, `skillState` present, brief queued), and its
     registry route reads opus, high effort, sonnet subagents, workflow on and compact 40. Next: `review-done`, then
     close run 340 and rule. After that this session asks the operator about merging PR #322.
+- **R31 (2026-10-08 10:21)**, review 340 is accepted, and wave 2 is ready for the operator's merge decision.
+  - Review run 340 (`ccrc-pwa-keen-mesa`, mail 3994) reviewed `451854d1d`, bounded as R29 said. The held-out panel
+    (Workflow `wf_ac4564ff-3dc`) ran 24 agents with no lens unverified: 5 confirmed, 2 refuted.
+    - R29's six items all hold. X48, X60 and X61 to X66 re-measured out of tree and match the plan.
+    - Every suite is green. The whole PWA suite, run alone, reads 108 files and 3520 tests. The citation instrument
+      reads `7 passed | 328 skipped (335)`.
+    - Lanes are empty, and `merge-tree` is clean against `origin/main` (`852c04512`), `ws/amber-river`,
+      `ws/soft-delta` and `ws/swift-cove`.
+    - Run 340 closed `done` and released. The report is copied to `w2-review-340-report.md`.
+  - Its one finding, F1, is minor prose: Task 3's mutation table header says "out of 183" over a footer that says
+    "All are counted out of 187". It is accepted as residue, not sent back: it needs no ruling, changes no
+    behaviour, and another round would cost a review and a cap slot for one sentence in a plan document.
+  - Residue that stands, each a first-cut snapshot in the plan or a test title, none behaviour:
+    - X37 and X38's failing counts at 187;
+    - X41 and X43's old test title;
+    - X59's drifted anchor;
+    - Task 4's "5 failed (5)";
+    - the source-`default` row's title saying "under a fallback" over a fixture with none (N2). Its asserted
+      property holds either way, and X65 reds it.
+    These are left for a later plan-hygiene pass. The shipped files govern, as the plan's own first-cut note says.
+  - PR #322 at `451854d1d`: every CI check is green except `test-macos 2/2`, which is advisory and gates nothing.
+  - Operator decisions before the merge:
+    - F1's line (R24) for a write with no answer: "Not confirmed — the server did not answer; the screen will
+      re-check."
+    - Operator question 2, now only for the 2xx-but-unreadable arm: "Saved — the server's answer could not be read;
+      the screen will re-check."
+    - Merge PR #322, by `--admin --squash --match-head-commit 451854d1dc0e7d70aef392e509f7d108688cd633`.
+  - After the merge: run 322 closes with `final:true`, the programme's last close. Then this session checks the
+    deploy read-only and opens a docs PR for this ledger, writing the three fix-round numbers only once their
+    definitions are on `main`.
 
 ## Carried constraints (reviewers get these)
 
