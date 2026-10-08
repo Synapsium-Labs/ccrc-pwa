@@ -1151,15 +1151,15 @@ export function drainSpool(db, c) {
     thrown = e;
   }
   if (thrown !== null) {
-    // FU8 (FPM8): the drain could not finish (D-4346's 'fail' arm: FULL, IOERR, CORRUPT, a foreign trigger; or any other
-    // throw), so the rest of this tick is the journal half's, as a hold's is (§9.2: "the journal half runs whenever the drain
-    // cannot"): this tick's spool files are renamed and observed (D-4232), and every draining file the loop did not reach is
-    // journaled. So, for a failure the drain meets, no id's spool file grows toward SPOOL_FILE_LINES_MAX while it lasts, and no
-    // renamed file waits with a `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick
-    // than every file the loop met, so the journaling order holds. The loop's error is thrown after it, and an error of the
-    // journal half never replaces it. A failure met at a write the pass makes before the drain (the migration verdict's meta
-    // write, the secrets step, the FTS probe, the phrase re-index and the re-derivation) ends the pass before drainSpool, so this
-    // half never runs for it (FR2a, review 344 F5).
+    // FU8 (FPM8): the drain could not finish (D-4346's 'fail' arm: FULL, IOERR, CORRUPT, a foreign trigger; or any other throw),
+    // so the rest of this tick is the journal half's, as a hold's is (§9.2: "the journal half runs whenever the drain cannot"):
+    // this tick's spool files are renamed and observed (D-4232), and every draining file the loop did not reach is journaled. So,
+    // for a failure the drain meets, no id's spool file grows toward SPOOL_FILE_LINES_MAX while it lasts, and no renamed file
+    // waits with a `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick than every
+    // file the loop met, so the journaling order holds. The loop's error is thrown after it, and an error of the journal half
+    // never replaces it. A failure met at a write the pass makes before the drain (the pass's own meta writes before the tick,
+    // the migration verdict's among them, the outbox flush, the secrets step, the FTS probe, the phrase re-index and the
+    // re-derivation) ends the pass before drainSpool, so this half never runs for it (FR2a, review 344 F5).
     try {
       // failedCounted is always false here: the loop sets it only right before a `break`, and countOutside never throws.
       if (journalHalf(c.home, c.ids, c.now()).journalFailed) countOutside(db, 'journal_write_failed');
@@ -3590,15 +3590,16 @@ export function secretsStep(db, ctx, secretFiles) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The FTS index (§6.2 "FTS indexing", §9.1; plan task 23). The index is derived and blobs stay
-// verbatim. Its body is extracted plain text (never JSON), redacted by entryIndexText (D-4343, D-4419)
-// before it is a term, and only for blobs that a row of searchable provenance references. A pair
-// learned after its text was indexed is re-indexed before any FTS insert of that tick, and the obligation
-// outlives the pass that learned it: by quoted phrase on the same tick (reindexForValues), then by a hash
-// re-derivation of every indexed blob (rederiveFts), which alone moves meta fts_reindex_rid
-// (D-4344, history-reindex-mark-by-rederivation). The bytes a
-// contentless delete leaves in blobs_fts_data are purged by bounded merge steps; a whole-table
-// 'optimize' never runs in a scheduled pass.
+// The FTS index (§6.2 "FTS indexing", §9.1; plan task 23). The index is derived and blobs stay verbatim.
+// Its body is extracted plain text (never JSON), redacted by entryIndexText (D-4343, D-4419) before it is
+// a term, and only for blobs that a row of searchable provenance references. A pair learned after its
+// text was indexed is re-indexed before any FTS insert of that tick, and the obligation outlives the pass
+// that learned it: by quoted phrase (reindexForValues: on the tick that learned the pair, or, while a
+// re-derivation generation is open, only for the pairs that tick recorded; charged to the slice it shares
+// with the re-derivation, review 344 F2), then by a hash re-derivation of every indexed blob
+// (rederiveFts), which alone moves meta fts_reindex_rid (D-4344, history-reindex-mark-by-rederivation).
+// The bytes a contentless delete leaves in blobs_fts_data are purged by bounded merge steps; a
+// whole-table 'optimize' never runs in a scheduled pass.
 // ---------------------------------------------------------------------------------------------
 
 const FTS_STEP = 'fts';
@@ -3897,11 +3898,11 @@ function rederiveSlice(budget) {
  *  generation's own target, never to a pair learned mid-generation; that pair opens the next generation. Each call
  *  is charged to a slice of the run budget (REDERIVE_SLICE_*; from tick, the slice it shares with the phrase path,
  *  review 344 F2) so a generation never starves capture, charges each blob's compressed bytes as the backfill does,
- *  and commits its groups with the cursor, so a dead pass resumes. It runs
- *  under any pause, like the phrase path and the merge steps (D-4242): it frees the very bytes a late pair put
- *  at risk, and the group's merge registration purges the deleted ones. A tombstoned blob keeps no index row.
- *  Three distinct words: 'idle' (nothing owed or FTS off), 'running' (budget spent, the cursor saved) and
- *  'completed' (the mark moved), with how many blobs were re-indexed. */
+ *  and commits its groups with the cursor, so a dead pass resumes. It runs under any pause, like the phrase path and
+ *  the merge steps (D-4242): it frees the very bytes a late pair put at risk, and the group's merge registration
+ *  purges the deleted ones. A tombstoned blob keeps no index row. Three distinct words: 'idle' (nothing owed or FTS
+ *  off), 'running' (budget spent, the cursor saved) and 'completed' (the mark moved), with how many blobs were
+ *  re-indexed. */
 export async function rederiveFts(db, ctx, budget, slice = rederiveSlice(budget)) {
   if (ctx.fts !== true) return { state: 'idle', reindexed: 0 };
   const d = derivStmts(db);

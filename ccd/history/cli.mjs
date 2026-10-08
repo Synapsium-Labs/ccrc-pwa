@@ -537,9 +537,10 @@ function oldestUnjournaledMs(p) {
 }
 
 /** How many names in spool/ that a hook spools to (lib's spoolFileIdOf) stand as something other than a regular file (a
- *  FIFO, a link, dangling or not, a directory), by lstat, never followed or opened (FR2c, D-4418): the hook appends to none of
- *  them. 0 when spool/ is absent; null when it is there but a listing or an lstat fails for any reason but ENOENT, which
- *  status names as unmeasured (absent is not unreadable). A name gone between the listing and its lstat is not counted. */
+ *  FIFO, a link, dangling or not, a directory, or any other node), by lstat, never followed or opened (FR2c, D-4418): the
+ *  hook appends to none of them. 0 when spool/ is absent; null when it is there but a listing or an lstat fails for any
+ *  reason but ENOENT, which status names as unmeasured (absent is not unreadable). A name gone between the listing and its
+ *  lstat is not counted. */
 function refusedSpoolNodes(dir) {
   let names;
   try { names = healthFs.readdirSync(dir); } catch (e) { return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 0 : null; }

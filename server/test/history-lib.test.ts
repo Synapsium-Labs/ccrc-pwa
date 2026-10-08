@@ -2956,9 +2956,9 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
 
   it('spool-planted names the nodes at spool/<id>.jsonl that are not regular files on its own, with its own remedy (FR2c, F3; D-4418)', () => {
     const i = healthLib.deriveHealth(base({ spoolNodesRefused: 2 })).warn.find((x) => x.word === 'spool-planted');
-    expect(i?.detail).toContain('2 node(s) at spool/<id>.jsonl are not regular files (a FIFO, a link or a directory), so the hook spools no line for that id while one stands');
+    expect(i?.detail).toContain('2 node(s) at spool/<id>.jsonl are not regular files (a FIFO, a link, a directory or any other non-regular node), so the hook spools no line for that id while one stands');
     expect(i?.detail, 'the counted clauses are left out when their counts are 0').not.toContain('skipped drain(s)');
-    expect(i?.remedy).toContain('any FIFO, link or directory that stands at ~/.ccrc/history/spool/<id>.jsonl (that id spools again once it is gone)');
+    expect(i?.remedy).toContain('any FIFO, link, directory or other non-regular node that stands at ~/.ccrc/history/spool/<id>.jsonl (that id spools again once it is gone)');
   });
 
   it('spoolFileIdOf is the spool name grammar: <id>.jsonl with an id idOk passes, no dot-name (FR2c)', () => {
