@@ -10221,13 +10221,15 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(arith, 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)').toEqual([]);
     expect(code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null, 'an arithmetic test operator (review 351 F1)').toBeNull();
     expect(
-      code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null,
+      code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null,
       'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
     ).toBeNull();
-    expect(code.match(/\$\{[!#]?[A-Za-z_]\w*\[(?!-?\d+\]|[@*]\])/)?.[0] ?? null, 'a ${name[subscript]} whose subscript is not a literal (review 351 F1)').toBeNull();
+    expect(
+      code.match(/(?<![\w$])[A-Za-z_]\w*\[(?!-?\d+\]|[@*]\])/)?.[0] ?? null,
+      'a name[subscript] whose subscript is not a literal, @ or *: in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes, quoted or not (review 351 F1)',
+    ).toBeNull();
     expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');
     expect(code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null, 'let and an integer attribute evaluate arithmetic (review 351 F1)').toBeNull();
-    expect(code.match(/(?<![\w$])[A-Za-z_]\w*\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/)?.[0] ?? null, 'an indexed assignment evaluates its subscript as arithmetic (review 351 F1)').toBeNull();
     const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
     expect(code.match(external)?.[0] ?? null, 'an external command in the spool block forks on the hot path').toBeNull();
   });
@@ -10512,11 +10514,12 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
    *  a `${…@…}` parameter transformation (FR2a, review 344 F1: `@P` runs prompt expansion, and so command substitution),
    *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`; and
    *  (FR3a, review 351 F1) arithmetic whose operand is anything but an integer literal or `${#name}`, in `(( ))`,
-   *  `$(( ))`, `$[ ]`, a `${name:offset:length}` or a `${name[subscript]}`, and the `-eq -ne -lt -le -gt -ge` operators
+   *  `$(( ))`, `$[ ]`, a `${name:offset:length}` or a `name[subscript]` anywhere (a `${…}`, an assignment, or a name
+   *  `read`, `printf -v` or `[[ -v ]]` takes, quoted or not), and the `-eq -ne -lt -le -gt -ge` operators
    *  of `[[ ]]`: each evaluates its operands as arithmetic, so a variable holding `a[$(…)]` forks there.
    *  Not chased (the S1 stopping line, review 351 F1): ${!x} indirection, [[ -v $v ]], and printf -v "$v" or
-   *  read -r "$v" with a dynamic name. Each forks when the name it reads holds a[$(…)], and each is a deliberate
-   *  spelling; the spool block uses none of them.
+   *  read -r "$v" with a dynamic name (a literal name with a variable subscript is named above). Each forks when the
+   *  name it reads holds a[$(…)], and each is a deliberate spelling; the spool block uses none of them.
    *  [] = builtins only. Conservative by construction: what it cannot classify is reported, never passed. */
   const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
     const found: string[] = [];
@@ -10544,22 +10547,22 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     };
     /** FR3a (review 351 F1): may this arithmetic text stand? Only integer literals, operators and `${#name}` (read as 0). */
     const arithOk = (content: string): boolean => !/[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(content.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0'));
-    /** FR3a (review 351 F1): the `${` whose body starts at `p` evaluates an operand as arithmetic when it names a substring
-     *  whose offset or length is not a literal, or an indexed element whose subscript is not a literal, `@` or `*`
-     *  (`${a[v]:-z}` forks too, so the subscript arm is a prefix test). `${x:-}` and `${x:+y}` are operators, not substrings. */
+    /** FR3a (review 351 F1; FR3c): the `${` whose body starts at `p` evaluates an operand as arithmetic when it names a
+     *  substring whose offset or length is not a literal, of a variable, a positional or a special parameter (`${$:v}` forks).
+     *  `${x:-}` and `${x:+y}` are operators, not substrings. A subscript is named once, over the whole source (below). */
     const exprAt = (s: string, p: number): string | null => {
-      const sub = /[!#]?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*])(?:\[[^\]\n]*\])?:(?![-=?+])/y;
+      const sub = /[!#]?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])/y;
       sub.lastIndex = p;
       const m = sub.exec(s);
-      if (m) {
-        const close = s.indexOf('}', p + m[0].length);
-        if (close < 0 || !/^\s*-?\d+(?::\s*-?\d+)?$/.test(s.slice(p + m[0].length, close))) return 'substring offset';
-      }
-      const elem = /[!#]?[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])/y;
-      elem.lastIndex = p;
-      return elem.test(s) ? 'subscript' : null;
+      if (!m) return null;
+      const close = s.indexOf('}', p + m[0].length);
+      return close < 0 || !/^\s*-?\d+(?::\s*-?\d+)?$/.test(s.slice(p + m[0].length, close)) ? 'substring offset' : null;
     };
     const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
+    // FR3c (review 351 F1): a `name[subscript]` anywhere (a `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes,
+    // quoted or not) evaluates a subscript that is not a literal, `@` or `*` as arithmetic, so it is named on the whole source,
+    // before step 1 masks quoted text. An unbraced `$x[v]` is `$x` and literal text, no subscript, hence the `$` in the lookbehind.
+    if (/(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])/.test(src)) found.push('subscript');
     // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
     let out = '';
     for (let i = 0; i < src.length; i++) {
@@ -10598,7 +10601,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
           else if (d === '}' && top === '}') stack.pop();
         }
         if (stack.length > 0) found.push('unterminated quote');
-        out += c === '"' ? '""' : /^\$\{#[A-Za-z_][A-Za-z0-9_]*\}$/.test(src.slice(i, j)) ? '0' : '$V'; i = j - 1; continue;   // FR3a: `${#name}` is a literal-valued operand, so step 3 reads `(( ${#id} <= 224 ))` as `(( 0 <= 224 ))`
+        out += c === '"' ? '""' : /^\$\{#[A-Za-z_][A-Za-z0-9_]*\}$/.test(src.slice(i, j)) ? '0' : '$V'; i = j - 1; continue;   // FR3a: `${#name}` is a literal-valued operand, so the arithmetic check before step 3 reads `(( ${#id} <= 224 ))` as `(( 0 <= 224 ))`
       }
       out += c;
     }
@@ -10700,6 +10703,16 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     ['a variable subscript', A, '_hs_g="${_hs[_hs_g]}"', 'subscript'],
     ['a $name subscript', A, '_hs_g=${_hs[$_hs_g]}', 'subscript'],
     ['an indexed assignment with a variable subscript', T, "_hs+='}'; _hs_x[_hs_g]=1", 'command _hs_x[_hs_g]=1'],
+    // FR3c (review 351 F1, task review): a `name[subscript]` wherever it stands, and a special parameter's substring offset.
+    ['read into a variable subscript', T, "_hs+='}'; read -r _hs_x[_hs_g]", 'subscript'],
+    ['printf -v into a variable subscript', T, "_hs+='}'; printf -v _hs_x[_hs_g] %s x", 'subscript'],
+    ['printf -v into a single-quoted variable subscript', T, "_hs+='}'; printf -v '_hs_x[_hs_g]' %s x", 'subscript'],
+    ['a [[ -v ]] test of a variable subscript', T, "_hs+='}'; [[ -v _hs_x[_hs_g] ]] && true", 'subscript'],
+    ['a [[ -v ]] test of a double-quoted variable subscript', T, '_hs+=\'}\'; [[ -v "_hs_x[_hs_g]" ]] && true', 'subscript'],
+    ['an indexed assignment with a variable subscript, as a subscript', T, "_hs+='}'; _hs_x[_hs_g]=1", 'subscript'],
+    ['a $ special parameter with a variable substring offset', A, '_hs_g=${$:_hs_g}', 'substring offset'],
+    ['a ? special parameter with a variable substring offset', A, '_hs_g=${?:_hs_g}', 'substring offset'],
+    ['a - special parameter with a variable substring offset', A, '_hs_g=${-:_hs_g}', 'substring offset'],
     ['a let', T, "_hs+='}'; let _hs_g", 'command let'],
   ];
   /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
@@ -10726,6 +10739,10 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     ['a literal subscript', A, '_hs_g="${_hs[0]}"'],
     ['a == test', T, "_hs+='}'; [[ $_hs_g == 0 ]] && true"],
     ['a ${name:-} default, an operator and not a substring', A, '_hs_g=${_hs:-0}'],
+    // FR3c (review 351 F1, task review): a literal subscript is no arithmetic hazard, and `$x[v]` is `$x` and literal text.
+    ['printf -v into a literal subscript', T, "_hs+='}'; printf -v _hs_x[0] %s x"],
+    ['read into a literal subscript', T, "_hs+='}'; read -r _hs_x[0]"],
+    ['an unbraced $name before literal brackets', A, '_hs_g=$_hs[_hs_g]'],
   ];
 
   it('S1 (syntax, F38): the spool block and every function it calls hold no fork form', () => {

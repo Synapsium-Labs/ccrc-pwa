@@ -795,7 +795,7 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
   // that id's spool lines until it is removed. Status counts such nodes under WARN spool-planted from its own lstat (no counter),
   // never opening or following one, so the clause clears when the node goes; a regular sibling, a dot-name and a name outside
   // the id grammar are not counted. A live link to a regular file is counted too, because status reads by lstat and never
-  // follows a link: a stat would call the target regular and count it as no node (review 351 F3).
+  // follows a link: a stat would follow it to a regular file and leave it uncounted (review 351 F3).
   it.each([['a FIFO'], ['a dangling link'], ['a link to a regular file'], ['a directory']])('%s at spool/<id>.jsonl is WARN spool-planted from status\'s own lstat, and the clause clears when it goes (FR2c, F3)', (kind) => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-spool-node-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);
