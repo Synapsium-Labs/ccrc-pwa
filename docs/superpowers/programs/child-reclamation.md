@@ -47,6 +47,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 20:58 — workspace-lifecycle has answered (quiet-river's 4036; this programme's reply is 4040), and wave 8's H8 is
+  amended (`0fc1a7221`, in PR #332).**
+  - **The shared word classifier.** ONE word half serves two carrier readers: the done document's
+    (word | null | `unreported`) and the mirror's (word | `unreported` | `truncated`). Neither is folded into the other.
+  - **Who owns it.** Workspace-lifecycle wave 5 lands first and owns the word half, as `keptLeafWord` in
+    `archivedExpiry.ts`. Under its consent, wave 8's Task 1 MOVES it to L0 as `leafKeptWord` and re-points every
+    line of that file that spells the three words: a move, never a copy.
+  - **The expiry lane** adopts the never-stopping 4 h tier, so nothing is stranded. Attention at once for
+    `containment-refuted`, and `crumb` on ws-expire, come in workspace-lifecycle's wave 6.
+  - **Rung 8** prints no new word.
+
 - **2026-10-08 20:56 — wave 8's plan is FINAL for review (8,666 lines).**
   - **The attack.** Workflow `wf_a12b1b0b-30d` ran four lenses with refuters. The SAFETY lens on the licence chain
     found NO defect; it measured every route with a re-mint at each point of a request's life and found it caught
