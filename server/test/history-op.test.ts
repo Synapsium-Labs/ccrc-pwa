@@ -1299,6 +1299,27 @@ describe('W1-j / §9.2 step 2: an unreadable roster skips the census', () => {
   });
 });
 
+describe('the statfs preload hides the host\'s managed settings from the census (Task 26 seam; review 316 F30)', () => {
+  /** The 31-minute offset makes the census due again; the spy is loaded before the statfs preload, so the seam wraps it. */
+  const census = (prefix: string, real: boolean): string[] => {
+    const box = boundBox(prefix);
+    const rec = path.join(box.home, 'reads.txt');
+    const r = runDriver(box, { offsetMs: 31 * MIN }, [], { preloads: [PRELOADS.readspy, PRELOADS.statfs], env: { HISTORY_TEST_READSPY: rec, ...(real ? { HISTORY_TEST_MANAGED_REAL: '1' } : {}) } });
+    expect(r.code, r.stderr).toBe(0);
+    const lines = fs.readFileSync(rec, 'utf8').split('\n');
+    expect(lines, 'CONTROL: the census ran through the spied API').toContain(`openSync ${path.join(box.homes[0]!, 'settings.json')}`);
+    return lines.filter((l) => l.includes('/etc/claude-code'));
+  };
+
+  it('CONTROL: with the seam lifted, the spy sees both managed reads', () => {
+    expect(census('ccrc-hist-f30a-', true)).toEqual(expect.arrayContaining(['openSync /etc/claude-code/managed-settings.json', 'readdirSync /etc/claude-code/managed-settings.d']));
+  });
+
+  it('the census never reaches /etc/claude-code', () => {
+    expect(census('ccrc-hist-f30b-', false)).toEqual([]);
+  });
+});
+
 // ── Task 26F: the controller's rulings on Task 25 and 26's review findings ─────────────────────────────
 describe('Task 26F item 1: --op import maps through registryBackfill\'s core (D-4297, IV5)', () => {
   const confirmedOf = (box: HistoryBox, uuid: string): (number | null)[] =>

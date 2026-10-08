@@ -36,6 +36,7 @@ export const SHIM = path.join(REPO, 'ccd', 'ccd-history-sweep');
 export const PRELOADS = {
   statfs: path.join(__dirname, 'fixtures', 'history', 'preload-statfs.mjs'),
   faults: path.join(__dirname, 'fixtures', 'history', 'preload-faults.mjs'),
+  readspy: path.join(__dirname, 'fixtures', 'history', 'preload-readspy.mjs'),
 } as const;
 
 /** Linux-only spawns skip on darwin (O24; the graph-sweep.test.ts:12

@@ -60,7 +60,7 @@ syncBuiltinESMExports();
 // a retention (or, unreadable, a retention_unmeasured WARN), any read of /etc/claude-code or a path under it
 // answers ENOENT, as on a box with no managed settings. The census's settings reads open through store.mjs's `readBounded`
 // (openSync, D-4347), the drop-in directory through readdirSync and an older read through readFileSync, so all three are hidden. O38's cases inject fixture paths through the run-pass
-// driver instead. HISTORY_TEST_MANAGED_REAL=1 lets the real files through; no case sets it, and historyHelpers'
+// driver instead. HISTORY_TEST_MANAGED_REAL=1 lets the real files through; only the read-spy CONTROL in history-op.test.ts sets it, and historyHelpers'
 // scrubbedEnv drops every inherited HISTORY_TEST_* variable.
 import fsM26 from 'node:fs';
 import { syncBuiltinESMExports as syncM26 } from 'node:module';
