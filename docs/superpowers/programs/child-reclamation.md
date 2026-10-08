@@ -47,6 +47,26 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 20:15 — wave 8's plan is ASSEMBLED, and its attack runs.** The plan is
+  `docs/superpowers/plans/2026-10-08-child-reclamation-wave8-reclaim-server-half.md`, 8,371 lines, at `740a2f220`.
+  - **The drafts.** Workflow `wf_3a0bcd5e-8ba` ran seven Opus drafters.
+  - **The rulings.** Every draft item is ruled in `ccr15-evidence-archive/wave8/drafts-rulings.md`, H1 to H8 and the
+    per-task rulings. The main ones:
+    - H1: dispatch only after wave 7 merges;
+    - H3: Task 6 owns the `stuck` reading and wave 7's pin flip;
+    - H6: the tier state has four fields.
+  - **Reconciliation.** The first attempt died when the previous account hit its weekly limit; this session moved to
+    another account. It was re-run as `wf_4ef2ae01-b27` and applied 213 edits, with no misses and no duplicates. Its
+    leftovers are ruled in the plan's rulings section:
+    - a held stuck child shows no retry clause;
+    - R76's "nothing retries it" is amended by the "as built" note;
+    - workspace-lifecycle's private word list is re-pointed to `leafKeptWord` only under quiet-river's recorded
+      consent;
+    - the shared lane rig's spellings are fixed.
+  - **The attack.** Workflow `wf_a12b1b0b-30d` runs four Opus lenses: the licence chain's SAFETY at xhigh, the
+    readers, stuck class and tier, security and wire, and executability. Two Sonnet refuters check each serious
+    finding.
+
 - **2026-10-08 18:50 — wave 8's pre-flight is RULED: contract §15, R73 to R80.** Three Opus attackers (`wf_8b58bf16-6e8`,
   SAFETY at xhigh) broke six of the draft's rulings and amended the rest. The attack is
   `ccr15-evidence-archive/wave8/attack.json`. What changed:
