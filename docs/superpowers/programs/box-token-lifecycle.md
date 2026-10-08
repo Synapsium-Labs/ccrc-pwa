@@ -16,8 +16,8 @@ spec's after wave 1.
 
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
-| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent. Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
-| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | — | — | to open before row 1 closes |
+| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
+| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | — | **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
@@ -121,6 +121,15 @@ spec's after wave 1.
   - **The rounds:** one bar-class finding gets one fix round, then a scoped review. Coverage and prose findings are
     fixed in that round if one runs; otherwise they become residue. A fix round's numbers are named in its mail, from
     4410 to 4417.
+  - **Review run 349** was dispatched at 17:20:26 to `ccrc-pwa-still-meadow`. It runs the held-out panel plus two
+    lenses. The security lens walks the leaked value from adoption to retirement, the public door, the accept-set
+    compare and every place a secret could surface. The state-machine lens walks G3's interleavings, proves part A
+    rotates nothing on the live fleet, checks the worker's fixes for C1 and I2, and says whether I3, I4 and sec-M2 are
+    real and reachable.
+- **2026-10-08 17:21 UTC: run 350 opened for row 2 (spec wave 1, part B), planned, before run 320 closes.** Deviation
+  block issued: 4551, 4552, 4553, 4554, 4555, 4556, 4557, 4558, 4559, 4560, 4561, 4562, 4563, 4564, 4565, 4566, 4567,
+  4568, 4569, 4570. Numbers are written bare until defined. The dispatch waits for #330 to merge and for the rulings on
+  I3, I4 and sec-M2.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
