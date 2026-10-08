@@ -761,6 +761,8 @@ const CCD_PIN = ['r.killed', 'r.killed', 'r.signal', 'r.signal'] as const;
  *    (a function result the file never names): the scope rule cannot see it;
  *  - a dynamic import whose specifier is a template literal (``await import(`../lifecycle.js`)``): the file is not
  *    seen as an importer;
+ *  - a doubled postfix non-null before a division (`x!! / (res.killed ? 1 : 2)`): the text before the last `!` ends in
+ *    a `!`, not in an operand, so the blanker takes the slash for a regex start and blanks code behind it;
  *  - a regex literal the blanker takes for a division, because it follows `)`, `]` or an identifier. The reach is not
  *    the end of the line: a regex holding a backtick or a `/*` (`if (res.ok) /`/.test(res.stderr);`) opens a template or
  *    a block comment that swallows the code on the lines after it, a reader included. And a division at the start of a
