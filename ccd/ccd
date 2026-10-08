@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8178e47bc23d94aec3c91164415d856c38c067929c283615df50216bf50b2f66
+# ccrc:generated 1 sha256=5a66fab1d58317b3a09f4f9fac7f9ed1cfad88c5f23a8e0ec09b0917bf22b226
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28617,11 +28617,25 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
   if [[ "$b" =~ ^[0-9]+$ ]]; then echo "$b"; else echo null; fi
 }
 
-_ws_reclaim_failed_json() {   # token detail -> the post-start failure document on stdout.
+# WHETHER A FAILURE WAS PRINTED PAST THE ACT'S BREADCRUMB (spec §5.6, §7 item 6):
+# `false` before it (nothing started, so a retry starts over), `true` past it:
+# the act had started. `true` says the breadcrumb was WRITTEN, never that it
+# stands now. The tail's `purge-*` failures print it after `_reg_purge` took
+# the row and its `.reaping` file. '' prints NO key: a reader takes
+# that absence as unmeasured, never as either value. Set by `_ws_reclaim_locked`
+# and by the shared tail, and by nothing else — so `ws-expire`'s own
+# pre-breadcrumb documents carry no key. Assigned here, when ccd is read, so an
+# exported value can never reach a document.
+_WS_RCL_CRUMB=''
+_ws_reclaim_failed_json() {   # token detail -> the post-start failure document on stdout, with
+  #                                `"crumb":true|false` only when _WS_RCL_CRUMB says one
   # `"failed"`, NEVER `"refused"`: a failure after the act started is not a
   # ladder answer, and `server/test/wsaudit.test.ts` harvests every literal
   # refusal object as one. The server reads this as `failed` and retries.
-  printf '{"failed":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$2")"
+  # ONLY the two literals print: any other value omits the key, never prints it.
+  local crumb=''
+  case "$_WS_RCL_CRUMB" in true|false) crumb=",\"crumb\":$_WS_RCL_CRUMB" ;; esac
+  printf '{"failed":%s,"detail":%s%s}\n' "$(_json_str "$1")" "$(_json_str "$2")" "$crumb"
 }
 
 _ws_reclaim_children_merge() {   # recorded settled -> the nested-checkout lines the tail acts on, one per path
@@ -29573,6 +29587,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local noun=reclaim donekey=reclaimed bindkey=childOf
   local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
+  # Every failure from here on is printed past a breadcrumb, for both verbs
+  # (`crumb`, spec §5.6).
+  _WS_RCL_CRUMB=true
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
     children|worktree|branch|artifacts) : ;;
@@ -30290,6 +30307,12 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
   [[ "$surface" == none ]] || declared="$surface"
   _ws_reclaim_fork "$id" "$defer" "$childof"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
+  # `crumb` (spec §5.6): a resumed arm's breadcrumb already stands (`true`); a
+  # fresh arm's is not written yet (`false`); a breadcrumb that stands but could
+  # not be read leaves it unsaid — whether an act started is not known.
+  if [[ -n "$phase" ]]; then _WS_RCL_CRUMB=true
+  elif [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then _WS_RCL_CRUMB=''
+  else _WS_RCL_CRUMB=false; fi
   # 10 — the consent IS the fingerprint, recomputed HERE, inside the lock. A
   # server-side check fails open into deletion; this one cannot.
   if [[ "$REAP_VERDICT" == reclaimable && "$token" != "$REAP_TOKEN" ]]; then
@@ -30372,6 +30395,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not write the tombstone or the breadcrumb for $id — nothing was destroyed"
       return 1
     fi
+    _WS_RCL_CRUMB=true
     phase="$start"
   fi
   _ws_reclaim_tail "$id" "$phase" "$lctx" "$RECLAIM_CHILDOF" "$surface" "$declared" "$resumed"

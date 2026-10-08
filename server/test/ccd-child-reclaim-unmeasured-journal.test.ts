@@ -32,10 +32,11 @@ const audit = (pre = ''): { code: number; stdout: string; stderr: string } =>
   h.run(`${AUDIT_STUBS} ${pre} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
 const shape = (e: Record<string, unknown>) =>
   ({ outcome: e['outcome'], refusal: e['refusal'], verb: e['verb'], detail: e['detail'], tx: e['tx'] ?? '' });
-/** What `_ws_reclaim_failed_json` prints for this detail: ccd's own printer, never a re-spelling. */
+/** What `_ws_reclaim_failed_json` prints for this detail: ccd's own printer, never a re-spelling. The fresh
+ *  arm's `crumb` is `false` (wave 7, spec §5.6): nothing had started. */
 const printedBy = (detail: string): string => {
   fs.writeFileSync(path.join(h.home, 'detail.txt'), detail);
-  return h.sh('_ws_reclaim_failed_json probe-unmeasured "$(cat "$HOME/detail.txt")"');
+  return h.sh('_WS_RCL_CRUMB=false; _ws_reclaim_failed_json probe-unmeasured "$(cat "$HOME/detail.txt")"');
 };
 
 describe('ws-reclaim: a probe that could not run under the lock is ONE failed line (spec §5.9)', () => {

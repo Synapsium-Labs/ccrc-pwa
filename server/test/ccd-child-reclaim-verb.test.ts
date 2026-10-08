@@ -450,7 +450,7 @@ describe('failures after the act started', () => {
     const c = makeChild(h);
     const r = childReclaimVerb(h, evalOf(h).token, { pre: '_ws_wip_commit() { RECLAIM_WIP_WHY="the disk is full"; return 1; };' });
     expect(r.code).toBe(1);
-    expect(JSON.parse(r.stdout)).toEqual({ failed: 'pin-failed', detail: 'the disk is full' });
+    expect(JSON.parse(r.stdout)).toEqual({ failed: 'pin-failed', detail: 'the disk is full', crumb: false });
     failedPairAgrees(r);
     expect(h.reg(CHILD_ID, 'reaping')).toBeNull();
     intact(c);
