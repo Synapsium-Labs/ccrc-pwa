@@ -952,12 +952,17 @@ export function tidyDraining(home, tickMs, pid, countBefore) {
   const plantedRoot = `${P.draining}/${PLANTED_DIR}`;
   const area = `${plantedRoot}/${tickMs}.${pid}`;
   let planting = false;
+  // The planted root's one initialisation, shared by `plant` and `areaReady` (FU10, B5M4): a non-directory at planted/ is
+  // removed and counted once per drain. False when that throws; `planting` is set first, so later calls go on without retrying (unchanged).
+  const rootReady = () => {
+    if (planting) return true;
+    planting = true;
+    try { if (clearNonDirectory(plantedRoot)) out.nonRegular += 1; } catch { return false; }
+    return true;
+  };
   // Move `n` into this drain's area; true when it moved. Never throws.
   const plant = (n) => {
-    if (!planting) {
-      planting = true;
-      try { if (clearNonDirectory(plantedRoot)) out.nonRegular += 1; } catch { return false; }
-    }
+    if (!rootReady()) return false;
     const m = moveAside(area, P.draining, n);
     if (m.stray) out.nonRegular += 1;
     return m.moved;
@@ -965,10 +970,7 @@ export function tidyDraining(home, tickMs, pid, countBefore) {
   // Make this drain's area (a non-directory at planted/ or at the area removed and counted first); true when it stands.
   // Never throws. A displacement asks this BEFORE its count, so no count is taken for a file that cannot move (FU8, FP6).
   const areaReady = () => {
-    if (!planting) {
-      planting = true;
-      try { if (clearNonDirectory(plantedRoot)) out.nonRegular += 1; } catch { return false; }
-    }
+    if (!rootReady()) return false;
     try { if (clearNonDirectory(area)) out.nonRegular += 1; mkdirDurable(area); return true; } catch { return false; }
   };
   // Set the directory `n` aside, or remove it when it cannot be moved and is empty; true when nothing stands at `n` now.
@@ -3650,15 +3652,16 @@ const UNDECODABLE = Object.freeze({ text: null, decoded: 0, undecodable: true })
  *  A sidecar's is `sidecarIndexText` (lib: redacted over a window, then cut) of a BOUNDED prefix of
  *  its body, at most SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN bytes of output, never the whole
  *  decompressed blob (O20's RSS bound). A body's plain text is small and decompressed whole
- *  (D-4195, history-fts-body-plain-text). A blob whose stored bytes do not decode (any throw of its decompress
- *  call, which depends on those bytes alone, a decode past its raw_len included: unbrotli is bounded by it, FPM10) answers `undecodable: true` with `text: null` and is never thrown; a
- *  body that decodes but does not parse indexes nothing (`text: ''`, `undecodable: false`). A body whose stored
- *  raw_len is over BLOB_DECODE_MAX is never decompressed (blobOverDecodeCap): it indexes nothing and is not counted, so
- *  a raw line-too-long line reached by a uuid collision cannot exhaust a pass's memory (D-4346,
- *  history-permanent-failures-classified). It answers `overCap: true` (a distinct word: `text: ''` also means "did not
- *  parse"), and every writer marks such a blob indexed and inserts NO row for it (`indexBlob`'s `overCap`, B3M3 FU5), so
- *  the re-derivation, which deletes any row it finds for one (rederiveFts, FU2), leaves the state every path leaves.
- *  `rawLen` is the blob's stored raw_len; sidecars are exempt, their prefix decoder being bounded already. */
+ *  (D-4195, history-fts-body-plain-text). A blob whose stored bytes do not decode (any throw of its decompress call,
+ *  which depends on those bytes alone, a decode past its raw_len included: unbrotli is bounded by it, FPM10) answers
+ *  `undecodable: true` with `text: null` and is never thrown; a body that decodes but does not parse indexes nothing
+ *  (`text: ''`, `undecodable: false`). A body whose stored raw_len is over BLOB_DECODE_MAX is never decompressed
+ *  (blobOverDecodeCap): it indexes nothing and is not counted, so a raw line-too-long line reached by a uuid collision
+ *  cannot exhaust a pass's memory (D-4346, history-permanent-failures-classified). It answers `overCap: true` (a
+ *  distinct word: `text: ''` also means "did not parse"), and every writer marks such a blob indexed and inserts NO row
+ *  for it (`indexBlob`'s `overCap`, B3M3 FU5), so the re-derivation, which deletes any row it finds for one
+ *  (rederiveFts, FU2), leaves the state every path leaves. `rawLen` is the blob's stored raw_len; sidecars are exempt,
+ *  their prefix decoder being bounded already. */
 export async function ftsTextOfBlob(z, isSidecar, pairIdx, rawLen) {
   if (isSidecar) {
     let p;

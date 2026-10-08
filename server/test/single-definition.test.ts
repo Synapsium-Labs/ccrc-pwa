@@ -1322,10 +1322,10 @@ const bashFiles = (dir: string): string[] => {
 // so a checkout without it fails the liveness row below, not every rule.
 const bashExtra = [path.join(ccrcRoot, 'install.sh')].filter((f) => existsSync(f));
 const BASH = [...bashRoots.flatMap(bashFiles), ...bashExtra];
-/** A bash line that is not a comment. Either path is discussed in prose all
- *  over these tools; only an actual line of shell is a reader or a writer. */
 /** One notion of a bash comment line, shared by every scan in this file that drops them (codeLines, the USAGE_PROSE describe's code()). */
 const isBashComment = (l: string): boolean => l.trim().startsWith('#');
+/** A bash line that is not a comment. Either path is discussed in prose all
+ *  over these tools; only an actual line of shell is a reader or a writer. */
 const codeLines = (f: string): string[] =>
   readFileSync(f, 'utf8').split('\n').filter((l) => !isBashComment(l));
 const holdersOf = (needle: string): string[] =>

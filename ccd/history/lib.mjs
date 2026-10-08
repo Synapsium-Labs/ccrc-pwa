@@ -171,12 +171,14 @@ export function blobOverDecodeCap(rawLen) {
  *  and a `:` only follows a key, so a line holds at most 2 × units + 1 of them). A line over either is stored raw-only
  *  and never parsed: JSON.parse and canonicalJson hold every value at once, and 8.1 million nested arrays in a valid
  *  16,200,040-byte line, or 5.4 million empty objects side by side, aborted every pass in a 1 GiB scope (review 316 F7).
- *  Measured for a whole pass on Node 24.14.1: the heaviest structured shape, 500,000 units of 30-character strings in one
- *  16,499,914-byte line, peaked at 389,508 KiB, under half the carrier's MemoryMax=1G (524,288 KiB, D-4244's bound family), where
- *  999,013 units of 13-character strings peaked at 516,988 KiB, 7,300 KiB (1.4%) under that half and too near it to keep. A plain-text line's cost is redaction and
- *  indexing, which this bound does not reach and D-4419's window does: with the window, a 16 MB user text of 8,000,000
- *  one-letter words with a secret file loaded peaks at 184,960 KiB for a whole pass in a 1 GiB scope (783,640 KiB before
- *  it, FU2), and the heaviest plain-text line measured with it, an ESC 7-dense one, at 372,204 KiB. A 4.3-million-line sample of this fleet's transcripts held at most 24,944 units, 15 deep. */
+ *  Measured for a whole pass on Node 24.14.1: the heaviest structured shape, 500,000 units of 30-character strings in
+ *  one 16,499,914-byte line, peaked at 389,508 KiB, under half the carrier's MemoryMax=1G (524,288 KiB, D-4244's bound
+ *  family), where 999,013 units of 13-character strings peaked at 516,988 KiB, 7,300 KiB (1.4%) under that half and too
+ *  near it to keep. A plain-text line's cost is redaction and indexing, which this bound does not reach and D-4419's
+ *  window does: with the window, a 16 MB user text of 8,000,000 one-letter words with a secret file loaded peaks at
+ *  184,960 KiB for a whole pass in a 1 GiB scope (783,640 KiB before it, FU2), and the heaviest plain-text line
+ *  measured with it, an ESC 7-dense one, at 372,204 KiB. A 4.3-million-line sample of this fleet's transcripts held at
+ *  most 24,944 units, 15 deep. */
 export const JSON_DEPTH_MAX = 100_000;
 export const JSON_NODES_MAX = 500_000;
 // 2 MiB, within §9.2's "≤16 MiB": the most headroom under O20's 256 MiB on Node 22.16.0 (whole sweep 172884 KiB; 4 MiB chunks: 210824 KiB, 247412 KiB once FTS indexes inline) (plan tasks 20, 23; D-4244).
