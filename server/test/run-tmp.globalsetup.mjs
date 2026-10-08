@@ -26,9 +26,19 @@
 // `owner.json` (pid, host, start time) is for a human reading a leftover directory. It decides nothing a socket
 // can answer: a socket that connects is `live` whatever else is true.
 //
+// THE NEXT RUN REAPS ONLY WHAT IS QUIET (D-4496). A dead owner is not enough: orphan workers outlive a killed
+// main process and keep writing (measured alive 12 s after main died), so a run is condemned only after
+// `RUN_QUIET_S` with no top-level change to the run dir or its `tmp/`. ctime, because nothing can rewind it and
+// only top-level entries move it (both measured). The walk also refuses to be steered: an anchored name, an
+// `lstat` (never `stat`, so a link named like a run is not followed), this uid, and a direct child of the base
+// it was given — through whatever spelling of that base it was given, since a bind mount is one directory with
+// two names.
+//
 // WHY A `.mjs` THAT IMPORTS ONLY `node:` BUILTINS. Bare-`node` children import it (`run-tmp.test.ts` spawns
 // real owners), and the node floor (22.16) cannot strip types; `shared/base-url.mjs` is the precedent.
-import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, renameSync, rmSync, writeSync } from 'node:fs';
+import {
+  closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, renameSync, rmSync, writeSync,
+} from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,6 +53,8 @@ export const RUN_TMP = 'tmp';
 /** The run's own name, and nothing else: `mkdtemp`'s six characters, optionally mid-removal. Built from the two
  *  names above so it cannot drift from them. */
 export const RUN_NAME_RE = new RegExp(`^${RUN_PREFIX}[A-Za-z0-9]{6}(${DEAD_SUFFIX.replace('.', '\\.')})?$`);
+/** How long a dead or unowned run must have been quiet before a later run condemns it (D-4496). */
+export const RUN_QUIET_S = 600;
 const PROBE_TIMEOUT_MS = 2000;
 
 /** Rename `dir` to `dir.dead`, then remove it. The rename is atomic and only one actor wins it; the loser reads
@@ -149,4 +161,44 @@ export function openRun(base) {
       resolve({ run, server });
     });
   });
+}
+
+/** The next run's collector: walk `base` for this suite's run directories and condemn the dead or unowned ones
+ *  that have been quiet for `quietS`. Every entry is decided on its own and inside its own `try`, so one entry
+ *  that throws is recorded and the walk goes on; the call never rejects.
+ *
+ *  `removed` holds `[name, '<why>:<removed|gone>']` with why `dead`, `unowned` or `dead-suffix`; `left` holds
+ *  `[name, why]` for everything matched and kept — a verdict (`live`, `unmeasurable:*`), `<verdict>:not-quiet`,
+ *  `not-a-directory`, `foreign-uid`, a failed removal's `left:<code>`, or `error:<code>`. A base that cannot be
+ *  listed answers `left: [['.', 'unreadable:<code>']]`.
+ *  @param {string} base
+ *  @param {{ now?: number, uid?: number, quietS?: number }} [opts]
+ *  @returns {Promise<{ removed: [string, string][], left: [string, string][] }>} */
+export async function reapRuns(base, { now = Date.now(), uid = process.getuid?.() ?? -1, quietS = RUN_QUIET_S } = {}) {
+  /** @type {[string, string][]} */ const removed = [];
+  /** @type {[string, string][]} */ const left = [];
+  let names;
+  try { names = readdirSync(base).sort(); } catch (e) { return { removed, left: [['.', `unreadable:${e.code ?? 'readdir'}`]] }; }
+  const settle = (name, why, r) => {
+    if (r.startsWith('left:')) left.push([name, r]); else removed.push([name, `${why}:${r}`]);
+  };
+  for (const name of names) {
+    if (!RUN_NAME_RE.test(name)) continue;
+    const dir = path.join(base, name);
+    try {
+      const st = lstatSync(dir);
+      if (!st.isDirectory()) { left.push([name, 'not-a-directory']); continue; }
+      if (st.uid !== uid) { left.push([name, 'foreign-uid']); continue; }
+      if (name.endsWith(DEAD_SUFFIX)) { settle(name, 'dead-suffix', condemn(dir)); continue; }
+      const v = await probeRun(dir);
+      if (v !== 'dead' && v !== 'unowned') { left.push([name, v]); continue; }
+      let quietSince = st.ctimeMs;
+      try { quietSince = Math.max(quietSince, lstatSync(path.join(dir, RUN_TMP)).ctimeMs); } catch { /* no tmp/: the run dir's own ctime is all there is */ }
+      if (now - quietSince < quietS * 1000) { left.push([name, `${v}:not-quiet`]); continue; }
+      settle(name, v, condemn(dir));
+    } catch (e) {
+      left.push([name, `error:${e.code ?? 'throw'}`]);
+    }
+  }
+  return { removed, left };
 }

@@ -11,21 +11,23 @@
 //   - `probeRun`: the six verdicts a later run reads off a run directory, never folded into one another. Each is
 //     produced by a REAL owner (a bare `node` child that called `openRun`), killed or stopped as the case says.
 //   - `condemn`: rename first, then remove; a second actor gets `gone`; a failure is reported, never thrown.
+//   - `reapRuns`: what the NEXT run removes — only a run-named, real, own directory whose owner is dead (or
+//     absent) and that has been quiet for the window, through any spelling of the base, never throwing.
 //
 // Every owner is a child this file spawned, and only those pids are ever signalled. Socket bases live under a
 // short `/tmp/ccrc-rt-XXXXXX` — a `mkTmp` path is too long for `sun_path` on macOS (104 bytes), the same reason
 // `delegation-rig.test.ts` uses a short `/tmp` base — and each is removed after its test.
 import { describe, it, expect, afterEach } from 'vitest';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync,
-  writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync,
+  unlinkSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  DEAD_SUFFIX, RUN_OWNER, RUN_SOCKET, RUN_TMP, condemn, openRun, probeRun,
+  DEAD_SUFFIX, RUN_OWNER, RUN_PREFIX, RUN_QUIET_S, RUN_SOCKET, RUN_TMP, condemn, openRun, probeRun, reapRuns,
 } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -221,5 +223,199 @@ describe('condemn', () => {
     // A `.dead` name is removed as it stands: any later actor finishes the job without probing.
     expect(condemn(dir + DEAD_SUFFIX)).toBe('removed');
     expect(existsSync(dir + DEAD_SUFFIX)).toBe(false);
+  });
+});
+
+describe('reapRuns — only dead, quiet, ours, by name', () => {
+  /** A `now` past the default window, so every dead run made just now is quiet. */
+  const later = (): number => Date.now() + (RUN_QUIET_S + 1) * 1000;
+  /** A run directory nobody listens on: `mkdtemp` with the run's prefix, plus its `tmp/`. */
+  const unowned = (base: string): string => {
+    const d = mkdtempSync(path.join(base, RUN_PREFIX));
+    mkdirSync(path.join(d, RUN_TMP));
+    return d;
+  };
+  const deadOwner = async (base: string): Promise<string> => {
+    const o = await startOwner(base);
+    await killOwner(o);
+    return o.run;
+  };
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const name = (d: string): string => path.basename(d);
+  const ctimeOf = (p: string): number => lstatSync(p).ctimeMs;
+
+  it('T3a: a live run is left, as live', async () => {
+    const base = socketBase();
+    const o = await startOwner(base);
+    const r = await reapRuns(base, { now: later() });
+    expect(r.left).toContainEqual([name(o.run), 'live']);
+    expect(r.removed).toEqual([]);
+    expect(existsSync(o.run)).toBe(true);
+  });
+
+  it('T3b: a dead, quiet run is removed — the directory and any .dead twin', async () => {
+    const base = socketBase();
+    const run = await deadOwner(base);
+    const r = await reapRuns(base, { now: later() });
+    expect(r.removed).toEqual([[name(run), 'dead:removed']]);
+    expect(existsSync(run) || existsSync(run + DEAD_SUFFIX)).toBe(false);
+  });
+
+  it('T3c: a dead run that is not yet quiet is left — orphan workers outlive their main process', async () => {
+    const base = socketBase();
+    const run = await deadOwner(base);
+    const r = await reapRuns(base, { now: Date.now() });
+    expect(r.left).toEqual([[name(run), 'dead:not-quiet']]);
+    expect(existsSync(run)).toBe(true);
+  });
+
+  it('T3d: an unowned run is removed once quiet, and a fresh one — a run still being made — is left', async () => {
+    const base = socketBase();
+    const old = unowned(base);
+    await sleep(1100);
+    const fresh = unowned(base);
+    const r = await reapRuns(base, { now: ctimeOf(path.join(fresh, RUN_TMP)) + 500, quietS: 1 });
+    expect(r.removed).toEqual([[name(old), 'unowned:removed']]);
+    expect(r.left).toEqual([[name(fresh), 'unowned:not-quiet']]);
+    expect(existsSync(fresh)).toBe(true);
+  });
+
+  it('T3e: a .dead directory is an interrupted removal and is finished without probing', () => {
+    // It carries an owner.json and no socket, which a probe would call `unmeasurable:ENOENT` and leave forever.
+    const base = socketBase();
+    const dead = path.join(base, `${RUN_PREFIX}abcdef${DEAD_SUFFIX}`);
+    mkdirSync(path.join(dead, RUN_TMP), { recursive: true });
+    writeFileSync(path.join(dead, RUN_OWNER), '{}\n');
+    writeFileSync(path.join(dead, RUN_TMP, 'f'), 'x');
+    return reapRuns(base, { now: later() }).then((r) => {
+      expect(r.removed).toEqual([[name(dead), 'dead-suffix:removed']]);
+      expect(existsSync(dead)).toBe(false);
+    });
+  });
+
+  it('T3f: a symlink named like a run is left, and so is everything it points at', async () => {
+    const base = socketBase();
+    const victim = mkTmp('ccrc-runtmp-victim-');
+    writeFileSync(path.join(victim, 'keep'), 'not the reaper\'s\n');
+    const link = path.join(base, `${RUN_PREFIX}abcdef`);
+    symlinkSync(victim, link);
+    const r = await reapRuns(base, { now: later() });
+    expect(r.left).toEqual([[name(link), 'not-a-directory']]);
+    expect(lstatSync(link).isSymbolicLink(), 'the link itself was moved').toBe(true);
+    expect(existsSync(path.join(victim, 'keep')), 'the reaper followed the link').toBe(true);
+  });
+
+  it('T3g: a directory another uid owns is left, whatever its verdict would be', async () => {
+    const base = socketBase();
+    const run = await deadOwner(base);
+    const loose = unowned(base);
+    const dead = path.join(base, `${RUN_PREFIX}abcdef${DEAD_SUFFIX}`);
+    mkdirSync(dead);
+    const r = await reapRuns(base, { now: later(), uid: process.getuid!() + 1 });
+    expect(r.removed).toEqual([]);
+    expect(r.left).toEqual([run, loose, dead].map((d) => [name(d), 'foreign-uid']).sort());
+    for (const d of [run, loose, dead]) expect(existsSync(d), d).toBe(true);
+  });
+
+  it('T3h: a name that only STARTS like a run is not the reaper\'s — `mkTmp(\'ccrc-testrun-signals-\')` shapes', async () => {
+    const base = socketBase();
+    const near = path.join(base, `${RUN_PREFIX}signals-abcdef`);
+    mkdirSync(near);
+    const r = await reapRuns(base, { now: later() });
+    expect(r).toEqual({ removed: [], left: [] });
+    expect(existsSync(near)).toBe(true);
+  });
+
+  it('T3i: quiet is measured on tmp/ as well as the run dir — a worker still writing keeps its run', async () => {
+    const base = socketBase();
+    const run = await deadOwner(base);
+    await sleep(1100);
+    mkdirSync(path.join(run, RUN_TMP, 'x'));
+    const tmpCtime = ctimeOf(path.join(run, RUN_TMP));
+    expect(tmpCtime - ctimeOf(run), 'the run dir itself must be quiet for this case to mean anything').toBeGreaterThan(1000);
+    const r = await reapRuns(base, { now: tmpCtime + 500, quietS: 1 });
+    expect(r.left).toEqual([[name(run), 'dead:not-quiet']]);
+    expect(existsSync(run)).toBe(true);
+  });
+
+  it.skipIf(isRoot)('T3j: a removal that fails is left:<errno>, and the walk goes on to the next entry', async () => {
+    const base = socketBase();
+    const stuck = path.join(base, `${RUN_PREFIX}lockdd${DEAD_SUFFIX}`);
+    const locked = path.join(stuck, 'locked');
+    mkdirSync(locked, { recursive: true });
+    writeFileSync(path.join(locked, 'f'), 'x');
+    chmodSync(locked, 0o500);
+    try {
+      const run = await deadOwner(base);
+      const r = await reapRuns(base, { now: later() });
+      expect(r.left).toEqual([[name(stuck), expect.stringMatching(/^left:E[A-Z]+$/)]]);
+      expect(r.removed).toEqual([[name(run), 'dead:removed']]);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  });
+
+  describe('T3k: through another spelling of the base, a dead run is removed and a live one left', () => {
+    // The fleet reaches one directory by more than one path (a bind mount, a volume mounted whole). A reaper
+    // that insisted the path it was given be the CANONICAL one would skip every run it reached another way.
+    const reapThrough = async (spell: (base: string) => string): Promise<void> => {
+      const base = socketBase();
+      const live = await startOwner(base);
+      const dead = await deadOwner(base);
+      const r = await reapRuns(spell(base), { now: later() });
+      expect(r.removed).toEqual([[name(dead), 'dead:removed']]);
+      expect(r.left).toEqual([[name(live.run), 'live']]);
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(live.run)).toBe(true);
+    };
+
+    it('a symlink to the base', async () => {
+      const alias = path.join(socketBase(), 'b');
+      await reapThrough((base) => { symlinkSync(base, alias); return alias; });
+    });
+
+    const DATA = '/System/Volumes/Data';
+    it.skipIf(process.platform !== 'darwin' || !existsSync(path.join(DATA, 'private', 'tmp')))(
+      'macOS: the /System/Volumes/Data firmlink (same dev and ino; realpath does not unify the two)', async () => {
+        await reapThrough((base) => path.join(DATA, base));
+      });
+
+    const canUnshare = process.platform === 'linux' && spawnSync('unshare', ['-Urm', 'true']).status === 0;
+    it.skipIf(!canUnshare)('Linux: a bind mount (unshare -Urm, mount --bind) — skipped where user namespaces are refused', async () => {
+      const base = socketBase();
+      const alt = socketBase();
+      const live = await startOwner(base);
+      const dead = await deadOwner(base);
+      // Inside the namespace this uid is root and so is every file it owns, which is the reaper's own default.
+      const src = [
+        `import { reapRuns } from ${JSON.stringify(MOD_URL)};`,
+        'console.log(JSON.stringify(await reapRuns(process.argv[1], { now: Number(process.argv[2]) })));',
+      ].join('\n');
+      const r = spawnSync('unshare', ['-Urm', 'sh', '-c',
+        'mount --bind "$0" "$1" && exec "$2" --input-type=module -e "$3" "$1" "$4"',
+        base, alt, process.execPath, src, String(later())], { encoding: 'utf8', timeout: 30_000 });
+      expect(r.status, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout) as { removed: string[][]; left: string[][] };
+      expect(out.removed).toEqual([[name(dead), 'dead:removed']]);
+      expect(out.left).toEqual([[name(live.run), 'live']]);
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(live.run)).toBe(true);
+    });
+  });
+
+  it.skipIf(isRoot)('T3l: an entry that throws is recorded as error:<code>, each one, and the call still resolves', async () => {
+    // `condemn` and `probeRun` never throw, so the throw an entry can raise is its own lstat: a base that can be
+    // listed but not searched (0400) raises it for every entry. Two, so a single outer `try` is red too.
+    const base = socketBase();
+    const a = unowned(base);
+    const b = unowned(base);
+    chmodSync(base, 0o400);
+    try {
+      const r = await reapRuns(base, { now: later() });
+      expect(r.removed).toEqual([]);
+      expect(r.left).toEqual([a, b].map((d) => [name(d), 'error:EACCES']).sort());
+    } finally {
+      chmodSync(base, 0o700);
+    }
   });
 });
