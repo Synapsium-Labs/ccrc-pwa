@@ -374,6 +374,8 @@ export interface HealthInputs {
   readonly journalSkipped: number;
   readonly blobUndecodable: number;
   readonly drainRejected: number;
+  readonly spoolDisplaced: number;
+  readonly spoolBlocked: number;
   readonly exportSegmentNewer: readonly string[];
   readonly exportSegmentMissing: number;
   readonly journalUnwritable: boolean;
@@ -391,7 +393,12 @@ export const HEALTH_META: Readonly<{
   exportSegmentNewer: 'export_segment_newer';
   exportSegmentMissing: 'export_segment_missing';
 }>;
-export const HEALTH_COUNTERS: Readonly<{ blobUndecodable: 'blob_undecodable'; drainRejected: 'drain_rejected' }>;
+export const HEALTH_COUNTERS: Readonly<{
+  blobUndecodable: 'blob_undecodable';
+  drainRejected: 'drain_rejected';
+  spoolDisplaced: 'spool_displaced';
+  spoolBlocked: 'spool_blocked';
+}>;
 export const RETENTION_STATE_META: 'retention_state:';
 export const SQLITE_CODES: Readonly<{
   BUSY: 5; LOCKED: 6; TOOBIG: 18; CONSTRAINT: 19; MISMATCH: 20; CONSTRAINT_CHECK: 275; CONSTRAINT_NOTNULL: 1299;

@@ -291,7 +291,8 @@ export const PASS_WORDS = Object.freeze([
  *  spec names in prose: `first-tick-pending`, `tick-stale`, `lag-high`,
  *  `at-cap`, `capture-paused-low-disk`, `mode-wrong`, `schema-newer`,
  *  `cap-malformed`, `cap-near`, `breaker-open`, `roster-unreadable`,
- *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`, D-4346's `blob-undecodable` and `drain-rejected`. */
+ *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`, D-4346's `blob-undecodable` and `drain-rejected`, and D-4347's
+ *  `spool-planted`. */
 const healthRows = (cls, words) => words.map((w) => [w, cls]);
 const healthEntries = [
   // D-4168: within the shim's grace with no tick yet, doctor answers PASS, not §9.6 step 3's WARN.
@@ -301,7 +302,7 @@ const healthEntries = [
     'redact-source-unreadable', 'cap-near', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
     'export-segment-missing', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
-    'drain-rejected',
+    'drain-rejected', 'spool-planted',
   ]),
   ...healthRows('fail', [
     'tick-stale', 'lag-high', 'at-cap', 'capture-paused-low-disk', 'mode-wrong', 'schema-newer',
@@ -2498,8 +2499,14 @@ export const HEALTH_META = Object.freeze({
 });
 
 /** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
- *  doctor fixtures that plant them. D-4346 (history-permanent-failures-classified). */
-export const HEALTH_COUNTERS = Object.freeze({ blobUndecodable: 'blob_undecodable', drainRejected: 'drain_rejected' });
+ *  doctor fixtures that plant them. D-4346 (history-permanent-failures-classified). Like `blob_undecodable` and
+ *  `drain_rejected`, `spool_displaced` and `spool_blocked` are never reset in B1 (B2's repair owns resets). */
+export const HEALTH_COUNTERS = Object.freeze({
+  blobUndecodable: 'blob_undecodable',
+  drainRejected: 'drain_rejected',
+  spoolDisplaced: 'spool_displaced',   // D-4347 (history-planted-entries-never-wedge)
+  spoolBlocked: 'spool_blocked',
+});
 
 /** The meta key prefix of each rostered home's retention verdict, `retention_state:<home>` (§9.15): the census writes it,
  *  reconcileRetentionState removes it for a home that left the roster (review 316 F13), and status reads it (cli.mjs
@@ -2597,6 +2604,8 @@ export const HEALTH_REMEDIES = Object.freeze({
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
   'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
   'drain-rejected': `the files are kept in ~/.ccrc/history/spool/.draining/rejected/ and their lines in the journal, and nothing in this build drains them again; the refusal is in the sweep's log: ${SWEEP_LOG}`,
+  // D-4347 (history-planted-entries-never-wedge). Never reset in B1, like drain-rejected and blob-undecodable: B2's repair owns resets.
+  'spool-planted': `remove the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; the sweep's log names each one: ${SWEEP_LOG}`,
 });
 
 const minutesOf = (ms) => Math.round(ms / 60_000);
@@ -2780,5 +2789,7 @@ export function deriveHealth(h) {
   if (h.blobUndecodable > 0) warn.push(item('blob-undecodable', `${h.blobUndecodable} stored blob(s) did not decode, so their text is out of search and cannot be read back`));
   // D-4346 (history-permanent-failures-classified): a spool file the store refused was set aside, counted once.
   if (h.drainRejected > 0) warn.push(item('drain-rejected', `${h.drainRejected} spool file(s) were set aside in .draining/rejected/ because the store refused their rows`));
+  // D-4347 (history-planted-entries-never-wedge): a displaced spool file's lines are out of the store, as a rejected one's are.
+  if (h.spoolDisplaced + h.spoolBlocked > 0) warn.push(item('spool-planted', `${h.spoolDisplaced} spool file(s) set aside under .draining/planted/ and ${h.spoolBlocked} skipped drain(s) of a file whose sidecar name is blocked, because of entries planted in .draining/`));
   return result();
 }

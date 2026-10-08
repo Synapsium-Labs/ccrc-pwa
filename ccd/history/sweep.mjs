@@ -886,11 +886,11 @@ export function drainSpool(db, c) {
   if (t.nonRegular > 0) countOutside(db, 'non_regular', t.nonRegular);
   if (t.malformed > 0) countOutside(db, 'sidecar_malformed', t.malformed);
   if (t.displaced.length > 0) {
-    countOutside(db, 'spool_displaced', t.displaced.length);
+    countOutside(db, HEALTH_COUNTERS.spoolDisplaced, t.displaced.length);
     for (const n of t.displaced) process.stderr.write(`history-sweep: spool-displaced: ${n}\n`);
   }
   if (t.blocked.length > 0) {
-    countOutside(db, 'spool_blocked', t.blocked.length);
+    countOutside(db, HEALTH_COUNTERS.spoolBlocked, t.blocked.length);
     for (const n of t.blocked) process.stderr.write(`history-sweep: spool-blocked: ${n}\n`);
   }
   const kept = new Set([...t.kept, ...t.blocked]);

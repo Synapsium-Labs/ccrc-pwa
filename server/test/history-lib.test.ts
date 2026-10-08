@@ -2499,7 +2499,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     ...o,
@@ -2554,12 +2554,19 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['journal-growth', 'warn', { journalGrowth30d: 41_943_041 }],
     ['blob-undecodable', 'warn', { blobUndecodable: 2 }],
     ['drain-rejected', 'warn', { drainRejected: 3 }],
+    ['spool-planted', 'warn', { spoolDisplaced: 2, spoolBlocked: 1 }],
   ];
 
   it('the healthy baseline is PASS ok, with nothing to warn or fail', () => {
     expect(healthLib.deriveHealth(base())).toEqual({ pass: 'ok', warn: [], fail: [] });
     // Exit 9 judges nothing: doctor's relay SKIPs on it (Task 32).
     expect(healthLib.deriveHealth(base({ exit: 9 }))).toEqual({ pass: null, warn: [], fail: [] });
+  });
+
+  it.each<[{ spoolDisplaced?: number; spoolBlocked?: number }]>([[{ spoolDisplaced: 2 }], [{ spoolBlocked: 1 }]])('spool-planted fires on either counter alone (D-4347 (history-planted-entries-never-wedge)) %j, and names both counts', (o) => {
+    const i = healthLib.deriveHealth(base(o)).warn.find((x) => x.word === 'spool-planted');
+    expect(i?.detail).toContain(`${o.spoolDisplaced ?? 0} spool file(s) set aside under .draining/planted/ and ${o.spoolBlocked ?? 0} skipped drain(s)`);
+    expect(i?.remedy).toContain('~/.ccrc/history/spool/.draining/');
   });
 
   it('blob-undecodable names how many stored blobs did not decode, and its remedy says the damage is storage corruption (D-4346)', () => {
