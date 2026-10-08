@@ -1157,9 +1157,10 @@ export function drainSpool(db, c) {
     // for a failure the drain meets, no id's spool file grows toward SPOOL_FILE_LINES_MAX while it lasts, and no renamed file
     // waits with a `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick than every
     // file the loop met, so the journaling order holds. The loop's error is thrown after it, and an error of the journal half
-    // never replaces it. A failure met at a write the pass makes before the drain (the pass's own meta writes before the tick,
-    // the migration verdict's among them, the outbox flush, the secrets step, the FTS probe, the phrase re-index and the
-    // re-derivation) ends the pass before drainSpool, so this half never runs for it (FR2a, review 344 F5).
+    // never replaces it. A failure met at a write the pass makes before the drain (the pass's own meta and counter writes before
+    // the tick: the migration verdict, the capture pause and its counters, the mode-drift count; then the outbox flush, the
+    // secrets step, the FTS probe, the phrase re-index and the re-derivation) ends the pass before drainSpool, so this half never
+    // runs for it (FR2a, review 344 F5).
     try {
       // failedCounted is always false here: the loop sets it only right before a `break`, and countOutside never throws.
       if (journalHalf(c.home, c.ids, c.now()).journalFailed) countOutside(db, 'journal_write_failed');
