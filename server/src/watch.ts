@@ -4170,7 +4170,7 @@ export class FleetWatcher {
     this.deadCoordinatorBreakerRecorded = key;
     // SEVEN — the act, never while the breaker stands, the longest dead first. ARMED, at most ONE claimant a pass. In
     // SHADOW every due claimant is recorded — a would-end touches nothing on the box, and the shadow list is what the
-    // operator arms on (`shadow-records-every-due-coordinator`). The executor decides shadow from its own listing, so
+    // operator arms on (the shadow half of `one-dead-coordinator-per-pass`). The executor decides shadow from its own listing, so
     // an outcome that is not a would-end ends the pass however this pass's listing read.
     if (!breaker.tripped) {
       const due = crashed.filter((c) => {
@@ -4210,8 +4210,8 @@ export class FleetWatcher {
         recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, out, pick.since);
       }
       this.deadCoordinatorState.set(pick.id, deadCoordinatorNextEntry(e, out, pick.cause, pick.since, Date.now(), CHILD_RECLAIM_SWEEP_MS));
-      // A re-measure that found it NOT crashed is evidence: its hour starts again from the next crash
-      // (`a-stopped-act-forgets-its-passes`).
+      // A re-measure that found it NOT crashed is evidence: its hour starts again from the next crash (ruling E: any
+      // answer but a crash deletes the anchor, and `deadCoordinatorNextEntry` forgets the run of crashed passes).
       if (out.kind === 'ended' && out.stoppedBy?.kind === 'remeasured') {
         try { coord.deleteDeadAnchor(pick.id); } catch { /* the next pass's own answer deletes or keeps it */ }
       }

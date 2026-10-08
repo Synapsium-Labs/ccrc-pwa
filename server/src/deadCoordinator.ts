@@ -497,7 +497,7 @@ const CAUSE_WORD: Readonly<Record<Exclude<ClaimantDeadCause, 'stopped'>, string>
 
 /** The feed row's words for an act (or its shadow), one row per programme (spec §5.4), each with the instant the hour
  *  counted from (`since`) — spec §9's stage-4 row reports every ended programme "with its first-dead time". A programme
- *  the act closed only PART of is never announced as ended (the departure `a-partly-ended-programme-says-so`). */
+ *  the act closed only PART of is never announced as ended: §5.4's row is for an ENDED programme, and one the act closed only part of says it was NOT. */
 export function deadCoordinatorFeedRows(
   claimantId: string, o: DeadCoordinatorActOutcome, since: number,
 ): { readonly title: string; readonly body: string }[] {
