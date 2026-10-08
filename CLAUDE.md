@@ -294,7 +294,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   wave 2): it then ends the coordinator's open runs through the abandon door's own decision, on the coordination
   serialiser, and consults no box token — session-gated when the auth gate is armed, like the abandon door. It is
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
-  route's literal.
+  route's literal. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
+  the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
+  the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`

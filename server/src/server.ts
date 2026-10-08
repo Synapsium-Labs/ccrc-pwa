@@ -55,6 +55,7 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
+import { registerTokenRoutes, type TokenRouteDriver } from './token/routes.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -308,6 +309,11 @@ export interface Deps {
    *  driver, so every lane reads it here at request time and a rotation needs no
    *  restart. A literal string is what tests inject, with today's meaning. */
   mailToken?: string | BoxTokenHolder | null;
+  /** The box-token driver as the token routes see it (`token/routes.ts`): the
+   *  claim door, the hand-out commit, "Rotate now" and the view. Read at request
+   *  time. Absent (tests, or a box whose driver was not built) means the claim
+   *  door answers `404 no-claim` and the rotate route `501 not-configured`. */
+  tokenDriver?: TokenRouteDriver;
   /** The coordination database (Build 7). Optional exactly like `push` and
    *  `notifyLog`: absent means the coord routes answer 501 and the mail lane
    *  never runs, which is what a box with no coordination configured should
@@ -1672,6 +1678,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that finds no row for this box yet measures once instead of answering an
   // empty node list.
   registerUpdateRoutes(app, deps, sessionAuth, watcher);
+
+  // The box-token lifecycle's claim door and "Rotate now" (spec 4.6), registered
+  // from their own file — the fourth that `auth-gate.test.ts`'s `ROUTES` and
+  // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
+  // is read at request time, so a box with no driver answers `no-claim`/`501`.
+  registerTokenRoutes(app, deps);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };

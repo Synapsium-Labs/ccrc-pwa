@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 88 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 90 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -64,7 +64,7 @@ import type { SessionStore } from './sessions.js';
  * used to pick the handler. Set membership on the ROUTER's own answer cannot
  * disagree with the handler that is about to run.
  *
- * THE SIX REASONS, and there are only six:
+ * THE SEVEN REASONS, and there are only seven:
  *
  *  1. `/health` — the liveness probe. `deploy/deploy.sh`'s final gate reads the
  *     shipped sha out of it to decide whether a deploy succeeded, from a shell
@@ -158,7 +158,20 @@ import type { SessionStore } from './sessions.js';
  *     The handler requires a live session OR a valid box token, so the
  *     confidentiality the method-keyed table bought is unchanged.
  *
+ *  7. `POST /api/token/claim` — a door that authenticates by a single-use code it
+ *     issued itself (box-token lifecycle, spec 4.6). The fleet box's
+ *     `ccrc token sync` trades a code the server sent it over the agent link for
+ *     the next box-token value; it has no cookie jar, and it must not present the
+ *     box token either, because the value being replaced may be the leaked one.
+ *     The credential is the code: 32 random bytes, only their sha256 held, in
+ *     memory, single use, a short TTL, bound to the measured fleet node id, the
+ *     live-code compare running before any budget (`token/door.ts`). Being exempt
+ *     it also skips the origin check, which is right for a machine caller.
+ *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
+ *  - `POST /api/token/rotate` — the console's "Rotate now". Session-only, like
+ *    every update write (decision 15's reasoning): a holder of the box token must
+ *    not be able to drive a rotation, and the operator is the one with a session.
  *  - `POST /api/auth/logout` — see 3 above.
  *  - `POST /api/auth/passkey/register/start` and `…/register/finish` — ENROLLING
  *    A KEY REQUIRES ALREADY BEING IN. This is the single most load-bearing
@@ -323,6 +336,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /api/ledger',
     "the allocation record and a project's floor, read cookieless from the fleet host — " +
     'box-token gated (requireMailToken), the GET /api/mail convention: no attribution to check'],
+
+  ['POST /api/token/claim',
+    'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +
+    'sent over the agent link for the next box-token value, with no cookie jar and deliberately ' +
+    'without the box token (token/door.ts: sha256 only, single use, TTL, node-bound, compare before budget)'],
 
   ['POST /api/auth/login',
     'the door — a gate that gated its own login route would be a box nobody can enter'],
