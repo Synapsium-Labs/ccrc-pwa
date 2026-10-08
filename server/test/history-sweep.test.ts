@@ -13,7 +13,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import {
-  PRELOADS, REPO, counters, makeHistoryBox, openStoreRO, runShim, runSweep, skipOnDarwin, type HistoryBox,
+  PRELOADS, REPO, SWEEP, counters, makeHistoryBox, openStoreRO, runShim, runSweep, skipOnDarwin, type HistoryBox,
 } from './historyHelpers.js';
 import { STATFS_DEADLINE_MS, historyPaths } from '../../ccd/history/lib.mjs';
 import { createStore, getMeta, userVersion } from '../../ccd/history/store.mjs';
@@ -524,5 +524,34 @@ describe('ccd-history-sweep ships the way ccd-tmp-sweep does', () => {
     expect(header).toMatch(/^#\s+systemctl --user disable --now ccd-history-sweep\.timer$/m);
     expect(header).toContain('_inst_enable_timer history ccd-history-sweep.timer');
     expect(readUnitText(joinUnitPath(UNIT_REPO, 'ccd', 'ccrc'), 'utf8')).toContain('_inst_enable_timer history ccd-history-sweep.timer');
+  });
+});
+
+describe('tick()\'s docstring names its steps in the order the body runs them (review 316 F39)', () => {
+  const src = fs.readFileSync(SWEEP, 'utf8');
+  const head = 'export async function tick(db, ctx) {';
+  const at = src.indexOf(head);
+  const doc = src.slice(src.lastIndexOf('/**', at), at);
+  const body = src.slice(at + head.length, src.indexOf('\n}\n', at)).replace(/(^|\s)\/\/.*$/gm, '$1');
+  const listed = [...doc.matchAll(/^\s*\*\s+\d+\.\s+`([A-Za-z]\w*)`/gm)].map((m) => m[1]!);
+  // A step's call site: `<name>(` not preceded by a word character, so `deriveFts(` never matches inside `rederiveFts(`.
+  const callAt = (n: string): number => {
+    let i = body.indexOf(`${n}(`);
+    while (i > 0 && /\w/.test(body[i - 1]!)) i = body.indexOf(`${n}(`, i + 1);
+    return i;
+  };
+  it('the docstring is a numbered list of at least ten steps', () => {
+    expect(at).toBeGreaterThan(-1);
+    expect(listed.length).toBeGreaterThanOrEqual(10);
+  });
+  it('every listed step is called in the body, in the listed order', () => {
+    const idx = listed.map(callAt);
+    expect(listed.filter((_, i) => idx[i]! < 0)).toEqual([]);
+    expect(idx).toEqual([...idx].sort((a, b) => a - b));
+  });
+  it('every step the body calls with db is listed', () => {
+    const NOT_STEPS = new Set(['bump', 'countOutside', 'scanDue']);
+    const called = [...new Set([...body.matchAll(/\b([a-z]\w*)\(db\b/g)].map((m) => m[1]!))].filter((n) => !NOT_STEPS.has(n));
+    expect(called.filter((n) => !listed.includes(n))).toEqual([]);
   });
 });

@@ -10,12 +10,18 @@
 // tick). The shim is the ONLY lock taker (RV13): this file never takes a lock,
 // and it is never run except under the shim's — a direct run is a test's.
 //
-// THE ORDER OF A PASS, up to the tick:
+// THE ORDER OF A SCHEDULED PASS, up to the tick (`scheduledPass`; the --op pass's own is the block above
+// `runOpPass`, and `THE PASS` block below says what each answer is):
 //   history-off → role (CCRC_ROLE in ~/.ccrc/ccrc.env, readBoxEnvValue) →
 //   the free-space probe on db/ (async, STATFS_DEADLINE_MS: a dead volume is a
-//   pause BEFORE any synchronous read under db/ can block, RR15) → the store
-//   facts → decideStoreOpen → stale temps → the stored version and
-//   planMigration → planRun → create / finish / open → `tick`.
+//   pause BEFORE any synchronous read under db/ can block, RR15) →
+//   `openStore`: the store facts → decideStoreOpen (a refusal ends the pass) → stale temps → (drop a pending
+//   creation →) create → the version peek, where a newer store is refused BEFORE finish-pending (D-4301) →
+//   finish-pending → the writer open, which refuses a store not in WAL → the writer mirror and the stale op
+//   marker → (store.writer unreadable: a `held` hold, the journal half observing only) → the outbox
+//   (`flushFirst`, outside the budget) → `clearDoneMarkers` → the store's size → `migrationVerdict`, which first
+//   removes every stale migration temp (D-4339) → planRun → migrate | hold | run (`fixModes`, then `tick`) →
+//   after the tick, `periodicCensus` and meta `journal_unwritable`.
 // `tick` is the bound store's whole tick (§9.2's order;
 // D-4224); each later step is added there, and nothing above it
 // changes for that.
@@ -282,13 +288,29 @@ export function countOutside(db, name, by = 1) {
 //
 // At tick N each spool/<id>.jsonl is renamed to spool/.draining/<id>.<tickMs>.<pid>.jsonl (so a name is never reused)
 // and observed. It is read at tick N+1. A hook that opened the old inode just before the rename still lands its line.
-// Every per-file step below follows §9.14's order:
+// `drainSpool` runs, in this order: `ensureSpoolDirs`, then `tidyDraining` (planted entries and stale or malformed
+// sidecars, D-4347: counted, moved or removed before the drain lists anything), then, for each draining file in
+// journaling order:
+//   0. a name tidyDraining `kept` or `blocked`, or one that waits behind an earlier blocked file of its id, is skipped
+//      (D-4347); a regular file over SPOOL_FILE_MAX is set aside from its lstat BEFORE any open (D-4337): into
+//      `.draining/oversize/`, counted `spool_oversize`, never journaled (one over SPOOL_FILE_LINES_MAX is set aside
+//      there too, counted `spool_overlines`, when its read counts the lines); a link or FIFO met here is removed with
+//      its sidecar and counted `non_regular`. For any other file, each per-file step follows §9.14's order:
 //   1. the observation sidecar;
-//   2. the `file` and `spool` records, one write, fsynced, then the sidecar's journaled mark;
-//   3. the drain transaction under synchronous=FULL, holding its verdicts and one `drained` outbox row;
-//   4. the verdict append, fsynced;
-//   5. the unlink of the file and its sidecar;
-//   6. the outbox delete.
+//   2. the `file` and `spool` records, ONE write, fsynced;
+//   3. the sidecar's journaled mark;
+//   4. the drain transaction under synchronous=FULL, holding its verdicts and one `drained` outbox row; a commit the
+//      store refuses for the file's own rows moves that journaled file into `.draining/rejected/` (counted
+//      `drain_rejected`, D-4346) and the loop goes on;
+//   5. the verdict append, fsynced;
+//   6. the unlink of the file and its sidecar;
+//   7. the outbox delete.
+// The three set-aside directories under `.draining/` are distinct, and `listDraining` lists none of them:
+// `oversize/` holds the files of step 0 only (D-4337); `rejected/` holds ONLY spool files the store refused, already
+// journaled, counted `drain_rejected` (D-4346); `planted/<tickMs>.<pid>/` holds planted non-regular entries, counted
+// `non_regular` (D-4347), and a live file whose sidecar name was planted (counted `spool_displaced`, or `spool_blocked`
+// and skipped when it cannot move either). After the loop, THIS tick's renames run (`renameAndObserve`), so a file is
+// read at the NEXT tick, never the one that renamed it.
 // So a drained file's lines and the verdicts taken from them are both in the fsynced journal before the file goes.
 
 /** Registry values ccd writes are a few dozen bytes; anything larger was not written by ccd. */
@@ -1691,12 +1713,35 @@ export function discoverAndPlan(db, c, uuids) {
  * @property {boolean} ingest  planRun's verdict: false under a cap or floor pause (Task 19)
  * @property {object} budget  the run's ONE budget, newBudget(now), spent by every step that reads the disk (Task 19)
  */
-/** The bound store's tick (§9.2), handed an open writer connection. Steps are
- *  added here in §9.2's order by the tasks that ship them; what it runs now:
- *  - spool/ exists from a bound store's first tick on: the hook's gate is that
- *    directory, and the hook never makes it (§5.1), so a box with no bound
- *    store — Darwin, a server, a refused store — spools nothing;
- *  - an unreadable roster is counted, once per pass (FE4, O54). */
+/** The bound store's tick (§9.2; D-4224, slug history-tick-order), handed an open writer connection. The steps, in the
+ *  order the body runs them (a test reads this list against the body, review 316 F39):
+ *  1. `flushOutbox`: verdict rows a crash left behind reach the journal first, outside the run budget (with no writer
+ *     token the rows wait in the DB);
+ *  2. `makeIngestCtx`: the tick's one ingest context, shared by the secrets, the ingest, the launch facts and the
+ *     ticks row;
+ *  3. `secretsStep`: every pair committed and journaled before any drain or FTS insert, and the context's pairIdx;
+ *  4. `ftsPrepare`: §9.1's probe at every open, which sets the context's `fts`;
+ *  5. `reindexForValues`: the same-tick phrase fast path over the values this tick loaded; it never moves the mark;
+ *  6. `rederiveFts`: the hash re-derivation of every indexed blob, which alone moves the durable reindex mark
+ *     (D-4344); it runs under any pause, in a per-tick slice of the run budget;
+ *  7. `drainSpool`: the journal-first drain of the spool (§9.14), whose hints feed the ingest; the per-tick first-row
+ *     cache (`newFirstRowCache`) is made just before it and shared with step 8's location rule;
+ *  8. `confirmCandidates`: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
+ *     location, each decided in its own FULL transaction;
+ *  9. `registryBackfill`: only when `scanDue` says the periodic scan is due, every `$REG/<id>.uuid` that names no
+ *     epoch becomes a registry mapping, committed before any ingest chunk can need it (D-4297);
+ * 10. `ingestTick`: discovery, admission and the chunked read under the run's ONE budget, unless a cap or floor pause
+ *     (`ctx.ingest` false) or an unreadable roster holds it; a busy database ends the tick here;
+ * 11. `backfillEpochFacts`: launch facts an epoch chained after its transcript's first chunk missed, after an ingest;
+ * 12. `resetFtsPending`: blobs this tick wrote but could not index re-open the completed FTS backfill;
+ * 13. `deriveFts`: §9.1 derivation ('fts', 1)'s backfill within what is left of the budget, held with the ingest
+ *     (D-4242) and when Task 19's per-chunk floor stopped it;
+ * 14. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
+ * 15. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
+ * 16. `markScan`: a due scan is marked done, unless the roster was unreadable.
+ *  Then spool/ is made (the hook's gate is that directory, and the hook never makes it, §5.1, so a box with no bound
+ *  store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
+ *  `periodicCensus` after the tick. `bump` and `countOutside` are counters, not steps. */
 export async function tick(db, ctx) {
   // >>> history tick steps (spec §9.2; D-4224, slug history-tick-order) ──────────────────────────────────────────
   // First, the outbox. Verdict rows a crash left behind reach the journal before anything else, outside the run
@@ -1779,10 +1824,13 @@ export async function tick(db, ctx) {
 // answer ends it:
 //   history-off (§9.7) → the recorded role (§6.9) → the free-space probe, which is ALSO the
 //   reachability probe and therefore runs before anything stats the volume (§9.3; slug
-//   history-store-unreachable) → the binding (decideStoreOpen) → stale temps → create / finish /
-//   open → a newer schema, refused with NO write (G9, DM17) → WAL (store-not-wal, §6.2) → the outbox,
-//   first and outside the budget (§9.14) → the migration verdict (§6.11) → planRun's arm: migrate,
-//   hold, or run with its cap or floor pause → the tick.
+//   history-store-unreachable) → `openStore`: the binding (decideStoreOpen) → stale temps → (drop a pending
+//   creation →) create → a newer schema, refused with NO write and BEFORE finish-pending (G9, DM17, D-4301) →
+//   finish-pending → open, WAL (store-not-wal, §6.2) → the writer mirror and the stale op marker → a `held` hold
+//   when store.writer cannot name the journal (§9.10 "Writer token") → the outbox, first and outside the budget
+//   (§9.14) → `clearDoneMarkers` → the migration verdict (§6.11), which first removes every stale migration
+//   temp (D-4339) → planRun's arm: migrate, hold, or run with its cap or floor pause (`fixModes`, then the
+//   tick) → after the tick, the periodic census (`periodicCensus`) and meta `journal_unwritable`.
 // "The journal half runs whenever the drain cannot" (§9.2; D-4231, slug history-journal-observation-sidecar):
 // every hold renames, observes and journals the spool with the two names read from store.id and
 // store.writer ON THE HOME FILESYSTEM, never from meta (DI5; D-4220, slug history-store-writer-file), so a held
@@ -3696,8 +3744,9 @@ export function mergeSteps(db, ctx, budget) {
 // `ccd-history-sweep --op <verb> …`, from the CLI (W1-B2) or straight from an operator's shell (§5.1's
 // published door; D-4221 history-apply-via-shim: every writing verb runs through the shim).
 // Spec §8.4 "Operator verbs" and "Speed bumps", §9.2 "An --op pass runs the journal half
-// too", §6.11 "doctor --migrate". In order:
-//   1. the verb and its arguments: B1 knows `import` and `migrate`; anything else is bad-args;
+// too", §6.11 "doctor --migrate". In order (`opPass`):
+//   1. the verb and its arguments: B1 knows `import` and `migrate`; anything else is bad-args (a session id off its
+//      grammar is bad-id; the file is made absolute once, and must be a `<uuid>.jsonl`);
 //   2. THE GATE, decided by lib.mjs's decideOpGate from this process's OWN CLAUDECODE, isatty(0) and, for an
 //      irreversible form only, the bounded `tmux display-message -p -t "$TMUX_PANE" '#S'` — the bumps the CLI
 //      applies, decided once and executed twice (D-4181, slug history-op-gate-in-sweep), so the direct door meets
@@ -3705,13 +3754,20 @@ export function mergeSteps(db, ctx, budget) {
 //      the store. These are speed bumps, not walls: `env -u CLAUDECODE` defeats the first (§8.4);
 //   3. the recorded role: a server box never gets a store, whatever a stale shim is asked (§6.9, O27; D-4222
 //      history-role-not-server);
-//   4. a dry run (`import` without --apply), after the bounded free-space probe, opens READ-ONLY and writes
-//      nothing at all (§8.4 "dry run by default"): no journal half, no marker, no flush;
+//   4. a dry run (`import` without --apply): an unreadable roster is refused first, `roster-unreadable`, before any
+//      read and without a count (D-4313, history-import-refusal-words); then, after the bounded free-space probe,
+//      it opens READ-ONLY and writes nothing at all (§8.4 "dry run by default"): no journal half, no marker, no
+//      flush;
 //   5. otherwise the journal half at lock take (DI7, D-4232 history-observe-at-rename: a /clear during a long
-//      --op keeps its startup epoch),
-//      the store opened exactly as a scheduled pass opens it, the op marker, the verb, the outbox flushed
-//      (an operator told "done" is in the fsynced journal, §8.4), the journal half again before release, on every
-//      outcome, not only rc 0 (D-4232), and the marker removed.
+//      --op keeps its startup epoch), then the free-space probe, then the store opened exactly as a scheduled
+//      pass opens it (`openStore`; a throw there is answered after the release half, review 316 F19); from here
+//      on EVERY answer, not only rc 0, runs the journal half again before release (D-4232), and a failed one
+//      replaces only an rc 0. Inside the body: an unreadable store.writer answers store-unmeasured; an `import`
+//      with an unreadable roster is counted `roster_unreadable` and refused BEFORE the marker is written (D-4313,
+//      every import form); then the op marker, the outbox (`flushFirst`), `clearDoneMarkers`, an `import` against
+//      a store with a migration pending refused `migration-pending`, and the verb; an rc 0 flushes the outbox
+//      once more (an operator told "done" is in the fsynced journal, §8.4, D-4225); the marker is removed and
+//      the writer closed last.
 // The result is ONE JSON line, `{"rc":<EXIT>}` or `{"rc":<EXIT>,"reason":"<REASONS key>"}`, printed LAST,
 // which the CLI relays (§8.4); the process exits with that rc. A held lock never reaches here: the shim
 // answers 75 for an --op pass (§5.1).
