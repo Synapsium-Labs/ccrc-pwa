@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `451854d1d` after fix round 3; review run 340 waits at the cap (R30) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `451854d1d` after fix round 3; review run 340 dispatched (R30) |
 
 ## Decisions & deviations
 
@@ -530,6 +530,17 @@ time.
     residue, never a finding. The whole wave gets only the property and lane checks.
   - The cap reads 24 of 24, and the next age-out is 08:47:32 (run 306). A session-only wake at 08:47 starts the
     timed attempt, which re-checks the preconditions and sends once at 08:47:34.
+  - The 08:47 attempt was refused `cap-daily` and spawned nothing. Native-docs-reader's review run 337 reached the
+    dispatch route first.
+    - Dispatches are serialised, and the cap check runs a few seconds before `dispatchStartedAt` is stamped. Mine
+      queued behind 337's spawn and was then checked at 24 of 24.
+    - `capsUsage` counts `dispatchedAt > now - 24 h` (`server/src/coord/store.ts` `capsUsage`), so the age-out was
+      measured right. Only the whole-second target, which fired one second late, lost the race.
+  - Dispatched (09:58). The retry slept to the millisecond, run 295's age-out plus 250 ms. The preconditions held at
+    09:58:19 (340 `planned`, 322 `awaiting-review`, tip `451854d1d`). It was accepted, its answer arriving at
+    09:58:44. The reviewer is `ccrc-pwa-keen-mesa` (`adopted` false, `skillState` present, brief queued), and its
+    registry route reads opus, high effort, sonnet subagents, workflow on and compact 40. Next: `review-done`, then
+    close run 340 and rule. After that this session asks the operator about merging PR #322.
 
 ## Carried constraints (reviewers get these)
 
