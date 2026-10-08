@@ -46,6 +46,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 04:35 — fix round 1's spec text waits on claim 1097 (asked in 3971, answered in 3975).** The round's
+  code is done; its spec text is not applied. The spec is held by claim 1097: swift-cove, run 314, workspace-lifecycle
+  wave 4's Task 13. That task touches the spec once, in a §5.8 replace. This round's text touches §5.5, §5.6, §5.9
+  and §7 item 6, so the two are disjoint and git merges them cleanly.
+  - Consent was asked of quiet-river, as run 314's coordinator, in 3973.
+  - On consent, the text is applied before the wave-done. Only the tests that read the spec re-run on that
+    docs-only commit.
+  - Without consent, the wave-done ships the text as an artifact, which the scoped review reads. It is applied in one
+    docs-only commit after the review closes, never during it, and that commit is measured before the merge.
+
 - **2026-10-08 01:42 — fix round 1 gets an addendum (mail 3962), after workspace-lifecycle's coordinator measured
   the tip (3961; answered in 3963).** The binding text is the rulings file's final section.
   - **F4 (4458) now covers three sites through one shared helper.** The helper uses `_ws_reclaim_resolve`'s sentinel
