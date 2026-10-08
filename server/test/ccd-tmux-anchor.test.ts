@@ -510,10 +510,12 @@ describe('D-3525 — the census: every ccd target is spelled by the exact builde
           .toMatch(/^\$\(_tmux_(?:t|at) "[^"]*"\)$/);
       }
     }
-    // Non-vacuity: the typers, the readers and the three pass-through helpers.
+    // Non-vacuity: the typers, the readers and the two pass-through helpers. `_route_ack_wait` was the
+    // third until the /model flow's outcome read moved to `_route_model_ack_wait`, which takes the
+    // registry id and binds its own `t` from `_tmux_t` (2026-10-06) — a binder, not a pass-through.
     expect(checked.length).toBeGreaterThanOrEqual(12);
     expect([...passThrough.keys()].sort())
-      .toEqual(['_answer_two_option_dialog', '_route_ack_wait', '_route_effort_ack_wait']);
+      .toEqual(['_answer_two_option_dialog', '_route_effort_ack_wait']);
     // A pass-through helper's every caller hands it `"$t"` in that position —
     // and that caller is itself one of the functions checked above.
     for (const [fn, pos] of passThrough) {

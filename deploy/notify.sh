@@ -86,7 +86,14 @@ case "$ADDR" in
   *)     BASE="http://${ADDR}" ;;
 esac
 
-curl -fsS -m 5 -X POST "$BASE/api/notify" \
+# THE TOKEN RIDES CURL'S STDIN, NEVER ITS ARGV (R16): a `-H` value is readable
+# in every process listing on the box for the life of the call. `-K -` reads the
+# header from a config line on stdin, the spelling ccd-pool-sync and
+# ccd-update-sync ship. The header is still sent only for a non-empty token: an
+# absent one leaves the config empty, so the POST goes out without it (the
+# tolerance above). curl's stdin is always this pipe, never the stdin ccd hands
+# the hook.
+{ [ -n "$tok" ] && printf 'header = "x-ccrc-mail-token: %s"\n' "$tok"; } |
+curl -fsS -m 5 -X POST "$BASE/api/notify" -K - \
   -H 'content-type: application/json' \
-  ${tok:+-H "x-ccrc-mail-token: $tok"} \
   -d "$(jq -cn --arg m "$1" '{message:$m}')" >/dev/null 2>&1 || true

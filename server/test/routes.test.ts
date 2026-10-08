@@ -1302,8 +1302,9 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
     expect(res.statusCode).toBe(409);
     // The SHAPE does not change with the condition — `runs` is present and
-    // empty, because no row was read. Fail-shut at a destructive act.
-    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
+    // empty, because no row was read. Fail-shut at a destructive act. And the
+    // store's own words ride it (workspace lifecycle wave 3b).
+    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [], detail: expect.stringMatching(/\S/) });
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await app.close();
   });

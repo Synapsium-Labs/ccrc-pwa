@@ -758,3 +758,49 @@ describe('the turn marker round trip: a hook-written line reads back ok (§5.1)'
     expect(r.bgKinds.join(',')).toHaveLength(199);
   });
 });
+
+// ── SessionEnd (delegation broker wave 1, spec §5.3): registered, captured in a -hookcap
+// session, and otherwise inert — no hookstate, no turn marker, nothing printed. A quitting
+// session must not look like activity to the stall watch (STALL_PLUMBING_EVENTS). ──
+describe('SessionEnd (delegation broker §5.3)', () => {
+  const markFile = (id = 'demo-quiet-basin'): string => path.join(reg(), `${id}.turn.json`);
+
+  it('prints nothing on either stream and exits 0', () => {
+    expect(runFull({ hook_event_name: 'SessionEnd', reason: 'prompt_input_exit' })).toEqual({ stdout: '', stderr: '' });
+  });
+
+  it('writes no hookstate.json when none existed, and no turn marker', () => {
+    run({ hook_event_name: 'SessionEnd', reason: 'clear' });
+    expect(fs.existsSync(stateFile())).toBe(false);
+    expect(fs.existsSync(markFile())).toBe(false);
+  });
+
+  it('control: a Stop in the same fixture writes both', () => {
+    run({ hook_event_name: 'Stop' });
+    expect(readState()).toMatchObject({ state: 'done', event: 'Stop' });
+    expect(fs.existsSync(markFile())).toBe(true);
+  });
+
+  it('leaves an existing hookstate.json and turn marker byte-identical', () => {
+    run({ hook_event_name: 'UserPromptSubmit' });
+    const state = fs.readFileSync(stateFile());
+    const mark = fs.readFileSync(markFile());
+    run({ hook_event_name: 'SessionEnd', reason: 'logout' });
+    expect(fs.readFileSync(stateFile())).toEqual(state);
+    expect(fs.readFileSync(markFile())).toEqual(mark);
+  });
+
+  it('is captured in a -hookcap session as one .cap file, and still writes no hookstate', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "cc-demo-hookcap"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(reg(), 'demo-hookcap.generation'), GENERATION);
+    run({ hook_event_name: 'SessionEnd', reason: 'prompt_input_exit' });
+    const dir = path.join(home, '.ccrc', 'hook-capture', 'demo-hookcap');
+    const caps = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith('SessionEnd-') && n.endsWith('.cap')) : [];
+    expect(caps).toHaveLength(1);
+    const [meta, body] = fs.readFileSync(path.join(dir, caps[0] as string), 'utf8').split('\n');
+    expect(meta).toBe('{"envSid":"uuid-1"}');
+    expect(JSON.parse(body as string)).toEqual({ hook_event_name: 'SessionEnd', reason: 'prompt_input_exit' });
+    expect(fs.existsSync(path.join(reg(), 'demo-hookcap.hookstate.json'))).toBe(false);
+    expect(fs.existsSync(markFile('demo-hookcap'))).toBe(false);
+  });
+});

@@ -135,7 +135,7 @@ function verbEnv(home: string): NodeJS.ProcessEnv {
     '    case "$3" in ccrc-codex-usage@*.timer)',
     '      t=absent; [ -e "$HOME/.config/systemd/user/ccrc-codex-usage@.timer" ] && t=present',
     '      printf \'%s template=%s\\n\' "$3" "$t" >> "$HOME/usage-disables"',
-    '      rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$3" ;;',
+    '      grep -qxF -- "$3" "$HOME/usage-keeplink" 2>/dev/null || rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$3" ;;',
     '    esac',
     '    exit 0 ;;',
     'esac',
@@ -201,6 +201,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(bin, 'ccd-account-health'), '#!/bin/sh\n# account health\n', { mode: 0o755 });
   // The per-uid temp-dir reaper, placed by `_inst_bins` on the non-Darwin arm.
   writeFileSync(join(bin, 'ccd-tmp-sweep'), '#!/bin/sh\n# tmp sweep\n', { mode: 0o755 });
+  // The pane-scope sweep, placed by `_inst_bins` on the same non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-scope-sweep'), '#!/bin/sh\n# scope sweep\n', { mode: 0o755 });
   // account-pool-membership wave 1, Task 4 fix round 1 (F1/F4): the leased-
   // projection puller. `_inst_bins` places it on the non-Darwin arm for every
   // role, so an installed Linux box has it and `_uninst_tree_bins` must take
@@ -266,6 +268,7 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
     'ccd-usage-sweep.service', 'ccd-usage-sweep.timer',
     // The temp-dir reaper's pair, on the same role-gated terms.
     'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
+    'ccd-scope-sweep.service', 'ccd-scope-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
@@ -548,6 +551,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
+    expect(calls).toContain('--user disable --now ccd-scope-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
@@ -582,6 +586,20 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls.indexOf('--user disable --now ccrc-codex-usage@codex-a.timer')).toBeGreaterThan(-1);
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     expect(r.stdout).toMatch(/^uninstall: units: 2 codex usage timer\(s\) stopped and disabled$/m);
+  });
+
+  itLinux('an instance whose disable the manager answers 0 while its link stays is NOT counted stopped: its failed line names it and the count is the measured one (Plan 3b Task A2, usage template)', () => {
+    const home = mkTmp('ccrc-uninst-usage-keeplink-');
+    plantInstalledBox(home);
+    const units = join(home, '.config', 'systemd', 'user');
+    const wants = join(units, 'timers.target.wants');
+    mkdirSync(wants, { recursive: true });
+    for (const id of ['codex-a', 'codex-b']) symlinkSync(join(units, 'ccrc-codex-usage@.timer'), join(wants, `ccrc-codex-usage@${id}.timer`));
+    writeFileSync(join(home, 'usage-keeplink'), 'ccrc-codex-usage@codex-b.timer\n');
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^uninstall: units: 1 codex usage timer\(s\) stopped and disabled$/m);
+    expect(r.stderr).toMatch(/^uninstall: units: disable --now ccrc-codex-usage@codex-b\.timer failed \(continuing/m);
   });
 
   // The same three promises — stop it, forget it, remove it — in launchd's
@@ -740,7 +758,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // `_inst_bins` places them, so an uninstall that left them strands them on
     // PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
-      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep', 'ccd-scope-sweep',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync',
       ...GPT_LANE_BINS, 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);

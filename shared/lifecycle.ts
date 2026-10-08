@@ -38,6 +38,14 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['claude (Claude Code: scratchpad, background-task output)', 'agents writing into the root'],
     collector: 'ccd-tmp-sweep (hourly; not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7)',
     bound: 'session lifetime + 7 days', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G', ruling: null },
+  // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
+  // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
+  // it lives in the runtime dir, so a reboot empties it — the safe direction for
+  // the first-seen clocks it keeps.
+  { name: 'scope-sweep-verdicts', root: '$XDG_RUNTIME_DIR/ccd-scope-sweep.state', pattern: 'R',
+    creators: ['ccd-scope-sweep'], collector: 'ccd-scope-sweep (rewritten whole each minute; emptied by a reboot)',
+    bound: 'the scopes dead at the last tick', tier: 'one line per dead pane scope and per process older than a day in a live one',
+    ruling: null },
   { name: 'project-pool-tag', root: '~/.cc-sessions/pools/<project>', pattern: 'O',
     creators: ['ccd project-pool', 'operator shell'], collector: null,
     bound: 'until cleared', tier: '<64 bytes per tagged project, one file per project',

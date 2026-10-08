@@ -94,7 +94,7 @@ describe('childReclaimGeneration', () => {
   });
 
   it('the birth fence\'s own use: over a CREATE-ONLY list, [0] IS the opening create', () => {
-    // `sweepChildReclaim` reads `childReclaimGeneration(coord.lifecycleCreatesFor(id), now)[0]?.at`
+    // `childReclaimBornAt` reads `childReclaimGeneration(coord.lifecycleCreatesFor(id), now)[0]?.at`
     // — a single-row slice whose one element is the opening create itself,
     // because a create-only list has no later row to close it early.
     const creates = [
@@ -125,5 +125,50 @@ describe('one implementation each', () => {
       expect(files.filter(([, text]) => re.test(text)).map(([f]) => f), name)
         .toEqual(['server/src/coord/childReclaim.ts']);
     }
+  });
+
+  // K8 — ONE coordination fence, ONE store read, ONE birth placement (spec §1
+  // rule 4; spec §5.6: slugs recycle). The close, the executor's step 2a and
+  // the hold-release job's step 5 decide through `childReclaimHasCoordinated`;
+  // the sweep reaches the same `childReclaimCoordinated` through its verdict.
+  // A consumer that read the store's claims itself, or placed the birth with
+  // its own spelling, would be a second reader that can disagree.
+  it('K8: the coordination fence, its store read and its birth placement each have ONE home', () => {
+    const root = path.resolve(__dirname, '../..');
+    const under = (dirs: readonly string[]) => dirs.flatMap((r) =>
+      (fs.readdirSync(path.join(root, r), { recursive: true }) as string[])
+        .filter((f) => /\.(ts|tsx|mjs|js)$/.test(f) && !f.split(path.sep).includes('node_modules'))
+        .map((f) => [path.join(r, f), fs.readFileSync(path.join(root, r, f), 'utf8')] as const));
+    const src = under(['server/src']).sort(([a], [b]) => a.localeCompare(b));
+    const count = (text: string, needle: string): number => text.split(needle).length - 1;
+    const holders = (needle: string) => src.filter(([, t]) => t.includes(needle)).map(([f]) => f);
+    for (const [name, home] of [
+      ['childReclaimCoordinated', 'server/src/childReclaimSweep.ts'],
+      ['childReclaimBornAt', 'server/src/coord/childReclaim.ts'],
+      ['childReclaimHasCoordinated', 'server/src/coord/childReclaim.ts'],
+    ] as const) {
+      const re = new RegExp(`function ${name}\\b|\\b${name}\\s*=\\s*\\(`);
+      expect(src.filter(([, t]) => re.test(t)).map(([f]) => f), `${name} is defined once`).toEqual([home]);
+    }
+    expect(holders('.childReclaimCoordinatorClaims()'), 'the store read is called only by the fence\'s two homes')
+      .toEqual(['server/src/coord/childReclaim.ts', 'server/src/watch.ts']);
+    const hasCoordinated = 'childReclaimHasCoordinated(';
+    expect(src.map(([f, t]) => [f, count(t, hasCoordinated)] as const).filter(([, n]) => n > 0),
+      'its definition, step 2a and step 5; and the close').toEqual([
+      ['server/src/coord/childReclaim.ts', 3], ['server/src/coord/close.ts', 1],
+    ]);
+    const placement = 'childReclaimGeneration(coord.lifecycleCreatesFor';
+    expect(src.map(([f, t]) => [f, count(t, placement)] as const).filter(([, n]) => n > 0), 'one birth placement')
+      .toEqual([['server/src/coord/childReclaim.ts', 1]]);
+    const childReclaimTs = src.find(([f]) => f === 'server/src/coord/childReclaim.ts')![1];
+    const bornAtBody = /export function childReclaimBornAt\([^]*?\n}\n/.exec(childReclaimTs)?.[0] ?? '';
+    expect(bornAtBody, 'the placement lives inside childReclaimBornAt').toContain(placement);
+    const watchTs = src.find(([f]) => f === 'server/src/watch.ts')![1];
+    expect(count(watchTs, 'childReclaimBornAt(coord, r.id, now)'), 'the sweep places the birth through the helper').toBe(1);
+    // The reader this fence replaced is gone from every file under server/ —
+    // the needle is built in two halves so this file does not name it either.
+    const retired = 'childReclaim' + 'CoordinatorIds';
+    expect(under(['server/src', 'server/test', 'server/test-e2e', 'server/scripts'])
+      .filter(([, t]) => t.includes(retired)).map(([f]) => f), 'no file names the retired reader').toEqual([]);
   });
 });

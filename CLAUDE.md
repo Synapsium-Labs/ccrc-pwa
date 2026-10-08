@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~5700 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~5800 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -103,7 +103,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
-  summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` run in full, and
+  summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa`, `node-floor` (on exactly the floor's version) and `probe-macos` run in full, and
   `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
   `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
   map, runs the full suite instead. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
@@ -115,10 +115,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
   `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its
   selection, not the whole suite; the daily run and the stable gate are where a miss is caught.
-- **Node floor `>=22.13.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
-  (server-only). Reason: `server/src/coord/db.ts` imports `node:sqlite` unconditionally; below 22.13 the server
-  fails to boot, not degrades. If node-floor's absolute assertion (3) is red while (1–2) are green, **RAISE
-  engines — never lower them to make it green.**
+- **Node floor `>=22.16.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
+  (server-only; CI's `node-floor` job runs it on exactly 22.16.0). Two reasons: `server/src/coord/db.ts` imports
+  `node:sqlite` unconditionally (below 22.13 the server fails to boot), and below 22.16 that `node:sqlite` has no
+  FTS5 (no history search). If absolute assertion 3 or 4 is red while (1–2) are green, **RAISE engines — never lower them.**
 - **Deploy = release + rollout** (design `docs/superpowers/specs/2026-09-18-release-rollout-design.md`). Every merge to
   `main` becomes a GitHub **prerelease** within about a minute (`.github/workflows/release-main.yml` →
   `deploy/release-main.sh prepare` → `build-release.sh` → `actions/attest-build-provenance` → `release-main.sh publish`;
@@ -254,8 +254,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   than open empty**. Its synchrony is a stated concurrency invariant — **do not wrap it async** (a repository/async
   interface over `CoordStore` is explicitly rejected). It is a server-side RE-MEASUREMENT of ccd's flat files
   (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
-  what it adds on top — mail, claims, asks, central pool edges, update intents — is gone without the snapshot
-  every `ccrc update` (and `ccrc backup`) takes into `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed).
+  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice —
+  is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into `~/ccrc-backups/<ts>/`
+  (`pool-edges.log` is never replayed).
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
@@ -276,11 +277,12 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4),
-  `POST /api/coord/caps` (wave 6) and `POST /api/coord/reclaim-pause` (child-reclamation wave 4) are
+  `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4) and
+  `POST /api/coord/stall-watch` (stall-watch settings wave 1) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other two are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other three are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -315,7 +317,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   stuck, marker unreadable) record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
   rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
-  like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that.
+  like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that. A level chosen in
+  Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never
+  `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers still have no writer.
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
   workspace branch, **never a separate feature branch** (a feature branch wedges every close with `stale-tip`).
   Re-measurement reads git ref files + `.prhistory` fresh, never the claim body.

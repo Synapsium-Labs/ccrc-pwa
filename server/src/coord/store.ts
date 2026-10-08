@@ -12,6 +12,14 @@ import type { LastRun } from './released.js';
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
 import type { StallDeliveryRow, StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
+// Stall watch settings (design 2026-10-05 §8, §11): the settings row's port and the notice-count row are declared by
+// their consumer, the L1 `stallsettings.ts`; the insert arm starts from its seed, and the no-op skip asks its compare.
+import { STALL_SETTINGS_SEED, stallPatchIsNoOp } from './stallsettings.js';
+import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from './stallsettings.js';
+// The coordination fence's claim shape is declared by its CONSUMER, the L1
+// sweep file's `childReclaimCoordinated` (the same port rule as above); the
+// read below implements it.
+import type { ChildReclaimCoordinatorClaim } from '../childReclaimSweep.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
 import type { SendResult } from '../inject/send.js';
@@ -31,6 +39,9 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
+import {
+  DEAD_COORDINATOR_JOURNAL_ACTS, type DeadAnchor, type DeadCoordinatorJournalRow,
+} from '../deadCoordinator.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
   isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
@@ -55,6 +66,9 @@ import {
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   isPositiveDecimalSafeInteger,
   parseArmEventDetail,
+  // The coordination fence's two instants (`childReclaimCoordinatorClaims`) are
+  // read in their canonical spelling only.
+  parseCanonicalPositiveSafeInteger,
   parseRouteEventDetail,
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
@@ -177,7 +191,10 @@ class OpenRunHoldRefused extends Error {
 export type AdvanceResult =
   | { ok: true; from: RunState; to: RunState }
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
-  | { ok: false; error: 'unknown-run' };
+  | { ok: false; error: 'unknown-run' }
+  /** `closeRun`'s compare-and-set (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's `claimedBy`
+   *  is no longer the id the caller expected — a successor took the programme — so nothing was written. */
+  | { ok: false; error: 'claimant-changed'; claimedBy: string | null };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -863,6 +880,25 @@ const persistedInt = (text: string, column: string): PersistedInt => {
     : { ok: false, detail: `${column} is not a positive safe integer` };
 };
 
+/** `setStallSettings`' answer: written, with the read before and the read after (equal on a no-op), or a conflict
+ *  carrying the read it found and wrote nothing over. */
+export type StallSettingsWrite =
+  | { kind: 'written'; before: StallSettingsRead; after: StallSettingsRead }
+  | { kind: 'conflict'; before: StallSettingsRead };
+
+/** `stallObservationsSince`' answer: the window's rows, or a read that failed, with its detail. */
+export type StallObservationsRead = { ok: true; rows: StallObservationRow[] } | { ok: false; detail: string };
+
+/** Whether two settings reads are the same state, compared as read, before any parse, so a `bigint` meets a `bigint`:
+ *  the same kind and, for a row, the same three values, `updatedAt` included. Two unreadable reads are the same
+ *  kind; `setStallSettings` throws on its own unreadable read before it asks. */
+const sameStallSettingsRead = (a: StallSettingsRead, b: StallSettingsRead): boolean => {
+  if (a.kind === 'row' && b.kind === 'row') {
+    return a.row.level === b.row.level && a.row.quietMs === b.row.quietMs && a.row.updatedAt === b.row.updatedAt;
+  }
+  return a.kind === b.kind;
+};
+
 /** The four persisted integers every run-shaped read carries, proven. */
 interface RunNumbers { id: number; wave: number; waveOf: number | null; reviews: number | null }
 
@@ -1425,7 +1461,7 @@ class IntentJournalFault extends Error {
  *  workspace be reclaimed. A well-shaped row (`demo-a -> heir-x`) has one
  *  occurrence and yields exactly its `from`.
  *
- *  `null` — which the one reader, `childReclaimCoordinatorIds`, below, turns
+ *  `null` — which the one reader, `childReclaimCoordinatorClaims`, below, turns
  *  into a THROW rather than a silent drop — only for text that does not
  *  start with `reclaim:` or holds no ` -> ` at all: the writer always emits
  *  the prefix and one separator, so such a row is hand-written or a future
@@ -1461,6 +1497,31 @@ function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const out: string[] = [];
   for (let i = first; i !== -1 && i <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS; i = body.indexOf(' -> ', i + 1)) {
     out.push(body.slice(0, i));
+  }
+  return out;
+}
+
+/** Every id that may be the `to` of one `reclaimProgram` row — the HEIR the
+ *  row's chair moved to — or `null` exactly when `childReclaimDisplacedCandidates`
+ *  answers `null` (text that does not start with `reclaim:`, or holds no ` -> `).
+ *  The mirror of that parser, for its reason: neither side can be split on, so
+ *  this returns the suffix after EVERY occurrence of ` -> `, overlapping ones
+ *  included, and the writer's own separator is always one of them. It searches
+ *  from the END (`lastIndexOf`, resuming one character before each hit), so the
+ *  suffixes come shortest first, and it stops at the first one longer than
+ *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` — every later one is longer still, and
+ *  no session id can be (that bound's own docstring, above). The extra readings
+ *  over-protect, which is the fail-shut direction. */
+function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
+  const prefix = 'reclaim:';
+  if (!detail.startsWith(prefix)) return null;
+  const body = detail.slice(prefix.length);
+  const last = body.lastIndexOf(' -> ');
+  if (last === -1) return null;
+  const out: string[] = [];
+  for (let i = last; i !== -1 && body.length - (i + 4) <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS;
+    i = i === 0 ? -1 : body.lastIndexOf(' -> ', i - 1)) {
+    out.push(body.slice(i + 4));
   }
   return out;
 }
@@ -2490,8 +2551,18 @@ export class CoordStore {
   closeRun(input: {
     runId: number; finalState: 'done' | 'failed'; causedBy: string;
     handoffCommit: string | null; program: string; viaClosing: boolean;
+    /** THE COMPARE-AND-SET (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): when given, the close commits
+     *  only while the run's `claimedBy` still equals it, read INSIDE this transaction; otherwise `claimant-changed`
+     *  and nothing is written. The dead-coordinator lane passes the crashed id; every other caller passes nothing. */
+    expectClaimedBy?: string;
   }): AdvanceResult {
     return tx(this.db, () => {
+      if (input.expectClaimedBy !== undefined) {
+        const row = this.db.prepare('SELECT claimedBy FROM runs WHERE id = ?').get(input.runId) as
+          { claimedBy: string | null } | undefined;
+        if (row === undefined) return { ok: false, error: 'unknown-run' };
+        if (row.claimedBy !== input.expectClaimedBy) return { ok: false, error: 'claimant-changed', claimedBy: row.claimedBy };
+      }
       // `viaClosing: false` is the ABANDON of a `planned` run (D-281 (was D-B4-8)).
       // `RUN_TRANSITIONS.planned` has a `failed` edge and deliberately no
       // `closing` one (`shared/api.ts`'s own docstring), and that table is NOT
@@ -3218,105 +3289,140 @@ export class CoordStore {
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
-  /** Every session EVER named `claimedBy` of any run, in ANY state — the
-   *  past-tense counterpart of `openCoordinatorIds` one method up (which
-   *  answers only LIVE coordination, `state NOT IN` the terminal set, and so
-   *  drops a claim that has since reached a terminal run). Child-workspace
-   *  reclamation (spec 2026-09-22 §1, rules 3–4: manual cleanup is reserved
-   *  for a coordinator's OWN workspace, never a sub-workspace a sweep may
-   *  act on) needs the historical question, not the live one: a child made a
-   *  programme's HEIR — the reclaim door rewrites `claimedBy` onto it — became
-   *  that programme's coordinator the moment the rewrite landed, whatever
-   *  state the run later reaches, so nothing here is excluded by state the
-   *  way `openCoordinatorIds` excludes it. A row `reclaimProgram` rewrote onto
-   *  an already-terminal run still counts: the workspace coordinated it once,
-   *  and a later close does not retroactively make that false.
+  /** The dead-coordinator lane's durable anchors (`dead_claimants`, migration 18; workspace lifecycle spec §5.4) —
+   *  EVERY row, one statement. Both integers ride CAST to TEXT and are proven, ALL-OR-FAILURE (D-2545's rule): an
+   *  anchor misread is how an hour gets counted that nobody measured, so one bad row fails the read and the lane acts
+   *  on nothing that pass. */
+  deadAnchors(): { ok: true; anchors: Map<string, DeadAnchor> } | { ok: false; detail: string } {
+    const rows = this.db.prepare(
+      'SELECT claimantId, CAST(firstDeadAt AS TEXT) AS firstText, CAST(lastDeadAt AS TEXT) AS lastText FROM dead_claimants',
+    ).all() as unknown as { claimantId: string; firstText: string; lastText: string }[];
+    const anchors = new Map<string, DeadAnchor>();
+    for (const r of rows) {
+      const first = persistedInt(r.firstText, 'firstDeadAt');
+      if (!first.ok) return { ok: false, detail: first.detail };
+      const last = persistedInt(r.lastText, 'lastDeadAt');
+      if (!last.ok) return { ok: false, detail: last.detail };
+      anchors.set(r.claimantId, { firstDeadAt: first.value, lastDeadAt: last.value });
+    }
+    return { ok: true, anchors };
+  }
+
+  /** Write one claimant's anchor — the lane's crashed pass. One statement, an upsert keyed by the claimant. */
+  setDeadAnchor(claimantId: string, a: DeadAnchor): void {
+    this.db.prepare(
+      'INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(claimantId) DO UPDATE SET firstDeadAt = excluded.firstDeadAt, lastDeadAt = excluded.lastDeadAt',
+    ).run(claimantId, a.firstDeadAt, a.lastDeadAt);
+  }
+
+  /** Delete one claimant's anchor — an alive, unmeasurable or non-crash answer, or a claimant that left the
+   *  population. Deleting a row that is not there is a no-op. */
+  deleteDeadAnchor(claimantId: string): void {
+    this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
+  }
+
+  /** Per session id, the LATEST instant it held a coordinator's chair. This is
+   *  what the coordination fence reads (spec §1 rule 4, with spec §5.6's
+   *  recycled slugs: "ever coordinated" means this incarnation of the
+   *  workspace).
+   *  - `'open'` while any run naming it `claimedBy` is not terminal. This is
+   *    `programOpenRunCount`'s predicate, copied, so `'unknown'` counts as open.
+   *  - `'unplaced'` when none is open but a claim carries no readable instant:
+   *    a terminal run with no `closedAt`, as a reconstructed or legacy row has,
+   *    or a `closedAt` or displacement `at` that is not the canonical decimal
+   *    spelling of a positive safe integer. Both columns are INTEGER affinity,
+   *    so SQLite already stores any spelling it can read as an integer as an
+   *    INTEGER on write (`'1e3'`, `' 5'`, `'+5'`, `'05'` and `'5.0'` read back
+   *    as 1000, 5, 5, 5 and 5). The parse guards what stays TEXT or REAL
+   *    (`'0x10'`, `'0b1'`, `''`, `5.5`, `1e20`, ±Infinity), and it also refuses
+   *    an INTEGER outside 1..2^53−1 (`'-5'`, `'0'`, `'1e18'`,
+   *    `'9007199254740993'`): CAST to TEXT, because the schema is not STRICT,
+   *    then `parseCanonicalPositiveSafeInteger`, never `Number()`, which reads
+   *    a TEXT `0x10` as 16, an instant before any workspace's birth, and would
+   *    let the fence call a coordinator "not coordinated". No writer in this
+   *    tree stores any of them.
+   *  - Otherwise, the greatest of: each terminal run's `closedAt` that names it
+   *    today; and the `at` of every `reclaim:` displacement row naming it on
+   *    EITHER side. The `from` side (`childReclaimDisplacedCandidates`) is a
+   *    claim that ended at that instant, which no run names any more. The `to`
+   *    side (`childReclaimDisplacedHeirCandidates`) is a claim on
+   *    already-terminal runs that began then, after their `closedAt`.
    *
-   *  UNIONED WITH THE DISPLACED SIDE too (fix, measured): a bare `SELECT
-   *  DISTINCT claimedBy` alone answers "who coordinates each programme NOW",
-   *  not "who ever has" — `reclaimProgram`'s own `UPDATE runs SET claimedBy = ?,
-   *  coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL` (above)
-   *  OVERWRITES `claimedBy` on every run of a programme, terminal runs included, so
-   *  the OUTGOING coordinator's own runs no longer name it anywhere in this table
-   *  once an heir takes the chair. The only surviving trace is the `run_events` row
-   *  that move writes once per displaced run: `causedBy:'operator',
-   *  detail:'reclaim:<from> -> <to>'`. That `causedBy`+prefix pair is unique to
-   *  this writer — grepped across `server/src`: every other `recordRunEvent`/
-   *  `advanceInner` call site either uses `causedBy:'coordinator'` or passes no
-   *  `reclaim:`-shaped detail (an ordinary transition's `detail` defaults to
-   *  `null`, which no `LIKE 'reclaim:%'` ever matches) — so the WHERE clause
-   *  below reads exactly `reclaimProgram`'s own rows and nothing another
-   *  writer has ever produced.
-   *
-   *  PARSED, not compared: unlike a hold's grammar (`holdReasonVerdict`,
-   *  compared against the server's own rendering, never parsed back), nothing
-   *  else ever reads this string, so there is no server-rendered form to
-   *  compare it against — it must be parsed, by
-   *  `childReclaimDisplacedCandidates` (above the class), which returns every
-   *  reading of the row that could be its `from` — all of them join the set,
-   *  and that function states what the over-protection costs. A
-   *  `reclaim:`-prefixed row it cannot read at all (no ` -> ` in it) THROWS
-   *  rather than being silently dropped — a row this build cannot attribute
-   *  to a `from` id is a row this build cannot prove is NOT evidence of past
-   *  coordination, and excluding it silently would be the exact fail-open
-   *  this fix exists to close. The executor's own try/catch around this call turns the throw into
-   *  a `siblings-unreadable` deferral (fail shut), the same word it already
-   *  uses for an unreadable `openRunsForSession`.
-   *
-   *  WHAT "EVER" NOW COVERS: every session currently named `claimedBy` of any
-   *  run (any state), UNION every session `reclaimProgram` has ever displaced
-   *  from a programme's chair — closing the gap where a nested coordinator
-   *  dies and an heir takes over (the reclaim door requires the outgoing
-   *  claimant to measure dead or registry-absent first) and the outgoing
-   *  session's own workspace would otherwise fall back into the reclaimable
-   *  population.
-   *  RESIDUAL: a lost or rebuilt `coord.db` loses this history along with
-   *  everything else the database holds — a rebuilt `runs`/`run_events` pair
-   *  starts from nothing, so a pre-loss displacement is unrecoverable here.
-   *  That is the same class of loss every other read in this file accepts as
-   *  fail-closed rather than reconstructible; closing it is not this method's
-   *  job.
-   *
-   *  Returns the whole set, not a per-session boolean, because the reclaim
-   *  sweep reads it ONCE per pass and checks many children against it — a
-   *  per-child query issued once per child would repeat the same table scan
-   *  every pass. The close-path executor and the close decision call it once
-   *  per session and check membership the same way, so the three
-   *  `childReclaim*` consumers share ONE read instead of three spellings of
-   *  the same SELECT.
+   *  The parsers' extra readings over-protect, which is the fail-shut
+   *  direction. An unparseable row THROWS. `reclaimProgram` is the only
+   *  writer of a `causedBy = 'operator'` row whose detail starts `reclaim:`
+   *  (the stall lane's operator rows start `stall:` or `stall-shadow:`, and
+   *  `closeRun`'s carry a NULL detail), so an unparseable such row — which
+   *  throws, and so keeps every child — can come from no other writer in this
+   *  tree. An id absent from the map has never held a chair. The residual is unchanged: a lost or rebuilt `coord.db`
+   *  loses this history, and every minting run with it.
    *
    *  Synchronous, like every other read on this store — see
    *  `openRunsForSession`'s own docstring for why that is not an oversight to
    *  be wrapped. */
-  childReclaimCoordinatorIds(): ReadonlySet<string> {
-    const ids = new Set((this.db.prepare(
-      'SELECT DISTINCT claimedBy FROM runs WHERE claimedBy IS NOT NULL',
-    ).all() as { claimedBy: string }[]).map((r) => r.claimedBy));
-    // `substr(...) = 'reclaim:'`, never `LIKE 'reclaim:%'` (child-reclamation
-    // wave 4): SQLite's `LIKE` is case-insensitive for ASCII
-    // by default, so an unrelated OPERATOR note that merely starts
-    // `RECLAIM:…` would have matched the old pattern and then reached
-    // `childReclaimDisplacedCandidates`, whose own `startsWith('reclaim:')`
-    // is case-SENSITIVE — a mismatch it reads as "not this writer's row" and
-    // therefore throws on (a row this build cannot attribute to a `from`).
+  childReclaimCoordinatorClaims(): ReadonlyMap<string, ChildReclaimCoordinatorClaim> {
+    const claims = new Map<string, ChildReclaimCoordinatorClaim>();
+    // THE FOLD, per id: `'open'` over everything, then `'unplaced'` over any
+    // number, then the greatest number.
+    const note = (id: string, c: ChildReclaimCoordinatorClaim): void => {
+      const had = claims.get(id);
+      if (had === 'open' || had === c) return;
+      if (had === undefined || c === 'open' || c === 'unplaced') { claims.set(id, c); return; }
+      if (had !== 'unplaced' && c > had) claims.set(id, c);
+    };
+    // The runs read. `closedAt` rides CAST to TEXT and is parsed by
+    // `parseCanonicalPositiveSafeInteger`: the schema is not STRICT, and SQLite
+    // ranks TEXT above INTEGER, so a raw read could hand this fold a string or
+    // a fraction. The column's INTEGER affinity already turns a spelling SQLite
+    // reads as an integer (`'1e3'`, `' 5'`, `'+5'`, `'05'`, `'5.0'`) into an
+    // INTEGER on write; what the parse guards is what stays TEXT or REAL
+    // (`'0x10'`, `'0b1'`, `''`, `5.5`, `1e20`, ±Infinity), and an INTEGER outside
+    // 1..2^53−1 (`'-5'`, `'0'`, `'1e18'`, `'9007199254740993'`). Canonical only,
+    // never `persistedInt`'s `Number()`: that reads `'0x10'` as an instant no
+    // writer wrote (16, before any birth: fail-OPEN), where `'unplaced'` keeps
+    // the child.
+    const runs = this.db.prepare(
+      `SELECT claimedBy, CASE WHEN state NOT IN ${TERMINAL_RUN_STATES_SQL} THEN 1 ELSE 0 END AS open, ` +
+      'CAST(closedAt AS TEXT) AS closedAtText FROM runs WHERE claimedBy IS NOT NULL',
+    ).all() as { claimedBy: string; open: number; closedAtText: string | null }[];
+    for (const r of runs) {
+      if (r.open === 1) { note(r.claimedBy, 'open'); continue; }
+      const closed = r.closedAtText === null ? null : parseCanonicalPositiveSafeInteger(r.closedAtText);
+      note(r.claimedBy, closed ?? 'unplaced');
+    }
+    // The displacement read. `substr(...) = 'reclaim:'`, never `LIKE
+    // 'reclaim:%'` (child-reclamation wave 4): SQLite's `LIKE` is
+    // case-insensitive for ASCII by default, so an unrelated OPERATOR note that
+    // merely starts `RECLAIM:…` would have matched and then reached the
+    // parsers, whose own `startsWith('reclaim:')` is case-SENSITIVE — a
+    // mismatch they read as "not this writer's row", which this read throws on.
     // One hand-written note in the wrong case would have broken automatic
     // reclamation fleet-wide. `substr` selects only what the writer's own
     // `reclaim:${…}` template can produce.
-    // `DISTINCT`: `reclaimProgram` writes one identical row per run of the
-    // programme it moves, so N runs would otherwise parse the same text N
-    // times; the candidate length bound is `childReclaimDisplacedCandidates`'s
-    // own (its docstring states why dropping a longer one is safe).
+    // `DISTINCT`: `reclaimProgram` writes one identical row (one `at` for the
+    // act) per run of the programme it moves, so N runs would otherwise parse
+    // the same text N times; the candidate length bound is the parsers' own
+    // (`CHILD_RECLAIM_MAX_SESSION_ID_CHARS`, whose docstring states why dropping
+    // a longer one is safe). There is no SQL `MAX`: each row's instant is
+    // proven before the fold compares it.
     const displacements = this.db.prepare(
-      "SELECT DISTINCT detail FROM run_events WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
-    ).all() as { detail: string }[];
+      'SELECT DISTINCT detail, CAST(at AS TEXT) AS atText FROM run_events ' +
+      "WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
+    ).all() as { detail: string; atText: string | null }[];
     for (const row of displacements) {
       const froms = childReclaimDisplacedCandidates(row.detail);
-      if (froms === null) {
+      const heirs = childReclaimDisplacedHeirCandidates(row.detail);
+      if (froms === null || heirs === null) {
         throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
       }
-      for (const from of froms) ids.add(from);
+      // Parsed canonically, for the runs read's reason above.
+      const at = row.atText === null ? null : parseCanonicalPositiveSafeInteger(row.atText);
+      const instant: ChildReclaimCoordinatorClaim = at ?? 'unplaced';
+      for (const id of froms) note(id, instant);
+      for (const id of heirs) note(id, instant);
     }
-    return ids;
+    return claims;
   }
 
   /**
@@ -3725,6 +3831,12 @@ export class CoordStore {
       // for the whole batch in four (D-1299). A REQUIRED parameter, so a caller
       // cannot forget it and quietly ship a zeroed health object.
       health,
+      // Child-reclamation wave 5: NOT composed here. See `RunSummary.childReclaim`:
+      // the answer needs the registry's child marker and the sweep's in-memory
+      // defer, and this class sees neither. `GET /api/runs` replaces this for
+      // every row it ships; every other emitter carries only non-terminal runs,
+      // for which the derivation answers null as well.
+      childReclaim: null,
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
       // Read straight through, on `homeProject`'s idiom: a free-form project
       // name stamped once at open time (migration 12), never re-derived here.
@@ -4071,6 +4183,89 @@ export class CoordStore {
       'SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND dispatchedAt > ?',
     ).get(now - 24 * 3600_000) as { c: number }).c;
     return { running, dispatchedIn24h };
+  }
+
+  // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
+
+  /** The settings row, every value as read: a row, no row, or a read that failed, three words and never one `null`.
+   *  The statement is prepared AND run inside the `try`, so a missing table or a driver throw is `unreadable` with the
+   *  driver's detail, never a throw. `setReadBigInts(true)`: without it an oversize INTEGER makes `.get()` throw
+   *  `ERR_OUT_OF_RANGE`, so one bad field would cost every field's own state; with it, that field arrives as a `bigint`
+   *  and only it parses unreadable (measured on node 22.13.0 and 24.14.1). Nothing is decided here:
+   *  `parseStallSettings` (L1) decides what each value means, `updatedAt` included. */
+  stallSettings(): StallSettingsRead {
+    try {
+      const st = this.db.prepare('SELECT level, quietMs, updatedAt FROM stall_settings WHERE id = 1');
+      st.setReadBigInts(true);
+      const r = st.get() as { level: unknown; quietMs: unknown; updatedAt: unknown } | undefined;
+      return r === undefined ? { kind: 'absent' } : { kind: 'row', row: { level: r.level, quietMs: r.quietMs, updatedAt: r.updatedAt } };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The settings write, in ONE `tx()`: read, compare, write, read again. It validates nothing; the route has decided
+   *  (the `setCaps` division of labour).
+   *  - A read that is itself unreadable takes neither arm: the store cannot tell an insert from an update, so it
+   *    THROWS inside the `tx()`, which rolls back. The route refuses on its own unreadable read first; this is the
+   *    second guard.
+   *  - It writes only over the row the route measured: a read that differs from `expected` (another kind, or any of a
+   *    row's three values as read, `updatedAt` included, since a hand edit need not move it) writes nothing and answers
+   *    `conflict` with the read it found (departure `server-decides-the-confirm` (D-4033)).
+   *  - A lost row takes the insert arm: `STALL_SETTINGS_SEED`, overridden only by the named fields.
+   *  - A patch that changes nothing in a stored row (`stallPatchIsNoOp`, after the `bigint` conversion) runs no
+   *    `UPDATE`, so `updatedAt` stays and `before` is `after` (departure `no-op-write-records-no-feed-event` (D-4031)).
+   *  - Otherwise the update arm sets only the named fields and `updatedAt`, so a quiet-only write keeps a stored level
+   *    as it is, an unreadable one included.
+   *  `stallSettingsAfter` (L1) is the projection of these arms; `stall-settings-store.test.ts` pins that they agree. */
+  setStallSettings(patch: StallSettingsPatch, at: number, expected: StallSettingsRead): StallSettingsWrite {
+    return tx(this.db, () => {
+      const before = this.stallSettings();
+      if (before.kind === 'unreadable') throw new Error(`stall settings unreadable inside the write: ${before.detail}`);
+      if (!sameStallSettingsRead(before, expected)) return { kind: 'conflict', before };
+      const quietMs = (q: NonNullable<StallSettingsPatch['quiet']>): number | null => (q.kind === 'default' ? null : q.ms);
+      if (before.kind === 'absent') {
+        this.db.prepare('INSERT INTO stall_settings (id, level, quietMs, updatedAt) VALUES (1, ?, ?, ?)').run(
+          patch.level ?? STALL_SETTINGS_SEED.level,
+          patch.quiet === undefined ? STALL_SETTINGS_SEED.quietMs : quietMs(patch.quiet),
+          at,
+        );
+      } else if (stallPatchIsNoOp(before.row, patch)) {
+        return { kind: 'written', before, after: before };
+      } else {
+        const sets: string[] = [];
+        const binds: (string | number | null)[] = [];
+        if (patch.level !== undefined) { sets.push('level = ?'); binds.push(patch.level); }
+        if (patch.quiet !== undefined) { sets.push('quietMs = ?'); binds.push(quietMs(patch.quiet)); }
+        sets.push('updatedAt = ?');
+        binds.push(at);
+        this.db.prepare(`UPDATE stall_settings SET ${sets.join(', ')} WHERE id = 1`).run(...binds);
+      }
+      return { kind: 'written', before, after: this.stallSettings() };
+    });
+  }
+
+  /** The notice-count read (§11): every `run_events` row at or after `since`, unordered (the counts are order-free,
+   *  and an `ORDER BY id` would invite a rowid scan on a database that never sees ANALYZE). It plans a SEARCH on
+   *  `run_events_by_at`, which `stall-settings-store.test.ts` pins. It spells no detail head: L1's
+   *  `stallNoticeCounts` classifies (`mail-stuck-decided-in-l1`'s discipline). `at` is CAST and proven (D-2545's
+   *  idiom), ALL-OR-FAILURE, the detail naming the column and no value; `detail` is CAST so a hand-edited non-text
+   *  value arrives as its text, which no stall detail matches. A thrown statement is `{ ok: false }`, never a throw. */
+  stallObservationsSince(since: number): StallObservationsRead {
+    try {
+      const rows = this.db.prepare(
+        'SELECT CAST(at AS TEXT) AS atText, CAST(detail AS TEXT) AS detail FROM run_events WHERE at >= ?',
+      ).all(since) as unknown as { atText: string; detail: string | null }[];
+      const out: StallObservationRow[] = [];
+      for (const r of rows) {
+        const at = persistedInt(r.atText, 'run_events at');
+        if (!at.ok) return { ok: false, detail: at.detail };
+        out.push({ at: at.value, detail: r.detail });
+      }
+      return { ok: true, rows: out };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   // ── work items ─────────────────────────────────────────────────────────────
@@ -5655,6 +5850,108 @@ export class CoordStore {
       'SELECT DISTINCT sessionId FROM lifecycle_events WHERE act = ? AND sessionId IS NOT NULL',
     ).all(act) as { sessionId: string }[];
     return new Set(rows.map((r) => r.sessionId));
+  }
+
+  /** The acts the reclaim chip's read returns (child-reclamation wave 5):
+   *  `reclaim`, the act itself, and `create`, which fences one workspace
+   *  generation from the next when ws-add hands a recycled slug out again
+   *  (wave 4's `childReclaimGeneration`). Typed, so a rename in `LifecycleAct` is a
+   *  compile error here rather than a silently empty read. */
+  private static readonly CHILD_RECLAIM_EVENT_ACTS: readonly LifecycleAct[] = ['reclaim', 'create'];
+
+  /** THE ONE SPELLING of `childReclaimEvents`' statement. Public so the test
+   *  (`child-reclaim-events-store.test.ts`) reads the text this method runs, not
+   *  a copy that could keep a hint the source dropped. It pins two things over
+   *  that one text: the hint is PRESENT (a string assertion, because today's
+   *  planner picks the index unhinted, so EXPLAIN alone cannot see the hint
+   *  go), and the plan SEEKS rather than scans (EXPLAIN, which `NOT INDEXED`
+   *  would turn into a scan).
+   *
+   *  `INDEXED BY lifecycle_by_session`, `recentProvenance`'s idiom: the table
+   *  is NEVER PRUNED, so this read's cost must be bounded by the requested
+   *  sessions' own histories, never by the table's. Today's planner picks the
+   *  index unhinted. The hint keeps that independent of `ANALYZE` statistics. */
+  static childReclaimEventsSql(sessions: number): string {
+    return `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_session ` +
+      `WHERE sessionId IN (${placeholders(sessions)}) ` +
+      `AND act IN (${placeholders(CoordStore.CHILD_RECLAIM_EVENT_ACTS.length)}) ` +
+      'ORDER BY sessionId, id';
+  }
+
+  /**
+   * Every `reclaim` and `create` row of each requested session, oldest-first by
+   * this table's own `id` (never `at`, which is ccd's nullable clock), for the
+   * reclaim chip on `GET /api/runs` (child-reclamation wave 5, spec §5.9).
+   *
+   * ONE STATEMENT, WHATEVER THE ROW COUNT. The board read already spends
+   * several statements per row (`runHealth`'s docstring prices a per-row read
+   * at ~3,000 for one load), and a per-session loop here would add hundreds
+   * more. Measured at planning: one `IN` statement was the cheapest of three
+   * shapes at 100k and 500k rows.
+   *
+   * EVERY requested id gets an entry, `[]` included. A caller forced to supply
+   * a default for a missing key is where an overloaded null is born
+   * (`runHealth`'s rule). Duplicate ids are asked once.
+   *
+   * The GENERATION is not decided here. Which of these rows belong to a given
+   * run's workspace is wave 4's `childReclaimGeneration`, the ONE fence
+   * (spec §5.6: slugs recycle), a pure function with its own pin, because a
+   * SQL fence costs three index walks per run where this read costs one per
+   * session. Which of them decides is wave 4's `childReclaimLatest`, likewise.
+   *
+   * Rows revive through `reviveLifecycleRow`, the one mapper `lifecycleFor`
+   * and `lifecycleCreatesFor` already share.
+   */
+  childReclaimEvents(sessionIds: readonly string[]): Map<string, MirroredLifecycleEvent[]> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, MirroredLifecycleEvent[]>(ids.map((id) => [id, []]));
+    // An empty request answers without a statement: nothing to ask the mirror.
+    if (ids.length === 0) return out;
+    const rows = this.db.prepare(CoordStore.childReclaimEventsSql(ids.length))
+      .all(...ids, ...CoordStore.CHILD_RECLAIM_EVENT_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
+    for (const r of rows) {
+      if (r.sessionId !== null) out.get(r.sessionId)?.push(CoordStore.reviveLifecycleRow(r));
+    }
+    return out;
+  }
+
+  /** THE JOURNAL CLAUSE'S ONE READ (workspace lifecycle spec 2026-09-24 §5.4, the dead-coordinator lane): for each
+   *  asked claimant, its rows of the acts the clause reads (`DEAD_COORDINATOR_JOURNAL_ACTS`), in this table's own id
+   *  order (INGEST order — the clause itself orders them by generation, then this id), and whether the mirror holds
+   *  ANY row for it — "no history at all" is a fact the clause turns on (an absent row with none is unmeasured), and it is not the same fact as "none of the clause's acts". TWO
+   *  statements whatever the claimant count, each `INDEXED BY lifecycle_by_session` (`recentProvenance`'s idiom: the
+   *  table is never pruned). EVERY asked id gets an entry. A failing read THROWS, and the lane reads that as
+   *  `unreadable` — never as no history. */
+  deadCoordinatorJournalRows(sessionIds: readonly string[]): Map<string, { rows: DeadCoordinatorJournalRow[]; hasHistory: boolean }> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, { rows: DeadCoordinatorJournalRow[]; hasHistory: boolean }>(
+      ids.map((id) => [id, { rows: [], hasHistory: false }]));
+    if (ids.length === 0) return out;
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_session ` +
+      `WHERE sessionId IN (${placeholders(ids.length)}) AND act IN (${placeholders(DEAD_COORDINATOR_JOURNAL_ACTS.length)}) ` +
+      'ORDER BY sessionId, id',
+    ).all(...ids, ...DEAD_COORDINATOR_JOURNAL_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
+    for (const r of rows) {
+      const e = r.sessionId === null ? undefined : out.get(r.sessionId);
+      if (e === undefined) continue;
+      const ev = CoordStore.reviveLifecycleRow(r);
+      e.rows.push({ act: ev.act, outcome: ev.outcome, at: ev.at, gen: ev.gen, dec: ev.dec, meas: ev.meas, raw: ev.raw });
+    }
+    const any = this.db.prepare(
+      'SELECT DISTINCT sessionId FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+      `WHERE sessionId IN (${placeholders(ids.length)})`,
+    ).all(...ids) as { sessionId: string }[];
+    for (const r of any) { const e = out.get(r.sessionId); if (e !== undefined) e.hasHistory = true; }
+    return out;
+  }
+
+  /** EVERY generation the mirror recorded lost bytes in, distinct, one statement — the dead-coordinator lane's journal
+   *  trust (workspace lifecycle spec §5.4, the departure `journal-loss-reads-as-unmeasured`): a gap in a generation
+   *  that is not older than a claimant's last successful spawn may have lost a deliberate act. Never limited: a gap
+   *  the read did not return is a gap the lane would trust past. A failing read THROWS, and the lane trusts nothing. */
+  lifecycleGapGens(): string[] {
+    return (this.db.prepare('SELECT DISTINCT gen FROM lifecycle_gaps').all() as { gen: string }[]).map((r) => r.gen);
   }
 
   /** The holes, newest-first — a timeline with a hole in it says so. */
