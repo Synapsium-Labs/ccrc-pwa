@@ -3514,7 +3514,8 @@ through a pass that cannot measure it, and a pass on which tmux does not answer 
 coordinator is ended per pass; in shadow every due one is recorded. `$REG/reclaim-paused` stops this lane too, shadow
 included. It never pushes: the stall watch's pushes about a dead coordinator's stalled workers — one per worker, each
 naming the coordinator — are the notifications, and this lane's rows (each with the instant the coordinator was first
-seen dead, and one when the breaker trips) are records of the same incident.
+seen dead, and one when the breaker trips) are records of the same incident. A mirror that goes stale between the pass
+and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done.
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in

@@ -543,7 +543,10 @@ lane's backoff. The abandon arm aims every non-planned work run at `closing`, so
 an hour; programme `<slug>` ended, `<n>` runs closed failed".
 
 **What follows, stated so nobody is surprised.**
-- The programme retires as `abandoned`, permanently.
+- The programme retires as `abandoned`. Opening a run does not change that: a coordinator revived under the crashed id
+  can still open a new run under its fenced slug (`openRun`'s conflict arm updates only the title), and while that run
+  is open the programme row still reads `abandoned`. The row is rewritten only when a later close ends the programme's
+  last open run, to `done` or `abandoned` by that close (measured in a fixture store, wave 5).
 - Outstanding deliveries naming those runs are cancelled.
 - The slug stays fenced to the crashed id until someone reclaims it.
 - CCR-15 wave 3 reclaims each marked child whose run closed. That includes a worker mid-turn: its work is committed
@@ -600,6 +603,23 @@ each item is a departure named there).
   of that incident and its entries are a list.
 - **Not changed:** the reclaim door and the stall watch ignore the verdict's new `cause`; landing reads a run the sweep
   failed exactly as one the operator abandoned (it keys on open runs, never on `causedBy`).
+
+**As wave 5 corrects the lane** (review 339's residue; each a departure named in the wave-5 plan,
+`docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`).
+- **A second crash is a second record.** A reading that ends an episode (anything but a crash) forgets the last
+  recorded outcome, so a coordinator that crashes, is revived and crashes again is recorded again in shadow.
+- **A release and a re-hold are two acts.** An act the re-measure stopped after its fleet act says which one ran: a
+  released worker is unheld until its coordinator re-holds it, and a worker re-held under a surviving run stays claimed.
+- **Every thrown act is recorded.** Each thrown act writes one feed row naming the runs it closed, the run whose
+  abandon failed, and that nothing more is known.
+- **A generation the mirror could not read is not a successful sweep.** One failed read is absorbed; a failure that
+  persists turns the mirror's health `stale`, so the lane decides nothing.
+- **A mirror gone stale at the act is a hold.** The act stops, the anchor and the run of crashed passes stand (the
+  adapter's own rule: a slow mirror never deletes an anchor), and the act waits a pass.
+- **An accepted abstention.** The journal clause counts any non-refused `reclaim` row as deliberate, so a child's
+  pre-start `reclaim` `failed` `probe-unmeasured` row reads as a deliberate act and the lane abstains from that
+  claimant. Abstention ends nothing. It is reachable only by a marked child that becomes a claimant or an heir before
+  any successful reclaim of it.
 
 ## 6. What this changes outside itself
 
