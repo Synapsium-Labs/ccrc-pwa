@@ -10,8 +10,8 @@
 // tick). The shim is the ONLY lock taker (RV13): this file never takes a lock,
 // and it is never run except under the shim's — a direct run is a test's.
 //
-// THE ORDER OF A SCHEDULED PASS, up to the tick (`scheduledPass`; the --op pass's own is the block above
-// `runOpPass`, and `THE PASS` block below says what each answer is):
+// THE ORDER OF A SCHEDULED PASS, up to the tick (`scheduledPass`; the --op pass's own is the block headed
+// `THE --op PASS`, and `THE PASS` block below says what each answer is):
 //   history-off → role (CCRC_ROLE in ~/.ccrc/ccrc.env, readBoxEnvValue) →
 //   the free-space probe on db/ (async, STATFS_DEADLINE_MS: a dead volume is a
 //   pause BEFORE any synchronous read under db/ can block, RR15) →
@@ -294,9 +294,10 @@ export function countOutside(db, name, by = 1) {
 //   0. a name tidyDraining `kept` or `blocked`, or one that waits behind an earlier blocked file of its id, is skipped
 //      (D-4347); a regular file over SPOOL_FILE_MAX is set aside from its lstat BEFORE any open (D-4337): into
 //      `.draining/oversize/`, counted `spool_oversize`, never journaled (one over SPOOL_FILE_LINES_MAX is set aside
-//      there too, counted `spool_overlines`, when its read counts the lines); a link or FIFO met here is removed with
-//      its sidecar and counted `non_regular`. For any other file, each per-file step follows §9.14's order:
-//   1. the observation sidecar;
+//      there too, counted `spool_overlines`, when its read counts the lines). For any other file, each per-file step
+//      follows §9.14's order:
+//   1. the observation sidecar (a link or FIFO met when the file is read is removed with the sidecar this step
+//      wrote, and counted `non_regular`, D-4347);
 //   2. the `file` and `spool` records, ONE write, fsynced;
 //   3. the sidecar's journaled mark;
 //   4. the drain transaction under synchronous=FULL, holding its verdicts and one `drained` outbox row; a commit the
@@ -1725,7 +1726,7 @@ export function discoverAndPlan(db, c, uuids) {
  *  6. `rederiveFts`: the hash re-derivation of every indexed blob, which alone moves the durable reindex mark
  *     (D-4344); it runs under any pause, in a per-tick slice of the run budget;
  *  7. `drainSpool`: the journal-first drain of the spool (§9.14), whose hints feed the ingest; the per-tick first-row
- *     cache (`newFirstRowCache`) is made just before it and shared with step 8's location rule;
+ *     cache (`newFirstRowCache`) is made just before it and shared by the drain's location rule and step 8's;
  *  8. `confirmCandidates`: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
  *     location, each decided in its own FULL transaction;
  *  9. `registryBackfill`: only when `scanDue` says the periodic scan is due, every `$REG/<id>.uuid` that names no
@@ -3759,7 +3760,8 @@ export function mergeSteps(db, ctx, budget) {
 //      it opens READ-ONLY and writes nothing at all (§8.4 "dry run by default"): no journal half, no marker, no
 //      flush;
 //   5. otherwise the journal half at lock take (DI7, D-4232 history-observe-at-rename: a /clear during a long
-//      --op keeps its startup epoch), then the free-space probe, then the store opened exactly as a scheduled
+//      --op keeps its startup epoch; a failed one answers `journal-unwritable`, exit INTERNAL, before the probe,
+//      and no release half runs), then the free-space probe, then the store opened exactly as a scheduled
 //      pass opens it (`openStore`; a throw there is answered after the release half, review 316 F19); from here
 //      on EVERY answer, not only rc 0, runs the journal half again before release (D-4232), and a failed one
 //      replaces only an rc 0. Inside the body: an unreadable store.writer answers store-unmeasured; an `import`
