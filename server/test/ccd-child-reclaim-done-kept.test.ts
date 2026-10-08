@@ -130,3 +130,54 @@ describe('ws-expire’s done document — the same printf — carries them too',
     kept(doc, 'expire');
   }, 90_000);
 });
+
+describe('a kept word never reads as null — it is printed without python, and an encoder that fails changes nothing', () => {
+  /** The encoder the kept words once went through (`_json_str`, one python3 call) FAILS when the tail asks it to
+   *  encode one of them; every other call — the id, the wip, the journal's — is the real one. */
+  const ENCODER_FAILS = 'eval "_t_json_real()$(declare -f _json_str | tail -n +2)";'
+    + ' _json_str() { if [[ "${FUNCNAME[1]-}" == _ws_reclaim_tail ]]; then case "${1-}" in refused|unmeasured|in-use)'
+    + ' echo "encoder-failed $1" >> "$HOME/encoder-fails"; return 1 ;; esac; fi; _t_json_real "$@"; };';
+
+  it('reclaim: both leaves kept, the encoder failing for their words — `refused` and `in-use` still, never null', () => {
+    makeChild(h);
+    plantClips(CHILD_ID);
+    plantTmp(CHILD_ID);
+    const r = childReclaimVerb(h, evalOf(h).token, { pre: `${CLIPS_NOT_OURS} ${TMP_IN_USE} ${ENCODER_FAILS}` });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const doc = JSON.parse(r.stdout) as Doc;
+    expect(doc['reclaimed']).toBe(CHILD_ID);
+    expect(doc['clipsKept'], 'a kept clips leaf never reads as nothing kept').toBe('refused');
+    expect(doc['tmpRootKept'], 'a kept temp root never reads as nothing kept').toBe('in-use');
+    kept(doc, 'reclaim');
+  }, 90_000);
+
+  it('expire: both leaves kept unmeasured, the encoder failing — `unmeasured` twice, never null', () => {
+    makeArchived(h);
+    plantClips(EXP_ID);
+    plantTmp(EXP_ID);
+    const r = expireVerb(h, expireToken(h), { pre: `${CLIPS_RM_FAILS} ${TMP_UNMEASURED} ${ENCODER_FAILS}` });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const doc = JSON.parse(r.stdout) as Doc;
+    expect(doc['expired']).toBe(EXP_ID);
+    expect(doc['clipsKept']).toBe('unmeasured');
+    expect(doc['tmpRootKept']).toBe('unmeasured');
+    kept(doc, 'expire');
+  }, 90_000);
+
+  it('a word outside the three — a value no arm names — prints `unmeasured`, never null', () => {
+    makeChild(h);
+    plantClips(CHILD_ID);
+    plantTmp(CHILD_ID);
+    // The temp root's kept word is replaced, after step (6) set it and before the document is printed, by a
+    // value no arm names: the residue patch runs in the tail's own shell, so a function it calls can reach the
+    // tail's local.
+    const odd = 'eval "_t_patch_real()$(declare -f _ws_tombstone_patch | tail -n +2)";'
+      + ' _ws_tombstone_patch() { [[ "${FUNCNAME[1]-}" == _ws_reclaim_tail && "${2-}" == *residueBytes* ]] && tmpkept=odd-word; _t_patch_real "$@"; };';
+    const r = childReclaimVerb(h, evalOf(h).token, { pre: `${CLIPS_NOT_OURS} ${TMP_IN_USE} ${odd}` });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const doc = JSON.parse(r.stdout) as Doc;
+    expect(doc['clipsKept']).toBe('refused');
+    expect(measOf(doneRow('reclaim'))['tmpRootKept'], 'the CONTROL: the tail carried the odd word').toBe('odd-word');
+    expect(doc['tmpRootKept'], 'an unnamed value is unmeasured, never nothing kept').toBe('unmeasured');
+  }, 90_000);
+});

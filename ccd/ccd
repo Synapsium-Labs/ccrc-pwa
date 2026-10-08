@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=01350cc046199531eddd5bf5efb6ea45c678a5415fc9a93b6e8792855883c364
+# ccrc:generated 1 sha256=e13c516ec75cb88b3316225d00d66951c069dbd8c5b046fd03b9d1e89a0d1395
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -30098,12 +30098,15 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # WHAT WAS KEPT rides the document too (spec §5.6), the done row's two words:
   # `clipsKept` and `tmpRootKept`, each `refused`, `unmeasured` or `in-use`, or
   # null when nothing was kept. ADDITIVE: an older ccd's document omits both,
-  # and a reader takes that absence as unmeasured, never as gone.
+  # and a reader takes that absence as unmeasured, never as gone. Each word is
+  # printed by a `case` over ccd's three, with NO encoder to fail: a failed
+  # python3 once printed null for a leaf that WAS kept. Only an empty value is
+  # null; any value no arm names prints "unmeasured", never null.
   printf '{"%s":%s,"%s":%s,"wip":%s,"attic":%s,"residueBytes":%s,"secretsDropped":%s,"clipsKept":%s,"tmpRootKept":%s}\n' \
     "$donekey" "$(_json_str "$id")" "$bindkey" "$childof" "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" \
     "${attic:-0}" "$residue" "$dropped" \
-    "$( [[ -n "$clipskept" ]] && _json_str "$clipskept" || echo null)" \
-    "$( [[ -n "$tmpkept" ]] && _json_str "$tmpkept" || echo null)"
+    "$(case "$clipskept" in ('') echo null ;; (refused|unmeasured|in-use) echo "\"$clipskept\"" ;; (*) echo '"unmeasured"' ;; esac)" \
+    "$(case "$tmpkept" in ('') echo null ;; (refused|unmeasured|in-use) echo "\"$tmpkept\"" ;; (*) echo '"unmeasured"' ;; esac)"
 }
 
 cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]
