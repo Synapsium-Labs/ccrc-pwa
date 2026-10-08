@@ -12,7 +12,7 @@ import { ClaimDoor } from './door.js';
 import {
   DRIVER_TICK_MS, FAILURES_FOR_BANNER, ROTATE_NOW_MIN_INTERVAL_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, applySyncResult,
   backoffMs, extendedGraceState, handedOutState, nextAction, owe, mintedState, phaseOf, promotedState, rotationGate,
-  stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type WriteRecord,
+  stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type SyncResult, type WriteRecord,
 } from './policy.js';
 import type { BothRoleWriter, GateRowsSource, GenerationReader, TokenStore, TokenSyncLink } from './ports.js';
 import type { BoxTokenHolder, HolderSlots } from '../coord/token.js';
@@ -68,6 +68,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
   private readonly unaccounted = new Set<string>();
   private owedSince: number | null = null;
   private mintFailedSince: number | null;
+  private mintGuardWarned = false;
 
   constructor(private readonly deps: DriverDeps, boot: BootResult) {
     this.now = deps.now ?? Date.now;
@@ -199,10 +200,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
       const now = this.now();
       const a = nextAction({ state: this.state, gate: this.gate(now), generation: obs,
         rotateRequested: this.rotateRequested, backoffUntil: this.backoffUntil, now });
-      if (a.kind !== 'hold') this.setHold(null);
+      if (a.kind !== 'hold') await this.setHold(null);
       switch (a.kind) {
         case 'none': case 'backoff': return;
-        case 'hold': this.setHold({ hold: a.hold, node: a.node }); return;
+        case 'hold': await this.setHold({ hold: a.hold, node: a.node }); return;
         case 'retry-mint': if (!(await this.retryMint(now))) return; break;
         case 'stage': if (!(await this.stage(a.why, now))) return; break;
         case 'send': await this.send(a.generation, a.nodeId); return;
@@ -223,6 +224,15 @@ export class BoxTokenDriver implements TokenRouteDriver {
   }
 
   private async retryMint(now: number): Promise<boolean> {
+    if (!this.mintFailed) {
+      // `nextAction` asks for a mint on a null state too; a mint over a mail.token that boot did not fail to mint would
+      // replace a value this process never read. Unreachable today (boot returns a null state only after a failed mint).
+      if (!this.mintGuardWarned) {
+        this.mintGuardWarned = true;
+        this.warn('ccrc-server: box token: a mint was asked for but no mint failed at boot; mail.token is left as it is');
+      }
+      return false;
+    }
     const store = this.deps.store;
     const v = store.mintValue();
     let rec: WriteRecord;
@@ -278,8 +288,8 @@ export class BoxTokenDriver implements TokenRouteDriver {
     const link = this.deps.link;
     if (link === null) return;
     const code = this.door.issue(id, nodeId, this.now());
-    const r = await link.send(code);
-    this.door.revoke(id);
+    let r: SyncResult;
+    try { r = await link.send(code); } finally { this.door.revoke(id); }   // the code never outlives the op, however it ends
     const before = this.mustState();
     const out = applySyncResult(before, id, r, this.now());
     if (out.learned !== null) {
@@ -328,6 +338,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     let prevWrite = null;
     // (b): the old current is still in memory until the swap below, so a retry after a completed (c) rewrites it.
     prevWrite = this.cur !== null ? await store.writeValue(store.paths.previous, this.cur) : null; // (b)
+    let currentWrite: WriteRecord | null = null;
     if (!renamed) {
       try {
         await store.renameOver(store.paths.pending(id), store.paths.current);                       // (c)
@@ -338,11 +349,21 @@ export class BoxTokenDriver implements TokenRouteDriver {
         if (after.kind !== 'value' || after.value !== value) throw e;
         this.warn(`ccrc-server: box token: could not confirm the directory sync after promoting a generation (${errno(e)}); the new value is in place`);
       }
+    } else {
+      // The pending file is gone: usually this promotion's own rename (an interrupted earlier attempt), but a file
+      // removed out of band looks the same. Read mail.token back; when it does not carry the value, the fleet-confirmed
+      // value is rewritten from memory, atomically, rather than promoting over a file that never received it (D-4408).
+      const after = await store.readValue(store.paths.current);
+      if (after.kind !== 'value' || after.value !== value) {
+        currentWrite = await store.writeValue(store.paths.current, value);
+        this.warn('ccrc-server: box token: the pending file was gone but mail.token did not carry the promoted value; it was rewritten from memory');
+      }
     }
     const now = this.now();
     const before = this.mustState();
     let next = promotedState({ ...before, promoting: null }, id, now, prevWrite);                    // (d)
     if (via === 'own-write') next = { ...next, fleetConfirmed: id };
+    if (currentWrite !== null) next = { ...next, current: { ...next.current, write: currentWrite } };
     // Only the values that actually left `pending` are discarded: promotedState keeps a LATER handed-out one (D-4400).
     const left = before.pending.filter((p) => p.id !== id && !next.pending.some((q) => q.id === p.id)).map((p) => p.id);
     for (const o of left) { this.door.revoke(o); await store.removeValue(store.paths.pending(o)); this.pend.delete(o); }
@@ -350,9 +371,11 @@ export class BoxTokenDriver implements TokenRouteDriver {
     this.cur = value;
     this.pend.delete(id);
     this.state = next;
+    // The base is taken in the same synchronous step as the swap, BEFORE it: the new current is accepted from
+    // `pushSlots`, so a presentation of it during the commit below must count (D-4409).
+    this.presentedBase = this.deps.holder.counters().matched.current;
     this.pushSlots();
     await this.commit(next);
-    this.presentedBase = this.deps.holder.counters().matched.current;
     this.warn(`ccrc-server: box token: generation #${g.seq} confirmed (${via}) and promoted; the previous value stays accepted for grace`);
   }
 
@@ -459,15 +482,21 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (next !== s) await this.commit(next);
   }
 
-  private setHold(h: { hold: TokenHold; node: string | null } | null): void {
+  /** The hold is recorded in memory AND in `box-token.json` whenever it (or its node) actually changes: Part B's
+   *  doctor reads `held:<TokenHold>` from that file, so a hold that lived in memory only would read as a plain owed
+   *  rotation with the wrong remedy (D-4409). The write goes through the serialised `commit`. */
+  private async setHold(h: { hold: TokenHold; node: string | null } | null): Promise<void> {
     const same = (this.hold?.hold ?? null) === (h?.hold ?? null) && (this.hold?.node ?? null) === (h?.node ?? null);
     this.hold = h;
-    if (this.state !== null) this.state = { ...this.state, hold: h?.hold ?? null, holdNode: h?.node ?? null };
+    const s = this.state;
+    const changed = s !== null && (s.hold !== (h?.hold ?? null) || s.holdNode !== (h?.node ?? null));
+    if (s !== null) this.state = { ...s, hold: h?.hold ?? null, holdNode: h?.node ?? null };
     if (!same && h !== null) this.warn(`ccrc-server: box token: held: ${h.hold}${h.node !== null ? ` (${h.node})` : ''}`);
     // Spec §5.1 "Pending values": reaching the cap takes repeated lost hand-outs, which is itself the alert.
     if (!same && h?.hold === 'pending-cap') {
       this.warn('ccrc-server: box token: handed-out values unaccounted for: the pending cap is reached, and no rotation starts until the fleet confirms one');
     }
+    if (changed) await this.commit(this.mustState());
   }
 
   /** Spec 4.2's run-time re-read (plan assembly), at the readiness cadence: every server token file this driver holds

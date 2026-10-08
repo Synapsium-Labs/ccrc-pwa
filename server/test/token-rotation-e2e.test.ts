@@ -5,7 +5,7 @@
 // verb against loopback is Part B's (token-rotation-real-verb.test.ts). Also the
 // link's answer mapping and the generation reader, over fakes.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { bootBoxToken, type BootResult } from '../src/token/boot.js';
@@ -512,6 +512,8 @@ describe('LIVE SAFETY: part A alone rotates nothing on a fleet whose ccrc has no
       await r.driver.tick();
       expect(r.driver.view()).toMatchObject({ phase: 'held', hold: 'verb-missing', failures: 0, lastFailure: null, banner: false,
         origin: 'adopted', rotationOwed: true, lastSync: { word: 'spawn-failed' } });
+      // Part B's doctor reads `held:<hold>` from this file, so the hold must be on disk, not only in memory (D-4409)
+      expect(await onDisk(r)).toMatchObject({ hold: 'verb-missing', holdNode: 'fleet' });
       // no storm: ten more ticks, five minutes apart, send nothing
       for (let i = 1; i <= 10; i++) { r.clock.offset = i * 5 * 60_000; await r.driver.tick(); }
       expect(sends).toBe(1);
@@ -732,6 +734,133 @@ describe('the retirement warning tells the truth about the self-check (D-4407)',
       expect(await r.lane(leaked)).toBe(401);
       expect(r.driver.view()).toMatchObject({ retiredRefused: true });
       expect(r.printed.some((l) => /grace ended; the previous value was retired and is refused$/.test(l))).toBe(true);
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('the hold is recorded on disk and cleared there (D-4409 item 1)', () => {
+  it('a closed gate writes hold and holdNode to box-token.json; a reopened gate writes them back to null', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    try {
+      r.rows.row = fleetRow({ agentOps: ['update'] });
+      await r.driver.tick();
+      expect(await onDisk(r)).toMatchObject({ hold: 'agent-predates-op', holdNode: 'fleet' });
+      r.rows.row = fleetRow();
+      await r.driver.tick();
+      expect(r.driver.view().hold).toBeNull();
+      expect(await onDisk(r)).toMatchObject({ hold: null, holdNode: null });
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('a promotion interrupted after its rename (D-4408 items 4 and 5)', () => {
+  /** G1 handed out and its result lost, then G2 handed out the same way; G2's id is then the fleet's generation. */
+  async function twoHandedOut() {
+    const leaked = 'e'.repeat(64);
+    let armed = false;
+    const r = await rig({ handMade: leaked, wrap: (st) => ({ ...st, removeValue: async (p) => {
+      if (armed && p.includes('mail-pending-')) { armed = false; throw Object.assign(new Error('injected'), { code: 'EACCES' }); }
+      return st.removeValue(p);
+    } }) });
+    const genFile = path.join(r.fleetHome, '.ccrc', 'box-token-generation');
+    r.agent.mode = 'lose-result';
+    await r.driver.tick();
+    rmSync(genFile);
+    r.agent.mode = 'claim-only';
+    r.clock.offset = CONFIRM_DEADLINE_MS + 1000;
+    await r.driver.tick();
+    const pend = (await onDisk(r)).pending;
+    expect(pend).toHaveLength(2);
+    const g2 = pend[1].id;
+    return { r, leaked, g2, g2v: r.boot.holder.pendingValue(g2) as string, genFile, arm: () => { armed = true; } };
+  }
+
+  it('the rename done and a later step failing: the next tick finishes it and the old value stays accepted as previous', async () => {
+    const { r, leaked, g2, g2v, genFile, arm } = await twoHandedOut();
+    try {
+      writeFileSync(genFile, `${g2}\n`);
+      arm();                                                           // dropping the earlier sibling's file will fail once
+      await r.driver.tick();
+      expect(r.printed.some((l) => l.includes('a driver tick failed'))).toBe(true);
+      expect(extractToken(readFileSync(tokPaths(r).current, 'utf8'))).toBe(g2v);   // (c) happened
+      expect(r.boot.holder.currentValue()).toBe(leaked);               // the swap did not
+      await r.driver.tick();
+      expect(r.boot.holder.currentValue()).toBe(g2v);
+      expect(await r.lane(leaked)).toBe(400);                           // the old value is previous, in grace
+      expect(r.driver.view()).toMatchObject({ phase: 'grace', origin: 'rotated' });
+      expect((await onDisk(r)).previous).not.toBeNull();
+    } finally { await r.app.close(); }
+  });
+
+  it('a pending file deleted out of band: mail.token is rewritten from memory with the promoted value, and the record follows it', async () => {
+    const leaked = 'e'.repeat(64);
+    const r = await rig({ handMade: leaked });
+    try {
+      r.agent.mode = 'lose-result';
+      await r.driver.tick();                                           // G handed out, the fleet wrote it, the result was lost
+      const g = genOf(r.fleetHome);
+      const gv = r.fleetValue() as string;
+      rmSync(tokPaths(r).pending(g));                                  // out of band
+      await r.driver.tick();                                           // the generation read confirms G
+      expect(extractToken(readFileSync(tokPaths(r).current, 'utf8'))).toBe(gv);
+      expect(r.boot.holder.currentValue()).toBe(gv);
+      expect(await r.lane(leaked)).toBe(400);
+      expect(r.printed.some((l) => l.includes('did not carry the promoted value; it was rewritten from memory'))).toBe(true);
+      // the recorded write follows the new file, so a restart still proves it server-written
+      const st = await onDisk(r);
+      const meta = statSync(tokPaths(r).current);
+      expect([st.current.write?.dev, st.current.write?.ino]).toEqual([meta.dev, meta.ino]);
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('a presentation of the new value during the promotion commit counts (D-4409 item 2)', () => {
+  it('the new current presented while its record is being written is counted as presented', async () => {
+    let rr: Rig | null = null;
+    let done = false;
+    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (!done && rr !== null && s.origin === 'rotated' && s.previous !== null) {
+        done = true;
+        await rr.lane(rr.boot.holder.currentValue() as string);        // the new current is already accepted
+      }
+      return st.writeState(s);
+    } }) });
+    rr = r;
+    try {
+      await r.driver.tick();
+      await r.driver.tick();                                           // noteCounters
+      expect(done).toBe(true);
+      expect((await onDisk(r)).previous?.currentPresented).toBe(true);
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('a mint is never asked of a boot that did not fail one (D-4409 item 3)', () => {
+  it('a null state with no failed mint leaves mail.token as it is, warns once, and sends nothing', async () => {
+    const leaked = 'e'.repeat(64);
+    const r = await rig({ handMade: leaked, mutateBoot: (b) => ({ ...b, state: null, mintFailed: false }) });
+    try {
+      await r.driver.tick();
+      await r.driver.tick();
+      expect(extractToken(readFileSync(tokPaths(r).current, 'utf8'))).toBe(leaked);
+      expect(r.boot.holder.currentValue()).toBe(leaked);
+      expect(r.printed.filter((l) => l.includes('a mint was asked for but no mint failed at boot'))).toHaveLength(1);
+      expect(r.agent.calls).toBe(0);
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('a code never outlives its op (D-4409 item 4)', () => {
+  it('a link that rejects still has its code revoked: presenting it afterwards is a miss, not a hand-out', async () => {
+    const codes: string[] = [];
+    const link: TokenSyncLink = { send: async (code) => { codes.push(code); throw new Error('boom'); } };
+    const r = await rig({ handMade: 'e'.repeat(64), link });
+    try {
+      await r.driver.tick();
+      expect(codes).toHaveLength(1);
+      const claim = await r.app.inject({ method: 'POST', url: '/api/token/claim', payload: { code: codes[0], nodeId: NODE } });
+      expect([claim.statusCode, claim.json().error]).toEqual([404, 'no-claim']);
+      expect((await onDisk(r)).pending.every((p) => p.handedOutAt === null)).toBe(true);
     } finally { await r.app.close(); }
   });
 });
