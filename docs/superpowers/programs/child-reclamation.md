@@ -1965,6 +1965,10 @@ round: rung 8 reading a silent omission as "no record", the uncapped `_WS_NORMAL
 on ccd's failed document (the pre-breadcrumb `pin-failed`/`tombstone-unwritable` sentence, and the resumed-arm
 `probe-unmeasured` on the verb and on the audit), and the collector calling `_ws_leaf_remove`; from review 341: the
 pins for F4 (writable `builtin`), F5 (the clips odd word), F6 (a FIFO at an outside admin `gitdir`), F7 (a fixed find
-order for row 17) and F9 (the vacuous kebab line) (decision 2026-10-08 12:03). Wave 8 waits for
+order for row 17) and F9 (the vacuous kebab line) (decision 2026-10-08 12:03); from review 346: the four prose
+corrections (`_ws_dir_physical`'s bare-capture list, "only a back-linked tree" scoped to outside the leaf, the
+back-link caller's inner NUL reading refused, and the two `childReclaim.ts` comments naming the audit arm), and the
+server half of `crumb` (`childReclaimAudit` reading an audit's exit-1 document rather than mapping it to `unreadable`)
+(decision 2026-10-08 13:08). Wave 8 waits for
 workspace-lifecycle wave 3b and for the fleet's `ccd caps` to advertise wave 7's token. The path-identity follow-up
 programme comes after wave 8.
