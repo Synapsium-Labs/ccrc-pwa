@@ -525,6 +525,13 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   from the console. The fleet box finished at 23:16:17 and the server box at 23:16:50 (each box's `update.json`, phase
   `done`; `ccrc version` reads `1bb88d5e` on both). Baseline B's week ends 2026-10-13 23:16 UTC. Wave 4b (run 308) is
   planned after that reading, and the stop stays shadowed until the operator arms `scope-sweep-live`.
+- **2026-10-08 11:15 — the operator's session takes ccrc-pwa #317, the carry's EXDEV copies (mail 4000).** Its first
+  PR links through a common mount of the same filesystem when there is one, and makes the copy fallback loud, with its
+  byte count. It does not drop the source after a carry and adds no dedupe verb. It touches `_swap_carry_*` and the
+  merge walk, and it replaces the EXDEV fallback this spec records as a named cost (§2). No open or planned wave of
+  this programme edits the carry: 4b sets a spawn variable and fixes `/clear`. Wave 6 (spec stage 3) writes the
+  manifest in the swap body right after the carry call. **Before wave 6's plan is written, mail claude-OpenClawHetzner.**
+  The plan reads main with #317 in it, or waits for #317 while it is open. Answered in mail 4001.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
