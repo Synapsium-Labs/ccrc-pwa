@@ -637,6 +637,7 @@ function healthInputsOf(env, x, nowMs) {
     drainRejected: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.drainRejected]) ?? 0),
     spoolDisplaced: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.spoolDisplaced]) ?? 0),
     spoolBlocked: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.spoolBlocked]) ?? 0),
+    spoolUnreadable: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.spoolUnreadable]) ?? 0),
     exportSegmentNewer: x.exportSegmentNewer,
     exportSegmentMissing: x.exportSegmentMissing,
     extrasUnmeasured: x.unmeasured,

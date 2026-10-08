@@ -2628,12 +2628,13 @@ export const HEALTH_META = Object.freeze({
 
 /** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
  *  doctor fixtures that plant them. D-4346 (history-permanent-failures-classified). Like `blob_undecodable` and
- *  `drain_rejected`, `spool_displaced` and `spool_blocked` are never reset in B1 (B2's repair owns resets). */
+ *  `drain_rejected`, `spool_displaced`, `spool_blocked` and `spool_unreadable` are never reset in B1 (B2's repair owns resets). */
 export const HEALTH_COUNTERS = Object.freeze({
   blobUndecodable: 'blob_undecodable',
   drainRejected: 'drain_rejected',
   spoolDisplaced: 'spool_displaced',   // D-4347 (history-planted-entries-never-wedge)
   spoolBlocked: 'spool_blocked',
+  spoolUnreadable: 'spool_unreadable',   // FU8 (FP5): a draining file or sidecar a drain could not read, skipped for that pass
 });
 
 /** The meta key prefix of each rostered home's retention verdict, `retention_state:<home>` (§9.15): the census writes it,
@@ -2733,7 +2734,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
   'drain-rejected': `the files are kept in ~/.ccrc/history/spool/.draining/rejected/ and their lines in the journal, and nothing in this build drains them again; the refusal is in the sweep's log: ${SWEEP_LOG}`,
   // D-4347 (history-planted-entries-never-wedge). Never reset in B1, like drain-rejected and blob-undecodable: B2's repair owns resets.
-  'spool-planted': `remove the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; the sweep's log names each one: ${SWEEP_LOG}`,
+  'spool-planted': `remove the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; a file the sweep cannot read stays in .draining/ with its .obs sidecar until both are readable by this user (chmod 600, or chown them) or removed, and its id's later files drain once it does; the sweep's log names each one: ${SWEEP_LOG}`,
 });
 
 const minutesOf = (ms) => Math.round(ms / 60_000);
@@ -2918,6 +2919,12 @@ export function deriveHealth(h) {
   // D-4346 (history-permanent-failures-classified): a spool file the store refused was set aside, counted once.
   if (h.drainRejected > 0) warn.push(item('drain-rejected', `${h.drainRejected} spool file(s) were set aside in .draining/rejected/ because the store refused their rows`));
   // D-4347 (history-planted-entries-never-wedge): a displaced spool file's lines are out of the store, as a rejected one's are.
-  if (h.spoolDisplaced + h.spoolBlocked > 0) warn.push(item('spool-planted', `${h.spoolDisplaced} spool file(s) set aside under .draining/planted/ and ${h.spoolBlocked} skipped drain(s) of a file whose sidecar name is blocked, because of entries planted in .draining/`));
+  // FU8 (FP5): a file the sweep could not read waits in place with its id's later files behind it, and is counted apart.
+  if (h.spoolDisplaced + h.spoolBlocked + h.spoolUnreadable > 0) {
+    const parts = [];
+    if (h.spoolDisplaced + h.spoolBlocked > 0) parts.push(`${h.spoolDisplaced} spool file(s) set aside under .draining/planted/ and ${h.spoolBlocked} skipped drain(s) of a file whose sidecar name is blocked, because of entries planted in .draining/`);
+    if (h.spoolUnreadable > 0) parts.push(`${h.spoolUnreadable} skipped drain(s) of a draining file or its sidecar the sweep could not read, whose id's later files wait behind it`);
+    warn.push(item('spool-planted', parts.join('; ')));
+  }
   return result();
 }

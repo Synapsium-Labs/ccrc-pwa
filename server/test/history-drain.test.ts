@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, PRELOADS, SWEEP, recordDirFsyncs, type HistoryBox } from './historyHelpers.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
-import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX, SPOOL_FILE_MAX, SPOOL_FILE_LINES_MAX } from '../../ccd/history/lib.mjs';
+import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX, SPOOL_FILE_MAX, SPOOL_FILE_LINES_MAX, OBS_FILE_MAX } from '../../ccd/history/lib.mjs';
 
 skipOnDarwin();
 
@@ -1092,15 +1092,19 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     const startupFile = (): void => {
       fs.writeFileSync(regularFile(), `\n${JSON.stringify(start(ID, U1, 'startup', { reg: U1 }))}\n`);
     };
-    const MALFORMED: Array<[string, Record<string, unknown>]> = [
+    const MALFORMED: Array<[string, Record<string, unknown> | string]> = [
       ['only v and observedMs', { v: 1, observedMs: T }],
       ['heldMatches null', { ...validObs, heldMatches: null }],
       ['journalT fractional', { ...validObs, journalT: 1.5 }],
+      // FU8 (FPM9): a size no observe writes is malformed, never unreadable; the extra key alone would pass observationOk
+      ['over OBS_FILE_MAX', { ...validObs, pad: 'x'.repeat(OBS_FILE_MAX) }],
+      // FU8 (FPM9): content that does not parse is malformed too, never unreadable (a string row is written as it is)
+      ['not JSON', '{"v":1,"observedMs":'],
     ];
 
     it.each(MALFORMED)('a malformed sidecar (%s) is removed, counted sidecar_malformed once and observed again; the file drains', (_why, bad) => {
       startupFile();
-      fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.900.1.obs`), JSON.stringify(bad));
+      fs.writeFileSync(path.join(DRAIN(box.home), `${ID}.900.1.obs`), typeof bad === 'string' ? bad : JSON.stringify(bad));
       const r = runSweep(box);
       expect(r.code, r.stderr).toBe(0);
       expect(counters(box)['sidecar_malformed']).toBe(1);
@@ -1462,6 +1466,123 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
           expect(r.stderr).not.toContain('internal error');
           expect(fs.existsSync(path.join(SPOOL(box.home), `${ID}.jsonl`))).toBe(true);
         } finally { fs.chmodSync(SPOOL(box.home), 0o700); moveDb(box, aside, hist(box.home, 'db')); }
+      });
+    });
+
+    // FU8 (FP5, FPM9): a draining file whose bytes or sidecar the sweep cannot read is skipped for the pass, as FU3F's blocked
+    // file is, never a thrown pass: left in place with its sidecar, counted spool_unreadable on a drain and named on stderr, and
+    // its own id's later files wait behind it; every file of another id drains. Root reads a mode-000 file, so these skip as root.
+    describe.skipIf(process.getuid?.() === 0)('a draining file or sidecar the sweep cannot read (FU8, FP5, FPM9)', () => {
+      const A = `${ID}.900.1.jsonl`;
+      const A2 = `${ID}.901.1.jsonl`;
+      const B = `${ID2}.902.1.jsonl`;
+      const at = (n: string): string => path.join(DRAIN(box.home), n);
+      const fileNames = (): unknown[] => journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'file').map((x) => x['name']);
+      const plantThree = (): void => {
+        fs.writeFileSync(at(A), stopLine(ID), { mode: 0o600 });
+        fs.writeFileSync(at(A2), stopLine(ID), { mode: 0o600 });
+        fs.writeFileSync(at(B), stopLine(ID2), { mode: 0o600 });
+      };
+      const unlock = (p: string): void => { if (fs.existsSync(p)) fs.chmodSync(p, 0o600); };
+
+      it('a mode-000 draining file: every pass exits 0, it and its id\'s later file wait, another id drains and renames go on, and it drains first once readable', () => {
+        plantThree();
+        fs.chmodSync(at(A), 0o000);
+        spool(box.home, ID2, { v: 1, ev: 'Stop', id: ID2 });
+        try {
+          for (const n of [1, 2]) {
+            const r = runSweep(box);
+            expect(r.code, `pass ${n}: ${r.stderr}`).toBe(0);           // at cf544c151: exit 1, EACCES, on every pass
+            expect(r.stderr).toContain(`history-sweep: spool-unreadable: ${A}: file EACCES\n`);
+            expect(counters(box)['spool_unreadable']).toBe(n);
+          }
+          expect(fs.existsSync(path.join(SPOOL(box.home), `${ID2}.jsonl`)), 'the other id\'s spool file was renamed').toBe(false);
+          expect(fileNames()).not.toContain(A);
+          expect(fileNames(), 'A2 waits behind A, unjournaled').not.toContain(A2);
+          expect(fileNames()).toContain(B);
+          expect(drainingNames(box.home)).toEqual([A, A2]);
+          expect(fs.existsSync(at(A.replace(/\.jsonl$/, '.obs'))), 'its sidecar is kept').toBe(true);
+          fs.chmodSync(at(A), 0o600);
+          const r3 = runSweep(box);
+          expect(r3.code, r3.stderr).toBe(0);
+          expect(drainingNames(box.home)).toEqual([]);
+          const order = fileNames();
+          expect(order.indexOf(A), 'A is journaled and drained before A2').toBeLessThan(order.indexOf(A2));
+          expect(counters(box)['spool_unreadable']).toBe(2);
+        } finally { unlock(at(A)); }
+      });
+
+      it('under a hold the journal half skips it the same way: exit 5, named, never a thrown pass, and its id\'s later file is not journaled before it', () => {
+        plantThree();
+        fs.chmodSync(at(A), 0o000);
+        const aside = path.join(box.home, 'aside');
+        moveDb(box, hist(box.home, 'db'), aside);
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(5);                              // at cf544c151: exit 1, EACCES
+          expect(r.stderr).toContain(`history-sweep: spool-unreadable: ${A}: file EACCES\n`);
+          expect(fileNames()).toEqual([B]);
+        } finally { moveDb(box, aside, hist(box.home, 'db')); unlock(at(A)); }
+      });
+
+      it('a mode-000 sidecar is never deleted, counted malformed or replaced: its file waits, then drains from that observation (FPM9)', () => {
+        fs.writeFileSync(at(A), stopLine(ID), { mode: 0o600 });
+        fs.writeFileSync(at(B), stopLine(ID2), { mode: 0o600 });
+        const side = at(A.replace(/\.jsonl$/, '.obs'));
+        const kept = JSON.stringify({ ...validObs, journalT: T + 5 });
+        fs.writeFileSync(side, kept, { mode: 0o600 });
+        fs.chmodSync(side, 0o000);
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+          expect(counters(box)['sidecar_malformed']).toBeUndefined();   // at cf544c151: 1, the sidecar deleted and the file re-observed
+          expect(counters(box)['spool_unreadable']).toBe(1);
+          expect(r.stderr).toContain(`history-sweep: spool-unreadable: ${A}: sidecar unreadable\n`);
+          expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(B, 1)]);
+          fs.chmodSync(side, 0o600);
+          expect(fs.readFileSync(side, 'utf8'), 'never replaced').toBe(kept);
+          const r2 = runSweep(box);
+          expect(r2.code, r2.stderr).toBe(0);
+          expect(receipts(box).find((x) => x.event_key === eventKey(A, 1))?.received_ms, 'received at the kept journalT (DI14)').toBe(T + 5);
+        } finally { unlock(side); }
+      });
+
+      it('a sidecar name that cannot be opened right after the rename leaves the file unobserved, never a thrown pass (FPM9)', () => {
+        spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+        const live = fs as unknown as Record<string, unknown>;
+        const realOpen = live['openSync'] as (...a: unknown[]) => unknown;
+        const realWrite = process.stderr.write;
+        const lines: string[] = [];
+        live['openSync'] = (p: unknown, ...rest: unknown[]): unknown => {
+          if (String(p).endsWith('.obs')) throw Object.assign(new Error(`EMFILE: too many open files, open '${String(p)}'`), { code: 'EMFILE', syscall: 'open', errno: -24 });
+          return realOpen(p, ...rest);
+        };
+        syncBuiltinESMExports();
+        (process.stderr as unknown as { write: unknown }).write = (s: unknown): boolean => { lines.push(String(s)); return true; };
+        try {
+          expect(SW.journalHalf(box.home, null, T).journalFailed).toBe(false);
+        } finally {
+          live['openSync'] = realOpen;
+          syncBuiltinESMExports();
+          (process.stderr as unknown as { write: unknown }).write = realWrite;
+        }
+        const [name] = drainingNames(box.home);
+        expect(name).toMatch(new RegExp(`^${ID}\\.\\d+\\.\\d+\\.jsonl$`));
+        expect(fs.existsSync(at(name!.replace(/\.jsonl$/, '.obs'))), 'no sidecar written over a name it could not read').toBe(false);   // at cf544c151: written
+        expect(lines).toContain(`history-sweep: spool-unreadable: ${name}: sidecar unreadable\n`);
+      });
+
+      it('a link at a draining name under a hold is no unreadable file: it holds nothing behind it, and its id\'s later file is journaled (FU8 CONTROL)', () => {
+        fs.symlinkSync(path.join(box.home, 'nowhere'), at(A));          // ELOOP at the drain's O_NOFOLLOW open: a planted link, not an unreadable file
+        fs.writeFileSync(at(A2), stopLine(ID), { mode: 0o600 });
+        const aside = path.join(box.home, 'aside');
+        moveDb(box, hist(box.home, 'db'), aside);
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(5);
+          expect(r.stderr).not.toContain('history-sweep: spool-unreadable:');
+          expect(fileNames()).toEqual([A2]);
+        } finally { moveDb(box, aside, hist(box.home, 'db')); }
       });
     });
   });

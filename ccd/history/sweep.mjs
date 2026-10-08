@@ -380,15 +380,38 @@ export function readObservation(home, id, nowMs) {
   };
 }
 
-/** The sidecar as `observe` wrote it, or null. A sidecar that fails lib's `observationOk`
- *  (D-4347 (history-planted-entries-never-wedge)) is observed again, as an unparseable one always was, so `observe`,
- *  `recordHeldMatches` and `journalFile` only ever see a valid observation, on the drain and the hold alike. */
+/** The sidecar as a measured read, four answers never folded (FU8, FPM9; the no-overloaded-null rule):
+ *  - `value`, with the observation `observe` wrote;
+ *  - `absent`;
+ *  - `malformed`: a regular file over OBS_FILE_MAX, or content that fails lib's `observationOk`
+ *    (D-4347 (history-planted-entries-never-wedge)), which no `observe` wrote, so it is observed again;
+ *  - `unreadable`: there, but not readable now (an open or read failure such as EACCES or EMFILE, or a non-regular entry).
+ *    It may still hold the file's rename-time observation and journaled mark (DI14, O46), so nothing removes or replaces it:
+ *    `observe` throws SPOOL_UNREADABLE and the file waits.
+ *  So `observe`, `recordHeldMatches` and `journalFile` only ever use a valid observation, on the drain and the hold alike. */
 function readSidecar(path) {
-  const p = readSmall(path, OBS_FILE_MAX);
-  if (p.state !== 'value') return null;
+  const r = readBounded(path, OBS_FILE_MAX, true);
+  if (r.state === 'absent') return { state: 'absent' };
+  if (r.state === 'unreadable') return { state: 'unreadable' };
+  if (r.state !== 'value') return { state: 'malformed' };   // over-cap: a size no observe writes
   let o;
-  try { o = JSON.parse(p.value); } catch { return null; }
-  return observationOk(o) ? o : null;
+  try { o = JSON.parse(r.value); } catch { return { state: 'malformed' }; }
+  return observationOk(o) ? { state: 'value', obs: o } : { state: 'malformed' };
+}
+
+/** One draining file this pass cannot read (FU8, FP5, FPM9; D-4347 (history-planted-entries-never-wedge)): its bytes
+ *  (`file <code>`: an fs error other than ENOENT and ELOOP, such as EACCES on a mode-000 file or one another uid owns, EMFILE
+ *  or EIO) or its observation sidecar (`sidecar unreadable`). Thrown per file, code SPOOL_UNREADABLE: the drain and the
+ *  journal half skip that file for the pass, leave it and its sidecar in place, and hold its id's later files behind it. */
+function spoolUnreadable(what, why) {
+  return Object.assign(new Error(`draining ${what} cannot be read: ${why}`), { code: 'SPOOL_UNREADABLE', reason: `${what} ${why}` });
+}
+
+/** A failure of a draining file's open or read as `readDrainingText`'s callers decide it: ENOENT (gone) and ELOOP (a planted
+ *  link) as they are; any other fs error (one carrying a code and a syscall) as SPOOL_UNREADABLE; anything else as it is. */
+function asDrainingReadError(e) {
+  if (e && typeof e.code === 'string' && typeof e.syscall === 'string' && e.code !== 'ENOENT' && e.code !== 'ELOOP') return spoolUnreadable('file', e.code);
+  return e;
 }
 
 /** Temp, fsync, rename, fsync the directory. The temp is `<sidecar>.tmp` (254 bytes at the bound), so no longer
@@ -422,11 +445,13 @@ function writeSidecar(path, obs) {
 /** The file's observation (slugs history-journal-observation-sidecar, D-4231; history-observe-at-rename, D-4232). The registry is
  *  read right after the rename and kept beside the file. Every decision the drain later takes uses this earliest
  *  observation, never the registry as it is then. An existing sidecar is reused, never re-read: a re-journal after a
- *  crash decides from the same facts. A sidecar that does not parse is observed again. */
+ *  crash decides from the same facts. A sidecar that does not parse is observed again. One that is there but cannot be
+ *  read now is never replaced (FU8, FPM9): this throws SPOOL_UNREADABLE and the file waits for a pass that can read it. */
 export function observe(home, name, nowMs) {
   const side = `${historyPaths(home).draining}/${sidecarName(name)}`;
   const had = readSidecar(side);
-  if (had !== null) return had;
+  if (had.state === 'value') return had.obs;
+  if (had.state === 'unreadable') throw spoolUnreadable('sidecar', 'unreadable');
   const obs = {
     v: 1, ...readObservation(home, idOfDrainingName(name), nowMs),
     late: null, journalT: null, journaled: null, heldMatches: {},
@@ -554,6 +579,8 @@ function renameAndObserve(home, tickMs, nowMs) {
     try {
       observe(home, n, nowMs);
     } catch (e) {
+      // FU8 (FPM9): a sidecar name it cannot read right after the rename leaves the file unobserved; its next journaling observes it
+      if (e && e.code === 'SPOOL_UNREADABLE') continue;
       if (!(e instanceof JournalError)) throw e;
       failed = true;
     }
@@ -567,9 +594,11 @@ function renameAndObserve(home, tickMs, nowMs) {
  *  actually read, throws `SPOOL_OVERSIZE` before it is buffered, so no spool file can make a pass allocate its way past
  *  the unit's memory limit. A file within the byte cap but over SPOOL_FILE_LINES_MAX lines throws `SPOOL_OVERLINES`, so no
  *  spool file's line count can make a pass allocate past the unit's memory limit either. Every read of a draining file
- *  goes through here. */
+ *  goes through here. An open or read that fails for any reason but ENOENT and ELOOP throws SPOOL_UNREADABLE (FU8, FP5): a
+ *  mode-000 file, or one another uid owns, threw EACCES out of every drain and every hold. */
 export function readDrainingText(path) {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let fd;
+  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch (e) { throw asDrainingReadError(e); }
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) throw Object.assign(new Error('draining file is not a regular file'), { code: 'NON_REGULAR' });
@@ -588,6 +617,8 @@ export function readDrainingText(path) {
     // D-4337 (history-spool-file-size-cap, its line arm): counted on the bytes, before the text exists.
     if (spoolLinesOverCap(buf)) throw Object.assign(new Error('draining file is over SPOOL_FILE_LINES_MAX'), { code: 'SPOOL_OVERLINES' });
     return { text: buf.toString('utf8'), bytes: buf.length };
+  } catch (e) {
+    throw asDrainingReadError(e);
   } finally {
     closeSync(fd);
   }
@@ -786,8 +817,9 @@ export function drainFile(db, c, name, obs, text) {
 export function recordHeldMatches(home, name, nowMs) {
   const P = historyPaths(home);
   const side = `${P.draining}/${sidecarName(name)}`;
-  const obs = readSidecar(side);
-  if (obs === null) return;
+  const had = readSidecar(side);
+  if (had.state !== 'value') return;
+  const obs = had.obs;
   const id = idOfDrainingName(name);
   const named = obs.uuid.state === 'value' ? obs.uuid.value : null;
   const waiting = spoolRecordsOf(readDrainingText(`${P.draining}/${name}`).text, id).valid
@@ -816,7 +848,9 @@ export function journalHalf(home, ids, nowMs) {
   // observes and journals each spool file as step 1 does"). A line a hook lands on the old inode after this
   // grows the file, and the next pass re-journals it under the same `t` (journalFile compares byte counts).
   if (renameAndObserve(home, nowMs, nowMs)) journalFailed = true;   // D-4338 (history-sidecar-write-failure-holds)
+  const waiting = new Set();   // FU8 (FP5): an id whose earlier file could not be read waits behind it, as on the drain
   for (const name of listDraining(home)) {
+    if (waiting.has(idOfDrainingName(name))) continue;
     try {
       observe(home, name, nowMs);
       if (ids !== null && !journalFailed) {
@@ -832,6 +866,12 @@ export function journalHalf(home, ids, nowMs) {
     } catch (e) {
       // D-4338 (history-sidecar-write-failure-holds): a sidecar that cannot be written is the journal failure; the file is held.
       if (e instanceof JournalError) { journalFailed = true; held.push(name); continue; }
+      if (e && e.code === 'SPOOL_UNREADABLE') {
+        // FU8 (FP5, FPM9): left in place with its sidecar, never a thrown pass; no DB holds a counter here (IV2), so it is named.
+        process.stderr.write(`history-sweep: spool-unreadable: ${name}: ${e.reason}\n`);
+        waiting.add(idOfDrainingName(name));
+        continue;
+      }
       // SPOOL_OVERSIZE or SPOOL_OVERLINES (D-4337): left where it is, unread. No DB holds a counter here (IV2), so the drain, which has one, sets
       // it aside and counts it when the hold ends.
       if (e && (e.code === 'ENOENT' || e.code === 'ELOOP' || e.code === 'NON_REGULAR' || e.code === 'SPOOL_OVERSIZE' || e.code === 'SPOOL_OVERLINES')) continue;
@@ -862,8 +902,9 @@ export function journalHalf(home, ids, nowMs) {
  *    visited in sorted order, so `<stem>.obs` comes before `<stem>.obs.tmp` and a blocked file keeps its regular sidecar
  *    (FU6). Any other entry at a sidecar-temp name, or at the sidecar name of a file that is not live, is the sweep's own
  *    debris and is removed uncounted (F20). Any other non-regular entry at a live file's
- *    sidecar name is removed and counted `non_regular`; a sidecar of a live file that fails `observationOk` is removed
- *    and counted `sidecar_malformed`, and the next `observe` re-observes it (F9).
+ *    sidecar name is removed and counted `non_regular`; a sidecar of a live file that `readSidecar` answers `malformed` is
+ *    removed and counted `sidecar_malformed`, and the next `observe` re-observes it (F9); one it answers `unreadable` is left
+ *    in place, uncounted here (FU8, FPM9).
  *  - A non-directory at `.draining/planted` or at the area is removed and counted `non_regular` when a set-aside needs it.
  *  - An area a failed move left empty is removed at the end, so an entry met on every drain leaves no empty area behind.
  *  A step that fails is left for the next drain. */
@@ -937,7 +978,9 @@ export function tidyDraining(home, tickMs, pid) {
       // removed uncounted.
       if (n.endsWith('.obs.tmp') || !live.has(file)) { removeEntry(p); continue; }
       if (t === 'other') { out.nonRegular += 1; removeEntry(p); continue; }
-      if (readSidecar(p) === null) { removeEntry(p); out.malformed += 1; }
+      // FU8 (FPM9): only a sidecar whose content is no observation is removed and counted; one that cannot be read now is
+      // left, uncounted here, because it may hold the file's rename-time observation: the drain skips the file (spool_unreadable).
+      if (readSidecar(p).state === 'malformed') { removeEntry(p); out.malformed += 1; }
     } catch { /* left for the next drain */ }
   }
   if (planting) { try { removeEntry(area); } catch { /* an area left behind is met by the next set-aside's own area */ } }
@@ -955,7 +998,9 @@ export function tidyDraining(home, tickMs, pid) {
  *    it found `blocked` (its sidecar name is blocked and it could not move) is counted `spool_blocked`, named on stderr and
  *    skipped like a kept name: never journaled by this drain, left in place, retried by the next drain's tidy, and every later
  *    file of another id drains. The blocked file's own id's later files wait behind it, so the epoch chain, which numbers in
- *    drain order, never inverts when the block lifts (FU3F review F1). */
+ *    drain order, never inverts when the block lifts (FU3F review F1).
+ *  - A file whose bytes or sidecar cannot be read on this drain (SPOOL_UNREADABLE) is skipped the same way, counted
+ *    `spool_unreadable` and named on stderr as `history-sweep: spool-unreadable: <name>: <reason>` (FU8, FP5, FPM9). */
 export function drainSpool(db, c) {
   const tickMs = c.now();
   // FU8 (D-4347 (history-planted-entries-never-wedge)): no spool work through a spool/ that is not a real directory (FP3):
@@ -1015,6 +1060,14 @@ export function drainSpool(db, c) {
           removeEntry(`${historyPaths(c.home).draining}/${sidecarName(name)}`);
         } catch { /* left for the next drain: tidyDraining meets it first */ }
         countOutside(db, 'non_regular');
+        continue;
+      }
+      if (e && e.code === 'SPOOL_UNREADABLE') {
+        // FU8 (FP5, FPM9; D-4347 (history-planted-entries-never-wedge)): skipped for this pass like a blocked file, never a
+        // thrown pass: left in place with its sidecar, read again by the next drain, and its own id's later files wait behind it.
+        countOutside(db, HEALTH_COUNTERS.spoolUnreadable);
+        process.stderr.write(`history-sweep: spool-unreadable: ${name}: ${e.reason}\n`);
+        blockedIds.add(idOfDrainingName(name));
         continue;
       }
       if (e && e.code === 'ENOENT') continue;

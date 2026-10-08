@@ -2725,7 +2725,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     ...o,
@@ -2793,6 +2793,16 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const i = healthLib.deriveHealth(base(o)).warn.find((x) => x.word === 'spool-planted');
     expect(i?.detail).toContain(`${o.spoolDisplaced ?? 0} spool file(s) set aside under .draining/planted/ and ${o.spoolBlocked ?? 0} skipped drain(s)`);
     expect(i?.remedy).toContain('~/.ccrc/history/spool/.draining/');
+  });
+
+  it('spool-planted fires on spool_unreadable alone, and names it apart from the planted counts (FU8, FP5)', () => {
+    const i = healthLib.deriveHealth(base({ spoolUnreadable: 3 })).warn.find((x) => x.word === 'spool-planted');
+    expect(i?.detail).toContain('3 skipped drain(s) of a draining file or its sidecar the sweep could not read, whose id\'s later files wait behind it');
+    expect(i?.detail, 'the planted clause is left out when its counts are 0').not.toContain('set aside');
+    expect(i?.remedy).toContain('readable by this user (chmod 600, or chown them)');
+    const both = healthLib.deriveHealth(base({ spoolDisplaced: 2, spoolUnreadable: 1 })).warn.find((x) => x.word === 'spool-planted');
+    expect(both?.detail).toContain('2 spool file(s) set aside under .draining/planted/ and 0 skipped drain(s)');
+    expect(both?.detail).toContain('; 1 skipped drain(s) of a draining file or its sidecar the sweep could not read');
   });
 
   it('blob-undecodable names how many stored blobs did not decode, and its remedy says the damage is storage corruption (D-4346)', () => {

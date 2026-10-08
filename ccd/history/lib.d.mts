@@ -377,6 +377,7 @@ export interface HealthInputs {
   readonly drainRejected: number;
   readonly spoolDisplaced: number;
   readonly spoolBlocked: number;
+  readonly spoolUnreadable: number;
   readonly exportSegmentNewer: readonly string[];
   readonly exportSegmentMissing: number;
   readonly journalUnwritable: boolean;
@@ -399,6 +400,7 @@ export const HEALTH_COUNTERS: Readonly<{
   drainRejected: 'drain_rejected';
   spoolDisplaced: 'spool_displaced';
   spoolBlocked: 'spool_blocked';
+  spoolUnreadable: 'spool_unreadable';
 }>;
 export const RETENTION_STATE_META: 'retention_state:';
 export const SQLITE_CODES: Readonly<{
