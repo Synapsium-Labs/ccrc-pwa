@@ -24,7 +24,7 @@ removed on 2026-09-10 was not.
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | — | **pre-flight ruled** (contract §14); run 347; plan next |
-| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **to plan**: built alongside wave 7, lands after it |
+| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **to plan**: run 348; built alongside wave 7, lands after it |
 | 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -46,6 +46,12 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-08 14:30 — wave 8's run is opened, and both waves have their blocks.**
+  - Run **348** is wave 8 (`planned`, 8 of 9).
+  - The allocator issued wave 7 (run 347) 32 numbers starting at 4502, and wave 8 (run 348) 16 numbers starting at
+    4534. Each is listed singly in the evidence archive (`wave7/`, `wave8/`).
+  - quiet-river was told the rulings that reach workspace-lifecycle, and asked the `watch.ts` order (4014).
 
 - **2026-10-08 14:29 — wave 7's pre-flight is RULED: contract §14, R65 to R72.** Four Opus attackers (`wf_93877eb5-7f3`,
   SAFETY at xhigh) broke the draft in nine places, and every break is closed in the binding text. The attack is
