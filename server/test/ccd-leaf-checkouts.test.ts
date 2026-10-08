@@ -123,6 +123,23 @@ describe('_ws_leaf_checkouts — refused: rc 1, a checkout git records elsewhere
     expect(a.why).toContain('holds no record');
   }, 60_000);
 
+  it('an admin dir under a SIBLING path that shares the leaf as a string prefix (`<id>-x`) is outside the leaf: refused', () => {
+    // A clone in another session's leaf, whose id has this child's id as a prefix; a worktree of it moved here.
+    const clone = path.join(rootOf(), `${ID}-x`, 'clone');
+    cloneAt(clone);
+    const w = path.join(h.home, 'w');
+    h.git(clone, 'worktree', 'add', '-q', '-b', 'w', w);
+    fs.writeFileSync(path.join(w, 'precious.txt'), 'uncommitted work of another session\n');
+    const dest = path.join(leafOf(), 'parked', 'w');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(w, dest);
+    expect(fs.readFileSync(path.join(dest, '.git'), 'utf8').trim(), 'the CONTROL: the admin dir sits under the sibling path')
+      .toBe(`gitdir: ${clone}/.git/worktrees/w`);
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain(`${dest}/.git`);
+  }, 60_000);
+
   it('a `.git` that is a LINK is refused — ccd never follows it, and git would', () => {
     fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
     fs.mkdirSync(path.join(h.home, 'elsewhere', '.git'), { recursive: true });

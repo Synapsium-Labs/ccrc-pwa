@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e13c516ec75cb88b3316225d00d66951c069dbd8c5b046fd03b9d1e89a0d1395
+# ccrc:generated 1 sha256=94ec47c20aaf07dc2b3253186add2505d06799522fafa51e32666b4ccbc464ba
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29339,9 +29339,15 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   directory, and git's record of it reads `prunable` — so the recovery
   #   places its row, and nothing else says where the tree went. So every
   #   DIRECTORY leaf is asked `_ws_leaf_checkouts` after the identity checks
-  #   above (owner, dev:ino, mount, physical path) and before the permission
-  #   pass, which writes: 1 refused, 2 unmeasured, `_WS_LEAF_WHY` naming the
-  #   checkout, and NOTHING more is touched. A caller keeps and records such a
+  #   above (owner, dev:ino, mount, physical path) — and so after the
+  #   owner-bits pass, which must run before the leaf is entered for its
+  #   physical path. That pass is the ONE write before the question: it sets
+  #   the owner bits of the leaf ITSELF, never of anything under it, so a
+  #   foreign tree moved in AS the leaf has its root's owner bits set (555
+  #   reads 755 afterwards) even when it is then refused. The question comes
+  #   before the permission pass and the `rm`, which reach the whole tree:
+  #   1 refused, 2 unmeasured, `_WS_LEAF_WHY` naming the checkout, and
+  #   NOTHING more is touched. A caller keeps and records such a
   #   leaf as it keeps any other (the tail's step (6): `clipsKept` and
   #   `tmpRootKept`; the act completes). A link or file leaf is unlinked,
   #   never scanned. THE LIMITS, STATED: (i) a tree stripped of its `.git`, or

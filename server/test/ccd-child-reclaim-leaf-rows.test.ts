@@ -106,6 +106,15 @@ describe('a STANDING row at or inside a leaf is nested', () => {
     row(ROW, path.join(clipsOf(CHILD_ID), 'lnk', 'wt'));
     nested(evalOf(h), ROW, 'a row through a link inside clips');
   }, 120_000);
+
+  it('the CONTROL: a row at a SIBLING-prefix path (`~/.cc-tmp/<id>-2/wt`, another id’s temp root) is outside the leaf — no hold', () => {
+    makeChild(h);
+    h.sh(`_child_tmpdir ${CHILD_ID} >/dev/null`);   // the leaf stands, so it is compared both ways
+    const sib = path.join(h.home, '.cc-tmp', `${CHILD_ID}-2`, 'wt');
+    fs.mkdirSync(sib, { recursive: true });
+    row(ROW, sib);
+    placed(evalOf(h), 'a row in a sibling id’s temp root');
+  }, 120_000);
 });
 
 describe('a RECOVERED row (its workdir gone) at or inside a leaf', () => {
