@@ -284,6 +284,13 @@ export function countOutside(db, name, by = 1) {
   try { withTx(db, 'NORMAL', () => bump(db, name, by)); } catch { /* recounted on the next tick that meets it */ }
 }
 
+/** A counter committed in its own transaction BEFORE the act it counts (D-4337's order: a crash between the two may count
+ *  twice, never lose the count). False when it could not commit: the caller then leaves the act undone, and the next tick
+ *  meets the entry again and counts it then (`setAside`; FU8, FP6: tidyDraining's displacement). */
+function countFirst(db, name) {
+  try { withTx(db, 'NORMAL', () => bump(db, name)); return true; } catch { return false; }
+}
+
 // ── The spool drain, two-phase (spec §9.2 step 1, §9.14 "The order of writes") ──────────────────────────────
 //
 // At tick N each spool/<id>.jsonl is renamed to spool/.draining/<id>.<tickMs>.<pid>.jsonl (so a name is never reused)
@@ -678,9 +685,7 @@ function clearNonDirectory(dir) {
  *  D-4346, history-permanent-failures-classified). */
 export function setAside(db, home, name, sub, counter) {
   const P = historyPaths(home);
-  try {
-    withTx(db, 'NORMAL', () => bump(db, counter));
-  } catch { return true; }   // uncounted, so unmoved: the next tick meets it again and counts it then
+  if (!countFirst(db, counter)) return true;   // uncounted, so unmoved: the next tick meets it again and counts it then
   // A failed move (ENOENT: another actor took the file; ENOSPC, EACCES, EXDEV through a planted link) leaves the file
   // where it is and the tick goes on, never rethrown; the next tick meets it again and counts it again, one recount per
   // tick until the failure clears (FR4 round 1).
@@ -881,7 +886,8 @@ export function journalHalf(home, ids, nowMs) {
 /** Tidy `spool/.draining/` before a drain lists it (D-4347 (history-planted-entries-never-wedge)). Returns what it
  *  counted, `nonRegular` entries and `malformed` sidecars (the caller bumps the counters; `journalHalf` never calls this,
  *  because no DB holds a counter there, IV2), the draining files it `displaced`, the draining files it found `blocked`, and the
- *  draining names it `kept`.
+ *  draining names it `kept`, and the draining files it `deferred` (FU8, FP6). `countBefore(counter)` commits one count and
+ *  answers whether it did (drainSpool hands it `countFirst`): a displacement is counted through it BEFORE its move.
  *  - A directory is moved whole into this drain's own area, `.draining/planted/<tickMs>.<pid>/` (never recursed into,
  *    never deleted: a same-user process may have left content, or a mount, there). The area is new for each drain, so a
  *    name planted again never meets the one set aside before, and the name itself is unchanged (NAME_MAX, D-4303). One
@@ -894,7 +900,10 @@ export function journalHalf(home, ids, nowMs) {
  *    file's sidecar or sidecar-temp name would fail every sidecar write of that file (the rename onto it EISDIR, the
  *    O_EXCL open EEXIST), D-4338's hold, so the live file itself is moved into the area instead: `displaced`, never
  *    journaled by this drain (a hold pass may have journaled it already), its bytes kept, so one planted entry costs
- *    only that file's lines. When the live file cannot be moved either (the area cannot be made), the file is `blocked`:
+ *    only that file's lines. The area is made first, then `spool_displaced` is committed (`countBefore`), then the file
+ *    moves (FU8, FP6), so a kill or a failed commit never loses the count of a file that left the drain: a count that cannot
+ *    commit leaves the file where it is, `deferred` (skipped by this drain like a blocked file, uncounted, for the next drain to
+ *    count and move). When the live file cannot be moved either (the area cannot be made), the file is `blocked`:
  *    taken out of `live` so the arms after it treat its sidecar names as not live, and never `displaced`. The names are
  *    visited in sorted order, so `<stem>.obs` comes before `<stem>.obs.tmp` and a blocked file keeps its regular sidecar
  *    (FU6). Any other entry at a sidecar-temp name, or at the sidecar name of a file that is not live, is the sweep's own
@@ -905,9 +914,9 @@ export function journalHalf(home, ids, nowMs) {
  *  - A non-directory at `.draining/planted` or at the area is removed and counted `non_regular` when a set-aside needs it.
  *  - An area a failed move left empty is removed at the end, so an entry met on every drain leaves no empty area behind.
  *  A step that fails is left for the next drain. */
-export function tidyDraining(home, tickMs, pid) {
+export function tidyDraining(home, tickMs, pid, countBefore) {
   const P = historyPaths(home);
-  const out = { nonRegular: 0, malformed: 0, displaced: [], blocked: [], kept: [] };
+  const out = { nonRegular: 0, malformed: 0, displaced: [], blocked: [], kept: [], deferred: [] };
   let names;
   try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return out; throw e; }
   // FU6 (B3M10): loop 2 depends on this order. A file the blocked arm takes out of `live` keeps its regular sidecar only
@@ -932,6 +941,15 @@ export function tidyDraining(home, tickMs, pid) {
     const m = moveAside(area, P.draining, n);
     if (m.stray) out.nonRegular += 1;
     return m.moved;
+  };
+  // Make this drain's area (a non-directory at planted/ or at the area removed and counted first); true when it stands.
+  // Never throws. A displacement asks this BEFORE its count, so no count is taken for a file that cannot move (FU8, FP6).
+  const areaReady = () => {
+    if (!planting) {
+      planting = true;
+      try { if (clearNonDirectory(plantedRoot)) out.nonRegular += 1; } catch { return false; }
+    }
+    try { if (clearNonDirectory(area)) out.nonRegular += 1; mkdirDurable(area); return true; } catch { return false; }
   };
   // Set the directory `n` aside, or remove it when it cannot be moved and is empty; true when nothing stands at `n` now.
   const plantOrRemove = (n) => {
@@ -963,8 +981,12 @@ export function tidyDraining(home, tickMs, pid) {
         out.nonRegular += 1;
         if (!plantOrRemove(n) && live.has(file)) {
           live.delete(file);
-          if (plant(file)) out.displaced.push(file);
-          else out.blocked.push(file);   // D-4347 (history-planted-entries-never-wedge): neither the entry nor its file could move; the drain skips this file, never holds on it
+          // D-4347 (history-planted-entries-never-wedge): when neither the entry nor its file can move, the file is `blocked`: the
+          // drain skips it, never holds on it. FU8 (FP6): `spool_displaced` is committed before the move, as setAside's counts are.
+          if (!areaReady()) out.blocked.push(file);
+          else if (!countBefore(HEALTH_COUNTERS.spoolDisplaced)) out.deferred.push(file);
+          else if (plant(file)) out.displaced.push(file);
+          else out.blocked.push(file);
         }
         continue;
       }
@@ -991,7 +1013,9 @@ export function tidyDraining(home, tickMs, pid) {
  *    into `.draining/rejected/` and the drain goes on; any other SQLite failure ends the tick (D-4346,
  *    history-permanent-failures-classified).
  *  - A link or FIFO planted in .draining/ is removed and counted. A draining name tidyDraining `kept` is skipped, and a
- *    file it `displaced` is counted `spool_displaced` and named on stderr (D-4347 (history-planted-entries-never-wedge)). A file
+ *    file it `displaced` was counted `spool_displaced` before its move and is named on stderr (D-4347
+ *    (history-planted-entries-never-wedge); FU8, FP6), and one it `deferred` (that count could not commit) is skipped like a
+ *    blocked file, uncounted and unnamed, its id waiting behind it, for the next drain. A file
  *    it found `blocked` (its sidecar name is blocked and it could not move) is counted `spool_blocked`, named on stderr and
  *    skipped like a kept name: never journaled by this drain, left in place, retried by the next drain's tidy, and every later
  *    file of another id drains. The blocked file's own id's later files wait behind it, so the epoch chain, which numbers in
@@ -1010,24 +1034,23 @@ export function drainSpool(db, c) {
   // FU8: nor through a spool/ or .draining this user cannot use; uncounted, because status names its mode (mode-wrong).
   if (spoolUnusable(c.home)) { process.stderr.write(SPOOL_UNUSABLE_LINE); return []; }
   if (ensureSpoolDirs(c.home)) countOutside(db, 'non_regular');
-  const t = tidyDraining(c.home, tickMs, process.pid);
+  const t = tidyDraining(c.home, tickMs, process.pid, (counter) => countFirst(db, counter));
   if (t.nonRegular > 0) countOutside(db, 'non_regular', t.nonRegular);
   if (t.malformed > 0) countOutside(db, 'sidecar_malformed', t.malformed);
-  if (t.displaced.length > 0) {
-    countOutside(db, HEALTH_COUNTERS.spoolDisplaced, t.displaced.length);
-    for (const n of t.displaced) process.stderr.write(`history-sweep: spool-displaced: ${n}\n`);
-  }
+  // FU8 (FP6): each displaced file was counted `spool_displaced` by tidyDraining before its move.
+  for (const n of t.displaced) process.stderr.write(`history-sweep: spool-displaced: ${n}\n`);
   if (t.blocked.length > 0) {
     countOutside(db, HEALTH_COUNTERS.spoolBlocked, t.blocked.length);
     for (const n of t.blocked) process.stderr.write(`history-sweep: spool-blocked: ${n}\n`);
   }
-  const kept = new Set([...t.kept, ...t.blocked]);
+  const kept = new Set([...t.kept, ...t.blocked, ...t.deferred]);
+  const waitsBehind = new Set([...t.blocked, ...t.deferred]);   // FU8 (FP6): a deferred file holds its id as a blocked one does
   const blockedIds = new Set();   // D-4347 (history-planted-entries-never-wedge): an id with a blocked file waits behind it, in order (FU3F review F1)
   const hints = [];
   let failedCounted = false;
   for (const name of listDraining(c.home)) {
     if (kept.has(name)) {   // D-4347 (history-planted-entries-never-wedge): counted once by tidyDraining, never observed (M17)
-      if (t.blocked.includes(name)) blockedIds.add(idOfDrainingName(name));
+      if (waitsBehind.has(name)) blockedIds.add(idOfDrainingName(name));
       continue;
     }
     // The epoch chain numbers in drain order, so a blocked file's later same-id files must not drain before it (they would invert the chain once it drains).
