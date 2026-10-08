@@ -307,6 +307,63 @@ describe('the first carry: a failed cp -al routes before it copies (D-4500), and
   });
 });
 
+describe('the merge walk: an absent file that will not link routes on EXDEV (D-4500), and its copies are counted by cause (D-4501)', () => {
+  /** A return visit: the destination `<uuid>/` already exists, so the walk runs. */
+  const plantReturn = (): void => {
+    put(side('.claude', R_JSON), BODY);
+    fs.mkdirSync(side('.claude-d'), { recursive: true });
+  };
+
+  it('M1 an absent file links via the common mount: (merged +1 ~0 !0, via-mount 1), one inode', () => {
+    plantReturn();
+    carry(rig());
+    expect(verdict()).toBe('(merged +1 ~0 !0, via-mount 1)');
+    expect(ino(side('.claude-d', R_JSON))).toBe(ino(side('.claude', R_JSON)));
+    expect(stderr()).not.toContain('COPIES');
+  });
+
+  it('M2 no second mount: the copy is counted by cause, files and bytes — and said on stderr', () => {
+    plantReturn();
+    carry(rig({ common: 'none' }));
+    expect(verdict()).toBe('(merged +1 ~0 !0, copy: exdev-no-root 1 files 7 bytes)');
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+    expect(stderr()).toContain(`ccd: warn: sidecar ${UUID} merged into ${side('.claude-d')} with COPIES (copy: exdev-no-root 1 files 7 bytes)`);
+  });
+
+  it('M3 only EXDEV routes: a link refused for another reason (EMLINK) is link-failed, never routed', () => {
+    plantReturn();
+    const r = rig();
+    carry({ ...r, env: { ...r.env, FAKE_LINK_ERRNO: 'EMLINK' } });
+    expect(verdict()).toBe('(merged +1 ~0 !0, copy: link-failed 1 files 7 bytes)');
+  });
+
+  it('M4 the diverged rows still name the ACCOUNT paths, never the aliases', () => {
+    plantReturn();
+    put(side('.claude', 'tool-results/x.json'), 'A LONGER SOURCE\n');
+    put(side('.claude-d', 'tool-results/x.json'), 'KEPT\n');
+    carry(rig());
+    expect(verdict()).toBe('(merged +1 ~0 !1, via-mount 1)');
+    expect(swapLog()).toContain(
+      `sidecar ${UUID} diverged ${side('.claude-d', 'tool-results/x.json')} longer ${side('.claude', 'tool-results/x.json')}`);
+  });
+
+  it('M5 a route that crashes inside the walk is contained: route-error, and the merge still lands', () => {
+    plantReturn();
+    const r = rig();
+    carry({ ...r, env: { ...r.env, FAKE_ROUTE_CRASH: '1' } });
+    expect(verdict()).toBe('(merged +1 ~0 !0, copy: route-error 1 files 7 bytes)');
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+    expect(stderr()).toContain('ccd: carry route failed:');
+  });
+
+  it('M6 copies of one cause are one clause, their files and bytes summed', () => {
+    plantReturn();
+    put(side('.claude', 'tool-results/q.json'), 'Q\n');
+    carry(rig({ common: 'none' }));
+    expect(verdict()).toBe('(merged +2 ~0 !0, copy: exdev-no-root 2 files 9 bytes)');
+  });
+});
+
 // THE REAL KERNEL, where it can be had: an unprivileged user namespace with its
 // own mount namespace mounts a tmpfs whole and binds two of its directories as
 // the account roots — the fleet's geometry — and ccd reads that namespace's own

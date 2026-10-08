@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1d8fe46ce849e24970986729998e67b96324ebdc1ecfd6f251207b7b6077852f
+# ccrc:generated 1 sha256=2011ee290b83e7d73cab91d3db705fd31cdca64555eed05cd116133509e23f19
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23149,7 +23149,8 @@ _carry_py() {   # walk src dst budget | route a b — the carry's ONE embedded p
   # THE TABLE (spec §5.1), per REGULAR file of the source; directories are
   # created as needed, and anything else in the source (a symlink, a fifo) is
   # never followed and never copied:
-  #   absent at destination             -> hardlink, else copy       +N
+  #   absent at destination             -> hardlink; on EXDEV, a hardlink
+  #                                        through the link route; else copy  +N
   #   the same inode (a linked carry)   -> nothing: equal by identity
   #   equal size and equal mtime_ns     -> nothing (the quick check below)
   #   equal size, bytes compared equal  -> nothing
@@ -23162,7 +23163,10 @@ _carry_py() {   # walk src dst budget | route a b — the carry's ONE embedded p
   #   any other file whose bytes differ (a tool result is written once)  !D
   #   a destination entry of another type where the source has a file    !D
   # Every !D prints `diverged <kept path> longer <longer copy's path>` for
-  # stage 3's manifest to name; the summary row is `merged <N> <R> <D> <K>`.
+  # stage 3's manifest to name; the summary row is `merged <N> <R> <D> <K>`,
+  # always LAST. Before it (D-4500, D-4501): `via <V>`, the absent files linked
+  # through the route, and one `copied <cause> <F> <B>` per cause, sorted —
+  # files and bytes an absent file was copied for, `<cause>` a CARRY_CAUSES word.
   #
   # THE FILL. Every row above that costs bytes (an absent file, a compare, a
   # replace) is an ACTION, priced by the dry pass from `lstat` alone; a verdict
@@ -23191,8 +23195,10 @@ _carry_py() {   # walk src dst budget | route a b — the carry's ONE embedded p
   # same bytes by definition, and every other pair is decided on size and
   # content. THE QUICK CHECK (equal size AND equal nanosecond mtime -> equal,
   # no bytes read) is rsync's default and this plan's measured choice: every
-  # carry since the bind-mount move is a `cp -a`, which preserves mtime_ns, so
-  # a file untouched since its last carry passes it; measured on the box's 673
+  # carry from the bind-mount move (2026-09-22) until D-4500 was a `cp -a`,
+  # which preserves mtime_ns — and every carry since is a link (the same inode,
+  # equal by identity) or still that copy — so a file untouched since its last
+  # carry passes it; measured on the box's 673
   # real return-visit pairs, it cuts the walk's p90 cost from 764 MiB to 208 MiB
   # — about the bytes that are actually new. Its named cost: two different
   # files of identical size AND identical nanosecond mtime read as equal.
@@ -23443,14 +23449,40 @@ def replace(rel):
             pass
         raise
 
-added = replaced = 0
+# AN ABSENT FILE LINKS, else routes, else copies (D-4500, D-4501). Only EXDEV
+# routes: any other refusal (EMLINK, ENOSPC, EPERM) is the same answer through
+# any mount, so it is `link-failed` and never asks. The route is asked ONCE per
+# walk and remembered — every absent file shares the same two roots — and it
+# returns ALIASES of `src` and `dst`, so only the link itself goes through
+# them; `mkparents`, every compare, `~R` and every `diverged` row keep the
+# account paths. A copy is counted by cause, files and bytes: printed as
+# `copied <cause> <F> <B>` rows, and links through the route as `via <V>`,
+# both BEFORE the unchanged `merged` row that bash reads last.
+added = replaced = via = 0
+memo, copied = [], {}
 for key, cost, kind, rel, s, d in go:
     sp, dp = os.path.join(src, rel), os.path.join(dst, rel)
     if kind == 'absent':
         mkparents(rel)
+        cause = None
         try:
             os.link(sp, dp)
-        except OSError:
+        except OSError as e:
+            cause = 'link-failed'
+            if e.errno == errno.EXDEV:
+                if not memo:
+                    memo.append(safe_route(src, dst))
+                r = memo[0]
+                if r[0] == 'via':
+                    try:
+                        os.link(os.path.join(r[1], rel), os.path.join(r[2], rel))
+                        cause = None
+                        via += 1
+                    except OSError:
+                        cause = 'root-failed'
+                else:
+                    cause = r[1]
+        if cause:
             fd, tmp = tempfile.mkstemp(prefix=TMP, dir=os.path.dirname(dp))
             os.close(fd)
             try:
@@ -23462,6 +23494,9 @@ for key, cost, kind, rel, s, d in go:
                 except OSError:
                     pass
                 raise
+            c = copied.setdefault(cause, [0, 0])
+            c[0] += 1
+            c[1] += s.st_size
         added += 1
     elif kind == 'replace':
         replace(rel); replaced += 1
@@ -23485,6 +23520,10 @@ for key, cost, kind, rel, s, d in go:
 
 for kept, longer in diverged:
     print(f'diverged {kept} longer {longer}')
+if via:
+    print(f'via {via}')
+for cause in sorted(copied):
+    print(f'copied {cause} {copied[cause][0]} {copied[cause][1]}')
 print(f'merged {added} {replaced} {len(diverged)} {deferred}')
 PY
 }
@@ -23519,7 +23558,9 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   # branch's old rule): `_swap_carry_merge_walk` above, under the carry slot and
   # CARRY_MERGE_BUDGET, logging `(merged +N ~R !D)`, `(merged +N ~R !D,
   # deferred K)` when K actions did not fit this visit's budget, or
-  # `(kept: busy|budget|error)`. A destination a failed first carry left
+  # `(kept: busy|budget|error)`. Its absent files that linked through the route
+  # add `, via-mount V`, and those it copied `, copy: <cause> <F> files <B>
+  # bytes` per cause (D-4500, D-4501). A destination a failed first carry left
   # partial is repaired by the same walk — it simply finds the missing files
   # absent — so `(kept)` is no longer permanent.
   #
@@ -23543,7 +23584,7 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   # C-collated sort: no destination is ever contested, so ordering changes only
   # the order of the swap.log lines a human reads, which is kept reproducible.
   local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc b
-  local slot="" slot_rc=0 wout wrc line n r dv k dfr bud CARRY_SLOT_FD=""
+  local slot="" slot_rc=0 wout wrc line n r dv k dfr bud vsuf csuf CARRY_SLOT_FD=""
   local CARRY_ROUTE="" CARRY_A2="" CARRY_B2=""
   local -a sidecars=() rows=()
   mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
@@ -23598,7 +23639,22 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
       # K > 0: the budget ran out part way. What was placed is whole; the K
       # actions left wait on the source for the next visit, which prices them first.
       if (( k > 0 )); then dfr=", deferred $k"; else dfr=""; fi
-      echo "$(date '+%F %T') sidecar $uuid -> $dst (merged +$n ~$r !$dv$dfr)" >> "$REG/swap.log"
+      # The walk's links through the route and its copies by cause (D-4500,
+      # D-4501), each row read by an ANCHORED pattern and appended to the one
+      # verdict: `, via-mount V`, then `, copy: <cause> <F> files <B> bytes` per
+      # cause. Any copy also says so on stderr.
+      vsuf=""; csuf=""
+      for line in "${rows[@]}"; do
+        if [[ "$line" =~ ^via\ ([0-9]+)$ ]]; then
+          vsuf=", via-mount ${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^copied\ ([a-z][a-z-]*)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+          csuf+=", copy: ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} files ${BASH_REMATCH[3]} bytes"
+        fi
+      done
+      if [[ -n "$csuf" ]]; then
+        echo "ccd: warn: sidecar $uuid merged into $dst with COPIES (${csuf#, })" >&2
+      fi
+      echo "$(date '+%F %T') sidecar $uuid -> $dst (merged +$n ~$r !$dv$dfr$vsuf$csuf)" >> "$REG/swap.log"
       continue
     fi
     mkdir -p "$dstcfg/projects/$pdir"
