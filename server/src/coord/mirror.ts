@@ -101,25 +101,33 @@ export class JournalMirror {
       });
     }
 
-    for (const r of plan.reads) await this.drain(dir, r.gen, r.from, r.lastSize, at);
+    let unread = 0;
+    for (const r of plan.reads) if (!(await this.drain(dir, r.gen, r.from, r.lastSize, at))) unread += 1;
 
     this.writeErrors = await this.readErrors(dir);
-    this.lastOkAt = at;
+    // A GENERATION THIS PASS COULD NOT READ IS NOT A SUCCESSFUL SWEEP (review 339, the worker's open item 2). Its
+    // cursor did not move and the next tick retries it, but a health that read `ok` across it would tell the
+    // dead-coordinator lane's journal clause it holds every act — and a deliberate `stop` sitting in that generation
+    // would be invisible to it for as long as the read keeps failing. So `lastOkAt` moves only when every planned
+    // read answered: one failed tick is absorbed (the last ok stands, inside `staleAfterMs`), and a failure that
+    // PERSISTS reads `stale` — on `/api/fleet/health`, and as the lane's `hold`, which decides nothing.
+    if (unread === 0) this.lastOkAt = at;
   }
 
   /** One generation, one pass — and at most TWO reads: the second happens only
    *  when the first proved a truncation, which is the one condition under
-   *  which the offset we asked from was wrong. */
+   *  which the offset we asked from was wrong. `false` when the generation
+   *  could not be read at all: nothing moved, and the next tick retries it. */
   private async drain(
     dir: string, gen: string, from: number, lastSize: number, at: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const file = path.join(dir, `${LC_GEN_PREFIX}${gen}${LC_GEN_SUFFIX}`);
     const first = await this.deps.io.readFileFrom(file, from);
-    if (first === null) return;                       // unreadable; retry next tick
+    if (first === null) return false;                 // unreadable; retry next tick
     const framed = frameRead(from, first.data, first.size, lastSize);
     if (!framed.shrank) {
       this.commit(gen, framed.lines, framed.nextCursor, first.size, at);
-      return;
+      return true;
     }
     // A TRUNCATION on an immutably-named generation. Record it, then re-read
     // from 0: `uid` dedupes what comes back, so only the genuinely-lost bytes
@@ -156,10 +164,11 @@ export class JournalMirror {
       // The cursor still has to leave the far side of the file, or every later
       // sweep re-records the same gap. Nothing was read, so nothing is ingested.
       this.commit(gen, [], 0, first.size, at);
-      return;
+      return true;   // the loss is a recorded gap row, which the lane's clause reads — not a silence
     }
     const re = frameRead(0, second.data, second.size, 0);
     this.commit(gen, re.lines, re.nextCursor, second.size, at);
+    return true;
   }
 
   private commit(gen: string, lines: readonly string[], cursor: number, size: number, at: number): void {
