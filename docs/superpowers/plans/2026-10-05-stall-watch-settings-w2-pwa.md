@@ -39,7 +39,7 @@ from the server's answer, never from the tap. In the same wave:
 - `SettingsScreen.tsx` renders `<StallWatchSection/>` after `<NotificationsSection/>`. Its header and "ONE poll"
   comments now name three sections and two reads.
 - `QuickConfirm`'s `consequence` widens to `string | string[]`. Every existing caller is unchanged.
-- Tasks 1 to 4 do not touch `shared/`, `server/src`, `agent/` or `ccd/`. W1's L0 block is complete, and they add no
+- Tasks 1 to 4 do not touch `shared/`, `server/src`, `agent/` or `ccd/`. W1's L0 block is complete for Tasks 1 to 4, and they add no
   string to it. Their one server-side file is a new test, `server/test/stall-settings-readme.test.ts`, which ties
   README's new sentence to the L0 labels and the L1 bounds. Fix round 1 adds one key to W1's block
   (`unanswered-write-has-its-own-l0-line`, below). The review's item 5 edits are the coordinator's scope (ledger R20,
@@ -47,7 +47,7 @@ from the server's answer, never from the tap. In the same wave:
   `server/test/coord-db.test.ts` and `server/test/stall-sweep.test.ts`.
 
 **Tech Stack:** React and TypeScript in the PWA (Vite build, `tsc --noEmit && vite build`). Tests run on vitest with
-jsdom and Testing Library (`pwa/test/`), and the README pin on vitest in `server/test/`. Node `>=22.13.0`. Mutation
+jsdom and Testing Library (`pwa/test/`), and the README pin on vitest in `server/test/`. Node `>=22.16.0`. Mutation
 instruments live outside the tree and are never committed.
 
 **Spec:** `docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md` rev 3.2, at `51aa5f0d8`: **APPROVED by the
@@ -318,12 +318,14 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
 | `pwa/src/screens/SettingsScreen.tsx` | header comment (≈1–7, "Two sections and no more"); the Notifications row label (≈650) and its comment; `<StallWatchSection />` after `<NotificationsSection/>`; the "ONE poll" comment (≈677) (13/7) | 3 |
 | `pwa/test/settings-screen.test.tsx` | the label pin (≈1771) moved; the new import (≈33); three describes, 51 rows (26 helpers, 22 section, 3 scans) (688/1) | 3 |
 | `README.md` | the Settings paragraph gains "Settings has a third section, **Stall watch** …" (one line becomes seventeen; ≈953 at `77f8d63a5`, ≈960 at `d12b5aba0`) | 4 |
-| `server/test/stall-settings-readme.test.ts` | **new** (81 lines, 5 rows): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word (the PWA's own device-word list) | 4 |
+| `server/test/stall-settings-readme.test.ts` | **new** (93 lines, 6 rows as shipped): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word (the PWA's own device-word list) | 4 |
 | `pwa/src/screens/settingsText.ts` | **new** (fix round 1, F4): `UNCONFIRMED_TEXT` and its docstring, imports nothing; `SettingsScreen.tsx` re-exports it and `StallWatchSection.tsx` imports it, so the two screens no longer import each other | fix round 1 |
 | `shared/api.ts` | one key, `STALL_CONFIRM_TEXT.unanswered`, inside W1's stall-watch block (`unanswered-write-has-its-own-l0-line`), and, in fix round 2, the two-line D-4043 comment above that key (no string changed); the review's item 5 edit to the block's header comment is the coordinator's (ledger R20, R21) | fix round 1 |
 | `server/test/coord-db.test.ts` | the stall_settings slot found by its DDL, not hard-coded (fix round 1, Q), and, in fix round 2, the needle stops at the name: `/CREATE TABLE stall_settings(?![A-Za-z0-9_])/` (R27 item 4), so a later `stall_settings_new` table is not counted; the review's item 5 edit is the coordinator's (ledger R20, R21) | fix round 1 |
 | `server/test/stall-sweep.test.ts` | the review's item 5 test edit, the coordinator's scope (ledger R20, R21) | coordinator |
 | `server/src/watch.ts` | the review's item 5 comment lines only (no behaviour), the coordinator's scope (ledger R20, R21) | coordinator |
+
+The line and row counts in this table are first-cut figures; the shipped files govern, and no count here is chased.
 
 **Deliberately unchanged** (measured):
 - **`shared/api.ts`, by Tasks 1 to 4.** W1's L0 holds every string the section shows. Fix round 1 adds one key,
@@ -3225,7 +3227,7 @@ no X57. X58 stays, re-described as the guard of the repeat line's mail-off varia
 - Modify: `README.md` (≈953 at `77f8d63a5`, ≈960 at `origin/main` `d12b5aba0`): the Settings paragraph (it opens
   `**Settings, the update banner and release pushes (update-management W3).**`, ≈939) gains its third section after the
   Notifications sentence and before "In remote mode". One line becomes seventeen: `git diff --numstat` reads `17	1`.
-- Create: `server/test/stall-settings-readme.test.ts` (81 lines): the README pin, five rows.
+- Create: `server/test/stall-settings-readme.test.ts` (93 lines as shipped): the README pin, six rows.
 - Test: `server/test/stall-settings-readme.test.ts`.
 - Run unedited: the whole PWA suite, the PWA build, `server/test/typecheck-tests.test.ts`,
   `single-definition.test.ts`, `topology-clean.test.ts`, the README citation instrument in `session-hook.test.ts`, and
@@ -3260,8 +3262,9 @@ phone-push bell" (≈951) is left as it is: §13 measured that nothing in README
 `notifications-label-says-push` (D-4036) reaches no README line, and row 5 scans the third section's sentences only.
 That phrase was put to the operator under "Open questions for the operator"; it is settled there (README now reads
 "push bell"). **Superseded in place (shipped):** the phone-push phrase was not left as it was. README :967 reads
-"push bell" (`a5771e471`, the operator's 2026-10-05 directive), and row 5 scans the whole Settings paragraph, not
-only the new section's sentences (`505ffbff4`).
+"push bell" (`a5771e471`, the operator's 2026-10-05 directive), and the device row, the README pin's sixth `it`
+(`stall-settings-readme.test.ts:90`), scans the whole Settings paragraph, not only the new section's sentences
+(`505ffbff4`).
 
 **README is in the citation corpus.** The edit adds 16 lines inside one paragraph. The citation instrument stays
 `7 passed | 328 skipped (335)`, measured before and after:
@@ -3838,8 +3841,9 @@ Neither blocks the wave; each is the operator's to rule on, and the wave-done ma
 - **`UNCONFIRMED_TEXT` for a write whose answer never arrived.** Its lead word, "Saved —", overstates a request that
   may never have left; the re-read that follows shows what was stored within one answer. (Settled for the network arm
   by fix round 1, F1: it now toasts `STALL_CONFIRM_TEXT.unanswered`, which says only "Not confirmed". The question
-  stands for the 2xx-unreadable arm, which keeps `UNCONFIRMED_TEXT`.) A text that says only "could not be confirmed"
-  would need an L0 or PWA string that neither wave adds today.
+  stands for the 2xx-unreadable arm, which keeps `UNCONFIRMED_TEXT`.) The network arm has its own line now
+  (`STALL_CONFIRM_TEXT.unanswered`, D-4043); a text that says only "could not be confirmed" for the 2xx arm would need
+  another one.
 
 ## If this PR is overtaken before it merges
 
