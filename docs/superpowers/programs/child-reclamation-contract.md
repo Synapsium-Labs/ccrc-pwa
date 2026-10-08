@@ -2272,3 +2272,13 @@ break they found is closed below. Evidence: the coordinator's `ccr15-evidence-ar
     earlier estimate.
   - **Numbers.** Run 348 holds two issued blocks, 16 numbers starting at 4534 and 16 starting at 4571, each listed
     singly in the evidence archive.
+- **R81 — the word half answers no null (after workspace-lifecycle's 4045, before wave 8's dispatch).** Amends R76's
+  "Kept leaves".
+  - **What is shared** is the WORD HALF only: `leafKeptWord(v): 'refused' | 'unmeasured' | 'in-use'`. ccd's three
+    words read as themselves, and any other value, `null` included, reads `unmeasured`. It never answers null.
+  - **`null` and absence are each carrier's**, asked before the word half. Workspace-lifecycle's done-document carrier
+    reads absence as `unreported` and `null` as nothing kept. Wave 8's mirror carrier reads a `meas` lost to a cut as
+    `truncated`, and a null value as `none-or-unreported`.
+  - **No answer of either carrier changes.** Wave 8 moves workspace-lifecycle's `keptLeafWord` to L0 as `leafKeptWord`
+    under its consent (4036, 4045), deleting its word list, word type and reader there, or declares it first if wave 8
+    lands first. Either way it is defined once.

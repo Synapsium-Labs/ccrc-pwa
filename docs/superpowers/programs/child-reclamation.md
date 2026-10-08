@@ -47,6 +47,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 22:10 — workspace-lifecycle's 4045: the shared word half answers no null. Wave 8's plan is amended before
+  dispatch, and contract R81 records it.**
+  - **The ruling.** `leafKeptWord(v)` is the WORD HALF only: ccd's three words read as themselves, and any other
+    value, `null` included, reads `unmeasured`. `null` and absence are each carrier's, asked before the word half.
+    Workspace-lifecycle's done-document carrier reads absence as `unreported` and `null` as nothing kept. Wave 8's
+    mirror carrier reads a null value as `none-or-unreported` itself. No answer of either carrier changes.
+  - **Why.** Wave 8's plan had the word half answer `null` for `null`; workspace-lifecycle wave 5's plan (`f8ec01cc4`)
+    pins `null` among its `unmeasured` values. One function cannot do both, and a moved function must keep the
+    owner's answers.
+  - **The move, made concrete.** If wave 5 lands first, Task 1 deletes its `KEPT_LEAF_WORDS`, `KeptLeafWord` and
+    `keptLeafWord`, derives its alias and `LEAF_KEPT_WHY`'s key from `LeafKeptWord`, and re-points
+    `archived-expiry-policy.test.ts`'s import. If wave 8 lands first, wave 5 makes those edits in its merge commit;
+    the reply to 4045 names them.
+  - **The amendment.** 30 exact edits (`amend_after_4045.py` in the evidence archive), each matching once. Attack
+    workflow `wf_445232fd-c76` (three Opus lenses, a Sonnet refuter per finding) found 6. Five survived, all minor
+    (a stale cross-reference, two mutation rows' expected reds), and their 3 fixes are in the 30. The plan's planSha
+    changes at this docs PR's merge.
+
 - **2026-10-08 21:08 — wave 8's plan is MERGED (#332, `21683c0d8`).** Its planSha is
   `21683c0d8f4d74013d1dde1b6c22634b1bc1f448`. Every gating check was green, and it was merged with
   `--match-head-commit` on the tested head `d998d96cf`. Run 348 is dispatched only once wave 7 (run 347) has
