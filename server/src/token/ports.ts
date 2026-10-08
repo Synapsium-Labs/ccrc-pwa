@@ -31,9 +31,10 @@ export type ValueRead =
 export type StateRead = { kind: 'state'; state: BoxTokenState } | { kind: 'absent' } | { kind: 'unusable' };
 export type RetiredRead = { kind: 'retired'; digests: string[] } | { kind: 'absent' } | { kind: 'unusable' };
 
-/** The driver's file store. Every write is the atomic, fsynced, 0600-from-birth write; a rejection means the
- *  target is unchanged. `removeValue` treats ENOENT as success. `renameOver` is one atomic replace followed by a
- *  directory fsync (promotion step (c), spec §5). */
+/** The driver's file store. Every write is the atomic, fsynced, 0600-from-birth write. `removeValue` treats ENOENT as success. `renameOver` is one atomic replace followed by a
+ *  directory fsync (promotion step (c), spec §5). A rejection BEFORE the rename leaves the target unchanged; a
+ *  rejection from the post-rename directory fsync means the target WAS replaced but its durability is unproven,
+ *  so the caller must treat the target's state as unknown (re-read it) after any rejection. */
 export interface TokenStore {
   readonly paths: TokenPaths;
   readState(): Promise<StateRead>;

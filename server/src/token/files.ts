@@ -14,7 +14,7 @@ import { extractToken, PLACEHOLDER_TOKEN } from '../coord/token.js';
 import {
   FLEET_TOKEN_FILE_COMMENT, GENERATION_ID_RE, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS,
 } from '../../../shared/box-token.js';
-import { CCRC_DIR_NAME, NODE_FILES } from '../../../shared/agent-protocol.js';
+import { CCRC_DIR_NAME, NODE_FILES, TOKEN_TRANSPORTS } from '../../../shared/agent-protocol.js';
 import type { BoxTokenState, WriteRecord } from './policy.js';
 import type { BothRoleWriter, FileMeta, RetiredRead, StateRead, TokenPaths, TokenStore, ValueRead } from './ports.js';
 
@@ -37,7 +37,7 @@ export function tokenPaths(mailTokenPath: string, home: string): TokenPaths {
     // A node file (verb, doctor, uninstall, the agent's grant): under the HOME, from NODE_FILES, never a quoted literal.
     generation: path.join(home, CCRC_DIR_NAME, NODE_FILES.tokenGeneration),
     fleetFile: path.join(home, '.cc-secrets', 'ccrc-mail.token'),
-    agentEnv: path.join(home, '.ccrc', 'agent.env'),
+    agentEnv: path.join(home, CCRC_DIR_NAME, 'agent.env'),
   };
 }
 
@@ -68,7 +68,8 @@ export async function readValueFile(p: string): Promise<ValueRead> {
 
 /** Temp `<dir>/.<base>.tmp-<16 hex>` opened O_WRONLY|O_CREAT|O_EXCL at 0600, written, fsynced, fstat'd, closed,
  *  renamed over `p`, then the directory fsynced. A throw before the rename removes the temp and leaves `p`
- *  byte-equal. `writtenAtMs` is never earlier than the file's own mtime (the 4.2.1 proof compares the two). */
+ *  byte-equal. A rejection from the post-rename directory fsync means `p` WAS replaced but its durability is
+ *  unproven: the caller must treat `p`'s state as unknown. `writtenAtMs` is never earlier than the file's own mtime (the 4.2.1 proof compares the two). */
 export async function writeValueFileAtomic(p: string, text: string): Promise<WriteRecord> {
   const dir = path.dirname(p);
   const tmp = path.join(dir, `.${path.basename(p)}.tmp-${randomBytes(8).toString('hex')}`);
@@ -97,7 +98,8 @@ async function syncDir(dir: string): Promise<void> {
   try { await dh.sync(); } finally { await dh.close(); }
 }
 
-/** One atomic replace (promotion step (c)), then the directory fsync. */
+/** One atomic replace (promotion step (c)), then the directory fsync. A rejection from the fsync means `to` WAS
+ *  replaced but its durability is unproven: the caller must treat `to`'s state as unknown. */
 export async function renameOverAtomic(from: string, to: string): Promise<void> {
   await fsp.rename(from, to);
   await syncDir(path.dirname(to));
@@ -107,9 +109,11 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const isNumOrNull = (v: unknown): boolean => v === null || isNum(v);
 const isStrOrNull = (v: unknown): boolean => v === null || typeof v === 'string';
+const isSource = (v: unknown): boolean => v === 'pending' || v === 'previous';
 const isWrite = (v: unknown): boolean => isObj(v) && isNum(v.dev) && isNum(v.ino) && isNum(v.writtenAtMs);
 
-/** A shape check, not a schema: enough that every reader of a field gets the type the field declares. */
+/** A shape check, not a schema: every field BoxTokenState declares must be present and null or its declared shape
+ *  (D-4403), so every reader of a field gets the type the field declares. Only `fileProblem` is optional. */
 function isBoxTokenState(v: unknown): v is BoxTokenState {
   if (!isObj(v) || v.v !== 1) return false;
   if (!(TOKEN_ORIGINS as readonly unknown[]).includes(v.origin)) return false;
@@ -122,7 +126,15 @@ function isBoxTokenState(v: unknown): v is BoxTokenState {
   const pr = v.previous;
   if (pr !== null && !(isObj(pr) && isStrOrNull(pr.id) && isNum(pr.seq) && isNum(pr.graceUntil) && isNum(pr.hardUntil)
     && typeof pr.currentPresented === 'boolean' && isWrite(pr.write))) return false;
-  if (v.promoting !== null && !(isObj(v.promoting) && typeof v.promoting.id === 'string')) return false;
+  if (v.promoting !== null && !(isObj(v.promoting) && typeof v.promoting.id === 'string' && GENERATION_ID_RE.test(v.promoting.id))) return false;
+  if (v.recovering !== null && !(isObj(v.recovering) && isSource(v.recovering.source))) return false;
+  if (!isStrOrNull(v.holdNode) || !isStrOrNull(v.lastFailure)) return false;
+  const ls = v.lastSync;
+  if (ls !== null && !(isObj(ls) && isNum(ls.at) && typeof ls.word === 'string'
+    && (ls.transport === 'unmeasured' || (TOKEN_TRANSPORTS as readonly unknown[]).includes(ls.transport)))) return false;
+  if (!isNumOrNull(v.retiredRefusedAt) || !isNumOrNull(v.mintFailedAt)) return false;
+  const lb = v.lastBootRecovery;
+  if (lb !== null && !(isObj(lb) && isNum(lb.at) && isSource(lb.source))) return false;
   if (v.hold !== null && !(TOKEN_HOLDS as readonly unknown[]).includes(v.hold)) return false;
   if (!isStrOrNull(v.fleetConfirmed) || !isNum(v.nextSeq) || !isNumOrNull(v.lastRotationAt) || !isNum(v.failures)) return false;
   if (!isObj(v.counters) || !isNum(v.counters.previousPresented) || !isNum(v.counters.retiredPresented)) return false;
@@ -143,39 +155,49 @@ export async function readState(p: string): Promise<StateRead> {
   } catch { return { kind: 'unusable' }; }
 }
 
+/** The same atomic write, so the same rejection contract: a rejection before the rename leaves the file unchanged;
+ *  one from the post-rename directory fsync means it was replaced with durability unproven (state unknown). */
 export async function writeState(p: string, s: BoxTokenState): Promise<void> {
   await writeValueFileAtomic(p, `${JSON.stringify(s)}\n`);
 }
 
 const DIGEST_RE = /^[0-9a-f]{64}$/;
 
+interface RetiredEntry { len: number; sha256: string; at: number }
+
+/** Parses and validates a retired file's text once; null when it is not the shape. Entries keep their validated shape. */
+function parseRetired(raw: string): RetiredEntry[] | null {
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!isObj(v) || v.v !== 1 || !Array.isArray(v.retired)) return null;
+    const entries: RetiredEntry[] = [];
+    for (const r of v.retired) {
+      if (!isObj(r) || typeof r.sha256 !== 'string' || !DIGEST_RE.test(r.sha256)) return null;
+      entries.push({ len: isNum(r.len) ? r.len : 64, sha256: r.sha256, at: isNum(r.at) ? r.at : 0 });
+    }
+    return entries;
+  } catch { return null; }
+}
+
 export async function readRetired(p: string): Promise<RetiredRead> {
   let raw: string;
   try { raw = await fsp.readFile(p, 'utf8'); } catch (e) {
     return errno(e) === 'ENOENT' ? { kind: 'absent' } : { kind: 'unusable' };
   }
-  try {
-    const v: unknown = JSON.parse(raw);
-    if (!isObj(v) || v.v !== 1 || !Array.isArray(v.retired)) return { kind: 'unusable' };
-    const digests: string[] = [];
-    for (const r of v.retired) {
-      if (!isObj(r) || typeof r.sha256 !== 'string' || !DIGEST_RE.test(r.sha256)) return { kind: 'unusable' };
-      digests.push(r.sha256);
-    }
-    return { kind: 'retired', digests };
-  } catch { return { kind: 'unusable' }; }
+  const entries = parseRetired(raw);
+  return entries === null ? { kind: 'unusable' } : { kind: 'retired', digests: entries.map((e) => e.sha256) };
 }
 
-/** Adds one digest (deduplicated). An unusable file is never overwritten: that would drop digests, so it throws. */
+/** Adds one digest (deduplicated). An unusable file is never overwritten: that would drop digests, so it throws.
+ *  One read, one parse: the new file is built from the validated entries. */
 export async function appendRetired(p: string, valueDigest: string, at: number): Promise<void> {
   if (!DIGEST_RE.test(valueDigest)) throw new RangeError('appendRetired: not a sha256 hex digest');
-  const cur = await readRetired(p);
-  if (cur.kind === 'unusable') throw new Error(`${p} is unusable; refusing to rewrite it`);
-  let entries: { len: number; sha256: string; at: number }[] = [];
-  if (cur.kind === 'retired') {
-    const raw = JSON.parse(await fsp.readFile(p, 'utf8')) as { retired: { len: number; sha256: string; at: number }[] };
-    entries = raw.retired;
+  let raw: string | null = null;
+  try { raw = await fsp.readFile(p, 'utf8'); } catch (e) {
+    if (errno(e) !== 'ENOENT') throw new Error(`${p} is unusable; refusing to rewrite it`);   // unreadable: never rewritten
   }
+  const entries = raw === null ? [] : parseRetired(raw);
+  if (entries === null) throw new Error(`${p} is unusable; refusing to rewrite it`);
   if (!entries.some((e) => e.sha256 === valueDigest)) entries.push({ len: 64, sha256: valueDigest, at });
   await writeValueFileAtomic(p, `${JSON.stringify({ v: 1, retired: entries })}\n`);
 }

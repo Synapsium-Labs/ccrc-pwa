@@ -182,6 +182,41 @@ describe('box-token.json and box-token-retired.json', () => {
     expect(await readState(p)).toEqual({ kind: 'unusable' });
   });
 
+  // D-4403: the seven fields and promoting.id the plan's first check left unvalidated.
+  it('a state with a missing or malformed field reads unusable, and a fully populated valid one reads state (D-4403)', async () => {
+    const { dir } = fixture();
+    const p = path.join(dir, 'box-token.json');
+    const s = mintedState(1000, { dev: 1, ino: 2, writtenAtMs: 1000 }, null, null, '0123456789abcdef');
+    const full = {
+      ...s, promoting: { id: 'fedcba9876543210' }, recovering: { source: 'previous' as const }, holdNode: 'n1',
+      lastFailure: 'x', lastSync: { at: 5, word: 'synced', transport: 'https' as const }, retiredRefusedAt: 6,
+      mintFailedAt: 7, lastBootRecovery: { at: 8, source: 'pending' as const },
+    };
+    await writeState(p, full);
+    expect(await readState(p)).toEqual({ kind: 'state', state: full });
+    await writeState(p, { ...full, lastSync: { at: 5, word: 'synced', transport: 'unmeasured' } });
+    expect((await readState(p)).kind).toBe('state');
+    const without = (k: string): Record<string, unknown> => { const o: Record<string, unknown> = { ...s }; delete o[k]; return o; };
+    const bad: [string, Record<string, unknown>][] = [
+      ['recovering missing', without('recovering')],
+      ['recovering a string', { ...s, recovering: 'x' }],
+      ['recovering with a junk source', { ...s, recovering: { source: 'current' } }],
+      ['holdNode missing', without('holdNode')],
+      ['holdNode a number', { ...s, holdNode: 3 }],
+      ['lastFailure missing', without('lastFailure')],
+      ['lastSync with a junk transport', { ...s, lastSync: { at: 1, word: 'synced', transport: 'ftp' } }],
+      ['lastSync missing', without('lastSync')],
+      ['retiredRefusedAt a string', { ...s, retiredRefusedAt: 'x' }],
+      ['mintFailedAt missing', without('mintFailedAt')],
+      ['lastBootRecovery with a junk source', { ...s, lastBootRecovery: { at: 1, source: 'x' } }],
+      ['promoting with a non-hex id', { ...s, promoting: { id: 'nothex' } }],
+    ];
+    for (const [name, v] of bad) {
+      writeFileSync(p, JSON.stringify(v));
+      expect(await readState(p), name).toEqual({ kind: 'unusable' });
+    }
+  });
+
   it('retired digests append once each, and an unusable file is never rewritten', async () => {
     const { dir } = fixture();
     const p = path.join(dir, 'box-token-retired.json');
