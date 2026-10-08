@@ -61,7 +61,8 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     the block ends there.
   - **Review run 346.** Its brief is `ccr15-evidence-archive/review-291-int-brief.md`, scoped to the two commits. It
     adds a SAFETY lens at xhigh asking whether #328's merged code composes or queues `ws-reclaim` or `ws-expire` on a
-    path wave 6's checks do not expect. Its dispatch waits on the daily cap.
+    path wave 6's checks do not expect. Its dispatch waited on the daily cap, and it was dispatched at 12:39 to
+    `ccrc-pwa-warm-basin`, on the first freed slot.
 
 - **2026-10-08 12:03 — review 341 ruled: wave 6 is accepted on its code; an integration round merges main (mail
   4004).** Rulings: `ccr15-evidence-archive/reviews/integration-291-rulings.md`.
