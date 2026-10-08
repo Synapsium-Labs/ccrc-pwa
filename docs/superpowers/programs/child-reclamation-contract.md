@@ -1526,3 +1526,17 @@ Code citations are to `77c11245`. They are hints, so locate code by content.
     one pass early. `releaseRetiredChildHold` still re-proves its six facts.
     - The direction: key it by generation.
   - Wave 7's SAFETY lens covers both, beside R57's recycled-slug proof and R61's closure.
+- **R64 — wave 6's fix round 1 (review 335).**
+  - **"Inside the child" means all three trees the tail deletes:** the worktree, `~/.cc-clips/<id>` and `~/.cc-tmp/<id>`.
+    - **The removal helper itself refuses** (rc 1, touching nothing) a directory leaf that holds a `.git` file linking to
+      an admin directory OUTSIDE the leaf, unless that admin directory's `gitdir` back-link names this checkout. A
+      missing admin directory also refuses. An unreadable entry, a timeout or more checkouts than the cap answers
+      unmeasured. A clone, or a submodule whose admin directory lies inside the leaf, is the leaf's own.
+    - The tail then KEEPS and records that leaf, and the act completes.
+    - Every caller of the helper inherits the rule, wave 7's collector included.
+    - **Registry rows** at, inside or through either leaf are NESTED.
+    - This closes review 335's F1 (a regression of R54's recovery) and the pre-existing shape of a registry row inside
+      a leaf.
+  - **R53, qualified.** "Never `pin-failed`" holds on the fresh path only. On git older than 2.43, a resume entering
+    at `children` or `worktree`, after the branch was deleted past the pin, stops `pin-failed` at the settle on every
+    retry. Nothing is deleted.
