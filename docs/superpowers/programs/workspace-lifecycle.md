@@ -1010,6 +1010,12 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     Task 1 moves the function. In Order B, wave 8 lands first, and wave 5's merge of main makes the same edits,
     importing `leafKeptWord` from `shared/api.ts`. CCR-15 asked for Order B as the second-lander rule. Run 345 had
     already been dispatched, so it reached the worker as a brief addendum (mail 4050); CCR-15 was told in 4051.
+  - **CCR-15 mail 4052 consents to wave 5's two regions inside claim 1113 (its R56):** `_ws_expire_locked` in
+    `ccd/ccd`, and `ExpiryAttention.kind`'s one line in `shared/api.ts`. Run 345 needs no claim on either file. Wave 7
+    edits neither region: in `ccd/ccd` it edits the shared tail, `crumb` and ws-collect, and in `shared/api.ts` it edits
+    `LcRefusalToken`, `LC_REFUSAL_WORD` and `LifecycleAct`. Whichever of runs 345 and 347 lands second merges main.
+    The consent was relayed to keen-hollow as addendum 2 (mail 4058). Run 320's README and `routes.ts` claims still
+    follow the brief's rule for a refused claim.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
