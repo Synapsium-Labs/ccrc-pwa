@@ -100,7 +100,7 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
   - `childReclaimSameGeneration` takes `(entry, bornAt, markerRunId, generation)`.
   - `childReclaimFirstSighting` takes the generation key as its fourth parameter.
 - **H6 — the tier state has four fields:** `{tier, tierToken, tierJ, tierRun}`, with `tier` and `tierJ` derived from `tierRun` by `childReclaimTierFrom`.
-- **H7 — one shared lane fixture.** A later task reuses an earlier task's lane fixture and never creates a second.
+- **H7 — one shared lane fixture.** A later task reuses an earlier task's lane fixture and never creates a second. Task 3's `server/test/childReclaimGenerationFixture.ts` is THE shared rig. Task 2's file-local rig in `child-reclaim-generation-lane.test.ts` predates it, is not shared, and stays as written. Every task after Task 3 uses Task 3's rig.
 - **H8 — `leafKeptWord`.** Whichever of this wave and workspace-lifecycle wave 5 lands first owns `leafKeptWord`. The other adopts it.
 - **The accepted departures, each numbered at the fix round:**
   - **Tasks 1 and 2:** `pass-clock-after-gather`, `an-overtaken-gather-decides-nothing`, `leaf-collapse-members-carry-a-run`, `marked-means-marker-reads-as-child`.
@@ -116,8 +116,18 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
 - **Rulings after reconciliation:**
   - **`held`.** A stuck child the sweep HOLDS also shows no retry clause. Its sentence says ccrc does not retry it while the hold stands, and that the long backoff resumes once the hold lifts. This extends Task 8's kept rule to holds (R41).
   - **The `purge-incomplete` tail.** Contract R76's "nothing retries it" is amended by Task 10's "§15 as built" note, because Task 6's tail is conditional.
-  - **`leafKeptWord` against workspace-lifecycle's file.** If workspace-lifecycle wave 5 landed first with a private word list in `server/src/archivedExpiry.ts`, Task 1 re-points that list to `leafKeptWord` in ONE additive edit. It does so only under quiet-river's consent as recorded in the brief; otherwise it STOPS and reports `leaf-kept-word-owned-elsewhere`.
-  - **The shared lane rig (H7).** Its spellings are fixed: `exec`, `journal(id, act, outcome, over?)`, `advance`, `advanceTo`, `mono`, `now`, `entryOf`, and a module-scope uid counter. The first task that needs a piece adds it with exactly that spelling, and later tasks reuse it.
+  - **`leafKeptWord` against workspace-lifecycle's file.** If workspace-lifecycle wave 5 landed first, it spells the three words on three code lines in `server/src/archivedExpiry.ts`: `EXPIRE_LEAF_WORDS`, the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type (its plan branch at 30b841c01). Task 1 re-points all three to `leafKeptWord` and `LeafKeptWord` in one commit. It does so only under quiet-river's consent as recorded in the brief; otherwise it STOPS and reports `leaf-kept-word-owned-elsewhere`.
+  - **The shared lane rig (H7).** Its spellings are fixed, exactly:
+    - `exec`;
+    - `journal = (id: string, act: string, outcome: string, over: Readonly<Record<string, unknown>> = {}): void`;
+    - `advance = (ms: number): void`;
+    - `advanceTo = (m: number): void`;
+    - `mono: () => mono`;
+    - `now: () => clock`;
+    - `entryOf = (id: string) => watcher.currentChildReclaimDefers().get(id)`;
+    - and `let uidN = 0;` directly above `export const laneFixture`.
+
+    The first task that needs a piece adds it with exactly that spelling. A later task adds to the returned object only the names that are not already keys of it. A difference in `Readonly` modifiers alone is never a reason to stop.
   - **A void sentence.** Task 7's sentence saying that Task 8 edits inside `childReclaimAttentionWithLeaves` is void: Task 8's kept and held swap lives inside `childReclaimAttentionWithKept`.
 - **Counts are measured, never copied.** Every count, red text and wall time a draft marks as measured on a scratch copy is re-measured by the worker. The measured value replaces the draft's, and a different count is not a departure.
 
@@ -142,47 +152,45 @@ The coordinator ruled on the task drafts, and those rulings are ALREADY APPLIED 
 
 ## File Structure
 
-Every file this wave touches, and the tasks that touch it. Each task's own **Files** block is the authority for what it does there.
+Every file this wave touches, taken from each task's own **Files** block, which stays the authority for what the task does there. The table names only files a task edits; files a task merely runs are not listed.
 
 | File | Task(s) |
 |---|---|
-| `shared/api.ts` | 1, 2, 3, 4, 6, 7, 9 |
-| `server/test/child-reclaim-generation-shape.test.ts` | 1, 2 |
-| `server/test/child-reclaim-attention-arms.test.ts` | 1, 2 |
-| `server/src/archivedExpiry.ts` | 1, 2, 7 |
-| `server/src/childReclaimSweep.ts` | 1, 2, 3, 4, 5, 6, 7, 8, 9 |
-| `server/src/coord/childReclaim.ts` | 1, 2, 3, 4, 5, 6, 7, 8, 9 |
-| `server/src/coord/close.ts` | 1, 2, 3, 4, 5 |
-| `server/src/watch.ts` | 1, 2, 3, 4, 5, 6, 7, 8, 9 |
-| `server/test/child-reclaim-sweep.test.ts` | 1, 2, 5 |
-| `server/test/child-reclaim-sweep-policy.test.ts` | 1, 2, 5, 8, 9 |
-| `server/test/child-reclaim-status.test.ts` | 1, 2, 8 |
-| `server/test/child-reclaim-runs-route.test.ts` | 1, 2 |
-| `server/test/child-reclaim-close.test.ts` | 1, 2, 5 |
-| `server/test/child-reclaim-paused-at-server.test.ts` | 1, 2 |
-| `server/test/child-reclaim-pre-crumb.test.ts` | 1, 2, 8 |
-| `server/test/child-reclaim.test.ts` | 1, 2, 3, 4 |
-| `server/test/child-reclaim-generation-key.test.ts` | 1, 2 |
-| `server/test/child-reclaim-generation-lane.test.ts` | 1, 2 |
-| `server/test/ccd-child-reclaim-row-generation.test.ts` | 3, 4 |
-| `server/test/childReclaimGenerationFixture.ts` | 3, 4, 5, 7, 9 |
-| `server/test/child-reclaim-licence-executor.test.ts` | 3, 4 |
-| `server/test/child-reclaim-licence-lane.test.ts` | 3, 4 |
-| `README.md` | 3, 4, 6, 8 |
-| `server/test/child-reclaim-hold-retired-generation.test.ts` | 3, 4 |
+| `shared/api.ts` | 1 |
+| `server/src/archivedExpiry.ts` | 1, only under H8 (workspace-lifecycle's file, with recorded consent) |
+| `server/src/childReclaimSweep.ts` | 2, 4, 5, 7, 8, 9 |
+| `server/src/coord/childReclaim.ts` | 2, 3, 4, 5, 6, 7, 8, 9 |
+| `server/src/coord/close.ts` | 2, 5 |
+| `server/src/watch.ts` | 2, 4, 5, 7, 8, 9 |
 | `server/src/coord/store.ts` | 5, 7 |
+| `server/test/child-reclaim-generation-shape.test.ts` (new) | 1 |
+| `server/test/child-reclaim-attention-arms.test.ts` (new) | 1 |
+| `server/test/child-reclaim-generation-key.test.ts` (new) | 2 |
+| `server/test/child-reclaim-generation-lane.test.ts` (new) | 2 |
+| `server/test/child-reclaim-status.test.ts` | 2, 8 |
+| `server/test/child-reclaim.test.ts` | 3, 4 |
+| `server/test/ccd-child-reclaim-row-generation.test.ts` | 3 (wave 7's file: two cases flipped, `wave7-generation-pins-owed`) |
+| `server/test/childReclaimGenerationFixture.ts` (new) | 3, then 5, 7, 9 (H7) |
+| `server/test/child-reclaim-licence-executor.test.ts` (new) | 3 |
+| `server/test/child-reclaim-licence-lane.test.ts` (new) | 3 |
+| `server/test/child-reclaim-hold-retired-generation.test.ts` (new) | 4 |
+| `server/test/child-reclaim-sweep-policy.test.ts` | 5, 8, 9 |
 | `server/test/child-reclaim-generation.test.ts` | 5 |
-| `server/test/child-reclaim-birth-removal.test.ts` | 5 |
-| `server/test/containment-refuted-word.test.ts` | 6, 8, 9 |
-| `server/test/child-reclaim-failed-arm.test.ts` | 6 |
-| `server/test/child-reclaim-leaf-kept.test.ts` | 7 |
-| `server/test/child-reclaim-leaf-kept-store.test.ts` | 7 |
-| `server/test/child-reclaim-leaf-kept-lane.test.ts` | 7 |
-| `server/test/child-reclaim-stuck.test.ts` | 8 |
-| `server/test/single-definition.test.ts` | 8 |
-| `server/test/ccd-child-reclaim-prelock-journal.test.ts` | 8 |
-| `server/test/child-reclaim-persistent-tier.test.ts` | 9 |
-| `server/test/child-reclaim-tier-lane.test.ts` | 9 |
+| `server/test/child-reclaim-close.test.ts` | 5 |
+| `server/test/child-reclaim-sweep.test.ts` | 5 |
+| `server/test/child-reclaim-birth-removal.test.ts` (new) | 5 |
+| `server/test/containment-refuted-word.test.ts` | 6 (wave 7's file: one assertion flipped, H3) |
+| `server/test/child-reclaim-failed-arm.test.ts` (new) | 6 |
+| `server/test/child-reclaim-leaf-kept.test.ts` (new) | 7 |
+| `server/test/child-reclaim-leaf-kept-store.test.ts` (new) | 7 |
+| `server/test/child-reclaim-leaf-kept-lane.test.ts` (new) | 7 |
+| `server/test/child-reclaim-pre-crumb.test.ts` | 8 |
+| `server/test/child-reclaim-stuck.test.ts` (new) | 8 |
+| `server/test/child-reclaim-persistent-tier.test.ts` (new) | 9 |
+| `server/test/child-reclaim-tier-lane.test.ts` (new) | 9 |
+| `README.md` | 10 |
+| `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` | 10 |
+| `docs/superpowers/programs/child-reclamation-contract.md` | 10 (the "§15 as built" note only) |
 
 ## Execution order and dependencies
 
@@ -228,8 +236,8 @@ grep -c '"generation"' ccd/ccd                                          # (a5) 1
 - [ ] **Step 2: The anchors this wave starts from**
 
 ```bash
-grep -n '^export type ChildReclaimDeferWhy\|^export type ChildReclaimResume\|^export function parseChildReclaimAudit\|^export function parseChildReclaimResult\|^export async function childReclaimOutcome\|^export function childReclaimBornAt' server/src/coord/childReclaim.ts   # six lines
-grep -n 'childReclaimHoldRetiredSeen\|^  private async sweepChildReclaim' server/src/watch.ts | head   # the Set, and the sweep
+grep -n '^export type ChildReclaimDeferWhy\|^export type ChildReclaimResume\|^export function parseChildReclaimAudit\|^export function parseChildReclaimResult\|^async function childReclaimOutcome\|^export function childReclaimBornAt' server/src/coord/childReclaim.ts   # six lines
+grep -n 'childReclaimHoldRetiredSeen\|^  async sweepChildReclaim(' server/src/watch.ts | head   # the Set, and the sweep
 grep -n 'lifecycleCreatesFor' server/src/coord/store.ts server/src/coord/childReclaim.ts server/src/watch.ts   # two callers outside the store
 grep -c 'REG_GENERATION_SHAPE\|leafKeptWord\|lifecycleBirthEventsFor\|CHILD_RECLAIM_TIER' shared/api.ts server/src/coord/childReclaim.ts server/src/childReclaimSweep.ts server/src/coord/store.ts   # 0 in each, unless workspace-lifecycle landed leafKeptWord first (H8: adopt it)
 ```
@@ -269,7 +277,7 @@ Three facts fix the shape of the edit:
   - one block appended after the file's last line (`} as const;` closing `STALL_SECTION_TEXT`, :9549).
 - Test (new): `server/test/child-reclaim-generation-shape.test.ts`
 - Test (new): `server/test/child-reclaim-attention-arms.test.ts`
-- Modify ONLY if workspace-lifecycle wave 5 (run 345) is on this branch with its private word list (Step 1's H8 grep prints an `EXPIRE_LEAF_WORDS` line): `server/src/archivedExpiry.ts`, to delete `EXPIRE_LEAF_WORDS` and re-point `expireLeafKept` at `leafKeptWord` (Step 4 (d)). Ruling H8; moved here from Task 7's Step 7, because this task's census case reds on that private list at this task's own commit.
+- Modify ONLY if workspace-lifecycle wave 5 (run 345) is on this branch with its private word list (Step 1's H8 grep prints an `EXPIRE_LEAF_WORDS` line): `server/src/archivedExpiry.ts`, to delete `EXPIRE_LEAF_WORDS` and re-point `expireLeafKept` at `leafKeptWord`, and to derive the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (Step 4 (d); W8-SEC-1: WL5's plan at `30b841c01` spells the three words on those two type-level lines too, and the census reds on either). Ruling H8; moved here from Task 7's Step 7, because this task's census case reds on that private list at this task's own commit.
 - Nothing else. No README edit, no `single-definition.test.ts` edit, and no `session-hook.test.ts` census edit: Step 6 proves none is owed. No PWA edit.
 
 **Interfaces:**
@@ -301,7 +309,7 @@ Three facts fix the shape of the edit:
   - **Measured at planning:** a second `kept-many` arm whose member type differs breaks `pwa/test/child-reclaim-banner.test.tsx:373` and `:429` under the PWA's `tsc` (TS2322, through `Extract<ChildReclaimAttention, { kind: 'kept-many' }>`), and this wave makes no PWA edit.
   - **The reader agrees:** the PWA's reader drops a member whose `runId` is not a number anyway (`pwa/src/fleet/childReclaimWords.ts`, `isKeptMember`).
   - **What Task 7 must do:** keep a kept leaf whose run is unknown as a single `leaf-kept` item, which the PWA renders with a null run. It never collapses one.
-- For Task 7 (and workspace lifecycle): no file in `shared`, `server/src`, `pwa/src` or `agent/src` other than `shared/api.ts` may spell all three words on one code line. Index any table by `LeafKeptWord`, or iterate `LEAF_KEPT_WORDS`. If workspace-lifecycle wave 5 is already on this branch with its private `EXPIRE_LEAF_WORDS`, THIS task deletes it and re-points `expireLeafKept` (Step 4 (d), H8); Task 7 then only verifies.
+- For Task 7 (and workspace lifecycle): no file in `shared`, `server/src`, `pwa/src` or `agent/src` other than `shared/api.ts` may spell all three words on one code line. Index any table by `LeafKeptWord`, or iterate `LEAF_KEPT_WORDS`. If workspace-lifecycle wave 5 is already on this branch with its private `EXPIRE_LEAF_WORDS`, THIS task deletes it, re-points `expireLeafKept`, and derives that file's `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (Step 4 (d), H8, W8-SEC-1); Task 7 then only verifies.
 
 - [ ] **Step 1: Re-measure the anchors (read-only)**
 
@@ -316,6 +324,7 @@ grep -n "  | 'collect'" shared/api.ts                                     # one 
 grep -c "'containment-refuted'" shared/api.ts                             # 2 or more: wave 7's word and its sentence (H1)
 ls server/test/containment-refuted-word.test.ts server/test/ccd-child-reclaim-row-generation.test.ts   # both: wave 7's tests (H1)
 grep -n "EXPIRE_LEAF_WORDS\|export function expireLeafKept" server/src/archivedExpiry.ts   # (H8) an EXPIRE_LEAF_WORDS line only if workspace-lifecycle wave 5 landed first
+grep -nE "ExpireLeafKept =|LEAF_KEPT_WHY" server/src/archivedExpiry.ts   # (H8, W8-SEC-1) WL5's two type-level spellings of the three words: lines only if wave 5 landed first
 ```
 
 STOP rules:
@@ -323,7 +332,7 @@ STOP rules:
   - If its answers differ from this task's table (null → null; the three words → themselves; anything else → `'unmeasured'`), STOP and report by slug `leaf-kept-word-owned-elsewhere`.
 - **Any other count differs.** Report it by slug, and build nothing on a changed anchor.
 - **Wave 7's tree (H1).** Wave 7 (run 347) has merged, and Task 0 brought its tree onto this branch. If any of the three wave 7 checks above prints nothing (or `ls` fails), STOP and report `wave7-tree-missing`: Task 0 brought wave 7's tree (H1); no merge mid-wave. Its `shared/api.ts` edits are in `LcRefusalToken`/`LC_REFUSAL_WORD`/`LifecycleAct`, so this task's lines are disjoint from them, and its README re-pointing is already on this branch. Read README's numbers from README itself in Step 6, never from this plan.
-- **Workspace-lifecycle wave 5's private list (H8).** If the `archivedExpiry.ts` grep prints an `EXPIRE_LEAF_WORDS` line, wave 5 landed first with its own copy of the three words, and this task's census case would red on it at this commit. Step 4 (d) re-points it, in this task's commit. If it prints only `expireLeafKept`, and that function already calls `leafKeptWord`, nothing is owed.
+- **Workspace-lifecycle wave 5's private list (H8).** If the `archivedExpiry.ts` grep prints an `EXPIRE_LEAF_WORDS` line, wave 5 landed first with its own copy of the three words, and this task's census case would red on it at this commit. Step 4 (d) re-points it, in this task's commit. The second H8 grep (W8-SEC-1) prints the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s declaration. Each one that still spells `'refused' | 'unmeasured' | 'in-use'` is a code line naming all three words, which the census reds just as surely, so Step 4 (d) derives it from `LeafKeptWord` in the same commit. If the first grep prints only `expireLeafKept`, that function already calls `leafKeptWord`, and `grep -nF "'refused' | 'unmeasured' | 'in-use'" server/src/archivedExpiry.ts` prints nothing, nothing is owed.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -647,9 +656,11 @@ export function leafKeptWord(v: unknown): LeafKeptWord | null {
 
 The block is L0: it imports nothing, and `ChildReclaimKeptMember` is declared above it in the same file. TypeScript resolves type names declared later in a file, so (b)'s forward references compile.
 
-(d) ONLY if Step 1's H8 grep printed an `EXPIRE_LEAF_WORDS` line (ruling H8; this was Task 7's Step 7). In `server/src/archivedExpiry.ts`:
+(d) ONLY if Step 1's H8 greps printed an `EXPIRE_LEAF_WORDS` line, or an `ExpireLeafKept =` or `LEAF_KEPT_WHY` line that spells the three words (ruling H8, W8-SEC-1; this was Task 7's Step 7). In `server/src/archivedExpiry.ts`, make each bullet whose line is there, exactly as quoted. WL5's plan at `30b841c01` writes all three lines, at its `:2205`, `:2206` and `:2329`:
 - delete `const EXPIRE_LEAF_WORDS: readonly string[] = ['refused', 'unmeasured', 'in-use'];`;
-- add `leafKeptWord` to the file's `../../shared/api.js` import;
+- replace `export type ExpireLeafKept = 'refused' | 'unmeasured' | 'in-use' | null | 'unreported';` with `export type ExpireLeafKept = LeafKeptWord | null | 'unreported';`;
+- replace `const LEAF_KEPT_WHY: Readonly<Record<'refused' | 'unmeasured' | 'in-use', string>> = {` with `const LEAF_KEPT_WHY: Readonly<Record<LeafKeptWord, string>> = {`;
+- add `leafKeptWord` to the file's `../../shared/api.js` import, and `type LeafKeptWord` beside it when either `replace` bullet above ran;
 - make `expireLeafKept`'s body:
 
 ```ts
@@ -657,7 +668,7 @@ The block is L0: it imports nothing, and `ChildReclaimKeptMember` is declared ab
   return leafKeptWord(doc[key]);
 ```
 
-Its answers are unchanged, because `leafKeptWord`'s non-absent arms are exactly the deleted ones (`null` → `null`, a word → itself, anything else → `'unmeasured'`). If wave 5's `expireLeafKept` answers differently from that, STOP and report `leaf-kept-word-owned-elsewhere`. Tell quiet-river in the wave-done. Task 7's Step 0 (e) then prints nothing, and Task 7 only verifies.
+Its answers are unchanged, because `leafKeptWord`'s non-absent arms are exactly the deleted ones (`null` → `null`, a word → itself, anything else → `'unmeasured'`). If wave 5's `expireLeafKept` answers differently from that, STOP and report `leaf-kept-word-owned-elsewhere`. The two type edits change no answer either: `LeafKeptWord` is the same three words, so `ExpireLeafKept` is the same union and `LEAF_KEPT_WHY` keeps its three keys (its `LEAF_KEPT_WHY[w]` index, narrowed past `null` and `'unreported'`, still type-checks, which Step 5's `tsc` shows). Tell quiet-river in the wave-done, naming all three lines. Task 7's Step 0 (e) then prints nothing, and Task 7 only verifies.
 
 - [ ] **Step 5: Run the tests, both type-checks, and the neighbours**
 
@@ -675,7 +686,8 @@ Expected:
   - The PWA check is the reason the collapsed line's members are `ChildReclaimKeptMember`. With `runId: number | null` members, `pwa/test/child-reclaim-banner.test.tsx` reds TS2322 at its `keptMany` builder.
 - `single-definition` is exactly as green as at the base. Run it on the base first if anything is red: in the planning scratch export one LiteLLM case was red at the base itself, so it is not this task's.
 - `typecheck-tests` is a known load flake: re-run it in isolation before calling it red.
-- Only when Step 4 (d) ran: `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts test/expire-archived.test.ts test/archived-expiry-lane.test.ts )` is green, with the counts workspace-lifecycle wave 5 left (H8).
+- Only when Step 4 (d) ran: `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts test/expire-archived.test.ts test/archived-expiry-lane.test.ts )` is green, with the counts workspace-lifecycle wave 5 left (H8). Then `grep -nF "'refused' | 'unmeasured' | 'in-use'" server/src/archivedExpiry.ts` prints nothing (W8-SEC-1).
+- Whatever landed first, the census case's `holders` is `['shared/api.ts']`: a red here naming `server/src/archivedExpiry.ts` is a type-level spelling Step 4 (d) missed, never a reason to widen the census.
 
 - [ ] **Step 6: Prove README and the citation census owe nothing (the README tax, paid as a measurement)**
 
@@ -715,6 +727,7 @@ Make each mutation alone, run its command, record the red, and revert before the
 | T1.9 | Delete ` \| ChildReclaimStuckAttention` from the union's last line | same | `error TS2322: Type '"stuck"' is not assignable to type '"failing" \| "kept" \| "kept-many" \| "leaf-kept" \| "terminal"'` |
 | T1.10 | Delete `'in-use': true` from `LEAF_KEPT_WORD_TABLE` | `cd server && ./node_modules/.bin/tsc --noEmit -p .` | `error TS2741: Property '"in-use"' is missing in type '{ refused: true; unmeasured: true; }' but required in type 'Readonly<Record<LeafKeptWord, true>>'` |
 | T1.11 | In `server/src/archivedExpiry.ts`, directly above `export const EXPIRE_LANE_LIVE_MARKER`, add the list wrapped over two lines: `export const EXPIRE_LEAF_WORDS: readonly string[] = ['refused', 'unmeasured',`, then on the next line `  'in-use'];` | `cd server && ./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `1 failed \| 15 passed (16)`: `is declared once, in shared/api.ts, …`: `a reader of the kept words with its own list: expected [ 'server/src/archivedExpiry.ts' ] to deeply equal []`. The one-line set check misses a wrapped copy; the name check catches it. Not measured at planning (added for H8): measure it |
+| T1.12 | In `server/src/archivedExpiry.ts`, directly above `export const EXPIRE_LANE_LIVE_MARKER`, add `export type ExpireLeafKeptCopy = ` followed, on the SAME line, by the three quoted words and `null` joined as a union: the type-level spelling WL5's plan drafts for its `ExpireLeafKept` alias (W8-SEC-1; Step 4 (d)'s second bullet quotes it) | `cd server && ./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `1 failed \| 15 passed (16)`: `is declared once, in shared/api.ts, …`: `expected [ 'shared/api.ts', …(1) ] to deeply equal [ 'shared/api.ts' ]`. A type-level copy is a code line naming all three words, so the set check catches it with no name to match. Not measured at planning (W8-SEC-1): measure it |
 
 Revert each mutation, then re-run Step 5's first command green.
 
@@ -2749,10 +2762,14 @@ Expected: both cases red. The first: `an older ccd: no key: expected { kind: 'to
 
 ```ts
 /** `generation-changed`'s sentence (spec §5.5, §5.6): what the feed row says after the word, wherever the
- *  executor finds it. Defined once; each detail that carries it first says what was measured. */
+ *  executor finds it. Defined once; each detail that carries it first says what was measured. Worded by what
+ *  was MEASURED, never by a cause: the executor sees only that the generation file now reads differently from
+ *  the licence. ccd can change that file with no removal (`_reg_generation_init` minting into an absence on a
+ *  standing row; `_reg_purge` unlinking `.generation` last with the row still listed), so "removed and made
+ *  again" would be a false cause on those rows. */
 export const CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE =
-  'The workspace under this name was removed and made again after the sweep judged it, so this request is not '
-  + 'used for the new one, and the sweep judges the new workspace afresh.';
+  'The workspace under this name no longer carries the generation the sweep judged it under, so this request '
+  + 'is not used, and the sweep judges the workspace afresh.';
 
 /** A generation key, in a detail's words. */
 const childReclaimGenerationWords = (g: ChildReclaimGenerationKey): string =>
@@ -2997,7 +3014,7 @@ MSG
   - the field and its docstring (`:842`; `grep -n "private childReclaimHoldRetiredSeen = new Set<string>();" server/src/watch.ts`; the docstring starts at `:831`);
   - the `hold-retired` branch (`:3541`, `:3542`, `:3547`, `:3578`; `grep -n "if (this.childReclaimHoldRetiredSeen.has(r.id)) {\|accountedRunId: release.accountedRunId,\|this.childReclaimHoldRetiredSeen.add(r.id);" server/src/watch.ts`);
   - the vanished-row prune (`:3721`; `grep -n "for (const id of \[...this.childReclaimHoldRetiredSeen\]) {" server/src/watch.ts`);
-  - `sweepChildReclaim`'s docstring sentence "on the SECOND consecutive pass this pass answers it" (`grep -n "on the SECOND consecutive pass this pass answers it" server/src/watch.ts`).
+  - `sweepChildReclaim`'s docstring sentence "on the SECOND consecutive pass this pass answers it", which wraps after `SECOND` in watch.ts (`grep -n "consecutive pass this pass answers it" server/src/watch.ts`; measured at `226bb881c`: one line, `:3270`).
 - Modify: `server/test/child-reclaim.test.ts`. Its 21 `ChildReclaimReleaseRequest` literals gain `generation: { kind: 'absent' }`. Its release rig writes no `.generation`, so `absent` against `absent` keeps every case's answer.
 - Create: `server/test/child-reclaim-hold-retired-generation.test.ts`.
 - No edit to `shared/api.ts`, `README.md` or `single-definition.test.ts`.
@@ -3415,7 +3432,7 @@ with:
 - `regGeneration` is Task 2's local (Step 0), passed as is.
 - In the vanished-row prune, `for (const id of [...this.childReclaimHoldRetiredSeen]) {` becomes `for (const id of [...this.childReclaimHoldRetiredSeen.keys()]) {`. A Map spreads to entries, which `tsc` reports against `seen.has(id)`.
 - The two `.clear()` sites and the ineligible and eligible arms' `.delete(r.id)` are unchanged: a Map has both methods.
-- In `sweepChildReclaim`'s docstring, "on the SECOND consecutive pass this pass answers it" becomes "on the SECOND consecutive pass this pass answers it for the SAME workspace generation (spec §5.6)".
+- In `sweepChildReclaim`'s docstring, on the line holding `consecutive pass this pass answers it,` (the sentence wraps after `SECOND`, so never match it as one line), insert ` for the SAME workspace generation (spec §5.6)` directly after `answers it`, before the comma, and keep the rest of the line as it is. Re-wrap only that line and the next if it passes the file's width.
 
 (d) **The existing release cases** (`server/test/child-reclaim.test.ts`):
 
@@ -5214,15 +5231,15 @@ MSG
 So the mirror reader answers three things, never folded: `kept:<word>`, `none-or-unreported` and `truncated`. The ONE thing shared with workspace-lifecycle is the word classifier, `leafKeptWord`. Workspace-lifecycle's stdout reader, `expireLeafKept`, keeps its own absence word (`unreported`), because on stdout an explicit `null` and an absent key mean different things. The item is derived on every pass from the mirror alone, so a restart rebuilds it. It is read in its OWN try, AFTER the fail-shut try, and before the two early returns.
 
 **Files:**
-- Modify: `server/src/childReclaimSweep.ts`. Add the kept-leaf block directly after `childReclaimFeedQuiet`'s closing brace (`grep -n "^export function childReclaimFeedQuiet(" server/src/childReclaimSweep.ts`, `:1163` at `226bb881c`). Add `leafKeptWord`, `CHILD_RUN_ID`, `type LifecycleMeas`, `type LeafKeptWord`, `type ChildReclaimLeafKeptAttention` and `type ChildReclaimLeafKeptMany` to its `../../shared/api.js` import (`:14-18`). The last three are Task 1's L0 names: this file imports them and never declares a second copy.
+- Modify: `server/src/childReclaimSweep.ts`. Add the kept-leaf block directly after `childReclaimFeedQuiet`'s closing brace (`grep -n "^export function childReclaimFeedQuiet(" server/src/childReclaimSweep.ts`, `:1163` at `226bb881c`). Add `leafKeptWord`, `CHILD_RUN_ID`, `LC_LINE_MAX`, `type LifecycleMeas`, `type LeafKeptWord`, `type ChildReclaimLeafKeptAttention` and `type ChildReclaimLeafKeptMany` to its `../../shared/api.js` import (`:14-18`). `LC_LINE_MAX` (`shared/api.ts:8056` at `226bb881c`) bounds `childReclaimDetailText` (W8-SEC-2). The last three are Task 1's L0 names: this file imports them and never declares a second copy.
 - Modify: `server/src/coord/store.ts`. Add `lifecycleReclaimRowsSinceSql`, `lifecycleReclaimRowsSince`, `lifecycleLeafEndsSql` and `lifecycleLeafEndsFor` directly after `childReclaimEvents` (`grep -n "  childReclaimEvents(sessionIds" server/src/coord/store.ts`, `:5905`). Widen the type-only import at `:22` (`grep -n "^import type { ChildReclaimCoordinatorClaim }" server/src/coord/store.ts`) to a value import, which `deadCoordinator.js`'s import at `:42` already precedents. Add `type LifecycleOutcome` to the `shared/api.js` import if it is absent.
-- Modify: `server/src/coord/childReclaim.ts`. Add `CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE`, `childReclaimLeafKeptFeedBody` and `recordChildReclaimLeafKeptFeed` directly after `recordChildReclaimKeptFeed` (`grep -n "^export function recordChildReclaimKeptFeed" server/src/coord/childReclaim.ts`, `:1399`). Add `type ChildReclaimLeafKept` to its `../childReclaimSweep.js` import (`:11-16`).
+- Modify: `server/src/coord/childReclaim.ts`. Add `CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE`, `childReclaimLeafKeptFeedBody` and `recordChildReclaimLeafKeptFeed` directly after `recordChildReclaimKeptFeed` (`grep -n "^export function recordChildReclaimKeptFeed" server/src/coord/childReclaim.ts`, `:1399`). Add `childReclaimDetailText` and `type ChildReclaimLeafKept` to its `../childReclaimSweep.js` import (`:11-16`).
 - Modify: `server/src/watch.ts`. Add two fields beside `childReclaimKeptReported` (`grep -n "private childReclaimKeptReported" server/src/watch.ts`, `:884`). Add the ONE-b block after the `mirrorArms` statement (`grep -n "latest, live, kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs: now," server/src/watch.ts`, `:3374`). Edit one line in `childReclaimPublishAttention` (`:3838`). Extend the imports at `:89-91` and `:93-100`.
-- No `server/src/archivedExpiry.ts` edit (H8). If workspace-lifecycle wave 5 is on this branch, Task 1's commit re-pointed `expireLeafKept` at the shared classifier. Step 0 (e) and Step 7 only verify that.
+- No `server/src/archivedExpiry.ts` edit (H8). If workspace-lifecycle wave 5 is on this branch, Task 1's commit re-pointed `expireLeafKept` at the shared classifier and derived that file's `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (W8-SEC-1). Step 0 (e), Step 0 (e2) and Step 7 only verify that.
 - Test (new): `server/test/child-reclaim-leaf-kept.test.ts` covers the mirror reader, the item, its ends, the collapse, and the tie of its purge-failure set to Task 6's `CHILD_RECLAIM_PURGE_INCOMPLETE`. The classifier's pins are Task 1's (H8).
 - Test (new): `server/test/child-reclaim-leaf-kept-store.test.ts` covers the two store reads.
 - Test (new): `server/test/child-reclaim-leaf-kept-lane.test.ts` covers the lane: the placement relative to the fail-shut try, the early returns, restart and the feed. It runs on Task 3's shared `laneFixture` (H7) and builds no FleetWatcher rig of its own.
-- Modify (test rig): `server/test/childReclaimGenerationFixture.ts`, Task 3's shared lane rig (H7). Step 1 adds the options and helpers this task's lane cases need, additively: `exec`, `ccdVerbs`, `notifyLog`, `coord` and `home` options, plus `journal`, `now` and `home` on the returned rig, with the uid counter moved to module scope.
+- Modify (test rig): `server/test/childReclaimGenerationFixture.ts`, Task 3's shared lane rig (H7). Step 1 adds the options and helpers this task's lane cases need, additively: `exec`, `ccdVerbs`, `notifyLog`, `coord` and `home` options, plus `journal`, `now` and `home` on the returned rig, each added only if it is not already a key of it, with the uid counter moved to module scope, directly above `export const laneFixture` (EX3).
 - No `shared/api.ts` edit, so this task has no README re-point. Task 1 makes every `shared/api.ts` insertion. No `pwa/` edit: Step 9 proves the PWA renders the new kind unchanged.
 
 **Interfaces:**
@@ -5255,8 +5272,11 @@ So the mirror reader answers three things, never folded: `kept:<word>`, `none-or
   export function childReclaimMirrorLeaf(
     row: Pick<ChildReclaimLeafSourceRow, 'truncated' | 'meas'>, key: 'clipsKept' | 'tmpRootKept'): ChildReclaimMirrorLeaf;
   export const childReclaimLeafSource: (r: Pick<ChildReclaimLeafSourceRow, 'outcome' | 'refusal'>) => boolean;
+  // W8-SEC-2: one line, control and bidi characters replaced, at most LC_LINE_MAX code points plus an ellipsis.
+  export function childReclaimDetailText(d: string): string;
   export function childReclaimLeafKeptSentence(
-    sessionId: string, clips: ChildReclaimMirrorLeaf, tmp: ChildReclaimMirrorLeaf | 'collected'): string;
+    sessionId: string, clips: ChildReclaimMirrorLeaf, tmp: ChildReclaimMirrorLeaf | 'collected',
+    detail: string | null): string;
   // `ChildReclaimLeafKeptAttention` is Task 1's L0 interface, imported from shared/api.ts and never redeclared.
   export interface ChildReclaimLeafKept {
     readonly item: ChildReclaimLeafKeptAttention; readonly source: number; readonly detail: string | null;
@@ -5288,12 +5308,13 @@ So the mirror reader answers three things, never folded: `kept:<word>`, `none-or
   ```
 - Produces, `server/src/watch.ts`: `private childReclaimLeaves: readonly ChildReclaimLeafKept[]` and `private readonly childReclaimLeafFed: Set<number>`. Neither has an accessor.
 - For Task 8: `childReclaimPublishAttention` now wraps `childReclaimAttentionWithKept(…)` in `childReclaimAttentionWithLeaves(…, leaves)`. Task 8 does not edit this line: its `stuck` item reaches the wrap through `mirrorArms`. The leaf merge yields to any item that carries a `sessionId`, so a `stuck` item outranks a leaf item by construction, as the coordinator ruled (stuck outranks leaf-kept). This task's yield case pins that with a `stuck` item, using Task 1's L0 arm.
+- For Task 8: `childReclaimDetailText` is declared HERE, in L1, because this task runs before Task 8 (W8-SEC-2). Task 8's stuck sentence imports it and declares no second copy.
 
 **Departures (named by slug; the coordinator assigns numbers):**
 - `leaf-kept-yields-to-a-live-item`. A leaf item is dropped when the list already holds any item for that id, including as a `kept-many` member. "One item per id" then holds across every arm, and the banner's React key (`a.sessionId`, `pwa/src/fleet/ChildReclaimBanner.tsx:148`) stays unique. A leaf item can only meet another item when the row still stands (purge-refused or purge-mechanism-absent) or a recycled slug's create is not placed yet. Its feed row is still written.
 - `leaf-end-clock-guard`. An end (a create or a collect) counts only when it FOLLOWS the row: its mirror id is higher, and NOT `end.at !== null && end.at < row.at`. This is R75's clock guard on the purge, applied to the ends. Doubt keeps the item listed.
 - `leaf-kept-ends-read`. The SOURCE is the one bounded read the ruling names. The ends need the ids' later `create`/`collect` `done` rows, which can lie outside a time window, so they come from a second read: one statement `INDEXED BY lifecycle_by_session` over the source's ids only.
-- `leaf-kept-feed-row`. "The feed keeps the record" is made true by one `child reclaim leaf kept` feed row per source row per process. The row is recorded and never pushed, and it carries ccd's own `detail`. That `detail` is also what "the feed names it" means for a cut line: the encoder drops `meas` before `detail`. A restart writes it once more (R44's precedent).
+- `leaf-kept-feed-row`. "The feed keeps the record" is made true by one `child reclaim leaf kept` feed row per source row per process. The row is recorded and never pushed, and it carries ccd's own `detail`. That `detail` is also what "the feed names it" means for a cut line: the encoder drops `meas` before `detail`, except in its last-resort line, which keeps neither (`ccd/ccd:4930-4939`, W8-SEC-3). So a cut line's sentence points at the feed row only when the row carries a `detail`. Otherwise it says ccd's line kept no detail either, and names where to look on the fleet box. The `detail` reaches the feed through `childReclaimDetailText` (W8-SEC-2): one line, control and bidi characters replaced, bounded by `LC_LINE_MAX`, because any session can append a journal line. A restart writes it once more (R44's precedent).
 - `leaf-kept-null-run-stays-single`. Only items with a numeric `runId` collapse, because the PWA drops a member whose `runId` is not a number (`pwa/src/fleet/childReclaimWords.ts:85-89`). An item with no run (a purge failure, or a cut line) always lists singly, however many there are.
 - `leaf-kept-undated-row-unlisted`. A reclaim row ccd journaled with no `at` is outside the `at >= ?` window, so it is never listed. It cannot be placed against the 7-day horizon either.
 - `leaf-kept-feed-memory-unpruned`. `childReclaimLeafFed` holds one number per kept-leaf row this process has seen. Nothing prunes it, because an ended item never returns, and a prune would be a branch with no observable effect to pin.
@@ -5306,25 +5327,26 @@ grep -nE "export (function|const) leafKeptWord|export type LeafKeptWord\b" share
 grep -n "readonly kind: 'leaf-kept'" shared/api.ts                       # (c) Task 1's arm: ONE line
 grep -n "^  readonly kind: 'kept-many'; readonly word: 'leaf-kept';$" shared/api.ts   # (d) ONE line: Task 1's ChildReclaimLeafKeptMany
 grep -n "EXPIRE_LEAF_WORDS\|export function expireLeafKept\|leafKeptWord" server/src/archivedExpiry.ts 2>/dev/null   # (e) WL5 on this branch? never EXPIRE_LEAF_WORDS (H8)
+grep -nF "'refused' | 'unmeasured' | 'in-use'" server/src/archivedExpiry.ts 2>/dev/null   # (e2) never a line: WL5's alias and LEAF_KEPT_WHY derive from LeafKeptWord (W8-SEC-1)
 grep -n "export const laneFixture\|readonly exec?:\|readonly ccdVerbs?:\|readonly notifyLog?:\|readonly coord?:\|readonly home?:\|const journal = \|now: () => clock\|^let uidN" server/test/childReclaimGenerationFixture.ts   # (f) the shared lane rig (H7)
 grep -n "export const CHILD_RECLAIM_PURGE_INCOMPLETE" server/src/coord/childReclaim.ts   # (g) Task 6's word: ONE line
 ```
 
-(a) prints nothing → STOP and report: Task 0 brought wave 7's tree (H1); no merge mid-wave. Never declare `'collect'` here. If (b), (c) or (d) prints nothing, STOP and report to the coordinator: Task 1 owns every `shared/api.ts` insertion. (e) prints nothing unless workspace-lifecycle wave 5 (run 345) is on this branch. If it prints an `EXPIRE_LEAF_WORDS` line, STOP and report: the re-point is Task 1's (H8), and this task never makes it. If it prints `expireLeafKept` and a `leafKeptWord` line, Step 7 runs WL5's tests. (f) must print `export const laneFixture`; if the file is missing, STOP: Task 3 owes it. Its other lines say which of Step 1's rig additions an earlier task (Task 5) already made. (g) prints nothing → STOP: Task 6 has not landed.
+(a) prints nothing → STOP and report: Task 0 brought wave 7's tree (H1); no merge mid-wave. Never declare `'collect'` here. If (b), (c) or (d) prints nothing, STOP and report to the coordinator: Task 1 owns every `shared/api.ts` insertion. (e) prints nothing unless workspace-lifecycle wave 5 (run 345) is on this branch. If it prints an `EXPIRE_LEAF_WORDS` line, STOP and report: the re-point is Task 1's (H8), and this task never makes it. (e2) prints a line → STOP and report the same way: Task 1's Step 4 (d) derives the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (W8-SEC-1). If it prints `expireLeafKept` and a `leafKeptWord` line, Step 7 runs WL5's tests. (f) must print `export const laneFixture`; if the file is missing, STOP: Task 3 owes it. Its other lines say which of Step 1's rig additions an earlier task (Task 5) already made. (g) prints nothing → STOP: Task 6 has not landed.
 
-**Who owns the classifier (H8).** It is defined once, in `shared/api.ts`. Whichever of workspace-lifecycle wave 5 and wave 8 lands first owns it, and the one that lands second adopts it. WL5's plan at `origin/docs/workspace-lifecycle-wave5-plan` (`30fae386e`, plan file `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`, Task 9, `:2145-2154`) defines NO `leafKeptWord`. Its only list is a private `EXPIRE_LEAF_WORDS` inside `expireLeafKept`, whose non-absent arms are exactly `leafKeptWord`'s (`null` → `null`, a word → itself, anything else → `'unmeasured'`). Task 1 does all of wave 8's share:
+**Who owns the classifier (H8).** It is defined once, in `shared/api.ts`. Whichever of workspace-lifecycle wave 5 and wave 8 lands first owns it, and the one that lands second adopts it. WL5's plan at `origin/docs/workspace-lifecycle-wave5-plan` (`30b841c01`, plan file `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`, Task 9, `:2205-2213` and `:2329`) defines NO `leafKeptWord`. It spells the three words on three code lines in `server/src/archivedExpiry.ts`: `EXPIRE_LEAF_WORDS` (`:2206`), the `ExpireLeafKept` alias (`:2205`) and `LEAF_KEPT_WHY`'s key type (`:2329`). `expireLeafKept`'s non-absent arms are exactly `leafKeptWord`'s (`null` → `null`, a word → itself, anything else → `'unmeasured'`). Task 1 does all of wave 8's share:
 - it declares the classifier, or imports WL5's if WL5 was re-planned to declare one in `shared/api.ts` and landed first;
 - it pins the classifier's behaviour and its one declaration, in `child-reclaim-attention-arms.test.ts`;
-- if WL5 is on the branch at Task 0, it re-points `expireLeafKept` in Task 1's own commit, because Task 1's census case reds a private word list at that commit.
+- if WL5 is on the branch at Task 0, in Task 1's own commit it deletes `EXPIRE_LEAF_WORDS`, re-points `expireLeafKept`, and derives the alias (`LeafKeptWord | null | 'unreported'`) and the record key (`Record<LeafKeptWord, string>`) from `LeafKeptWord`, because Task 1's census case reds any code line outside `shared/api.ts` that spells all three words, at that commit.
 
-If wave 8 lands first, WL5's merge of `main` reds Task 1's census until WL5 re-points its reader; quiet-river has been told (H8). This task only consumes the classifier and verifies (Step 0 (e), Step 7).
+If wave 8 lands first, WL5's merge of `main` reds Task 1's census until WL5 makes those three edits in its own merge commit. The note to quiet-river names all three lines at `30b841c01` (`EXPIRE_LEAF_WORDS`, the `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type) and that commit (H8, W8-SEC-1). This task only consumes the classifier and verifies (Step 0 (e), Step 7).
 
 - [ ] **Step 1: Extend the shared lane rig, then write the failing tests.**
 
 First, extend the shared lane rig (H7). `server/test/childReclaimGenerationFixture.ts` is Task 3's, and it is the ONE watcher rig: this task builds no second one. Step 0 (f) printed what it already has, because Task 5 may have added `exec`, `journal` and `now` first. Add each piece below that is missing, spelled exactly as here. A piece already there with this signature stays as it is. If an earlier task spelled one differently, use that spelling in this task's calls and never add a second. Every addition is an optional option or a new returned helper, so Task 3's, Task 4's and Task 5's cases run unchanged.
 
 1. Import the feed log's type beside the other imports: `import type { NotifyLog } from '../src/notifylog.js';`.
-2. Move the uid counter to MODULE scope. Delete `  let uidN = 0;` inside `laneFixture`, and declare it directly above `export interface LaneOpts {`:
+2. Move the uid counter to MODULE scope, unless Step 0 (f) printed `let uidN` at column 0 (Task 5 moved it; leave it as it is, with Task 5's docstring). Delete `  let uidN = 0;` inside `laneFixture`, and declare it directly above `export const laneFixture` (EX3: Tasks 5, 7 and 9 give it this one placement):
 
 ```ts
 /** ONE uid counter for every rig in a test file. The mirror's `uid` is UNIQUE and inserted OR IGNORE, so a
@@ -5357,11 +5379,11 @@ let uidN = 0;
         { coord, io, cfg, runCcd: base.runCcd, fleetState, presence }, req));
 ```
 
-- Directly above `plant`, add `journal`:
+- Directly above `plant`, add `journal`, unless Step 0 (f) printed `const journal = ` (Task 5 added it after `remint`, with this signature; leave it). The signature is H7's, exactly: `journal = (id: string, act: string, outcome: string, over: Readonly<Record<string, unknown>> = {}): void` (EX3).
 
 ```ts
   /** One lifecycle line into the mirror, at the rig's wall clock unless `over` says otherwise. */
-  const journal = (id: string, act: string, outcome: string, over: Record<string, unknown> = {}): void => {
+  const journal = (id: string, act: string, outcome: string, over: Readonly<Record<string, unknown>> = {}): void => {
     uidN += 1;
     const line = JSON.stringify({ uid: `w8.1.${uidN}`, at: clock, act, outcome, id, ...over });
     coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: uidN * 200,
@@ -5369,8 +5391,8 @@ let uidN = 0;
   };
 ```
 
-  In `plant`, the four lines from `uidN += 1;` through `size: uidN * 200, at: clock });` become `journal(id, 'create', 'done', { verb: 'ws-add' });`.
-- The returned object gains `home, journal, now: () => clock`.
+  In `plant`, if it still holds them, the four lines from `uidN += 1;` through `size: uidN * 200, at: clock });` become `journal(id, 'create', 'done', { verb: 'ws-add' });`.
+- Add to the returned object each of these names that is not already a key of it: `home`, `journal`, `now: () => clock` (EX3). Task 5 put `journal` there already. A name written twice is TS1117 (`An object literal cannot have multiple properties with the same name`), which `typecheck-tests` reds.
 
 Run `( cd server && ./node_modules/.bin/vitest run test/child-reclaim-licence-lane.test.ts test/child-reclaim-hold-retired-generation.test.ts )`. Expected: green, with the counts Tasks 3 and 4 left. The rig change alone changes no case.
 
@@ -5384,13 +5406,14 @@ Then create `server/test/child-reclaim-leaf-kept.test.ts`:
 // `leafKeptWord`, is Task 1's and is pinned in Task 1's test (H8); this file only reads through it.
 import { describe, it, expect } from 'vitest';
 import {
-  CHILD_RECLAIM_KEPT_WORDS, type ChildReclaimAttention, type ChildReclaimLeafKeptAttention, type LifecycleOutcome,
+  CHILD_RECLAIM_KEPT_WORDS, LC_LINE_MAX, type ChildReclaimAttention, type ChildReclaimLeafKeptAttention,
+  type LifecycleOutcome,
 } from '../../shared/api.js';
 import { reviveMeas } from '../src/coord/journalparse.js';
-import { CHILD_RECLAIM_PURGE_INCOMPLETE } from '../src/coord/childReclaim.js';
+import { CHILD_RECLAIM_PURGE_INCOMPLETE, childReclaimLeafKeptFeedBody } from '../src/coord/childReclaim.js';
 import {
   CHILD_RECLAIM_KEPT_MANY_OVER, CHILD_RECLAIM_LEAF_FAILED_TOKENS, CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS,
-  CHILD_RECLAIM_LEAF_KEPT_MANY_WORD, childReclaimAttentionWithLeaves, childReclaimLeafKept,
+  CHILD_RECLAIM_LEAF_KEPT_MANY_WORD, childReclaimAttentionWithLeaves, childReclaimDetailText, childReclaimLeafKept,
   childReclaimLeafKeptManySentence, childReclaimLeafKeptSince, childReclaimMirrorLeaf,
   type ChildReclaimLeafEndRow, type ChildReclaimLeafSourceRow,
 } from '../src/childReclaimSweep.js';
@@ -5430,6 +5453,10 @@ const CUT = 'The reclaim of this child completed, but the journal line ccd wrote
   + 'its clips directory or its temp root was kept is not known; the feed row for it carries what ccd said.';
 const TRUNCATED = `${CUT} ${HORIZON}`;
 const TRUNCATED_COLLECTED = `${CUT} Its temp root has since been collected. ${HORIZON}`;
+/** W8-SEC-3: a cut line whose `detail` is gone too, ccd's last-resort line, never points at the feed. */
+const CUT_BARE = 'The reclaim of this child completed, but the journal line ccd wrote for it was cut to fit, so whether '
+  + "its clips directory or its temp root was kept is not known; ccd's line kept no detail either, so the feed "
+  + 'cannot name it; look for ~/.cc-clips/demo-gone and ~/.cc-tmp/demo-gone on the fleet box.';
 
 describe('childReclaimMirrorLeaf — the mirror reader: kept:<word>, none-or-unreported, truncated', () => {
   it('reads a word on the key as kept', () => {
@@ -5501,10 +5528,19 @@ describe('childReclaimLeafKept — one item per id, from its latest reclaim row 
   });
 
   it('lists a line cut to fit, with no run and its own sentence', () => {
-    const r = src({ truncated: true, meas: null });
+    const r = src({ truncated: true, meas: null, detail: 'clips kept (refused)' });
     expect(derive([r])).toEqual([{
-      item: { kind: 'leaf-kept', sessionId: ID, runId: null, sentence: TRUNCATED, at: NOW - DAY }, source: r.id, detail: null,
+      item: { kind: 'leaf-kept', sessionId: ID, runId: null, sentence: TRUNCATED, at: NOW - DAY }, source: r.id,
+      detail: 'clips kept (refused)',
     }]);
+  });
+
+  it('a line cut to fit that kept no detail either never points at the feed: it names where to look (W8-SEC-3)', () => {
+    for (const detail of [null, '']) {
+      const got = derive([src({ truncated: true, meas: null, detail })]);
+      expect(got.map((k) => k.item.sentence), JSON.stringify(detail)).toEqual([`${CUT_BARE} ${HORIZON}`]);
+      expect(got[0]!.item.sentence).not.toContain('carries what ccd said');
+    }
   });
 
   it('reads the LATEST row of the id by the mirror\'s id: a later done that kept nothing ends an earlier kept one', () => {
@@ -5546,7 +5582,7 @@ describe('how the item ends', () => {
     const both = src({ meas: { childOf: '41', clipsKept: 'refused', tmpRootKept: 'in-use' } });
     expect(derive([both], ends([{ id: both.id + 1, act: 'collect', at: NOW - 1 }])).map((k) => k.item.sentence))
       .toEqual([CLIPS_REFUSED]);
-    const cut = src({ truncated: true, meas: null });
+    const cut = src({ truncated: true, meas: null, detail: 'clips kept (refused)' });
     expect(derive([cut], ends([{ id: cut.id + 1, act: 'collect', at: null }])).map((k) => k.item.sentence))
       .toEqual([TRUNCATED_COLLECTED]);
   });
@@ -5605,6 +5641,29 @@ describe('on the list: one item per child, and the collapse', () => {
   it('its collapse word is no kept word, so its line never shares a key with another kept-many line', () => {
     expect(CHILD_RECLAIM_LEAF_KEPT_MANY_WORD).toBe('leaf-kept');
     expect(CHILD_RECLAIM_KEPT_WORDS as readonly string[]).not.toContain(CHILD_RECLAIM_LEAF_KEPT_MANY_WORD);
+  });
+});
+
+describe('childReclaimDetailText — ccd’s detail as one bounded plain line (W8-SEC-2)', () => {
+  // Built from code points, never written as escapes: an agent's file write decodes a backslash-u escape.
+  const NL = String.fromCharCode(10);
+  const RLO = String.fromCharCode(0x202e);
+  const LONG = `${'x'.repeat(10)}${NL}${RLO}${'y'.repeat(9988)}`;
+  const leaf = (detail: string | null) => ({
+    item: { kind: 'leaf-kept' as const, sessionId: ID, runId: null, sentence: 's.', at: NOW }, source: 1, detail });
+
+  it('a 10,000-character detail holding a newline and a bidi override reads as one line of at most LC_LINE_MAX + 1 characters', () => {
+    expect(LONG).toHaveLength(10_000);
+    const t = childReclaimDetailText(LONG);
+    expect(t.includes(NL), 'a newline').toBe(false);
+    expect(t.includes(RLO), 'a bidi override').toBe(false);
+    expect(t.startsWith(`${'x'.repeat(10)} y`), 'one run of unsafe characters is one space').toBe(true);
+    expect(t).toHaveLength(LC_LINE_MAX + 1);
+    expect(t.endsWith('…')).toBe(true);
+    expect(childReclaimDetailText('temp root kept (in-use): pid 7')).toBe('temp root kept (in-use): pid 7');
+    expect(childReclaimDetailText(`${NL}${RLO}`)).toBe('');
+    expect(childReclaimLeafKeptFeedBody(leaf(LONG))).toBe(`${ID}: s. ccd recorded: ${t}`);
+    expect(childReclaimLeafKeptFeedBody(leaf(NL))).toBe(`${ID}: s. ccd recorded no detail.`);
   });
 });
 ```
@@ -5863,13 +5922,13 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-leaf-kept.test.ts
 ```
 
 Expected: FAIL.
-- `child-reclaim-leaf-kept`: every case (24) fails on an export this task adds. The file has no classifier case: Task 1 pins it (H8). For example, `TypeError: (0 , __vi_import_…__.childReclaimMirrorLeaf) is not a function`, and `TypeError: undefined is not iterable` for `CHILD_RECLAIM_LEAF_FAILED_TOKENS`.
+- `child-reclaim-leaf-kept`: every case (26, re-measure (R-j): the drafted 24 plus W8-SEC-3's cut-without-detail case and W8-SEC-2's detail-text case) fails on an export this task adds. The file has no classifier case: Task 1 pins it (H8). For example, `TypeError: (0 , __vi_import_…__.childReclaimMirrorLeaf) is not a function`, and `TypeError: undefined is not iterable` for `CHILD_RECLAIM_LEAF_FAILED_TOKENS`.
 - `child-reclaim-leaf-kept-store`: every case fails with `TypeError: s.lifecycleReclaimRowsSince is not a function`, or `…lifecycleLeafEndsFor is not a function`, or `CoordStore.lifecycleReclaimRowsSinceSql is not a function`.
 - `child-reclaim-leaf-kept-lane`: case 1 fails with `expected [] to deeply equal [ { kind: 'leaf-kept', … } ]`. Cases 3 and 4 fail in `vi.spyOn` (`lifecycleReclaimRowsSince does not exist`). Case 5 fails with `expected [] to have a length of 1`.
 
 None passes by accident. A missing Task 1 or Task 6 export is Step 0's STOP, never a red here.
 
-- [ ] **Step 3: Implement L1.** In `server/src/childReclaimSweep.ts`, extend the `../../shared/api.js` import (`grep -n "CHILD_RECLAIM_KEPT_WORDS, SPAWN_STALL_MS, TERMINAL_RUN_STATES" server/src/childReclaimSweep.ts`) with `CHILD_RUN_ID, leafKeptWord, type ChildReclaimLeafKeptAttention, type ChildReclaimLeafKeptMany, type LeafKeptWord, type LifecycleMeas`. Then insert directly after `childReclaimFeedQuiet`'s closing brace:
+- [ ] **Step 3: Implement L1.** In `server/src/childReclaimSweep.ts`, extend the `../../shared/api.js` import (`grep -n "CHILD_RECLAIM_KEPT_WORDS, SPAWN_STALL_MS, TERMINAL_RUN_STATES" server/src/childReclaimSweep.ts`) with `CHILD_RUN_ID, LC_LINE_MAX, leafKeptWord, type ChildReclaimLeafKeptAttention, type ChildReclaimLeafKeptMany, type LeafKeptWord, type LifecycleMeas`. Then insert directly after `childReclaimFeedQuiet`'s closing brace:
 
 ```ts
 // ── Kept leaves (spec §5.6, §5.9) ─────────────────────────────────────────────
@@ -5878,6 +5937,32 @@ None passes by accident. A missing Task 1 or Task 6 export is Step 0's STOP, nev
 // word on the reclaim's `done` row and on the three purge failures, whose act also completed. After a
 // `done` ccd has purged the registry row, so this item is derived from the lifecycle mirror alone and
 // never filtered by the listing. A REPORT, gating nothing: no verdict, due set, lease or request reads it.
+
+/** The characters ccd's journal `detail` may not carry onto a banner, a chip or a feed row (W8-SEC-2): the C0
+ *  controls (a newline among them), DEL and the C1 controls, the two Unicode line and paragraph separators, and the
+ *  bidi embeddings, overrides and isolates (U+202A to U+202E, U+2066 to U+2069), which reorder what an operator
+ *  reads. Spelled as code points, so no escape sits here for a file write to decode. */
+const detailUnsafe = (c: number): boolean =>
+  c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029
+  || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069);
+
+/** ccd's journal `detail` as banner, chip and feed text (W8-SEC-2): ONE plain line, bounded. The mirror reads
+ *  whole lines, `journalparse.ts` takes `detail` as any string, and any session can append a line, so the server
+ *  re-imposes what only ccd's encoder enforces. Each run of `detailUnsafe` characters becomes one space, the ends
+ *  are trimmed, and past `LC_LINE_MAX` code points (ccd's own line cap, L0) the text is cut and ends in an
+ *  ellipsis. Pure. Declared here because this task runs before Task 8, whose stuck sentence calls it too. */
+export function childReclaimDetailText(d: string): string {
+  let one = '';
+  let gap = false;
+  for (const ch of d) {
+    if (detailUnsafe(ch.codePointAt(0) ?? 0)) { gap = true; continue; }
+    if (gap && one !== '') one += ' ';
+    gap = false;
+    one += ch;
+  }
+  const cps = [...one.trim()];
+  return cps.length <= LC_LINE_MAX ? cps.join('') : `${cps.slice(0, LC_LINE_MAX).join('')}…`;
+}
 
 /** The `reclaim` FAILURE tokens whose row carries the two kept-leaf keys: the act completed, and only the
  *  registry purge after it failed. Spelled once, here, and bound by the store's read, never written as a
@@ -5961,14 +6046,21 @@ const LEAF_HORIZON = `This line ends when the id is used for a new workspace, or
   + 'the reclaim; the feed keeps the record.';
 
 /** The kept-leaf item's sentence (spec §5.9): what stands, why, and what ends the line. A cut line says it
- *  was cut, and points to the feed row, which carries ccd's own line. A temp root that a later `collect`
- *  took is never named as kept. */
+ *  was cut. It points to the feed row only when the row carries ccd's `detail`: ccd's last-resort line keeps
+ *  neither `meas` nor `detail` (W8-SEC-3), and then the sentence names where to look instead. A temp root that
+ *  a later `collect` took is never named as kept, nor as a place to look. */
 export function childReclaimLeafKeptSentence(
   sessionId: string, clips: ChildReclaimMirrorLeaf, tmp: ChildReclaimMirrorLeaf | 'collected',
+  detail: string | null,
 ): string {
   if (clips.kind === 'truncated') {
+    const where = tmp === 'collected'
+      ? `~/.cc-clips/${sessionId}` : `~/.cc-clips/${sessionId} and ~/.cc-tmp/${sessionId}`;
     return 'The reclaim of this child completed, but the journal line ccd wrote for it was cut to fit, so whether '
-      + 'its clips directory or its temp root was kept is not known; the feed row for it carries what ccd said.'
+      + 'its clips directory or its temp root was kept is not known; '
+      + (detail !== null && childReclaimDetailText(detail) !== ''
+        ? 'the feed row for it carries what ccd said.'
+        : `ccd's line kept no detail either, so the feed cannot name it; look for ${where} on the fleet box.`)
       + (tmp === 'collected' ? ' Its temp root has since been collected.' : '') + ` ${LEAF_HORIZON}`;
   }
   const tmpWord = tmp !== 'collected' && tmp.kind === 'kept' ? tmp.word : null;
@@ -6028,7 +6120,7 @@ export function childReclaimLeafKept(i: {
     if (clips.kind === 'none-or-unreported' && (tmp === 'collected' || tmp.kind === 'none-or-unreported')) continue;
     out.push({
       item: { kind: 'leaf-kept', sessionId: r.sessionId, runId: leafRunOf(r.meas?.childOf ?? null),
-        sentence: childReclaimLeafKeptSentence(r.sessionId, clips, tmp), at: r.at },
+        sentence: childReclaimLeafKeptSentence(r.sessionId, clips, tmp, r.detail), at: r.at },
       source: r.id, detail: r.detail,
     });
   }
@@ -6166,11 +6258,14 @@ export const CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE = 'child reclaim leaf kept';
 
 /** The kept-leaf feed row's body (spec §5.9): the item's own sentence, then ccd's own line for the row. That
  *  line names what was kept and why, and a line cut to fit usually keeps it, because the encoder drops
- *  `meas` before `detail`. Once the item has ended, this row is the record. */
+ *  `meas` before `detail`, except in its last-resort line, which keeps neither (W8-SEC-3). ccd's line goes
+ *  through `childReclaimDetailText` (W8-SEC-2): one line, control and bidi characters replaced, bounded by
+ *  `LC_LINE_MAX`. Once the item has ended, this row is the record. */
 export function childReclaimLeafKeptFeedBody(k: ChildReclaimLeafKept): string {
   const a = k.item;
   const who = a.runId === null ? a.sessionId : `${a.sessionId}, child of run #${a.runId}`;
-  const said = k.detail === null || k.detail === '' ? 'ccd recorded no detail.' : `ccd recorded: ${k.detail}`;
+  const line = k.detail === null ? '' : childReclaimDetailText(k.detail);
+  const said = line === '' ? 'ccd recorded no detail.' : `ccd recorded: ${line}`;
   return `${who}: ${a.sentence} ${said}`;
 }
 
@@ -6250,7 +6345,7 @@ In `childReclaimPublishAttention`, replace `this.childReclaimAttentionList = chi
 
 Then add one bullet to the `childReclaimAttentionList` field's docstring (`grep -n "private childReclaimAttentionList" server/src/watch.ts`): "- Its `leaf-kept` items, and their `kept-many` collapse, come from the mirror on every pass that gets past the fail-shut try. They are never filtered by the listing, and they yield to any other item for the same child."
 
-- [ ] **Step 7: Workspace lifecycle's reader: verify only (H8).** The re-point is Task 1's. If workspace-lifecycle wave 5 was on the branch at Task 0, Task 1's commit deleted its private `EXPIRE_LEAF_WORDS` and made `expireLeafKept` call `leafKeptWord`. This task edits nothing in `server/src/archivedExpiry.ts`. Only if Step 0 (e) printed `export function expireLeafKept`, run `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts test/expire-archived.test.ts test/archived-expiry-lane.test.ts )`. Expected: green, with the counts Task 1 left. If Step 0 (e) printed nothing, skip this step.
+- [ ] **Step 7: Workspace lifecycle's reader: verify only (H8).** The re-point is Task 1's. If workspace-lifecycle wave 5 was on the branch at Task 0, Task 1's commit deleted its private `EXPIRE_LEAF_WORDS`, made `expireLeafKept` call `leafKeptWord`, and derived its `ExpireLeafKept` alias and `LEAF_KEPT_WHY`'s key type from `LeafKeptWord` (W8-SEC-1); Step 0 (e2) checked that no line there still spells the three words. This task edits nothing in `server/src/archivedExpiry.ts`. Only if Step 0 (e) printed `export function expireLeafKept`, run `( cd server && ./node_modules/.bin/vitest run test/archived-expiry-policy.test.ts test/expire-archived.test.ts test/archived-expiry-lane.test.ts )`. Expected: green, with the counts Task 1 left. If Step 0 (e) printed nothing, skip this step.
 
 - [ ] **Step 8: Run the tests to verify they pass, and the neighbours stay green.**
 
@@ -6264,7 +6359,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep.test.ts tes
 ```
 
 Expected:
-- the first command: `child-reclaim-leaf-kept` 24/24 (the drafted 26, less the three classifier cases that are Task 1's (H8), plus the purge-incomplete tie case), `child-reclaim-leaf-kept-store` 5/5, `child-reclaim-leaf-kept-lane` 6/6;
+- the first command: `child-reclaim-leaf-kept` 26/26, re-measure (R-j) (the drafted 26, less the three classifier cases that are Task 1's (H8), plus the purge-incomplete tie case, W8-SEC-3's cut-without-detail case and W8-SEC-2's detail-text case), `child-reclaim-leaf-kept-store` 5/5, `child-reclaim-leaf-kept-lane` 6/6;
 - the second command: green and unchanged. The shared rig's other users keep the counts Tasks 3, 4 and 5 left, because every rig addition is optional. No existing fixture journals a `reclaim` `done` row with kept keys, or one cut to fit, so no existing list gains an item. `mail-routes`' kebab scanner stays green, because this task writes no new quoted kebab literal under `server/src/coord`: the purge tokens are bound from L1, and `'leaf-kept'` lives in L1.
 
 Run each command in the foreground with a timeout of at least 600000 ms. If `child-reclaim-sweep` reds on a known load flake, re-run it in isolation before calling it a break.
@@ -6272,6 +6367,7 @@ Run each command in the foreground with a timeout of at least 600000 ms. If `chi
 - [ ] **Step 9: The PWA renders the new kind with NO PWA edit.**
 
 ```bash
+SCRATCH=$(mktemp -d)                                                   # EX7: a fresh temp dir, never the tree
 ( cd pwa && { test -d node_modules || npm ci; } && ./node_modules/.bin/tsc --noEmit ) ; echo "pwa tsc rc=$?"
 git status --porcelain -- pwa/                                         # prints nothing
 cat > "$SCRATCH/pwa-reads-leaf-kept.ts" <<EOF
@@ -6283,9 +6379,10 @@ console.log(JSON.stringify(childReclaimAttentionOf({ childReclaimAttention: [
 ] })));
 EOF
 ( cd server && ./node_modules/.bin/tsx "$SCRATCH/pwa-reads-leaf-kept.ts" )
+rm -rf "$SCRATCH"
 ```
 
-`$SCRATCH` is this session's scratchpad directory, never the tree. Expected:
+`$SCRATCH` is the fresh directory the block's first line makes, never the tree, and the block's last line removes it (EX7). Expected:
 - `pwa tsc rc=0`. Task 1's union, with its separate `ChildReclaimLeafKeptMany` arm, compiles through `RenderedAttention = Pick<Extract<ChildReclaimAttention, { readonly sessionId: string }>, …>` (`pwa/src/fleet/childReclaimWords.ts:67`), whose `runId` becomes `number | null`, the type `isAttention` already admits (`:81-82`).
 - `git status` prints nothing.
 - The script prints all three items, in order: the two singles as given, the null-run one included, and the collapsed line rebuilt as `{"kind":"kept-many","word":"leaf-kept","sentence":"s3","members":[{"sessionId":"demo-c","runId":3}]}`.
@@ -6296,7 +6393,7 @@ The banner keys the line `kept-many leaf-kept` (`ChildReclaimBanner.tsx:141`), w
 
 | # | Mutation (exact edit) | Command | Expected red |
 |---|---|---|---|
-| T7.3 | `childReclaimMirrorLeaf`: replace `row.truncated ? { kind: 'truncated' } : { kind: 'none-or-unreported' }` with `{ kind: 'none-or-unreported' }` | `./node_modules/.bin/vitest run test/child-reclaim-leaf-kept.test.ts` | "reads a line cut to fit…": `expected { kind: 'none-or-unreported' } to deeply equal { kind: 'truncated' }`; "lists a line cut to fit…": `expected [] to deeply equal [ { item: …, source: …, detail: null } ]` |
+| T7.3 | `childReclaimMirrorLeaf`: replace `row.truncated ? { kind: 'truncated' } : { kind: 'none-or-unreported' }` with `{ kind: 'none-or-unreported' }` | `./node_modules/.bin/vitest run test/child-reclaim-leaf-kept.test.ts` | "reads a line cut to fit…": `expected { kind: 'none-or-unreported' } to deeply equal { kind: 'truncated' }`; "lists a line cut to fit…": `expected [] to deeply equal [ { item: …, source: …, detail: 'clips kept (refused)' } ]`; and "a line cut to fit that kept no detail either…": `null: expected [] to deeply equal [ '…' ]`. Re-measure (R-j) |
 | T7.4 | `childReclaimLeafSource`: delete the `\|\| (r.outcome === FAILED && …)` arm | same | "lists the three purge failures…": `expected [] to deeply equal [ 'demo-p0', 'demo-p1', 'demo-p2' ]` |
 | T7.5 | `childReclaimLeafSource`: replace the token test with `r.outcome === FAILED` | same | same case: `expected [ 'demo-p0', 'demo-p1', 'demo-p2', 'demo-x', 'demo-y' ] to deeply equal [ 'demo-p0', 'demo-p1', 'demo-p2' ]` |
 | T7.6 | `childReclaimLeafKept`: replace `r.id > had.id` with `true` | same | "reads the LATEST row…": `array order decided "latest": expected [ { item: … } ] to deeply equal []` |
@@ -6322,6 +6419,12 @@ The banner keys the line `kept-many leaf-kept` (`ChildReclaimBanner.tsx:141`), w
 | T7.26 | Delete `if (this.childReclaimLeafFed.has(k.source)) continue;` | same | "lists a reclaimed child…": `expected [ …(3) ] to have a length of 1` |
 | T7.27 | In `childReclaimPublishAttention`, revert to `this.childReclaimAttentionList = childReclaimAttentionWithKept(mirrorArms, kept, verdicts);` | same | "lists a reclaimed child…": `expected [] to deeply equal [ { kind: 'leaf-kept', … } ]` |
 | T7.28 | `CHILD_RECLAIM_LEAF_FAILED_TOKENS`: delete `'purge-incomplete', ` | `./node_modules/.bin/vitest run test/child-reclaim-leaf-kept.test.ts` | "the purge-failure set holds Task 6's purge-incomplete word…": `expected [ 'purge-mechanism-absent', 'purge-refused' ] to include 'purge-incomplete'`; "lists the three purge failures…" reds too, on its first `toEqual` |
+| T7.29 | `childReclaimLeafKeptSentence`'s truncated arm: replace the whole conditional clause (`detail !== null && … ? … : …`, in its parentheses) with `'the feed row for it carries what ccd said.'` | `./node_modules/.bin/vitest run test/child-reclaim-leaf-kept.test.ts` | "a line cut to fit that kept no detail either…": `null: expected [ 'The reclaim of this child completed, but the journal line …' ] to deeply equal [ 'The reclaim of this child completed, but the journal line …' ]`. Not measured at planning (W8-SEC-3): measure it (R-j) |
+| T7.30 | The same arm: replace `detail !== null && childReclaimDetailText(detail) !== ''` with `detail !== null` | same | the same case, on its empty detail: `"": expected [ '…' ] to deeply equal [ '…' ]`. Not measured at planning (W8-SEC-3): measure it (R-j) |
+| T7.31 | `childReclaimDetailText`: replace its `return` line with `return cps.join('');` | same | "a 10,000-character detail…": `expected 'xxxxxxxxxx yyyyyyyyyyyyyyyyyyyyyyyyyy…' to have a length of 2049 but got 9999`. Not measured at planning (W8-SEC-2): measure it (R-j) |
+| T7.32 | `detailUnsafe`: delete its first disjunct, `c <= 0x1f`, with the or-operator after it | same | the same case: `a newline: expected true to be false`. Not measured at planning (W8-SEC-2): measure it (R-j) |
+| T7.33 | `detailUnsafe`: delete the disjunct `(c >= 0x202a && c <= 0x202e)`, with the or-operator before it | same | the same case: `a bidi override: expected true to be false`. Not measured at planning (W8-SEC-2): measure it (R-j) |
+| T7.34 | `childReclaimLeafKeptFeedBody`: replace `childReclaimDetailText(k.detail)` with `k.detail` | same | the same case: `expected 'demo-gone: s. ccd recorded: xxxxxxxxxx…' to be 'demo-gone: s. ccd recorded: xxxxxxxxxx…'`. Not measured at planning (W8-SEC-2): measure it (R-j) |
 
 Revert each mutation, then re-run Step 8's first command: green.
 
@@ -6360,6 +6463,10 @@ The read sits in its own try after the fail-shut try. It gates nothing, so
 its failure keeps the last items and never fails the pass shut, and it runs
 before the early returns, so a paused pass still lists them.
 
+ccd's detail reaches the feed as one bounded plain line
+(childReclaimDetailText). A line cut to fit that kept no detail either
+names where to look on the fleet box instead of pointing at the feed.
+
 A leaf item yields to any other item for the same child, a stuck one
 included. The lane cases run on the shared lane rig, which gains an
 executor stub, the fleet's verbs, a feed log, a restart over one coord.db
@@ -6382,9 +6489,9 @@ MSG
 
 This task implements the rulings for this class, and nothing more:
 - **The word (Task 6's, H3).** This task declares, parses, admits and flips none of it. It consumes Task 6's `CHILD_RECLAIM_STUCK_TOKENS`, `isChildReclaimStuckToken` and `resume: 'stuck'`, which the executor passes through unchanged (childReclaim.ts:942; `grep -n "resume: act.resume" server/src/coord/childReclaim.ts`). L1 receives the classifier injected, the way it receives `childReclaimTokenKind`. Task 9 turns the stuck outcome into the tier field.
-- **Attention.** Each stuck child gets ONE item, listed at once, with no ceiling. Its sentence carries ccd's word and the journal row's `detail`, which names the tree or row to fix. To make that possible, `ChildReclaimJournalRow` gains `detail`. With no detail, the sentence says the record was cut and points to the feed. The retry clause is conditional. For a child the sweep KEEPS (a kept verdict judged under the run the item names), the sentence drops the retry clause: it says the child is kept and names the kept reason, and never promises a retry the kept word prevents (ruling T8 OPEN4, R41).
-- **Precedence.** `terminal` outranks `stuck`. `stuck` outranks `kept`, `kept-many` and `failing`. A `held` verdict does not withhold it. `childReclaimKeptItems` excludes stuck ids. Task 7's `leaf-kept` yields to it too (ruling: stuck outranks leaf-kept, through Task 7's DEP1, with no edit here).
-- **The chip.** It reads `deferred`, with the stuck item's own sentence, and never `refused`. For a kept child that sentence is the kept variant (T8 OPEN4), which promises no retry, so the switch leaves it as it leaves every kept answer. `refused` is settled in the PWA, which never re-reads it. Step 5 checks that the PWA needs no edit.
+- **Attention.** Each stuck child gets ONE item, listed at once, with no ceiling. Its sentence carries ccd's word and the journal row's `detail`, which names the tree or row to fix. To make that possible, `ChildReclaimJournalRow` gains `detail`. With no detail, the sentence says the record was cut and points to the feed. The retry clause is conditional. For a child the sweep KEEPS (a kept verdict judged under the run the item names), the sentence drops the retry clause: it says the child is kept and names the kept reason, and never promises a retry the kept word prevents (ruling T8 OPEN4, R41). For a child the sweep HOLDS (a `held` verdict, which carries no run), the sentence drops the retry clause too: it says ccrc does not retry the child while the hold stands, and that the long backoff resumes once the hold lifts (the coordinator's `held` ruling, R41). The `detail` is ccd's text, and any session on the fleet box can append a journal line, so the sentence carries it only through Task 7's `childReclaimDetailText`: one line, with no control, separator or bidi character, cut at `LC_LINE_MAX` characters (W8-SEC-2).
+- **Precedence.** `terminal` outranks `stuck`. `stuck` outranks `kept`, `kept-many` and `failing`. A `held` verdict does not withhold it; it swaps the item's retry clause for the hold's (the `held` ruling). `childReclaimKeptItems` excludes stuck ids. Task 7's `leaf-kept` yields to it too (ruling: stuck outranks leaf-kept, through Task 7's DEP1, with no edit here).
+- **The chip.** It reads `deferred`, with the stuck item's own sentence, and never `refused`. For a kept child that sentence is the kept variant (T8 OPEN4), which promises no retry, so the switch leaves it as it leaves every kept answer. For a held child it is the held variant (the `held` ruling), which promises no retry while the hold stands; like the hold's own deferred answer it still says the sweep acts once the hold lifts, so the switch turns it to `paused`, as it turns every deferred. `refused` is settled in the PWA, which never re-reads it. Step 5 checks that the PWA needs no edit.
 - **The feed.** `childReclaimFeedQuiet` treats a listed stuck item like a failing one, so a retry that finds the same word writes no new row. Task 6's `childReclaimFailedTail` already says the stuck clause; this task re-points that literal to `CHILD_RECLAIM_STUCK_RETRY`, so one spelling remains.
 - **Review 341's F9.** The vacuous `isChildReclaimKebab('state-changed')` line (server/test/child-reclaim-pre-crumb.test.ts:61; `grep -n "isChildReclaimKebab('state-changed')" server/test/child-reclaim-pre-crumb.test.ts`) can never fail, because `isChildReclaimToken` admits that word first. It is re-aimed at `isChildReclaimKebab('containment-refuted')`. Only Task 6's stuck-set admission (H3) lets that word through, so the re-aimed line pins that admission directly. (The scanner in `mail-routes.test.ts` needs the admission too, because `CHILD_RECLAIM_STUCK_TOKENS` is a quoted kebab literal under `server/src/coord`.) Task 8 keeps this re-aim (H3).
 
@@ -6392,18 +6499,18 @@ This task implements the rulings for this class, and nothing more:
 - Modify: `server/src/coord/childReclaim.ts`. The stuck set, its type and guard, `ChildReclaimResume`'s `'stuck'`, the kebab admission and the parse arm are Task 6's (H3), and this task does not touch them. The edits:
   - in Task 6's `childReclaimFailedTail`, the `case 'stuck':` literal becomes `return CHILD_RECLAIM_STUCK_RETRY;`, the same bytes (`grep -n "^export function childReclaimFailedTail" server/src/coord/childReclaim.ts`);
   - add `'detail'` to `ChildReclaimEvent`'s `Pick` (:1494);
-  - add the stuck arm, with its kept variant (T8 OPEN4), to `childReclaimStatus` (:1612), between `const marked =` (:1630) and the verdict arm (:1634, `grep -n "if (marked && input.verdict.kind === 'skip')" server/src/coord/childReclaim.ts`);
+  - add the stuck arm, with its kept variant (T8 OPEN4) and its held variant (the `held` ruling), to `childReclaimStatus` (:1612), between `const marked =` (:1630) and the verdict arm (:1634, `grep -n "if (marked && input.verdict.kind === 'skip')" server/src/coord/childReclaim.ts`);
   - extend the `../childReclaimSweep.js` import (:11-16) and add `isChildReclaimKeptWord` to the `../../../shared/api.js` import (:19-21).
 - Modify: `server/src/childReclaimSweep.ts`. The edits:
   - `ChildReclaimJournalRow` gains `detail` (:896-902);
   - `childReclaimJournalRow` returns `detail` (:965, `grep -n "return { sessionId: latest.id" server/src/childReclaimSweep.ts`);
   - `childReclaimTerminalRefusal`'s parameter type is widened (:974; the body is unchanged);
-  - new: `CHILD_RECLAIM_STUCK_RETRY`, `childReclaimStuckRow`, `childReclaimStuckKeptClause`, `childReclaimStuckKept` and `childReclaimStuckSentence` (with its `kept` parameter, T8 OPEN4), placed after `childReclaimFailingWord` (:1003);
+  - new: `CHILD_RECLAIM_STUCK_RETRY`, `childReclaimStuckRow`, `childReclaimStuckKeptClause`, `childReclaimStuckKept`, `CHILD_RECLAIM_STUCK_HELD`, `childReclaimStuckHeld` (the `held` ruling) and `childReclaimStuckSentence` (with its `kept` parameter, T8 OPEN4; it carries ccd's detail through Task 7's `childReclaimDetailText`, W8-SEC-2), placed after `childReclaimFailingWord` (:1003);
   - `ChildReclaimAttentionInput.stuckOf` (:1006-1018);
   - `ChildReclaimJournalAttention` gains `'stuck'` (:1022);
   - `childReclaimAttention`'s loop (:1041-1064);
   - `childReclaimKeptItems`'s terminal set (:1090, `grep -n "const terminal = new Set(i.mirrorArms" server/src/childReclaimSweep.ts`) and its skip (:1097);
-  - `childReclaimAttentionWithKept`: a stuck item for a child kept under the run it names takes the kept variant of its sentence (T8 OPEN4), and its docstring (:1130-1135);
+  - `childReclaimAttentionWithKept`: a stuck item for a child kept under the run it names takes the kept variant of its sentence (T8 OPEN4), a stuck item for a held child takes the held variant (the `held` ruling), and its docstring (:1130-1135);
   - `ChildReclaimFeedQuiet` and `childReclaimFeedQuiet` (:1149-1171, `grep -n "const failing = listed.find" server/src/childReclaimSweep.ts`).
 - Modify: `server/src/watch.ts`. This file only wires. Add `isChildReclaimStuckToken` to the `./coord/childReclaim.js` import (:88-92) and `stuckOf: isChildReclaimStuckToken` to the one `childReclaimAttention({…})` call (:3373-3375, `grep -n "latest, live, kindOf: childReclaimTokenKind" server/src/watch.ts`).
 - Modify (F9 re-aim): `server/test/child-reclaim-pre-crumb.test.ts`. One line and that case's title.
@@ -6418,12 +6525,14 @@ This task implements the rulings for this class, and nothing more:
   - Task 2: `ChildReclaimRequest.licenceGeneration: ChildReclaimGenerationKey | { kind: 'none' }` (the feed rig sends close's `{ kind: 'none' }`), and `childReclaimFirstSighting(monoMs, bornAt, markerRunId, generation: ChildReclaimGenerationKey)`. The key is the fourth parameter (H5).
   - Task 6 (H3), all committed before this task starts: `'stuck'` in `ChildReclaimResume` and `CHILD_RECLAIM_RESUME`; `CHILD_RECLAIM_STUCK_TOKENS`, `ChildReclaimStuckToken` and the type guard `isChildReclaimStuckToken(v: unknown): v is ChildReclaimStuckToken`; `parseChildReclaimResult`'s word-first failed arm (`childReclaimFailedResume`), which answers `resume: 'stuck'` whatever `crumb` says; `isChildReclaimKebab`'s admission of the stuck words and `purge-incomplete`; `childReclaimFailedTail`, with its exhaustive `switch (o.resume)` and its `'stuck'` case; and the flip of wave 7's `parseChildReclaimResult` pin. This task declares, parses, admits and flips none of these again.
   - Task 7: whatever parameters it added to `childReclaimKeptItems` or `childReclaimAttentionWithKept` for the leaf-kept arm. Keep them. The edits below touch only the lines they quote.
+  - Task 7 (W8-SEC-2): `childReclaimDetailText(d: string): string`, exported from `server/src/childReclaimSweep.ts` (L1; the module the stuck composer lives in, so 3g adds no import for it). It answers ccd's journal `detail` as display text: every C0 or C1 control, line or paragraph separator and bidi embedding, override or isolate character replaced by a space, trimmed, and cut to `LC_LINE_MAX` characters followed by one `…` when longer. This task wraps the stuck sentence's detail in it, and declares nothing of it.
 - Produces:
   ```ts
   // server/src/coord/childReclaim.ts
   export type ChildReclaimEvent = Pick<MirroredLifecycleEvent, 'act' | 'outcome' | 'refusal' | 'at' | 'detail'>;
   // childReclaimStatus: a marked child whose latest event is a stuck failure → deferred, ahead of the verdict arm;
-  //   a kept verdict takes the kept variant and is never switched to paused (T8 OPEN4)
+  //   a kept verdict takes the kept variant and is never switched to paused (T8 OPEN4);
+  //   a held verdict takes the held variant (childReclaimStuckHeld), which the switch turns to paused like every deferred
   // childReclaimFailedTail (Task 6's): case 'stuck' returns CHILD_RECLAIM_STUCK_RETRY (the same bytes)
   // server/src/childReclaimSweep.ts (L1)
   export interface ChildReclaimJournalRow { …; readonly detail: string | null }
@@ -6432,12 +6541,17 @@ This task implements the rulings for this class, and nothing more:
     row: R, stuckOf: (token: string) => boolean) => row is R & { readonly refusal: string };
   export const childReclaimStuckKeptClause: (kept: ChildReclaimKeptWord) => string;
   export const childReclaimStuckKept: (sentence: string, kept: ChildReclaimKeptWord) => string;
+  export const CHILD_RECLAIM_STUCK_HELD: string; // the held ruling (R41)
+  export const childReclaimStuckHeld: (sentence: string) => string;
+  // childReclaimStuckSentence: the detail through Task 7's childReclaimDetailText (W8-SEC-2); a detail that is
+  //   empty once made one line reads as a cut record
   export const childReclaimStuckSentence: (token: string, detail: string | null, sentenceFor: (token: string) => string,
     kept: ChildReclaimKeptWord | null) => string;
   export interface ChildReclaimAttentionInput { …; readonly stuckOf: (token: string) => boolean }
   export type ChildReclaimJournalAttention = Extract<ChildReclaimAttention, { readonly kind: 'terminal' | 'stuck' | 'failing' }>;
   export const childReclaimTerminalRefusal: (row: Omit<ChildReclaimJournalRow, 'detail'>, kindOf: …) => boolean; // body unchanged
-  // childReclaimAttentionWithKept: a stuck item for a child kept under the run it names → childReclaimStuckKept(sentence, why)
+  // childReclaimAttentionWithKept: a stuck item for a child kept under the run it names → childReclaimStuckKept(sentence, why);
+  //   a stuck item for a held child (no run to match: a held verdict carries none) → childReclaimStuckHeld(sentence)
   ```
   - For Task 9: the executor's `failed` outcome carries `resume: 'stuck'` (Task 6's). Task 9 derives `ChildReclaimSweepOutcome`'s `stuck: boolean` from the token, `isChildReclaimStuckToken(o.token)`, in `childReclaimSweepOutcomeOf`. Its restart seeding classifies a journal token with `isChildReclaimStuckToken`, injected into L1 exactly as `stuckOf` is here. Step 3h already imports `isChildReclaimStuckToken` into watch.ts, so Task 9 adds only `childReclaimSweepOutcomeOf` there.
 
@@ -6454,10 +6568,11 @@ grep -n "^export const CHILD_RECLAIM_STUCK_TOKENS" server/src/coord/childReclaim
 grep -n "^export function isChildReclaimStuckToken(v: unknown): v is ChildReclaimStuckToken" server/src/coord/childReclaim.ts
 grep -n "^export function childReclaimFailedTail" server/src/coord/childReclaim.ts
 grep -n ": never = " server/src/coord/childReclaim.ts
+grep -nE "^export (const|function) childReclaimDetailText" server/src/childReclaimSweep.ts
 ```
 
 - If any of the first three checks prints nothing, wave 7 is not on this branch. STOP and report: Task 0 brought wave 7's tree (H1); no merge mid-wave.
-- If the fourth prints nothing, Task 1 is not done. If any of the last four prints nothing, Task 6 is not done (H3: the stuck set, its guard and the failed tail are Task 6's). Stop in either case.
+- If the fourth prints nothing, Task 1 is not done. If any of the next four prints nothing, Task 6 is not done (H3: the stuck set, its guard and the failed tail are Task 6's). If the last prints nothing, Task 7 is not done (it declares `childReclaimDetailText`, W8-SEC-2). Stop in any of these cases.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -6471,8 +6586,9 @@ Create `server/test/child-reclaim-stuck.test.ts`:
 // moves that tree or row. The server reads it as its own class:
 //   - the parse reads the word FIRST, whatever `crumb` says (Task 6's arm, H3; pinned here as a consumer);
 //   - ONE attention item per child, at once, carrying the journal row's detail and a conditional retry
-//     clause (for a KEPT child, the kept reason in its place: T8 OPEN4); under a terminal refusal and over every kept, kept-many and failing item, and never
-//     withheld for a held child;
+//     clause (for a KEPT child, the kept reason in its place: T8 OPEN4; for a HELD child, the hold's clause in
+//     its place: the held ruling, R41); ccd's detail as one bounded line (W8-SEC-2); under a terminal refusal
+//     and over every kept, kept-many and failing item, and never withheld for a held child;
 //   - the chip's `deferred` (an unsettled word the PWA re-reads), with the same sentence — never
 //     `refused`;
 //   - a feed that does not repeat itself when a retry finds the same word.
@@ -6492,15 +6608,16 @@ import {
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_KEPT_MANY_OVER, CHILD_RECLAIM_SKIP, CHILD_RECLAIM_STUCK_RETRY,
   childReclaimAttention, childReclaimAttentionWithKept, childReclaimFeedQuiet, childReclaimFirstSighting,
-  childReclaimKeptItems, childReclaimKeptList, childReclaimStuckKept, childReclaimStuckKeptClause, childReclaimStuckSentence,
-  isChildReclaimPreLockToken,
+  CHILD_RECLAIM_STUCK_HELD, childReclaimDetailText,
+  childReclaimKeptItems, childReclaimKeptList, childReclaimStuckHeld, childReclaimStuckKept, childReclaimStuckKeptClause,
+  childReclaimStuckSentence, isChildReclaimPreLockToken,
   type ChildReclaimJournalRow, type ChildReclaimSweepVerdict,
 } from '../src/childReclaimSweep.js';
 import { refusalSentence } from '../src/wsaudit.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
-import { CHILD_RECLAIM_KEPT_WORDS, LC_REFUSAL_WORD, isLcRefusalToken } from '../../shared/api.js';
+import { CHILD_RECLAIM_KEPT_WORDS, LC_LINE_MAX, LC_REFUSAL_WORD, isLcRefusalToken } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -6587,7 +6704,43 @@ describe('the stuck attention item (spec §5.9)', () => {
     expect(kept).not.toContain(CHILD_RECLAIM_STUCK_RETRY);
   });
 
-  it.each([null, ''])('with no detail (%j), it says the record was cut and points to the feed', (detail) => {
+  it('the hold clause replaces the retry clause for a held child: no retry while the hold stands, the backoff once it lifts (the held ruling, R41)', () => {
+    expect(CHILD_RECLAIM_STUCK_HELD).toBe('This workspace carries a hold, so ccrc does not retry it while the hold stands; '
+      + 'its long backoff resumes once the hold lifts.');
+    const plain = childReclaimStuckSentence(W, DETAIL, refusalSentence, null);
+    const held = childReclaimStuckHeld(plain);
+    expect(held).toBe(`${plain.slice(0, -CHILD_RECLAIM_STUCK_RETRY.length)}${CHILD_RECLAIM_STUCK_HELD}`);
+    expect(held).not.toContain(CHILD_RECLAIM_STUCK_RETRY);
+    expect(held).toContain(DETAIL);
+    // A sentence that does not end with the retry clause (a kept one) is returned as it is.
+    const kept = childReclaimStuckSentence(W, DETAIL, refusalSentence, 'coordinating');
+    expect(childReclaimStuckHeld(kept)).toBe(kept);
+  });
+
+  it('ccd’s detail reaches the sentence as one bounded line: no control or bidi character, at most LC_LINE_MAX characters and one ellipsis (W8-SEC-2)', () => {
+    // Any session on the fleet box can append a journal line, so its detail is untrusted text.
+    const nonText = (t: string): boolean => [...t].some((c) => {
+      const n = c.codePointAt(0)!;
+      return n < 0x20 || (n >= 0x7f && n <= 0x9f) || n === 0x2028 || n === 0x2029
+        || (n >= 0x202a && n <= 0x202e) || (n >= 0x2066 && n <= 0x2069);
+    });
+    const big = `${'x'.repeat(4_000)}${String.fromCharCode(0x0a, 0x202e)}${'y'.repeat(5_998)}`;
+    expect(big).toHaveLength(10_000);
+    expect(nonText(big)).toBe(true);
+    const s = childReclaimStuckSentence(W, big, refusalSentence, null);
+    expect(nonText(s)).toBe(false);
+    expect(s).toContain(childReclaimDetailText(big));
+    const lead = 'What ccd found in the way: ';
+    expect(s).toContain(lead);
+    expect(s.endsWith(` ${CHILD_RECLAIM_STUCK_RETRY}`)).toBe(true);
+    const part = s.slice(s.indexOf(lead) + lead.length, s.length - ` ${CHILD_RECLAIM_STUCK_RETRY}`.length);
+    expect(part.length).toBeLessThanOrEqual(LC_LINE_MAX + 1);
+    expect(part.startsWith('x'.repeat(100))).toBe(true);
+    // The attention item, which the chip shares, says the same bounded line.
+    expect(listOf([row({ detail: big })])[0]!.sentence).toBe(s);
+  });
+
+  it.each([null, '', String.fromCharCode(0x0a, 0x202e, 0x20)])('with no detail, or none left once made one line (%j), it says the record was cut and points to the feed', (detail) => {
     const s = listOf([row({ detail })])[0]!.sentence;
     expect(s).toMatch(/record was cut/);
     expect(s).toMatch(/“child reclaim failed” row/);
@@ -6671,10 +6824,25 @@ describe('precedence: stuck outranks kept, kept-many and failing, and held never
     // A kept verdict judged under ANOTHER run's marker is a recycled slug's (spec §5.6): it says nothing of this item.
     expect(banner(new Map<string, ChildReclaimSweepVerdict>([[ID, { eligible: false, why: 'coordinating', runId: RUN + 1 }]])))
       .toEqual(arms);
-    // `held` and a doubt word keep the retry clause: the ruling names kept verdicts only.
-    expect(banner(new Map<string, ChildReclaimSweepVerdict>([[ID, { eligible: false, why: 'held' }]]))).toEqual(arms);
+    // `held` drops the retry clause too, for the hold's (the held ruling, R41), with no run to match: a held
+    // verdict carries none.
+    expect(banner(new Map<string, ChildReclaimSweepVerdict>([[ID, { eligible: false, why: 'held' }]])))
+      .toEqual([{ ...arms[0]!, sentence: childReclaimStuckHeld(arms[0]!.sentence) }]);
+    // A doubt word keeps the retry clause: the sweep reads that child again on its next pass.
     expect(banner(new Map<string, ChildReclaimSweepVerdict>([[ID, { eligible: false, why: 'identity-unmeasured' }]])))
       .toEqual(arms);
+  });
+
+  it('a HELD child: its stuck item stays listed and drops the retry clause for the hold’s, with no run to match (the held ruling, R41)', () => {
+    const verdicts = new Map<string, ChildReclaimSweepVerdict>([[ID, { eligible: false, why: 'held' }]]);
+    const live = new Map<string, number | null>([[ID, RUN]]);
+    const arms = listOf([row()]);
+    const out = childReclaimAttentionWithKept(arms, childReclaimKeptItems({ verdicts, live, mirrorArms: arms }), verdicts);
+    expect(out).toEqual([{ ...arms[0]!,
+      sentence: childReclaimStuckHeld(childReclaimStuckSentence(W, DETAIL, refusalSentence, null)) }]);
+    expect(out[0]!.sentence).not.toContain(CHILD_RECLAIM_STUCK_RETRY);
+    expect(out[0]!.sentence).toContain(CHILD_RECLAIM_STUCK_HELD);
+    expect(out[0]!.sentence).toContain(DETAIL);
   });
 });
 
@@ -6696,9 +6864,9 @@ describe('the chip (spec §5.9): deferred, with the stuck item’s sentence, nev
 
   it('outranks every non-ordinary verdict (a kept word, held, a doubt word) and never reads refused', () => {
     for (const why of ['coordinating', 'held', 'identity-unmeasured'] as const) {
+      const plain = childReclaimStuckSentence(W, DETAIL, refusalSentence, why === 'coordinating' ? why : null);
       expect(childReclaimStatus(base({ verdict: { kind: 'skip', why } })), why).toEqual({
-        word: 'deferred', sentence: childReclaimStuckSentence(W, DETAIL, refusalSentence, why === 'coordinating' ? why : null),
-        at: LINE_AT });
+        word: 'deferred', sentence: why === 'held' ? childReclaimStuckHeld(plain) : plain, at: LINE_AT });
     }
   });
 
@@ -6709,6 +6877,23 @@ describe('the chip (spec §5.9): deferred, with the stuck item’s sentence, nev
       expect(s!.sentence, why).not.toContain(CHILD_RECLAIM_STUCK_RETRY);
       expect(childReclaimStatus(base({ verdict: { kind: 'skip', why }, fleetPaused: true })), why).toEqual(s);
     }
+  });
+
+  it('a HELD verdict on the chip: the hold’s clause, never a retry, the banner’s own sentence, and the switch turns it to paused (the held ruling, R41)', () => {
+    const held = { kind: 'skip', why: 'held' } as const;
+    const s = childReclaimStatus(base({ verdict: held }));
+    expect(s).toEqual({ word: 'deferred',
+      sentence: childReclaimStuckHeld(childReclaimStuckSentence(W, DETAIL, refusalSentence, null)), at: LINE_AT });
+    expect(s!.sentence).not.toContain(CHILD_RECLAIM_STUCK_RETRY);
+    expect(s!.sentence).toContain(CHILD_RECLAIM_STUCK_HELD);
+    const verdicts = new Map<string, ChildReclaimSweepVerdict>([[ID, { eligible: false, why: 'held' }]]);
+    const live = new Map<string, number | null>([[ID, RUN]]);
+    const arms = listOf([row()]);
+    expect(childReclaimAttentionWithKept(arms, childReclaimKeptItems({ verdicts, live, mirrorArms: arms }), verdicts)[0]!.sentence)
+      .toBe(s!.sentence);
+    // The hold's own deferred answer is switched (`waiting`), and so is this one: it says the sweep acts once the hold lifts.
+    expect(childReclaimStatus(base({ verdict: held, fleetPaused: true })))
+      .toEqual({ word: 'paused', sentence: CHILD_RECLAIM_STATUS_SENTENCE.fleetPaused, at: null });
   });
 
   it('past the ceiling too: the stuck sentence, never the failing one', () => {
@@ -6839,7 +7024,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep-policy.test
 
 Expected:
 - **`child-reclaim-stuck`:** FAIL.
-  - Every case that calls a new L1 export fails with `TypeError: … is not a function`: `childReclaimStuckSentence`, `childReclaimStuckKept` and `childReclaimStuckKeptClause`. That covers the sentence-built expectations of the attention, kept-variant, chip and banner cases. `CHILD_RECLAIM_STUCK_RETRY`'s `toBe` reads `undefined`.
+  - Every case that calls a new L1 export fails with `TypeError: … is not a function`: `childReclaimStuckSentence`, `childReclaimStuckKept`, `childReclaimStuckKeptClause` and `childReclaimStuckHeld`. That covers the sentence-built expectations of the attention, kept-variant, held-variant, bounded-detail, chip and banner cases, the two HELD cases and the third no-detail row included. `CHILD_RECLAIM_STUCK_RETRY`'s `toBe` reads `undefined`, and so does `CHILD_RECLAIM_STUCK_HELD`'s. `childReclaimDetailText` is Task 7's and already exists. The failing count is re-measure (R-j).
   - `childReclaimAttention` has no stuck arm yet, so `listOf` lists nothing for a stuck row. The no-`at` case fails with `expected [] to match object [ { kind: 'stuck', at: null } ]`, the ceiling case with `expected [] to deeply equal [ 'stuck' ]`, and the precedence cases on their first `toEqual`.
   - The rig's feed case fails on `toContain(CHILD_RECLAIM_STUCK_RETRY)`, which reads `undefined`. Its `resume: 'stuck'` and its tail are already Task 6's. The quiet case fails with `expected [ '…' ] to deeply equal []`: no stuck item is listed yet, so `feedQuiet` carries no failure word and the row is written.
   - The wiring case fails with `expected '…' to contain 'stuckOf: isChildReclaimStuckToken'`.
@@ -6852,7 +7037,7 @@ Expected:
 
 **3a–3d. None.** The stuck set, its type and guard, `ChildReclaimResume`'s `'stuck'`, the kebab admission and the word-first parse arm are Task 6's, committed before this task starts (H3). Do not declare, re-admit or re-parse any of them here.
 
-**3e. The feed row: one spelling of the retry clause.** Extend the `../childReclaimSweep.js` import block with `CHILD_RECLAIM_STUCK_RETRY, childReclaimStuckRow, childReclaimStuckSentence,`. In Task 6's `childReclaimFailedTail` (`grep -n "^export function childReclaimFailedTail" server/src/coord/childReclaim.ts`), its `case 'stuck':` return
+**3e. The feed row: one spelling of the retry clause.** Extend the `../childReclaimSweep.js` import block with `CHILD_RECLAIM_STUCK_RETRY, childReclaimStuckHeld, childReclaimStuckRow, childReclaimStuckSentence,`. In Task 6's `childReclaimFailedTail` (`grep -n "^export function childReclaimFailedTail" server/src/coord/childReclaim.ts`), its `case 'stuck':` return
 
 ```ts
       return 'While automatic reclamation runs, ccrc retries it on its long backoff; the box resumes from its breadcrumb once the tree or row is fixed.';
@@ -6876,11 +7061,17 @@ The bytes are identical, so Task 6's exact-text pins in `child-reclaim-failed-ar
   // item on the banner. Like every failure line, it speaks only for a child that still stands as this
   // run's (`marked`). For a child the sweep KEEPS (T8 OPEN4, R41), the sentence drops the retry clause and
   // names the kept reason instead; it promises no retry, so the switch leaves it as it leaves every kept
-  // answer. Every other stuck answer promises a retry, and the switch turns it to `paused`.
+  // answer. For a child the sweep HOLDS (the held ruling, R41), the sentence drops the retry clause for the
+  // hold's: no retry while the hold stands, the long backoff once it lifts. The same rewrite the banner
+  // makes (`childReclaimStuckHeld`). It still says the sweep acts once the hold lifts, so, like the verdict
+  // arm's own held answer, the switch turns it to `paused`. Every other stuck answer promises a retry, and
+  // the switch turns it to `paused`.
   if (event !== null && marked && childReclaimStuckRow(event, isChildReclaimStuckToken)) {
     const kept = input.verdict.kind === 'skip' && isChildReclaimKeptWord(input.verdict.why) ? input.verdict.why : null;
+    const held = input.verdict.kind === 'skip' && input.verdict.why === 'held';
+    const sentence = childReclaimStuckSentence(event.refusal, event.detail, refusalSentence, kept);
     const stuck: ChildReclaimStatus = {
-      word: 'deferred', sentence: childReclaimStuckSentence(event.refusal, event.detail, refusalSentence, kept), at: event.at };
+      word: 'deferred', sentence: held ? childReclaimStuckHeld(sentence) : sentence, at: event.at };
     return kept === null ? waiting(stuck) : stuck;
   }
 ```
@@ -6892,6 +7083,8 @@ In the function's numbered docstring, add after rule 2's paragraph:
  *    (`childReclaimStuckRow`) → deferred, with the attention item's own sentence and the line's time.
  *    It outranks the verdict (3) and every remaining event (4), and is never `refused`. A KEPT verdict
  *    swaps the retry clause for the kept reason (T8 OPEN4), and the switch never replaces that answer.
+ *    A HELD verdict swaps it for the hold's clause (`childReclaimStuckHeld`, the held ruling), and the
+ *    switch replaces that answer as it replaces the hold's own deferred one.
 ```
 
 **3g. `server/src/childReclaimSweep.ts`.**
@@ -6925,7 +7118,8 @@ export const childReclaimStuckRow = <R extends { readonly outcome: string; reado
   row: R, stuckOf: (token: string) => boolean,
 ): row is R & { readonly refusal: string } => row.outcome === FAILED && row.refusal !== null && stuckOf(row.refusal);
 
-const childReclaimStuckEnd = (t: string): string => (/[.!?]$/.test(t) ? t : `${t}.`);
+/** A sentence end for ccd's detail. An ellipsis ends a detail `childReclaimDetailText` cut (W8-SEC-2), so it takes no stop. */
+const childReclaimStuckEnd = (t: string): string => (/[.!?…]$/.test(t) ? t : `${t}.`);
 
 /** What a stuck sentence says in place of the retry clause for a child the sweep KEEPS (ruling T8 OPEN4,
  *  R41): the child is kept, and why, in the sweep table's own kept sentence. It promises no retry, because
@@ -6943,18 +7137,36 @@ export const childReclaimStuckKept = (sentence: string, kept: ChildReclaimKeptWo
   return sentence.endsWith(retry) ? `${sentence.slice(0, -retry.length)} ${childReclaimStuckKeptClause(kept)}` : sentence;
 };
 
+/** What a stuck sentence says in place of the retry clause for a child the sweep HOLDS (the coordinator's
+ *  held ruling, R41): a held child is never asked while the hold stands, so nothing retries it then, and
+ *  its long backoff resumes once the hold lifts. */
+export const CHILD_RECLAIM_STUCK_HELD =
+  'This workspace carries a hold, so ccrc does not retry it while the hold stands; its long backoff resumes once the hold lifts.';
+
+/** A stuck sentence for a HELD child (the held ruling): the retry clause, which ends every
+ *  `childReclaimStuckSentence` composed with no kept word, gives way to `CHILD_RECLAIM_STUCK_HELD`. ONE
+ *  rewrite, read by the chip (`childReclaimStatus`) and by `childReclaimAttentionWithKept` (the banner). A
+ *  sentence that does not end with the retry clause (a kept one) is returned as it is. */
+export const childReclaimStuckHeld = (sentence: string): string => {
+  const retry = ` ${CHILD_RECLAIM_STUCK_RETRY}`;
+  return sentence.endsWith(retry) ? `${sentence.slice(0, -retry.length)} ${CHILD_RECLAIM_STUCK_HELD}` : sentence;
+};
+
 /** The stuck item's sentence (spec §5.9), composed ONCE for the attention item and the chip, so the two
  *  say the same thing of one line. It is ccd's word for the token, then what ccd recorded as standing in
  *  the way, then the conditional retry clause, or, for a child kept under a `kept` word, the kept clause
- *  in its place (T8 OPEN4). A line with no detail says the record was cut and points to the feed, whose
+ *  in its place (T8 OPEN4). The detail is any session's text (identity on the fleet box is attribution), so
+ *  it is carried only as Task 7's `childReclaimDetailText` makes it: one line, bounded (W8-SEC-2). A line
+ *  with no detail, or none left once made one line, says the record was cut and points to the feed, whose
  *  failed row carries ccd's printed detail. The word's lookup order is `childReclaimFailingWord`'s: the
  *  journal map first, the server's lookup second. */
 export const childReclaimStuckSentence = (token: string, detail: string | null,
   sentenceFor: (token: string) => string, kept: ChildReclaimKeptWord | null): string => {
   const word = lcRefusalWord(token) ?? sentenceFor(token);
-  const what = detail === null || detail === ''
+  const shown = detail === null ? '' : childReclaimDetailText(detail);
+  const what = shown === ''
     ? 'The journal record was cut, so it does not name the tree or row in the way; this child’s “child reclaim failed” row in the feed names it.'
-    : `What ccd found in the way: ${childReclaimStuckEnd(detail)}`;
+    : `What ccd found in the way: ${childReclaimStuckEnd(shown)}`;
   const sentence = `${word} ${what} ${CHILD_RECLAIM_STUCK_RETRY}`;
   return kept === null ? sentence : childReclaimStuckKept(sentence, kept);
 };
@@ -7029,14 +7241,18 @@ becomes
       .map((a) => {
         // A STUCK item for a child the sweep KEEPS under the run the item names (T8 OPEN4, R41): its retry
         // clause gives way to the kept reason. A kept verdict under another run is a recycled slug's (§5.6).
+        // A STUCK item for a child the sweep HOLDS (the held ruling, R41): its retry clause gives way to the
+        // hold's, because a held child is never asked while the hold stands. No run to match: a held verdict
+        // carries none, and `heldIds` withholds the failing item on the same reading.
         if (a.kind !== 'stuck') return a;
+        if (heldIds.has(a.sessionId)) return { ...a, sentence: childReclaimStuckHeld(a.sentence) };
         const v = verdicts.get(a.sessionId);
         return v !== undefined && isChildReclaimKeptVerdict(v) && v.runId === a.runId
           ? { ...a, sentence: childReclaimStuckKept(a.sentence, v.why) } : a;
       }),
 ```
 
-Keep any parameter Task 7 added. Its docstring's last sentence `With no verdict recorded the failing arm stands as it always did.` gains: ` A \`stuck\` item is never filtered: \`held\` never withholds it, and the kept arm never lists its child. For a child kept under the run the item names, its retry clause gives way to the kept reason (\`childReclaimStuckKept\`), so the banner never promises a retry the kept word prevents (R41).`
+Keep any parameter Task 7 added. Its docstring's last sentence `With no verdict recorded the failing arm stands as it always did.` gains: ` A \`stuck\` item is never filtered: \`held\` never withholds it, and the kept arm never lists its child. For a child kept under the run the item names, its retry clause gives way to the kept reason (\`childReclaimStuckKept\`), so the banner never promises a retry the kept word prevents (R41). For a held child it gives way to the hold's clause (childReclaimStuckHeld), with no run to match, so the banner never promises a retry the hold prevents (the held ruling).`
 
 In `ChildReclaimFeedQuiet`, the `failureToken` docstring becomes: `The token of this child's \`failing\` or \`stuck\` attention item, or null when neither arm lists it, or the failing arm lists it with no token.`
 
@@ -7118,7 +7334,7 @@ Make each mutation alone on the Step 4 tree. Run its command in the FOREGROUND, 
 | 7 | Move 3g's stuck block below the failing block (and drop its `continue`) | STK `-t 'past the ceiling it is still stuck'` | `expected [ 'failing', 'stuck' ] to deeply equal [ 'stuck' ]` |
 | 8 | Wrap the stuck push in `if (childReclaimFailingPastCeiling(row, i.nowMs)) { … }` | STK `-t 'AT ONCE'` | `expected [] to deeply equal [ { kind: 'stuck', … } ]` |
 | 9 | In `childReclaimStuckSentence`, the value arm `` `What ccd found in the way: ${…}` `` becomes `''` | STK `-t 'AT ONCE'` | `expected '…' to contain 'registry row demo-twin lies inside /w/demo-quiet-basin'` |
-| 10 | The no-detail arm becomes `''` | STK `-t 'record was cut'` | `expected '…' to match /record was cut/` (both rows of the `each`) |
+| 10 | The no-detail arm becomes `''` | STK `-t 'record was cut'` | `expected '…' to match /record was cut/` (every row of the `each`; the count is re-measure (R-j)) |
 | 11 | `CHILD_RECLAIM_STUCK_RETRY` loses `While automatic reclamation runs, ` | STK `-t 'conditional'` | `expected 'ccrc retries it on its long backoff; …' to be 'While automatic reclamation runs, …'` |
 | 12 | In `childReclaimKeptItems`, `a.kind === 'terminal' \|\| a.kind === 'stuck'` becomes `a.kind === 'terminal'` | STK `-t 'precedence'` | the kept case: `expected [ { kind: 'kept', … } ] to deeply equal []`; the kept-many case: `expected [ 'demo-kept-1', … ] to deeply equal [ 'demo-kept-2', … ]` |
 | 13 | In `childReclaimAttentionWithKept`, `a.kind === 'failing' &&` becomes `(a.kind === 'failing' \|\| a.kind === 'stuck') &&` | STK `-t 'held verdict'` | `expected [] to deeply equal [ 'stuck:demo-quiet-basin' ]` |
@@ -7137,6 +7353,13 @@ Make each mutation alone on the Step 4 tree. Run its command in the FOREGROUND, 
 | 27 | In that `.map`, delete `&& v.runId === a.runId` | STK `-t 'KEPT child: its stuck item'` | the another-run line: a `toEqual` diff, `'… The sweep keeps this child for a person: …'` received where `'… While automatic reclamation runs, …'` is expected |
 | 28 | In `childReclaimStuckKept`, return `sentence` unchanged | STK `-t 'retry clause gives way'` | `expected '… While automatic reclamation runs, …' to be '… The sweep keeps this child for a person: …'`, every kept word |
 | 29 | `childReclaimStuckKeptClause` drops `${CHILD_RECLAIM_SKIP[kept].sentence}` | STK `-t 'retry clause gives way'` | `expected 'The sweep keeps this child for a person: ' to contain '…'`, every kept word |
+| 30 | In `childReclaimAttentionWithKept`'s `.map`, delete `if (heldIds.has(a.sessionId)) return { ...a, sentence: childReclaimStuckHeld(a.sentence) };` | STK `-t 'HELD child'`; then STK `-t 'KEPT child: its stuck item'`; then STK `-t 'HELD verdict on the chip'` | a `toEqual` diff on `sentence`: `'… While automatic reclamation runs, …'` received where `'… This workspace carries a hold, …'` is expected (the KEPT case's held line reds the same way; the chip case reds on its banner `toBe`) |
+| 31 | In 3f, `sentence: held ? childReclaimStuckHeld(sentence) : sentence` becomes `sentence` | STK `-t 'HELD verdict on the chip'`; then STK `-t 'non-ordinary verdict'` | `expected { word: 'deferred', sentence: '… While automatic reclamation runs, …', … } to deeply equal { …, sentence: '… This workspace carries a hold, …', … }`; the second: the same diff under `held` |
+| 32 | In 3f, `return kept === null ? waiting(stuck) : stuck;` becomes `return kept === null && !held ? waiting(stuck) : stuck;` | STK `-t 'HELD verdict on the chip'` | `expected { word: 'deferred', … } to deeply equal { word: 'paused', … }` |
+| 33 | `childReclaimStuckHeld` returns `sentence` unchanged | STK `-t 'hold clause replaces'` | `expected '… While automatic reclamation runs, …' to be '… This workspace carries a hold, …'` |
+| 34 | In `childReclaimStuckSentence`, `childReclaimDetailText(detail)` becomes `detail` | STK `-t 'one bounded line'` | `expected true to be false` (the control-character scan, its first red) |
+| 35 | In `childReclaimStuckSentence`, `shown === ''` becomes a test of the raw `detail` (null or empty) | STK `-t 'record was cut'` | the third `each` row: `expected '… What ccd found in the way: . …' to match /record was cut/` |
+| 36 | `childReclaimStuckEnd`'s `/[.!?…]$/` becomes `/[.!?]$/` | STK `-t 'one bounded line'` | `expected 2050 to be less than or equal to 2049` (the numbers are re-measure (R-j); this red needs Task 7's cut to end in `…`) |
 
 Rows 1, 2 and 21 of the draft are gone (H3): the parse arm and the switch's `'stuck'` case are Task 6's, and Task 6's own mutation rows are their reds. Their numbers are not reused.
 
@@ -7172,6 +7395,12 @@ own class.
 - For a child the sweep keeps, the stuck sentence drops the retry clause,
   says the child is kept and names the reason, on the chip and the
   banner (R41).
+- For a child the sweep holds, the stuck sentence drops the retry clause
+  too: ccrc does not retry it while the hold stands, and its long backoff
+  resumes once the hold lifts (the held ruling, R41), on the chip and the
+  banner.
+- ccd's detail reaches the sentence through childReclaimDetailText: one
+  line, with no control or bidi character, bounded at LC_LINE_MAX.
 - childReclaimFeedQuiet reads a listed stuck item like a failing one, so a
   retry that finds the same word writes no new feed row.
 
@@ -7201,7 +7430,7 @@ MSG
 - **Docstrings.** The ones that promise "at least once a ceiling" are rewritten.
 
 **Readings this task takes (each named in the plan's departures, for the coordinator):**
-- `tier-uncountable-failure-neutral`. A failure whose word is not countable (null, or a pre-lock word) neither enters, counts, advances nor ENDS the tier. The rulings' "a failure with a different token" is read as a different COUNTABLE token. The evidence's amended text is "Neither a pre-lock token nor a null token ends or advances it" (`attack.json`, R78 population). The reason is the restart: a rejection and a cut-short call are never journaled, and a pre-lock die is journaled as a `refused` line. A rule that let them end the tier would make the live memory and its restart seed disagree. The agreement case below pins that they agree.
+- `tier-uncountable-failure-neutral`. A failure whose word is not countable (null, or a pre-lock word) neither enters, counts, advances nor ENDS the tier. The rulings' "a failure with a different token" is read as a different COUNTABLE token. The evidence's amended text is "Neither a pre-lock token nor a null token ends or advances it" (`attack.json`, R78 population). The reason is the restart: a rejection and a cut-short call are never journaled, and a pre-lock die is journaled as a `refused` line. A rule that let them end the tier would make the live memory and its restart seed disagree. The same holds for two more `refused` lines, because ccd journals EVERY `ws-reclaim` refusal through one emit (`_lc_emit reclaim refused … refusal "$REAP_VERDICT"`, ccd/ccd:30280 at `226bb881c`, and `refused in-progress` at :30183): a box retry refusal (`attached`, `held`, `tree-busy`, `state-changed`, `in-progress`, `reap-in-progress`, `paused`), which the executor answers as a deferral that keeps the tier (`childReclaimRefusal`'s `retry` arm, coord/childReclaim.ts:1019-1021), and a refused word this build cannot classify, which the executor answers as a failure with a null word (coord/childReclaim.ts:749-752), so neutral. The seed reads past both, through the injected `kindOf` (`childReclaimTokenKind`), and ends only at a `terminal` or `gone` refusal, as the live memory does. The agreement case below pins that they agree, journaled box retry refusals and unclassified refused words included.
 - `tier-j-from-run`. Live, `j = max(0, run − K)`, the seed's own formula, for (b) members and stuck members alike. So a stuck child is paced at the ceiling for its first four answers, then 30, 60, 120 and 240 minutes. A restart reads back exactly the j the dead process held.
 - `tier-seed-carries-short-run`. The seed also carries a NON-member's word and run (fewer than K), so the K-th failure is the same failure live or after a restart.
 - `tier-seed-birth-guard`. The seed reads a generation only when its opening `create` is the entry's own `bornAt`. With no placed birth (R75's purge window), it seeds nothing. That direction is faster pacing, never a missed ask.
@@ -7257,6 +7486,7 @@ MSG
   export function childReclaimFailureWaitMs(entry: ChildReclaimSweepEntry, passIntervalMs: number): number;
   export function childReclaimTierSeed(
     generation: readonly MirroredLifecycleEvent[], bornAt: number | null, stuckOf: (token: string) => boolean,
+    kindOf: (token: string) => ChildReclaimTokenKind | null,
   ): ChildReclaimTierState;
   // childReclaimFirstSighting gains a LAST parameter: tier: ChildReclaimTierState = CHILD_RECLAIM_TIER_NONE
   ```
@@ -7270,7 +7500,7 @@ MSG
   readonly exec?: (req: ChildReclaimRequest) => ChildReclaimOutcome | Promise<ChildReclaimOutcome>;
   // module scope: `let uidN = 0;`, moved out of laneFixture, so a rig over a reused coord.db never reuses a uid
   // laneFixture's rig gains:
-  journal(id: string, act: string, outcome: string, over?: Record<string, unknown>): void;
+  journal(id: string, act: string, outcome: string, over?: Readonly<Record<string, unknown>>): void;
   advance(ms: number): void; advanceTo(mono: number): void; mono(): number; now(): number;
   entryOf(id: string): ChildReclaimSweepEntry | undefined;
   ```
@@ -7281,7 +7511,7 @@ MSG
   - Task 3's shared lane fixture, `server/test/childReclaimGenerationFixture.ts` (`laneFixture`, `G1`, `G2`), as Tasks 5 and 7 left it (H7).
   - Task 3's `'generation-changed'` deferral word. It is only a string here, used as one deferral row.
   - Wave 7's `LcRefusalToken` member `'containment-refuted'`.
-  - Existing code at `226bb881c`: `isChildReclaimPreLockToken` and `CHILD_RECLAIM_PRE_LOCK_TOKEN` (childReclaimSweep.ts:920-929), `childReclaimFailureLine` (:936), `childReclaimGeneration` (coord/childReclaim.ts:145) and `CHILD_RECLAIM_SWEEP_MS` (watch.ts).
+  - Existing code at `226bb881c`: `isChildReclaimPreLockToken` and `CHILD_RECLAIM_PRE_LOCK_TOKEN` (childReclaimSweep.ts:920-929), `childReclaimFailureLine` (:936), `ChildReclaimTokenKind` (childReclaimSweep.ts:908), `childReclaimGeneration` (coord/childReclaim.ts:145), `childReclaimTokenKind` (coord/childReclaim.ts:102, already imported by watch.ts at :89) and `CHILD_RECLAIM_SWEEP_MS` (watch.ts).
 
 - [ ] **Step 0: Entry conditions**
 
@@ -7307,7 +7537,7 @@ Then measure what the shared fixture already carries. Tasks 5 and 7 add their op
 grep -n '^let uidN\|readonly exec?:\|const journal = \|const advance = \|const advanceTo = \|mono: () => mono\|now: () => clock\|const entryOf = ' server/test/childReclaimGenerationFixture.ts
 ```
 
-If one of these is present under its name but with another signature than Step 2a's (for example, `journal` without the `id` first), STOP and report. Never add a second spelling beside it.
+If one of these is present under its name with the same parameter ORDER and arity as Step 2a's (`journal(id, act, outcome, over?)`, `advance(ms)`, `advanceTo(m)`, `mono()`, `now()`, `entryOf(id)`), reuse it as it stands, whatever its `Readonly` modifiers: Task 5's `journal` takes `over: Readonly<Record<string, unknown>>`, H7's spelling, and that is the same piece. STOP and report only when it has another parameter list (a different order or arity, for example `journal` without the `id` first) or another return type. Never add a second spelling beside it.
 
 - [ ] **Step 1: Write the failing L1 test**
 
@@ -7333,7 +7563,8 @@ import {
   type ChildReclaimTierState,
 } from '../src/childReclaimSweep.js';
 import {
-  CHILD_RECLAIM_PROBE_UNMEASURED, childReclaimSweepOutcomeOf, isChildReclaimStuckToken, parseChildReclaimResult,
+  CHILD_RECLAIM_PROBE_UNMEASURED, childReclaimSweepOutcomeOf, childReclaimTokenKind, isChildReclaimStuckToken,
+  parseChildReclaimResult,
 } from '../src/coord/childReclaim.js';
 import type { LifecycleAct, LifecycleOutcome, MirroredLifecycleEvent } from '../../shared/api.js';
 
@@ -7381,7 +7612,12 @@ const attempt = (w: string | null): MirroredLifecycleEvent[] => [
 const generation = (...words: (string | null)[]): MirroredLifecycleEvent[] =>
   [ev('create', 'done', { at: BORN }), ...words.flatMap(attempt)];
 const seed = (rows: readonly MirroredLifecycleEvent[]): ChildReclaimTierState =>
-  childReclaimTierSeed(rows, BORN, isChildReclaimStuckToken);
+  childReclaimTierSeed(rows, BORN, isChildReclaimStuckToken, childReclaimTokenKind);
+/** What ccd journals for an attempt the box REFUSED with `w`: its `intent`, then the one `refused` emit every
+ *  `ws-reclaim` refusal goes through (ccd/ccd:30280). */
+const refusedAttempt = (w: string): MirroredLifecycleEvent[] => [ev('reclaim', 'intent'), ev('reclaim', 'refused', { refusal: w })];
+/** A refused word no build was compiled to know: `childReclaimTokenKind` answers null for it. */
+const UNKNOWN_REFUSAL = 'a-word-this-build-never-knew';
 /** mulberry32: a seeded row replays exactly. */
 const mulberry32 = (s: number): (() => number) => {
   let a = s >>> 0;
@@ -7533,16 +7769,28 @@ describe('the restart seed (childReclaimTierSeed)', () => {
       .toEqual({ tier: true, tierToken: A, tierJ: 0, tierRun: 4 });
   });
 
+  it('a journaled box retry refusal and an unclassified refused word are read past, as the live memory keeps the tier through them', () => {
+    expect(childReclaimTokenKind('attached')).toBe('retry');
+    expect(childReclaimTokenKind(UNKNOWN_REFUSAL)).toBeNull();
+    for (const w of ['attached', 'held', 'in-progress', UNKNOWN_REFUSAL]) {
+      expect(seed([...generation(A, A), ...refusedAttempt(w), ...attempt(A), ...attempt(A)]), w)
+        .toEqual({ tier: true, tierToken: A, tierJ: 0, tierRun: 4 });
+    }
+  });
+
   it('any other reclaim outcome ends the walk; another act is read past', () => {
-    for (const end of [ev('reclaim', 'refused', { refusal: 'tree-unreadable' }), ev('reclaim', 'done'), ev('reclaim', 'unknown')]) {
+    for (const end of [ev('reclaim', 'refused', { refusal: 'tree-unreadable' }), ev('reclaim', 'refused', { refusal: 'no-such-session' }),
+      ev('reclaim', 'done'), ev('reclaim', 'unknown')]) {
       expect(seed([...generation(...times(5, A)), end]), `${end.outcome}:${String(end.refusal)}`).toEqual(CHILD_RECLAIM_TIER_NONE);
     }
     expect(seed([...generation(...times(4, A)), ev('hold', 'done')])).toMatchObject({ tier: true, tierRun: 4 });
   });
 
   it('reads the entry\'s OWN generation: an opening create at another birth, or no birth, seeds nothing', () => {
-    expect(childReclaimTierSeed(generation(...times(6, A)), BORN + 1, isChildReclaimStuckToken)).toEqual(CHILD_RECLAIM_TIER_NONE);
-    expect(childReclaimTierSeed(generation(...times(6, A)), null, isChildReclaimStuckToken)).toEqual(CHILD_RECLAIM_TIER_NONE);
+    expect(childReclaimTierSeed(generation(...times(6, A)), BORN + 1, isChildReclaimStuckToken, childReclaimTokenKind))
+      .toEqual(CHILD_RECLAIM_TIER_NONE);
+    expect(childReclaimTierSeed(generation(...times(6, A)), null, isChildReclaimStuckToken, childReclaimTokenKind))
+      .toEqual(CHILD_RECLAIM_TIER_NONE);
   });
 
   it('reads no clock: past the opening create, no row\'s own `at` changes the answer', () => {
@@ -7553,7 +7801,8 @@ describe('the restart seed (childReclaimTierSeed)', () => {
 
   it('the seed and the live memory agree on every sequence: a restart reads back what the process that died held', () => {
     const rnd = mulberry32(78);
-    const words: readonly (string | null)[] = [A, B, STUCK, null, 'flock-unavailable', 'token-malformed', 'defer'];
+    const words: readonly (string | null)[] =
+      [A, B, STUCK, null, 'flock-unavailable', 'token-malformed', 'defer', 'box-retry', 'refused-unknown'];
     for (let trial = 0; trial < 500; trial += 1) {
       let live = fresh();
       const rows: MirroredLifecycleEvent[] = [ev('create', 'done', { at: BORN })];
@@ -7564,6 +7813,18 @@ describe('the restart seed (childReclaimTierSeed)', () => {
         seq.push(w);
         // A deferral is journaled nowhere (a retryable verdict never is), and the memory keeps the tier through it.
         if (w === 'defer') { live = fold(live, [{ kind: 'deferred', why: 'presence' }]); continue; }
+        // A box retry refusal IS journaled (`refused attached`), and the executor answers it as a deferral.
+        if (w === 'box-retry') {
+          live = fold(live, [{ kind: 'deferred', why: 'attached' }]);
+          rows.push(...refusedAttempt('attached'));
+          continue;
+        }
+        // A refused word this build cannot classify is journaled too, and answered as a failure that names no word.
+        if (w === 'refused-unknown') {
+          live = fold(live, [failed(null)]);
+          rows.push(...refusedAttempt(UNKNOWN_REFUSAL));
+          continue;
+        }
         live = fold(live, [failed(w)]);
         rows.push(...attempt(w));
       }
@@ -7627,11 +7888,11 @@ let uidN = 0;
 
 In `childReclaimExec`, `const o = await base.queue.run(req.sessionId, () => reclaimChild(` becomes `const o = opts.exec !== undefined ? await opts.exec(req) : await base.queue.run(req.sessionId, () => reclaimChild(`. The continuation line and `outcomes.push(o);` stay as they are.
 
-(iii) Directly above the rig's `return {`, add:
+(iii) Directly above the rig's `return {`, add each declaration below that Step 0's grep did NOT find (Task 5 may already have added `journal` and `advance`, and Task 7 `journal`). `journal` takes H7's `Readonly` spelling, and it increments the MODULE-scope `uidN` from (i), never a rig-local one:
 
 ```ts
   /** One ccd journal line for `id`, mirrored at the rig's wall clock, on `plant`'s uid counter. */
-  const journal = (id: string, act: string, outcome: string, over: Record<string, unknown> = {}): void => {
+  const journal = (id: string, act: string, outcome: string, over: Readonly<Record<string, unknown>> = {}): void => {
     uidN += 1;
     const line = JSON.stringify({ uid: `w8.1.${uidN}`, at: clock, act, outcome, id, ...over });
     coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: uidN * 200,
@@ -7643,7 +7904,7 @@ In `childReclaimExec`, `const o = await base.queue.run(req.sessionId, () => recl
   const entryOf = (id: string) => watcher.currentChildReclaimDefers().get(id);
 ```
 
-Then add `journal, advance, advanceTo, mono: () => mono, now: () => clock, entryOf` to the object it returns.
+Then add to the returned object each of these names that is not already a key of it: `journal`, `advance`, `advanceTo`, `mono: () => mono`, `now: () => clock`, `entryOf`. Tasks 5 and 7 have already put some there (`journal`, `advance`, `now`), and a repeated key is TS1117 ("An object literal cannot have multiple properties with the same name"), which `typecheck-tests` reds.
 
 2b. Create `server/test/child-reclaim-tier-lane.test.ts`:
 
@@ -7692,10 +7953,12 @@ const fixture = () => {
     return { kind: 'failed', sessionId: req.sessionId, runId: req.runId,
       resume: word === STUCK ? 'stuck' : 'resumable', detail: `${word}: d`, token: word };
   };
+  /** ccd's own record of one earlier attempt the box refused with a RETRY word (ccd/ccd:30280's one emit). */
+  const boxRetry = (word: string): void => { f.advance(1); reclaimLine('intent'); reclaimLine('refused', { refusal: word }); };
   /** `ws-add` minted the slug again: a new generation, and its `create` mirrored. */
   const remintSlug = (): void => { f.remint(ID, G2); f.journal(ID, 'create', 'done', { verb: 'ws-add' }); };
   return {
-    reg: f.reg, requests: f.requests, plantChild, failures, failedAs, remintSlug, pass: f.pass, next: f.next,
+    reg: f.reg, requests: f.requests, plantChild, failures, boxRetry, failedAs, remintSlug, pass: f.pass, next: f.next,
     advance: f.advance, advanceTo: f.advanceTo, mono: f.mono,
     answer: (fn: (req: ChildReclaimRequest) => ChildReclaimOutcome) => { answer = fn; },
     entryOf: () => f.entryOf(ID),
@@ -7770,6 +8033,17 @@ describe('the persistent tier, wired', () => {
     expect(f.requests).toHaveLength(2);
   });
 
+  it('a journaled box retry refusal never resets the seed: the lane injects the one token kind', async () => {
+    const f = fixture();
+    f.plantChild();
+    f.failures(2, A);
+    f.boxRetry('attached');                                         // the executor answered this one as a deferral
+    f.failures(2, A);
+    await f.pass();                                                 // the first sighting, seeded from the mirror
+    expect(f.requests).toHaveLength(0);
+    expect(f.entryOf()).toMatchObject({ tier: true, tierToken: A, tierRun: 4, tierJ: 0, lastFailedAt: null });
+  });
+
   it('the seed reads the CURRENT generation only: a slug minted again never inherits the old workspace\'s tier', async () => {
     const f = fixture();
     f.plantChild();
@@ -7788,7 +8062,7 @@ describe('the persistent tier, wired', () => {
 cd server && ./node_modules/.bin/vitest run test/child-reclaim-persistent-tier.test.ts test/child-reclaim-tier-lane.test.ts
 ```
 
-Expected: FAIL, 25 of 25 in `child-reclaim-persistent-tier` and 4 of 4 in `child-reclaim-tier-lane`. Vitest binds a missing named export to `undefined`; it does not raise a SyntaxError.
+Expected: FAIL, 25 of 25 in `child-reclaim-persistent-tier` and 5 of 5 in `child-reclaim-tier-lane` (both counts re-measure (R-j): the box-retry row case and the box-retry lane case are new, and the persistent-tier file drafted 24 `it(` before them). Vitest binds a missing named export to `undefined`; it does not raise a SyntaxError.
 - The constants case fails at `expected undefined to be 4`.
 - The rejection case fails at `expected undefined to deeply equal { kind: 'failed', token: null, stuck: false }`.
 - Every case that calls a new function fails at `TypeError: … childReclaimTierOf is not a function`, or the same error naming `childReclaimTierCountable`, `childReclaimTierPaceMs`, `childReclaimFailureWaitMs`, `childReclaimTierSeed` or `childReclaimSweepOutcomeOf`.
@@ -7997,6 +8271,10 @@ In its docstring, `once \`childReclaimBackoffMs\` has elapsed` becomes `once \`c
  *  capability, a mirror fail-shut and every pass that does not find the child eligible. So every first sighting
  *  reads the tier back from ccd's own journal of the CURRENT generation:
  *  - it walks back over `reclaim` lines, reading past `intent`s and other acts;
+ *  - it reads past a `refused` line whose word `kindOf` classes neither `terminal` nor `gone`: a box retry
+ *    refusal, which the executor answers as a deferral that KEEPS the tier, or a word this build cannot classify,
+ *    which it answers as a failure naming no word (neutral). ccd journals every refusal, so without this a
+ *    restart would read a shorter run than the memory held;
  *  - it reads past a failure line whose word is not countable, as the memory is neutral to it;
  *  - it counts the latest run of one countable word, and ends at any other outcome or another word.
  *  Membership and j come from `childReclaimTierFrom`, the live memory's own derivation. The caller leaves
@@ -8005,13 +8283,15 @@ In its docstring, `once \`childReclaimBackoffMs\` has elapsed` becomes `once \`c
  *
  *  `generation` is `childReclaimGeneration(events, now)`'s slice. It is read only when its opening `create` is
  *  `bornAt`, the birth the new entry describes, so another workspace's rows never seed this one. No birth seeds
- *  nothing. No clock is read: ccd's `at` places nothing here. `stuckOf` is the stuck class, injected
- *  (`isChildReclaimStuckToken`; this file imports L0 alone). Two residuals:
+ *  nothing. No clock is read: ccd's `at` places nothing here. `stuckOf` is the stuck class and `kindOf` wave 3's
+ *  token kind, both injected (`isChildReclaimStuckToken`, `childReclaimTokenKind`; this file imports L0 alone).
+ *  Two residuals:
  *  - The slice can be windowed short (`lifecycleFor`'s page), which only makes a run look younger.
  *  - A recycled slug's rows are read before its new `create` is placed.
  *  Each affects pacing only. */
 export function childReclaimTierSeed(
   generation: readonly MirroredLifecycleEvent[], bornAt: number | null, stuckOf: (token: string) => boolean,
+  kindOf: (token: string) => ChildReclaimTokenKind | null,
 ): ChildReclaimTierState {
   const opening = generation[0];
   if (bornAt === null || opening === undefined || opening.at !== bornAt) return CHILD_RECLAIM_TIER_NONE;
@@ -8020,6 +8300,12 @@ export function childReclaimTierSeed(
   for (let k = generation.length - 1; k >= 0; k -= 1) {
     const e = generation[k]!;
     if (e.act !== RECLAIM_ACT || e.outcome === INTENT) continue;
+    if (e.outcome === REFUSED && e.refusal !== null && !isChildReclaimPreLockToken(e.refusal)) {
+      const kind = kindOf(e.refusal);
+      // a box retry refusal (the executor's deferral, which keeps the tier) or a word this build cannot classify
+      // (a word-less failure, neutral): the live memory's tier stands through both, so the walk reads past them
+      if (kind !== 'terminal' && kind !== 'gone') continue;
+    }
     if (!childReclaimFailureLine(e)) break;
     if (!childReclaimTierCountable(e.refusal)) continue;
     if (token !== null && e.refusal !== token) break;
@@ -8037,8 +8323,9 @@ export function childReclaimTierSeed(
 ```ts
 /** The executor's answer as the sweep's memory needs it (spec §5.9, the persistent tier). The ONE projection:
  *  `failed` carries ccd's own word and whether it is in the stuck class, decided HERE by the class's one spelling
- *  (`isChildReclaimStuckToken`). The lane hands the same predicate to the restart seed
- *  (`childReclaimTierSeed`), so the live memory and the seed never classify one word two ways. Every other arm
+ *  (`isChildReclaimStuckToken`). The lane hands the same predicate, and the same token kind the executor's
+ *  refusal arm reads (`childReclaimTokenKind`), to the restart seed (`childReclaimTierSeed`), so the live memory
+ *  and the seed never classify one word two ways. Every other arm
  *  carries what the memory reads, and nothing else. */
 export function childReclaimSweepOutcomeOf(o: ChildReclaimOutcome): ChildReclaimSweepOutcome {
   switch (o.kind) {
@@ -8056,7 +8343,8 @@ export function childReclaimSweepOutcomeOf(o: ChildReclaimOutcome): ChildReclaim
 
 6a. Imports:
 - add `childReclaimSweepOutcomeOf` ALONE to the `./coord/childReclaim.js` import. `isChildReclaimStuckToken` is already there (Task 8's Step 3h), and importing it again is a duplicate identifier and a tsc error;
-- add `CHILD_RECLAIM_SWEEP_REJECTED` and `childReclaimTierSeed` to the `./childReclaimSweep.js` import.
+- add `CHILD_RECLAIM_SWEEP_REJECTED` and `childReclaimTierSeed` to the `./childReclaimSweep.js` import;
+- `childReclaimTokenKind` is already in the `./coord/childReclaim.js` import (wave 4, watch.ts:89 at `226bb881c`), so the seed's `kindOf` needs no import. Never import it again.
 
 6b. In the memory field's docstring (:799-802), after `…which ccd's re-proof on the box makes safe — never cause one.` add `The persistent tier is re-read at every first sighting (\`childReclaimTierSeed\`), so a lost memory costs a tier child one extra ask, never a fresh tier wait.`
 
@@ -8078,7 +8366,7 @@ Inside the loop, directly below `const gen = childReclaimGeneration(…);`, add 
         // current generation, with `lastFailedAt` left null, so a tier child is asked once on its next due pass
         // and then waits its tier pace. It never waits a fresh tier pace, and never falls back to the 15-minute ramp.
         this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, v.runId, regGeneration,
-          childReclaimTierSeed(tierGenerations.get(r.id) ?? [], childBornAt, isChildReclaimStuckToken)));
+          childReclaimTierSeed(tierGenerations.get(r.id) ?? [], childBornAt, isChildReclaimStuckToken, childReclaimTokenKind)));
         continue;
       }
 ```
@@ -8108,7 +8396,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-persistent-tier.t
   test/containment-refuted-word.test.ts
 ```
 
-Expected: PASS everywhere, with `child-reclaim-persistent-tier` at 25/25 and `child-reclaim-tier-lane` at 4/4, run in the FOREGROUND under 600 s. Every pre-existing case stays green unchanged. They prove that a non-tier child paces exactly as before.
+Expected: PASS everywhere, with `child-reclaim-persistent-tier` at 25/25 and `child-reclaim-tier-lane` at 5/5 (both re-measure (R-j)), run in the FOREGROUND under 600 s. Every pre-existing case stays green unchanged. They prove that a non-tier child paces exactly as before.
 
 Then run every other user of the shared lane fixture, which Step 2a extended additively:
 
@@ -8156,6 +8444,9 @@ Make each mutation alone on the Step 8 tree, run its command (FOREGROUND), see t
 | 21 | In watch.ts's first sighting, wrap the seeded entry as `{ ...childReclaimFirstSighting(…), lastFailedAt: mono }` | L `-t 'memory clear never starves'` | `asked once on its next due pass, never a fresh tier wait: expected [ …(1) ] to have a length of 2 but got 1` |
 | 22 | `CHILD_RECLAIM_SWEEP_REJECTED`'s `token: null` → `token: 'rejected'` | P `-t 'rejection is written'`; L `-t 'a rejection names no word'` | `expected { kind: 'failed', token: 'rejected', stuck: false } to deeply equal { …, token: null, … }`; `expected { …, tier: false, … } to match object { tier: true, … }` |
 | 23 | Restore `still asked for at least once a` in `childReclaimBackoffMs`'s docstring | P `-t 'no longer promise'` | `expected '…' not to contain 'still asked for at least once a'` |
+| 24 | In `childReclaimTierSeed`, delete the line `if (kind !== 'terminal' && kind !== 'gone') continue;` | P `-t 'journaled box retry refusal and an unclassified'`; P `-t 'agree on every sequence'`; L `-t 'never resets the seed'` | `attached: expected { tier: false, tierToken: 'worktree-remove-failed', tierJ: 0, tierRun: 2 } to deeply equal { tier: true, …, tierRun: 4 }`; the agreement case reds on a sequence holding `box-retry` or `refused-unknown` (its message prints the sequence); the lane case `expected { …, tier: false, … } to match object { tier: true, …, tierRun: 4, … }` |
+| 25 | In `childReclaimTierSeed`, `kind !== 'terminal' && kind !== 'gone'` → `kind !== 'terminal'` | P `-t 'any other reclaim outcome ends the walk'` | `refused:no-such-session: expected { tier: true, tierToken: 'worktree-remove-failed', tierJ: 1, tierRun: 5 } to deeply equal { tier: false, tierToken: null, tierJ: 0, tierRun: 0 }` |
+| 26 | In watch.ts's first sighting, the seed's last argument `childReclaimTokenKind` → `() => 'terminal' as const` | L `-t 'never resets the seed'` | `expected { …, tier: false, tierToken: 'worktree-remove-failed', tierRun: 2, … } to match object { tier: true, tierToken: 'worktree-remove-failed', tierRun: 4, … }` |
 
 - [ ] **Step 11: Commit**
 
@@ -8207,7 +8498,11 @@ Write in the spec's voice. It cites no contract rule and carries no `D-` token. 
   - **§5.9:**
     - the readers of `crumb` and of the exit-1 audit;
     - the kept-leaf item for a purged row, with its source, its ends and its collapse;
-    - the `stuck` class: attention, precedence, the chip word `deferred`, and the feed.
+    - the `stuck` class: attention, precedence, the chip word `deferred`, and the feed;
+    - the kept and held variants, which carry no retry clause;
+    - that the stuck and kept-leaf sentences carry ccd's `detail` as one bounded plain line (control and bidi characters replaced, at most `LC_LINE_MAX` characters);
+    - the sentence that `grep -n "holds no dated creation of its workspace" docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` finds, rewritten to name both causes;
+    - `generation-changed` worded by what was measured: the workspace no longer carries the generation the sweep judged it under. It never says "removed and made again".
   - **§7 item 6, the stated residuals:**
     - an older ccd's unlicensed gap;
     - the read follows symlinks;
@@ -8218,11 +8513,11 @@ Write in the spec's voice. It cites no contract rule and carries no `D-` token. 
     - a box-level cure can wait up to the tier's cap;
     - the seed's windowed slice, and the recycled-slug window, affect pacing only.
   - **§8:** this wave's row.
-- [ ] **Step 2: The contract's "§15 as built" note.** One note at the end of §15, in the style of "§12 as built". Every departure named by slug gets one sentence. Write each number singly.
+- [ ] **Step 2: The contract's "§15 as built" note.** One note at the end of §15, in the style of "§12 as built". Every departure named by slug gets one sentence. Write each number singly. It also amends R76's "nothing retries it": `purge-incomplete`'s feed tail is conditional, because the sweep asks again if the row's own files still stand.
 - [ ] **Step 3: Run the docs scanners**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts test/expiry-lane-prose.test.ts
+cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts test/expiry-lane-prose.test.ts test/dead-coordinator-prose.test.ts
 ```
 
 Expected: PASS.
