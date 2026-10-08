@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `working`, fix round 2 from `7253060da`; review run 333 closed (R27) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `6cef2ae46` after fix round 2; review run 338 waits at the cap (R28) |
 
 ## Decisions & deviations
 
@@ -438,6 +438,26 @@ time.
   - F1's line for the operator stands as "Not confirmed — the server did not answer; the screen will re-check."
   - Next: run 322 is back at `working` (fingerprint `7253060da`), and the `fix-round` mail goes out. The round ends
     in a fresh wave-done, a new review run for the new tip, and then the operator's merge decision.
+- **R28 (2026-10-08 04:27)**, fix round 2's wave-done is verified, and its review waits at the cap.
+  - Mail 3970 claims `6cef2ae46`. Re-measured:
+    - `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all read `6cef2ae46`, the workspace is clean,
+      and the PR is open.
+    - The seven commits since `7253060da` touch five files. `server/src` is unchanged, and the one `shared/api.ts`
+      hunk is a two-line comment inside wave 1's stall-watch block.
+    - `merge-tree` is clean against `origin/main` (`3c33d3218`) and against `ws/swift-cove` (workspace-lifecycle run
+      314, to which the worker waived regions by mail 3944).
+    - The server took the fingerprint, and run 322 is `awaiting-review`.
+    - Every required CI check on run 37725973446 is green.
+    - The child's evidence is copied to `w2-fix2-child-evidence/`.
+  - Claims: claim 1083 lapsed at its 8-hour cap. The worker released 1087 and holds claim 1101 over this round's
+    paths.
+  - The worker's notes go to the review. The pinned option sits right after Built-in, a position R27 did not set.
+    Mutation rows X40 and X48 still quote first-cut code lines.
+  - Review run 338 is open (planned). Its brief is `w2-fix2-review-brief.md`: the panel on `7253060da..<tip>`,
+    R27's six items, the whole-wave properties, lanes (now including `ws/swift-cove`), the suites and the citation
+    instrument. The cap reads 24 of 24, and the next age-out is 05:02:17 (run 313).
+  - Three sends lost a freed slot within seconds (R26), so a session-only wake at 05:02 starts a timed background
+    attempt 2 s after the age-out. The attempt re-checks the preconditions first and sends once.
 
 ## Carried constraints (reviewers get these)
 
