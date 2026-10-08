@@ -1631,7 +1631,7 @@ This note amends; it edits no earlier text.
       open), and the expiry probe's parent (`_ws_expire_cwd_users`, whose resolution alone changed, with
       workspace-lifecycle's consent).
     - Fix round 1's checkout question resolves through the same function too (the leaf, each admin directory and each
-      back-link's directory), as does the leaf placement in `_ws_reclaim_workdir_shared`. Each maps a failure to
+      checkout's own directory, for the back-link compare), as does the leaf placement in `_ws_reclaim_workdir_shared`. Each maps a failure to
       unmeasured.
     - The leaf's own path takes no sentinel. Under a newline-free physical root, a leaf that is no link resolves to
       exactly `<root>/<id>`, and only a link swapped in between the link test and the `cd` could differ, the same-uid

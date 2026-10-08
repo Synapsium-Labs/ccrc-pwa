@@ -220,8 +220,10 @@ time or run no longer match, so a recycled slug's new child overwrites it on its
 never fails the spawn. The registry subdirectory has no leading dot, as `pools/` has none: no registry glob
 sees it, a row's purge leaves it standing, and a slug whose only trace is its witness reads free. A
 `tmproots/` that is itself a link is never followed, by the writer, the reader or the remover. It dies
-only after the removal helper (§5.6) has proven its leaf absent. A leaf whose identity no longer matches its
-witness, which is what a storage migration does to every leaf, is never collected; it is the operator's.
+only once its leaf is proven absent: by the removal helper (§5.6) after it removes the leaf, or by the tail's own
+absence proof when the in-use probe answered in use or unmeasured and the helper was never asked (§5.6). A leaf
+whose identity no longer matches its witness, which is what a storage migration does to every leaf, is never
+collected; it is the operator's.
 Identity on the box is attribution: any process of this uid can write the file, so the binding narrows a
 forgery to a directory ccd itself made, and it is not a wall. Nothing collects by the witness until waves
 7 and 8 (§8).
@@ -1056,12 +1058,13 @@ approved on a narrow one.
    - The checkout question fails closed, and it leaks. A temp root that holds a directory ccd cannot read, more
      than 64 entries named `.git`, or a tree whose walk outlasts the scan bound is kept unmeasured on every pass,
      where the permission pass used to normalise it and remove it. A clips leaf is mostly spared the first shape,
-     because the ladder normalises clips before the tail. Measured on one fleet, 47 such entries sat in 6 of 45
-     temp roots and none in clips.
+     because the ladder normalises clips before the tail. Measured on one fleet, 47 entries named `.git` sat in 6 of
+     45 temp roots, none of them near the cap, and none in clips.
    - An unprovable leaf, or a standing row at, inside or through a leaf (§5.5), makes the tail fail resumable
      `worktree-remove-failed` at its start, and so on every resume, until the row or the leaf is fixed. So does a
-     foreign tree that stands in the child, at the tail's moved-tree check. Nothing is deleted, and a fresh reclaim
-     is held at the ladder. These are persistent per-child failures that retry for ever, and wave 7 carries them.
+     foreign tree that stands in the child's worktree, at the tail's moved-tree check. Nothing is deleted, and a
+     fresh reclaim is held at the ladder. These are persistent per-child failures that retry for ever, and wave 7
+     carries them.
    - A `pin-failed` or `tombstone-unwritable` printed in the pin phase, before the breadcrumb, reads resumable to the
      server (§5.6), so the feed says the box resumes where it stopped of an act that is retried from the start.
      `ws-expire`'s pin phase prints the same two words before its own breadcrumb, and its reader reads them the same

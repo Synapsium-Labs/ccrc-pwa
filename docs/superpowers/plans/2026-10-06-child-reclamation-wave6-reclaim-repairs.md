@@ -9556,7 +9556,7 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     body is workspace-lifecycle's. Its coordinator, quiet-river, consented to that one edit in mail 3961, and the
     consent covers nothing else in the function.
   - **Other callers.** Fix round 1's checkout question (`leaf-moved-checkout-refused`) also resolves through the same
-    helper: its leaf, each admin directory, and each back-link's directory. So does the leaf placement in
+    helper: its leaf, each admin directory, and each checkout's own directory for the back-link compare. So does the leaf placement in
     `_ws_reclaim_workdir_shared` (`leaf-rows-are-nested`). Each maps a failure to unmeasured.
   - **The leaf's own path takes no sentinel.** Under a newline-free physical root, with an id that holds none, a leaf
     that is no link resolves to exactly `<root>/<id>`. Only a link swapped in between the link test and the `cd` could
