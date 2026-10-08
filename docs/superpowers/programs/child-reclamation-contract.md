@@ -1504,11 +1504,13 @@ This note amends; it edits no earlier text.
     replaced it in fix round 1: `['probe-unmeasured', 'state-changed']`, typed `as const satisfies readonly
     (LcRefusalToken | ChildReclaimToken)[]`. It is a union because `state-changed` is a `ChildReclaimToken`, not an
     `LcRefusalToken`, and a typo in the set is a compile error.
-  - **A `failed` word printed before the breadcrumb reads `not-resumable`.**
+  - **A `failed` word printed before the breadcrumb reads `not-resumable`, on the fresh arm.**
     - `parseChildReclaimResult` reads a `failed` word in that set as `not-resumable`, and every other `failed` word
       as `resumable`. `state-changed` (the consent binding, spec §5.5) stops the act before the tombstone and the
       breadcrumb, so nothing had started, and the feed says the act is retried from the start. It no longer says
-      the box resumes where it stopped.
+      the box resumes where it stopped. `state-changed` is printed on the fresh arm only, because only the fresh arm
+      runs the pin phase. `probe-unmeasured` is pre-breadcrumb on the fresh arm only (see the resumed-arm residual
+      below).
     - `pin-failed` and `tombstone-unwritable` stay `resumable`. Each is printed once in the fresh path's pin
       phase, before the breadcrumb, and also by the tail after it (eight producers of `pin-failed` and five of
       `tombstone-unwritable` in the tail), so the word alone cannot tell the two apart.
@@ -1516,6 +1518,14 @@ This note amends; it edits no earlier text.
       phase reads `resumable`, so the feed says the box resumes where it stopped of an act that is retried from the
       start. `ws-expire`'s pin phase prints the same two words before its own breadcrumb, and its parser, which is
       workspace-lifecycle's, reads them the same way. The fix is an additive `crumb:false` field on ccd's document.
+    - **The resumed arm's `probe-unmeasured` is a second residual, carried to wave 7 with the same field.** The locked
+      recomputation prints `probe-unmeasured` for any unmeasured verdict, and on a resume that verdict can come from
+      the resume's own reads (an unreadable tombstone, for one) while an earlier attempt's breadcrumb (for example
+      `reclaim:artifacts`) still stands. The server reads it `not-resumable`, so the feed says the act is retried from
+      the start, but the box's next attempt resumes from that breadcrumb and completes. It is the mirror image of the
+      `pin-failed` case: the same symptom, a wrong sentence and never a wrong act. The classification is unchanged in
+      wave 6. It agrees with the scoped sentence of `LC_REFUSAL_WORD['probe-unmeasured']` ("this attempt started
+      nothing and removed nothing"), which says only what THIS attempt did.
   - `die "bad run id"` was reclaim's alone, so the sanctioned unjournaled set narrows by one.
 - **R31's stated cost.** A row whose directory is gone now holds only while neither arm of R54 places it.
   - Two interrupted children whose trees the tail removed release each other through the breadcrumb arm.
@@ -1734,5 +1744,6 @@ This note amends; it edits no earlier text.
     - The nested leaf rows have the same shape. An unprovable leaf, or a standing row at, inside or through a leaf, makes
       the tail fail resumable `worktree-remove-failed` at its start, on every resume, until the row or the leaf is
       fixed. A fresh reclaim is held at the ladder instead, and nothing is deleted in either case.
-    - The pre-breadcrumb `pin-failed` and `tombstone-unwritable` (see R43 above) wait for the additive `crumb:false`
-      field.
+    - The pre-breadcrumb `pin-failed` and `tombstone-unwritable`, and the resumed arm's `probe-unmeasured` (see R43
+      above), wait for the additive `crumb:false` field. That field marks a document with or without a breadcrumb, so
+      it covers both directions.

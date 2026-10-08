@@ -9378,7 +9378,7 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     that enters at `children` or `worktree` never reaches that step. The settle's pin reads unmeasured and stops
     `pin-failed` on every retry, with the tree, the breadcrumb and the row standing and nothing deleted: a leak,
     retried for ever, on old git only. R53's "never `pin-failed`" therefore holds on the fresh path only. The "§12 as
-    built" note states both shapes, and the same sentence belongs in spec §7 item 6.
+    built" note states both shapes, and the same sentence is in spec §7 item 6.
   - **F14, comment-only truth fixes outside Task 13's Files list.** `_ws_reclaim_workdir_shared`'s header (two lines,
     the breadcrumb arm's "compared as text" qualifier), `cmd_ws_reclaim`'s entry comment ("a shape ccrc mints" became
     "a registry-safe charset (no `/`)"), the audit comment in `watch.ts`, and `childReclaimSweep.ts`'s "the one
@@ -9525,12 +9525,12 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
   `failed` word except `probe-unmeasured` as `resumable`, so the feed said "the box resumes where it stopped" of the
   consent binding's `state-changed`, which stops the act before the tombstone and the breadcrumb and is retried from
   the start.
-  - **As built.** A named set of pre-breadcrumb `failed` words, `CHILD_RECLAIM_PRE_CRUMB_FAILED` (`probe-unmeasured`
-    and `state-changed`), reads `not-resumable`. It replaces the one-word `CHILD_RECLAIM_PROBE_UNMEASURED` and is
-    typed `as const satisfies readonly (LcRefusalToken | ChildReclaimToken)[]`, a union, because `state-changed` is a
-    `ChildReclaimToken` and not an `LcRefusalToken`; a typo in it is a compile error. `isChildReclaimKebab` admits
-    `probe-unmeasured` through the set's guard, so no second hand-kept literal exists. The comments and the doc of
-    `ChildReclaimResume` are updated.
+  - **As built.** A named set of `failed` words that are pre-breadcrumb on the fresh arm,
+    `CHILD_RECLAIM_PRE_CRUMB_FAILED` (`probe-unmeasured` and `state-changed`), reads `not-resumable`. It replaces the
+    one-word `CHILD_RECLAIM_PROBE_UNMEASURED` and is typed `as const satisfies readonly (LcRefusalToken |
+    ChildReclaimToken)[]`, a union, because `state-changed` is a `ChildReclaimToken` and not an `LcRefusalToken`; a
+    typo in it is a compile error. `isChildReclaimKebab` admits `probe-unmeasured` through the set's guard, so no
+    second hand-kept literal exists. The comments and the doc of `ChildReclaimResume` are updated.
   - **`pin-failed` and `tombstone-unwritable` stay `resumable`.** Each is printed once in the fresh path's pin phase,
     before the breadcrumb, and also by the tail after it (eight producers of `pin-failed` and five of
     `tombstone-unwritable` in the tail), so the word alone cannot tell the two apart.
@@ -9538,6 +9538,16 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     where it stopped of an act that is retried from the start. ws-expire's pin phase prints the same two words before
     its own breadcrumb, so the residual covers that verb too, and its parser is workspace-lifecycle's and unchanged.
     The fix is an additive `crumb:false` field on ccd's document, carried to wave 7.
+  - **The resumed arm's `probe-unmeasured`, a second residual.** The word is pre-breadcrumb on the fresh arm only.
+    `state-changed` is printed on the fresh arm only, because only the fresh arm runs the pin phase. But the locked
+    recomputation prints `probe-unmeasured` for any unmeasured verdict, and on a resume that verdict can come from the
+    resume's own reads (an unreadable tombstone, for one) while an earlier attempt's breadcrumb (for example
+    `reclaim:artifacts`) still stands. The server reads it `not-resumable`, so the feed says the act is retried from
+    the start, but the box's next attempt resumes from that breadcrumb and completes. It is the mirror image of the
+    `pin-failed` case: the same symptom, a wrong sentence and never a wrong act, carried to wave 7 with the same
+    `crumb` field, which marks a document with or without a breadcrumb and so covers both directions. The
+    classification is unchanged in wave 6. It agrees with `probe-unmeasured-word-scoped-to-attempt`, whose sentence
+    says only what THIS attempt did and started.
 - **D-4458** `leaf-root-newline-refused` (Fix round 1) — the removal helper's root resolution, `rroot=$(cd -- "$root"
   … && pwd -P)`, dropped every trailing newline of the physical path (review 335, F4). A root resolving to `<vol>\n`
   read as `<vol>`, `lreal == leaf` passed because both sides were stripped, and `<vol>/<id>`, outside the root, was

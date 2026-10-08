@@ -584,11 +584,14 @@ absent. Those arms never go through the leaf's removal itself, because its leaf 
 leaf re-created in the window. A leaf re-created between the proof that it is absent and the drop leaves a leaf with
 no witness: a leak, never a loss, because the collector takes only a witnessed leaf.
 
-**A failure printed before the breadcrumb is retried from the start.** `probe-unmeasured` and the consent binding's
-`state-changed` (§5.5) are printed before the tombstone and the breadcrumb, so nothing had started. The server reads
-those two words as not resumable, and its feed says the act is retried from the start, not that the box resumes
-where it stopped. `pin-failed` and `tombstone-unwritable` stay resumable, because each is printed once in the pin
-phase, before the breadcrumb, and also by the tail after it, so the word alone cannot tell the two apart (§7).
+**A failure printed before the breadcrumb is retried from the start.** On the fresh arm, `probe-unmeasured` and the
+consent binding's `state-changed` (§5.5) are printed before the tombstone and the breadcrumb, so nothing had
+started. The server reads those two words as not resumable, and its feed says the act is retried from the start, not
+that the box resumes where it stopped. The consent binding's `state-changed` is printed on the fresh arm only,
+because only the fresh arm runs the pin phase. `probe-unmeasured` is pre-breadcrumb on the fresh arm only: the
+locked recomputation prints it on the resumed arm too, where an earlier attempt's breadcrumb stands (§7).
+`pin-failed` and `tombstone-unwritable` stay resumable, because each is printed once in the pin phase, before the
+breadcrumb, and also by the tail after it, so the word alone cannot tell the two apart (§7).
 
 ### 5.7 When reclaim happens
 
@@ -840,9 +843,11 @@ child leaves the fleet frame. It re-reads again whenever the newest reclaim `don
 mirror has ingested changes, while some finished row's chip is still unsettled; that value rides the
 coordination frame and is omitted until there is one. A child leaving the registry listing also brings
 the mirror's next sweep forward, and the tick does not wait for it. Each re-read follows one measured fact,
-so it is not a polling cadence. The board keeps the newest read it has applied, so an older read that lands last,
-or fails last, changes nothing. A board mounted after its child left, whose first read lands between the
-registry purge and the journal's `done`, keeps a null chip until its next load.
+so it is not a polling cadence. The board keeps the newest read it has applied, so a read older than the newest
+one applied changes nothing, whether it lands or fails. A failure never advances that mark, so an older success
+still lands after a newer failure: it is the freshest answer there is. A board mounted after its child left,
+whose first read lands between the registry purge and the journal's `done`, keeps a null chip until its next
+load.
 
 **The chip says why the sweep leaves a child alone.** The sweep keeps each marked child's last verdict in
 memory. A reclaim that happened, ccd's word that the session is already gone, and a terminal refusal ccd
@@ -1069,6 +1074,12 @@ approved on a narrow one.
      server (§5.6), so the feed says the box resumes where it stopped of an act that is retried from the start.
      `ws-expire`'s pin phase prints the same two words before its own breadcrumb, and its reader reads them the same
      way. An additive field on ccd's document will tell the two cases apart. Wave 7 carries it.
+   - A `probe-unmeasured` printed on the resumed arm reads not resumable to the server (§5.6), though an earlier
+     attempt's breadcrumb stands. The locked recomputation prints it for any unmeasured verdict, and on a resume that
+     verdict can come from the resume's own reads (an unreadable tombstone, for one). The feed says the act is retried
+     from the start, but the box's next attempt resumes from that breadcrumb and completes. This is the mirror image
+     of the residual above: the same symptom, a wrong sentence and never a wrong act, and the same additive field
+     tells the cases apart. Wave 7 carries it.
    - The in-use probe reads each process's environment as exec'd, so a TMPDIR set after exec is not seen.
      - A cwd or fd reached through another mount of the same directory has a spelling neither of its compared
        spellings names. `~/.cc-tmp` is a bind mount on the fleet box, and the TMPDIR arm compares ccd's own
