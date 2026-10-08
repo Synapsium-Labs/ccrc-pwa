@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `6cef2ae46` after fix round 2; review run 338 dispatched (R28) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `working`, fix round 3 from `6cef2ae46`; review run 338 closed (R29) |
 
 ## Decisions & deviations
 
@@ -463,6 +463,53 @@ time.
     `ccrc-pwa-warm-mesa` (`adopted` false, `skillState` present, brief queued), and its registry route reads opus,
     high effort, sonnet subagents, workflow on and compact 40. Next: `review-done`, then this session advances run
     338 to `working`, closes it, and rules. After that it asks the operator about merging PR #322.
+- **R29 (2026-10-08 05:23)**, review 338 is accepted, and wave 2 goes back for a third fix round.
+  - Review run 338 (`ccrc-pwa-warm-mesa`, mail 3980) reviewed `6cef2ae46` with the held-out panel (Workflow
+    `wf_fb8b0b1b-451`): 30 agents, no lens unverified, 8 confirmed and 1 refuted. Merged, that is seven findings:
+    F1 and F3 important, the rest minor.
+    - R27's six items are addressed, F5 with residue. Every mutation row re-measured as reported.
+    - Every suite is green; four PWA reds under panel load were green in isolation.
+    - The citation instrument reads `7 passed | 328 skipped (335)`.
+    - `merge-tree` is clean against `origin/main`, `ws/amber-river`, `ws/soft-delta` and `ws/swift-cove`.
+    - Run 338 closed `done` and released. The report is copied to `w2-review-338-report.md`.
+  - Before ruling on F1 and F2, this session put both proposed rulings to three Opus·high refuters (Workflow
+    `wf_ffbcfd62-d2b`, a spec lens, a user-screen lens and a consistency lens). None refuted either ruling. Their
+    output is saved to `r29-refute-workflow.json`.
+  - F1 (important): spec §13 item 4 says the select offers Built-in and every step except the built-in's "so the
+    built-in value appears once". A pinned 7 200 000 shown as its own option puts that value in the select twice.
+    The spec is not silent there, so this is a numbered departure, `pinned-built-in-value-is-its-own-option`, from
+    the wave 2 reserve. It is named to the worker by mail, defined in the W2 plan, and cited at the pinned-option arm
+    and at `quietChoices`' docstring. It is not written here until that definition is on `main`. The candidate
+    `quiet-select-shows-no-unanswered-value` loses that half. The spec-faithful alternative is to select nothing for
+    a pinned 7 200 000, which would hide a real pinned choice; it is rejected for that reason.
+  - F2 (minor): the pinned option is labelled `chosenHere`, but under a fallback or an unreadable level the server
+    sends `quiet.source` `default`. The screen then shows "2 h (built-in)" over a selected "2 h (chosen here)".
+    - Ruling: the pinned option is labelled exactly as `quietChoices` labels every step, plain `quietText`, and it
+      sits at its step's numeric place. It is the missing step, shown back for the stored case.
+    - A step label never claims a source; the quiet line above it alone says where the effective value comes from,
+      as it already does for a stored 3 h under a fallback.
+    - This supersedes R27's label clause ("labelled with the quiet line's wording"). Every other part of R27's F1
+      stands.
+    - Rows pin the label under `source` `chosen` and `default`, and the position. Each is measured red under its
+      mutation, as numbered X rows in the plan's own table.
+  - F3 (important): `unanswered-write-has-its-own-l0-line`'s "Pinned by" cites mutation rows X48 and X60, whose quoted code and failing-row title no
+    longer exist. They are re-measured against what ships and corrected in place.
+  - F4 (minor): fix round 2's pinned-option guard has no row in the plan's mutation table. Fix round 2's mutations
+    and this round's are added to Task 3's table as numbered X rows.
+  - F5 (minor): the plan's Deviations lead sentence says the two fix-round numbers did not come from the 17:47 call.
+    The reviewer read the allocator: they were issued in this programme's 17:47 block as reserve and assigned later,
+    by R24 and R27. The sentence is reworded to say so, naming no range.
+  - F6 and F7 (minor), in place:
+    - the "row 5" that is the README pin's sixth row;
+    - `stall-settings-readme`'s line and row counts;
+    - a one-line note that the File Structure table's line and row counts are first-cut figures, with the shipped
+      files governing;
+    - the second operator question's last sentence, now false;
+    - the Tech Stack's Node floor, to `>=22.16.0` as the engines say;
+    - "W1's L0 block is complete", qualified to Tasks 1 to 4.
+  - The round is bounded: the worker fixes exactly these, and the next review is scoped to this round's diff and the
+    passages it edits.
+  - Next: run 322 is back at `working` (fingerprint `6cef2ae46`), and the `fix-round` mail goes out.
 
 ## Carried constraints (reviewers get these)
 
