@@ -347,7 +347,9 @@ export type ExpiryReport =
   | { readonly kind: 'held'; readonly at: number; readonly reason: string }
   | { readonly kind: 'in-use'; readonly at: number; readonly inUse: readonly ExpireInUse[]; readonly passes: number }
   | { readonly kind: 'refused'; readonly at: number; readonly token: ExpireToken; readonly detail: string }
-  | { readonly kind: 'failing'; readonly at: number; readonly detail: string }
+  /** `final`: the row is not asked again for this archive — a composition error, or a failure the box said will not
+   *  resume — so its sentence never promises a retry. Absent on a failure that is still being retried. */
+  | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true }
   | { readonly kind: 'no-evidence'; readonly at: number };
 
 export const archivedExpiryEntry = (archivedAt: number): ArchivedExpiryEntry => ({
@@ -361,33 +363,78 @@ export const archivedExpiryEntryFor = (prev: ArchivedExpiryEntry | undefined, ar
 
 /** What an audit run only to LEARN the instant taught the entry. `absent` (an older ccd) and `none` leave it unknown
  *  and wait `EXPIRE_NO_EVIDENCE_RETRY_MS`; an audit that read a DIFFERENT archive than the registry's is a row moving
- *  under the lane — learned nothing, asked again next pass. */
+ *  under the lane — learned nothing, asked again next pass. An audit that could not be READ, or that read NO archive
+ *  (a refusal ccd answered before it read the stamp: an interrupted ws-reap's breadcrumb, `reap-in-progress`), taught
+ *  nothing either, and it is not asked again every pass: it climbs the failure ladder and is REPORTED, so a row the
+ *  lane cannot learn is on the attention list — the shadow record is the operator's arming evidence — and never takes a
+ *  learn slot each pass (review 313, parked item 1). A `gone` word is a return, which the next pass drops unreported.
+ *  A document with NO `expiresAt` key is an older ccd's (the current one prints the key on every expire audit, and the
+ *  breadcrumb's carries `null`), even when it names no archive — an older ccd prints `archivedAt` only past its seven-day
+ *  age check — so it is no evidence, never a failure: only an upgrade of the box fixes it. */
 export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAuditRead, nowMs: number, passMs: number): ArchivedExpiryEntry {
-  if (read.kind === 'unreadable') return { ...entry, nextAskAt: nowMs + passMs };
-  if (read.archivedAt !== entry.archivedAt) return { ...entry, nextAskAt: nowMs + passMs };
-  if (read.expiresAt.kind !== 'at') {
-    return { ...entry, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
-      report: read.expiresAt.kind === 'absent' ? { kind: 'no-evidence', at: nowMs } : entry.report };
+  if (read.kind === 'document' && read.archivedAt === null && read.verdict.kind === 'refused'
+    && EXPIRE_TOKEN_KIND[read.verdict.token] === 'gone') return { ...entry, nextAskAt: nowMs + passMs };
+  if (read.kind === 'document' && read.expiresAt.kind === 'absent') {
+    return { ...entry, failures: 0, failingSince: null, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
+      report: { kind: 'no-evidence', at: nowMs } };
   }
-  return { ...entry, expiresAt: read.expiresAt.at, nextAskAt: 0,
-    report: entry.report?.kind === 'no-evidence' ? null : entry.report };
+  if (read.kind === 'unreadable' || read.archivedAt === null) {
+    const why = read.kind === 'unreadable' ? read.detail : `ws-audit --expire read no archive (${read.verdict.kind === 'refused'
+      ? `${read.verdict.token}${read.verdict.detail === '' ? '' : `: ${read.verdict.detail}`}` : 'expirable'})`;
+    const failures = entry.failures + 1;
+    const failingSince = entry.failingSince ?? nowMs;
+    return { ...entry, failures, failingSince, nextAskAt: nowMs + archivedExpiryBackoffMs(failures, passMs),
+      report: { kind: 'failing', at: failingSince, detail: `its expiry could not be learned — ${why}` } };
+  }
+  if (read.archivedAt !== entry.archivedAt) return { ...entry, nextAskAt: nowMs + passMs };
+  const learned = { failures: 0, failingSince: null, report: entry.report?.kind === 'failing' ? null : entry.report };
+  if (read.expiresAt.kind !== 'at') {
+    return { ...entry, ...learned, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
+      report: read.expiresAt.kind === 'absent' ? { kind: 'no-evidence', at: nowMs } : learned.report };
+  }
+  return { ...entry, ...learned, expiresAt: read.expiresAt.at, nextAskAt: 0,
+    report: learned.report?.kind === 'no-evidence' ? null : learned.report };
 }
+
+/** A report whose row the lane will NEVER ask again for this archive (`nextAskAt` is +∞ — `archivedExpiryNextEntry`'s
+ *  terminal-refusal, non-resumable-failure and composition arms): the report is the row's only trace on the attention
+ *  list, so a hold must not take its place — nothing would ever put it back. */
+export const expiryReportIsFinal = (r: ExpiryReport | null): boolean =>
+  r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal'));
 
 /** One pass's verdict, folded into memory. THE TWICE-OBSERVED RULE (spec §5.3: "all of the above held on the
  *  previous pass too"): an eligible verdict seeds `eligibleSince` on its first pass and makes the row DUE only on a
  *  later one; any other verdict ends the run. And THE HELD REPORT (spec §5.3: "An archived workspace that is still
  *  held after 7 days is not acted on. It goes on the attention list."): `held` is listed with its reason, and the
- *  listing goes when the hold does. */
+ *  listing goes when the hold does. AND THE RECORD FOLLOWS THE ROW (review 313, F1): an ineligible sighting ends a
+ *  `would-expire` or `in-use` report too, with the run of in-use answers. Such a row is never due, so it is never
+ *  audited again, and a report it kept would stand on the attention list — the operator's arming evidence — for as long
+ *  as the condition lasts. The box's own verdicts (`refused`, `failing`, `no-evidence`) stand: they are about the box.
+ *  A report so cleared also resets `nextAskAt` to 0: one transient ineligible pass (a store read that failed once, an
+ *  identity unmeasured) must not hide a row that is due again behind the shadow wait the report carried — it is
+ *  re-audited as soon as it is twice-observed eligible, and the twice-observed rule still gates that. A hold that
+ *  REPLACES a would-expire, in-use or retryable failing report resets it for the same reason (a final report is kept,
+ *  wait and all). */
 export function archivedExpirySighted(
   entry: ArchivedExpiryEntry, v: ArchivedExpiryVerdict, held: string | null, nowMs: number,
 ): ArchivedExpiryEntry {
   const eligibleSince = v.eligible ? (entry.eligibleSince ?? nowMs) : null;
   if (!v.eligible && v.why === 'held' && held !== null) {
+    // A row the lane has stopped asking keeps its own report — listed with its reason while held and after the hold goes.
+    if (expiryReportIsFinal(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };
     const at = entry.report?.kind === 'held' ? entry.report.at : nowMs;
-    return { ...entry, eligibleSince, report: { kind: 'held', at, reason: held } };
+    // A hold that REPLACES a would-expire, in-use or retryable failing report ends it as an ineligible sighting does, so
+    // it resets `nextAskAt` the same way: the release clears the hold's own report, and left at the replaced report's
+    // wait (the shadow wait, a failure's backoff) the row would be unlisted and not due until that wait ran out — absent
+    // from the list the operator arms on. Re-audited as soon as it is due again; the twice-observed rule still gates it.
+    const replaces = entry.report?.kind === 'would-expire' || entry.report?.kind === 'in-use' || entry.report?.kind === 'failing';
+    return { ...entry, eligibleSince, inUseRun: 0, inUse: [], ...(replaces ? { nextAskAt: 0 } : {}),
+      report: { kind: 'held', at, reason: held } };
   }
-  const report = entry.report?.kind === 'held' ? null : entry.report;
-  return eligibleSince === entry.eligibleSince && report === entry.report ? entry : { ...entry, eligibleSince, report };
+  const ends = !v.eligible && (entry.report?.kind === 'would-expire' || entry.report?.kind === 'in-use');
+  const report = entry.report?.kind === 'held' || ends ? null : entry.report;
+  const run = ends ? { inUseRun: 0, inUse: [] as readonly ExpireInUse[], nextAskAt: 0 } : {};
+  return eligibleSince === entry.eligibleSince && report === entry.report ? entry : { ...entry, ...run, eligibleSince, report };
 }
 
 /** DUE: eligible on a previous pass and still, and past `nextAskAt`. */
@@ -410,7 +457,10 @@ export type ArchivedExpiryOutcome =
        *  an earlier instant (the threshold was raised: §9's lever) is learned afresh, never re-asked every pass. */
       readonly auditExpiresAt?: number | null }
   | { readonly kind: 'gone' }
-  | { readonly kind: 'failed'; readonly detail: string }
+  /** `resumable` is the box's own answer (`ExpireVerbRead.failed.resumable`), CARRIED, never narrowed (review 313,
+   *  parked item 4): `false` — a wrong-row `expired`, a refusal word this build does not know, `probe-unmeasured` — is
+   *  not something waiting cures, so the row is reported and not asked again for this archive. */
+  | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
   | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
   | { readonly kind: 'composition'; readonly detail: string }
   | { readonly kind: 'no-evidence' };
@@ -490,6 +540,12 @@ export function archivedExpiryNextEntry(
       return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null };
     }
     case 'failed': case 'box': {
+      if (o.kind === 'failed' && !o.resumable) {
+        // The box said this will not resume: reported AT ONCE and never asked again for this archive — never an hour
+        // of retries before anyone hears of it (review 313, parked item 4).
+        return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
+          report: { kind: 'failing', at: nowMs, detail: o.detail, final: true } };
+      }
       // `flock-unavailable` is the BOX's, and the lane stops asking that box at all (`watch.ts`); for the row it is
       // a failure like `lock-unopenable`, backed off and reported past the ceiling.
       const failures = entry.failures + 1;
@@ -501,7 +557,7 @@ export function archivedExpiryNextEntry(
     }
     case 'composition':
       return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
-        report: { kind: 'failing', at: nowMs, detail: `the server composed a call ccd rejected: ${o.detail}` } };
+        report: { kind: 'failing', at: nowMs, detail: `the server composed a call ccd rejected: ${o.detail}`, final: true } };
   }
 }
 
@@ -529,10 +585,15 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
         + `(shadow), so nothing was deleted. ${r.sensitive === 0 ? 'No secret-shaped file would be dropped.'
           : `${r.sensitive} secret-shaped ${r.sensitive === 1 ? 'file' : 'files'} would be dropped and recorded by path.`}`;
     case 'held':
-      return `held (“${r.reason}”) past its seven days, so it is not cleaned up — release the hold or restore it.`;
+      // The INSTANT, never a period: the threshold is ccd's, and a sentence that typed it would go stale the day
+      // `WS_EXPIRE_AFTER_S` moves (review 313, F3).
+      return `held (“${r.reason}”) past its expiry${expiresAt === null ? '' : ` (due ${iso(expiresAt)})`}, so it is not `
+        + 'cleaned up — release the hold or restore it.';
     case 'in-use': return expiryInUseSentence(r.inUse, r.passes);
     case 'refused': return `not cleaned up: ccd refused (${r.token}) — ${r.detail === '' ? 'no detail' : r.detail}`;
-    case 'failing': return `cleanup keeps failing: ${r.detail}. It is retried, backing off in between.`;
+    case 'failing':
+      return r.final === true ? `cleanup stopped: ${r.detail}. It is not asked again for this archive.`
+        : `cleanup keeps failing: ${r.detail}. It is retried, backing off in between.`;
     case 'no-evidence':
       return 'not cleaned up: the fleet box’s ccd does not say when this archive expires (an older build), so the '
         + 'server composes nothing for it until the box is updated.';

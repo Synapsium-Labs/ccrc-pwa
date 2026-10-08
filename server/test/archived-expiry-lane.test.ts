@@ -118,6 +118,100 @@ const threePasses = async (f: Fixture): Promise<void> => {
   await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
 };
 
+describe('learning: slots in nextAskAt order, an unlearnable row backed off and reported (review 313, parked item 1)', () => {
+  it('a row never asked takes a learn slot ahead of rows that keep failing, whatever the registry order', async () => {
+    const stuck = new Set(['demo-a', 'demo-b', 'demo-c']);
+    const f = await fixture({ audit: (id) => (stuck.has(id) ? { session: 'demo-elsewhere' } : { verdict: 'expirable', token: tokOf(id) }) });
+    for (const id of stuck) f.plant(id);
+    await f.pass();
+    expect(f.verbsFor('ws-audit')).toEqual(['demo-a', 'demo-b', 'demo-c']);
+    f.plant('demo-z');
+    f.advance(2 * CHILD_RECLAIM_SWEEP_MS + 1);   // past the stuck rows' first backoff: all four may be asked
+    await f.pass();
+    expect(f.verbsFor('ws-audit').slice(3), 'the never-asked row first, then the two asked longest ago')
+      .toEqual(['demo-z', 'demo-a', 'demo-b']);
+  });
+
+  it('an unlearnable row is listed at once, and not asked again before its backoff', async () => {
+    const f = await fixture({ audit: (id) => (id === 'demo-a' ? { session: 'demo-elsewhere' } : { verdict: 'expirable', token: tokOf(id) }) });
+    f.plant('demo-a');
+    await f.pass();
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-audit'), 'one audit: the second pass is inside the backoff').toEqual(['demo-a']);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
+  });
+});
+
+describe('a failure that will not resume (review 313, parked item 4)', () => {
+  it('a wrong-row `expired` is reported at once and never asked again for this archive — not after an hour', async () => {
+    const f = await fixture({ expire: () => ({ code: 0, stdout: JSON.stringify({ expired: 'demo-other', archivedAt: OLD, wip: null }), stderr: '' }) });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
+    for (let k = 0; k < 70; k += 1) { f.next(); await f.pass(); }   // well past the one-hour ceiling
+    expect(f.verbsFor('ws-expire'), 'stopped, never retried').toEqual(['demo-a']);
+  });
+});
+
+describe('the record follows the row (review 313, F1)', () => {
+  it('a would-expire entry goes when the row stops being eligible — a run binds it', async () => {
+    const f = await fixture();
+    f.plant('demo-a');
+    await threePasses(f);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'would-expire']]);
+    f.bindWorker('demo-a');
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention, 'a bound row is never due again, so its record goes now').toEqual([]);
+  });
+
+  it('a report an ineligible pass clears is re-audited as soon as the row is due again, not after its old wait', async () => {
+    const f = await fixture();
+    f.plant('demo-a');
+    await threePasses(f);
+    await f.watcher.tick();
+    const listed = () => f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind]);
+    expect(listed()).toEqual([['demo-a', 'would-expire']]);
+    const audits = f.verbsFor('ws-audit').length;
+    // ONE pass of doubt (an identity field unmeasured) clears the report; the row's 15-minute shadow wait must go with it.
+    f.next(); await f.pass((r) => ({ ...r, unmeasured: ['wrapper'] }));
+    await f.watcher.tick();
+    expect(listed(), 'the doubtful pass cleared it').toEqual([]);
+    f.next(); await f.pass();   // eligible again: sighted once
+    f.next(); await f.pass();   // sighted twice: due, and not held back by the wait the cleared report carried
+    await f.watcher.tick();
+    expect(f.verbsFor('ws-audit').length, 'audited again within the twice-observed passes').toBe(audits + 1);
+    expect(listed(), 'and listed again, minutes after the doubt, not fifteen').toEqual([['demo-a', 'would-expire']]);
+  });
+});
+
+describe('a hold that replaces a report (final review, B-F1)', () => {
+  it('would-expire, then held, then released: the row is listed again within the twice-observed passes — not fifteen minutes later', async () => {
+    const f = await fixture();
+    f.plant('demo-a');
+    await threePasses(f);
+    await f.watcher.tick();
+    const listed = () => f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind]);
+    expect(listed()).toEqual([['demo-a', 'would-expire']]);
+    const audits = f.verbsFor('ws-audit').length;
+    writeFileSync(path.join(f.reg, 'demo-a.hold'), 'program:x wave:1/2');
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(listed(), 'the hold replaces the report').toEqual([['demo-a', 'held']]);
+    rmSync(path.join(f.reg, 'demo-a.hold'));
+    f.next(); await f.pass();   // released: sighted once
+    f.next(); await f.pass();   // sighted twice: due, and not held back by the shadow wait the replaced report carried
+    await f.watcher.tick();
+    expect(f.verbsFor('ws-audit').length, 'audited again within the twice-observed passes').toBe(audits + 1);
+    expect(listed(), 'and listed again, never missing from the list the operator arms on').toEqual([['demo-a', 'would-expire']]);
+  });
+});
+
 describe('the lane SHIPS SHADOWED', () => {
   it('without `expire-lane-live`, a due row is audited and RECORDED — and ws-expire is never composed, however long', async () => {
     const f = await fixture();

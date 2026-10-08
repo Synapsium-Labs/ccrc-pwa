@@ -1,0 +1,13678 @@
+# Native Docs reader, wave 3 — routes Implementation Plan
+
+> **For agentic workers:** this wave is dispatched by the programme's coordinator as one run (see "How this wave runs" below). The worker executes it with REQUIRED SUB-SKILL superpowers:subagent-driven-development (recommended) or superpowers:executing-plans, task by task, under the `ccrc-worker` skill. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Serve the Docs API. Four session-gated routes (`GET /api/docs/projects`, `GET /api/docs/:project/tree`, `GET /api/docs/:project/file`, `POST /api/docs/:project/refresh`) in ONE encapsulated Fastify plugin, registered in `server/src/server.ts` beside `registerUpdateRoutes`, that APPLY W2's L1 verdicts (`server/src/docs/policy.ts`) to W2's L3 answers (`server/src/docs/ccdsource.ts`) through a provenance hook, a response-policy hook, a per-node read lane, a fetch lane, single-flight and a bounded committed cache, with every census moved and a console-latency test that proves Docs never starves the shared agent socket. The API then rolls out dark to both boxes, fleet first, so the operator can run R2 and R1 on the real link before W5 merges.
+
+**Architecture:** Four new L4 files under `server/src/docs/`, the four names W2's ring guard already reserves. `hooks.ts` installs the plugin's `onRequest` (provenance: L1 `docsProvenance`, a 403 `foreign-request` with a once-a-minute log per `why`), the plugin's error handler (Fastify's request-body refusals become L1's `bad-query {why:'body'}`; every other error is re-thrown to Fastify's default as a fresh error carrying L1's `DOCS_DEFECT_MESSAGE`) and the plugin's `onSend` (L1 `docsSendPolicy`: the four §5.3 headers, the content-type allowlist, `Cache-Control`). `lane.ts` holds the read lane (L1 `laneAdmit` over a strict FIFO of 32 with a 10 s wait), the fetch lane (serial per (node, project) through its own FIFO and a set of running keys, not a `KeyedQueue` (refinement (v)), under a global 2, a queue of 8 jobs not yet started and a 20 s wait), single-flight with abandonment, and the generation counters (per (node, project) for the tree, per node for the index). `cache.ts` holds the committed blob LRU (64 MiB, keyed node NUL repoKey NUL blob), the listing map (LRU by commit, 50 000 file entries), the draft `fp -> size` map (10 000) and the per-node index micro-cache (30 s). `routes.ts` composes one node's reader, fetcher, lanes and caches (`composeDocs`) and registers the three reads (`registerDocsReadRoutes`, which never receives a fetcher) and the refresh (`registerDocsRefreshRoute`). Every decision those files apply is a NEW L1 function or constant appended to `policy.ts`: the busy, foreign-request and body-error bodies and the defect message, node-first cache and flight keys, the refresh-half verdict and the refresh answer, the index cache verdict, an ok-answer shape guard (depth-bounded, so neither `refreshDue` nor reply serialisation can throw on a hostile listing), the show-bytes bound, the raster check and file representation, the cache verdicts and the cache-hit answer. `server.ts` builds the composition from `deps.runCcd` and a getter over `deps.fleetState` (so the adapter sees the one FleetState the link mutates, and a swapped one too) and registers the plugin unconditionally; `index.ts` is untouched. One W3 run: one worker, one reviewer.
+
+**Tech Stack:** TypeScript (node >= 22.13; TS 7 for the server), Fastify 5.10 (one encapsulated plugin, plugin-scoped `onRequest`/`onSend`/error handler, `light-my-request` inject over the default `fast-querystring` parser), vitest 4.1, `node:http` and `node:net` for the real-socket and throttled-link tests, python3 for the latency test's fixture ccd. No new dependency.
+
+**Spec:** `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md` — §1's units (routes, hooks, lanes, cache, docs cache rows), §2 (g) Flow, GET never fetches (three walls), Link protection and Cache, §2 (i) Server-only words and Routes, §2 (j) rows 49-52, §3.0 (M-a..M-h, F1), §3.4 (Registration, table, Parameter rules, Refresh flow), §3.5, §3.6, §3.7, §3.8, §3.9, §3.12, §3.13, §3.14's M3.4-M3.8 and M3.13-M3.15, §5.2, §5.3, §5.8's M5.1, M5.2, M5.4-M5.6, §6.1-§6.6, §6.8, §6.9, §6.10's M6.2 and M6.9-M6.12, §7.1, §7.7's W3 row, §7.8 (R2, R1), §7.9's W3 suites.
+
+**Format:** Markdown, by the operator's ruling of 2026-10-07: plans stay Markdown in this programme and every other (the HTML preference of 2026-10-06 is for specs). `server/test/deviation-refs.test.ts` and the ledger's floor scan read `*.md` plans, and Task 12's scratch tools parse this file's `### Task` headings and its JSON fences.
+
+## Global Constraints
+
+- SAFETY: fixture HOMEs only. No W3 test runs `ccd` against any HOME but a `mkTmp` fixture: the route tests drive W2's real adapter over a recording or scripted `CcdRunner` double; the latency test boots a real agent on `makeFixture()`'s HOME with a python fixture ccd at `<fixture home>/.local/bin/ccd`. Never run `ccd` against the live HOME, never run a destructive ccd verb, never touch tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*` units, never call the live ccrc server, never print a secret file's contents. Mutations run in a scratch COPY of the tree (`git archive HEAD | tar -x -C <copy>` then `git -C <copy> init -q`), never in the worktree.
+- Scope. W3 creates `server/src/docs/hooks.ts`, `lane.ts`, `cache.ts`, `routes.ts`; edits `server/src/docs/policy.ts` (appends, plus two in-place edits: its one import statement, widened by Task 1 and again by Task 2, and the one hardened body of `docsRetryAfterSeconds`), `server/src/server.ts` (two import lines, `./docs/routes.js` and `./docs/hooks.js`, and one registration block, all located by content), `server/src/auth/gate.ts` (the line-8 route-count numeral, in place); creates `server/test/docs-headers.test.ts`, `docs-lanes.test.ts`, `docs-cache.test.ts`, `docs-routes.test.ts`, `docs-file-bytes.test.ts`, `docs-console-latency.test.ts`, `docsRouteHelpers.ts`, `throttledLink.ts`; edits `server/test/docs-policy.test.ts` (appended describes), `auth-gate.test.ts`, `box-token-census.test.ts`, `single-definition.test.ts`; and this plan (Task 9 appends `## Deviations found`, Task 12 appends `## Wave 3 results`). It makes NO edit to `ccd/`, `shared/` (W1's `shared/docs.ts` is consumed, never amended; `FLEET_PROTO` and `shared/agent-protocol.ts` untouched), `pwa/`, `agent/`, `server/src/index.ts`, `server/src/docs/ports.ts`, `server/src/docs/ccdsource.ts`, `server/src/lifecycle.ts`, `server/src/ccdargv.ts`, `server/src/remote/runner.ts`, `README.md` or `CLAUDE.md`. `EXEC_COMMANDS` stays `['tmux','ccd']`; no grant, builder, cap token or failure word is added (`docs-shared.test.ts`'s `SPEC_WORDS` is frozen).
+- Base. The workspace branch must contain W2. Task 1 Step 0 checks content, not ancestry (W2 may land squashed): `grep -q 'export function ccdDocsFetcher' server/src/docs/ccdsource.ts && grep -q 'export function docsSendPolicy' server/src/docs/policy.ts && test ! -e server/src/docs/routes.ts && test ! -e server/src/docs/hooks.ts && test -f docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md` (the plan itself is on the branch: How this wave runs), and prints `git rev-parse HEAD` into the SDD ledger as the wave's base. If any check fails, stop and put an ask to the coordinator; never merge, rebase or pull inside a task.
+- Rings, by imports (M7.10; W2's ring guard in `single-definition.test.ts`, `DOCS_RING_ROLES`):
+  - `routes.ts`, `hooks.ts`, `lane.ts`, `cache.ts` are L4: they may import fastify, own timers and name `reply`, and they DECIDE NOTHING. Every number, word, key, status, header, bound and representation they apply comes from L1 (`policy.ts`) or L0 (`shared/docs.ts`). Task 9's scan pins the visible half of that rule: no `DocsFailure` word is quoted in an L4 file's code.
+  - Additions to `policy.ts` keep L1: every import specifier is `../../../shared/docs.js`; no `node:` import, no `Buffer`, no clock, no timer, no fastify, no `reply`, no `console` (`docs-policy.test.ts`'s purity scan). `ports.ts` and `ccdsource.ts` are not edited.
+  - No fifth file under `server/src/docs/`: an unnamed file is held to L3 by the ring guard. The composition lives in `routes.ts`; the plugin block lives in `server.ts`.
+  - An adapter never narrows a distinction it received; no overloaded `null` or `undefined` at a seam (every one in a W3 signature has exactly one stated meaning); a server log line is `console.warn('ccrc-server: ...')`, never `req.log` (`Fastify({ logger: false })`).
+- Exact values, copied from the spec:
+  - Routes (§2 (i), §3.4): `GET /api/docs/projects` (no query keys), `GET /api/docs/:project/tree` (`ref?`, bare or qualified), `GET /api/docs/:project/file` (committed pin `commit, servedRef, section, path`, or draft pin `branch, head, section, path, fp`), `POST /api/docs/:project/refresh` (JSON body `{ref: string or null, reason: 'auto' or 'manual'}`). All four session-gated, none `EXEMPT`, none consults the box token; the POST is origin-checked by the gate when armed. Success is 200 only: no 3xx, 204 or 304, no redirects, no ETag (§3.7, §6.6).
+  - Registration (§3.4), verbatim apart from the composition's name: `await app.register(async (app) => {` ... `installDocsRequestPolicy(app);` `installDocsResponsePolicy(app);` `registerDocsReadRoutes(app, docs.readers, docs.lanes);` `registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);` `});` — the parameter is named `app` because `auth-gate.test.ts`'s scanner is literal. The read registration never receives a fetcher (§2 (g) wall 1).
+  - Provenance (§3.8), in order: `sec-fetch-mode === 'navigate'` gives `why:'navigation'`; `sec-fetch-site` present and not `'same-origin'` gives `why:'site'`; `x-ccrc-docs` not equal to `'1'` gives `why:'marker'`. The refusal is 403 `foreign-request` with no `verdict`, logged as `console.warn('ccrc-server: docs refused a <why> request')` at most once a minute per `why`.
+  - Response policy (§5.3): every docs response carries `x-content-type-options: nosniff`, `content-security-policy: default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'`, `referrer-policy: no-referrer`, `cross-origin-resource-policy: same-origin` (the values are L0's `DOCS_RESPONSE_HEADERS`; never spelled in L4); a content type outside `DOCS_ALLOWED_CONTENT_TYPES` (`application/json; charset=utf-8` and the four raster MIMEs, compared exactly) is replaced by 500 `{ok:false, failure:'response-type-refused'}`, `no-store`, no `content-length` of the old payload, no `content-disposition`, logged as `` console.warn(`ccrc-server: docs response refused, content-type ${JSON.stringify(ct.slice(0, 80))}`) ``; a non-200, or a 200 whose route set no `cache-control`, gets `cache-control: no-store`.
+  - Cache-Control (§5.2, §6.6): `private, max-age=31536000, immutable` only on a committed raw-raster 200; `no-store` on every JSON body, every draft and every failure.
+  - Read lane (§6.3, one per node; index, tree, show): at most `DOCS_LANE_EXECS` = 2 execs in flight; at most `DOCS_LANE_BYTES` = 3 145 728 estimated framed bytes in flight; at most one answer whose raw estimate exceeds `DOCS_LANE_LARGE_RAW` = 1 048 576; strict FIFO, `DOCS_LANE_QUEUE` = 32 queued, `DOCS_LANE_MAX_WAIT_MS` = 10 000; past that `docs-busy {lane:'read', retryAfterMs: 2000}` (503, `Retry-After: 2`). An idle lane always admits one. Cache hits bypass it. A queued job whose requests all closed is removed; a running exec is not cancelled.
+  - Fetch lane (§6.4): serial per (node, project) through the lane's own FIFO of accepted, not-yet-started jobs and a set of keys with a running job, not §6.4's `KeyedQueue` (refinement (v), a deviation: `single-definition.test.ts` holds `new KeyedQueue(` to `server/src/index.ts`); at most `DOCS_FETCH_GLOBAL` = 2 globally, 8 queued jobs that have not started (a new job is queued and pumped first, and refused only when it is left waiting as the ninth), a 20 s wait from acceptance; past that `docs-busy {lane:'fetch', retryAfterMs: 5000}` (503, `Retry-After: 5`).
+  - Single-flight (§6.4), joined before the lanes: index by (node, node-gen); tree by (node, project, ref text or none, gen); show by the node-prefixed full pin plus `N`; refresh by (node, project, branch or default). `gen` is a per-(node, project) counter and node-gen a per-node one (`docsNodeKey`), both bumped when a refresh's fetch half settles, so a refresh's tree never joins a flight that started before the fetch, and no GET after a refresh joins, nor any answer fills the micro-cache from, an index begun before it (the index key fills §6.4's silence: it lists tree, show and refresh only).
+  - Cache (§6.5): `DOCS_CACHE_BYTES` = 64 MiB (67 108 864) of `Buffer.byteLength`, LRU keyed `node NUL repoKey NUL blob`, filled only from ok committed show answers that passed checks 8 and 9; failures and negatives never cached; with no listing-map entry the answer is served but not cached. Listing map `(node, project, commit) -> {repoKey, entries: section NUL path -> {blob, size, kind}, refsAt: servedRef -> recordedAtMs}`, fed from every ok tree answer the server forwards, LRU by commit, at most `DOCS_LISTING_MAP_ENTRIES` = 50 000 entries in total. A hit whose `servedRef` was recorded less than `DOCS_LISTING_PROVENANCE_MS` (= `DOCS_STALE_MS`, 600 000, derived) ago answers with zero execs, as `onRef:'contains'`, `from:'cache'`. Drafts, tree answers, refresh answers and failures are never cached; drafts feed only the `fp -> size` map (10 000 entries). The index has a 30 s micro-cache per node, dropped by any refresh and filled only by an index begun at the node's current generation.
+  - Refresh (§3.4, §2 (g) Flow): `fetchBranchFor` maps `null` to a fetch with no `--branch`, bare `b` and `refs/remotes/origin/b` to `--branch b`, `refs/heads/b` to `skipped {why:'local-ref'}` with no fetch exec; then a NEW `docs-tree` flight; the response is `{ok:true, fetch: ran|failed|skipped, tree: DocsTreeResponse | DocsFailureBody}` at 200 whenever the lanes ran; a fetch failure never replaces the listing; a refusal before any exec returns that word's own status, the fetch half's (L1 `docsRefreshFetchHalf`) and, when the fetch was skipped so the request made no exec at all, the tree half's (L1 `docsRefreshAnswer`; refinement (m)).
+  - Latency (§6.8): `HOL_LIMIT_MS = ceil(DOCS_LANE_BYTES / 12.5e6 x 1000 x 1.5) + 150 = 528`; throttle `throttledProxy(targetPort, 12_500_000)`, time-based credit, 2 ms flush; probes: pty echo every 25 ms, `fleet.client.caps()` every 100 ms; load: one tree GET, then concurrently one 2 MiB `.md` and twelve 2 MiB `.png`, each with the marker and `sec-fetch-site: same-origin`; all 13 answer 200; pty echo p95 and max and the caps round-trip max are each `<= HOL_LIMIT_MS`; the control (a pass-through lane) must EXCEED it, or the test fails with "the probe cannot see starvation".
+  - R2 and R1 (§6.9, §7.8): operator acts after the dark rollout. R2 passes when every remote-URL class answers `fetch.state === 'ran'`; R1 passes when the p95 of `GET /api/sessions/<id>/pane/history` under the 20-file docs load minus its idle p95 is at most 250 ms. Neither is run by this wave.
+- Never spelled in `server/src` by W3 (each is pinned by an existing scan of the four TS roots): the quoted `'docs-v1'` (`capsupported.test.ts`'s `literalSpellings`); the quoted `'x-ccrc-docs'` (read `DOCS_REQUEST_HEADER`/`DOCS_REQUEST_HEADER_VALUE`); the CSP text, the PNG magic, any redactor fragment or grammar body (import from `shared/docs.ts`); a quoted `refs/heads/` or `refs/remotes/origin/` under `server/src/docs` (use `DOCS_REF_PREFIXES`/`docsRefTarget`); the quoted `'worktree-gone'` or any archive refusal code (the archive door's pin allows exactly its listed homes); any `CCD_ARGV.` call in an L4 file (`verb-gate.test.ts`, the one-caller scan: the routes reach ccd only through the ports); and, inside `server/src/docs/routes.ts`, the text `requireMailToken(req` or `checkMailToken(` anywhere, comments included (`box-token-census.test.ts`'s `lanesIn` reads raw text), and the text of a route registration in any comment (`auth-gate.test.ts`'s `scanRoutes` reads raw text). The standalone docs server's name appears nowhere (M7.9).
+- Registration lines are fixed text, because two censuses read them: in `routes.ts` the four registrations are `app.get('/api/docs/projects', { exposeHeadRoute: false }, async (req, reply) => {`, `app.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {`, `app.get('/api/docs/:project/file', { exposeHeadRoute: false }, async (req, reply) => {` and `app.post('/api/docs/:project/refresh', async (req, reply) => {` (receiver literally `app`, single-quoted literal paths; Task 8's planted-call controls anchor on the GET-tree and POST lines verbatim). The `server.ts` block contains no `app.<verb>('` text, no `knownId(` and no `readProjectPools(` (`routes.test.ts`'s server.ts censuses).
+- `single-definition.test.ts` changes by exactly one in-place line (`DOCS_RING_FLOOR` gains the four L4 names, Task 9) and one EOF append (Task 9), judged NET against the wave's base, not per commit (W2's lesson): `session-hook.test.ts`'s citation audit cites the file by line, so nothing above its last line moves. Locate the end with `tail -n 6`; reuse its module-scope `ALL`, `rel`, `sources`, `stallCode`, `stallCodeText`, `ccrcRoot`, `path`, `readFileSync`; add no import at its top.
+- `auth-gate.test.ts` and `gate.ts`: every count is RE-DERIVED on the base at Task 8 Step 0, never copied from the spec (§3.13's "86 to 90 (`:295`)" is stale: at W2's tip `ROUTES.length` is 89 and the HTTP count 86, so W3 makes them 93 and 90). Numeral lines are edited in place; each `claim()` needle must still match exactly one line.
+- Locate every edit by content. Line numbers in this plan are hints measured at W2's tip; every Find block must match the tree as the PREVIOUS task left it, and be unique in it. If a Find block is absent or not unique, stop and put an ask to the coordinator, never guess. When a later task re-spells code that an earlier task's mutation row anchors on, the later task re-anchors that row in its own rows block and says so.
+- Test hygiene: `( cd server && ./node_modules/.bin/vitest run test/<file> )`, in the FOREGROUND, Bash timeout 600000 ms; split anything longer with `-t`; never background, never bare `npx vitest`. Run `git fetch -q origin main` before `deviation-refs`. Known load flakes (`typecheck-tests`, `session-hook` among them, and from this wave `docs-console-latency`) are re-run in isolation before being called broken. Route tests drive Fastify's REAL query parser (`app.inject` with a `query:` object or a raw URL string), never a hand decoder. Quoted pass counts are indicative; what binds is that each case this plan adds is red before its code and green after, and every pre-existing case in a touched file stays as green as it was at the base.
+- Mutation-table discipline (binding): every guard a task adds (a refusal, a bound, a header, a lane clause, a key field, a census line, a scan) ships with a case that goes red when the guard is deleted or mutated, measured in the scratch copy at that task's state. Each task lists its rows (`W3-T<n>-M<k>`: `pkg`, `file`, `old`, `new`, `tests`, `red`); Task 12 runs the whole table at the wave's end state. Where no fixture can reach a branch, record `D-TBD-<slug>` in the task's report and say so; no such placeholder lands in a commit (`dtbd.test.ts`).
+- Fixtures carry placeholders only: projects `demo`, `a`, `b`; branches `main`, `ws/a`; slug `example-org/example-repo`; the shell URL `/docs/example-project/specs/x.md?ref=ws/example`; 40/64-hex strings built by `'a'.repeat(40)`. No real host, project, user, pool or account name (`topology-clean`).
+- Deviations. Six of the refinements below depart from the binding spec's TEXT rather than fill a silence, so each is a deviation with an allocator-issued number: (d) router-level refusals for an over-long `:project` or a malformed path escape, (i) the composition built in `buildServer` with no `index.ts` edit, (j) abandonment measured on the response's close, not `req.raw`'s, (s) the latency test mounting the plugin on a bare Fastify, not through `buildServer`, (v) the fetch lane's own FIFO in place of §6.4's `KeyedQueue`, and (w) a JSON file reply that serves the verified bytes rather than the answer's content field verbatim (§3.5: "wraps these answers unchanged"). The coordinator mints a block of at least six numbers at run-open (`POST /api/ledger/deviations`) and names it in the brief. Task 9's last step defines the block's first six, in that order, in a `## Deviations found` section appended at the end of this plan. The rest of the block serves departures found while executing or in a fix round, each reported to the coordinator first when it changes behaviour the spec states. A session that cannot reach the allocator writes `D-TBD-<slug>` and reports. This plan's text spells no `D-` number, and no task types one it was not issued.
+- Commits: one per task (Task 11's fix wave may make one per finding), files staged by name, message `<area>: <what> (docs W3)`, ending with the `Co-Authored-By:` trailer the dispatch names (the model that wrote the commit; default `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`). Commits go on the workspace branch, never a separate feature branch (a feature branch wedges the close with `stale-tip`). Only Task 12 pushes, and it opens the wave's ONE pull request.
+- Carried into W3, each handled or deferred here:
+  - W2 review: ok tree/index/fetch answers are only envelope-checked (a malformed tree makes `refreshDue` throw; a deep unknown key inside the 1 MiB bound makes `JSON.stringify` throw `RangeError` at serialisation) -> Task 2's `docsAnswerShape`, applied by Tasks 6 and 7 before `refreshDue`, the caches and the reply (review 317's notes for W3, its fifth: the depth half is pinned by Task 2's `a 500 000-deep listing value is schema, and the guard itself never throws` and `%s: a 17-deep nest under an unknown key is schema`, and at the routes by Task 6's `a tree carrying a 500 000-deep unknown key inside the listing bound: 502 schema, no RangeError at serialisation` and Task 7's `a fetch answer nested past DOCS_ANSWER_MAX_DEPTH: ...`; the `refreshDue` half by the `the tree fields W3 reads` table's `freshness deleted`, `ref deleted` and `ref.requested 7` rows (`%s is schema`), and at the route by Task 6's `a tree without freshness: 502 malformed-answer {why: schema}, never a 500, logged, and nothing recorded`). The JSON.parse cost of such a line (about 230 ms of loop for a 1 MiB, 500 000-deep line) stays in L3's `parseLine`; bounding it needs a pre-parse scan in `ccdsource.ts`, outside W3's row: DEFERRED to a later adapter change, recorded in the results.
+  - W2 review: decoded show bytes are never compared to `ask.maxBytes` -> Task 2's `docsShowBound` holds `bytes.byteLength` to the job's `raw` estimate (which is at most `maxBytes`), applied by Task 6.
+  - W2 review: `fleetState` is captured by reference -> Task 9's wiring passes a getter over `deps.fleetState`, with a case that swaps the object after `buildServer` and one that mutates it in place.
+  - W2 review: the `DOCS_CALL` scan misses optional-chain, bracket and aliased calls -> Task 9's widened row-49 scan (identifier-level `docsFetch` count and a `CCD_ARGV` aliasing scan, each with a CONTROL planting every missed shape).
+  - W2 review: `docsRetryAfterSeconds` passes NaN, Infinity and negative values -> Task 1 hardens it (finite and positive, else no header) and pins the two producer constants.
+  - W2 review: route tests should use Fastify's real query parser -> Task 6's query cases go through `app.inject`, with a differential describe against W2's `form()` decoder.
+  - W2 review 317's other notes for W3, each settled here: (1) check 8 verifies the decoded bytes, not the answer it hands back -> refinement (w): Task 2's Decision 9 serves the verified bytes (W3-T2-M39, W3-T2-M40) and Task 6's two route cases feed a lone-surrogate `text` and a stray `text` beside a `b64`; (2) `parseDocsProjectParam('__proto__')` is ok -> refinement (x): every W3 map is a `Map` over a kind-tagged NUL key, and Task 7's Decision 16 drives `__proto__` and `constructor` through the tree, file, cache and refresh paths; (3) the second redaction pass rewrites values, not key names -> CARRIED, not fixed: W3's routes send every failure body exactly as the adapter returns it and build none from ccd's keys, so W3's serialiser path adds no exposure of its own; the fix belongs in L3's `redactBody` (`ccdsource.ts`, outside W3's row: W3 does not edit it), with the parse-cost scan above, and the path is latent (no W1 ccd verb writes untrusted text into a key name); (4) the old-agent `not-granted` case runs on `tree` only -> covered at the routes, not carried: Task 7's Decision 17 drives the agent's refusal through all four routes and both file pins (index, tree, committed and draft show, fetch), so no residue goes back to W2.
+  - Plan review, CARRIED as accepted: the generation map (`docsGenerations`) gains one entry per (node, project) ever refreshed and one per node, and nothing bounds how many project names there are (the grammar bounds a name's length only; a refresh of a grammar-valid project that does not exist, or a skipped local-ref refresh, bumps too). The growth is one short key and one number per new name, each a session-gated POST, and an entry cannot be dropped safely (a counter reset to 0 lets a request join a flight keyed on the old value, the stale join it exists to stop). Recorded in the results; a bound, if one is wanted, is a later lane change.
+  - Plan review, CARRIED to W7's residue: `policy.ts`'s `lowerAscii` is a twin of `shared/docs.ts`'s module-private ASCII lowering (`contentClass`'s rule), because W3 must not edit `shared/`. Until a wave that may edit L0 exports one helper (or an L0 raster-type lookup), Task 2's parity describe pins both homes to `DOCS_RASTER_EXT` (Task 2's Decision 10).
+  - Programme: SEC-3 (a killed helper orphans git's process group; the lane holds a slot until the runner budget, never kills), SEC-4 and the missing stamp after a failed post-fetch `for-each-ref` (W5), `branch: null` meaning detached OR unmeasured (carried verbatim by every route), the partial-clone word pair (carried verbatim), `too-many-entries` read by `count` (carried verbatim) — all CARRIED, not fixed. `GithubTarget` cannot express `resolveDocRef`'s `repo` kind: no W3 route consumes either, so it is DEFERRED to W5 with its consumer. W7 prose residue gains: two test comments (`coord-store.test.ts`, `run-routes.test.ts`) that say no `app.setErrorHandler` exists anywhere in `server/src` (after W3 one does, plugin-scoped), and CLAUDE.md's known-load-flakes bullet gaining `docs-console-latency`. New: in local mode a failed boot caps probe leaves `ccdVerbs` null for the process lifetime, so every docs call answers `caps-unknown` (auto retry) until a restart; DEFERRED to W5 (the PWA's retry backoff) and W7 (README), recorded in the results.
+
+## How this wave runs (coordinator)
+
+- This plan reaches `main` BEFORE the run opens, through the programme's ledger PR (as W2's did, #306), so the child workspace minted from `main` holds it: Tasks 9, 11 and 12 read and append to it on the branch, and Task 12's PR body links its `blob/main` path. Task 1 Step 0 and Task 9 Step 0 check `test -f` on it, so a missing plan stops the run instead of letting `! grep` pass vacuously.
+- One run row for W3, opened by the programme's coordinator (`ccrc-coordinator` skill) through `POST /api/runs`, with no `sessionId`, so a fresh child workspace is minted from `main` containing W2. W2's run stays open until W3's run exists (closing first retires the programme). At run-open the coordinator mints the deviation block (`POST /api/ledger/deviations`, at least six numbers for refinements (d), (i), (j), (s), (v), (w), plus a reserve) and names it in the brief.
+- Claims are checked at dispatch. W3 edits `server/src/server.ts`, `server/src/auth/gate.ts`, `server/src/docs/policy.ts`, `server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts`, `server/test/single-definition.test.ts` and `server/test/docs-policy.test.ts`. The coordinator lists open claims on those files before dispatch; the worker claims them again before the task that edits each, and edits a file another run holds only after that claim ends or the two coordinators confirm a scoped agreement by mail (each side edits only its own lines; the second to merge takes `main` and keeps both).
+- Dispatch: one `ccrc-worker` brief (mail, `WORKER_KICKOFF_PREFIX`) carrying WAVE SPECIFICS only: this plan's path, Tasks 1-12, the base, the issued block, the claim state, and the branch-discipline sentence. Routing: Opus main loop, `sonnet` implementers, an `opus` per-task reviewer, the whole-branch review on `opus` (Task 11), workflows off.
+- The worker acks, runs the tasks with native subagents (never Fable), puts questions to the operator as structured asks, and lists mail before its wave-done. Task 11 is the whole-branch review and its fix wave: it runs after the last implementation task (Task 10) and BEFORE the close. Task 12 closes: it runs the suites, the census-free invariants and the whole mutation table, appends the results (that commit is the `handoffCommit` and the tip), pushes the workspace branch, opens the wave's ONE pull request, measures the fingerprint with that PR's number and `prPhase: 'open'`, and sends the wave-done. CI runs while the review reads (the git 2.43 / 2.55 lesson of W1).
+- Review: on a verified wave-done the coordinator dispatches one `ccrc-reviewer` run reading the branch at one measured tip in its own worktree. Its brief names the panel's Lenses line from the coordinator skill's `review-panel.md`: (1) rings and L4-decides-nothing (every applied verdict is L1's; no overloaded null; the adapter's distinctions survive the routes); (2) the gate, provenance and headers (F1, M3.5-M3.8, M5.4-M5.6, the router-level refusals of refinement (d)); (3) untrusted input — query, path, body, headers, every ccd answer after the adapter (shape guard, show bound, raster check); (4) concurrency and link protection (lanes, single-flight, abandonment, the cache, the latency test's control); (5) mutation-table discipline and spec conformance (every W3 row and M-case in Task 12's table). Copy the wave-done and the review report into `.superpowers/` on receipt. The coordinator rules; a fix round is a scoped re-review; the merge is the coordinator's after the review rules clean.
+- After the merge, NOT in this wave: the merge becomes a prerelease; the dark rollout moves both boxes, fleet first, through ccrc's own update mechanism (the API is live and session-gated with no UI door); then the operator runs R2 and R1 on the real link (§7.8). Both gate W5's MERGE, never this wave's. An R1 failure fires `docs-chunked-reads` (a `docs-show-range` run, W3b, before W5 merges); an R2 failure fires `docs-fetch-keeplist`. The two small PRs of §7.6 (the private report's fix and the global header baseline) land after W3, outside the waves.
+
+## Review Focus
+
+The five inputs a person using this will meet first, each pinned in the task that owns it:
+
+1. **A request the browser did not make on the PWA's behalf, or a signed-out one.** A top-level open of an API URL (`Sec-Fetch-Mode: navigate`), an `<img>` from a sibling or another site (`Sec-Fetch-Site: same-site`/`cross-site`/`none`/empty), a `fetch()` without the marker, and an armed request with no cookie give 403 `foreign-request {why}` (no `verdict`) or the gate's 401 with its `verdict` FIRST, each carrying the four headers and zero execs; a log line at most once a minute per `why`. Pinned by T3 (M3.5-M3.7) and T9 (M3.8, M5.4).
+2. **A hand-typed or hostile API URL or body.** A repeated key (`?ref=a&ref=b`), an unknown key (`node`, `size`), `?ref` with no `=`, `%ZZ` and `;` in a value, a null-prototype query, `:project` of `a%2Fb`, `%00` or 101 characters, a HEAD, a text/plain or invalid-JSON or 2 MiB or form-encoded refresh body, `[1]` and `null` bodies, and an extra body key give `bad-query {key?, why}`, the right `bad-*` word, or a router-level refusal (refinement (d)), with zero execs. Pinned by T6 (M3.4), T7 and T9.
+3. **A file whose bytes are not what its name says, or a type that must never be served raw.** A `.png` holding JPEG, SVG, empty or 3 bytes; `.svg` and `.html` paths; a planted route sending `text/html`, `image/svg+xml`, `text/plain`, `application/octet-stream` or `application/xml`; `immutable` on a draft, on JSON or on a 404. Only the declared-equals-actual raster is raw bytes (`image/*`, `immutable` when committed); every mismatch is 422 `raster-mismatch {declared, size}` with no bytes; every refused type is 500 `response-type-refused`. Pinned by T2, T3 (M5.5) and T6 (M5.1, M5.2, M5.6).
+4. **Many requests at once.** A page with 30 images, 33 queued reads, a refresh storm, two tabs on one ref, a tab closed while queued, and a docs load that would starve the terminal. At most 2 reads in flight, strict FIFO, `docs-busy` 503 with `Retry-After: 2` or `5` past the bounds with zero extra execs, identical calls joined, a refresh's tree never joined to an older flight nor a later projects GET to an index begun before the refresh, a closed request dequeued, and pty echo held under 528 ms at 100 Mbit while a control proves the probe can see starvation. Pinned by T4, T6 (M6.2), T7 (row 51, M6.9, M6.10) and T10 (M6.12).
+5. **A fleet answer the adapter passed that the routes must still not believe.** An ok tree without `freshness` or `ref`, a listing with a 500 000-deep unknown key, show bytes over the requested bound, a `utf8` text that is a lone surrogate or a stray second content field, a cache hit after a force-push (provenance older than 10 minutes), a draft, a failure, a symlink entry sharing a cached blob, and the same blob under a new commit. Each gives `malformed-answer {why}` (502) instead of a 500 or a crash, the verified bytes instead of the answer's own content field, a fresh `docs-show` where the cache cannot vouch, and zero execs where it can. Pinned by T2, T5 (M3.13) and T6 (row 52, M6.11, the served show).
+
+## File Structure
+
+| File | Task | Responsibility |
+|---|---|---|
+| `server/src/docs/policy.ts` | T1, T2 | L1 appends, and the one import statement widened in place by each. T1: fetch-lane, cache, index and log constants; `DOCS_PRIMARY_NODE`; node-first keys; the busy, foreign-request and body-error bodies and `DOCS_DEFECT_MESSAGE`; the refresh-half verdict and `docsRefreshAnswer`; `docsIndexCacheable`; `docsLogDue`; the hardened `docsRetryAfterSeconds`. T2: `docsAnswerShape`, `docsShowBound`, `docsRasterType`, `rasterVerdict`, `docsFileReply` (its JSON `show` built from the verified bytes), `docsKnownSize`, the cache verdicts and `docsCacheHitAnswer`. |
+| `server/test/docs-policy.test.ts` | T1, T2 | Appended describes: the new tables, the constants' exact `export const X = n;` lines, and the existing purity scan over the grown file. |
+| `server/src/docs/hooks.ts` | T3 | L4: `installDocsRequestPolicy` (provenance `onRequest`, its throttled log, the body-error handler, which re-throws a defect as a fresh error carrying `DOCS_DEFECT_MESSAGE`), `installDocsResponsePolicy` (`onSend`), `sendDocsFailure` (status and `Retry-After` from L1). |
+| `server/test/docs-headers.test.ts` | T3, T9 | T3: the hooks on a bare Fastify with planted routes (M3.5-M3.7, M5.5, a defect's body). T9: every route in the real server's table under `/api/docs/` (M5.4). |
+| `server/src/docs/lane.ts` | T4 | L4: the read lane, the fetch lane, single-flight with abandonment, the generation counter. |
+| `server/test/docs-lanes.test.ts` | T4, T7 | Blocking doubles and fake timers over each lane clause; T7 adds the read/fetch lane separation case. |
+| `server/test/docsRouteHelpers.ts` | T4, T6, T7, T10 | T4: blocking exec doubles. T6: the scripted `CcdRunner` over W2's real adapter, full tree, show and index fixtures, the PWA's request headers, `docsApp()`. T7: `docsApp` registers the refresh too (its `routes.js` import and one line). T10: `echoPty()` and `passThroughLane()`. |
+| `server/src/docs/cache.ts` | T5 | L4: the blob LRU, the listing map, the draft size map, the index micro-cache, all node-keyed. |
+| `server/test/docs-cache.test.ts` | T5, T6 | T5: the cache units and M3.13. T6: row 52 and M6.11 through the routes. |
+| `server/src/docs/routes.ts` | T6, T7 | L4: `composeDocs`, `registerDocsReadRoutes` (T6), `registerDocsRefreshRoute` (T7). |
+| `server/test/docs-routes.test.ts` | T6, T7, T9 | T6: the read routes (M3.4, M6.2, the shape guard). T7: the refresh (row 51, M6.9, M6.10, the no-exec refusal), a project named `__proto__` or `constructor`, `not-granted` on every route. T9: the real server (row 49 spy, row 50, M3.8, the fleetState getter, the type-level wall). |
+| `server/test/docs-file-bytes.test.ts` | T6 | M5.1, M5.2, the show bound, the JSON show's verified bytes, raster Cache-Control. |
+| `server/src/server.ts` | T8 | Two import lines (`./docs/routes.js`, `./docs/hooks.js`) beside the update import; the plugin block after `registerUpdateRoutes(app, deps, sessionAuth, watcher);`. |
+| `server/src/auth/gate.ts` | T8 | Line 8's route-count numeral, in place. |
+| `server/test/auth-gate.test.ts` | T8 | `ROUTES` gains `docs/routes.ts`; the per-file count; the derived counts and their prose numerals in place; the four keys; the shell URL. |
+| `server/test/box-token-census.test.ts` | T8 | One describe appended at EOF: the docs lane source, `DOCS_DOORS` both ways, zero box-token text in every docs file, planted controls, and the no-`/docs`-route scan (M3.14, M3.15). |
+| `server/test/single-definition.test.ts` | T9 | `DOCS_RING_FLOOR` in place; one EOF append: row 49's widened scans and the L4-quotes-no-failure-word scan, each with a CONTROL. |
+| `server/test/throttledLink.ts`, `server/test/docs-console-latency.test.ts` | T10 | The throttled TCP proxy, the echo pty, the python fixture ccd, M6.12 with its control. |
+| `docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md` | T9, T12 | T9: appends `## Deviations found` (the brief's first five issued numbers). T12: appends `## Wave 3 results`. |
+
+## Spec refinements (decided while planning)
+
+These refine the spec where it is silent, stale, or could be built two ways. Each is applied in the task named; W7's prose pass carries the spec text into line with them. Five of them, (d), (i), (j), (s) and (v), contradict the spec's TEXT rather than fill a silence: they are deviations, which Task 9 defines with issued numbers (Global Constraints, "Deviations"), and the text here is the rationale those entries carry.
+
+- **(a) Citations and counts are re-derived on the base** (T8). §3.4's `registerUpdateRoutes (:1629)` is at `:1659` at W2's tip; §3.0/§7.1's not-found handler is at `server.ts:3500-3507`; §3.13's "`ROUTES.length` goes from 86 to 90 (`:295`)" conflates the HTTP count with `ROUTES.length`: at W2's tip `ROUTES.length` is 89 (`:313`) and the HTTP count 86, so W3 makes them 93 and 90, the gated count 54 -> 58 and the exempt-HTTP count stays 32. Stale citations, not departures.
+- **(b) W3's L1 additions live in `policy.ts`** (T1, T2), as W2's refinement (l) reserved: `DOCS_FETCH_GLOBAL` (2), `DOCS_FETCH_QUEUE` (8), `DOCS_FETCH_MAX_WAIT_MS` (20 000), `DOCS_READ_BUSY_RETRY_MS` (2000), `DOCS_FETCH_BUSY_RETRY_MS` (5000), `DOCS_CACHE_BYTES` (67 108 864), `DOCS_LISTING_MAP_ENTRIES` (50 000), `DOCS_LISTING_PROVENANCE_MS` (`= DOCS_STALE_MS`, derived), `DOCS_INDEX_CACHE_MS` (30 000), `DOCS_DRAFT_SIZE_ENTRIES` (10 000), `DOCS_REFUSAL_LOG_MS` (60 000), `DOCS_ANSWER_MAX_DEPTH` (16) and `DOCS_PRIMARY_NODE` (`'primary'`), each its own literal; the spec gives the fetch queue, its wait, the micro-cache and the size map only as bare numbers, so W3 names them. The key builders, `rasterVerdict` and the raster MIME choice join them.
+- **(c) HEAD is not exposed** (T6, T7). Fastify exposes a HEAD per GET by default, and a HEAD runs the full GET handler: a ccd exec and a lane slot for a discarded body. The three GETs register with `exposeHeadRoute: false`; a HEAD then matches no docs route (zero execs; gate and not-found handler answer as for any unmatched URL). Fills a silence (§3.4 lists methods; nothing names HEAD).
+- **(d) Router-level refusals stay router-level** (T6, T9). A `:project` over 100 characters gets Fastify's `414 FST_ERR_MAX_PARAM_LENGTH`, and a malformed percent escape in the path gets `400 FST_ERR_BAD_URL`, both before any hook: no gate, no provenance, no docs headers, no `bad-project`. Zero execs still holds, and L0's project grammar admits at most 100 characters, so no valid project is affected. Raising `maxParamLength` or adding `frameworkErrors` would change every route of a server that sets no router option today. **A deviation** from §3.4's "`:project` failing the grammar gives `bad-project` with zero execs" and §5.3/M5.4's "every docs response": Task 9 Step 7 defines it.
+- **(e) Request-body refusals are `bad-query {why:'body'}`** (T1, T3). §3.4 names the string body; Fastify also refuses invalid or empty JSON (400), a body over 1 MiB (413) and an unparsed media type (415) before the handler, in its own shape. The plugin's error handler maps every `FST_ERR_CTP_*` code (L1 `docsBodyErrorVerdict`) to `bad-query {why:'body'}` at `DOCS_FAILURE_HTTP['bad-query']` (400); any other error is re-thrown to Fastify's default handler as a FRESH error carrying L1's `DOCS_DEFECT_MESSAGE`, the original kept as its `cause`, so a defect stays a default 500, still decorated by the plugin's `onSend` (F1), and its body (`{statusCode, error, message}`, which echoes the thrown message) never carries an absolute path or stderr text from the thrower (T1, T3; the plan review's note). The status, the body's shape and the headers are F1's default 500, decorated; only the message text is fixed, where the spec is silent.
+- **(f) Ok answers are shape-checked before they are believed** (T2, applied T6, T7; W2 carry). `docsAnswerShape(verb, answer)` walks the answer ITERATIVELY to `DOCS_ANSWER_MAX_DEPTH` (16; the deepest legitimate answer is about 5 levels) and, for a tree, checks every field W3 reads (`ref.requested`, `ref.served`, `ref.commit`, `repo.key`, `freshness.remote`, `freshness.stamp`, each `entries[]` row's `section`, `path`, `committed` and `draft` facts); for an index, that `projects` is an array of objects. A failure is `malformed-answer {why:'schema'}` (502), never a 500, a `TypeError` in `refreshDue` or a `RangeError` at serialisation. The parse cost in L3 is deferred (Global Constraints).
+- **(g) Show bytes are held to the bound the server declared** (T2, applied T6; W2 carry). `bytes.byteLength > ask.job.raw` (`raw` is `showRawBound(maxBytes, knownSize)`, so at most the class cap) answers `malformed-answer {why:'oversize'}`, check 9's word: the answer broke the bound the server sent. Never `too-large`, which is ccd's word for a file over the cap and whose `{size, cap}` the server would have to invent.
+- **(h) `Retry-After` is finite and positive or absent** (T1; W2 carry). `docsRetryAfterSeconds` answers `Math.ceil(ms / 1000)` for `docs-busy` only when `Number.isFinite(ms) && ms > 0`, else `null` (no header, one meaning). The producers are the L1 constants `DOCS_READ_BUSY_RETRY_MS` and `DOCS_FETCH_BUSY_RETRY_MS`, used only through `docsBusyBody(lane)`.
+- **(i) The composition is built in `buildServer`; `index.ts` is not edited** (T6, T9; W2 carry). `composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } })` runs once per `buildServer` call, beside the plugin block, so production has one lane per link (one `buildServer`, one `deps`) and independent test servers share nothing (the `CoordMutex` precedent). The getter is the fix for W2's "captured by reference" carry: the adapter reads `deps.fleetState` at each call, so the object the link mutates in place is seen, and so is a replaced one. No `Deps` field is added (a new optional field with a local fallback is exactly what `Deps.queue`'s docstring warns against, and the plugin must register unconditionally or `auth-gate.test.ts`'s COMPLETE describe finds four phantoms), and `update-routes.test.ts`'s two-literal pin on `index.ts` stays untouched. **A deviation** from §7.7's W3 row "wiring in `index.ts`": Task 9 Step 7 defines it.
+- **(j) A queued job is abandoned when every request joined to it has gone, measured on the RESPONSE** (T4, T6). The route derives one `AbortSignal` per request from `reply.raw`'s `close` event when `reply.raw.writableFinished` is still false, the one condition that means the client left before its answer, whatever the request stream's own `close` means on a given node version (Fastify 5.10's `request.signal` listens to `req.raw`'s `close`, which current node can emit once the request body has been consumed, before any reply; Task 6's real-socket case measures and records which). Single-flight aborts a flight's own signal only when every joiner's signal has aborted, so one tab closing never cancels another tab's answer; the lane then removes the queued job; a running exec is never cancelled (the agent has no cancel op). **A deviation** from §6.3's "(`req.raw` `close`)": Task 9 Step 7 defines it.
+- **(k) Order on every read: cache, then single-flight, then the lane** (T6). §6.4's "requests join before the lanes" and §6.3's "cache hits bypass it" fix two of three edges; a cache probe first means a hit never waits behind a flight.
+- **(l) What the cache stores and how a hit answers** (T2, T5, T6). The blob cache stores the verified committed answer and its decoded bytes, charged as `bytes.byteLength + Buffer.byteLength(text or b64)`; an entry above the whole budget is never stored. Fills come only from a committed pin whose listing-map entry exists and whose kind is `file` or `exec` (`docsCacheFill`); a hit is served only for such an entry whose `servedRef` is recorded within `DOCS_LISTING_PROVENANCE_MS` (`docsCacheVerdict`), so a symlink or submodule entry sharing a blob never hits. A hit's `show` is synthesised by L1 `docsCacheHitAnswer`: the stored content fields (`encoding`, `text`/`b64`, `size`, `sha256`), the REQUEST's pin echoes (`source:'committed'`, `section`, `path`, `commit`), the listing's `blob`, `onRef:'contains'`, `elapsedMs: 0`, and no `mode` (absent: not measured for this request), so the same blob under a new commit or path answers that commit and path. The listing map is fed from every ok tree answer (§6.5 over §2 (g)'s "tree and show"), counts FILE entries toward its 50 000, and evicts whole commits, least recently used first. The draft size map is node-keyed (§3.12) and LRU.
+- **(m) The refresh's outcome** (T1, T7). Validation refusals (`bad-project`, `bad-query`, `bad-ref`) answer their own status with zero execs. The fetch half's PRE-EXEC refusals — the gate's `caps-unknown` and `unsupported`, and the fetch lane's `docs-busy` — end the request with that word's status and `Retry-After` (L1 `docsRefreshFetchHalf`: "a refusal before any exec returns that word's own status"; the same gate would refuse the tree). So does a SKIPPED fetch half (a local ref, no exec) whose tree half is then refused before any exec, by the gate or the read lane's `docs-busy`: the request made no exec at all, so L1's `docsRefreshAnswer` ends it with the tree word's status (503 `Retry-After: 5`, 501, or 503 `Retry-After: 2`), never a 200 `{fetch: skipped, tree: <refusal>}` (the plan review's T7 note; the spec's own sentence, read for the one case it had not been applied to, so not a deviation). Anything else is 200 with both halves: `ran`, `failed` (its body verbatim, `fetch-too-soon`'s `retryAfterMs` included, no header) or `skipped`, and the tree half (`DocsTreeResponse` or its own failure body). `gen` is bumped when the fetch half settles, a skipped one included, BEFORE the follow-up tree flight starts, so §3.4's "always starts a new flight" holds; the node's index generation is bumped and the index micro-cache dropped at the same moment, and the micro-cache is dropped again when the refresh completes. `reason` changes only the failure log line, `ccrc-server: docs <reason> refresh of <project> failed: <word>`, at most once a minute per word.
+- **(n) The fetch lane's queue counts every accepted job that has not started** (T4): behind its key or behind the global semaphore, across all keys. The 9th such job is refused, and a job the pump starts at once is never counted: a new job is queued and pumped first, then refused only if it is still waiting (T4's Decision 9). The 20 s wait runs from acceptance. Each lane keeps its own queue, never the process's `deps.queue` (which serialises session operations by session id); the fetch lane's is its own FIFO, not a `KeyedQueue` (refinement (v)).
+- **(o) The provenance log cadence is L1, the clock L4** (T1, T3): `docsLogDue(lastMs, nowMs)` and a per-`why` `Map` in `hooks.ts`, no timer; `installDocsRequestPolicy(app, nowMs = Date.now)` takes the clock for its test.
+- **(p) Node keys** (T1, T5, §3.12): `DOCS_PRIMARY_NODE` is the one node value; every key builder joins its fields with NUL, kind tag first (`index`, `tree`, `show`, `refresh`, `project`, `blob`, `listing`, `fp`, `node`), so keys are injective (no field can contain NUL: the project, ref and path grammars and the hex forms exclude it) and one flight map serves every kind. An absent tree ref is the empty field: `''` is never a parsed ref. The index flight key carries the node's generation (`docsNodeKey(node)`'s counter in the same `DocsGenerations`), which a refresh's settled fetch bumps beside the project's (T1, T6, T7): §6.4 names no index key, so this fills a silence. Whether an index answer may fill the micro-cache is L1's `docsIndexCacheable(genAtStart, genNow)`, so `routes.ts` compares no generations itself (the plan review's rings note).
+- **(q) Where the new scans live** (T8, T9). §3.13's "new scans" name no file. The no-`/docs`-route scan (M3.14) joins the box-token census's docs describe, which already owns the quote-agnostic `registrationsIn`; row 49's scans (exactly one `CCD_ARGV.docsFetch(`, widened to an identifier-level `docsFetch` count and a `CCD_ARGV` aliasing scan) and the L4-quotes-no-failure-word scan join `single-definition.test.ts`'s EOF, where `ALL` and `stallCode` live; the type-level half of row 49 lives in `docs-routes.test.ts`, which `typecheck-tests` compiles. `DOCS_RING_FLOOR` gains the four L4 names in place, so a deleted L4 file reds.
+- **(r) The box-token census reads every docs file** (T8), not `routes.ts` alone: a box-token call in `hooks.ts` would gate a route as surely as one in its handler. `DOCS_DOORS` does not join `SESSION_ONLY_ALL` or `ALL_LANES`: docs routes are not coordination writes, so no CLAUDE.md sentence and no number word moves.
+- **(s) The latency test mounts the plugin on a bare Fastify for both runs** (T10), through `composeDocs`'s `readLane` option, so the control differs from the real run in the lane alone (§6.8's `buildServer` would add the gate and nothing the probe measures). `buildServer` composes the read lane itself and `Deps` has no field that could inject the control's pass-through lane (refinement (i) adds none), so a control built through it could not differ from the real run in the lane alone; the link itself stays §6.8's (the real agent behind the throttled proxy, `ccdRunner(fleet.runner, cfg)` and `fleet.state`). **A deviation** from §6.8's setup sentence ("`buildServer` with `ccdRunner(fleet.runner, cfg)` and `fleet.state`"): Task 9 Step 7 defines it. `echoPty` and `throttledProxy` are new test helpers (neither exists); `connectToAgent` gets a `requestTimeoutMs` above the docs-show budget plus slack.
+- **(t) R1, R2 and the dark rollout are documented, not run** (T12): the results restate §7.8's procedures and pass criteria and that both gate W5's merge.
+- **(u) No README or CLAUDE.md edit** (W7 owns the prose, the known-load-flakes bullet and the gated-verb sentence; README's pins and line ratchet make an unplanned edit costly).
+- **(v) The fetch lane is its own FIFO plus a running-key set, not a `KeyedQueue`** (T4). §6.4 names "a `KeyedQueue` (`server/src/inject/queue.ts:6`) per (node, project)", but `single-definition.test.ts`'s "one KeyedQueue for the process" holds `new KeyedQueue(` to `server/src/index.ts`, the composition root, so a `KeyedQueue` in `lane.ts` reds it (measured: `1 failed | 471 passed (472)`), and refinement (n) rules out the process's own queue. The lane keeps ONE FIFO of accepted, not-yet-started jobs and a set of keys with a running job; its pump starts, in FIFO order, every job whose key has nothing running while fewer than `DOCS_FETCH_GLOBAL` run. Every behaviour §6.4 states holds: serial and in acceptance order per key, 2 at once, 8 queued, a 20 s wait, `docs-busy {lane:'fetch'}` past either. **A deviation** from §6.4's named mechanism: Task 9 Step 7 defines it.
+- **(w) A JSON file reply carries the verified bytes, never the answer's own content field** (T2, T6; the W2 review's note 1). Check 8 verifies the bytes it decodes from an ok show, not the answer it hands back, so `docsFileReply`'s `show` is the answer's facts with its ONE content field rebuilt from those bytes: a `utf8` `text` is the bytes decoded (a lone surrogate, whose UTF-8 is U+FFFD's three bytes and so passes check 8, is served as U+FFFD; a leading byte-order mark is kept), a `base64` `b64` is the one check 8 proved canonical, and a stray second content field is dropped. A deviation, by the coordinator's ruling of 2026-10-08: §3.5 says the server "wraps these answers unchanged", and for an answer outside ccd's contract the served content field differs from the answer's, so the departure is from the spec's TEXT however narrow. For every answer within ccd's contract (one content field, the file's UTF-8 or its canonical base64) the served `show` equals the answer field for field; the rebuilt field differs only for an answer outside that contract, the class refinements (f) and (g) already refuse or bound. Task 9 defines it as the sixth.
+- **(x) Every map keyed by project or node is a `Map` over a kind-tagged NUL key** (T4, T5, T7; the W2 review's note 2: L0's grammar admits `__proto__`). No W3 plain object is keyed by a project, a node or a ref; Task 7 pins it with a `__proto__` and a `constructor` project through the tree, file, cache and refresh paths.
+
+### Task 1: L1 policy for the routes, part 1: the lane, cache and log constants, node-first keys, the busy, foreign-request and body-error bodies, the refresh-half verdict and a hardened Retry-After
+
+**Model routing:** `sonnet`, effort `high` — a pure-function transcription. The traps are the purity scan (every import from `shared/docs.ts`, no `Buffer`, no clock, no `console`, and no `fastify`/`reply` text in code, strings included), W2's rule that each constant is its OWN integer literal pinned by its exact `export const X = n;` line, and the one escape `'\u0000'`, which must reach the file as six source characters, never as a raw NUL.
+
+**Spec rows:** section 6.4's and section 6.5's constants (W3 refinement (b), as W2's refinement (l) reserved), section 3.7's `docs-busy {lane, retryAfterMs}` and `foreign-request {why, site?}` bodies (no `verdict`), refinement (e)'s request-body refusal, refinement (o)'s log cadence (section 3.8: "at most once a minute per `why`"), section 3.4's refresh-status sentence ("a refusal before any exec returns that word's own status"; refinement (m)), section 3.12's node key and section 6.4's flight keys (refinement (p); M3.13's L1 half: no key is shared across nodes), plus an index flight key carrying the node's generation and that generation's own key (`docsNodeKey`; Decision 8 fills section 6.4's silence on the index key, so section 6.5's "dropped by any refresh" holds under concurrency), and W2's carry on `docsRetryAfterSeconds` (refinement (h): finite and positive, else no header). The L4 code that applies these (hooks, lanes, caches, routes) is Tasks 3-7; M3.13's route half is Task 5's.
+
+**Files:**
+- Modify: `server/src/docs/policy.ts` — three edits, each located by content: (a) its one import statement (lines 11-18 at W2's tip, the block directly under the header comment), widened in place, same specifier; (b) `docsRetryAfterSeconds`'s docstring bullet for `docs-busy` (two lines, rewritten in place, same line count) and its body (one line becomes two), lines 103-115 at W2's tip; (c) an append at the END of the file, after `docsSendPolicy`'s closing `}` (line 531 at W2's tip).
+- Modify: `server/test/docs-policy.test.ts` — an append at the END of the file only (after the `docsSendPolicy` describe's closing `});`, line 780 at W2's tip). Its imports go WITH its describes, for W2 Task 3's reason: W2's row W2-T2-M14 cites `docs-policy.test.ts(242,7)`, so no line above the end may move. ES module imports are hoisted.
+- Test: `server/test/docs-policy.test.ts`; guards `server/test/docs-budget.test.ts`, `server/test/docs-source.test.ts`, `server/test/single-definition.test.ts`, `server/test/topology-clean.test.ts`, `server/test/capsupported.test.ts`, `server/test/typecheck-tests.test.ts`.
+
+Every Find block below is quoted from the file as W2 left it (this is the wave's first task) and is unique in it; line numbers are hints. If a Find block is absent or not unique, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes, from `shared/docs.ts` (W1; imported, never amended): `DOCS_STALE_MS` (`600000`); `docsRefText(r: DocsRefSpec): string`; `type DocsFailureBody` (its context's `lane?: 'read' | 'fetch'`, `site?: string`, `why?: string`, `lockAgeMs?: number | null`); `type DocsFetchOk`; `type DocsRefreshFetch` (`{state:'ran'; answer: DocsFetchOk} | {state:'failed'; failure: DocsFailureBody} | {state:'skipped'; why:'local-ref'}`); `type DocPin`; `type DocsRefSpec`; `type DocsFailure`; `type DocsTreeResponse` (`{ok: true; tree: DocsTreeOk; refreshDue: boolean}`); `type DocsRefreshResponse` (`{ok: true; fetch: DocsRefreshFetch; tree: DocsTreeResponse | DocsFailureBody}`).
+- Consumes, from W2's `server/src/docs/policy.ts`: `DOCS_FAILURE_HTTP: Record<DocsFailure, number>` (`docs-busy` 503, `foreign-request` 403, `bad-query` 400); `docsRetryAfterSeconds(body: DocsFailureBody): number | null` (its body hardened here); `DOCS_CAPS_UNKNOWN_RETRY_AFTER_S` (5); `type DocsProvenance = { ok: true } | { ok: false; why: 'navigation' | 'site' | 'marker'; site?: string }`; `docsProvenance(headers: DocsHeaderBag): DocsProvenance`; the module-private `badQuery(why, key?)`; `DOCS_REF_PREFIXES` (test only). In the test file: W2's module-scope `T4_POLICY_SRC`, `T3_COMMIT`, `T3_HEAD`, `T3_FP`, `COMMITTED_PIN`, `DRAFT_PIN`, and the top block's `DOCS_FAILURES`, `DocsFailure`, `DocsFailureBody`, `DOCS_FAILURE_HTTP`, `docsRetryAfterSeconds`, `DOCS_REF_PREFIXES`, and Task 3's `docsProvenance` and `DocPin`, reused, never redeclared or re-imported.
+- Produces, all in `server/src/docs/policy.ts`:
+  - `export const DOCS_PRIMARY_NODE = 'primary';` — the one node value this build has (section 3.12); never a wire field.
+  - `export const DOCS_READ_BUSY_RETRY_MS = 2000;` `export const DOCS_FETCH_GLOBAL = 2;` `export const DOCS_FETCH_QUEUE = 8;` `export const DOCS_FETCH_MAX_WAIT_MS = 20000;` `export const DOCS_FETCH_BUSY_RETRY_MS = 5000;` `export const DOCS_CACHE_BYTES = 67108864;` `export const DOCS_LISTING_MAP_ENTRIES = 50000;` `export const DOCS_INDEX_CACHE_MS = 30000;` `export const DOCS_DRAFT_SIZE_ENTRIES = 10000;` `export const DOCS_REFUSAL_LOG_MS = 60000;` — each its own integer literal, each pinned by its exact line.
+  - `export const DOCS_LISTING_PROVENANCE_MS = DOCS_STALE_MS;` — derived, never its own literal.
+  - `export type DocsLaneName = NonNullable<DocsFailureBody['lane']>;` — exactly `'read' | 'fetch'`, derived from L0's failure context so the lane names have one home.
+  - `export function docsBusyBody(lane: DocsLaneName): DocsFailureBody` — `{ok:false, failure:'docs-busy', lane, retryAfterMs}`, the wait `DOCS_READ_BUSY_RETRY_MS` for `read`, `DOCS_FETCH_BUSY_RETRY_MS` for `fetch`; a fresh object every call; the only producer of a `docs-busy` body.
+  - `export function docsRetryAfterSeconds(body: DocsFailureBody): number | null` — signature unchanged; `docs-busy` answers `Math.ceil(ms / 1000)` only when `ms` is defined, `Number.isFinite(ms)` and `ms > 0`, else `null`; `caps-unknown` answers `DOCS_CAPS_UNKNOWN_RETRY_AFTER_S`; every other word `null`.
+  - `export function docsForeignRequestBody(v: Exclude<DocsProvenance, { ok: true }>): DocsFailureBody` — `{ok:false, failure:'foreign-request', why}`, plus `site` only when `v` carries one; never a `verdict` key.
+  - `export type DocsBodyError = { kind: 'body'; body: DocsFailureBody } | { kind: 'defect' };`
+  - `export const DOCS_DEFECT_MESSAGE = 'docs route defect';` — the message of the 500 a docs-route defect answers (Decision 11): Task 3's error handler re-throws every defect as a fresh error carrying it, the original as its `cause`.
+  - `export function docsBodyErrorVerdict(code: unknown): DocsBodyError` — a string starting `FST_ERR_CTP_` is `{kind:'body', body:{ok:false, failure:'bad-query', why:'body'}}` (a fresh body each call); anything else, `{kind:'defect'}`.
+  - `export function docsLogDue(lastMs: number | undefined, nowMs: number): boolean` — `undefined` means "never logged", one meaning; due when never logged or `nowMs - lastMs >= DOCS_REFUSAL_LOG_MS`.
+  - `export type DocsRefreshHalf = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'half'; fetch: DocsRefreshFetch };`
+  - `export function docsRefreshFetchHalf(run: { ok: true; answer: DocsFetchOk } | DocsFailureBody): DocsRefreshHalf` — the parameter is structurally W2's `DocsFetchRun` (L1 cannot import `ports.ts`), and the fetch lane's own `docsBusyBody('fetch')` also fits it. `caps-unknown`, `unsupported`, `docs-busy` give `{kind:'refuse', body}` carrying the SAME object; any other failure gives `{kind:'half', fetch:{state:'failed', failure}}` carrying the SAME object; ok gives `{kind:'half', fetch:{state:'ran', answer}}`.
+  - `export const DOCS_REFRESH_SKIPPED: Readonly<DocsRefreshFetch>` — frozen `{state:'skipped', why:'local-ref'}`.
+  - `export type DocsRefreshAnswer = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'send'; body: DocsRefreshResponse };`
+  - `export function docsRefreshAnswer(fetch: DocsRefreshFetch, tree: DocsTreeResponse | DocsFailureBody): DocsRefreshAnswer` — `refuse` carrying the tree's body itself exactly when the fetch half is `skipped` and the tree half is a `REFRESH_PRE_EXEC` word (no exec ran at all: Decision 9); otherwise `send` `{ok: true, fetch, tree}`.
+  - The keys, each `kind tag NUL node NUL fields...` (the tag first, then the node, then the fields in the order given; an absent field is `''`):
+    - `export function docsIndexFlightKey(node: string, gen: number): string` — tag `index`; field `String(gen)`, the node's generation (`docsNodeKey`'s counter), so a GET after a refresh never joins an index flight begun before the refresh's fetch (fills section 6.4's silence on the index key, as the tree key carries the project's generation).
+    - `export function docsTreeFlightKey(node: string, project: string, ref: DocsRefSpec | null, gen: number): string` — tag `tree`; fields `project`, `docsRefText(ref)` or `''` for `null` (the default view), `String(gen)`.
+    - `export function docsShowFlightKey(node: string, project: string, pin: DocPin, maxBytes: number): string` — tag `show`; fields `project`, `pin.kind`, then committed `commit, servedRef, section, path` or draft `branch, head, section, path, fp` (`docsApi`'s order), then `String(maxBytes)`.
+    - `export function docsRefreshFlightKey(node: string, project: string, branch: string | null): string` — tag `refresh`; fields `project`, `branch` or `''` for `null` (the origin default).
+    - `export function docsProjectKey(node: string, project: string): string` — tag `project`: the project's generation counter key and the fetch lane's serial key (its own FIFO, not a `KeyedQueue`: refinement (v)).
+    - `export function docsBlobKey(node: string, repoKey: string, blob: string): string` — tag `blob`.
+    - `export function docsListingKey(node: string, project: string, commit: string): string` — tag `listing`.
+    - `export function docsDraftSizeKey(node: string, fp: string): string` — tag `fp`.
+    - `export function docsNodeKey(node: string): string` — tag `node`: the generation counter's key for one node's index (Task 7 bumps it when a refresh's fetch half settles; Task 6 reads it before joining an index flight and before filling the micro-cache).
+  - `export function docsIndexCacheable(genAtStart: number, genNow: number): boolean` — whether an ok index answer may fill the node's micro-cache: only when the node's generation is still the one its flight began at (Decision 10).
+  - Module-private (not exported): `BODY_ERROR_CODE_PREFIX = 'FST_ERR_CTP_'`, `REFRESH_PRE_EXEC: ReadonlySet<DocsFailure>` (exactly the three words), `KEY_SEP = '\u0000'` (written as the escape), the nine `KEY_*` tag consts and `docsKey(kind, fields)`.
+  - For later tasks: Task 3 (`hooks.ts`) applies `docsForeignRequestBody`, `docsBodyErrorVerdict`, `DOCS_DEFECT_MESSAGE`, `docsLogDue`, `docsRetryAfterSeconds` and `DOCS_REFUSAL_LOG_MS`; Task 4 (`lane.ts`) applies `docsBusyBody`, `DOCS_FETCH_GLOBAL`, `DOCS_FETCH_QUEUE`, `DOCS_FETCH_MAX_WAIT_MS` and `docsProjectKey`; Task 5 (`cache.ts`) applies `DOCS_CACHE_BYTES`, `DOCS_LISTING_MAP_ENTRIES`, `DOCS_LISTING_PROVENANCE_MS`, `DOCS_INDEX_CACHE_MS`, `DOCS_DRAFT_SIZE_ENTRIES`, `docsBlobKey`, `docsListingKey`, `docsDraftSizeKey`; Tasks 6-7 apply `DOCS_PRIMARY_NODE`, the four flight keys, `docsNodeKey`, `docsIndexCacheable`, `docsRefreshFetchHalf`, `DOCS_REFRESH_SKIPPED` and `docsRefreshAnswer`. A later task that needs another `shared/docs.ts` name ADDS it to the one import statement (never a second import from the same specifier).
+
+**Decisions this task makes (refinements (b), (e), (h), (m), (o), (p) applied; none is a deviation):**
+1. **Each numeric constant is its own literal**, pinned by its exact line appearing exactly once. `DOCS_LISTING_PROVENANCE_MS` is the one derived name: section 6.5 defines it AS the stale threshold, so it is `= DOCS_STALE_MS;`, and a row reds if it is ever typed as `600000`.
+2. **`DocsLaneName` is derived from L0** (`NonNullable<DocsFailureBody['lane']>`), not re-listed as `'read' | 'fetch'`: the same type the architecture names, with one home. `docsBusyBody` is the only `docs-busy` producer, so the hardened `docsRetryAfterSeconds` meets 2000 or 5000 in production and the finite-positive rule guards only a future producer.
+3. **`docsRetryAfterSeconds`'s docstring keeps its line count**: the `docs-busy` bullet's two lines are rewritten in place to state the finite-positive rule. The body grows by one line (`const ms = body.retryAfterMs;`, so `Number.isFinite` and `> 0` read a narrowed value), which moves every later line of `policy.ts` down by one. Measured while planning: nothing in the tree cites `policy.ts` by line number.
+4. **`docsForeignRequestBody` spreads no `undefined`**: `site` is written only when the verdict carries it, so `Object.hasOwn(body, 'site')` is false for `navigation` and `marker`. An empty `site` (`sec-fetch-site: ''`) is a value and rides.
+5. **`docsBodyErrorVerdict` reads `code` as `unknown`** and uses `startsWith`, so `FST_ERR_BAD_URL` (a router refusal, refinement (d)), a lower-cased code, a code with the prefix inside it, a number, `null` and an object are each a defect. The prefix is a string literal of its own; the word "fastify" never appears in this file's code (the purity scan reads strings too).
+6. **`docsRefreshFetchHalf` carries bodies by identity**: a `failed` half's `failure` and a refusal's `body` are the object it was given (`toBe`), so `fetch-too-soon`'s `retryAfterMs` and `ref-locked`'s `lockAgeMs` (number, `null` or absent) reach the client exactly as ccd and the adapter said. `not-granted`, `link-failed` and `malformed-answer` are failed halves, as the architecture lists: only the adapter's gate words and the lane's `docs-busy` are pre-exec.
+7. **Keys join with NUL, kind tag first, node second** (refinement (p)). `KEY_SEP` is written `'\u0000'` (an escape; a raw NUL in source is invisible in review). The field layout is pinned exactly by `split(NUL)`, so a dropped field, a moved field or a different separator reds. `''` stands for an absent ref or branch: no parsed ref, bare branch, project or hex is empty. Key injectivity rests on no field holding a NUL: the request-side fields pass L0 grammars, and `repoKey` and `blob` come from an ok tree answer, which Task 2's `docsAnswerShape` checks before any key is built from them.
+8. **The index flight key carries the node's generation** (fills a silence: section 6.4 lists single-flight keys for tree, show and refresh only). `docsIndexFlightKey(node, gen)` adds `String(gen)`, where `gen` is the counter `docsNodeKey(node)` names in Task 4's `DocsGenerations`; Task 7 bumps it when a refresh's fetch half settles, beside the project's generation. So a projects GET issued after a refresh never joins an index flight begun before that refresh's fetch, and Task 6's fill guard keeps such an answer out of the micro-cache: section 6.5's "the index has a 30 s micro-cache per node, dropped by any refresh" holds under concurrency, not only between requests. `docsNodeKey`'s tag `node` is its own, so no node key equals a project or index key (W3-T1-M21, W3-T1-M22).
+9. **A refresh that ran no exec at all ends with its word's own status** (section 3.4: "a refusal before any exec returns that word's own status"; refinement (m), the plan review's T7 note). A local ref skips the fetch with no exec; when its tree half is then refused before any exec too (the adapter's `caps-unknown` or `unsupported`, or the read lane's `docs-busy`), the request made none, so `docsRefreshAnswer` answers `refuse` with the tree's body, which Task 7 sends with its status (503 `Retry-After: 5`, 501, 503 `Retry-After: 2`), never a 200 `{fetch: skipped, tree: <refusal>}`. A ran or failed fetch made an exec, so a pre-exec tree word still rides the 200 as the tree half (section 3.4's "200 whenever the lanes ran"); every post-exec tree failure rides it too, after a skip included. The decision is L1's, so the route applies one verdict and branches on no word (W3-T1-M23, W3-T1-M24; Task 7's route case and W3-T7-M23).
+10. **The index's cache verdict is L1's** (the plan review's rings note): `docsIndexCacheable(genAtStart, genNow)` answers whether an index answer may fill the micro-cache, so Task 6's `believeIndex` compares no generations itself (W3-T1-M25; the route half is W3-T7-M21).
+11. **A defect's 500 names no thrower's text** (the plan review's T3 note): `DOCS_DEFECT_MESSAGE` is fixed text, and Task 3's error handler re-throws every defect as a fresh error carrying it, the original as its `cause`, so Fastify's default 500 body never carries an absolute path or stderr from the thrown message. Refinement (e)'s "a defect stays a default 500" holds: the status, the body's shape and the plugin's headers are unchanged. The constant is pinned here by value; its guard row is Task 3's (W3-T3-M19).
+
+**Measured while planning** (the shared scratch tree at W2's tip, then a separate copy for the mutations; none is a deviation):
+1. **RED is `87 failed | 317 passed (404)`.** 97 new cases; 87 fail (the functions with `TypeError: <name> is not a function`, the constants on `undefined` (`DOCS_DEFECT_MESSAGE` included), the line pins on an empty filter, the six non-positive `docs-busy` cases on `NaN`/`Infinity`/`-Infinity`/`-5`/`0`/`-0` returned where `null` is wanted). 10 new cases are green before the change by design: the seven positive-wait rows, the no-wait row, `caps-unknown` and `fetch-too-soon`, which pin that the hardening keeps W2's answers. W2's 307 cases stay green. GREEN is `404 passed (404)`.
+2. **No table is built from a function under test at collection time**: the refusal table's `docs-busy` body is written out (`fail('docs-busy', { lane: 'fetch', retryAfterMs: 5000 })`), so RED is per case and never `no tests` (a first draft that called `docsBusyBody` in an `it.each` table failed the whole file at collection).
+3. **Guards**: `tsc` on both projects is clean; `docs-budget` + `docs-source` `142 passed (142)`; `single-definition` `472 passed (472)` (no name added here is declared anywhere else in the four roots, measured by `grep -rlw` before the edit); `topology-clean` + `capsupported` `77 passed (77)` with `CCRC_HISTORY_BASE=<base sha>`. Environment-only reds, as W2 recorded: with no `origin/main`, `topology-clean`'s `resolved a base to measure against` reds alone (`1 failed | 54 passed (55)`); with a symlinked `pwa/node_modules`, `typecheck-tests`' `PWA_TSC really is pwa's own installed compiler` reds alone (`1 failed | 11 passed (12)`).
+4. **Mutations**: twenty-five, each measured red in a separate copy (`git archive HEAD | tar -x -C <copy>`, `git -C <copy> init -q`, `server/node_modules` linked in), restored after each. The architecture's M1-M14 are W3-T1-M1..M14 in its order; M15-M25 pin guards the decisions above add (the freeze, `startsWith` over `includes`, the never-logged clause, the two empty fields, the refusal's identity, Decision 8's generation field and node key, Decision 9's skip clause and its pre-exec set, and Decision 10's comparison).
+
+| id | file | red |
+|---|---|---|
+| W3-T1-M1 | `server/src/docs/policy.ts` | server docs-policy: 3 failed \| 401 passed (404) |
+| W3-T1-M2 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M3 | `server/src/docs/policy.ts` | server docs-policy: 7 failed \| 397 passed (404) |
+| W3-T1-M4 | `server/src/docs/policy.ts` | server docs-policy: 4 failed \| 400 passed (404) |
+| W3-T1-M5 | `server/src/docs/policy.ts` | server docs-policy: 3 failed \| 401 passed (404) |
+| W3-T1-M6 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M7 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M8 | `server/src/docs/policy.ts` | server docs-policy: 4 failed \| 400 passed (404) |
+| W3-T1-M9 | `server/src/docs/policy.ts` | server docs-policy: 7 failed \| 397 passed (404) |
+| W3-T1-M10 | `server/src/docs/policy.ts` | server docs-policy: 3 failed \| 401 passed (404) |
+| W3-T1-M11 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M12 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M13 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M14 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 403 passed (404) |
+| W3-T1-M15 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 403 passed (404) |
+| W3-T1-M16 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 403 passed (404) |
+| W3-T1-M17 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M18 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M19 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M20 | `server/src/docs/policy.ts` | server docs-policy: 3 failed \| 401 passed (404) |
+| W3-T1-M21 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M22 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M23 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+| W3-T1-M24 | `server/src/docs/policy.ts` | server docs-policy: 3 failed \| 401 passed (404) |
+| W3-T1-M25 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 402 passed (404) |
+
+- [ ] **Step 0: Check the base, install, and claim (once per wave).** From the worktree root:
+
+```bash
+grep -q 'export function ccdDocsFetcher' server/src/docs/ccdsource.ts && grep -q 'export function docsSendPolicy' server/src/docs/policy.ts && test ! -e server/src/docs/routes.ts && test ! -e server/src/docs/hooks.ts && test -f docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md && echo BASE-OK
+git rev-parse HEAD
+( cd server && npm ci ) && ( cd agent && npm ci ) && ( cd pwa && npm ci )
+```
+
+Expected: `BASE-OK` (the last check: this plan reached `main` through the programme's ledger PR before the run opened, so the branch holds it; Tasks 9, 11 and 12 read and append to it), then the base sha (record it in the SDD ledger as the wave's base: Task 9's net file-shape checks and Task 12's results measure against it), then three clean installs (`typecheck-tests` compiles all three packages and needs a real, non-symlinked `pwa/node_modules`). If `BASE-OK` does not print, stop and put an ask to the coordinator; never merge, rebase or pull inside a task.
+
+Then take the claims on `server/src/docs/policy.ts` and `server/test/docs-policy.test.ts` (worker skill clause 11, `~/.local/bin/ccrc-api claims take`). A 409 names the holder: mail it through the response's `mailHint` and edit neither file until that claim ends or the two coordinators confirm a scoped agreement.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts )`
+Expected: `Tests  307 passed (307)` (W2's cases, measured at W2's tip).
+
+- [ ] **Step 1: Write the failing tests.** Append the block below to the END of `server/test/docs-policy.test.ts`: find the end with `tail -n 3 server/test/docs-policy.test.ts` (it prints `    expect(a.headers).not.toBe(DOCS_RESPONSE_HEADERS);`, `  });` and `});`), leave one blank line after that final `});`, then paste the block exactly. Edit nothing above it. It imports no name a block above already imports (a second import of the same name is a duplicate-identifier compile error under `typecheck-tests`).
+
+```ts
+// ===== W3 Task 1: the routes' L1, part 1 =====
+// The fetch-lane, cache, index and log constants (W3 refinement (b), section 6.4, section 6.5), the docs-busy,
+// foreign-request and body-error bodies (section 3.7, section 3.8; refinements (e), (h)), the refusal-log cadence
+// (refinement (o)), the refresh's fetch half (refinement (m)), the hardened Retry-After (W2's carry) and the
+// node-first keys (refinement (p), section 3.12; M3.13's L1 half). Every expected value below is written out from the
+// spec, never read back from `policy.ts`; a qualified ref is built from `DOCS_REF_PREFIXES`, never typed.
+//
+// Imports sit here for W2 Task 3's reason: no line above this block moves.
+import {
+  DOCS_CACHE_BYTES, DOCS_DEFECT_MESSAGE, DOCS_DRAFT_SIZE_ENTRIES, DOCS_FETCH_BUSY_RETRY_MS, DOCS_FETCH_GLOBAL,
+  DOCS_FETCH_MAX_WAIT_MS, DOCS_FETCH_QUEUE, DOCS_INDEX_CACHE_MS, DOCS_LISTING_MAP_ENTRIES, DOCS_LISTING_PROVENANCE_MS,
+  DOCS_PRIMARY_NODE, DOCS_READ_BUSY_RETRY_MS, DOCS_REFRESH_SKIPPED, DOCS_REFUSAL_LOG_MS, docsBlobKey,
+  docsBodyErrorVerdict, docsBusyBody, docsDraftSizeKey, docsForeignRequestBody, docsIndexCacheable, docsIndexFlightKey,
+  docsListingKey, docsLogDue, docsNodeKey, docsProjectKey, docsRefreshAnswer, docsRefreshFetchHalf,
+  docsRefreshFlightKey, docsShowFlightKey, docsTreeFlightKey,
+  type DocsBodyError, type DocsLaneName, type DocsProvenance, type DocsRefreshAnswer, type DocsRefreshHalf,
+} from '../src/docs/policy.js';
+import {
+  DOCS_STALE_MS, docsRefText, type DocsFetchOk, type DocsRefSpec, type DocsTreeResponse,
+} from '../../shared/docs.js';
+
+describe('W3 T1: the fetch-lane, cache, index and log constants (refinement (b), section 6.4, section 6.5)', () => {
+  const lines = T4_POLICY_SRC.split('\n');
+
+  it('each has the value the spec gives it', () => {
+    expect(DOCS_READ_BUSY_RETRY_MS).toBe(2000);
+    expect(DOCS_FETCH_GLOBAL).toBe(2);
+    expect(DOCS_FETCH_QUEUE).toBe(8);
+    expect(DOCS_FETCH_MAX_WAIT_MS).toBe(20000);
+    expect(DOCS_FETCH_BUSY_RETRY_MS).toBe(5000);
+    expect(DOCS_CACHE_BYTES).toBe(64 * 1024 * 1024);
+    expect(DOCS_LISTING_MAP_ENTRIES).toBe(50000);
+    expect(DOCS_INDEX_CACHE_MS).toBe(30000);
+    expect(DOCS_DRAFT_SIZE_ENTRIES).toBe(10000);
+    expect(DOCS_REFUSAL_LOG_MS).toBe(60000);
+  });
+
+  it('each numeric constant is its own integer literal, on exactly one line', () => {
+    for (const line of [
+      'export const DOCS_READ_BUSY_RETRY_MS = 2000;',
+      'export const DOCS_FETCH_GLOBAL = 2;',
+      'export const DOCS_FETCH_QUEUE = 8;',
+      'export const DOCS_FETCH_MAX_WAIT_MS = 20000;',
+      'export const DOCS_FETCH_BUSY_RETRY_MS = 5000;',
+      'export const DOCS_CACHE_BYTES = 67108864;',
+      'export const DOCS_LISTING_MAP_ENTRIES = 50000;',
+      'export const DOCS_INDEX_CACHE_MS = 30000;',
+      'export const DOCS_DRAFT_SIZE_ENTRIES = 10000;',
+      'export const DOCS_REFUSAL_LOG_MS = 60000;',
+    ]) expect(lines.filter((l) => l === line), line).toHaveLength(1);
+  });
+
+  it('DOCS_LISTING_PROVENANCE_MS is DOCS_STALE_MS by definition (section 6.5): derived, never a literal of its own', () => {
+    expect(DOCS_LISTING_PROVENANCE_MS).toBe(600000);
+    expect(DOCS_LISTING_PROVENANCE_MS).toBe(DOCS_STALE_MS);
+    expect(lines.filter((l) => l === 'export const DOCS_LISTING_PROVENANCE_MS = DOCS_STALE_MS;')).toHaveLength(1);
+  });
+
+  it('DOCS_PRIMARY_NODE is the one node value: a non-empty string with no NUL (section 3.12)', () => {
+    expect(typeof DOCS_PRIMARY_NODE).toBe('string');
+    expect(DOCS_PRIMARY_NODE.length).toBeGreaterThan(0);
+    expect(DOCS_PRIMARY_NODE.includes(String.fromCharCode(0))).toBe(false);
+    expect(lines.filter((l) => l === "export const DOCS_PRIMARY_NODE = 'primary';")).toHaveLength(1);
+  });
+});
+
+describe('W3 T1: docsBusyBody, the one docs-busy producer (section 6.3, section 6.4, section 3.7)', () => {
+  it.each([
+    ['read', { ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 2000 }, 2],
+    ['fetch', { ok: false, failure: 'docs-busy', lane: 'fetch', retryAfterMs: 5000 }, 5],
+  ] as const)('the %s lane answers %j, Retry-After %i s, status 503', (lane, want, seconds) => {
+    const name: DocsLaneName = lane;
+    expect(docsBusyBody(name)).toStrictEqual(want);
+    expect(docsRetryAfterSeconds(docsBusyBody(name))).toBe(seconds);
+    expect(DOCS_FAILURE_HTTP[docsBusyBody(name).failure]).toBe(503);
+  });
+
+  it("answers a fresh object each call, so no caller can change another caller's body", () => {
+    expect(docsBusyBody('read')).not.toBe(docsBusyBody('read'));
+  });
+});
+
+describe("W3 T1: docsRetryAfterSeconds is finite and positive or absent (refinement (h), W2's carry)", () => {
+  const busy = (retryAfterMs: number): DocsFailureBody =>
+    ({ ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs });
+
+  it.each([NaN, Infinity, -Infinity, -5000, -1, 0, -0])('docs-busy with retryAfterMs %s sends no header', (ms) => {
+    expect(docsRetryAfterSeconds(busy(ms))).toBeNull();
+  });
+
+  it.each([[0.5, 1], [1, 1], [999, 1], [1000, 1], [1001, 2], [2000, 2], [5000, 5]] as const)(
+    'docs-busy with retryAfterMs %s answers %i s, rounded up', (ms, seconds) => {
+      expect(docsRetryAfterSeconds(busy(ms))).toBe(seconds);
+    });
+
+  it('docs-busy with no retryAfterMs at all sends no header', () => {
+    expect(docsRetryAfterSeconds({ ok: false, failure: 'docs-busy', lane: 'fetch' })).toBeNull();
+  });
+
+  it('caps-unknown is 5 s whatever its body carries', () => {
+    for (const retryAfterMs of [NaN, -1, 0, 9000]) {
+      expect(docsRetryAfterSeconds({ ok: false, failure: 'caps-unknown', retryAfterMs }), String(retryAfterMs)).toBe(5);
+    }
+  });
+
+  it("fetch-too-soon's wait still rides its body only: no header", () => {
+    expect(docsRetryAfterSeconds({ ok: false, failure: 'fetch-too-soon', retryAfterMs: 9000 })).toBeNull();
+  });
+});
+
+describe('W3 T1: docsForeignRequestBody, the 403 for a refused provenance verdict (section 3.7, section 3.8)', () => {
+  type Refused = Exclude<DocsProvenance, { ok: true }>;
+  const ROWS: readonly (readonly [what: string, verdict: Refused, want: DocsFailureBody])[] = [
+    ['navigation', { ok: false, why: 'navigation' }, { ok: false, failure: 'foreign-request', why: 'navigation' }],
+    ['marker', { ok: false, why: 'marker' }, { ok: false, failure: 'foreign-request', why: 'marker' }],
+    ['site, cross-site', { ok: false, why: 'site', site: 'cross-site' },
+      { ok: false, failure: 'foreign-request', why: 'site', site: 'cross-site' }],
+    ['site, an empty value', { ok: false, why: 'site', site: '' },
+      { ok: false, failure: 'foreign-request', why: 'site', site: '' }],
+  ];
+
+  it.each(ROWS)('%s', (_what, verdict, want) => {
+    const body = docsForeignRequestBody(verdict);
+    expect(body).toStrictEqual(want);
+    expect(Object.hasOwn(body, 'site'), 'site rides only a verdict that carries one').toBe(Object.hasOwn(want, 'site'));
+    expect(Object.hasOwn(body, 'verdict'), 'never a verdict key: no login overlay').toBe(false);
+    expect(DOCS_FAILURE_HTTP[body.failure]).toBe(403);
+  });
+
+  it("carries docsProvenance's own refusals: a bare request is marker, a sibling is site", () => {
+    const marker = docsProvenance({});
+    const site = docsProvenance({ 'sec-fetch-site': 'same-site' });
+    if (marker.ok || site.ok) throw new Error('docsProvenance admitted a request with no marker');
+    expect(docsForeignRequestBody(marker)).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
+    expect(docsForeignRequestBody(site))
+      .toStrictEqual({ ok: false, failure: 'foreign-request', why: 'site', site: 'same-site' });
+  });
+});
+
+describe('W3 T1: docsBodyErrorVerdict, a refused request body (refinement (e))', () => {
+  const BODY: DocsBodyError = { kind: 'body', body: { ok: false, failure: 'bad-query', why: 'body' } };
+
+  it.each([
+    'FST_ERR_CTP_INVALID_JSON_BODY', 'FST_ERR_CTP_EMPTY_JSON_BODY', 'FST_ERR_CTP_BODY_TOO_LARGE',
+    'FST_ERR_CTP_INVALID_MEDIA_TYPE', 'FST_ERR_CTP_INVALID_CONTENT_LENGTH',
+  ])('%s is bad-query {why:body}, status 400', (code) => {
+    const v = docsBodyErrorVerdict(code);
+    expect(v).toStrictEqual(BODY);
+    if (v.kind !== 'body') throw new Error('not a body verdict');
+    expect(DOCS_FAILURE_HTTP[v.body.failure]).toBe(400);
+  });
+
+  it.each([
+    ['FST_ERR_BAD_URL'], ['FST_ERR_NOT_FOUND'], ['ERR_X'], [''], ['fst_err_ctp_invalid_json_body'],
+    ['X_FST_ERR_CTP_INVALID_JSON_BODY'], [undefined], [null], [42], [{ code: 'FST_ERR_CTP_BODY_TOO_LARGE' }],
+  ])('%j is a defect: re-thrown to the default handler', (code) => {
+    expect(docsBodyErrorVerdict(code)).toStrictEqual({ kind: 'defect' });
+  });
+
+  it('answers a fresh body each call', () => {
+    const a = docsBodyErrorVerdict('FST_ERR_CTP_BODY_TOO_LARGE');
+    const b = docsBodyErrorVerdict('FST_ERR_CTP_BODY_TOO_LARGE');
+    if (a.kind !== 'body' || b.kind !== 'body') throw new Error('not a body verdict');
+    expect(a.body).not.toBe(b.body);
+  });
+
+  it("a defect's 500 carries DOCS_DEFECT_MESSAGE, fixed text naming no path and no stderr", () => {
+    expect(DOCS_DEFECT_MESSAGE).toBe('docs route defect');
+  });
+});
+
+describe('W3 T1: docsLogDue, at most one refusal line a minute per reason (refinement (o), section 3.8)', () => {
+  it.each([
+    ['never logged, at time 0', undefined, 0, true],
+    ['never logged, later', undefined, 123456, true],
+    ['one ms short of a minute', 0, 59999, false],
+    ['exactly a minute', 0, 60000, true],
+    ['a minute after a later line', 1000, 61000, true],
+    ['one ms short after a later line', 1000, 60999, false],
+    ['the same instant', 5000, 5000, false],
+  ] as const)('%s', (_what, last, now, want) => {
+    expect(docsLogDue(last, now)).toBe(want);
+  });
+});
+
+describe("W3 T1: docsRefreshFetchHalf, the refresh's fetch half (refinement (m), section 3.4)", () => {
+  const fail = (failure: DocsFailure, extra: Partial<DocsFailureBody> = {}): DocsFailureBody =>
+    ({ ok: false, failure, ...extra });
+  const PRE_EXEC: readonly DocsFailure[] = ['caps-unknown', 'unsupported', 'docs-busy'];
+
+  it.each([
+    ['caps-unknown', fail('caps-unknown')],
+    ['unsupported', fail('unsupported')],
+    ['docs-busy', fail('docs-busy', { lane: 'fetch', retryAfterMs: 5000 })],
+  ] as const)('%s ends the request with its own status: refuse, carrying the body itself', (_word, body) => {
+    const half: DocsRefreshHalf = docsRefreshFetchHalf(body);
+    expect(half).toStrictEqual({ kind: 'refuse', body });
+    if (half.kind !== 'refuse') throw new Error('not a refusal');
+    expect(half.body).toBe(body);
+  });
+
+  it.each([
+    ['fetch-too-soon with its wait', fail('fetch-too-soon', { retryAfterMs: 9000 })],
+    ['remote-branch-absent', fail('remote-branch-absent', { branch: 'ws/a' })],
+    ['ref-locked, the lock already gone (null)', fail('ref-locked', { lockAgeMs: null })],
+    ['ref-locked, unmeasured (ABSENT)', fail('ref-locked')],
+    ['link-failed', fail('link-failed', { cause: 'closed' })],
+    ['not-granted', fail('not-granted')],
+    ['malformed-answer', fail('malformed-answer', { why: 'schema' })],
+  ] as const)('%s is a failed half carrying its body verbatim', (_what, body) => {
+    const half = docsRefreshFetchHalf(body);
+    expect(half).toStrictEqual({ kind: 'half', fetch: { state: 'failed', failure: body } });
+    if (half.kind !== 'half' || half.fetch.state !== 'failed') throw new Error('not a failed half');
+    expect(half.fetch.failure).toBe(body);
+  });
+
+  it('absent stays absent and null stays null: ref-locked\'s lockAgeMs as ccd said it', () => {
+    const absent = docsRefreshFetchHalf(fail('ref-locked'));
+    const gone = docsRefreshFetchHalf(fail('ref-locked', { lockAgeMs: null }));
+    if (absent.kind !== 'half' || absent.fetch.state !== 'failed') throw new Error('not a failed half');
+    if (gone.kind !== 'half' || gone.fetch.state !== 'failed') throw new Error('not a failed half');
+    expect(Object.hasOwn(absent.fetch.failure, 'lockAgeMs')).toBe(false);
+    expect(gone.fetch.failure.lockAgeMs).toBeNull();
+  });
+
+  it('every word but the three pre-exec ones is a failed half, never a refusal', () => {
+    for (const word of Object.keys(DOCS_FAILURES) as DocsFailure[]) {
+      expect(docsRefreshFetchHalf(fail(word)).kind, word).toBe(PRE_EXEC.includes(word) ? 'refuse' : 'half');
+    }
+  });
+
+  it('an ok run is a ran half carrying the answer itself', () => {
+    const answer: DocsFetchOk = {
+      v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 12, branch: 'main', trackedRef: DOCS_REF_PREFIXES[1] + 'main',
+      before: null, after: 'a'.repeat(40), moved: 'created', stamp: 'written',
+    };
+    const half = docsRefreshFetchHalf({ ok: true, answer });
+    expect(half).toStrictEqual({ kind: 'half', fetch: { state: 'ran', answer } });
+    if (half.kind !== 'half' || half.fetch.state !== 'ran') throw new Error('not a ran half');
+    expect(half.fetch.answer).toBe(answer);
+  });
+
+  it('DOCS_REFRESH_SKIPPED is the local-ref half, frozen', () => {
+    expect(DOCS_REFRESH_SKIPPED).toStrictEqual({ state: 'skipped', why: 'local-ref' });
+    expect(Object.isFrozen(DOCS_REFRESH_SKIPPED)).toBe(true);
+  });
+});
+
+describe("W3 T1: docsRefreshAnswer, a refresh that ran no exec at all (refinement (m), section 3.4)", () => {
+  const fail = (failure: DocsFailure, extra: Partial<DocsFailureBody> = {}): DocsFailureBody =>
+    ({ ok: false, failure, ...extra });
+  const TREE: DocsTreeResponse = { ok: true, tree: {} as DocsTreeOk, refreshDue: false };
+  const RAN = { state: 'ran', answer: {} as DocsFetchOk } as const;
+  const FAILED = { state: 'failed', failure: fail('fetch-too-soon', { retryAfterMs: 9000 }) } as const;
+  const PRE_EXEC: readonly DocsFailure[] = ['caps-unknown', 'unsupported', 'docs-busy'];
+
+  it.each([
+    ['caps-unknown', fail('caps-unknown')],
+    ['unsupported', fail('unsupported')],
+    ['docs-busy', fail('docs-busy', { lane: 'read', retryAfterMs: 2000 })],
+  ] as const)('a skipped fetch and a %s tree half: no exec ran, so refuse, carrying the body itself', (_word, body) => {
+    const out: DocsRefreshAnswer = docsRefreshAnswer(DOCS_REFRESH_SKIPPED, body);
+    expect(out).toStrictEqual({ kind: 'refuse', body });
+    if (out.kind !== 'refuse') throw new Error('not a refusal');
+    expect(out.body).toBe(body);
+  });
+
+  it.each([
+    ['an ok tree', TREE],
+    ['a tree that failed after its exec (unresolved-ref)', fail('unresolved-ref')],
+    ['not-granted (the agent refused an exec it was sent)', fail('not-granted')],
+  ] as const)('a skipped fetch and %s: send the 200 {ok, fetch: skipped, tree}', (_what, tree) => {
+    expect(docsRefreshAnswer(DOCS_REFRESH_SKIPPED, tree))
+      .toStrictEqual({ kind: 'send', body: { ok: true, fetch: { state: 'skipped', why: 'local-ref' }, tree } });
+  });
+
+  it.each([['a ran fetch', RAN], ['a failed fetch', FAILED]] as const)(
+    '%s made an exec: a pre-exec tree word rides the 200 as the tree half', (_what, fetch) => {
+      for (const word of PRE_EXEC) {
+        const tree = fail(word);
+        expect(docsRefreshAnswer(fetch, tree), word).toStrictEqual({ kind: 'send', body: { ok: true, fetch, tree } });
+      }
+    });
+
+  it('a skipped fetch: every word but the three pre-exec ones rides the 200, never a refusal', () => {
+    for (const word of Object.keys(DOCS_FAILURES) as DocsFailure[]) {
+      expect(docsRefreshAnswer(DOCS_REFRESH_SKIPPED, fail(word)).kind, word)
+        .toBe(PRE_EXEC.includes(word) ? 'refuse' : 'send');
+    }
+  });
+});
+
+describe("W3 T1: docsIndexCacheable, a micro-cache fill only at the flight's own generation (section 6.5)", () => {
+  it.each([
+    ['no refresh since the flight began', 0, 0, true],
+    ['no refresh since, at a later generation', 3, 3, true],
+    ['a refresh settled after the flight began', 0, 1, false],
+    ['three refreshes settled after it began', 2, 5, false],
+  ] as const)('%s', (_what, atStart, now, want) => {
+    expect(docsIndexCacheable(atStart, now)).toBe(want);
+  });
+});
+
+describe('W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half)', () => {
+  const NUL = String.fromCharCode(0);
+  const N = DOCS_PRIMARY_NODE;
+  const OTHER = 'other-node';
+  const BARE_A: DocsRefSpec = { kind: 'bare', name: 'a' };
+  const LOCAL_A: DocsRefSpec = { kind: 'qualified', ref: DOCS_REF_PREFIXES[0] + 'a' };
+  const MAIN: DocsRefSpec = { kind: 'bare', name: 'main' };
+  const REPO = 'r'.repeat(64);
+  const BLOB = 'b'.repeat(40);
+
+  it('every key is its kind tag, the node, then its fields, joined by NUL and nothing else', () => {
+    expect(docsIndexFlightKey('n', 0).split(NUL)).toEqual(['index', 'n', '0']);
+    expect(docsIndexFlightKey('n', 4).split(NUL)).toEqual(['index', 'n', '4']);
+    expect(docsNodeKey('n').split(NUL)).toEqual(['node', 'n']);
+    expect(docsTreeFlightKey('n', 'demo', null, 0).split(NUL)).toEqual(['tree', 'n', 'demo', '', '0']);
+    expect(docsTreeFlightKey('n', 'demo', LOCAL_A, 3).split(NUL))
+      .toEqual(['tree', 'n', 'demo', docsRefText(LOCAL_A), '3']);
+    expect(docsShowFlightKey('n', 'demo', COMMITTED_PIN, 2097152).split(NUL)).toEqual([
+      'show', 'n', 'demo', 'committed', T3_COMMIT, COMMITTED_PIN.servedRef, 'specs', 'a.md', '2097152',
+    ]);
+    expect(docsShowFlightKey('n', 'demo', DRAFT_PIN, 2097152).split(NUL)).toEqual([
+      'show', 'n', 'demo', 'draft', 'ws/a', T3_HEAD, 'plans', 'dir/b.md', T3_FP, '2097152',
+    ]);
+    expect(docsRefreshFlightKey('n', 'demo', null).split(NUL)).toEqual(['refresh', 'n', 'demo', '']);
+    expect(docsRefreshFlightKey('n', 'demo', 'main').split(NUL)).toEqual(['refresh', 'n', 'demo', 'main']);
+    expect(docsProjectKey('n', 'demo').split(NUL)).toEqual(['project', 'n', 'demo']);
+    expect(docsBlobKey('n', REPO, BLOB).split(NUL)).toEqual(['blob', 'n', REPO, BLOB]);
+    expect(docsListingKey('n', 'demo', T3_COMMIT).split(NUL)).toEqual(['listing', 'n', 'demo', T3_COMMIT]);
+    expect(docsDraftSizeKey('n', T3_FP).split(NUL)).toEqual(['fp', 'n', T3_FP]);
+  });
+
+  it.each([
+    ['index', (node: string) => docsIndexFlightKey(node, 0)],
+    ['node', (node: string) => docsNodeKey(node)],
+    ['tree', (node: string) => docsTreeFlightKey(node, 'demo', MAIN, 0)],
+    ['show', (node: string) => docsShowFlightKey(node, 'demo', COMMITTED_PIN, 2097152)],
+    ['refresh', (node: string) => docsRefreshFlightKey(node, 'demo', 'main')],
+    ['project', (node: string) => docsProjectKey(node, 'demo')],
+    ['blob', (node: string) => docsBlobKey(node, REPO, BLOB)],
+    ['listing', (node: string) => docsListingKey(node, 'demo', T3_COMMIT)],
+    ['fp', (node: string) => docsDraftSizeKey(node, T3_FP)],
+  ] as const)('the %s key changes when ONLY its node changes (M3.13: no entry is shared across nodes)', (_k, key) => {
+    expect(key(N)).not.toBe(key(OTHER));
+  });
+
+  it('a tree key tells the default view, a bare ref, a local ref and the generation apart', () => {
+    const keys = [
+      docsTreeFlightKey(N, 'demo', null, 0),
+      docsTreeFlightKey(N, 'demo', MAIN, 0),
+      docsTreeFlightKey(N, 'demo', BARE_A, 0),
+      docsTreeFlightKey(N, 'demo', LOCAL_A, 0),
+      docsTreeFlightKey(N, 'demo', null, 1),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('a generation bump alone makes a new tree flight (section 6.4: a refresh never joins an older tree)', () => {
+    expect(docsTreeFlightKey(N, 'demo', MAIN, 0)).not.toBe(docsTreeFlightKey(N, 'demo', MAIN, 1));
+  });
+
+  it('a node generation bump alone makes a new index flight (section 6.5: a GET after a refresh never joins an older index)', () => {
+    expect(docsIndexFlightKey(N, 0)).not.toBe(docsIndexFlightKey(N, 1));
+    expect(docsNodeKey(N)).not.toBe(docsProjectKey(N, ''));
+    expect(docsNodeKey(N)).not.toBe(docsIndexFlightKey(N, 0));
+  });
+
+  it('a show key tells a committed pin from a draft pin with the same section and path, and N apart', () => {
+    const committed: DocPin = { ...COMMITTED_PIN, section: 'plans', path: 'dir/b.md' };
+    expect(docsShowFlightKey(N, 'demo', committed, 2097152))
+      .not.toBe(docsShowFlightKey(N, 'demo', DRAFT_PIN, 2097152));
+    expect(docsShowFlightKey(N, 'demo', COMMITTED_PIN, 1)).not.toBe(docsShowFlightKey(N, 'demo', COMMITTED_PIN, 2));
+  });
+
+  it('a refresh key tells the default branch from a named one', () => {
+    expect(docsRefreshFlightKey(N, 'demo', null)).not.toBe(docsRefreshFlightKey(N, 'demo', 'main'));
+  });
+
+  it('no field can shift into its neighbour: adjacent fields split differently give different keys', () => {
+    const pairs: readonly (readonly [string, string])[] = [
+      [docsTreeFlightKey(N, 'ab', { kind: 'bare', name: 'c' }, 0),
+        docsTreeFlightKey(N, 'a', { kind: 'bare', name: 'bc' }, 0)],
+      [docsShowFlightKey(N, 'demo', { ...COMMITTED_PIN, path: 'a.md1' }, 2),
+        docsShowFlightKey(N, 'demo', { ...COMMITTED_PIN, path: 'a.md' }, 12)],
+      [docsRefreshFlightKey(N, 'ab', 'c'), docsRefreshFlightKey(N, 'a', 'bc')],
+      [docsProjectKey('n1', 'demo'), docsProjectKey('n', '1demo')],
+      [docsBlobKey(N, 'a', 'bc'), docsBlobKey(N, 'ab', 'c')],
+      [docsListingKey(N, 'ab', 'c'), docsListingKey(N, 'a', 'bc')],
+      [docsDraftSizeKey('na', 'b'), docsDraftSizeKey('n', 'ab')],
+    ];
+    for (const [a, b] of pairs) expect(a).not.toBe(b);
+  });
+
+  it('the kind tag alone tells two kinds over the same fields apart', () => {
+    const same = [
+      docsBlobKey(N, 'demo', 'c'), docsListingKey(N, 'demo', 'c'), docsRefreshFlightKey(N, 'demo', 'c'),
+    ];
+    expect(new Set(same).size).toBe(3);
+    expect(docsProjectKey(N, 'demo')).not.toBe(docsDraftSizeKey(N, 'demo'));
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts )`
+Expected: `Test Files  1 failed (1)`, `Tests  87 failed | 317 passed (404)` (Measured 1). The function rows fail with `TypeError: docsBusyBody is not a function` (likewise `docsForeignRequestBody`, `docsBodyErrorVerdict`, `docsLogDue`, `docsRefreshFetchHalf`, `docsRefreshAnswer`, `docsIndexCacheable` and the nine key builders); the constant rows fail on `undefined`; the line pins on `expected [] to have a length of 1`; the non-positive `docs-busy` rows on `expected NaN to be null` (likewise `Infinity`, `-Infinity`, `-5`, `+0`, `-0`). If the run reports `no tests`, a table calls a function under test at collection time: the block was not pasted exactly.
+
+- [ ] **Step 3: Write the implementation.** Three edits to `server/src/docs/policy.ts`.
+
+(a) Widen the one import statement, in place (lines 11-18 at W2's tip). Find:
+
+```ts
+import {
+  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
+  DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS,
+  DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, isDocsBareRef, isDocsCommit, isDocsFingerprint, isDocsProject,
+  isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef,
+  type DocContentClass, type DocPin, type DocSectionSlug, type DocsFailure, type DocsFailureBody, type DocsRefSpec,
+  type DocsTreeOk,
+} from '../../../shared/docs.js';
+```
+
+Replace with:
+
+```ts
+import {
+  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
+  DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS,
+  DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRefText, isDocsBareRef, isDocsCommit, isDocsFingerprint,
+  isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef,
+  type DocContentClass, type DocPin, type DocSectionSlug, type DocsFailure, type DocsFailureBody, type DocsFetchOk,
+  type DocsRefreshFetch, type DocsRefreshResponse, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
+} from '../../../shared/docs.js';
+```
+
+(b) Harden `docsRetryAfterSeconds`, in place (lines 103-115 at W2's tip). Find:
+
+```ts
+/**
+ * The `Retry-After` header a failure body gets, in whole seconds, or `null`: send NO header (one meaning).
+ * - `caps-unknown`: `DOCS_CAPS_UNKNOWN_RETRY_AFTER_S`.
+ * - `docs-busy`: its body's `retryAfterMs`, rounded UP to a whole second; `null` when the body carries none, so a
+ *   wait is never guessed.
+ * - every other word: `null`. `fetch-too-soon`'s wait rides its body's `retryAfterMs` only (section 2 (i) names no
+ *   header for it), and a `retryAfterMs` on any other word's body changes nothing here.
+ */
+export function docsRetryAfterSeconds(body: DocsFailureBody): number | null {
+  if (body.failure === 'caps-unknown') return DOCS_CAPS_UNKNOWN_RETRY_AFTER_S;
+  if (body.failure === 'docs-busy' && typeof body.retryAfterMs === 'number') return Math.ceil(body.retryAfterMs / 1000);
+  return null;
+}
+```
+
+Replace with:
+
+```ts
+/**
+ * The `Retry-After` header a failure body gets, in whole seconds, or `null`: send NO header (one meaning).
+ * - `caps-unknown`: `DOCS_CAPS_UNKNOWN_RETRY_AFTER_S`.
+ * - `docs-busy`: its body's `retryAfterMs`, rounded UP to a whole second, only when it is finite and above 0; `null`
+ *   otherwise (none, NaN, an infinity, 0 or below), so a wait is never guessed and never sent empty or negative.
+ * - every other word: `null`. `fetch-too-soon`'s wait rides its body's `retryAfterMs` only (section 2 (i) names no
+ *   header for it), and a `retryAfterMs` on any other word's body changes nothing here.
+ */
+export function docsRetryAfterSeconds(body: DocsFailureBody): number | null {
+  if (body.failure === 'caps-unknown') return DOCS_CAPS_UNKNOWN_RETRY_AFTER_S;
+  const ms = body.retryAfterMs;
+  if (body.failure === 'docs-busy' && ms !== undefined && Number.isFinite(ms) && ms > 0) return Math.ceil(ms / 1000);
+  return null;
+}
+```
+
+(c) Append the block below at the END of the file: find the end with `tail -n 3 server/src/docs/policy.ts` (it prints `docsSendPolicy`'s last three lines: `  if (statusCode !== 200 || cacheControl === undefined) headers['cache-control'] = DOCS_CACHE_NO_STORE;`, `  return { kind: 'pass', headers };` and `}`), leave one blank line after that final `}`, then paste the block exactly.
+
+```ts
+// ===== W3: the fetch lane, the caches and the refusal log (section 6.4, section 6.5; refinement (b)) =====
+//
+// The lanes and caches themselves (`lane.ts`, `cache.ts`) are W3's L4; they apply these numbers and decide nothing.
+// Each numeric constant is its OWN integer literal, never an alias of a neighbour that holds the same number (W1's
+// rule for the caps, W2's for the read lane), with one stated exception: `DOCS_LISTING_PROVENANCE_MS` IS
+// `DOCS_STALE_MS` by the spec's definition (section 6.5), so it is derived, never typed twice.
+
+/** The one fleet node this build has (section 3.12): every docs key, flight and cache entry carries it, so a second
+ *  node arrives as a second value, never as a re-key. Not a wire field: the API has no `node` key. */
+export const DOCS_PRIMARY_NODE = 'primary';
+/** The read lane's `docs-busy` wait (section 6.3: 503, `Retry-After: 2`). */
+export const DOCS_READ_BUSY_RETRY_MS = 2000;
+/** The most fetches running at once across every (node, project) key (section 6.4). */
+export const DOCS_FETCH_GLOBAL = 2;
+/** The most accepted fetch jobs not yet started, behind their key or the global bound (section 6.4; refinement
+ *  (n)); the next is `docs-busy {lane:'fetch'}`. */
+export const DOCS_FETCH_QUEUE = 8;
+/** The longest an accepted fetch job waits to start, from acceptance (section 6.4). */
+export const DOCS_FETCH_MAX_WAIT_MS = 20000;
+/** The fetch lane's `docs-busy` wait (section 6.4: 503, `Retry-After: 5`). */
+export const DOCS_FETCH_BUSY_RETRY_MS = 5000;
+/** The committed blob cache's budget: 64 MiB of stored bytes (section 6.5). */
+export const DOCS_CACHE_BYTES = 67108864;
+/** The most FILE entries the listing map holds across every commit it keeps (section 6.5). */
+export const DOCS_LISTING_MAP_ENTRIES = 50000;
+/** How recently a listing's `servedRef` must have been recorded for a cache hit to vouch for it (section 6.5):
+ *  the stale threshold itself, derived. */
+export const DOCS_LISTING_PROVENANCE_MS = DOCS_STALE_MS;
+/** The per-node index micro-cache's lifetime (section 6.5); any refresh drops it. */
+export const DOCS_INDEX_CACHE_MS = 30000;
+/** The most entries the draft `fp -> size` map holds (section 6.5, section 3.12). */
+export const DOCS_DRAFT_SIZE_ENTRIES = 10000;
+/** The shortest gap between two log lines for the same refusal reason (section 3.8: "at most once a minute"). */
+export const DOCS_REFUSAL_LOG_MS = 60000;
+
+// ===== The bodies the HTTP layer sends before any exec (section 3.7, section 3.8; refinements (e), (h), (o)) =====
+
+/** A lane's name, as `docs-busy`'s `lane` field spells it: derived from L0's failure context, never re-listed. */
+export type DocsLaneName = NonNullable<DocsFailureBody['lane']>;
+
+/**
+ * `docs-busy` for a lane (section 6.3, section 6.4): `{lane, retryAfterMs}`, the wait being that lane's constant.
+ * The only producer of a `docs-busy` body, so `docsRetryAfterSeconds` always meets one of the two constants. A
+ * fresh object every call.
+ */
+export function docsBusyBody(lane: DocsLaneName): DocsFailureBody {
+  return {
+    ok: false, failure: 'docs-busy', lane,
+    retryAfterMs: lane === 'read' ? DOCS_READ_BUSY_RETRY_MS : DOCS_FETCH_BUSY_RETRY_MS,
+  };
+}
+
+/**
+ * The 403 body for a refused provenance verdict (section 3.7, section 3.8): `{why}`, plus `site` only when the
+ * verdict carries one (a `site` refusal). Never a `verdict` key, so it can never raise the PWA's login overlay.
+ */
+export function docsForeignRequestBody(v: Exclude<DocsProvenance, { ok: true }>): DocsFailureBody {
+  return v.site === undefined
+    ? { ok: false, failure: 'foreign-request', why: v.why }
+    : { ok: false, failure: 'foreign-request', why: v.why, site: v.site };
+}
+
+/** The error-code prefix of every request-body refusal the HTTP framework raises before a handler runs (invalid
+ *  or empty JSON, a body over its limit, an unparsed media type, a bad content length). */
+const BODY_ERROR_CODE_PREFIX = 'FST_ERR_CTP_';
+
+/** What the docs plugin's error handler does with an error: `body`, answer this `bad-query` body; `defect`,
+ *  re-throw to the framework's default handler as a fresh error carrying `DOCS_DEFECT_MESSAGE` (a defect stays a
+ *  default 500, and its body never carries the thrower's own message). */
+export type DocsBodyError = { kind: 'body'; body: DocsFailureBody } | { kind: 'defect' };
+
+/**
+ * Refinement (e): an error whose `code` is a string starting `FST_ERR_CTP_` is a refused request body, answered as
+ * `bad-query {why:'body'}` (status `DOCS_FAILURE_HTTP['bad-query']`); any other code, a missing one or a non-string
+ * one is a defect. Takes the code as `unknown` because an error's `code` is whatever the thrower set.
+ */
+export function docsBodyErrorVerdict(code: unknown): DocsBodyError {
+  return typeof code === 'string' && code.startsWith(BODY_ERROR_CODE_PREFIX)
+    ? { kind: 'body', body: badQuery('body') }
+    : { kind: 'defect' };
+}
+
+/** The message of the 500 a docs-route defect answers (refinement (e)): the plugin's error handler re-throws every
+ *  defect to the framework's default handler as a fresh error carrying this text, the original kept as its
+ *  `cause`, so the default body (`{statusCode, error, message}`) never carries a thrower's own message: no host
+ *  path, no stderr. */
+export const DOCS_DEFECT_MESSAGE = 'docs route defect';
+
+/**
+ * Whether a refusal log line is due (refinement (o)): `lastMs` is when this reason last logged, `undefined` when it
+ * never has (one meaning); due when it never has, or when at least `DOCS_REFUSAL_LOG_MS` has passed. The clock is
+ * the caller's (`nowMs`), so nothing here reads time.
+ */
+export function docsLogDue(lastMs: number | undefined, nowMs: number): boolean {
+  return lastMs === undefined || nowMs - lastMs >= DOCS_REFUSAL_LOG_MS;
+}
+
+// ===== The refresh's fetch half (section 3.4's refresh flow; refinement (m)) =====
+
+/** The words a refresh half can only meet BEFORE an exec: the adapter's gate (`caps-unknown`, `unsupported`) and
+ *  a lane's own refusal (`docs-busy`). The same gate would refuse the tree, so the request ends there. */
+const REFRESH_PRE_EXEC: ReadonlySet<DocsFailure> = new Set<DocsFailure>(['caps-unknown', 'unsupported', 'docs-busy']);
+
+/** The refresh's verdict on its fetch half: `refuse`, end the request with this body's own status (section 3.4: "a
+ *  refusal before any exec returns that word's own status"); `half`, carry this fetch half and run the tree. */
+export type DocsRefreshHalf = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'half'; fetch: DocsRefreshFetch };
+
+/**
+ * The fetch half of a refresh (refinement (m)), from the fetch port's answer or the fetch lane's refusal:
+ * - a pre-exec word (`REFRESH_PRE_EXEC`): `refuse`, carrying the body itself;
+ * - any other failure: a `failed` half carrying the body VERBATIM (the same object: `fetch-too-soon`'s
+ *   `retryAfterMs` rides it, and `ref-locked`'s `lockAgeMs` stays a number, `null` or absent as ccd said);
+ * - ok: a `ran` half carrying the answer.
+ * The skipped half (a local ref, no exec) is `DOCS_REFRESH_SKIPPED`; it never reaches this function.
+ */
+export function docsRefreshFetchHalf(run: { ok: true; answer: DocsFetchOk } | DocsFailureBody): DocsRefreshHalf {
+  if (run.ok) return { kind: 'half', fetch: { state: 'ran', answer: run.answer } };
+  if (REFRESH_PRE_EXEC.has(run.failure)) return { kind: 'refuse', body: run };
+  return { kind: 'half', fetch: { state: 'failed', failure: run } };
+}
+
+/** The fetch half of a refresh whose ref is local (`fetchBranchFor`'s `skipped`): no exec ran. Frozen, so no
+ *  caller can change every other caller's half. */
+export const DOCS_REFRESH_SKIPPED: Readonly<DocsRefreshFetch> = Object.freeze({ state: 'skipped', why: 'local-ref' });
+
+/** The refresh's answer once both halves are known: `refuse`, end the request with this body's own status and
+ *  `Retry-After`; `send`, the 200 `{ok: true, fetch, tree}`. */
+export type DocsRefreshAnswer = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'send'; body: DocsRefreshResponse };
+
+/**
+ * The refresh's answer (refinement (m); section 3.4: "a refusal before any exec returns that word's own status"). A
+ * SKIPPED fetch half (a local ref) ran no exec, so when the tree half was refused before any exec too (a
+ * `REFRESH_PRE_EXEC` word: the adapter's gate, or the read lane's own `docs-busy`) the request ran none at all:
+ * `refuse`, carrying the tree's body itself. Every other pair ran an exec or answered: `send`, the tree half a body
+ * in the 200 (a ran or failed fetch made an exec, so even a pre-exec tree word rides as the tree half).
+ */
+export function docsRefreshAnswer(fetch: DocsRefreshFetch, tree: DocsTreeResponse | DocsFailureBody):
+    DocsRefreshAnswer {
+  if (fetch.state === 'skipped' && !tree.ok && REFRESH_PRE_EXEC.has(tree.failure)) {
+    return { kind: 'refuse', body: tree };
+  }
+  return { kind: 'send', body: { ok: true, fetch, tree } };
+}
+
+// ===== Node-first keys (section 3.12, section 6.4, section 6.5; refinement (p)) =====
+//
+// Every key is its kind tag, then the node, then its fields, joined by NUL. No field can hold a NUL (the project,
+// ref, section and path grammars and the hex forms exclude it), so a key names one tuple: one flight map can hold
+// every kind, and no two tuples share a key. An absent field (the default view's ref, the default branch) is the
+// empty field, which no parsed value is.
+
+/** The field separator: NUL, written as an escape so the source holds no raw control character. */
+const KEY_SEP = '\u0000';
+const KEY_INDEX = 'index';
+const KEY_TREE = 'tree';
+const KEY_SHOW = 'show';
+const KEY_REFRESH = 'refresh';
+const KEY_PROJECT = 'project';
+const KEY_BLOB = 'blob';
+const KEY_LISTING = 'listing';
+const KEY_FP = 'fp';
+const KEY_NODE = 'node';
+
+function docsKey(kind: string, fields: readonly string[]): string {
+  return [kind, ...fields].join(KEY_SEP);
+}
+
+/** The index flight: one per node (`docs-index --all` names no project) and per node generation (`docsNodeKey`'s
+ *  counter, bumped when a refresh's fetch half settles), so a GET after a refresh never joins an index begun
+ *  before its fetch, as a refresh's tree never joins an older tree. */
+export function docsIndexFlightKey(node: string, gen: number): string {
+  return docsKey(KEY_INDEX, [node, String(gen)]);
+}
+
+/** A tree flight (section 6.4): the requested ref's text, the empty field for the default view (`null`), and the
+ *  project's generation, so a refresh's tree never joins a flight that started before its fetch. */
+export function docsTreeFlightKey(node: string, project: string, ref: DocsRefSpec | null, gen: number): string {
+  return docsKey(KEY_TREE, [node, project, ref === null ? '' : docsRefText(ref), String(gen)]);
+}
+
+/** A show flight (section 6.4): the pin's kind and every pin field in `docsApi`'s order, then `--max-bytes`. */
+export function docsShowFlightKey(node: string, project: string, pin: DocPin, maxBytes: number): string {
+  const fields = pin.kind === 'committed'
+    ? [pin.kind, pin.commit, pin.servedRef, pin.section, pin.path]
+    : [pin.kind, pin.branch, pin.head, pin.section, pin.path, pin.fp];
+  return docsKey(KEY_SHOW, [node, project, ...fields, String(maxBytes)]);
+}
+
+/** A refresh flight (section 6.4): the fetched branch, the empty field for the origin default (`null`). */
+export function docsRefreshFlightKey(node: string, project: string, branch: string | null): string {
+  return docsKey(KEY_REFRESH, [node, project, branch ?? '']);
+}
+
+/** One project on one node: the generation counter's key and the fetch lane's queue key. */
+export function docsProjectKey(node: string, project: string): string {
+  return docsKey(KEY_PROJECT, [node, project]);
+}
+
+/** A committed blob in the blob cache (section 6.5): node, repository key, blob. */
+export function docsBlobKey(node: string, repoKey: string, blob: string): string {
+  return docsKey(KEY_BLOB, [node, repoKey, blob]);
+}
+
+/** One commit's listing in the listing map (section 6.5). */
+export function docsListingKey(node: string, project: string, commit: string): string {
+  return docsKey(KEY_LISTING, [node, project, commit]);
+}
+
+/** A draft's size in the `fp -> size` map (section 3.12, section 6.5). */
+export function docsDraftSizeKey(node: string, fp: string): string {
+  return docsKey(KEY_FP, [node, fp]);
+}
+
+/** One node: the generation counter's key for that node's index (section 6.5: the index is dropped by any refresh;
+ *  the counter is how an index answer begun before a refresh's fetch is kept out of the micro-cache). */
+export function docsNodeKey(node: string): string {
+  return docsKey(KEY_NODE, [node]);
+}
+
+/** Whether an ok index answer may fill the node's micro-cache (section 6.5: the index is "dropped by any refresh";
+ *  refinement (p)): only while the node's generation (`docsNodeKey`'s counter) is still `genAtStart`, the one its
+ *  flight began at. An index begun before a refresh's fetch settled is served to the requests that joined it, and
+ *  never cached past that refresh. */
+export function docsIndexCacheable(genAtStart: number, genNow: number): boolean {
+  return genAtStart === genNow;
+}
+```
+
+Then check the separator reached the file as an escape, not as a NUL (a tool write can decode a backslash-u escape into the character itself):
+
+Run: `grep -c "^const KEY_SEP = '\\\\u0000';\$" server/src/docs/policy.ts && ! grep -qP '\x00' server/src/docs/policy.ts && echo ESCAPE-OK`
+Expected: `1`, then `ESCAPE-OK`. If the count is `0` or `ESCAPE-OK` does not print, rewrite that one line so it holds the six characters backslash, `u`, `0`, `0`, `0`, `0` between the quotes (`od -c` on the line shows `\   u   0   0   0   0`).
+
+- [ ] **Step 4: Run them to verify they pass.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts )`
+Expected: `Tests  404 passed (404)` (W2's 307; this task's 97). The purity describe stays green over the grown file: the only import specifier is still `../../../shared/docs.js`, and the new code reads no clock, names no `Buffer`, `console`, `reply` or `fastify`.
+
+- [ ] **Step 5: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` is a known load flake, so a red there is re-run alone before it is called broken.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The first compiles `policy.ts` under the server's build flags (the narrowed `ms`, the `Readonly<DocsRefreshFetch>` freeze); the second compiles the new cases (the `as const` tables, the `Refused` rows, the `DocsFetchOk` fixture).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-budget.test.ts test/docs-source.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  142 passed (142)`: W2's budget inequalities and the adapter, which imports `policy.ts`, are unchanged.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  472 passed (472)` (Measured 3): no name added here has a second home, and the docs ring guard still holds `policy.ts` to L1.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/capsupported.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  77 passed (77)` (topology-clean 55, capsupported 22). `topology-clean` needs `origin/main` (or `CCRC_HISTORY_BASE=<base sha>`; Measured 3); this task adds only placeholder names (`demo`, `ws/a`, `other-node`) and spells no cap token.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Measured 3); Step 0 installs real modules.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add server/src/docs/policy.ts server/test/docs-policy.test.ts
+git commit -m "server: docs L1 for the routes, part 1 (docs W3)" \
+  -m "The fetch-lane, cache, index and log constants (each its own literal; DOCS_LISTING_PROVENANCE_MS derived from DOCS_STALE_MS) and DOCS_PRIMARY_NODE; docsBusyBody, the one docs-busy producer; docsRetryAfterSeconds hardened (a docs-busy wait that is not finite and positive sends no header, W2's carry); docsForeignRequestBody (no verdict, site only when carried); docsBodyErrorVerdict (FST_ERR_CTP_ codes are bad-query why:body, anything else a defect); docsLogDue; docsRefreshFetchHalf (the three pre-exec words end the request, every other failure is a failed half carried by identity) and DOCS_REFRESH_SKIPPED; docsRefreshAnswer (a skipped fetch whose tree half is a pre-exec word ran no exec at all, so it refuses with that word); DOCS_DEFECT_MESSAGE (a defect's 500 carries fixed text); docsIndexCacheable (an index fills the micro-cache only at its flight's generation); and the nine node-first keys, kind tag then node then fields, joined by NUL (the index flight key carries the node's generation, docsNodeKey's counter)." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state):
+
+```json
+[
+ {
+  "id": "W3-T1-M1",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "export const DOCS_READ_BUSY_RETRY_MS = 2000;",
+  "new": "export const DOCS_READ_BUSY_RETRY_MS = 3000;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 3 failed | 401 passed (404) — each has the value the spec gives it; each numeric constant is its own integer literal, on exactly one line; the read lane answers {\"ok\":false,\"failure\":\"docs-busy\",\"lane\":\"read\",\"retryAfterMs\":2000}, Retry-After 2 s, status 503"
+ },
+ {
+  "id": "W3-T1-M2",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "    retryAfterMs: lane === 'read' ? DOCS_READ_BUSY_RETRY_MS : DOCS_FETCH_BUSY_RETRY_MS,",
+  "new": "    retryAfterMs: lane === 'read' ? DOCS_FETCH_BUSY_RETRY_MS : DOCS_READ_BUSY_RETRY_MS,",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — the fetch lane answers {\"ok\":false,\"failure\":\"docs-busy\",\"lane\":\"fetch\",\"retryAfterMs\":5000}, Retry-After 5 s, status 503; the read lane answers {\"ok\":false,\"failure\":\"docs-busy\",\"lane\":\"read\",\"retryAfterMs\":2000}, Retry-After 2 s, status 503"
+ },
+ {
+  "id": "W3-T1-M3",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "ms !== undefined && Number.isFinite(ms) && ms > 0)",
+  "new": "ms !== undefined && typeof ms === 'number')",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 7 failed | 397 passed (404) — docs-busy with retryAfterMs -0 sends no header; docs-busy with retryAfterMs -1 sends no header; docs-busy with retryAfterMs -5000 sends no header; docs-busy with retryAfterMs -Infinity sends no header; docs-busy with retryAfterMs 0 sends no header; docs-busy with retryAfterMs Infinity sends no header; docs-busy with retryAfterMs NaN sends no header"
+ },
+ {
+  "id": "W3-T1-M4",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "ms !== undefined && Number.isFinite(ms) && ms > 0)",
+  "new": "ms !== undefined && Number.isFinite(ms))",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 4 failed | 400 passed (404) — docs-busy with retryAfterMs -0 sends no header; docs-busy with retryAfterMs -1 sends no header; docs-busy with retryAfterMs -5000 sends no header; docs-busy with retryAfterMs 0 sends no header"
+ },
+ {
+  "id": "W3-T1-M5",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return v.site === undefined\n    ? { ok: false, failure: 'foreign-request', why: v.why }\n    : { ok: false, failure: 'foreign-request', why: v.why, site: v.site };\n",
+  "new": "  return { ok: false, failure: 'foreign-request', why: v.why, site: v.site };\n",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 3 failed | 401 passed (404) — carries docsProvenance's own refusals: a bare request is marker, a sibling is site; marker; navigation"
+ },
+ {
+  "id": "W3-T1-M6",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "const BODY_ERROR_CODE_PREFIX = 'FST_ERR_CTP_';",
+  "new": "const BODY_ERROR_CODE_PREFIX = 'FST_ERR_';",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — \"FST_ERR_BAD_URL\" is a defect: re-thrown to the default handler; \"FST_ERR_NOT_FOUND\" is a defect: re-thrown to the default handler"
+ },
+ {
+  "id": "W3-T1-M7",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "nowMs - lastMs >= DOCS_REFUSAL_LOG_MS",
+  "new": "nowMs - lastMs > DOCS_REFUSAL_LOG_MS",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — a minute after a later line; exactly a minute"
+ },
+ {
+  "id": "W3-T1-M8",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "new Set<DocsFailure>(['caps-unknown', 'unsupported', 'docs-busy']);",
+  "new": "new Set<DocsFailure>(['caps-unknown', 'unsupported']);",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 4 failed | 400 passed (404) — a skipped fetch and a docs-busy tree half: no exec ran, so refuse, carrying the body itself; a skipped fetch: every word but the three pre-exec ones rides the 200, never a refusal; docs-busy ends the request with its own status: refuse, carrying the body itself; every word but the three pre-exec ones is a failed half, never a refusal"
+ },
+ {
+  "id": "W3-T1-M9",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return { kind: 'half', fetch: { state: 'failed', failure: run } };",
+  "new": "  return { kind: 'half', fetch: { state: 'failed', failure: { ...run } } };",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 7 failed | 397 passed (404) — fetch-too-soon with its wait is a failed half carrying its body verbatim; link-failed is a failed half carrying its body verbatim; malformed-answer is a failed half carrying its body verbatim; not-granted is a failed half carrying its body verbatim; ref-locked, the lock already gone (null) is a failed half carrying its body verbatim; ref-locked, unmeasured (ABSENT) is a failed half carrying its body verbatim; remote-branch-absent is a failed half carrying its body verbatim"
+ },
+ {
+  "id": "W3-T1-M10",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "ref === null ? '' : docsRefText(ref), String(gen)]",
+  "new": "ref === null ? '' : docsRefText(ref)]",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 3 failed | 401 passed (404) — a generation bump alone makes a new tree flight (section 6.4: a refresh never joins an older tree); a tree key tells the default view, a bare ref, a local ref and the generation apart; every key is its kind tag, the node, then its fields, joined by NUL and nothing else"
+ },
+ {
+  "id": "W3-T1-M11",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "docsKey(KEY_BLOB, [node, repoKey, blob])",
+  "new": "docsKey(KEY_BLOB, [repoKey, blob])",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — every key is its kind tag, the node, then its fields, joined by NUL and nothing else; the blob key changes when ONLY its node changes (M3.13: no entry is shared across nodes)"
+ },
+ {
+  "id": "W3-T1-M12",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "[node, project, ...fields, String(maxBytes)]",
+  "new": "[node, project, ...fields]",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — a show key tells a committed pin from a draft pin with the same section and path, and N apart; every key is its kind tag, the node, then its fields, joined by NUL and nothing else"
+ },
+ {
+  "id": "W3-T1-M13",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "const KEY_SEP = '\\u0000';",
+  "new": "const KEY_SEP = '';",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — every key is its kind tag, the node, then its fields, joined by NUL and nothing else; no field can shift into its neighbour: adjacent fields split differently give different keys"
+ },
+ {
+  "id": "W3-T1-M14",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "export const DOCS_LISTING_PROVENANCE_MS = DOCS_STALE_MS;",
+  "new": "export const DOCS_LISTING_PROVENANCE_MS = 600000;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 403 passed (404) — DOCS_LISTING_PROVENANCE_MS is DOCS_STALE_MS by definition (section 6.5): derived, never a literal of its own"
+ },
+ {
+  "id": "W3-T1-M15",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "Object.freeze({ state: 'skipped', why: 'local-ref' });",
+  "new": "{ state: 'skipped', why: 'local-ref' };",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 403 passed (404) — DOCS_REFRESH_SKIPPED is the local-ref half, frozen"
+ },
+ {
+  "id": "W3-T1-M16",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "typeof code === 'string' && code.startsWith(BODY_ERROR_CODE_PREFIX)",
+  "new": "typeof code === 'string' && code.includes(BODY_ERROR_CODE_PREFIX)",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 403 passed (404) — \"X_FST_ERR_CTP_INVALID_JSON_BODY\" is a defect: re-thrown to the default handler"
+ },
+ {
+  "id": "W3-T1-M17",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return lastMs === undefined || nowMs - lastMs >= DOCS_REFUSAL_LOG_MS;",
+  "new": "  return nowMs - (lastMs as number) >= DOCS_REFUSAL_LOG_MS;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — never logged, at time 0; never logged, later"
+ },
+ {
+  "id": "W3-T1-M18",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "ref === null ? '' : docsRefText(ref), String(gen)]",
+  "new": "ref === null ? 'main' : docsRefText(ref), String(gen)]",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — a tree key tells the default view, a bare ref, a local ref and the generation apart; every key is its kind tag, the node, then its fields, joined by NUL and nothing else"
+ },
+ {
+  "id": "W3-T1-M19",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "docsKey(KEY_REFRESH, [node, project, branch ?? ''])",
+  "new": "docsKey(KEY_REFRESH, [node, project, branch ?? 'main'])",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — a refresh key tells the default branch from a named one; every key is its kind tag, the node, then its fields, joined by NUL and nothing else"
+ },
+ {
+  "id": "W3-T1-M20",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (REFRESH_PRE_EXEC.has(run.failure)) return { kind: 'refuse', body: run };",
+  "new": "  if (REFRESH_PRE_EXEC.has(run.failure)) return { kind: 'refuse', body: { ...run } };",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 3 failed | 401 passed (404) — caps-unknown ends the request with its own status: refuse, carrying the body itself; docs-busy ends the request with its own status: refuse, carrying the body itself; unsupported ends the request with its own status: refuse, carrying the body itself"
+ },
+ {
+  "id": "W3-T1-M21",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return docsKey(KEY_INDEX, [node, String(gen)]);",
+  "new": "  return docsKey(KEY_INDEX, [node]);",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — a node generation bump alone makes a new index flight (section 6.5: a GET after a refresh never joins an older index); every key is its kind tag, the node, then its fields, joined by NUL and nothing else"
+ },
+ {
+  "id": "W3-T1-M22",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return docsKey(KEY_NODE, [node]);",
+  "new": "  return docsKey(KEY_NODE, []);",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — every key is its kind tag, the node, then its fields, joined by NUL and nothing else; the node key changes when ONLY its node changes (M3.13: no entry is shared across nodes)"
+ },
+ {
+  "id": "W3-T1-M23",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (fetch.state === 'skipped' && !tree.ok && REFRESH_PRE_EXEC.has(tree.failure)) {",
+  "new": "  if (!tree.ok && REFRESH_PRE_EXEC.has(tree.failure)) {",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — a failed fetch made an exec: a pre-exec tree word rides the 200 as the tree half; a ran fetch made an exec: a pre-exec tree word rides the 200 as the tree half"
+ },
+ {
+  "id": "W3-T1-M24",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (fetch.state === 'skipped' && !tree.ok && REFRESH_PRE_EXEC.has(tree.failure)) {",
+  "new": "  if (fetch.state === 'skipped' && !tree.ok) {",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 3 failed | 401 passed (404) — a skipped fetch and a tree that failed after its exec (unresolved-ref): send the 200 {ok, fetch: skipped, tree}; a skipped fetch and not-granted (the agent refused an exec it was sent): send the 200 {ok, fetch: skipped, tree}; a skipped fetch: every word but the three pre-exec ones rides the 200, never a refusal"
+ },
+ {
+  "id": "W3-T1-M25",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return genAtStart === genNow;",
+  "new": "  return genAtStart <= genNow;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 402 passed (404) — a refresh settled after the flight began; three refreshes settled after it began"
+ }
+]
+```
+
+### Task 2: L1 policy for the routes, part 2: the ok-answer shape guard, the show-bytes bound, the raster check and file representation, the known size and the cache verdicts
+
+**Model routing:** `sonnet`, effort `high` — untrusted input after the adapter. The traps: the depth guard is an ITERATIVE walk over an explicit stack (a recursive guard would itself overflow on the input it exists to refuse); bytes stay `Uint8Array` and every size is `byteLength` (the purity scan refuses `Buffer` in code); and the purity scan's import-specifier regex (`\bfrom\s*(['"])`) reads code text, so no code line in `policy.ts` may put a quote right after the word `from` (an indexed type such as `DocsFileResponse['from']` reds it; the parameter is spelled `'ccd' | 'cache'`).
+
+**Spec rows:** W2's review carries (refinement (f): ok tree, index and fetch answers are only envelope-checked, so a malformed tree makes `refreshDue` throw and a ~500 000-deep unknown key inside the 1 MiB bound makes `JSON.stringify` throw `RangeError` at reply serialisation; refinement (g): decoded show bytes are never compared to the server's bound; and the review's note that check 8 verifies the decoded bytes, not the answer it hands back, so the JSON reply carries the bytes: Decision 9); section 3.6 (the representation is a function of `contentClass(path)` alone) and section 5.2 steps 2, 5 and 6 (`t = DOCS_RASTER_EXT[ext]`, `rasterVerdict` wrapping `sniffRaster`, 422 `raster-mismatch {declared, size}` with no bytes, `cacheControlFor`, JSON for every other class); section 6.2's `knownSize` from server facts only; section 6.5's committed hit path (refinement (l): eligibility, fill, and the hit's synthesised `show`); M5.2's L1 half. The L4 code that applies these is Tasks 5-7 (`cache.ts` stores `DocsListedFile`; the read routes apply `docsAnswerShape` before `refreshDue`, a cache or the reply, `docsShowBound` and `docsFileReply` after every ok show, and the cache verdicts on the committed path); M5.1/M5.2's route halves are Task 6's.
+
+**Files:**
+- Modify: `server/src/docs/policy.ts` — two edits, each located by content: (a) its one import statement (lines 11-18 at Task 1's state, the block directly under the header comment), widened in place, same specifier; (b) an append at the END of the file, after `docsIndexCacheable`'s closing `}` (line 759 at Task 1's state).
+- Modify: `server/test/docs-policy.test.ts` — an append at the END of the file only (after Task 1's node-first-keys describe's closing `});`, line 1184 at Task 1's state). Its imports go WITH its describes, for W2 Task 3's reason: W2's row W2-T2-M14 cites `docs-policy.test.ts(242,7)`, so no line above the end may move.
+- Test: `server/test/docs-policy.test.ts`; guards `server/test/docs-shared.test.ts`, `server/test/docs-source.test.ts`, `server/test/docs-budget.test.ts`, `server/test/single-definition.test.ts`, `server/test/topology-clean.test.ts`, `server/test/capsupported.test.ts`, `server/test/typecheck-tests.test.ts`.
+
+Every Find block below is quoted from the file as Task 1 left it and is unique in it; line numbers are hints. If a Find block is absent or not unique, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes, from `shared/docs.ts` (W1; imported, never amended): `contentClass(path: string): DocContentClass`; `DOCS_RASTER_TYPES` (each type's `mime` and `magic`); `DOCS_RASTER_EXT: Record<'png' | 'jpg' | 'jpeg' | 'gif' | 'webp', RasterType>`; `sniffRaster(declared: RasterType, bytes: Uint8Array): 'match' | 'mismatch'`; `isDocsCommit`, `isDocsFingerprint`, `isDocsSection` (already imported); types `DocsVerb`, `DocsEntry`, `DocsShowOk`, `DocsFileResponse`, `RasterType`, `RasterMime`, `DocPin`, `DocsFailureBody`.
+- Consumes, from `server/src/docs/policy.ts`: W2's `interface DocsJob { raw: number; wire: number }`, `cacheControlFor(pin: DocPin, cls: DocContentClass): string`, `docsShowPlan(path, knownSize)` (test only), `refreshDue` (test only), `DOCS_REF_PREFIXES` (test only), the module-private `isText(v)` and `own(record, key)`; Task 1's `DOCS_LISTING_PROVENANCE_MS` and the module-private `KEY_SEP`. In the test file: W2's module-scope `T4_POLICY_SRC` and the earlier blocks' imports `DocsFailureBody`, `DocsTreeOk`, `DocPin`, `DocsJob`, `DOCS_REF_PREFIXES`, `refreshDue`, `docsShowPlan`, `DOCS_CACHE_IMMUTABLE`, `DOCS_CACHE_NO_STORE`, reused, never redeclared or re-imported.
+- Produces, all in `server/src/docs/policy.ts`:
+  - `export const DOCS_ANSWER_MAX_DEPTH = 16;` — its own literal, pinned by its exact line; the answer itself is depth 0.
+  - `export function docsAnswerShape(verb: DocsVerb, answer: unknown): { ok: true } | DocsFailureBody` — in order, the first fault winning, each `{ok:false, failure:'malformed-answer', why:'schema'}`: (1) the answer is a plain object; (2) the iterative depth walk (no container deeper than 16; every verb); (3) `docs-tree`: `repo.key` and `ref.served` are key text (non-empty, no NUL), `ref.commit` passes `isDocsCommit`, `ref.requested` is `null` or text, `freshness.remote` is `'origin'` or `null`, `freshness.stamp` is `null` or has a finite `attemptAgeMs` and a text `lastOutcome`, `entries` is an array whose every row has an L0 section, a key-text `path`, a `committed` slot (`null`, or a `DocsEntry` committed kind, an `isDocsCommit` blob and a byte count or `null` size) and a `draft` slot (`null`, or an `isDocsFingerprint` or `null` fp and a byte count or `null` size); (4) `docs-index`: `projects` is an array of plain objects. `docs-show` and `docs-fetch` stop after (2).
+  - `export function docsShowBound(job: DocsJob, bytes: Uint8Array): { ok: true } | DocsFailureBody` — `bytes.byteLength > job.raw` gives `{ok:false, failure:'malformed-answer', why:'oversize'}`.
+  - `export function docsRasterType(path: string): RasterType | null` — `null` means only "`contentClass(path)` is not `raster`"; otherwise the final component's extension, lowered ASCII-only, looked up in `DOCS_RASTER_EXT`.
+  - `export function rasterVerdict(declared: RasterType, bytes: Uint8Array): 'match' | 'mismatch'` — `sniffRaster(declared, bytes)`.
+  - `export type DocsFileReply = { kind: 'json'; body: DocsFileResponse } | { kind: 'bytes'; mime: RasterMime; cacheControl: string; bytes: Uint8Array } | { kind: 'refuse'; body: DocsFailureBody };`
+  - `export function docsFileReply(pin: DocPin, answer: DocsShowOk, bytes: Uint8Array, from: 'ccd' | 'cache'): DocsFileReply` — by `contentClass(pin.path)` alone: not raster gives `json` `{ok:true, contentClass, show, from}` whose `show` is a NEW object: the answer's facts with its one content field rebuilt from the verified `bytes` (`servedShow`: `utf8` decodes the bytes, `base64` keeps the `b64` check 8 proved canonical; the other content field dropped; Decision 9); a raster whose bytes match its declared type gives `bytes` (`DOCS_RASTER_TYPES[t].mime`, `cacheControlFor(pin, 'raster')`, the same `bytes` object); a mismatch gives `refuse` `{ok:false, failure:'raster-mismatch', declared: t, size: bytes.byteLength}`.
+  - `export type DocsListedFile = { blob: string; size: number | null; kind: ListedKind };` where the module-private `type ListedKind = NonNullable<DocsEntry['committed']>['kind']` is exactly `'file' | 'exec' | 'symlink' | 'submodule'`, derived from L0.
+  - `export function docsKnownSize(pin: DocPin, listed: DocsListedFile | undefined, draftSize: number | undefined): number | undefined` — committed: `listed?.size ?? undefined`; draft: `draftSize`; `undefined` is "no size fact", one meaning (unlisted and a listed `null` size alike); the other side's value is ignored.
+  - `export type DocsCacheVerdict = { eligible: true } | { eligible: false; why: 'unlisted' | 'kind' | 'provenance' };`
+  - `export function docsCacheVerdict(listed: DocsListedFile | undefined, servedRefAgeMs: number | undefined): DocsCacheVerdict` — `unlisted`, then `kind` (not `file`/`exec`), then `provenance` (`servedRefAgeMs` undefined, negative, `NaN`, or `>= DOCS_LISTING_PROVENANCE_MS`); else eligible.
+  - `export function docsCacheFill(pin: DocPin, listed: DocsListedFile | undefined): boolean` — committed pin, listed, kind `file` or `exec`.
+  - `export function docsCacheHitAnswer(stored: DocsShowOk, pin: Extract<DocPin, { kind: 'committed' }>, blob: string): DocsShowOk` — `v:1, verb:'docs-show', ok:true, elapsedMs:0, source:'committed'`, the pin's `section`, `path` and `commit`, the stored `size`, `sha256`, `encoding` and its one content field (`text` or `b64`), the given `blob`, `onRef:'contains'`; no `mode`, no draft fields; a new object.
+  - Module-private (not exported): `schemaFault()`, `type AnswerRecord`, `isRecord`, `withinDepth`, `isKeyText`, `isByteCount`, `type ListedKind`, `LISTED_KINDS` (a `Record<ListedKind, true>`, so a kind added to L0 does not compile until placed), `committedFactsOk`, `draftFactsOk`, `entryOk`, `stampOk`, `freshnessOk`, `treeShapeOk`, `indexShapeOk`, `SHOW_UTF8` (a `TextDecoder('utf-8', { ignoreBOM: true })`), `servedShow`, `lowerAscii`, `type RasterExt`, `declaredRasterType` (throws on a raster-class path whose extension `DOCS_RASTER_EXT` lacks: an L0 inconsistency, never a verdict), `cacheableKind`.
+  - For later tasks: Task 5 (`cache.ts`) stores `DocsListedFile`; Task 6 applies `docsAnswerShape` (index, tree), `docsKnownSize`, `docsCacheVerdict`, `docsCacheHitAnswer`, `docsShowBound`, `docsCacheFill` and `docsFileReply`; Task 7 applies `docsAnswerShape` to the fetch answer and the follow-up tree. A later task that needs another `shared/docs.ts` name ADDS it to the one import statement (never a second import from the same specifier).
+
+**Decisions this task makes (refinements (f), (g), (l) applied; none is a deviation):**
+1. **Depth is counted on containers, the answer itself at depth 0**, so a nest of `n` containers under a top-level key has its innermost at depth `n`: 16 is admitted, 17 refused (`DOCS_ANSWER_MAX_DEPTH = 16`; the deepest legitimate container is about depth 3). The walk is iterative over an explicit `[value, depth][]` stack, descends arrays and plain objects only, and answers `false` at the first container past the bound, so a 500 000-deep value costs about 17 pushes. The fixture nest alternates array and object, so a walk that descends only one of the two reds.
+2. **Shape before belief, on every verb**: the root must be a plain object and the depth bound holds for all four verbs (a fetch answer is carried into the refresh's JSON too). Tree and index then check exactly the fields W3 reads; nothing else of the listing (the PWA's `drafts`, `sections`, `github`) is judged here.
+3. **Key fields are NUL-free**: Task 1's key injectivity rests on no field holding a NUL. `repo.key`, `ref.served` and each entry's `path` must be key text (non-empty, no `KEY_SEP`); `ref.commit` and each committed `blob` pass `isDocsCommit` and each draft `fp` passes `isDocsFingerprint`, L0 hex grammars that exclude NUL. No grammar body is spelled here (`repo.key` has no L0 predicate, so it is held to key text, not to a hand-written 32-hex pattern).
+4. **Sizes are byte counts**: a listed or draft `size` is `null` or a non-negative safe integer, so a negative or fractional size never reaches `showRawBound`.
+5. **The oversize word is check 9's**: `docsShowBound` answers `malformed-answer {why:'oversize'}` (502), never `too-large` (refinement (g)). It is `>`, never `>=`, and compares against `job.raw`, never `job.wire` (the framed bound check 9 already held).
+6. **`raster-mismatch`'s `size` is `bytes.byteLength`**, the bytes the route would have served (equal to the answer's `size` after check 8). `declared` is `DOCS_RASTER_EXT`'s value, so `x.jpg` declares `jpeg`.
+7. **`docsRasterType`'s `null` has one meaning** ("not raster by `contentClass`"); a raster-class path whose extension the raster table lacks is an L0 inconsistency, and `declaredRasterType` throws rather than fold it into `null`. Lowering is ASCII-only (`A-Z` alone), the rule `contentClass` applies; L0's helper is module-private, so `lowerAscii` is its twin for this one lookup: CARRIED residue for W7 (the header's carried list; W3 must not edit `shared/`), held by Decision 10's parity describe.
+8. **The hit answer has no `mode`**: a stored `mode` was measured for another request, so it is absent, never copied (refinement (l)); `elapsedMs` is 0 and `onRef` is `'contains'` because the listing vouched within `DOCS_LISTING_PROVENANCE_MS`.
+9. **The JSON file reply serves the verified bytes, never the answer's own content field** (W2's review, note 1: check 8 verifies the decoded bytes, not the answer it hands back verbatim). `docsFileReply`'s `show` is `servedShow(answer, bytes)`: a `utf8` answer's `text` is the bytes decoded (a lone surrogate encodes to U+FFFD's three bytes, so it passes check 8 and is served as U+FFFD; a leading byte-order mark is one of the bytes and is kept, `ignoreBOM: true`); a `base64` answer keeps the `b64` check 8 proved is exactly the bytes' canonical base64; a stray `text` beside a `b64` (or `b64` beside a `text`) is dropped. The decode is L1's, so Task 6's file route and its cache-hit path, which both go through `docsFileReply`, decide nothing; `TextDecoder` is a pure global, no `Buffer`, so the purity scan stays green. Pinned by the `the JSON show is the verified bytes` describe (W3-T2-M39 serves the answer itself, W3-T2-M40 drops the BOM) and Task 6's two route cases.
+10. **The raster extension rule has two homes, held to one table** (the plan review's rings note). L0's `contentClass` lowers with a module-private helper and `declaredRasterType` with its twin `lowerAscii`; W3 cannot export L0's (no `shared/` edit), so the twin is carried to W7 and a parity describe pins both to `DOCS_RASTER_EXT`: every key in lower, UPPER and Capitalised spelling is raster to `contentClass` and its own type to `docsRasterType` (never a throw), and three non-ASCII spellings are raster to neither. It adds no guard of its own (deleting the twin's call is W3-T2-M21, which now reds the parity cases too), so it contributes no row.
+
+**Measured while planning** (the shared scratch tree at Task 1's state, then a separate copy for the mutations; none is a deviation):
+1. **RED is `169 failed | 405 passed (574)`.** 170 new cases; 169 fail (`TypeError: docsAnswerShape is not a function`, likewise `docsFileReply`, `docsShowBound`, `docsCacheHitAnswer`, `rasterVerdict`, `docsKnownSize`, `docsRasterType`, `docsCacheVerdict`, `docsCacheFill`; the constant row on `expected undefined to be 16`; the 500 000-deep row on `expected [Function] to not throw`). One new case is green before the change by design: `the table holds the four raster types the spec names`, which reads L0 only. Task 1's 404 stay green. GREEN is `574 passed (574)`.
+2. **The threat is real on this node (v24)**: `JSON.parse` of a 500 000-deep `[[...]]` takes about 140 ms and succeeds, and `JSON.stringify` of it throws `RangeError` (the test asserts both, so the case documents why the guard exists).
+3. **A raster's own magic cut one byte short, not "three bytes", is the short-input row**: JPEG's whole magic is three bytes, so a three-byte JPEG prefix MATCHES; the table keeps a fixed `[0, 1, 2]` (mismatch for all four) and adds each type's magic minus its last byte.
+4. **Guards**: `tsc` on both projects is clean; `docs-shared` + `docs-source` `362 passed (362)`; `docs-budget` + `docs-source` `142 passed (142)`; `single-definition` `472 passed (472)` (no name added here is declared anywhere else in the four roots, measured by `grep -rnw` before the edit; the PNG-signature scan stays green because every raster byte in the tests is built from `DOCS_RASTER_TYPES`); `topology-clean` + `capsupported` `77 passed (77)` with `CCRC_HISTORY_BASE=<base sha>`; `typecheck-tests` `12 passed (12)` with real modules (with a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds, `1 failed | 11 passed (12)`, environment-only, as Task 1 recorded).
+5. **Mutations**: forty, each measured red in a separate copy (`git archive HEAD | tar -x -C <copy>`, `git -C <copy> init -q`, `server/node_modules` linked in), restored after each. The architecture's M1-M18 are W3-T2-M1..M18 in its order; M19-M38 pin the guards the decisions above add, and M39-M40 Decision 9's (the answer served as it came; a BOM dropped). W3-T2-M10 and W3-T2-M11 anchor on the JSON branch's opening line, `  if (cls !== 'raster') {`. W3-T2-M10 and W3-T2-M11 red by a throw (the mutated class reaches `declaredRasterType`, which has no type for `svg`/`html`), not by a `bytes` reply: either way the JSON row reds.
+
+| id | file | red |
+|---|---|---|
+| W3-T2-M1 | `server/src/docs/policy.ts` | server docs-policy: 5 failed \| 569 passed (574) |
+| W3-T2-M2 | `server/src/docs/policy.ts` | server docs-policy: 6 failed \| 568 passed (574) |
+| W3-T2-M3 | `server/src/docs/policy.ts` | server docs-policy: 6 failed \| 568 passed (574) |
+| W3-T2-M4 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M5 | `server/src/docs/policy.ts` | server docs-policy: 14 failed \| 560 passed (574) |
+| W3-T2-M6 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 572 passed (574) |
+| W3-T2-M7 | `server/src/docs/policy.ts` | server docs-policy: 3 failed \| 571 passed (574) |
+| W3-T2-M8 | `server/src/docs/policy.ts` | server docs-policy: 4 failed \| 570 passed (574) |
+| W3-T2-M9 | `server/src/docs/policy.ts` | server docs-policy: 7 failed \| 567 passed (574) |
+| W3-T2-M10 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 572 passed (574) |
+| W3-T2-M11 | `server/src/docs/policy.ts` | server docs-policy: 4 failed \| 570 passed (574) |
+| W3-T2-M12 | `server/src/docs/policy.ts` | server docs-policy: 15 failed \| 559 passed (574) |
+| W3-T2-M13 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 572 passed (574) |
+| W3-T2-M14 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M15 | `server/src/docs/policy.ts` | server docs-policy: 3 failed \| 571 passed (574) |
+| W3-T2-M16 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M17 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M18 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M19 | `server/src/docs/policy.ts` | server docs-policy: 4 failed \| 570 passed (574) |
+| W3-T2-M20 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 572 passed (574) |
+| W3-T2-M21 | `server/src/docs/policy.ts` | server docs-policy: 10 failed \| 564 passed (574) |
+| W3-T2-M22 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 572 passed (574) |
+| W3-T2-M23 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M24 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M25 | `server/src/docs/policy.ts` | server docs-policy: 6 failed \| 568 passed (574) |
+| W3-T2-M26 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 572 passed (574) |
+| W3-T2-M27 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M28 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M29 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 572 passed (574) |
+| W3-T2-M30 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M31 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M32 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M33 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M34 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M35 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+| W3-T2-M36 | `server/src/docs/policy.ts` | server docs-policy: 6 failed \| 568 passed (574) |
+| W3-T2-M37 | `server/src/docs/policy.ts` | server docs-policy: 4 failed \| 570 passed (574) |
+| W3-T2-M38 | `server/src/docs/policy.ts` | server docs-policy: 2 failed \| 572 passed (574) |
+| W3-T2-M39 | `server/src/docs/policy.ts` | server docs-policy: 11 failed \| 563 passed (574) |
+| W3-T2-M40 | `server/src/docs/policy.ts` | server docs-policy: 1 failed \| 573 passed (574) |
+
+- [ ] **Step 0: Confirm the state and claim.** From the worktree root:
+
+```bash
+grep -q 'export function docsDraftSizeKey' server/src/docs/policy.ts && ! grep -q 'export function docsAnswerShape' server/src/docs/policy.ts && echo T1-STATE-OK
+```
+
+Expected: `T1-STATE-OK` (Task 1 is committed; this task's names are absent). If it does not print, stop and put an ask to the coordinator. The claims on `server/src/docs/policy.ts` and `server/test/docs-policy.test.ts` were taken at Task 1 Step 0; if either has lapsed (claims cap at 8 h), take it again (`~/.local/bin/ccrc-api claims take`) before editing.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts )`
+Expected: `Tests  404 passed (404)` (W2's 307 and Task 1's 97).
+
+- [ ] **Step 1: Write the failing tests.** Append the block below to the END of `server/test/docs-policy.test.ts`: find the end with `tail -n 3 server/test/docs-policy.test.ts` (it prints `    expect(docsProjectKey(N, 'demo')).not.toBe(docsDraftSizeKey(N, 'demo'));`, `  });` and `});`), leave one blank line after that final `});`, then paste the block exactly. Edit nothing above it. It imports no name a block above already imports (a second import of the same name is a duplicate-identifier compile error under `typecheck-tests`).
+
+```ts
+// ===== W3 Task 2: the routes' L1, part 2 =====
+// The ok-answer shape guard (refinement (f), W2's carry), the show-bytes bound (refinement (g), W2's carry), the raster
+// check and the file representation (section 3.6, section 5.2 steps 2, 5 and 6; M5.2's L1 half), the known size
+// (section 6.2) and the cache verdicts and hit answer (section 6.5; refinement (l)). Every expected value below is
+// written out from the spec, never read back from `policy.ts`. Raster bytes are built from L0's `DOCS_RASTER_TYPES`,
+// never typed: the PNG signature has one home (`single-definition.test.ts`).
+//
+// Imports sit here for W2 Task 3's reason: no line above this block moves.
+import {
+  DOCS_ANSWER_MAX_DEPTH, docsAnswerShape, docsCacheFill, docsCacheHitAnswer, docsCacheVerdict, docsFileReply,
+  docsKnownSize, docsRasterType, docsShowBound, rasterVerdict,
+  type DocsCacheVerdict, type DocsFileReply, type DocsListedFile,
+} from '../src/docs/policy.js';
+import {
+  DOCS_RASTER_EXT, DOCS_RASTER_TYPES, contentClass, type DocsShowOk, type DocsVerb, type RasterType,
+} from '../../shared/docs.js';
+
+const T2_COMMIT = 'a'.repeat(40);
+const T2_FP = 'b'.repeat(64);
+const T2_SERVED = DOCS_REF_PREFIXES[1] + 'main';
+const T2_SCHEMA: DocsFailureBody = { ok: false, failure: 'malformed-answer', why: 'schema' };
+const T2_OVERSIZE: DocsFailureBody = { ok: false, failure: 'malformed-answer', why: 'oversize' };
+
+/** A COMPLETE ok tree: every `DocsTreeOk` field present, placeholders only. `demo` on its origin default, fetched 5 s
+ *  ago; two committed entries (a file, and an exec of size 0) and one untracked draft. `over` replaces top-level
+ *  fields; a fresh object every call. */
+function t2Tree(over: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
+  const tree: DocsTreeOk = {
+    v: 1, verb: 'docs-tree', ok: true, elapsedMs: 3, project: 'demo',
+    repo: { key: 'a'.repeat(32), objectFormat: 'sha1', shallow: false },
+    github: { state: 'named', slug: 'example-org/example-repo' },
+    ref: {
+      requested: null, served: T2_SERVED, name: 'main', side: 'origin', commit: T2_COMMIT,
+      via: 'default:origin-head', tried: [{ ref: T2_SERVED, result: 'resolved' }], relation: 'equal',
+      counterpart: { ref: DOCS_REF_PREFIXES[0] + 'main', commit: T2_COMMIT, ahead: 0, behind: 0, count: 'measured' },
+    },
+    mainCheckout: { path: '/srv/demo', branch: 'main', head: T2_COMMIT },
+    sections: [
+      { slug: 'specs', path: 'docs/superpowers/specs', state: 'present', count: 2 },
+      { slug: 'plans', path: 'docs/superpowers/plans', state: 'present', count: 1 },
+      { slug: 'product-design', path: 'docs/product-design', state: 'absent', count: 0 },
+      { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+    ],
+    entries: [
+      { section: 'specs', path: 'a.md', committed: { kind: 'file', blob: 'c'.repeat(40), size: 12 }, draft: null },
+      { section: 'plans', path: 'dir/run.sh', committed: { kind: 'exec', blob: 'd'.repeat(40), size: 0 }, draft: null },
+      {
+        section: 'specs', path: 'new.md', committed: null,
+        draft: { state: 'untracked', kind: 'file', size: 7, fp: T2_FP, trust: 'hash' },
+      },
+    ],
+    unlisted: { count: 0, byReason: {} },
+    drafts: {
+      state: 'holder', branch: 'main', worktree: { path: '/srv/demo', head: T2_COMMIT, class: 'main' },
+      baseEqual: true, base: null, caveats: [], opaque: [],
+    },
+    freshness: {
+      remote: 'origin', trackedRef: T2_SERVED,
+      stamp: { okAgeMs: 5000, attemptAgeMs: 5000, lastOutcome: 'ok', okCommit: T2_COMMIT },
+      fetchHead: { ageMs: 5000, bytes: 90 },
+    },
+  };
+  return { ...structuredClone(tree), ...over };
+}
+
+/** `t2Tree()` with one nested change, made on a fresh copy (`any`: the change is meant to break the type). */
+function t2TreeWith(change: (t: any) => void): Record<string, unknown> {
+  const t = t2Tree();
+  change(t);
+  return t;
+}
+
+/** `n` containers nested inside one another, alternating array and object, the innermost empty: `t2Nest(1)` is `[]`,
+ *  `t2Nest(2)` is `{k: []}`, `t2Nest(3)` is `[{k: []}]`. Held under a top-level key, its innermost container sits at
+ *  depth `n` (the answer itself is depth 0). */
+function t2Nest(n: number): unknown {
+  let v: unknown = [];
+  for (let level = 2; level <= n; level++) v = level % 2 === 0 ? { k: v } : [v];
+  return v;
+}
+
+describe('W3 T2: docsAnswerShape, the depth bound (refinement (f), W2 carry)', () => {
+  it('DOCS_ANSWER_MAX_DEPTH is 16, its own literal on exactly one line', () => {
+    expect(DOCS_ANSWER_MAX_DEPTH).toBe(16);
+    expect(T4_POLICY_SRC.split('\n').filter((l) => l === 'export const DOCS_ANSWER_MAX_DEPTH = 16;')).toHaveLength(1);
+  });
+
+  it('the complete tree fixture is ok, and serialises', () => {
+    const tree = t2Tree();
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual({ ok: true });
+    expect(() => JSON.stringify(tree)).not.toThrow();
+  });
+
+  it('a 16-deep nest under an unknown key is ok: the boundary', () => {
+    expect(docsAnswerShape('docs-tree', t2Tree({ extra: t2Nest(16) }))).toStrictEqual({ ok: true });
+  });
+
+  it.each(['docs-tree', 'docs-index', 'docs-show', 'docs-fetch'] as const)(
+    '%s: a 17-deep nest under an unknown key is schema', (verb: DocsVerb) => {
+      const base = verb === 'docs-tree' ? t2Tree() : { v: 1, verb, ok: true, elapsedMs: 1, projects: [], duplicates: [] };
+      expect(docsAnswerShape(verb, { ...base, extra: t2Nest(17) })).toStrictEqual(T2_SCHEMA);
+    });
+
+  it('a 17-deep nest of arrays only, and of objects only, is schema', () => {
+    let arrays: unknown = [];
+    let objects: unknown = {};
+    for (let i = 1; i < 17; i++) {
+      arrays = [arrays];
+      objects = { k: objects };
+    }
+    expect(docsAnswerShape('docs-fetch', { v: 1, extra: arrays })).toStrictEqual(T2_SCHEMA);
+    expect(docsAnswerShape('docs-fetch', { v: 1, extra: objects })).toStrictEqual(T2_SCHEMA);
+  });
+
+  it('a 500 000-deep listing value is schema, and the guard itself never throws', () => {
+    const deep: unknown = JSON.parse('['.repeat(500000) + ']'.repeat(500000));
+    const tree = t2Tree({ extra: deep });
+    // The threat the guard exists for: a reply carrying this value cannot be serialised.
+    expect(() => JSON.stringify(tree)).toThrow(RangeError);
+    let verdict: unknown;
+    expect(() => { verdict = docsAnswerShape('docs-tree', tree); }).not.toThrow();
+    expect(verdict).toStrictEqual(T2_SCHEMA);
+  });
+
+  it.each(['docs-fetch', 'docs-show'] as const)('%s: a flat answer is ok (depth is all it checks)', (verb) => {
+    expect(docsAnswerShape(verb, { v: 1, verb, ok: true, elapsedMs: 1, anything: 'at all' })).toStrictEqual({ ok: true });
+  });
+
+  it.each([
+    ['an array', []], ['null', null], ['a string', 'x'], ['a number', 7],
+  ] as const)('the answer itself must be a plain object: %s is schema for every verb', (_what, answer) => {
+    for (const verb of ['docs-tree', 'docs-index', 'docs-show', 'docs-fetch'] as const) {
+      expect(docsAnswerShape(verb, answer), verb).toStrictEqual(T2_SCHEMA);
+    }
+  });
+});
+
+describe('W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry)', () => {
+  it.each([
+    ['freshness deleted', t2TreeWith((t) => { delete t.freshness; })],
+    ['ref deleted', t2TreeWith((t) => { delete t.ref; })],
+    ['repo deleted', t2TreeWith((t) => { delete t.repo; })],
+    ["freshness.remote 'upstream'", t2TreeWith((t) => { t.freshness.remote = 'upstream'; })],
+    ['freshness.stamp {} (no attemptAgeMs)', t2TreeWith((t) => { t.freshness.stamp = {}; })],
+    ["stamp.attemptAgeMs the string '1'", t2TreeWith((t) => { t.freshness.stamp.attemptAgeMs = '1'; })],
+    ['stamp.lastOutcome 7', t2TreeWith((t) => { t.freshness.stamp.lastOutcome = 7; })],
+    ['ref.requested 7', t2TreeWith((t) => { t.ref.requested = 7; })],
+    ['ref.served absent', t2TreeWith((t) => { delete t.ref.served; })],
+    ['ref.served empty', t2TreeWith((t) => { t.ref.served = ''; })],
+    ['ref.served holding a NUL', t2TreeWith((t) => { t.ref.served = T2_SERVED + String.fromCharCode(0); })],
+    ['ref.commit absent', t2TreeWith((t) => { delete t.ref.commit; })],
+    ['ref.commit not a sha', t2TreeWith((t) => { t.ref.commit = 'main'; })],
+    ['repo.key absent', t2TreeWith((t) => { delete t.repo.key; })],
+    ['repo.key holding a NUL', t2TreeWith((t) => { t.repo.key = 'a' + String.fromCharCode(0) + 'b'; })],
+    ['entries not an array', t2TreeWith((t) => { t.entries = {}; })],
+    ['an entry that is null', t2TreeWith((t) => { t.entries.push(null); })],
+    ['an entry with section 9', t2TreeWith((t) => { t.entries[0].section = 9; })],
+    ["an entry with section 'docs'", t2TreeWith((t) => { t.entries[0].section = 'docs'; })],
+    ['an entry with no path', t2TreeWith((t) => { delete t.entries[0].path; })],
+    ['an entry whose committed is {} (no kind, no blob)', t2TreeWith((t) => { t.entries[0].committed = {}; })],
+    ['an entry with no committed key at all', t2TreeWith((t) => { delete t.entries[0].committed; })],
+    ["an entry whose committed kind is 'tree'", t2TreeWith((t) => { t.entries[0].committed.kind = 'tree'; })],
+    ['an entry whose committed blob is not a sha', t2TreeWith((t) => { t.entries[0].committed.blob = 'x'; })],
+    ['an entry whose committed size is -1', t2TreeWith((t) => { t.entries[0].committed.size = -1; })],
+    ["an entry whose committed size is '12'", t2TreeWith((t) => { t.entries[0].committed.size = '12'; })],
+    ['an entry whose draft.fp is 7', t2TreeWith((t) => { t.entries[2].draft.fp = 7; })],
+    ["an entry whose draft.fp is 'x', not a fingerprint", t2TreeWith((t) => { t.entries[2].draft.fp = 'x'; })],
+    ['an entry whose draft.size is 1.5', t2TreeWith((t) => { t.entries[2].draft.size = 1.5; })],
+    ['an entry with no draft key at all', t2TreeWith((t) => { delete t.entries[2].draft; })],
+  ])('%s is schema', (_what, tree) => {
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual(T2_SCHEMA);
+  });
+
+  it.each([
+    ['ref.requested a string', t2TreeWith((t) => { t.ref.requested = 'main'; })],
+    ['no origin remote and no stamp', t2TreeWith((t) => { t.freshness.remote = null; t.freshness.stamp = null; })],
+    ['a listed size of null and a draft with no fp', t2TreeWith((t) => {
+      t.entries[0].committed.size = null;
+      t.entries[2].draft.fp = null;
+      t.entries[2].draft.size = null;
+    })],
+    ['no entries at all', t2TreeWith((t) => { t.entries = []; })],
+    ['a stamp with a failed last outcome', t2TreeWith((t) => { t.freshness.stamp.lastOutcome = 'fetch-transport'; })],
+  ])('%s is ok', (_what, tree) => {
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual({ ok: true });
+  });
+
+  it('the order the routes keep: refreshDue is reached only after an ok shape', () => {
+    // The carry: `refreshDue` over a tree with no freshness throws a TypeError, so the shape comes first.
+    const broken = t2TreeWith((t) => { delete t.freshness; });
+    expect(() => refreshDue(broken as unknown as DocsTreeOk)).toThrow(TypeError);
+    expect(docsAnswerShape('docs-tree', broken)).toStrictEqual(T2_SCHEMA);
+    const tree = t2Tree();
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual({ ok: true });
+    expect(refreshDue(tree as unknown as DocsTreeOk)).toBe(false);
+  });
+});
+
+describe('W3 T2: docsAnswerShape, the index (refinement (f), W2 carry)', () => {
+  const index = (projects: unknown): Record<string, unknown> =>
+    ({ v: 1, verb: 'docs-index', ok: true, elapsedMs: 1, unlisted: 0, duplicates: [], projects });
+
+  it('an empty project list is ok, and so is a list of rows', () => {
+    expect(docsAnswerShape('docs-index', index([]))).toStrictEqual({ ok: true });
+    expect(docsAnswerShape('docs-index', index([{ project: 'demo', state: 'ready', github: { state: 'none' } }])))
+      .toStrictEqual({ ok: true });
+  });
+
+  it.each([
+    ['projects not an array', index({})],
+    ['projects absent', { v: 1, verb: 'docs-index', ok: true, elapsedMs: 1 }],
+    ['projects [7]', index([7])],
+    ['projects [null]', index([null])],
+    ['projects [[]]', index([[]])],
+  ])('%s is schema', (_what, answer) => {
+    expect(docsAnswerShape('docs-index', answer)).toStrictEqual(T2_SCHEMA);
+  });
+});
+
+describe('W3 T2: docsShowBound, decoded show bytes held to the bound the server declared (refinement (g))', () => {
+  const job: DocsJob = { raw: 10, wire: 65552 };
+
+  it('exactly raw bytes is ok; one more is malformed-answer {why:oversize}', () => {
+    expect(docsShowBound(job, new Uint8Array(10))).toStrictEqual({ ok: true });
+    expect(docsShowBound(job, new Uint8Array(11))).toStrictEqual(T2_OVERSIZE);
+  });
+
+  it("the class cap's plan: 2 097 152 bytes ok, 2 097 153 oversize", () => {
+    const plan = docsShowPlan('a.md', undefined);
+    expect(plan.job.raw).toBe(2097152);
+    expect(docsShowBound(plan.job, new Uint8Array(2097152))).toStrictEqual({ ok: true });
+    expect(docsShowBound(plan.job, new Uint8Array(2097153))).toStrictEqual(T2_OVERSIZE);
+  });
+
+  it('a listed size lowers the bound: a 5-byte listing answered with 6 bytes is oversize', () => {
+    const plan = docsShowPlan('a.md', 5);
+    expect(docsShowBound(plan.job, new Uint8Array(5))).toStrictEqual({ ok: true });
+    expect(docsShowBound(plan.job, new Uint8Array(6))).toStrictEqual(T2_OVERSIZE);
+  });
+
+  it('a listed size of 0 holds the answer to no bytes at all', () => {
+    expect(docsShowBound(docsShowPlan('a.png', 0).job, new Uint8Array(1))).toStrictEqual(T2_OVERSIZE);
+  });
+});
+
+/** `type`'s first magic alternative, read from L0's table. */
+function t2Runs(type: RasterType): readonly { readonly at: number; readonly bytes: readonly number[] }[] {
+  return DOCS_RASTER_TYPES[type].magic[0];
+}
+
+/** Bytes that are `type` by L0's table: its first magic alternative's runs, written into 16 zero bytes. */
+function t2Magic(type: RasterType): Uint8Array {
+  const out = new Uint8Array(16);
+  for (const run of t2Runs(type)) out.set(run.bytes, run.at);
+  return out;
+}
+
+/** `type`'s magic cut one byte short of its last run's end: too short to hold it. */
+function t2Short(type: RasterType): Uint8Array {
+  const end = Math.max(...t2Runs(type).map((run) => run.at + run.bytes.length));
+  return t2Magic(type).slice(0, end - 1);
+}
+
+const T2_RASTER_TYPES = Object.keys(DOCS_RASTER_TYPES) as RasterType[];
+const T2_SVG_BYTES = new TextEncoder().encode('<svg/>');
+
+describe('W3 T2: docsRasterType, the declared raster type of a path (section 5.2 step 5)', () => {
+  it.each([
+    ['a.png', 'png'], ['A.PNG', 'png'], ['dir/x.Png', 'png'], ['x.jpg', 'jpeg'], ['x.JPEG', 'jpeg'],
+    ['x.jpeg', 'jpeg'], ['x.gif', 'gif'], ['x.webp', 'webp'], ['x.WebP', 'webp'],
+    ['x.png.html', null], ['x.svg', null], ['.png', null], ['dir/.png', null], ['x.', null], ['x', null],
+    ['dir.png/readme', null], ['x.pngx', null], ['x.md', null],
+  ] as const)('%s is %s, agreeing with contentClass', (p, want) => {
+    expect(docsRasterType(p)).toBe(want);
+    expect(docsRasterType(p) === null).toBe(contentClass(p) !== 'raster');
+  });
+});
+
+describe("W3 T2: rasterVerdict, the declared type against the bytes (section 5.2 step 5; M5.2's L1 half)", () => {
+  it('the table holds the four raster types the spec names', () => {
+    expect(T2_RASTER_TYPES).toEqual(['png', 'jpeg', 'gif', 'webp']);
+  });
+
+  it.each(T2_RASTER_TYPES.flatMap((declared) => T2_RASTER_TYPES.map((actual) => [declared, actual] as const)))(
+    'declared %s over the bytes of %s: match only on the diagonal', (declared, actual) => {
+      expect(rasterVerdict(declared, t2Magic(actual))).toBe(declared === actual ? 'match' : 'mismatch');
+    });
+
+  it.each(T2_RASTER_TYPES)('declared %s: SVG text, no bytes, three bytes and its own magic cut short are mismatch', (d) => {
+    expect(rasterVerdict(d, T2_SVG_BYTES)).toBe('mismatch');
+    expect(rasterVerdict(d, new Uint8Array(0))).toBe('mismatch');
+    expect(rasterVerdict(d, new Uint8Array([0, 1, 2]))).toBe('mismatch');
+    expect(rasterVerdict(d, t2Short(d))).toBe('mismatch');
+  });
+});
+
+/** A show answer for `path`, committed, base64: L1 never re-checks it (the adapter's check 8 did). */
+function t2Show(p: string, bytes: Uint8Array): DocsShowOk {
+  return {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 4, source: 'committed', section: 'specs', path: p,
+    size: bytes.byteLength, sha256: 'f'.repeat(64), encoding: 'base64', b64: Buffer.from(bytes).toString('base64'),
+    commit: T2_COMMIT, blob: 'c'.repeat(40), mode: '100644', onRef: 'contains',
+  };
+}
+const t2Committed = (p: string): Extract<DocPin, { kind: 'committed' }> =>
+  ({ kind: 'committed', commit: T2_COMMIT, servedRef: T2_SERVED, section: 'specs', path: p });
+const t2Draft = (p: string): DocPin =>
+  ({ kind: 'draft', branch: 'ws/a', head: T2_COMMIT, section: 'specs', path: p, fp: T2_FP });
+
+describe('W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2)', () => {
+  it.each([
+    ['a.png', 'png', 'image/png'], ['x.jpg', 'jpeg', 'image/jpeg'], ['x.GIF', 'gif', 'image/gif'],
+    ['x.webp', 'webp', 'image/webp'],
+  ] as const)('a committed %s holding %s bytes is raw bytes, %s, immutable', (p, type, mime) => {
+    const bytes = t2Magic(type);
+    const reply: DocsFileReply = docsFileReply(t2Committed(p), t2Show(p, bytes), bytes, 'ccd');
+    expect(reply).toStrictEqual({ kind: 'bytes', mime, cacheControl: DOCS_CACHE_IMMUTABLE, bytes });
+    if (reply.kind !== 'bytes') throw new Error('not bytes');
+    expect(reply.bytes).toBe(bytes);
+  });
+
+  it('a draft a.png holding PNG bytes is raw bytes, no-store', () => {
+    const bytes = t2Magic('png');
+    expect(docsFileReply(t2Draft('a.png'), t2Show('a.png', bytes), bytes, 'ccd'))
+      .toStrictEqual({ kind: 'bytes', mime: 'image/png', cacheControl: DOCS_CACHE_NO_STORE, bytes });
+  });
+
+  it('a cache hit on a committed raster is the same bytes reply', () => {
+    const bytes = t2Magic('gif');
+    expect(docsFileReply(t2Committed('x.gif'), t2Show('x.gif', bytes), bytes, 'cache'))
+      .toStrictEqual({ kind: 'bytes', mime: 'image/gif', cacheControl: DOCS_CACHE_IMMUTABLE, bytes });
+  });
+
+  it.each([
+    ['JPEG bytes', t2Magic('jpeg')],
+    ['GIF bytes', t2Magic('gif')],
+    ['SVG text', T2_SVG_BYTES],
+    ['no bytes', new Uint8Array(0)],
+    ['three bytes', new Uint8Array([0, 1, 2])],
+    ['its own magic cut short', t2Short('png')],
+  ] as const)('a.png holding %s is refused: raster-mismatch {declared, size}, no bytes', (_what, bytes) => {
+    for (const pin of [t2Committed('a.png'), t2Draft('a.png')]) {
+      expect(docsFileReply(pin, t2Show('a.png', bytes), bytes, 'ccd')).toStrictEqual({
+        kind: 'refuse', body: { ok: false, failure: 'raster-mismatch', declared: 'png', size: bytes.byteLength },
+      });
+    }
+  });
+
+  it("x.jpg holding PNG bytes names its declared type as the table's key: jpeg", () => {
+    const bytes = t2Magic('png');
+    expect(docsFileReply(t2Committed('x.jpg'), t2Show('x.jpg', bytes), bytes, 'ccd')).toStrictEqual({
+      kind: 'refuse', body: { ok: false, failure: 'raster-mismatch', declared: 'jpeg', size: 16 },
+    });
+  });
+
+  it.each([
+    ['a.md', 'markdown'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.json', 'text'], ['a.woff2', 'other'],
+    ['a.pdf', 'other'], ['a', 'other'], ['a.png.html', 'html'],
+  ] as const)('%s is DocsFileResponse JSON of class %s, from carried', (p, cls) => {
+    const bytes = t2Magic('png');
+    for (const from of ['ccd', 'cache'] as const) {
+      const answer = t2Show(p, bytes);
+      const reply = docsFileReply(t2Committed(p), answer, bytes, from);
+      expect(reply).toStrictEqual({ kind: 'json', body: { ok: true, contentClass: cls, show: answer, from } });
+      if (reply.kind !== 'json') throw new Error('not json');
+      expect(reply.body.show).not.toBe(answer);
+    }
+  });
+
+  it.each(['a.svg', 'a.html', 'a.htm', 'a.md'])('%s never yields raw bytes, even holding PNG bytes, committed or draft', (p) => {
+    const bytes = t2Magic('png');
+    for (const pin of [t2Committed(p), t2Draft(p)]) {
+      expect(docsFileReply(pin, t2Show(p, bytes), bytes, 'ccd').kind).toBe('json');
+    }
+  });
+});
+
+describe("W3 T2: the JSON show is the verified bytes, never the answer's content field (W2 review, check 8)", () => {
+  /** A committed utf8 answer for a.md whose `text` is `text`, over `bytes` (the bytes check 8 decoded). */
+  function t2Utf8(text: string, bytes: Uint8Array): DocsShowOk {
+    const { b64: _b64, ...facts } = t2Show('a.md', bytes);
+    return { ...facts, encoding: 'utf8', text };
+  }
+  const shown = (answer: DocsShowOk, bytes: Uint8Array): DocsShowOk => {
+    const reply = docsFileReply(t2Committed('a.md'), answer, bytes, 'ccd');
+    if (reply.kind !== 'json') throw new Error('not json');
+    return reply.body.show;
+  };
+
+  it("a lone-surrogate text (its UTF-8 is the replacement character's bytes) is served as U+FFFD", () => {
+    const bytes = new Uint8Array([0xef, 0xbf, 0xbd]);
+    const answer = t2Utf8('\ud800', bytes);
+    expect(shown(answer, bytes)).toStrictEqual({ ...answer, text: '\ufffd' });
+  });
+
+  it('a stray text beside a canonical b64 is dropped: the show carries the b64 alone', () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const show = shown({ ...t2Show('a.md', bytes), text: 'not the bytes' }, bytes);
+    expect(Object.hasOwn(show, 'text')).toBe(false);
+    expect(show).toStrictEqual(t2Show('a.md', bytes));
+  });
+
+  it('a stray b64 beside a utf8 text is dropped: the show carries the text alone', () => {
+    const bytes = Buffer.from('hi', 'utf8');
+    const show = shown({ ...t2Utf8('hi', bytes), b64: 'AAAA' }, bytes);
+    expect(Object.hasOwn(show, 'b64')).toBe(false);
+    expect(show.text).toBe('hi');
+  });
+
+  it('a leading byte-order mark is one of the bytes: the text keeps it', () => {
+    const bytes = Buffer.from('\ufeff' + 'hi', 'utf8');
+    expect(shown(t2Utf8('\ufeff' + 'hi', bytes), bytes).text).toBe('\ufeff' + 'hi');
+  });
+});
+
+describe('W3 T2: the raster extension rule in its two homes, held to one table (carried to W7)', () => {
+  const spellings = (ext: string): string[] => [ext, ext.toUpperCase(), ext.charAt(0).toUpperCase() + ext.slice(1)];
+
+  it.each(Object.keys(DOCS_RASTER_EXT))(
+    '.%s in every ASCII case: raster to contentClass, its type to docsRasterType', (ext) => {
+      const want = DOCS_RASTER_EXT[ext as keyof typeof DOCS_RASTER_EXT];
+      for (const s of spellings(ext)) {
+        const p = `dir/x.${s}`;
+        expect(contentClass(p), p).toBe('raster');
+        expect(docsRasterType(p), p).toBe(want);
+      }
+    });
+
+  it.each(['x.' + '\uff50\uff4e\uff47', 'x.p' + '\u0274' + 'g', 'x.' + '\u212a' + 'png'])(
+    'a non-ASCII spelling (%s) is raster to neither home', (p) => {
+      expect(contentClass(p)).not.toBe('raster');
+      expect(docsRasterType(p)).toBeNull();
+    });
+});
+
+describe('W3 T2: docsKnownSize, a size the server holds (section 6.2: never the request)', () => {
+  const listed = (size: number | null): DocsListedFile => ({ blob: 'c'.repeat(40), size, kind: 'file' });
+  const COMMITTED = t2Committed('a.md');
+  const DRAFT = t2Draft('a.md');
+
+  it.each([
+    ['committed, listed size 0: a fact', COMMITTED, listed(0), undefined, 0],
+    ['committed, listed size 12', COMMITTED, listed(12), undefined, 12],
+    ['committed, listed size null: no fact', COMMITTED, listed(null), undefined, undefined],
+    ['committed, unlisted: no fact', COMMITTED, undefined, undefined, undefined],
+    ['committed: a draft size is ignored', COMMITTED, listed(12), 9, 12],
+    ['committed, unlisted: a draft size is still ignored', COMMITTED, undefined, 9, undefined],
+    ['draft with a size of 9', DRAFT, undefined, 9, 9],
+    ['draft with a size of 0', DRAFT, undefined, 0, 0],
+    ['draft: a listed size is ignored', DRAFT, listed(12), 9, 9],
+    ['draft without a size', DRAFT, listed(12), undefined, undefined],
+  ] as const)('%s', (_what, pin, entry, draftSize, want) => {
+    expect(docsKnownSize(pin, entry, draftSize)).toBe(want);
+  });
+
+  it('a listed size of 0 reaches the show plan as a bound of 0', () => {
+    expect(docsShowPlan('a.md', docsKnownSize(COMMITTED, listed(0), undefined)).job.raw).toBe(0);
+  });
+});
+
+describe('W3 T2: docsCacheVerdict and docsCacheFill (section 6.5; refinement (l))', () => {
+  const entry = (kind: DocsListedFile['kind']): DocsListedFile => ({ blob: 'c'.repeat(40), size: 12, kind });
+
+  it.each([
+    ['unlisted', undefined, 1000, { eligible: false, why: 'unlisted' }],
+    ['unlisted, no provenance either', undefined, undefined, { eligible: false, why: 'unlisted' }],
+    ['a symlink entry', entry('symlink'), 1000, { eligible: false, why: 'kind' }],
+    ['a submodule entry', entry('submodule'), 1000, { eligible: false, why: 'kind' }],
+    ['a symlink entry with no provenance: kind first', entry('symlink'), undefined, { eligible: false, why: 'kind' }],
+    ['a file whose servedRef was never recorded', entry('file'), undefined, { eligible: false, why: 'provenance' }],
+    ['a file recorded 0 ms ago', entry('file'), 0, { eligible: true }],
+    ['a file recorded 599 999 ms ago', entry('file'), 599999, { eligible: true }],
+    ['a file recorded 600 000 ms ago', entry('file'), 600000, { eligible: false, why: 'provenance' }],
+    ['an exec recorded 1000 ms ago', entry('exec'), 1000, { eligible: true }],
+    ['a clock that went back: a negative age', entry('file'), -1, { eligible: false, why: 'provenance' }],
+    ['a NaN age', entry('file'), NaN, { eligible: false, why: 'provenance' }],
+  ] as const)('%s', (_what, listed, age, want) => {
+    const verdict: DocsCacheVerdict = docsCacheVerdict(listed, age);
+    expect(verdict).toStrictEqual(want);
+  });
+
+  it.each([
+    ['committed, file', t2Committed('a.md'), entry('file'), true],
+    ['committed, exec', t2Committed('a.md'), entry('exec'), true],
+    ['committed, symlink', t2Committed('a.md'), entry('symlink'), false],
+    ['committed, submodule', t2Committed('a.md'), entry('submodule'), false],
+    ['committed, unlisted', t2Committed('a.md'), undefined, false],
+    ['draft, listed file', t2Draft('a.md'), entry('file'), false],
+    ['draft, unlisted', t2Draft('a.md'), undefined, false],
+  ] as const)('fill: %s', (_what, pin, listed, want) => {
+    expect(docsCacheFill(pin, listed)).toBe(want);
+  });
+});
+
+describe("W3 T2: docsCacheHitAnswer, the request's pin over the stored content (section 6.5; refinement (l))", () => {
+  const STORED: DocsShowOk = {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 9, source: 'committed', section: 'specs', path: 'old.md', size: 5,
+    sha256: 'e'.repeat(64), encoding: 'utf8', text: 'hello', commit: 'c'.repeat(40), blob: '1'.repeat(40),
+    mode: '100644', onRef: 'not-contained',
+  };
+  const PIN = { kind: 'committed', commit: 'd'.repeat(40), servedRef: T2_SERVED, section: 'plans', path: 'new.md' } as const;
+  const BLOB = '2'.repeat(40);
+
+  it("answers the pin's commit, section and path, the listing's blob, onRef contains, elapsedMs 0, no mode", () => {
+    const hit = docsCacheHitAnswer(STORED, PIN, BLOB);
+    expect(hit).toStrictEqual({
+      v: 1, verb: 'docs-show', ok: true, elapsedMs: 0, source: 'committed', section: 'plans', path: 'new.md', size: 5,
+      sha256: 'e'.repeat(64), encoding: 'utf8', text: 'hello', commit: 'd'.repeat(40), blob: BLOB, onRef: 'contains',
+    });
+    for (const key of ['mode', 'b64', 'worktree', 'branch', 'head', 'fp']) {
+      expect(Object.hasOwn(hit, key), key).toBe(false);
+    }
+  });
+
+  it('a base64 stored answer keeps b64 and carries no text key', () => {
+    const stored: DocsShowOk = { ...STORED, encoding: 'base64', b64: 'aGVsbG8=' };
+    delete stored.text;
+    const hit = docsCacheHitAnswer(stored, PIN, BLOB);
+    expect(hit.encoding).toBe('base64');
+    expect(hit.b64).toBe('aGVsbG8=');
+    expect(Object.hasOwn(hit, 'text')).toBe(false);
+  });
+
+  it('never mutates the stored answer, and answers a new object', () => {
+    const before = structuredClone(STORED);
+    const hit = docsCacheHitAnswer(STORED, PIN, BLOB);
+    expect(STORED).toStrictEqual(before);
+    expect(hit).not.toBe(STORED);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts )`
+Expected: `Test Files  1 failed (1)`, `Tests  169 failed | 405 passed (574)` (Measured 1). The function rows fail with `TypeError: docsAnswerShape is not a function` (likewise `docsShowBound`, `docsRasterType`, `rasterVerdict`, `docsFileReply`, `docsKnownSize`, `docsCacheVerdict`, `docsCacheFill`, `docsCacheHitAnswer`); the constant row on `expected undefined to be 16`; the 500 000-deep row on `expected [Function] to not throw an error`. The one green new case is `the table holds the four raster types the spec names`. If the run reports `no tests`, a table calls a function under test at collection time: the block was not pasted exactly.
+
+- [ ] **Step 3: Write the implementation.** Two edits to `server/src/docs/policy.ts`.
+
+(a) Widen the one import statement, in place (lines 11-18 at Task 1's state). Find:
+
+```ts
+import {
+  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
+  DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS,
+  DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRefText, isDocsBareRef, isDocsCommit, isDocsFingerprint,
+  isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef,
+  type DocContentClass, type DocPin, type DocSectionSlug, type DocsFailure, type DocsFailureBody, type DocsFetchOk,
+  type DocsRefreshFetch, type DocsRefreshResponse, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
+} from '../../../shared/docs.js';
+```
+
+Replace with:
+
+```ts
+import {
+  DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
+  DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_RASTER_EXT, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE,
+  DOCS_RESPONSE_HEADERS, DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRefText, isDocsBareRef, isDocsCommit,
+  isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef, sniffRaster,
+  type DocContentClass, type DocPin, type DocSectionSlug, type DocsEntry, type DocsFailure, type DocsFailureBody,
+  type DocsFetchOk, type DocsFileResponse, type DocsRefreshFetch, type DocsRefreshResponse, type DocsRefSpec,
+  type DocsShowOk, type DocsTreeOk, type DocsTreeResponse, type DocsVerb, type RasterMime, type RasterType,
+} from '../../../shared/docs.js';
+```
+
+(b) Append the block below at the END of the file: find the end with `tail -n 3 server/src/docs/policy.ts` (it prints `docsIndexCacheable`'s last three lines: `export function docsIndexCacheable(genAtStart: number, genNow: number): boolean {`, `  return genAtStart === genNow;` and `}`), leave one blank line after that final `}`, then paste the block exactly.
+
+```ts
+// ===== W3: the ok-answer shape guard (refinement (f); W2's review carry) =====
+//
+// The adapter checks an ok tree, index or fetch line's ENVELOPE only (`v`, `verb`, `ok`); a show line also passes
+// check 8. What the routes read of an ok answer must be there before they read it: `refreshDue` dereferences
+// `freshness` and `ref`, the caches key on `repo.key`, `ref.commit`, `ref.served` and each entry's facts, and every
+// answer is serialised into a reply, which recurses. So the routes apply `docsAnswerShape` to every ok answer before
+// `refreshDue`, a cache or the reply sees it.
+
+/** The deepest container an ok answer may hold, the answer itself at depth 0 (refinement (f)). The deepest
+ *  legitimate one sits at about depth 3 (a tree's `ref.tried[i]`, an entry's `committed`); a value nested past this
+ *  is not ccd's contract, and one nested hundreds of thousands deep inside the listing bound makes reply
+ *  serialisation throw a `RangeError`. */
+export const DOCS_ANSWER_MAX_DEPTH = 16;
+
+/** `malformed-answer {why:'schema'}`, a fresh body each call. */
+function schemaFault(): DocsFailureBody {
+  return { ok: false, failure: 'malformed-answer', why: 'schema' };
+}
+
+type AnswerRecord = Readonly<Record<string, unknown>>;
+
+/** A plain object: not `null`, not an array (a JSON object, as `JSON.parse` builds one). */
+function isRecord(v: unknown): v is AnswerRecord {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Whether no container in `answer` sits deeper than `DOCS_ANSWER_MAX_DEPTH`. ITERATIVE, over an explicit stack of
+ * `[value, depth]` pairs: a recursive walk would itself overflow on the input it exists to refuse. It descends into
+ * arrays and plain objects only, and answers at the first container past the bound, so it never goes deeper.
+ */
+function withinDepth(answer: unknown): boolean {
+  const stack: [value: unknown, depth: number][] = [[answer, 0]];
+  for (let top = stack.pop(); top !== undefined; top = stack.pop()) {
+    const [value, depth] = top;
+    if (typeof value !== 'object' || value === null) continue;
+    if (depth > DOCS_ANSWER_MAX_DEPTH) return false;
+    for (const child of Array.isArray(value) ? value : Object.values(value)) stack.push([child, depth + 1]);
+  }
+  return true;
+}
+
+/** Text a key is built from (refinement (p)): non-empty, and holding no NUL, the key separator. */
+function isKeyText(v: unknown): v is string {
+  return isText(v) && v.length > 0 && !v.includes(KEY_SEP);
+}
+
+/** A byte count: a non-negative safe integer. */
+function isByteCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
+/** A listing entry's committed kind, L0's own union (`DocsEntry`). */
+type ListedKind = NonNullable<DocsEntry['committed']>['kind'];
+
+/** Every committed kind, typed by the union: a kind added to `DocsEntry` does not compile here until it is placed. */
+const LISTED_KINDS: Readonly<Record<ListedKind, true>> = { file: true, exec: true, symlink: true, submodule: true };
+
+/** An entry's committed facts: `null`, or the kind, blob and size the listing map stores. */
+function committedFactsOk(c: unknown): boolean {
+  if (c === null) return true;
+  if (!isRecord(c)) return false;
+  const kind = own(c, 'kind');
+  const blob = own(c, 'blob');
+  const size = own(c, 'size');
+  if (!isText(kind) || !Object.hasOwn(LISTED_KINDS, kind)) return false;
+  return isText(blob) && isDocsCommit(blob) && (size === null || isByteCount(size));
+}
+
+/** An entry's draft facts: `null`, or the fingerprint and size the draft size map stores. */
+function draftFactsOk(d: unknown): boolean {
+  if (d === null) return true;
+  if (!isRecord(d)) return false;
+  const fp = own(d, 'fp');
+  const size = own(d, 'size');
+  return (fp === null || (isText(fp) && isDocsFingerprint(fp))) && (size === null || isByteCount(size));
+}
+
+/** One `entries[]` row: its section, its path (key text) and both fact slots, each present. */
+function entryOk(e: unknown): boolean {
+  if (!isRecord(e)) return false;
+  const section = own(e, 'section');
+  if (!isText(section) || !isDocsSection(section) || !isKeyText(own(e, 'path'))) return false;
+  return committedFactsOk(own(e, 'committed')) && draftFactsOk(own(e, 'draft'));
+}
+
+/** A fetch stamp: `null` (never fetched), or one whose `attemptAgeMs` is a finite number and whose `lastOutcome` is
+ *  text, the two fields `refreshDue` compares. */
+function stampOk(s: unknown): boolean {
+  if (s === null) return true;
+  return isRecord(s) && Number.isFinite(own(s, 'attemptAgeMs')) && isText(own(s, 'lastOutcome'));
+}
+
+/** `freshness`: an object whose `remote` is `origin` or `null` and whose stamp passes `stampOk`. */
+function freshnessOk(f: unknown): boolean {
+  if (!isRecord(f)) return false;
+  const remote = own(f, 'remote');
+  return (remote === 'origin' || remote === null) && stampOk(own(f, 'stamp'));
+}
+
+/** The tree fields W3 reads: `repo.key`; `ref.served`, `ref.commit` and `ref.requested`; `freshness`; every entry. */
+function treeShapeOk(t: AnswerRecord): boolean {
+  const repo = own(t, 'repo');
+  if (!isRecord(repo) || !isKeyText(own(repo, 'key'))) return false;
+  const ref = own(t, 'ref');
+  if (!isRecord(ref) || !isKeyText(own(ref, 'served'))) return false;
+  const commit = own(ref, 'commit');
+  if (!isText(commit) || !isDocsCommit(commit)) return false;
+  const requested = own(ref, 'requested');
+  if (requested !== null && !isText(requested)) return false;
+  if (!freshnessOk(own(t, 'freshness'))) return false;
+  const entries = own(t, 'entries');
+  return Array.isArray(entries) && entries.every(entryOk);
+}
+
+/** The index field W3 reads: `projects`, an array of plain objects. */
+function indexShapeOk(i: AnswerRecord): boolean {
+  const projects = own(i, 'projects');
+  return Array.isArray(projects) && projects.every(isRecord);
+}
+
+/**
+ * Whether an ok answer the adapter passed may be believed by the routes (refinement (f)), in order, the first fault
+ * winning, each `malformed-answer {why:'schema'}` (502), never a `TypeError` in `refreshDue` or a `RangeError` at
+ * serialisation:
+ * 1. the answer is a plain object;
+ * 2. no container in it sits deeper than `DOCS_ANSWER_MAX_DEPTH` (`withinDepth`, every verb);
+ * 3. `docs-tree`: `repo.key` and `ref.served` are key text, `ref.commit` is a commit, `ref.requested` is `null` or
+ *    text, `freshness.remote` is `origin` or `null`, `freshness.stamp` is `null` or carries a finite
+ *    `attemptAgeMs` and a text `lastOutcome`, and `entries` is an array whose every row has an L0 section, a key-text
+ *    path, a `committed` slot (`null`, or a listed kind, a commit-form blob and a byte count or `null`) and a
+ *    `draft` slot (`null`, or a fingerprint or `null` and a byte count or `null`);
+ * 4. `docs-index`: `projects` is an array of plain objects.
+ * `docs-show` (check 8 ran in the adapter) and `docs-fetch` stop after 2. Takes `unknown`: this is the check that
+ * makes the answer's static type true.
+ */
+export function docsAnswerShape(verb: DocsVerb, answer: unknown): { ok: true } | DocsFailureBody {
+  if (!isRecord(answer)) return schemaFault();
+  if (!withinDepth(answer)) return schemaFault();
+  if (verb === 'docs-tree' && !treeShapeOk(answer)) return schemaFault();
+  if (verb === 'docs-index' && !indexShapeOk(answer)) return schemaFault();
+  return { ok: true };
+}
+
+// ===== The show bound, the raster check and the file representation (section 3.6, section 5.2; refinement (g)) =====
+
+/**
+ * Decoded show bytes held to the bound the server declared (refinement (g); W2's review carry): more than `job.raw`
+ * (`showRawBound(maxBytes, knownSize)`, so at most the class cap) is `malformed-answer {why:'oversize'}`, check 9's
+ * word: the answer broke the bound the server sent. Never `too-large`, ccd's word for a file over the cap, whose
+ * `{size, cap}` the server would have to invent. `>`, never `>=`: exactly `raw` bytes is within the bound.
+ */
+export function docsShowBound(job: DocsJob, bytes: Uint8Array): { ok: true } | DocsFailureBody {
+  if (bytes.byteLength > job.raw) return { ok: false, failure: 'malformed-answer', why: 'oversize' };
+  return { ok: true };
+}
+
+/** `A-Z` to `a-z` by char code and nothing else: the rule `contentClass` applies (section 5.1, M5.3), so a KELVIN
+ *  SIGN never lowers to `k`. L0's own helper is module-private; this is its twin for one table lookup. */
+function lowerAscii(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    out += c >= 0x41 && c <= 0x5a ? String.fromCharCode(c + 0x20) : s.charAt(i);
+  }
+  return out;
+}
+
+type RasterExt = keyof typeof DOCS_RASTER_EXT;
+
+/** The raster type a RASTER-CLASS path declares: its final component's text after the last `.`, lowered ASCII-only,
+ *  looked up in `DOCS_RASTER_EXT`. An extension the table lacks means L0's two tables disagree (`contentClass` said
+ *  raster), a defect: it throws, never answers `null`, whose one meaning is "not raster". */
+function declaredRasterType(path: string): RasterType {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const ext = lowerAscii(name.slice(name.lastIndexOf('.') + 1));
+  if (!Object.hasOwn(DOCS_RASTER_EXT, ext)) {
+    throw new Error(`declaredRasterType: '${path}' is raster by contentClass, but no raster type has its extension`);
+  }
+  return DOCS_RASTER_EXT[ext as RasterExt];
+}
+
+/** The raster type `path` declares (section 5.2 step 5's `t`), or `null`, whose one meaning is "`contentClass(path)`
+ *  is not `raster`". */
+export function docsRasterType(path: string): RasterType | null {
+  return contentClass(path) === 'raster' ? declaredRasterType(path) : null;
+}
+
+/** Whether `bytes` are the raster type the path declared (section 5.2 step 5): L0's `sniffRaster` against the
+ *  declared type alone, never a second copy of its table and never "any raster type". */
+export function rasterVerdict(declared: RasterType, bytes: Uint8Array): 'match' | 'mismatch' {
+  return sniffRaster(declared, bytes);
+}
+
+/** UTF-8 as the decoder of a show's verified bytes: a leading byte-order mark is KEPT (it is one of the file's
+ *  bytes), and a malformed sequence would read as U+FFFD (the bytes came from a `text`, so none is). */
+const SHOW_UTF8 = new TextDecoder('utf-8', { ignoreBOM: true });
+
+/**
+ * The `show` a JSON file reply carries (W2's review: check 8 verifies the decoded bytes, not the answer it hands
+ * back): the answer's facts with its ONE content field rebuilt from the verified bytes and the other dropped. A
+ * `utf8` answer's `text` is the bytes decoded, so a lone surrogate (which encodes to U+FFFD's bytes) is served as
+ * U+FFFD; a `base64` answer's `b64` is the answer's, which check 8 proved is exactly the bytes' canonical base64.
+ * A stray `text` beside a `b64`, or a `b64` beside a `text`, never rides. A new object; the answer is never written.
+ */
+function servedShow(answer: DocsShowOk, bytes: Uint8Array): DocsShowOk {
+  const { text: _text, b64: _b64, ...facts } = answer;
+  return answer.encoding === 'utf8' ? { ...facts, text: SHOW_UTF8.decode(bytes) } : { ...facts, b64: answer.b64 };
+}
+
+/**
+ * What the file route answers for a show that passed the adapter and `docsShowBound` (section 3.6, section 5.2
+ * steps 5 and 6), decided here so the route decides nothing:
+ * - `json`: every class but `raster`, the `DocsFileResponse` (`show` is `servedShow`'s: the answer's facts and the
+ *   verified bytes, never the answer's own content field; `from` as given), sent as JSON with `no-store`;
+ * - `bytes`: a raster whose bytes are its declared type, sent as `mime` with `cacheControl` (`cacheControlFor`:
+ *   immutable for a committed pin, `no-store` for a draft) and these exact bytes;
+ * - `refuse`: a raster whose bytes are not, `raster-mismatch {declared, size}` (422) with no bytes; `size` is the
+ *   bytes' `byteLength` (equal to the answer's `size` after check 8).
+ * The representation is a function of `contentClass(pin.path)` alone: no request parameter reaches it.
+ */
+export type DocsFileReply =
+  | { kind: 'json'; body: DocsFileResponse }
+  | { kind: 'bytes'; mime: RasterMime; cacheControl: string; bytes: Uint8Array }
+  | { kind: 'refuse'; body: DocsFailureBody };
+
+export function docsFileReply(pin: DocPin, answer: DocsShowOk, bytes: Uint8Array, from: 'ccd' | 'cache'):
+    DocsFileReply {
+  const cls = contentClass(pin.path);
+  if (cls !== 'raster') {
+    return { kind: 'json', body: { ok: true, contentClass: cls, show: servedShow(answer, bytes), from } };
+  }
+  const declared = declaredRasterType(pin.path);
+  if (rasterVerdict(declared, bytes) === 'mismatch') {
+    return { kind: 'refuse', body: { ok: false, failure: 'raster-mismatch', declared, size: bytes.byteLength } };
+  }
+  return { kind: 'bytes', mime: DOCS_RASTER_TYPES[declared].mime, cacheControl: cacheControlFor(pin, cls), bytes };
+}
+
+// ===== The known size and the committed cache's verdicts (section 6.2, section 6.5; refinement (l)) =====
+
+/** What the listing map holds for one committed `section NUL path` (section 6.5): the blob, the listed size (`null`:
+ *  the tree carried none) and the committed kind. Task 5's `cache.ts` stores exactly this. */
+export type DocsListedFile = { blob: string; size: number | null; kind: ListedKind };
+
+/**
+ * The size the server holds for a show (section 6.2: from server facts only, never the request), for
+ * `docsShowPlan`'s `knownSize`. A committed pin reads its listing entry's size; a draft reads the `fp -> size` map's
+ * value (`draftSize`). `undefined` means "no size fact", one meaning: an unlisted entry and a listed `null` size are
+ * both no fact. A listed 0 is a fact, so `??`, never `||`. The other side's value is ignored.
+ */
+export function docsKnownSize(pin: DocPin, listed: DocsListedFile | undefined, draftSize: number | undefined):
+    number | undefined {
+  return pin.kind === 'committed' ? listed?.size ?? undefined : draftSize;
+}
+
+/** Whether the cache may serve a committed hit (section 6.5): `eligible`, or why not, in this order: no listing
+ *  entry (`unlisted`), a kind that is not file content (`kind`), a served ref not recorded recently (`provenance`). */
+export type DocsCacheVerdict = { eligible: true } | { eligible: false; why: 'unlisted' | 'kind' | 'provenance' };
+
+/** File content: the two committed kinds whose blob is the file's bytes. A symlink's blob is its target text and a
+ *  submodule's is a commit, so neither may hit or fill, even when it shares a blob with a file. */
+function cacheableKind(kind: ListedKind): boolean {
+  return kind === 'file' || kind === 'exec';
+}
+
+/**
+ * The committed hit verdict (section 6.5; refinement (l)): eligible iff the pin's listing entry exists, its kind is
+ * `file` or `exec`, and its `servedRef` was recorded `servedRefAgeMs` ago with `0 <= age < DOCS_LISTING_PROVENANCE_MS`.
+ * `servedRefAgeMs` is `undefined` when the listing never recorded that `servedRef`, one meaning; a negative age (a
+ * clock that went back) and `NaN` vouch for nothing. The clock is the caller's.
+ */
+export function docsCacheVerdict(listed: DocsListedFile | undefined, servedRefAgeMs: number | undefined):
+    DocsCacheVerdict {
+  if (listed === undefined) return { eligible: false, why: 'unlisted' };
+  if (!cacheableKind(listed.kind)) return { eligible: false, why: 'kind' };
+  if (servedRefAgeMs === undefined || !(servedRefAgeMs >= 0 && servedRefAgeMs < DOCS_LISTING_PROVENANCE_MS)) {
+    return { eligible: false, why: 'provenance' };
+  }
+  return { eligible: true };
+}
+
+/** Whether an ok show answer may FILL the blob cache (section 6.5): a committed pin whose listing entry exists and
+ *  is file content. A draft never fills, and with no listing entry the answer is served but not cached. */
+export function docsCacheFill(pin: DocPin, listed: DocsListedFile | undefined): boolean {
+  return pin.kind === 'committed' && listed !== undefined && cacheableKind(listed.kind);
+}
+
+/**
+ * A cache hit's `show` (refinement (l)): the STORED content (`size`, `sha256`, `encoding` and its one content field),
+ * the REQUEST's pin echoes (`source:'committed'`, `section`, `path`, `commit`), the listing's `blob`,
+ * `onRef:'contains'` (the listing vouched within `DOCS_LISTING_PROVENANCE_MS`) and `elapsedMs: 0`. No `mode`: it was
+ * not measured for this request, so it is absent, never copied. The same blob under a new commit or path answers that
+ * commit and path. A new object; the stored answer is never written.
+ */
+export function docsCacheHitAnswer(stored: DocsShowOk, pin: Extract<DocPin, { kind: 'committed' }>, blob: string):
+    DocsShowOk {
+  const content = stored.encoding === 'base64' ? { b64: stored.b64 } : { text: stored.text };
+  return {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 0, source: 'committed', section: pin.section, path: pin.path,
+    size: stored.size, sha256: stored.sha256, encoding: stored.encoding, ...content,
+    commit: pin.commit, blob, onRef: 'contains',
+  };
+}
+```
+
+Then check the purity scan's two traps by hand before running it: no code line may hold `Buffer`, and none may put a quote right after the word `from`.
+
+Run: `grep -nE "\bfrom\s*['\"]" server/src/docs/policy.ts`
+Expected: exactly one line, the import statement's `} from '../../../shared/docs.js';`.
+
+- [ ] **Step 4: Run them to verify they pass.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts )`
+Expected: `Tests  574 passed (574)` (W2's 307, Task 1's 97, this task's 170). The purity describe stays green over the grown file: the only import specifier is still `../../../shared/docs.js`, and the new code reads no clock, names no `Buffer`, `console`, `reply` or `fastify`.
+
+- [ ] **Step 5: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` is a known load flake, so a red there is re-run alone before it is called broken.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The first compiles the new L1 under the server's flags (`LISTED_KINDS` typed by L0's union, the `DocsFileReply` arms, the `Extract<DocPin, ...>` pin); the second compiles the new cases (the `t2TreeWith` changes typed `any` on purpose, the `as const` tables, the `DocsShowOk` fixtures).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/docs-source.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  362 passed (362)`: L0's raster table and `sniffRaster` are consumed, never amended, and the adapter, which imports `policy.ts`, is unchanged.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-budget.test.ts )`
+Expected: `Test Files  1 passed (1)`; together with `docs-source` it measured `142 passed (142)`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  472 passed (472)` (Measured 4): no name added here has a second home, the PNG signature is still spelled only in `shared/docs.ts`, and the docs ring guard still holds `policy.ts` to L1.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/capsupported.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  77 passed (77)`. `topology-clean` needs `origin/main` (or `CCRC_HISTORY_BASE=<base sha>`); this task adds only placeholder names (`demo`, `ws/a`, `example-org/example-repo`, `/srv/demo`) and spells no cap token.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Measured 4); Task 1 Step 0 installed real modules.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add server/src/docs/policy.ts server/test/docs-policy.test.ts
+git commit -m "server: docs L1 for the routes, part 2 (docs W3)" \
+  -m "docsAnswerShape (an iterative depth walk to DOCS_ANSWER_MAX_DEPTH for every verb, then the tree fields W3 reads and the index's projects array; malformed-answer why:schema, never a TypeError in refreshDue or a RangeError at serialisation, W2's carry); docsShowBound (decoded bytes over job.raw are malformed-answer why:oversize, W2's carry); docsRasterType and rasterVerdict (sniffRaster against the declared type alone); docsFileReply (representation by contentClass alone: JSON whose show carries the verified bytes, never the answer's own content field, raw raster bytes with cacheControlFor, or raster-mismatch {declared, size}); docsKnownSize (server facts only, a listed 0 is a fact); docsCacheVerdict, docsCacheFill and docsCacheHitAnswer (file or exec only, provenance within DOCS_LISTING_PROVENANCE_MS, the request's pin over the stored content, no mode)." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state):
+
+```json
+[
+ {
+  "id": "W3-T2-M1",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "    if (depth > DOCS_ANSWER_MAX_DEPTH) return false;",
+  "new": "    if (depth > DOCS_ANSWER_MAX_DEPTH + 1) return false;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 5 failed | 569 passed (574) — a 17-deep nest of arrays only, and of objects only, is schema; docs-fetch: a 17-deep nest under an unknown key is schema; docs-index: a 17-deep nest under an unknown key is schema; docs-show: a 17-deep nest under an unknown key is schema; docs-tree: a 17-deep nest under an unknown key is schema"
+ },
+ {
+  "id": "W3-T2-M2",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (!withinDepth(answer)) return schemaFault();\n",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 6 failed | 568 passed (574) — a 17-deep nest of arrays only, and of objects only, is schema; a 500 000-deep listing value is schema, and the guard itself never throws; docs-fetch: a 17-deep nest under an unknown key is schema; docs-index: a 17-deep nest under an unknown key is schema; docs-show: a 17-deep nest under an unknown key is schema; docs-tree: a 17-deep nest under an unknown key is schema"
+ },
+ {
+  "id": "W3-T2-M3",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (!freshnessOk(own(t, 'freshness'))) return false;\n",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 6 failed | 568 passed (574) — freshness deleted is schema; freshness.remote 'upstream' is schema; freshness.stamp {} (no attemptAgeMs) is schema; stamp.attemptAgeMs the string '1' is schema; stamp.lastOutcome 7 is schema; the order the routes keep: refreshDue is reached only after an ok shape"
+ },
+ {
+  "id": "W3-T2-M4",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "Number.isFinite(own(s, 'attemptAgeMs')) && ",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — stamp.attemptAgeMs the string '1' is schema"
+ },
+ {
+  "id": "W3-T2-M5",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return Array.isArray(entries) && entries.every(entryOk);",
+  "new": "  return Array.isArray(entries);",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 14 failed | 560 passed (574) — an entry that is null is schema; an entry whose committed blob is not a sha is schema; an entry whose committed is {} (no kind, no blob) is schema; an entry whose committed kind is 'tree' is schema; an entry whose committed size is '12' is schema; an entry whose committed size is -1 is schema; an entry whose draft.fp is 'x', not a fingerprint is schema; an entry whose draft.fp is 7 is schema; an entry whose draft.size is 1.5 is schema; an entry with no committed key at all is schema; an entry with no draft key at all is schema; an entry with no path is schema; an entry with section 'docs' is schema; an entry with section 9 is schema"
+ },
+ {
+  "id": "W3-T2-M6",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return Array.isArray(projects) && projects.every(isRecord);",
+  "new": "  return !Array.isArray(projects) || projects.every(isRecord);",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 572 passed (574) — projects absent is schema; projects not an array is schema"
+ },
+ {
+  "id": "W3-T2-M7",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (bytes.byteLength > job.raw) return",
+  "new": "  if (bytes.byteLength >= job.raw) return",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 3 failed | 571 passed (574) — a listed size lowers the bound: a 5-byte listing answered with 6 bytes is oversize; exactly raw bytes is ok; one more is malformed-answer {why:oversize}; the class cap's plan: 2 097 152 bytes ok, 2 097 153 oversize"
+ },
+ {
+  "id": "W3-T2-M8",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (bytes.byteLength > job.raw) return",
+  "new": "  if (bytes.byteLength > job.wire) return",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 4 failed | 570 passed (574) — a listed size lowers the bound: a 5-byte listing answered with 6 bytes is oversize; a listed size of 0 holds the answer to no bytes at all; exactly raw bytes is ok; one more is malformed-answer {why:oversize}; the class cap's plan: 2 097 152 bytes ok, 2 097 153 oversize"
+ },
+ {
+  "id": "W3-T2-M9",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (rasterVerdict(declared, bytes) === 'mismatch') {",
+  "new": "  if (false && rasterVerdict(declared, bytes) === 'mismatch') {",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 7 failed | 567 passed (574) — a.png holding GIF bytes is refused: raster-mismatch {declared, size}, no bytes; a.png holding JPEG bytes is refused: raster-mismatch {declared, size}, no bytes; a.png holding SVG text is refused: raster-mismatch {declared, size}, no bytes; a.png holding its own magic cut short is refused: raster-mismatch {declared, size}, no bytes; a.png holding no bytes is refused: raster-mismatch {declared, size}, no bytes; a.png holding three bytes is refused: raster-mismatch {declared, size}, no bytes; x.jpg holding PNG bytes names its declared type as the table's key: jpeg"
+ },
+ {
+  "id": "W3-T2-M10",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (cls !== 'raster') {",
+  "new": "  if (cls !== 'raster' && cls !== 'svg') {",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 572 passed (574) — a.svg is DocsFileResponse JSON of class svg, from carried; a.svg never yields raw bytes, even holding PNG bytes, committed or draft"
+ },
+ {
+  "id": "W3-T2-M11",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (cls !== 'raster') {",
+  "new": "  if (cls !== 'raster' && cls !== 'html') {",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 4 failed | 570 passed (574) — a.htm never yields raw bytes, even holding PNG bytes, committed or draft; a.html is DocsFileResponse JSON of class html, from carried; a.html never yields raw bytes, even holding PNG bytes, committed or draft; a.png.html is DocsFileResponse JSON of class html, from carried"
+ },
+ {
+  "id": "W3-T2-M12",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return sniffRaster(declared, bytes);",
+  "new": "  return (Object.keys(DOCS_RASTER_TYPES) as RasterType[]).some((t) => sniffRaster(t, bytes) === 'match') ? 'match' : 'mismatch';",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 15 failed | 559 passed (574) — a.png holding GIF bytes is refused: raster-mismatch {declared, size}, no bytes; a.png holding JPEG bytes is refused: raster-mismatch {declared, size}, no bytes; declared gif over the bytes of jpeg: match only on the diagonal; declared gif over the bytes of png: match only on the diagonal; declared gif over the bytes of webp: match only on the diagonal; declared jpeg over the bytes of gif: match only on the diagonal; declared jpeg over the bytes of png: match only on the diagonal; declared jpeg over the bytes of webp: match only on the diagonal; declared png over the bytes of gif: match only on the diagonal; declared png over the bytes of jpeg: match only on the diagonal; declared png over the bytes of webp: match only on the diagonal; declared webp over the bytes of gif: match only on the diagonal; declared webp over the bytes of jpeg: match only on the diagonal; declared webp over the bytes of png: match only on the diagonal; x.jpg holding PNG bytes names its declared type as the table's key: jpeg"
+ },
+ {
+  "id": "W3-T2-M13",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "listed?.size ?? undefined",
+  "new": "listed?.size || undefined",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 572 passed (574) — a listed size of 0 reaches the show plan as a bound of 0; committed, listed size 0: a fact"
+ },
+ {
+  "id": "W3-T2-M14",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "servedRefAgeMs < DOCS_LISTING_PROVENANCE_MS)",
+  "new": "servedRefAgeMs <= DOCS_LISTING_PROVENANCE_MS)",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — a file recorded 600 000 ms ago"
+ },
+ {
+  "id": "W3-T2-M15",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (!cacheableKind(listed.kind)) return { eligible: false, why: 'kind' };\n",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 3 failed | 571 passed (574) — a submodule entry; a symlink entry; a symlink entry with no provenance: kind first"
+ },
+ {
+  "id": "W3-T2-M16",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return pin.kind === 'committed' && listed !== undefined && cacheableKind(listed.kind);",
+  "new": "  return listed !== undefined && cacheableKind(listed.kind);",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — fill: draft, listed file"
+ },
+ {
+  "id": "W3-T2-M17",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "    commit: pin.commit, blob, onRef: 'contains',",
+  "new": "    commit: stored.commit, blob, onRef: 'contains',",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — answers the pin's commit, section and path, the listing's blob, onRef contains, elapsedMs 0, no mode"
+ },
+ {
+  "id": "W3-T2-M18",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "    commit: pin.commit, blob, onRef: 'contains',",
+  "new": "    commit: pin.commit, blob, onRef: 'contains', mode: stored.mode,",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — answers the pin's commit, section and path, the listing's blob, onRef contains, elapsedMs 0, no mode"
+ },
+ {
+  "id": "W3-T2-M19",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (!isRecord(answer)) return schemaFault();\n",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 4 failed | 570 passed (574) — the answer itself must be a plain object: a number is schema for every verb; the answer itself must be a plain object: a string is schema for every verb; the answer itself must be a plain object: an array is schema for every verb; the answer itself must be a plain object: null is schema for every verb"
+ },
+ {
+  "id": "W3-T2-M20",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return isText(v) && v.length > 0 && !v.includes(KEY_SEP);",
+  "new": "  return isText(v) && v.length > 0;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 572 passed (574) — ref.served holding a NUL is schema; repo.key holding a NUL is schema"
+ },
+ {
+  "id": "W3-T2-M21",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  const ext = lowerAscii(name.slice(name.lastIndexOf('.') + 1));",
+  "new": "  const ext = name.slice(name.lastIndexOf('.') + 1);",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 10 failed | 564 passed (574) — .gif in every ASCII case: raster to contentClass, its type to docsRasterType; .jpeg in every ASCII case: raster to contentClass, its type to docsRasterType; .jpg in every ASCII case: raster to contentClass, its type to docsRasterType; .png in every ASCII case: raster to contentClass, its type to docsRasterType; and 6 more"
+ },
+ {
+  "id": "W3-T2-M22",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return contentClass(path) === 'raster' ? declaredRasterType(path) : null;",
+  "new": "  return Object.hasOwn(DOCS_RASTER_EXT, lowerAscii(path.slice(path.lastIndexOf('.') + 1))) ? declaredRasterType(path) : null;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 572 passed (574) — .png is null, agreeing with contentClass; dir/.png is null, agreeing with contentClass"
+ },
+ {
+  "id": "W3-T2-M23",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "!(servedRefAgeMs >= 0 && servedRefAgeMs < DOCS_LISTING_PROVENANCE_MS)",
+  "new": "!(servedRefAgeMs < DOCS_LISTING_PROVENANCE_MS)",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — a clock that went back: a negative age"
+ },
+ {
+  "id": "W3-T2-M24",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "    commit: pin.commit, blob, onRef: 'contains',",
+  "new": "    commit: pin.commit, blob, onRef: stored.onRef,",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — answers the pin's commit, section and path, the listing's blob, onRef contains, elapsedMs 0, no mode"
+ },
+ {
+  "id": "W3-T2-M25",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "    for (const child of Array.isArray(value) ? value : Object.values(value)) stack.push([child, depth + 1]);",
+  "new": "    if (Array.isArray(value)) for (const child of value) stack.push([child, depth + 1]);",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 6 failed | 568 passed (574) — a 17-deep nest of arrays only, and of objects only, is schema; a 500 000-deep listing value is schema, and the guard itself never throws; docs-fetch: a 17-deep nest under an unknown key is schema; docs-index: a 17-deep nest under an unknown key is schema; docs-show: a 17-deep nest under an unknown key is schema; docs-tree: a 17-deep nest under an unknown key is schema"
+ },
+ {
+  "id": "W3-T2-M26",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (!isText(commit) || !isDocsCommit(commit)) return false;\n",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 572 passed (574) — ref.commit absent is schema; ref.commit not a sha is schema"
+ },
+ {
+  "id": "W3-T2-M27",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (!isText(kind) || !Object.hasOwn(LISTED_KINDS, kind)) return false;\n",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — an entry whose committed kind is 'tree' is schema"
+ },
+ {
+  "id": "W3-T2-M28",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return isText(blob) && isDocsCommit(blob) && (size === null || isByteCount(size));",
+  "new": "  return isText(blob) && (size === null || isByteCount(size));",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — an entry whose committed blob is not a sha is schema"
+ },
+ {
+  "id": "W3-T2-M29",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;",
+  "new": "  return typeof v === 'number';",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 572 passed (574) — an entry whose committed size is -1 is schema; an entry whose draft.size is 1.5 is schema"
+ },
+ {
+  "id": "W3-T2-M30",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "(fp === null || (isText(fp) && isDocsFingerprint(fp)))",
+  "new": "(fp === null || isText(fp))",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — an entry whose draft.fp is 'x', not a fingerprint is schema"
+ },
+ {
+  "id": "W3-T2-M31",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (requested !== null && !isText(requested)) return false;\n",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — ref.requested 7 is schema"
+ },
+ {
+  "id": "W3-T2-M32",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return (remote === 'origin' || remote === null) && stampOk(own(f, 'stamp'));",
+  "new": "  return stampOk(own(f, 'stamp'));",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — freshness.remote 'upstream' is schema"
+ },
+ {
+  "id": "W3-T2-M33",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (!isText(section) || !isDocsSection(section) || !isKeyText(own(e, 'path'))) return false;",
+  "new": "  if (!isText(section) || !isKeyText(own(e, 'path'))) return false;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — an entry with section 'docs' is schema"
+ },
+ {
+  "id": "W3-T2-M34",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "function committedFactsOk(c: unknown): boolean {\n  if (c === null) return true;",
+  "new": "function committedFactsOk(c: unknown): boolean {\n  if (c === null || c === undefined) return true;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — an entry with no committed key at all is schema"
+ },
+ {
+  "id": "W3-T2-M35",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": " && isText(own(s, 'lastOutcome'))",
+  "new": "",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — stamp.lastOutcome 7 is schema"
+ },
+ {
+  "id": "W3-T2-M36",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "export const DOCS_ANSWER_MAX_DEPTH = 16;",
+  "new": "export const DOCS_ANSWER_MAX_DEPTH = 17;",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 6 failed | 568 passed (574) — DOCS_ANSWER_MAX_DEPTH is 16, its own literal on exactly one line; a 17-deep nest of arrays only, and of objects only, is schema; docs-fetch: a 17-deep nest under an unknown key is schema; docs-index: a 17-deep nest under an unknown key is schema; docs-show: a 17-deep nest under an unknown key is schema; docs-tree: a 17-deep nest under an unknown key is schema"
+ },
+ {
+  "id": "W3-T2-M37",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return { kind: 'bytes', mime: DOCS_RASTER_TYPES[declared].mime, cacheControl: cacheControlFor(pin, cls), bytes };",
+  "new": "  return { kind: 'bytes', mime: DOCS_RASTER_TYPES[declared].mime, cacheControl: cacheControlFor(pin, cls), bytes: bytes.slice() };",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 4 failed | 570 passed (574) — a committed a.png holding png bytes is raw bytes, image/png, immutable; a committed x.GIF holding gif bytes is raw bytes, image/gif, immutable; a committed x.jpg holding jpeg bytes is raw bytes, image/jpeg, immutable; a committed x.webp holding webp bytes is raw bytes, image/webp, immutable"
+ },
+ {
+  "id": "W3-T2-M38",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  const content = stored.encoding === 'base64' ? { b64: stored.b64 } : { text: stored.text };",
+  "new": "  const content = { b64: stored.b64, text: stored.text };",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 2 failed | 572 passed (574) — a base64 stored answer keeps b64 and carries no text key; answers the pin's commit, section and path, the listing's blob, onRef contains, elapsedMs 0, no mode"
+ },
+ {
+  "id": "W3-T2-M39",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "show: servedShow(answer, bytes), from }",
+  "new": "show: answer, from }",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 11 failed | 563 passed (574) — a is DocsFileResponse JSON of class other, from carried; a lone-surrogate text (its UTF-8 is the replacement character's bytes) is served as U+FFFD; a stray b64 beside a utf8 text is dropped: the show carries the text alone; a stray text beside a canonical b64 is dropped: the show carries the b64 alone; and 7 more"
+ },
+ {
+  "id": "W3-T2-M40",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "new TextDecoder('utf-8', { ignoreBOM: true })",
+  "new": "new TextDecoder('utf-8', { ignoreBOM: false })",
+  "tests": [
+   "test/docs-policy.test.ts"
+  ],
+  "red": "server docs-policy: 1 failed | 573 passed (574) — a leading byte-order mark is one of the bytes: the text keeps it"
+ }
+]
+```
+
+### Task 3: hooks.ts: the provenance onRequest and its throttled log, the request-body error handler, the response-policy onSend, and sendDocsFailure
+
+**Model routing:** `sonnet`, effort `high` — Fastify's hook semantics are the trap: `onSend` sees a string or a `Buffer` payload and the content-length is set after it; `reply.getHeader` answers a string, a number, an array or `undefined`; a hook that sends must `return` the reply; a child error handler that throws hands the error to its parent's; and Fastify 5.10 types a thrown value as `unknown`. Every shape below was measured on the installed fastify 5.10.0 (the ground file's section E).
+
+**Spec rows:** M3.5 (a navigation is refused), M3.6 (a `sec-fetch-site` other than `same-origin` is refused), M3.7 (the marker is required; the marker alone admits a browser that sends no `Sec-Fetch-*`), M5.5 (a content type outside the allowlist is replaced by 500 `response-type-refused`); section 3.8's log line ("at most once a minute per `why`", refinement (o)); refinement (e) (Fastify's request-body refusals become `bad-query {why:'body'}`; a defect stays Fastify's default 500, whose body carries no message of the thrower's); section 5.3's four headers and section 6.6's Cache-Control at the hook; section 3.7's status and `Retry-After` through `sendDocsFailure`; F1's analogue (a gate refusal on a matched docs route still carries the docs headers). The real server's half (M3.8, M5.4: the gate before provenance and every route of the real table) is Task 9's; the routes that call `sendDocsFailure` are Tasks 6 and 7.
+
+**Files:**
+- Create: `server/src/docs/hooks.ts` — L4, 94 lines: `sendDocsFailure`, the module-private `replyHeaderText` and `errorCode`, `installDocsRequestPolicy`, `installDocsResponsePolicy`. It is one of the four L4 names W2's ring guard already reserves (`DOCS_RING_ROLES` in `single-definition.test.ts`), so it may import fastify and name `reply`; `DOCS_RING_FLOOR` gains it in Task 9, not here.
+- Create: `server/test/docs-headers.test.ts` — 419 lines, 48 cases on a bare Fastify. Task 9 appends M5.4's describe at its end.
+- Test: `server/test/docs-headers.test.ts`; guards `server/test/docs-policy.test.ts`, `server/test/single-definition.test.ts`, `server/test/topology-clean.test.ts`, `server/test/capsupported.test.ts`, `server/test/typecheck-tests.test.ts`, and the censuses that read `server/src` as text (`server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts`, `server/test/verb-gate.test.ts`).
+
+This task edits no existing file, so it has no Find block. Before Step 1, check that both files are absent and that Task 1's and Task 2's names exist (the tree as Task 2 left it):
+
+Run: `test ! -e server/src/docs/hooks.ts && test ! -e server/test/docs-headers.test.ts && grep -q '^export function docsBodyErrorVerdict' server/src/docs/policy.ts && grep -q '^export function docsBusyBody' server/src/docs/policy.ts && echo T3-BASE-OK`
+Expected: `T3-BASE-OK`. If it does not print, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes, from `fastify` (5.10.0): `FastifyInstance` (`addHook('onRequest', async (req, reply) => ...)`, `addHook('onSend', async (req, reply, payload) => ...)`, `setErrorHandler((err: unknown, req, reply) => ...)`), `FastifyReply` (`code`, `header`, `headers`, `getHeader(name): number | string | string[] | undefined`, `removeHeader`, `send`, `statusCode`).
+- Consumes, from W2's `server/src/docs/policy.ts`: `DOCS_FAILURE_HTTP: Record<DocsFailure, number>`; `docsProvenance(headers: DocsHeaderBag): DocsProvenance` (`req.headers` is assignable to `DocsHeaderBag`); `docsRetryAfterSeconds(body: DocsFailureBody): number | null` (Task 1's hardened body); `docsSendPolicy(statusCode: number, contentType: string, cacheControl: string | undefined): DocsSendVerdict` (`contentType` is `''` when none was set; `cacheControl` `undefined` when the route set none), whose `pass` arm carries `headers` and whose `refuse` arm carries `status`, `headers`, `remove`, `body` and `contentType` (already cut to 80 characters). From Task 1: `docsForeignRequestBody(v: Exclude<DocsProvenance, { ok: true }>): DocsFailureBody`, `docsBodyErrorVerdict(code: unknown): DocsBodyError`, `DOCS_DEFECT_MESSAGE` (`'docs route defect'`), `docsLogDue(lastMs: number | undefined, nowMs: number): boolean`, and (test only) `docsBusyBody(lane)`; from W2 (test only) `DOCS_CACHE_IMMUTABLE`.
+- Consumes, from `shared/docs.ts` (W1): `type DocsFailureBody`; (test only) `DOCS_REQUEST_HEADER`, `DOCS_REQUEST_HEADER_VALUE`, `DOCS_RESPONSE_HEADERS`, `DOCS_RASTER_TYPES`.
+- Produces, in `server/src/docs/hooks.ts`:
+  - `export function sendDocsFailure(reply: FastifyReply, body: DocsFailureBody): FastifyReply` — `reply.code(DOCS_FAILURE_HTTP[body.failure])`; `retry-after: String(s)` exactly when `docsRetryAfterSeconds(body)` answers a number `s`; `return reply.send(body)`. Tasks 6 and 7 send every docs failure through it (`return sendDocsFailure(reply, body)` in an async handler).
+  - `export function installDocsRequestPolicy(app: FastifyInstance, nowMs: () => number = Date.now): void` — on the plugin's own instance: (1) an `onRequest` hook: `v = docsProvenance(req.headers)`; ok, nothing; refused, log `ccrc-server: docs refused a <why> request` when `docsLogDue(lastLogged.get(why), nowMs())` (then record `now`), and `return sendDocsFailure(reply, docsForeignRequestBody(v))`; (2) the plugin's error handler: `docsBodyErrorVerdict(errorCode(err))`; `body`, `sendDocsFailure(reply, v.body)`; `defect`, `throw new Error(DOCS_DEFECT_MESSAGE, { cause: err })` (Fastify hands it to the parent's handler, its default; the thrower's message never reaches the body). `lastLogged` is a `Map<string, number>` created per call, never at module scope.
+  - `export function installDocsResponsePolicy(app: FastifyInstance): void` — on the plugin's own instance, an `onSend` hook: `v = docsSendPolicy(reply.statusCode, replyHeaderText(reply, 'content-type') ?? '', replyHeaderText(reply, 'cache-control'))`; set `v.headers`; `pass`, return the payload unchanged; `refuse`, remove each `v.remove` header, `reply.code(v.status)`, log `` `ccrc-server: docs response refused, content-type ${JSON.stringify(v.contentType)}` ``, return `JSON.stringify(v.body)`.
+  - Module-private: `replyHeaderText(reply, name): string | undefined` (`undefined` only when the header is absent: one meaning; a number reads as its decimal text, an array as its `', '`-join) and `errorCode(err: unknown): unknown` (the thrown value's `code`, `undefined` when it is not an object or carries none).
+  - Section 3.4's registration (Task 8) calls `installDocsRequestPolicy(app);` and `installDocsResponsePolicy(app);` with the default clock, inside the one `await app.register(async (app) => { ... })`.
+
+**Decisions this task makes (refinements (e) and (o) applied; none is a deviation):**
+1. **The hooks decide nothing.** Every refusal, body, status, header, cadence and verdict is L1's; `hooks.ts` quotes no failure word (Task 9's scan) and spells none of `DOCS_RESPONSE_HEADERS`' names or values nor the request marker (this task's own scan, the last describe): it sets whatever the verdict carries. The two header names it reads (`content-type`, `cache-control`) and the one it writes (`retry-after`) are HTTP's, as every other route in `server/src` spells them.
+2. **One send path.** A provenance refusal and a body refusal go through `sendDocsFailure`, the same function the routes use, so the status table and the `Retry-After` rule have one applier. `sendDocsFailure` sets the status and `Retry-After` only; the four headers and `no-store` come from the `onSend` hook, which every response of a matched docs route passes through (a gate refusal, a provenance refusal and a default 500 included: F1).
+3. **The error handler reads `code` defensively.** Fastify 5.10 types a thrown value as `unknown`, so `errorCode` reads `code` only off an object; L1's `docsBodyErrorVerdict` already treats any non-`FST_ERR_CTP_` value (an absent code included) as a defect. A defect is re-thrown, never answered here: Fastify's `handleError` hands a throw from a child error handler to its parent's (`lib/error-handler.js`), so a defect stays Fastify's default 500, decorated by this plugin's `onSend`. It is re-thrown as a FRESH error carrying L1's `DOCS_DEFECT_MESSAGE`, the original kept as its `cause` (Fastify's default serialiser writes `statusCode`, `error` and `message` only, measured): the default body echoes `err.message`, so re-throwing the original would put whatever the thrower wrote, a host path or a line of stderr, in front of the client. The planted defect throws exactly that text, and the body is `{statusCode:500, error:'Internal Server Error', message:'docs route defect'}` with none of it (the plan review's T3 note; W3-T3-M19). The error handler's sync body sends and returns nothing: a value it returned would be handed to `reply.send` again (`lib/error-handler.js`), a second send of a reply already sent.
+4. **The log map is per call** (`lastLogged` inside `installDocsRequestPolicy`), so each server instance keeps its own minute per `why`, and the clock is the caller's (`nowMs`, default `Date.now`), so the test needs no fake timers and no timer is owned.
+5. **`replyHeaderText`'s `undefined` has one meaning** (the route set no such header), which is exactly `docsSendPolicy`'s `cacheControl` contract; the content type maps `undefined` to `''`, `docsSendPolicy`'s "none set". An array or a number reads as text that can never equal an allowed type, so it is refused, never guessed.
+
+**Measured while planning** (the shared scratch tree at Task 2's state, then a separate copy for the mutations; none is a deviation):
+1. **RED is a failed suite**, `Test Files  1 failed (1)`, `Tests  no tests`, `Error: Cannot find module '../src/docs/hooks.js'`: every case imports the module this task creates. GREEN is `Tests  48 passed (48)`.
+2. **Fastify 5.10 shapes the test relies on**: a planted GET with no type sending a string answers `text/plain; charset=utf-8`, and one sending a `Buffer` answers `application/octet-stream`; `reply.type('image/png ; x')` stays exactly that text, so the exact comparison refuses it; a root `onRequest` that sends a 401 on a matched plugin route still runs the plugin's `onSend`; an unmatched `/api/docs/...` URL and a route outside the plugin run none of the plugin's hooks; a 1 MiB + 1 JSON body (`FST_ERR_CTP_BODY_TOO_LARGE`, 413), a form-encoded body (`FST_ERR_CTP_INVALID_MEDIA_TYPE`, 415), invalid or empty JSON and a `__proto__` key (`FST_ERR_CTP_INVALID_JSON_BODY` / `FST_ERR_CTP_EMPTY_JSON_BODY`, 400) all reach the plugin's error handler after `onRequest`; a `text/plain` body reaches the handler as a string; the marker sent twice reaches `docsProvenance` as text that is not `'1'`.
+3. **Removing `content-length` on a refusal is unreachable by any fixture.** Fastify 5.10's `onSendEnd` recomputes a `content-length` that does not match a non-HEAD payload (`lib/reply.js`), and an exposed HEAD route's own `onSend` (`lib/head-route.js`) sets it from the final payload, so a mutation that keeps a stale `content-length` stays green on GET and on HEAD (measured, then dropped from the table). The remove loop itself is pinned by the `content-disposition` case (W3-T3-M10), and the list's contents by W2's `docsSendPolicy` rows; the `own-length` row stays, asserting the refused answer's length is the new body's.
+4. **Guards**: `tsc` on both projects is clean (the first draft read `err.code` and failed `TS18046: 'err' is of type 'unknown'`; `errorCode` is the fix); `docs-policy` `574 passed (574)` (Task 2's count, unchanged: this task appends nothing to `policy.ts`); `single-definition` `472 passed (472)` (`hooks.ts` is an L4 name in `DOCS_RING_ROLES`, so the ring guard holds it to L4's rules, and no exported name has a second home); `topology-clean` + `capsupported` `77 passed (77)` with `CCRC_HISTORY_BASE=<base sha>`; `auth-gate` + `box-token-census` + `verb-gate` `193 passed (193)` (no registration, no box-token text and no `CCD_ARGV.` call in `hooks.ts`). Environment-only reds, as Tasks 1 and 2 recorded: with no `origin/main`, `topology-clean`'s `resolved a base to measure against` reds alone (`1 failed | 54 passed (55)`); with a symlinked `pwa/node_modules`, `typecheck-tests`' `PWA_TSC really is pwa's own installed compiler` reds alone (`1 failed | 11 passed (12)`).
+5. **Mutations**: nineteen, each measured red in a separate copy (`git archive HEAD | tar -x -C <copy>`, `git -C <copy> init -q`, `server/node_modules` linked in), restored after each. The architecture's M1-M13 are W3-T3-M1..M13 in its order (M2-M5 mutate W2's `docsProvenance` in `policy.ts` and are re-measured here at the route level, so each reds `docs-headers` as well as W2's own rows); M14-M18 pin the guards the decisions above add: the refusal's log line, the no-header-spelling scan, the status `sendDocsFailure` sets, the refusal's lack of a `verdict` at L4, and the error handler reading the code; M19 pins Decision 3's fresh error (the original re-thrown puts its message in the body). W3-T3-M12 anchors on the defect line as this task writes it.
+
+| id | file | red |
+|---|---|---|
+| W3-T3-M1 | `server/src/docs/hooks.ts` | server docs-headers: 15 failed \| 33 passed (48) |
+| W3-T3-M2 | `server/src/docs/policy.ts` | server docs-headers: 5 failed \| 43 passed (48) |
+| W3-T3-M3 | `server/src/docs/policy.ts` | server docs-headers: 6 failed \| 42 passed (48) |
+| W3-T3-M4 | `server/src/docs/policy.ts` | server docs-headers: 5 failed \| 43 passed (48) |
+| W3-T3-M5 | `server/src/docs/policy.ts` | server docs-headers: 1 failed \| 47 passed (48) |
+| W3-T3-M6 | `server/src/docs/hooks.ts` | server docs-headers: 2 failed \| 46 passed (48) |
+| W3-T3-M7 | `server/src/docs/hooks.ts` | server docs-headers: 3 failed \| 45 passed (48) |
+| W3-T3-M8 | `server/src/docs/hooks.ts` | server docs-headers: 38 failed \| 10 passed (48) |
+| W3-T3-M9 | `server/src/docs/hooks.ts` | server docs-headers: 10 failed \| 38 passed (48) |
+| W3-T3-M10 | `server/src/docs/hooks.ts` | server docs-headers: 1 failed \| 47 passed (48) |
+| W3-T3-M11 | `server/src/docs/hooks.ts` | server docs-headers: 7 failed \| 41 passed (48) |
+| W3-T3-M12 | `server/src/docs/hooks.ts` | server docs-headers: 2 failed \| 46 passed (48) |
+| W3-T3-M13 | `server/src/docs/hooks.ts` | server docs-headers: 2 failed \| 46 passed (48) |
+| W3-T3-M14 | `server/src/docs/hooks.ts` | server docs-headers: 10 failed \| 38 passed (48) |
+| W3-T3-M15 | `server/src/docs/hooks.ts` | server docs-headers: 1 failed \| 47 passed (48) |
+| W3-T3-M16 | `server/src/docs/hooks.ts` | server docs-headers: 23 failed \| 25 passed (48) |
+| W3-T3-M17 | `server/src/docs/hooks.ts` | server docs-headers: 12 failed \| 36 passed (48) |
+| W3-T3-M18 | `server/src/docs/hooks.ts` | server docs-headers: 5 failed \| 43 passed (48) |
+| W3-T3-M19 | `server/src/docs/hooks.ts` | server docs-headers: 2 failed \| 46 passed (48) |
+
+- [ ] **Step 1: Write the failing test.** Create `server/test/docs-headers.test.ts` with exactly this content:
+
+```ts
+// `server/src/docs/hooks.ts`, the docs plugin's request and response policy (design 2026-10-01, section 3.8, section
+// 5.3, section 3.4's registration; W3 refinements (e) and (o)). Task 3 drives the hooks on a BARE Fastify: a root
+// `onRequest` stub stands in for the gate (it is registered before the plugin, as `installGate` is in `buildServer`),
+// the plugin is registered exactly as section 3.4 registers the docs plugin, and planted routes stand in for the docs
+// routes (a handler entry is a planted route's "exec"). M3.5-M3.7 (provenance), the refusal log, F1's analogue (a
+// gate refusal still carries the docs headers), the request-body error handler, M5.5 (the content-type allowlist),
+// Cache-Control at the hook, and `sendDocsFailure`. Task 9 appends M5.4 (every route of the REAL server's table).
+//
+// The PWA's own headers are built from L0's constants, never the quoted marker; the response headers and the raster
+// magic are read from L0's tables, never typed here.
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { installDocsRequestPolicy, installDocsResponsePolicy, sendDocsFailure } from '../src/docs/hooks.js';
+import { DOCS_CACHE_IMMUTABLE, docsBusyBody } from '../src/docs/policy.js';
+import {
+  DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, type DocsFailureBody,
+} from '../../shared/docs.js';
+
+const HOOKS_SRC = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/docs/hooks.ts'), 'utf8');
+
+/** What the PWA's `fetch()` sends (section 3.8): the marker, a same-origin site and a non-navigation mode. */
+const PWA: Readonly<Record<string, string>> = {
+  [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors',
+};
+const JSON_TYPE = 'application/json; charset=utf-8';
+/** A PNG's own magic followed by four bytes, from L0's table. */
+const PNG_BYTES = Uint8Array.from([...DOCS_RASTER_TYPES.png.magic[0][0].bytes, 1, 2, 3, 4]);
+
+/** A planted response: its content type (`null`: the route sets none), body, and any extra headers it sets. */
+interface Sent { type: string | null; body: string | Uint8Array; status?: number; headers?: Record<string, string> }
+
+/** Handler entries: a planted route's "exec". Reset before each case. */
+let entered = 0;
+
+/** M5.5's refused responses and the passing ones (by name, so each case names its route). */
+const SENT: Readonly<Record<string, Sent>> = {
+  html: { type: 'text/html', body: '<p>x</p>' },
+  'html-utf8': { type: 'text/html; charset=utf-8', body: '<p>x</p>' },
+  svg: { type: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg"/>' },
+  'bare-string': { type: null, body: 'plain words' },
+  'bare-buffer': { type: null, body: Buffer.from([0, 1, 2, 3]) },
+  xml: { type: 'application/xml', body: '<a/>' },
+  attachment: { type: 'text/html', body: '<p>x</p>', headers: { 'content-disposition': 'attachment; filename="x.html"' } },
+  'own-length': { type: 'text/html', body: '<p>x</p>', headers: { 'content-length': '8' } },
+  'png-spaced': { type: 'image/png ; x', body: PNG_BYTES },
+  bmp: { type: 'image/bmp', body: PNG_BYTES },
+  png: { type: 'image/png', body: PNG_BYTES },
+  'png-immutable': { type: 'image/png', body: PNG_BYTES, headers: { 'cache-control': DOCS_CACHE_IMMUTABLE } },
+  'json-404-immutable': {
+    type: JSON_TYPE, body: JSON.stringify({ ok: false, x: 1 }), status: 404,
+    headers: { 'cache-control': DOCS_CACHE_IMMUTABLE },
+  },
+  'json-422': { type: JSON_TYPE, body: JSON.stringify({ ok: false, x: 2 }), status: 422 },
+};
+
+/** The failure bodies `sendDocsFailure` is driven with, by name. */
+const FAILURES: Readonly<Record<string, DocsFailureBody>> = {
+  'busy-read': docsBusyBody('read'),
+  'caps-unknown': { ok: false, failure: 'caps-unknown' },
+  'fetch-too-soon': { ok: false, failure: 'fetch-too-soon', retryAfterMs: 9000 },
+  'bad-query': { ok: false, failure: 'bad-query', key: 'ref', why: 'repeated' },
+};
+
+/** What the planted defect throws: a host path and a line of stderr, which no docs response may carry. */
+const DEFECT_TEXT = "ENOENT: open '/var/example/docs/a.md'; stderr: fatal: not a git repository";
+
+/**
+ * A bare app: the gate stub at the root (`x-test-gate: deny` is the gate's 401 with its `verdict`; `origin` is its
+ * 403 `foreign-origin`), then the docs plugin as section 3.4 registers it, holding the planted routes, then one route
+ * OUTSIDE the plugin.
+ */
+async function bareApp(clock: () => number = () => 0): Promise<FastifyInstance> {
+  const app = Fastify({ logger: false });
+  app.addHook('onRequest', async (req, reply) => {
+    const gate = req.headers['x-test-gate'];
+    if (gate === 'deny') return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
+    if (gate === 'origin') return reply.code(403).send({ ok: false, error: 'foreign-origin' });
+  });
+  await app.register(async (app) => {
+    installDocsRequestPolicy(app, clock);
+    installDocsResponsePolicy(app);
+    app.get('/api/docs/:project/tree', async () => {
+      entered += 1;
+      return { ok: true };
+    });
+    app.post('/api/docs/:project/refresh', async (req) => {
+      entered += 1;
+      return { ok: true, bodyType: typeof req.body, body: req.body };
+    });
+    app.get('/api/docs/boom', async () => {
+      entered += 1;
+      throw new Error(DEFECT_TEXT);
+    });
+    app.get('/api/docs/sent/:name', async (req, reply) => {
+      entered += 1;
+      const s = SENT[(req.params as { name: string }).name];
+      if (s.status !== undefined) reply.code(s.status);
+      if (s.type !== null) reply.type(s.type);
+      for (const [k, v] of Object.entries(s.headers ?? {})) reply.header(k, v);
+      return reply.send(s.body);
+    });
+    app.get('/api/docs/fail/:name', async (req, reply) => {
+      entered += 1;
+      return sendDocsFailure(reply, FAILURES[(req.params as { name: string }).name]);
+    });
+  });
+  app.get('/api/outside', async () => {
+    entered += 1;
+    return { ok: true };
+  });
+  await app.ready();
+  return app;
+}
+
+/** The four section 5.3 headers, exactly as L0's table holds them. */
+function expectDocsHeaders(headers: Record<string, unknown>): void {
+  for (const [name, value] of Object.entries(DOCS_RESPONSE_HEADERS)) expect(headers[name], name).toBe(value);
+}
+function expectNoDocsHeaders(headers: Record<string, unknown>): void {
+  for (const name of Object.keys(DOCS_RESPONSE_HEADERS)) expect(headers[name], name).toBeUndefined();
+}
+
+let warn: MockInstance<(...args: unknown[]) => void>;
+const opened: FastifyInstance[] = [];
+beforeEach(() => {
+  entered = 0;
+  warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+afterEach(async () => {
+  warn.mockRestore();
+  for (const app of opened.splice(0)) await app.close();
+});
+async function open(clock?: () => number): Promise<FastifyInstance> {
+  const app = await bareApp(clock);
+  opened.push(app);
+  return app;
+}
+const TREE = '/api/docs/demo/tree';
+
+describe('W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8)', () => {
+  it.each([
+    ['M3.5 a top-level navigation', { ...PWA, 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' }],
+    ["M3.5 the service worker's navigation (dest empty)", { ...PWA, 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'empty' }],
+  ])('%s is 403 foreign-request {why:navigation}, no verdict, no handler', async (_what, headers) => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: TREE, headers });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'navigation' });
+    expect(Object.hasOwn(res.json(), 'verdict')).toBe(false);
+    expect(res.headers['content-type']).toBe(JSON_TYPE);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expectDocsHeaders(res.headers);
+    expect(entered).toBe(0);
+  });
+
+  it.each([
+    ['same-site', 'same-site'], ['cross-site', 'cross-site'], ['none', 'none'], ['an empty value', ''],
+    ['a 100-character value, cut to 64', 'x'.repeat(100)],
+  ])('M3.6 sec-fetch-site %s is 403 foreign-request {why:site}, carrying the value', async (_what, site) => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: TREE, headers: { ...PWA, 'sec-fetch-site': site } });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'site', site: site.slice(0, 64) });
+    expectDocsHeaders(res.headers);
+    expect(entered).toBe(0);
+  });
+
+  it.each([
+    ['no marker and no Sec-Fetch-*', {}],
+    ['marker 0', { [DOCS_REQUEST_HEADER]: '0' }],
+    ['marker true', { [DOCS_REQUEST_HEADER]: 'true' }],
+    ['the marker sent twice', { [DOCS_REQUEST_HEADER]: [DOCS_REQUEST_HEADER_VALUE, DOCS_REQUEST_HEADER_VALUE] }],
+    ['a same-origin fetch without the marker', { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors' }],
+  ])('M3.7 %s is 403 foreign-request {why:marker}', async (_what, headers) => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: TREE, headers });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
+    expectDocsHeaders(res.headers);
+    expect(entered).toBe(0);
+  });
+
+  it.each([
+    ["the PWA's own fetch", PWA],
+    ['the marker alone, from a browser that sends no Sec-Fetch-*', { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE }],
+  ])('M3.7 %s reaches the handler', async (_what, headers) => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: TREE, headers });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({ ok: true });
+    expect(entered).toBe(1);
+  });
+});
+
+describe('W3 T3: the refusal log, at most one line a minute per why (refinement (o), section 3.8)', () => {
+  const NAV = { ...PWA, 'sec-fetch-mode': 'navigate' };
+  const SITE = { ...PWA, 'sec-fetch-site': 'cross-site' };
+  const lines = (): unknown[] => warn.mock.calls.map((c) => c[0]);
+
+  it('logs a navigation refusal once in a minute, again at the minute, and a site refusal on its own clock', async () => {
+    let now = 0;
+    const app = await open(() => now);
+    await app.inject({ method: 'GET', url: TREE, headers: NAV });
+    now = 1;
+    await app.inject({ method: 'GET', url: TREE, headers: SITE });
+    for (const t of [30000, 59999]) {
+      now = t;
+      await app.inject({ method: 'GET', url: TREE, headers: NAV });
+    }
+    expect(lines()).toEqual([
+      'ccrc-server: docs refused a navigation request', 'ccrc-server: docs refused a site request',
+    ]);
+    now = 60000;
+    const res = await app.inject({ method: 'GET', url: TREE, headers: NAV });
+    expect(res.statusCode).toBe(403);
+    expect(lines()).toEqual([
+      'ccrc-server: docs refused a navigation request', 'ccrc-server: docs refused a site request',
+      'ccrc-server: docs refused a navigation request',
+    ]);
+  });
+
+  it('every refusal is answered, logged or not', async () => {
+    const app = await open(() => 0);
+    for (let i = 0; i < 3; i += 1) {
+      const res = await app.inject({ method: 'GET', url: TREE, headers: NAV });
+      expect(res.statusCode).toBe(403);
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(entered).toBe(0);
+  });
+
+  it('two server instances keep separate minutes', async () => {
+    const a = await open(() => 0);
+    const b = await open(() => 1);
+    await a.inject({ method: 'GET', url: TREE, headers: NAV });
+    await b.inject({ method: 'GET', url: TREE, headers: NAV });
+    expect(lines()).toEqual([
+      'ccrc-server: docs refused a navigation request', 'ccrc-server: docs refused a navigation request',
+    ]);
+  });
+});
+
+describe("W3 T3: the gate's refusals still carry the docs headers (F1's analogue)", () => {
+  it('a 401 with its verdict, decorated, no handler; the gate runs before provenance', async () => {
+    const app = await open();
+    for (const headers of [{ ...PWA, 'x-test-gate': 'deny' }, { 'x-test-gate': 'deny' }]) {
+      const res = await app.inject({ method: 'GET', url: TREE, headers });
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toStrictEqual({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
+      expect(res.headers['content-type']).toBe(JSON_TYPE);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expectDocsHeaders(res.headers);
+    }
+    expect(entered).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("the gate's 403 foreign-origin on the POST, decorated", async () => {
+    const app = await open();
+    const res = await app.inject({
+      method: 'POST', url: '/api/docs/demo/refresh', headers: { ...PWA, 'x-test-gate': 'origin' },
+      payload: { ref: null, reason: 'manual' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toStrictEqual({ ok: false, error: 'foreign-origin' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expectDocsHeaders(res.headers);
+    expect(entered).toBe(0);
+  });
+
+  it('a route outside the plugin and an unmatched docs URL get none of the docs headers', async () => {
+    const app = await open();
+    const outside = await app.inject({ method: 'GET', url: '/api/outside', headers: { 'sec-fetch-mode': 'navigate' } });
+    expect(outside.statusCode).toBe(200);
+    expectNoDocsHeaders(outside.headers);
+    expect(outside.headers['cache-control']).toBeUndefined();
+    const unmatched = await app.inject({ method: 'GET', url: '/api/docs/nothing/x', headers: PWA });
+    expect(unmatched.statusCode).toBe(404);
+    expectNoDocsHeaders(unmatched.headers);
+  });
+});
+
+describe('W3 T3: request-body refusals are bad-query {why:body} (refinement (e))', () => {
+  const REFRESH = '/api/docs/demo/refresh';
+  const BAD_BODY = { ok: false, failure: 'bad-query', why: 'body' };
+
+  it.each([
+    ['invalid JSON', 'application/json', '{"ref":'],
+    ['an empty body with a JSON type', 'application/json', ''],
+    ['a __proto__ key', 'application/json', '{"__proto__":{},"ref":null,"reason":"auto"}'],
+    ['a body over 1 MiB', 'application/json', `{"ref":"${'x'.repeat(1048577)}","reason":"auto"}`],
+    ['a form-encoded body', 'application/x-www-form-urlencoded', 'ref=main&reason=auto'],
+  ])('%s', async (_what, type, payload) => {
+    const app = await open();
+    const res = await app.inject({ method: 'POST', url: REFRESH, headers: { ...PWA, 'content-type': type }, payload });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toStrictEqual(BAD_BODY);
+    expect(res.headers['content-type']).toBe(JSON_TYPE);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['retry-after']).toBeUndefined();
+    expectDocsHeaders(res.headers);
+    expect(entered).toBe(0);
+  });
+
+  it('a text/plain body reaches the route as a string (the route refuses it, Task 7)', async () => {
+    const app = await open();
+    const res = await app.inject({
+      method: 'POST', url: REFRESH, headers: { ...PWA, 'content-type': 'text/plain' }, payload: 'hello',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({ ok: true, bodyType: 'string', body: 'hello' });
+    expect(entered).toBe(1);
+  });
+
+  it("a defect stays Fastify's default 500, still decorated, never a docs word", async () => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: '/api/docs/boom', headers: PWA });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toStrictEqual({ statusCode: 500, error: 'Internal Server Error', message: 'docs route defect' });
+    expect(res.headers['content-type']).toBe(JSON_TYPE);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expectDocsHeaders(res.headers);
+    expect(entered).toBe(1);
+  });
+
+  it("a defect's 500 body carries no absolute path and no stderr text: never the thrower's message", async () => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: '/api/docs/boom', headers: PWA });
+    expect(res.statusCode).toBe(500);
+    expect(res.body).not.toContain(DEFECT_TEXT);
+    expect(res.body).not.toMatch(/\/[A-Za-z0-9._-]+\//);
+    expect(res.body).not.toContain('stderr');
+    expect(res.body).not.toContain('fatal:');
+  });
+});
+
+describe('W3 T3: the response policy (M5.5, section 5.3)', () => {
+  const sent = async (name: string) => {
+    const app = await open();
+    return app.inject({ method: 'GET', url: `/api/docs/sent/${name}`, headers: PWA });
+  };
+
+  it.each([
+    ['html', 'text/html'], ['html-utf8', 'text/html; charset=utf-8'], ['svg', 'image/svg+xml'],
+    ['bare-string', 'text/plain; charset=utf-8'], ['bare-buffer', 'application/octet-stream'], ['xml', 'application/xml'],
+    ['attachment', 'text/html'], ['own-length', 'text/html'], ['png-spaced', 'image/png ; x'], ['bmp', 'image/bmp'],
+  ])('M5.5 %s (%s) is refused: 500 response-type-refused, JSON, no-store, logged once', async (name, type) => {
+    const res = await sent(name);
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'response-type-refused' });
+    expect(res.headers['content-type']).toBe(JSON_TYPE);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['content-disposition']).toBeUndefined();
+    expect(Number(res.headers['content-length'])).toBe(Buffer.byteLength(res.body));
+    expectDocsHeaders(res.headers);
+    expect(warn.mock.calls).toEqual([[`ccrc-server: docs response refused, content-type ${JSON.stringify(type)}`]]);
+    expect(entered).toBe(1);
+  });
+
+  it('image/png passes byte for byte, decorated; a 200 that set no cache-control gets no-store', async () => {
+    const res = await sent('png');
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(new Uint8Array(res.rawPayload)).toEqual(PNG_BYTES);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expectDocsHeaders(res.headers);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a JSON 200 passes, decorated, no-store', async () => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: TREE, headers: PWA });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe(JSON_TYPE);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expectDocsHeaders(res.headers);
+  });
+
+  it('a 200 raster that set immutable keeps it (section 6.6)', async () => {
+    const res = await sent('png-immutable');
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['cache-control']).toBe(DOCS_CACHE_IMMUTABLE);
+  });
+
+  it.each([['json-404-immutable', 404], ['json-422', 422]])('%s: a non-200 is always no-store', async (name, status) => {
+    const res = await sent(name);
+    expect(res.statusCode).toBe(status);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expectDocsHeaders(res.headers);
+  });
+});
+
+describe('W3 T3: sendDocsFailure, the status and Retry-After from L1 (section 3.7)', () => {
+  it.each([
+    ['busy-read', 503, '2'], ['caps-unknown', 503, '5'], ['fetch-too-soon', 429, undefined], ['bad-query', 400, undefined],
+  ] as const)('%s answers %i, Retry-After %s', async (name, status, retryAfter) => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: `/api/docs/fail/${name}`, headers: PWA });
+    expect(res.statusCode).toBe(status);
+    expect(res.json()).toStrictEqual(FAILURES[name]);
+    expect(res.headers['retry-after']).toBe(retryAfter);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expectDocsHeaders(res.headers);
+  });
+});
+
+describe('W3 T3: hooks.ts spells none of the response-policy headers (it sets what the verdict carries)', () => {
+  it('no quoted header name or value from DOCS_RESPONSE_HEADERS, and no quoted request marker', () => {
+    const quoted = (s: string): string[] => [`'${s}'`, `"${s}"`, `\`${s}\``];
+    const spelled = [
+      ...Object.entries(DOCS_RESPONSE_HEADERS).flat(), DOCS_REQUEST_HEADER,
+    ].flatMap(quoted).filter((q) => HOOKS_SRC.includes(q));
+    expect(spelled).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-headers.test.ts )`
+Expected: `Test Files  1 failed (1)`, `Tests  no tests`, with `Error: Cannot find module '../src/docs/hooks.js' imported from .../server/test/docs-headers.test.ts` (Measured 1). Any other error (a missing export of `policy.ts`, a syntax error) means Tasks 1-2 are not in the tree or the file was not pasted exactly: stop.
+
+- [ ] **Step 3: Write the implementation.** Create `server/src/docs/hooks.ts` with exactly this content:
+
+```ts
+// The native Docs reader's request and response policy hooks (design 2026-10-01, section 3.8, section 5.3, section
+// 3.4's registration; W3 refinements (e) and (o)): L4. They are installed INSIDE the one encapsulated docs plugin,
+// so they run for the docs routes alone, after the root gate's own `onRequest` (F1), and never for a route outside
+// the plugin or an unmatched URL.
+//
+// Ring (M7.10; the ring guard in `single-definition.test.ts`): this file may import fastify and name `reply`, and it
+// DECIDES NOTHING. The provenance verdict, the refusal bodies, the log cadence, the body-error verdict, the response
+// headers, the content-type allowlist, every status and the `Retry-After` seconds are L1's (`policy.ts`); this file
+// applies them. It quotes no failure word and spells none of the response-policy header names or values: it sets
+// whatever headers the verdict carries. A log line is `console.warn('ccrc-server: ...')`: the server runs
+// `Fastify({ logger: false })`, so the request logger is a silent no-op.
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { DocsFailureBody } from '../../../shared/docs.js';
+import {
+  DOCS_DEFECT_MESSAGE, DOCS_FAILURE_HTTP, docsBodyErrorVerdict, docsForeignRequestBody, docsLogDue, docsProvenance,
+  docsRetryAfterSeconds, docsSendPolicy,
+} from './policy.js';
+
+/**
+ * Send one docs failure body: the status is `DOCS_FAILURE_HTTP`'s for its word, and `Retry-After` is sent exactly
+ * when `docsRetryAfterSeconds` answers a number (`docs-busy` with a finite positive wait, `caps-unknown`); `null`
+ * sends no header. Returns the reply, so an async hook or handler can `return sendDocsFailure(...)`.
+ */
+export function sendDocsFailure(reply: FastifyReply, body: DocsFailureBody): FastifyReply {
+  reply.code(DOCS_FAILURE_HTTP[body.failure]);
+  const retryAfterS = docsRetryAfterSeconds(body);
+  if (retryAfterS !== null) reply.header('retry-after', String(retryAfterS));
+  return reply.send(body);
+}
+
+/** A reply header as text for L1: absent stays `undefined` (one meaning: the route set none); a number reads as its
+ *  decimal text; an array as its `', '`-join, so it never equals one allowed value. */
+function replyHeaderText(reply: FastifyReply, name: string): string | undefined {
+  const v = reply.getHeader(name);
+  if (v === undefined) return undefined;
+  return Array.isArray(v) ? v.join(', ') : String(v);
+}
+
+/** A thrown value's `code`, whatever the thrower set; `undefined` when the value is not an object or carries none.
+ *  Fastify types a thrown value as `unknown`, and `docsBodyErrorVerdict` reads the code as `unknown` too. */
+function errorCode(err: unknown): unknown {
+  return typeof err === 'object' && err !== null ? (err as { code?: unknown }).code : undefined;
+}
+
+/**
+ * The plugin's request policy, installed on the docs plugin's own instance (never the root):
+ * - an `onRequest` hook applying `docsProvenance` to the request headers: a refusal answers `foreign-request`
+ *   (`docsForeignRequestBody`, no `verdict`) through `sendDocsFailure`, so no handler runs and no exec is made, and
+ *   logs `ccrc-server: docs refused a <why> request` when `docsLogDue` says so for that `why`;
+ * - an error handler applying `docsBodyErrorVerdict` to the error's code: a refused request body answers its
+ *   `bad-query` body; a defect is re-thrown as a fresh error carrying L1's `DOCS_DEFECT_MESSAGE` (the original as
+ *   its `cause`), which hands it to the parent's (Fastify's default) error handler, so a defect stays a default 500,
+ *   is never dressed as a docs word, and its body never carries the thrower's own message (a host path, stderr).
+ * `lastLogged` is per call, so each server instance (and each test app) keeps its own minute per `why`. `nowMs` is
+ * the clock; the test passes its own.
+ */
+export function installDocsRequestPolicy(app: FastifyInstance, nowMs: () => number = Date.now): void {
+  const lastLogged = new Map<string, number>();
+  app.addHook('onRequest', async (req, reply) => {
+    const v = docsProvenance(req.headers);
+    if (v.ok) return;
+    const now = nowMs();
+    if (docsLogDue(lastLogged.get(v.why), now)) {
+      lastLogged.set(v.why, now);
+      console.warn(`ccrc-server: docs refused a ${v.why} request`);
+    }
+    return sendDocsFailure(reply, docsForeignRequestBody(v));
+  });
+  app.setErrorHandler((err, _req, reply) => {
+    const v = docsBodyErrorVerdict(errorCode(err));
+    if (v.kind === 'defect') throw new Error(DOCS_DEFECT_MESSAGE, { cause: err });
+    sendDocsFailure(reply, v.body);
+  });
+}
+
+/**
+ * The plugin's response policy: an `onSend` hook applying `docsSendPolicy` to every docs response, a gate refusal,
+ * a provenance refusal and a default 500 included (each runs the matched route's `onSend`). It sets every header the
+ * verdict carries; on `pass` it sends the payload unchanged; on `refuse` it removes the verdict's `remove` headers,
+ * answers the verdict's status with the JSON of its body, and logs the refused type.
+ */
+export function installDocsResponsePolicy(app: FastifyInstance): void {
+  app.addHook('onSend', async (_req, reply, payload) => {
+    const v = docsSendPolicy(
+      reply.statusCode, replyHeaderText(reply, 'content-type') ?? '', replyHeaderText(reply, 'cache-control'),
+    );
+    reply.headers(v.headers);
+    if (v.kind === 'pass') return payload;
+    for (const name of v.remove) reply.removeHeader(name);
+    reply.code(v.status);
+    console.warn(`ccrc-server: docs response refused, content-type ${JSON.stringify(v.contentType)}`);
+    return JSON.stringify(v.body);
+  });
+}
+```
+
+- [ ] **Step 4: Run it to verify it passes.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-headers.test.ts )`
+Expected: `Test Files  1 passed (1)`, `Tests  48 passed (48)`.
+
+- [ ] **Step 5: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` is a known load flake, so a red there is re-run alone before it is called broken.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The first compiles `hooks.ts` under the server's build flags (the `unknown` thrown value, `reply.getHeader`'s union); the second compiles the test (the `MockInstance` spy, the `as const` table).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts )`
+Expected: `Tests  574 passed (574)` (Task 2's count; `policy.ts` is not edited).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  472 passed (472)`: the docs ring guard visits `hooks.ts` as L4, and no name exported here is declared anywhere else in the four roots.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/capsupported.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  77 passed (77)`. `topology-clean` needs `origin/main` (or `CCRC_HISTORY_BASE=<base sha>`; Measured 4); this task adds only placeholder names (`demo`, `x.html`) and spells no cap token.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/verb-gate.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  193 passed (193)`: `hooks.ts` registers no route, holds no box-token text and makes no `CCD_ARGV.` call.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Measured 4); Task 1's Step 0 installs real modules.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add server/src/docs/hooks.ts server/test/docs-headers.test.ts
+git commit -m "server: docs plugin hooks, provenance, body errors, response policy and sendDocsFailure (docs W3)" \
+  -m "hooks.ts (L4) applies W2's and Task 1's L1 verdicts and decides nothing: installDocsRequestPolicy's onRequest refuses a navigation, a foreign Sec-Fetch-Site and a missing marker as 403 foreign-request (no verdict, no handler), logging each why at most once a minute through docsLogDue on a per-instance map; its error handler answers Fastify's FST_ERR_CTP_ body refusals as bad-query why:body and re-throws every defect to Fastify's default 500 as a fresh error carrying DOCS_DEFECT_MESSAGE, so no thrower's path or stderr reaches the body; installDocsResponsePolicy's onSend applies docsSendPolicy (the four headers, no-store, the content-type allowlist with response-type-refused); sendDocsFailure sets DOCS_FAILURE_HTTP's status and Retry-After from docsRetryAfterSeconds. docs-headers.test.ts drives them on a bare Fastify with a gate stub (M3.5-M3.7, M5.5, F1's analogue)." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state):
+
+```json
+[
+ {
+  "id": "W3-T3-M1",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "  app.addHook('onRequest', async (req, reply) => {",
+  "new": "  if (false as boolean) app.addHook('onRequest', async (req, reply) => {",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 15 failed | 33 passed (48) — M3.5 a top-level navigation is 403 foreign-request {why:navigation}, no verdict, no handler; M3.5 the service worker's navigation (dest empty) is 403 foreign-request {why:navigation}, no verdict, no handler; M3.6 sec-fetch-site a 100-character value, cut to 64 is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site an empty value is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site cross-site is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site none is 403 foreign-request {why:site}, carrying the value; and 9 more"
+ },
+ {
+  "id": "W3-T3-M2",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (headerText(headers['sec-fetch-mode']) === 'navigate') return { ok: false, why: 'navigation' };\n",
+  "new": "",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 5 failed | 43 passed (48) — M3.5 a top-level navigation is 403 foreign-request {why:navigation}, no verdict, no handler; M3.5 the service worker's navigation (dest empty) is 403 foreign-request {why:navigation}, no verdict, no handler; every refusal is answered, logged or not; logs a navigation refusal once in a minute, again at the minute, and a site refusal on its own clock; two server instances keep separate minutes"
+ },
+ {
+  "id": "W3-T3-M3",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (site !== undefined && site !== 'same-origin') {",
+  "new": "  if (false as boolean) {",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 6 failed | 42 passed (48) — M3.6 sec-fetch-site a 100-character value, cut to 64 is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site an empty value is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site cross-site is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site none is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site same-site is 403 foreign-request {why:site}, carrying the value; logs a navigation refusal once in a minute, again at the minute, and a site refusal on its own clock"
+ },
+ {
+  "id": "W3-T3-M4",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (headerText(headers[DOCS_REQUEST_HEADER]) !== DOCS_REQUEST_HEADER_VALUE) return { ok: false, why: 'marker' };\n",
+  "new": "",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 5 failed | 43 passed (48) — M3.7 a same-origin fetch without the marker is 403 foreign-request {why:marker}; M3.7 marker 0 is 403 foreign-request {why:marker}; M3.7 marker true is 403 foreign-request {why:marker}; M3.7 no marker and no Sec-Fetch-* is 403 foreign-request {why:marker}; M3.7 the marker sent twice is 403 foreign-request {why:marker}"
+ },
+ {
+  "id": "W3-T3-M5",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (headerText(headers[DOCS_REQUEST_HEADER]) !== DOCS_REQUEST_HEADER_VALUE) return { ok: false, why: 'marker' };",
+  "new": "  if (headerText(headers[DOCS_REQUEST_HEADER]) !== DOCS_REQUEST_HEADER_VALUE || site === undefined) return { ok: false, why: 'marker' };",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 1 failed | 47 passed (48) — M3.7 the marker alone, from a browser that sends no Sec-Fetch-* reaches the handler"
+ },
+ {
+  "id": "W3-T3-M6",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    if (docsLogDue(lastLogged.get(v.why), now)) {",
+  "new": "    if (docsLogDue(undefined, now)) {",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 2 failed | 46 passed (48) — every refusal is answered, logged or not; logs a navigation refusal once in a minute, again at the minute, and a site refusal on its own clock"
+ },
+ {
+  "id": "W3-T3-M7",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "  const lastLogged = new Map<string, number>();",
+  "new": "  const lastLogged = ((globalThis as { docsLastLogged?: Map<string, number> }).docsLastLogged ??= new Map<string, number>());",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 3 failed | 45 passed (48) — every refusal is answered, logged or not; logs a navigation refusal once in a minute, again at the minute, and a site refusal on its own clock; two server instances keep separate minutes"
+ },
+ {
+  "id": "W3-T3-M8",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "  app.addHook('onSend', async (_req, reply, payload) => {",
+  "new": "  if (false as boolean) app.addHook('onSend', async (_req, reply, payload) => {",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 38 failed | 10 passed (48) — M3.5 a top-level navigation is 403 foreign-request {why:navigation}, no verdict, no handler; M3.5 the service worker's navigation (dest empty) is 403 foreign-request {why:navigation}, no verdict, no handler; M3.6 sec-fetch-site a 100-character value, cut to 64 is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site an empty value is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site cross-site is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site none is 403 foreign-request {why:site}, carrying the value; and 37 more"
+ },
+ {
+  "id": "W3-T3-M9",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    if (v.kind === 'pass') return payload;",
+  "new": "    if (v.kind === 'pass' || v.status > 0) return payload;",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 10 failed | 38 passed (48) — M5.5 attachment (text/html) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 bare-buffer (application/octet-stream) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 bare-string (text/plain; charset=utf-8) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 bmp (image/bmp) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 html (text/html) is refused: 500 response-type-refused, JSON, no-store, logged once; and 7 more"
+ },
+ {
+  "id": "W3-T3-M10",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    for (const name of v.remove) reply.removeHeader(name);",
+  "new": "    for (const name of v.remove) if (name !== 'content-disposition') reply.removeHeader(name);",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 1 failed | 47 passed (48) — M5.5 attachment (text/html) is refused: 500 response-type-refused, JSON, no-store, logged once"
+ },
+ {
+  "id": "W3-T3-M11",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "  app.setErrorHandler((err, _req, reply) => {",
+  "new": "  if (false as boolean) app.setErrorHandler((err, _req, reply) => {",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 7 failed | 41 passed (48) — a __proto__ key; a body over 1 MiB; a defect stays Fastify's default 500, still decorated, never a docs word; a defect's 500 body carries no absolute path and no stderr text: never the thrower's message; and 3 more"
+ },
+ {
+  "id": "W3-T3-M12",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    if (v.kind === 'defect') throw new Error(DOCS_DEFECT_MESSAGE, { cause: err });",
+  "new": "    if (v.kind === 'defect') return void sendDocsFailure(reply, { ok: false, failure: 'bad-query', why: 'body' });",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 2 failed | 46 passed (48) — a defect stays Fastify's default 500, still decorated, never a docs word; a defect's 500 body carries no absolute path and no stderr text: never the thrower's message"
+ },
+ {
+  "id": "W3-T3-M13",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "  if (retryAfterS !== null) reply.header('retry-after', String(retryAfterS));\n",
+  "new": "",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 2 failed | 46 passed (48) — busy-read answers 503, Retry-After 2; caps-unknown answers 503, Retry-After 5"
+ },
+ {
+  "id": "W3-T3-M14",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    console.warn(`ccrc-server: docs response refused, content-type ${JSON.stringify(v.contentType)}`);\n",
+  "new": "",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 10 failed | 38 passed (48) — M5.5 attachment (text/html) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 bare-buffer (application/octet-stream) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 bare-string (text/plain; charset=utf-8) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 bmp (image/bmp) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 html (text/html) is refused: 500 response-type-refused, JSON, no-store, logged once; and 7 more"
+ },
+ {
+  "id": "W3-T3-M15",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    reply.headers(v.headers);\n",
+  "new": "    reply.headers(v.headers);\n    reply.header('referrer-policy', 'no-referrer');\n",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 1 failed | 47 passed (48) — no quoted header name or value from DOCS_RESPONSE_HEADERS, and no quoted request marker"
+ },
+ {
+  "id": "W3-T3-M16",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "  reply.code(DOCS_FAILURE_HTTP[body.failure]);\n",
+  "new": "",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 23 failed | 25 passed (48) — M3.5 a top-level navigation is 403 foreign-request {why:navigation}, no verdict, no handler; M3.5 the service worker's navigation (dest empty) is 403 foreign-request {why:navigation}, no verdict, no handler; M3.6 sec-fetch-site a 100-character value, cut to 64 is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site an empty value is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site cross-site is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site none is 403 foreign-request {why:site}, carrying the value; and 17 more"
+ },
+ {
+  "id": "W3-T3-M17",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    return sendDocsFailure(reply, docsForeignRequestBody(v));",
+  "new": "    return sendDocsFailure(reply, { ...docsForeignRequestBody(v), verdict: 'no-session' } as DocsFailureBody);",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 12 failed | 36 passed (48) — M3.5 a top-level navigation is 403 foreign-request {why:navigation}, no verdict, no handler; M3.5 the service worker's navigation (dest empty) is 403 foreign-request {why:navigation}, no verdict, no handler; M3.6 sec-fetch-site a 100-character value, cut to 64 is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site an empty value is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site cross-site is 403 foreign-request {why:site}, carrying the value; M3.6 sec-fetch-site none is 403 foreign-request {why:site}, carrying the value; and 6 more"
+ },
+ {
+  "id": "W3-T3-M18",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    const v = docsBodyErrorVerdict(errorCode(err));",
+  "new": "    const v = docsBodyErrorVerdict((err as Error).message);",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 5 failed | 43 passed (48) — a __proto__ key; a body over 1 MiB; a form-encoded body; an empty body with a JSON type; invalid JSON"
+ },
+ {
+  "id": "W3-T3-M19",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "throw new Error(DOCS_DEFECT_MESSAGE, { cause: err });",
+  "new": "throw err;",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 2 failed | 46 passed (48) — a defect stays Fastify's default 500, still decorated, never a docs word; a defect's 500 body carries no absolute path and no stderr text: never the thrower's message"
+ }
+]
+```
+
+### Task 4: lane.ts: the read lane, the fetch lane, single-flight with abandonment, and the generation counter
+
+**Model routing:** `sonnet`, effort `high` — concurrency; the traps are strict FIFO (only the head is ever admitted), releasing a slot in `finally` exactly once, unref'd timers cleared on admission, abandonment and close, a job that leaves the FIFO letting the job behind it start, and a flight that aborts only when EVERY joiner has gone. Every case below runs under `vi.useFakeTimers()` with blocking exec doubles, and was measured on the scratch tree at Task 3's state.
+
+**Spec rows:** section 6.3's and section 6.4's lane and single-flight mechanics: the read lane (`laneAdmit` applied to the head, strict FIFO, `DOCS_LANE_QUEUE` = 32, `DOCS_LANE_MAX_WAIT_MS` = 10 000, `docs-busy {lane:'read', retryAfterMs: 2000}`, a closed request's queued job removed, a running exec never cancelled), the fetch lane (serial per (node, project), `DOCS_FETCH_GLOBAL` = 2, a queue of `DOCS_FETCH_QUEUE` = 8 jobs that have NOT started, counted across keys (refinement (n): a job the pump starts at once is never refused by it), a `DOCS_FETCH_MAX_WAIT_MS` = 20 000 wait from acceptance, `docs-busy {lane:'fetch', retryAfterMs: 5000}`), single-flight (joined before the lanes; refinement (j)'s "a flight aborts only when every joiner has gone") and the per-(node, project) generation counter. These are the unit halves of M6.2 ("the 33rd queued job or a 10 s wait gives `docs-busy {lane:'read'}` with zero extra execs; a closed request is dequeued"; mutations LIFO, no bound, no dequeue), M6.9 (drop the join, drop `gen`) and M6.10 (serial per project, at most 2 global, the 9th queued is `docs-busy {lane:'fetch'}`; remove the semaphore). Their route-level cases (M6.2's "a non-docs route is unaffected", M6.9 and M6.10 through `app.inject`) are Task 6's and Task 7's; Task 7 appends the read/fetch lane separation case to `docs-lanes.test.ts`.
+
+**Files:**
+- Create: `server/src/docs/lane.ts` — L4, 331 lines: `DocsLaneRun`, `DocsReadLane`/`docsReadLane`, `DocsFetchLane`/`docsFetchLane`, `DocsFlights`/`docsFlights`, `DocsGenerations`/`docsGenerations`, and the module-private `ABANDONED`, `busy`, `ReadWaiter`, `FetchWaiter`, `Flight`. It is one of the four L4 names W2's ring guard already reserves (`DOCS_RING_ROLES` in `single-definition.test.ts`), so it may own timers; `DOCS_RING_FLOOR` gains it in Task 9, not here.
+- Create: `server/test/docsRouteHelpers.ts` — 25 lines: `blocker<T>()`, the blocking exec double. Task 6 appends the scripted runner, the fixtures and `docsApp()`; Task 10 appends `echoPty()` and `passThroughLane()`.
+- Create: `server/test/docs-lanes.test.ts` — 714 lines, 38 cases. Task 7 appends the read/fetch separation case at its end.
+- Test: `server/test/docs-lanes.test.ts`; guards `server/test/single-definition.test.ts` (the docs ring guard, and "one KeyedQueue for the process", Decision 2), `server/test/topology-clean.test.ts`, `server/test/capsupported.test.ts`, `server/test/typecheck-tests.test.ts`, `server/test/docs-policy.test.ts`, `server/test/docs-headers.test.ts`, and the censuses that read `server/src` as text (`server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts`, `server/test/verb-gate.test.ts`).
+
+This task edits no existing file, so it has no Find block. Before Step 1, check that the three files are absent and that the names this task consumes exist (the tree as Task 3 left it):
+
+Run: `test ! -e server/src/docs/lane.ts && test ! -e server/test/docs-lanes.test.ts && test ! -e server/test/docsRouteHelpers.ts && grep -q '^export function laneAdmit' server/src/docs/policy.ts && grep -q '^export function docsBusyBody' server/src/docs/policy.ts && grep -q '^export const DOCS_FETCH_QUEUE = 8;' server/src/docs/policy.ts && grep -q '^export type DocsLaneName' server/src/docs/policy.ts && test -e server/src/docs/hooks.ts && echo T4-BASE-OK`
+Expected: `T4-BASE-OK`. If it does not print, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes, from W2's `server/src/docs/policy.ts`: `interface DocsJob { raw: number; wire: number }`; `interface LaneLoad { execs: number; bytes: number; large: number }`; `laneAdmit(load: LaneLoad, job: DocsJob): boolean`; `DOCS_LANE_LARGE_RAW` (1 048 576), `DOCS_LANE_QUEUE` (32), `DOCS_LANE_MAX_WAIT_MS` (10 000); (test only) `DOCS_LANE_EXECS` (2), `DOCS_LANE_BYTES` (3 145 728). From Task 1: `DOCS_FETCH_GLOBAL` (2), `DOCS_FETCH_QUEUE` (8), `DOCS_FETCH_MAX_WAIT_MS` (20 000), `type DocsLaneName` (`'read' | 'fetch'`, derived from L0's failure context), `docsBusyBody(lane: DocsLaneName): DocsFailureBody` (a fresh `{ok:false, failure:'docs-busy', lane, retryAfterMs}` per call).
+- Consumes, from `shared/docs.ts` (W1): `type DocsFailureBody`.
+- Does NOT consume `server/src/inject/queue.ts`'s `KeyedQueue` (Decision 2; the architecture listed it).
+- Produces, in `server/src/docs/lane.ts`:
+  - `export type DocsLaneRun<T> = { kind: 'ran'; value: T } | { kind: 'busy'; body: DocsFailureBody } | { kind: 'abandoned' };` — `ran`: the exec ran and fulfilled (a rejected exec rejects the caller instead); `busy`: the lane refused the job (queue full, wait expired, or lane closed) and the exec never ran, `body` being a fresh `docsBusyBody(lane)`; `abandoned`: every requester left before the job started and the exec never ran. Three arms, three meanings.
+  - `export interface DocsReadLane { run<T>(job: DocsJob, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>>; load(): Readonly<LaneLoad & { queued: number }>; close(): void }` and `export function docsReadLane(): DocsReadLane` — one per node, built by Task 6's `composeDocs` (Task 10's `passThroughLane()` implements the same interface).
+  - `export interface DocsFetchLane { run<T>(key: string, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>>; load(): Readonly<{ running: number; queued: number }>; close(): void }` and `export function docsFetchLane(): DocsFetchLane` — `key` is Task 1's `docsProjectKey(node, project)`; Task 7 calls `run` inside the refresh flight.
+  - `export interface DocsFlights { join<T>(key: string, signal: AbortSignal, start: (flight: AbortSignal) => Promise<T>): Promise<T>; size(): number }` and `export function docsFlights(): DocsFlights` — keys are Task 1's flight key builders (`docsIndexFlightKey`, `docsTreeFlightKey`, `docsShowFlightKey`, `docsRefreshFlightKey`), all NUL-joined with a kind tag first, so one flight map serves every kind (refinement (p)). The routes pass `start = (s) => lane.run(job, s, exec)`, so `T` is a `DocsLaneRun<...>`.
+  - `export interface DocsGenerations { current(key: string): number; bump(key: string): number }` and `export function docsGenerations(): DocsGenerations` — `key` is `docsProjectKey(node, project)`; Task 7 bumps it when a refresh's fetch half settles.
+- Produces, in `server/test/docsRouteHelpers.ts`: `export function blocker<T>(): { exec: () => Promise<T>; started(): number; release(i: number, v: T): void; fail(i: number, e: Error): void }` — every `exec()` call is one started exec, held until the test settles it by its 0-based start index.
+
+**Decisions this task makes (refinements (j) and (n) applied; Decision 2 is a deviation, the others fill silences or apply a refinement):**
+1. **The lanes decide nothing.** Admission is L1's `laneAdmit`, applied to the HEAD job only, in `run` (only when the FIFO is empty) and in the pump; every bound, wait and body is an L1 constant or `docsBusyBody`. What stays in `lane.ts` is bookkeeping: the three counters `laneAdmit` reads, the FIFOs, the timers and the listeners. The one comparison it makes, `job.raw > DOCS_LANE_LARGE_RAW` (`isLarge`), maintains the `large` counter that `laneAdmit`'s fourth clause reads, against L1's own threshold; it quotes no failure word and spells no number.
+2. **The fetch lane serialises per key with its own FIFO, not a `KeyedQueue`.** Section 6.4 says "a `KeyedQueue` (`server/src/inject/queue.ts:6`) per (node, project)", and refinement (n) says each lane keeps its own. But `single-definition.test.ts`'s "one KeyedQueue for the process" holds `new KeyedQueue(` to `server/src/index.ts` alone (it scans for the CONSTRUCTOR, so that a component cannot quietly serialise against nothing): a `new KeyedQueue()` in `lane.ts` reds it (Measured 3), and refinement (n) rules out the process's own queue. So the fetch lane keeps ONE FIFO of accepted, not-yet-started jobs and a set of keys with a running job; its pump starts, in FIFO order, every job whose key has nothing running while fewer than `DOCS_FETCH_GLOBAL` run. The behaviour section 6.4 states holds exactly: serial and in order per (node, project), at most 2 at once, a queue of 8, a 20 s wait, `docs-busy {lane:'fetch'}` past either. It also starts a startable job synchronously, where a `KeyedQueue` turn starts a microtask later (`prev.then(fn, fn)`), which would count a startable job as queued for that tick. **This departs from section 6.4's TEXT (the named mechanism), so it is a deviation:** the plan's Spec refinements list it as (v), and Task 9's deviation step defines it with the issued block's FIFTH number, after (d), (i), (j) and (s). The lane names no `KeyedQueue` in code; its docstring says why.
+3. **A job whose key is busy never holds back another key** (fills a silence: section 6.4 does not order jobs across keys). The fetch pump passes over a job whose key is running and keeps scanning, so per-key order is FIFO and the global semaphore serves the oldest startable job. A strict global head would let one project's queued refresh block every other project's (W3-T4-M22).
+4. **Leaving the FIFO pumps the read lane.** A queued read job that expires or is abandoned is removed, its timer and listener detached, and the pump runs, because the job behind a blocking head may now admit (W3-T4-M18). In the fetch lane a leaving job frees no key and no slot, so it does not pump. Admission detaches the job's timer and listener too, so a started job is never answered `busy` later (W3-T4-M21).
+5. **One release per started job, in `finally`.** `running` (read) and `fetching` (fetch) take their share, `await exec()` inside `try`, and call `release` in `finally`: a fulfilled, a rejected and a synchronously throwing exec each release exactly once and pump. A rejected exec rejects its own caller, never the lane.
+6. **Abandonment** (refinement (j)). A signal already aborted answers `abandoned` at once with no exec, even on an idle lane; a queued job whose signal aborts is removed and answered `abandoned`; a RUNNING job's signal is not listened to (the listener is removed on admission), so its answer is `ran`. Single-flight passes each flight its OWN signal, which aborts only when every joiner's signal has aborted, so one tab closing never removes another tab's job. A join on a key whose flight has already aborted starts a NEW flight under that key and the old one settles alone, so a live request never receives an abandoned answer; a lone joiner whose signal is already aborted starts a flight whose signal is already aborted (the lane then answers `abandoned` with no exec). A settled flight frees its key only if it is still the key's flight, and detaches its joiners' listeners. A `start` that throws synchronously becomes that flight's rejection.
+7. **`close()`** (Task 6's plugin `onClose`) answers every queued job `busy`, clears every timer and listener, and answers every later `run` `busy` with no exec; a running exec is left to finish (the agent has no cancel op, section 6.3), and its release then finds an empty FIFO.
+8. **No module scope.** Every lane, flight map and counter is created by its factory, so each composition (one per `buildServer`, refinement (i)) and each test has its own; the generation map grows by one entry per (node, project) ever refreshed, plus one per node. Nothing bounds the COUNT of those keys (the project grammar bounds each name's length, not how many names there are, and a refresh of a grammar-valid project that does not exist, or a skipped local-ref refresh, bumps too), so a signed-in client can grow it, one short key and one number per new name and per refresh POST. That growth is ACCEPTED and carried (the header's carried list), not bounded: every step is a session-gated POST, and an entry cannot be dropped safely, because a counter reset to 0 would let a request join a flight keyed on the old 0 (the stale-join this counter exists to stop).
+9. **The fetch queue bound counts only jobs that have NOT started** (refinement (n), section 6.4's "8 queued"). `run` pushes the new job and pumps FIRST, then refuses it only when it is still waiting as the (`DOCS_FETCH_QUEUE` + 1)th job that has not started: `leave` detaches its timer and listener and answers it `busy`, and it frees no slot, so nothing else starts. Before the push the FIFO holds at most `DOCS_FETCH_QUEUE` jobs and the last pump left none startable, so the new job is the only one the pump can start; a FIFO longer than `DOCS_FETCH_QUEUE` after the pump therefore means the new job is in it. A pre-check on the FIFO's length before the pump would refuse a job on an idle key while a global slot is free and eight jobs wait behind one running key (W3-T4-M10, W3-T4-M31, W3-T4-M32). The read lane needs no such order: it is strict FIFO, so a new job behind a non-empty queue can never start at once, and an empty queue admits first.
+
+**Measured while planning** (the shared scratch tree at Task 3's state, then a separate copy for the mutations; none is a deviation beyond Decision 2):
+1. **RED is a failed suite**, `Test Files  1 failed (1)`, `Tests  no tests`, `Error: Cannot find module '../src/docs/lane.js'`: every case imports the module this task creates. GREEN is `Tests  38 passed (38)` in about 0.5 s.
+2. **Fake timers fake no microtask**, so `flush()` (twenty `await Promise.resolve()`) lets a settle, its `finally` and the pump run, and `settledOrPending()` reads an answer that must already exist (a refused or abandoned run) without hanging when a mutation leaves it pending. `vi.getTimerCount()` counts the lanes' unref'd wait timers.
+3. **A `KeyedQueue` in `lane.ts` reds a guard.** The first draft built the fetch lane on `new KeyedQueue()`: `docs-lanes` was green, and `single-definition` answered `1 failed | 471 passed (472)`, `one KeyedQueue for the process > is constructed in exactly one file under server/src, and that file is the composition root`. Decision 2 is the fix; with it, `single-definition` is `472 passed (472)`.
+4. **Guards**: `tsc` on both projects is clean; `single-definition` `472 passed (472)` (`lane.ts` is an L4 name in `DOCS_RING_ROLES`, so its timers are allowed, and no exported name has a second home); `topology-clean` + `capsupported` `77 passed (77)` with `CCRC_HISTORY_BASE=<base sha>`; `auth-gate` + `box-token-census` + `verb-gate` `193 passed (193)` (`lane.ts` registers no route, holds no box-token text and makes no `CCD_ARGV.` call); `docs-policy` + `docs-headers` `622 passed (622)` (Tasks 2 and 3's counts, 574 + 48, unchanged). Environment-only reds, as Tasks 1-3 recorded: with no `origin/main`, `topology-clean`'s `resolved a base to measure against` reds alone; with a symlinked `pwa/node_modules`, `typecheck-tests`' `PWA_TSC really is pwa's own installed compiler` reds alone (`1 failed | 11 passed (12)`).
+5. **Mutations**: thirty-two, each measured red in a separate copy (`git archive HEAD | tar -x -C <copy>`, `git -C <copy> init -q`, `server/node_modules` linked in), restored after each, every one red within the default test timeout (no case hangs). The architecture's M1-M16 are W3-T4-M1..M16 in its order (its M11, "an expired job still runs at its turn", is the FIFO removal that Decision 2's lane relies on); M17-M32 pin the guards the decisions above add (M31 and M32 Decision 9's order and boundary; M10 is Decision 9's refusal line, the queue bound itself).
+
+| id | mutation | red |
+|---|---|---|
+| W3-T4-M1 | the read lane's start-at-once skips `laneAdmit` (always start) | server docs-lanes: 13 failed \| 25 passed (38) |
+| W3-T4-M2 | the pump serves the TAIL (LIFO) | server docs-lanes: 3 failed \| 35 passed (38) |
+| W3-T4-M3 | the pump scans past a blocked head (admits a non-head job) | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M4 | the read queue bound `>=` becomes `>` | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M5 | no read wait timer | server docs-lanes: 2 failed \| 36 passed (38) |
+| W3-T4-M6 | no abort listener on a queued read job | server docs-lanes: 3 failed \| 35 passed (38) |
+| W3-T4-M7 | the read release moves out of `finally` (fulfilment only) | server docs-lanes: 2 failed \| 36 passed (38) |
+| W3-T4-M8 | the fetch lane's per-key serialisation removed | server docs-lanes: 5 failed \| 33 passed (38) |
+| W3-T4-M9 | the global fetch bound 2 becomes 3 | server docs-lanes: 6 failed \| 32 passed (38) |
+| W3-T4-M10 | the fetch queue bound removed (the refusal after the pump) | server docs-lanes: 2 failed \| 36 passed (38) |
+| W3-T4-M11 | an expired or abandoned fetch job stays queued and runs at its turn | server docs-lanes: 4 failed \| 34 passed (38) |
+| W3-T4-M12 | no join (every call starts a flight) | server docs-lanes: 4 failed \| 34 passed (38) |
+| W3-T4-M13 | a settled flight keeps its key | server docs-lanes: 3 failed \| 35 passed (38) |
+| W3-T4-M14 | the flight aborts on the FIRST joiner's abort | server docs-lanes: 2 failed \| 36 passed (38) |
+| W3-T4-M15 | read `close()` leaves the waiters' timers | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M16 | a join on an abandoned flight joins it instead of starting anew | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M17 | the read lane's already-aborted check removed | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M18 | a read job leaving the FIFO does not pump | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M19 | the read lane starts a new job ahead of a waiting head | server docs-lanes: 2 failed \| 36 passed (38) |
+| W3-T4-M20 | the read lane's closed flag ignored | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M21 | admission does not clear the read wait timer | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M22 | a fetch job whose key is busy holds back every later key (strict head) | server docs-lanes: 3 failed \| 35 passed (38) |
+| W3-T4-M23 | the fetch lane's already-aborted check removed | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M24 | no abort listener on a queued fetch job | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M25 | no fetch wait timer | server docs-lanes: 2 failed \| 36 passed (38) |
+| W3-T4-M26 | the fetch release moves out of `finally` (fulfilment only) | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M27 | the fetch lane's closed flag ignored | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M28 | fetch `close()` leaves the waiters' timers | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M29 | `bump` does not persist the new generation | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M30 | a lone already-aborted joiner leaves the flight's signal live | server docs-lanes: 1 failed \| 37 passed (38) |
+| W3-T4-M31 | the fetch lane refuses BEFORE the pump (the pre-check order: a job that would start at once is refused) | server docs-lanes: 2 failed \| 36 passed (38) |
+| W3-T4-M32 | the fetch queue bound `>` becomes `>=` (the eighth job not started is refused) | server docs-lanes: 3 failed \| 35 passed (38) |
+
+- [ ] **Step 1: Write the failing test.** Create `server/test/docsRouteHelpers.ts` with exactly this content:
+
+```ts
+// Test helpers for the native Docs reader's L4 (design 2026-10-01, section 6.3, section 6.4; W3). Task 4 adds the
+// blocking exec double the lane, fetch-lane and single-flight cases drive; Task 6 adds the scripted `CcdRunner`
+// over W2's real adapter and `docsApp()`; Task 10 adds `echoPty()` and `passThroughLane()`.
+
+/**
+ * A blocking exec double (section 6.10's "blocking doubles", M6.2): every call of `exec` is one started exec, held
+ * open until the test settles it by its start index. `started()` counts the calls, so "zero extra execs" is a
+ * count that did not move.
+ */
+export function blocker<T>(): {
+  exec: () => Promise<T>;
+  started(): number;
+  release(i: number, v: T): void;
+  fail(i: number, e: Error): void;
+} {
+  const held: { resolve: (v: T) => void; reject: (e: Error) => void }[] = [];
+  return {
+    exec: () => new Promise<T>((resolve, reject) => {
+      held.push({ resolve, reject });
+    }),
+    started: () => held.length,
+    release: (i, v) => held[i].resolve(v),
+    fail: (i, e) => held[i].reject(e),
+  };
+}
+```
+
+Then create `server/test/docs-lanes.test.ts` with exactly this content:
+
+```ts
+// `server/src/docs/lane.ts`, the native Docs reader's link protection (design 2026-10-01, section 6.3, section 6.4;
+// W3 refinements (j), (n) and (p)). Task 4 drives each lane clause with blocking exec doubles (`blocker()`, section
+// 6.10's M6.2 "blocking doubles") and fake timers: the read lane (laneAdmit applied to the HEAD only, strict FIFO,
+// the queue bound, the 10 s wait, abandonment, release on every settle, close), the fetch lane (serial per key, the
+// global bound, the queue of 8 counted across keys, the 20 s wait from acceptance), single-flight with abandonment
+// (a flight aborts only when EVERY joiner has gone) and the generation counter. The route-level M-cases (M6.2's
+// "a non-docs route is unaffected", M6.9, M6.10) are Tasks 6 and 7's; Task 7 appends the read/fetch separation case.
+//
+// Every bound, wait and busy body is read from L1 (`policy.ts`), never typed here.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  docsFetchLane, docsFlights, docsGenerations, docsReadLane, type DocsFetchLane, type DocsLaneRun, type DocsReadLane,
+} from '../src/docs/lane.js';
+import {
+  DOCS_FETCH_GLOBAL, DOCS_FETCH_MAX_WAIT_MS, DOCS_FETCH_QUEUE, DOCS_LANE_BYTES, DOCS_LANE_EXECS, DOCS_LANE_LARGE_RAW,
+  DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, docsBusyBody, type DocsJob,
+} from '../src/docs/policy.js';
+import { blocker } from './docsRouteHelpers.js';
+
+/** A small read job: far under every bound. */
+const SMALL: DocsJob = { raw: 1000, wire: 2000 };
+/** A large read job: one byte over the large threshold, its wire well inside the byte budget. */
+const LARGE: DocsJob = { raw: DOCS_LANE_LARGE_RAW + 1, wire: 1100000 };
+const IDLE = { execs: 0, bytes: 0, large: 0, queued: 0 };
+
+/** A signal nobody aborts. */
+const live = (): AbortSignal => new AbortController().signal;
+/** Let every pending promise hop run (a settle, a `finally`, a pump); fake timers fake no microtask. */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+}
+/** The answer `p` has already given, or `'pending'` when it has given none after a flush. */
+async function settledOrPending<T>(p: Promise<T>): Promise<T | 'pending'> {
+  return Promise.race([p, flush().then(() => 'pending' as const)]);
+}
+/** An exec that records its name when the lane starts it, then blocks on `b`. */
+function named(order: string[], name: string, b: ReturnType<typeof blocker<string>>): () => Promise<string> {
+  return () => {
+    order.push(name);
+    return b.exec();
+  };
+}
+
+let lanes: { close(): void }[] = [];
+beforeEach(() => {
+  vi.useFakeTimers();
+  lanes = [];
+});
+afterEach(() => {
+  for (const l of lanes) l.close();
+  vi.useRealTimers();
+});
+function readLane(): DocsReadLane {
+  const l = docsReadLane();
+  lanes.push(l);
+  return l;
+}
+function fetchLane(): DocsFetchLane {
+  const l = docsFetchLane();
+  lanes.push(l);
+  return l;
+}
+
+describe('W3 T4: the read lane admits by laneAdmit, applied to its head (section 6.3)', () => {
+  it(`${DOCS_LANE_EXECS} small jobs start at once and the third waits for a slot`, async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const runs = [0, 1, 2].map(() => lane.run(SMALL, live(), b.exec));
+    expect(b.started()).toBe(2);
+    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 4000, large: 0, queued: 1 });
+    b.release(0, 'a');
+    await flush();
+    expect(b.started()).toBe(3);
+    expect(await runs[0]).toStrictEqual({ kind: 'ran', value: 'a' });
+    b.release(1, 'b');
+    b.release(2, 'c');
+    expect(await Promise.all(runs.slice(1))).toStrictEqual([{ kind: 'ran', value: 'b' }, { kind: 'ran', value: 'c' }]);
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('the byte budget holds a second job whose wire would pass DOCS_LANE_BYTES', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const job: DocsJob = { raw: 1000, wire: 2000000 };
+    expect(2 * job.wire).toBeGreaterThan(DOCS_LANE_BYTES);
+    const runs = [lane.run(job, live(), b.exec), lane.run(job, live(), b.exec)];
+    expect(b.started()).toBe(1);
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 2000000, large: 0, queued: 1 });
+    b.release(0, 'a');
+    await flush();
+    expect(b.started()).toBe(2);
+    b.release(1, 'b');
+    await Promise.all(runs);
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('a second large job waits; exactly DOCS_LANE_LARGE_RAW is not large', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const runs = [lane.run(LARGE, live(), b.exec), lane.run(LARGE, live(), b.exec)];
+    expect(b.started()).toBe(1);
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 1100000, large: 1, queued: 1 });
+    b.release(0, 'a');
+    await flush();
+    expect(b.started()).toBe(2);
+    b.release(1, 'b');
+    await Promise.all(runs);
+
+    const edge: DocsJob = { raw: DOCS_LANE_LARGE_RAW, wire: 1100000 };
+    const c = blocker<string>();
+    const more = [lane.run(edge, live(), c.exec), lane.run(edge, live(), c.exec)];
+    expect(c.started()).toBe(2);
+    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 2200000, large: 0, queued: 0 });
+    c.release(0, 'x');
+    c.release(1, 'y');
+    await Promise.all(more);
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('an idle lane admits one job over the whole byte budget, alone', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const huge: DocsJob = { raw: 1000, wire: DOCS_LANE_BYTES + 854272 };
+    const runs = [lane.run(huge, live(), b.exec), lane.run(SMALL, live(), b.exec)];
+    expect(b.started()).toBe(1);
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: huge.wire, large: 0, queued: 1 });
+    b.release(0, 'a');
+    await flush();
+    expect(b.started()).toBe(2);
+    b.release(1, 'b');
+    await Promise.all(runs);
+  });
+});
+
+describe('W3 T4: the read lane is strict FIFO (section 6.3)', () => {
+  it('jobs start in the order they were queued', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    const runs = ['p', 'q', 'x', 'y', 'z'].map((n) => lane.run(SMALL, live(), named(order, n, b)));
+    expect(order).toStrictEqual(['p', 'q']);
+    b.release(0, 'p');
+    await flush();
+    expect(order).toStrictEqual(['p', 'q', 'x']);
+    b.release(1, 'q');
+    await flush();
+    expect(order).toStrictEqual(['p', 'q', 'x', 'y']);
+    b.release(2, 'x');
+    await flush();
+    expect(order).toStrictEqual(['p', 'q', 'x', 'y', 'z']);
+    b.release(3, 'y');
+    b.release(4, 'z');
+    await Promise.all(runs);
+  });
+
+  it('a large head blocks a small job behind it that would admit on its own', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    const runs = [
+      lane.run(LARGE, live(), named(order, 'a', b)),
+      lane.run(SMALL, live(), named(order, 'p', b)),
+      lane.run(LARGE, live(), named(order, 'b', b)),
+      lane.run(SMALL, live(), named(order, 'c', b)),
+    ];
+    expect(order).toStrictEqual(['a', 'p']);
+    b.release(1, 'p');
+    await flush();
+    expect(order).toStrictEqual(['a', 'p']);
+    expect(lane.load()).toStrictEqual({ execs: 1, bytes: 1100000, large: 1, queued: 2 });
+    b.release(0, 'a');
+    await flush();
+    expect(order).toStrictEqual(['a', 'p', 'b', 'c']);
+    b.release(2, 'b');
+    b.release(3, 'c');
+    await Promise.all(runs);
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('a new job queues behind a waiting head even when the lane would admit it', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    const runs = [
+      lane.run(LARGE, live(), named(order, 'a', b)),
+      lane.run(LARGE, live(), named(order, 'b', b)),
+    ];
+    runs.push(lane.run(SMALL, live(), named(order, 'c', b)));
+    expect(order).toStrictEqual(['a']);
+    b.release(0, 'a');
+    await flush();
+    expect(order).toStrictEqual(['a', 'b', 'c']);
+    b.release(1, 'b');
+    b.release(2, 'c');
+    await Promise.all(runs);
+  });
+});
+
+describe('W3 T4: the read lane refuses past its queue and its wait (M6.2, section 6.3)', () => {
+  it(`with ${DOCS_LANE_EXECS} running and ${DOCS_LANE_QUEUE} queued, the next is docs-busy {lane:'read'} at once`, async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    for (let i = 0; i < DOCS_LANE_EXECS + DOCS_LANE_QUEUE; i += 1) void lane.run(SMALL, live(), b.exec);
+    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 4000, large: 0, queued: DOCS_LANE_QUEUE });
+    const next = await settledOrPending(lane.run(SMALL, live(), b.exec));
+    expect(next).toStrictEqual({ kind: 'busy', body: docsBusyBody('read') });
+    expect(b.started()).toBe(2);
+    expect(lane.load().queued).toBe(DOCS_LANE_QUEUE);
+  });
+
+  it(`a queued job still waits at ${DOCS_LANE_MAX_WAIT_MS - 1} ms, is docs-busy at ${DOCS_LANE_MAX_WAIT_MS} ms, and never starts`, async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    void lane.run(SMALL, live(), b.exec);
+    void lane.run(SMALL, live(), b.exec);
+    const waiting = lane.run(SMALL, live(), b.exec);
+    await vi.advanceTimersByTimeAsync(DOCS_LANE_MAX_WAIT_MS - 1);
+    expect(await settledOrPending(waiting)).toBe('pending');
+    expect(lane.load().queued).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await settledOrPending(waiting)).toStrictEqual({ kind: 'busy', body: docsBusyBody('read') });
+    expect(lane.load().queued).toBe(0);
+    b.release(0, 'a');
+    b.release(1, 'b');
+    await flush();
+    expect(b.started()).toBe(2);
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('admission clears the wait timer: a job that starts is never answered busy later', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    void lane.run(SMALL, live(), b.exec);
+    void lane.run(SMALL, live(), b.exec);
+    const third = lane.run(SMALL, live(), b.exec);
+    b.release(0, 'a');
+    await flush();
+    expect(b.started()).toBe(3);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(DOCS_LANE_MAX_WAIT_MS);
+    b.release(2, 'c');
+    expect(await third).toStrictEqual({ kind: 'ran', value: 'c' });
+  });
+});
+
+describe('W3 T4: abandonment in the read lane (refinement (j), section 6.3)', () => {
+  it('aborting a queued job answers abandoned, dequeues it, and it never starts', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    void lane.run(SMALL, live(), b.exec);
+    void lane.run(SMALL, live(), b.exec);
+    const gone = new AbortController();
+    const waiting = lane.run(SMALL, gone.signal, b.exec);
+    expect(lane.load().queued).toBe(1);
+    gone.abort();
+    expect(await settledOrPending(waiting)).toStrictEqual({ kind: 'abandoned' });
+    expect(lane.load().queued).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    b.release(0, 'a');
+    b.release(1, 'b');
+    await flush();
+    expect(b.started()).toBe(2);
+  });
+
+  it('a signal already aborted answers abandoned at once, even on an idle lane, and never starts', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const gone = new AbortController();
+    gone.abort();
+    expect(await settledOrPending(lane.run(SMALL, gone.signal, b.exec))).toStrictEqual({ kind: 'abandoned' });
+    expect(b.started()).toBe(0);
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('aborting a RUNNING job changes nothing: the exec is not cancelled and the answer is ran', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const gone = new AbortController();
+    const running = lane.run(SMALL, gone.signal, b.exec);
+    expect(b.started()).toBe(1);
+    gone.abort();
+    b.release(0, 'a');
+    expect(await running).toStrictEqual({ kind: 'ran', value: 'a' });
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('abandoning a blocking head lets the job behind it start at once', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    void lane.run(LARGE, live(), named(order, 'a', b));
+    const gone = new AbortController();
+    const head = lane.run(LARGE, gone.signal, named(order, 'b', b));
+    void lane.run(SMALL, live(), named(order, 'c', b));
+    expect(order).toStrictEqual(['a']);
+    gone.abort();
+    expect(await head).toStrictEqual({ kind: 'abandoned' });
+    expect(order).toStrictEqual(['a', 'c']);
+    expect(lane.load()).toStrictEqual({ execs: 2, bytes: 1102000, large: 1, queued: 0 });
+  });
+});
+
+describe('W3 T4: the read lane releases a slot on every settle, once (section 6.3)', () => {
+  it('a rejected exec frees its slot (the next queued starts) and rejects its own caller', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const first = lane.run(SMALL, live(), b.exec);
+    void lane.run(SMALL, live(), b.exec);
+    const third = lane.run(SMALL, live(), b.exec);
+    b.fail(0, new Error('boom'));
+    await expect(first).rejects.toThrow('boom');
+    await flush();
+    expect(b.started()).toBe(3);
+    b.release(1, 'b');
+    b.release(2, 'c');
+    expect(await third).toStrictEqual({ kind: 'ran', value: 'c' });
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('an exec that throws before returning a promise frees its slot too', async () => {
+    const lane = readLane();
+    const thrown = lane.run(SMALL, live(), () => {
+      throw new Error('sync');
+    });
+    await expect(thrown).rejects.toThrow('sync');
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+});
+
+describe('W3 T4: closing the read lane (the plugin onClose, Task 6)', () => {
+  it('answers every queued job busy, leaves no timer, and refuses a later run without starting it', async () => {
+    const lane = docsReadLane();
+    const b = blocker<string>();
+    void lane.run(SMALL, live(), b.exec);
+    void lane.run(SMALL, live(), b.exec);
+    const queued = [0, 1, 2].map(() => lane.run(SMALL, live(), b.exec));
+    expect(vi.getTimerCount()).toBe(3);
+    lane.close();
+    expect(vi.getTimerCount()).toBe(0);
+    const busy: DocsLaneRun<string> = { kind: 'busy', body: docsBusyBody('read') };
+    expect(await Promise.all(queued.map(settledOrPending))).toStrictEqual([busy, busy, busy]);
+    expect(lane.load().queued).toBe(0);
+    b.release(0, 'a');
+    b.release(1, 'b');
+    await flush();
+    expect(b.started()).toBe(2);
+    expect(await settledOrPending(lane.run(SMALL, live(), b.exec))).toStrictEqual(busy);
+    expect(b.started()).toBe(2);
+  });
+});
+
+describe('W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n))', () => {
+  it('the same key twice: the second waits behind the first though a global slot is free', async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    const runs = [lane.run('demo', live(), b.exec), lane.run('demo', live(), b.exec)];
+    await flush();
+    expect(b.started()).toBe(1);
+    expect(lane.load()).toStrictEqual({ running: 1, queued: 1 });
+    b.release(0, 'a');
+    await flush();
+    expect(b.started()).toBe(2);
+    b.release(1, 'b');
+    expect(await Promise.all(runs)).toStrictEqual([{ kind: 'ran', value: 'a' }, { kind: 'ran', value: 'b' }]);
+    expect(lane.load()).toStrictEqual({ running: 0, queued: 0 });
+  });
+
+  it(`three keys: ${DOCS_FETCH_GLOBAL} run and the third waits for a global slot`, async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    const runs = ['a', 'b', 'demo'].map((k) => lane.run(k, live(), b.exec));
+    await flush();
+    expect(b.started()).toBe(DOCS_FETCH_GLOBAL);
+    expect(lane.load()).toStrictEqual({ running: 2, queued: 1 });
+    b.release(1, 'b');
+    await flush();
+    expect(b.started()).toBe(3);
+    b.release(0, 'a');
+    b.release(2, 'c');
+    await Promise.all(runs);
+    expect(lane.load()).toStrictEqual({ running: 0, queued: 0 });
+  });
+
+  it('a job waiting behind its own key never holds back another key: the later key starts on a free slot', async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    const runs = [
+      lane.run('demo', live(), named(order, 'demo-1', b)),
+      lane.run('demo', live(), named(order, 'demo-2', b)),
+      lane.run('a', live(), named(order, 'a-1', b)),
+    ];
+    await flush();
+    expect(order).toStrictEqual(['demo-1', 'a-1']);
+    expect(lane.load()).toStrictEqual({ running: 2, queued: 1 });
+    b.release(0, 'x');
+    await flush();
+    expect(order).toStrictEqual(['demo-1', 'a-1', 'demo-2']);
+    b.release(1, 'y');
+    b.release(2, 'z');
+    expect(await Promise.all(runs)).toStrictEqual([
+      { kind: 'ran', value: 'x' }, { kind: 'ran', value: 'z' }, { kind: 'ran', value: 'y' },
+    ]);
+  });
+
+  it(`with ${DOCS_FETCH_GLOBAL} running and ${DOCS_FETCH_QUEUE} queued across keys, the next is docs-busy {lane:'fetch'}`, async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    void lane.run('a', live(), b.exec);
+    void lane.run('b', live(), b.exec);
+    await flush();
+    for (let i = 0; i < DOCS_FETCH_QUEUE; i += 1) void lane.run(i % 2 === 0 ? 'a' : `k${i}`, live(), b.exec);
+    await flush();
+    expect(lane.load()).toStrictEqual({ running: 2, queued: DOCS_FETCH_QUEUE });
+    const next = await settledOrPending(lane.run('demo', live(), b.exec));
+    expect(next).toStrictEqual({ kind: 'busy', body: docsBusyBody('fetch') });
+    expect(docsBusyBody('fetch')).toStrictEqual({ ok: false, failure: 'docs-busy', lane: 'fetch', retryAfterMs: 5000 });
+    expect(b.started()).toBe(2);
+  });
+
+  it(`${DOCS_FETCH_QUEUE} queued behind one running key with a global slot free: a job on an idle key starts at once`, async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    void lane.run('a', live(), b.exec);
+    for (let i = 0; i < DOCS_FETCH_QUEUE; i += 1) void lane.run('a', live(), b.exec);
+    await flush();
+    expect(lane.load()).toStrictEqual({ running: 1, queued: DOCS_FETCH_QUEUE });
+    const idle = lane.run('demo', live(), b.exec);
+    await flush();
+    expect(b.started()).toBe(2);
+    expect(lane.load()).toStrictEqual({ running: 2, queued: DOCS_FETCH_QUEUE });
+    b.release(1, 'demo');
+    expect(await idle).toStrictEqual({ kind: 'ran', value: 'demo' });
+  });
+
+  it(`the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer`, async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    void lane.run('a', live(), b.exec);
+    for (let i = 0; i < DOCS_FETCH_QUEUE; i += 1) void lane.run('a', live(), b.exec);
+    const second = lane.run('b', live(), b.exec);
+    await flush();
+    expect(lane.load()).toStrictEqual({ running: DOCS_FETCH_GLOBAL, queued: DOCS_FETCH_QUEUE });
+    const timers = vi.getTimerCount();
+    expect(await settledOrPending(lane.run('demo', live(), b.exec)))
+      .toStrictEqual({ kind: 'busy', body: docsBusyBody('fetch') });
+    expect(vi.getTimerCount()).toBe(timers);
+    expect(lane.load()).toStrictEqual({ running: DOCS_FETCH_GLOBAL, queued: DOCS_FETCH_QUEUE });
+    expect(b.started()).toBe(DOCS_FETCH_GLOBAL);
+    b.release(1, 'b');
+    expect(await second).toStrictEqual({ kind: 'ran', value: 'b' });
+  });
+
+  it(`a job waiting behind its key is docs-busy at ${DOCS_FETCH_MAX_WAIT_MS} ms and never runs when its key frees`, async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    const first = lane.run('demo', live(), b.exec);
+    const second = lane.run('demo', live(), b.exec);
+    await vi.advanceTimersByTimeAsync(DOCS_FETCH_MAX_WAIT_MS - 1);
+    expect(await settledOrPending(second)).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await settledOrPending(second)).toStrictEqual({ kind: 'busy', body: docsBusyBody('fetch') });
+    expect(lane.load()).toStrictEqual({ running: 1, queued: 0 });
+    b.release(0, 'a');
+    expect(await first).toStrictEqual({ kind: 'ran', value: 'a' });
+    await flush();
+    expect(b.started()).toBe(1);
+    expect(lane.load()).toStrictEqual({ running: 0, queued: 0 });
+  });
+
+  it('a job waiting for a global slot is docs-busy at its wait, never runs, and frees its place', async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    void lane.run('a', live(), b.exec);
+    void lane.run('b', live(), b.exec);
+    const third = lane.run('demo', live(), b.exec);
+    await vi.advanceTimersByTimeAsync(DOCS_FETCH_MAX_WAIT_MS);
+    expect(await settledOrPending(third)).toStrictEqual({ kind: 'busy', body: docsBusyBody('fetch') });
+    expect(lane.load()).toStrictEqual({ running: 2, queued: 0 });
+    b.release(0, 'a');
+    await flush();
+    expect(b.started()).toBe(2);
+    expect(lane.load()).toStrictEqual({ running: 1, queued: 0 });
+    const fourth = lane.run('demo', live(), b.exec);
+    await flush();
+    expect(b.started()).toBe(3);
+    b.release(1, 'b');
+    b.release(2, 'd');
+    expect(await fourth).toStrictEqual({ kind: 'ran', value: 'd' });
+  });
+
+  it('aborting a queued fetch answers abandoned and dequeues it, behind its key or the global bound', async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    void lane.run('a', live(), b.exec);
+    void lane.run('b', live(), b.exec);
+    const behindKey = new AbortController();
+    const behindGlobal = new AbortController();
+    const k = lane.run('a', behindKey.signal, b.exec);
+    const g = lane.run('demo', behindGlobal.signal, b.exec);
+    await flush();
+    expect(lane.load()).toStrictEqual({ running: 2, queued: 2 });
+    behindKey.abort();
+    behindGlobal.abort();
+    expect(await settledOrPending(k)).toStrictEqual({ kind: 'abandoned' });
+    expect(await settledOrPending(g)).toStrictEqual({ kind: 'abandoned' });
+    expect(lane.load()).toStrictEqual({ running: 2, queued: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+    b.release(0, 'a');
+    b.release(1, 'b');
+    await flush();
+    expect(b.started()).toBe(2);
+    expect(lane.load()).toStrictEqual({ running: 0, queued: 0 });
+  });
+
+  it('a signal already aborted answers abandoned with no exec; aborting a running fetch changes nothing', async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    const gone = new AbortController();
+    gone.abort();
+    expect(await settledOrPending(lane.run('demo', gone.signal, b.exec))).toStrictEqual({ kind: 'abandoned' });
+    expect(b.started()).toBe(0);
+    const later = new AbortController();
+    const running = lane.run('demo', later.signal, b.exec);
+    await flush();
+    expect(b.started()).toBe(1);
+    later.abort();
+    b.release(0, 'a');
+    expect(await running).toStrictEqual({ kind: 'ran', value: 'a' });
+  });
+
+  it('a rejected fetch frees its key and its global slot and rejects its own caller', async () => {
+    const lane = fetchLane();
+    const b = blocker<string>();
+    const first = lane.run('demo', live(), b.exec);
+    void lane.run('a', live(), b.exec);
+    const third = lane.run('demo', live(), b.exec);
+    await flush();
+    b.fail(0, new Error('boom'));
+    await expect(first).rejects.toThrow('boom');
+    await flush();
+    expect(b.started()).toBe(3);
+    expect(lane.load()).toStrictEqual({ running: 2, queued: 0 });
+    b.release(1, 'a');
+    b.release(2, 'c');
+    expect(await third).toStrictEqual({ kind: 'ran', value: 'c' });
+  });
+
+  it('close answers every queued fetch busy, leaves no timer, and refuses a later run', async () => {
+    const lane = docsFetchLane();
+    const b = blocker<string>();
+    void lane.run('a', live(), b.exec);
+    void lane.run('b', live(), b.exec);
+    const queued = [lane.run('a', live(), b.exec), lane.run('demo', live(), b.exec)];
+    await flush();
+    lane.close();
+    expect(vi.getTimerCount()).toBe(0);
+    const busy: DocsLaneRun<string> = { kind: 'busy', body: docsBusyBody('fetch') };
+    expect(await Promise.all(queued.map(settledOrPending))).toStrictEqual([busy, busy]);
+    b.release(0, 'a');
+    b.release(1, 'b');
+    await flush();
+    expect(b.started()).toBe(2);
+    expect(await settledOrPending(lane.run('demo', live(), b.exec))).toStrictEqual(busy);
+    await flush();
+    expect(b.started()).toBe(2);
+  });
+});
+
+describe('W3 T4: single-flight (section 6.4, refinement (j))', () => {
+  it('two joins on one key start once and both receive the one value', async () => {
+    const flights = docsFlights();
+    const b = blocker<string>();
+    const start = vi.fn((_s: AbortSignal) => b.exec());
+    const one = flights.join('k', live(), start);
+    const two = flights.join('k', live(), start);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(flights.size()).toBe(1);
+    b.release(0, 'v');
+    expect(await Promise.all([one, two])).toStrictEqual(['v', 'v']);
+  });
+
+  it('different keys start separately', () => {
+    const flights = docsFlights();
+    const b = blocker<string>();
+    void flights.join('k1', live(), () => b.exec());
+    void flights.join('k2', live(), () => b.exec());
+    expect(b.started()).toBe(2);
+    expect(flights.size()).toBe(2);
+  });
+
+  it('a settled flight frees its key: a third join starts again', async () => {
+    const flights = docsFlights();
+    const b = blocker<string>();
+    const first = flights.join('k', live(), () => b.exec());
+    b.release(0, 'v1');
+    expect(await first).toBe('v1');
+    await flush();
+    expect(flights.size()).toBe(0);
+    const again = flights.join('k', live(), () => b.exec());
+    expect(b.started()).toBe(2);
+    b.release(1, 'v2');
+    expect(await again).toBe('v2');
+  });
+
+  it('a rejected flight rejects every joiner and frees its key', async () => {
+    const flights = docsFlights();
+    const b = blocker<string>();
+    const one = flights.join('k', live(), () => b.exec());
+    const two = flights.join('k', live(), () => b.exec());
+    b.fail(0, new Error('boom'));
+    await expect(one).rejects.toThrow('boom');
+    await expect(two).rejects.toThrow('boom');
+    await flush();
+    expect(flights.size()).toBe(0);
+    const thrown = flights.join('s', live(), () => {
+      throw new Error('sync');
+    });
+    await expect(thrown).rejects.toThrow('sync');
+    await flush();
+    expect(flights.size()).toBe(0);
+  });
+
+  it("the flight's signal aborts only when EVERY joiner's signal has aborted", async () => {
+    const flights = docsFlights();
+    const b = blocker<string>();
+    let flight: AbortSignal | undefined;
+    const a = new AbortController();
+    const c = new AbortController();
+    void flights.join('k', a.signal, (s) => {
+      flight = s;
+      return b.exec();
+    });
+    void flights.join('k', c.signal, () => b.exec());
+    expect(flight?.aborted).toBe(false);
+    a.abort();
+    expect(flight?.aborted).toBe(false);
+    c.abort();
+    expect(flight?.aborted).toBe(true);
+  });
+
+  it('a join on an abandoned flight starts a NEW flight; the old one settles alone', async () => {
+    const flights = docsFlights();
+    const b = blocker<string>();
+    const signals: AbortSignal[] = [];
+    const start = (s: AbortSignal): Promise<string> => {
+      signals.push(s);
+      return b.exec();
+    };
+    const a = new AbortController();
+    const old = flights.join('k', a.signal, start);
+    a.abort();
+    expect(signals[0].aborted).toBe(true);
+    const fresh = flights.join('k', live(), start);
+    expect(b.started()).toBe(2);
+    expect(signals[1].aborted).toBe(false);
+    b.release(0, 'old');
+    expect(await old).toBe('old');
+    await flush();
+    expect(flights.size()).toBe(1);
+    b.release(1, 'new');
+    expect(await fresh).toBe('new');
+    await flush();
+    expect(flights.size()).toBe(0);
+  });
+
+  it('a lone joiner whose signal is already aborted starts a flight whose signal is aborted', () => {
+    const flights = docsFlights();
+    const gone = new AbortController();
+    gone.abort();
+    let flight: AbortSignal | undefined;
+    void flights.join('k', gone.signal, (s) => {
+      flight = s;
+      return new Promise<string>(() => {});
+    });
+    expect(flight?.aborted).toBe(true);
+  });
+
+  it('through the read lane: a queued flight whose every requester left is abandoned and never execs', async () => {
+    const lane = readLane();
+    const flights = docsFlights();
+    const b = blocker<string>();
+    void lane.run(SMALL, live(), b.exec);
+    void lane.run(SMALL, live(), b.exec);
+    const a = new AbortController();
+    const c = new AbortController();
+    const start = (s: AbortSignal): Promise<DocsLaneRun<string>> => lane.run(SMALL, s, b.exec);
+    const one = flights.join('k', a.signal, start);
+    const two = flights.join('k', c.signal, start);
+    expect(lane.load().queued).toBe(1);
+    a.abort();
+    expect(lane.load().queued).toBe(1);
+    c.abort();
+    expect(await Promise.all([one, two])).toStrictEqual([{ kind: 'abandoned' }, { kind: 'abandoned' }]);
+    expect(lane.load().queued).toBe(0);
+    b.release(0, 'a');
+    b.release(1, 'b');
+    await flush();
+    expect(b.started()).toBe(2);
+  });
+});
+
+describe('W3 T4: the generation counter (section 6.4)', () => {
+  it('starts at 0 per key, bump answers the new value, and keys are independent', () => {
+    const gens = docsGenerations();
+    expect(gens.current('demo')).toBe(0);
+    expect(gens.bump('demo')).toBe(1);
+    expect(gens.bump('demo')).toBe(2);
+    expect(gens.current('demo')).toBe(2);
+    expect(gens.current('a')).toBe(0);
+    expect(gens.bump('a')).toBe(1);
+    expect(gens.current('demo')).toBe(2);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-lanes.test.ts )`
+Expected: `Test Files  1 failed (1)`, `Tests  no tests`, with `Error: Cannot find module '../src/docs/lane.js' imported from .../server/test/docs-lanes.test.ts` (Measured 1). Any other error (a missing export of `policy.ts`, a syntax error) means Tasks 1-3 are not in the tree or a file was not pasted exactly: stop.
+
+- [ ] **Step 3: Write the implementation.** Create `server/src/docs/lane.ts` with exactly this content:
+
+```ts
+// The native Docs reader's link protection (design 2026-10-01, section 6.3, section 6.4; W3 refinements (j), (n)
+// and (p)): L4. One read lane per node (index, tree and show; cache hits never reach it), one fetch lane per node,
+// single-flight with abandonment, and the per-(node, project) generation counter. The routes (Tasks 6 and 7) build
+// one of each per node in `composeDocs`, never at module scope, and join a flight BEFORE a lane (refinement (k)).
+//
+// Ring (M7.10; the ring guard in `single-definition.test.ts`): this file owns timers and DECIDES NOTHING. Whether
+// the head job is admitted is L1's `laneAdmit`; every bound, wait and busy body is an L1 constant or `docsBusyBody`.
+// What stays here is bookkeeping: the counters `laneAdmit` reads, the FIFO, the timers, the listeners. A running
+// exec is never cancelled (the agent has no cancel op, section 6.3): abandonment only ever removes a job that has
+// not started.
+import type { DocsFailureBody } from '../../../shared/docs.js';
+import {
+  DOCS_FETCH_GLOBAL, DOCS_FETCH_MAX_WAIT_MS, DOCS_FETCH_QUEUE, DOCS_LANE_LARGE_RAW, DOCS_LANE_MAX_WAIT_MS,
+  DOCS_LANE_QUEUE, docsBusyBody, laneAdmit, type DocsJob, type DocsLaneName, type LaneLoad,
+} from './policy.js';
+
+/**
+ * What a lane answers for one job. `ran`: the exec ran and fulfilled with `value` (a rejected exec rejects the
+ * caller instead). `busy`: the lane refused it (its queue was full, its wait expired, or the lane is closed); the
+ * exec never ran. `abandoned`: every requester left before the job started; the exec never ran.
+ */
+export type DocsLaneRun<T> = { kind: 'ran'; value: T } | { kind: 'busy'; body: DocsFailureBody } | { kind: 'abandoned' };
+
+/** One node's read lane (section 6.3). `load()` is a fresh snapshot: the three counters `laneAdmit` reads, plus
+ *  how many jobs wait in the FIFO. `close()` answers every queued job `busy` and every later `run` too. */
+export interface DocsReadLane {
+  run<T>(job: DocsJob, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>>;
+  load(): Readonly<LaneLoad & { queued: number }>;
+  close(): void;
+}
+
+/** One node's fetch lane (section 6.4). `key` is the (node, project) key (`docsProjectKey`): jobs under one key
+ *  run one at a time, in order. `queued` counts every accepted job that has not started (refinement (n)). */
+export interface DocsFetchLane {
+  run<T>(key: string, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>>;
+  load(): Readonly<{ running: number; queued: number }>;
+  close(): void;
+}
+
+/** Single-flight (section 6.4). `join` answers the promise of the live flight under `key`, or starts one with
+ *  `start(flight)`, where `flight` aborts only when every joiner's `signal` has aborted (refinement (j)). */
+export interface DocsFlights {
+  join<T>(key: string, signal: AbortSignal, start: (flight: AbortSignal) => Promise<T>): Promise<T>;
+  size(): number;
+}
+
+/** The per-(node, project) generation counter (section 6.4): 0 until the first bump. */
+export interface DocsGenerations {
+  current(key: string): number;
+  bump(key: string): number;
+}
+
+const ABANDONED: DocsLaneRun<never> = Object.freeze({ kind: 'abandoned' });
+
+/** A `busy` run carrying a FRESH body from L1 (callers may hand the body on to a reply). */
+function busy(lane: DocsLaneName): DocsLaneRun<never> {
+  return { kind: 'busy', body: docsBusyBody(lane) };
+}
+
+/** A queued read job: its estimate, its signal, and the three ways it leaves the FIFO. */
+interface ReadWaiter {
+  job: DocsJob;
+  signal: AbortSignal;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  onAbort: () => void;
+  begin: () => void;
+  refuse: (run: DocsLaneRun<never>) => void;
+}
+
+/**
+ * A read lane (section 6.3). A job starts at once only when the FIFO is empty and `laneAdmit` admits it; else it
+ * queues (or is `busy` when `DOCS_LANE_QUEUE` jobs already wait). Only the HEAD is ever considered, so a large job
+ * cannot starve. Every settle of a running exec releases its share exactly once (in `finally`) and pumps; so does a
+ * queued job leaving, since the job behind it may now admit.
+ */
+export function docsReadLane(): DocsReadLane {
+  const load: LaneLoad = { execs: 0, bytes: 0, large: 0 };
+  const queue: ReadWaiter[] = [];
+  let closed = false;
+
+  const isLarge = (job: DocsJob): boolean => job.raw > DOCS_LANE_LARGE_RAW;
+
+  /** Detach a waiter from its timer and its signal (on admission, expiry, abandonment or close). */
+  const detach = (w: ReadWaiter): void => {
+    clearTimeout(w.timer);
+    w.signal.removeEventListener('abort', w.onAbort);
+  };
+
+  const pump = (): void => {
+    while (queue.length > 0 && laneAdmit(load, queue[0].job)) {
+      const head = queue.shift() as ReadWaiter;
+      detach(head);
+      head.begin();
+    }
+  };
+
+  /** Take a queued job out of the FIFO and answer it `run`; the job behind it may now admit. */
+  const leave = (w: ReadWaiter, run: DocsLaneRun<never>): void => {
+    const i = queue.indexOf(w);
+    if (i < 0) return;
+    queue.splice(i, 1);
+    detach(w);
+    w.refuse(run);
+    pump();
+  };
+
+  /** Give a running job's share back and pump: called once per started job, from `running`'s `finally`. */
+  const release = (job: DocsJob): void => {
+    load.execs -= 1;
+    load.bytes -= job.wire;
+    if (isLarge(job)) load.large -= 1;
+    pump();
+  };
+
+  async function running<T>(job: DocsJob, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
+    load.execs += 1;
+    load.bytes += job.wire;
+    if (isLarge(job)) load.large += 1;
+    try {
+      return { kind: 'ran', value: await exec() };
+    } finally {
+      release(job);
+    }
+  }
+
+  return {
+    run<T>(job: DocsJob, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
+      if (signal.aborted) return Promise.resolve(ABANDONED);
+      if (closed) return Promise.resolve(busy('read'));
+      if (queue.length === 0 && laneAdmit(load, job)) return running(job, exec);
+      if (queue.length >= DOCS_LANE_QUEUE) return Promise.resolve(busy('read'));
+      return new Promise<DocsLaneRun<T>>((resolve) => {
+        const w: ReadWaiter = {
+          job, signal, timer: undefined,
+          onAbort: () => leave(w, ABANDONED),
+          begin: () => resolve(running(job, exec)),
+          refuse: resolve,
+        };
+        w.timer = setTimeout(() => leave(w, busy('read')), DOCS_LANE_MAX_WAIT_MS);
+        w.timer.unref();
+        signal.addEventListener('abort', w.onAbort, { once: true });
+        queue.push(w);
+      });
+    },
+    load: () => ({ ...load, queued: queue.length }),
+    close: () => {
+      closed = true;
+      for (const w of queue.splice(0)) {
+        detach(w);
+        w.refuse(busy('read'));
+      }
+    },
+  };
+}
+
+/** An accepted fetch job, queued until it starts. */
+interface FetchWaiter {
+  key: string;
+  signal: AbortSignal;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  onAbort: () => void;
+  begin: () => void;
+  refuse: (run: DocsLaneRun<never>) => void;
+}
+
+/**
+ * A fetch lane (section 6.4; refinement (n)). Jobs under one key run one at a time, in acceptance order; at most
+ * `DOCS_FETCH_GLOBAL` run across keys. One FIFO holds every accepted job that has not started, behind its key or
+ * the global bound, and each job's `DOCS_FETCH_MAX_WAIT_MS` runs from acceptance. A new job is queued and pumped
+ * FIRST: one the pump starts at once never counts against the queue bound, and one left waiting as the
+ * (`DOCS_FETCH_QUEUE` + 1)th job that has not started leaves at once as `busy`, having started nothing (refinement
+ * (n): a pre-check on the queue's length would refuse a job on an idle key while a global slot is free).
+ * A pump starts, in FIFO order, every job whose key has nothing running while a global slot is free;
+ * a job whose key is busy is passed over, never reordered within its key. The per-key serialisation is this FIFO,
+ * not a `KeyedQueue`: `single-definition.test.ts` ("one KeyedQueue for the process") holds the constructor to the
+ * composition root, and the process's queue serialises session operations.
+ */
+export function docsFetchLane(): DocsFetchLane {
+  const queue: FetchWaiter[] = [];
+  const runningKeys = new Set<string>();
+  let running = 0;
+  let closed = false;
+
+  const detach = (w: FetchWaiter): void => {
+    clearTimeout(w.timer);
+    w.signal.removeEventListener('abort', w.onAbort);
+  };
+
+  const pump = (): void => {
+    for (let i = 0; i < queue.length && running < DOCS_FETCH_GLOBAL;) {
+      if (runningKeys.has(queue[i].key)) {
+        i += 1;
+        continue;
+      }
+      const next = queue.splice(i, 1)[0];
+      detach(next);
+      next.begin();
+    }
+  };
+
+  /** Take a queued job out of the FIFO and answer it `run`; it frees no slot, so nothing else can start. */
+  const leave = (w: FetchWaiter, run: DocsLaneRun<never>): void => {
+    const i = queue.indexOf(w);
+    if (i < 0) return;
+    queue.splice(i, 1);
+    detach(w);
+    w.refuse(run);
+  };
+
+  /** Free a running job's key and global slot and pump: called once per started job, from `fetching`'s
+   *  `finally`. */
+  const release = (key: string): void => {
+    running -= 1;
+    runningKeys.delete(key);
+    pump();
+  };
+
+  async function fetching<T>(key: string, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
+    running += 1;
+    runningKeys.add(key);
+    try {
+      return { kind: 'ran', value: await exec() };
+    } finally {
+      release(key);
+    }
+  }
+
+  return {
+    run<T>(key: string, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
+      if (signal.aborted) return Promise.resolve(ABANDONED);
+      if (closed) return Promise.resolve(busy('fetch'));
+      return new Promise<DocsLaneRun<T>>((resolve) => {
+        const w: FetchWaiter = {
+          key, signal, timer: undefined,
+          onAbort: () => leave(w, ABANDONED),
+          begin: () => resolve(fetching(key, exec)),
+          refuse: resolve,
+        };
+        w.timer = setTimeout(() => leave(w, busy('fetch')), DOCS_FETCH_MAX_WAIT_MS);
+        w.timer.unref();
+        signal.addEventListener('abort', w.onAbort, { once: true });
+        queue.push(w);
+        pump();
+        if (queue.length > DOCS_FETCH_QUEUE) leave(w, busy('fetch'));
+      });
+    },
+    load: () => ({ running, queued: queue.length }),
+    close: () => {
+      closed = true;
+      for (const w of queue.splice(0)) {
+        detach(w);
+        w.refuse(busy('fetch'));
+      }
+    },
+  };
+}
+
+/** One flight: the promise every joiner receives, the signal handed to `start`, and its live joiners. */
+interface Flight {
+  promise: Promise<unknown>;
+  controller: AbortController;
+  live: number;
+  /** Removes each joiner's abort listener once the flight settles. */
+  detach: (() => void)[];
+}
+
+/**
+ * Single-flight (section 6.4; refinement (j)). A join on a key whose flight is live joins it; a join on a new key,
+ * or on a key whose flight every joiner has left (its signal aborted), starts a NEW flight under that key, so a
+ * live request never receives an abandoned answer; the old flight settles alone. A flight's signal aborts only
+ * when EVERY joiner's signal has aborted, so one tab closing never cancels another's answer. A settled flight
+ * frees its key, fulfilled or rejected.
+ */
+export function docsFlights(): DocsFlights {
+  const flights = new Map<string, Flight>();
+
+  /** Count `signal` as one joiner of `f`. An already-aborted signal is a joiner that has already gone. */
+  const attach = (f: Flight, signal: AbortSignal): void => {
+    if (signal.aborted) {
+      if (f.live === 0) f.controller.abort();
+      return;
+    }
+    f.live += 1;
+    const onAbort = (): void => {
+      f.live -= 1;
+      if (f.live === 0) f.controller.abort();
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    f.detach.push(() => signal.removeEventListener('abort', onAbort));
+  };
+
+  return {
+    join<T>(key: string, signal: AbortSignal, start: (flight: AbortSignal) => Promise<T>): Promise<T> {
+      const found = flights.get(key);
+      if (found !== undefined && !found.controller.signal.aborted) {
+        attach(found, signal);
+        return found.promise as Promise<T>;
+      }
+      const f: Flight = { promise: Promise.resolve(), controller: new AbortController(), live: 0, detach: [] };
+      attach(f, signal);
+      let p: Promise<T>;
+      try {
+        p = start(f.controller.signal);
+      } catch (e) {
+        p = Promise.reject(e);
+      }
+      f.promise = p;
+      flights.set(key, f);
+      const done = (): void => {
+        for (const d of f.detach.splice(0)) d();
+        if (flights.get(key) === f) flights.delete(key);
+      };
+      p.then(done, done);
+      return p;
+    },
+    size: () => flights.size,
+  };
+}
+
+/** The generation counter (section 6.4): per key, 0 until bumped; `bump` answers the new value. */
+export function docsGenerations(): DocsGenerations {
+  const gens = new Map<string, number>();
+  return {
+    current: (key) => gens.get(key) ?? 0,
+    bump: (key) => {
+      const next = (gens.get(key) ?? 0) + 1;
+      gens.set(key, next);
+      return next;
+    },
+  };
+}
+```
+
+- [ ] **Step 4: Run it to verify it passes.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-lanes.test.ts )`
+Expected: `Test Files  1 passed (1)`, `Tests  38 passed (38)`.
+
+- [ ] **Step 5: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` is a known load flake, so a red there is re-run alone before it is called broken.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The first compiles `lane.ts` under the server's build flags (the generic `DocsLaneRun<T>` resolvers, `ReturnType<typeof setTimeout>`'s `unref`); the second compiles the test and the helper.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  472 passed (472)`: the docs ring guard visits `lane.ts` as L4, `new KeyedQueue(` still appears only in `server/src/index.ts` (Decision 2, Measured 3), and no name exported here is declared anywhere else in the four roots.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/capsupported.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  77 passed (77)`. `topology-clean` needs `origin/main` (or `CCRC_HISTORY_BASE=<base sha>`; Measured 4); this task adds only placeholder names (`demo`, `a`, `b`, `k1`) and spells no cap token.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/verb-gate.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  193 passed (193)`: `lane.ts` registers no route, holds no box-token text and makes no `CCD_ARGV.` call.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts test/docs-headers.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  622 passed (622)` (574 + 48; neither file nor `policy.ts` is edited).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Measured 4); Task 1's Step 0 installs real modules.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add server/src/docs/lane.ts server/test/docs-lanes.test.ts server/test/docsRouteHelpers.ts
+git commit -m "server: docs read lane, fetch lane, single-flight and generations (docs W3)" \
+  -m "lane.ts (L4) applies L1 and decides nothing: docsReadLane admits by laneAdmit applied to its head only (strict FIFO, a queue of DOCS_LANE_QUEUE, a DOCS_LANE_MAX_WAIT_MS wait, docs-busy read past either), releases each started job once in finally and pumps, and removes a queued job whose signal aborts; docsFetchLane runs jobs serially per (node, project) key from its own FIFO under DOCS_FETCH_GLOBAL, with a queue of DOCS_FETCH_QUEUE jobs not yet started, counted across keys (a new job is pumped first and refused only when left waiting as the ninth), and a DOCS_FETCH_MAX_WAIT_MS wait from acceptance (no KeyedQueue: single-definition pins its constructor to index.ts); docsFlights joins identical calls and aborts a flight only when every joiner has gone, starting a new flight over an abandoned one; docsGenerations counts per key. docs-lanes.test.ts drives every clause with blocking doubles and fake timers; docsRouteHelpers.ts gains blocker()." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state):
+
+```json
+[
+ {
+  "id": "W3-T4-M1",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (queue.length === 0 && laneAdmit(load, job)) return running(job, exec);",
+  "new": "      if (queue.length === 0) return running(job, exec);",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 13 failed | 25 passed (38) — 2 small jobs start at once and the third waits for a slot; a large head blocks a small job behind it that would admit on its own; a new job queues behind a waiting head even when the lane would admit it; a queued job still waits at 9999 ms, is docs-busy at 10000 ms, and never starts; a second large job waits; exactly DOCS_LANE_LARGE_RAW is not large; abandoning a blocking head lets the job behind it start at once; and 7 more"
+ },
+ {
+  "id": "W3-T4-M2",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "    while (queue.length > 0 && laneAdmit(load, queue[0].job)) {\n      const head = queue.shift() as ReadWaiter;",
+  "new": "    while (queue.length > 0 && laneAdmit(load, queue[queue.length - 1].job)) {\n      const head = queue.pop() as ReadWaiter;",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 3 failed | 35 passed (38) — a large head blocks a small job behind it that would admit on its own; a new job queues behind a waiting head even when the lane would admit it; jobs start in the order they were queued"
+ },
+ {
+  "id": "W3-T4-M3",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "    while (queue.length > 0 && laneAdmit(load, queue[0].job)) {\n      const head = queue.shift() as ReadWaiter;",
+  "new": "    for (let i = 0; i < queue.length;) {\n      if (!laneAdmit(load, queue[i].job)) { i += 1; continue; }\n      const head = queue.splice(i, 1)[0];",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — a large head blocks a small job behind it that would admit on its own"
+ },
+ {
+  "id": "W3-T4-M4",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (queue.length >= DOCS_LANE_QUEUE) return Promise.resolve(busy('read'));",
+  "new": "      if (queue.length > DOCS_LANE_QUEUE) return Promise.resolve(busy('read'));",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — with 2 running and 32 queued, the next is docs-busy {lane:'read'} at once"
+ },
+ {
+  "id": "W3-T4-M5",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        w.timer = setTimeout(() => leave(w, busy('read')), DOCS_LANE_MAX_WAIT_MS);\n        w.timer.unref();\n",
+  "new": "",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 2 failed | 36 passed (38) — a queued job still waits at 9999 ms, is docs-busy at 10000 ms, and never starts; answers every queued job busy, leaves no timer, and refuses a later run without starting it"
+ },
+ {
+  "id": "W3-T4-M6",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        signal.addEventListener('abort', w.onAbort, { once: true });\n        queue.push(w);\n      });",
+  "new": "        queue.push(w);\n      });",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 3 failed | 35 passed (38) — abandoning a blocking head lets the job behind it start at once; aborting a queued job answers abandoned, dequeues it, and it never starts; through the read lane: a queued flight whose every requester left is abandoned and never execs"
+ },
+ {
+  "id": "W3-T4-M7",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      return { kind: 'ran', value: await exec() };\n    } finally {\n      release(job);\n    }",
+  "new": "      const value = await exec();\n      release(job);\n      return { kind: 'ran', value };\n    } finally {\n      // released on fulfilment only\n    }",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 2 failed | 36 passed (38) — a rejected exec frees its slot (the next queued starts) and rejects its own caller; an exec that throws before returning a promise frees its slot too"
+ },
+ {
+  "id": "W3-T4-M8",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (runningKeys.has(queue[i].key)) {",
+  "new": "      if (false as boolean) {",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 5 failed | 33 passed (38) — 8 queued behind one running key with a global slot free: a job on an idle key starts at once; a job waiting behind its key is docs-busy at 20000 ms and never runs when its key frees; a job waiting behind its own key never holds back another key: the later key starts on a free slot; the same key twice: the second waits behind the first though a global slot is free; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer"
+ },
+ {
+  "id": "W3-T4-M9",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "    for (let i = 0; i < queue.length && running < DOCS_FETCH_GLOBAL;) {",
+  "new": "    for (let i = 0; i < queue.length && running < DOCS_FETCH_GLOBAL + 1;) {",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 6 failed | 32 passed (38) — a job waiting for a global slot is docs-busy at its wait, never runs, and frees its place; aborting a queued fetch answers abandoned and dequeues it, behind its key or the global bound; close answers every queued fetch busy, leaves no timer, and refuses a later run; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; three keys: 2 run and the third waits for a global slot; with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}"
+ },
+ {
+  "id": "W3-T4-M10",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        if (queue.length > DOCS_FETCH_QUEUE) leave(w, busy('fetch'));\n",
+  "new": "",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 2 failed | 36 passed (38) — the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'} (the bound gone, the ninth job not started waits in the FIFO instead of being refused)"
+ },
+ {
+  "id": "W3-T4-M11",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "    queue.splice(i, 1);\n    detach(w);\n    w.refuse(run);\n  };",
+  "new": "    detach(w);\n    w.refuse(run);\n  };",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 4 failed | 34 passed (38) — a job waiting behind its key is docs-busy at 20000 ms and never runs when its key frees; a job waiting for a global slot is docs-busy at its wait, never runs, and frees its place; aborting a queued fetch answers abandoned and dequeues it, behind its key or the global bound; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer"
+ },
+ {
+  "id": "W3-T4-M12",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (found !== undefined && !found.controller.signal.aborted) {",
+  "new": "      if (false as boolean) {",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 4 failed | 34 passed (38) — a rejected flight rejects every joiner and frees its key; the flight's signal aborts only when EVERY joiner's signal has aborted; through the read lane: a queued flight whose every requester left is abandoned and never execs; two joins on one key start once and both receive the one value"
+ },
+ {
+  "id": "W3-T4-M13",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        if (flights.get(key) === f) flights.delete(key);\n",
+  "new": "",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 3 failed | 35 passed (38) — a join on an abandoned flight starts a NEW flight; the old one settles alone; a rejected flight rejects every joiner and frees its key; a settled flight frees its key: a third join starts again"
+ },
+ {
+  "id": "W3-T4-M14",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      f.live -= 1;\n      if (f.live === 0) f.controller.abort();",
+  "new": "      f.live -= 1;\n      f.controller.abort();",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 2 failed | 36 passed (38) — the flight's signal aborts only when EVERY joiner's signal has aborted; through the read lane: a queued flight whose every requester left is abandoned and never execs"
+ },
+ {
+  "id": "W3-T4-M15",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      for (const w of queue.splice(0)) {\n        detach(w);\n        w.refuse(busy('read'));",
+  "new": "      for (const w of queue.splice(0)) {\n        w.refuse(busy('read'));",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — answers every queued job busy, leaves no timer, and refuses a later run without starting it"
+ },
+ {
+  "id": "W3-T4-M16",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (found !== undefined && !found.controller.signal.aborted) {",
+  "new": "      if (found !== undefined) {",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — a join on an abandoned flight starts a NEW flight; the old one settles alone"
+ },
+ {
+  "id": "W3-T4-M17",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (signal.aborted) return Promise.resolve(ABANDONED);\n      if (closed) return Promise.resolve(busy('read'));",
+  "new": "      if (closed) return Promise.resolve(busy('read'));",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — a signal already aborted answers abandoned at once, even on an idle lane, and never starts"
+ },
+ {
+  "id": "W3-T4-M18",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "    w.refuse(run);\n    pump();\n",
+  "new": "    w.refuse(run);\n",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — abandoning a blocking head lets the job behind it start at once"
+ },
+ {
+  "id": "W3-T4-M19",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (queue.length === 0 && laneAdmit(load, job)) return running(job, exec);",
+  "new": "      if (laneAdmit(load, job)) return running(job, exec);",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 2 failed | 36 passed (38) — a new job queues behind a waiting head even when the lane would admit it; abandoning a blocking head lets the job behind it start at once"
+ },
+ {
+  "id": "W3-T4-M20",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (closed) return Promise.resolve(busy('read'));\n",
+  "new": "",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — answers every queued job busy, leaves no timer, and refuses a later run without starting it"
+ },
+ {
+  "id": "W3-T4-M21",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      const head = queue.shift() as ReadWaiter;\n      detach(head);\n",
+  "new": "      const head = queue.shift() as ReadWaiter;\n",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — admission clears the wait timer: a job that starts is never answered busy later"
+ },
+ {
+  "id": "W3-T4-M22",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        i += 1;\n        continue;",
+  "new": "        break;",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 3 failed | 35 passed (38) — 8 queued behind one running key with a global slot free: a job on an idle key starts at once; a job waiting behind its own key never holds back another key: the later key starts on a free slot; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer"
+ },
+ {
+  "id": "W3-T4-M23",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (signal.aborted) return Promise.resolve(ABANDONED);\n      if (closed) return Promise.resolve(busy('fetch'));",
+  "new": "      if (closed) return Promise.resolve(busy('fetch'));",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — a signal already aborted answers abandoned with no exec; aborting a running fetch changes nothing"
+ },
+ {
+  "id": "W3-T4-M24",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        signal.addEventListener('abort', w.onAbort, { once: true });\n        queue.push(w);\n        pump();",
+  "new": "        queue.push(w);\n        pump();",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — aborting a queued fetch answers abandoned and dequeues it, behind its key or the global bound"
+ },
+ {
+  "id": "W3-T4-M25",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        w.timer = setTimeout(() => leave(w, busy('fetch')), DOCS_FETCH_MAX_WAIT_MS);\n        w.timer.unref();\n",
+  "new": "",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 2 failed | 36 passed (38) — a job waiting behind its key is docs-busy at 20000 ms and never runs when its key frees; a job waiting for a global slot is docs-busy at its wait, never runs, and frees its place"
+ },
+ {
+  "id": "W3-T4-M26",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      return { kind: 'ran', value: await exec() };\n    } finally {\n      release(key);\n    }",
+  "new": "      const value = await exec();\n      release(key);\n      return { kind: 'ran', value };\n    } finally {\n      // released on fulfilment only\n    }",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — a rejected fetch frees its key and its global slot and rejects its own caller"
+ },
+ {
+  "id": "W3-T4-M27",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (closed) return Promise.resolve(busy('fetch'));\n",
+  "new": "",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — close answers every queued fetch busy, leaves no timer, and refuses a later run"
+ },
+ {
+  "id": "W3-T4-M28",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      for (const w of queue.splice(0)) {\n        detach(w);\n        w.refuse(busy('fetch'));",
+  "new": "      for (const w of queue.splice(0)) {\n        w.refuse(busy('fetch'));",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — close answers every queued fetch busy, leaves no timer, and refuses a later run"
+ },
+ {
+  "id": "W3-T4-M29",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      gens.set(key, next);\n",
+  "new": "",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — starts at 0 per key, bump answers the new value, and keys are independent"
+ },
+ {
+  "id": "W3-T4-M30",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (f.live === 0) f.controller.abort();\n      return;",
+  "new": "      return;",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 1 failed | 37 passed (38) — a lone joiner whose signal is already aborted starts a flight whose signal is aborted"
+ },
+ {
+  "id": "W3-T4-M31",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        queue.push(w);\n        pump();\n        if (queue.length > DOCS_FETCH_QUEUE) leave(w, busy('fetch'));\n",
+  "new": "        queue.push(w);\n        if (queue.length > DOCS_FETCH_QUEUE) leave(w, busy('fetch'));\n        pump();\n",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 2 failed | 36 passed (38) — 8 queued behind one running key with a global slot free: a job on an idle key starts at once; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer (refusing before the pump is the pre-check order: the job on the idle key, and 'b' on a free slot, are refused)"
+ },
+ {
+  "id": "W3-T4-M32",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "        if (queue.length > DOCS_FETCH_QUEUE) leave(w, busy('fetch'));\n",
+  "new": "        if (queue.length >= DOCS_FETCH_QUEUE) leave(w, busy('fetch'));\n",
+  "tests": [
+   "test/docs-lanes.test.ts"
+  ],
+  "red": "server docs-lanes: 3 failed | 35 passed (38) — 8 queued behind one running key with a global slot free: a job on an idle key starts at once; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}"
+ }
+]
+```
+
+### Task 5: cache.ts: the committed blob LRU, the listing map, the draft size map and the index micro-cache, every key carrying the node
+
+**Model routing:** `sonnet`, effort `high` — bounded memory; the traps are charging `Buffer.byteLength` of BOTH stored representations (the decoded bytes and the answer's `text` or `b64`), evicting WHOLE commits from the listing map by their file count, refreshing LRU order on a read as well as a write, giving a replaced entry's charge back before adding the new one, and never storing a value charged above the whole budget. Every case below runs synchronously (no timers, no clock: callers pass `nowMs`) and was measured on the scratch tree at Task 4's state.
+
+**Spec rows:** M3.13 ("`docs-cache.test.ts`: the same (repoKey, blob) under two injected node values gives two entries; same for single-flight"; mutation: drop the node from a key), and the unit half of section 6.5's cache mechanics: `CommittedBlobCache` (an LRU keyed `node NUL repoKey NUL blob` within `DOCS_CACHE_BYTES` = 67 108 864 of `Buffer.byteLength`), `ListingMap` (`(node, project, commit) -> {repoKey, entries: section NUL path -> {blob, size, kind}, refsAt: servedRef -> recordedAtMs}`, an LRU by commit holding at most `DOCS_LISTING_MAP_ENTRIES` = 50 000 entries in total), the draft `fp -> size` map (`DOCS_DRAFT_SIZE_ENTRIES` = 10 000, node-keyed per section 3.12) and the index's 30 s micro-cache per node (`DOCS_INDEX_CACHE_MS`), dropped by any refresh. The route-level halves (section 2 row 52: "a second committed GET costs 0 execs; the same blob under a new commit costs 0; a draft always execs"; M6.11) are Task 6's, appended to `docs-cache.test.ts`; Task 7 calls `index.drop`. Whether a committed hit may be served or a show may fill is L1's `docsCacheVerdict` and `docsCacheFill` (Task 2), applied by Task 6's route, never by this file.
+
+**Files:**
+- Create: `server/src/docs/cache.ts` — L4, 260 lines: the exported `DocsCachedShow`, `DocsBlobCache`, `DocsListingMap`, `DocsDraftSizes`, `DocsIndexCache`, `DocsCaches` and `docsCaches()`; the module-private `BlobSlot`, `ListedCommit`, `listedFiles`, `docsBlobCache`, `docsListingMap`, `docsDraftSizes`, `docsIndexCache`. It is one of the four L4 names W2's ring guard already reserves (`DOCS_RING_ROLES` in `single-definition.test.ts`); `DOCS_RING_FLOOR` gains it in Task 9, not here. It owns no timer and reads no clock.
+- Create: `server/test/docs-cache.test.ts` — 388 lines, 27 cases in four describes (M3.13 and the per-composition case; the blob LRU; the listing map; the draft size map; the index micro-cache). Task 6 appends its route describe at the end of this file and extends this file's import block (it will need `docsApp()` and the route fixtures from `docsRouteHelpers.ts`); nothing in this task's describes depends on line positions.
+- Test: `server/test/docs-cache.test.ts`; guards `server/test/docs-lanes.test.ts` (this task's M3.13 flight case drives Task 4's `docsFlights`), `server/test/single-definition.test.ts` (the docs ring guard; no exported name has a second home), `server/test/topology-clean.test.ts`, `server/test/capsupported.test.ts`, `server/test/typecheck-tests.test.ts`, `server/test/docs-policy.test.ts`, `server/test/docs-headers.test.ts`, and the censuses that read `server/src` as text (`server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts`, `server/test/verb-gate.test.ts`).
+
+This task edits no existing file, so it has no Find block. Before Step 1, check that the two files are absent and that the names this task consumes exist (the tree as Task 4 left it):
+
+Run: `test ! -e server/src/docs/cache.ts && test ! -e server/test/docs-cache.test.ts && grep -q '^export const DOCS_CACHE_BYTES = 67108864;' server/src/docs/policy.ts && grep -q '^export const DOCS_LISTING_MAP_ENTRIES = 50000;' server/src/docs/policy.ts && grep -q '^export const DOCS_DRAFT_SIZE_ENTRIES = 10000;' server/src/docs/policy.ts && grep -q '^export const DOCS_INDEX_CACHE_MS = 30000;' server/src/docs/policy.ts && grep -q '^export function docsBlobKey' server/src/docs/policy.ts && grep -q '^export function docsListingKey' server/src/docs/policy.ts && grep -q '^export function docsDraftSizeKey' server/src/docs/policy.ts && grep -q '^export type DocsListedFile' server/src/docs/policy.ts && grep -q '^export function docsFlights' server/src/docs/lane.ts && grep -q '^export function blocker' server/test/docsRouteHelpers.ts && echo T5-BASE-OK`
+Expected: `T5-BASE-OK`. If it does not print, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes, from `server/src/docs/policy.ts` (Task 1): `DOCS_CACHE_BYTES` (67 108 864), `DOCS_LISTING_MAP_ENTRIES` (50 000), `DOCS_DRAFT_SIZE_ENTRIES` (10 000), `DOCS_INDEX_CACHE_MS` (30 000); `docsBlobKey(node: string, repoKey: string, blob: string): string`, `docsListingKey(node: string, project: string, commit: string): string`, `docsDraftSizeKey(node: string, fp: string): string` (each NUL-joined, kind tag first); (test only) `docsTreeFlightKey(node: string, project: string, ref: DocsRefSpec | null, gen: number): string` and `docsShowFlightKey(node: string, project: string, pin: DocPin, maxBytes: number): string`. From Task 2: `type DocsListedFile = { blob: string; size: number | null; kind: ListedKind }` (`ListedKind` is `NonNullable<DocsEntry['committed']>['kind']`).
+- Consumes, from `server/src/docs/lane.ts` (Task 4, test only): `docsFlights(): DocsFlights` (M3.13's single-flight half). From `server/test/docsRouteHelpers.ts` (Task 4, test only): `blocker<T>()`.
+- Consumes, from `shared/docs.ts` (W1): types `DocSectionSlug`, `DocsIndexOk`, `DocsShowOk`, `DocsTreeOk`; (test only) `DocPin`, `DocsEntry`.
+- Produces, in `server/src/docs/cache.ts`:
+  - `export interface DocsCachedShow { answer: DocsShowOk; bytes: Uint8Array }` — one cached committed show: the verified answer and its decoded bytes.
+  - `export interface DocsBlobCache { get(node: string, repoKey: string, blob: string): DocsCachedShow | undefined; set(node: string, repoKey: string, blob: string, value: DocsCachedShow): void; bytes(): number; size(): number }` — `get`'s `undefined` has one meaning: not cached. `bytes()` is the running charge (`bytes.byteLength + Buffer.byteLength(answer.text ?? answer.b64 ?? '')` per entry), `size()` the entry count.
+  - `export interface DocsListingMap { record(node: string, tree: DocsTreeOk, nowMs: number): void; lookup(node: string, project: string, commit: string, section: DocSectionSlug, path: string): { repoKey: string; file: DocsListedFile } | undefined; servedRefAgeMs(node: string, project: string, commit: string, servedRef: string, nowMs: number): number | undefined; entries(): number; commits(): number }` — `record` takes a tree that already passed `docsAnswerShape('docs-tree', ...)` (Task 6 applies it first); `lookup`'s `undefined` means no listing entry for that (node, project, commit, section, path); `servedRefAgeMs`'s `undefined` means that `servedRef` was never recorded at that commit on that node (its value is `nowMs - recordedAtMs`, possibly negative: L1's `docsCacheVerdict` refuses a negative age).
+  - `export interface DocsDraftSizes { record(node: string, tree: DocsTreeOk): void; get(node: string, fp: string): number | undefined; size(): number }` — `get`'s `undefined` means no size recorded for that fingerprint on that node (Task 6 hands it to `docsKnownSize` as "no size fact").
+  - `export interface DocsIndexCache { get(node: string, nowMs: number): { index: DocsIndexOk; ageMs: number } | undefined; set(node: string, index: DocsIndexOk, nowMs: number): void; drop(node: string): void }` — `get`'s `undefined` means nothing usable: absent, dropped, or not within `0 <= age < DOCS_INDEX_CACHE_MS`; a hit's `ageMs` becomes `DocsProjectsResponse.cacheAgeMs` (Task 6).
+  - `export interface DocsCaches { blobs: DocsBlobCache; listing: DocsListingMap; draftSizes: DocsDraftSizes; index: DocsIndexCache }` and `export function docsCaches(): DocsCaches` — a fresh set per call; Task 6's `composeDocs` builds one per composition and carries it as `DocsNodeLanes.caches`.
+
+**Decisions this task makes (refinements (l) and (p) applied; none departs from the spec's text):**
+1. **The caches decide nothing.** Every key is an L1 builder (`docsBlobKey`, `docsListingKey`, `docsDraftSizeKey`); the index micro-cache's key is the node string itself (one entry per node, so the node is the whole key). Every bound is an L1 constant. Whether a committed hit may be served, and whether a show may fill, are L1's `docsCacheVerdict` and `docsCacheFill`, which Task 6 applies BEFORE it calls `blobs.get`/`blobs.set`; this file never inspects a kind, a pin or a provenance age. What stays here is bookkeeping: insertion-ordered `Map`s used as LRUs, the charges, the counts, and comparisons of a running total or an age against an L1 bound (the same class as `lane.ts`'s `isLarge`). The file quotes no failure word (Task 9's L4 scan) and spells no number.
+2. **A blob entry is charged for BOTH representations it holds**: `value.bytes.byteLength + Buffer.byteLength(value.answer.text ?? value.answer.b64 ?? '')` (refinement (l)). The stored answer carries its content field and the decoded bytes are kept beside it, so a 1 MiB `.md` costs about 2 MiB of budget and a 1 MiB `.png` about 2.33 MiB. `Buffer.byteLength`, never `.length`: a UTF-8 text of non-ASCII characters is longer in bytes than in UTF-16 units (W3-T5-M18).
+3. **A value charged above the whole budget is never stored, and evicts nothing** (section 6.5's budget is a bound on what is held). Exactly the budget is stored and evicts everything else. A re-set of a held key gives its old charge back first (W3-T5-M20), so `bytes()` is always the sum of the held charges. After a set, entries go from the FRONT (least recently used) until the total is within the budget, so the value just set is never evicted by its own set.
+4. **LRU, not FIFO, in all three bounded maps**: a `get` (blob, draft size) or a `lookup` that finds the commit (listing) moves the key to the end; `servedRefAgeMs` reads without moving (Task 6 calls it beside `lookup`, which has already moved the commit).
+5. **The listing map stores committed rows only, and exactly the three facts.** A row whose `committed` is `null` (draft-only) has no committed facts and is not recorded. For the rest, `{blob, size, kind}` is COPIED from `committed`, so an unknown key ccd sent beside them (which `docsAnswerShape` allows) never rides into the map (W3-T5-M21). A listed `null` size stays `null` (`docsKnownSize` reads it as "no size fact"). Symlink and submodule rows ARE recorded and counted: they are listing entries; whether they may hit or fill is `docsCacheVerdict`'s kind check (Task 2, refinement (l)), so a symlink sharing a file's blob never hits. Within a commit the rows live in nested maps (section, then path), so this file builds no key of its own; refinement (p)'s kind tags name no section/path key, and none is needed.
+6. **The listing bound counts FILE entries and evicts WHOLE commits.** `entries()` is the summed number of distinct (section, path) rows across held commits; after a record, the least recently used commit goes while that sum exceeds `DOCS_LISTING_MAP_ENTRIES` and more than one commit is held. So eleven trees of 5 000 rows keep ten commits; the commit just recorded is never evicted by its own record, even when it alone exceeds the bound (a tree holds at most `DOCS_MAX_ENTRIES` = 5 000 rows, so this cannot happen from ccd; the case pins the loop's floor, W3-T5-M23).
+7. **A re-record of a held commit replaces its repository key and rows with the new tree's and keeps its served refs.** The old count is given back first (W3-T5-M10), the new served ref is stamped `nowMs` (an already-known ref is re-stamped), every other ref keeps its own `recordedAtMs` (W3-T5-M22), and the commit moves to the end. A commit's rows are a function of the commit, so the replacement normally changes nothing but the order; taking the new `repo.key` keeps the blob cache's key on the repository the newest tree answered from.
+8. **The draft size map records an entry only when its draft carries a string `fp` and a number `size`** (section 6.5: drafts feed only this map). A `null` either way is no size fact and is not recorded (W3-T5-M26, W3-T5-M27); a listed `0` IS a size and is recorded. Node-keyed (section 3.12), LRU within `DOCS_DRAFT_SIZE_ENTRIES`.
+9. **The index micro-cache answers a hit only for `0 <= age < DOCS_INDEX_CACHE_MS`.** At exactly 30 000 ms it is gone (W3-T5-M12), and a clock that went back (`nowMs` before the set) vouches for nothing, the rule `docsCacheVerdict` applies to provenance (W3-T5-M28). `drop(node)` forgets that node's entry at once and no other's. An expired entry is left in place (one per node, overwritten by the next `set`).
+10. **No clock and no module scope.** Every method that needs time takes `nowMs`; `docsCaches()` builds four fresh maps per call (W3-T5-M29), so one composition per `buildServer` (refinement (i)) and each test have their own.
+
+**Measured while planning** (the shared scratch tree at Task 4's state, then a separate copy for the mutations; none is a deviation):
+1. **RED is a failed suite**, `Test Files  1 failed (1)`, `Tests  no tests`, `Error: Cannot find module '../src/docs/cache.js' imported from .../server/test/docs-cache.test.ts`: every case imports the module this task creates. GREEN is `Tests  27 passed (27)` in about 0.5 s. The largest single allocation is one `Uint8Array` of `DOCS_CACHE_BYTES + 1` bytes; the 65-value cases share ONE 1 MiB array (the charge reads `byteLength`, not identity), so the file stays well inside vitest's default heap.
+2. **The listing fixture is a complete `DocsTreeOk`** (`treeOf`), so `tsc -p test/tsconfig.tests.json` checks it against W1's type; the one cast is `committedRow`'s `extra: 1`, the planted unknown key Decision 5 pins.
+3. **`topology-clean` reads `git ls-files`**, so it sees the two new files only once they are staged: Step 5 stages them before running it (an untracked file is outside its corpus and would pass vacuously).
+4. **Guards**: `tsc` on both projects is clean; `docs-lanes` `38 passed (38)` (unchanged); `single-definition` `472 passed (472)`; `topology-clean` + `capsupported` `77 passed (77)` with `CCRC_HISTORY_BASE=<base sha>`; `auth-gate` + `box-token-census` + `verb-gate` `193 passed (193)` (`cache.ts` registers no route, holds no box-token text and makes no `CCD_ARGV.` call); `docs-policy` + `docs-headers` `622 passed (622)` (neither file nor `policy.ts` is edited). Environment-only reds, as Tasks 1-4 recorded: with no `origin/main`, `topology-clean`'s `resolved a base to measure against` reds alone; with a symlinked `pwa/node_modules`, `typecheck-tests`' `PWA_TSC really is pwa's own installed compiler` reds alone (`1 failed | 11 passed (12)`).
+5. **Mutations**: twenty-nine, each measured red in a separate copy (`git archive HEAD | tar -x -C <copy>`, `git -C <copy> init -q`, `server/node_modules` linked in), restored after each, each red within the default test timeout. The architecture's M1-M13 are W3-T5-M1..M13 in its order (its M12, "index expiry `>=` -> `>`", is spelled here as the hit condition `< ` becoming `<=`, the same boundary); M14-M29 pin the guards the decisions above add. W3-T5-M16 and W3-T5-M17 mutate Task 1's flight key builders in `policy.ts` (M3.13's single-flight half): if a later task re-spells `docsTreeFlightKey` or `docsShowFlightKey`, that task re-anchors these two rows in its own rows block and says so.
+
+| id | mutation | red |
+|---|---|---|
+| W3-T5-M1 | blob key carries no node (the set's docsBlobKey call) | server docs-cache: 6 failed \| 21 passed (27) |
+| W3-T5-M2 | listing key carries no node (the record's docsListingKey call) | server docs-cache: 8 failed \| 19 passed (27) |
+| W3-T5-M3 | blob eviction loop removed | server docs-cache: 3 failed \| 24 passed (27) |
+| W3-T5-M4 | blob eviction takes the newest | server docs-cache: 3 failed \| 24 passed (27) |
+| W3-T5-M5 | blob get does not refresh LRU order | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M6 | a value above the whole budget is stored | server docs-cache: 2 failed \| 25 passed (27) |
+| W3-T5-M7 | the charge omits the stored text | server docs-cache: 4 failed \| 23 passed (27) |
+| W3-T5-M8 | listing bound applied to commits, not file entries | server docs-cache: 3 failed \| 24 passed (27) |
+| W3-T5-M9 | listing records draft-only rows | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M10 | re-recording a known commit double-counts | server docs-cache: 2 failed \| 25 passed (27) |
+| W3-T5-M11 | draft size bound removed | server docs-cache: 2 failed \| 25 passed (27) |
+| W3-T5-M12 | index expiry at the bound is still a hit | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M13 | index drop is a no-op | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M14 | draft size key carries no node (the record's docsDraftSizeKey call) | server docs-cache: 4 failed \| 23 passed (27) |
+| W3-T5-M15 | index micro-cache answers another node's entry | server docs-cache: 2 failed \| 25 passed (27) |
+| W3-T5-M16 | tree flight key drops the node | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M17 | show flight key drops the node | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M18 | the text is charged by length, not byte length | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M19 | the charge omits a base64 answer's b64 | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M20 | re-setting a key keeps its old charge | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M21 | listing stores ccd's committed object, not the three facts | server docs-cache: 2 failed \| 25 passed (27) |
+| W3-T5-M22 | re-recording a known commit forgets its other served refs | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M23 | the newest commit can be evicted by its own record | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M24 | listing lookup does not refresh LRU order | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M25 | draft size get does not refresh LRU order | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M26 | a draft with a null size is recorded | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M27 | a draft with a null fp is recorded | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M28 | index entry vouches under a clock that went back | server docs-cache: 1 failed \| 26 passed (27) |
+| W3-T5-M29 | one blob cache shared at module scope | server docs-cache: 3 failed \| 24 passed (27) |
+
+- [ ] **Step 1: Write the failing test.** Create `server/test/docs-cache.test.ts` with exactly this content (the 2n case's text is written as a six-character escape, backslash then `u00e9`; a tool that writes the character itself instead changes nothing the case measures, since both spell the same string):
+
+```ts
+// `server/src/docs/cache.ts`, the native Docs reader's server-side caches (design 2026-10-01, section 6.5, section
+// 3.12; W3 refinements (l) and (p)). Task 5 pins the units: M3.13 (every key carries the node: two node values give
+// two entries in each cache, and two flights), the blob LRU (charged as BOTH stored representations, LRU not FIFO,
+// never a value above the whole budget), the listing map (committed rows only, the three facts copied, whole
+// commits evicted by file count, a re-record counted once, the served-ref ages), the draft size map and the index
+// micro-cache. Task 6 appends the route-level describe (section 2 row 52, M6.11).
+//
+// Every bound is read from L1 (`policy.ts`), never typed here. Fixtures carry placeholders only.
+import { describe, expect, it } from 'vitest';
+import { docsCaches, type DocsCachedShow } from '../src/docs/cache.js';
+import { docsFlights } from '../src/docs/lane.js';
+import {
+  DOCS_CACHE_BYTES, DOCS_DRAFT_SIZE_ENTRIES, DOCS_INDEX_CACHE_MS, DOCS_LISTING_MAP_ENTRIES, docsShowFlightKey,
+  docsTreeFlightKey,
+} from '../src/docs/policy.js';
+import type { DocPin, DocsEntry, DocsIndexOk, DocsShowOk, DocsTreeOk } from '../../shared/docs.js';
+import { blocker } from './docsRouteHelpers.js';
+
+const MIB = 1048576;
+const REPO = 'a'.repeat(32);
+const BLOB = 'b'.repeat(40);
+const COMMIT = 'c'.repeat(40);
+const MAIN = 'refs/remotes/origin/main';
+const WS = 'refs/heads/ws/a';
+
+/** A 40-hex commit or blob from an index: distinct per `i`. */
+const hex40 = (i: number): string => i.toString(16).padStart(40, '0');
+/** A 64-hex fingerprint from an index: distinct per `i`. */
+const hex64 = (i: number): string => i.toString(16).padStart(64, '0');
+
+/** An ok utf8 show answer carrying `text` (its `size` the text's UTF-8 length). */
+function textAnswer(text: string): DocsShowOk {
+  return {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: 'specs', path: 'x.md',
+    size: Buffer.byteLength(text), sha256: 'd'.repeat(64), encoding: 'utf8', text,
+    commit: COMMIT, blob: BLOB, mode: '100644', onRef: 'contains',
+  };
+}
+
+/** A cached show whose answer carries `text` and whose decoded bytes are `bytes`. */
+function shown(bytes: Uint8Array, text = ''): DocsCachedShow {
+  return { answer: textAnswer(text), bytes };
+}
+
+/** A committed listing row; `extra` rides beside the three facts, as an unknown key from ccd would. */
+function committedRow(path: string, blob: string, size: number | null, kind: 'file' | 'symlink' = 'file'): DocsEntry {
+  return { section: 'specs', path, committed: { kind, blob, size, extra: 1 } as DocsEntry['committed'], draft: null };
+}
+
+/** A draft-only row: no committed facts, a draft with `fp` and `size` as given. */
+function draftRow(path: string, fp: string | null, size: number | null): DocsEntry {
+  return {
+    section: 'specs', path, committed: null,
+    draft: { state: 'untracked', kind: 'file', size, fp, trust: 'hash' },
+  };
+}
+
+/** A complete ok tree of `project` at `commit`, served from `served`, with `entries`. */
+function treeOf(commit: string, served: string, entries: DocsEntry[], project = 'demo', repoKey = REPO): DocsTreeOk {
+  return {
+    v: 1, verb: 'docs-tree', ok: true, elapsedMs: 5, project,
+    repo: { key: repoKey, objectFormat: 'sha1', shallow: false },
+    github: { state: 'named', slug: 'example-org/example-repo' },
+    ref: {
+      requested: null, served, name: 'main', side: 'origin', commit, via: 'default:origin-head', tried: [],
+      relation: 'equal', counterpart: null,
+    },
+    mainCheckout: { path: '/tmp/example', branch: 'main', head: commit },
+    sections: [], entries, unlisted: { count: 0, byReason: {} },
+    drafts: { state: 'none', branch: 'main', skipped: [] },
+    freshness: { remote: 'origin', trackedRef: MAIN, stamp: null, fetchHead: null },
+  };
+}
+
+/** A tree of `n` committed file rows (`f<i>.md`) at `commit`. */
+function bigTree(commit: string, n: number): DocsTreeOk {
+  const entries: DocsEntry[] = [];
+  for (let i = 0; i < n; i += 1) entries.push(committedRow(`f${i}.md`, BLOB, 10));
+  return treeOf(commit, MAIN, entries);
+}
+
+/** An ok index naming `project`. */
+function indexOf(project: string): DocsIndexOk {
+  return {
+    v: 1, verb: 'docs-index', ok: true, elapsedMs: 2, unlisted: 0, duplicates: [],
+    projects: [{ project, state: 'ready', github: { state: 'none' } }],
+  };
+}
+
+const live = (): AbortSignal => new AbortController().signal;
+
+describe('docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12)', () => {
+  it('blob cache: the same (repoKey, blob) under two nodes is two entries, each answering its own value', () => {
+    const { blobs } = docsCaches();
+    const one = shown(new Uint8Array(3), 'one');
+    const two = shown(new Uint8Array(3), 'two');
+    blobs.set('n1', REPO, BLOB, one);
+    blobs.set('n2', REPO, BLOB, two);
+    expect(blobs.size()).toBe(2);
+    expect(blobs.get('n1', REPO, BLOB)).toBe(one);
+    expect(blobs.get('n2', REPO, BLOB)).toBe(two);
+  });
+
+  it('listing map: the same tree under two nodes is two commits, and a lookup under a node never recorded misses', () => {
+    const { listing } = docsCaches();
+    const tree = treeOf(COMMIT, MAIN, [committedRow('x.md', BLOB, 7)]);
+    listing.record('n1', tree, 1000);
+    expect(listing.lookup('n2', 'demo', COMMIT, 'specs', 'x.md')).toBeUndefined();
+    expect(listing.servedRefAgeMs('n2', 'demo', COMMIT, MAIN, 1000)).toBeUndefined();
+    listing.record('n2', tree, 1000);
+    expect(listing.commits()).toBe(2);
+    expect(listing.entries()).toBe(2);
+  });
+
+  it('draft sizes: one fingerprint under two nodes keeps two sizes', () => {
+    const { draftSizes } = docsCaches();
+    const fp = hex64(1);
+    draftSizes.record('n1', treeOf(COMMIT, MAIN, [draftRow('d.md', fp, 5)]));
+    draftSizes.record('n2', treeOf(COMMIT, MAIN, [draftRow('d.md', fp, 7)]));
+    expect(draftSizes.size()).toBe(2);
+    expect(draftSizes.get('n1', fp)).toBe(5);
+    expect(draftSizes.get('n2', fp)).toBe(7);
+  });
+
+  it('index micro-cache: one node\'s index is not another\'s', () => {
+    const { index } = docsCaches();
+    index.set('n1', indexOf('a'), 0);
+    expect(index.get('n2', 1)).toBeUndefined();
+    expect(index.get('n1', 1)?.index.projects[0].project).toBe('a');
+  });
+
+  it('single-flight: the same tree or show under two nodes starts two flights; the same node twice starts one', () => {
+    const flights = docsFlights();
+    const b = blocker<number>();
+    void flights.join(docsTreeFlightKey('n1', 'demo', null, 0), live(), () => b.exec());
+    void flights.join(docsTreeFlightKey('n2', 'demo', null, 0), live(), () => b.exec());
+    void flights.join(docsTreeFlightKey('n1', 'demo', null, 0), live(), () => b.exec());
+    expect(b.started()).toBe(2);
+    const pin: DocPin = { kind: 'committed', commit: COMMIT, servedRef: MAIN, section: 'specs', path: 'x.md' };
+    void flights.join(docsShowFlightKey('n1', 'demo', pin, 100), live(), () => b.exec());
+    void flights.join(docsShowFlightKey('n2', 'demo', pin, 100), live(), () => b.exec());
+    expect(b.started()).toBe(4);
+    expect(flights.size()).toBe(4);
+  });
+
+  it('each docsCaches() call is its own set: nothing is shared at module scope', () => {
+    const a = docsCaches();
+    const b = docsCaches();
+    a.blobs.set('n1', REPO, BLOB, shown(new Uint8Array(1)));
+    a.listing.record('n1', treeOf(COMMIT, MAIN, [committedRow('x.md', BLOB, 1)]), 0);
+    a.draftSizes.record('n1', treeOf(COMMIT, MAIN, [draftRow('d.md', hex64(1), 1)]));
+    a.index.set('n1', indexOf('a'), 0);
+    expect(b.blobs.size()).toBe(0);
+    expect(b.listing.commits()).toBe(0);
+    expect(b.draftSizes.size()).toBe(0);
+    expect(b.index.get('n1', 1)).toBeUndefined();
+  });
+});
+
+describe('docs caches — the committed blob LRU (section 6.5; refinement (l))', () => {
+  const one = new Uint8Array(MIB);
+
+  it('65 values of 1 MiB stay within DOCS_CACHE_BYTES: the first is evicted, the second kept', () => {
+    const { blobs } = docsCaches();
+    for (let i = 0; i < 65; i += 1) blobs.set('n1', REPO, hex40(i), shown(one));
+    expect(blobs.bytes()).toBeLessThanOrEqual(DOCS_CACHE_BYTES);
+    expect(blobs.bytes()).toBe(64 * MIB);
+    expect(blobs.size()).toBe(64);
+    expect(blobs.get('n1', REPO, hex40(0))).toBeUndefined();
+    expect(blobs.get('n1', REPO, hex40(1))).toBeDefined();
+    expect(blobs.get('n1', REPO, hex40(64))).toBeDefined();
+  });
+
+  it('LRU, not FIFO: a get on the second before the 65th set keeps it, and the third goes instead', () => {
+    const { blobs } = docsCaches();
+    for (let i = 0; i < 64; i += 1) blobs.set('n1', REPO, hex40(i), shown(one));
+    expect(blobs.get('n1', REPO, hex40(0))).toBeDefined();
+    blobs.set('n1', REPO, hex40(64), shown(one));
+    expect(blobs.get('n1', REPO, hex40(0))).toBeDefined();
+    expect(blobs.get('n1', REPO, hex40(1))).toBeUndefined();
+    expect(blobs.get('n1', REPO, hex40(2))).toBeDefined();
+  });
+
+  it('a value charged exactly the budget is stored and evicts everything else', () => {
+    const { blobs } = docsCaches();
+    blobs.set('n1', REPO, hex40(1), shown(new Uint8Array(10)));
+    blobs.set('n1', REPO, hex40(2), shown(new Uint8Array(DOCS_CACHE_BYTES - 4), 'abcd'));
+    expect(blobs.size()).toBe(1);
+    expect(blobs.bytes()).toBe(DOCS_CACHE_BYTES);
+    expect(blobs.get('n1', REPO, hex40(2))).toBeDefined();
+  });
+
+  it('a value of DOCS_CACHE_BYTES + 1 in bytes alone is never stored and evicts nothing', () => {
+    const { blobs } = docsCaches();
+    blobs.set('n1', REPO, hex40(1), shown(new Uint8Array(10)));
+    blobs.set('n1', REPO, hex40(2), shown(new Uint8Array(DOCS_CACHE_BYTES + 1)));
+    expect(blobs.size()).toBe(1);
+    expect(blobs.bytes()).toBe(10);
+    expect(blobs.get('n1', REPO, hex40(2))).toBeUndefined();
+    expect(blobs.get('n1', REPO, hex40(1))).toBeDefined();
+  });
+
+  it('the text counts toward the charge: bytes of budget - 4 and 5 bytes of text are never stored', () => {
+    const { blobs } = docsCaches();
+    blobs.set('n1', REPO, hex40(1), shown(new Uint8Array(10)));
+    blobs.set('n1', REPO, hex40(2), shown(new Uint8Array(DOCS_CACHE_BYTES - 4), 'abcde'));
+    expect(blobs.size()).toBe(1);
+    expect(blobs.bytes()).toBe(10);
+  });
+
+  it('a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length', () => {
+    const { blobs } = docsCaches();
+    const text = '\u00e9'.repeat(3);
+    blobs.set('n1', REPO, BLOB, shown(new Uint8Array(Buffer.from(text, 'utf8')), text));
+    expect(blobs.bytes()).toBe(12);
+  });
+
+  it('a base64 answer is charged its decoded bytes plus its b64 text', () => {
+    const { blobs } = docsCaches();
+    const answer: DocsShowOk = {
+      v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: 'specs', path: 'x.png',
+      size: 4, sha256: 'd'.repeat(64), encoding: 'base64', b64: 'AAECAw==', commit: COMMIT, blob: BLOB,
+      mode: '100644', onRef: 'contains',
+    };
+    blobs.set('n1', REPO, BLOB, { answer, bytes: new Uint8Array([0, 1, 2, 3]) });
+    expect(blobs.bytes()).toBe(12);
+  });
+
+  it('re-setting a key replaces its charge, never adds to it', () => {
+    const { blobs } = docsCaches();
+    blobs.set('n1', REPO, BLOB, shown(new Uint8Array(10)));
+    blobs.set('n1', REPO, hex40(1), shown(new Uint8Array(5)));
+    blobs.set('n1', REPO, BLOB, shown(new Uint8Array(20)));
+    expect(blobs.size()).toBe(2);
+    expect(blobs.bytes()).toBe(25);
+    expect(blobs.get('n1', REPO, BLOB)?.bytes.byteLength).toBe(20);
+  });
+});
+
+describe('docs caches — the listing map (section 6.5; refinement (l))', () => {
+  it('records committed rows only, copying exactly {blob, size, kind}; a listed null size stays null', () => {
+    const { listing } = docsCaches();
+    const tree = treeOf(COMMIT, MAIN, [
+      committedRow('x.md', BLOB, null),
+      committedRow('link.md', hex40(9), 12, 'symlink'),
+      draftRow('new.md', hex64(1), 3),
+    ]);
+    listing.record('n1', tree, 1000);
+    expect(listing.entries()).toBe(2);
+    expect(listing.commits()).toBe(1);
+    expect(listing.lookup('n1', 'demo', COMMIT, 'specs', 'x.md'))
+      .toEqual({ repoKey: REPO, file: { blob: BLOB, size: null, kind: 'file' } });
+    expect(listing.lookup('n1', 'demo', COMMIT, 'specs', 'link.md'))
+      .toEqual({ repoKey: REPO, file: { blob: hex40(9), size: 12, kind: 'symlink' } });
+    expect(listing.lookup('n1', 'demo', COMMIT, 'specs', 'new.md')).toBeUndefined();
+    expect(listing.lookup('n1', 'demo', COMMIT, 'plans', 'x.md')).toBeUndefined();
+    expect(listing.lookup('n1', 'b', COMMIT, 'specs', 'x.md')).toBeUndefined();
+  });
+
+  it('11 trees of 5000 committed rows: at most DOCS_LISTING_MAP_ENTRIES, 10 commits, the first evicted', () => {
+    const { listing } = docsCaches();
+    for (let i = 0; i < 11; i += 1) listing.record('n1', bigTree(hex40(i), 5000), 0);
+    expect(listing.entries()).toBeLessThanOrEqual(DOCS_LISTING_MAP_ENTRIES);
+    expect(listing.entries()).toBe(50000);
+    expect(listing.commits()).toBe(10);
+    expect(listing.lookup('n1', 'demo', hex40(0), 'specs', 'f0.md')).toBeUndefined();
+    expect(listing.lookup('n1', 'demo', hex40(1), 'specs', 'f0.md')).toBeDefined();
+    expect(listing.lookup('n1', 'demo', hex40(10), 'specs', 'f0.md')).toBeDefined();
+  });
+
+  it('LRU by commit: a lookup on the first before the 11th record keeps it, and the second goes instead', () => {
+    const { listing } = docsCaches();
+    for (let i = 0; i < 10; i += 1) listing.record('n1', bigTree(hex40(i), 5000), 0);
+    expect(listing.lookup('n1', 'demo', hex40(0), 'specs', 'f0.md')).toBeDefined();
+    listing.record('n1', bigTree(hex40(10), 5000), 0);
+    expect(listing.lookup('n1', 'demo', hex40(0), 'specs', 'f0.md')).toBeDefined();
+    expect(listing.lookup('n1', 'demo', hex40(1), 'specs', 'f0.md')).toBeUndefined();
+    expect(listing.commits()).toBe(10);
+  });
+
+  it('a commit alone above the bound is kept by its own record (the newest is never evicted)', () => {
+    const { listing } = docsCaches();
+    listing.record('n1', bigTree(hex40(1), 10), 0);
+    listing.record('n1', bigTree(hex40(2), DOCS_LISTING_MAP_ENTRIES + 1), 0);
+    expect(listing.commits()).toBe(1);
+    expect(listing.entries()).toBe(DOCS_LISTING_MAP_ENTRIES + 1);
+    expect(listing.lookup('n1', 'demo', hex40(2), 'specs', 'f0.md')).toBeDefined();
+  });
+
+  it('re-recording a known commit counts its rows once and stamps each served ref; ages are nowMs - recordedAt', () => {
+    const { listing } = docsCaches();
+    const rows = [committedRow('x.md', BLOB, 7), committedRow('y.md', hex40(3), 8)];
+    listing.record('n1', treeOf(COMMIT, MAIN, rows), 1000);
+    listing.record('n1', treeOf(COMMIT, WS, rows), 1100);
+    expect(listing.entries()).toBe(2);
+    expect(listing.commits()).toBe(1);
+    expect(listing.servedRefAgeMs('n1', 'demo', COMMIT, MAIN, 1500)).toBe(500);
+    expect(listing.servedRefAgeMs('n1', 'demo', COMMIT, WS, 1500)).toBe(400);
+    listing.record('n1', treeOf(COMMIT, MAIN, rows), 1400);
+    expect(listing.entries()).toBe(2);
+    expect(listing.servedRefAgeMs('n1', 'demo', COMMIT, MAIN, 1500)).toBe(100);
+    expect(listing.servedRefAgeMs('n1', 'demo', COMMIT, WS, 1500)).toBe(400);
+  });
+
+  it('a re-record takes the new tree\'s repository key and rows', () => {
+    const { listing } = docsCaches();
+    listing.record('n1', treeOf(COMMIT, MAIN, [committedRow('x.md', BLOB, 7)]), 0);
+    listing.record('n1', treeOf(COMMIT, MAIN, [committedRow('z.md', BLOB, 9)], 'demo', 'e'.repeat(32)), 0);
+    expect(listing.entries()).toBe(1);
+    expect(listing.lookup('n1', 'demo', COMMIT, 'specs', 'x.md')).toBeUndefined();
+    expect(listing.lookup('n1', 'demo', COMMIT, 'specs', 'z.md'))
+      .toEqual({ repoKey: 'e'.repeat(32), file: { blob: BLOB, size: 9, kind: 'file' } });
+  });
+
+  it('servedRefAgeMs: 599999 at t0 + 599999; an unrecorded ref or commit is undefined', () => {
+    const { listing } = docsCaches();
+    listing.record('n1', treeOf(COMMIT, MAIN, [committedRow('x.md', BLOB, 7)]), 5000);
+    expect(listing.servedRefAgeMs('n1', 'demo', COMMIT, MAIN, 5000 + 599999)).toBe(599999);
+    expect(listing.servedRefAgeMs('n1', 'demo', COMMIT, WS, 5000)).toBeUndefined();
+    expect(listing.servedRefAgeMs('n1', 'demo', hex40(1), MAIN, 5000)).toBeUndefined();
+  });
+});
+
+describe('docs caches — the draft size map (section 6.5, section 3.12)', () => {
+  /** One tree whose `n` draft rows carry fingerprints `hex64(from) ..`, each its index as its size. */
+  const drafts = (from: number, n: number): DocsTreeOk => {
+    const rows: DocsEntry[] = [];
+    for (let i = from; i < from + n; i += 1) rows.push(draftRow(`d${i}.md`, hex64(i), i));
+    return treeOf(COMMIT, MAIN, rows);
+  };
+
+  it('10001 distinct fingerprints keep DOCS_DRAFT_SIZE_ENTRIES; the first is gone, the last kept', () => {
+    const { draftSizes } = docsCaches();
+    draftSizes.record('n1', drafts(0, DOCS_DRAFT_SIZE_ENTRIES + 1));
+    expect(draftSizes.size()).toBe(DOCS_DRAFT_SIZE_ENTRIES);
+    expect(draftSizes.get('n1', hex64(0))).toBeUndefined();
+    expect(draftSizes.get('n1', hex64(1))).toBe(1);
+    expect(draftSizes.get('n1', hex64(DOCS_DRAFT_SIZE_ENTRIES))).toBe(DOCS_DRAFT_SIZE_ENTRIES);
+  });
+
+  it('LRU: a get on the first before one more record keeps it, and the second goes instead', () => {
+    const { draftSizes } = docsCaches();
+    draftSizes.record('n1', drafts(0, DOCS_DRAFT_SIZE_ENTRIES));
+    expect(draftSizes.get('n1', hex64(0))).toBe(0);
+    draftSizes.record('n1', drafts(DOCS_DRAFT_SIZE_ENTRIES, 1));
+    expect(draftSizes.get('n1', hex64(0))).toBe(0);
+    expect(draftSizes.get('n1', hex64(1))).toBeUndefined();
+  });
+
+  it('a draft whose fp or size is null, and a committed-only row, record nothing; a listed 0 is a size', () => {
+    const { draftSizes } = docsCaches();
+    draftSizes.record('n1', treeOf(COMMIT, MAIN, [
+      draftRow('a.md', null, 5), draftRow('b.md', hex64(2), null), committedRow('c.md', BLOB, 4),
+      draftRow('e.md', hex64(3), 0),
+    ]));
+    expect(draftSizes.size()).toBe(1);
+    expect(draftSizes.get('n1', hex64(2))).toBeUndefined();
+    expect(draftSizes.get('n1', hex64(3))).toBe(0);
+  });
+});
+
+describe('docs caches — the index micro-cache (section 6.5)', () => {
+  it('a hit carries its age until DOCS_INDEX_CACHE_MS; at the bound it is gone', () => {
+    const { index } = docsCaches();
+    const ix = indexOf('a');
+    index.set('n1', ix, 1000);
+    expect(index.get('n1', 1000)).toEqual({ index: ix, ageMs: 0 });
+    expect(index.get('n1', 1000 + DOCS_INDEX_CACHE_MS - 1)).toEqual({ index: ix, ageMs: DOCS_INDEX_CACHE_MS - 1 });
+    expect(index.get('n1', 1000 + DOCS_INDEX_CACHE_MS)).toBeUndefined();
+  });
+
+  it('a clock that went back vouches for nothing', () => {
+    const { index } = docsCaches();
+    index.set('n1', indexOf('a'), 1000);
+    expect(index.get('n1', 999)).toBeUndefined();
+  });
+
+  it('drop forgets the node at once and leaves every other node; a set after it is a fresh entry', () => {
+    const { index } = docsCaches();
+    index.set('n1', indexOf('a'), 0);
+    index.set('n2', indexOf('b'), 0);
+    index.drop('n1');
+    expect(index.get('n1', 1)).toBeUndefined();
+    expect(index.get('n2', 1)?.index.projects[0].project).toBe('b');
+    index.set('n1', indexOf('c'), 10);
+    expect(index.get('n1', 10)).toEqual({ index: indexOf('c'), ageMs: 0 });
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-cache.test.ts )`
+Expected: `Test Files  1 failed (1)`, `Tests  no tests`, with `Error: Cannot find module '../src/docs/cache.js' imported from .../server/test/docs-cache.test.ts` (Measured 1). Any other error (a missing export of `policy.ts` or `lane.ts`, a syntax error) means Tasks 1-4 are not in the tree or the file was not pasted exactly: stop.
+
+- [ ] **Step 3: Write the implementation.** Create `server/src/docs/cache.ts` with exactly this content:
+
+```ts
+// The native Docs reader's server-side caches (design 2026-10-01, section 6.5, section 3.12; W3 refinements (l) and
+// (p)): L4. The committed blob LRU, the listing map, the draft `fp -> size` map and the per-node index micro-cache,
+// every key carrying the node. The routes (Tasks 6 and 7) build one set per composition through `docsCaches()`,
+// never at module scope, so two compositions (two `buildServer` calls, two tests) share nothing.
+//
+// Ring (M7.10; the ring guard in `single-definition.test.ts`): this file holds no clock (every caller passes
+// `nowMs`) and DECIDES NOTHING. Every key is an L1 builder (`docsBlobKey`, `docsListingKey`, `docsDraftSizeKey`; the
+// index micro-cache's key is the node itself), every bound an L1 constant, and whether a committed hit may be served
+// or a show may fill is L1's `docsCacheVerdict` and `docsCacheFill`, applied by the routes. What stays here is
+// bookkeeping: insertion-ordered `Map`s used as LRUs (a read or a write moves its key to the end; eviction takes the
+// first key), the charges, the counts, and the comparisons of a running total or an age against an L1 bound.
+import type { DocSectionSlug, DocsIndexOk, DocsShowOk, DocsTreeOk } from '../../../shared/docs.js';
+import {
+  DOCS_CACHE_BYTES, DOCS_DRAFT_SIZE_ENTRIES, DOCS_INDEX_CACHE_MS, DOCS_LISTING_MAP_ENTRIES, docsBlobKey,
+  docsDraftSizeKey, docsListingKey, type DocsListedFile,
+} from './policy.js';
+
+/** One cached committed show: the verified answer and its decoded bytes (section 6.5: filled only from an ok
+ *  committed answer that passed checks 8 and 9, and the routes' `docsShowBound`). */
+export interface DocsCachedShow {
+  answer: DocsShowOk;
+  bytes: Uint8Array;
+}
+
+/** The committed blob LRU (section 6.5), keyed `node NUL repoKey NUL blob`, within `DOCS_CACHE_BYTES`. `get`
+ *  answers `undefined` for one meaning: not cached. `bytes()` is the running charge, `size()` the entry count. */
+export interface DocsBlobCache {
+  get(node: string, repoKey: string, blob: string): DocsCachedShow | undefined;
+  set(node: string, repoKey: string, blob: string, value: DocsCachedShow): void;
+  bytes(): number;
+  size(): number;
+}
+
+/**
+ * The listing map (section 6.5): `(node, project, commit) -> {repoKey, files, refsAt}`, fed from every ok tree answer
+ * the routes forward, AFTER `docsAnswerShape` passed it. `lookup` answers `undefined` for one meaning: no listing
+ * entry for that (node, project, commit, section, path). `servedRefAgeMs` answers `undefined` for one meaning: that
+ * `servedRef` was never recorded for that commit. `entries()` is the summed committed-entry count the bound applies
+ * to; `commits()` the number of commits held.
+ */
+export interface DocsListingMap {
+  record(node: string, tree: DocsTreeOk, nowMs: number): void;
+  lookup(node: string, project: string, commit: string, section: DocSectionSlug, path: string):
+    { repoKey: string; file: DocsListedFile } | undefined;
+  servedRefAgeMs(node: string, project: string, commit: string, servedRef: string, nowMs: number): number | undefined;
+  entries(): number;
+  commits(): number;
+}
+
+/** The draft `fp -> size` map (section 6.5, section 3.12), node-keyed, LRU within `DOCS_DRAFT_SIZE_ENTRIES`. `get`
+ *  answers `undefined` for one meaning: no size recorded for that fingerprint on that node. */
+export interface DocsDraftSizes {
+  record(node: string, tree: DocsTreeOk): void;
+  get(node: string, fp: string): number | undefined;
+  size(): number;
+}
+
+/** The per-node index micro-cache (section 6.5). `get` answers `undefined` for one meaning: nothing usable (absent,
+ *  dropped, or not within `0 <= age < DOCS_INDEX_CACHE_MS`); a hit carries its age for `cacheAgeMs`. */
+export interface DocsIndexCache {
+  get(node: string, nowMs: number): { index: DocsIndexOk; ageMs: number } | undefined;
+  set(node: string, index: DocsIndexOk, nowMs: number): void;
+  drop(node: string): void;
+}
+
+/** One composition's caches (Task 6's `DocsNodeLanes.caches`). */
+export interface DocsCaches {
+  blobs: DocsBlobCache;
+  listing: DocsListingMap;
+  draftSizes: DocsDraftSizes;
+  index: DocsIndexCache;
+}
+
+/** A blob entry and the charge it was admitted with, so a replacement or an eviction gives back exactly that. */
+interface BlobSlot {
+  value: DocsCachedShow;
+  charge: number;
+}
+
+/**
+ * The committed blob LRU. A value's charge is `Buffer.byteLength` of BOTH stored representations: the decoded bytes
+ * and the answer's one content field (`text` or `b64`), since the cache holds both. A value charged above the whole
+ * budget is never stored and evicts nothing; re-setting a key gives its old charge back first; after a set, the
+ * least recently used entries go until the total is within the budget, so the value just set (charged at most the
+ * budget) is never evicted by its own set.
+ */
+function docsBlobCache(): DocsBlobCache {
+  const slots = new Map<string, BlobSlot>();
+  let total = 0;
+
+  const charge = (value: DocsCachedShow): number =>
+    value.bytes.byteLength + Buffer.byteLength(value.answer.text ?? value.answer.b64 ?? '');
+
+  return {
+    get(node, repoKey, blob) {
+      const key = docsBlobKey(node, repoKey, blob);
+      const slot = slots.get(key);
+      if (slot === undefined) return undefined;
+      slots.delete(key);
+      slots.set(key, slot);
+      return slot.value;
+    },
+    set(node, repoKey, blob, value) {
+      const c = charge(value);
+      if (c > DOCS_CACHE_BYTES) return;
+      const at = docsBlobKey(node, repoKey, blob);
+      const old = slots.get(at);
+      if (old !== undefined) {
+        slots.delete(at);
+        total -= old.charge;
+      }
+      slots.set(at, { value, charge: c });
+      total += c;
+      while (total > DOCS_CACHE_BYTES) {
+        const oldest = slots.keys().next().value as string;
+        total -= (slots.get(oldest) as BlobSlot).charge;
+        slots.delete(oldest);
+      }
+    },
+    bytes: () => total,
+    size: () => slots.size,
+  };
+}
+
+/** One commit's listing: its repository key, its committed facts by section then path, how many it holds, and when
+ *  each served ref was last recorded at this commit. Nested maps, so this file builds no key of its own. */
+interface ListedCommit {
+  repoKey: string;
+  files: Map<DocSectionSlug, Map<string, DocsListedFile>>;
+  count: number;
+  refsAt: Map<string, number>;
+}
+
+/** The committed facts of one tree: exactly `{blob, size, kind}` per entry whose `committed` is not `null` (a
+ *  draft-only row has no committed facts), copied, so no other field ccd sent rides into the map. */
+function listedFiles(tree: DocsTreeOk): { files: Map<DocSectionSlug, Map<string, DocsListedFile>>; count: number } {
+  const files = new Map<DocSectionSlug, Map<string, DocsListedFile>>();
+  let count = 0;
+  for (const e of tree.entries) {
+    const c = e.committed;
+    if (c === null) continue;
+    let inSection = files.get(e.section);
+    if (inSection === undefined) {
+      inSection = new Map<string, DocsListedFile>();
+      files.set(e.section, inSection);
+    }
+    if (!inSection.has(e.path)) count += 1;
+    inSection.set(e.path, { blob: c.blob, size: c.size, kind: c.kind });
+  }
+  return { files, count };
+}
+
+/**
+ * The listing map. A record of a commit already held replaces its repository key and files with the new tree's (the
+ * count is given back first, so nothing is counted twice), keeps the served refs it had, stamps the new one, and
+ * moves the commit to the end. After a record, whole commits go, least recently used first, until the summed count
+ * is within `DOCS_LISTING_MAP_ENTRIES`; the commit just recorded is never evicted by its own record. A `lookup` that
+ * finds the commit moves it to the end; `servedRefAgeMs` reads without moving.
+ */
+function docsListingMap(): DocsListingMap {
+  const commits = new Map<string, ListedCommit>();
+  let total = 0;
+
+  return {
+    record(node, tree, nowMs) {
+      const key = docsListingKey(node, tree.project, tree.ref.commit);
+      const { files, count } = listedFiles(tree);
+      const known = commits.get(key);
+      const refsAt = known === undefined ? new Map<string, number>() : known.refsAt;
+      if (known !== undefined) {
+        commits.delete(key);
+        total -= known.count;
+      }
+      refsAt.set(tree.ref.served, nowMs);
+      commits.set(key, { repoKey: tree.repo.key, files, count, refsAt });
+      total += count;
+      while (total > DOCS_LISTING_MAP_ENTRIES && commits.size > 1) {
+        const oldest = commits.keys().next().value as string;
+        total -= (commits.get(oldest) as ListedCommit).count;
+        commits.delete(oldest);
+      }
+    },
+    lookup(node, project, commit, section, path) {
+      const key = docsListingKey(node, project, commit);
+      const held = commits.get(key);
+      if (held === undefined) return undefined;
+      commits.delete(key);
+      commits.set(key, held);
+      const file = held.files.get(section)?.get(path);
+      return file === undefined ? undefined : { repoKey: held.repoKey, file };
+    },
+    servedRefAgeMs(node, project, commit, servedRef, nowMs) {
+      const at = commits.get(docsListingKey(node, project, commit))?.refsAt.get(servedRef);
+      return at === undefined ? undefined : nowMs - at;
+    },
+    entries: () => total,
+    commits: () => commits.size,
+  };
+}
+
+/** The draft size map: every entry whose draft carries a string `fp` and a number `size` (a `null` either way is no
+ *  size fact, so it is not recorded); a record or a read moves its key to the end; past `DOCS_DRAFT_SIZE_ENTRIES`
+ *  the least recently used go. */
+function docsDraftSizes(): DocsDraftSizes {
+  const sizes = new Map<string, number>();
+
+  return {
+    record(node, tree) {
+      for (const e of tree.entries) {
+        const d = e.draft;
+        if (d === null || typeof d.fp !== 'string' || typeof d.size !== 'number') continue;
+        const key = docsDraftSizeKey(node, d.fp);
+        sizes.delete(key);
+        sizes.set(key, d.size);
+      }
+      while (sizes.size > DOCS_DRAFT_SIZE_ENTRIES) sizes.delete(sizes.keys().next().value as string);
+    },
+    get(node, fp) {
+      const key = docsDraftSizeKey(node, fp);
+      const size = sizes.get(key);
+      if (size === undefined) return undefined;
+      sizes.delete(key);
+      sizes.set(key, size);
+      return size;
+    },
+    size: () => sizes.size,
+  };
+}
+
+/** The index micro-cache: one `{index, atMs}` per node. A hit needs `0 <= age < DOCS_INDEX_CACHE_MS` (a clock that
+ *  went back vouches for nothing, as in `docsCacheVerdict`); `drop` forgets the node's entry at once. */
+function docsIndexCache(): DocsIndexCache {
+  const held = new Map<string, { index: DocsIndexOk; atMs: number }>();
+
+  return {
+    get(node, nowMs) {
+      const e = held.get(node);
+      if (e === undefined) return undefined;
+      const ageMs = nowMs - e.atMs;
+      if (!(ageMs >= 0 && ageMs < DOCS_INDEX_CACHE_MS)) return undefined;
+      return { index: e.index, ageMs };
+    },
+    set(node, index, nowMs) {
+      held.set(node, { index, atMs: nowMs });
+    },
+    drop(node) {
+      held.delete(node);
+    },
+  };
+}
+
+/** A fresh set of caches for one composition (refinement (i)): nothing here lives at module scope. */
+export function docsCaches(): DocsCaches {
+  return {
+    blobs: docsBlobCache(),
+    listing: docsListingMap(),
+    draftSizes: docsDraftSizes(),
+    index: docsIndexCache(),
+  };
+}
+```
+
+- [ ] **Step 4: Run it to verify it passes.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-cache.test.ts )`
+Expected: `Test Files  1 passed (1)`, `Tests  27 passed (27)`.
+
+- [ ] **Step 5: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` is a known load flake, so a red there is re-run alone before it is called broken. Stage the two new files first, so `topology-clean`'s `git ls-files` corpus contains them (Measured 3):
+
+Run: `git add server/src/docs/cache.ts server/test/docs-cache.test.ts && git status --short`
+Expected: exactly `A  server/src/docs/cache.ts` and `A  server/test/docs-cache.test.ts`.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The first compiles `cache.ts` under the server's build flags (`Buffer` from node's types; the `as string` on each `keys().next().value`); the second compiles the test and its complete `DocsTreeOk` fixtures against W1's types.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-lanes.test.ts )`
+Expected: `Tests  38 passed (38)` (Task 4's file, unchanged).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  472 passed (472)`: the docs ring guard visits `cache.ts` as L4 (no timer here anyway), and no name exported here is declared anywhere else in the four roots.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/capsupported.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  77 passed (77)`. `topology-clean` needs `origin/main` (or `CCRC_HISTORY_BASE=<base sha>`; Measured 4); this task adds only placeholder names (`demo`, `a`, `b`, `c`, `n1`, `n2`, `ws/a`, `example-org/example-repo`, `/tmp/example`) and hex built by `repeat`/`padStart`, and spells no cap token.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/verb-gate.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  193 passed (193)`: `cache.ts` registers no route, holds no box-token text and makes no `CCD_ARGV.` call.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts test/docs-headers.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  622 passed (622)` (neither file nor `policy.ts` is edited).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Measured 4); Task 1's Step 0 installs real modules.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add server/src/docs/cache.ts server/test/docs-cache.test.ts
+git commit -m "server: docs blob cache, listing map, draft sizes and index micro-cache (docs W3)" \
+  -m "cache.ts (L4) keys every entry by the node through L1's builders and decides nothing: docsCaches() builds, per composition, a committed blob LRU within DOCS_CACHE_BYTES charged as the decoded bytes plus the answer's text or b64 (a value above the whole budget is never stored, a re-set gives its old charge back), a listing map of committed rows ({blob, size, kind} copied) LRU by commit that evicts whole commits past DOCS_LISTING_MAP_ENTRIES file entries and keeps each served ref's recordedAtMs, a node-keyed draft fp -> size map LRU within DOCS_DRAFT_SIZE_ENTRIES, and a per-node index micro-cache that hits only within 0 <= age < DOCS_INDEX_CACHE_MS and drops at once. docs-cache.test.ts pins M3.13 (two node values give two entries in every cache and two flights) and each bound, charge and LRU order." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state):
+
+```json
+[
+ {
+  "id": "W3-T5-M1",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      const at = docsBlobKey(node, repoKey, blob);",
+  "new": "      const at = docsBlobKey('', repoKey, blob);",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 6 failed | 21 passed (27) — blob cache: the same (repoKey, blob) under two nodes is two entries, each answering its own value; 65 values of 1 MiB stay within DOCS_CACHE_BYTES: the first is evicted, the second kept; LRU, not FIFO: a get on the second before the 65th set keeps it, and the third goes instead; a value charged exactly the budget is stored and evicts everything else; and 2 more"
+ },
+ {
+  "id": "W3-T5-M2",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      const key = docsListingKey(node, tree.project, tree.ref.commit);",
+  "new": "      const key = docsListingKey('', tree.project, tree.ref.commit);",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 8 failed | 19 passed (27) — listing map: the same tree under two nodes is two commits, and a lookup under a node never recorded misses; records committed rows only, copying exactly {blob, size, kind}; a listed null size stays null; 11 trees of 5000 committed rows: at most DOCS_LISTING_MAP_ENTRIES, 10 commits, the first evicted; LRU by commit: a lookup on the first before the 11th record keeps it, and the second goes instead; and 4 more"
+ },
+ {
+  "id": "W3-T5-M3",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      while (total > DOCS_CACHE_BYTES) {",
+  "new": "      while (false as boolean) {",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 3 failed | 24 passed (27) — 65 values of 1 MiB stay within DOCS_CACHE_BYTES: the first is evicted, the second kept; LRU, not FIFO: a get on the second before the 65th set keeps it, and the third goes instead; a value charged exactly the budget is stored and evicts everything else"
+ },
+ {
+  "id": "W3-T5-M4",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "        const oldest = slots.keys().next().value as string;",
+  "new": "        const oldest = [...slots.keys()].pop() as string;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 3 failed | 24 passed (27) — 65 values of 1 MiB stay within DOCS_CACHE_BYTES: the first is evicted, the second kept; LRU, not FIFO: a get on the second before the 65th set keeps it, and the third goes instead; a value charged exactly the budget is stored and evicts everything else"
+ },
+ {
+  "id": "W3-T5-M5",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      slots.delete(key);\n      slots.set(key, slot);\n      return slot.value;",
+  "new": "      return slot.value;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — LRU, not FIFO: a get on the second before the 65th set keeps it, and the third goes instead"
+ },
+ {
+  "id": "W3-T5-M6",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      if (c > DOCS_CACHE_BYTES) return;\n",
+  "new": "",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 2 failed | 25 passed (27) — a value of DOCS_CACHE_BYTES + 1 in bytes alone is never stored and evicts nothing; the text counts toward the charge: bytes of budget - 4 and 5 bytes of text are never stored"
+ },
+ {
+  "id": "W3-T5-M7",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "    value.bytes.byteLength + Buffer.byteLength(value.answer.text ?? value.answer.b64 ?? '');",
+  "new": "    value.bytes.byteLength;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 4 failed | 23 passed (27) — a value charged exactly the budget is stored and evicts everything else; the text counts toward the charge: bytes of budget - 4 and 5 bytes of text are never stored; a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length; a base64 answer is charged its decoded bytes plus its b64 text"
+ },
+ {
+  "id": "W3-T5-M8",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      while (total > DOCS_LISTING_MAP_ENTRIES && commits.size > 1) {",
+  "new": "      while (commits.size > DOCS_LISTING_MAP_ENTRIES && commits.size > 1) {",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 3 failed | 24 passed (27) — 11 trees of 5000 committed rows: at most DOCS_LISTING_MAP_ENTRIES, 10 commits, the first evicted; LRU by commit: a lookup on the first before the 11th record keeps it, and the second goes instead; a commit alone above the bound is kept by its own record (the newest is never evicted)"
+ },
+ {
+  "id": "W3-T5-M9",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "    const c = e.committed;\n    if (c === null) continue;",
+  "new": "    const c = e.committed ?? { kind: 'file' as const, blob: '', size: e.draft?.size ?? null };",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — records committed rows only, copying exactly {blob, size, kind}; a listed null size stays null"
+ },
+ {
+  "id": "W3-T5-M10",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "        total -= known.count;\n",
+  "new": "",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 2 failed | 25 passed (27) — re-recording a known commit counts its rows once and stamps each served ref; ages are nowMs - recordedAt; a re-record takes the new tree's repository key and rows"
+ },
+ {
+  "id": "W3-T5-M11",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      while (sizes.size > DOCS_DRAFT_SIZE_ENTRIES) sizes.delete(sizes.keys().next().value as string);\n",
+  "new": "",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 2 failed | 25 passed (27) — 10001 distinct fingerprints keep DOCS_DRAFT_SIZE_ENTRIES; the first is gone, the last kept; LRU: a get on the first before one more record keeps it, and the second goes instead"
+ },
+ {
+  "id": "W3-T5-M12",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      if (!(ageMs >= 0 && ageMs < DOCS_INDEX_CACHE_MS)) return undefined;",
+  "new": "      if (!(ageMs >= 0 && ageMs <= DOCS_INDEX_CACHE_MS)) return undefined;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — a hit carries its age until DOCS_INDEX_CACHE_MS; at the bound it is gone"
+ },
+ {
+  "id": "W3-T5-M13",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      held.delete(node);\n",
+  "new": "",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — drop forgets the node at once and leaves every other node; a set after it is a fresh entry"
+ },
+ {
+  "id": "W3-T5-M14",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "        const key = docsDraftSizeKey(node, d.fp);",
+  "new": "        const key = docsDraftSizeKey('', d.fp);",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 4 failed | 23 passed (27) — draft sizes: one fingerprint under two nodes keeps two sizes; 10001 distinct fingerprints keep DOCS_DRAFT_SIZE_ENTRIES; the first is gone, the last kept; LRU: a get on the first before one more record keeps it, and the second goes instead; a draft whose fp or size is null, and a committed-only row, record nothing; a listed 0 is a size"
+ },
+ {
+  "id": "W3-T5-M15",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      const e = held.get(node);",
+  "new": "      const e = held.get(node) ?? [...held.values()][0];",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 2 failed | 25 passed (27) — index micro-cache: one node's index is not another's; drop forgets the node at once and leaves every other node; a set after it is a fresh entry"
+ },
+ {
+  "id": "W3-T5-M16",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return docsKey(KEY_TREE, [node, project, ref === null ? '' : docsRefText(ref), String(gen)]);",
+  "new": "  return docsKey(KEY_TREE, [project, ref === null ? '' : docsRefText(ref), String(gen)]);",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — single-flight: the same tree or show under two nodes starts two flights; the same node twice starts one"
+ },
+ {
+  "id": "W3-T5-M17",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  return docsKey(KEY_SHOW, [node, project, ...fields, String(maxBytes)]);",
+  "new": "  return docsKey(KEY_SHOW, [project, ...fields, String(maxBytes)]);",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — single-flight: the same tree or show under two nodes starts two flights; the same node twice starts one"
+ },
+ {
+  "id": "W3-T5-M18",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "    value.bytes.byteLength + Buffer.byteLength(value.answer.text ?? value.answer.b64 ?? '');",
+  "new": "    value.bytes.byteLength + (value.answer.text ?? value.answer.b64 ?? '').length;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length"
+ },
+ {
+  "id": "W3-T5-M19",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "Buffer.byteLength(value.answer.text ?? value.answer.b64 ?? '')",
+  "new": "Buffer.byteLength(value.answer.text ?? '')",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — a base64 answer is charged its decoded bytes plus its b64 text"
+ },
+ {
+  "id": "W3-T5-M20",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "        total -= old.charge;\n",
+  "new": "",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — re-setting a key replaces its charge, never adds to it"
+ },
+ {
+  "id": "W3-T5-M21",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "    inSection.set(e.path, { blob: c.blob, size: c.size, kind: c.kind });",
+  "new": "    inSection.set(e.path, c);",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 2 failed | 25 passed (27) — records committed rows only, copying exactly {blob, size, kind}; a listed null size stays null; a re-record takes the new tree's repository key and rows"
+ },
+ {
+  "id": "W3-T5-M22",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      const refsAt = known === undefined ? new Map<string, number>() : known.refsAt;",
+  "new": "      const refsAt = new Map<string, number>();",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — re-recording a known commit counts its rows once and stamps each served ref; ages are nowMs - recordedAt"
+ },
+ {
+  "id": "W3-T5-M23",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      while (total > DOCS_LISTING_MAP_ENTRIES && commits.size > 1) {",
+  "new": "      while (total > DOCS_LISTING_MAP_ENTRIES && commits.size > 0) {",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — a commit alone above the bound is kept by its own record (the newest is never evicted)"
+ },
+ {
+  "id": "W3-T5-M24",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      commits.delete(key);\n      commits.set(key, held);\n",
+  "new": "",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — LRU by commit: a lookup on the first before the 11th record keeps it, and the second goes instead"
+ },
+ {
+  "id": "W3-T5-M25",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      sizes.delete(key);\n      sizes.set(key, size);\n      return size;",
+  "new": "      return size;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — LRU: a get on the first before one more record keeps it, and the second goes instead"
+ },
+ {
+  "id": "W3-T5-M26",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "        if (d === null || typeof d.fp !== 'string' || typeof d.size !== 'number') continue;",
+  "new": "        if (d === null || typeof d.fp !== 'string') continue;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — a draft whose fp or size is null, and a committed-only row, record nothing; a listed 0 is a size"
+ },
+ {
+  "id": "W3-T5-M27",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "        if (d === null || typeof d.fp !== 'string' || typeof d.size !== 'number') continue;",
+  "new": "        if (d === null || typeof d.size !== 'number') continue;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — a draft whose fp or size is null, and a committed-only row, record nothing; a listed 0 is a size"
+ },
+ {
+  "id": "W3-T5-M28",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      if (!(ageMs >= 0 && ageMs < DOCS_INDEX_CACHE_MS)) return undefined;",
+  "new": "      if (!(ageMs < DOCS_INDEX_CACHE_MS)) return undefined;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 26 passed (27) — a clock that went back vouches for nothing"
+ },
+ {
+  "id": "W3-T5-M29",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "export function docsCaches(): DocsCaches {\n  return {\n    blobs: docsBlobCache(),",
+  "new": "const SHARED_BLOBS = docsBlobCache();\nexport function docsCaches(): DocsCaches {\n  return {\n    blobs: SHARED_BLOBS,",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 3 failed | 24 passed (27) — each docsCaches() call is its own set: nothing is shared at module scope; a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length; a base64 answer is charged its decoded bytes plus its b64 text"
+ }
+]
+```
+
+### Task 6: routes.ts, part 1: composeDocs and the three read routes, applying L1 to the adapter through the caches, flights and read lane
+
+**Model routing:** `sonnet`, effort `high` — the routes decide nothing: every branch they take is an L1 verdict or an L3 answer. The traps are reading the query only through L1's parser (never a property read of `req.query`), the order cache -> flight -> lane on every read, believing an ok answer (`docsAnswerShape`, `docsShowBound`) INSIDE the flight before any cache or `refreshDue` sees it, carrying every failure body verbatim (absent stays absent), and measuring abandonment on the RESPONSE. Every count below was measured on the scratch tree at Task 5's state, on node v24.14.1 and Fastify 5.10.0.
+
+**Spec rows:** M3.4 (the route half: "`docs-routes.test.ts`: each `bad-query` why, with zero execs on a recording runner"), M5.1, M5.2, M5.6 (the route half; Task 3 pinned the hook half), M6.2 (the route half: "the 33rd queued job or a 10 s wait gives `docs-busy {lane:'read'}` with zero extra execs; a non-docs route is unaffected; a closed request is dequeued"), M6.11 and section 2 (j) row 52's cache cases ("a second committed GET costs 0 execs; the same blob under a new commit costs 0; a draft always execs"; "`immutable` only on a committed raw-raster 200"). W2's review carries handled here: the ok-answer shape guard applied before `refreshDue` and before reply serialisation (refinement (f)); the decoded show bytes held to the server's bound (refinement (g)); route tests through Fastify's REAL query parser, with a differential against W2's `form()` decoder; and the mutate half of the `fleetState` carry (Task 9 owns the swap half). Refinements applied: (c) no HEAD, (d) measured and recorded for Task 9's deviation, (i) `composeDocs` over the same source object, (j) abandonment on the response, (k) cache -> flight -> lane, (l) what the cache serves.
+
+**Files:**
+- Create: `server/src/docs/routes.ts` — L4, 284 lines: the exported `DocsNodes<T>`, `DocsNodeLanes`, `DocsComposition`, `DocsComposeOptions`, `composeDocs` and `registerDocsReadRoutes`; module-private `primaryOnly`, `forNode`, `clientGone`, `abandon`, `notRan`, `believeIndex`, `believeTree`, `believeShow`, `readTree`, `treeResponse` and `sendFile`. One of the four L4 names W2's ring guard reserves (`DOCS_RING_ROLES`); `DOCS_RING_FLOOR` gains it in Task 9. It registers routes but is NOT yet read by `auth-gate.test.ts`'s `ROUTES` or the box-token census (Task 8 adds it, with the plugin registration in `server.ts`); its four registration lines are already the fixed texts of the Global Constraints (the refresh's is Task 7's), and no comment in it spells a registration call or a box-token call.
+- Create: `server/test/docs-routes.test.ts` — 451 lines, 60 cases: M3.4 (22 refusals, the router-level refusals, the dot-dot case, three HEADs), the parser differential (1 + 16 cases), answers, ccd failures and the gate (8 cases), the shape guard (3 cases) and M6.2 at the routes (5 cases, three over a real socket). Task 7 appends its refresh describes and Task 9 its real-server describes at the end of this file.
+- Create: `server/test/docs-file-bytes.test.ts` — 217 lines, 43 cases: M5.1 (8), M5.2 (28 cells), the show bound (3), the JSON show's verified bytes (2), M5.6 (2).
+- Modify: `server/test/docsRouteHelpers.ts` — an import block inserted under the 3-line header comment (lines 1-3 at Task 5's state, which already announce Task 6's additions), and the Task 6 helpers appended at EOF, after `blocker`'s closing `}` (line 25). Task 10 appends `echoPty()` and `passThroughLane()` after these.
+- Modify: `server/test/docs-cache.test.ts` — its import block (lines 9-17 at Task 5's state) and one describe appended at EOF, after line 388 (10 cases: row 52, M6.11, the listed blob, refinements (k) and (l)). Nothing in Task 5's describes moves or changes.
+- Test: the three files above; guards `server/test/docs-lanes.test.ts`, `docs-headers.test.ts`, `docs-policy.test.ts`, `docs-source.test.ts` (none edited), `single-definition.test.ts` (the docs ring guard visits `routes.ts` as L4; no exported name has a second home), `topology-clean.test.ts`, `capsupported.test.ts`, `auth-gate.test.ts`, `box-token-census.test.ts`, `verb-gate.test.ts` (no `CCD_ARGV.` call in `routes.ts`: the routes reach ccd only through the ports) and `typecheck-tests.test.ts`.
+
+Every Find block below is quoted from the file as Task 5 left it and is unique in it; line numbers are hints. If a Find block is absent or not unique, stop and put an ask to the coordinator.
+
+Before Step 1, check that the three new files are absent and that the names this task consumes exist (the tree as Task 5 left it):
+
+Run: `test ! -e server/src/docs/routes.ts && test ! -e server/test/docs-routes.test.ts && test ! -e server/test/docs-file-bytes.test.ts && grep -q '^export function docsCaches' server/src/docs/cache.ts && grep -q '^export function docsFlights' server/src/docs/lane.ts && grep -q '^export function docsReadLane' server/src/docs/lane.ts && grep -q '^export function sendDocsFailure' server/src/docs/hooks.ts && grep -q '^export function installDocsResponsePolicy' server/src/docs/hooks.ts && grep -q '^export function docsAnswerShape' server/src/docs/policy.ts && grep -q '^export function docsCacheHitAnswer' server/src/docs/policy.ts && grep -q '^export function docsFileReply' server/src/docs/policy.ts && grep -q "^export const DOCS_PRIMARY_NODE = 'primary';" server/src/docs/policy.ts && grep -q '^export function blocker' server/test/docsRouteHelpers.ts && echo T6-BASE-OK`
+Expected: `T6-BASE-OK`. If it does not print, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes, from W2: `server/src/docs/ccdsource.ts`: `export interface CcdDocsDeps { runCcd: CcdRunner; fleetState: Pick<FleetState, 'ccdVerbs'> | undefined }`, `export function ccdDocsReader(deps: CcdDocsDeps): DocsReader`, `export function ccdDocsFetcher(deps: CcdDocsDeps): DocsFetcher` (each reads `deps.fleetState` at every call). `server/src/docs/ports.ts`: `DocsReader { index(at: DocsNodeId): Promise<DocsIndexRead>; tree(src: DocsSourceId, ref: DocsRefSpec | null): Promise<DocsTreeRead>; show(src: DocsSourceId, pin: DocPin, ask: DocsShowAsk): Promise<DocsShowRead> }`, `DocsFetcher`, `DocsSourceId { node: string; project: string }`, `DocsShowAsk { maxBytes: number; job: DocsJob; listedBlob: string | null }` and the four result types (`{ ok: true; answer; bytes? } | DocsFailureBody`). `server/src/docs/policy.ts`: `parseDocsApiQuery(route: DocsApiRoute, query: Readonly<Record<string, unknown>>): { ok: true; req: DocsApiRequest } | DocsFailureBody`, `parseDocsProjectParam(project: unknown): { ok: true; project: string } | DocsFailureBody`, `refreshDue(tree: DocsTreeOk): boolean`, `docsShowPlan(path: string, knownSize: number | undefined): DocsShowPlan` (`{ cls; maxBytes; job }`), `LISTING_JOB`, `type DocsJob`, `type DocsApiRequest`.
+- Consumes, from Tasks 1-2 (`policy.ts`): `DOCS_PRIMARY_NODE` (`'primary'`); `docsIndexFlightKey(node: string, gen: number): string`, `docsNodeKey(node: string): string`, `docsIndexCacheable(genAtStart: number, genNow: number): boolean`, `docsTreeFlightKey(node: string, project: string, ref: DocsRefSpec | null, gen: number): string`, `docsShowFlightKey(node: string, project: string, pin: DocPin, maxBytes: number): string`, `docsProjectKey(node: string, project: string): string`; `docsAnswerShape(verb: DocsVerb, answer: unknown): { ok: true } | DocsFailureBody`; `docsShowBound(job: DocsJob, bytes: Uint8Array): { ok: true } | DocsFailureBody`; `docsKnownSize(pin: DocPin, listed: DocsListedFile | undefined, draftSize: number | undefined): number | undefined`; `docsCacheVerdict(listed: DocsListedFile | undefined, servedRefAgeMs: number | undefined): DocsCacheVerdict`; `docsCacheFill(pin: DocPin, listed: DocsListedFile | undefined): boolean`; `docsCacheHitAnswer(stored: DocsShowOk, pin: Extract<DocPin, { kind: 'committed' }>, blob: string): DocsShowOk`; `docsFileReply(pin: DocPin, answer: DocsShowOk, bytes: Uint8Array, from: 'ccd' | 'cache'): DocsFileReply` (`json` whose `show` carries the verified bytes | `bytes {mime, cacheControl, bytes}` | `refuse {body}`); `type DocsListedFile`; (test only) `DOCS_INDEX_CACHE_MS`, `DOCS_LANE_MAX_WAIT_MS`, `DOCS_LANE_QUEUE`, `DOCS_LISTING_PROVENANCE_MS`, `DOCS_CACHE_IMMUTABLE`.
+- Consumes, from Task 3 (`hooks.ts`): `sendDocsFailure(reply: FastifyReply, body: DocsFailureBody): FastifyReply`, `installDocsRequestPolicy(app: FastifyInstance, nowMs?: () => number): void`, `installDocsResponsePolicy(app: FastifyInstance): void`. From Task 4 (`lane.ts`): `docsReadLane(): DocsReadLane`, `docsFetchLane(): DocsFetchLane`, `docsFlights(): DocsFlights`, `docsGenerations(): DocsGenerations`, `type DocsLaneRun<T> = { kind: 'ran'; value: T } | { kind: 'busy'; body: DocsFailureBody } | { kind: 'abandoned' }`. From Task 5 (`cache.ts`): `docsCaches(): DocsCaches` (`blobs`, `listing`, `draftSizes`, `index`). From Task 4's helpers: `blocker<T>()`.
+- Consumes, from `shared/docs.ts` (W1): types `DocPin`, `DocsProjectsResponse`, `DocsRefSpec`, `DocsTreeOk`, `DocsTreeResponse`; (test only) `DOCS_RESPONSE_HEADERS`, `DOCS_RASTER_TYPES`, `DOCS_MAX_DOC_BYTES`, `DOCS_REQUEST_HEADER`, `DOCS_REQUEST_HEADER_VALUE`.
+- Produces, in `server/src/docs/routes.ts`:
+  - `export interface DocsNodes<T> { readonly primary: string; readonly byNode: ReadonlyMap<string, T> }` — `primary` is the node every request reads (the API has no node key).
+  - `export interface DocsNodeLanes { read: DocsReadLane; fetch: DocsFetchLane; flights: DocsFlights; gens: DocsGenerations; caches: DocsCaches; nowMs: () => number }`.
+  - `export interface DocsComposition { readers: DocsNodes<DocsReader>; fetchers: DocsNodes<DocsFetcher>; lanes: DocsNodes<DocsNodeLanes> }`.
+  - `export interface DocsComposeOptions { nowMs?: () => number; readLane?: () => DocsReadLane }` — `readLane` is the latency test's pass-through control only (Task 10).
+  - `export function composeDocs(source: CcdDocsDeps, opts: DocsComposeOptions = {}): DocsComposition` — one node, `DOCS_PRIMARY_NODE`; the reader and the fetcher are both built over the SAME `source` object (never a spread copy), so Task 8's `get fleetState()` getter is read at every call.
+  - `export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>, lanes: DocsNodes<DocsNodeLanes>): void` — the three GETs with `exposeHeadRoute: false`, and an `onClose` hook that closes every node's read and fetch lane. It throws at registration when either map lacks the primary node (a wiring defect). It never receives a fetcher.
+  - Module-private, for Task 7 to reuse rather than copy: `function readTree(reader: DocsReader, at: DocsNodeLanes, src: DocsSourceId, ref: DocsRefSpec | null, signal: AbortSignal): Promise<DocsLaneRun<DocsTreeRead>>` (joins the tree flight of the project's CURRENT generation and books `LISTING_JOB`; the answer is believed and recorded inside the flight), `function treeResponse(tree: DocsTreeOk): DocsTreeResponse`, `function clientGone(reply: FastifyReply): AbortSignal` (aborts on `reply.raw`'s `close` while `!reply.raw.writableFinished`, and at once when the response is already destroyed unfinished), `function abandon(reply: FastifyReply): FastifyReply` (`reply.hijack()`, then destroy the raw response if it is not already), `function notRan(reply: FastifyReply, run: Exclude<DocsLaneRun<unknown>, { kind: 'ran' }>): FastifyReply`, `function forNode<T>(nodes: DocsNodes<T>, node: string, what: string): T`.
+- Produces, in `server/test/docsRouteHelpers.ts` (test only): `PWA_HEADERS: Readonly<Record<string, string>>`; `FIXTURE_COMMIT` (`'a'.repeat(40)`), `FIXTURE_SERVED` (`'refs/remotes/origin/main'`); `okRes(stdout: string): CcdResult`; `faultRes(stderr?: string): CcdResult`; `line(o: unknown): string`; `sha256Hex(bytes: Uint8Array): string`; `scripted(handler: (argv: string[]) => CcdResult | Promise<CcdResult>): { run: CcdRunner; calls: string[][] }`; `committedEntry(path: string, blob: string, size: number | null, kind?: 'file' | 'exec' | 'symlink' | 'submodule'): DocsEntry`; `draftEntry(path: string, fp: string | null, size: number | null): DocsEntry`; `treeOk(over?: Partial<DocsTreeOk>): DocsTreeOk`; `indexOk(over?: Partial<DocsIndexOk>): DocsIndexOk`; `showLine(pin: DocPin, bytes: Uint8Array, over?: Record<string, unknown>): string`; `nodeLanes(docs: DocsComposition): DocsNodeLanes`; `until(cond: () => boolean, label: string, ms?: number): Promise<void>`; `docsApp(o: { run: CcdRunner; verbs?: string[] | null; nowMs?: () => number; readLane?: () => DocsReadLane; root?: (app: FastifyInstance) => void }): Promise<{ app: FastifyInstance; state: { ccdVerbs: string[] | null }; docs: DocsComposition }>`. Task 7 adds the refresh registration line to `docsApp`'s plugin body; Task 10 reuses `docsApp`'s mount shape.
+
+**Decisions this task makes (refinements (c), (d), (f), (g), (i), (j), (k), (l) and (w) applied; (d), (i), (j) and (w) depart from the spec's TEXT and are deviations Task 9 Step 7 defines; Decision 12 applies Task 1's index generation):**
+1. **The routes decide nothing.** Each handler parses `:project` with `parseDocsProjectParam` and the query with `parseDocsApiQuery` (the ONLY reader of `req.query`; a refusal is sent before any exec, with its own status through `sendDocsFailure`); every key is an L1 builder; the show's `--max-bytes` and lane job are `docsShowPlan(path, docsKnownSize(...))`; whether a committed hit may be served is `docsCacheVerdict`, whether a show may fill is `docsCacheFill`; a hit's `show` is `docsCacheHitAnswer`; the representation (JSON, raster bytes with L1's MIME and `Cache-Control`, or `raster-mismatch`) is `docsFileReply`. `routes.ts` quotes no failure word and spells no header value, CSP, MIME, ref prefix or number.
+2. **One order on every read: cache, then single-flight, then the read lane** (refinement (k)). The projects route probes the node's index micro-cache, the file route the blob LRU (committed pins only), before joining a flight, so a hit never waits behind a flight or a full lane (W3-T6-M24's case). Each flight's starter books the lane, so joiners share ONE lane slot and ONE exec; the flight join itself is pinned by Task 7's M6.9 cases (two tree GETs, two file GETs of one pin, one exec each), not here.
+3. **An ok answer is believed once, inside its flight, before anyone reads it** (refinements (f) and (g)): `believeIndex`, `believeTree` and `believeShow` run inside the lane exec, so the shape check, the show bound, the listing and draft-size records, the micro-cache fill and the blob-cache fill happen once per flight and every joiner receives the same believed `DocsLaneRun`. A tree is shape-checked BEFORE the listing map, the draft size map and `refreshDue` see it; an index before the micro-cache; a show (shape, then `docsShowBound(plan.job, bytes)`) before the blob cache. A refused answer logs one `console.warn('ccrc-server: docs <verb> answer ...')` line per flight and answers its `malformed-answer` body (502), never a 500, a `TypeError` in `refreshDue` or a `RangeError` at serialisation.
+4. **Every failure body is sent as it came** (`sendDocsFailure(reply, run.value)`): ccd's context keys ride verbatim, `lockAgeMs` absent stays absent and `null` stays `null` (W3-T6-M11), a lane's `docs-busy` body is the lane's own (`retry-after: 2` from L1).
+5. **Abandonment is measured on the RESPONSE** (refinement (j)). `clientGone(reply)` aborts on `reply.raw`'s `close` while the response has not finished, and at once when the response is already destroyed unfinished (a client that left during an earlier `onRequest` hook: Fastify 5.10 still runs the handler, measured). Single-flight aborts a flight only when every joiner has gone, so `abandoned` from a lane means this client left too: `abandon(reply)` hijacks the reply and ends the socket. Measured on node v24.14.1 over a real socket (the facts refinement (j) and Task 9's deviation cite): a completed GET's response emits `close` with `writableFinished === true`, and the REQUEST stream's `close` follows it (also after the response finished), so on this node a `request.signal`-based abandonment would not misfire on a completed GET either; a client destroyed while queued gives the response `close` with `writableFinished === false` before any answer. Under `app.inject` the response emits `close` after the reply with `writableFinished === false`; that is harmless, because a request receives its answer only after its flight settled, and a settled flight has already detached every joiner's listener.
+6. **No HEAD** (refinement (c)): each GET registers with `exposeHeadRoute: false`, so a HEAD matches no docs route (404 from the root's not-found handler, zero execs).
+7. **Router-level refusals stay router-level** (refinement (d), measured here, defined by Task 9): a 101-character `:project` answers Fastify's `414 FST_ERR_MAX_PARAM_LENGTH` and `/api/docs/%ZZ/tree` its `400 FST_ERR_BAD_URL`, both before any hook, so neither carries the four docs headers and neither execs; 100 characters reach the route. A `..` or `%2E%2E` project segment is resolved away by the URL before routing (404, zero execs). Under Fastify 5.10's default parser the query object is an ordinary object (not null-prototype), so the route-level cases pin `__proto__=x` and `constructor=x` as unknown own keys; the null-prototype property stays the L1 cases' own.
+8. **`composeDocs` is per call and over the same source** (refinement (i)): one read lane, fetch lane, flight map, generation counter and cache set per composition, no module scope; the reader and the fetcher both receive `source` itself, so a getter on it is read at each call (W3-T6-M16 plants the spread copy). `opts.readLane` replaces only the read lane.
+9. **A closing server answers every queued job.** The plugin's `onClose` closes each node's read and fetch lane, so queued reads answer `docs-busy` at once instead of waiting out `DOCS_LANE_MAX_WAIT_MS` against a closed server (W3-T6-M15).
+10. **`docsApp` gains a `root` option** beyond the architecture's sketch: it runs on the root instance before the plugin registers (where `installGate` sits in `buildServer`), which is how the real-socket cases hold a request in an earlier hook and observe the response's and the request's `close`. Nothing else about the mount differs from section 3.4's.
+11. **Three of the architecture's guard sketches are not mutation rows here, by measurement:** "cache filled for a draft", "cache filled from a failure" and "fill without a listing entry" cannot be planted at the route (a draft and an unlisted committed pin have no listing entry, so there is no repository key to fill under; a failure carries no answer or bytes), and dropping `docsCacheFill` from the route is equivalent there (a symlink or submodule entry never HITS, by `docsCacheVerdict`'s kind check, and its blob's bytes are the same bytes): each behaviour is pinned by a case (the draft, failure, no-listing and symlink cases) and reported to the coordinator, not tabled. Keying `clientGone` on `req.raw` instead of `reply.raw` is likewise equivalent on node v24.14.1 (measured: all 97 cases of `docs-routes` and `docs-cache` stay green), so refinement (j)'s choice is argued from section 6.3's own wording and the measured facts in decision 5, not from a red case.
+12. **The index flight and the micro-cache fill carry the node's generation** (Task 1's Decision 8; section 6.5's "dropped by any refresh" under concurrency). The projects route reads `at.gens.current(docsNodeKey(node))` ONCE, before the join, and joins `docsIndexFlightKey(node, gen)`, so every joiner of one flight shares one generation; `believeIndex(at, node, gen, got)` fills the micro-cache only when L1's `docsIndexCacheable(gen, at.gens.current(docsNodeKey(node)))` says the node's generation is still `gen`, so an index begun before a refresh's fetch is served to the requests that joined it and never cached past that refresh. The key, its field and the cache verdict are L1's (Task 1's Decisions 8 and 10, the plan review's rings note); `routes.ts` reads the counter and applies the verdict. Nothing moves a node's generation before Task 7's `fetchSettled`, so in this task `gen` is always 0 and the guard is inert: its red cases and its rows (W3-T7-M20 for the flight key, W3-T7-M21 for the fill check, W3-T7-M22 for the bump) are Task 7's, the first state at which a refresh exists.
+13. **A JSON file reply carries the verified bytes** (Task 2's Decision 9; the W2 review's note 1). The file route and its cache-hit path both answer through `docsFileReply`, so neither ever sends the answer's own content field: two route cases in `docs-file-bytes.test.ts` drive W2's real adapter with a `utf8` answer whose `text` is a lone surrogate (it passes check 8, because its UTF-8 is U+FFFD's three bytes) and a `base64` answer carrying a stray `text` beside its canonical `b64`; the first is served as U+FFFD and the second without the `text`. The guard is L1's (W3-T2-M39), so these cases add no row here.
+
+- [ ] **Step 1: Write the failing tests.** Four edits.
+
+(a) `server/test/docsRouteHelpers.ts`, the import block under the header comment (lines 3-5).
+
+Find:
+
+```ts
+// over W2's real adapter and `docsApp()`; Task 10 adds `echoPty()` and `passThroughLane()`.
+
+/**
+```
+
+Replace with:
+
+```ts
+// over W2's real adapter and `docsApp()`; Task 10 adds `echoPty()` and `passThroughLane()`.
+import { createHash } from 'node:crypto';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { DOCS_CAP, type CcdArgv } from '../src/ccdargv.js';
+import type { CcdResult, CcdRunner } from '../src/lifecycle.js';
+import { installDocsRequestPolicy, installDocsResponsePolicy } from '../src/docs/hooks.js';
+import type { DocsReadLane } from '../src/docs/lane.js';
+import {
+  composeDocs, registerDocsReadRoutes, type DocsComposition, type DocsNodeLanes,
+} from '../src/docs/routes.js';
+import {
+  DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, type DocPin, type DocsEntry, type DocsIndexOk, type DocsTreeOk,
+} from '../../shared/docs.js';
+
+/**
+```
+
+Then append at the very end of the file (after its last line, `blocker`'s closing `}`, line 25 before this edit) exactly this block, which starts with one empty line:
+
+```ts
+
+// ===== Task 6: the scripted runner over W2's real adapter, the fixtures, and the app =====
+
+/** What the PWA's `fetch()` sends (section 3.8): the marker, a same-origin site and a non-navigation mode. Built
+ *  from L0's constants, never the quoted marker. */
+export const PWA_HEADERS: Readonly<Record<string, string>> = {
+  [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors',
+};
+
+/** The commit and served ref every fixture tree answers unless a case says otherwise. */
+export const FIXTURE_COMMIT = 'a'.repeat(40);
+export const FIXTURE_SERVED = 'refs/remotes/origin/main';
+
+/** A measured, clean ccd exit carrying `stdout`. */
+export function okRes(stdout: string): CcdResult {
+  return { ok: true, stdout, stderr: '', killed: false, signal: null };
+}
+
+/** A measured exit that wrote nothing and failed: the adapter answers `ccd-fault {stderrHead}`. */
+export function faultRes(stderr = 'usage'): CcdResult {
+  return { ok: false, stdout: '', stderr, killed: false, signal: null };
+}
+
+/** One answer line as ccd writes it: one JSON text and one LF. */
+export function line(o: unknown): string {
+  return `${JSON.stringify(o)}\n`;
+}
+
+/** The sha256 of `bytes`, lower-case hex: a draft pin's `fp` and every show answer's `sha256`. */
+export function sha256Hex(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/**
+ * A scripted `CcdRunner` (W2's real adapter runs over it): every argv is recorded as a copy, so "zero execs" is
+ * `calls` staying empty, and answered by `handler`, which may hold the answer open (a blocking double).
+ */
+export function scripted(handler: (argv: string[]) => CcdResult | Promise<CcdResult>): {
+  run: CcdRunner;
+  calls: string[][];
+} {
+  const calls: string[][] = [];
+  return {
+    calls,
+    run: async (argv: CcdArgv) => {
+      const copy = [...argv];
+      calls.push(copy);
+      return handler(copy);
+    },
+  };
+}
+
+/** A committed listing row: exactly the three facts, no draft. */
+export function committedEntry(path: string, blob: string, size: number | null,
+  kind: 'file' | 'exec' | 'symlink' | 'submodule' = 'file'): DocsEntry {
+  return { section: 'specs', path, committed: { kind, blob, size }, draft: null };
+}
+
+/** A draft-only row: no committed facts, an untracked file with `fp` and `size` as given. */
+export function draftEntry(path: string, fp: string | null, size: number | null): DocsEntry {
+  return { section: 'specs', path, committed: null, draft: { state: 'untracked', kind: 'file', size, fp, trust: 'hash' } };
+}
+
+/** A complete ok tree of `demo` at `FIXTURE_COMMIT`, served from `FIXTURE_SERVED`, with an origin remote and no
+ *  stamp (so `refreshDue` is true) and no entries; `over` replaces top-level fields. It passes `docsAnswerShape`. */
+export function treeOk(over: Partial<DocsTreeOk> = {}): DocsTreeOk {
+  return {
+    v: 1, verb: 'docs-tree', ok: true, elapsedMs: 5, project: 'demo',
+    repo: { key: 'f'.repeat(32), objectFormat: 'sha1', shallow: false },
+    github: { state: 'named', slug: 'example-org/example-repo' },
+    ref: {
+      requested: null, served: FIXTURE_SERVED, name: 'main', side: 'origin', commit: FIXTURE_COMMIT,
+      via: 'default:origin-head', tried: [], relation: 'equal', counterpart: null,
+    },
+    mainCheckout: { path: '/tmp/example', branch: 'main', head: FIXTURE_COMMIT },
+    sections: [], entries: [], unlisted: { count: 0, byReason: {} },
+    drafts: { state: 'none', branch: 'main', skipped: [] },
+    freshness: { remote: 'origin', trackedRef: FIXTURE_SERVED, stamp: null, fetchHead: null },
+    ...over,
+  };
+}
+
+/** A complete ok index: one ready project `demo`; `over` replaces top-level fields. It passes `docsAnswerShape`. */
+export function indexOk(over: Partial<DocsIndexOk> = {}): DocsIndexOk {
+  return {
+    v: 1, verb: 'docs-index', ok: true, elapsedMs: 2, unlisted: 0, duplicates: [],
+    projects: [{ project: 'demo', state: 'ready', github: { state: 'none' } }],
+    ...over,
+  };
+}
+
+/**
+ * The ccd line of a valid show answer for `pin` carrying `bytes`, base64-encoded: its `size` and `sha256` measured
+ * over the bytes and every pin echo matching, so W2's check 8 passes (a draft pin's `fp` must be `sha256Hex(bytes)`).
+ * A committed answer carries `blob` `'b'.repeat(40)` and `onRef: 'contains'`; `over` replaces any field.
+ */
+export function showLine(pin: DocPin, bytes: Uint8Array, over: Record<string, unknown> = {}): string {
+  const common = {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, section: pin.section, path: pin.path,
+    size: bytes.byteLength, sha256: sha256Hex(bytes), encoding: 'base64', b64: Buffer.from(bytes).toString('base64'),
+  };
+  return line(pin.kind === 'committed'
+    ? { ...common, source: 'committed', commit: pin.commit, blob: 'b'.repeat(40), mode: '100644', onRef: 'contains', ...over }
+    : { ...common, source: 'draft', worktree: '/tmp/example', branch: pin.branch, head: pin.head, fp: pin.fp, ...over });
+}
+
+/** The one node's lanes and caches of a composition (the primary node's). */
+export function nodeLanes(docs: DocsComposition): DocsNodeLanes {
+  const at = docs.lanes.byNode.get(docs.lanes.primary);
+  if (at === undefined) throw new Error('docsRouteHelpers: the composition has no primary lanes');
+  return at;
+}
+
+/** Poll `cond` across event-loop turns until it holds, or throw naming `label` after `ms` of wall time. It yields
+ *  with `setImmediate`, so a case that fakes `setTimeout` never stalls it, and I/O progresses between polls. */
+export async function until(cond: () => boolean, label: string, ms = 5000): Promise<void> {
+  const deadline = performance.now() + ms;
+  while (!cond()) {
+    if (performance.now() > deadline) throw new Error(`until: ${label} did not happen within ${ms} ms`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+/**
+ * A bare Fastify with the docs plugin mounted exactly as `server.ts` will mount it (section 3.4), over a
+ * composition built from `run` and a fleet state whose `ccdVerbs` is `verbs` (default: `caps` and the docs cap;
+ * `null`: not handshaken). `state` is the object the adapter reads, so a case mutates it in place. `root` runs on the
+ * root instance before the plugin is registered, where `installGate` sits in `buildServer`; `GET /api/other` is a
+ * route outside the plugin. `nowMs` is both the routes' and the provenance log's clock; `readLane` the latency
+ * test's control lane.
+ */
+export async function docsApp(o: {
+  run: CcdRunner;
+  verbs?: string[] | null;
+  nowMs?: () => number;
+  readLane?: () => DocsReadLane;
+  root?: (app: FastifyInstance) => void;
+}): Promise<{ app: FastifyInstance; state: { ccdVerbs: string[] | null }; docs: DocsComposition }> {
+  const state = { ccdVerbs: o.verbs === undefined ? ['caps', DOCS_CAP] : o.verbs };
+  const docs = composeDocs({ runCcd: o.run, fleetState: state }, { nowMs: o.nowMs, readLane: o.readLane });
+  const app = Fastify({ logger: false });
+  o.root?.(app);
+  app.get('/api/other', async () => ({ ok: true }));
+  await app.register(async (app) => {
+    installDocsRequestPolicy(app, o.nowMs);
+    installDocsResponsePolicy(app);
+    registerDocsReadRoutes(app, docs.readers, docs.lanes);
+  });
+  return { app, state, docs };
+}
+```
+
+(b) Create `server/test/docs-routes.test.ts` with exactly this content:
+
+```ts
+// `server/src/docs/routes.ts`, part 1: the three docs reads (design 2026-10-01, section 3.4, section 3.6, section
+// 6.3-6.5; W3 refinements (c), (d), (f), (i), (j) and (k)). Task 6 drives `composeDocs` and
+// `registerDocsReadRoutes` over W2's REAL adapter and a scripted `CcdRunner` (`docsRouteHelpers.ts`), through
+// Fastify's REAL query parser (`app.inject` with a raw URL; W2's review carry), and every case counts the argv the
+// runner recorded: M3.4 (each refusal with zero execs, the router-level refusals of refinement (d), no HEAD), the
+// differential against W2's test decoder, the answers and ccd failures carried verbatim, the gate and its live state,
+// the ok-answer shape guard, and M6.2 at the routes (the read lane's bounds, a non-docs route unaffected, a client
+// that left dequeued). Task 7 appends the refresh describes; Task 9 the real server's.
+//
+// Fixtures carry placeholders only; the marker is L0's constant, never quoted here.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { DOCS_CAP } from '../src/ccdargv.js';
+import type { CcdResult } from '../src/lifecycle.js';
+import { composeDocs } from '../src/docs/routes.js';
+import {
+  DOCS_INDEX_CACHE_MS, DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, LISTING_JOB, parseDocsApiQuery, refreshDue,
+} from '../src/docs/policy.js';
+import { DOCS_RESPONSE_HEADERS, type DocsFailureBody, type DocsFailure } from '../../shared/docs.js';
+import {
+  FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, docsApp, faultRes, indexOk, line, nodeLanes, okRes, scripted,
+  treeOk, until,
+} from './docsRouteHelpers.js';
+
+const apps: FastifyInstance[] = [];
+
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  for (const app of apps.splice(0)) await app.close();
+});
+
+/** `docsApp`, closed after the case. */
+async function open(o: Parameters<typeof docsApp>[0]): Promise<Awaited<ReturnType<typeof docsApp>>> {
+  const made = await docsApp(o);
+  apps.push(made.app);
+  return made;
+}
+
+const enc = encodeURIComponent;
+const FP = 'c'.repeat(64);
+/** A complete committed pin's query and a complete draft pin's, as `docsApi` writes them. */
+const COMMITTED_Q = `commit=${FIXTURE_COMMIT}&servedRef=${enc(FIXTURE_SERVED)}&section=specs&path=a.md`;
+const DRAFT_Q = `branch=${enc('ws/a')}&head=${FIXTURE_COMMIT}&section=specs&path=a.md&fp=${FP}`;
+const fileUrl = (q: string): string => `/api/docs/demo/file?${q}`;
+/** A committed file GET for `path` (no listing: the class cap is the bound). */
+const committedAt = (path: string): string => fileUrl(COMMITTED_Q.replace('path=a.md', `path=${enc(path)}`));
+
+const badQuery = (why: string, key?: string): DocsFailureBody =>
+  (key === undefined ? { ok: false, failure: 'bad-query', why } : { ok: false, failure: 'bad-query', key, why });
+const word = (failure: DocsFailure): DocsFailureBody => ({ ok: false, failure });
+
+/** The four response-policy headers, as names. */
+const DOCS_HEADER_NAMES = Object.keys(DOCS_RESPONSE_HEADERS);
+
+describe('M3.4 — every refusal before an exec answers its word and status, with zero execs', () => {
+  const REFUSED: readonly (readonly [string, string, DocsFailureBody])[] = [
+    ['tree: an unknown key node', '/api/docs/demo/tree?node=primary', badQuery('unknown', 'node')],
+    ['file: an unknown key size', fileUrl(`${COMMITTED_Q}&size=1`), badQuery('unknown', 'size')],
+    ['file: an unknown key maxBytes', fileUrl(`${COMMITTED_Q}&maxBytes=1`), badQuery('unknown', 'maxBytes')],
+    ['projects: any key', '/api/docs/projects?x=1', badQuery('unknown', 'x')],
+    ['tree: __proto__ is an own key, so an unknown one', '/api/docs/demo/tree?__proto__=x', badQuery('unknown', '__proto__')],
+    ['tree: constructor', '/api/docs/demo/tree?constructor=x', badQuery('unknown', 'constructor')],
+    ['tree: a repeated ref', '/api/docs/demo/tree?ref=a&ref=b', badQuery('repeated', 'ref')],
+    ['file: a repeated path', fileUrl(`${COMMITTED_Q}&path=b.md`), badQuery('repeated', 'path')],
+    ['file: a mixed pin', fileUrl(`${COMMITTED_Q}&branch=main`), badQuery('pin-shape')],
+    ['file: an incomplete pin', fileUrl(`commit=${FIXTURE_COMMIT}&section=specs&path=a.md`), badQuery('pin-shape')],
+    ['tree: ?ref with no =', '/api/docs/demo/tree?ref', word('bad-ref')],
+    ['tree: ?ref=%ZZ', '/api/docs/demo/tree?ref=%ZZ', word('bad-ref')],
+    ['tree: ?ref=a;b=c', '/api/docs/demo/tree?ref=a;b=c', word('bad-ref')],
+    ['file: a commit that is not one', fileUrl(COMMITTED_Q.replace(FIXTURE_COMMIT, 'x')), word('bad-commit')],
+    ['file: a bare servedRef', fileUrl(COMMITTED_Q.replace(enc(FIXTURE_SERVED), 'main')), word('bad-ref')],
+    ['file: an unknown section', fileUrl(COMMITTED_Q.replace('section=specs', 'section=nope')), word('bad-section')],
+    ['file: an absolute path', fileUrl(COMMITTED_Q.replace('path=a.md', 'path=%2Fa.md')), word('bad-path')],
+    ['file: a fingerprint that is not one', fileUrl(DRAFT_Q.replace(FP, 'x')), word('bad-fingerprint')],
+    ['tree: :project a%2Fb', '/api/docs/a%2Fb/tree', word('bad-project')],
+    ['tree: :project %00', '/api/docs/%00/tree', word('bad-project')],
+    ['tree: :project -x', '/api/docs/-x/tree', word('bad-project')],
+    ['file: :project .hidden', `/api/docs/.hidden/file?${COMMITTED_Q}`, word('bad-project')],
+  ];
+
+  it.each(REFUSED)('%s', async (_label, url, body) => {
+    const rec = scripted(() => okRes(line(treeOk())));
+    const { app } = await open({ run: rec.run });
+    const res = await app.inject({ url, headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual(body);
+    expect(res.headers['cache-control']).toBe('no-store');
+    for (const name of DOCS_HEADER_NAMES) expect(res.headers[name], name).toBe(DOCS_RESPONSE_HEADERS[name as keyof typeof DOCS_RESPONSE_HEADERS]);
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('refinement (d): a 101-character :project is the router\'s 414 and a malformed path escape its 400, before any hook (no docs header, zero execs); 100 characters reach the route', async () => {
+    const rec = scripted(() => faultRes());
+    const { app } = await open({ run: rec.run });
+    const ROUTER: readonly (readonly [string, number, string])[] = [
+      [`/api/docs/${'a'.repeat(101)}/tree`, 414, 'FST_ERR_MAX_PARAM_LENGTH'],
+      ['/api/docs/%ZZ/tree', 400, 'FST_ERR_BAD_URL'],
+    ];
+    for (const [url, status, code] of ROUTER) {
+      const res = await app.inject({ url, headers: PWA_HEADERS });
+      expect(res.statusCode, url).toBe(status);
+      expect(res.json().code, url).toBe(code);
+      for (const name of DOCS_HEADER_NAMES) expect(res.headers[name], `${url} ${name}`).toBeUndefined();
+    }
+    expect(rec.calls).toEqual([]);
+    const longest = await app.inject({ url: `/api/docs/${'a'.repeat(100)}/tree`, headers: PWA_HEADERS });
+    expect(longest.statusCode).toBe(502);
+    expect(rec.calls).toEqual([['docs-tree', '--project', 'a'.repeat(100)]]);
+  });
+
+  it('a dot-dot :project is resolved away by the URL before routing: no docs route, zero execs', async () => {
+    const rec = scripted(() => faultRes());
+    const { app } = await open({ run: rec.run });
+    for (const url of ['/api/docs/../tree', '/api/docs/%2E%2E/tree']) {
+      expect((await app.inject({ url, headers: PWA_HEADERS })).statusCode, url).toBe(404);
+    }
+    expect(rec.calls).toEqual([]);
+  });
+
+  it.each(['/api/docs/projects', '/api/docs/demo/tree', fileUrl(COMMITTED_Q)])(
+    'refinement (c): HEAD %s matches no docs route: 404, zero execs', async (url) => {
+      const rec = scripted(() => okRes(line(indexOk())));
+      const { app } = await open({ run: rec.run });
+      const res = await app.inject({ method: 'HEAD', url, headers: PWA_HEADERS });
+      expect(res.statusCode).toBe(404);
+      expect(rec.calls).toEqual([]);
+    });
+});
+
+describe('the query reaches L1 as Fastify\'s real parser decodes it (W2 review carry)', () => {
+  /** `docs-policy.test.ts`'s decoder, copied verbatim: W2's L1 cases ran through this, not through Fastify. */
+  function form(search: string): Record<string, string | string[]> {
+    const out: Record<string, string | string[]> = {};
+    for (const [key, value] of new URLSearchParams(search)) {
+      const had = Object.hasOwn(out, key) ? out[key] : undefined;
+      out[key] = had === undefined ? value : Array.isArray(had) ? [...had, value] : [had, value];
+    }
+    return out;
+  }
+
+  const CORPUS: readonly string[] = [
+    'ref', 'ref=', 'ref=a;b=c', 'ref=%ZZ', 'a[b]=1', '=2', 'ref=a+b', 'ref=a%2Bb', '__proto__=x', 'constructor=x',
+    'ref=a&ref=b', 'x=1&x', 'ref=%E0%A4%A', 'ref=%C3%A9', 'ref=ws%2Fa', 'ref=main#frag',
+  ];
+
+  /** What Fastify's default parser hands a route for `?search`, as own entries (so `__proto__` stays a key). */
+  async function fastifyDecode(search: string): Promise<Record<string, unknown>> {
+    const probe = Fastify({ logger: false });
+    apps.push(probe);
+    probe.get('/probe', async (req) => Object.entries(req.query as Record<string, unknown>));
+    return Object.fromEntries((await probe.inject({ url: `/probe?${search}` })).json() as [string, unknown][]);
+  }
+
+  it('Fastify and form() differ on exactly three: __proto__ (an own key, against form\'s prototype write), a malformed UTF-8 escape (kept, against U+FFFD) and a fragment (never sent)', async () => {
+    const differ: string[] = [];
+    for (const s of CORPUS) {
+      const fastify = Object.entries(await fastifyDecode(s));
+      if (JSON.stringify(fastify) !== JSON.stringify(Object.entries(form(s)))) differ.push(s);
+    }
+    expect(differ).toEqual(['__proto__=x', 'ref=%E0%A4%A', 'ref=main#frag']);
+  });
+
+  it.each(CORPUS)('the tree route\'s answer to ?%s is L1\'s verdict over Fastify\'s decode', async (s) => {
+    const verdict = parseDocsApiQuery('tree', await fastifyDecode(s));
+    const rec = scripted(() => okRes(line(treeOk())));
+    const { app } = await open({ run: rec.run });
+    const res = await app.inject({ url: `/api/docs/demo/tree?${s}`, headers: PWA_HEADERS });
+    if (verdict.ok) {
+      expect(res.statusCode).toBe(200);
+      expect(rec.calls).toHaveLength(1);
+    } else {
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual(verdict);
+      expect(rec.calls).toEqual([]);
+    }
+  });
+});
+
+describe('answers, ccd failures and the gate (section 3.4, section 3.5)', () => {
+  it('projects: 200 {ok, index, cacheAgeMs: null}; within DOCS_INDEX_CACHE_MS a hit with zero execs and its age; at the bound, ccd again', async () => {
+    let now = 1000;
+    const rec = scripted(() => okRes(line(indexOk())));
+    const { app } = await open({ run: rec.run, nowMs: () => now });
+    const first = await app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toEqual({ ok: true, index: indexOk(), cacheAgeMs: null });
+    expect(rec.calls).toEqual([['docs-index', '--all']]);
+    now += 7;
+    const second = await app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    expect(second.json()).toEqual({ ok: true, index: indexOk(), cacheAgeMs: 7 });
+    expect(rec.calls).toHaveLength(1);
+    now = 1000 + DOCS_INDEX_CACHE_MS;
+    const third = await app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    expect(third.json()).toEqual({ ok: true, index: indexOk(), cacheAgeMs: null });
+    expect(rec.calls).toHaveLength(2);
+  });
+
+  it('tree: 200 {ok, tree, refreshDue} with L1\'s refreshDue over the same tree, due and not due; the default view sends no --ref', async () => {
+    const due = treeOk();
+    const notDue = treeOk({
+      freshness: {
+        remote: 'origin', trackedRef: FIXTURE_SERVED, fetchHead: null,
+        stamp: { okAgeMs: 0, attemptAgeMs: 0, lastOutcome: 'ok', okCommit: FIXTURE_COMMIT },
+      },
+    });
+    expect([refreshDue(due), refreshDue(notDue)]).toEqual([true, false]);
+    let next = due;
+    const rec = scripted(() => okRes(line(next)));
+    const { app } = await open({ run: rec.run });
+    const a = await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    expect(a.statusCode).toBe(200);
+    expect(a.json()).toEqual({ ok: true, tree: due, refreshDue: true });
+    next = notDue;
+    const b = await app.inject({ url: '/api/docs/demo/tree?ref=ws%2Fa', headers: PWA_HEADERS });
+    expect(b.json()).toEqual({ ok: true, tree: notDue, refreshDue: false });
+    expect(rec.calls).toEqual([['docs-tree', '--project', 'demo'], ['docs-tree', '--project', 'demo', '--ref', 'ws/a']]);
+  });
+
+  const FAILED: readonly (readonly [string, Record<string, unknown>, number])[] = [
+    ['ref-locked with lockAgeMs null', { failure: 'ref-locked', lockAgeMs: null }, 409],
+    ['ref-locked with lockAgeMs ABSENT', { failure: 'ref-locked' }, 409],
+    ['unresolved-ref with tried', {
+      failure: 'unresolved-ref', ref: 'ws/x',
+      tried: [{ ref: 'refs/remotes/origin/ws/x', result: 'absent' }, { ref: 'refs/heads/ws/x', result: 'absent' }],
+    }, 404],
+  ];
+
+  it.each(FAILED)('a ccd failure line (%s) answers its status and the adapter\'s body verbatim, absent staying absent', async (_l, ctx, status) => {
+    const rec = scripted(() => okRes(line({ v: 1, verb: 'docs-tree', ok: false, elapsedMs: 4, ...ctx })));
+    const { app } = await open({ run: rec.run });
+    const res = await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(status);
+    expect(res.json()).toStrictEqual({ ok: false, ...ctx });
+    expect(Object.hasOwn(res.json(), 'lockAgeMs')).toBe(Object.hasOwn(ctx, 'lockAgeMs'));
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('ccd-fault: 502 with the adapter\'s stderrHead', async () => {
+    const rec = scripted(() => faultRes('boom'));
+    const { app } = await open({ run: rec.run });
+    const res = await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'ccd-fault', stderrHead: 'boom' });
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('caps-unknown (ccdVerbs null): 503 Retry-After 5; unsupported: 501, no Retry-After; both with zero execs; the state mutated in place is read at the next call (W2 carry, the mutate half)', async () => {
+    const rec = scripted(() => okRes(line(treeOk())));
+    const { app, state } = await open({ run: rec.run, verbs: null });
+    const unknown = await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    expect(unknown.statusCode).toBe(503);
+    expect(unknown.headers['retry-after']).toBe('5');
+    expect(unknown.json()).toStrictEqual(word('caps-unknown'));
+    state.ccdVerbs = ['caps'];
+    const unsupported = await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    expect(unsupported.statusCode).toBe(501);
+    expect(unsupported.headers['retry-after']).toBeUndefined();
+    expect(unsupported.json()).toStrictEqual(word('unsupported'));
+    expect(rec.calls).toEqual([]);
+    state.ccdVerbs = ['caps', DOCS_CAP];
+    expect((await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS })).statusCode).toBe(200);
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('composeDocs builds the reader and the fetcher over the SAME source: a fleetState getter is read at every call (refinement (i))', async () => {
+    let current: { ccdVerbs: string[] | null } = { ccdVerbs: null };
+    const rec = scripted(() => okRes(line(indexOk())));
+    const docs = composeDocs({ runCcd: rec.run, get fleetState() { return current; } });
+    const node = docs.readers.primary;
+    const reader = docs.readers.byNode.get(node);
+    const fetcher = docs.fetchers.byNode.get(node);
+    if (reader === undefined || fetcher === undefined) throw new Error('composeDocs: no primary reader or fetcher');
+    expect(await reader.index({ node })).toStrictEqual(word('caps-unknown'));
+    expect(await fetcher.fetch({ node, project: 'demo' }, null)).toStrictEqual(word('caps-unknown'));
+    current = { ccdVerbs: ['caps', DOCS_CAP] };
+    expect((await reader.index({ node })).ok).toBe(true);
+    await fetcher.fetch({ node, project: 'demo' }, null);
+    expect(rec.calls).toEqual([['docs-index', '--all'], ['docs-fetch', '--project', 'demo']]);
+  });
+});
+
+describe('an ok answer the adapter passed is shape-checked before it is believed (refinement (f); W2 carry)', () => {
+  it('a tree without freshness: 502 malformed-answer {why: schema}, never a 500, logged, and nothing recorded', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { freshness: _dropped, ...noFreshness } = treeOk();
+    const rec = scripted(() => okRes(line(noFreshness)));
+    const { app, docs } = await open({ run: rec.run });
+    const res = await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+    expect(nodeLanes(docs).caches.listing.commits()).toBe(0);
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs tree answer failed its shape check');
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('a tree carrying a 500 000-deep unknown key inside the listing bound: 502 schema, no RangeError at serialisation', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const text = `${JSON.stringify(treeOk()).slice(0, -1)},"deep":${'['.repeat(500000)}${']'.repeat(500000)}}\n`;
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(LISTING_JOB.wire);
+    const rec = scripted(() => okRes(text));
+    const { app, docs } = await open({ run: rec.run });
+    const res = await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+    expect(nodeLanes(docs).caches.listing.commits()).toBe(0);
+  });
+
+  it('an index whose projects is not an array: 502 schema, and nothing enters the micro-cache', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = scripted(() => okRes(line({ ...indexOk(), projects: {} })));
+    const { app } = await open({ run: rec.run });
+    for (let i = 0; i < 2; i += 1) {
+      const res = await app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+    }
+    expect(rec.calls).toHaveLength(2);
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs index answer failed its shape check');
+  });
+});
+
+describe('M6.2 at the routes — the read lane: two in flight, a strict queue, its wait, and a client that left', () => {
+  /** Two tree GETs held in flight on distinct refs (two flights), with the runner's blocker. */
+  async function twoHeld(): Promise<{
+    app: FastifyInstance; docs: Awaited<ReturnType<typeof docsApp>>['docs']; rec: ReturnType<typeof scripted>;
+    b: ReturnType<typeof blocker<CcdResult>>; held: Promise<unknown>[];
+  }> {
+    const b = blocker<CcdResult>();
+    const rec = scripted(() => b.exec());
+    const { app, docs } = await open({ run: rec.run });
+    const held = ['a', 'b'].map((ref) => app.inject({ url: `/api/docs/demo/tree?ref=${ref}`, headers: PWA_HEADERS }));
+    await until(() => rec.calls.length === 2, 'two tree execs');
+    return { app, docs, rec, b, held };
+  }
+
+  it('the 33rd queued read answers docs-busy 503 Retry-After 2 with zero extra execs; a non-docs route is unaffected; closing answers every queued read busy', async () => {
+    const { app, docs, rec, b, held } = await twoHeld();
+    const lane = nodeLanes(docs).read;
+    const queued = Array.from({ length: DOCS_LANE_QUEUE },
+      (_, i) => app.inject({ url: committedAt(`f${i}.md`), headers: PWA_HEADERS }));
+    await until(() => lane.load().queued === DOCS_LANE_QUEUE, 'a full queue');
+    const busy = await app.inject({ url: committedAt('over.md'), headers: PWA_HEADERS });
+    expect(busy.statusCode).toBe(503);
+    expect(busy.headers['retry-after']).toBe('2');
+    expect(busy.json()).toStrictEqual({ ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 2000 });
+    expect(rec.calls).toHaveLength(2);
+    expect((await app.inject({ url: '/api/other' })).statusCode).toBe(200);
+    await app.close();
+    expect(lane.load().queued).toBe(0);
+    expect((await Promise.all(queued)).map((r) => r.statusCode)).toEqual(Array(DOCS_LANE_QUEUE).fill(503));
+    b.release(0, faultRes());
+    b.release(1, faultRes());
+    await Promise.all(held);
+    expect(rec.calls).toHaveLength(2);
+  });
+
+  it('a read queued for DOCS_LANE_MAX_WAIT_MS answers docs-busy, and its show never runs', async () => {
+    const { app, docs, rec, b, held } = await twoHeld();
+    const lane = nodeLanes(docs).read;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const waiting = app.inject({ url: committedAt('f0.md'), headers: PWA_HEADERS });
+    await until(() => lane.load().queued === 1, 'one queued read');
+    vi.advanceTimersByTime(DOCS_LANE_MAX_WAIT_MS - 1);
+    expect(lane.load().queued).toBe(1);
+    vi.advanceTimersByTime(1);
+    const res = await waiting;
+    expect(res.statusCode).toBe(503);
+    expect(res.headers['retry-after']).toBe('2');
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 2000 });
+    b.release(0, faultRes());
+    b.release(1, faultRes());
+    await Promise.all(held);
+    expect(rec.calls).toHaveLength(2);
+  });
+
+  it('refinement (j): a client that goes while its read is queued is dequeued over a real socket, and its show never runs', async () => {
+    const { app, docs, rec, b, held } = await twoHeld();
+    const lane = nodeLanes(docs).read;
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const req = http.get({ host: '127.0.0.1', port, path: committedAt('f0.md'), headers: PWA_HEADERS });
+    req.on('error', () => undefined);
+    await until(() => lane.load().queued === 1, 'the socket\'s read queued');
+    req.destroy();
+    await until(() => lane.load().queued === 0, 'the read dequeued');
+    b.release(0, faultRes());
+    b.release(1, faultRes());
+    await Promise.all(held);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(rec.calls).toHaveLength(2);
+  });
+
+  it('refinement (j): a client that went before the handler ran starts no exec', async () => {
+    let release: () => void = () => undefined;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    let entered = 0;
+    const rec = scripted(() => okRes(line(treeOk())));
+    const { app } = await open({
+      run: rec.run,
+      root: (root) => root.addHook('onRequest', async (req) => {
+        if (req.headers['x-test-hold'] === undefined) return;
+        entered += 1;
+        await hold;
+      }),
+    });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const req = http.get({
+      host: '127.0.0.1', port, path: '/api/docs/demo/tree', headers: { ...PWA_HEADERS, 'x-test-hold': '1' },
+    });
+    req.on('error', () => undefined);
+    await until(() => entered === 1, 'the request held in the root hook');
+    req.destroy();
+    let connections = 1;
+    await until(() => {
+      app.server.getConnections((_e, n) => { connections = n; });
+      return connections === 0;
+    }, 'the server saw the client go');
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('measured (refinement (j)): on a completed GET over a real socket the response closes finished, so an answered request never aborts its flight', async () => {
+    const seen: string[] = [];
+    const rec = scripted(() => okRes(line(treeOk())));
+    const { app } = await open({
+      run: rec.run,
+      root: (root) => root.addHook('onRequest', async (req, reply) => {
+        req.raw.once('close', () => seen.push(`request close, response finished ${reply.raw.writableFinished}`));
+        reply.raw.once('close', () => seen.push(`response close, finished ${reply.raw.writableFinished}`));
+      }),
+    });
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const status = await new Promise<number | undefined>((resolve) => {
+      http.get({ host: '127.0.0.1', port, path: '/api/docs/demo/tree', headers: PWA_HEADERS }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      });
+    });
+    expect(status).toBe(200);
+    await until(() => seen.some((s) => s.startsWith('response close')), 'the response closed');
+    expect(seen).toContain('response close, finished true');
+    expect(rec.calls).toHaveLength(1);
+  });
+});
+```
+
+(c) Create `server/test/docs-file-bytes.test.ts` with exactly this content:
+
+```ts
+// The file route's representation and bounds (design 2026-10-01, section 3.6, section 5.1, section 5.2, section
+// 6.6; W3 refinement (g)), through `registerDocsReadRoutes` over W2's real adapter and a scripted `CcdRunner`
+// (`docsRouteHelpers.ts`): M5.1 (only a raster is raw bytes; every other class is JSON), M5.2 (the declared raster
+// type must be true of the bytes, else 422 `raster-mismatch` with no bytes), the show bound (decoded bytes held to the
+// bound the server declared; W2's review carry) and M5.6 (`immutable` only on a committed raster 200; `no-store`
+// on every JSON body, every draft and every failure).
+//
+// The raster magic is read from L0's table, never typed here; fixtures carry placeholders only.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { DOCS_CACHE_IMMUTABLE } from '../src/docs/policy.js';
+import { DOCS_MAX_DOC_BYTES, DOCS_RASTER_TYPES, type DocPin, type RasterType } from '../../shared/docs.js';
+import {
+  FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, committedEntry, docsApp, draftEntry, line, okRes, scripted, sha256Hex,
+  showLine, treeOk,
+} from './docsRouteHelpers.js';
+
+const apps: FastifyInstance[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  for (const app of apps.splice(0)) await app.close();
+});
+
+const JSON_TYPE = 'application/json; charset=utf-8';
+const BLOB = 'b'.repeat(40);
+const enc = encodeURIComponent;
+
+const committed = (path: string): DocPin =>
+  ({ kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path });
+const draft = (path: string, bytes: Uint8Array): DocPin =>
+  ({ kind: 'draft', branch: 'ws/a', head: FIXTURE_COMMIT, section: 'specs', path, fp: sha256Hex(bytes) });
+
+/** The file GET URL of `pin`, in `docsApi`'s key order. */
+function urlOf(pin: DocPin): string {
+  const q = pin.kind === 'committed'
+    ? `commit=${pin.commit}&servedRef=${enc(pin.servedRef)}&section=${pin.section}&path=${enc(pin.path)}`
+    : `branch=${enc(pin.branch)}&head=${pin.head}&section=${pin.section}&path=${enc(pin.path)}&fp=${pin.fp}`;
+  return `/api/docs/demo/file?${q}`;
+}
+
+/** One file GET of `pin`, whose show ccd answers with `bytes` (a valid answer), on a fresh app. */
+async function getFile(pin: DocPin, bytes: Uint8Array, verbs?: string[] | null) {
+  const rec = scripted(() => okRes(showLine(pin, bytes)));
+  const made = await docsApp({ run: rec.run, verbs });
+  apps.push(made.app);
+  return { res: await made.app.inject({ url: urlOf(pin), headers: PWA_HEADERS }), rec };
+}
+
+/** Bytes of raster type `t`: 16 bytes holding its first magic alternative's runs at their offsets, from L0. */
+function rasterBytes(t: RasterType): Uint8Array {
+  const out = new Uint8Array(16).fill(0x2e);
+  for (const run of DOCS_RASTER_TYPES[t].magic[0]) out.set(run.bytes, run.at);
+  return out;
+}
+
+const TEXT = Buffer.from('<p>x</p>\n', 'utf8');
+
+describe('M5.1 — the representation is a function of the path\'s class: only a raster is raw bytes', () => {
+  it('a.png holding PNG magic answers 200 image/png with exactly its bytes, immutable', async () => {
+    const bytes = rasterBytes('png');
+    const { res, rec } = await getFile(committed('a.png'), bytes);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.headers['cache-control']).toBe(DOCS_CACHE_IMMUTABLE);
+    expect(new Uint8Array(res.rawPayload)).toEqual(bytes);
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  const CLASSES: readonly (readonly [string, string])[] = [
+    ['a.md', 'markdown'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.json', 'text'], ['a.woff2', 'other'],
+    ['a.pdf', 'other'], ['a', 'other'],
+  ];
+
+  it.each(CLASSES)('%s answers 200 JSON {ok, contentClass: %s, show, from: ccd}, no-store', async (path, cls) => {
+    const pin = committed(path);
+    const { res, rec } = await getFile(pin, TEXT);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe(JSON_TYPE);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.json()).toStrictEqual({ ok: true, contentClass: cls, show: JSON.parse(showLine(pin, TEXT)), from: 'ccd' });
+    expect(rec.calls).toHaveLength(1);
+  });
+});
+
+describe('M5.2 — a raster\'s declared type must be true of its bytes', () => {
+  const DECLARED: readonly (readonly [string, RasterType])[] = [
+    ['a.png', 'png'], ['a.jpg', 'jpeg'], ['a.gif', 'gif'], ['a.webp', 'webp'],
+  ];
+  const ACTUAL: readonly (readonly [string, Uint8Array])[] = [
+    ['png', rasterBytes('png')], ['jpeg', rasterBytes('jpeg')], ['gif', rasterBytes('gif')], ['webp', rasterBytes('webp')],
+    ['svg', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>', 'utf8')], ['empty', new Uint8Array(0)],
+    ['3 bytes', Uint8Array.of(1, 2, 3)],
+  ];
+  const CELLS = DECLARED.flatMap(([path, declared]) => ACTUAL.map(([actual, bytes]) => [path, actual, declared, bytes] as const));
+
+  it.each(CELLS)('declared %s, actual %s', async (path, actual, declared, bytes) => {
+    const { res, rec } = await getFile(committed(path), bytes);
+    expect(rec.calls).toHaveLength(1);
+    if (actual === declared) {
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe(DOCS_RASTER_TYPES[declared].mime);
+      expect(new Uint8Array(res.rawPayload)).toEqual(bytes);
+      return;
+    }
+    expect(res.statusCode).toBe(422);
+    expect(res.headers['content-type']).toBe(JSON_TYPE);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'raster-mismatch', declared, size: bytes.byteLength });
+  });
+});
+
+describe('the show bound: decoded bytes are held to the bound the server declared (refinement (g); W2 carry)', () => {
+  it('a committed .md answer of DOCS_MAX_DOC_BYTES + 1 valid bytes passes the adapter and is refused here: 502 malformed-answer {why: oversize}', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { res, rec } = await getFile(committed('a.md'), Buffer.alloc(DOCS_MAX_DOC_BYTES + 1, 0x61));
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'oversize' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(warn.mock.calls).toEqual([['ccrc-server: docs show answer over the bound the server asked for']]);
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('a listed size of 5: a 6-byte answer under the listed blob is 502 oversize; a 5-byte one is 200', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let bytes: Uint8Array = Buffer.from('abcdef', 'utf8');
+    const pin = committed('a.md');
+    const rec = scripted((argv) => okRes(argv[0] === 'docs-tree'
+      ? line(treeOk({ entries: [committedEntry('a.md', BLOB, 5)] }))
+      : showLine(pin, bytes, { blob: BLOB })));
+    const { app } = await docsApp({ run: rec.run });
+    apps.push(app);
+    expect((await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS })).statusCode).toBe(200);
+    const over = await app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    expect(over.statusCode).toBe(502);
+    expect(over.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'oversize' });
+    bytes = Buffer.from('abcde', 'utf8');
+    expect((await app.inject({ url: urlOf(pin), headers: PWA_HEADERS })).statusCode).toBe(200);
+    expect(rec.calls.map((argv) => argv[0])).toEqual(['docs-tree', 'docs-show', 'docs-show']);
+  });
+
+  it('a draft whose fp -> size map holds 5: a 6-byte answer under that fingerprint is 502 oversize', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const bytes = Buffer.from('abcdef', 'utf8');
+    const pin = draft('a.md', bytes);
+    const rec = scripted((argv) => okRes(argv[0] === 'docs-tree'
+      ? line(treeOk({ entries: [draftEntry('a.md', sha256Hex(bytes), 5)] }))
+      : showLine(pin, bytes)));
+    const { app } = await docsApp({ run: rec.run });
+    apps.push(app);
+    expect((await app.inject({ url: urlOf(pin), headers: PWA_HEADERS })).statusCode).toBe(200);
+    expect((await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS })).statusCode).toBe(200);
+    const over = await app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    expect(over.statusCode).toBe(502);
+    expect(over.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'oversize' });
+    expect(rec.calls.map((argv) => argv[0])).toEqual(['docs-show', 'docs-tree', 'docs-show']);
+  });
+});
+
+describe("the JSON show is the verified bytes, never the answer's own content field (W2 review, check 8)", () => {
+  it("a utf8 .md whose text is a lone surrogate (its UTF-8 is U+FFFD's) is served as U+FFFD", async () => {
+    const pin = committed('a.md');
+    const bytes = Buffer.from('\ufffd', 'utf8');
+    const rec = scripted(() => okRes(showLine(pin, bytes, { encoding: 'utf8', b64: undefined, text: '\ud800' })));
+    const made = await docsApp({ run: rec.run });
+    apps.push(made.app);
+    const res = await made.app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().show).toMatchObject({ encoding: 'utf8', size: 3, text: '\ufffd' });
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('a base64 .md carrying a stray text beside its b64: 200, the show carries the b64 alone', async () => {
+    const pin = committed('a.md');
+    const rec = scripted(() => okRes(showLine(pin, TEXT, { text: 'not the bytes' })));
+    const made = await docsApp({ run: rec.run });
+    apps.push(made.app);
+    const res = await made.app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(200);
+    const show = res.json().show;
+    expect(Object.hasOwn(show, 'text')).toBe(false);
+    expect(Buffer.from(show.b64, 'base64')).toEqual(TEXT);
+  });
+});
+
+describe('M5.6 — Cache-Control: immutable only on a committed raster 200', () => {
+  it('a draft raster 200, a committed JSON 200 and a draft JSON 200 are no-store', async () => {
+    const png = rasterBytes('png');
+    const draftRaster = await getFile(draft('a.png', png), png);
+    expect(draftRaster.res.statusCode).toBe(200);
+    expect(draftRaster.res.headers['content-type']).toBe('image/png');
+    expect(draftRaster.res.headers['cache-control']).toBe('no-store');
+    for (const pin of [committed('a.md'), draft('a.md', TEXT)]) {
+      const { res } = await getFile(pin, TEXT);
+      expect(res.statusCode, pin.kind).toBe(200);
+      expect(res.headers['content-type'], pin.kind).toBe(JSON_TYPE);
+      expect(res.headers['cache-control'], pin.kind).toBe('no-store');
+    }
+  });
+
+  it('every failure is no-store: 404 absent-path, 422 raster-mismatch, 502 malformed-answer, 503 caps-unknown', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const pin = committed('a.md');
+    const rec = scripted(() => okRes(line({ v: 1, verb: 'docs-show', ok: false, elapsedMs: 2, failure: 'absent-path' })));
+    const made = await docsApp({ run: rec.run });
+    apps.push(made.app);
+    const absent = await made.app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    const mismatch = (await getFile(committed('a.png'), TEXT)).res;
+    const oversize = (await getFile(pin, Buffer.alloc(DOCS_MAX_DOC_BYTES + 1, 0x61))).res;
+    const unknown = (await getFile(pin, TEXT, null)).res;
+    expect([absent, mismatch, oversize, unknown].map((r) => r.statusCode)).toEqual([404, 422, 502, 503]);
+    for (const r of [absent, mismatch, oversize, unknown]) {
+      expect(r.headers['cache-control'], String(r.statusCode)).toBe('no-store');
+      expect(r.headers['content-type'], String(r.statusCode)).toBe(JSON_TYPE);
+    }
+  });
+});
+```
+
+(d) `server/test/docs-cache.test.ts`, its import block (lines 9-17).
+
+Find:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { docsCaches, type DocsCachedShow } from '../src/docs/cache.js';
+import { docsFlights } from '../src/docs/lane.js';
+import {
+  DOCS_CACHE_BYTES, DOCS_DRAFT_SIZE_ENTRIES, DOCS_INDEX_CACHE_MS, DOCS_LISTING_MAP_ENTRIES, docsShowFlightKey,
+  docsTreeFlightKey,
+} from '../src/docs/policy.js';
+import type { DocPin, DocsEntry, DocsIndexOk, DocsShowOk, DocsTreeOk } from '../../shared/docs.js';
+import { blocker } from './docsRouteHelpers.js';
+
+```
+
+Replace with:
+
+```ts
+import { afterEach, describe, expect, it } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import type { CcdResult } from '../src/lifecycle.js';
+import { docsCaches, type DocsCachedShow } from '../src/docs/cache.js';
+import { docsFlights } from '../src/docs/lane.js';
+import {
+  DOCS_CACHE_BYTES, DOCS_DRAFT_SIZE_ENTRIES, DOCS_INDEX_CACHE_MS, DOCS_LANE_QUEUE, DOCS_LISTING_MAP_ENTRIES,
+  DOCS_LISTING_PROVENANCE_MS, docsShowFlightKey, docsTreeFlightKey,
+} from '../src/docs/policy.js';
+import type { DocsComposition } from '../src/docs/routes.js';
+import {
+  DOCS_MAX_DOC_BYTES, type DocPin, type DocsEntry, type DocsIndexOk, type DocsShowOk, type DocsTreeOk,
+} from '../../shared/docs.js';
+import {
+  PWA_HEADERS, blocker, committedEntry, docsApp, draftEntry, line, nodeLanes, okRes, scripted, sha256Hex, showLine,
+  until,
+} from './docsRouteHelpers.js';
+
+```
+
+Then append at the very end of the file (after its last line, `});`, line 388 before this edit) exactly this block, which starts with one empty line:
+
+```ts
+
+describe('docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l))', () => {
+  const apps: FastifyInstance[] = [];
+  afterEach(async () => {
+    for (const app of apps.splice(0)) await app.close();
+  });
+
+  const C2 = 'e'.repeat(40);
+  const TEXT = Buffer.from('# a\n', 'utf8');
+
+  /** A committed file GET of `path` at `commit`, served from `MAIN`. */
+  const committedUrl = (path: string, commit = COMMIT): string =>
+    `/api/docs/demo/file?commit=${commit}&servedRef=${encodeURIComponent(MAIN)}&section=specs&path=${encodeURIComponent(path)}`;
+
+  /** The pin a `docs-show` argv names, read back from its flags. */
+  function pinOf(argv: readonly string[]): DocPin {
+    const flag = (name: string): string => argv[argv.indexOf(name) + 1] ?? '';
+    return argv.includes('--commit')
+      ? { kind: 'committed', commit: flag('--commit'), servedRef: flag('--ref'), section: 'specs', path: flag('--path') }
+      : {
+        kind: 'draft', branch: flag('--draft-branch'), head: flag('--head'), section: 'specs', path: flag('--path'),
+        fp: flag('--fingerprint'),
+      };
+  }
+
+  /**
+   * One app over a scripted world: `docs-tree` answers `world.tree` (or waits on `held` while `world.holdTrees`);
+   * `docs-show` answers a valid show of the pin its argv names, with `world.bytes`' bytes for that path (default
+   * `TEXT`) under `world.blobs`' blob (default `BLOB`), or ccd's `absent-path` while `world.showFails`.
+   */
+  async function scene(): Promise<{
+    app: FastifyInstance; docs: DocsComposition; shows: () => number; clock: { ms: number };
+    world: { tree: DocsTreeOk; bytes: Map<string, Uint8Array>; blobs: Map<string, string>; showFails: boolean;
+      holdTrees: boolean };
+    held: ReturnType<typeof blocker<CcdResult>>;
+  }> {
+    const clock = { ms: 1000 };
+    const world = {
+      tree: treeOf(COMMIT, MAIN, [committedEntry('a.md', BLOB, TEXT.byteLength)]),
+      bytes: new Map<string, Uint8Array>(), blobs: new Map<string, string>(), showFails: false, holdTrees: false,
+    };
+    const held = blocker<CcdResult>();
+    const rec = scripted((argv) => {
+      if (argv[0] === 'docs-tree') return world.holdTrees ? held.exec() : okRes(line(world.tree));
+      if (world.showFails) return okRes(line({ v: 1, verb: 'docs-show', ok: false, elapsedMs: 1, failure: 'absent-path' }));
+      const pin = pinOf(argv);
+      return okRes(showLine(pin, world.bytes.get(pin.path) ?? TEXT, { blob: world.blobs.get(pin.path) ?? BLOB }));
+    });
+    const { app, docs } = await docsApp({ run: rec.run, nowMs: () => clock.ms });
+    apps.push(app);
+    return { app, docs, shows: () => rec.calls.filter((argv) => argv[0] === 'docs-show').length, clock, world, held };
+  }
+
+  const get = (app: FastifyInstance, url: string) => app.inject({ url, headers: PWA_HEADERS });
+
+  it('row 52: a second committed GET costs zero execs and is marked from: cache, onRef: contains, with no mode', async () => {
+    const { app, shows } = await scene();
+    expect((await get(app, '/api/docs/demo/tree')).statusCode).toBe(200);
+    const first = await get(app, committedUrl('a.md'));
+    expect(first.json()).toMatchObject({ ok: true, from: 'ccd', show: { mode: '100644' } });
+    expect(shows()).toBe(1);
+    const second = await get(app, committedUrl('a.md'));
+    expect(second.statusCode).toBe(200);
+    expect(shows()).toBe(1);
+    const hit = second.json();
+    expect(hit).toMatchObject({ ok: true, contentClass: 'markdown', from: 'cache' });
+    expect(hit.show).toMatchObject({ onRef: 'contains', elapsedMs: 0, commit: COMMIT, blob: BLOB, path: 'a.md' });
+    expect(Object.hasOwn(hit.show, 'mode')).toBe(false);
+    expect(hit.show.b64).toBe(first.json().show.b64);
+  });
+
+  it('row 52: the same blob under a new commit, and under a new path, costs zero execs and answers that commit and path', async () => {
+    const { app, shows, world } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    await get(app, committedUrl('a.md'));
+    expect(shows()).toBe(1);
+    world.tree = treeOf(C2, MAIN, [committedEntry('a.md', BLOB, TEXT.byteLength), committedEntry('b.md', BLOB, TEXT.byteLength)]);
+    await get(app, '/api/docs/demo/tree?ref=main');
+    const moved = await get(app, committedUrl('a.md', C2));
+    const renamed = await get(app, committedUrl('b.md', C2));
+    expect(shows()).toBe(1);
+    expect(moved.json()).toMatchObject({ from: 'cache', show: { commit: C2, path: 'a.md', blob: BLOB } });
+    expect(renamed.json()).toMatchObject({ from: 'cache', show: { commit: C2, path: 'b.md', blob: BLOB } });
+  });
+
+  it('row 52: a draft always execs', async () => {
+    const { app, shows, world } = await scene();
+    const fp = sha256Hex(TEXT);
+    world.tree = treeOf(COMMIT, MAIN, [draftEntry('d.md', fp, TEXT.byteLength)]);
+    await get(app, '/api/docs/demo/tree');
+    const url = `/api/docs/demo/file?branch=ws%2Fa&head=${COMMIT}&section=specs&path=d.md&fp=${fp}`;
+    for (let i = 0; i < 2; i += 1) expect((await get(app, url)).json()).toMatchObject({ ok: true, from: 'ccd' });
+    expect(shows()).toBe(2);
+  });
+
+  it('M6.11: a failure is never cached; the success after it is', async () => {
+    const { app, shows, world } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    world.showFails = true;
+    expect((await get(app, committedUrl('a.md'))).statusCode).toBe(404);
+    world.showFails = false;
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(2);
+  });
+
+  it('M6.11: a served ref recorded DOCS_LISTING_PROVENANCE_MS ago vouches for nothing: ccd again', async () => {
+    const { app, shows, clock } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    await get(app, committedUrl('a.md'));
+    clock.ms = 1000 + DOCS_LISTING_PROVENANCE_MS - 1;
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(1);
+    clock.ms = 1000 + DOCS_LISTING_PROVENANCE_MS;
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect(shows()).toBe(2);
+  });
+
+  it('M6.11: with no listing entry the answer is served but not cached; after the tree it fills, then hits', async () => {
+    const { app, shows } = await scene();
+    for (let i = 0; i < 2; i += 1) expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect(shows()).toBe(2);
+    await get(app, '/api/docs/demo/tree');
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(3);
+  });
+
+  it('the listing\'s blob rides the ask: a show answering another blob is 502 malformed-answer {why: pin}, never cached', async () => {
+    const { app, shows, world } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    world.blobs.set('a.md', 'd'.repeat(40));
+    for (let i = 0; i < 2; i += 1) {
+      const res = await get(app, committedUrl('a.md'));
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'pin' });
+    }
+    expect(shows()).toBe(2);
+  });
+
+  it('refinement (l): a symlink entry sharing a cached file\'s blob never hits and never fills', async () => {
+    const { app, shows, world } = await scene();
+    world.tree = treeOf(COMMIT, MAIN, [
+      committedEntry('a.md', BLOB, TEXT.byteLength), committedEntry('link.md', BLOB, TEXT.byteLength, 'symlink'),
+    ]);
+    await get(app, '/api/docs/demo/tree');
+    await get(app, committedUrl('a.md'));
+    expect(shows()).toBe(1);
+    for (let i = 0; i < 2; i += 1) expect((await get(app, committedUrl('link.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect(shows()).toBe(3);
+  });
+
+  it('M6.11: the blob LRU evicts at DOCS_CACHE_BYTES, least recently used first', async () => {
+    const { app, docs, shows, world } = await scene();
+    const size = DOCS_MAX_DOC_BYTES;
+    const charge = size + Buffer.byteLength(Buffer.alloc(size).toString('base64'));
+    const fits = Math.floor(DOCS_CACHE_BYTES / charge);
+    const names = Array.from({ length: fits + 2 }, (_, i) => `f${i}.md`);
+    names.forEach((name, i) => {
+      world.bytes.set(name, Buffer.alloc(size, i + 1));
+      world.blobs.set(name, hex40(i + 1));
+    });
+    world.tree = treeOf(COMMIT, MAIN, names.map((name, i) => committedEntry(name, hex40(i + 1), size)));
+    await get(app, '/api/docs/demo/tree');
+    for (const name of names.slice(0, fits)) await get(app, committedUrl(name));
+    expect(shows()).toBe(fits);
+    expect(nodeLanes(docs).caches.blobs.size()).toBe(fits);
+    expect((await get(app, committedUrl('f0.md'))).json()).toMatchObject({ from: 'cache' });
+    expect((await get(app, committedUrl(names[fits]!))).json()).toMatchObject({ from: 'ccd' });
+    expect(nodeLanes(docs).caches.blobs.bytes()).toBeLessThanOrEqual(DOCS_CACHE_BYTES);
+    expect((await get(app, committedUrl('f1.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect((await get(app, committedUrl('f0.md'))).json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(fits + 2);
+  });
+
+  it('refinement (k): a cache hit is served under a full read lane, before any flight or lane', async () => {
+    const { app, docs, shows, world, held } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    await get(app, committedUrl('a.md'));
+    world.holdTrees = true;
+    const trees = ['x', 'y'].map((ref) => get(app, `/api/docs/demo/tree?ref=${ref}`));
+    await until(() => held.started() === 2, 'two held tree execs');
+    const lane = nodeLanes(docs).read;
+    const queued = Array.from({ length: DOCS_LANE_QUEUE }, (_, i) => get(app, committedUrl(`q${i}.md`)));
+    await until(() => lane.load().queued === DOCS_LANE_QUEUE, 'a full queue');
+    const hit = await get(app, committedUrl('a.md'));
+    expect(hit.statusCode).toBe(200);
+    expect(hit.json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(1);
+    await app.close();
+    held.release(0, okRes(line(world.tree)));
+    held.release(1, okRes(line(world.tree)));
+    await Promise.all([...trees, ...queued]);
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-file-bytes.test.ts test/docs-cache.test.ts test/docs-lanes.test.ts )`
+Expected: `Test Files  4 failed (4)`, `Tests  no tests`, each with `Error: Cannot find module '../src/docs/routes.js' imported from .../server/test/docsRouteHelpers.ts` (`docs-routes.test.ts` names itself as the importer). `docs-lanes.test.ts` (Task 4's) is red too until Step 3, because it imports `blocker` from the helper file, which now imports `routes.js`. Any other error (a missing export of `policy.ts`, `lane.ts`, `cache.ts` or `hooks.ts`, a syntax error) means Tasks 1-5 are not in the tree or a block was not pasted exactly: stop.
+
+- [ ] **Step 3: Write the implementation.** Create `server/src/docs/routes.ts` with exactly this content:
+
+```ts
+// The native Docs reader's HTTP routes (design 2026-10-01, section 3.4, section 3.6, section 6.3-6.5; W3 refinements
+// (c), (i), (j), (k) and (l)): L4. `composeDocs` builds one node's reader, fetcher, lanes and caches, once per call
+// (never at module scope); `registerDocsReadRoutes` registers the three reads on the docs plugin's own instance, and
+// Task 7's `registerDocsRefreshRoute` the refresh. The read registration never receives a fetcher (section 2 (g)'s
+// wall 1): its signature takes readers and lanes only.
+//
+// Ring (M7.10; the ring guard in `single-definition.test.ts`): this file may import fastify and name `reply`, and it
+// DECIDES NOTHING. The query, project and pin verdicts, every key, the show plan, the known size, the shape guard,
+// the show bound, the cache verdicts, the cache-hit answer, the file representation and every status are L1's
+// (`policy.ts`); the lanes, flights and caches are bookkeeping (`lane.ts`, `cache.ts`). This file applies them in one
+// order on every read: the cache, then single-flight, then the read lane (refinement (k)). It quotes no failure word,
+// and every failure body it receives is sent as it came, never rebuilt. A log line is `console.warn('ccrc-server:
+// ...')`: the server runs `Fastify({ logger: false })`, so the request logger is a silent no-op.
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { DocPin, DocsProjectsResponse, DocsRefSpec, DocsTreeOk, DocsTreeResponse } from '../../../shared/docs.js';
+import { docsCaches, type DocsCaches } from './cache.js';
+import { ccdDocsFetcher, ccdDocsReader, type CcdDocsDeps } from './ccdsource.js';
+import { sendDocsFailure } from './hooks.js';
+import {
+  docsFetchLane, docsFlights, docsGenerations, docsReadLane, type DocsFetchLane, type DocsFlights, type DocsGenerations,
+  type DocsLaneRun, type DocsReadLane,
+} from './lane.js';
+import {
+  DOCS_PRIMARY_NODE, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer, docsCacheVerdict, docsFileReply,
+  docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsNodeKey, docsProjectKey, docsShowBound, docsShowFlightKey,
+  docsShowPlan, docsTreeFlightKey, parseDocsApiQuery, parseDocsProjectParam, refreshDue, type DocsApiRequest,
+  type DocsFileReply, type DocsJob, type DocsListedFile,
+} from './policy.js';
+import type { DocsFetcher, DocsIndexRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead } from './ports.js';
+
+/** One value per fleet node (section 3.12). `primary` is the node every request reads: the API carries no node key,
+ *  so a route reads `byNode.get(primary)`. A second node arrives as a second entry, never as a re-key. */
+export interface DocsNodes<T> { readonly primary: string; readonly byNode: ReadonlyMap<string, T> }
+
+/** One node's link protection and caches (section 6.3-6.5). `nowMs` is the clock the routes hand the caches, which
+ *  hold none. */
+export interface DocsNodeLanes {
+  read: DocsReadLane;
+  fetch: DocsFetchLane;
+  flights: DocsFlights;
+  gens: DocsGenerations;
+  caches: DocsCaches;
+  nowMs: () => number;
+}
+
+/** What the docs plugin is registered with (section 3.4): the readers, the fetchers and the lanes, per node. */
+export interface DocsComposition {
+  readers: DocsNodes<DocsReader>;
+  fetchers: DocsNodes<DocsFetcher>;
+  lanes: DocsNodes<DocsNodeLanes>;
+}
+
+/** `nowMs`: the clock (default `Date.now`). `readLane`: builds the read lane (default `docsReadLane`); only the
+ *  latency test's control passes one, a pass-through lane (refinement (s)). */
+export interface DocsComposeOptions {
+  nowMs?: () => number;
+  readLane?: () => DocsReadLane;
+}
+
+/** A single-node map under `DOCS_PRIMARY_NODE`. */
+function primaryOnly<T>(value: T): DocsNodes<T> {
+  return { primary: DOCS_PRIMARY_NODE, byNode: new Map([[DOCS_PRIMARY_NODE, value]]) };
+}
+
+/**
+ * Compose one node's Docs (refinement (i)): a reader and a fetcher over the SAME `source` object, never a copy, so
+ * a `fleetState` getter on it is read at every call (the link's state object, mutated in place or replaced); and a
+ * fresh read lane, fetch lane, flight map, generation counter and cache set. Called once per `buildServer`, so two
+ * servers (two tests) share nothing.
+ */
+export function composeDocs(source: CcdDocsDeps, opts: DocsComposeOptions = {}): DocsComposition {
+  return {
+    readers: primaryOnly(ccdDocsReader(source)),
+    fetchers: primaryOnly(ccdDocsFetcher(source)),
+    lanes: primaryOnly<DocsNodeLanes>({
+      read: (opts.readLane ?? docsReadLane)(),
+      fetch: docsFetchLane(),
+      flights: docsFlights(),
+      gens: docsGenerations(),
+      caches: docsCaches(),
+      nowMs: opts.nowMs ?? Date.now,
+    }),
+  };
+}
+
+/** The value a composition holds for `node`. A composition without one is a wiring defect: registration throws,
+ *  so no route is ever registered over a missing reader or lane. */
+function forNode<T>(nodes: DocsNodes<T>, node: string, what: string): T {
+  const value = nodes.byNode.get(node);
+  if (value === undefined) throw new Error(`docs routes: no ${what} for node '${node}'`);
+  return value;
+}
+
+/**
+ * The signal that the client left before its answer (refinement (j)): it aborts on the RESPONSE's `close` while the
+ * response has not finished, and at once when the response is already destroyed unfinished (the client went while
+ * an earlier hook ran). Measured on the response, never on the request stream, whose own `close` means different
+ * things on different node versions. Single-flight aborts a flight only when every joiner's signal has aborted.
+ */
+function clientGone(reply: FastifyReply): AbortSignal {
+  const gone = new AbortController();
+  const res = reply.raw;
+  if (res.destroyed && !res.writableFinished) gone.abort();
+  else res.once('close', () => { if (!res.writableFinished) gone.abort(); });
+  return gone.signal;
+}
+
+/** Every requester of an abandoned job has gone: send nothing, take the reply from Fastify, and end the socket if
+ *  it is still open. */
+function abandon(reply: FastifyReply): FastifyReply {
+  reply.hijack();
+  if (!reply.raw.destroyed) reply.raw.destroy();
+  return reply;
+}
+
+/** A lane run that produced no value: `abandoned` ends the request unanswered; `busy` sends the lane's own body. */
+function notRan(reply: FastifyReply, run: Exclude<DocsLaneRun<unknown>, { kind: 'ran' }>): FastifyReply {
+  return run.kind === 'abandoned' ? abandon(reply) : sendDocsFailure(reply, run.body);
+}
+
+/** A route's query as Fastify's default parser hands it over (an own key per name, an array for a repeated key);
+ *  read by L1's parser alone. */
+type DocsQuery = Readonly<Record<string, unknown>>;
+/** The `:project` parameter, read by L1's parser alone. */
+type DocsParams = Readonly<{ project?: unknown }>;
+type TreeRequest = Extract<DocsApiRequest, { route: 'tree' }>;
+type FileRequest = Extract<DocsApiRequest, { route: 'file' }>;
+
+/** An ok index the adapter passed, believed only after `docsAnswerShape`; a believed index fills the node's
+ *  micro-cache only when L1's `docsIndexCacheable` says the node's generation is still `gen`, the one its flight
+ *  began at: an index begun before a refresh's fetch settled is served to the requests that joined it, never cached
+ *  past that refresh (section 6.5). A failure is handed back as it came. */
+function believeIndex(at: DocsNodeLanes, node: string, gen: number, got: DocsIndexRead): DocsIndexRead {
+  if (!got.ok) return got;
+  const shape = docsAnswerShape('docs-index', got.answer);
+  if (!shape.ok) {
+    console.warn('ccrc-server: docs index answer failed its shape check');
+    return shape;
+  }
+  if (!docsIndexCacheable(gen, at.gens.current(docsNodeKey(node)))) return got;
+  at.caches.index.set(node, got.answer, at.nowMs());
+  return got;
+}
+
+/** An ok tree the adapter passed, believed only after `docsAnswerShape` (refinement (f)): only then does it feed the
+ *  listing map and the draft size map, and only then may `refreshDue` read it. A failure is handed back as it came. */
+function believeTree(at: DocsNodeLanes, node: string, got: DocsTreeRead): DocsTreeRead {
+  if (!got.ok) return got;
+  const shape = docsAnswerShape('docs-tree', got.answer);
+  if (!shape.ok) {
+    console.warn('ccrc-server: docs tree answer failed its shape check');
+    return shape;
+  }
+  at.caches.listing.record(node, got.answer, at.nowMs());
+  at.caches.draftSizes.record(node, got.answer);
+  return got;
+}
+
+/** An ok show the adapter passed, believed only after `docsAnswerShape` and `docsShowBound` (refinement (g)); a
+ *  believed show fills the blob cache exactly when `docsCacheFill` says so. A failure is handed back as it came. */
+function believeShow(at: DocsNodeLanes, node: string, pin: DocPin, listed: { repoKey: string; file: DocsListedFile } |
+  undefined, job: DocsJob, got: DocsShowRead): DocsShowRead {
+  if (!got.ok) return got;
+  const shape = docsAnswerShape('docs-show', got.answer);
+  if (!shape.ok) {
+    console.warn('ccrc-server: docs show answer failed its shape check');
+    return shape;
+  }
+  const bound = docsShowBound(job, got.bytes);
+  if (!bound.ok) {
+    console.warn('ccrc-server: docs show answer over the bound the server asked for');
+    return bound;
+  }
+  if (listed !== undefined && docsCacheFill(pin, listed.file)) {
+    at.caches.blobs.set(node, listed.repoKey, listed.file.blob, { answer: got.answer, bytes: got.bytes });
+  }
+  return got;
+}
+
+/**
+ * One tree read (section 6.4): join the tree flight of (node, project, ref, the project's CURRENT generation), whose
+ * starter books `LISTING_JOB` on the read lane; the answer is believed (and recorded) once, inside the flight, before
+ * any joiner sees it. Task 7's refresh reads its tree half through this same function after bumping the generation.
+ */
+function readTree(reader: DocsReader, at: DocsNodeLanes, src: DocsSourceId, ref: DocsRefSpec | null,
+  signal: AbortSignal): Promise<DocsLaneRun<DocsTreeRead>> {
+  const gen = at.gens.current(docsProjectKey(src.node, src.project));
+  return at.flights.join(docsTreeFlightKey(src.node, src.project, ref, gen), signal,
+    (flight) => at.read.run(LISTING_JOB, flight, async () => believeTree(at, src.node, await reader.tree(src, ref))));
+}
+
+/** A believed tree's 200 body: the tree as ccd answered it, and L1's `refreshDue` over it. */
+function treeResponse(tree: DocsTreeOk): DocsTreeResponse {
+  return { ok: true, tree, refreshDue: refreshDue(tree) };
+}
+
+/** Send L1's file representation: a refusal as its failure body, JSON as it is (the response policy makes it
+ *  `no-store`), raster bytes with L1's MIME type and `Cache-Control`, exactly those bytes. */
+function sendFile(reply: FastifyReply, out: DocsFileReply): FastifyReply {
+  if (out.kind === 'refuse') return sendDocsFailure(reply, out.body);
+  if (out.kind === 'json') return reply.send(out.body);
+  return reply.code(200).type(out.mime).header('cache-control', out.cacheControl)
+    .send(Buffer.from(out.bytes.buffer, out.bytes.byteOffset, out.bytes.byteLength));
+}
+
+/**
+ * The three docs reads (section 3.4), on the docs plugin's own instance, each with `exposeHeadRoute: false`
+ * (refinement (c): a HEAD would run the whole GET for a discarded body), and an `onClose` that closes every node's
+ * read and fetch lane, so a closing server answers every queued job `docs-busy` instead of leaving it to its wait.
+ * Each handler parses `:project` and the query with L1's parsers (a refusal is sent before any exec), probes its
+ * cache, joins its flight, and books the read lane; every failure body is sent verbatim.
+ */
+export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>,
+  lanes: DocsNodes<DocsNodeLanes>): void {
+  const node = readers.primary;
+  const reader = forNode(readers, node, 'reader');
+  const at = forNode(lanes, node, 'lanes');
+
+  app.addHook('onClose', async () => {
+    for (const each of lanes.byNode.values()) {
+      each.read.close();
+      each.fetch.close();
+    }
+  });
+
+  app.get('/api/docs/projects', { exposeHeadRoute: false }, async (req, reply) => {
+    const q = parseDocsApiQuery('projects', req.query as DocsQuery);
+    if (!q.ok) return sendDocsFailure(reply, q);
+    const hit = at.caches.index.get(node, at.nowMs());
+    if (hit !== undefined) {
+      const cached: DocsProjectsResponse = { ok: true, index: hit.index, cacheAgeMs: hit.ageMs };
+      return reply.send(cached);
+    }
+    const gen = at.gens.current(docsNodeKey(node));
+    const run = await at.flights.join(docsIndexFlightKey(node, gen), clientGone(reply),
+      (flight) => at.read.run(LISTING_JOB, flight,
+        async () => believeIndex(at, node, gen, await reader.index({ node }))));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendDocsFailure(reply, run.value);
+    const fresh: DocsProjectsResponse = { ok: true, index: run.value.answer, cacheAgeMs: null };
+    return reply.send(fresh);
+  });
+
+  app.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {
+    const p = parseDocsProjectParam((req.params as DocsParams).project);
+    if (!p.ok) return sendDocsFailure(reply, p);
+    const q = parseDocsApiQuery('tree', req.query as DocsQuery);
+    if (!q.ok) return sendDocsFailure(reply, q);
+    const { ref } = q.req as TreeRequest;
+    const run = await readTree(reader, at, { node, project: p.project }, ref, clientGone(reply));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendDocsFailure(reply, run.value);
+    return reply.send(treeResponse(run.value.answer));
+  });
+
+  app.get('/api/docs/:project/file', { exposeHeadRoute: false }, async (req, reply) => {
+    const p = parseDocsProjectParam((req.params as DocsParams).project);
+    if (!p.ok) return sendDocsFailure(reply, p);
+    const q = parseDocsApiQuery('file', req.query as DocsQuery);
+    if (!q.ok) return sendDocsFailure(reply, q);
+    const { pin } = q.req as FileRequest;
+    const src: DocsSourceId = { node, project: p.project };
+    const listed = pin.kind === 'committed'
+      ? at.caches.listing.lookup(node, src.project, pin.commit, pin.section, pin.path) : undefined;
+    const draftSize = pin.kind === 'draft' ? at.caches.draftSizes.get(node, pin.fp) : undefined;
+    const plan = docsShowPlan(pin.path, docsKnownSize(pin, listed?.file, draftSize));
+    if (pin.kind === 'committed' && listed !== undefined) {
+      const ageMs = at.caches.listing.servedRefAgeMs(node, src.project, pin.commit, pin.servedRef, at.nowMs());
+      const hit = docsCacheVerdict(listed.file, ageMs).eligible
+        ? at.caches.blobs.get(node, listed.repoKey, listed.file.blob) : undefined;
+      if (hit !== undefined) {
+        return sendFile(reply,
+          docsFileReply(pin, docsCacheHitAnswer(hit.answer, pin, listed.file.blob), hit.bytes, 'cache'));
+      }
+    }
+    const ask = { maxBytes: plan.maxBytes, job: plan.job, listedBlob: listed?.file.blob ?? null };
+    const run = await at.flights.join(docsShowFlightKey(node, src.project, pin, plan.maxBytes), clientGone(reply),
+      (flight) => at.read.run(plan.job, flight,
+        async () => believeShow(at, node, pin, listed, plan.job, await reader.show(src, pin, ask))));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendDocsFailure(reply, run.value);
+    return sendFile(reply, docsFileReply(pin, run.value.answer, run.value.bytes, 'ccd'));
+  });
+}
+```
+
+- [ ] **Step 4: Run them to verify they pass.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts )`
+Expected: `Test Files  1 passed (1)`, `Tests  60 passed (60)`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-file-bytes.test.ts )`
+Expected: `Test Files  1 passed (1)`, `Tests  43 passed (43)`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-cache.test.ts )`
+Expected: `Test Files  1 passed (1)`, `Tests  37 passed (37)` (Task 5's 27, unchanged, and this task's 10).
+
+- [ ] **Step 5: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` is a known load flake, so a red there is re-run alone before it is called broken. Stage the five files first, so `topology-clean`'s `git ls-files` corpus contains them:
+
+Run: `git add server/src/docs/routes.ts server/test/docs-routes.test.ts server/test/docs-file-bytes.test.ts server/test/docsRouteHelpers.ts server/test/docs-cache.test.ts && git status --short`
+Expected: exactly `A  server/src/docs/routes.ts`, `M  server/test/docs-cache.test.ts`, `A  server/test/docs-file-bytes.test.ts`, `A  server/test/docs-routes.test.ts` and `M  server/test/docsRouteHelpers.ts`.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The first compiles `routes.ts` under the server's build flags (fastify's `FastifyReply.raw` as `ServerResponse`, the narrowing of `DocsLaneRun` and of each L1 union); the second compiles the three test files and the helpers against W1's and W2's types.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-headers.test.ts test/docs-lanes.test.ts test/docs-policy.test.ts test/docs-source.test.ts )`
+Expected: `Test Files  4 passed (4)`, `Tests  783 passed (783)` (none of these files nor the sources they test is edited; `docs-lanes` is green again).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  472 passed (472)`: the docs ring guard visits `routes.ts` as L4 (fastify, `reply` and the lanes' timers are allowed there), and no name exported here is declared anywhere else in the four roots.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/capsupported.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  77 passed (77)`. `topology-clean` needs `origin/main` (or `CCRC_HISTORY_BASE=<the wave's base sha>`); this task adds only placeholder names (`demo`, `a`, `b`, `ws/a`, `ws/x`, `example-org/example-repo`, `/tmp/example`, `primary`) and hex built by `repeat`/`padStart`, and quotes no cap token (`DOCS_CAP` is imported).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/verb-gate.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  193 passed (193)`: neither census reads `routes.ts` yet (Task 8), `routes.ts` holds no box-token text, and it makes no `CCD_ARGV.` call.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Task 5's Measured 4); Task 1's Step 0 installs real modules.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add server/src/docs/routes.ts server/test/docs-routes.test.ts server/test/docs-file-bytes.test.ts server/test/docsRouteHelpers.ts server/test/docs-cache.test.ts
+git commit -m "server: docs read routes over the caches, flights and read lane (docs W3)" \
+  -m "routes.ts (L4) composes one node's reader, fetcher, lanes and caches (composeDocs, over the same source object so a fleetState getter is read at every call) and registers GET /api/docs/projects, /:project/tree and /:project/file (exposeHeadRoute false, an onClose that closes every lane). Each read parses :project and the query with L1's parsers, probes its cache, joins its flight and books the read lane; an ok answer is believed inside the flight (docsAnswerShape before refreshDue and every cache, docsShowBound before the blob cache), every failure body is sent verbatim, and abandonment is measured on the response's close. docs-routes.test.ts pins M3.4, the router-level refusals, the parser differential, the gate and M6.2 at the routes; docs-file-bytes.test.ts M5.1, M5.2, the show bound, the JSON show's verified bytes and M5.6; docs-cache.test.ts row 52 and M6.11." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at this task's commit, then `git -C <copy> init -q`; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state). Task 7 re-spells none of these anchors except where its own rows block says so; if Task 7 moves the tree route's failure line or `readTree` into a shared helper, it re-anchors W3-T6-M8, W3-T6-M9 and W3-T6-M11 in its own block. The node-generation guard of Decision 12 has no row here: it cannot go red before a refresh exists, so its rows are Task 7's (W3-T7-M20, W3-T7-M21). W3-T6-M21 and W3-T6-M22 anchor on Task 2's JSON-branch opening line, `  if (cls !== 'raster') {`.
+
+```json
+[
+ {
+  "id": "W3-T6-M1",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const q = parseDocsApiQuery('tree', req.query as DocsQuery);",
+  "new": "    const q = parseDocsApiQuery('tree', Object.hasOwn(req.query as DocsQuery, 'ref') ? { ref: String((req.query as DocsQuery).ref) } : {});",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 10 failed | 50 passed (60) — tree: an unknown key node; tree: __proto__ is an own key, so an unknown one; tree: constructor; tree: a repeated ref; and 6 more"
+ },
+ {
+  "id": "W3-T6-M2",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  app.get('/api/docs/projects', { exposeHeadRoute: false }, async (req, reply) => {",
+  "new": "  app.get('/api/docs/projects', async (req, reply) => {",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — refinement (c): HEAD /api/docs/projects matches no docs route: 404, zero execs"
+ },
+ {
+  "id": "W3-T6-M3",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  app.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {",
+  "new": "  app.get('/api/docs/:project/tree', async (req, reply) => {",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — refinement (c): HEAD /api/docs/demo/tree matches no docs route: 404, zero execs"
+ },
+ {
+  "id": "W3-T6-M4",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  app.get('/api/docs/:project/file', { exposeHeadRoute: false }, async (req, reply) => {",
+  "new": "  app.get('/api/docs/:project/file', async (req, reply) => {",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — refinement (c): HEAD /api/docs/demo/file?commit=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&servedRef=refs%2Fremotes%2Forigin%2Fmain&section=specs&path=a.md matches no docs route: 404, zero execs"
+ },
+ {
+  "id": "W3-T6-M5",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const hit = at.caches.index.get(node, at.nowMs());",
+  "new": "    const hit = at.caches.index.get(node, Number.NaN);",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — projects: 200 {ok, index, cacheAgeMs: null}; within DOCS_INDEX_CACHE_MS a hit with zero execs and its age; at the bound, ccd again"
+ },
+ {
+  "id": "W3-T6-M6",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "      const cached: DocsProjectsResponse = { ok: true, index: hit.index, cacheAgeMs: hit.ageMs };",
+  "new": "      const cached: DocsProjectsResponse = { ok: true, index: hit.index, cacheAgeMs: null };",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — projects: 200 {ok, index, cacheAgeMs: null}; within DOCS_INDEX_CACHE_MS a hit with zero execs and its age; at the bound, ccd again"
+ },
+ {
+  "id": "W3-T6-M7",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  at.caches.index.set(node, got.answer, at.nowMs());\n",
+  "new": "",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — projects: 200 {ok, index, cacheAgeMs: null}; within DOCS_INDEX_CACHE_MS a hit with zero execs and its age; at the bound, ccd again"
+ },
+ {
+  "id": "W3-T6-M8",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const shape = docsAnswerShape('docs-tree', got.answer);",
+  "new": "  const shape = { ok: true } as const;",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 2 failed | 58 passed (60) — a tree without freshness: 502 malformed-answer {why: schema}, never a 500, logged, and nothing recorded; a tree carrying a 500 000-deep unknown key inside the listing bound: 502 schema, no RangeError at serialisation"
+ },
+ {
+  "id": "W3-T6-M9",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  if (!got.ok) return got;\n  const shape = docsAnswerShape('docs-tree', got.answer);",
+  "new": "  if (!got.ok) return got;\n  at.caches.listing.record(node, got.answer, at.nowMs());\n  const shape = docsAnswerShape('docs-tree', got.answer);",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 2 failed | 58 passed (60) — a tree without freshness: 502 malformed-answer {why: schema}, never a 500, logged, and nothing recorded; a tree carrying a 500 000-deep unknown key inside the listing bound: 502 schema, no RangeError at serialisation"
+ },
+ {
+  "id": "W3-T6-M10",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const shape = docsAnswerShape('docs-index', got.answer);",
+  "new": "  const shape = { ok: true } as const;",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — an index whose projects is not an array: 502 schema, and nothing enters the micro-cache"
+ },
+ {
+  "id": "W3-T6-M11",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    if (!run.value.ok) return sendDocsFailure(reply, run.value);\n    return reply.send(treeResponse(run.value.answer));",
+  "new": "    if (!run.value.ok) return sendDocsFailure(reply, { lockAgeMs: null, ...run.value });\n    return reply.send(treeResponse(run.value.answer));",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 6 failed | 54 passed (60) — a ccd failure line (ref-locked with lockAgeMs ABSENT) answers its status and the adapter's body verbatim, absent staying absent; a ccd failure line (unresolved-ref with tried) answers its status and the adapter's body verbatim, absent staying absent; ccd-fault: 502 with the adapter's stderrHead; caps-unknown (ccdVerbs null): 503 Retry-After 5; unsupported: 501, no Retry-After; both with zero execs; the state mutated in place is read at the next call (W2 carry, the mutate half); and 2 more"
+ },
+ {
+  "id": "W3-T6-M12",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  else res.once('close', () => { if (!res.writableFinished) gone.abort(); });",
+  "new": "  else res.once('close', () => undefined);",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — refinement (j): a client that goes while its read is queued is dequeued over a real socket, and its show never runs"
+ },
+ {
+  "id": "W3-T6-M13",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  if (res.destroyed && !res.writableFinished) gone.abort();\n  else res.once",
+  "new": "  if (false as boolean) gone.abort();\n  else res.once",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — refinement (j): a client that went before the handler ran starts no exec"
+ },
+ {
+  "id": "W3-T6-M14",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "      (flight) => at.read.run(plan.job, flight,",
+  "new": "      (flight) => (async (_job: unknown, _s: AbortSignal, exec: () => Promise<DocsShowRead>) => ({ kind: 'ran' as const, value: await exec() }))(plan.job, flight,",
+  "tests": [
+   "test/docs-routes.test.ts",
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-routes+docs-cache: 4 failed | 93 passed (97) — refinement (k): a cache hit is served under a full read lane, before any flight or lane; the 33rd queued read answers docs-busy 503 Retry-After 2 with zero extra execs; a non-docs route is unaffected; closing answers every queued read busy; a read queued for DOCS_LANE_MAX_WAIT_MS answers docs-busy, and its show never runs; refinement (j): a client that goes while its read is queued is dequeued over a real socket, and its show never runs"
+ },
+ {
+  "id": "W3-T6-M15",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  app.addHook('onClose', async () => {\n    for (const each of lanes.byNode.values()) {\n      each.read.close();\n      each.fetch.close();\n    }\n  });\n",
+  "new": "",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — the 33rd queued read answers docs-busy 503 Retry-After 2 with zero extra execs; a non-docs route is unaffected; closing answers every queued read busy"
+ },
+ {
+  "id": "W3-T6-M16",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    readers: primaryOnly(ccdDocsReader(source)),",
+  "new": "    readers: primaryOnly(ccdDocsReader({ ...source })),",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 59 passed (60) — composeDocs builds the reader and the fetcher over the SAME source: a fleetState getter is read at every call (refinement (i))"
+ },
+ {
+  "id": "W3-T6-M17",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const bound = docsShowBound(job, got.bytes);",
+  "new": "  const bound = { ok: true } as const;",
+  "tests": [
+   "test/docs-file-bytes.test.ts"
+  ],
+  "red": "server docs-file-bytes: 4 failed | 39 passed (43) — a committed .md answer of DOCS_MAX_DOC_BYTES + 1 valid bytes passes the adapter and is refused here: 502 malformed-answer {why: oversize}; a listed size of 5: a 6-byte answer under the listed blob is 502 oversize; a 5-byte one is 200; a draft whose fp -> size map holds 5: a 6-byte answer under that fingerprint is 502 oversize; every failure is no-store: 404 absent-path, 422 raster-mismatch, 502 malformed-answer, 503 caps-unknown"
+ },
+ {
+  "id": "W3-T6-M18",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const plan = docsShowPlan(pin.path, docsKnownSize(pin, listed?.file, draftSize));",
+  "new": "    const plan = docsShowPlan(pin.path, docsKnownSize(pin, listed?.file, undefined));",
+  "tests": [
+   "test/docs-file-bytes.test.ts"
+  ],
+  "red": "server docs-file-bytes: 1 failed | 42 passed (43) — a draft whose fp -> size map holds 5: a 6-byte answer under that fingerprint is 502 oversize"
+ },
+ {
+  "id": "W3-T6-M19",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const plan = docsShowPlan(pin.path, docsKnownSize(pin, listed?.file, draftSize));",
+  "new": "    const plan = docsShowPlan(pin.path, docsKnownSize(pin, undefined, draftSize));",
+  "tests": [
+   "test/docs-file-bytes.test.ts"
+  ],
+  "red": "server docs-file-bytes: 1 failed | 42 passed (43) — a listed size of 5: a 6-byte answer under the listed blob is 502 oversize; a 5-byte one is 200"
+ },
+ {
+  "id": "W3-T6-M20",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  if (out.kind === 'refuse') return sendDocsFailure(reply, out.body);",
+  "new": "  if (out.kind === 'refuse') return reply.code(200).send(out.body);",
+  "tests": [
+   "test/docs-file-bytes.test.ts"
+  ],
+  "red": "server docs-file-bytes: 25 failed | 18 passed (43) — declared a.png, actual jpeg; declared a.png, actual gif; declared a.png, actual webp; declared a.png, actual svg; and 21 more (every off-diagonal cell, and the M5.6 failure case)"
+ },
+ {
+  "id": "W3-T6-M21",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (cls !== 'raster') {",
+  "new": "  if (cls === 'svg') return { kind: 'bytes', mime: 'image/svg+xml' as RasterMime, cacheControl: cacheControlFor(pin, cls), bytes };\n  if (cls !== 'raster') {",
+  "tests": [
+   "test/docs-file-bytes.test.ts"
+  ],
+  "red": "server docs-file-bytes: 1 failed | 42 passed (43) — a.svg answers 200 JSON {ok, contentClass: svg, show, from: ccd}, no-store"
+ },
+ {
+  "id": "W3-T6-M22",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "  if (cls !== 'raster') {",
+  "new": "  if (cls === 'html') return { kind: 'bytes', mime: 'text/html' as RasterMime, cacheControl: cacheControlFor(pin, cls), bytes };\n  if (cls !== 'raster') {",
+  "tests": [
+   "test/docs-file-bytes.test.ts"
+  ],
+  "red": "server docs-file-bytes: 1 failed | 42 passed (43) — a.html answers 200 JSON {ok, contentClass: html, show, from: ccd}, no-store"
+ },
+ {
+  "id": "W3-T6-M23",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  if (out.kind === 'json') return reply.send(out.body);",
+  "new": "  if (out.kind === 'json') return reply.header('cache-control', 'private, max-age=31536000, immutable').send(out.body);",
+  "tests": [
+   "test/docs-file-bytes.test.ts"
+  ],
+  "red": "server docs-file-bytes: 8 failed | 35 passed (43) — a.md answers 200 JSON {ok, contentClass: markdown, show, from: ccd}, no-store; a.svg answers 200 JSON {ok, contentClass: svg, show, from: ccd}, no-store; a.html answers 200 JSON {ok, contentClass: html, show, from: ccd}, no-store; a.json answers 200 JSON {ok, contentClass: text, show, from: ccd}, no-store; and 4 more"
+ },
+ {
+  "id": "W3-T6-M24",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    if (pin.kind === 'committed' && listed !== undefined) {",
+  "new": "    const gate = await at.read.run(plan.job, clientGone(reply), async () => 0);\n    if (gate.kind !== 'ran') return notRan(reply, gate);\n    if (pin.kind === 'committed' && listed !== undefined) {",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 36 passed (37) — refinement (k): a cache hit is served under a full read lane, before any flight or lane"
+ },
+ {
+  "id": "W3-T6-M25",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "      const ageMs = at.caches.listing.servedRefAgeMs(node, src.project, pin.commit, pin.servedRef, at.nowMs());",
+  "new": "      const ageMs = 0;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 36 passed (37) — M6.11: a served ref recorded DOCS_LISTING_PROVENANCE_MS ago vouches for nothing: ccd again"
+ },
+ {
+  "id": "W3-T6-M26",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "          docsFileReply(pin, docsCacheHitAnswer(hit.answer, pin, listed.file.blob), hit.bytes, 'cache'));",
+  "new": "          docsFileReply(pin, hit.answer, hit.bytes, 'cache'));",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 2 failed | 35 passed (37) — row 52: a second committed GET costs zero execs and is marked from: cache, onRef: contains, with no mode; row 52: the same blob under a new commit, and under a new path, costs zero execs and answers that commit and path"
+ },
+ {
+  "id": "W3-T6-M27",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    at.caches.blobs.set(node, listed.repoKey, listed.file.blob, { answer: got.answer, bytes: got.bytes });",
+  "new": "    void listed;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 7 failed | 30 passed (37) — row 52: a second committed GET costs zero execs and is marked from: cache, onRef: contains, with no mode; row 52: the same blob under a new commit, and under a new path, costs zero execs and answers that commit and path; M6.11: a failure is never cached; the success after it is; M6.11: a served ref recorded DOCS_LISTING_PROVENANCE_MS ago vouches for nothing: ccd again; and 3 more"
+ },
+ {
+  "id": "W3-T6-M28",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const ask = { maxBytes: plan.maxBytes, job: plan.job, listedBlob: listed?.file.blob ?? null };",
+  "new": "    const ask = { maxBytes: plan.maxBytes, job: plan.job, listedBlob: null };",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 36 passed (37) — the listing's blob rides the ask: a show answering another blob is 502 malformed-answer {why: pin}, never cached"
+ },
+ {
+  "id": "W3-T6-M29",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "      const hit = docsCacheVerdict(listed.file, ageMs).eligible",
+  "new": "      const hit = (ageMs ?? 0) >= 0",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 2 failed | 35 passed (37) — M6.11: a served ref recorded DOCS_LISTING_PROVENANCE_MS ago vouches for nothing: ccd again; refinement (l): a symlink entry sharing a cached file's blob never hits and never fills"
+ },
+ {
+  "id": "W3-T6-M30",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  at.caches.listing.record(node, got.answer, at.nowMs());\n  at.caches.draftSizes.record(node, got.answer);",
+  "new": "  at.caches.draftSizes.record(node, got.answer);",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 8 failed | 29 passed (37) — row 52: a second committed GET costs zero execs and is marked from: cache, onRef: contains, with no mode; row 52: the same blob under a new commit, and under a new path, costs zero execs and answers that commit and path; M6.11: a failure is never cached; the success after it is; M6.11: a served ref recorded DOCS_LISTING_PROVENANCE_MS ago vouches for nothing: ccd again; and 4 more"
+ },
+ {
+  "id": "W3-T6-M31",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  at.caches.draftSizes.record(node, got.answer);\n",
+  "new": "",
+  "tests": [
+   "test/docs-file-bytes.test.ts"
+  ],
+  "red": "server docs-file-bytes: 1 failed | 42 passed (43) — a draft whose fp -> size map holds 5: a 6-byte answer under that fingerprint is 502 oversize"
+ }
+]
+```
+
+### Task 7: routes.ts, part 2: the refresh route — fetch lane, refresh single-flight, the generation bump, the index-cache drop and the two halves
+
+**Model routing:** `sonnet`, effort `high` — the GET-never-fetches split is the trap: only this registration receives a fetcher, and the refresh's tree must start a new flight. The other traps: the fetch lane's own `docs-busy` and the adapter's gate words are refused through L1's `docsRefreshFetchHalf` (never a route-side branch on a word), the generation is bumped INSIDE the refresh flight (once per fetch, before any joiner reads its tree), and a failed fetch half never replaces the listing. Every count below was measured on the scratch tree at Task 6's state plus this task, on node v24.14.1 and Fastify 5.10.0.
+
+**Spec rows:** section 2 (j) row 51 (the refresh half: "two concurrent refreshes produce one fetch"; at most 2 reads in flight under refresh load), M6.9 ("two concurrent tree GETs: 1 exec; two file GETs for the same pin: 1 exec; a refresh's tree after a fetch does not join an earlier flight"), M6.10 ("serial per project; at most 2 global; the 9th queued gives `docs-busy {lane:'fetch'}`"), and section 3.4's refresh flow and Parameter rules (the body, `fetchBranchFor`'s table, "a refusal before any exec returns that word's own status", "200 whenever the lanes ran"). W2's review carries handled here: the ok FETCH answer is shape-checked before it is believed (refinement (f)'s third verb; Task 6 did tree and index), and the refresh's request bodies go through Fastify's real parsers. Refinements applied: (e) at the route (a string body), (j) abandonment on the response, (m) the refresh's outcome, (p) the refresh flight key and the node's index generation (section 6.5's "the index has a 30 s micro-cache, dropped by any refresh", held under concurrency: Decision 14).
+
+**Files:**
+- Modify: `server/src/docs/routes.ts` — two import blocks (the `shared/docs.js` type import, line 15 at Task 6's state; the `./policy.js` and `./ports.js` imports, lines 23-29) and one block appended at EOF after `registerDocsReadRoutes`'s closing `}` (line 284): module-private `RefreshFetchOutcome`, `believeFetch`, `fetchSettled`, `fetchHalf`, `treeHalf`, and the exported `registerDocsRefreshRoute`. 284 -> 404 lines. Task 6's `readTree`, `treeResponse`, `clientGone`, `abandon`, `forNode` and `DocsParams` are REUSED, not copied or moved; nothing above line 284 changes but the two import blocks, so none of Task 6's mutation anchors moves (see "Mutation rows").
+- Modify: `server/test/docsRouteHelpers.ts` — the `../src/docs/routes.js` import (lines 10-12) and one line added to `docsApp`'s plugin body after `registerDocsReadRoutes(app, docs.readers, docs.lanes);` (line 184), as Task 6's Interfaces announced, so every route test mounts the plugin as section 3.4 does. (The architecture's file list for this task omits this helper; the edit is two lines and changes no existing case.)
+- Modify: `server/test/docs-routes.test.ts` — its `lifecycle.js` import (line 16; a value import of `UNMEASURED` from `exec.js` joins it), its `policy.js`, `shared/docs.js` and route-helper imports (lines 18-25), and 572 lines appended at EOF after the file's last line: nine describes, 49 cases (bodies and `:project` 15, `fetchBranchFor` 4, the halves 9, row 51 and M6.9 6, M6.10 4, a project named like an `Object.prototype` key 2, an agent that grants no docs verb 5, the index generation 2, the index micro-cache 2). Task 9 appends its real-server describes after these.
+- Modify: `server/test/docs-lanes.test.ts` — one describe appended at EOF after line 714 (1 case: the read and fetch lanes are separate).
+- Test: the four files above; guards `docs-cache.test.ts`, `docs-file-bytes.test.ts`, `docs-headers.test.ts`, `docs-policy.test.ts`, `docs-source.test.ts` (none edited), `single-definition.test.ts` (the docs ring guard visits `routes.ts` as L4; `registerDocsRefreshRoute` has no second home), `topology-clean.test.ts`, `capsupported.test.ts`, `auth-gate.test.ts`, `box-token-census.test.ts`, `verb-gate.test.ts` (still no `CCD_ARGV.` call in `routes.ts`: the refresh reaches ccd only through the `DocsFetcher` port) and `typecheck-tests.test.ts`.
+
+Every Find block below is quoted from the file as Task 6 left it and is unique in it; line numbers are hints. If a Find block is absent or not unique, stop and put an ask to the coordinator.
+
+Before Step 1, check that the refresh does not exist yet and that the names this task consumes do (the tree as Task 6 left it):
+
+Run: `grep -q '^export function registerDocsReadRoutes' server/src/docs/routes.ts && ! grep -q '^export function registerDocsRefreshRoute' server/src/docs/routes.ts && ! grep -q 'registerDocsRefreshRoute(app' server/test/docsRouteHelpers.ts && grep -q '^function readTree(' server/src/docs/routes.ts && grep -q '^function clientGone(' server/src/docs/routes.ts && grep -q '^export function docsRefreshFetchHalf' server/src/docs/policy.ts && grep -q '^export function docsRefreshAnswer' server/src/docs/policy.ts && grep -q '^export const DOCS_REFRESH_SKIPPED' server/src/docs/policy.ts && grep -q '^export function docsRefreshFlightKey' server/src/docs/policy.ts && grep -q '^export function parseDocsRefreshBody' server/src/docs/policy.ts && grep -q '^export function fetchBranchFor' server/src/docs/policy.ts && grep -q '^export function docsLogDue' server/src/docs/policy.ts && grep -q '^export function docsFetchLane' server/src/docs/lane.ts && grep -q '  drop(node: string): void;' server/src/docs/cache.ts && grep -q '^export async function docsApp' server/test/docsRouteHelpers.ts && echo T7-BASE-OK`
+Expected: `T7-BASE-OK`. If it does not print, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes, from W2 (`server/src/docs/ports.ts`): `DocsFetcher { fetch(src: DocsSourceId, branch: string | null): Promise<DocsFetchRun> }` (`null`: the origin default branch, no `--branch`), `type DocsFetchRun = { ok: true; answer: DocsFetchOk } | DocsFailureBody`, `DocsReader`, `DocsSourceId { node: string; project: string }`. From W2's `policy.ts`: `parseDocsProjectParam(project: unknown): { ok: true; project: string } | DocsFailureBody`; `parseDocsRefreshBody(body: unknown): { ok: true; req: DocsRefreshRequest } | DocsFailureBody` with `type DocsRefreshRequest = { ref: DocsRefSpec | null; reason: 'auto' | 'manual' }`; `fetchBranchFor(ref: DocsRefSpec | null): DocsFetchPlan` with `type DocsFetchPlan = { kind: 'fetch'; branch: string | null } | { kind: 'skipped'; why: 'local-ref' }`; `DOCS_REF_PREFIXES` (test only: `[local, origin]`, derived from L0's grammar, so no test quotes a prefix).
+- Consumes, from Task 1 (`policy.ts`): `docsRefreshFetchHalf(run: { ok: true; answer: DocsFetchOk } | DocsFailureBody): DocsRefreshHalf` with `type DocsRefreshHalf = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'half'; fetch: DocsRefreshFetch }` (refuse: `caps-unknown`, `unsupported`, `docs-busy`); `DOCS_REFRESH_SKIPPED: Readonly<DocsRefreshFetch>` (`{state:'skipped', why:'local-ref'}`); `docsRefreshAnswer(fetch: DocsRefreshFetch, tree: DocsTreeResponse | DocsFailureBody): DocsRefreshAnswer` (`refuse {body}` exactly when the fetch was skipped and the tree half is a pre-exec word, else `send {body: DocsRefreshResponse}`); `docsIndexCacheable(genAtStart: number, genNow: number): boolean` (Task 6's `believeIndex` applies it); `docsRefreshFlightKey(node: string, project: string, branch: string | null): string`; `docsProjectKey(node: string, project: string): string`; `docsNodeKey(node: string): string` (the node's index generation, which Task 6's projects route and `believeIndex` read); `docsLogDue(lastMs: number | undefined, nowMs: number): boolean`; (test only) `DOCS_FETCH_GLOBAL` (2), `DOCS_FETCH_QUEUE` (8), `DOCS_REFUSAL_LOG_MS` (60 000). From Task 2: `docsAnswerShape(verb: DocsVerb, answer: unknown): { ok: true } | DocsFailureBody` (`docs-fetch`: a plain object within `DOCS_ANSWER_MAX_DEPTH`).
+- Consumes, from Task 3: `sendDocsFailure(reply: FastifyReply, body: DocsFailureBody): FastifyReply` (the word's status, `Retry-After` from L1). From Task 4: `DocsFetchLane.run<T>(key: string, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>>`, `DocsFetchLane.load(): Readonly<{ running: number; queued: number }>`, `DocsFlights.join<T>(key: string, signal: AbortSignal, start: (flight: AbortSignal) => Promise<T>): Promise<T>`, `DocsFlights.size(): number`, `DocsGenerations.bump(key: string): number`, `type DocsLaneRun<T>`. From Task 5: `DocsIndexCache.drop(node: string): void`. From Task 6 (`routes.ts`, module-private, reused in place): `readTree(reader: DocsReader, at: DocsNodeLanes, src: DocsSourceId, ref: DocsRefSpec | null, signal: AbortSignal): Promise<DocsLaneRun<DocsTreeRead>>` (joins the tree flight of the project's CURRENT generation), `treeResponse(tree: DocsTreeOk): DocsTreeResponse`, `clientGone(reply: FastifyReply): AbortSignal`, `abandon(reply: FastifyReply): FastifyReply`, `forNode<T>(nodes: DocsNodes<T>, node: string, what: string): T`, `type DocsParams`; and the exported `DocsNodes<T>`, `DocsNodeLanes`. From Task 6's helpers: `docsApp`, `scripted`, `okRes`, `faultRes`, `line`, `treeOk`, `indexOk`, `blocker`, `nodeLanes`, `until`, `PWA_HEADERS`, `FIXTURE_COMMIT`, `FIXTURE_SERVED`.
+- Consumes, from `shared/docs.ts` (W1): types `DocsFailureBody`, `DocsRefreshFetch` (`ran {answer}` | `failed {failure}` | `skipped {why:'local-ref'}`), (test only) `DocsFetchOk`; `DocsRefreshResponse { ok: true; fetch: DocsRefreshFetch; tree: DocsTreeResponse | DocsFailureBody }` is L1's `send` body, so `routes.ts` no longer names it. From `server/src/exec.ts` (test only): `UNMEASURED`, the transport's unmeasured `killed`/`signal`. From Task 6's helpers (test only, added to the import): `committedEntry`, `showLine`.
+- Produces, in `server/src/docs/routes.ts`:
+  - `export function registerDocsRefreshRoute(app: FastifyInstance, readers: DocsNodes<DocsReader>, fetchers: DocsNodes<DocsFetcher>, lanes: DocsNodes<DocsNodeLanes>): void` — registration line exactly `app.post('/api/docs/:project/refresh', async (req, reply) => {` (the Global Constraints' fixed text; receiver `app`, single-quoted literal path). It throws at registration when any map lacks the primary node. It is the ONLY docs registration that receives a fetcher.
+  - Module-private: `type RefreshFetchOutcome = DocsRefreshHalf | { kind: 'abandoned' }`; `function believeFetch(got: DocsFetchRun): DocsFetchRun`; `function fetchSettled(at: DocsNodeLanes, src: DocsSourceId): void` (bumps `gens` under `docsProjectKey` and under `docsNodeKey`, drops the node's index micro-cache); `async function fetchHalf(fetcher: DocsFetcher, at: DocsNodeLanes, src: DocsSourceId, branch: string | null, flight: AbortSignal): Promise<RefreshFetchOutcome>`; `function treeHalf(run: Exclude<DocsLaneRun<DocsTreeRead>, { kind: 'abandoned' }>): DocsTreeResponse | DocsFailureBody`.
+- Produces, in `server/test/docsRouteHelpers.ts`: `docsApp` now also registers `registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes)` inside the plugin, after the reads (its signature is unchanged). Task 10 reuses this mount shape.
+
+**Decisions this task makes (refinements (e), (f), (j), (m), (p) applied; Decision 14 completes Task 6's index generation):**
+1. **GET never fetches; the refresh is the one door that does** (section 2 (g)'s wall 1). `registerDocsReadRoutes` keeps its fetcher-less signature; `registerDocsRefreshRoute` is the only function in `routes.ts` that receives `DocsNodes<DocsFetcher>`, and it reaches ccd only through that port. Task 9 adds the spy, the type-level wall and the widened scans.
+2. **The refresh flight covers the FETCH half only** (section 6.4: refresh joins by (node, project, branch or default), `docsRefreshFlightKey`). The tree half is per request, through Task 6's `readTree` with the request's own ref: a bare `ws/a` and an origin-qualified `ws/a` share one fetch but list their own requested ref. The flight's starter books the fetch lane under `docsProjectKey(node, project)`, so refreshes of one project run one at a time across branches (M6.10), and joiners share ONE fetch-lane slot and ONE exec (row 51).
+3. **The generation is bumped inside the flight, once per fetch, before any joiner resumes** (`fetchSettled`, called from `fetchHalf` when L1 answers a `half`). Section 6.4: "`gen` is bumped when a fetch completes". Every joiner of one fetch then reads the SAME new generation, so two joined refreshes of one ref share one tree flight too (measured: 1 docs-fetch and 1 docs-tree; W3-T7-M5 plants an extra per-request bump and splits them into two tree execs). The architecture's outline wrote the bump after the flight returns, in the handler; that placement bumps once per JOINER and is what W3-T7-M5 measures as wrong. A tree GET already in flight was keyed on the old generation, so the refresh's tree never joins it; a tree GET arriving after the bump joins the refresh's tree (M6.9, 2 execs in all).
+4. **Every refusal word is L1's.** The fetch lane's `docs-busy` body and the adapter's answer both go through `docsRefreshFetchHalf`: `refuse` (`caps-unknown`, `unsupported`, `docs-busy`) ends the request with `sendDocsFailure` (503 `Retry-After: 5`, 501, 503 `Retry-After: 5`), and settles nothing (no bump, no index drop: nothing ran). Any other failure is a `failed` half carrying the body VERBATIM (the same object: `fetch-too-soon`'s `retryAfterMs` rides it with NO header, `ref-locked`'s absent `lockAgeMs` stays absent); ok is `ran`. `routes.ts` still quotes no failure word.
+5. **An ok fetch answer is shape-checked** (`believeFetch`, inside the flight; refinement (f), W2's carry names tree, index AND fetch). A fetch line nested past `DOCS_ANSWER_MAX_DEPTH` becomes `malformed-answer {why:'schema'}`, which L1 makes a `failed` half: the exec ran, so the half settled (the generation bumps), the tree half still answers, and the reply never meets a `RangeError` (W3-T7-M13 measures the 500 without it).
+6. **A local ref settles at once, with no exec and no flight** (`fetchBranchFor`'s `skipped`): `fetchSettled` bumps and drops exactly as a fetch's settle does, and the half is `DOCS_REFRESH_SKIPPED` itself. Its tree half also never joins a GET begun before the refresh (W3-T7-M6). When that tree half is refused before any exec too, the request made none at all, and Decision 15 sends that word's status.
+7. **The index micro-cache is dropped twice** (refinement (m), section 6.4): when the fetch half settles (inside `fetchSettled`, before the tree half starts) and again when the refresh completes (after the tree half, whatever it answered), so an index read that started during the tree half cannot outlive the refresh. One case pins both drops by a projects GET during a blocked tree half (W3-T7-M9, W3-T7-M10).
+8. **The tree half is a body, never a status.** `treeHalf` hands back the believed tree's `DocsTreeResponse`, the tree's own failure body verbatim, or the read lane's `docs-busy` body; the answer is 200 `{ok: true, fetch, tree}` whenever the lanes ran (section 3.4), except Decision 15's one case. A failed fetch never replaces the listing: the tree half runs after every `half`.
+9. **The failure log is per registration, per word, on the composition's clock.** `lastLogged` lives in the `registerDocsRefreshRoute` call (one per server), keyed by the failure word; `docsLogDue` decides; the clock is `at.nowMs` (the routes' clock, `docsApp`'s `nowMs`). The line is `ccrc-server: docs <reason> refresh of <project> failed: <word>`; `reason` changes nothing else (the case compares an `auto` and a `manual` response byte for byte).
+10. **Abandonment as for the reads** (refinement (j)): one `clientGone(reply)` per request, passed to the refresh flight and to the tree half. A refresh whose client leaves while its fetch is queued is dequeued and never fetches (measured over a real socket); a running fetch is never cancelled.
+11. **Bodies through Fastify's real parsers.** The cases POST raw payloads with a content type through `app.inject`: Fastify's `text/plain` parser hands the handler a string (refused here by `parseDocsRefreshBody`, `bad-query {why:'body'}`); invalid JSON, an empty JSON body, a 1 MiB + 1 body and a form-encoded body are refused by Task 3's error handler before the handler runs; `[1]`, `null` and `"main"` parse and are refused here. Every one answers 400 with zero execs.
+12. **The read/fetch lane separation is pinned, not newly guarded.** The `docs-lanes.test.ts` case passes at once (it pins a property Task 4 built: two lane objects with different interfaces) and contributes no mutation row; the route-level half is the M6.10 case's tree GET answered 200 while the fetch lane is full.
+13. **Task 6's anchors stay put.** The handler names its flight result `fetched`, not `out`: with `out`, Task 6's W3-T6-M20 anchor `  if (out.kind === 'refuse') return sendDocsFailure(reply, out.body);` would match a second line (measured), so no Task 6 row is re-anchored.
+14. **The node's generation is bumped beside the project's** (Task 1's Decision 8, Task 6's Decision 12; section 6.5's "dropped by any refresh" under concurrency). `fetchSettled` also bumps `docsNodeKey(src.node)`, at the same moment it drops the micro-cache. An index flight begun before the fetch settled is keyed on the old node generation, so a projects GET issued after the refresh starts a new flight instead of joining it, and `believeIndex` refuses that older answer the micro-cache when it lands after the bump: it is served to the requests that joined it and never cached past the refresh. Without the generation, an index GET in flight during a refresh refilled the micro-cache after the drop, and for up to `DOCS_INDEX_CACHE_MS` the API answered an index measured before the fetch (its default commit, `fetch.okAgeMs`). Two route cases hold the index exec with a blocker across a whole refresh (W3-T7-M20, M21, M22); the completion-time drop of Decision 7 stays (W3-T7-M10), and now only catches an index begun after the bump.
+15. **A refresh that ran no exec at all answers that word's own status** (Task 1's Decision 9; section 3.4: "a refusal before any exec returns that word's own status"; the plan review's T7 note). The handler hands both halves to L1's `docsRefreshAnswer` and sends its verdict: `refuse` (a skipped fetch with a pre-exec tree half: the gate's `caps-unknown` 503 `Retry-After: 5` or `unsupported` 501, or the read lane's `docs-busy` 503 `Retry-After: 2`) through `sendDocsFailure`, else `send` the 200. A local ref under unknown caps therefore answers 503 with `Retry-After: 5` and zero execs, never a 200 whose tree half carries `caps-unknown` with no header (W3-T7-M23, the case under `each half carries its own word`). The `docs-busy` arm is pinned at L1 by `docsRefreshAnswer`'s table in `docs-policy.test.ts` (W3-T1-M24); the handler applies that verdict unchanged, so no second route case is added for it. A ran or failed fetch made an exec, so a later pre-exec tree word stays a 200 body, as Decision 8 says. The index generation is still bumped by the skip's settle, which costs a new flight and nothing else.
+16. **A project named like an `Object.prototype` key is an ordinary project to every map** (the W2 review's note 2: `parseDocsProjectParam('__proto__')` is ok). Every map W3 keys by project or node is a `Map` over a NUL-joined, kind-tagged key (`lane.ts`, `cache.ts`, the two log maps), and no plain object is keyed by either. One case per name (`__proto__`, `constructor`) drives a tree GET, a committed file twice (ccd, then the blob cache, which needs the listing map keyed by that project) and a refresh (the fetch lane, the refresh flight and both generations), and checks every argv named the project and `Object.prototype` gained no key. It pins existing behaviour and adds no guard, so it contributes no row.
+17. **An agent that grants no docs verb answers `not-granted` on every route** (the W2 review's note 4: W2's adapter case for the old agent runs on `tree` only). The transport's own refusal (`stderr` the agent's refusal word, both halves `UNMEASURED`) is driven through all four routes: the three reads and both file pins answer 501 `{ok:false, failure:'not-granted'}` after exactly one exec, with no `Retry-After`; the refresh, whose fetch the agent refused AFTER it was sent, is a failed fetch half, so both halves carry `not-granted` in the 200 (not a pre-exec word: L1's `REFRESH_PRE_EXEC` has three). It pins the adapter's distinction through the routes and adds no guard, so it contributes no row.
+
+- [ ] **Step 1: Write the failing tests.** Four files, six edits.
+
+(a) `server/test/docsRouteHelpers.ts`, the routes import (lines 10-12).
+
+Find:
+
+```ts
+import {
+  composeDocs, registerDocsReadRoutes, type DocsComposition, type DocsNodeLanes,
+} from '../src/docs/routes.js';
+```
+
+Replace with:
+
+```ts
+import {
+  composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute, type DocsComposition, type DocsNodeLanes,
+} from '../src/docs/routes.js';
+```
+
+(b) `server/test/docsRouteHelpers.ts`, `docsApp`'s plugin body (line 184).
+
+Find:
+
+```ts
+    registerDocsReadRoutes(app, docs.readers, docs.lanes);
+  });
+```
+
+Replace with:
+
+```ts
+    registerDocsReadRoutes(app, docs.readers, docs.lanes);
+    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+  });
+```
+
+(c) `server/test/docs-routes.test.ts`, the `policy.js`, `shared/docs.js` and route-helper imports (lines 18-25).
+
+Find:
+
+```ts
+import {
+  DOCS_INDEX_CACHE_MS, DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, LISTING_JOB, parseDocsApiQuery, refreshDue,
+} from '../src/docs/policy.js';
+import { DOCS_RESPONSE_HEADERS, type DocsFailureBody, type DocsFailure } from '../../shared/docs.js';
+import {
+  FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, docsApp, faultRes, indexOk, line, nodeLanes, okRes, scripted,
+  treeOk, until,
+} from './docsRouteHelpers.js';
+```
+
+Replace with:
+
+```ts
+import {
+  DOCS_FETCH_GLOBAL, DOCS_FETCH_QUEUE, DOCS_INDEX_CACHE_MS, DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, DOCS_REF_PREFIXES,
+  DOCS_REFUSAL_LOG_MS, LISTING_JOB, parseDocsApiQuery, refreshDue,
+} from '../src/docs/policy.js';
+import {
+  DOCS_RESPONSE_HEADERS, type DocsFailureBody, type DocsFailure, type DocsFetchOk,
+} from '../../shared/docs.js';
+import {
+  FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, committedEntry, docsApp, faultRes, indexOk, line, nodeLanes,
+  okRes, scripted, showLine, treeOk, until,
+} from './docsRouteHelpers.js';
+```
+
+(d) `server/test/docs-routes.test.ts`: append at EOF. Locate the end with `tail -n 3 server/test/docs-routes.test.ts`, which prints the last case's `    expect(rec.calls).toHaveLength(1);`, `  });` and `});`; append exactly this after that last `});` (the leading blank line included):
+
+```ts
+
+// ===== Task 7: the refresh route (section 3.4's refresh flow, section 6.4; row 51, M6.9, M6.10) =====
+
+/** A complete ok `docs-fetch` answer line's object (`DocsFetchOk`): the default branch moved; `over` replaces any
+ *  field. The adapter checks a fetch line's envelope only, so the route answers exactly this object. */
+function fetchOk(over: Partial<DocsFetchOk> = {}): DocsFetchOk {
+  return {
+    v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 6, branch: 'main', trackedRef: FIXTURE_SERVED,
+    before: FIXTURE_COMMIT, after: 'b'.repeat(40), moved: 'updated', stamp: 'written', ...over,
+  };
+}
+
+/** A ccd failure line of `verb` carrying `ctx` (its `failure` word and context keys). */
+function failLine(verb: string, ctx: Record<string, unknown>): CcdResult {
+  return okRes(line({ v: 1, verb, ok: false, elapsedMs: 4, ...ctx }));
+}
+
+type Answer = (argv: string[]) => CcdResult | Promise<CcdResult>;
+
+/** The refresh URL of `demo`, for the real-socket case. */
+const REFRESH_PATH = '/api/docs/demo/refresh';
+
+/** A recording runner that answers `docs-fetch` with `fetch`, `docs-tree` with `tree` and `docs-index` with `index`
+ *  (defaults: an ok fetch, the fixture tree, the fixture index); any other verb is a ccd fault. */
+function fleet(o: { fetch?: Answer; tree?: Answer; index?: Answer } = {}): ReturnType<typeof scripted> {
+  return scripted((argv) => {
+    if (argv[0] === 'docs-fetch') return (o.fetch ?? (() => okRes(line(fetchOk()))))(argv);
+    if (argv[0] === 'docs-tree') return (o.tree ?? (() => okRes(line(treeOk()))))(argv);
+    if (argv[0] === 'docs-index') return (o.index ?? (() => okRes(line(indexOk()))))(argv);
+    return faultRes();
+  });
+}
+
+/** The argv a runner recorded for one verb. */
+function verb(calls: string[][], name: string): string[][] {
+  return calls.filter((argv) => argv[0] === name);
+}
+
+/** A refresh POST of `payload` (sent as written) with content type `type`, with the PWA's request headers. */
+function postRaw(app: FastifyInstance, payload: string, type = 'application/json', project = 'demo') {
+  return app.inject({
+    method: 'POST', url: REFRESH_PATH.replace('/demo/', `/${project}/`), headers: { ...PWA_HEADERS, 'content-type': type },
+    payload,
+  });
+}
+
+/** A refresh POST of `{ref, reason}` as JSON. */
+function refresh(app: FastifyInstance, ref: string | null, reason: 'auto' | 'manual' = 'auto', project = 'demo') {
+  return postRaw(app, JSON.stringify({ ref, reason }), 'application/json', project);
+}
+
+describe('T7: a refresh body or :project that fails its parser is refused before any exec (section 3.4; refinement (e))', () => {
+  const REFUSED: readonly (readonly [string, string, string, DocsFailureBody])[] = [
+    ['a text/plain body', 'text/plain', 'hello', badQuery('body')],
+    ['invalid JSON', 'application/json', '{"ref":', badQuery('body')],
+    ['an empty JSON body', 'application/json', '', badQuery('body')],
+    ['a JSON array [1]', 'application/json', '[1]', badQuery('body')],
+    ['a JSON null', 'application/json', 'null', badQuery('body')],
+    ['a JSON string', 'application/json', '"main"', badQuery('body')],
+    ['reason missing', 'application/json', '{"ref":null}', badQuery('body', 'reason')],
+    ['ref missing', 'application/json', '{"reason":"auto"}', badQuery('body', 'ref')],
+    ['ref a number', 'application/json', '{"ref":1,"reason":"auto"}', badQuery('body', 'ref')],
+    ['reason neither auto nor manual', 'application/json', '{"ref":null,"reason":"later"}', badQuery('body', 'reason')],
+    ['an unknown key x', 'application/json', '{"ref":null,"reason":"auto","x":1}', badQuery('unknown', 'x')],
+    ['a ref in neither grammar', 'application/json', '{"ref":"a..b","reason":"auto"}', word('bad-ref')],
+    ['a body of 1 MiB + 1', 'application/json', `{"ref":"${'x'.repeat(1048577)}","reason":"auto"}`, badQuery('body')],
+    ['a form-encoded body', 'application/x-www-form-urlencoded', 'ref=main&reason=auto', badQuery('body')],
+  ];
+
+  it.each(REFUSED)('%s', async (_label, type, payload, body) => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const res = await postRaw(app, payload, type);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toStrictEqual(body);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(rec.calls).toEqual([]);
+  });
+
+  it(':project -x with a valid body: bad-project, zero execs', async () => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null, 'auto', '-x');
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toStrictEqual(word('bad-project'));
+    expect(rec.calls).toEqual([]);
+  });
+});
+
+describe('T7: fetchBranchFor maps the request onto one docs-fetch, then a docs-tree of the requested ref (section 3.4)', () => {
+  it('ref null: one docs-fetch with no --branch, then one docs-tree with no --ref; 200 {ok, fetch: ran, tree}', async () => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'ran', answer: fetchOk() }, tree: { ok: true, tree: treeOk(), refreshDue: true },
+    });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(rec.calls).toEqual([['docs-fetch', '--project', 'demo'], ['docs-tree', '--project', 'demo']]);
+  });
+
+  it.each([
+    ['bare ws/a', 'ws/a'],
+    ['origin-qualified ws/a', `${DOCS_REF_PREFIXES[1]}ws/a`],
+  ])('%s: docs-fetch --branch ws/a, then docs-tree --ref as requested', async (_label, ref) => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, ref);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().fetch).toStrictEqual({ state: 'ran', answer: fetchOk() });
+    expect(rec.calls).toEqual([
+      ['docs-fetch', '--project', 'demo', '--branch', 'ws/a'], ['docs-tree', '--project', 'demo', '--ref', ref],
+    ]);
+  });
+
+  it('local-qualified ws/a: ZERO docs-fetch, fetch {state: skipped, why: local-ref}, and the tree still runs: 200', async () => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const ref = `${DOCS_REF_PREFIXES[0]}ws/a`;
+    const res = await refresh(app, ref, 'manual');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'skipped', why: 'local-ref' }, tree: { ok: true, tree: treeOk(), refreshDue: true },
+    });
+    expect(rec.calls).toEqual([['docs-tree', '--project', 'demo', '--ref', ref]]);
+  });
+});
+
+describe('T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m))', () => {
+  const FAILED_FETCH: readonly (readonly [string, Record<string, unknown>])[] = [
+    ['fetch-too-soon {retryAfterMs: 9000}', { failure: 'fetch-too-soon', retryAfterMs: 9000 }],
+    ['remote-branch-absent', { failure: 'remote-branch-absent' }],
+    ['ref-locked with lockAgeMs ABSENT', { failure: 'ref-locked' }],
+  ];
+
+  it.each(FAILED_FETCH)('a failed fetch (%s): 200, fetch {state: failed, failure: the body verbatim}, no Retry-After, and the tree half still answers', async (_label, ctx) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = fleet({ fetch: () => failLine('docs-fetch', ctx) });
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'failed', failure: { ok: false, ...ctx } }, tree: { ok: true, tree: treeOk(), refreshDue: true },
+    });
+    expect(Object.hasOwn(res.json().fetch.failure, 'lockAgeMs')).toBe(false);
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(1);
+  });
+
+  it('a failed tree half (unresolved-ref): 200 with tree: its body verbatim, and the fetch half ran', async () => {
+    const ctx = { failure: 'unresolved-ref', ref: 'ws/x', tried: [{ ref: 'refs/remotes/origin/ws/x', result: 'absent' }] };
+    const rec = fleet({ tree: () => failLine('docs-tree', ctx) });
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, 'ws/x');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({ ok: true, fetch: { state: 'ran', answer: fetchOk() }, tree: { ok: false, ...ctx } });
+  });
+
+  it('a fetch answer nested past DOCS_ANSWER_MAX_DEPTH: the fetch half is failed malformed-answer {why: schema}, never a 500, and the tree half answers', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const text = `${JSON.stringify(fetchOk()).slice(0, -1)},"deep":${'['.repeat(500000)}${']'.repeat(500000)}}\n`;
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(LISTING_JOB.wire);
+    const rec = fleet({ fetch: () => okRes(text) });
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'failed', failure: { ok: false, failure: 'malformed-answer', why: 'schema' } },
+      tree: { ok: true, tree: treeOk(), refreshDue: true },
+    });
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs fetch answer failed its shape check');
+  });
+
+  it('caps-unknown (ccdVerbs null): 503 Retry-After 5, the WHOLE body caps-unknown, zero execs; unsupported: 501, no Retry-After, zero execs', async () => {
+    const rec = fleet();
+    const { app, state } = await open({ run: rec.run, verbs: null });
+    const unknown = await refresh(app, null);
+    expect(unknown.statusCode).toBe(503);
+    expect(unknown.headers['retry-after']).toBe('5');
+    expect(unknown.json()).toStrictEqual(word('caps-unknown'));
+    state.ccdVerbs = ['caps'];
+    const unsupported = await refresh(app, 'ws/a');
+    expect(unsupported.statusCode).toBe(501);
+    expect(unsupported.headers['retry-after']).toBeUndefined();
+    expect(unsupported.json()).toStrictEqual(word('unsupported'));
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('a local ref (no fetch exec) whose tree half the gate refuses: the WHOLE answer is that word, 503 Retry-After 5 or 501, zero execs', async () => {
+    const rec = fleet();
+    const { app, state } = await open({ run: rec.run, verbs: null });
+    const ref = `${DOCS_REF_PREFIXES[0]}ws/a`;
+    const unknown = await refresh(app, ref);
+    expect(unknown.statusCode).toBe(503);
+    expect(unknown.headers['retry-after']).toBe('5');
+    expect(unknown.json()).toStrictEqual(word('caps-unknown'));
+    state.ccdVerbs = ['caps'];
+    const unsupported = await refresh(app, ref, 'manual');
+    expect(unsupported.statusCode).toBe(501);
+    expect(unsupported.headers['retry-after']).toBeUndefined();
+    expect(unsupported.json()).toStrictEqual(word('unsupported'));
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('a tree half the full read lane refuses rides the 200 as its body, docs-busy {lane: read}, with no Retry-After header', async () => {
+    const b = blocker<CcdResult>();
+    const rec = fleet({ tree: () => b.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).read;
+    const held = ['a', 'b'].map((ref) => app.inject({ url: `/api/docs/demo/tree?ref=${ref}`, headers: PWA_HEADERS }));
+    await until(() => b.started() === 2, 'two tree execs');
+    const queued = Array.from({ length: DOCS_LANE_QUEUE },
+      (_, i) => app.inject({ url: committedAt(`f${i}.md`), headers: PWA_HEADERS }));
+    await until(() => lane.load().queued === DOCS_LANE_QUEUE, 'a full queue');
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'ran', answer: fetchOk() },
+      tree: { ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 2000 },
+    });
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(2);
+    await app.close();
+    await Promise.all(queued);
+    b.release(0, faultRes());
+    b.release(1, faultRes());
+    await Promise.all(held);
+  });
+
+  it('a failed refresh logs one line per word a minute, naming its reason; reason changes nothing else in the response', async () => {
+    let now = 1000;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = fleet({ fetch: () => failLine('docs-fetch', { failure: 'fetch-too-soon', retryAfterMs: 9000 }) });
+    const { app } = await open({ run: rec.run, nowMs: () => now });
+    const logged = (): unknown[] => warn.mock.calls.map((c) => c[0]).filter((m) => String(m).includes('refresh of'));
+    const auto = await refresh(app, null, 'auto');
+    expect(logged()).toEqual(['ccrc-server: docs auto refresh of demo failed: fetch-too-soon']);
+    now += DOCS_REFUSAL_LOG_MS - 1;
+    const manual = await refresh(app, null, 'manual');
+    expect(logged()).toHaveLength(1);
+    expect(manual.statusCode).toBe(auto.statusCode);
+    expect(manual.json()).toStrictEqual(auto.json());
+    now += 1;
+    await refresh(app, null, 'manual');
+    expect(logged()).toEqual([
+      'ccrc-server: docs auto refresh of demo failed: fetch-too-soon',
+      'ccrc-server: docs manual refresh of demo failed: fetch-too-soon',
+    ]);
+  });
+});
+
+describe('T7: row 51 and M6.9 — single-flight, and a refresh\'s tree never joins a flight begun before its fetch', () => {
+  it('row 51: two concurrent refreshes of one (project, branch) make exactly ONE docs-fetch and share one tree; both 200 with the same halves', async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const two = [refresh(app, 'ws/a', 'auto'), refresh(app, 'ws/a', 'manual')];
+    await until(() => f.started() === 1, 'one fetch exec');
+    await until(() => nodeLanes(docs).flights.size() === 1, 'one refresh flight');
+    f.release(0, okRes(line(fetchOk({ branch: 'ws/a' }))));
+    const [a, b] = await Promise.all(two);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect(a.json()).toStrictEqual(b.json());
+    expect(a.json().fetch).toStrictEqual({ state: 'ran', answer: fetchOk({ branch: 'ws/a' }) });
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([['docs-fetch', '--project', 'demo', '--branch', 'ws/a']]);
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(1);
+  });
+
+  it('row 51: at most 2 reads in flight under refresh load: the tree halves ride the read lane', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).read;
+    const three = ['demo', 'a', 'b'].map((project) => refresh(app, null, 'auto', project));
+    await until(() => lane.load().queued === 1, 'the third tree half queued');
+    expect(lane.load().execs).toBe(2);
+    expect(verb(rec.calls, 'docs-fetch')).toHaveLength(3);
+    expect(t.started()).toBe(2);
+    t.release(0, okRes(line(treeOk())));
+    await until(() => t.started() === 3, 'the third tree half started');
+    t.release(1, okRes(line(treeOk())));
+    t.release(2, okRes(line(treeOk())));
+    expect((await Promise.all(three)).map((r) => r.statusCode)).toEqual([200, 200, 200]);
+  });
+
+  it('M6.9: two concurrent tree GETs for one (project, ref): one exec, two equal answers', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app } = await open({ run: rec.run });
+    const two = [0, 1].map(() => app.inject({ url: '/api/docs/demo/tree?ref=ws%2Fa', headers: PWA_HEADERS }));
+    await until(() => t.started() === 1, 'one tree exec');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    t.release(0, okRes(line(treeOk())));
+    const [a, b] = await Promise.all(two);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect(a.json()).toStrictEqual(b.json());
+    expect(rec.calls).toEqual([['docs-tree', '--project', 'demo', '--ref', 'ws/a']]);
+  });
+
+  it('M6.9: two concurrent file GETs for one pin: one docs-show exec', async () => {
+    const s = blocker<CcdResult>();
+    const rec = scripted(() => s.exec());
+    const { app } = await open({ run: rec.run });
+    const two = [0, 1].map(() => app.inject({ url: fileUrl(COMMITTED_Q), headers: PWA_HEADERS }));
+    await until(() => s.started() === 1, 'one show exec');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    s.release(0, faultRes('boom'));
+    expect((await Promise.all(two)).map((r) => r.statusCode)).toEqual([502, 502]);
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('M6.9: a refresh\'s tree half is a SECOND docs-tree, never the tree GET in flight before its fetch; a tree GET after the bump joins the refresh\'s tree', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app } = await open({ run: rec.run });
+    const before = app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    await until(() => t.started() === 1, 'the tree GET in flight');
+    const refreshed = refresh(app, null);
+    await until(() => t.started() === 2, 'the refresh\'s own tree exec');
+    const after = app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(t.started()).toBe(2);
+    t.release(1, okRes(line(treeOk({ elapsedMs: 2 }))));
+    t.release(0, okRes(line(treeOk({ elapsedMs: 1 }))));
+    const [b, r, a] = await Promise.all([before, refreshed, after]);
+    expect(b.json().tree.elapsedMs).toBe(1);
+    expect(r.json().tree.tree.elapsedMs).toBe(2);
+    expect(a.json().tree.elapsedMs).toBe(2);
+    expect(rec.calls).toEqual([
+      ['docs-tree', '--project', 'demo'], ['docs-fetch', '--project', 'demo'], ['docs-tree', '--project', 'demo'],
+    ]);
+  });
+  it('M6.9: a skipped fetch (a local ref) bumps the generation too: its tree half is a second docs-tree, never the GET in flight', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app } = await open({ run: rec.run });
+    const ref = `${DOCS_REF_PREFIXES[0]}ws/a`;
+    const before = app.inject({ url: `/api/docs/demo/tree?ref=${enc(ref)}`, headers: PWA_HEADERS });
+    await until(() => t.started() === 1, 'the tree GET in flight');
+    const refreshed = refresh(app, ref);
+    await until(() => t.started() === 2, 'the refresh\'s own tree exec');
+    t.release(0, okRes(line(treeOk())));
+    t.release(1, okRes(line(treeOk())));
+    const [b, r] = await Promise.all([before, refreshed]);
+    expect([b.statusCode, r.statusCode]).toEqual([200, 200]);
+    expect(r.json().fetch).toStrictEqual({ state: 'skipped', why: 'local-ref' });
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([]);
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(2);
+  });
+});
+
+describe('T7: M6.10 — the fetch lane at the route: serial per project, 2 globally, 8 queued, then docs-busy {lane: fetch}', () => {
+  it('two refreshes of one project on different branches fetch one after the other', async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    const two = [refresh(app, null), refresh(app, 'ws/a')];
+    await until(() => lane.load().queued === 1, 'the second fetch queued behind its project');
+    expect(lane.load().running).toBe(1);
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([['docs-fetch', '--project', 'demo']]);
+    f.release(0, okRes(line(fetchOk())));
+    await until(() => f.started() === 2, 'the second fetch started');
+    expect(verb(rec.calls, 'docs-fetch')[1]).toEqual(['docs-fetch', '--project', 'demo', '--branch', 'ws/a']);
+    f.release(1, okRes(line(fetchOk({ branch: 'ws/a' }))));
+    expect((await Promise.all(two)).map((r) => r.statusCode)).toEqual([200, 200]);
+  });
+
+  it(`three projects: ${DOCS_FETCH_GLOBAL} fetch at once and the third waits for a global slot`, async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    const three = ['demo', 'a', 'b'].map((project) => refresh(app, null, 'auto', project));
+    await until(() => lane.load().queued === 1, 'the third fetch queued');
+    expect(lane.load().running).toBe(DOCS_FETCH_GLOBAL);
+    expect(f.started()).toBe(DOCS_FETCH_GLOBAL);
+    f.release(0, okRes(line(fetchOk())));
+    await until(() => f.started() === 3, 'the third fetch started');
+    f.release(1, okRes(line(fetchOk())));
+    f.release(2, okRes(line(fetchOk())));
+    expect((await Promise.all(three)).map((r) => r.statusCode)).toEqual([200, 200, 200]);
+  });
+
+  it(`${DOCS_FETCH_GLOBAL} running and ${DOCS_FETCH_QUEUE} queued: the next refresh is 503 docs-busy {lane: fetch} Retry-After 5 with no new exec, and a read is still served`, async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    const running = ['demo', 'a'].map((project) => refresh(app, null, 'auto', project));
+    await until(() => f.started() === DOCS_FETCH_GLOBAL, 'two fetches running');
+    const queued = Array.from({ length: DOCS_FETCH_QUEUE }, (_, i) => refresh(app, `ws/q${i}`));
+    await until(() => lane.load().queued === DOCS_FETCH_QUEUE, 'a full fetch queue');
+    const busy = await refresh(app, 'ws/next');
+    expect(busy.statusCode).toBe(503);
+    expect(busy.headers['retry-after']).toBe('5');
+    expect(busy.json()).toStrictEqual({ ok: false, failure: 'docs-busy', lane: 'fetch', retryAfterMs: 5000 });
+    expect(verb(rec.calls, 'docs-fetch')).toHaveLength(DOCS_FETCH_GLOBAL);
+    const read = await app.inject({ url: '/api/docs/b/tree', headers: PWA_HEADERS });
+    expect(read.statusCode).toBe(200);
+    expect(verb(rec.calls, 'docs-tree')).toEqual([['docs-tree', '--project', 'b']]);
+    await app.close();
+    expect((await Promise.all(queued)).map((r) => r.statusCode)).toEqual(Array(DOCS_FETCH_QUEUE).fill(503));
+    f.release(0, okRes(line(fetchOk())));
+    f.release(1, okRes(line(fetchOk())));
+    await Promise.all(running);
+    expect(verb(rec.calls, 'docs-fetch')).toHaveLength(DOCS_FETCH_GLOBAL);
+  });
+
+  it('refinement (j): a refresh whose client goes while its fetch is queued is dequeued over a real socket and never fetches', async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    const first = refresh(app, null);
+    await until(() => f.started() === 1, 'the first fetch running');
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const req = http.request({
+      host: '127.0.0.1', port, method: 'POST', path: REFRESH_PATH,
+      headers: { ...PWA_HEADERS, 'content-type': 'application/json' },
+    });
+    req.on('error', () => undefined);
+    req.end(JSON.stringify({ ref: 'ws/a', reason: 'auto' }));
+    await until(() => lane.load().queued === 1, 'the socket\'s fetch queued');
+    req.destroy();
+    await until(() => lane.load().queued === 0, 'the fetch dequeued');
+    f.release(0, okRes(line(fetchOk())));
+    expect((await first).statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([['docs-fetch', '--project', 'demo']]);
+  });
+});
+
+describe('T7: a project named like an Object.prototype key is an ordinary project to every map (W2 review: L0 admits __proto__)', () => {
+  it.each(['__proto__', 'constructor'])('%s: its tree, a committed file from ccd then from the cache, and a refresh', async (project) => {
+    const blob = 'b'.repeat(40);
+    const bytes = Buffer.from('# a', 'utf8');
+    const pin = {
+      kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
+    } as const;
+    const rec = scripted((argv) => {
+      if (argv[0] === 'docs-tree') {
+        return okRes(line(treeOk({ project, entries: [committedEntry('a.md', blob, bytes.byteLength)] })));
+      }
+      if (argv[0] === 'docs-show') return okRes(showLine(pin, bytes, { blob }));
+      if (argv[0] === 'docs-fetch') return okRes(line(fetchOk()));
+      return faultRes();
+    });
+    const { app } = await open({ run: rec.run });
+    const file = `/api/docs/${project}/file?${COMMITTED_Q}`;
+    expect((await app.inject({ url: `/api/docs/${project}/tree`, headers: PWA_HEADERS })).statusCode).toBe(200);
+    expect((await app.inject({ url: file, headers: PWA_HEADERS })).json()).toMatchObject({ ok: true, from: 'ccd' });
+    expect((await app.inject({ url: file, headers: PWA_HEADERS })).json()).toMatchObject({ ok: true, from: 'cache' });
+    const res = await refresh(app, null, 'auto', project);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, fetch: { state: 'ran' }, tree: { ok: true } });
+    expect(rec.calls.map((argv) => argv.slice(0, 3))).toEqual([
+      ['docs-tree', '--project', project], ['docs-show', '--project', project], ['docs-fetch', '--project', project],
+      ['docs-tree', '--project', project],
+    ]);
+    expect(Object.keys(Object.prototype)).toEqual([]);
+  });
+});
+
+describe("T7: an agent that grants no docs verb: every route carries the adapter's not-granted (W2 review: its gate row ran on tree only)", () => {
+  /** The agent's refusal of an argv its whitelist lacks, as the link carries it (both halves unmeasured): the word
+   *  `docs-source.test.ts`'s `agentRefusalWord()` reads from `agent/src/server.ts`. */
+  const refusal = (): CcdResult =>
+    ({ ok: false, stdout: '', stderr: 'forbidden', killed: UNMEASURED, signal: UNMEASURED });
+
+  it.each([
+    ['projects', '/api/docs/projects'],
+    ['tree', '/api/docs/demo/tree'],
+    ['a committed file', fileUrl(COMMITTED_Q)],
+    ['a draft file', fileUrl(DRAFT_Q)],
+  ])('%s: 501 not-granted, the body verbatim, no Retry-After, after exactly one exec', async (_what, url) => {
+    const rec = scripted(() => refusal());
+    const { app } = await open({ run: rec.run });
+    const res = await app.inject({ url, headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toStrictEqual(word('not-granted'));
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('the refresh: the agent refused an exec it was sent, not a pre-exec word, so both halves carry it in the 200', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = scripted(() => refusal());
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'failed', failure: word('not-granted') }, tree: word('not-granted'),
+    });
+    expect(rec.calls.map((argv) => argv[0])).toEqual(['docs-fetch', 'docs-tree']);
+  });
+});
+
+describe('T7: an index flight begun before a refresh\'s fetch neither answers a later GET nor fills the micro-cache (section 6.5: "dropped by any refresh")', () => {
+  it('a projects GET issued after the refresh never joins the index flight begun before its fetch: a second docs-index', async () => {
+    const ix = blocker<CcdResult>();
+    const rec = fleet({ index: () => ix.exec() });
+    const { app } = await open({ run: rec.run });
+    const projects = () => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    const before = projects();
+    await until(() => ix.started() === 1, 'the index flight in flight');
+    expect((await refresh(app, null)).statusCode).toBe(200);
+    const after = projects();
+    await until(() => ix.started() === 2, 'a second docs-index for the GET issued after the refresh', 2000);
+    ix.release(1, okRes(line(indexOk({ unlisted: 2 }))));
+    ix.release(0, okRes(line(indexOk({ unlisted: 1 }))));
+    expect((await before).json().index.unlisted).toBe(1);
+    expect((await after).json()).toMatchObject({ cacheAgeMs: null, index: { unlisted: 2 } });
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(2);
+  });
+
+  it('an index answered after the refresh settled is served to its own GET but never cached: the next GET execs again', async () => {
+    const ix = blocker<CcdResult>();
+    const rec = fleet({ index: () => ix.exec() });
+    const { app } = await open({ run: rec.run });
+    const projects = () => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    const before = projects();
+    await until(() => ix.started() === 1, 'the index flight in flight');
+    expect((await refresh(app, null)).statusCode).toBe(200);
+    ix.release(0, okRes(line(indexOk({ unlisted: 1 }))));
+    expect((await before).json()).toMatchObject({ cacheAgeMs: null, index: { unlisted: 1 } });
+    const next = projects();
+    await until(() => ix.started() === 2, 'the next GET execs: the pre-fetch index was not cached', 2000);
+    ix.release(1, okRes(line(indexOk({ unlisted: 2 }))));
+    expect((await next).json()).toMatchObject({ cacheAgeMs: null, index: { unlisted: 2 } });
+    const cached = (await projects()).json();
+    expect(cached.cacheAgeMs).not.toBeNull();
+    expect(cached.index.unlisted).toBe(2);
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(2);
+  });
+});
+
+describe('T7: the index micro-cache is dropped by a refresh, when its fetch settles and again when it completes (section 6.4; refinement (m))', () => {
+  it('projects GET (exec), projects GET (0 execs), refresh, projects GET (exec again)', async () => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const projects = () => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    expect((await projects()).json().cacheAgeMs).toBeNull();
+    expect((await projects()).json().cacheAgeMs).not.toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(1);
+    expect((await refresh(app, null)).statusCode).toBe(200);
+    expect((await projects()).json().cacheAgeMs).toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(2);
+  });
+
+  it('dropped when the fetch settles (an index GET during the tree half execs) and again when the refresh completes', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app } = await open({ run: rec.run });
+    const projects = () => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    await projects();
+    const refreshed = refresh(app, null);
+    await until(() => t.started() === 1, 'the tree half in flight');
+    expect((await projects()).json().cacheAgeMs).toBeNull();
+    expect((await projects()).json().cacheAgeMs).not.toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(2);
+    t.release(0, okRes(line(treeOk())));
+    expect((await refreshed).statusCode).toBe(200);
+    expect((await projects()).json().cacheAgeMs).toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(3);
+  });
+});
+```
+
+(e) `server/test/docs-lanes.test.ts`: append at EOF. `tail -n 3 server/test/docs-lanes.test.ts` prints `    expect(gens.current('demo')).toBe(2);`, `  });` and `});`; append exactly this after that last `});`:
+
+```ts
+
+describe('W3 T7: the fetch lane and the read lane are separate (section 6.4: fetch answers take no read-lane slot)', () => {
+  it('a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound', async () => {
+    const read = readLane();
+    const fetch = fetchLane();
+    const br = blocker<string>();
+    const bf = blocker<string>();
+    for (let i = 0; i < DOCS_LANE_EXECS + DOCS_LANE_QUEUE; i += 1) void read.run(SMALL, live(), br.exec);
+    expect(read.load()).toStrictEqual({ execs: DOCS_LANE_EXECS, bytes: DOCS_LANE_EXECS * SMALL.wire, large: 0, queued: DOCS_LANE_QUEUE });
+    expect(await read.run(SMALL, live(), br.exec)).toStrictEqual({ kind: 'busy', body: docsBusyBody('read') });
+    void fetch.run('k0', live(), bf.exec);
+    expect(bf.started()).toBe(1);
+    for (let i = 1; i < DOCS_FETCH_GLOBAL + DOCS_FETCH_QUEUE; i += 1) void fetch.run(`k${i % DOCS_FETCH_GLOBAL}`, live(), bf.exec);
+    expect(fetch.load()).toStrictEqual({ running: DOCS_FETCH_GLOBAL, queued: DOCS_FETCH_QUEUE });
+    expect(await fetch.run('k-next', live(), bf.exec)).toStrictEqual({ kind: 'busy', body: docsBusyBody('fetch') });
+    br.release(0, 'r0');
+    await flush();
+    expect(br.started()).toBe(DOCS_LANE_EXECS + 1);
+    expect(read.load().queued).toBe(DOCS_LANE_QUEUE - 1);
+    expect(bf.started()).toBe(DOCS_FETCH_GLOBAL);
+  });
+});
+```
+
+(f) `server/test/docs-routes.test.ts`, the `lifecycle.js` import (line 16): the not-granted cases build the transport's own refusal, whose two halves are `UNMEASURED`.
+
+Find:
+
+```ts
+import type { CcdResult } from '../src/lifecycle.js';
+```
+
+Replace with:
+
+```ts
+import type { CcdResult } from '../src/lifecycle.js';
+import { UNMEASURED } from '../src/exec.js';
+```
+
+- [ ] **Step 2: Run them to verify they fail.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-lanes.test.ts )`
+Expected: `Test Files  1 failed | 1 passed (2)`, `Tests  107 failed | 41 passed (148)`. Every `docs-routes` case that builds `docsApp` fails with `TypeError: registerDocsRefreshRoute is not a function` at `test/docsRouteHelpers.ts:185:5` (Task 6's cases included, because the shared mount now names the refresh); the two that build no app stay green (the parser differential's first case and the `composeDocs` same-source case). `docs-lanes` is `39 passed`: its new case pins a separation that already holds (decision 12). `docs-cache` (10 of 37) and `docs-file-bytes` (43 of 43) are red for the same `TypeError` until Step 3; they are not this step's evidence. Any other error (a missing export of `policy.ts`, `lane.ts` or `cache.ts`, a syntax error) means Tasks 1-6 are not in the tree or a block was not pasted exactly: stop.
+
+- [ ] **Step 3: Write the implementation.** `server/src/docs/routes.ts`, three edits.
+
+(a) The `shared/docs.js` type import (line 15).
+
+Find:
+
+```ts
+import type { DocPin, DocsProjectsResponse, DocsRefSpec, DocsTreeOk, DocsTreeResponse } from '../../../shared/docs.js';
+```
+
+Replace with:
+
+```ts
+import type {
+  DocPin, DocsFailureBody, DocsProjectsResponse, DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
+} from '../../../shared/docs.js';
+```
+
+(b) The `./policy.js` and `./ports.js` imports (lines 23-29).
+
+Find:
+
+```ts
+import {
+  DOCS_PRIMARY_NODE, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer, docsCacheVerdict, docsFileReply,
+  docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsNodeKey, docsProjectKey, docsShowBound, docsShowFlightKey,
+  docsShowPlan, docsTreeFlightKey, parseDocsApiQuery, parseDocsProjectParam, refreshDue, type DocsApiRequest,
+  type DocsFileReply, type DocsJob, type DocsListedFile,
+} from './policy.js';
+import type { DocsFetcher, DocsIndexRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead } from './ports.js';
+```
+
+Replace with:
+
+```ts
+import {
+  DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
+  docsCacheVerdict, docsFileReply, docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsLogDue, docsNodeKey,
+  docsProjectKey, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
+  docsShowPlan, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam, parseDocsRefreshBody,
+  refreshDue, type DocsApiRequest, type DocsFileReply, type DocsJob, type DocsListedFile, type DocsRefreshHalf,
+  type DocsRefreshRequest,
+} from './policy.js';
+import type {
+  DocsFetchRun, DocsFetcher, DocsIndexRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead,
+} from './ports.js';
+```
+
+(c) Append at EOF. `tail -n 3 server/src/docs/routes.ts` prints `    return sendFile(reply, docsFileReply(pin, run.value.answer, run.value.bytes, 'ccd'));`, `  });` and `}`; append exactly this after that last `}` (the leading blank line included):
+
+```ts
+
+// ===== Task 7: the refresh (section 3.4's refresh flow, section 6.4; refinement (m)) =====
+
+/** What one refresh flight's fetch half came to: L1's verdict over the fetch (`refuse`, or a `half` to carry), or
+ *  `abandoned`: every requester left before the fetch started, so no fetch ran and nothing settled. */
+type RefreshFetchOutcome = DocsRefreshHalf | { kind: 'abandoned' };
+
+/** An ok fetch the adapter passed, believed only after `docsAnswerShape` (refinement (f); W2's carry names the fetch
+ *  answer too): one nested past the bound would throw at reply serialisation. A failure is handed back as it came. */
+function believeFetch(got: DocsFetchRun): DocsFetchRun {
+  if (!got.ok) return got;
+  const shape = docsAnswerShape('docs-fetch', got.answer);
+  if (!shape.ok) {
+    console.warn('ccrc-server: docs fetch answer failed its shape check');
+    return shape;
+  }
+  return got;
+}
+
+/** A refresh's fetch half has settled, ran, failed or skipped (refinement (m)): bump the project's generation, so
+ *  the tree read that follows starts a NEW flight and never joins one begun before the fetch (section 3.4, section
+ *  6.4); bump the node's generation, so no index begun before the fetch is joined or cached after it; and drop the
+ *  node's index micro-cache (section 6.5). */
+function fetchSettled(at: DocsNodeLanes, src: DocsSourceId): void {
+  at.gens.bump(docsProjectKey(src.node, src.project));
+  at.gens.bump(docsNodeKey(src.node));
+  at.caches.index.drop(src.node);
+}
+
+/**
+ * One refresh flight's fetch half (section 6.4: a refresh joins by (node, project, branch)): book the project's
+ * fetch-lane key, believe the answer, and take L1's verdict (`docsRefreshFetchHalf`) over the answer or over the
+ * lane's own `docs-busy` body. A half that settled is marked HERE, inside the flight, once per fetch and before any
+ * joiner reads its tree, so every joiner of one fetch reads the same new generation. A refusal settles nothing.
+ */
+async function fetchHalf(fetcher: DocsFetcher, at: DocsNodeLanes, src: DocsSourceId, branch: string | null,
+  flight: AbortSignal): Promise<RefreshFetchOutcome> {
+  const run = await at.fetch.run(docsProjectKey(src.node, src.project), flight,
+    async () => believeFetch(await fetcher.fetch(src, branch)));
+  if (run.kind === 'abandoned') return run;
+  const half = docsRefreshFetchHalf(run.kind === 'busy' ? run.body : run.value);
+  if (half.kind === 'half') fetchSettled(at, src);
+  return half;
+}
+
+/** The tree half of a refresh's 200 (section 3.5's `DocsRefreshResponse.tree`): a believed tree's response, or the
+ *  failure body as it came, the read lane's own `docs-busy` included (a body here, never a status). */
+function treeHalf(run: Exclude<DocsLaneRun<DocsTreeRead>, { kind: 'abandoned' }>): DocsTreeResponse | DocsFailureBody {
+  if (run.kind === 'busy') return run.body;
+  return run.value.ok ? treeResponse(run.value.answer) : run.value;
+}
+
+/**
+ * The refresh (section 3.4's refresh flow; refinement (m)): the ONLY docs registration that receives a fetcher
+ * (section 2 (g)'s wall 1). In order:
+ * 1. `:project` and the body through L1's parsers (`parseDocsProjectParam`, `parseDocsRefreshBody`): a refusal is
+ *    sent with its own status before any exec. A `text/plain` body reaches the handler as a string and is refused
+ *    here; a body Fastify itself refuses is answered by the plugin's error handler (Task 3).
+ * 2. `fetchBranchFor(ref)`: `skipped` (a local ref) settles at once with no exec; `fetch` joins the refresh flight
+ *    of (node, project, branch), whose starter books the fetch lane (`fetchHalf`). A refusal before any exec (the
+ *    gate's `caps-unknown` or `unsupported`, the fetch lane's `docs-busy`) is the whole answer, with its own status
+ *    and `Retry-After`; `abandoned` ends the request unanswered.
+ * 3. A failed half logs `ccrc-server: docs <reason> refresh of <project> failed: <word>` when `docsLogDue` says so
+ *    for that word; `reason` changes nothing else.
+ * 4. The tree half: `readTree` at the generation the settle bumped, so it never joins a flight begun before the
+ *    fetch; the index micro-cache is dropped again once it completes.
+ * 5. L1's `docsRefreshAnswer` over the two halves: a skipped fetch whose tree half was refused before any exec is
+ *    the whole answer, with that word's own status and `Retry-After` (no exec ran at all); otherwise 200 `{ok: true,
+ *    fetch, tree}`: each half carries its own word, and a failed fetch never replaces the listing.
+ */
+export function registerDocsRefreshRoute(app: FastifyInstance, readers: DocsNodes<DocsReader>,
+  fetchers: DocsNodes<DocsFetcher>, lanes: DocsNodes<DocsNodeLanes>): void {
+  const node = readers.primary;
+  const reader = forNode(readers, node, 'reader');
+  const fetcher = forNode(fetchers, node, 'fetcher');
+  const at = forNode(lanes, node, 'lanes');
+  const lastLogged = new Map<string, number>();
+
+  const logFailed = (reason: DocsRefreshRequest['reason'], project: string, failure: DocsFailureBody): void => {
+    const now = at.nowMs();
+    if (!docsLogDue(lastLogged.get(failure.failure), now)) return;
+    lastLogged.set(failure.failure, now);
+    console.warn(`ccrc-server: docs ${reason} refresh of ${project} failed: ${failure.failure}`);
+  };
+
+  app.post('/api/docs/:project/refresh', async (req, reply) => {
+    const p = parseDocsProjectParam((req.params as DocsParams).project);
+    if (!p.ok) return sendDocsFailure(reply, p);
+    const body = parseDocsRefreshBody(req.body);
+    if (!body.ok) return sendDocsFailure(reply, body);
+    const { ref, reason } = body.req;
+    const src: DocsSourceId = { node, project: p.project };
+    const gone = clientGone(reply);
+    const plan = fetchBranchFor(ref);
+    let fetch: DocsRefreshFetch;
+    if (plan.kind === 'skipped') {
+      fetchSettled(at, src);
+      fetch = DOCS_REFRESH_SKIPPED;
+    } else {
+      const fetched = await at.flights.join(docsRefreshFlightKey(node, src.project, plan.branch), gone,
+        (flight) => fetchHalf(fetcher, at, src, plan.branch, flight));
+      if (fetched.kind === 'abandoned') return abandon(reply);
+      if (fetched.kind === 'refuse') return sendDocsFailure(reply, fetched.body);
+      fetch = fetched.fetch;
+    }
+    if (fetch.state === 'failed') logFailed(reason, src.project, fetch.failure);
+    const tree = await readTree(reader, at, src, ref, gone);
+    at.caches.index.drop(node);
+    if (tree.kind === 'abandoned') return abandon(reply);
+    const answer = docsRefreshAnswer(fetch, treeHalf(tree));
+    if (answer.kind === 'refuse') return sendDocsFailure(reply, answer.body);
+    return reply.send(answer.body);
+  });
+}
+```
+
+- [ ] **Step 4: Run them to verify they pass.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts )`
+Expected: `Test Files  1 passed (1)`, `Tests  109 passed (109)` (Task 6's 60, unchanged, and this task's 49).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-lanes.test.ts test/docs-cache.test.ts test/docs-file-bytes.test.ts test/docs-headers.test.ts )`
+Expected: `Test Files  4 passed (4)`, `Tests  167 passed (167)` (`docs-lanes` 39: Task 4's 38 and this task's 1; `docs-cache` 37, `docs-file-bytes` 43 and `docs-headers` 48 unchanged and green again).
+
+- [ ] **Step 5: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` is a known load flake, so a red there is re-run alone before it is called broken. Stage the four files first, so `topology-clean`'s `git ls-files` corpus contains them:
+
+Run: `git add server/src/docs/routes.ts server/test/docsRouteHelpers.ts server/test/docs-routes.test.ts server/test/docs-lanes.test.ts && git status --short`
+Expected: exactly `M  server/src/docs/routes.ts`, `M  server/test/docs-lanes.test.ts`, `M  server/test/docs-routes.test.ts` and `M  server/test/docsRouteHelpers.ts`.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The first compiles the refresh under the server's build flags (the narrowing of `DocsFetchPlan`, `RefreshFetchOutcome` and `DocsLaneRun`, `DOCS_REFRESH_SKIPPED`'s `Readonly` assigned to a `DocsRefreshFetch`); the second the four test files.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-policy.test.ts test/docs-source.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  697 passed (697)` (neither file nor the sources it tests is edited).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  472 passed (472)`: the docs ring guard visits `routes.ts` as L4, and `registerDocsRefreshRoute` is declared nowhere else in the four roots.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/capsupported.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  77 passed (77)`. `topology-clean` needs `origin/main` (or `CCRC_HISTORY_BASE=<the wave's base sha>`); this task adds only placeholder names (`demo`, `a`, `b`, `ws/a`, `ws/x`, `ws/q0`..`ws/q7`, `ws/next`, `main`) and hex built by `repeat`, quotes no ref prefix (`DOCS_REF_PREFIXES`) and no cap token.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/verb-gate.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  193 passed (193)`: neither census reads `routes.ts` yet (Task 8 adds it, and its four registrations, the POST's included, are already the fixed texts); `routes.ts` holds no box-token text and no route-registration text in a comment, and makes no `CCD_ARGV.` call.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Task 5's Measured 4); Task 1's Step 0 installs real modules.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add server/src/docs/routes.ts server/test/docsRouteHelpers.ts server/test/docs-routes.test.ts server/test/docs-lanes.test.ts
+git commit -m "server: docs refresh route over the fetch lane and refresh single-flight (docs W3)" \
+  -m "registerDocsRefreshRoute (L4, the only docs registration given a fetcher) parses :project and the body with L1's parsers, maps the ref with fetchBranchFor, joins the refresh flight of (node, project, branch) whose starter books the fetch lane, shape-checks the fetch answer and takes docsRefreshFetchHalf's verdict: a pre-exec refusal is the whole answer, any other failure a failed half carried verbatim. When the fetch half settles (or a local ref skips it) the project's and the node's generations are bumped once and the index micro-cache dropped, so the tree half, read through the shared readTree, starts a new flight, and no index begun before the fetch is joined or cached after it; the index cache is dropped again at completion, and docsRefreshAnswer gives the answer: 200 {ok, fetch, tree}, or, when a skipped fetch's tree half was refused before any exec, that word's own status. docs-routes.test.ts pins the bodies, the mapping, both halves, the no-exec refusal, row 51, M6.9, M6.10, abandonment, a project named __proto__ or constructor, not-granted on every route, the index generation and the index drops; docs-lanes.test.ts the read/fetch lane separation." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at this task's commit, then `git -C <copy> init -q`; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state). The architecture's eight guard sketches map to W3-T7-M1 (a skipped plan still fetches), M2 (the refresh flight join removed), M4 (the generation not bumped before the tree half), M7 (`docsRefreshFetchHalf` bypassed, a gate refusal riding a 200), M8 (a failed fetch half replacing the listing), M9 and M10 (the index cache not dropped, one row per drop), M11 (the fetch lane bypassed) and M12 (a `Retry-After` taken from `fetch-too-soon`'s `retryAfterMs`); M3, M5, M6 and M13-M19 are this task's own; M20-M22 guard the node's index generation (the projects route's flight key and `believeIndex`'s fill check, which Task 6 wrote and which no case can redden before a refresh exists, and this task's bump in `fetchSettled`); M21 anchors on that check as Task 6 writes it, through L1's `docsIndexCacheable`; M23 guards Decision 15 (the refusal sent as a 200's tree half), and M12 anchors on the `docsRefreshAnswer` line. This task re-anchors none of Task 6's rows: no Task 6 anchor text moved, and every one of them is still unique at this task's state (measured).
+
+```json
+[
+ {
+  "id": "W3-T7-M1",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const plan = fetchBranchFor(ref);",
+  "new": "    const plan: ReturnType<typeof fetchBranchFor> = { kind: 'fetch', branch: null };",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 8 failed | 101 passed (109) — bare ws/a: docs-fetch --branch ws/a, then docs-tree --ref as requested; origin-qualified ws/a: docs-fetch --branch ws/a, then docs-tree --ref as requested; local-qualified ws/a: ZERO docs-fetch, fetch {state: skipped, why: local-ref}, and the tree still runs: 200; row 51: two concurrent refreshes of one (project, branch) make exactly ONE docs-fetch and share one tree; both 200 with the same halves; and 4 more"
+ },
+ {
+  "id": "W3-T7-M2",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "      const fetched = await at.flights.join(docsRefreshFlightKey(node, src.project, plan.branch), gone,",
+  "new": "      const fetched = await ((_key: string, s: AbortSignal, start: (f: AbortSignal) => Promise<RefreshFetchOutcome>) => start(s))(docsRefreshFlightKey(node, src.project, plan.branch), gone,",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — row 51: two concurrent refreshes of one (project, branch) make exactly ONE docs-fetch and share one tree; both 200 with the same halves"
+ },
+ {
+  "id": "W3-T7-M3",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "      const fetched = await at.flights.join(docsRefreshFlightKey(node, src.project, plan.branch), gone,",
+  "new": "      const fetched = await at.flights.join(docsRefreshFlightKey(node, src.project, null), gone,",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 3 failed | 106 passed (109) — two refreshes of one project on different branches fetch one after the other; 2 running and 8 queued: the next refresh is 503 docs-busy {lane: fetch} Retry-After 5 with no new exec, and a read is still served; refinement (j): a refresh whose client goes while its fetch is queued is dequeued over a real socket and never fetches"
+ },
+ {
+  "id": "W3-T7-M4",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  at.gens.bump(docsProjectKey(src.node, src.project));\n",
+  "new": "",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 2 failed | 107 passed (109) — M6.9: a refresh's tree half is a SECOND docs-tree, never the tree GET in flight before its fetch; a tree GET after the bump joins the refresh's tree; M6.9: a skipped fetch (a local ref) bumps the generation too: its tree half is a second docs-tree, never the GET in flight"
+ },
+ {
+  "id": "W3-T7-M5",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "      fetch = fetched.fetch;",
+  "new": "      fetch = fetched.fetch;\n      fetchSettled(at, src);",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — row 51: two concurrent refreshes of one (project, branch) make exactly ONE docs-fetch and share one tree; both 200 with the same halves"
+ },
+ {
+  "id": "W3-T7-M6",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    if (plan.kind === 'skipped') {\n      fetchSettled(at, src);\n",
+  "new": "    if (plan.kind === 'skipped') {\n",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — M6.9: a skipped fetch (a local ref) bumps the generation too: its tree half is a second docs-tree, never the GET in flight"
+ },
+ {
+  "id": "W3-T7-M7",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const half = docsRefreshFetchHalf(run.kind === 'busy' ? run.body : run.value);",
+  "new": "  const got = run.kind === 'busy' ? run.body : run.value;\n  const half: DocsRefreshHalf = got.ok ? { kind: 'half', fetch: { state: 'ran', answer: got.answer } } : { kind: 'half', fetch: { state: 'failed', failure: got } };",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 2 failed | 107 passed (109) — caps-unknown (ccdVerbs null): 503 Retry-After 5, the WHOLE body caps-unknown, zero execs; unsupported: 501, no Retry-After, zero execs; 2 running and 8 queued: the next refresh is 503 docs-busy {lane: fetch} Retry-After 5 with no new exec, and a read is still served"
+ },
+ {
+  "id": "W3-T7-M8",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    if (fetch.state === 'failed') logFailed(reason, src.project, fetch.failure);",
+  "new": "    if (fetch.state === 'failed') return sendDocsFailure(reply, fetch.failure);",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 6 failed | 103 passed (109) — a failed fetch (fetch-too-soon {retryAfterMs: 9000}): 200, fetch {state: failed, failure: the body verbatim}, no Retry-After, and the tree half still answers; a failed fetch (ref-locked with lockAgeMs ABSENT): 200, fetch {state: failed, failure: the body verbatim}, no Retry-After, and the tree half still answers; a failed fetch (remote-branch-absent): 200, fetch {state: failed, failure: the body verbatim}, no Retry-After, and the tree half still answers; a failed refresh logs one line per word a minute, naming its reason; reason changes nothing else in the response; and 2 more"
+ },
+ {
+  "id": "W3-T7-M9",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  at.caches.index.drop(src.node);\n}",
+  "new": "}",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — dropped when the fetch settles (an index GET during the tree half execs) and again when the refresh completes"
+ },
+ {
+  "id": "W3-T7-M10",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    at.caches.index.drop(node);\n    if (tree.kind === 'abandoned') return abandon(reply);",
+  "new": "    if (tree.kind === 'abandoned') return abandon(reply);",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — dropped when the fetch settles (an index GET during the tree half execs) and again when the refresh completes"
+ },
+ {
+  "id": "W3-T7-M11",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const run = await at.fetch.run(docsProjectKey(src.node, src.project), flight,",
+  "new": "  const run = await (async (_k: string, _s: AbortSignal, exec: () => Promise<DocsFetchRun>): Promise<DocsLaneRun<DocsFetchRun>> => ({ kind: 'ran', value: await exec() }))(docsProjectKey(src.node, src.project), flight,",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 4 failed | 105 passed (109) — two refreshes of one project on different branches fetch one after the other; three projects: 2 fetch at once and the third waits for a global slot; 2 running and 8 queued: the next refresh is 503 docs-busy {lane: fetch} Retry-After 5 with no new exec, and a read is still served; refinement (j): a refresh whose client goes while its fetch is queued is dequeued over a real socket and never fetches"
+ },
+ {
+  "id": "W3-T7-M12",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const answer = docsRefreshAnswer(fetch, treeHalf(tree));",
+  "new": "    if (fetch.state === 'failed' && fetch.failure.retryAfterMs !== undefined) reply.header('retry-after', String(Math.ceil(fetch.failure.retryAfterMs / 1000)));\n    const answer = docsRefreshAnswer(fetch, treeHalf(tree));",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — a failed fetch (fetch-too-soon {retryAfterMs: 9000}): 200, fetch {state: failed, failure: the body verbatim}, no Retry-After, and the tree half still answers"
+ },
+ {
+  "id": "W3-T7-M13",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const shape = docsAnswerShape('docs-fetch', got.answer);",
+  "new": "  const shape = { ok: true } as const;",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — a fetch answer nested past DOCS_ANSWER_MAX_DEPTH: the fetch half is failed malformed-answer {why: schema}, never a 500, and the tree half answers"
+ },
+ {
+  "id": "W3-T7-M14",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    if (tree.kind === 'abandoned') return abandon(reply);\n    const answer",
+  "new": "    if (tree.kind === 'abandoned') return abandon(reply);\n    if (tree.kind === 'busy') return sendDocsFailure(reply, tree.body);\n    const answer",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — a tree half the full read lane refuses rides the 200 as its body, docs-busy {lane: read}, with no Retry-After header"
+ },
+ {
+  "id": "W3-T7-M15",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  return run.value.ok ? treeResponse(run.value.answer) : run.value;",
+  "new": "  return run.value.ok ? treeResponse(run.value.answer) : { ok: false, failure: run.value.failure };",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — a failed tree half (unresolved-ref): 200 with tree: its body verbatim, and the fetch half ran"
+ },
+ {
+  "id": "W3-T7-M16",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const gone = clientGone(reply);\n    const plan",
+  "new": "    const gone = new AbortController().signal;\n    const plan",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — refinement (j): a refresh whose client goes while its fetch is queued is dequeued over a real socket and never fetches"
+ },
+ {
+  "id": "W3-T7-M17",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    if (!docsLogDue(lastLogged.get(failure.failure), now)) return;",
+  "new": "    if (!docsLogDue(undefined, now)) return;",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — a failed refresh logs one line per word a minute, naming its reason; reason changes nothing else in the response"
+ },
+ {
+  "id": "W3-T7-M18",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const body = parseDocsRefreshBody(req.body);",
+  "new": "    const body = { ok: true as const, req: { ref: null, reason: 'auto' as const } };",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 19 failed | 90 passed (109) — a text/plain body; a JSON array [1]; a JSON null; a JSON string; and 15 more"
+ },
+ {
+  "id": "W3-T7-M19",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const p = parseDocsProjectParam((req.params as DocsParams).project);\n    if (!p.ok) return sendDocsFailure(reply, p);\n    const body",
+  "new": "    const p = { ok: true as const, project: String((req.params as DocsParams).project) };\n    const body",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — :project -x with a valid body: bad-project, zero execs"
+ },
+ {
+  "id": "W3-T7-M20",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    const run = await at.flights.join(docsIndexFlightKey(node, gen), clientGone(reply),\n",
+  "new": "    const run = await at.flights.join(docsIndexFlightKey(node, 0), clientGone(reply),\n",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — a projects GET issued after the refresh never joins the index flight begun before its fetch: a second docs-index (until: a second docs-index for the GET issued after the refresh did not happen within 2000 ms)"
+ },
+ {
+  "id": "W3-T7-M21",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  if (!docsIndexCacheable(gen, at.gens.current(docsNodeKey(node)))) return got;\n",
+  "new": "",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — an index answered after the refresh settled is served to its own GET but never cached: the next GET execs again (until: the next GET execs: the pre-fetch index was not cached did not happen within 2000 ms)"
+ },
+ {
+  "id": "W3-T7-M22",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  at.gens.bump(docsNodeKey(src.node));\n",
+  "new": "",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 2 failed | 107 passed (109) — a projects GET issued after the refresh never joins the index flight begun before its fetch: a second docs-index; an index answered after the refresh settled is served to its own GET but never cached: the next GET execs again"
+ },
+ {
+  "id": "W3-T7-M23",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "    if (answer.kind === 'refuse') return sendDocsFailure(reply, answer.body);",
+  "new": "    if (answer.kind === 'refuse') return reply.send({ ok: true, fetch, tree: answer.body });",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 1 failed | 108 passed (109) — a local ref (no fetch exec) whose tree half the gate refuses: the WHOLE answer is that word, 503 Retry-After 5 or 501, zero execs"
+ }
+]
+```
+
+### Task 8: Register the plugin beside registerUpdateRoutes and move the route censuses: gate.ts's numeral, auth-gate.test.ts, and the box-token census's docs lane
+
+**Model routing:** `sonnet`, effort `high` — census arithmetic. Every count is re-derived on the tree Task 7 left, every prose numeral is edited in place so each `claim()` needle still matches exactly one line, and the planted-call controls anchor on registration lines that must exist verbatim. Every count below was measured on the scratch tree at Task 7's state plus this task, on node v24.14.1 and Fastify 5.10.0, with no `server/dist-pwa/` (so `HAS_PWA` is false; the one place that changes a number is said where it applies).
+
+**Spec rows:** M3.14 ("the `auth-gate` count lines and the COMPLETE describe; no `/docs` server route (scan)"; red when a docs route registers from an unscanned file or under `/docs`) and M3.15 ("`DOCS_DOORS` both directions, zero box-token calls, planted controls"; red when a box-token call is added or the lane is dropped), and section 3.13's census list: `ROUTES` gains `docs/routes.ts`, a per-file count of 4, every derived count re-measured, the shell URL `/docs/example-project/specs/x.md?ref=ws/example`, the armed no-cookie sweep green (the gate's 401 first), the dark versus armed-with-cookie property green (both 403 `foreign-request`: the sweeps send no marker), docs routes in neither `EXEMPT` nor `FLAG_AWARE`, and section 3.4's registration block verbatim. Refinements applied: (a) the counts are re-derived on the base, never copied from section 3.13 ("86 to 90 (`:295`)" conflates the HTTP count with `ROUTES.length`); (i) the composition is built in `buildServer` over a getter (Task 9 Step 7 defines the deviation; this task only builds it); (q) the no-`/docs`-route scan lives in the box-token census's docs describe, which owns the quote-agnostic `registrationsIn`; (r) the box-token census reads EVERY docs file, and `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor `ALL_LANES`.
+
+**Files:**
+- Modify: `server/src/server.ts` — two import lines after `import { registerUpdateRoutes } from './update/routes.js';` (line 57 at Task 7's state), and one block (a blank line, a nine-line comment, `const docs = ...`, the five-line `app.register`) after `registerUpdateRoutes(app, deps, sessionAuth, watcher);` (line 1659). The block holds no `app.<verb>('` text, no `knownId(`, no `readProjectPools(`, no box-token text and no failure word (`routes.test.ts`'s `server.ts` censuses, `box-token-census.test.ts`'s `lanesIn(SERVER_SRC)`).
+- Modify: `server/src/auth/gate.ts` — line 8's route-count numeral, in place (86 -> 90).
+- Modify: `server/test/auth-gate.test.ts` — `ROUTES`'s docstring (line 95) and array (lines 99-101); the scanner meta-test's title (line 208); a per-file count after the `update/routes.ts` count (line 250); `ROUTES.length` and its arithmetic comment (lines 312-313); the four keys in the specific-registrations list (line 353); the `scanned + the static wildcard` numeral (line 451); the shell-URL list (line 790); the property loop's two numerals (lines 901 and 965). Every edit is in place or an insertion; no line is deleted and no `claim()` needle gains a second line.
+- Modify: `server/test/box-token-census.test.ts` — the `node:fs` import gains `readdirSync` (line 57, in place), one import line after `import { fileURLToPath } from 'node:url';` (line 59), and one describe appended at EOF after line 899 (8 cases).
+- Test: `auth-gate.test.ts`, `box-token-census.test.ts`; guards `auth-passkey.test.ts`, `auth-wire.test.ts`, `coord-routes-single-file.test.ts`, `coord-pause-route.test.ts`, `routes.test.ts`, `update-routes.test.ts`, `boot.test.ts` (`index.ts` untouched, its two-literal pin intact), `verb-gate.test.ts`, `whitelist-subset.test.ts`, `capsupported.test.ts`, `topology-clean.test.ts`, `single-definition.test.ts`, `typecheck-tests.test.ts`, the five docs route suites (none edited, all mount through `docsApp`, not `buildServer`) and the eighteen other suites that read `server.ts` as text (Step 5).
+
+Every Find block below is quoted from the file as Task 7 left it and is unique in it; line numbers are hints. If a Find block is absent or not unique, stop and put an ask to the coordinator.
+
+- [ ] **Step 0: Re-derive the counts on the tree Task 7 left, before any edit.** Foreground, Bash timeout 600000 ms.
+
+Run: `grep -q '^export function composeDocs' server/src/docs/routes.ts && grep -q '^export function registerDocsReadRoutes' server/src/docs/routes.ts && grep -q '^export function registerDocsRefreshRoute' server/src/docs/routes.ts && grep -q '^export function installDocsRequestPolicy' server/src/docs/hooks.ts && grep -q '^export function installDocsResponsePolicy' server/src/docs/hooks.ts && grep -qF "  app.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {" server/src/docs/routes.ts && grep -qF "  app.post('/api/docs/:project/refresh', async (req, reply) => {" server/src/docs/routes.ts && ! grep -q 'docs/routes.js' server/src/server.ts && ! grep -q "scanRoutes('docs/routes.ts')" server/test/auth-gate.test.ts && echo T8-BASE-OK`
+Expected: `T8-BASE-OK`. If it does not print, stop and put an ask to the coordinator.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  181 passed (181)` (auth-gate 158, box-token-census 23).
+
+Then derive the counts from SOURCE, never from this plan. Write this throwaway script outside the tree (it reads the same regexes `auth-gate.test.ts`'s `scanRoutes` and the census's `EXEMPT_BUT_AUTHENTICATED` slice use) and run it with the tree's root:
+
+```js
+// <scratch>/t8-counts.mjs — read-only; prints the route counts this task moves.
+import { readFileSync } from 'node:fs';
+const root = process.argv[2];
+const scan = (f) => {
+  let src = '';
+  try { src = readFileSync(`${root}/server/src/${f}`, 'utf8'); } catch { return []; }
+  return [...src.matchAll(/app\.(get|post|put|patch|delete)\('([^']+)'/g)].map((m) => `${m[1].toUpperCase()} ${m[2]}`);
+};
+const files = ['server.ts', 'coord/routes.ts', 'update/routes.ts', 'docs/routes.ts'];
+let all = [];
+for (const f of files) { const r = scan(f); console.log(f, r.length); all = all.concat(r); }
+const ws = ['/ws/fleet', '/ws/session/:id', '/ws/pty/:id'];
+const W = all.filter((k) => ws.includes(k.slice(k.indexOf(' ') + 1))).length;
+const gate = readFileSync(`${root}/server/src/auth/gate.ts`, 'utf8');
+const exempt = [...gate.matchAll(/^ {2}\['((?:GET|POST|PUT|DELETE|PATCH) [^']+)',/gm)].map((m) => m[1]);
+const E = all.filter((k) => exempt.includes(k)).length;
+console.log({ ROUTES: all.length, W, H: all.length - W, exemptHttp: E, gated: all.length - W - E });
+```
+
+Run: `node <scratch>/t8-counts.mjs "$(git rev-parse --show-toplevel)"`
+Expected at Task 7's state: `server.ts 51`, `coord/routes.ts 31`, `update/routes.ts 7`, `docs/routes.ts 4`, `{ ROUTES: 93, W: 3, H: 90, exemptHttp: 32, gated: 58 }`. The script already counts `docs/routes.ts` (Tasks 6 and 7 wrote it); the TEST's `ROUTES` does not yet, so today's test counts are the first three files: `ROUTES.length` 89 (51 + 31 + 7), HTTP 86, exempt-HTTP 32, gated 54. After this task: 93, 90, 32 and 58. If `main` moved any of the first three numbers, use the MEASURED numbers in every edit below (the numerals in this plan are hints) and say so in the task's report.
+
+- [ ] **Step 1: Write the failing tests.** Two files, twelve edits: (a)-(j) in `auth-gate.test.ts`, (k) and (l) in `box-token-census.test.ts`.
+
+(a) `server/test/auth-gate.test.ts`, `ROUTES`'s docstring, first line (line 95).
+
+Find:
+
+```ts
+/** THREE files register routes since update-management W2 (design 2026-09-20
+```
+
+Replace with:
+
+```ts
+/** FOUR files register routes since the native Docs reader's W3 (design
+ *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its four on the docs
+ *  plugin's own instance, whose parameter is named `app` so this literal scan
+ *  reads them like any other. THREE since update-management W2 (design 2026-09-20
+```
+
+(b) `server/test/auth-gate.test.ts`, the `ROUTES` array (lines 100-101).
+
+Find:
+
+```ts
+  ...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts'), ...scanRoutes('update/routes.ts'),
+];
+```
+
+Replace with:
+
+```ts
+  ...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts'), ...scanRoutes('update/routes.ts'),
+  ...scanRoutes('docs/routes.ts'),
+];
+```
+
+(c) `server/test/auth-gate.test.ts`, the scanner meta-test's title (line 208).
+
+Find:
+
+```ts
+  it('found all three files, and EXACTLY the route count the surface has', () => {
+```
+
+Replace with:
+
+```ts
+  it('found all four files, and EXACTLY the route count the surface has', () => {
+```
+
+(d) `server/test/auth-gate.test.ts`, the per-file count (line 250).
+
+Find:
+
+```ts
+    expect(scanRoutes('update/routes.ts').length).toBe(7);
+```
+
+Replace with:
+
+```ts
+    expect(scanRoutes('update/routes.ts').length).toBe(7);
+    // 4 in `docs/routes.ts` (the native Docs reader's W3, design 2026-10-01 §3.4
+    // and §3.13): `GET /api/docs/projects`, `GET /api/docs/:project/tree`,
+    // `GET /api/docs/:project/file` and `POST /api/docs/:project/refresh`, on the
+    // docs plugin's own instance. Session-gated and NOT EXEMPT, no box token, not
+    // FLAG_AWARE: with no marker header they answer 403 `foreign-request` dark and
+    // armed-with-a-session alike, so the property loop below compares them as it
+    // compares every other route, and the armed no-cookie sweep sees the gate's 401
+    // first.
+    expect(scanRoutes('docs/routes.ts').length).toBe(4);
+```
+
+(e) `server/test/auth-gate.test.ts`, `ROUTES.length` (lines 312-313).
+
+Find:
+
+```ts
+    // 30 -> 31 and main took the third file 5 -> 7, so 51 + 31 + 7 = 89.
+    expect(ROUTES.length).toBe(89);
+```
+
+Replace with:
+
+```ts
+    // 30 -> 31 and main took the third file 5 -> 7, so 51 + 31 + 7 = 89.
+    //
+    // 93 since the native Docs reader's W3 put the fourth file's four beside them,
+    // re-derived on the tree that registers them: 51 + 31 + 7 + 4 = 93. All four
+    // are HTTP routes and none is EXEMPT, so the HTTP count moves 86 -> 90, the
+    // gated count 54 -> 58, and the exempt-HTTP count stays 32.
+    expect(ROUTES.length).toBe(93);
+```
+
+(f) `server/test/auth-gate.test.ts`, the specific-registrations list (lines 353-354).
+
+Find:
+
+```ts
+      'POST /api/updates/apply', 'POST /api/updates/rollback',
+    ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
+```
+
+Replace with:
+
+```ts
+      'POST /api/updates/apply', 'POST /api/updates/rollback',
+      // The fourth file's four (the native Docs reader's W3): a scanner that stopped
+      // reading `docs/routes.ts` would lose all of them at once, the refresh POST too.
+      'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
+      'POST /api/docs/:project/refresh',
+    ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
+```
+
+(g) `server/test/auth-gate.test.ts`, the COMPLETE describe's numeral (line 451).
+
+Find:
+
+```ts
+    // 89 scanned + the static wildcard when the bundle is built.
+```
+
+Replace with:
+
+```ts
+    // 93 scanned + the static wildcard when the bundle is built.
+```
+
+(h) `server/test/auth-gate.test.ts`, the no-cookie shell list (line 790).
+
+Find:
+
+```ts
+    for (const url of ['/', '/index.html', '/sessions/deep/link']) {
+```
+
+Replace with:
+
+```ts
+    // A Docs page URL (design 2026-10-01 §3.13) is a shell URL too: `/docs/...` is a
+    // page the SPA routes, never a server route, so a signed-out hard load of a shared
+    // link must reach the login screen rather than the gate's refusal.
+    for (const url of ['/', '/index.html', '/sessions/deep/link', '/docs/example-project/specs/x.md?ref=ws/example']) {
+```
+
+(i) `server/test/auth-gate.test.ts`, the property loop's first numeral (line 901).
+
+Find:
+
+```ts
+    // THE PROPERTY, in one loop over all 86 HTTP routes, with THREE probes each:
+```
+
+Replace with:
+
+```ts
+    // THE PROPERTY, in one loop over all 90 HTTP routes, with THREE probes each:
+```
+
+(j) `server/test/auth-gate.test.ts`, the third probe's numerals (line 965). The exempt count stays 32.
+
+Find:
+
+```ts
+          //    is not itself flag-aware — the assertion that covers all 86 HTTP routes, not the 32 exempt.
+```
+
+Replace with:
+
+```ts
+          //    is not itself flag-aware — the assertion that covers all 90 HTTP routes, not the 32 exempt.
+```
+
+None of the inserted comment lines contains a `claim()` needle (`in one loop over all`, `the assertion that covers all`, `websockets and every HTTP route`, `scanned + the static wildcard`), nor the census-title needle `box-token lanes in EXEMPT` that `box-token-census.test.ts` reads out of this file; Step 4 re-measures that each needle still matches exactly one line.
+
+(k) `server/test/box-token-census.test.ts`, the imports (lines 56-59).
+
+Find:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+```
+
+Replace with:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
+```
+
+(l) `server/test/box-token-census.test.ts`: append at EOF. Locate the end with `tail -n 3 server/test/box-token-census.test.ts`, which prints `      .toContain('/api/pools/epoch');`, `  });` and `});`; append exactly this after that last `});` (the leading blank line included). It reuses the module-scope `read`, `REPO`, `GATE_PATTERNS`, `registrationsIn`, `lanesIn`, `SESSION_ONLY_ALL` and `ALL_LANES`; `TREE_LINE` and `REFRESH_LINE` are the Global Constraints' fixed registration texts, without their two-space indent.
+
+```ts
+
+// ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
+//
+// `server/src/docs/routes.ts` is the FOURTH file that registers routes. Its four are session-gated, NOT EXEMPT and
+// consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
+// one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
+// token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own
+// hooks would gate all four routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
+// `ALL_LANES`: a docs read or refresh is not a coordination write, so CLAUDE.md's box-token bullet owes it no
+// sentence and no number word moves. And the page grammar's prefix is never a SERVER route (§3.13's new scan): a
+// `/docs/...` URL is the PWA's page, answered by the SPA shell, under every file in `server/src`.
+describe('the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
+  const DOCS_SRC = read('server/src/docs/routes.ts');
+  /** Every source file of the docs surface, by listing the directory, so a file added there is read without an edit
+   *  here. */
+  const DOCS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'docs'))
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/docs/${f}`);
+  /** The four doors, by path (§3.4). Hand-kept for the NAMES only: the cases below derive the same set from the file
+   *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
+  const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
+    '/api/docs/:project/refresh'];
+  const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
+  const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
+  /** The registration lines the planted-call controls anchor on (the plan's fixed registration text). */
+  const TREE_LINE = "app.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {";
+  const REFRESH_LINE = "app.post('/api/docs/:project/refresh', async (req, reply) => {";
+  /** Every `.ts` file under `server/src`, repo-relative. */
+  const SERVER_FILES = (readdirSync(path.join(REPO, 'server', 'src'), { recursive: true }) as string[])
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/${f.split(path.sep).join('/')}`);
+
+  it('docs/routes.ts registers what the checks below reason over, and every docs file is read', () => {
+    // Anti-vacuity: every loop below is over REGISTERED, DOCS_FILES or SERVER_FILES.
+    expect(REGISTERED.length, 'the docs scan collapsed — this describe is over nothing').toBe(DOCS_DOORS.length);
+    expect(new Set(REGISTERED).size, 'a docs route is registered twice').toBe(REGISTERED.length);
+    expect(DOCS_FILES, 'the docs directory listing lost a file this census must read').toEqual(expect.arrayContaining([
+      'server/src/docs/cache.ts', 'server/src/docs/hooks.ts', 'server/src/docs/lane.ts', 'server/src/docs/routes.ts',
+    ]));
+    expect(SERVER_FILES, 'the server/src listing is not recursive — the /docs scan would miss every subdirectory')
+      .toEqual(expect.arrayContaining(['server/src/server.ts', 'server/src/docs/routes.ts', 'server/src/coord/routes.ts']));
+  });
+
+  it('DOCS_DOORS is exactly what docs/routes.ts registers, in both directions', () => {
+    expect(REGISTERED.map(pathOf).sort(),
+      'docs/routes.ts and DOCS_DOORS disagree — a route was added or removed on one side only')
+      .toEqual([...DOCS_DOORS].sort());
+  });
+
+  it('no docs file consults the box token, and no docs handler is a lane (§3.4: no box token is used)', () => {
+    for (const rel of DOCS_FILES) {
+      const src = read(rel);
+      for (const re of GATE_PATTERNS) {
+        expect(re.test(src), `${rel} consults the box token (${re.source}) — a docs route would be gated by it`)
+          .toBe(false);
+      }
+    }
+    expect(lanesIn(DOCS_SRC)).toEqual([]);
+  });
+
+  it('a box-token call planted after the tree GET or the refresh POST is SEEN — the lane source is live', () => {
+    // The control for the two cases above: they would pass just as green over a scanner that could not see this file.
+    for (const [anchor, k] of [[TREE_LINE, 'GET /api/docs/:project/tree'],
+      [REFRESH_LINE, 'POST /api/docs/:project/refresh']] as const) {
+      expect(DOCS_SRC, `the registration line of ${k} moved — re-point this control at it`).toContain(anchor);
+      for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+        const planted = DOCS_SRC.replace(anchor, `${anchor}\n    ${call}`);
+        expect(lanesIn(planted), `a planted ${call} in ${k} went unseen`).toEqual([k]);
+        expect(GATE_PATTERNS.some((re) => re.test(planted)), `a planted ${call} went unseen by the file scan`)
+          .toBe(true);
+      }
+    }
+  });
+
+  it('a route planted with another verb, or through app.route(), is SEEN and breaks the both-directions equality', () => {
+    const plants = [
+      ["app.delete('/api/docs/x', async (req, reply) => { reply.code(200).send({ ok: true }); });", 'DELETE /api/docs/x'],
+      ["app.route({ method: 'PUT', url: '/api/docs/y', handler: async (req, reply) => { if (req) { reply.code(200).send({ ok: true }); } } });",
+        'PUT /api/docs/y'],
+    ] as const;
+    for (const [text, k] of plants) {
+      const planted = registrationsIn(`${DOCS_SRC}\n${text}\n`).map((r) => r.key);
+      expect(planted, `a planted ${k} went unseen`).toContain(k);
+      expect(planted.map(pathOf).sort(), `a planted ${k} left the door set unchanged`)
+        .not.toEqual([...DOCS_DOORS].sort());
+      expect(REGISTERED).not.toContain(k);
+    }
+  });
+
+  it('DOCS_DOORS joins neither the session-only coordination writes nor the box-token lanes', () => {
+    for (const door of DOCS_DOORS) {
+      expect(SESSION_ONLY_ALL, `${door} was counted as a coordination write`).not.toContain(door);
+      expect(ALL_LANES.map(pathOf), `${door} was counted as a box-token lane`).not.toContain(door);
+    }
+  });
+
+  it('every /api/docs route lives in docs/routes.ts, and no file in server/src registers a /docs route', () => {
+    // §3.13's new scan, over every file and through the quote-agnostic `registrationsIn`: a docs route registered
+    // anywhere else would miss the docs plugin's provenance and response policy, and a `/docs` route would answer a
+    // URL that is the PWA's page.
+    const misplaced: string[] = [];
+    const pageRoutes: string[] = [];
+    for (const rel of SERVER_FILES) {
+      for (const { key: k } of registrationsIn(read(rel))) {
+        if (pathOf(k).startsWith('/api/docs') && rel !== 'server/src/docs/routes.ts') misplaced.push(`${rel}: ${k}`);
+        if (pathOf(k).startsWith(DOCS_PAGE_PREFIX)) pageRoutes.push(`${rel}: ${k}`);
+      }
+    }
+    expect(misplaced, 'a docs route is registered outside the docs plugin').toEqual([]);
+    expect(pageRoutes, 'a server route answers the Docs page prefix').toEqual([]);
+  });
+
+  it('a /docs route planted in each quote form, or through app.route(), is SEEN by that scan', () => {
+    const body = 'async (req, reply) => { reply.code(200).send({ ok: true }); }';
+    for (const text of [
+      `app.get('${DOCS_PAGE_PREFIX}/x', ${body});`,
+      `app.get("${DOCS_PAGE_PREFIX}/x", ${body});`,
+      'app.get(\x60' + DOCS_PAGE_PREFIX + '/x\x60, ' + body + ');',
+      `app.route({ method: 'GET', url: '${DOCS_PAGE_PREFIX}/x', handler: ${body} });`,
+    ]) {
+      const keys = registrationsIn(`${DOCS_SRC}\n${text}\n`).map((r) => r.key);
+      expect(keys.filter((k) => pathOf(k).startsWith(DOCS_PAGE_PREFIX)), `${text} went unseen`)
+        .toEqual([`GET ${DOCS_PAGE_PREFIX}/x`]);
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts )`
+Expected: `Test Files  1 failed | 1 passed (2)`, `Tests  3 failed | 190 passed (193)`. The three reds, all in `auth-gate.test.ts`, are the measured proof that the scan now reads `docs/routes.ts` while `buildServer` does not yet register it:
+- `…and in the other direction: nothing the scan found is a phantom`: `the scan invented routes this server does not register: expected [ 'GET /api/docs/:project/file', …(3) ] to deeply equal []` (the four phantoms);
+- `the table parser is looking at something — guards the guard`: `expected 89 to be 93`;
+- `gate.ts's own docstring names the HTTP-route count it stands in front of`: `expected [ 86 ] to deeply equal [ 90 ]`.
+
+Every other auth-gate case is green already, and that is measured, not assumed: the four new `%s answers 401 no-session` rows pass because the gate refuses an unmatched URL exactly as a gated one (`no-session`), and the property loop sees an unmatched `/api/...` URL answer the not-found handler's 404 dark and authenticated alike. `box-token-census.test.ts` is `31 passed` (Task 7's 23 and this task's 8) at once: its describe is a census of `docs/routes.ts` and `hooks.ts`, which Tasks 3, 6 and 7 wrote; its red evidence is the mutation rows W3-T8-M7 to M13, each measured red below. Any other failure (a `claim()` needle matching zero or two lines, a missing export, a syntax error) means an edit was not pasted exactly: stop.
+
+- [ ] **Step 3: Write the implementation.** Two files, three edits.
+
+(a) `server/src/server.ts`, the imports (line 57).
+
+Find:
+
+```ts
+import { registerUpdateRoutes } from './update/routes.js';
+```
+
+Replace with:
+
+```ts
+import { registerUpdateRoutes } from './update/routes.js';
+import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
+```
+
+(b) `server/src/server.ts`, the plugin block (line 1659). Section 3.4's registration verbatim, apart from the composition's name; the plugin's parameter is named `app` because `auth-gate.test.ts`'s scanner is literal (it reads `docs/routes.ts`, whose functions receive this `app`). `installDocsRequestPolicy(app)` takes its default clock, `Date.now`.
+
+Find:
+
+```ts
+  registerUpdateRoutes(app, deps, sessionAuth, watcher);
+```
+
+Replace with:
+
+```ts
+  registerUpdateRoutes(app, deps, sessionAuth, watcher);
+
+  // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
+  // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
+  // nothing else; which is why `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts`'s docs describe read
+  // `docs/routes.ts` by name. The root's gate hook runs before the plugin's own, so a signed-out request meets the
+  // gate first. The composition is built here, once per `buildServer` (two servers share no lane and no cache), over
+  // a getter: the adapter reads `deps.fleetState` at every call, so it sees the one state object the link mutates in
+  // place, and a replaced one too. Registered UNCONDITIONALLY: before the handshake, and in local mode with no
+  // measured caps, the adapter itself refuses every call before any exec. The read registration is never handed a
+  // fetcher; only the refresh is.
+  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });
+  await app.register(async (app) => {
+    installDocsRequestPolicy(app);
+    installDocsResponsePolicy(app);
+    registerDocsReadRoutes(app, docs.readers, docs.lanes);
+    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+  });
+```
+
+(c) `server/src/auth/gate.ts`, the module docstring's numeral (line 8), in place.
+
+Find:
+
+```ts
+ * THE GATE. One `onRequest` hook stands in front of all 86 routes, the static
+```
+
+Replace with:
+
+```ts
+ * THE GATE. One `onRequest` hook stands in front of all 90 routes, the static
+```
+
+`index.ts` is not edited (refinement (i)): `deps.runCcd` is the runner `index.ts` already builds for both modes, and `deps.fleetState` is the object `connectFleet` mutates in remote mode and absent in local mode (the adapter's tri-state gate then answers `caps-unknown` before any exec, which Task 9 pins). No `Deps` field is added.
+
+- [ ] **Step 4: Run them to verify they pass.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  193 passed (193)` (auth-gate 162: Task 7's 158 and the four new `answers 401 no-session` rows; box-token-census 31). The provenance hook logs `ccrc-server: docs refused a marker request` while the property loop runs: its probes send no marker, which is the point.
+
+What the green run measures, recorded so the reviewer need not re-derive it (measured with a throwaway probe case in a scratch copy, not committed): for each of the four docs routes, dark answers `403 {"ok":false,"failure":"foreign-request","why":"marker"}` with `x-content-type-options: nosniff` and `cache-control: no-store`, armed with no cookie answers the gate's `401 {"ok":false,"error":"unauthenticated","verdict":"no-session"}`, and armed with a live cookie answers the same 403 as dark. With a built bundle (`server/dist-pwa/index.html` present, `HAS_PWA` true) the suite is also `162 passed`, the shell list's Docs URL answers 200, `real.size` is 94, and a not-found handler that stops serving the shell for `/docs` reds `the SPA shell loads with no cookie` (`expected 404 to be 200`); without a bundle that case returns early and the URL is not probed, as its own comment says.
+
+- [ ] **Step 5: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests`, `session-hook` and `pr-sweep` are known load flakes, so a red there is re-run alone before it is called broken. Stage the four files first, so `topology-clean`'s `git ls-files` corpus contains them:
+
+Run: `git add server/src/server.ts server/src/auth/gate.ts server/test/auth-gate.test.ts server/test/box-token-census.test.ts && git status --short`
+Expected: exactly `M  server/src/auth/gate.ts`, `M  server/src/server.ts`, `M  server/test/auth-gate.test.ts` and `M  server/test/box-token-census.test.ts`.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The first compiles the getter object against `CcdDocsDeps` (`fleetState: FleetState | undefined` is assignable to `Pick<FleetState, 'ccdVerbs'> | undefined`) and the plugin's `app` parameter against the three registration signatures; the second `readdirSync(..., { recursive: true }) as string[]` and the `shared/docs.js` import.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-passkey.test.ts test/auth-wire.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  165 passed (165)`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/coord-routes-single-file.test.ts test/coord-pause-route.test.ts test/routes.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  103 passed (103)`: the `server.ts` block holds no `app.<verb>('` text, no `knownId(` and no `readProjectPools(`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/update-routes.test.ts test/boot.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  41 passed (41)` (`index.ts` untouched; `buildServer` with the plugin boots).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/verb-gate.test.ts test/whitelist-subset.test.ts test/capsupported.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  140 passed (140)`: `server.ts` makes no `CCD_ARGV.` docs call (the routes reach ccd only through the ports) and quotes no cap token.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )`
+Expected: `Tests  55 passed (55)`. It needs `origin/main` (or `CCRC_HISTORY_BASE=<the wave's base sha>`; without either its first case reds by design, `no $CCRC_HISTORY_BASE or origin/main resolved`). This task adds only placeholder names: the project `example-project`, the branch `ws/example`, and the planted paths `/api/docs/x`, `/api/docs/y` and `/docs/x`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  472 passed (472)`: `composeDocs`, `registerDocsReadRoutes`, `registerDocsRefreshRoute`, `installDocsRequestPolicy` and `installDocsResponsePolicy` are imported, never re-declared, and the docs ring guard is unchanged (Task 9 moves its floor).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-headers.test.ts test/docs-lanes.test.ts test/docs-cache.test.ts test/docs-file-bytes.test.ts )`
+Expected: `Test Files  5 passed (5)`, `Tests  276 passed (276)` (unchanged: they mount through `docsApp`, not `buildServer`).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-routes.test.ts test/ccrc-versioned-audit.test.ts test/divergence-sweep.test.ts test/docs-budget.test.ts test/docs-parity.test.ts test/docs-source.test.ts test/pane-history-route.test.ts test/notify-token.test.ts test/pools-prose.test.ts test/pool-accounts-route.test.ts test/roster.test.ts test/update-spawn-twin-bodies.test.ts test/update-op-vocabulary.test.ts test/swap-timeout-budget.test.ts test/name-sweep.test.ts test/fleet.test.ts test/run-route-route.test.ts test/gen-accounts.test.ts )`
+Expected: `Test Files  18 passed (18)`, `Tests  890 passed (890)`: every other suite that reads `server.ts` as text, so a moved anchor or a census over its imports would show here.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts test/pr-sweep.test.ts )`
+Expected: `Test Files  2 passed (2)`. Both are known load flakes (measured once here: one `session-hook` case red under the concurrent docs batch, `335 passed (335)` alone); neither reads a file this task edits by line.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Task 5's Measured 4); Task 1's Step 0 installs real modules.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add server/src/server.ts server/src/auth/gate.ts server/test/auth-gate.test.ts server/test/box-token-census.test.ts
+git commit -m "server: register the docs plugin and move the route censuses (docs W3)" \
+  -m "buildServer composes the docs reader, fetcher, lanes and caches once, over a getter on deps.fleetState, and registers the docs plugin unconditionally beside registerUpdateRoutes, as spec section 3.4 writes it: the provenance and response policies, the three reads without a fetcher, then the refresh. auth-gate.test.ts scans docs/routes.ts as the fourth route file (93 routes, 90 HTTP, 58 gated, 32 exempt, re-derived on the tree), names its four keys and the Docs shell URL, and gate.ts's numeral follows. box-token-census.test.ts gains the docs describe: DOCS_DOORS both ways, no box-token text in any docs file, planted controls on the tree GET and the refresh POST, every /api/docs route in docs/routes.ts, and no /docs route anywhere in server/src (M3.14, M3.15)." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at this task's commit, then `git -C <copy> init -q`, with `server/node_modules` linked to the worktree's; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state). The architecture's eleven guard sketches map to W3-T8-M1 to M11 in order, with two departures, both measured: M5 (`'GET /api/docs/projects'` planted in `EXEMPT`) reds the exact `EXEMPT` list and the third probe's exempt numeral, NOT the armed no-cookie sweep the sketch predicted (an exempted docs route then answers the provenance hook's 403, which `is NOT refused by the gate` accepts); and M11 (the sketch's "plugin parameter renamed `docs`") is written as what the literal scan actually protects, an aliased receiver on the tree registration in `routes.ts` (renaming the `server.ts` parameter would collide with `const docs` and fail every server-booting suite for an unrelated reason). M12 (`DOCS_DOORS` counted as a coordination write) and M13 (the `server/src` listing made non-recursive, which would blind the `/docs` scan to every subdirectory) are this task's own. This task re-anchors none of Tasks 1-7's rows: their 199 anchors all sit in `server/src/docs/` (`cache.ts`, `hooks.ts`, `lane.ts`, `policy.ts`, `routes.ts`), which this task does not edit, and every one of them is still unique at this task's state (measured).
+
+Measured, not a row: the shell list's Docs URL (Step 4) reds only with a built bundle present, and a fresh workspace has none (`server/dist-pwa/` is a gitignored build artefact), so Task 12's table run could not reproduce it; its red was measured once in a copy with the worktree's bundle and is recorded in Step 4.
+
+```json
+[
+ {
+  "id": "W3-T8-M1",
+  "pkg": "server",
+  "file": "server/test/auth-gate.test.ts",
+  "old": "  ...scanRoutes('docs/routes.ts'),\n",
+  "new": "",
+  "tests": [
+   "test/auth-gate.test.ts"
+  ],
+  "red": "server auth-gate: 8 failed | 150 passed (158) — found all four files, and EXACTLY the route count the surface has; found the specific registrations this file reasons about; every route the server really registers was found by the source scan; the table parser is looking at something — guards the guard; the property loop names the HTTP-route count; the third probe names the whole and the exempt part; gate.ts's own docstring names the HTTP-route count it stands in front of; the scanner-meta comment names the scanned route count"
+ },
+ {
+  "id": "W3-T8-M2",
+  "pkg": "server",
+  "file": "server/src/server.ts",
+  "old": "  await app.register(async (app) => {\n    installDocsRequestPolicy(app);\n    installDocsResponsePolicy(app);\n    registerDocsReadRoutes(app, docs.readers, docs.lanes);\n    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);\n  });\n",
+  "new": "  void docs;\n",
+  "tests": [
+   "test/auth-gate.test.ts"
+  ],
+  "red": "server auth-gate: 2 failed | 160 passed (162) — …and in the other direction: nothing the scan found is a phantom (the four docs keys); the table parser is looking at something — guards the guard (89, want 93)"
+ },
+ {
+  "id": "W3-T8-M3",
+  "pkg": "server",
+  "file": "server/src/server.ts",
+  "old": "  await app.register(async (app) => {\n",
+  "new": "  if (deps.fleetState) await app.register(async (app) => {\n",
+  "tests": [
+   "test/auth-gate.test.ts"
+  ],
+  "red": "server auth-gate: 2 failed | 160 passed (162) — …and in the other direction: nothing the scan found is a phantom; the table parser is looking at something — guards the guard (testDeps carries no fleetState, so the conditional plugin never registers)"
+ },
+ {
+  "id": "W3-T8-M4",
+  "pkg": "server",
+  "file": "server/src/server.ts",
+  "old": "  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });\n",
+  "new": "  app.get(`/api/docs/extra`, async () => ({ ok: true }));\n  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });\n",
+  "tests": [
+   "test/auth-gate.test.ts",
+   "test/box-token-census.test.ts"
+  ],
+  "red": "server auth-gate + box-token-census: 3 failed | 190 passed (193) — every /api/docs route lives in docs/routes.ts, and no file in server/src registers a /docs route; every route the server really registers was found by the source scan; the table parser is looking at something — guards the guard"
+ },
+ {
+  "id": "W3-T8-M5",
+  "pkg": "server",
+  "file": "server/src/auth/gate.ts",
+  "old": "  ['GET /api/auth/status',\n",
+  "new": "  ['GET /api/docs/projects',\n    'a planted exemption: the docs index read, which must stay behind the session gate like every docs route'],\n  ['GET /api/auth/status',\n",
+  "tests": [
+   "test/auth-gate.test.ts"
+  ],
+  "red": "server auth-gate: 2 failed | 160 passed (162) — exempts exactly the six classes the plan names — nothing has crept in; the third probe names the whole and the exempt part"
+ },
+ {
+  "id": "W3-T8-M6",
+  "pkg": "server",
+  "file": "server/src/auth/gate.ts",
+  "old": " * THE GATE. One `onRequest` hook stands in front of all 90 routes, the static\n",
+  "new": " * THE GATE. One `onRequest` hook stands in front of all 86 routes, the static\n",
+  "tests": [
+   "test/auth-gate.test.ts"
+  ],
+  "red": "server auth-gate: 1 failed | 161 passed (162) — gate.ts's own docstring names the HTTP-route count it stands in front of"
+ },
+ {
+  "id": "W3-T8-M7",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  app.post('/api/docs/:project/refresh', async (req, reply) => {\n",
+  "new": "  app.post('/api/docs/:project/refresh', async (req, reply) => {\n    if (checkMailToken(null, undefined) !== 'ok') return reply;\n",
+  "tests": [
+   "test/box-token-census.test.ts"
+  ],
+  "red": "server box-token-census: 2 failed | 29 passed (31) — no docs file consults the box token, and no docs handler is a lane (§3.4: no box token is used); a box-token call planted after the tree GET or the refresh POST is SEEN — the lane source is live"
+ },
+ {
+  "id": "W3-T8-M8",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    const v = docsProvenance(req.headers);\n",
+  "new": "    if (requireMailToken(req, reply)) return;\n    const v = docsProvenance(req.headers);\n",
+  "tests": [
+   "test/box-token-census.test.ts"
+  ],
+  "red": "server box-token-census: 1 failed | 30 passed (31) — no docs file consults the box token, and no docs handler is a lane (§3.4: no box token is used)"
+ },
+ {
+  "id": "W3-T8-M9",
+  "pkg": "server",
+  "file": "server/test/box-token-census.test.ts",
+  "old": "  const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',\n",
+  "new": "  const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree',\n",
+  "tests": [
+   "test/box-token-census.test.ts"
+  ],
+  "red": "server box-token-census: 2 failed | 29 passed (31) — docs/routes.ts registers what the checks below reason over, and every docs file is read; DOCS_DOORS is exactly what docs/routes.ts registers, in both directions"
+ },
+ {
+  "id": "W3-T8-M10",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  app.get('/api/docs/projects', { exposeHeadRoute: false }, async (req, reply) => {\n",
+  "new": "  app.get('/docs/x', { exposeHeadRoute: false }, async () => ({ ok: true }));\n  app.get('/api/docs/projects', { exposeHeadRoute: false }, async (req, reply) => {\n",
+  "tests": [
+   "test/box-token-census.test.ts",
+   "test/auth-gate.test.ts"
+  ],
+  "red": "server box-token-census + auth-gate: 9 failed | 185 passed (194) — docs/routes.ts registers what the checks below reason over, and every docs file is read; DOCS_DOORS is exactly what docs/routes.ts registers, in both directions; every /api/docs route lives in docs/routes.ts, and no file in server/src registers a /docs route; a /docs route planted in each quote form, or through app.route(), is SEEN by that scan; found all four files, and EXACTLY the route count the surface has; and 4 more (the prose-count claims)"
+ },
+ {
+  "id": "W3-T8-M11",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  app.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {\n",
+  "new": "  const docsApp = app;\n  docsApp.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {\n",
+  "tests": [
+   "test/auth-gate.test.ts",
+   "test/box-token-census.test.ts"
+  ],
+  "red": "server auth-gate + box-token-census: 11 failed | 181 passed (192) — docs/routes.ts registers what the checks below reason over, and every docs file is read; DOCS_DOORS is exactly what docs/routes.ts registers, in both directions; a box-token call planted after the tree GET or the refresh POST is SEEN — the lane source is live; found all four files, and EXACTLY the route count the surface has; found the specific registrations this file reasons about; every route the server really registers was found by the source scan; and 5 more"
+ },
+ {
+  "id": "W3-T8-M12",
+  "pkg": "server",
+  "file": "server/test/box-token-census.test.ts",
+  "old": "const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS];\n",
+  "new": "const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS, '/api/docs/:project/refresh'];\n",
+  "tests": [
+   "test/box-token-census.test.ts"
+  ],
+  "red": "server box-token-census: 2 failed | 29 passed (31) — CLAUDE.md's box-token bullet is TRUE, not merely present; DOCS_DOORS joins neither the session-only coordination writes nor the box-token lanes"
+ },
+ {
+  "id": "W3-T8-M13",
+  "pkg": "server",
+  "file": "server/test/box-token-census.test.ts",
+  "old": "  const SERVER_FILES = (readdirSync(path.join(REPO, 'server', 'src'), { recursive: true }) as string[])\n",
+  "new": "  const SERVER_FILES = (readdirSync(path.join(REPO, 'server', 'src')) as string[])\n",
+  "tests": [
+   "test/box-token-census.test.ts"
+  ],
+  "red": "server box-token-census: 1 failed | 30 passed (31) — docs/routes.ts registers what the checks below reason over, and every docs file is read"
+ }
+]
+```
+
+### Task 9: The Docs API in the real server: gate before provenance, headers on every docs route, the refresh door, GET never fetches (spy, type and widened scans), L4 quotes no failure word, and the five spec deviations
+
+**Model routing:** `sonnet`, effort `high` — the `buildServer` harness (armed and dark) and two source scans with CONTROLs; the deviation step reads the issued block from the brief and types no other number. Every count below was measured on the scratch tree at Task 8's state plus this task, on node v24.14.1 and Fastify 5.10.0, with no `server/dist-pwa/`.
+
+**Spec rows:** section 2 (j) row 49 ("GET never fetches": "Only one `CCD_ARGV.docsFetch(` in `server/src` (scan)", "The read registration's type has no fetcher (typecheck-tests)", "A spy across every GET never sees `docs-fetch`"; mutation "call fetch from a GET"), the three walls of section 2 (g) ("GET never fetches"); row 50 ("Refresh gated": armed, a POST without a session gives 401 and a wrong `Origin` 403; not in `EXEMPT`; the census half is Task 8's); M3.8 ("Gate before provenance": armed, no cookie, no marker gives the gate's 401 with `verdict`; mutation "register provenance as a root hook before `installGate`"); M5.4 ("Headers everywhere": for every route in Fastify's route table under `/api/docs/`, derived, under a 200, a 4xx, a 5xx, an armed no-cookie 401, an armed POST with a foreign `Origin` (403) and a provenance 403, all four headers with exact values; mutations "delete the hook; delete one header; register a docs route outside the plugin"). W2's review carries closed here: `fleetState` captured by reference (the SWAP half: a state object replaced after `buildServer` is read; Task 6 pinned the mutate half) and the `DOCS_CALL` scan's blind spots (optional-chain, bracket and aliased calls: refinement (q)'s widened scans, each with a CONTROL planting every missed shape). Refinements applied: (d) measured on the real server, armed; (i) the getter wiring Task 8 wrote, proved here; (q) the scans' homes. Step 7 DEFINES the five deviations, (d), (i), (j), (s) and (v), with the first five numbers of the block the brief issued.
+
+**Files:**
+- Modify: `server/test/docs-routes.test.ts` — its imports, in place (lines 12-13, 18 and 23-29 at Task 8's state), and five describes appended at EOF after line 1027 (6 cases): the getter (refinement (i), the swap), row 49's spy, row 50, M3.8 with refinement (d)'s real-server measurement, and row 49's type wall (`typecheck-tests` compiles this file).
+- Modify: `server/test/docs-headers.test.ts` — its imports, in place (lines 12-20), and one describe appended at EOF after line 419 (7 cases): M5.4 over the real server's derived route table.
+- Modify: `server/test/single-definition.test.ts` — exactly one in-place line (`DOCS_RING_FLOOR`, line 4808) and one describe appended at EOF after line 5054 (7 cases). Judged NET against the wave's base: no earlier W3 task touches this file, so the net diff is these two hunks.
+- Modify: `docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md`, this plan — Step 7 appends `## Deviations found` after the file's last line; nothing above it changes.
+- Test: the three files above and `typecheck-tests.test.ts`; guards `auth-gate.test.ts`, `box-token-census.test.ts` (unchanged, re-run), `topology-clean.test.ts`, `session-hook.test.ts`'s citation audit, `docs-lanes.test.ts`, `docs-cache.test.ts`, `docs-file-bytes.test.ts`, `deviation-refs.test.ts`, `dtbd.test.ts`. No `server/src` file is edited: the walls stand over the code Tasks 3-8 wrote.
+
+**Interfaces:**
+- Consumes: `buildServer(deps: Deps, bus?: Bus, watcher?: FleetWatcher): Promise<FastifyInstance>` and `type Deps` (`server/src/server.ts`; Task 8's plugin block inside it); `testDeps(home?: string, run?: Runner): Deps` (`server/test/helpers.ts`; wraps `guardRunner`, so every docs argv these cases make is checked against the agent's real exec whitelist; builds NO `fleetState`); `mkTmp(prefix: string): string` (`server/test/tmpHelpers.ts`); `hashLine(passphrase: string, params: ScryptParams, generation: number): Promise<string>` and `ScryptParams` (`server/src/auth/secret.ts`); `EXEMPT: ReadonlyMap<string, string>` (`server/src/auth/gate.ts`); `type Runner = (cmd: string, args: string[]) => Promise<ExecResult>` and `ExecResult` (`server/src/exec.ts`); `FleetState` (`server/src/fleetstate.ts`); `DOCS_CAP` (`server/src/ccdargv.ts`); `registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>, lanes: DocsNodes<DocsNodeLanes>): void`, `DocsNodes<T>`, `DocsNodeLanes`, `DocsComposition` (`server/src/docs/routes.ts`, Task 6); `DocsReader` (`server/src/docs/ports.ts`); `DOCS_API_PREFIX`, `DOCS_RESPONSE_HEADERS`, `docsApi`, `DocPin` (`shared/docs.ts`); `DOCS_REF_PREFIXES` (`server/src/docs/policy.ts`); from `docsRouteHelpers.ts` (Tasks 4 and 6) `PWA_HEADERS`, `FIXTURE_COMMIT`, `FIXTURE_SERVED`, `indexOk`, `treeOk`, `line`, `showLine`, `sha256Hex`; `docs-routes.test.ts`'s module-scope `apps`, `enc`, `word`, `DOCS_HEADER_NAMES`, `fetchOk`, `verb`; `docs-headers.test.ts`'s module-scope `PWA`, `opened`, and its `beforeEach` `console.warn` spy; `single-definition.test.ts`'s module-scope `ALL`, `rel`, `ccrcRoot`, `path`, `readFileSync`, `stallCodeText`.
+- Produces (test-local; no export, no `server/src` name):
+  - `docs-routes.test.ts`: `readyFleet(): FleetState`, `realAnswer(args: string[]): ExecResult`, `realServer(o?: { auth?: boolean }): Promise<{ app: FastifyInstance; deps: Deps; ccd: () => string[][] }>`, `realLogin(app: FastifyInstance): Promise<string>`, `eachDocsRoute(app: FastifyInstance, headers?: Record<string, string>)`, and the type-level wall `type ReadRegistrationTakesNoFetcher = Assert<Equals<Parameters<typeof registerDocsReadRoutes>, [FastifyInstance, DocsNodes<DocsReader>, DocsNodes<DocsNodeLanes>]>>` plus one `// @ts-expect-error` call passing `docs.fetchers` as the readers.
+  - `docs-headers.test.ts`: `RECIPES: Readonly<Record<string, { ok: M54Req; refused: M54Req }>>`, `m54RouteTable(app: FastifyInstance): Set<string>` (a copy of `auth-gate.test.ts`'s `realRouteTable` walk), `derivedDocsRoutes(app: FastifyInstance): string[]`, `m54Server(o?: { auth?: boolean; fault?: boolean }): Promise<{ app: FastifyInstance; state: FleetState }>`.
+  - `single-definition.test.ts`: `const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts', 'routes.ts', 'hooks.ts', 'lane.ts', 'cache.ts'];` (in place) and the EOF describe `'docs W3 — GET never fetches, and the L4 files quote no failure word (spec 2026-10-01 §2 row 49, §3.13)'`.
+  - This plan: `## Deviations found` with the brief's first five issued numbers, for refinements (d), (i), (j), (s), (v).
+
+Every Find block below is quoted from the file as Task 8 left it and is unique in it; line numbers are hints. If a Find block is absent or not unique, stop and put an ask to the coordinator.
+
+- [ ] **Step 0: Check the base and the claim, and measure the three suites before any edit.** Foreground, Bash timeout 600000 ms.
+
+Run: `grep -qF "const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });" server/src/server.ts && grep -qF "    registerDocsReadRoutes(app, docs.readers, docs.lanes);" server/src/server.ts && grep -qF "  const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts'];" server/test/single-definition.test.ts && ! grep -q 'docs W3 — GET never fetches' server/test/single-definition.test.ts && ! grep -q 'T9: the real server' server/test/docs-routes.test.ts && test -f docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md && ! grep -q '^- \*\*D-[0-9]' docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md && echo T9-BASE-OK`
+Expected: `T9-BASE-OK` (the last two checks: this plan is on the branch, having reached `main` through the programme's ledger PR before the run opened, so `! grep` cannot pass vacuously on a missing file, whose `grep` exits 2; and no deviation entry is defined in it yet: Step 7's own template below spells `D-<n1>`, which it does not match). If it does not print, stop and put an ask to the coordinator. `single-definition.test.ts` is a claimed file (How this wave runs): edit it only while this run holds its claim, or after the two coordinators confirm a scoped agreement by mail.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-headers.test.ts test/single-definition.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  629 passed (629)` (docs-routes 109, docs-headers 48, single-definition 472). If `main` moved any of these counts, the deltas below still bind (+6, +7, +7).
+
+- [ ] **Step 1: The real-server cases in `docs-routes.test.ts`.** Three import edits, then one append.
+
+(a) The `node:` imports (lines 12-13).
+
+Find:
+
+```ts
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+```
+
+Replace with:
+
+```ts
+import http from 'node:http';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
+import type { AddressInfo } from 'node:net';
+```
+
+(b) The routes import (line 18).
+
+Find:
+
+```ts
+import { composeDocs } from '../src/docs/routes.js';
+```
+
+Replace with:
+
+```ts
+import {
+  composeDocs, registerDocsReadRoutes, type DocsComposition, type DocsNodeLanes, type DocsNodes,
+} from '../src/docs/routes.js';
+import type { DocsReader } from '../src/docs/ports.js';
+import { buildServer, type Deps } from '../src/server.js';
+import { EXEMPT } from '../src/auth/gate.js';
+import { hashLine, type ScryptParams } from '../src/auth/secret.js';
+import type { ExecResult, Runner } from '../src/exec.js';
+import type { FleetState } from '../src/fleetstate.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+```
+
+(c) The `shared/docs.js` and helper imports (lines 23-29).
+
+Find:
+
+```ts
+import {
+  DOCS_RESPONSE_HEADERS, type DocsFailureBody, type DocsFailure, type DocsFetchOk,
+} from '../../shared/docs.js';
+import {
+  FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, committedEntry, docsApp, faultRes, indexOk, line, nodeLanes,
+  okRes, scripted, showLine, treeOk, until,
+} from './docsRouteHelpers.js';
+```
+
+Replace with:
+
+```ts
+import {
+  DOCS_RESPONSE_HEADERS, docsApi, type DocPin, type DocsFailureBody, type DocsFailure, type DocsFetchOk,
+} from '../../shared/docs.js';
+import {
+  FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, committedEntry, docsApp, faultRes, indexOk, line, nodeLanes,
+  okRes, scripted, sha256Hex, showLine, treeOk, until,
+} from './docsRouteHelpers.js';
+```
+
+(d) Append at EOF. Locate the end with `tail -n 3 server/test/docs-routes.test.ts`, which prints `    expect(verb(rec.calls, 'docs-index')).toHaveLength(3);`, `  });` and `});`; append exactly this after that last `});` (the leading blank line included). It reuses the module-scope `apps` (closed by the file's `afterEach`), `enc`, `word`, `DOCS_HEADER_NAMES`, `fetchOk` and `verb`; the real server is booted over a `mkTmp` fixture HOME, never the live one, and the runner is a recording double (no ccd runs).
+
+```ts
+
+// ===== Task 9: the Docs API in the real server (section 2 (g)'s walls, section 2 (j) rows 49 and 50, M3.8; W3
+// refinements (d) and (i)) =====
+//
+// These cases boot the REAL server (`buildServer` over `testDeps`), not `docsApp`: the gate, the plugin and the
+// composition are the ones production registers. `testDeps` wraps the runner in `guardRunner`, so every docs argv
+// these cases make is also checked against the agent's real exec whitelist. The runner records `[cmd, ...args]` and
+// answers by ccd verb; `ccd()` is the recorded ccd argv, the spy section 2 (g)'s third wall names.
+
+/** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
+const REAL_PASSPHRASE = 'correct horse battery staple';
+const REAL_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
+/** The four docs routes as `METHOD path` keys (section 3.4). */
+const DOCS_KEYS = [
+  'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
+  'POST /api/docs/:project/refresh',
+] as const;
+/** The bytes every fixture show answers, and the two pins the corpus reads them through, as `docsApi` writes them. */
+const REAL_MD = new TextEncoder().encode('# a\n');
+const REAL_COMMITTED: DocPin = {
+  kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
+};
+const REAL_DRAFT: DocPin = {
+  kind: 'draft', branch: 'ws/a', head: FIXTURE_COMMIT, section: 'specs', path: 'a.md', fp: sha256Hex(REAL_MD),
+};
+
+/** A handshaken fleet state carrying the docs cap: a NEW object each call, so a case can swap one in. */
+function readyFleet(): FleetState {
+  return { connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP], rosterFp: null, build: null };
+}
+
+/** A measured, clean exit of the runner (`ExecResult`), so the adapter's check 1 reads both halves as measured. */
+function realOk(stdout: string): ExecResult {
+  return { code: 0, stdout, stderr: '', killed: false, signal: null };
+}
+
+/** The fixture fleet: ok answers for the four docs verbs (a show answers the pin its argv names); any other ccd argv
+ *  exits 1 with nothing on stdout. */
+function realAnswer(args: string[]): ExecResult {
+  if (args[0] === 'docs-index') return realOk(line(indexOk()));
+  if (args[0] === 'docs-tree') return realOk(line(treeOk()));
+  if (args[0] === 'docs-show') return realOk(showLine(args.includes('--commit') ? REAL_COMMITTED : REAL_DRAFT, REAL_MD));
+  if (args[0] === 'docs-fetch') return realOk(line(fetchOk()));
+  return { code: 1, stdout: '', stderr: 'usage', killed: false, signal: null };
+}
+
+/**
+ * The real server over a fixture HOME (never the live one): `testDeps` with a recording runner, `authEnabled` as
+ * asked (armed: a passphrase is written first, and `cookieSecure` is off for inject), and NO `fleetState` (testDeps
+ * builds none; each case sets the one it needs, AFTER `buildServer`, which is the point of the getter). Closed after
+ * the case with the module's other apps.
+ */
+async function realServer(o: { auth?: boolean } = {}): Promise<{
+  app: FastifyInstance; deps: Deps; ccd: () => string[][];
+}> {
+  const calls: string[][] = [];
+  const run: Runner = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    return realAnswer(args);
+  };
+  const home = mkTmp('ccrc-docs-w3-');
+  const base = testDeps(home, run);
+  if (o.auth) {
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(REAL_PASSPHRASE, REAL_FAST_PARAMS, 1)}\n`, { mode: 0o600 });
+  }
+  const deps: Deps = { ...base, cfg: { ...base.cfg, authEnabled: o.auth ?? false, cookieSecure: false } };
+  const app = await buildServer(deps);
+  await app.ready();
+  apps.push(app);
+  return { app, deps, ccd: () => calls.filter((c) => c[0] === deps.cfg.ccdBin).map((c) => c.slice(1)) };
+}
+
+/** A live session cookie for an armed `app`, minted through the real login route. */
+async function realLogin(app: FastifyInstance): Promise<string> {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: REAL_PASSPHRASE } });
+  expect(res.statusCode, res.body).toBe(204);
+  const set = res.headers['set-cookie'];
+  const first = Array.isArray(set) ? set[0] : String(set);
+  return first.slice(0, first.indexOf(';'));
+}
+
+/** One request per docs route, with no body and no header unless given: what a signed-out browser tab could send. */
+function eachDocsRoute(app: FastifyInstance, headers: Record<string, string> = {}) {
+  return [
+    app.inject({ method: 'GET', url: docsApi.projects(), headers }),
+    app.inject({ method: 'GET', url: docsApi.tree('demo', null), headers }),
+    app.inject({ method: 'GET', url: docsApi.file('demo', REAL_COMMITTED), headers }),
+    app.inject({ method: 'POST', url: docsApi.refresh('demo'), headers }),
+  ];
+}
+
+describe('T9: the real server — the composition reads deps.fleetState through a getter (refinement (i); W2 carry)', () => {
+  it('no fleet state: caps-unknown; a state SWAPPED in after buildServer is read; the same object mutated in place is read', async () => {
+    const { app, deps, ccd } = await realServer();
+    const tree = () => app.inject({ url: docsApi.tree('demo', null), headers: PWA_HEADERS });
+    const none = await tree();
+    expect(none.statusCode).toBe(503);
+    expect(none.headers['retry-after']).toBe('5');
+    expect(none.json()).toStrictEqual(word('caps-unknown'));
+    const state = readyFleet();
+    deps.fleetState = state;
+    const swapped = await tree();
+    expect(swapped.statusCode).toBe(200);
+    expect(swapped.json()).toEqual({ ok: true, tree: treeOk(), refreshDue: true });
+    state.ccdVerbs = null;
+    const mutated = await tree();
+    expect(mutated.statusCode).toBe(503);
+    expect(mutated.json()).toStrictEqual(word('caps-unknown'));
+    expect(ccd()).toEqual([['docs-tree', '--project', 'demo']]);
+  });
+});
+
+describe('T9: row 49 — GET never fetches, on the real server (section 2 (g), the third wall: the recorder)', () => {
+  const [LOCAL_PREFIX, ORIGIN_PREFIX] = DOCS_REF_PREFIXES;
+  /** Every GET shape: the index; the tree with no ref, a bare ref, an origin-qualified and a local-qualified one;
+   *  the file under a committed and a draft pin; and each route with a refused query. */
+  const GETS: readonly (readonly [string, number])[] = [
+    [docsApi.projects(), 200],
+    [docsApi.tree('demo', null), 200],
+    ['/api/docs/demo/tree?ref=main', 200],
+    [`/api/docs/demo/tree?ref=${enc(`${ORIGIN_PREFIX}main`)}`, 200],
+    [`/api/docs/demo/tree?ref=${enc(`${LOCAL_PREFIX}ws/a`)}`, 200],
+    [docsApi.file('demo', REAL_COMMITTED), 200],
+    [docsApi.file('demo', REAL_DRAFT), 200],
+    [`${docsApi.projects()}?x=1`, 400],
+    ['/api/docs/demo/tree?ref=a&ref=b', 400],
+    [`${docsApi.file('demo', REAL_COMMITTED)}&size=1`, 400],
+  ];
+
+  it('a spy across every GET never sees docs-fetch; CONTROL: one refresh POST records exactly one', async () => {
+    const { app, deps, ccd } = await realServer();
+    deps.fleetState = readyFleet();
+    for (const [url, status] of GETS) {
+      expect((await app.inject({ url, headers: PWA_HEADERS })).statusCode, url).toBe(status);
+    }
+    expect(verb(ccd(), 'docs-fetch'), 'a GET ran docs-fetch').toEqual([]);
+    expect([...new Set(ccd().map((argv) => argv[0]))].sort(), 'the spy saw the reads it guards')
+      .toEqual(['docs-index', 'docs-show', 'docs-tree']);
+    const posted = await app.inject({
+      method: 'POST', url: docsApi.refresh('demo'), headers: { ...PWA_HEADERS, 'content-type': 'application/json' },
+      payload: JSON.stringify({ ref: null, reason: 'manual' }),
+    });
+    expect(posted.statusCode).toBe(200);
+    expect(verb(ccd(), 'docs-fetch'), 'the spy cannot see a fetch').toEqual([['docs-fetch', '--project', 'demo']]);
+  });
+});
+
+describe('T9: row 50 — the refresh is gated (section 2 (j) row 50, section 3.4)', () => {
+  it('armed: no session 401; a foreign Origin 403; the session with no Origin 200; none of the four keys is EXEMPT', async () => {
+    const { app, deps, ccd } = await realServer({ auth: true });
+    deps.fleetState = readyFleet();
+    const post = (headers: Record<string, string>) => app.inject({
+      method: 'POST', url: docsApi.refresh('demo'),
+      headers: { ...PWA_HEADERS, 'content-type': 'application/json', ...headers },
+      payload: JSON.stringify({ ref: null, reason: 'manual' }),
+    });
+    const anonymous = await post({});
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymous.json()).toStrictEqual({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
+    const cookie = await realLogin(app);
+    const foreign = await post({ cookie, origin: 'https://other.example' });
+    expect(foreign.statusCode).toBe(403);
+    expect(foreign.json()).toStrictEqual({ ok: false, error: 'foreign-origin' });
+    expect(ccd(), 'a refused refresh made an exec').toEqual([]);
+    const allowed = await post({ cookie });
+    expect(allowed.statusCode).toBe(200);
+    expect(verb(ccd(), 'docs-fetch')).toEqual([['docs-fetch', '--project', 'demo']]);
+    for (const k of DOCS_KEYS) expect(EXEMPT.has(k), `${k} is EXEMPT`).toBe(false);
+  });
+});
+
+describe('T9: M3.8 — the gate before provenance, on the real server (spec F1)', () => {
+  it('armed, no cookie and no marker: each docs route answers the gate\'s 401 with its verdict, decorated, with zero execs', async () => {
+    const { app, deps, ccd } = await realServer({ auth: true });
+    deps.fleetState = readyFleet();
+    const answers = await Promise.all(eachDocsRoute(app));
+    expect(answers).toHaveLength(DOCS_KEYS.length);
+    for (const [i, res] of answers.entries()) {
+      expect(res.statusCode, DOCS_KEYS[i]).toBe(401);
+      expect(res.json(), DOCS_KEYS[i]).toStrictEqual({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
+      expect(res.headers['content-type'], DOCS_KEYS[i]).toBe('application/json; charset=utf-8');
+      expect(res.headers['cache-control'], DOCS_KEYS[i]).toBe('no-store');
+      for (const name of DOCS_HEADER_NAMES) {
+        expect(res.headers[name], `${DOCS_KEYS[i]} ${name}`)
+          .toBe(DOCS_RESPONSE_HEADERS[name as keyof typeof DOCS_RESPONSE_HEADERS]);
+      }
+    }
+    expect(ccd()).toEqual([]);
+  });
+
+  it('refinement (d), measured on the real server: an over-long :project (414) and a malformed path escape (400) are the router\'s, before the gate, with no docs header and zero execs', async () => {
+    const { app, deps, ccd } = await realServer({ auth: true });
+    deps.fleetState = readyFleet();
+    for (const [url, status, code] of [
+      [`/api/docs/${'a'.repeat(101)}/tree`, 414, 'FST_ERR_MAX_PARAM_LENGTH'],
+      ['/api/docs/%ZZ/tree', 400, 'FST_ERR_BAD_URL'],
+    ] as const) {
+      const res = await app.inject({ url });
+      expect(res.statusCode, url).toBe(status);
+      expect(res.json().code, url).toBe(code);
+      expect(res.json().verdict, `${url}: the gate ran`).toBeUndefined();
+      for (const name of DOCS_HEADER_NAMES) expect(res.headers[name], `${url} ${name}`).toBeUndefined();
+    }
+    expect(ccd()).toEqual([]);
+  });
+});
+
+/** Equal types, in either direction (the standard deferred-conditional form). */
+type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Assert<T extends true> = T;
+/** Row 49's type wall (section 2 (g)'s wall 1), compiled by `typecheck-tests`: the read registration takes the app,
+ *  the readers and the lanes, and nothing that can fetch. A fetcher parameter added to it fails this alias. */
+type ReadRegistrationTakesNoFetcher = Assert<Equals<Parameters<typeof registerDocsReadRoutes>,
+  [FastifyInstance, DocsNodes<DocsReader>, DocsNodes<DocsNodeLanes>]>>;
+
+describe('T9: row 49 — the read registration\'s type has no fetcher (section 2 (g), wall 1; typecheck-tests)', () => {
+  it('its parameters are pinned, and a fetcher map cannot be passed as the readers', () => {
+    const pinned: ReadRegistrationTakesNoFetcher = true;
+    /** Never called: it exists for the compiler. Were a fetcher map assignable to a reader map, the directive would
+     *  be unused, and `typecheck-tests` would fail on it. */
+    const fetcherAsReader = (app: FastifyInstance, docs: DocsComposition): void => {
+      // @ts-expect-error -- a DocsFetcher map is not a DocsReader map: the read registration is never handed a fetcher
+      registerDocsReadRoutes(app, docs.fetchers, docs.lanes);
+    };
+    expect(pinned).toBe(true);
+    expect(fetcherAsReader).toBeTypeOf('function');
+  });
+});
+```
+
+- [ ] **Step 2: M5.4 over the real route table in `docs-headers.test.ts`.** One import edit, then one append.
+
+(a) The imports (lines 12-20).
+
+Find:
+
+```ts
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { installDocsRequestPolicy, installDocsResponsePolicy, sendDocsFailure } from '../src/docs/hooks.js';
+import { DOCS_CACHE_IMMUTABLE, docsBusyBody } from '../src/docs/policy.js';
+import {
+  DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, type DocsFailureBody,
+} from '../../shared/docs.js';
+```
+
+Replace with:
+
+```ts
+import { readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { installDocsRequestPolicy, installDocsResponsePolicy, sendDocsFailure } from '../src/docs/hooks.js';
+import { DOCS_CACHE_IMMUTABLE, docsBusyBody } from '../src/docs/policy.js';
+import { buildServer, type Deps } from '../src/server.js';
+import { DOCS_CAP } from '../src/ccdargv.js';
+import { hashLine, type ScryptParams } from '../src/auth/secret.js';
+import type { ExecResult, Runner } from '../src/exec.js';
+import type { FleetState } from '../src/fleetstate.js';
+import {
+  DOCS_API_PREFIX, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, docsApi,
+  type DocPin, type DocsFailureBody,
+} from '../../shared/docs.js';
+import { FIXTURE_COMMIT, FIXTURE_SERVED, indexOk, line, showLine, treeOk } from './docsRouteHelpers.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+```
+
+(b) Append at EOF. Locate the end with `tail -n 3 server/test/docs-headers.test.ts`, which prints `    expect(spelled).toEqual([]);`, `  });` and `});`; append exactly this after that last `});` (the leading blank line included). It reuses the module-scope `PWA`, `opened` (closed by the file's `afterEach`) and the `beforeEach` that silences `console.warn` (the provenance probe logs a marker refusal, which is the point).
+
+```ts
+
+// ===== Task 9: M5.4 over the REAL server's route table (design 2026-10-01 section 5.3, section 5.8) =====
+//
+// The docs routes are DERIVED from Fastify's own `printRoutes` of a server `buildServer` built (the walk is a copy
+// of `auth-gate.test.ts`'s `realRouteTable`: HEAD rows dropped, a line it cannot read recorded as `UNPARSED` so it
+// fails), filtered to `DOCS_API_PREFIX`, never hand-listed: a docs route registered outside the plugin joins the set
+// and fails for want of the headers. Each probe below runs over that derived set. `RECIPES` says only how to make
+// each route answer a 200 or a 4xx; a derived route without a recipe fails by name.
+
+/** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
+const M54_PASSPHRASE = 'correct horse battery staple';
+const M54_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
+/** The four docs routes as `METHOD path` keys (section 3.4): what the derived set must equal. */
+const M54_DOCS_KEYS = [
+  'GET /api/docs/:project/file', 'GET /api/docs/:project/tree', 'GET /api/docs/projects',
+  'POST /api/docs/:project/refresh',
+];
+/** The bytes the fixture show answers, and the committed pin the file route is read through. */
+const M54_MD = new TextEncoder().encode('# a\n');
+const M54_PIN: DocPin = {
+  kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
+};
+
+/** One request: its method, URL and, for the POST, a JSON body. */
+interface M54Req { method: 'GET' | 'POST'; url: string; payload?: string }
+/** How to make one docs route answer a 200 and a 4xx (a refused query or body), by its derived key. */
+const RECIPES: Readonly<Record<string, { ok: M54Req; refused: M54Req }>> = {
+  'GET /api/docs/projects': {
+    ok: { method: 'GET', url: docsApi.projects() },
+    refused: { method: 'GET', url: `${docsApi.projects()}?x=1` },
+  },
+  'GET /api/docs/:project/tree': {
+    ok: { method: 'GET', url: docsApi.tree('demo', null) },
+    refused: { method: 'GET', url: '/api/docs/demo/tree?ref=a&ref=b' },
+  },
+  'GET /api/docs/:project/file': {
+    ok: { method: 'GET', url: docsApi.file('demo', M54_PIN) },
+    refused: { method: 'GET', url: `${docsApi.file('demo', M54_PIN)}&branch=main` },
+  },
+  'POST /api/docs/:project/refresh': {
+    ok: { method: 'POST', url: docsApi.refresh('demo'), payload: JSON.stringify({ ref: null, reason: 'manual' }) },
+    refused: { method: 'POST', url: docsApi.refresh('demo'), payload: '{"ref":1,"reason":"auto"}' },
+  },
+};
+
+/** Every route Fastify itself says it has, as `METHOD path` (`auth-gate.test.ts`'s walk, copied). */
+function m54RouteTable(app: FastifyInstance): Set<string> {
+  const out = new Set<string>();
+  const stack: string[] = [];
+  let matched = 0;
+  for (const row of app.printRoutes({ commonPrefix: false }).split('\n')) {
+    const m = /^([│\s]*)[├└]──\s(\S*)\s\(([^)]+)\)\s*$/.exec(row);
+    if (row.trim() === '') continue;
+    if (!m) { out.add(`UNPARSED ${row}`); continue; }
+    matched++;
+    const depth = m[1].length / 4;
+    stack.length = depth;
+    stack[depth] = m[2];
+    const full = stack.slice(0, depth + 1).join('') || '/';
+    for (const method of m[3].split(',')) {
+      const v = method.trim();
+      if (v === 'HEAD') continue;
+      out.add(`${v} ${full === '*' ? '/*' : full}`);
+    }
+  }
+  if (matched === 0) out.add('UNPARSED the whole tree — printRoutes changed shape');
+  return out;
+}
+
+/** The derived docs routes, sorted: every row under `DOCS_API_PREFIX`, and every row the walk could not read. */
+function derivedDocsRoutes(app: FastifyInstance): string[] {
+  return [...m54RouteTable(app)].filter((k) => k.startsWith('UNPARSED')
+    || k.slice(k.indexOf(' ') + 1) === DOCS_API_PREFIX || k.slice(k.indexOf(' ') + 1).startsWith(`${DOCS_API_PREFIX}/`))
+    .sort();
+}
+
+/** A route key's path with `:project` filled in: the request a probe with no recipe sends. */
+function concreteUrl(key: string): string {
+  return key.slice(key.indexOf(' ') + 1).replace(':project', 'demo');
+}
+
+/** A measured runner exit (`ExecResult`), so the adapter's check 1 reads both halves as measured. */
+function m54Exit(code: number, stdout: string): ExecResult {
+  return { code, stdout, stderr: code === 0 ? '' : 'boom', killed: false, signal: null };
+}
+
+/**
+ * The real server over a fixture HOME (never the live one), its runner answering every docs verb ok (`fault`: every
+ * exec exits 1 with no output, ccd's `ccd-fault`), `authEnabled` as asked, and a handshaken fleet state carrying the
+ * docs cap, returned so a probe can mutate it in place.
+ */
+async function m54Server(o: { auth?: boolean; fault?: boolean } = {}): Promise<{ app: FastifyInstance; state: FleetState }> {
+  const run: Runner = async (_cmd, args) => {
+    if (o.fault) return m54Exit(1, '');
+    if (args[0] === 'docs-index') return m54Exit(0, line(indexOk()));
+    if (args[0] === 'docs-tree') return m54Exit(0, line(treeOk()));
+    if (args[0] === 'docs-show') return m54Exit(0, showLine(M54_PIN, M54_MD));
+    if (args[0] === 'docs-fetch') {
+      return m54Exit(0, line({
+        v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 6, branch: 'main', trackedRef: FIXTURE_SERVED,
+        before: FIXTURE_COMMIT, after: 'b'.repeat(40), moved: 'updated', stamp: 'written',
+      }));
+    }
+    return m54Exit(1, '');
+  };
+  const home = mkTmp('ccrc-docs-m54-');
+  const base = testDeps(home, run);
+  if (o.auth) {
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(M54_PASSPHRASE, M54_FAST_PARAMS, 1)}\n`, { mode: 0o600 });
+  }
+  const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP], rosterFp: null, build: null };
+  const deps: Deps = {
+    ...base, cfg: { ...base.cfg, authEnabled: o.auth ?? false, cookieSecure: false }, fleetState: state,
+  };
+  const app = await buildServer(deps);
+  await app.ready();
+  opened.push(app);
+  return { app, state };
+}
+
+/** Send `req` with `headers` (a JSON content type added when it has a body). */
+function sendM54(app: FastifyInstance, req: M54Req, headers: Record<string, string>) {
+  return app.inject({
+    method: req.method, url: req.url, payload: req.payload,
+    headers: req.payload === undefined ? headers : { ...headers, 'content-type': 'application/json' },
+  });
+}
+
+/** The recipe for a derived key; a route with none fails by name. */
+function recipeFor(key: string): { ok: M54Req; refused: M54Req } {
+  const r = RECIPES[key];
+  expect(r, `${key} is a docs route with no recipe here — was a route added outside this plan?`).toBeDefined();
+  return r;
+}
+
+/** The four headers with exact values, and `no-store` on every non-200. */
+function expectDecorated(key: string, res: { statusCode: number; headers: Record<string, unknown> }): void {
+  for (const [name, value] of Object.entries(DOCS_RESPONSE_HEADERS)) expect(res.headers[name], `${key} ${name}`).toBe(value);
+  if (res.statusCode !== 200) expect(res.headers['cache-control'], `${key} cache-control`).toBe('no-store');
+}
+
+describe('M5.4 — every docs route in the real server\'s table carries the four headers (section 5.3, section 5.8)', () => {
+  it('the derived set: the real table under /api/docs is exactly the four docs routes, and the walk read every row', async () => {
+    const { app } = await m54Server();
+    expect(derivedDocsRoutes(app)).toEqual(M54_DOCS_KEYS);
+  });
+
+  it('a 200: dark, the PWA headers, ok answers (the POST with its JSON body)', async () => {
+    const { app } = await m54Server();
+    for (const key of derivedDocsRoutes(app)) {
+      const res = await sendM54(app, recipeFor(key).ok, PWA);
+      expect(res.statusCode, key).toBe(200);
+      expectDecorated(key, res);
+    }
+  });
+
+  it('a 4xx: a refused query or body, before any exec', async () => {
+    const { app } = await m54Server();
+    for (const key of derivedDocsRoutes(app)) {
+      const res = await sendM54(app, recipeFor(key).refused, PWA);
+      expect(res.statusCode, key).toBe(400);
+      expectDecorated(key, res);
+    }
+  });
+
+  it('a 5xx: a read\'s ccd fault (502); the refresh\'s caps-unknown (503: a refusal before any exec keeps its status)', async () => {
+    const { app, state } = await m54Server({ fault: true });
+    for (const key of derivedDocsRoutes(app)) {
+      const req = recipeFor(key).ok;
+      state.ccdVerbs = req.method === 'POST' ? null : ['caps', DOCS_CAP];
+      const res = await sendM54(app, req, PWA);
+      expect(res.statusCode, key).toBe(req.method === 'POST' ? 503 : 502);
+      expectDecorated(key, res);
+    }
+  });
+
+  it('armed, no cookie: the gate\'s 401 with its verdict', async () => {
+    const { app } = await m54Server({ auth: true });
+    for (const key of derivedDocsRoutes(app)) {
+      const res = await sendM54(app, recipeFor(key).ok, PWA);
+      expect(res.statusCode, key).toBe(401);
+      expect(res.json().verdict, key).toBe('no-session');
+      expectDecorated(key, res);
+    }
+  });
+
+  it('armed, a session, a POST from a foreign Origin: the gate\'s 403', async () => {
+    const { app } = await m54Server({ auth: true });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: M54_PASSPHRASE } });
+    expect(login.statusCode, login.body).toBe(204);
+    const set = login.headers['set-cookie'];
+    const first = Array.isArray(set) ? set[0] : String(set);
+    const cookie = first.slice(0, first.indexOf(';'));
+    const posts = derivedDocsRoutes(app).filter((k) => k.startsWith('POST '));
+    expect(posts.length, 'no docs POST in the derived set').toBeGreaterThan(0);
+    for (const key of posts) {
+      const res = await sendM54(app, recipeFor(key).ok, { ...PWA, cookie, origin: 'https://other.example' });
+      expect(res.statusCode, key).toBe(403);
+      expect(res.json(), key).toStrictEqual({ ok: false, error: 'foreign-origin' });
+      expectDecorated(key, res);
+    }
+  });
+
+  it('dark, no marker: the provenance 403 foreign-request — for every derived route, recipe or none', async () => {
+    const { app } = await m54Server();
+    for (const key of derivedDocsRoutes(app)) {
+      const res = await app.inject({ method: key.slice(0, key.indexOf(' ')) as 'GET' | 'POST', url: concreteUrl(key) });
+      expect(res.statusCode, key).toBe(403);
+      expect(res.json(), key).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
+      expectDecorated(key, res);
+    }
+  });
+});
+```
+
+- [ ] **Step 3: `single-definition.test.ts`: the floor in place, then the EOF append.**
+
+(a) `DOCS_RING_FLOOR` (line 4808), in place: the four L4 files join the floor, so a deleted L4 file reds `covers the directory` instead of disarming the ring scan. The docstring above it ("The files W2 created") stays as it is: the file changes by this one line and the append, nothing else.
+
+Find:
+
+```ts
+  const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts'];
+```
+
+Replace with:
+
+```ts
+  const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts', 'routes.ts', 'hooks.ts', 'lane.ts', 'cache.ts'];
+```
+
+(b) Append at EOF. Locate the end with `tail -n 6 server/test/single-definition.test.ts`, which prints `  });`, a blank line, `  it('the docs builders have one caller across the four roots: the adapter', () => {`, `    expect(ALL.filter((f) => DOCS_CALL.test(stallCode(f))).map(rel)).toEqual([SOURCE]);`, `  });` and `});`; append exactly this after that last `});` (the leading blank line included). It adds no import at the file's top: `DOCS_FAILURES`' keys are read from `shared/docs.ts`'s text and held equal to the module through a dynamic `import()` inside one case.
+
+```ts
+
+// Docs W3, Task 9 (spec 2026-10-01 section 2 (g)'s walls, section 2 (j) row 49, section 3.13's new scans; W3
+// refinement (q)). GET never fetches, read as text: row 49's literal half (exactly one `CCD_ARGV.docsFetch(` across
+// the four roots, in the adapter), WIDENED for W2's review carry, which found that `DOCS_CALL` above cannot see an
+// optional-chain, a bracket or an aliased call. The identifier `docsFetch` is held to its two code lines (the builder
+// key and the one call), and every other `CCD_ARGV` in code must be a plain member access, so the builder table is
+// never indexed, destructured, aliased or passed. And the visible half of "L4 decides nothing": no failure word of
+// `shared/docs.ts`'s `DOCS_FAILURES` is quoted in the code of `routes.ts`, `hooks.ts`, `lane.ts` or `cache.ts`. The
+// words are read from that file's TEXT (and held equal to the module's keys by a dynamic import), so this append adds
+// no import above. `DOCS_RING_FLOOR` (edited in place, above) names those four files too, so a deleted L4 file reds
+// the floor. Every scan reads comment-stripped text (`stallCodeText`). APPENDED, for the citation audit's reason above.
+describe('docs W3 — GET never fetches, and the L4 files quote no failure word (spec 2026-10-01 §2 row 49, §3.13)', () => {
+  type Text = readonly [string, string];
+  const SOURCE = 'server/src/docs/ccdsource.ts';
+  const ARGV = 'server/src/ccdargv.ts';
+  const L4_FILES = ['routes.ts', 'hooks.ts', 'lane.ts', 'cache.ts'];
+  /** Every file of the four roots as `[repo-relative path, text]`, read once. */
+  const LIVE: readonly Text[] = ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const);
+  /** The live corpus with `shape` planted after `name`'s own text (a copy: nothing is written). */
+  const plantedIn = (name: string, shape: string): Text[] =>
+    LIVE.map(([n, t]) => [n, n === name ? `${t}\n${shape}\n` : t] as const);
+
+  const LITERAL = 'CCD_ARGV.docsFetch(';
+  /** One entry per literal `CCD_ARGV.docsFetch(` in code, naming its file. */
+  const literalCalls = (files: readonly Text[]): string[] =>
+    files.flatMap(([n, t]) => new Array<string>(stallCodeText(t).split(LITERAL).length - 1).fill(n));
+  const DOCS_FETCH_ID = /\bdocsFetch\b/;
+  /** One entry per comment-stripped LINE that names the identifier `docsFetch`, naming its file. */
+  const docsFetchLines = (files: readonly Text[]): string[] =>
+    files.flatMap(([n, t]) => stallCodeText(t).split('\n').filter((l) => DOCS_FETCH_ID.test(l)).map(() => n));
+  /** A whole static import statement, single- or multi-line (lazy, and never across a `;`). */
+  const IMPORT_STATEMENT = /^\s*import\s[^;]*?\bfrom\s*(['"])[^'"\n]+\1\s*;?/gm;
+  /** `CCD_ARGV` NOT followed by a plain member access (`.name`, whitespace and newlines allowed around the dot). */
+  const ARGV_ESCAPE = /\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
+  const ARGV_DECLARATION = 'export const CCD_ARGV = {';
+  /** Every `CCD_ARGV` in code, imports removed, that is not a plain member access, as `file: line`; the table's one
+   *  declaration excepted. */
+  const argvEscapes = (files: readonly Text[]): string[] => files.flatMap(([n, t]) => {
+    const code = stallCodeText(t).replace(IMPORT_STATEMENT, '');
+    const out: string[] = [];
+    for (const m of code.matchAll(ARGV_ESCAPE)) {
+      const start = code.lastIndexOf('\n', m.index) + 1;
+      const end = code.indexOf('\n', m.index);
+      const at = code.slice(start, end === -1 ? code.length : end).trim();
+      if (n === ARGV && at === ARGV_DECLARATION) continue;
+      out.push(`${n}: ${at}`);
+    }
+    return out;
+  });
+
+  it('row 49, literal: exactly one `CCD_ARGV.docsFetch(` across the four roots, in the adapter', () => {
+    expect(literalCalls(LIVE)).toEqual([SOURCE]);
+  });
+
+  it('row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call', () => {
+    expect(docsFetchLines(LIVE).sort()).toEqual([ARGV, SOURCE]);
+  });
+
+  it('row 49, widened by use: `CCD_ARGV` is only ever a plain member access, outside its one declaration', () => {
+    expect(argvEscapes(LIVE)).toEqual([]);
+    expect(LIVE.filter(([n]) => n === ARGV).flatMap(([, t]) => stallCodeText(t).split('\n'))
+      .filter((l) => l.trim() === ARGV_DECLARATION), 'the declaration the escape scan excepts moved').toHaveLength(1);
+  });
+
+  it('CONTROL: every call shape the literal scan misses is caught by one of the two widened scans; prose by neither', () => {
+    const base = {
+      literal: literalCalls(LIVE).length, lines: docsFetchLines(LIVE).length, escapes: argvEscapes(LIVE).length,
+    };
+    const SHAPES: readonly (readonly [string, boolean, boolean])[] = [
+      // [the planted text, seen by the identifier scan, seen by the escape scan]
+      ['const a = CCD_ARGV?.docsFetch(p, b);', true, true],
+      ["const a = CCD_ARGV['docsFetch'](p, b);", true, true],
+      ['const a = CCD_ARGV["docsFetch"](p, b);', true, true],
+      ['const { docsFetch } = CCD_ARGV;', true, true],
+      ['const A = CCD_ARGV; A.docsFetch(p, b);', true, true],
+      ['const a = CCD_ARGV\n  .docsFetch(p, b);', true, false],
+      ["const f = Reflect.get(CCD_ARGV, 'docsFetch');", true, true],
+    ];
+    for (const [shape, byId, byEscape] of SHAPES) {
+      const planted = plantedIn(SOURCE, shape);
+      expect(literalCalls(planted).length, `${shape}: the literal scan was expected to miss it`).toBe(base.literal);
+      expect(docsFetchLines(planted).length > base.lines, `${shape}: identifier scan`).toBe(byId);
+      expect(argvEscapes(planted).length > base.escapes, `${shape}: escape scan`).toBe(byEscape);
+      expect(byId || byEscape, shape).toBe(true);
+    }
+    for (const prose of ['// a CCD_ARGV?.docsFetch( or `const { docsFetch } = CCD_ARGV` in prose',
+      ' * CCD_ARGV[\'docsFetch\'] named in a docstring']) {
+      const planted = plantedIn(SOURCE, prose);
+      expect(docsFetchLines(planted).length, prose).toBe(base.lines);
+      expect(argvEscapes(planted).length, prose).toBe(base.escapes);
+    }
+    expect(literalCalls(plantedIn(SOURCE, 'void CCD_ARGV.docsFetch(p, b);')).length, 'the literal scan is blind')
+      .toBe(base.literal + 1);
+  });
+
+  /** `DOCS_FAILURES`' keys, read from `shared/docs.ts`'s TEXT: its `export const DOCS_FAILURES = {` block. */
+  const failureWords = (): string[] => {
+    const text = readFileSync(path.join(ccrcRoot, 'shared/docs.ts'), 'utf8');
+    const open = text.indexOf('export const DOCS_FAILURES = {');
+    const close = text.indexOf('} as const', open);
+    expect(open, 'the DOCS_FAILURES block moved').toBeGreaterThan(-1);
+    expect(close, 'the DOCS_FAILURES block has no end').toBeGreaterThan(open);
+    return [...text.slice(open, close).matchAll(/^\s*'([a-z][a-z-]*)':/gm)].map((m) => m[1]);
+  };
+  /** The words of `words` quoted as a whole literal (single, double or backtick) in `text`'s code. */
+  const quotedWords = (text: string, words: readonly string[]): string[] => {
+    const code = stallCodeText(text);
+    return words.filter((w) => new RegExp(`(['"\`])${w}\\1`).test(code));
+  };
+  const l4 = (): Text[] =>
+    L4_FILES.map((n) => [n, readFileSync(path.join(ccrcRoot, 'server/src/docs', n), 'utf8')] as const);
+
+  it('the failure words read from the text are exactly DOCS_FAILURES\' keys', async () => {
+    const { DOCS_FAILURES } = await import('../../shared/docs.js');
+    expect(failureWords()).toEqual(Object.keys(DOCS_FAILURES));
+  });
+
+  it('CONTROL: a quoted word is seen in each quote; a backticked word in a prose comment is not', () => {
+    const words = failureWords();
+    for (const hit of ["const w = 'docs-busy';", 'const w = "bad-query";', 'const w = `foreign-request`;']) {
+      expect(quotedWords(hit, words), hit).toHaveLength(1);
+    }
+    for (const miss of ['// the lane answers `docs-busy` past its wait', ' * a `bad-query {why}` refusal',
+      'const w = docsBusyBody(lane);']) {
+      expect(quotedWords(miss, words), miss).toEqual([]);
+    }
+  });
+
+  it('L4 decides nothing (the visible half): routes.ts, hooks.ts, lane.ts and cache.ts quote no failure word', () => {
+    const words = failureWords();
+    const files = l4();
+    expect(files.map(([n]) => n)).toEqual(L4_FILES);
+    expect(files.flatMap(([n, t]) => quotedWords(t, words).map((w) => `${n}: '${w}'`))).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 4: Run the three files.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-headers.test.ts test/single-definition.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  649 passed (649)` (docs-routes 115, docs-headers 55, single-definition 479).
+
+Every new case is green on arrival, and that is expected, not a skipped red: this task adds no production code. The walls stand over what Tasks 3-8 wrote (the plugin, its hooks, the getter, the fetcher-less read registration), so a red before an implementation step does not exist here; each wall's red is MEASURED instead, by mutating the code it guards. Step 5 watches three of them go red before anything is committed, and the rows block below records all fourteen. What the green run measured, so the reviewer need not re-derive it:
+1. With `testDeps` (no `fleetState`), a docs read answers `503 caps-unknown` with `Retry-After: 5` and zero execs; a `FleetState` assigned to `deps.fleetState` AFTER `buildServer` is read at the next call (200), and `ccdVerbs` set to `null` on that same object is read too (503). Through the plugin, the getter is the whole of the wiring: `composeDocs` given `deps.fleetState` itself pins `undefined` (row M1).
+2. The spy's corpus is ten GETs (the index; the tree with no ref, `main`, `refs/remotes/origin/main` and `refs/heads/ws/a`, the qualified two built from `DOCS_REF_PREFIXES`; the file under a committed and a draft pin; and three refused queries). They answer 200 seven times and 400 three times, the recorded verbs are exactly `docs-index`, `docs-show` and `docs-tree`, and no `docs-fetch`; one refresh POST then records exactly `['docs-fetch', '--project', 'demo']`. Every recorded argv crossed `guardRunner`, so each is a granted docs argv.
+3. Armed, the four docs routes with no cookie and no marker answer the gate's `401 {"ok":false,"error":"unauthenticated","verdict":"no-session"}` as `application/json; charset=utf-8` with the four headers and `cache-control: no-store` (the plugin's `onSend` decorates the root gate's reply: F1), and zero execs. The refresh POST with a session cookie and `Origin: https://other.example` answers the gate's `403 {"ok":false,"error":"foreign-origin"}`; with the cookie and no `Origin` it answers 200 and fetches once.
+4. Refinement (d) on the real server, armed and with no cookie: `/api/docs/<101 a's>/tree` answers `414` with `code: FST_ERR_MAX_PARAM_LENGTH` and `/api/docs/%ZZ/tree` answers `400` with `code: FST_ERR_BAD_URL`, both in Fastify's own body with no `verdict` (the gate never ran, though the server is armed and the request carries no cookie), none of the four docs headers, and zero execs. This is the measured fact Step 7's first entry records.
+5. M5.4's derived set is exactly `GET /api/docs/:project/file`, `GET /api/docs/:project/tree`, `GET /api/docs/projects` and `POST /api/docs/:project/refresh`, and the walk reads every row of `printRoutes` (no `UNPARSED`; `exposeHeadRoute: false` leaves no docs HEAD row). Its probes answer 200; 400; 502 for each read (`ccd-fault`) and 503 for the refresh (`caps-unknown`: a ccd fault in either half of a refresh rides a 200 by refinement (m), so its 5xx is a refusal before any exec); 401 `no-session`; 403 `foreign-origin` (the POST only: the gate origin-checks no GET); and 403 `foreign-request {why: marker}` — each with the four headers at their exact values and, on every non-200, `cache-control: no-store`.
+6. The widened scans over the live four roots: one literal `CCD_ARGV.docsFetch(` (`server/src/docs/ccdsource.ts`); `docsFetch` on exactly two comment-stripped lines (`server/src/ccdargv.ts`'s builder key and the adapter's call); and no `CCD_ARGV` outside a plain member access once import statements are removed, apart from `export const CCD_ARGV = {`. Of the seven planted shapes, six are seen by both widened scans and one (`CCD_ARGV` then `.docsFetch(` on the next line) by the identifier scan alone; the literal scan misses all seven, and neither widened scan counts a comment line.
+7. `DOCS_FAILURES`' 58 keys, read from the text, equal `Object.keys(DOCS_FAILURES)` in order, and none is quoted in the comment-stripped code of the four L4 files.
+
+- [ ] **Step 5: Watch three walls go red, in a scratch copy, before committing.** Never in the worktree. The copy is taken from the working tree (the new tests are not committed yet); each mutation is applied alone and reverted. Foreground, Bash timeout 600000 ms; run from the worktree root:
+
+```bash
+COPY="$(mktemp -d "${TMPDIR:-/tmp}/docs-w3-t9-walls.XXXXXX")"
+git ls-files -z | tar --null -T - -cf - | tar -x -C "$COPY"
+git -C "$COPY" init -q
+for p in server agent pwa; do ln -s "$PWD/$p/node_modules" "$COPY/$p/node_modules"; done
+python3 - "$COPY" <<'PY'
+import pathlib, re, subprocess, sys
+copy = pathlib.Path(sys.argv[1])
+ROWS = [
+    ('server/src/server.ts',
+     "  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });\n",
+     "  const docs = composeDocs({ runCcd: deps.runCcd, fleetState: deps.fleetState });\n",
+     ['test/docs-routes.test.ts']),
+    ('server/src/server.ts', "    installDocsResponsePolicy(app);\n", "",
+     ['test/docs-headers.test.ts', 'test/docs-routes.test.ts']),
+    ('server/src/docs/lane.ts', "const ABANDONED: DocsLaneRun<never> = Object.freeze({ kind: 'abandoned' });\n",
+     "const ABANDONED: DocsLaneRun<never> = Object.freeze({ kind: 'abandoned' });\nconst BUSY_WORD = 'docs-busy';\n",
+     ['test/single-definition.test.ts']),
+]
+for name, old, new, tests in ROWS:
+    p = copy / name
+    text = p.read_text()
+    assert text.count(old) == 1, f'{name}: the anchor is not unique'
+    p.write_text(text.replace(old, new))
+    out = subprocess.run(['./node_modules/.bin/vitest', 'run', *tests], cwd=copy / 'server',
+                         capture_output=True, text=True).stdout
+    out = re.sub(r'\x1b\[[0-9;]*m', '', out)
+    print(name, [l.strip() for l in out.splitlines() if l.strip().startswith('Tests ')])
+    p.write_text(text)
+PY
+rm -rf "$COPY"
+```
+
+Expected, three lines: `server/src/server.ts ['Tests  3 failed | 112 passed (115)']` (rows M1: the getter pinned), `server/src/server.ts ['Tests  7 failed | 163 passed (170)']` (M11: the response hook deleted) and `server/src/docs/lane.ts ['Tests  1 failed | 478 passed (479)']` (M13: a quoted failure word in L4). A line reading `0 failed` or a printed `AssertionError` from the script means a wall does not bite or an anchor moved: stop and put an ask to the coordinator.
+
+- [ ] **Step 6: The guard suites, the compiles and the file-shape invariant.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` and `session-hook` are known load flakes, so a red there is re-run alone before it is called broken. Stage the three test files first, so `topology-clean`'s `git ls-files` corpus contains them:
+
+Run: `git add server/test/docs-routes.test.ts server/test/docs-headers.test.ts server/test/single-definition.test.ts && git status --short`
+Expected: exactly `M  server/test/docs-headers.test.ts`, `M  server/test/docs-routes.test.ts` and `M  server/test/single-definition.test.ts`.
+
+Run: `( cd server && node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit && echo TSC-OK )`
+Expected: `TSC-OK`. The second compiles the `Equals` pin (it resolves to `true`) and finds the `@ts-expect-error` directive used: a `DocsNodes<DocsFetcher>` lacks `index`, `tree` and `show`, so it is not a `DocsNodes<DocsReader>`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`. With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Task 5's Measured 4); Task 1's Step 0 installs real modules.
+
+Run: `git diff -U0 HEAD -- server/test/single-definition.test.ts | grep '^@@'`
+Expected: exactly two hunk headers, `@@ -4808 +4808 @@ ...` (the floor, one line in place) and `@@ -5054,0 +5055,135 @@ ...` (the append); the numbers are the file's own (`-4808` is the `DOCS_RING_FLOOR` line, `-5054,0` the line count before this task). No W3 task before this one edits the file, so this diff against Task 8's commit is also the NET diff against the wave's base: the invariant Task 12 checks (`git diff -U0 <base> -- server/test/single-definition.test.ts`, `<base>` being the sha Task 1 Step 0 recorded) shows the same two hunks. Any third hunk means a line above the append moved: `session-hook.test.ts`'s citation audit cites this file by line, so stop and fix the edit.
+
+Run: `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )`
+Expected: `Tests  13 passed | 322 skipped (335)`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  193 passed (193)` (unchanged from Task 8: this task registers no route and quotes no box-token call).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-lanes.test.ts test/docs-cache.test.ts test/docs-file-bytes.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  119 passed (119)` (unchanged).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )`
+Expected: `Tests  55 passed (55)`. It needs `origin/main` (or `CCRC_HISTORY_BASE=<the wave's base sha>`). This task adds placeholder names only: the project `demo`, the branch `ws/a`, the domain `other.example` and the fixture prefixes `ccrc-docs-w3-` and `ccrc-docs-m54-`.
+
+No `ccd/ccd` edit, so no restamp.
+
+- [ ] **Step 7: Define the six spec deviations, then commit.**
+
+This task is where the plan's six departures from the binding spec's TEXT are defined (Global Constraints, "Deviations"): refinements (d), (i), (j), (s), (v) and (w). Define them with the first six numbers of the block the brief issued for this run, in that order, by appending ONE section at the end of this plan (after Task 12's rows block, whatever the file's last line is; nothing above it changes). `<n1>`..`<n5>` are those issued numbers, never one looked up, guessed or read off `GET /api/ledger`'s `floor`; `<date>` is `date -u +%F`. If the brief names no block, or fewer than five numbers, stop and put an ask to the coordinator: write no `D-` number that was not issued. Append exactly this, with the placeholders filled:
+
+```markdown
+
+## Deviations found
+
+- **D-<n1> (<date>)** — a `:project` over 100 characters and a malformed percent escape in the path are refused by Fastify's router before any hook runs: `414 FST_ERR_MAX_PARAM_LENGTH` and `400 FST_ERR_BAD_URL`, in Fastify's own body, with no gate verdict, none of the four docs headers and no `bad-project` (spec §3.4: "`:project` failing the grammar gives `bad-project` with zero execs"; §5.3 and M5.4: "every docs response" carries the four headers). Zero execs still holds, and L0's project grammar admits at most 100 characters, so no valid project is affected; raising `maxParamLength` or adding `frameworkErrors` would change every route of a server that sets no router option today. Measured on the docs plugin by Task 6 and on the real server, armed and with no cookie, by Task 9. Refinement (d); Tasks 6 and 9.
+- **D-<n2> (<date>)** — the Docs composition is built in `buildServer`, beside the plugin's registration, over a getter on `deps.fleetState`, and `server/src/index.ts` is not edited (spec §7.7's W3 row: "wiring in `index.ts`"). `composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } })` runs once per `buildServer`, so production has one lane per link and two test servers share nothing. The getter closes W2's "captured by reference" carry: the adapter reads the state object the link mutates in place (Task 6) and one assigned after `buildServer` (Task 9). No `Deps` field is added, so the plugin registers unconditionally and `update-routes.test.ts`'s two-literal pin on `index.ts` stays untouched. Refinement (i); Tasks 8 and 9.
+- **D-<n3> (<date>)** — a queued docs job is abandoned when every request joined to it has gone, measured on the RESPONSE: `reply.raw`'s `close` while `writableFinished` is still false, not "`req.raw` `close`" (spec §6.3). Fastify 5.10's `request.signal` listens to the request stream's `close`, which current node can emit once the request body has been consumed, before any reply; the response closing unfinished is the one condition that means the client left (Task 6's real-socket cases measure it). Single-flight aborts a flight's own signal only when every joiner's signal has aborted, so one tab closing never cancels another tab's answer; the lane then removes the queued job, and a running exec is never cancelled. Refinement (j); Tasks 4, 6 and 7.
+- **D-<n4> (<date>)** — the console-latency test (M6.12) mounts the Docs plugin on a bare Fastify for both its real run and its control, registered exactly as `server.ts` registers it, through `composeDocs`'s `readLane` option, not through `buildServer` (spec §6.8's setup: "`buildServer` with `ccdRunner(fleet.runner, cfg)` and `fleet.state`"). `buildServer` composes the read lane itself and `Deps` has no field through which a test could hand it the control's pass-through lane (refinement (i) adds none: a new optional field with a local fallback is what `Deps.queue`'s docstring warns against), so a control built through `buildServer` could not differ from the real run in the lane alone; what `buildServer` adds over the plugin (the session gate, the other routes) is nothing the probes measure. The link stays §6.8's: a real agent behind `throttledProxy`, the docs composition over `ccdRunner(fleet.runner, cfg)` and `fleet.state` itself. Refinement (s); Task 10.
+- **D-<n5> (<date>)** — the fetch lane serialises per (node, project) with ONE FIFO of accepted, not-yet-started jobs and a set of keys with a running job, not "a `KeyedQueue` (`server/src/inject/queue.ts:6`) per (node, project)" (spec §6.4). `single-definition.test.ts`'s "one KeyedQueue for the process" holds `new KeyedQueue(` to `server/src/index.ts`, the composition root, so a `KeyedQueue` in `lane.ts` reds it (measured), and refinement (n) rules out the process's own queue, which serialises session operations by session id. The behaviour §6.4 states holds exactly: serial and in acceptance order per key, at most `DOCS_FETCH_GLOBAL` = 2 at once, a queue of 8 jobs that have not started (a new job is pumped first and refused only when it is left waiting as the ninth), a 20 s wait from acceptance, and `docs-busy {lane:'fetch'}` past either. Refinement (v); Task 4.
+- **D-<n6> (<date>)** — a JSON file reply's `show` carries the bytes check 8 verified, not the answer's own content field verbatim (spec §3.5: "wraps these answers unchanged"): a `utf8` `text` is the verified bytes decoded (a lone surrogate, which passes check 8 as U+FFFD's three bytes, is served as U+FFFD), a `base64` `b64` is the canonical one check 8 proved, and a stray second content field is dropped. For every answer within ccd's contract the served `show` equals the answer field for field; it differs only for an answer outside that contract. Raised by W2's review 317 (its note 1 for W3); refinement (w); pinned by W3-T2-M39, W3-T2-M40 and Task 6's two `docs-file-bytes` route cases.
+```
+
+Then prove the numbers collide with nothing and no placeholder lands, and read the result BEFORE committing (the commit is its own call, made only after a green read):
+
+```bash
+git fetch -q origin main
+( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )
+grep -c '^- \*\*D-[0-9][0-9]* (' docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md
+```
+
+Expected: `Test Files  2 passed (2)`; then `6`. A red `deviation-refs` names a number defined in two plans: stop and report it to the coordinator, never renumber by hand.
+
+```bash
+git add server/test/docs-routes.test.ts server/test/docs-headers.test.ts server/test/single-definition.test.ts \
+  docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md
+git commit -m "server: docs W3 in the real server, row 49's walls and the six deviations (docs W3)" \
+  -m "The Docs API is proved on the server buildServer builds, over testDeps (every docs argv crosses the agent's real whitelist) and a recording runner. The composition reads deps.fleetState through its getter: a state swapped in after buildServer is read, and the same object mutated in place. Row 49's three walls: a spy across every GET shape never records docs-fetch while one refresh POST records exactly one; the read registration's parameters are pinned by an Equals type with no fetcher, plus a @ts-expect-error call that hands it the fetchers; and single-definition.test.ts holds the literal CCD_ARGV.docsFetch( to one, widened for W2's review carry to the identifier docsFetch on two code lines and CCD_ARGV only ever a member access, each with a CONTROL planting every missed shape. Row 50 and M3.8: armed, the gate answers 401 no-session before provenance on all four routes, the refresh refuses a foreign Origin with 403, and no docs key is EXEMPT. M5.4: every route under /api/docs in the real route table, derived from printRoutes, carries the four headers under a 200, a 4xx, a 5xx, an armed 401, a foreign-Origin 403 and a provenance 403. The L4 files quote no DOCS_FAILURES word, and DOCS_RING_FLOOR names them. The plan defines the five issued deviations (refinements (d), (i), (j), (s), (v))." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at this task's commit, then `git -C <copy> init -q`, with `server/`, `agent/` and `pwa/node_modules` linked to the worktree's; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state). The architecture's ten guard sketches map onto these fourteen rows, with four departures, each measured: its M2 ("the read routes call `fetcher.fetch`", red in the Equals pin AND the spy) is two rows here, because a row edits one file and no single-file edit can do both: M2 gives `registerDocsReadRoutes` an optional fetcher parameter (the type wall reds; the server never passes one, so the spy stays green) and M3 hands the read registration, in `server.ts`, a reader whose `tree` fetches first (the spy reds; the parameter types are untouched, which is why the spy wall exists). M6 and M7 are this task's own, so that each widened half has a red of its own: the table passed by value with no `docsFetch` spelled (the escape scan alone) and a member access across a newline (the identifier scan alone). M11 is the spec's own M5.4 mutation "delete the hook" (`installDocsResponsePolicy`), which the sketch list did not carry. And the sketch's M10 ("`hooks.ts` deleted") is written as what the floor arm guards that a row can express, the directory walk no longer visiting `hooks.ts` (a row replaces text; it cannot delete a file): red at this task's state, green at Task 8's (472 passed), the floor edit's own evidence. The real deletion was measured too: at this task's state `rm server/src/docs/hooks.ts` reds `single-definition` 2 failed | 477 passed (479) (`covers the directory`, `hooks.ts is listed but not visited`, and the L4 scan's read of the four files), and at Task 8's state it is green (472 passed). M8 reds row 50's case as well as M3.8's because a ROOT provenance hook also refuses the marker-less login POST. This task re-anchors none of Tasks 1-8's rows: their `old` texts sit in `server/src/` and in `auth-gate.test.ts` and `box-token-census.test.ts`, none of which this task edits, and all 212 are still unique at this task's state (measured).
+
+```json
+[
+ {
+  "id": "W3-T9-M1",
+  "pkg": "server",
+  "file": "server/src/server.ts",
+  "old": "  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });\n",
+  "new": "  const docs = composeDocs({ runCcd: deps.runCcd, fleetState: deps.fleetState });\n",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 3 failed | 112 passed (115) — no fleet state: caps-unknown; a state SWAPPED in after buildServer is read; the same object mutated in place is read; a spy across every GET never sees docs-fetch; CONTROL: one refresh POST records exactly one; armed: no session 401; a foreign Origin 403; the session with no Origin 200; none of the four keys is EXEMPT (the pinned object is testDeps' absent fleetState, so every docs call stays caps-unknown after the swap)"
+ },
+ {
+  "id": "W3-T9-M2",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>,\n  lanes: DocsNodes<DocsNodeLanes>): void {\n",
+  "new": "export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>,\n  lanes: DocsNodes<DocsNodeLanes>, fetchers?: DocsNodes<DocsFetcher>): void {\n  void fetchers;\n",
+  "tests": [
+   "test/typecheck-tests.test.ts"
+  ],
+  "red": "server typecheck-tests: 2 failed | 10 passed (12) — server/test/ is clean under a tests-inclusive project (test/docs-routes.test.ts: TS2344 Type 'false' does not satisfy the constraint 'true', on ReadRegistrationTakesNoFetcher); the other red, PWA_TSC really is pwa's own installed compiler, is the symlinked-pwa/node_modules environment red and is red without the mutation too"
+ },
+ {
+  "id": "W3-T9-M3",
+  "pkg": "server",
+  "file": "server/src/server.ts",
+  "old": "    registerDocsReadRoutes(app, docs.readers, docs.lanes);\n",
+  "new": "    registerDocsReadRoutes(app, { primary: docs.readers.primary, byNode: new Map([...docs.readers.byNode].map(([n, r]) => [n, { ...r, tree: async (src, ref) => { await docs.fetchers.byNode.get(n)?.fetch(src, null); return r.tree(src, ref); } }])) }, docs.lanes);\n",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 2 failed | 113 passed (115) — a spy across every GET never sees docs-fetch; CONTROL: one refresh POST records exactly one; no fleet state: caps-unknown; a state SWAPPED in after buildServer is read; the same object mutated in place is read (its exact argv list sees the docs-fetch the tree GET made)."
+ },
+ {
+  "id": "W3-T9-M4",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const fetcher = forNode(fetchers, node, 'fetcher');\n",
+  "new": "  const fetcher = forNode(fetchers, node, 'fetcher');\n  void CCD_ARGV.docsFetch('demo', null);\n",
+  "tests": [
+   "test/single-definition.test.ts"
+  ],
+  "red": "server single-definition: 3 failed | 476 passed (479) — row 49, literal: exactly one `CCD_ARGV.docsFetch(` across the four roots, in the adapter; row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call; the docs builders have one caller across the four roots: the adapter"
+ },
+ {
+  "id": "W3-T9-M5",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const fetcher = forNode(fetchers, node, 'fetcher');\n",
+  "new": "  const fetcher = forNode(fetchers, node, 'fetcher');\n  const { docsFetch } = CCD_ARGV;\n  void docsFetch;\n",
+  "tests": [
+   "test/single-definition.test.ts"
+  ],
+  "red": "server single-definition: 2 failed | 477 passed (479) — row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call; row 49, widened by use: `CCD_ARGV` is only ever a plain member access, outside its one declaration. W2's DOCS_CALL case and the literal count stay green: the aliased call is the gap W2's review carried"
+ },
+ {
+  "id": "W3-T9-M6",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const fetcher = forNode(fetchers, node, 'fetcher');\n",
+  "new": "  const fetcher = forNode(fetchers, node, 'fetcher');\n  const table = CCD_ARGV;\n  void table;\n",
+  "tests": [
+   "test/single-definition.test.ts"
+  ],
+  "red": "server single-definition: 1 failed | 478 passed (479) — row 49, widened by use: `CCD_ARGV` is only ever a plain member access, outside its one declaration (no `docsFetch` is spelled, so the escape scan alone sees the table passed by value)"
+ },
+ {
+  "id": "W3-T9-M7",
+  "pkg": "server",
+  "file": "server/src/docs/routes.ts",
+  "old": "  const fetcher = forNode(fetchers, node, 'fetcher');\n",
+  "new": "  const fetcher = forNode(fetchers, node, 'fetcher');\n  void CCD_ARGV\n    .docsFetch('demo', null);\n",
+  "tests": [
+   "test/single-definition.test.ts"
+  ],
+  "red": "server single-definition: 1 failed | 478 passed (479) — row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call (the member access spans a newline, so the literal count, W2's DOCS_CALL and the escape scan all miss it)"
+ },
+ {
+  "id": "W3-T9-M8",
+  "pkg": "server",
+  "file": "server/src/server.ts",
+  "old": "  installGate(app, {\n",
+  "new": "  installDocsRequestPolicy(app);\n  installGate(app, {\n",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 2 failed | 113 passed (115) — armed, no cookie and no marker: each docs route answers the gate's 401 with its verdict, decorated, with zero execs (403 foreign-request {why: marker} answers first); armed: no session 401; a foreign Origin 403; the session with no Origin 200; none of the four keys is EXEMPT (the root provenance hook also refuses the marker-less login POST)"
+ },
+ {
+  "id": "W3-T9-M9",
+  "pkg": "server",
+  "file": "server/src/server.ts",
+  "old": "    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);\n  });\n",
+  "new": "    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);\n  });\n  app.get('/api/docs/:project/extra', async () => ({ ok: true }));\n",
+  "tests": [
+   "test/docs-headers.test.ts"
+  ],
+  "red": "server docs-headers: 6 failed | 49 passed (55) — the derived set: the real table under /api/docs is exactly the four docs routes, and the walk read every row; a 200: dark, the PWA headers, ok answers (the POST with its JSON body); a 4xx: a refused query or body, before any exec; a 5xx: a read's ccd fault (502); the refresh's caps-unknown (503: a refusal before any exec keeps its status); armed, no cookie: the gate's 401 with its verdict; dark, no marker: the provenance 403 foreign-request — for every derived route, recipe or none (the planted route answers 200 with none of the four headers)"
+ },
+ {
+  "id": "W3-T9-M10",
+  "pkg": "server",
+  "file": "server/src/docs/hooks.ts",
+  "old": "    reply.headers(v.headers);\n",
+  "new": "    reply.headers(Object.fromEntries(Object.entries(v.headers).slice(1)));\n",
+  "tests": [
+   "test/docs-headers.test.ts",
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-headers + docs-routes: 67 failed | 103 passed (170) — every M5.4 probe but the derived set (a 200; a 4xx; a 5xx; armed, no cookie: the gate's 401; armed, a session, a POST from a foreign Origin: the gate's 403; dark, no marker: the provenance 403), M3.8's armed no-cookie case, and Task 3's and Task 6's header assertions (x-content-type-options absent everywhere)"
+ },
+ {
+  "id": "W3-T9-M11",
+  "pkg": "server",
+  "file": "server/src/server.ts",
+  "old": "    installDocsResponsePolicy(app);\n",
+  "new": "",
+  "tests": [
+   "test/docs-headers.test.ts",
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-headers + docs-routes: 7 failed | 163 passed (170) — a 200; a 4xx; a 5xx; armed, no cookie: the gate's 401 with its verdict; armed, a session, a POST from a foreign Origin: the gate's 403; dark, no marker: the provenance 403 foreign-request; armed, no cookie and no marker: each docs route answers the gate's 401 with its verdict, decorated, with zero execs"
+ },
+ {
+  "id": "W3-T9-M12",
+  "pkg": "server",
+  "file": "server/src/auth/gate.ts",
+  "old": "  ['GET /api/auth/status',\n",
+  "new": "  ['POST /api/docs/:project/refresh',\n    'a planted exemption: the docs refresh, which must stay behind the session gate and the origin check'],\n  ['GET /api/auth/status',\n",
+  "tests": [
+   "test/docs-routes.test.ts"
+  ],
+  "red": "server docs-routes: 2 failed | 113 passed (115) — armed: no session 401; a foreign Origin 403; the session with no Origin 200; none of the four keys is EXEMPT; armed, no cookie and no marker: each docs route answers the gate's 401 with its verdict, decorated, with zero execs (the exempted refresh meets provenance's 403 instead)"
+ },
+ {
+  "id": "W3-T9-M13",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "const ABANDONED: DocsLaneRun<never> = Object.freeze({ kind: 'abandoned' });\n",
+  "new": "const ABANDONED: DocsLaneRun<never> = Object.freeze({ kind: 'abandoned' });\nconst BUSY_WORD = 'docs-busy';\n",
+  "tests": [
+   "test/single-definition.test.ts"
+  ],
+  "red": "server single-definition: 1 failed | 478 passed (479) — L4 decides nothing (the visible half): routes.ts, hooks.ts, lane.ts and cache.ts quote no failure word (lane.ts: 'docs-busy')"
+ },
+ {
+  "id": "W3-T9-M14",
+  "pkg": "server",
+  "file": "server/test/single-definition.test.ts",
+  "old": "  const docsNames = (): string[] => sources(docsDir).map((f) => path.relative(docsDir, f));\n",
+  "new": "  const docsNames = (): string[] => sources(docsDir).filter((f) => !f.endsWith('hooks.ts')).map((f) => path.relative(docsDir, f));\n",
+  "tests": [
+   "test/single-definition.test.ts"
+  ],
+  "red": "server single-definition: 1 failed | 478 passed (479) — covers the directory — every floor file is visited by the directory walk (never a hand list) (hooks.ts is listed but not visited). Measured at Task 8's state, the same mutation is green (472 passed): W2's floor did not name hooks.ts"
+ }
+]
+```
+
+### Task 10: docs-console-latency.test.ts: Docs never starves the console, over a real agent behind a throttled link, with a control that proves the probe can see starvation
+
+**Model routing:** `sonnet`, effort `high` — a load-sensitive wall-clock measurement. The traps are a probe that cannot fail (hence the control, the meta-check, the sample-count floor and the link floor), `connectToAgent`'s 2 s default request wait, the agent reading `ccd caps` once at BOOT (the fixture ccd must exist before `bootAgent`), and leaving a socket, an interval, an agent or a fixture behind. Every number below was measured on the shared scratch tree at Task 9's state plus this task, on node v24.14.1 and Fastify 5.10.0, on a 16-core box under a load average between 15 and 100.
+
+**Spec rows:** section 6.8 ("Docs never starves the console", `server/test/docs-console-latency.test.ts`) and its row M6.12 ("Console latency, with control"; mutation: "a pass-through lane (the control proves the probe can see it)"). Setup, probes, load and assertions are section 6.8's: `makeFixture()` and `bootAgent(fixture, {spawnPty: echoPty})`; a python fixture ccd at `<home>/.local/bin/ccd` answering `caps` with the docs verbs and the docs cap token, `docs-tree` with a canned 13-entry listing and `docs-show` with random bytes of the listed size (behind the PNG signature for a `.png`) echoing the pin and `sha256`; `throttledProxy(targetPort, 12_500_000)` (time-based credit, 2 ms flush); `connectFleet` through the proxy; the docs composition over `ccdRunner(fleet.runner, cfg)` and `fleet.state`; a pty echo every 25 ms and `fleet.client.caps()` every 100 ms; a tree GET, then one 2 MiB `.md` and twelve 2 MiB `.png` at once, each with the marker and `sec-fetch-site: same-origin`; all 13 answer 200; pty echo p95 and max and the caps round-trip max each at most `HOL_LIMIT_MS = ceil(DOCS_LANE_BYTES / 12.5e6 x 1000 x 1.5) + 150 = 528`; the control (a pass-through lane) must EXCEED it, or the test fails with "the probe cannot see starvation". Refinement (s) applied, a deviation from section 6.8's setup sentence (its `buildServer`), which Task 9's Step 7 defines with the issued block's fourth number: both runs mount the plugin on a bare Fastify through `composeDocs`'s `readLane` option, so the control differs from the real run in the lane alone.
+
+**Files:**
+- Create: `server/test/throttledLink.ts` — 109 lines: `ThrottledProxy` and `throttledProxy`, a `net.Server` on `127.0.0.1:0` that pipes each accepted connection to `127.0.0.1:<targetPort>`, each direction through its own time-based credit bucket flushed every 2 ms; `close()` stops every bucket and destroys both sockets of every connection.
+- Modify: `server/test/docsRouteHelpers.ts` — two import edits in place (lines 4-5 and line 9 at Task 9's state) and one block appended at EOF after line 188 (`echoPty()` and `passThroughLane()`; the file's header comment already names them as Task 10's).
+- Create: `server/test/docs-console-latency.test.ts` — 323 lines, one describe, four cases: the `HOL_LIMIT_MS` derivation pin, the real lane, the control, and the meta-check that the control ran its starvation check.
+- Test: `server/test/docs-console-latency.test.ts`; guards `server/test/remote-pty.test.ts` and `server/test/caps-refresh.test.ts` (the agent link this test boots), the five suites that import `docsRouteHelpers.ts` (`docs-routes`, `docs-lanes`, `docs-cache`, `docs-file-bytes`, `docs-headers`), `server/test/typecheck-tests.test.ts` (it compiles `server/test/**`), `server/test/single-definition.test.ts`, `server/test/topology-clean.test.ts` and `server/test/ci-pipeline.test.ts` (it reads the test directory).
+
+This task edits no `server/src` file, no census and no counted line. Before Step 1, check that the two new files are absent and that the names this task consumes exist (the tree as Task 9 left it), and that a `python3` is on PATH for the fixture ccd:
+
+Run: `test ! -e server/test/throttledLink.ts && test ! -e server/test/docs-console-latency.test.ts && grep -q '^export async function docsApp' server/test/docsRouteHelpers.ts && grep -q 'readLane?: () => DocsReadLane;' server/src/docs/routes.ts && grep -q '^export function docsReadLane' server/src/docs/lane.ts && grep -q '^export const DOCS_LANE_BYTES = 3145728;' server/src/docs/policy.ts && command -v python3 >/dev/null && echo T10-BASE-OK`
+Expected: `T10-BASE-OK`. If it does not print, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes, from `server/test/remoteHelpers.ts`: `interface RemoteFixture { home: string; projectsRoot: string }`; `makeFixture(): RemoteFixture`; `bootAgent(fixture: RemoteFixture, extra: Partial<AgentOpts> = {}): Promise<RunningAgent>`; `connectToAgent(port: number, extra: Partial<RemoteFleetConfig> = {}): ConnectedFleet` (its `requestTimeoutMs` default is 2 000; this test passes 30 000).
+- Consumes, from `agent/src/server.ts` (type only): `interface RunningAgent { port: number; close(): Promise<void> }`; from `agent/src/pty.ts` (type only): `interface PtyProcess { onData(listener: (data: string) => void): { dispose(): void }; onExit(listener: () => void): { dispose(): void }; write(data: string): void; resize(cols: number, rows: number): void; kill(): void }`, `type PtySpawn = (sessionId: string, cols: number, rows: number) => PtyProcess`.
+- Consumes, from `server/src/remote/client.ts` (type only): `interface ConnectedFleet { client: FleetClient; runner: Runner; io: FleetIO; spawnPty: SpawnPty; state: FleetState; onStateChange(cb): () => void; close(): Promise<void> }`, with `FleetClient.caps(): Promise<string[] | null>` (`null`: no answer to trust); from `server/src/pty.ts` (type only): `interface PtyLike { onData(listener: (data: string) => void): { dispose(): void }; write(data: string): void; resize(cols: number, rows: number): void; kill(): void }`.
+- Consumes, from `server/src/lifecycle.ts`: `ccdRunner(run: Runner, cfg: CcrcConfig): CcdRunner`; from `server/src/config.ts`: `loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig`; from `server/test/helpers.ts`: `seedRoster(home: string, roster?: unknown): void`; from `server/test/tmpHelpers.ts`: `mkTmp(prefix: string): string`; from `server/src/ccdargv.ts`: `DOCS_CAP`.
+- Consumes, from Task 6's `server/src/docs/routes.ts`: `composeDocs(source: CcdDocsDeps, opts: DocsComposeOptions = {}): DocsComposition`, `interface DocsComposeOptions { nowMs?: () => number; readLane?: () => DocsReadLane }`, `registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<DocsReader>, lanes: DocsNodes<DocsNodeLanes>): void`, `registerDocsRefreshRoute(app: FastifyInstance, readers: DocsNodes<DocsReader>, fetchers: DocsNodes<DocsFetcher>, lanes: DocsNodes<DocsNodeLanes>): void`; from Task 3's `server/src/docs/hooks.ts`: `installDocsRequestPolicy(app: FastifyInstance, nowMs: () => number = Date.now): void`, `installDocsResponsePolicy(app: FastifyInstance): void`; from Task 4's `server/src/docs/lane.ts` (type only): `DocsReadLane`, `DocsLaneRun<T>`; from `server/src/docs/policy.ts`: `DOCS_LANE_BYTES` (3 145 728), `type DocsJob`; from Task 6's `server/test/docsRouteHelpers.ts`: `PWA_HEADERS`, `treeOk(over?: Partial<DocsTreeOk>): DocsTreeOk`, `committedEntry(path: string, blob: string, size: number | null, kind?): DocsEntry`, `line(o: unknown): string`, `sha256Hex(bytes: Uint8Array): string`.
+- Consumes, from `shared/docs.ts` (W1): `DOCS_CLASS_CAP`, `DOCS_RASTER_TYPES` (the PNG magic, read from the table, never spelled), `contentClass(path: string): DocContentClass`, `type DocsTreeResponse`.
+- Produces, in `server/test/throttledLink.ts`:
+  - `export interface ThrottledProxy { port: number; close(): Promise<void> }`
+  - `export async function throttledProxy(targetPort: number, bytesPerSecond: number): Promise<ThrottledProxy>` — listens on `127.0.0.1:0`; per accepted connection one upstream connection to `127.0.0.1:<targetPort>`, both `setNoDelay`; each direction a FIFO of chunks drained every `FLUSH_MS` (2) by a credit of `elapsed x bytesPerSecond / 1000`, banking at most `IDLE_BURST_MS` (10) of credit only while idle, and pausing its source above `HIGH_WATER_BYTES` (1 MiB); either side's `close` or `error` destroys both; `close()` stops every bucket, destroys every socket and resolves when the listener has closed.
+- Produces, in `server/test/docsRouteHelpers.ts`:
+  - `export function echoPty(): PtySpawn` — each spawned process emits every `write` back to its data listeners as the same string on the next `setImmediate`; `kill` drops every listener and emits no exit; `resize` is a no-op.
+  - `export function passThroughLane(): DocsReadLane` — `run` runs `exec` at once and answers `{kind: 'ran', value}` (a rejected exec rejects); `load()` answers all zeros; `close()` does nothing. It never answers `busy` or `abandoned`.
+- Produces, in `server/test/docs-console-latency.test.ts`: one describe, four cases; module-private `HOL_LIMIT_MS`, `LINK_FLOOR_MS`, `FIXTURE_CCD`, `plantFixtureCcd`, `boot`, `loadAndProbe`, `quantile`, `summary`, `seesStarvation`.
+
+**Decisions this task makes (refinement (s) applied; Decision 1 departs from section 6.8's TEXT and is a deviation, which Task 9 defines; the others each fill a silence of section 6.8 or add an assertion on top of its stated ones):**
+1. **A bare Fastify, both runs, through `app.inject`.** Section 6.8 says "`buildServer` with `ccdRunner(fleet.runner, cfg)` and `fleet.state`"; refinement (s) mounts the plugin on a bare Fastify, registered exactly as `server.ts` registers it (the `await app.register(async (app) => { ... })` block with the four calls), because `buildServer` adds the gate and nothing the probes measure, and the control must differ from the real run in the lane alone. **This replaces the spec's named setup, so it is a deviation** (refinement (s); Task 9's Step 7 defines it with the issued block's fourth number), and the departure is forced: `buildServer` composes the read lane itself and `Deps` has no field through which a test could hand it the control's pass-through lane (refinement (i) adds none: a new optional field with a local fallback is what `Deps.queue`'s docstring warns against), so a `buildServer` control could not differ from the real run in the lane alone. The link under test is section 6.8's unchanged: the real agent behind the throttled proxy, `ccdRunner(fleet.runner, cfg)` and `fleet.state`. The test composes its own rather than calling `docsApp()`: `docsApp` builds its own fleet-state literal, and this test must hand the adapter `fleet.state`, the object the client fills on the agent's `ready` frame. The HTTP side is `app.inject`: the link under test is the agent socket, not the browser's.
+2. **One process, one event loop.** The agent, the proxy, the client, the routes and the probes share the vitest worker's event loop, so an echo's round trip includes the CPU the docs answers cost there (a 2 MiB show is a 2.8 MB JSON parse, a base64 decode and re-encode, and a sha256). That is pessimistic for the real run and is part of why section 6.8's limit carries 1.5x and 150 ms of slack. Measured below: the real lane's echo max stayed at or under 341 ms.
+3. **Four cases, not two.** (a) A derivation pin, `HOL_LIMIT_MS === 528`, cheap and separate, so a change of `DOCS_LANE_BYTES` reds it at once (whoever moves the budget revisits section 6.8). (b) The real lane. (c) The control, whose verdict is `seesStarvation`, which throws `the probe cannot see starvation (...)` unless the echo max EXCEEDS `HOL_LIMIT_MS`, and which is the only writer of the module's `controlVerdict`. (d) A meta-check that `controlVerdict` is `'starved'`, so deleting the control's verdict line reds too (a deleted assertion is otherwise invisible). Vitest runs a file's cases in order, so (d) follows (c).
+4. **Two extra assertions that make a vacuous green impossible.** Every heavy case asserts `echoMs.length > LEAD_MS / ECHO_EVERY_MS` (40): a probe that recorded nothing would otherwise pass `max <= 528` with `-Infinity`. And every heavy case asserts the load took at least 90% of `LINK_FLOOR_MS`, the thirteen answers' base64 content bytes at the link rate (2 908 ms): a load faster than that never crossed the throttle. Measured below, a proxy with the throttle removed still left the control's echo max at 504 ms from CPU alone, 24 ms under the limit, so "the control no longer exceeds" was too thin a red for a removed throttle; the link floor reds it by a wide margin in BOTH cases.
+5. **The fixture ccd is generic python reading one JSON file.** The test writes `docs-latency.json` beside the script: the verb list (with `DOCS_CAP`, never the quoted token), the canned tree line (built by Task 6's `treeOk` and `committedEntry`, so it passes `docsAnswerShape`), and the PNG magic as hex (from `DOCS_RASTER_TYPES.png.magic`). `docs-show` looks its `--section`/`--path` up in the canned tree for the blob and the size, so the listing is the one source of both, and W2's check 8 (integrity, pin echoes, the listing's blob, `onRef`) and check 9 (`showWire` of the listed size) both pass. Each path's blob is `sha256Hex(path)`'s first 40 hex characters, so every blob is distinct and none is a real object id.
+6. **The agent's caps cache.** The agent answers `caps` from a cache keyed on the stats of BOTH `<home>/.local/bin/ccd` and `<home>/.local/libexec/ccrc/ccd`; the placeholder at the second path lets the cache key form, so the 100 ms `caps` probe measures the link, not a python start. The fixture ccd and its JSON are written before `bootAgent`, because the agent's handshake carries its boot-time `ccd caps` read.
+7. **Waits.** `requestTimeoutMs: 30_000` is the client's default wait for `caps` and the pty open (above the docs-show budget of 15 000 plus the runner's 5 000 slack); a docs exec carries its own budget. After the load, the test stops issuing probes and waits up to 30 s for every probe in flight; a probe that never returns reds the case rather than being dropped from the sample.
+8. **`fleet.state` is passed as the object itself.** `connectFleet` returns `client.state`, mutated in place on `ready` and never replaced, so no getter is needed here (refinement (i)'s getter is for `buildServer`'s `deps`, Task 9).
+9. **CPU-sensitive.** A red is re-run alone, in the foreground, before it is called a break. W7's prose pass adds `docs-console-latency` to CLAUDE.md's known-load-flakes bullet (refinement (u): no CLAUDE.md edit here).
+
+**Measured while planning** (the shared scratch tree at Task 9's state plus this task; separate copies for the mutations):
+1. Seven green diagnostic runs (four before the link floor was added, three after, the file otherwise as below): the real lane's pty echo p95 was 209-220 ms and its max 230-341 ms, its caps round-trip max 221-256 ms, with 200-223 echo samples and no `null` caps; the control's echo p95 was 2 096-2 619 ms and its max 2 524-2 812 ms (the lab analogue measured 2 022 ms), a separation of about 8x to 10x on loopback. In the three later runs the real load took 4 529-4 677 ms and the control's 3 178-3 199 ms, against a link floor of 2 908 ms (90%: 2 617 ms).
+2. The throttle removed (the proxy's credit infinite), before the link floor existed: the control's echo max was 504 ms, under the 528 limit, from CPU alone. With the floor: the real load 1 870 ms and the control's 938 ms, both under 90% of 2 908 ms. Row W3-T10-M4.
+3. The read lane's admission bypassed in `lane.ts` (every job admitted): the real case's echo p95 2 589 ms and max 2 785 ms, the control unchanged and green. Row W3-T10-M1, M6.12's own mutation.
+4. Step 2's RED is the missing module (`Cannot find module './throttledLink.js'`); with `throttledLink.ts` written but the helpers not yet appended, the three runtime cases red with `TypeError: echoPty is not a function` and the meta-check, and the pin is green.
+5. One full file run takes about 15 s wall time (the two heavy cases about 5 s each plus boot).
+
+- [ ] **Step 1: Write the failing test.** Create `server/test/docs-console-latency.test.ts` with exactly this content:
+
+```ts
+// "Docs never starves the console" (design 2026-10-01, section 6.8, M6.12; W3 Task 10, refinement (s)). A real
+// in-process agent on a fixture HOME, a python fixture ccd at `<home>/.local/bin/ccd`, a 100 Mbit userland link
+// (`throttledProxy`) between the agent and a real `connectFleet` client, and the docs plugin mounted on a bare Fastify
+// over W2's real adapter. While a tree GET and thirteen 2 MiB file GETs run, the console's two probes share the one
+// agent socket: a pty echo every 25 ms and a `caps` round trip every 100 ms. Through the real read lane each stays
+// within one lane budget of link time (`HOL_LIMIT_MS`); through a pass-through lane (the CONTROL) the same load must
+// push the echo PAST it, or the probe could not have seen starvation and the real run proves nothing.
+//
+// CPU-sensitive: it measures wall time on a shared event loop. A red is re-run in isolation, in the foreground,
+// before it is called a break (CLAUDE.md's known load flakes; W7 adds this file to that list).
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RunningAgent } from '../../agent/src/server.js';
+import { DOCS_CAP } from '../src/ccdargv.js';
+import { loadConfig } from '../src/config.js';
+import { installDocsRequestPolicy, installDocsResponsePolicy } from '../src/docs/hooks.js';
+import { DOCS_LANE_BYTES } from '../src/docs/policy.js';
+import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from '../src/docs/routes.js';
+import { ccdRunner } from '../src/lifecycle.js';
+import type { PtyLike } from '../src/pty.js';
+import type { ConnectedFleet } from '../src/remote/client.js';
+import { DOCS_CLASS_CAP, DOCS_RASTER_TYPES, contentClass, type DocsTreeResponse } from '../../shared/docs.js';
+import {
+  PWA_HEADERS, committedEntry, echoPty, line, passThroughLane, sha256Hex, treeOk,
+} from './docsRouteHelpers.js';
+import { seedRoster } from './helpers.js';
+import { bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
+import { throttledProxy, type ThrottledProxy } from './throttledLink.js';
+import { mkTmp } from './tmpHelpers.js';
+
+/** The link rate (section 6.8): 12 500 000 bytes a second is 100 Mbit. */
+const LINK_BYTES_PER_SECOND = 12_500_000;
+/** One lane budget of link time, with 1.5x and 150 ms of slack (section 6.8), DERIVED from L1's budget. */
+const HOL_LIMIT_MS = Math.ceil(DOCS_LANE_BYTES / 12.5e6 * 1000 * 1.5) + 150;
+/** The probes' cadence (section 6.8). */
+const ECHO_EVERY_MS = 25;
+const CAPS_EVERY_MS = 100;
+/** How long the probes run before the load starts (an idle baseline inside the sample). */
+const LEAD_MS = 1000;
+/** The client's default request wait, raised above the docs-show budget (15 000) plus the runner's 5 000 slack, so
+ *  a `caps` probe or the pty open never times out under the control's backlog (connectToAgent's default is 2 000). */
+const REQUEST_TIMEOUT_MS = 30_000;
+/** Each heavy case's own vitest timeout. */
+const CASE_TIMEOUT_MS = 120_000;
+
+/** The load (section 6.8): one 2 MiB markdown file and twelve 2 MiB PNGs, each at its class cap, in `specs`. */
+const LOAD_PATHS: readonly string[] = ['doc.md', ...Array.from({ length: 12 }, (_, i) => `img-${i + 1}.png`)];
+
+/** The least time the thirteen answers can take on the link: their base64 content bytes at the link rate, before
+ *  any envelope (`showWire` without its reserve). A load faster than 90% of it never crossed the throttle. */
+const LINK_FLOOR_MS = LOAD_PATHS.reduce((n, p) => n + 4 * Math.ceil(DOCS_CLASS_CAP[contentClass(p)] / 3), 0)
+  / LINK_BYTES_PER_SECOND * 1000;
+
+/** The canned tree the fixture ccd answers: every load path committed at its class cap, each with a distinct
+ *  40-hex blob derived from its path. A complete `DocsTreeOk`, so it passes `docsAnswerShape`. */
+function cannedTree(): string {
+  return line(treeOk({
+    entries: LOAD_PATHS.map((p) =>
+      committedEntry(p, sha256Hex(Buffer.from(p)).slice(0, 40), DOCS_CLASS_CAP[contentClass(p)])),
+  }));
+}
+
+/**
+ * The fixture ccd (section 6.8): a python3 script that reads `docs-latency.json` beside itself. `caps` prints the
+ * verb list; `docs-tree` prints the canned line; `docs-show` answers fresh random bytes of the listed size (behind
+ * the PNG magic for a `.png`, so the raster check matches), base64-encoded, with `size`, `sha256`, the listing's
+ * `blob` and every pin echo, and `onRef` 'contains', so W2's check 8 passes and the answer is within check 9's bound.
+ * Any other verb exits 2 with nothing on stdout.
+ */
+const FIXTURE_CCD = String.raw`#!/usr/bin/env python3
+import base64, hashlib, json, os, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(HERE, 'docs-latency.json')) as f:
+    FIX = json.load(f)
+
+def flags(argv):
+    return {argv[i]: argv[i + 1] for i in range(0, len(argv) - 1, 2)}
+
+def show(o):
+    tree = json.loads(FIX['treeLine'])
+    entry = next(e for e in tree['entries'] if e['section'] == o['--section'] and e['path'] == o['--path'])
+    size = entry['committed']['size']
+    head = bytes.fromhex(FIX['pngMagicHex']) if o['--path'].endswith('.png') else b''
+    body = head + os.urandom(size - len(head))
+    return {
+        'v': 1, 'verb': 'docs-show', 'ok': True, 'elapsedMs': 1, 'source': 'committed',
+        'section': o['--section'], 'path': o['--path'], 'commit': o['--commit'], 'blob': entry['committed']['blob'],
+        'mode': '100644', 'onRef': 'contains', 'size': len(body), 'sha256': hashlib.sha256(body).hexdigest(),
+        'encoding': 'base64', 'b64': base64.b64encode(body).decode('ascii'),
+    }
+
+def main(argv):
+    verb = argv[0] if argv else ''
+    if verb == 'caps':
+        sys.stdout.write(''.join(v + '\n' for v in FIX['verbs']))
+        return 0
+    if verb == 'docs-tree':
+        sys.stdout.write(FIX['treeLine'])
+        return 0
+    if verb == 'docs-show':
+        sys.stdout.write(json.dumps(show(flags(argv[1:])), separators=(',', ':')) + '\n')
+        return 0
+    sys.stderr.write('fixture ccd: no such verb\n')
+    return 2
+
+sys.exit(main(sys.argv[1:]))
+`;
+
+/** Write the fixture ccd, its config and the libexec placeholder the agent's caps cache keys on, before boot (the
+ *  agent reads `ccd caps` once at boot for the handshake). */
+function plantFixtureCcd(home: string): void {
+  const bin = path.join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  const png = DOCS_RASTER_TYPES.png.magic[0][0];
+  writeFileSync(path.join(bin, 'docs-latency.json'), JSON.stringify({
+    verbs: ['caps', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', DOCS_CAP],
+    treeLine: cannedTree(),
+    pngMagicHex: Buffer.from(png.bytes).toString('hex'),
+  }));
+  writeFileSync(path.join(bin, 'ccd'), FIXTURE_CCD);
+  chmodSync(path.join(bin, 'ccd'), 0o755);
+  const libexec = path.join(home, '.local', 'libexec', 'ccrc');
+  mkdirSync(libexec, { recursive: true });
+  writeFileSync(path.join(libexec, 'ccd'), '# placeholder: the agent stats this file to key its caps cache\n');
+}
+
+interface Rig {
+  fixture: RemoteFixture;
+  agent: RunningAgent;
+  proxy: ThrottledProxy;
+  fleet: ConnectedFleet;
+  app: FastifyInstance;
+  pty: PtyLike | undefined;
+}
+
+let rig: Rig | undefined;
+
+afterEach(async () => {
+  const r = rig;
+  rig = undefined;
+  if (r === undefined) return;
+  r.pty?.kill();
+  await r.app.close();
+  await r.fleet.close();
+  await r.proxy.close();
+  await r.agent.close();
+  rmSync(r.fixture.home, { recursive: true, force: true });
+  rmSync(r.fixture.projectsRoot, { recursive: true, force: true });
+});
+
+/**
+ * Boot one case: the fixture, the agent with an echo pty, the throttled link, the client through it, and the docs
+ * plugin on a bare Fastify, registered exactly as `server.ts` registers it (refinement (s): `buildServer` would add
+ * the gate and nothing the probes measure). `lane` picks the read lane: the real `docsReadLane`, or the control.
+ */
+async function boot(lane: 'real' | 'control'): Promise<Rig> {
+  const fixture = makeFixture();
+  plantFixtureCcd(fixture.home);
+  const serverHome = mkTmp('ccrc-docs-latency-server-');
+  seedRoster(serverHome);
+  const cfg = loadConfig({ CCRC_HOME: serverHome });
+  const agent = await bootAgent(fixture, { spawnPty: echoPty() });
+  const proxy = await throttledProxy(agent.port, LINK_BYTES_PER_SECOND);
+  const fleet = connectToAgent(proxy.port, { requestTimeoutMs: REQUEST_TIMEOUT_MS });
+  const app = Fastify({ logger: false });
+  rig = { fixture, agent, proxy, fleet, app, pty: undefined };
+  await vi.waitFor(() => expect(fleet.state.ccdVerbs).toContain(DOCS_CAP), { timeout: 10_000 });
+  const docs = composeDocs({ runCcd: ccdRunner(fleet.runner, cfg), fleetState: fleet.state },
+    lane === 'control' ? { readLane: passThroughLane } : {});
+  await app.register(async (app) => {
+    installDocsRequestPolicy(app);
+    installDocsResponsePolicy(app);
+    registerDocsReadRoutes(app, docs.readers, docs.lanes);
+    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+  });
+  await app.ready();
+  return rig;
+}
+
+/** What one loaded run measured: each file GET's status and content type, how long the thirteen took together,
+ *  every pty echo's and every caps round trip's milliseconds, and how many caps probes answered nothing to trust. */
+interface Measured {
+  files: { path: string; status: number; type: string }[];
+  loadMs: number;
+  echoMs: number[];
+  capsMs: number[];
+  capsNull: number;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run the probes from `LEAD_MS` before the load until it ends (section 6.8), then wait for every probe in flight to
+ * come back. The load: one tree GET (its commit and served ref are the pins), then the thirteen file GETs at once,
+ * each with the PWA's headers (the marker and `sec-fetch-site: same-origin`).
+ */
+async function loadAndProbe(r: Rig): Promise<Measured> {
+  const pty = r.fleet.spawnPty('docs-latency', 80, 24);
+  r.pty = pty;
+  const sent = new Map<string, number>();
+  const echoMs: number[] = [];
+  let buffered = '';
+  pty.onData((d) => {
+    const now = performance.now();
+    buffered += d;
+    for (let i = buffered.indexOf(';'); i >= 0; i = buffered.indexOf(';')) {
+      const token = buffered.slice(0, i);
+      buffered = buffered.slice(i + 1);
+      const t0 = sent.get(token);
+      if (t0 !== undefined) {
+        sent.delete(token);
+        echoMs.push(now - t0);
+      }
+    }
+  });
+  sent.set('warm', performance.now());
+  pty.write('warm;');
+  await vi.waitFor(() => expect(sent.size).toBe(0), { timeout: 10_000 });
+  echoMs.length = 0;
+
+  const capsMs: number[] = [];
+  let capsNull = 0;
+  let capsOut = 0;
+  let n = 0;
+  const echoTimer = setInterval(() => {
+    const token = `e${n++}`;
+    sent.set(token, performance.now());
+    pty.write(`${token};`);
+  }, ECHO_EVERY_MS);
+  const capsTimer = setInterval(() => {
+    const t0 = performance.now();
+    capsOut += 1;
+    void r.fleet.client.caps().then((verbs) => {
+      capsOut -= 1;
+      capsMs.push(performance.now() - t0);
+      if (verbs === null) capsNull += 1;
+    });
+  }, CAPS_EVERY_MS);
+  try {
+    await sleep(LEAD_MS);
+    const tree = await r.app.inject({ method: 'GET', url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    expect(tree.statusCode, tree.body.slice(0, 300)).toBe(200);
+    const { commit, served } = (tree.json() as DocsTreeResponse).tree.ref;
+    const started = performance.now();
+    const files = await Promise.all(LOAD_PATHS.map(async (p) => {
+      const res = await r.app.inject({
+        method: 'GET', url: '/api/docs/demo/file', headers: PWA_HEADERS,
+        query: { commit, servedRef: served, section: 'specs', path: p },
+      });
+      return { path: p, status: res.statusCode, type: String(res.headers['content-type']) };
+    }));
+    const loadMs = performance.now() - started;
+    clearInterval(echoTimer);
+    clearInterval(capsTimer);
+    await vi.waitFor(() => {
+      expect(sent.size).toBe(0);
+      expect(capsOut).toBe(0);
+    }, { timeout: REQUEST_TIMEOUT_MS, interval: 20 });
+    return { files, loadMs, echoMs, capsMs, capsNull };
+  } finally {
+    clearInterval(echoTimer);
+    clearInterval(capsTimer);
+  }
+}
+
+/** The `p` quantile by nearest rank (`p95`: the smallest sample with at least 95% of samples at or below it). */
+function quantile(xs: readonly number[], p: number): number {
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)] as number;
+}
+
+const maxOf = (xs: readonly number[]): number => Math.max(...xs);
+
+/** One line naming what was measured, for every assertion message. */
+function summary(m: Measured): string {
+  const ms = (x: number): string => `${Math.round(x)} ms`;
+  return `load ${ms(m.loadMs)} (link floor ${ms(LINK_FLOOR_MS)}); `
+    + `echo n=${m.echoMs.length} p95=${ms(quantile(m.echoMs, 0.95))} max=${ms(maxOf(m.echoMs))}; `
+    + `caps n=${m.capsMs.length} max=${ms(maxOf(m.capsMs))} null=${m.capsNull}; limit ${HOL_LIMIT_MS} ms`;
+}
+
+/** The control's verdict (section 6.8): the pass-through lane's echo max must EXCEED the limit, else the probe could
+ *  not have seen starvation and the real run's green proves nothing. */
+function seesStarvation(m: Measured): 'starved' {
+  if (!(maxOf(m.echoMs) > HOL_LIMIT_MS)) throw new Error(`the probe cannot see starvation (${summary(m)})`);
+  return 'starved';
+}
+
+/** Set only by the control case's verdict, read by the meta-check that follows it. */
+let controlVerdict: 'starved' | undefined;
+
+describe('Docs never starves the console (section 6.8, M6.12)', () => {
+  it('HOL_LIMIT_MS is derived from the read lane budget, 528 ms at 100 Mbit', () => {
+    expect(HOL_LIMIT_MS).toBe(528);
+  });
+
+  it('through the real read lane, all 13 files answer 200 while pty echo p95 and max and the caps max stay within HOL_LIMIT_MS', async () => {
+    const m = await loadAndProbe(await boot('real'));
+    expect(m.files.map((f) => f.status), summary(m)).toEqual(LOAD_PATHS.map(() => 200));
+    expect(m.files.filter((f) => f.path.endsWith('.png')).map((f) => f.type)).toEqual(Array(12).fill('image/png'));
+    expect(m.loadMs, `the load crossed the throttled link: ${summary(m)}`).toBeGreaterThanOrEqual(LINK_FLOOR_MS * 0.9);
+    expect(m.echoMs.length, summary(m)).toBeGreaterThan(LEAD_MS / ECHO_EVERY_MS);
+    expect(m.capsNull, summary(m)).toBe(0);
+    expect(quantile(m.echoMs, 0.95), `pty echo p95: ${summary(m)}`).toBeLessThanOrEqual(HOL_LIMIT_MS);
+    expect(maxOf(m.echoMs), `pty echo max: ${summary(m)}`).toBeLessThanOrEqual(HOL_LIMIT_MS);
+    expect(maxOf(m.capsMs), `caps round-trip max: ${summary(m)}`).toBeLessThanOrEqual(HOL_LIMIT_MS);
+  }, CASE_TIMEOUT_MS);
+
+  it('the control: the same load through a pass-through lane pushes pty echo past HOL_LIMIT_MS', async () => {
+    const m = await loadAndProbe(await boot('control'));
+    expect(m.files.map((f) => f.status), summary(m)).toEqual(LOAD_PATHS.map(() => 200));
+    expect(m.loadMs, `the load crossed the throttled link: ${summary(m)}`).toBeGreaterThanOrEqual(LINK_FLOOR_MS * 0.9);
+    expect(m.echoMs.length, summary(m)).toBeGreaterThan(LEAD_MS / ECHO_EVERY_MS);
+    controlVerdict = seesStarvation(m);
+  }, CASE_TIMEOUT_MS);
+
+  it('the control ran its starvation check (the meta-check)', () => {
+    expect(controlVerdict, 'the control did not run its starvation check').toBe('starved');
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails.** Foreground, Bash timeout 600000 ms.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-console-latency.test.ts )`
+Expected: FAIL, `Test Files  1 failed (1)`, `Tests  no tests`, with `Error: Cannot find module './throttledLink.js' imported from .../server/test/docs-console-latency.test.ts` (the helper and the two `docsRouteHelpers.ts` exports do not exist yet).
+
+- [ ] **Step 3: Write the throttled link.** Create `server/test/throttledLink.ts` with exactly this content:
+
+```ts
+// A userland throttled TCP link for the Docs console-latency test (design 2026-10-01, section 6.8; W3 Task 10).
+// `throttledProxy(targetPort, bytesPerSecond)` listens on 127.0.0.1 and pipes every accepted connection to
+// `127.0.0.1:targetPort`, each direction through its own time-based credit bucket flushed every 2 ms, so bytes
+// leave in arrival order at no more than `bytesPerSecond` (12 500 000 is 100 Mbit). A frame queued behind others
+// waits for them: exactly the head-of-line blocking the read lane bounds.
+import net from 'node:net';
+
+/** How often each direction's bucket is flushed (section 6.8: "2 ms flush"). */
+const FLUSH_MS = 2;
+/** The credit an IDLE direction may bank, in milliseconds of rate: a burst after idleness, never a backlog's
+ *  catch-up. A backlogged direction banks no cap, so a late flush (a busy event loop) loses no link time. */
+const IDLE_BURST_MS = 10;
+/** Above this many queued bytes a direction pauses its source socket, and resumes at or below it, so the
+ *  backlog waits in the sender's own buffers in the order it was written. */
+const HIGH_WATER_BYTES = 1048576;
+
+export interface ThrottledProxy {
+  /** The port the proxy listens on, on 127.0.0.1. */
+  port: number;
+  /** Stop listening, stop every bucket, and destroy both sockets of every connection. */
+  close(): Promise<void>;
+}
+
+/** One direction of one connection: `from`'s bytes reach `to` at most `bytesPerSecond`, in order. */
+function throttle(from: net.Socket, to: net.Socket, bytesPerSecond: number): { stop(): void } {
+  const perMs = bytesPerSecond / 1000;
+  const queue: Buffer[] = [];
+  let queued = 0;
+  let credit = 0;
+  let last = performance.now();
+
+  const flush = (): void => {
+    const now = performance.now();
+    const earned = (now - last) * perMs;
+    last = now;
+    credit = queue.length === 0 ? Math.min(credit + earned, perMs * IDLE_BURST_MS) : credit + earned;
+    while (queue.length > 0 && credit >= 1) {
+      const head = queue[0] as Buffer;
+      const n = Math.min(head.length, Math.floor(credit));
+      if (n === head.length) queue.shift();
+      else queue[0] = head.subarray(n);
+      if (!to.destroyed) to.write(head.subarray(0, n));
+      queued -= n;
+      credit -= n;
+    }
+    if (queued <= HIGH_WATER_BYTES && from.isPaused()) from.resume();
+  };
+
+  const timer = setInterval(flush, FLUSH_MS);
+  from.on('data', (chunk: Buffer) => {
+    queue.push(chunk);
+    queued += chunk.length;
+    if (queued > HIGH_WATER_BYTES) from.pause();
+  });
+  return { stop: () => clearInterval(timer) };
+}
+
+/**
+ * A throttled proxy to `127.0.0.1:targetPort` (section 6.8). Each accepted connection opens one upstream
+ * connection; both sockets are `setNoDelay`, and each direction has its own bucket at `bytesPerSecond`. Either
+ * side closing or failing destroys both. `close()` resolves once the listener has closed.
+ */
+export async function throttledProxy(targetPort: number, bytesPerSecond: number): Promise<ThrottledProxy> {
+  const live = new Set<{ stop(): void }>();
+  const sockets = new Set<net.Socket>();
+
+  const server = net.createServer((client) => {
+    const upstream = net.connect(targetPort, '127.0.0.1');
+    client.setNoDelay(true);
+    upstream.setNoDelay(true);
+    sockets.add(client);
+    sockets.add(upstream);
+    const up = throttle(client, upstream, bytesPerSecond);
+    const down = throttle(upstream, client, bytesPerSecond);
+    live.add(up);
+    live.add(down);
+    const end = (): void => {
+      up.stop();
+      down.stop();
+      live.delete(up);
+      live.delete(down);
+      client.destroy();
+      upstream.destroy();
+      sockets.delete(client);
+      sockets.delete(upstream);
+    };
+    client.on('close', end);
+    upstream.on('close', end);
+    client.on('error', end);
+    upstream.on('error', end);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+  const port = (server.address() as net.AddressInfo).port;
+
+  return {
+    port,
+    close: () => new Promise<void>((resolve) => {
+      for (const t of live) t.stop();
+      live.clear();
+      for (const s of sockets) s.destroy();
+      sockets.clear();
+      server.close(() => resolve());
+    }),
+  };
+}
+```
+
+- [ ] **Step 4: Add the echo pty and the control lane to the route helpers.** Three edits to `server/test/docsRouteHelpers.ts`, each Find block matching exactly once in the file as Task 9 left it.
+
+Find (lines 4-5):
+
+```ts
+import { createHash } from 'node:crypto';
+import Fastify, { type FastifyInstance } from 'fastify';
+```
+
+Replace with:
+
+```ts
+import { createHash } from 'node:crypto';
+import Fastify, { type FastifyInstance } from 'fastify';
+import type { PtyProcess, PtySpawn } from '../../agent/src/pty.js';
+```
+
+Find (line 9):
+
+```ts
+import type { DocsReadLane } from '../src/docs/lane.js';
+```
+
+Replace with:
+
+```ts
+import type { DocsLaneRun, DocsReadLane } from '../src/docs/lane.js';
+import type { DocsJob } from '../src/docs/policy.js';
+```
+
+Then append at the end of the file, after `docsApp`'s closing `}` (line 188 at Task 9's state, line 190 after the two import edits), one blank line and exactly this block:
+
+```ts
+// ===== Task 10: the latency test's echo pty and its control lane (section 6.8; refinement (s)) =====
+
+/**
+ * An agent-side pty (`AgentOpts.spawnPty`) that echoes: every `write` is emitted back to its data listeners, as the
+ * same string, on the next turn of the event loop (`setImmediate`), so an echo's round trip is the link's and the
+ * event loop's, never a terminal's. `kill` silences it and emits no exit; `resize` is a no-op. No node-pty, no tmux.
+ */
+export function echoPty(): PtySpawn {
+  return () => {
+    const data = new Set<(d: string) => void>();
+    const exit = new Set<() => void>();
+    const proc: PtyProcess = {
+      onData: (listener) => {
+        data.add(listener);
+        return { dispose: () => { data.delete(listener); } };
+      },
+      onExit: (listener) => {
+        exit.add(listener);
+        return { dispose: () => { exit.delete(listener); } };
+      },
+      write: (d) => {
+        setImmediate(() => {
+          for (const listener of data) listener(d);
+        });
+      },
+      resize: () => undefined,
+      kill: () => {
+        data.clear();
+        exit.clear();
+      },
+    };
+    return proc;
+  };
+}
+
+/**
+ * The latency test's CONTROL lane (section 6.8, M6.12's mutation; refinement (s)): a `DocsReadLane` that runs every
+ * job at once, with no FIFO, no budget and no refusal, so every show's answer is on the link together. Passed to
+ * `composeDocs` as its `readLane` option; nothing else differs between the control and the real run.
+ */
+export function passThroughLane(): DocsReadLane {
+  return {
+    async run<T>(_job: DocsJob, _signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
+      return { kind: 'ran', value: await exec() };
+    },
+    load: () => ({ execs: 0, bytes: 0, large: 0, queued: 0 }),
+    close: () => undefined,
+  };
+}
+```
+
+Check: `tail -n 3 server/test/docsRouteHelpers.ts` prints `    close: () => undefined,`, `  };` and `}`, and `wc -l server/test/docsRouteHelpers.ts` prints `241`.
+
+- [ ] **Step 5: Run it to verify it passes.** Foreground, Bash timeout 600000 ms. CPU-sensitive: if a heavy case reds, re-run the file alone, on a quieter moment, before calling it broken; the assertion message names every measured number (`load`, the link floor, echo `n`/p95/max, caps `n`/max/`null`, the limit).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-console-latency.test.ts )`
+Expected: `Test Files  1 passed (1)`, `Tests  4 passed (4)`, in about 15 s.
+
+- [ ] **Step 6: The guard suites and the compiles.** Foreground, Bash timeout 600000 ms each; `typecheck-tests` is a known load flake, so a red there is re-run alone before it is called broken.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/remote-pty.test.ts test/caps-refresh.test.ts )`
+Expected: `Test Files  2 passed (2)`, `Tests  14 passed (14)` (unchanged: the agent link this test boots).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-lanes.test.ts test/docs-cache.test.ts test/docs-file-bytes.test.ts test/docs-headers.test.ts )`
+Expected: `Test Files  5 passed (5)`, `Tests  289 passed (289)` (unchanged: the five suites that import `docsRouteHelpers.ts`).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)`: `server/test/**` compiles with the two new files and the helpers' new imports (`passThroughLane`'s `run` is generic, and `echoPty`'s process is typed `PtyProcess`). With a symlinked `pwa/node_modules` only `PWA_TSC really is pwa's own installed compiler` reds (Task 5's Measured 4); Task 1's Step 0 installs real modules.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )`
+Expected: `Tests  479 passed (479)` (unchanged: this task adds no `server/src` file and no scanned definition).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )`
+Expected: `Tests  55 passed (55)`. It needs `origin/main` (or `CCRC_HISTORY_BASE=<the wave's base sha>`). This task adds placeholder names only: the project `demo`, the section `specs`, the paths `doc.md` and `img-1.png` to `img-12.png`, the pty session `docs-latency` and the fixture prefix `ccrc-docs-latency-server-`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts )`
+Expected: `Tests  43 passed (43)` (unchanged: it reads the test directory).
+
+No `ccd/ccd` edit, so no restamp; no census and no counted line moves.
+
+- [ ] **Step 7: Commit.**
+
+```bash
+git add server/test/throttledLink.ts server/test/docsRouteHelpers.ts server/test/docs-console-latency.test.ts
+git commit -m "server: docs console-latency test over a real agent behind a throttled link, with its control (docs W3)" \
+  -m "docs-console-latency.test.ts (section 6.8, M6.12) boots a real agent on a fixture HOME with a python fixture ccd and an echo pty, links a real connectFleet client to it through throttledProxy at 12 500 000 bytes a second, and mounts the docs plugin on a bare Fastify over W2's real adapter (refinement (s)). Under a tree GET and thirteen 2 MiB file GETs, the real read lane keeps pty echo p95 and max and the caps round-trip max within HOL_LIMIT_MS (528, derived from DOCS_LANE_BYTES and pinned); the control, a pass-through lane, must exceed it or the test fails with 'the probe cannot see starvation', and a meta-check reds if the control's verdict is never taken. A sample-count floor and a link floor (the answers' bytes at the link rate) keep both heavy cases from passing vacuously. throttledLink.ts is the time-based-credit proxy (2 ms flush); docsRouteHelpers.ts gains echoPty() and passThroughLane(). CPU-sensitive: re-run a red alone before calling it a break." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+**Mutation rows this task contributes** (each measured red in a separate copy, never in the worktree; `pkg` is the package the `tests` run in; `old` is unique in the file at this task's state). These are wall-clock rows: Task 12 runs each alone, in the foreground, and a row that greens under load is re-run once before it is called a gap. Row W3-T10-M1 is M6.12's own mutation (section 6.10: "a pass-through lane"), applied to the REAL lane: the control stays green under it, as it must.
+
+```json
+[
+ {
+  "id": "W3-T10-M1",
+  "pkg": "server",
+  "file": "server/src/docs/lane.ts",
+  "old": "      if (queue.length === 0 && laneAdmit(load, job)) return running(job, exec);\n",
+  "new": "      if (queue.length === 0) return running(job, exec);\n",
+  "tests": [
+   "test/docs-console-latency.test.ts"
+  ],
+  "red": "server docs-console-latency: 1 failed | 3 passed (4) — through the real read lane, all 13 files answer 200 while pty echo p95 and max and the caps max stay within HOL_LIMIT_MS (pty echo p95: load 3135 ms (link floor 2908 ms); echo n=147 p95=2589 ms max=2785 ms; caps max=2705 ms; expected 2588.85 to be less than or equal to 528). The control, the pin and the meta-check stay green: M6.12's mutation is caught by the real case, and the control is unaffected by it"
+ },
+ {
+  "id": "W3-T10-M2",
+  "pkg": "server",
+  "file": "server/test/docs-console-latency.test.ts",
+  "old": "  if (!(maxOf(m.echoMs) > HOL_LIMIT_MS)) throw new Error(`the probe cannot see starvation (${summary(m)})`);\n",
+  "new": "  if (!(maxOf(m.echoMs) <= HOL_LIMIT_MS)) throw new Error(`the probe cannot see starvation (${summary(m)})`);\n",
+  "tests": [
+   "test/docs-console-latency.test.ts"
+  ],
+  "red": "server docs-console-latency: 2 failed | 2 passed (4) — the control: the same load through a pass-through lane pushes pty echo past HOL_LIMIT_MS (Error: the probe cannot see starvation (load 3086 ms (link floor 2908 ms); echo n=143 p95=2542 ms max=2720 ms; ...)); the control ran its starvation check (the meta-check) (the control did not run its starvation check: expected undefined to be 'starved')"
+ },
+ {
+  "id": "W3-T10-M3",
+  "pkg": "server",
+  "file": "server/test/docs-console-latency.test.ts",
+  "old": "    controlVerdict = seesStarvation(m);\n",
+  "new": "",
+  "tests": [
+   "test/docs-console-latency.test.ts"
+  ],
+  "red": "server docs-console-latency: 1 failed | 3 passed (4) — the control ran its starvation check (the meta-check) (the control did not run its starvation check: expected undefined to be 'starved'); the control itself stays green with its verdict line deleted, which is what the meta-check exists to see"
+ },
+ {
+  "id": "W3-T10-M4",
+  "pkg": "server",
+  "file": "server/test/throttledLink.ts",
+  "old": "  const perMs = bytesPerSecond / 1000;\n",
+  "new": "  const perMs = Infinity;\n",
+  "tests": [
+   "test/docs-console-latency.test.ts"
+  ],
+  "red": "server docs-console-latency: 3 failed | 1 passed (4) — through the real read lane, all 13 files answer 200 while pty echo p95 and max and the caps max stay within HOL_LIMIT_MS (the load crossed the throttled link: load 1870 ms (link floor 2908 ms); expected 1870.2 to be greater than or equal to 2617.2); the control: the same load through a pass-through lane pushes pty echo past HOL_LIMIT_MS (the load crossed the throttled link: load 938 ms; echo max 416 ms); the control ran its starvation check (the meta-check). Without the link floor this mutation left the control's echo max at 504 ms, 24 ms under the limit: a thin red from CPU alone"
+ },
+ {
+  "id": "W3-T10-M5",
+  "pkg": "server",
+  "file": "server/src/docs/policy.ts",
+  "old": "export const DOCS_LANE_BYTES = 3145728;\n",
+  "new": "export const DOCS_LANE_BYTES = 4194304;\n",
+  "tests": [
+   "test/docs-console-latency.test.ts"
+  ],
+  "red": "server docs-console-latency: 1 failed | 3 passed (4) — HOL_LIMIT_MS is derived from the read lane budget, 528 ms at 100 Mbit (expected 654 to be 528); the two heavy cases and the meta-check stay green (the lane admits one 2 MiB answer at a time either way: each is over DOCS_LANE_LARGE_RAW)"
+ },
+ {
+  "id": "W3-T10-M6",
+  "pkg": "server",
+  "file": "server/test/docs-console-latency.test.ts",
+  "old": "        echoMs.push(now - t0);\n",
+  "new": "",
+  "tests": [
+   "test/docs-console-latency.test.ts"
+  ],
+  "red": "server docs-console-latency: 3 failed | 1 passed (4) — through the real read lane, all 13 files answer 200 while pty echo p95 and max and the caps max stay within HOL_LIMIT_MS (echo n=0 p95=NaN ms max=-Infinity ms: expected 0 to be greater than 40); the control: the same load through a pass-through lane pushes pty echo past HOL_LIMIT_MS (expected 0 to be greater than 40); the control ran its starvation check (the meta-check)"
+ }
+]
+```
+
+### Task 11: Whole-branch review and its fix wave, before the close
+
+**Model routing:** the four lens reviewers and the conformance pass on `opus`, effort `high`; one refute pass per finding on `sonnet`; the fix implementers on `sonnet`, effort `high`; the main loop (Opus) rules every finding and never delegates a ruling. Every subagent's `model` is passed explicitly (never inherited, never Fable), no workflow. This task carries no code of its own: what this plan's own whole-branch read found while it was written is already in the tasks that own it (the fetch lane's post-pump refusal is Task 4's Decision 9; the index flight's node generation is Task 1's Decision 8, Task 6's Decision 12 and Task 7's Decision 14), so the panel reads the tree exactly as Tasks 1-10 left it. Every count below was measured on the shared scratch tree at Task 10's state, on node v24.14.1 and Fastify 5.10.0.
+
+**Spec rows:** none of its own. The panel reads the wave against every row the earlier tasks pin (§2 rows 49-52; M3.4-M3.8, M3.13-M3.15; M5.1, M5.2, M5.4-M5.6; M6.2, M6.9-M6.12) and the refinements (a)-(v).
+
+**Files:**
+- Create (gitignored, never committed): `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review.md`, the review record, and `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review/` (the reviewers' reports, the refute verdicts and the row measurements, copied out of scratch because the fleet box's `/tmp` reaper deletes files older than 12 h).
+- Modify (Step 5, only for a CONFIRMED in-scope finding of the live panel): the W3 file it names, within Global Constraints' scope list; the test file that owns its area (table in Step 5); and this plan's Task 11 rows block (the row is appended to the JSON array below) and, only for a ruled spec departure, this plan's `## Deviations found`.
+- Run (guards): `docs-lanes`, `docs-routes`, `docs-policy`, `docs-cache`, `docs-headers`, `docs-file-bytes`, `docs-console-latency`, `auth-gate`, `box-token-census`, `verb-gate`, `capsupported`, `single-definition`, `topology-clean`, `typecheck-tests`, `deviation-refs`, `dtbd` and `session-hook.test.ts`'s citation audit.
+
+A fix's Find blocks are written by the fix itself, quoted from the file as the previous commit left it and unique in it. If one is absent or not unique, stop and put an ask to the coordinator.
+
+**Interfaces:**
+- Consumes:
+  - The branch at Task 10's tip; `BASE`, the wave's base sha recorded in the SDD ledger at Task 1 Step 0; this plan (`docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md`) with the mutation rows block of each of Tasks 1-10; the spec (`docs/superpowers/specs/2026-10-01-native-docs-reader-design.md`), the sections in this plan's Spec line; the W2 plan's `## Deviations found` and `## Wave 2 results` (`docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`); the five lenses of "How this wave runs".
+  - Tests a fix appends to, each at its END (Step 5's table): `docs-lanes.test.ts`, `docs-cache.test.ts`, `docs-headers.test.ts`, `docs-routes.test.ts`, `docs-file-bytes.test.ts`, `docs-policy.test.ts` and the census files' own W3 describes, with their module-scope helpers (`docs-lanes.test.ts`'s `fetchLane()`, `readLane()`, `live()`, `flush()`, `settledOrPending(p)`; `docs-routes.test.ts`'s `open(o)`, `fleet(o)`, `verb(calls, name)`, `refresh(app, ref, reason?, project?)` and Task 9's `realServer`; `docsRouteHelpers.ts`'s `blocker<T>()`, `until(cond, label, ms?)`, `indexOk(over?)`, `treeOk(over?)`, `okRes(stdout)`, `line(o)`, `PWA_HEADERS`).
+- Produces:
+  - The review record and its evidence directory (gitignored); the fix commits, each `<area>: <what> (docs W3 review)`; and, only for a fixed finding, this task's rows `W3-T11-M<k>` (from M1) and any re-anchored earlier row (same id, superseding the earlier block's: Task 12's extractor keys rows by id and keeps the LAST occurrence, in task order).
+
+- [ ] **Step 0: Preconditions, the baseline, and the record.** From the worktree root, foreground, Bash timeout 600000 ms.
+
+```bash
+test -z "$(git status --porcelain)" && grep -qF "        if (queue.length > DOCS_FETCH_QUEUE) leave(w, busy('fetch'));" server/src/docs/lane.ts && grep -qF 'export function docsIndexFlightKey(node: string, gen: number): string {' server/src/docs/policy.ts && grep -qF '  at.gens.bump(docsNodeKey(src.node));' server/src/docs/routes.ts && test -f server/test/docs-console-latency.test.ts && ! grep -q "T11 review" server/test/docs-*.test.ts && echo T11-BASE-OK
+git rev-parse HEAD
+```
+
+Expected: `T11-BASE-OK`, then Task 10's commit sha: record it in the SDD ledger as `T10_TIP`. If `T11-BASE-OK` does not print, stop and put an ask to the coordinator. A fix that edits a claimed file (How this wave runs) re-takes its claim first (worker skill clause 11, `~/.local/bin/ccrc-api claims take`; a claim lapses at its hard cap, so an earlier task's may have ended): a 409 names the holder, and the file is not edited until that claim ends or the two coordinators confirm a scoped agreement.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-lanes.test.ts test/docs-routes.test.ts test/docs-policy.test.ts )`
+Expected: `Test Files  3 passed (3)`, `Tests  728 passed (728)` (docs-lanes 39, docs-routes 115, docs-policy 574). If `main` moved any of these counts, what binds is that each Step 5 case adds to its own file's count and nothing else moves.
+
+Create the record, `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review.md`, with exactly this content (`<T10_TIP>` and `<BASE>` are the two shas above, typed from the ledger):
+
+```markdown
+# W3 Task 11 — whole-branch review record
+
+Base: <BASE>. Task 10's tip: <T10_TIP>. Panel tip: (Step 1 fills this).
+
+| id | lens | file:line | claim | refute verdict | ruling | outcome | rows |
+|---|---|---|---|---|---|---|---|
+| R1 | 4 concurrency | server/src/docs/lane.ts:292 | a join on a flight every joiner left, whose exec has already STARTED, starts a second exec of the same call | — (planning) | NOT A DEFECT: refinement (j) and Task 4 chose it ("a live request never receives an abandoned answer"); the second exec is bounded by the read lane like any other | none | none |
+| R2 | 3 untrusted input | server/src/docs/cache.ts:174 | a served ref recorded at a new commit leaves the same ref's record at the old commit, so a pin at the old commit can hit for up to 10 minutes after a force-push | — (planning) | NOT A DEFECT: §6.5 fixes the provenance window at `DOCS_LISTING_PROVENANCE_MS` (= `DOCS_STALE_MS`), the staleness the spec accepts for every listing | none | none |
+| R3 | 4 concurrency | server/src/docs/lane.ts:130-131 | the read lane checks its queue bound before admission, where the fetch lane pumps first and refuses after (Task 4's Decision 9) | — (planning) | NOT A DEFECT: the read lane is strict FIFO, so a new job behind a non-empty queue can never start at once; an empty queue admits first (line 130) | none | none |
+```
+
+- [ ] **Step 1: Record the panel tip, and write the row tool a fix will need.** Never in the worktree. `<SCRATCH>` is this run's scratch directory under `$HOME/.cc-tmp/` (not `/tmp`: the fleet box reaps it after 12 h); the tools live in `<SCRATCH>/tools`, outside the copy. From the worktree root; an agent's shell keeps no variable between calls, so every later call that names `$SCRATCH` sets `SCRATCH="$HOME/.cc-tmp/docs-w3-t11"` first.
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t11"; mkdir -p "$SCRATCH/tools" "$SCRATCH/copy"
+TIP=$(git rev-parse HEAD); echo "$TIP"
+git archive HEAD | tar -x -C "$SCRATCH/copy" && git -C "$SCRATCH/copy" init -q
+ln -s "$PWD/server/node_modules" "$SCRATCH/copy/server/node_modules"
+```
+
+Fill the record's `Panel tip` with `$TIP`: Task 10's tip, the tree the panel reads. Then write `<SCRATCH>/tools/rows.py`, which reads this task's rows block straight out of the plan (so what is measured is what Task 12 will run) and runs each row alone, restoring the file byte for byte after each:
+
+```python
+import json, os, re, subprocess, sys
+# The rows marker and the code fence are built from parts, so this file never spells either one whole and no
+# parser of the plan can mistake this block for Task 11's rows.
+MARK = '**Mutation rows' + ' this task contributes**'
+FENCE = '`' * 3
+plan, copy = sys.argv[1], sys.argv[2]
+only = set(sys.argv[3:])
+text = open(plan, encoding='utf-8').read()
+start = re.search(r'^### Task 11: ', text, re.M).start()
+after = re.search(r'^### Task 12: ', text[start:], re.M)
+section = text[start:start + after.start()] if after else text[start:]
+marker = section.index(MARK)
+fence = section.index(FENCE + 'json', marker) + len(FENCE + 'json')
+rows = json.loads(section[fence:section.index(FENCE, fence)])
+for row in rows:
+    if only and row['id'] not in only:
+        continue
+    target = os.path.join(copy, row['file'])
+    original = open(target, encoding='utf-8').read()
+    if original.count(row['old']) != 1:
+        print(row['id'], 'ANCHOR', original.count(row['old']))
+        continue
+    open(target, 'w', encoding='utf-8').write(original.replace(row['old'], row['new']))
+    try:
+        out = subprocess.run(['./node_modules/.bin/vitest', 'run', *row['tests']], cwd=os.path.join(copy, row['pkg']),
+                             capture_output=True, text=True, timeout=600).stdout
+    finally:
+        open(target, 'w', encoding='utf-8').write(original)
+    out = re.sub(r'\x1b\[[0-9;]*m', '', out)
+    summary = [l.strip() for l in out.splitlines() if re.match(r'\s+Tests\s', l)]
+    failed = [l.strip() for l in out.splitlines() if l.strip().startswith('×')]
+    print(row['id'], summary, *failed, sep='\n    ')
+```
+
+Run nothing with it yet: this task's rows block holds no row until a Step 5 fix appends one, and Step 5.4 runs `rows.py` with that row's id in a fresh copy of the fix's commit.
+
+- [ ] **Step 2: Dispatch the panel: four lens reviewers and one conformance pass, `opus`, effort `high`.** Five native subagents in ONE message (they are independent), each READ-ONLY on the worktree. Each prompt is the shared preamble below followed by its lens block, with `<WT>` (this worktree's absolute path), `<BASE>`, `<TIP>` (Step 1) and `<SCRATCH>` replaced by their measured values. Say in the dispatching message: "5 reviewers on opus, effort high".
+
+Shared preamble (verbatim):
+
+```text
+You are one reviewer of a five-reviewer panel reading ONE finished wave of the ccrc repository before it closes.
+Worktree: <WT> (read only: never edit, stage, commit, checkout, stash or reset there). Wave base: <BASE>. Tip you
+review: <TIP>. The change: `git -C <WT> diff <BASE> <TIP>` and `git -C <WT> log --oneline <BASE>..<TIP>`.
+The plan: <WT>/docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md (read its Global Constraints,
+Spec refinements (a)-(v) and Review Focus first; Tasks 1-10 built the wave, Task 11 adds no code of its own).
+The binding spec: <WT>/docs/superpowers/specs/2026-10-01-native-docs-reader-design.md (sections named in the
+plan's Spec line). Repository rules: <WT>/CLAUDE.md (rings, censuses, the auth gate, no overloaded null
+at a seam, `console.warn('ccrc-server: ...')` never `req.log`).
+Rules: never run `ccd` against any real HOME, never call a running ccrc server, never touch tmux or ~/.cc-sessions,
+never print a secret file. You may run a single test file in the FOREGROUND from <WT>/server with
+`./node_modules/.bin/vitest run test/<file>` (never bare npx). To prove a defect you may write a throwaway case in a
+COPY: `mkdir -p <SCRATCH>/review-<lens>; git -C <WT> archive <TIP> | tar -x -C <SCRATCH>/review-<lens>; ln -s
+<WT>/server/node_modules <SCRATCH>/review-<lens>/server/node_modules`, never in <WT>.
+Already ruled (do not re-report unless you have a NEW failure scenario): the fetch lane's post-pump refusal
+(Task 4's Decision 9) and the index flight's node generation (Tasks 1, 6 and 7) are design, measured while
+planning; R1 (a join on an abandoned flight whose exec already started makes a second exec: refinement (j)'s
+choice); R2 (a served ref recorded at a new commit leaves the old commit's
+record for up to DOCS_LISTING_PROVENANCE_MS: section 6.5's window); R3 (the read lane's queue pre-check is correct
+under strict FIFO); and every item under Global Constraints' "Carried into W3" (deferred or carried by ruling).
+Report ONLY defects: behaviour that is wrong for a concrete input, a guard that a concrete mutation would not
+redden, a ring or census rule broken, a spec row the wave claims but does not deliver. No style notes, no
+suggestions without a failure. Return ONE JSON array, nothing else, each element:
+{"id": "<lens>-<k>", "lens": <n>, "file": "<repo-relative path>", "line": <n>, "claim": "<one sentence>",
+ "scenario": "<concrete inputs or interleaving -> the wrong output, status, exec count or crash>",
+ "spec": "<section or row, or 'none'>", "evidence": "<the command you ran and what it printed, or 'reasoning'>",
+ "severity": "high" | "medium" | "low"}
+An empty array is a valid answer.
+```
+
+Lens 1 block (verbatim): `Lens 1, rings and L4-decides-nothing. Read server/src/docs/routes.ts, hooks.ts, lane.ts and cache.ts line by line against the plan's Rings constraint: every number, word, key, status, header, bound and representation they apply must come from server/src/docs/policy.ts (L1) or shared/docs.ts (L0); no DocsFailure word quoted in their code; no CCD_ARGV text; no fastify, Buffer, clock, timer or console in policy.ts's W3 additions (its imports are ../../../shared/docs.js only). Check that no W3 signature carries an overloaded null or undefined (each must have exactly one stated meaning), that every failure body the adapter answers reaches the reply verbatim (no word narrowed, no context key dropped or defaulted), and that server.ts's plugin block is exactly the registration of section 3.4 with the getter of refinement (i).`
+
+Lens 2 block (verbatim): `Lens 2, the gate, provenance and headers. Check spec F1 (the root gate's onRequest runs before the plugin's provenance hook, so a signed-out request gets the gate's 401 with its verdict first), M3.5-M3.8 (navigate, site, marker: 403 foreign-request {why} with no verdict, zero execs, a log line at most once a minute per why), M5.4-M5.6 (the four headers on EVERY docs response: 200, 4xx, 5xx, the gate's 401 and 403, provenance 403, the body-error 400, a default 500; the content-type allowlist compared exactly; Cache-Control immutable only on a committed raw raster 200, no-store everywhere else), refinement (c) (no HEAD route), refinement (d) (the two router-level refusals and nothing else escapes the plugin), and refinement (e) (every FST_ERR_CTP_* body refusal is bad-query {why:'body'}; any other error stays Fastify's default 500, still decorated). Name any docs response path that leaves the plugin's onSend.`
+
+Lens 3 block (verbatim): `Lens 3, untrusted input. Treat every query, path parameter, body, header and every ccd answer the adapter passed as hostile. Query and path: repeated, unknown and prototype keys, empty and percent-broken values, a 101-character :project, dot segments, NUL. Body: JSON array, null, string, extra keys, 1 MiB + 1, form-encoded, text/plain. Answers: an ok tree, index or fetch answer missing a field the routes read, nested past DOCS_ANSWER_MAX_DEPTH, or carrying a toJSON or __proto__ key; show bytes over job.raw; a raster whose bytes are not its declared type; a symlink or submodule entry sharing a cached blob; a listing whose servedRef record is stale, negative-aged or NaN-aged. For each, find any input that reaches refreshDue, a cache, JSON serialisation or a reply without passing docsAnswerShape, docsShowBound or the raster check, or that makes the server throw, answer 500, exec, or send bytes it should not.`
+
+Lens 4 block (verbatim): `Lens 4, concurrency and link protection. Read lane.ts, cache.ts and the routes' order (cache, then single-flight, then the read lane: refinement (k)). Check each lane clause of sections 6.3 and 6.4 for an interleaving that breaks it: at most 2 read execs, 3 145 728 framed bytes, one large answer, strict FIFO, 32 queued, a 10 s wait; the fetch lane serial per (node, project), 2 globally, 8 queued, a 20 s wait from acceptance; every slot released exactly once on fulfil, reject and synchronous throw; abandonment that removes only a queued job and only when EVERY joiner left (refinement (j)); a refresh's tree never joining a flight begun before its fetch (generation bumped before the tree flight starts); the caches' bounds, LRU order and node keys (M3.13); timers that outlive a closed lane or a closed app. Then read server/test/docs-console-latency.test.ts: can the real case pass without the lane working, or the control pass without starvation?`
+
+Conformance block (verbatim): `Pass 5, spec conformance and mutation discipline. Build a table with one line per row this wave claims (section 2 rows 49, 50, 51, 52; M3.4, M3.5, M3.6, M3.7, M3.8, M3.13, M3.14, M3.15; M5.1, M5.2, M5.4, M5.5, M5.6; M6.2, M6.9, M6.10, M6.11, M6.12): the spec's required case and mutation, the test file and case title that pins it (grep it), and the plan's mutation row id(s) whose 'red' names that case. Every row of the plan's mutation rows blocks (Tasks 1-11, as anchors.py reads them; for a repeated id the LAST occurrence wins) must have an 'old' text found exactly once in its 'file' at <TIP>: run this from <WT> and include its output: python3 <SCRATCH>/tools/anchors.py <WT>/docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md <WT>. Report as a finding: a claimed row with no pinning case, a spec mutation with no plan row, a row whose red names no case of that row, an anchor that is not unique, and every refinement (a)-(v) not applied where the plan says. Put the table in the 'evidence' of a finding with id 'conformance-table' and severity 'low' even when it shows no gap.`
+
+Before dispatch, write `<SCRATCH>/tools/anchors.py` (the conformance pass and Step 6 both run it):
+
+```python
+import json, os, re, sys
+# Built from parts for rows.py's reason. A repeated id keeps its LAST occurrence (a re-anchor supersedes).
+MARK = '**Mutation rows' + ' this task contributes**'
+FENCE = '`' * 3
+plan, root = sys.argv[1], sys.argv[2]
+text = open(plan, encoding='utf-8').read()
+heads = [m.start() for m in re.finditer(r'^### Task \d+: ', text, re.M)]
+rows = {}
+for i, start in enumerate(heads):
+    section = text[start:heads[i + 1] if i + 1 < len(heads) else len(text)]
+    if MARK not in section:
+        continue
+    marker = section.index(MARK)
+    fence = section.index(FENCE + 'json', marker) + len(FENCE + 'json')
+    for row in json.loads(section[fence:section.index(FENCE, fence)]):
+        rows[row['id']] = row
+bad = 0
+for rid, row in rows.items():
+    if row['old'] == '':
+        continue
+    path = os.path.join(root, row['file'])
+    count = open(path, encoding='utf-8').read().count(row['old']) if os.path.exists(path) else -1
+    if count != 1:
+        bad += 1
+        print(f'{rid} {row["file"]} count={count} old={row["old"][:100]!r}')
+print(f'{len(rows)} rows; {bad} not exactly once')
+```
+
+Run it once yourself before dispatch: `python3 "$SCRATCH/tools/anchors.py" docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md .`
+Expected: `232 rows; 0 not exactly once` (Tasks 1-10's 232 ids; this task's block is empty until a Step 5 fix appends a row). A non-zero count before dispatch is a finding against the plan: put it in the record as `A-<k>` and rule it in Step 4 like any other.
+
+Save each reviewer's JSON verbatim to `<SCRATCH>/review/lens-<n>.json` and copy the directory into `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review/` on receipt.
+
+- [ ] **Step 3: One refute pass per finding, `sonnet`.** For every element except `conformance-table`, dispatch one native subagent (`model: 'sonnet'`; independent findings in one message, at most eight at a time; say the count and model in the message). Prompt (verbatim, with the finding's JSON pasted where shown and the same `<WT>`, `<TIP>`, `<SCRATCH>`):
+
+```text
+You are a refuter. Your job is to show the finding below FALSE on the ccrc tree at <TIP> (worktree <WT>, read
+only). Read the code it names and everything that calls it. Then try to reproduce it: copy the tree with
+`mkdir -p <SCRATCH>/refute-<id>; git -C <WT> archive <TIP> | tar -x -C <SCRATCH>/refute-<id>; ln -s
+<WT>/server/node_modules <SCRATCH>/refute-<id>/server/node_modules`, write the smallest vitest case that would
+fail if the finding is true, and run it in the FOREGROUND from <SCRATCH>/refute-<id>/server with
+`./node_modules/.bin/vitest run test/<file>`. Never edit <WT>; never run ccd against a real HOME; never call a
+running server. Answer ONE JSON object, nothing else:
+{"id": "<the finding's id>", "verdict": "CONFIRMED" | "PLAUSIBLE" | "REFUTED",
+ "evidence": "<the case you wrote (full code) and the summary line it printed, or the exact code that makes the
+ scenario impossible, with file:line>", "scope": "W3" | "outside-W3", "spec_behaviour_change": true | false}
+CONFIRMED: your case fails on <TIP> as the finding says. REFUTED: you can name the code that prevents the scenario,
+or your case passes and you show why it is the scenario. PLAUSIBLE: neither. scope is outside-W3 when the defect
+lives only in a file the plan's Global Constraints forbid this wave to edit (ccd/, shared/, pwa/, agent/,
+server/src/index.ts, server/src/docs/ports.ts, server/src/docs/ccdsource.ts, lifecycle.ts, ccdargv.ts,
+remote/runner.ts, README.md, CLAUDE.md). spec_behaviour_change is true when the only fix changes a behaviour the
+spec's TEXT states (a status, word, header, bound or order it spells), false when it fills a silence or restores
+the stated behaviour.
+
+The finding:
+<paste the finding's JSON>
+```
+
+Save each answer to `<SCRATCH>/review/refute-<id>.json` and copy it into the evidence directory.
+
+- [ ] **Step 4: Rule every finding (the main loop, never a subagent).** Add one table line per finding to the record (`id`, `lens`, `file:line`, `claim`, `refute verdict`, `ruling`, `outcome`, `rows`), ruled by the first line of this table that applies:
+
+| Refute answer | Ruling | Next |
+|---|---|---|
+| `REFUTED`, and the main loop agrees after reading the evidence | NOT A DEFECT, the refuter's evidence in one sentence | none |
+| any verdict, `scope: outside-W3` | CARRIED: no edit (Global Constraints forbid it); the record names the file and the scenario, and Task 12's results list it under Carried | none |
+| `CONFIRMED` or `PLAUSIBLE`, `spec_behaviour_change: true` | a QUESTION to the coordinator first: mail it (`~/.local/bin/ccrc-api mail send`, subject `docs W3 review <id>: spec departure?`, the finding, the refutation and the proposed fix); wait for the ruling; list mail before acting | if ruled a departure: Step 5 with a deviation entry; if ruled out: CARRIED or NOT A DEFECT as the coordinator says |
+| `PLAUSIBLE`, W3, no spec change | the main loop writes the refuter's missing case itself in a copy; red: treat as CONFIRMED; green: NOT A DEFECT, with that case as evidence | Step 5 or none |
+| `CONFIRMED`, W3, no spec change | FIX | Step 5 |
+
+A finding whose fix would edit `server/test/single-definition.test.ts` above Task 9's EOF describe, `server/src/auth/gate.ts` beyond its line-8 numeral, or any file outside Global Constraints' scope list is CARRIED, never fixed here: Task 12's `sd-shape`, `gate-shape` and `scope` invariants would fail.
+
+- [ ] **Step 5: The fix loop, one commit per confirmed finding.** For each FIX ruling, in severity order, dispatch one `sonnet` implementer (effort `high`) with the finding, the refutation and these rules, then review its diff in the main loop before the commit:
+
+1. Red first. Append the case that pins the finding at the END of the test file that owns its area, in a describe titled `T11 review <id>: <claim>`:
+
+   | Area | Test file |
+   |---|---|
+   | `lane.ts`, a lane clause, single-flight, the generation | `server/test/docs-lanes.test.ts` |
+   | `cache.ts` | `server/test/docs-cache.test.ts` |
+   | `hooks.ts`, provenance, headers, the error handler | `server/test/docs-headers.test.ts` |
+   | a read route's answer, a query, the shape guard | `server/test/docs-routes.test.ts` |
+   | file bytes, the show bound, raster, Cache-Control | `server/test/docs-file-bytes.test.ts` |
+   | the refresh | `server/test/docs-routes.test.ts` |
+   | a `policy.ts` verdict | `server/test/docs-policy.test.ts`, appended at EOF |
+   | `server.ts`'s block, the real server | `server/test/docs-routes.test.ts` (Task 9's `realServer`) |
+   | a census | the census's own test file, inside the describe Task 8 or 9 appended |
+
+   Run that file alone in the foreground and write its RED summary and the failing case into the record.
+2. The fix is the smallest change in the W3 file the finding names. A new decision goes to `policy.ts` as an append that keeps L1 (imports from `../../../shared/docs.js` only, no `node:`, no `Buffer`, no clock, no timer, no `console`); an L4 file applies it. No new failure word, grant, builder or cap token (`docs-shared.test.ts`'s `SPEC_WORDS` is frozen). No `D-` number in code, comments or test titles.
+3. GREEN: the file's suite, then the suites of every file the fix touched (Step 6's list), in the foreground.
+4. A mutation row: the guard the fix adds, deleted or inverted, as `W3-T11-M<k>`, `k` counting from 1 (M1, M2, ...). Commit the fix first (step 6 below), then measure the row in a FRESH copy of that commit (`rm -rf "$SCRATCH/copy" && mkdir "$SCRATCH/copy" && git archive HEAD | tar -x -C "$SCRATCH/copy" && git -C "$SCRATCH/copy" init -q && ln -s "$PWD/server/node_modules" "$SCRATCH/copy/server/node_modules"`) with `rows.py` and the row's id; its `red` is that run's summary and failed case titles, verbatim. If the fix re-spells text an earlier row's `old` anchors on, re-anchor that row here: a row with the SAME id and the new `old`, measured red the same way, and say so in the sentence above the rows block.
+5. Append the row object(s) to this task's JSON array below (it starts empty, `[]` on one line: replace it with `[`, the objects separated by `,`, and `]`; once it holds rows, add `,` after the last element's closing `}` and the new objects before the line holding only `]`), and, only for a coordinator-ruled spec departure, one entry at the end of `## Deviations found` with the next unspent number of the issued block, never a typed or looked-up one: `- **D-<n> (<date>)** — <what departs from which spec sentence, and why>. Task 11 review <id>.` with `<date>` from `date -u +%F`. Then `git fetch -q origin main && ( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` must print `Test Files  2 passed (2)` before the next commit.
+6. Commit the fix and its case together, then (after the row is measured) the plan edit alone, each in its own call after a green read, files by name:
+
+```bash
+git add <the fixed file> <the test file>
+git commit -m "<area>: <what the fix makes true> (docs W3 review)" -m "Whole-branch review <id>: <the scenario, and what now happens instead>." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git add docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md
+git commit -m "docs: W3 Task 11 row for review <id> (docs W3 review)" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+`<area>` is `server` for a source or test fix, `docs` for the plan. Fill the finding's record line (`outcome`: both shas; `rows`: the ids). A fix round never pushes: Task 12 pushes.
+
+- [ ] **Step 6: Close the fix wave: the suites, the anchors, the record.** Foreground, Bash timeout 600000 ms each; a known load flake (`typecheck-tests`, `session-hook`, `docs-console-latency`) is re-run alone before it is called broken.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-lanes.test.ts test/docs-routes.test.ts test/docs-policy.test.ts test/docs-cache.test.ts test/docs-headers.test.ts test/docs-file-bytes.test.ts )`
+Expected with no Step 5 fix: `Test Files  6 passed (6)`, `Tests  863 passed (863)` (docs-lanes 39, docs-routes 115, docs-policy 574, docs-cache 37, docs-headers 55, docs-file-bytes 43), plus each Step 5 case.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/docs-console-latency.test.ts )`
+Expected: `Tests  4 passed (4)` (a Step 5 fix to `lane.ts` must keep it green).
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/verb-gate.test.ts test/capsupported.test.ts test/single-definition.test.ts )`
+Expected: `Test Files  5 passed (5)`, `Tests  706 passed (706)` (162 + 31 + 12 + 22 + 479): no registration line moved, no box-token text, no `CCD_ARGV` in an L4 file, no quoted cap token, and every L1 export a fix appended keeps L1 imports.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )`
+Expected: `Tests  55 passed (55)` (with `origin/main` fetched, or `CCRC_HISTORY_BASE=<BASE>`): the new cases use the placeholders `demo`, `a`, `b` and `ws/a` only.
+
+Run: `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )`
+Expected: `Tests  12 passed (12)` with real `pwa/node_modules` (Task 1 Step 0); with a symlinked one only `PWA_TSC really is pwa's own installed compiler` reds, as at every earlier task. The second compile (`node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit` from `server/`) is what reads every test a fix appended.
+
+Run: `git fetch -q origin main && ( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )`
+Expected: `Test Files  2 passed (2)`.
+
+Run: `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )`
+Expected: `Tests  13 passed | 322 skipped (335)` (no cited file moved: a census fix appends inside Task 9's EOF describe, never above it).
+
+Run: `python3 "$SCRATCH/tools/anchors.py" docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md .`
+Expected: `<n> rows; 0 not exactly once`, `<n>` being 232 plus the ids Step 5 added. Any other line is a row Task 12 could not run: re-anchor it (Step 5.4) before closing.
+
+Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n> (fixed <a>, carried <b>, not a defect <c>, ruled departures <d>). Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).`, and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review/`. Task 12 Step 4's Notes cite the record's last line and its Carried list takes every CARRIED line. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
+
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them.
+
+```json
+[]
+```
+
+### Task 12: Close the wave: the W3 suites and the full server suite, the census-free invariants, the mutation table, the results record, the push, the ONE pull request, the fingerprint and the wave-done
+
+**Model routing:** `sonnet`, effort `high`. The seven scratch tools are complete below; the work is running them and reading what they print. Any red that is not a measured load flake, any `FAIL` invariant and any mutation row that does not come back as its `expect` says is a FINDING: it is reported to the coordinator (Step 3's `finding` mail, or an ask when it needs the operator), never fixed silently and never weakened. This task adds no guard and edits no source or test file. No subagent: every step is a command and a read.
+
+**Spec rows:** none of its own. Section 7.9's "every wave" and W3 suites and "the full server suite"; section 2 rows 49-52 and the M3, M5 and M6 cases of section 7.7's W3 row, as carried by Tasks 1-11's mutation rows; section 7.7's W3 rollout and section 7.8's R2 and R1, which this task DOCUMENTS and does not run (refinement (t)).
+
+**Files:**
+- Modify: `docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md`, this plan. `## Wave 3 results` is APPENDED after the file's last line, which is the end of `## Deviations found` (Task 9's six entries and any Task 11 added). `w3-results.py` is its only writer: it refuses while the file has uncommitted edits, and on a re-run (a fix round) it replaces the section it wrote, which is the file's last `## ` section by construction. No line above it changes.
+- No other tracked file. Scratch only, never committed, all under `<SCRATCH>` = `$HOME/.cc-tmp/docs-w3-t12` (not `/tmp`: the fleet box's reaper deletes `/tmp` entries older than 12 h): the seven tools in `<SCRATCH>/tools/` (`w3-suites.py`, `w3-invariants.py`, `w3-rows.py`, `mutate.py`, `w3-results.py`, `w3-pr-body.py`, `w3-wave-done.py`); `w3-base`, `w3-run`, `w3-block`, `w3-pr`; every `w3-suite-*.log` (and each split piece's `.json`), `w3-full-split.txt`, `w3-invariants.txt`, `w3-rows.json`, the `w3-mut/` copy with its `w3-mut.*` state files, `w3-mutation-table.md`, `w3-notes.md` when anything needed a note, `w3-pr-body.md` and `w3-wave-done.json`.
+- Gitignored, never committed: `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-12-evidence/` (Step 4 and Step 8 copy the evidence there, because the coordinator and the reviewer read it after this session ends) and `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-12-first-full-run.txt` (the wave's first full-suite verdict, written once by `w3-results.py`).
+- Read, never edited: `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review.md`, Task 11's closed review record (its `Base:` line, its last `Findings:` line and every row it ruled `CARRIED`).
+
+Shell state does not survive between Bash calls, so every block below opens with `SCRATCH="$HOME/.cc-tmp/docs-w3-t12"`, and every tool is written to that absolute path. Every command runs from the worktree root, in the FOREGROUND, with a Bash timeout of 600000 ms; nothing is backgrounded, and no tool call is planned to run longer than 570 s.
+
+**Interfaces:**
+- Consumes (no TypeScript: this task imports nothing and declares nothing):
+  - this plan's `### Task <n>: ` sections 1-12, each ending in a `**Mutation rows this task contributes**` line and one JSON block of rows `{id, pkg, file, old, new, tests, red}` (ids `W3-T<n>-M<k>`; 232 rows in Tasks 1-10's blocks: T1 25, T2 40, T3 19, T4 32, T5 29, T6 31, T7 23, T8 13, T9 14, T10 6; Task 11's block is empty unless its Step 5 appended a row, and Task 12's own block is empty). A row a Task 11 fix re-anchors repeats an earlier id with a new `old`: the extractor keeps an id's LAST occurrence in task order, so the table has 232 ids plus any Task 11 added;
+  - the wave's base: the parent of the first first-parent commit whose subject ends `(docs W3)`, which must equal the `Base:` sha that Task 1 Step 0 recorded and Task 11's record repeats;
+  - from the brief: the run id and the issued deviation block (`<LO>-<HI>`), written once into `<SCRATCH>/w3-run` and `<SCRATCH>/w3-block` at Step 0;
+  - the test files Tasks 1-11 created or extended (server: `docs-routes`, `docs-cache`, `docs-lanes`, `docs-headers`, `docs-file-bytes`, `docs-console-latency`, `docs-policy`, `auth-gate`, `box-token-census`, `single-definition`, `typecheck-tests`), and the whole server suite;
+  - W2's mutation-runner idiom (`git archive HEAD | tar -x`, then `git -C <copy> init -q`; one row at a time; byte-for-byte restore under a per-row sentinel);
+  - `$HOME/.local/bin/ccrc-api` (`whoami`, `mail list`, `mail fetch`, `mail ack`, `mail send`), as the `ccrc-worker` skill uses it; `git push`; `gh pr list`, `gh pr create` and `gh pr view` (never `gh pr merge`, `gh pr edit` or any update-branch).
+- Produces:
+  - `## Wave 3 results` at the end of this plan: the measurement time, the measured tree's sha, the base, the W3 commit count and the deviation numbers spent; a Suites table for suites 01-10 (command, `Test Files`, `Tests`, seconds, rc, and a re-run's rc where one was needed); the full-suite table (one line per batch) with this run's first pass, the wave's FIRST full-run verdict and the split check; the Invariants block verbatim; the Mutation table (one line per row: id, task, file, measured verdict, first red case) with its `<n> rows; <n> measured as expected` line; Notes (Task 11's `Findings:` line, then every note this task recorded); Carried, not fixed (Global Constraints' deferred items restated, plus every row Task 11 ruled `CARRIED`); and Post-merge acts, not this wave's (the prerelease, the dark rollout fleet first, R2 and R1 with their procedures and pass criteria, and that both gate W5's merge);
+  - one commit, `docs: W3 results (docs W3)`: the wave's `handoffCommit` and the branch tip;
+  - the workspace branch pushed to `origin`, and ONE pull request against `main`, titled `docs W3: routes (native Docs reader)`;
+  - one `wave-done` mail to the coordinator whose body opens with `suite: <the wave's first full run>` (plus `failure: unclear` when that word is `red`) and then the fingerprint `{"branchTip":<the tip>,"prNumber":<the PR's number>,"prPhase":"open","handoffCommit":<the tip>}`.
+  - The tools' command lines: `python3 w3-suites.py SCRATCH ID [ID ...] | --full | --rerun ID | --list`; `python3 w3-invariants.py BASE BLOCK`; `python3 w3-rows.py PLAN OUT [EXTRA]`; `python3 mutate.py ROWS MUT setup|baseline|run [ID ...]|final|report`; `python3 w3-results.py SCRATCH BASE BLOCK [--record-reds] [--review RECORD]`; `python3 w3-pr-body.py SCRATCH BLOCK OUT`; `python3 w3-wave-done.py SCRATCH RUN PR BLOCK FROM_ID FROM_UUID [--dry-run]`. All run from the worktree root.
+
+**Measured while planning** (the shared scratch tree at Task 10's state, which is also Task 11's (it adds no code unless its panel finds a defect): items 3 and 4 and the invariants of item 5 re-measured at `97ab17f` after the plan review's minor fixes, items 1, 2 and 6 at the earlier `d8bfbba`, whose code differs from it only in those fixes; base `2fbbd25`, on node v24.14.1, a 16-core box under a load average between 12 and 38; separate copies for every planted or mutated check):
+1. **The full server suite does not fit one call, and three files do not fit a batch.** 538 files. `ccrc-install.test.ts` ran past 575 s ALONE; `ccd-ws-audit.test.ts` took 351 s alone; a 54-file `c[a-h]` batch and an 11-file `ccrc-[a-h]` batch each ran past 540 s. So `w3-suites.py` runs 25 prefix batches plus six files as 28 `-t` pieces of their top-level describes (`ccd-ws-audit` 2, `ccd-ws-reap` 2, `ccrc-account` 4, `ccrc-doctor` 6, `ccrc-install` 4, `ccrc-update` 4, each plus a remainder piece): 53 batches, the slowest 272 s (`F02`), 4 800 s in all, about 45 `--full` invocations. The pieces are proved whole from their JSON reports: `ccrc-doctor` 759 tests ran once each and 15 were skipped in every piece, of 774 (the file's own `skipIf`s), and so on for all six (Step 1's expected lines). A `-t` title that begins a longer title (`ccrc doctor: services` and `ccrc doctor: services knows about the account-health timer`) is fenced with a lookahead, or the longer one's tests would run twice; the check would then print `MISMATCH`.
+2. **Reds a scratch tree shows that this worktree does not, and one that is not W3's.** In the planning tree, which has no `origin` and a symlinked `pwa/node_modules`, four cases are red on every run and green in a real checkout: `deviation-refs`' two PR-incident cases under `the cross-tree collision scan` (they replay the repository's own history, which a `git init` copy lacks), `coordinator-skill`'s `keeps the superseded 2026-08-11 specification byte-identical to origin/main`, and `typecheck-tests`' `PWA_TSC really is pwa's own installed compiler`. One more, `tmp-sweep.test.ts`'s `FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed`, was red alone AND red in a `git archive` copy of the BASE on the same box (14 tests, 1 failed): a red that main also shows, never W3's (W3 touches no `ccd/` file and no `tmp-sweep` reader). Step 1's base-copy check is how a worker tells the two apart. And `ccd-child-tmpdir.test.ts` went red once inside a 29-file batch under load 30 and green alone in 14 s: a load flake.
+3. **The named suites at Task 10's state:** `01` 55 passed; `02` 479; `03` 32 (two files); `04` 12; `05` 863 across the six W3 files (docs-lanes 39, docs-routes 115, docs-policy 574, docs-cache 37, docs-headers 55, docs-file-bytes 43); `06` 4; `07` 334 across six files; `08` 308 across six; `09` 426 across four; `10` 13 passed and 322 skipped. All but `04`'s symlink red and `03`'s two history cases green in the planning tree; each took under 60 s.
+4. **The table is whole and every row bites at the wave's END state.** At Task 10's state all 232 non-empty `old` strings occur exactly once in their files. `mutate.py` built the copy (`12 files under mutation (0 created by a row), 232 rows, 15 test commands`), proved the 15 commands green, and measured `ALL ROWS MEASURED: 232 ok, 0 not ok` in three `run` invocations, as the box's load allowed (measured with this plan committed on Task 10's tip), every row `RED` (none needs `load`); `W3-T9-M2` runs with `-t 'server/test/ is clean under a tests-inclusive project'` for the reason W2's `W2-T2-M14` did. Then `final`: byte-equal, 15 commands green, and `232 rows; 232 measured as expected.`.
+5. **The invariants can fail, and they read a merge of main correctly.** On the planning tree, 12 PASS and `deviations` FAIL (the planning tree holds no issued block, so no `## Deviations found`). In a clone with one planted commit (a `shared/docs.ts` line, a second quoted `'docs-v1'` in `ccdargv.ts`, `req.log` in `hooks.ts`, `CCD_ARGV` in `lane.ts`, a line inserted at line 11 of `single-definition.test.ts`, a `gate.ts` line 9 edit, and a `## Deviations found` defining the issued block's 1st, 3rd and 4th numbers), it printed eight `FAIL` lines and `13 invariants, 5 PASS`, rc 1; with the section corrected to the first three numbers, `deviations` passed. In a clone where a branch from the base standing in for `main` edited `README.md` and inserted a line at line 3 of `single-definition.test.ts`, merged into the tip, every invariant passed (`ref` is that merge's second parent): judged against the base alone, `untouched` and `sd-shape` would have failed on main's own edits.
+6. **The writers.** `w3-results.py` refuses an untracked or edited plan, a mutation table measured at another HEAD, a missing full run, a red suite, a `MISMATCH` split line, a `FAIL` invariant and an incomplete table (it printed its `not all green` list: the planning tree's five red suites and the `deviations` FAIL); in the planning tree it wrote the section only under `--record-reds` (the scratch-only reds of item 2 and the `deviations` FAIL), which no worker uses without a coordinator's ruling. with it, the section came to 381 lines. `w3-pr-body.py` (39 lines, every link under the remote's GitHub URL, ending with the attribution line) and `w3-wave-done.py --dry-run` (the `suite:` and `failure:` lines, then the fingerprint) ran in a clone of the results commit with a placeholder GitHub `origin`; on the planning tree itself, whose tip subject is not the results commit's, the builder refused with `the tip is not the results commit; nothing sent`. Neither the push, the PR nor the mail can run in a planning tree, so Steps 6-8's live answers are the worker's to read.
+
+- [ ] **Step 0: Preconditions, and the inputs the brief names.** One Bash call:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; rm -rf "$SCRATCH" && mkdir -p "$SCRATCH/tools"
+PLAN=docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md
+REC=.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review.md
+first=$(git log --first-parent --reverse --format='%H %s' HEAD | awk '/ \(docs W3\)$/ {print $1; exit}')
+BASE=$(git rev-parse "$first^"); echo "$BASE" > "$SCRATCH/w3-base"; echo "base $BASE"
+grep -q "^Base: $BASE\. " "$REC" && echo base-agrees-with-task-11 || echo BASE-DISAGREES
+test -z "$(git status --porcelain)" && echo clean || echo NOT-CLEAN
+git merge-base --is-ancestor "$BASE" HEAD && echo base-is-ancestor
+git cat-file -e "$BASE:server/src/docs/routes.ts" 2>/dev/null && echo base-has-routes || echo base-has-no-routes
+git log --first-parent --no-merges --format=%s "$BASE"..HEAD | grep -cE '\(docs W3( review)?\)$'
+for p in server agent pwa; do { [ -d "$p/node_modules" ] && [ ! -L "$p/node_modules" ]; } || echo "not installed: $p"; done
+grep -c '^### Task [0-9]*: ' "$PLAN"; grep '^## ' "$PLAN" | tail -n 1
+grep -c '^Findings: ' "$REC"
+```
+
+Expected: `base <40 hex>`; `base-agrees-with-task-11`; `clean`; `base-is-ancestor`; `base-has-no-routes`; at least `10` (one commit per task 1-10, plus Task 11's review commits, which end `(docs W3 review)`); no `not installed` line (else `( cd <pkg> && npm ci )` for that package, foreground); `12`; `## Deviations found` (or `## Wave 3 results` when a fix round re-runs this task); `1` (Task 11 Step 6 closed its record). Any other answer: stop and put an ask to the coordinator; never merge, rebase or pull here.
+
+Then record the two values the brief names, exactly as the brief spells them (the run id is digits; the block is the issued range, two numbers joined by `-`), one Bash call:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; printf '%s\n' '<the runId the brief names>' > "$SCRATCH/w3-run"; printf '%s\n' '<the issued block, LO-HI>' > "$SCRATCH/w3-block"
+grep -Eqx '[0-9]+' "$SCRATCH/w3-run" && grep -Eqx '[0-9]+-[0-9]+' "$SCRATCH/w3-block" && echo inputs-ok
+```
+
+Expected: `inputs-ok`. These two files, `w3-base` and the tools are the only inputs every later step reads; no later block types a sha, a run id or a number.
+
+- [ ] **Step 1: The suites (section 7.9), then the full server suite.** Write the suite runner to `<SCRATCH>/tools/w3-suites.py`:
+
+````python
+#!/usr/bin/env python3
+"""The W3 suites (the plan's Task 12, Steps 1 and 4). Scratch only: never committed.
+
+  python3 w3-suites.py SCRATCH ID [ID ...]          run those suites, in the foreground, one after another
+  python3 w3-suites.py SCRATCH --full                run the next full-suite batches that have no log yet
+  python3 w3-suites.py SCRATCH --rerun ID            run a suite again, ALONE, into its .rerun.log
+  python3 w3-suites.py SCRATCH --list                print the table and every full-suite batch's file count
+
+Run from the worktree root. IDs 01-11 are named suites; F01 onward are the FULL server suite. Every file vitest's
+`include` reaches (`server/test/**/*.test.ts`) lands in exactly one prefix batch, the first whose pattern matches
+its file name (F25 takes every name no earlier pattern matched, so a file added later is never skipped), except a
+file in SPLIT, which one 600 s call cannot be trusted to hold: it runs as pieces, each a `-t` pattern over a run
+of its top-level describe titles (a title that begins a longer title never claims the longer one's tests), plus
+one remainder piece that excludes them all. A batch passes its files to vitest explicitly, and a green run is
+wrong (rc=125) unless vitest's `Test Files` total equals its file count.
+
+`--full` starts the first batch with no log, then another only while it has run at most FULL_START_S seconds, so
+one invocation ends inside a 600 s tool call; repeat it until it prints `FULL SUITE: <n> of <n> batches run`, after
+which it writes SCRATCH/w3-full-split.txt: `FULL <n> batches`, then one line per SPLIT file saying whether every
+test ran in exactly one piece (read from each piece's JSON report: a test either runs in one piece, or is skipped
+in every piece because the file itself skips it). A batch's FIRST log is its first run, which the wave-done's
+`suite:` line reads. `--rerun` of a red prefix batch runs only the files its first log names in a FAIL line (all
+of its files after a timeout), alone, in one vitest call; of a piece, the same piece.
+
+Each run writes SCRATCH/w3-suite-<ID>-<name>.log: the command on its first line (a batch names its pattern and its
+count, not its files), the vitest output with colour codes stripped, then `files=<n>` for a batch, `seconds=<n>`
+and `rc=<n>`; it prints vitest's `Test Files` and `Tests` lines, every FAIL line, the seconds and the rc. A suite
+marked `fetch` (topology-clean, deviation-refs, and every batch, since F21 holds both) runs `git fetch -q origin
+main` once first, unless CCRC_LEDGER_BASE or CCRC_HISTORY_BASE is set, which those tests read before origin/main.
+A suite that outlives SUITE_TIMEOUT_S is killed with its process group and recorded as rc=124. Exit 0 only when
+every suite run is rc 0.
+"""
+import glob, json, os, re, signal, subprocess, sys, time
+
+SUITE_TIMEOUT_S = 540
+FULL_START_S = 25
+NAMED = [
+    ('01', 'topology-clean', ['test/topology-clean.test.ts'], None, True),
+    ('02', 'single-definition', ['test/single-definition.test.ts'], None, False),
+    ('03', 'plan-pins', ['test/deviation-refs.test.ts', 'test/dtbd.test.ts'], None, True),
+    ('04', 'typecheck-tests', ['test/typecheck-tests.test.ts'], None, False),
+    ('05', 'docs-new', ['test/docs-routes.test.ts', 'test/docs-cache.test.ts', 'test/docs-lanes.test.ts',
+                        'test/docs-headers.test.ts', 'test/docs-file-bytes.test.ts', 'test/docs-policy.test.ts'],
+     None, False),
+    ('06', 'docs-console-latency', ['test/docs-console-latency.test.ts'], None, False),
+    ('07', 'censuses', ['test/auth-gate.test.ts', 'test/box-token-census.test.ts',
+                        'test/coord-routes-single-file.test.ts', 'test/coord-pause-route.test.ts',
+                        'test/verb-gate.test.ts', 'test/whitelist-subset.test.ts'], None, False),
+    ('08', 'touched-readers', ['test/capsupported.test.ts', 'test/routes.test.ts', 'test/update-routes.test.ts',
+                               'test/boot.test.ts', 'test/auth-passkey.test.ts', 'test/auth-wire.test.ts'],
+     None, False),
+    ('09', 'docs-w1-w2', ['test/docs-source.test.ts', 'test/docs-budget.test.ts', 'test/docs-shared.test.ts',
+                          'test/docs-parity.test.ts'], None, False),
+    ('10', 'session-hook-citations', ['test/session-hook.test.ts'], 'every line citation is anchored', False),
+    ('11', 'plan-pins-after', ['test/topology-clean.test.ts', 'test/deviation-refs.test.ts', 'test/dtbd.test.ts'],
+     None, True),
+]
+PREFIX = [
+    ('F01', 'full-ccd-a', r'^ccd-a'),
+    ('F02', 'full-ccd-b-ch', r'^ccd-(b|c[a-h])'),
+    ('F03', 'full-ccd-c-rest', r'^ccd-c'),
+    ('F04', 'full-ccd-d-h', r'^ccd-[d-h]'),
+    ('F05', 'full-ccd-i-o', r'^ccd-[i-o]'),
+    ('F06', 'full-ccd-p', r'^ccd-p'),
+    ('F07', 'full-ccd-ra-re', r'^ccd-r[a-e]'),
+    ('F08', 'full-ccd-r-rest', r'^ccd-r'),
+    ('F09', 'full-ccd-s', r'^ccd-s'),
+    ('F10', 'full-ccd-t-v', r'^ccd-[t-v]'),
+    ('F11', 'full-ccd-ws-expire', r'^ccd-ws-expire'),
+    ('F12', 'full-ccd-w-wsa-ws-a-g', r'^ccd-(w[a-r]|wsa|ws-[a-g])'),
+    ('F13', 'full-ccd-rest', r'^ccd-'),
+    ('F14', 'full-a-b', r'^[ab]'),
+    ('F15', 'full-caps-ccdargv-ccgpt', r'^(ca|ccdargv|ccg)'),
+    ('F16', 'full-ccrc-install-graphify', r'^ccrc-install-graphify\.'),
+    ('F17', 'full-ccrc-a-h', r'^ccrc-[a-h]'),
+    ('F18', 'full-ccrc-rest', r'^ccrc-'),
+    ('F19', 'full-ch', r'^ch'),
+    ('F20', 'full-c-rest', r'^c'),
+    ('F21', 'full-d-k', r'^[d-k]'),
+    ('F22', 'full-l-o', r'^[l-o]'),
+    ('F23', 'full-p-r', r'^[p-r]'),
+    ('F24', 'full-s-t', r'^[st]'),
+    ('F25', 'full-rest', r''),
+]
+# Files one call cannot be trusted to hold, and how many describe-run pieces each becomes (the remainder piece is
+# added after them). Measured while this plan was written on the 16-core box under a load average of 17-38:
+# ccrc-install.test.ts ran past 575 s ALONE, ccd-ws-audit.test.ts took 351 s alone, and a batch holding
+# ccrc-account.test.ts and ccrc-doctor.test.ts ran past 540 s; ccd-ws-reap.test.ts and ccrc-update.test.ts are
+# their siblings in size.
+SPLIT = {
+    'test/ccd-ws-audit.test.ts': 2,
+    'test/ccd-ws-reap.test.ts': 2,
+    'test/ccrc-account.test.ts': 4,
+    'test/ccrc-doctor.test.ts': 6,
+    'test/ccrc-install.test.ts': 4,
+    'test/ccrc-update.test.ts': 4,
+}
+ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+
+
+def js_escape(s):
+    return re.sub(r'[.*+?^${}()|\[\]\\/]', lambda m: '\\' + m.group(0), s)
+
+
+def pieces(f, k):
+    """[(name, -t pattern)]: k runs of the file's top-level describes, cut by source lines, then the remainder."""
+    text = open(os.path.join('server', f), encoding='utf-8').read()
+    found = [(m.start(), m.group(1).replace("\\'", "'"))
+             for m in re.finditer(r"^describe\('((?:[^'\\]|\\.)*)'", text, re.M)]
+    titles = [t for _at, t in found]
+    if len(titles) < k or len(set(titles)) != len(titles):
+        sys.exit('w3-suites.py: %s has %d top-level describe titles (%d distinct); stop and report'
+                 % (f, len(titles), len(set(titles))))
+    total = len(text)
+    groups, cur = [], []
+    for i, (at, t) in enumerate(found):
+        cur.append(t)
+        end = found[i + 1][0] if i + 1 < len(found) else total
+        if end >= total * (len(groups) + 1) / k and len(groups) < k - 1:
+            groups.append(cur)
+            cur = []
+    groups.append(cur)
+    def one(t):
+        # A title that begins another title plus a space ('a b' and 'a b c') must not claim the longer one's tests.
+        longer = [b[len(t) + 1:] for b in titles if b != t and b.startswith(t + ' ')]
+        return js_escape(t) + ' ' + ('(?!(?:%s) )' % '|'.join(js_escape(x) for x in longer) if longer else '')
+    alt = lambda ts: '(?:%s)' % '|'.join(one(t) for t in ts)
+    out = [('part%d' % (i + 1), '^' + alt(g)) for i, g in enumerate(groups)]
+    out.append(('rest', '^(?!%s)' % alt(titles)))
+    return out
+
+
+def batch_files():
+    """{batch id: [test/<file>, ...]} for the prefix batches, and the number of files the include reaches."""
+    found = sorted(os.path.relpath(p, 'server') for p in glob.glob('server/test/**/*.test.ts', recursive=True))
+    out = dict((b[0], []) for b in PREFIX)
+    for f in found:
+        if f in SPLIT:
+            continue
+        for bid, _name, pat in PREFIX:
+            if re.search(pat, os.path.basename(f)):
+                out[bid].append(f)
+                break
+    missing = [f for f in SPLIT if f not in found]
+    if missing or sum(len(v) for v in out.values()) + len(SPLIT) != len(found):
+        sys.exit('w3-suites.py: the batches do not cover the suite exactly (%s); stop and report' % missing)
+    return out, len(found)
+
+
+def suites():
+    """id -> (id, name, argv, fetch, expected file count or None, shown command, piece of)."""
+    table = {}
+    for i, name, files, t, fetch in NAMED:
+        argv = ['./node_modules/.bin/vitest', 'run'] + (['-t', t] if t else []) + files
+        shown = '( cd server && %s )' % ' '.join(("'%s'" % a) if ' ' in a else a for a in argv)
+        table[i] = (i, name, argv, fetch, None, shown, None)
+    by_batch, _n = batch_files()
+    for bid, name, pat in PREFIX:
+        files = by_batch[bid]
+        shown = '( cd server && ./node_modules/.bin/vitest run <the %d files whose name matches %s> )' % (
+            len(files), ('/%s/' % pat) if pat else 'no earlier pattern')
+        table[bid] = (bid, name, ['./node_modules/.bin/vitest', 'run'] + files, True, len(files), shown, None)
+    n = len(PREFIX)
+    for f, k in SPLIT.items():
+        stem = os.path.basename(f)[:-len('.test.ts')]
+        for pname, pat in pieces(f, k):
+            n += 1
+            bid = 'F%02d' % n
+            shown = "( cd server && ./node_modules/.bin/vitest run -t '<%s: %s>' %s )" % (
+                stem, pname if pname == 'rest' else pname + ' of its top-level describes', f)
+            table[bid] = (bid, 'full-%s-%s' % (stem, pname), ['./node_modules/.bin/vitest', 'run', '-t', pat, f],
+                          True, 1, shown, f)
+    return table
+
+
+def full_ids(table):
+    return [i for i in table if i.startswith('F')]
+
+
+def log_path(scratch, s, rerun, ext='log'):
+    return os.path.join(scratch, 'w3-suite-%s-%s%s.%s' % (s[0], s[1], '.rerun' if rerun else '', ext))
+
+
+FETCHED = []
+
+
+def fetch_once():
+    if FETCHED or os.environ.get('CCRC_LEDGER_BASE') or os.environ.get('CCRC_HISTORY_BASE'):
+        return
+    f = subprocess.run(['git', 'fetch', '-q', 'origin', 'main'], capture_output=True, text=True)
+    if f.returncode != 0:
+        sys.exit('w3-suites.py: git fetch origin main failed: %s' % f.stderr.strip())
+    FETCHED.append(True)
+
+
+def failed_files(scratch, s):
+    """The test files the first log names in a FAIL line, or None (no FAIL line: a timeout, or a count mismatch)."""
+    p = log_path(scratch, s, False)
+    if not os.path.exists(p):
+        sys.exit('w3-suites.py: %s has no first run to re-run' % s[0])
+    got = sorted(set(re.findall(r'^\s*FAIL\s+(test/\S+\.test\.ts)', open(p, encoding='utf-8').read(), re.M)))
+    return got or None
+
+
+def run(scratch, s, rerun):
+    sid, name, argv, fetch, want_files, shown, piece_of = s
+    if rerun and want_files is not None and piece_of is None:
+        only = failed_files(scratch, s)
+        if only:
+            argv = ['./node_modules/.bin/vitest', 'run'] + only
+            want_files = len(only)
+            shown = '( cd server && ./node_modules/.bin/vitest run %s )' % ' '.join(only)
+    if piece_of is not None:
+        argv = argv[:2] + ['--reporter=default', '--reporter=json',
+                           '--outputFile.json=' + os.path.abspath(log_path(scratch, s, rerun, 'json'))] + argv[2:]
+    if fetch:
+        fetch_once()
+    t0 = time.monotonic()
+    p = subprocess.Popen(argv, cwd='server', stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+    try:
+        raw, _ = p.communicate(timeout=SUITE_TIMEOUT_S)
+        rc = p.returncode
+    except subprocess.TimeoutExpired:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(p.pid, sig)
+            except OSError:
+                break
+            time.sleep(3)
+        raw, _ = p.communicate()
+        rc = 124
+    secs = int(time.monotonic() - t0)
+    out = ANSI.sub('', raw.decode('utf-8', 'replace'))
+    if want_files is not None and rc == 0:
+        got = re.findall(r'^\s*Test Files\s+.*\((\d+)\)\s*$', out, re.M)
+        if not got or int(got[-1]) != want_files:
+            out += '\nw3-suites.py: vitest ran %s files, the batch holds %d\n' % (got[-1] if got else 'no',
+                                                                                 want_files)
+            rc = 125
+    with open(log_path(scratch, s, rerun), 'w', encoding='utf-8') as fh:
+        fh.write('$ %s\n%s\n%sseconds=%d\nrc=%d\n' % (shown, out.rstrip('\n'),
+                 ('files=%d\n' % want_files) if want_files is not None else '', secs, rc))
+    print('== %s %s%s: %s' % (sid, name, ' (re-run alone)' if rerun else '', shown))
+    for line in out.splitlines():
+        if re.match(r'^\s*(Test Files|Tests)\s', line) or re.match(r'^\s*FAIL\s', line) or \
+                line.startswith('w3-suites.py:'):
+            print('   ' + line.strip())
+    print('   %ds rc=%d' % (secs, rc))
+    return rc
+
+
+def split_check(scratch, table):
+    """One line per SPLIT file: did every test run in exactly one piece (each piece's last run)?"""
+    lines = []
+    for f in SPLIT:
+        runs, skips, totals, unread = {}, None, set(), []
+        for s in table.values():
+            if s[6] != f:
+                continue
+            p = log_path(scratch, s, True, 'json')
+            p = p if os.path.exists(p) else log_path(scratch, s, False, 'json')
+            try:
+                tests = [a for r in json.load(open(p, encoding='utf-8'))['testResults']
+                         for a in r['assertionResults']]
+            except (OSError, ValueError, KeyError):
+                unread.append(s[0])
+                continue
+            seen, keys = {}, []
+            for a in tests:
+                seen[a['fullName']] = seen.get(a['fullName'], 0) + 1
+                keys.append(((a['fullName'], seen[a['fullName']]), a['status']))
+            totals.add(len(keys))
+            for k, st in keys:
+                if st in ('passed', 'failed'):
+                    runs[k] = runs.get(k, 0) + 1
+            skipped = set(k for k, st in keys if st not in ('passed', 'failed'))
+            skips = skipped if skips is None else skips & skipped
+        twice = sorted(k[0] for k, n in runs.items() if n > 1)
+        total = next(iter(totals)) if len(totals) == 1 else None
+        ok = not unread and total is not None and not twice and len(runs) + len(skips or ()) == total
+        lines.append('%s %s: %d tests ran once each across its pieces, %d skipped in every piece, of %s%s%s' % (
+            'OK' if ok else 'MISMATCH', f, len(runs) - len(twice), len(skips or ()), total if total is not None
+            else sorted(totals), ('; ran twice: %s' % twice[:3]) if twice else '',
+            ('; no JSON report: %s' % unread) if unread else ''))
+    lines.insert(0, 'FULL %d batches' % len(full_ids(table)))
+    open(os.path.join(scratch, 'w3-full-split.txt'), 'w', encoding='utf-8').write('\n'.join(lines) + '\n')
+    return lines
+
+
+if len(sys.argv) < 3:
+    sys.exit(__doc__)
+SCRATCH = sys.argv[1]
+if not os.path.isdir(SCRATCH):
+    sys.exit('w3-suites.py: %s is not a directory' % SCRATCH)
+if not os.path.isdir('server/test') or not os.path.isdir('agent'):
+    sys.exit('w3-suites.py: run me from the worktree root')
+TABLE = suites()
+FULL = full_ids(TABLE)
+if sys.argv[2] == '--list':
+    for s in TABLE.values():
+        print('%-3s %-30s %s%s' % (s[0], s[1], s[5], '   [fetch]' if s[3] else ''))
+    print('%d files: %d prefix batches and %d pieces of %d split file(s), %d full-suite batches in all'
+          % (batch_files()[1], len(PREFIX), len(FULL) - len(PREFIX), len(SPLIT), len(FULL)))
+    sys.exit(0)
+if sys.argv[2] == '--full':
+    t0 = time.monotonic()
+    rcs = []
+    for bid in FULL:
+        if os.path.exists(log_path(SCRATCH, TABLE[bid], False)):
+            continue
+        if rcs and time.monotonic() - t0 > FULL_START_S:
+            break
+        rcs.append(run(SCRATCH, TABLE[bid], False))
+    done = [b for b in FULL if os.path.exists(log_path(SCRATCH, TABLE[b], False))]
+    print('FULL SUITE: %d of %d batches run' % (len(done), len(FULL)))
+    if len(done) == len(FULL):
+        for line in split_check(SCRATCH, TABLE):
+            print(line)
+    sys.exit(0 if all(rc == 0 for rc in rcs) else 1)
+rerun = sys.argv[2] == '--rerun'
+ids = sys.argv[3:] if rerun else sys.argv[2:]
+if rerun and len(ids) != 1:
+    sys.exit('w3-suites.py: --rerun takes exactly one ID')
+for i in ids:
+    if i not in TABLE:
+        sys.exit('w3-suites.py: no suite %s (try --list)' % i)
+rcs = [run(SCRATCH, TABLE[i], rerun) for i in ids]
+if rerun and TABLE[ids[0]][6] is not None and all(os.path.exists(log_path(SCRATCH, TABLE[b], False)) for b in FULL):
+    for line in split_check(SCRATCH, TABLE):
+        print(line)
+sys.exit(0 if all(rc == 0 for rc in rcs) else 1)
+````
+
+Then, one Bash call per line:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-suites.py" "$SCRATCH" --list | tail -n 1
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-suites.py" "$SCRATCH" 01 02 03 04
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-suites.py" "$SCRATCH" 05 06 07 08 09 10
+```
+
+Expected (counts measured at Task 10's state on the planning base; a later `main` moves them, and what binds is rc 0):
+- `--list`: `538 files: 25 prefix batches and 28 pieces of 6 split file(s), 53 full-suite batches in all`. A different file count is `main` adding tests; any other refusal (`do not cover the suite exactly`, `top-level describe titles`) is a finding.
+- `01 topology-clean`: `Test Files 1 passed (1)`, `Tests 55 passed (55)` (run after `git fetch -q origin main`).
+- `02 single-definition`: `1 passed (1)`, `479 passed (479)`.
+- `03 plan-pins` (`deviation-refs`, `dtbd`): `2 passed (2)`, `32 passed (32)`. Green means no allocator-era `D-N` this plan defines is defined in another plan on this branch or `origin/main`, and no concrete `D-TBD-` placeholder landed.
+- `04 typecheck-tests`: `1 passed (1)`, `12 passed (12)`; about 60 s.
+- `05 docs-new`: `6 passed (6)`, `863 passed (863)`.
+- `06 docs-console-latency`: `1 passed (1)`, `4 passed (4)`; about 12 s.
+- `07 censuses` (`auth-gate`, `box-token-census`, `coord-routes-single-file`, `coord-pause-route`, `verb-gate`, `whitelist-subset`): `6 passed (6)`, `334 passed (334)`.
+- `08 touched-readers` (`capsupported`, `routes`, `update-routes`, `boot`, `auth-passkey`, `auth-wire`): `6 passed (6)`, `308 passed (308)`.
+- `09 docs-w1-w2` (`docs-source`, `docs-budget`, `docs-shared`, `docs-parity`: W1's and W2's, unchanged by W3, which consumes `shared/docs.ts` and the adapter and amends neither): `4 passed (4)`, `426 passed (426)`.
+- `10 session-hook-citations`: `1 passed (1)`, `13 passed | 322 skipped (335)`: the compaction card's line census is unmoved, which is what `single-definition.test.ts`'s EOF-only append bought.
+
+Then the full server suite. Repeat this one call until it prints `FULL SUITE: 53 of 53 batches run` and the split lines (each call runs one batch, or a short one and the next; the 53 batches took 4 800 s in all while this plan was written):
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-suites.py" "$SCRATCH" --full
+```
+
+Expected: one `== F<nn>` block per batch, each ending `rc=0`, and at the end:
+
+```text
+FULL SUITE: 53 of 53 batches run
+FULL 53 batches
+OK test/ccd-ws-audit.test.ts: 141 tests ran once each across its pieces, 4 skipped in every piece, of 145
+OK test/ccd-ws-reap.test.ts: 114 tests ran once each across its pieces, 0 skipped in every piece, of 114
+OK test/ccrc-account.test.ts: 357 tests ran once each across its pieces, 0 skipped in every piece, of 357
+OK test/ccrc-doctor.test.ts: 759 tests ran once each across its pieces, 15 skipped in every piece, of 774
+OK test/ccrc-install.test.ts: 296 tests ran once each across its pieces, 20 skipped in every piece, of 316
+OK test/ccrc-update.test.ts: 502 tests ran once each across its pieces, 12 skipped in every piece, of 514
+```
+
+Measured per batch while planning (seconds; `Tests`): F01 ccd-a 114 (548); F02 ccd-b, ccd-c[a-h] 272 (761, 1 skipped); F03 ccd-c rest 50 (178); F04 ccd-[d-h] 79 (683); F05 ccd-[i-o] 117 (490); F06 ccd-p 114 (375); F07 ccd-r[a-e] 82 (240); F08 ccd-r rest 58 (246); F09 ccd-s 34 (389, 8 skipped); F10 ccd-[t-v] 10 (119); F11 ccd-ws-expire 99 (135); F12 ccd-w, ccd-wsa, ccd-ws-[a-g] 74 (191); F13 ccd- rest 39 (82); F14 [ab] 22 (1 064); F15 ca, ccdargv, ccg 19 (274, 5 skipped); F16 ccrc-install-graphify 137 (58); F17 ccrc-[a-h] 183 (562, 3 skipped); F18 ccrc- rest 72 (551, 4 skipped); F19 ch 60 (1 046); F20 c rest 32 (5 860); F21 [d-k] 61 (3 117); F22 [l-o] 50 (1 363); F23 [p-r] 43 (1 881); F24 [st] 148 (2 819); F25 the rest 29 (1 363); F26-F53 the pieces, 2-199 each.
+
+**A red suite or batch.** Re-run it ALONE once, `SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-suites.py" "$SCRATCH" --rerun <ID>` (a red prefix batch re-runs only the files its log names in a `FAIL` line; it writes the `.rerun.log` beside the first, and the results table shows both rcs). Then:
+- **Green alone:** a load flake (`CLAUDE.md`'s list, `docs-console-latency` among them from this wave, or any file whose red under load is green alone). Add one line to `<SCRATCH>/w3-notes.md`: `- suite <ID> <name>: red on the first run (<the FAIL line>), green re-run alone; a load flake.` It still counts as a red FIRST run: the wave-done's `suite:` line says what the first full run said (worker skill clause 15).
+- **Red alone, in a file W3 touched** (any file in Global Constraints' scope list, or one that imports `server/src/docs/`): a finding (Step 3's last paragraph), and this task stops there.
+- **Red alone, in a file W3 did not touch:** run the same file at the BASE, in a copy (one Bash call, `<file>` being the `test/<name>.test.ts` the `FAIL` line names):
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; rm -rf "$SCRATCH/base-copy" && mkdir "$SCRATCH/base-copy" && git archive "$(cat "$SCRATCH/w3-base")" | tar -x -C "$SCRATCH/base-copy" && for p in server agent pwa; do ln -s "$PWD/$p/node_modules" "$SCRATCH/base-copy/$p/node_modules"; done && ( cd "$SCRATCH/base-copy/server" && ./node_modules/.bin/vitest run <file> )
+```
+
+  Red there too: it is `main-red`, not W3's (worker skill clause 16: reported once and left alone). Add `- suite <ID>: <file> red alone and red at the base (<the FAIL line>); main-red, reported once, not W3's.` to `w3-notes.md` and report it once as a finding whose subject begins `main-red:`; Step 4 writes the record only after the coordinator rules it may be recorded. Green at the base: a finding against W3.
+
+- [ ] **Step 2: The census-free invariants.** Write the checker to `<SCRATCH>/tools/w3-invariants.py`:
+
+````python
+#!/usr/bin/env python3
+"""The W3 census-free invariants (the plan's Task 12, Step 2). Scratch only: never committed. Read-only.
+
+  python3 w3-invariants.py BASE BLOCK      from the worktree root; BLOCK is the issued deviation block, LO-HI
+
+W3's OWN edits are the union of its own commits, `git log --first-parent --no-merges BASE..HEAD` (scope). A file's
+NET change is judged against REF: BASE, or, when the first-parent line merged origin/main in (a fix round may),
+the second parent of the LAST such merge, so main's own edits never count as W3's (untouched, gate-shape,
+sd-shape). Prints one PASS/FAIL line per invariant and `<n> invariants, <n> PASS`; exit 0 only when all PASS.
+"""
+import os, re, subprocess, sys
+
+if len(sys.argv) != 3 or not re.fullmatch(r'\d+-\d+', sys.argv[2]):
+    sys.exit(__doc__)
+BASE = sys.argv[1]
+LO, HI = (int(x) for x in sys.argv[2].split('-'))
+PLAN = 'docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md'
+SCOPE = {
+    'server/src/docs/hooks.ts', 'server/src/docs/lane.ts', 'server/src/docs/cache.ts', 'server/src/docs/routes.ts',
+    'server/src/docs/policy.ts', 'server/src/server.ts', 'server/src/auth/gate.ts',
+    'server/test/docs-headers.test.ts', 'server/test/docs-lanes.test.ts', 'server/test/docs-cache.test.ts',
+    'server/test/docs-routes.test.ts', 'server/test/docs-file-bytes.test.ts',
+    'server/test/docs-console-latency.test.ts', 'server/test/docsRouteHelpers.ts', 'server/test/throttledLink.ts',
+    'server/test/docs-policy.test.ts', 'server/test/auth-gate.test.ts', 'server/test/box-token-census.test.ts',
+    'server/test/single-definition.test.ts',
+}
+FORBIDDEN = ['ccd/', 'shared/', 'pwa/', 'agent/', 'server/src/index.ts', 'server/src/docs/ports.ts',
+             'server/src/docs/ccdsource.ts', 'server/src/lifecycle.ts', 'server/src/ccdargv.ts',
+             'server/src/remote/runner.ts', 'README.md', 'CLAUDE.md']
+DOCS = sorted('server/src/docs/%s.ts' % n for n in ('policy', 'ports', 'ccdsource', 'routes', 'hooks', 'lane',
+                                                    'cache'))
+L4 = ['server/src/docs/%s.ts' % n for n in ('routes', 'hooks', 'lane', 'cache')]
+SD = 'server/test/single-definition.test.ts'
+FLOOR = ("  const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts', 'routes.ts', "
+         "'hooks.ts', 'lane.ts', 'cache.ts'];")
+GATE = 'server/src/auth/gate.ts'
+
+
+def git(*a):
+    return subprocess.run(['git'] + list(a), capture_output=True, text=True, check=True).stdout
+
+
+results = []
+
+
+def check(name, ok, answer):
+    results.append(ok)
+    print('%s %-14s %s' % ('PASS' if ok else 'FAIL', name, answer))
+
+
+def texts(root):
+    for d, _dirs, fs in os.walk(root):
+        for f in sorted(fs):
+            if f.endswith('.ts'):
+                p = os.path.join(d, f)
+                yield p, open(p, encoding='utf-8').read()
+
+
+def headings(text):
+    """(offset, heading) of every `## ` line OUTSIDE a fenced block: Task 9's text quotes a `## Deviations found`
+    heading inside its template fence."""
+    out, fence, at = [], None, 0
+    for line in text.splitlines(keepends=True):
+        m = re.match(r'^(`{3,})', line)
+        if m:
+            if fence is None:
+                fence = len(m.group(1))
+            elif len(m.group(1)) >= fence and line.strip() == m.group(1):
+                fence = None
+        elif fence is None and line.startswith('## '):
+            out.append((at, line.rstrip('\n')))
+        at += len(line)
+    return out
+
+
+def hunks(path):
+    """[(a, b, c, d, minus lines, plus lines)] of `git diff -U0 REF HEAD -- path`."""
+    out = []
+    patch = git('diff', '-U0', REF, 'HEAD', '--', path)
+    parts = re.split(r'^(@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@.*)$', patch, flags=re.M)
+    for i in range(1, len(parts), 2):
+        m = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', parts[i])
+        body = parts[i + 1].splitlines()
+        out.append((int(m.group(1)), int(m.group(2) or 1), int(m.group(3)), int(m.group(4) or 1),
+                    [l[1:] for l in body if l.startswith('-')], [l[1:] for l in body if l.startswith('+')]))
+    return out
+
+
+merges = git('rev-list', '--first-parent', '--merges', '%s..HEAD' % BASE).split()
+REF = git('rev-parse', merges[0] + '^2').strip() if merges else git('rev-parse', BASE).strip()
+commits = git('rev-list', '--first-parent', '--no-merges', '%s..HEAD' % BASE).split()
+touched = set(l for l in git('log', '--first-parent', '--no-merges', '--format=', '--name-only',
+                                '%s..HEAD' % BASE).splitlines() if l)
+print('base %s, ref %s, tip %s, %d W3 commits, %d merges of main' % (
+    git('rev-parse', '--short=12', BASE).strip(), REF[:12], git('rev-parse', '--short=12', 'HEAD').strip(),
+    len(commits), len(merges)))
+
+extra = sorted(touched - SCOPE - {PLAN})
+missing = sorted(SCOPE - touched)
+check('scope', not extra and not missing,
+      '%d files touched by W3 commits; outside the scope: %s; scope files untouched: %s'
+      % (len(touched), extra or 'none', missing or 'none'))
+
+moved = sorted(set(git('diff', '--name-only', REF, 'HEAD', '--', *FORBIDDEN).split()))
+check('untouched', not moved, 'ccd/, shared/, pwa/, agent/, index.ts, docs/ports.ts, docs/ccdsource.ts, '
+      'lifecycle.ts, ccdargv.ts, remote/runner.ts, README.md, CLAUDE.md changed vs ref: %s' % (moved or 'none'))
+
+tracked = sorted(git('ls-files', 'server/src/docs').split())
+on_disk = sorted(os.path.join('server/src/docs', f) for f in os.listdir('server/src/docs'))
+check('docs-files', tracked == DOCS and on_disk == DOCS, 'tracked %s; on disk %s' % (
+    [os.path.basename(p) for p in tracked], [os.path.basename(p) for p in on_disk]))
+
+wl = open('agent/src/whitelist.ts', encoding='utf-8').read()
+n_exec = wl.count("export const EXEC_COMMANDS = ['tmux', 'ccd'] as const;")
+check('exec-surface', n_exec == 1 and wl.count('export const EXEC_COMMANDS') == 1,
+      "EXEC_COMMANDS = ['tmux', 'ccd'] x%d" % n_exec)
+
+api = open('shared/api.ts', encoding='utf-8').read()
+n_p, n_pm = api.count('export const FLEET_PROTO = 1;'), api.count('export const FLEET_PROTO_MIN = 1;')
+check('fleet-proto', n_p == 1 and n_pm == 1, 'FLEET_PROTO = 1 x%d; FLEET_PROTO_MIN = 1 x%d' % (n_p, n_pm))
+
+cap = dict((p, t.count("'docs-v1'")) for p, t in texts('server/src') if "'docs-v1'" in t)
+check('cap-literal', cap == {'server/src/ccdargv.ts': 1}, "'docs-v1' quoted under server/src: %s" % cap)
+
+argv = sorted(p for p, t in texts('server/src') if 'CCD_ARGV.docs' in t)
+check('builder-calls', argv == ['server/src/docs/ccdsource.ts'], 'CCD_ARGV.docs under server/src: %s' % argv)
+
+l4 = sorted(p for p in L4 if 'CCD_ARGV' in open(p, encoding='utf-8').read())
+check('no-l4-ccd', not l4, 'CCD_ARGV in routes.ts, hooks.ts, lane.ts, cache.ts: %s' % (l4 or 'none'))
+
+logs = sorted(p for p, t in texts('server/src/docs') if re.search(r'\b(req|request)\.log\b', t))
+check('no-req-log', not logs, 'req.log or request.log under server/src/docs: %s' % (logs or 'none'))
+
+tok = sorted(p for p, t in texts('server/src/docs') if 'requireMailToken' in t or 'checkMailToken' in t)
+check('no-box-token', not tok, 'requireMailToken or checkMailToken under server/src/docs: %s' % (tok or 'none'))
+
+g = hunks(GATE)
+digits = lambda s: re.sub(r'\d+', '#', s)
+gate_ok = (len(g) == 1 and g[0][:4] == (8, 1, 8, 1) and len(g[0][4]) == 1 and len(g[0][5]) == 1
+           and g[0][4][0] != g[0][5][0] and digits(g[0][4][0]) == digits(g[0][5][0]))
+check('gate-shape', gate_ok, 'gate.ts vs ref: %s' % (
+    ['-%d,%d +%d,%d' % h[:4] for h in g] or 'unchanged'))
+
+ref_lines = len(git('show', '%s:%s' % (REF, SD)).splitlines())
+sd = hunks(SD)
+in_place = [h for h in sd if h[1] == 1 and h[3] == 1 and len(h[4]) == 1 and 'const DOCS_RING_FLOOR' in h[4][0]
+            and h[5] == [FLOOR]]
+append = [h for h in sd if h[1] == 0 and h[0] == ref_lines]
+other = [h for h in sd if h not in in_place and h not in append]
+check('sd-shape', len(in_place) == 1 and len(append) == 1 and not other,
+      'single-definition.test.ts vs ref (%d lines): %d DOCS_RING_FLOOR line in place, %d EOF append (%s lines), '
+      'other hunks: %s' % (ref_lines, len(in_place), len(append), append[0][3] if append else 0,
+                           ['-%d,%d +%d,%d' % h[:4] for h in other] or 'none'))
+
+plan = open(PLAN, encoding='utf-8').read() if os.path.isfile(PLAN) else ''
+marks = headings(plan)
+heads = [i for i, (_at, h) in enumerate(marks) if h == '## Deviations found']
+defs = re.findall(r'^- \*\*D-(\d+) \((\d{4}-\d{2}-\d{2})\)\*\* — ', plan, re.M)
+loose = [l for l in plan.splitlines() if re.match(r'^- \*\*D-\d', l)
+         and not re.match(r'^- \*\*D-\d+ \(\d{4}-\d{2}-\d{2}\)\*\* — ', l)]
+spent = [int(n) for n, _d in defs]
+section_defs = []
+if len(heads) == 1:
+    i = heads[0]
+    sec = plan[marks[i][0]:marks[i + 1][0] if i + 1 < len(marks) else len(plan)]
+    section_defs = [int(n) for n in re.findall(r'^- \*\*D-(\d+) \(', sec, re.M)]
+dev_ok = (len(heads) == 1 and len(spent) >= 6 and spent == section_defs and not loose
+          and spent == list(range(LO, LO + len(spent))) and spent[-1] <= HI)
+check('deviations', dev_ok, '## Deviations found x%d; defined %s (issued %d-%d; the first %d expected in order); '
+      'malformed definition lines: %d' % (len(heads), ['D-%d' % n for n in spent] or 'none', LO, HI,
+                                          len(spent), len(loose)))
+
+print('%d invariants, %d PASS' % (len(results), sum(results)))
+sys.exit(0 if all(results) else 1)
+````
+
+Then, one Bash call:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-invariants.py" "$(cat "$SCRATCH/w3-base")" "$(cat "$SCRATCH/w3-block")" | tee "$SCRATCH/w3-invariants.txt"; echo "rc=${PIPESTATUS[0]}"
+```
+
+Expected: the `base … ref … tip … <n> W3 commits, 0 merges of main` line, then thirteen `PASS` lines and `13 invariants, 13 PASS`, `rc=0`:
+- `scope`: `20 files touched by W3 commits; outside the scope: none; scope files untouched: none` (the 19 files of Global Constraints' scope list, every one touched, and this plan, which Task 9 appended to).
+- `untouched`: `… changed vs ref: none` (no `ccd/` edit, so no restamp and no citation tax; no `shared/` edit, so no `FLEET_PROTO` bump and no `shared/agent-protocol.ts` change; no `pwa/`, `agent/`, `index.ts`, `ports.ts`, `ccdsource.ts`, `lifecycle.ts`, `ccdargv.ts`, `runner.ts`, `README.md` or `CLAUDE.md` edit).
+- `docs-files`: tracked and on disk, exactly `cache.ts`, `ccdsource.ts`, `hooks.ts`, `lane.ts`, `policy.ts`, `ports.ts`, `routes.ts`.
+- `exec-surface`: `EXEC_COMMANDS = ['tmux', 'ccd'] x1`. `fleet-proto`: `FLEET_PROTO = 1 x1; FLEET_PROTO_MIN = 1 x1`.
+- `cap-literal`: `'docs-v1' quoted under server/src: {'server/src/ccdargv.ts': 1}`. `builder-calls`: `CCD_ARGV.docs under server/src: ['server/src/docs/ccdsource.ts']`.
+- `no-l4-ccd`, `no-req-log`, `no-box-token`: each `… none`.
+- `gate-shape`: `gate.ts vs ref: ['-8,1 +8,1']` (line 8's route-count numeral, digits only).
+- `sd-shape`: `single-definition.test.ts vs ref (<n> lines): 1 DOCS_RING_FLOOR line in place, 1 EOF append (<n> lines), other hunks: none`, judged NET against the base (or main's last merge), never per commit (W2's lesson): a review fix that inserted lines inside Task 9's appended block is still one EOF append.
+- `deviations`: `## Deviations found x1; defined ['D-<n1>', 'D-<n2>', 'D-<n3>', 'D-<n4>', 'D-<n5>', 'D-<n6>'…] (issued <LO>-<HI>; the first <k> expected in order); malformed definition lines: 0`: exactly the block's first `<k>` numbers, `<k>` at least 6 (Task 9's six, plus any reserve number a fix round spent), in order, each `- **D-<n> (<date>)** — `.
+
+A `FAIL` line is a finding (Step 3's last paragraph); never edit the checker to make it pass.
+
+- [ ] **Step 3: The mutation table.** Mutations never run in the worktree. Write the row extractor to `<SCRATCH>/tools/w3-rows.py`:
+
+````python
+#!/usr/bin/env python3
+"""Build the W3 mutation table from the plan itself (the plan's Task 12, Step 3). Scratch only: never committed.
+
+  python3 w3-rows.py PLAN OUT [EXTRA]
+
+Reads every `### Task <n>: ` section of PLAN (a section ends at the next `### Task` heading, or at the end of the
+file: Task 9's text quotes a `## Deviations found` heading inside a fence, so a `## ` line is no boundary), takes
+the LAST line in it that starts with the rows marker, and parses the first json fence after that line: for Task 12
+that is its own empty block, which precedes `## Deviations found` and `## Wave 3 results`. Tasks 1-10 must each contribute at
+least one row; Task 11's block holds only the rows its fix loop appended, so it may be empty; Task 12's is empty. A row's id
+is `W3-T<m>-M<k>`: m is its own task, or an EARLIER task that already
+contributed that id (a re-anchor, as a Task 11 fix may re-anchor an earlier row), and then the LAST occurrence in task order
+supersedes the first and keeps its place in the table. EXTRA, when given, is a JSON list of rows in the same shape
+that a per-task review measured red but no rows block carries (its ids must be new); they are appended and marked.
+Each row keeps its fields verbatim (id, pkg, file, old, new, tests, red) and gains `task` (its id's task),
+`from` (the task whose block carried the row that counts) and the measurement fields the plan states in prose:
+  - W3-T9-M2 reds `typecheck-tests`' server case (its `red` says so): `t` is set to that case, because the file's
+    PWA_TSC case is red on its own wherever pwa/node_modules is a symlink, as it is in the mutation copy.
+"""
+import json, re, sys
+
+if len(sys.argv) not in (3, 4):
+    sys.exit(__doc__)
+PLAN, OUT = sys.argv[1], sys.argv[2]
+EXTRA_PATH = sys.argv[3] if len(sys.argv) == 4 else None
+MARK = '**Mutation rows' + ' this task contributes**'
+FENCE = '`' * 3
+FIELDS = ('id', 'pkg', 'file', 'old', 'new', 'tests', 'red')
+MEASURE = {'W3-T9-M2': {'t': 'server/test/ is clean under a tests-inclusive project'}}
+text = open(PLAN, encoding='utf-8').read()
+heads = list(re.finditer(r'^### Task (\d+): ', text, re.M))
+nums = [int(h.group(1)) for h in heads]
+if nums != list(range(1, 13)):
+    sys.exit('w3-rows.py: the plan has Task headings %r, not 1..12 in order; stop and report' % nums)
+rows, order, per, reanchored = {}, [], [], []
+for i, h in enumerate(heads):
+    n = nums[i]
+    sec = text[h.start():heads[i + 1].start() if i + 1 < len(heads) else len(text)]
+    leads = [m.start() for m in re.finditer(r'^' + re.escape(MARK), sec, re.M)]
+    if not leads:
+        sys.exit('w3-rows.py: Task %d has no rows line; stop and report' % n)
+    fence = re.compile(r'^' + FENCE + r'json\n(.*?)\n' + FENCE + r'$', re.S | re.M).search(sec, leads[-1])
+    if fence is None:
+        sys.exit('w3-rows.py: Task %d has no json fence after its rows line; stop and report' % n)
+    got = json.loads(fence.group(1))
+    if not isinstance(got, list) or (n <= 10 and not got) or (n == 12 and got):
+        sys.exit('w3-rows.py: Task %d contributes %r rows; Tasks 1-10 need some, Task 11 may hold none, Task 12 none'
+                 % (n, len(got)))
+    seen = set()
+    for r in got:
+        missing = [k for k in FIELDS if k not in r]
+        m = re.fullmatch(r'W3-T(\d+)-M(\d+)', r.get('id', ''))
+        if missing or not m or r['id'] in seen:
+            sys.exit('w3-rows.py: row %r of Task %d: missing %r, a malformed id, or a repeat in one block'
+                     % (r.get('id'), n, missing))
+        owner = int(m.group(1))
+        if owner != n and not (owner < n and r['id'] in rows):
+            sys.exit('w3-rows.py: row %s of Task %d names Task %d, which never contributed it; stop and report'
+                     % (r['id'], n, owner))
+        seen.add(r['id'])
+        if r['id'] in rows:
+            reanchored.append('%s (by T%d)' % (r['id'], n))
+        else:
+            order.append(r['id'])
+        rows[r['id']] = dict(r, task='T%d' % owner, **{'from': 'T%d' % n})
+        rows[r['id']].update(MEASURE.get(r['id'], {}))
+    per.append('T%d %d' % (n, len(got)))
+extra = []
+if EXTRA_PATH:
+    for r in json.load(open(EXTRA_PATH, encoding='utf-8')):
+        missing = [k for k in FIELDS if k not in r]
+        if missing or r['id'] in rows or not re.fullmatch(r'W3-T\d+-M\d+', r['id']):
+            sys.exit('w3-rows.py: extra row %r: missing %r, a malformed id, or an id the plan already has'
+                     % (r.get('id'), missing))
+        rows[r['id']] = dict(r, task='T' + r['id'].split('-')[1][1:], **{'from': 'review'})
+        order.append(r['id'])
+        extra.append(r['id'])
+unknown = sorted(set(MEASURE) - set(rows))
+if unknown:
+    sys.exit('w3-rows.py: no row %r for its measurement fields; stop and report' % unknown)
+json.dump([rows[i] for i in order], open(OUT, 'w', encoding='utf-8'), indent=1)
+print('%d rows in 12 blocks (%s); %d ids after %d re-anchor(s)%s%s' % (
+    sum(int(p.split()[1]) for p in per), ', '.join(per), len(order), len(reanchored),
+    (': ' + ', '.join(reanchored)) if reanchored else '',
+    ('; %d extra review rows: %s' % (len(extra), ', '.join(extra))) if extra else ''))
+````
+
+Write the runner to `<SCRATCH>/tools/mutate.py`:
+
+````python
+#!/usr/bin/env python3
+"""Mutation runner for the native Docs reader, wave 3 (the plan's Task 12, Step 3). Scratch only: never committed.
+
+Run from the WORKTREE root. It reads HEAD with git, and it never writes inside the worktree:
+
+  python3 mutate.py ROWS MUT setup             build MUT, a `git archive` copy of HEAD, and its manifest
+  python3 mutate.py ROWS MUT baseline          every distinct test command the rows name, unmutated: all green
+  python3 mutate.py ROWS MUT run [ID ...]      measure the rows not measured yet (all of them, or the IDs given)
+  python3 mutate.py ROWS MUT final             MUT is byte-equal to HEAD again, and every test command is green
+  python3 mutate.py ROWS MUT report            the measured table, as markdown, for the results section
+
+ROWS is the list w3-rows.py writes: {id, task, from, pkg, file, old, new, tests, red, t?, expect?, loadMatch?,
+timeoutS?}. A row replaces exactly one occurrence of `old` with `new` in MUT/<file>; an `old` that is absent or not
+unique SKIPS the row and touches nothing. A row whose `old` is empty and whose `file` does not exist at HEAD CREATES
+that file with `new` (and the restore deletes it). A row on a `ccd/` file is refused at setup: W3 edits none. A row
+runs `vitest run --bail=1 [-t <t>] <tests>` in MUT/<pkg>. `expect` is 'red' (the default: at least one test
+FAILED) or 'load' (no test failed, but a test file failed to load, and the output names `loadMatch`).
+
+Each row backs its file up under a sentinel of its own (MUT.bak/<id>.orig, or a record that the file was absent),
+writes MUT.pending.json BEFORE it mutates, and restores the file byte for byte afterwards, asserting the sha256 the
+manifest recorded (or the absence). A run killed mid-row leaves MUT.pending.json behind, and the next invocation
+restores from it before anything else.
+
+One invocation starts a row or a command only while it has run less than BUDGET_S seconds AND that piece's own
+bound still ends before CEILING_S, so every invocation ends inside a 600 s tool call; a piece that does not fit
+waits for the next invocation, where it starts first. Run it again until it prints ALL ROWS MEASURED (or ALL
+COMMANDS GREEN).
+"""
+import hashlib, json, os, re, shutil, signal, subprocess, sys, time
+
+BUDGET_S = 240
+CEILING_S = 570
+ROW_TIMEOUT_S = 300
+UNIT_TIMEOUT_S = 300
+ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+
+
+def die(msg):
+    print('mutate.py: ' + msg, file=sys.stderr)
+    sys.exit(2)
+
+
+def sha(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def on_signal(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
+for _s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(_s, on_signal)
+
+if len(sys.argv) < 4:
+    die(__doc__)
+ROWS_PATH, MUT, CMD = sys.argv[1], os.path.abspath(sys.argv[2]), sys.argv[3]
+ROOT = os.getcwd()
+top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(ROOT):
+    die('run me from the worktree root')
+real_mut, real_root = os.path.realpath(MUT), os.path.realpath(ROOT)
+if real_mut == real_root or real_mut.startswith(real_root + os.sep):
+    die('MUT must lie OUTSIDE the worktree: mutations never run in it')
+ROWS = json.load(open(ROWS_PATH, encoding='utf-8'))
+BY_ID = dict((r['id'], r) for r in ROWS)
+if len(BY_ID) != len(ROWS):
+    die('duplicate row ids')
+MANIFEST, RESULTS, PENDING, BAK = MUT + '.manifest.json', MUT + '.results.jsonl', MUT + '.pending.json', MUT + '.bak'
+BASE_DONE, FINAL_DONE = MUT + '.baseline.json', MUT + '.final.json'
+T0 = time.monotonic()
+
+
+def head_sha():
+    return subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def head_bytes(f):
+    """The file's bytes at HEAD, or None when HEAD has no such file."""
+    p = subprocess.run(['git', 'cat-file', 'blob', 'HEAD:' + f], capture_output=True)
+    return p.stdout if p.returncode == 0 else None
+
+
+def load_manifest():
+    if not os.path.exists(MANIFEST):
+        die('no manifest: run setup first')
+    m = json.load(open(MANIFEST))
+    if m['head'] != head_sha():
+        die('HEAD moved since setup: run setup, then baseline, again')
+    return m
+
+
+def matches(m, f):
+    """True when MUT/<f> is what the manifest recorded: the HEAD bytes, or absent."""
+    p = os.path.join(MUT, f)
+    if m['files'][f] is None:
+        return not os.path.lexists(p)
+    return os.path.isfile(p) and sha(open(p, 'rb').read()) == m['files'][f]
+
+
+def put_back(m, f, bak):
+    p = os.path.join(MUT, f)
+    if bak is None:
+        if os.path.lexists(p):
+            os.remove(p)
+    else:
+        shutil.copyfile(bak, p)
+        os.remove(bak)
+    if not matches(m, f):
+        die('%s was not restored to the manifest state (backup %s)' % (f, bak))
+
+
+def kill_group(pgid):
+    """SIGTERM to vitest's whole process group (its workers and anything they spawned), then SIGKILL."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except OSError:
+            return
+        if sig == signal.SIGTERM:
+            time.sleep(5)
+
+
+def ours(pid):
+    """True only while pid is still a vitest leader running in MUT: a recorded pid can be reused once its process
+    has gone, and this runner never signals a group it cannot prove is its own."""
+    try:
+        cwd = os.path.realpath('/proc/%d/cwd' % pid)
+    except OSError:
+        return False
+    return cwd == real_mut or cwd.startswith(real_mut + os.sep)
+
+
+def restore_pending(m):
+    if not os.path.exists(PENDING):
+        return
+    p = json.load(open(PENDING))
+    if p.get('pgid') and ours(p['pgid']):
+        kill_group(p['pgid'])
+    put_back(m, p['file'], p['bak'])
+    os.remove(PENDING)
+    print('restored %s, left mutated by an interrupted row %s' % (p['file'], p['id']))
+
+
+def assert_pristine(m):
+    for f in sorted(m['files']):
+        if not matches(m, f):
+            die('%s in MUT is not its HEAD state: run setup again' % f)
+
+
+def unit_of(r):
+    return (r.get('pkg', 'server'), tuple(r['tests']), r.get('t'))
+
+
+def units():
+    seen = []
+    for r in ROWS:
+        u = unit_of(r)
+        if u not in seen:
+            seen.append(u)
+    return seen
+
+
+def unit_key(u):
+    return '%s:%s%s' % (u[0], ' '.join(u[1]), (' -t %r' % u[2]) if u[2] else '')
+
+
+def vitest(unit, timeout_s, bail, on_start=None):
+    pkg, files, t = unit
+    argv = (['./node_modules/.bin/vitest', 'run'] + (['--bail=1'] if bail else []) + (['-t', t] if t else [])
+            + list(files))
+    p = subprocess.Popen(argv, cwd=os.path.join(MUT, pkg), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+    if on_start is not None:
+        on_start(p.pid)
+    try:
+        out, _ = p.communicate(timeout=timeout_s)
+        return p.returncode, ANSI.sub('', out.decode('utf-8', 'replace')), False
+    except subprocess.TimeoutExpired:
+        kill_group(p.pid)
+        out, _ = p.communicate()
+        return None, ANSI.sub('', out.decode('utf-8', 'replace')), True
+    except BaseException:
+        kill_group(p.pid)
+        raise
+
+
+def classify(rc, out, timed_out):
+    """green | red | load | timeout | error. Red needs a FAILED TEST. Load is a test file that failed to load with
+    no test failed (a guard that throws at import); a row accepts it only with expect 'load' and its loadMatch.
+    Anything else that is not green (a config error, 'no test files') is error, never red."""
+    if timed_out:
+        return 'timeout', out.strip()[-600:]
+    if rc == 0:
+        return 'green', ''
+    lines = out.splitlines()
+    named = [l.strip() for l in lines if re.match(r'^\s*(FAIL|\u00d7|\u2717)\s', l) and ' > ' in l]
+    counted = re.findall(r'^\s*Tests\s+(\d+) failed', out, re.M)
+    if named or (counted and int(counted[-1]) > 0):
+        return 'red', (named[0] if named else 'Tests %s failed' % counted[-1])[:240]
+    files_failed = re.findall(r'^\s*Test Files\s+(\d+) failed', out, re.M)
+    if files_failed and int(files_failed[-1]) > 0 and re.search(r'^\s*Tests\s+no tests', out, re.M):
+        return 'load', 'Test Files %s failed, no tests' % files_failed[-1]
+    return 'error', out.strip()[-1200:]
+
+
+def results():
+    got = {}
+    if os.path.exists(RESULTS):
+        for line in open(RESULTS, encoding='utf-8'):
+            if line.strip():
+                o = json.loads(line)
+                got[o['id']] = o
+    return got
+
+
+def cmd_setup():
+    for r in ROWS:
+        if r['file'].startswith('ccd/'):
+            die('row %s mutates %s: W3 edits no ccd/ file; stop and report' % (r['id'], r['file']))
+    for p in (MUT, BAK):
+        if os.path.exists(p):
+            shutil.rmtree(p)
+    for p in (MANIFEST, RESULTS, PENDING, BASE_DONE, FINAL_DONE):
+        if os.path.exists(p):
+            os.remove(p)
+    os.makedirs(MUT)
+    os.makedirs(BAK)
+    tar = subprocess.run(['git', 'archive', '--format=tar', 'HEAD'], capture_output=True, check=True).stdout
+    subprocess.run(['tar', '-x', '-C', MUT], input=tar, check=True)
+    subprocess.run(['git', '-C', MUT, 'init', '-q'], check=True)
+    # All three packages: typecheck-tests resolves pwa's own compiler at module scope, whichever package runs it.
+    for pkg in ('server', 'agent', 'pwa'):
+        src = os.path.join(ROOT, pkg, 'node_modules')
+        if not os.path.isdir(src):
+            die('%s has no node_modules: run npm ci there first' % pkg)
+        os.symlink(os.path.realpath(src), os.path.join(MUT, pkg, 'node_modules'))
+    files = {}
+    for r in ROWS:
+        f = r['file']
+        want = head_bytes(f)
+        if want is None:
+            if r['old'] != '':
+                die('row %s mutates %s, which HEAD does not have' % (r['id'], f))
+            files[f] = None
+            continue
+        data = open(os.path.join(MUT, f), 'rb').read()
+        if data != want:
+            die('%s in the archive differs from HEAD' % f)
+        files[f] = sha(data)
+    json.dump({'head': head_sha(), 'files': files}, open(MANIFEST, 'w'), indent=1)
+    print('MUT ready at HEAD %s: %d files under mutation (%d created by a row), %d rows, %d test commands'
+          % (head_sha()[:12], len(files), sum(1 for v in files.values() if v is None), len(ROWS), len(units())))
+
+
+def fits(tmo):
+    """May a piece bounded by tmo seconds start now?"""
+    elapsed = time.monotonic() - T0
+    return elapsed <= BUDGET_S and elapsed + tmo <= CEILING_S
+
+
+def run_units(done_path, label):
+    m = load_manifest()
+    restore_pending(m)
+    assert_pristine(m)
+    done = json.load(open(done_path)) if os.path.exists(done_path) else {}
+    for u in units():
+        key = unit_key(u)
+        if done.get(key) == 'green':
+            continue
+        if not fits(UNIT_TIMEOUT_S):
+            print('%d of %d commands green; run `%s` again' % (len(done), len(units()), label))
+            return 3
+        rc, out, timed_out = vitest(u, UNIT_TIMEOUT_S, False)
+        verdict, detail = classify(rc, out, timed_out)
+        print('%-8s %s %s' % (verdict.upper(), key, detail[:300]))
+        if verdict != 'green':
+            print(out.strip()[-2000:])
+            die('%s is not green unmutated: every red row would be meaningless; stop and report' % key)
+        done[key] = 'green'
+        json.dump(done, open(done_path, 'w'), indent=1)
+    print('ALL COMMANDS GREEN (%s)' % label)
+    return 0
+
+
+def mutate_one(m, r):
+    f = r['file']
+    path = os.path.join(MUT, f)
+    create = m['files'][f] is None
+    if create:
+        text = r['new']
+    else:
+        text = open(path, 'rb').read().decode('utf-8')
+        n = text.count(r['old'])
+        if n != 1:
+            return 'skipped', '`old` occurs %d times in %s: %r' % (n, f, r['old'][:80])
+        text = text.replace(r['old'], r['new'], 1)
+    bak = None
+    if not create:
+        bak = os.path.join(BAK, r['id'] + '.orig')
+        shutil.copyfile(path, bak)
+    pending = {'id': r['id'], 'file': f, 'bak': bak}
+    json.dump(pending, open(PENDING, 'w'))
+
+    def started(pid):
+        pending['pgid'] = pid
+        json.dump(pending, open(PENDING, 'w'))
+
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, 'w', encoding='utf-8').write(text)
+        rc, out, timed_out = vitest(unit_of(r), r.get('timeoutS', ROW_TIMEOUT_S), True, started)
+        verdict, detail = classify(rc, out, timed_out)
+        if verdict == 'load' and r.get('loadMatch') and r['loadMatch'] not in out:
+            return 'error', 'a load failure that does not name %r: %s' % (r['loadMatch'], out.strip()[-600:])
+        return verdict, detail
+    finally:
+        put_back(m, f, bak)
+        os.remove(PENDING)
+
+
+def ok_of(r, verdict):
+    return verdict == r.get('expect', 'red')
+
+
+def cmd_run(ids):
+    m = load_manifest()
+    restore_pending(m)
+    assert_pristine(m)
+    for i in ids:
+        if i not in BY_ID:
+            die('no row %s' % i)
+    got = results()
+    queue = [r for r in ROWS if r['id'] in ids] if ids else [r for r in ROWS if r['id'] not in got]
+    bad = 0
+    for r in queue:
+        if not fits(r.get('timeoutS', ROW_TIMEOUT_S)):
+            continue
+        t = time.monotonic()
+        verdict, detail = mutate_one(m, r)
+        ok = ok_of(r, verdict)
+        rec = {'id': r['id'], 'verdict': verdict, 'ok': ok, 'detail': detail, 'seconds': int(time.monotonic() - t)}
+        with open(RESULTS, 'a', encoding='utf-8') as fh:
+            fh.write(json.dumps(rec) + '\n')
+        bad += 0 if ok else 1
+        print('== %-10s [%s] %-11s %s  %ss  %s' % (r['id'], r['task'], verdict.upper(), 'ok' if ok else 'NOT OK',
+              rec['seconds'], detail[:200]))
+    assert_pristine(m)
+    left = [x['id'] for x in ROWS if x['id'] not in results()]
+    if left:
+        print('%d rows left (%s...): run `run` again' % (len(left), ', '.join(left[:6])))
+        return 3
+    nok = [x for x in results().values() if not x['ok']]
+    print('ALL ROWS MEASURED: %d ok, %d not ok%s' % (len(ROWS) - len(nok), len(nok),
+          (' -> ' + ', '.join(x['id'] for x in nok)) if nok else ''))
+    return 1 if (nok or bad) else 0
+
+
+def cmd_final():
+    m = load_manifest()
+    restore_pending(m)
+    for f in sorted(m['files']):
+        p = os.path.join(MUT, f)
+        if m['files'][f] is None:
+            if os.path.lexists(p):
+                die('%s exists in MUT, and HEAD has no such file' % f)
+        elif not matches(m, f) or open(p, 'rb').read() != head_bytes(f):
+            die('%s in MUT is not byte-equal to HEAD' % f)
+    print('MUT byte-equal to HEAD for all %d files under mutation' % len(m['files']))
+    return run_units(FINAL_DONE, 'final')
+
+
+def cmd_report():
+    got = results()
+    cell = lambda s: s.replace('|', '\\|').replace('\n', ' ')
+    out = ['| Row | Task | File | Result | First red case (measured) |', '|---|---|---|---|---|']
+    for r in ROWS:
+        g = got.get(r['id'])
+        if g is None:
+            res, case = 'NOT MEASURED', ''
+        else:
+            res = g['verdict'] + ('' if g['ok'] else ' (NOT OK)')
+            # Only a red or load detail is a test's own name; any other detail can carry a scratch path, and
+            # stays in MUT.results.jsonl for the report to the coordinator.
+            case = (re.sub(r'^FAIL\s+', '', g['detail']) if g['verdict'] in ('red', 'load')
+                    else '(detail in w3-mut.results.jsonl)')
+        task = r['task'] if r.get('from', r['task']) == r['task'] else '%s (re-anchored in %s)' % (r['task'],
+                                                                                                 r['from'])
+        out.append('| %s | %s | `%s` | %s | %s |' % (r['id'], task, r['file'], res, cell(case[:160])))
+    nok = [r['id'] for r in ROWS if r['id'] not in got or not got[r['id']]['ok']]
+    out.append('')
+    out.append('%d rows; %d measured as expected%s.' % (len(ROWS), len(ROWS) - len(nok),
+               ('; not as expected or not measured: ' + ', '.join(nok)) if nok else ''))
+    print('\n'.join(out))
+    return 0
+
+
+if CMD == 'setup':
+    cmd_setup()
+    sys.exit(0)
+if CMD == 'baseline':
+    sys.exit(run_units(BASE_DONE, 'baseline'))
+if CMD == 'run':
+    if not os.path.exists(BASE_DONE) or len(json.load(open(BASE_DONE))) != len(units()):
+        die('run `baseline` to ALL COMMANDS GREEN first')
+    sys.exit(cmd_run(sys.argv[4:]))
+if CMD == 'final':
+    sys.exit(cmd_final())
+if CMD == 'report':
+    sys.exit(cmd_report())
+die('unknown command %r' % CMD)
+````
+
+Extract the rows from this plan, build the copy and prove every test command green in it, one Bash call per line, repeating `baseline` until it prints `ALL COMMANDS GREEN (baseline)`:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-rows.py" docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md "$SCRATCH/w3-rows.json"
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/mutate.py" "$SCRATCH/w3-rows.json" "$SCRATCH/w3-mut" setup
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/mutate.py" "$SCRATCH/w3-rows.json" "$SCRATCH/w3-mut" baseline
+```
+
+Expected: `232 rows in 12 blocks (T1 25, T2 40, T3 19, T4 32, T5 29, T6 31, T7 23, T8 13, T9 14, T10 6, T11 0, T12 0); 232 ids after 0 re-anchor(s)` (Task 11 Step 5's rows, if any, add to T11's count and to the ids, and a row one of its fixes re-anchored is named after `re-anchor(s):`); then `MUT ready at HEAD <12 hex>: 12 files under mutation (0 created by a row), 232 rows, 15 test commands`; then fifteen `GREEN` lines and `ALL COMMANDS GREEN (baseline)`. If the SDD ledger holds rows a per-task review measured red that no rows block carries, write them as a JSON list in the rows' shape to `<SCRATCH>/w3-extra-rows.json`, pass that path as the extractor's third argument, and add `- Extra review rows <ids>: measured red by their task's review, carried in no rows block.` to `w3-notes.md`. A command that is not green unmutated stops the runner: run the same files in the worktree (`( cd server && ./node_modules/.bin/vitest run [-t '<t>'] <files> )`). Green there means the copy differs from the tree: stop and report. Red there too: re-run it alone once, and report it if it stays red. Never run a row against a red baseline. If the extractor stops (a heading count, a missing rows line, an empty block, a foreign id), the plan was edited after it was written: report it, never hand-write `w3-rows.json`.
+
+Then measure, one Bash call per invocation, repeating `run` (exit 3 means rows are left) until it prints `ALL ROWS MEASURED`:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/mutate.py" "$SCRATCH/w3-rows.json" "$SCRATCH/w3-mut" run
+```
+
+Each row prints `== <id> [T<n>] <VERDICT> ok|NOT OK <seconds>s <first red case>` and is appended to `w3-mut.results.jsonl`, so an interrupted invocation loses at most the row in flight. Expected: `ALL ROWS MEASURED: 232 ok, 0 not ok` after about three invocations, every row `RED`. A row that is `NOT OK`:
+- **SKIPPED**: its `old` is not in the file exactly once. Find the guard the row's `red` names in the shipped file. If it is there with another spelling (a fix round changed the code after the row was written, and its task did not re-anchor it), rewrite that row's `old`/`new` in `w3-rows.json` as the SAME mutation of the shipped text, re-measure it alone (`… run <ID>`), and add `- <ID>: re-anchored to the shipped text; same mutation.` to `w3-notes.md`. If the guard is gone, it is a finding.
+- **GREEN** where red was expected: a guard nothing pins. Re-measure it alone once; if it stays green, it is a finding. Closing it is a test change in the owning task's file, and the coordinator orders that round; never weaken or drop the row.
+- **LOAD**, **ERROR** or **TIMEOUT**: re-measure it alone once; if it repeats, it is a finding, with the detail `w3-mut.results.jsonl` holds. It is unmeasured, never red.
+
+Then prove the copy restored and green again, repeating `final` until it prints `ALL COMMANDS GREEN (final)`, prove the worktree untouched, and write the table:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/mutate.py" "$SCRATCH/w3-rows.json" "$SCRATCH/w3-mut" final
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; git status --short; python3 "$SCRATCH/tools/mutate.py" "$SCRATCH/w3-rows.json" "$SCRATCH/w3-mut" report > "$SCRATCH/w3-mutation-table.md"; tail -n 1 "$SCRATCH/w3-mutation-table.md"
+```
+
+Expected: `MUT byte-equal to HEAD for all 12 files under mutation`, fifteen `GREEN` lines, `ALL COMMANDS GREEN (final)`; no status line; `232 rows; 232 measured as expected.`.
+
+**Reporting a finding** (any step). The coordinator rules on it; this worker never fixes it in this task. Send ONE `finding` mail per finding, then wait for the ruling (it arrives as mail; list it as Step 7 does). `<SUBJECT>` names the step and the id (`W3 Task 12: mutation row W3-T6-M12 stays green`, `W3 Task 12: batch F24 red alone`, `main-red: tmp-sweep.test.ts red at the W3 base`, `W3 Task 12: invariant sd-shape FAIL`), and `<BODY>` quotes the printed line and the file that holds the detail:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; API="$HOME/.local/bin/ccrc-api"
+who=$("$API" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
+id=${who#*\"id\":\"};     id=${id%%\"*}
+uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}
+[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
+python3 - "$id" "$uuid" "$(cat "$SCRATCH/w3-run")" '<SUBJECT>' '<BODY>' <<'PY' | "$API" mail send --json -
+import json, sys
+i, u, run, subject, body = sys.argv[1:6]
+print(json.dumps({'fromId': i, 'fromUuid': u, 'toId': 'coordinator', 'runId': int(run), 'kind': 'finding',
+                  'subject': subject, 'body': body, 'artifacts': []}))
+PY
+```
+
+Expected: a JSON answer with `"ok":true`. A `stale-uuid` means the identity was cached; re-run the whole block. When the coordinator rules that a red is to be RECORDED as it stands (a `main-red`, or a red it accepts), Step 4 runs `w3-results.py` with `--record-reds` and the ruling is quoted in `w3-notes.md` as `- Coordinator ruling (mail <n>, <date>) on <finding>: <the ruling, verbatim>.`.
+
+- [ ] **Step 4: The results record and its pins.** Write the section writer to `<SCRATCH>/tools/w3-results.py`:
+
+````python
+#!/usr/bin/env python3
+"""Write `## Wave 3 results` at the end of the plan (the plan's Task 12, Step 4). Scratch only: never committed.
+
+  python3 w3-results.py SCRATCH BASE BLOCK [--record-reds] [--review RECORD]
+
+Run from the worktree root, after Steps 1-3. It reads only what those steps wrote into SCRATCH (the w3-suite-01..10
+logs, every w3-suite-F<nn> batch log and w3-full-split.txt, each with any .rerun.log; w3-invariants.txt;
+w3-mut.manifest.json and w3-mutation-table.md; w3-notes.md when it exists), the plan's own `## Deviations found`,
+and Task 11's review record (RECORD, by default the SDD ledger's task-11-review.md): its last `Findings:` line and
+every row it ruled CARRIED. It refuses (exit 2, plan untouched) when the plan is untracked or has uncommitted
+edits, the mutation table was measured at another HEAD, a suite's LAST run is not rc 0, a split file's pieces did
+not run every test exactly once, an invariant is not PASS, or the mutation table's last line does not say every
+row measured as expected, unless --record-reds is given, which is used ONLY when the coordinator has ruled that the
+reds be recorded as they stand. A section already present is replaced (it is the plan's last `## `
+section by construction); nothing above it is touched. The `suite:` word the wave-done carries is the wave's FIRST
+full run (worker skill clause 15: red stays red whatever a fix round does): `green` when every batch's first run
+was rc 0, else `red`. It is recorded in FIRST, in the SDD ledger, the first time this script reads a complete full
+run (before any refusal), and never rewritten: a fix round's re-run reports its own run beside it.
+"""
+import datetime, json, os, re, subprocess, sys
+
+PLAN = 'docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md'
+RECORD = '.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review.md'
+FIRST = '.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-12-first-full-run.txt'
+HEAD = '## Wave 3 results'
+NAMED = ['%02d' % i for i in range(1, 11)]
+CARRIED = [
+    'The JSON.parse cost of a hostile ok answer (about 230 ms of event loop for a 1 MiB line nested 500 000 deep) '
+    'stays in L3\'s `parseLine`: `docsAnswerShape` (Task 2) keeps it from reaching `refreshDue`, a cache or the '
+    'reply, but bounding the parse itself needs a pre-parse scan in `ccdsource.ts`, outside W3\'s row. DEFERRED to '
+    'a later adapter change.',
+    '`GithubTarget` cannot express `resolveDocRef`\'s `repo` kind. No W3 route consumes either, so it is DEFERRED to '
+    'W5, with its consumer.',
+    'Local mode: a failed boot caps probe leaves `ccdVerbs` null for the process lifetime, so every docs call '
+    'answers `caps-unknown` (auto retry) until a restart. DEFERRED to W5 (the PWA\'s retry backoff) and W7 (README).',
+    'W7 prose: two test comments (`coord-store.test.ts`, `run-routes.test.ts`) still say no `app.setErrorHandler` '
+    'exists in `server/src`; after W3 one does, plugin-scoped (`hooks.ts`). CLAUDE.md\'s known-load-flakes bullet '
+    'gains `docs-console-latency`. DEFERRED to W7 (refinement (u): no README or CLAUDE.md edit here).',
+    'SEC-3 (a killed helper orphans git\'s process group; the lane holds a slot until the runner budget and never '
+    'kills), SEC-4 (fetch stamps accumulate, one per branch name) and the missing stamp after a failed post-fetch '
+    '`for-each-ref`: CARRIED to W5 and ccd, not fixed.',
+    '`branch: null` means detached OR unmeasured; the partial-clone word pair (`git-failed {step:\'cat-file\'}` on '
+    'git 2.43, `unknown-commit` on 2.55); `too-many-entries` read by `count`: each CARRIED verbatim by every route, '
+    'never mapped or defaulted.',
+    'The generation map (`docsGenerations`, `lane.ts`) gains one entry per (node, project) ever refreshed and one per '
+    'node, and nothing bounds how many project names there are (the grammar bounds a name\'s length only). The '
+    'growth is one short key and one number per new name, each a session-gated POST; an entry cannot be dropped '
+    'safely, since a counter reset to 0 lets a request join a flight keyed on the old value. CARRIED as accepted.',
+    '`policy.ts`\'s `lowerAscii` twins `shared/docs.ts`\'s module-private ASCII lowering, because W3 must not '
+    'edit `shared/`; Task 2\'s parity describe pins both homes to `DOCS_RASTER_EXT`. CARRIED to W7\'s residue.',
+    'The adapter\'s second redaction pass rewrites values, not key names (review 317). W3 sends every failure body '
+    'as the adapter returns it and builds none from ccd\'s keys; the fix is L3\'s `redactBody`, outside W3\'s row, and '
+    'the path is latent (no W1 ccd verb writes untrusted text into a key). CARRIED to a later adapter change.',
+]
+POST_MERGE = [
+    'The merge becomes a prerelease (`release-main.yml`), the `dev` channel.',
+    'The dark rollout moves BOTH boxes, fleet first, through ccrc\'s own update mechanism (spec section 7.7: boxes '
+    'move only through `ccrc rollout`; never a hand copy). The Docs API is then live and session-gated, with no UI '
+    'door.',
+    'R2, fetch authentication through the agent\'s environment (operator; spec section 7.8). Group the fleet\'s '
+    'projects by the shape of `remote.origin.url`, read-only (https with a credential helper, ssh, a '
+    '`url.insteadOf` rewrite, other). For one project per class, from the ccrc origin\'s devtools console (same '
+    'origin, so the cookie and `Origin` are right), POST `/api/docs/<project>/refresh` with `content-type: '
+    'application/json`, the marker header and the body `{ref: null, reason: \'manual\'}`. PASS: every class '
+    'answers `fetch.state === \'ran\'`. FAIL (`fetch-auth-failed` or `fetch-transport`): contingency '
+    '`docs-fetch-keeplist` fires, widening the fetch environment\'s keep-list for that class, then R2 is '
+    're-measured.',
+    'R1, head-of-line blocking on the shared socket (operator; spec sections 6.9 and 7.8). On the fleet box, '
+    '`git init` a scratch project under ccd\'s projects root and commit 20 distinct files of exactly '
+    '`DOCS_MAX_DOC_BYTES` of incompressible text as `docs/superpowers/specs/p<n>.md`. Sample `GET '
+    '/api/sessions/<id>/pane/history` of a live session every 200 ms: 30 s idle, then 30 s while a loop fetches the '
+    '20 files through the file route with the marker header, 4 at a time. Remove the scratch project. PASS: p95 '
+    'under load minus p95 idle is at most 250 ms. FAIL: contingency `docs-chunked-reads` fires: a `docs-show-range` '
+    'run (W3b) becomes a precondition of W5\'s merge, and R1 is re-measured once it lands.',
+    'Both R2 and R1 gate W5\'s MERGE, never this wave\'s; W5 merges only with both recorded as passing in its plan.',
+]
+
+
+def die(msg):
+    print('w3-results.py: ' + msg, file=sys.stderr)
+    sys.exit(2)
+
+
+def git(*a):
+    return subprocess.run(['git'] + list(a), capture_output=True, text=True, check=True).stdout.strip()
+
+
+def summary(path):
+    text = open(path, encoding='utf-8').read()
+    lines = text.splitlines()
+    cmd = lines[0][2:] if lines and lines[0].startswith('$ ') else '?'
+    rc = int(re.findall(r'^rc=(\d+)$', text, re.M)[-1])
+    secs = re.findall(r'^seconds=(\d+)$', text, re.M)
+    pick = lambda label: next((re.sub(r'\s+', ' ', l.strip())[len(label):].strip()
+                               for l in reversed(lines) if l.strip().startswith(label + ' ')), '-')
+    fails = [l.strip()[len('FAIL'):].strip() for l in lines if re.match(r'^\s*FAIL\s', l)]
+    return cmd, pick('Test Files'), pick('Tests'), rc, fails, (secs[-1] if secs else '?')
+
+
+args = [a for a in sys.argv[1:]]
+record = '--record-reds' in args
+if record:
+    args.remove('--record-reds')
+if '--review' in args:
+    i = args.index('--review')
+    RECORD = args[i + 1]
+    del args[i:i + 2]
+if len(args) != 3 or not re.fullmatch(r'\d+-\d+', args[2]):
+    die(__doc__)
+S, BASE, BLOCK = args
+if not os.path.isfile(PLAN):
+    die('no %s: run me from the worktree root' % PLAN)
+if subprocess.run(['git', 'ls-files', '--error-unmatch', PLAN], capture_output=True).returncode != 0:
+    die('%s is not tracked: this is not the wave\'s plan' % PLAN)
+if subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--', PLAN]).returncode != 0:
+    die('%s has uncommitted edits; this script must be the only writer' % PLAN)
+
+reds, rows, full_rows, first_red = [], [], [], []
+esc = lambda s: s.replace('|', '\\|')
+
+
+def one(sid, path):
+    cmd, files, tests, rc, fails, secs = summary(path)
+    cell, final_rc = '%d' % rc, rc
+    rerun = path[:-len('.log')] + '.rerun.log'
+    if os.path.exists(rerun):
+        _c, files, tests, final_rc, fails2, _s = summary(rerun)
+        cell = '%d; re-run alone: %d' % (rc, final_rc)
+        fails = fails2 if final_rc else fails
+    if final_rc != 0:
+        reds.append('suite %s' % sid)
+    out = ['| %s | `%s` | %s | %s | %s | %s |' % (sid, esc(cmd), esc(files), esc(tests), secs, cell)]
+    out += ['|  | FAIL: %s |  |  |  |  |' % esc(f)[:200] for f in (fails if final_rc else [])]
+    return out, rc
+
+
+for i in NAMED:
+    found = sorted(f for f in os.listdir(S) if re.match(r'^w3-suite-%s-[a-z0-9-]+\.log$' % i, f))
+    if len(found) != 1:
+        die('expected one w3-suite-%s-*.log in %s, found %r: run that suite first' % (i, S, found))
+    rows += one(i, os.path.join(S, found[0]))[0]
+split_path = os.path.join(S, 'w3-full-split.txt')
+if not os.path.exists(split_path):
+    die('no w3-full-split.txt: `w3-suites.py --full` has not run every batch')
+split = open(split_path, encoding='utf-8').read().rstrip('\n').splitlines()
+want = int(re.fullmatch(r'FULL (\d+) batches', split[0]).group(1))
+batch_logs = sorted(f for f in os.listdir(S) if re.match(r'^w3-suite-F\d\d-[a-z0-9-]+\.log$', f))
+if len(batch_logs) != want:
+    die('%d full-suite batch logs, and the suite has %d batches: run `--full` again' % (len(batch_logs), want))
+for f in batch_logs:
+    lines, rc = one(f.split('-')[2], os.path.join(S, f))
+    full_rows += lines
+    if rc != 0:
+        first_red.append(f.split('-')[2])
+reds += ['split: ' + l for l in split[1:] if not l.startswith('OK ')]
+suite_word = 'red' if first_red else 'green'
+when = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+if not os.path.exists(FIRST):
+    os.makedirs(os.path.dirname(FIRST), exist_ok=True)
+    open(FIRST, 'w', encoding='utf-8').write('%s %s %s\n' % (suite_word, git('rev-parse', 'HEAD'), when))
+first_word, first_tip = open(FIRST, encoding='utf-8').read().split()[:2]
+
+inv = open(os.path.join(S, 'w3-invariants.txt'), encoding='utf-8').read().rstrip('\n')
+reds += ['invariant: ' + l for l in inv.splitlines() if l.startswith('FAIL ')]
+if not re.search(r'^\d+ invariants, \d+ PASS$', inv, re.M):
+    die('w3-invariants.txt has no summary line: run Step 2 again')
+mut_head = json.load(open(os.path.join(S, 'w3-mut.manifest.json'), encoding='utf-8'))['head']
+if mut_head != git('rev-parse', 'HEAD'):
+    die('the mutation table was measured at %s and HEAD is %s: run Step 3 again' % (mut_head[:12],
+                                                                                git('rev-parse', 'HEAD')[:12]))
+table = open(os.path.join(S, 'w3-mutation-table.md'), encoding='utf-8').read().rstrip('\n')
+m = re.match(r'^(\d+) rows; (\d+) measured as expected', table.splitlines()[-1])
+if not m:
+    die('w3-mutation-table.md does not end with the runner\'s count line: run Step 3\'s report again')
+if m.group(1) != m.group(2):
+    reds.append('mutation table: ' + table.splitlines()[-1])
+if not os.path.exists(RECORD):
+    die('no Task 11 review record at %s: Task 11 closes before Task 12' % RECORD)
+rec = open(RECORD, encoding='utf-8').read().splitlines()
+findings = [l for l in rec if l.startswith('Findings: ')]
+if not findings:
+    die('the Task 11 record has no `Findings:` line: Task 11 Step 6 closes the record first')
+carried_t11 = []
+for l in rec:
+    cells = [c.strip() for c in re.split(r'(?<!\\)\|', l)[1:-1]] if l.startswith('| ') else []
+    if len(cells) == 8 and cells[5].startswith('CARRIED'):
+        carried_t11.append('Task 11 review %s (%s): %s. %s' % (cells[0], cells[2], cells[3].rstrip('.'), cells[5]))
+if reds and not record:
+    die('not all green, so nothing is written; report these to the coordinator:\n  ' + '\n  '.join(reds))
+
+plan = open(PLAN, encoding='utf-8').read()
+spent = re.findall(r'^- \*\*D-(\d+) \(\d{4}-\d{2}-\d{2}\)\*\* ', plan, re.M)
+notes_path = os.path.join(S, 'w3-notes.md')
+notes = open(notes_path, encoding='utf-8').read().strip() if os.path.exists(notes_path) else ''
+tip = git('rev-parse', '--short=12', 'HEAD')
+base = git('rev-parse', '--short=12', BASE)
+n = len(git('rev-list', '--first-parent', '--no-merges', '%s..HEAD' % BASE).split())
+out = [HEAD, '',
+       'Measured %s on the tree at `%s` (base `%s`, %d W3 commits on the first-parent line). Every number below '
+       'was printed by a Task 12 command; none is a forecast. The commit that adds this section changes only this '
+       'file, and it is the wave-done `handoffCommit`.' % (when, tip, base, n), '',
+       'Deviation numbers spent (issued block %s): %s.' % (BLOCK, ', '.join('D-' + x for x in spent) or 'none'), '',
+       '### Suites', '',
+       'The every-wave, W3 and existing suites (spec section 7.9), run in the foreground:', '',
+       '| # | Command | Test Files | Tests | s | rc |', '|---|---|---|---|---|---|'] + rows + [
+       '', 'The full server suite, in %d batches that hold every file vitest\'s include reaches exactly once '
+       '(files one call cannot hold run as `-t` pieces of their top-level describes). This run\'s first pass: %s%s. '
+       'First full run of this wave: **%s** (at `%s`).'
+       % (want, suite_word, (' (red on the first run: %s)' % ', '.join(first_red)) if first_red else '',
+          first_word, first_tip[:12]), '',
+       '| # | Command | Test Files | Tests | s | rc |', '|---|---|---|---|---|---|'] + full_rows + [
+       '', '```text'] + split + ['```', '',
+       '### Invariants', '',
+       'From `w3-invariants.py` (scope from W3\'s own commits; net shapes against the base, or the last merge of '
+       'main):', '', '```text', inv, '```', '',
+       '### Mutation table', '',
+       'Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored id counts once, at its last '
+       'occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `%s`, one row at a time, each file '
+       'restored byte for byte after its row.' % tip, '',
+       table, '',
+       '### Notes', '',
+       '- Task 11: ' + findings[-1]] + (notes.splitlines() if notes else [
+       '- No suite needed a re-run, and no row was re-anchored or reported.']) + [
+       '', '### Carried, not fixed', ''] + ['- ' + c for c in CARRIED + carried_t11] + [
+       '', '### Post-merge acts, not this wave\'s', ''] + ['%d. %s' % (i + 1, p) for i, p in enumerate(POST_MERGE)] + ['']
+section = '\n'.join(out)
+at = plan.find('\n' + HEAD + '\n')
+if at >= 0:
+    if re.search(r'^## ', plan[at + len(HEAD) + 2:], re.M):
+        die('%s is not the plan\'s last ## section; stop and report' % HEAD)
+    plan = plan[:at + 1]
+elif not plan.endswith('\n'):
+    plan += '\n'
+open(PLAN, 'w', encoding='utf-8').write(plan + ('' if plan.endswith('\n\n') else '\n') + section)
+print('wrote %s (%d lines) to %s%s' % (HEAD, section.count('\n'), PLAN,
+                                       '; WITH REDS, on the coordinator\'s ruling' if reds else ''))
+print('suite: %s (the wave\'s first full run, at %s)' % (first_word, first_tip[:12]))
+````
+
+Then, one Bash call per line:
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-results.py" "$SCRATCH" "$(cat "$SCRATCH/w3-base")" "$(cat "$SCRATCH/w3-block")"
+git status --short; git diff --stat
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; python3 "$SCRATCH/tools/w3-suites.py" "$SCRATCH" 11
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; E=.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-12-evidence; rm -rf "$E" && mkdir -p "$E" && cp "$SCRATCH"/w3-suite-* "$SCRATCH/w3-full-split.txt" "$SCRATCH/w3-invariants.txt" "$SCRATCH/w3-rows.json" "$SCRATCH/w3-mut.results.jsonl" "$SCRATCH/w3-mutation-table.md" "$E"/ && { [ ! -f "$SCRATCH/w3-notes.md" ] || cp "$SCRATCH/w3-notes.md" "$E"/; } && ls "$E" | wc -l && git status --short
+```
+
+Expected: `wrote ## Wave 3 results (<n> lines) to docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md` (about 390 lines: the mutation table is 232 of them, the full-suite table 53) and `suite: green (the wave's first full run, at <12 hex>)`; then ` M docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md` alone and its `1 file changed` stat; then `11 plan-pins-after` (`topology-clean`, `deviation-refs`, `dtbd`, re-run because the plan changed): `Test Files 3 passed (3)`, `Tests 87 passed (87)`, `rc=0` (the section names no real host, project, user or account; it DEFINES no `D-N`, since the spent numbers are restated as `Deviation numbers spent (issued block …): D-…`, which is not a definition line; and it carries no concrete `D-TBD-` placeholder); then the evidence count (each suite's log, each piece's `.json`, every `.rerun.log`, and the five files) and the same single status line. If `w3-results.py` refuses with its `not all green` list, every item on it is a finding still open: report it (Step 3's last paragraph) and stop. If it refuses with `the mutation table was measured at …`, HEAD moved after Step 3: run Step 3 again from `setup`. Then read the section once, top to bottom, with `sed -n '/^## Wave 3 results$/,$p' docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md`: every number in it was printed by a command above, and nothing in it is a forecast.
+
+- [ ] **Step 5: Commit the results.** In its own Bash call, only after the `11 plan-pins-after` line read `rc=0` and the section was read:
+
+```bash
+git add docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md
+git commit -m "docs: W3 results (docs W3)" \
+  -m "Task 12's measured record: the every-wave, W3 and existing suites with their counts; the full server suite in 53 batches (six files as -t pieces of their top-level describes, each proved to run every test exactly once) and the wave's first full-run verdict; thirteen census-free invariants (W3's own commits touch exactly the scope list; no ccd/, shared/, pwa/, agent/, index.ts, ports.ts, ccdsource.ts, lifecycle.ts, ccdargv.ts, runner.ts, README.md or CLAUDE.md change; server/src/docs holds exactly its seven files; the exec surface, FLEET_PROTO, the docs-v1 literal and the builder call site as the plan states; no CCD_ARGV, req.log or box-token text in the docs files; gate.ts changed by its line-8 numeral and single-definition.test.ts by one in-place line and one EOF append, net; the deviation section holds exactly the issued numbers it spent); session-hook's citation census unmoved; and the 232-id mutation table run at the wave's end state in a git-archive copy, every row restored byte for byte. Post-merge acts (the dark rollout fleet first, then R2 and R1, which gate W5's merge) are documented, not run." \
+  -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git log -1 --format='%H %s'; git status --short
+```
+
+Expected: the new sha and `docs: W3 results (docs W3)`; no status line. This commit is the `handoffCommit` and the branch tip: nothing is committed after it in this task.
+
+- [ ] **Step 6: Push the workspace branch and open the wave's ONE pull request.** Write the body writer to `<SCRATCH>/tools/w3-pr-body.py`:
+
+````python
+#!/usr/bin/env python3
+"""Write the W3 pull request's body (the plan's Task 12, Step 6). Scratch only: never committed.
+
+  python3 w3-pr-body.py SCRATCH BLOCK OUT
+
+Run from the worktree root AFTER the results commit. It reads the plan as committed at HEAD (its Task headings,
+`## Deviations found` and `## Wave 3 results`), and builds every link from `git remote get-url origin`, so the body
+names only GitHub URLs: the plan's blob on main (the plan merged before dispatch; this PR adds its last sections)
+and the spec's. No tailnet docs link, no scratch path, no box name. The body ends with the attribution line.
+"""
+import re, subprocess, sys
+
+if len(sys.argv) != 4 or not re.fullmatch(r'\d+-\d+', sys.argv[2]):
+    sys.exit(__doc__)
+SCRATCH, BLOCK, OUT = sys.argv[1:4]
+PLAN = 'docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md'
+SPEC = 'docs/superpowers/specs/2026-10-01-native-docs-reader-design.md'
+ATTRIBUTION = chr(0x1F916) + ' Generated with [Claude Code](https://claude.com/claude-code)'
+
+
+def git(*a):
+    return subprocess.run(['git'] + list(a), capture_output=True, text=True, check=True).stdout
+
+
+url = git('remote', 'get-url', 'origin').strip()
+m = re.fullmatch(r'(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([\w.-]+)/([\w.-]+?)(?:\.git)?/?',
+                 url)
+if not m:
+    sys.exit('w3-pr-body.py: origin is not a GitHub remote (%s); stop and report' % url)
+repo = 'https://github.com/%s/%s' % (m.group(1), m.group(2))
+plan = git('show', 'HEAD:' + PLAN)
+tasks = re.findall(r'^### Task (\d+): (.+)$', plan, re.M)
+if [int(n) for n, _t in tasks] != list(range(1, 13)):
+    sys.exit('w3-pr-body.py: the plan at HEAD has Task headings %r; stop and report' % [n for n, _t in tasks])
+at = plan.find('\n## Wave 3 results\n')
+if at < 0:
+    sys.exit('w3-pr-body.py: the plan at HEAD has no `## Wave 3 results`: commit Step 4 first')
+results = plan[at:]
+spent = re.findall(r'^- \*\*D-(\d+) \(\d{4}-\d{2}-\d{2}\)\*\* ', plan, re.M)
+first_run = re.search(r'First full run of this wave: \*\*(\w+)\*\*', results).group(1)
+inv = re.search(r'^\d+ invariants, \d+ PASS$', results, re.M).group(0)
+table = re.search(r'^\d+ rows; \d+ measured as expected.*$', results, re.M).group(0)
+carried = re.search(r'^### Carried, not fixed\n\n(.*?)\n\n###', results, re.S | re.M).group(1)
+body = ['Native Docs reader, wave 3 of 7: the Docs API. Four session-gated routes (`GET /api/docs/projects`, '
+        '`GET /api/docs/:project/tree`, `GET /api/docs/:project/file`, `POST /api/docs/:project/refresh`) in one '
+        'encapsulated Fastify plugin registered beside `registerUpdateRoutes`, applying W2\'s L1 verdicts '
+        '(`server/src/docs/policy.ts`) to W2\'s L3 answers through a provenance hook, a response-policy hook, a '
+        'per-node read lane, a fetch lane, single-flight and a bounded committed cache (`server/src/docs/'
+        '{routes,hooks,lane,cache}.ts`). No UI door: the API rolls out dark.', '',
+        '- Plan: %s/blob/main/%s (this PR adds its `## Deviations found` and `## Wave 3 results`)' % (repo, PLAN),
+        '- Spec: %s/blob/main/%s (section 7.7, the W3 row)' % (repo, SPEC), '',
+        '## Tasks', ''] + ['%s. %s' % (n, t) for n, t in tasks] + [
+        '', '## Deviations', '',
+        'Spent from the issued block %s: %s.' % (BLOCK, ', '.join('D-' + n for n in spent) or 'none'), '',
+        '## Measured (see the plan\'s Wave 3 results)', '',
+        '- Full server suite, first run: %s.' % first_run,
+        '- Invariants: %s.' % inv,
+        '- Mutation table: %s' % table, '',
+        '## Carried, not fixed', '', carried, '',
+        '## After the merge, not this PR', '',
+        'The merge becomes a prerelease; the dark rollout moves both boxes, fleet first, through ccrc\'s own update '
+        'mechanism; then the operator runs R2 (fetch authentication per remote class) and R1 (head-of-line blocking '
+        'on the real link). Both gate W5\'s merge, never this one.', '',
+        ATTRIBUTION]
+open(OUT, 'w', encoding='utf-8').write('\n'.join(body) + '\n')
+print('wrote %s: %d lines, %d tasks, %d deviation(s), links under %s' % (OUT, len(body), len(tasks), len(spent),
+                                                                       repo))
+````
+
+Push, in its own Bash call (the branch is this workspace's own `ws/<slug>`, never a feature branch; a pre-push hook refusal is a finding, never `--no-verify`):
+
+```bash
+git push -u origin HEAD 2>&1 | tail -n 3; git ls-remote origin "refs/heads/$(git branch --show-current)"; git rev-parse HEAD
+```
+
+Expected: the push summary, then the remote line naming the same 40-hex sha as `git rev-parse HEAD`.
+
+Then the pull request, one Bash call. On a fix round's re-run the PR already exists and the push above updated it: the block reuses an OPEN one and refuses a merged or closed one.
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; br=$(git branch --show-current)
+python3 "$SCRATCH/tools/w3-pr-body.py" "$SCRATCH" "$(cat "$SCRATCH/w3-block")" "$SCRATCH/w3-pr-body.md" || exit 1
+prs=$(gh pr list --head "$br" --state all --json number,state); echo "prs=$prs"
+if [ "$prs" = '[]' ]; then
+  gh pr create --base main --head "$br" --title 'docs W3: routes (native Docs reader)' --body-file "$SCRATCH/w3-pr-body.md"
+elif ! printf '%s' "$prs" | grep -q '"state":"OPEN"'; then
+  echo 'a merged or closed PR holds this branch: stop and report'; exit 1
+fi
+gh pr view "$br" --json number -q .number | tee "$SCRATCH/w3-pr"
+```
+
+Expected: `wrote <SCRATCH>/w3-pr-body.md: <n> lines, 12 tasks, <k> deviation(s), links under https://github.com/<owner>/<repo>`; `prs=[]` on the first run; the new PR's URL; then its number. Never `gh pr merge`, `gh pr edit` or any update-branch: the merge is the coordinator's, after the review rules clean. CI starts on its own; this task does not wait for it (a worker that sleeps on CI never wakes): the review reads while CI runs.
+
+- [ ] **Step 7: The fingerprint, read fresh, and the mail list.** Write the wave-done builder to `<SCRATCH>/tools/w3-wave-done.py`:
+
+````python
+#!/usr/bin/env python3
+"""Measure the W3 fingerprint ONCE and print the wave-done mail (the plan's Task 12, Steps 7 and 8).
+
+  python3 w3-wave-done.py SCRATCH RUN PR BLOCK FROM_ID FROM_UUID [--dry-run]
+
+Run from the worktree root after the push and the pull request. It measures, fresh and in this order: the tip
+(`git rev-parse HEAD`), that the tip's subject is the results commit's, a clean status, the remote branch
+(`git ls-remote origin refs/heads/<branch>` must name the tip), and the pull request (`gh pr view PR --json
+number,state,headRefOid,baseRefName`: OPEN, its head the tip, its base main). Any mismatch exits 1 and prints
+nothing on stdout, so nothing is sent. Otherwise it prints ONE JSON object for `ccrc-api mail send --json -`: a
+status mail to the coordinator, subject exactly `wave-done`, whose body opens with the `suite:` line (and a
+`failure:` line only when the first full run was red), then the fingerprint {branchTip, prNumber, prPhase:'open',
+handoffCommit}, then the spent deviation numbers, the summary lines and the evidence paths. --dry-run skips the
+remote and pull-request reads (planning only; never for a mail that is sent).
+"""
+import json, os, re, subprocess, sys
+
+PLAN = 'docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md'
+EVIDENCE = '.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-12-evidence'
+SUBJECT = 'docs: W3 results (docs W3)'
+args = sys.argv[1:]
+dry = '--dry-run' in args
+if dry:
+    args.remove('--dry-run')
+if len(args) != 6 or not args[1].isdigit() or not args[2].isdigit() or not re.fullmatch(r'\d+-\d+', args[3]):
+    sys.exit(__doc__)
+SCRATCH, RUN, PR, BLOCK, FROM_ID, FROM_UUID = args
+
+
+def git(*a):
+    return subprocess.run(['git'] + list(a), capture_output=True, text=True, check=True).stdout.strip()
+
+
+def refuse(why):
+    print('w3-wave-done.py: %s; nothing sent' % why, file=sys.stderr)
+    sys.exit(1)
+
+
+tip = git('rev-parse', 'HEAD')
+if git('log', '-1', '--format=%s') != SUBJECT:
+    refuse('the tip is not the results commit')
+if git('status', '--porcelain'):
+    refuse('the worktree is not clean')
+branch = git('branch', '--show-current')
+if not dry:
+    remote = git('ls-remote', 'origin', 'refs/heads/' + branch).split()
+    if not remote or remote[0] != tip:
+        refuse('origin/%s is %s, not the tip %s: push first' % (branch, remote[0] if remote else 'absent', tip))
+    pr = json.loads(subprocess.run(['gh', 'pr', 'view', PR, '--json', 'number,state,headRefOid,baseRefName'],
+                                   capture_output=True, text=True, check=True).stdout)
+    if pr.get('number') != int(PR) or pr.get('state') != 'OPEN' or pr.get('headRefOid') != tip \
+            or pr.get('baseRefName') != 'main':
+        refuse('pull request %s reads %r' % (PR, pr))
+results = git('show', 'HEAD:' + PLAN)
+results = results[results.find('\n## Wave 3 results\n'):]
+first = re.search(r'First full run of this wave: \*\*(green|red)\*\*', results)
+if first is None:
+    refuse('the results section names no first full run')
+spent = re.findall(r'^- \*\*D-(\d+) \(\d{4}-\d{2}-\d{2}\)\*\* ', git('show', 'HEAD:' + PLAN), re.M)
+table = re.search(r'^\d+ rows; \d+ measured as expected.*$', results, re.M).group(0)
+inv = re.search(r'^\d+ invariants, \d+ PASS$', results, re.M).group(0)
+ev = os.path.abspath(EVIDENCE)
+fp = json.dumps({'branchTip': tip, 'prNumber': int(PR), 'prPhase': 'open', 'handoffCommit': tip},
+                separators=(',', ':'))
+signal = ['suite: %s' % first.group(1)] + (['failure: unclear'] if first.group(1) == 'red' else [])
+body = '\n'.join(signal + [
+    fp,
+    'W3 (routes), Tasks 1-12 done on this workspace branch; PR #%s open against main, CI running.' % PR,
+    'Results: %s, section Wave 3 results.' % PLAN,
+    'Deviations spent from %s: %s.' % (BLOCK, ', '.join('D-' + n for n in spent) or 'none'),
+    'Mutation table: ' + table,
+    'Invariants: ' + inv,
+    'Carried and post-merge acts (dark rollout fleet first, then R2 and R1 gating W5): the results section.',
+    'Evidence (logs, rows, results): ' + ev,
+])
+print(json.dumps({'fromId': FROM_ID, 'fromUuid': FROM_UUID, 'toId': 'coordinator', 'runId': int(RUN),
+                  'kind': 'status', 'subject': 'wave-done', 'body': body,
+                  'artifacts': [os.path.join(ev, 'w3-mutation-table.md'), os.path.join(ev, 'w3-invariants.txt')]}))
+````
+
+First list mail, so nothing the coordinator sent while the suites ran sits unread under a wave-done (a hold once sat three hours that way). One Bash call:
+
+```bash
+API="$HOME/.local/bin/ccrc-api"
+who=$("$API" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
+id=${who#*\"id\":\"}; id=${id%%\"*}
+[[ -n "$id" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
+"$API" mail list --to "$id"
+```
+
+For every row not yet acked, read and ack it BEFORE acting on it, one Bash call per row, with `D` set to the row's `deliveryId` (never the row's own `id`, which is a different sequence):
+
+```bash
+API="$HOME/.local/bin/ccrc-api"; D=<the row's deliveryId>
+who=$("$API" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
+id=${who#*\"id\":\"};     id=${id%%\"*}
+uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}
+[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
+"$API" mail fetch "$D"
+printf '{"fromId":"%s","fromUuid":"%s"}' "$id" "$uuid" | "$API" mail ack "$D" --json -
+```
+
+A mail that changes the wave (a hold, a ruling, a fix-round order) is obeyed first, and this task resumes at the step it names.
+
+- [ ] **Step 8: Send the wave-done, ONCE, and copy the last evidence.** The fingerprint is measured and sent in ONE Bash call, after the push and the pull request: `w3-wave-done.py` reads the tip, the remote branch and the PR fresh and prints nothing unless all four fields agree (`branchTip` = `handoffCommit` = the results commit = `origin/<branch>` = the PR's `headRefOid`; the PR `OPEN` against `main`; `prPhase` `open`):
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; API="$HOME/.local/bin/ccrc-api"
+who=$("$API" whoami) || { printf 'identity refused: %s\n' "$who" >&2; exit 1; }
+id=${who#*\"id\":\"};     id=${id%%\"*}
+uuid=${who#*\"uuid\":\"}; uuid=${uuid%%\"*}
+[[ -n "$id" && -n "$uuid" ]] || { printf 'identity unreadable: %s\n' "$who" >&2; exit 1; }
+python3 "$SCRATCH/tools/w3-wave-done.py" "$SCRATCH" "$(cat "$SCRATCH/w3-run")" "$(cat "$SCRATCH/w3-pr")" "$(cat "$SCRATCH/w3-block")" "$id" "$uuid" > "$SCRATCH/w3-wave-done.json" || exit 1
+python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['body'])" "$SCRATCH/w3-wave-done.json" | head -n 3
+"$API" mail send --json - < "$SCRATCH/w3-wave-done.json"
+```
+
+Expected: the body's first lines, `suite: green` (or `suite: red` and `failure: unclear` when the wave's first full run was red, a load flake's included) and `{"branchTip":"<40 hex>","prNumber":<n>,"prPhase":"open","handoffCommit":"<the same 40 hex>"}`; then a JSON answer with `"ok":true`. A refusal from the builder (`the tip is not the results commit`, `push first`, `pull request … reads …`) sends nothing: fix the cause and run this step again. A `stale-uuid` means the identity was cached; re-run the whole block.
+
+Then, one Bash call, copy what the mail named into the evidence directory (gitignored, so the status stays clean):
+
+```bash
+SCRATCH="$HOME/.cc-tmp/docs-w3-t12"; E=.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-12-evidence; cp "$SCRATCH/w3-pr-body.md" "$SCRATCH/w3-wave-done.json" "$SCRATCH/w3-pr" "$E"/ && git status --short && git rev-parse HEAD
+```
+
+Expected: no status line, and the tip the fingerprint named. Then stop: no commit and no push after `wave-done` (worker skill clause 9). The review run reads this tip; a fix round, if the coordinator orders one, arrives as mail and re-runs this task from Step 0 after its own commits (the wave's first full-run verdict stays recorded, and the new run is reported beside it).
+
+No commit in this task but Step 5's: everything else it writes is scratch or gitignored evidence.
+
+**Mutation rows this task contributes** (none: Task 12 adds no guard; it runs Tasks 1-11's 232 rows at the wave's end state and records what they measured):
+
+```json
+[]
+```
