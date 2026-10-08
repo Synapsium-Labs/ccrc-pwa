@@ -810,6 +810,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   newline fail-open is an arming blocker; the kept-leaf silence is a follow-up. Findings for wave 6's own fix round went
   to calm-mesa as mail 3961: `_ws_path_users` unfixed at the tip, a new wrong-target site in `_ws_leaf_remove`, a
   new-word skew loop, a never-terminal tail retry. Its answer on the shared helper is pending.
+- **2026-10-08 01:44 — calm-mesa answered 3961 (mail 3963).** Wave 6's fix round takes all three newline sites through one helper
+  (4458), our function included on our consent. It adds `clipsKept`/`tmpRootKept` to the done document (4462). It mints
+  no new word. The sweep under Carried constraints is updated, and the next wave owns the kept-leaf reader.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -864,6 +867,11 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   review's word, and `_ws_leaf_remove`'s root, a new site that can remove the wrong target. Both went to calm-mesa (mail
   3961) with one question: does wave 6's fix round apply one shared sentinel helper at all three sites (this programme
   consents to that one change to the body), or does lifecycle take its own after #326?
+  - **Answered 2026-10-08 01:44 (mail 3963): wave 6 takes all three** through one helper on `_ws_reclaim_resolve`'s sentinel
+    idiom, refusing a newline-bearing physical path as unmeasured. In `_ws_expire_cwd_users` only the parent's
+    resolution changes, landing on its existing `_ws_reclaim_unmeasured` arm, red-first, one case per site. CCR-15
+    defines it as 4458, naming the three sites and this programme's consent. **The blocker clears when #326 merges
+    with it**; check the merged lines before arming.
 - **Carried (a follow-up, not a blocker): a kept leaf is silent.** When ccd's shared tail keeps clips or the temp
   root, `ws-expire` still prints `expired`. The server records "cleaned up" and raises no attention entry. The keep
   lives only in the journal row's `detail`, which no PWA surface renders. CCR-15 is asked for additive
@@ -871,6 +879,13 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   programme's next wave. Also on the CCR-15 side: if F1 mints a new nested word, `ExpireToken` gains it in the same PR,
   or it reuses `containment-unproven`. Otherwise the audit reads `unreadable` and re-audits every pass through the
   rollout skew. And the tail's moved-tree arm retries hourly forever, never terminal.
+  - **Answered 2026-10-08 01:44 (mail 3963).** The done document gains `clipsKept` and `tmpRootKept` (CCR-15's 4462, in wave 6's
+    fix round), each the kept word (`refused`/`unmeasured`/`in-use`) or null. An older ccd omits both, so absence
+    reads as unmeasured. `parseExpireResult` reads named keys only, so agent-first stays safe. **The reader and its
+    attention entry are this programme's next wave.** No new word: rows in a leaf refuse `containment-unproven`
+    (4455), which `ExpireToken` already holds as terminal. The never-terminal tail retry stays as written (fail-closed).
+    The expiry lane's answer to a repeating resumable failure is this programme's. A shared terminal word is raised at
+    CCR-15 wave 7's pre-flight, beside its carried "persistent per-child failures that retry for ever".
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`, `~/.cc-limits`
   or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec whitelist; never print
   secret contents.
@@ -894,8 +909,8 @@ from spec §4 wave 4 and §5.4: the dead-coordinator lane (crash-only, one hour,
 - **The operator's questions before arming** are (b)–(d) in the 06:01 entry. (b), the confirm copy, is still open. On
   10-07 the operator expired 15 archived workspaces by hand, which cuts most of (c), the backlog. (d) is in hand: the
   operator ends brisk-mesa's stray tmux server (see the entry after 06:05).
-- **Arming the expiry lane also waits on** `_ws_expire_cwd_users`' newline fix (Carried constraints; this programme's
-  or wave 6's, per calm-mesa's answer to mail 3961) and on wave 4's own arming blockers. Once #326 lands, the operator
+- **Arming the expiry lane also waits on** `_ws_expire_cwd_users`' newline fix (Carried constraints; wave 6 carries it
+  as 4458, so it clears when #326 merges) and on wave 4's own arming blockers. Once #326 lands, the operator
   should also know two facts. An archived workspace whose branch is already gone now expires, with its work kept in
   the attic, where `main` stops at `pin-failed`. In that case, ignored and secret-shaped files go with the tree.
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
