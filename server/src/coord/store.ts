@@ -5916,9 +5916,9 @@ export class CoordStore {
   }
 
   /** THE JOURNAL CLAUSE'S ONE READ (workspace lifecycle spec 2026-09-24 §5.4, the dead-coordinator lane): for each
-   *  asked claimant, its rows of the acts the clause reads (`DEAD_COORDINATOR_JOURNAL_ACTS`), oldest first by this
-   *  table's own id, and whether the mirror holds ANY row for it — "no history at all" is a fact the clause turns on
-   *  (an absent row with none is unmeasured), and it is not the same fact as "none of the clause's acts". TWO
+   *  asked claimant, its rows of the acts the clause reads (`DEAD_COORDINATOR_JOURNAL_ACTS`), in this table's own id
+   *  order (INGEST order — the clause itself orders them by generation, then this id), and whether the mirror holds
+   *  ANY row for it — "no history at all" is a fact the clause turns on (an absent row with none is unmeasured), and it is not the same fact as "none of the clause's acts". TWO
    *  statements whatever the claimant count, each `INDEXED BY lifecycle_by_session` (`recentProvenance`'s idiom: the
    *  table is never pruned). EVERY asked id gets an entry. A failing read THROWS, and the lane reads that as
    *  `unreadable` — never as no history. */

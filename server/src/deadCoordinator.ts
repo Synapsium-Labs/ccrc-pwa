@@ -69,7 +69,7 @@ export const DEAD_COORDINATOR_DELIBERATE_ACTS: readonly LifecycleAct[] =
 export const DEAD_COORDINATOR_JOURNAL_ACTS: readonly LifecycleAct[] =
   [...DEAD_COORDINATOR_DELIBERATE_ACTS, 'unsupervise', 'spawn', 'unknown'];
 
-/** One mirrored row as the clause reads it (`MirroredLifecycleEvent`, oldest first by the mirror's own id). `raw` is
+/** One mirrored row as the clause reads it (`MirroredLifecycleEvent`; the clause re-sorts by generation, then the mirror's own id). `raw` is
  *  the line verbatim, the mirror's own column; `gen` is the generation it was read from (19 digits, ccd's clock), which
  *  places a recorded gap before or after it. */
 export interface DeadCoordinatorJournalRow {
@@ -161,14 +161,24 @@ function spawnSucceeded(r: DeadCoordinatorJournalRow): boolean {
  *  recorded `rc` 0: `start` and `ensure` are journaled at the TOP of their verbs, before any pane exists, so a revive
  *  that FAILED journals them too — the case the clause exists for (a person stopped it, a later revive failed and
  *  cleared the stop stamp; the row now reads `orphan`). Only `_spawn_settle`'s `spawn` line carries the outcome. With
- *  no such row in the mirror's horizon, every row it holds counts. `rows` is the mirror's answer for the clause's acts,
- *  oldest first; `hasHistory` is whether it holds ANY row for the id, of any act — the store reads the two together;
+ *  no such row in the mirror's horizon, every row it holds counts. `rows` is the mirror's answer for the clause's acts, in
+ *  the mirror's id order (the clause orders them by generation itself); `hasHistory` is whether it holds ANY row for the id, of any act — the store reads the two together;
  *  `trust` is what the lane measured about the journal itself, and a journal that may be missing an act since that
  *  start is `unreadable`, never quiet. */
 export function deadCoordinatorJournal(
-  rows: readonly DeadCoordinatorJournalRow[], hasHistory: boolean, trust: DeadCoordinatorJournalTrust,
+  mirrorRows: readonly DeadCoordinatorJournalRow[], hasHistory: boolean, trust: DeadCoordinatorJournalTrust,
 ): DeadCoordinatorJournal {
   if (trust.untrusted !== null) return { kind: 'unreadable', detail: trust.untrusted };
+  // JOURNAL ORDER, not ingest order. The mirror's id is the order rows were COMMITTED, and a pass whose read of an older
+  // generation failed commits the newer one first (`mirror.ts` drains each present generation in turn and carries on
+  // past a failed read), so by id alone a newer `stop` can precede an older successful spawn and read as a crash. Rows
+  // sort by generation (`compareGenerations`, L0's one reader of that order); within one generation the id order IS the
+  // line order, and the sort is stable. A generation name this reader cannot place is not guessed at.
+  const unplaced = mirrorRows.find((r) => !GEN_DIGITS.test(r.gen));
+  if (unplaced !== undefined) {
+    return { kind: 'unreadable', detail: `a journal row names a generation that cannot be placed ("${unplaced.gen}")` };
+  }
+  const rows = [...mirrorRows].sort((a, b) => compareGenerations(a.gen, b.gen));
   let from = 0;
   let start: DeadCoordinatorJournalRow | null = null;
   for (let i = rows.length - 1; i >= 0; i -= 1) {

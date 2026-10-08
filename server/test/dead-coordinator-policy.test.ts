@@ -66,6 +66,28 @@ describe('the journal clause — one reader, four answers', () => {
       .toEqual({ kind: 'deliberate', act: 'stop', at: NOW });
   });
 
+  it('rows are read in JOURNAL order — (generation, then the mirror id) — not ingest order: a newer generation ingested FIRST still comes after an older one', () => {
+    // A rotation-time read failure lets the mirror commit the newer generation before the older one's tail, so the
+    // mirror ids order [stop(new), spawn-ok(old)]. Read by position, the last start is the old spawn and nothing
+    // deliberate follows it: a stop the operator made would read as a crash.
+    const stopNew = row('stop', { gen: NEWER_GEN, at: NOW + 2 });
+    const spawnOld = { ...spawned(0), gen: OLDER_GEN, at: NOW + 1 };
+    expect(deadCoordinatorJournal([stopNew, spawnOld], true, T), 'ingested out of journal order')
+      .toEqual({ kind: 'deliberate', act: 'stop', at: NOW + 2 });
+    expect(deadCoordinatorJournal([spawnOld, stopNew], true, T), 'the same rows in journal order').toEqual({ kind: 'deliberate', act: 'stop', at: NOW + 2 });
+    // Within one generation the mirror id order IS line order and is kept (the sort is stable).
+    expect(deadCoordinatorJournal([row('stop'), spawned(0)], true, T), 'same generation: position decides').toEqual({ kind: 'quiet', started: true });
+    // A newer generation's successful spawn bounds an older generation's stop, wherever it was ingested.
+    expect(deadCoordinatorJournal([{ ...spawned(0), gen: NEWER_GEN }, row('stop', { gen: OLDER_GEN })], true, T))
+      .toEqual({ kind: 'quiet', started: true });
+  });
+
+  it('a row whose generation name cannot be placed makes the journal UNREADABLE — never a guessed order', () => {
+    for (const gen of ['journal-x.ndjson', '', 'lifecycle.unplaceable.jsonl', '1'.repeat(26)]) {
+      expect(deadCoordinatorJournal([spawned(0), row('hold', { gen })], true, T).kind, gen).toBe('unreadable');
+    }
+  });
+
   it('a REFUSED act did nothing; an act this build cannot name, and an unsupervise whose surface cannot be read, are doubt — never a crash', () => {
     expect(deadCoordinatorJournal([spawned(0), row('stop', { outcome: 'refused' })], true, T)).toEqual({ kind: 'quiet', started: true });
     expect(deadCoordinatorJournal([spawned(0), row('unknown')], true, T).kind).toBe('deliberate');
