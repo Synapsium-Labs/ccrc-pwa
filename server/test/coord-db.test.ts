@@ -1395,12 +1395,14 @@ describe('coord.db: migration 16 — runs.sessionBornAt / runs.sessionBornFor (c
 });
 
 describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1, design 2026-10-05 §8)', () => {
-  /** This entry's slot, found by its DDL, `CREATE TABLE stall_settings` (the first entry that spells it), and never
+  /** This entry's slot, found by its DDL, `CREATE TABLE stall_settings (` (the first entry that spells it), and never
    *  hard-coded (the stall mail indexes' rule above): whichever of two branches holding one slot merges second moves
    *  up, and that renumber must not have to edit a line here. The bare name would not do: a later migration may name
-   *  the table without creating it. */
-  const CREATE = 'CREATE TABLE stall_settings';
-  const SLOT = MIGRATIONS.findIndex((m) => m.includes(CREATE)) + 1;
+   *  the table without creating it. The needle stops at the NAME, not at a prefix of it: `_` is a word character, so
+   *  the lookahead names it, and `CREATE TABLE stall_settings_new` (SQLite's table-rebuild idiom, a legitimate later
+   *  migration) is not a second create of this table. */
+  const CREATE = /CREATE TABLE stall_settings(?![A-Za-z0-9_])/;
+  const SLOT = MIGRATIONS.findIndex((m) => CREATE.test(m)) + 1;
   const NAMES = ['run_events_by_at', 'stall_settings'];
   const objectNames = (db: DatabaseSync): string[] =>
     (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'").all() as
@@ -1427,7 +1429,7 @@ describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1
     expect(SLOT, 'no MIGRATIONS entry creates stall_settings').toBeGreaterThanOrEqual(17);
     // Exactly one entry CREATEs the table. A later legitimate migration may name it (an ALTER, an index), and that is
     // no fault; only a second CREATE is, so the count is of the DDL and not of the name.
-    expect(MIGRATIONS.filter((m) => m.includes(CREATE)).length,
+    expect(MIGRATIONS.filter((m) => CREATE.test(m)).length,
       'more than one MIGRATIONS entry carries CREATE TABLE stall_settings: a later migration may name the table (an ALTER is fine), but only one entry may create it').toBe(1);
     // SLOT is found by the DDL, so this scan is meaningful: a name amended into a frozen entry reds here.
     expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => m.includes('stall_settings')),
