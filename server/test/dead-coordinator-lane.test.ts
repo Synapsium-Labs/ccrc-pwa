@@ -313,6 +313,27 @@ describe('the act’s own re-measure', () => {
     expect(f.anchorOf(A), 'evidence it came back: the anchor goes').toBeNull();
   });
 
+  it('the act re-measures at ITS OWN instant: a heartbeat stamped after the pass measured is a restarting coordinator — nothing ends (review 339, F1)', async () => {
+    let beat = false;
+    const f: Fixture = await fixture({ beforeAct: () => {
+      if (!beat) return;
+      // The pass measured A crashed at its own instant. Three seconds later, inside the serialiser and before the act's
+      // first re-measure, A's supervisor beats: a stamp AFTER the pass's instant and not after the act's.
+      f.advance(3000);
+      writeFileSync(path.join(f.reg, `${A}.supervised`), String(Math.floor(Date.now() / 1000)));
+    } });
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A);
+    await f.pass(); await walk(f, HOUR - 60_000);
+    beat = true;
+    f.next(); await f.pass();
+    expect(f.acts(), 'the act was asked').toBe(1);
+    expect(f.stateOf(r), 'restarting is no crash: the run stays open').toBe('working');
+    expect(f.calls, 'nothing composed on the box').toEqual([]);
+    expect(f.anchorOf(A), 're-measured restarting — evidence: the anchor goes').toBeNull();
+  });
+
   it('an act that THROWS after closing a programme keeps that programme’s feed row, and the attention entry says what closed', async () => {
     const f = await fixture({ abandonThrowsAt: 2 });
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
