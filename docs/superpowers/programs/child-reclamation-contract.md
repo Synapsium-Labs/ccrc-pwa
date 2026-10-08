@@ -1756,3 +1756,60 @@ This note amends; it edits no earlier text.
       `ws-audit --reclaim` over a standing breadcrumb with an unreadable tombstone exits 1, the server reads it
       `unreadable`, and the executor reads not resumable, so the feed's "retried from the start" is wrong there on
       every attempt while the tombstone stays unreadable. A wrong sentence, never a wrong act.
+
+## 13. Rulings, 2026-10-06 (wave 5's fix round 1) — binding; they AMEND sections 1–12
+
+- **R60 — `child-birth-unplaced` is a doubt word (fix round 1's F11, number 3941).** This amends R41's class table.
+  - The kept class loses `child-birth-unplaced`, and the doubt class gains it.
+  - Its sentence reads like the other doubt words: the sweep reads it again on its next pass. It does not end
+    "ccrc never reclaims it on its own", and it writes no `child reclaim kept` feed row.
+  - The reason is R40's own list: "an unplaceable birth" is doubt there, and each judging pass places the birth
+    afresh, so the word can end with no person acting.
+  - The spec's §5.9 lists it with the doubt words from wave 5's PR on.
+- **R61 — `kept-word-ends-on-late-birth` is a stated residual (number 3944).** It is display-only and gates nothing.
+  - **The window.** A slug is recycled, and its new `create` is not placed yet: either it is not ingested, or its
+    `at` is ahead of the server's clock. Meanwhile the new marker's minting run is already past `minting-run-open`.
+    A judging pass then reads the older generation's birth (`childReclaimBornAt` reads `create` events only). It
+    can answer `minting-run-postdates-child`, or, negligibly, `coordinating`.
+  - **What that costs.** The chip reads `refused` with a kept sentence, one `child reclaim kept` feed row is
+    written, and the banner lists the child. Once the new birth is placed, the same child can turn eligible and is
+    reclaimed, so "ccrc never reclaims it on its own" was false for it. The eventual reclaim is correct. In normal
+    operation the window lasts seconds.
+  - **What stands.** The kept sentences and the spec's §5.9 ending stand unchanged; this is not reworded away.
+  - **The closure goes to wave 7's pre-flight,** beside R57's recycled-slug proof. The direction:
+    - The birth reader treats the last placed `create` as unplaced when a placed removal of the same id follows it.
+      That makes the answer doubt (R60).
+    - It never compares the birth with the minting run's dispatch. That comparison would fold every truly
+      postdating run into doubt and empty `minting-run-postdates-child` of its meaning.
+- **R62 — three stated residuals of fix round 1 (review 303's G3).** "Left as ruled" in number 3939's definition is true
+  from this ruling on.
+  - A recycled slug's non-kept verdicts (held, doubt, eligible), and its old sweep entry's defer fields, carry no run. So
+    they can show on the new run's chip for at most one pass. This is display-only.
+  - Under a persistent mirror-read failure, the published attention list keeps its last items until a pass publishes
+    again. This is display-only.
+  - A same-run re-mint of the same slug is not told apart. That is number 3940's window, as its definition states it.
+- **R63 — two pre-existing recycled-slug paths go to wave 7's pre-flight (review 303's X1 and X3).** Neither came in
+  with wave 5, and each answers the same on wave 4's code.
+  - **X1, SAFETY class.** A licensed request already queued (`deferExpired`) can reach the SAME run's re-minted
+    workspace. The executor re-proves the request against the marker's run id alone, and presence is skipped under
+    `deferExpired`.
+    - The direction: the executor re-proves a licensed request against the generation it was judged under (birth
+      and marker run). A licence never crosses a generation.
+  - **X3.** The hold-retired memory is keyed by session id, so a slug recycled inside one pass gap queues `ws-release`
+    one pass early. `releaseRetiredChildHold` still re-proves its six facts.
+    - The direction: key it by generation.
+  - Wave 7's SAFETY lens covers both, beside R57's recycled-slug proof and R61's closure.
+- **R64 — wave 6's fix round 1 (review 335).**
+  - **"Inside the child" means all three trees the tail deletes:** the worktree, `~/.cc-clips/<id>` and `~/.cc-tmp/<id>`.
+    - **The removal helper itself refuses** (rc 1, touching nothing) a directory leaf that holds a `.git` file linking to
+      an admin directory OUTSIDE the leaf, unless that admin directory's `gitdir` back-link names this checkout. A
+      missing admin directory also refuses. An unreadable entry, a timeout or more checkouts than the cap answers
+      unmeasured. A clone, or a submodule whose admin directory lies inside the leaf, is the leaf's own.
+    - The tail then KEEPS and records that leaf, and the act completes.
+    - Every caller of the helper inherits the rule, wave 7's collector included.
+    - **Registry rows** at, inside or through either leaf are NESTED.
+    - This closes review 335's F1 (a regression of R54's recovery) and the pre-existing shape of a registry row inside
+      a leaf.
+  - **R53, qualified.** "Never `pin-failed`" holds on the fresh path only. On git older than 2.43, a resume entering
+    at `children` or `worktree`, after the branch was deleted past the pin, stops `pin-failed` at the settle on every
+    retry. Nothing is deleted.
