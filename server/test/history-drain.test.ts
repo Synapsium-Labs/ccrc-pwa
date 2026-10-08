@@ -13,7 +13,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, plantSession, plantTranscript, PRELOADS, SWEEP, recordDirFsyncs, type HistoryBox } from './historyHelpers.js';
+import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, plantSession, plantTranscript, runDriver, PRELOADS, SWEEP, recordDirFsyncs, type HistoryBox } from './historyHelpers.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX, SPOOL_FILE_MAX, SPOOL_FILE_LINES_MAX, OBS_FILE_MAX } from '../../ccd/history/lib.mjs';
 
@@ -600,6 +600,21 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
     expect(runSweep(box).code).toBe(0);
     expect(receipts(box).map((x) => x.event_key).sort()).toEqual([eventKey(first!, 1), eventKey(second!, 1)].sort());
     expect(drainingNames(box.home)).toEqual([]);
+  });
+
+  // FU10 (B5M3): the journal half the failing drain runs is best effort. Its own throw (here an EACCES-class rename fault on
+  // the spool file it renames) never replaces the drain's error, and `journal_write_failed` is never counted twice in a tick.
+  it('a drain whose commit fails AND whose journal half throws reports the commit\'s error, not the half\'s, and counts journal_write_failed at most once (FU10, B5M3)', () => {
+    spool(box.home, ID2, { v: 1, ev: 'Stop', id: ID2 });
+    expect(runSweep(box).code).toBe(0);                                   // renamed: it drains at the next tick
+    spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });                    // renamed by the failing tick's journal half
+    const r = runDriver(box, { throwTimesAtStart: { fn: 'renameSync', needle: `/spool/${ID}.jsonl`, code: 'EACCES' } }, [],
+      { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FAIL_COMMIT: '1:13' } });   // the drain's FULL commit fails: the 'fail' arm
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr, 'the pass reports the commit\'s error').toContain('Error: injected commit failure');   // run-pass.mjs has no main(): the pass's own throw ends the process, so this is its uncaught-error text
+    expect(r.stderr, 'never the journal half\'s').not.toContain('EACCES');
+    expect((counters(box)['journal_write_failed'] ?? 0), 'counted at most once in the tick').toBeLessThanOrEqual(1);
+    expect(fs.existsSync(path.join(SPOOL(box.home), `${ID}.jsonl`)), 'the half\'s rename was the one that threw').toBe(true);
   });
 
   it.each([['full disk', '1:13'], ['corrupt', '1:11'], ['I/O', '1:266'], ['no result code', '1']])('an injected %s commit failure fails the pass (exit 1) and keeps the file for the next pass', (_what, code) => {
@@ -1282,6 +1297,35 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
           expect(drainingNames(box.home), 'neither is left to drain').toEqual([]);
           expect(fs.readFileSync(PLANTED(`${ID}.900.1.jsonl`), 'utf8'), 'A is kept whole under planted/').toBe(stopLine(ID));
           expect(journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'file').map((x) => x['name'])).toEqual([`${ID}.902.1.jsonl`]);
+        } finally { fs.chmodSync(d, 0o700); }
+      });
+
+      // FU10 (B5M2): a displacement whose count commits and whose MOVE then fails is the file's `else out.blocked.push(file)`:
+      // counted spool_displaced AND spool_blocked, on each drain while the move fails (D-4347: "may count twice, never lose the
+      // count"), and it never leaves .draining/ or reaches the journal. The area is made (planted/ is usable), the unmovable
+      // 0500 directory stays, and one rename of the live file itself fails (an injected EIO), as an ENOENT race or any rename error would.
+      it('a displacement whose count commits and whose move then fails is counted spool_displaced and spool_blocked on each drain, and the file stays, unjournaled (FU10, B5M2)', () => {
+        writeRegular();
+        const d = plantDir(`${ID}.900.1.obs`, 'keep');
+        fs.chmodSync(d, 0o500);
+        const drive = (): ReturnType<typeof runDriver> => runDriver(box, { throwTimesAtStart: { fn: 'renameSync', needle: `${ID}.900.1.jsonl`, code: 'EIO', times: 99 } });
+        try {
+          const r1 = drive();
+          expect(r1.code, r1.stderr).toBe(0);
+          expect(counters(box)['spool_displaced'], 'the count committed before the move').toBe(1);
+          expect(counters(box)['spool_blocked'], 'the move failed: blocked too').toBe(1);
+          expect(r1.stderr).toContain(`history-sweep: spool-blocked: ${ID}.900.1.jsonl\n`);
+          expect(r1.stderr, 'a file that never moved is not named displaced').not.toContain('history-sweep: spool-displaced:');
+          expect(plantedHits(`${ID}.900.1.jsonl`)).toEqual([]);
+          expect(fs.readFileSync(regularFile(), 'utf8'), 'still a live draining file, its bytes kept').toBe(stopLine(ID));
+          expect(drainingNames(box.home)).toEqual([`${ID}.900.1.jsonl`]);
+          expect(journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'file'), 'not journaled by this drain').toEqual([]);
+          expect(receipts(box)).toEqual([]);
+          const r2 = drive();
+          expect(r2.code, r2.stderr).toBe(0);
+          expect(counters(box)['spool_displaced'], 'counted again on each drain while the move fails').toBe(2);
+          expect(counters(box)['spool_blocked']).toBe(2);
+          expect(drainingNames(box.home)).toEqual([`${ID}.900.1.jsonl`]);
         } finally { fs.chmodSync(d, 0o700); }
       });
 

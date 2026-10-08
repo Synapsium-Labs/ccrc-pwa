@@ -2791,24 +2791,35 @@ describe('redactField: a mark that ends a fragment before a sequence is carried 
   it('fail closed: span characters right after a token coloured in whole are marked with it', () => {
     expect(libRedact.redactField(`x \x1b[1m${GHP}\x1b[0m.txt y`, none())).toBe(`x ${M}${M} y`);
   });
-  it('a fixed-seed sweep of ghp_ pair values split by one to three realistic sequences, at JSON escape levels 0-2, leaks no 8-character piece', () => {
+  // Two rows, one seed and trial count each (FU10, B5M6): the design table names two classes that leaked, a ghp_ value with its
+  // pair registered (4,053 of 10,000 trials) and an sk-ant-api03 key with no pair at all (6,978), which reaches the shape arm only.
+  it('a fixed-seed sweep of ghp_ pair values, and of sk-ant-api03 keys with no pair, split by one to three realistic sequences, at JSON escape levels 0-2, leaks no 8-character piece', () => {
     const SEQS = ['\x1b[1m', '\x1b[0m', '\x1b[m', '\x1b[01;31m', '\x1b[K', '\x1b[01;31m\x1b[K', '\x1b[m\x1b[K', '\x1b[32m', '\x1b[1;32m',
       '\x1b[39m', '\x1b[22m', '\x1b(B', '\x1b[0;1;31m', '\x1b[38;5;196m', '\x1b[4m', '\x1b[7m'];
     const AL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let x = 20261008;
-    const rnd = (n: number): number => { x = (x * 1103515245 + 12345) % 2147483648; return x % n; };
-    const leaks: string[] = [];
-    for (let trial = 0; trial < 2000; trial += 1) {
-      const tok = `ghp_${Array.from({ length: 36 }, () => AL[rnd(AL.length)]).join('')}`;
-      const cuts = [...new Set(Array.from({ length: 1 + rnd(3) }, () => 1 + rnd(tok.length - 1)))].sort((a, b) => a - b);
-      let s = '';
-      let last = 0;
-      for (const c of cuts) { s += tok.slice(last, c) + SEQS[rnd(SEQS.length)]; last = c; }
-      let text = `word ${s}${tok.slice(last)} more`;
-      for (let l = rnd(3); l > 0; l -= 1) text = JSON.stringify(text).slice(1, -1);
-      if (pieces(libRedact.redactForIndex(text, pairOf(tok)), tok, 8).length > 0) leaks.push(JSON.stringify(text));
+    const SKP = `${['sk', 'ant', 'api03'].join('-')}-`;
+    const rows: Array<{ name: string; make: (rnd: (n: number) => number) => string; skip: number; index: (tok: string) => libRedact.PairIndex }> = [
+      { name: 'ghp_, pair registered', make: (rnd) => `ghp_${Array.from({ length: 36 }, () => AL[rnd(AL.length)]).join('')}`, skip: 0, index: pairOf },
+      { name: 'sk-ant-api03, no pair', make: (rnd) => `${SKP}${Array.from({ length: 60 }, () => AL[rnd(AL.length)]).join('')}`, skip: SKP.length, index: () => none() },
+    ];
+    const leaked: Record<string, string[]> = {};
+    for (const row of rows) {
+      let x = 20261008;
+      const rnd = (n: number): number => { x = (x * 1103515245 + 12345) % 2147483648; return x % n; };
+      const leaks: string[] = [];
+      for (let trial = 0; trial < 2000; trial += 1) {
+        const tok = row.make(rnd);
+        const cuts = [...new Set(Array.from({ length: 1 + rnd(3) }, () => 1 + rnd(tok.length - 1)))].sort((a, b) => a - b);
+        let s = '';
+        let last = 0;
+        for (const c of cuts) { s += tok.slice(last, c) + SEQS[rnd(SEQS.length)]; last = c; }
+        let text = `word ${s}${tok.slice(last)} more`;
+        for (let l = rnd(3); l > 0; l -= 1) text = JSON.stringify(text).slice(1, -1);
+        if (pieces(libRedact.redactForIndex(text, row.index(tok)), tok.slice(row.skip), 8).length > 0) leaks.push(JSON.stringify(text));
+      }
+      leaked[row.name] = leaks.slice(0, 3);
     }
-    expect(leaks.slice(0, 3)).toEqual([]);
+    expect(leaked).toEqual({ 'ghp_, pair registered': [], 'sk-ant-api03, no pair': [] });   // both rows reported, so a mutation names the row it reds
   }, 60_000);
 });
 
