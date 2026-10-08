@@ -14,6 +14,9 @@ import { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { KeyedQueue } from './inject/queue.js';
 import { bootBoxToken } from './token/boot.js';
+import { BoxTokenDriver } from './token/driver.js';
+import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
+import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
@@ -210,9 +213,27 @@ const watcher = new FleetWatcher(deps, bus);
 // inventory lane's clock starts at 0.
 fleetClient?.onConnected(() => watcher.triggerInventory());
 
+// The box-token driver (spec §5): its own unref'd 60 s timer, never a lane in
+// watch.ts. Built before buildServer so the claim door and the rotate route read
+// it from `deps.tokenDriver`; started after listen. `lastReadyAt` is the time
+// of the last agent handshake, which re-probes a learned hold and resets backoff.
+let lastReadyAt: number | null = null;
+fleetClient?.onConnected(() => { lastReadyAt = Date.now(); });
+const tokenStore = fileTokenStore(tokenPaths(cfg.mailTokenPath, cfg.home));
+const tokenDriver = new BoxTokenDriver({
+  store: tokenStore, holder: tokenBoot.holder,
+  link: fleetClient === null ? null : tokenSyncLinkOver(fleetClient),
+  generation: fleetClient === null ? null : generationReaderOver(deps.io, cfg.ccrcDir, Date.now),
+  rows: gateRowsOver(coord, () => cfg.fleetMode === 'remote' && (deps.fleetState?.connected ?? false), () => lastReadyAt),
+  env: { fleetMode: cfg.fleetMode, role: cfg.role, roleSource: cfg.roleSource, agentEnvMarksFleet: tokenBoot.agentEnvMarksFleet },
+  bothWriter: tokenBoot.bothWriterArmed ? fileBothRoleWriter(tokenStore.paths) : null,
+}, tokenBoot);
+deps.tokenDriver = tokenDriver;
+
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 await app.listen({ host: cfg.host, port: cfg.port });
+tokenDriver.start();
 console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);
 
 // Said once at boot, beside the line above: a role DERIVED because CCRC_ROLE
