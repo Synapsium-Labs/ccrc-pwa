@@ -1132,6 +1132,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       child-reclamation wave 6 (#326) and that programme's docs (#329).
       - STATUS: fleet and server v0.0.125, newest v0.0.125, backups fleet 145M/server 594M, disk free fleet 216G/work
         volume 271G/server 33G, no anomalies.
+    - **2026-10-08 18:42 UTC: v0.0.126 published at 18:12:29, and the fleet box's auto move to it is in flight.** That
+      release is child-reclamation's wave 7 plan (#331). The fleet box's `update.json` read `installing` toward
+      v0.0.126 from 18:42:24 (`--from pwa`, the dispatcher's path). The server box follows the fleet. No action was
+      taken.
+      - STATUS: fleet and server v0.0.125, newest v0.0.126, backups fleet 145M/server 594M, disk free fleet 216G/work
+        volume 268G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
