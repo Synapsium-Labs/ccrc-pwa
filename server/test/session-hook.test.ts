@@ -36,6 +36,14 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
+/** The env every hook spawn in this file shares (B3M19: one definition, so a variable added here reaches `run`, `runFull`
+ *  and the spool describe's `runSpoolBounded` alike): the fixture HOME, a PATH that finds the fixture's tmux, the pane, the
+ *  session id, the pid and the generation. `env` overrides it: each test adds or breaks its own legs there, never in a
+ *  second copy of this literal. */
+const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env,
+});
 /** Run the hook with a payload; env overrides let each test break one leg.
  *  Returns the hook's STDOUT, which is empty on every event but SessionStart
  *  (R1) — `encoding: 'utf8'` is what makes execFileSync hand it back as a
@@ -44,13 +52,7 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
   execFileSync('bash', [HOOK], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home,
-      PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
-      CCRC_SESSION_GENERATION: GENERATION,
-      ...env,
-    },
+    env: hookEnv(env),
   });
 /** `run`, plus stderr: the hook's contract is silence on BOTH streams, and a
  *  bare `find` over a directory that does not exist would break it on stderr
@@ -68,9 +70,7 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
 const runFull = (payload: object, env: Record<string, string> = {}, opts: { allowNonZeroExit?: boolean } = {}): { stdout: string; stderr: string } => {
   const r = spawnSync('bash', [HOOK], {
     input: JSON.stringify(payload), encoding: 'utf8',
-    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
-      CCRC_SESSION_GENERATION: GENERATION, ...env },
+    env: hookEnv(env),
   });
   if (!opts.allowNonZeroExit) expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return { stdout: r.stdout, stderr: r.stderr };
@@ -10519,7 +10519,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
           if (d === '`') found.push('backtick');
           else if (d === '$' && src[j + 1] === '(' && src[j + 2] !== '(') found.push('command substitution');
           else if (d === '$' && src[j + 1] === '{') { stack.push('}'); j++; }
-          else if (d === "'" && top === '}') { const k = src.indexOf("'", j + 1); j = k < 0 ? src.length : k; }
+          else if (d === "'" && top === '}' && !stack.includes('"')) { const k = src.indexOf("'", j + 1); j = k < 0 ? src.length : k; }   // B3M16: inside double quotes a ${…} word's single quotes are literal, so what they enclose is live
           else if (d === '"') { if (top === '"') stack.pop(); else stack.push('"'); }
           else if (d === '}' && top === '}') stack.pop();
         }
@@ -10579,6 +10579,12 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     ['a program as an if condition', T, "_hs+='}'; if mkdir -p x; then true; fi", 'command mkdir'],
     ['a program as an elif condition', T, "_hs+='}'; if [[ -n x ]]; then true; elif /bin/true; then true; fi", 'command /bin/true'],
     ['a program in a case arm on the case line', T, "_hs+='}'; case \"$src\" in clear) mkdir -p x ;; esac", 'command mkdir'],
+    ['a substitution in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'$(id)\'}"', 'command substitution'],
+    ['a backtick in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'`id`\'}"', 'backtick'],
+  ];
+  /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
+  const INERT: Array<[string, string, string]> = [
+    ['a substitution inside plain single quotes', A, "_hs_g='${CCRC_SESSION_GENERATION:-$(id)}'"],
   ];
 
   it('S1 (syntax, F38): the spool block and every function it calls hold no fork form', () => {
@@ -10598,6 +10604,13 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(forkForms(block.replace(anchor, replacement), allowed)).toContain(form);
   });
 
+  it.each(INERT)('S1 (syntax, B3M16): %s planted in the spool block is inert and is not named', (_label, anchor, replacement) => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
+    expect(block).toContain(anchor);
+    expect(forkForms(block.replace(anchor, replacement), allowed)).toEqual([]);
+  });
+
   it('F37: EPOCHREALTIME is read once: a clock that moves between the test and the slice writes no ts or the tested reading, never a mix', async () => {
     plantSpool();
     const trapFile = path.join(home, 'epochtrap.bash');
@@ -10615,16 +10628,14 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
   });
 
   /** The hook with a wall-clock bound: a hook blocked in open(2) is killed, never left to hang the suite. */
-  const runBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
-    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL',
-    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...SCRUB },
+  const runSpoolBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(SCRUB),
   });
 
   it('F24: a FIFO at the spool path writes no line and never blocks: exit 0, silent, hookstate written, the FIFO left as it was (D-4418)', () => {
     plantSpool();
     execFileSync('mkfifo', [spoolFile()]);
-    const r = runBounded({ hook_event_name: 'Stop', session_id: SID });
+    const r = runSpoolBounded({ hook_event_name: 'Stop', session_id: SID });
     expect(r.signal).toBeNull();
     expect(r.status).toBe(0);
     expect(r.stderr).toBe('');
