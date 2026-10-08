@@ -32,7 +32,7 @@
 // allow-list single-definition.test.ts pins; tests reach every fault through a
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
-  chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync,
+  accessSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync,
   readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -312,6 +312,9 @@ export function countOutside(db, name, by = 1) {
 // `non_regular` (D-4347), and a live file whose sidecar name was planted (counted `spool_displaced`, or `spool_blocked`
 // and skipped when it cannot move either). After the loop, THIS tick's renames run (`renameAndObserve`), so a file is
 // read at the NEXT tick, never the one that renamed it.
+// Nothing here runs through a `spool/` that is not a real directory (FU8, D-4347 (history-planted-entries-never-wedge)): a link
+// there is never followed, and the drain, the journal half and the tick's own mkdir refuse it (`spoolRefused`). Nor through a
+// `spool/` or `.draining` this user cannot read, write and search (`spoolUnusable`).
 // So a drained file's lines and the verdicts taken from them are both in the fsynced journal before the file goes.
 
 /** Registry values ccd writes are a few dozen bytes; anything larger was not written by ccd. */
@@ -443,8 +446,12 @@ export function obsForLine(obs, rec) {
  *  were written in, so a held clear never chains before an earlier held startup of the same id (rev 3.2 review, DI9).
  *  readdir order is a hash order, and lexical order puts tick 1000 before tick 900. Neither is used. */
 export function listDraining(home) {
+  const P = historyPaths(home);
+  // FU8 (D-4347 (history-planted-entries-never-wedge)): a link at `.draining` is never listed through, and a non-directory
+  // there lists nothing (its readdir threw ENOTDIR out of a pass that only journals, M16).
+  if (dirKind(P.draining) !== 'dir') return [];
   let names;
-  try { names = readdirSync(historyPaths(home).draining); } catch (e) { if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return []; throw e; }
+  try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return []; throw e; }
   return names
     .map((n) => ({ n, p: parseDrainingName(n) }))
     .filter((x) => x.p !== null)
@@ -469,12 +476,47 @@ export function ensureSpoolDirs(home) {
 /** Whether `p` names an entry (a link counts, its target is never followed); any lstat error but ENOENT propagates. */
 function presentName(p) { try { lstatSync(p); return true; } catch (e) { if (e && e.code === 'ENOENT') return false; throw e; } }
 
+/** What stands at one of the spool directories' own names, judged by lstat and never followed (FU8, D-4347
+ *  (history-planted-entries-never-wedge)): `dir` for a real directory; `absent` when nothing does (ENOENT, or ENOTDIR: an
+ *  ancestor is not a directory); `other` for anything else, a link to a directory included. Any other lstat error propagates. */
+function dirKind(p) {
+  let st;
+  try { st = lstatSync(p); } catch (e) { if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return 'absent'; throw e; }
+  return st.isDirectory() ? 'dir' : 'other';
+}
+
+/** True when something that is not a real directory stands at `spool/` (FU8, D-4347 (history-planted-entries-never-wedge)).
+ *  Only db/ may link out of the history root (§9.3; RV9), and the hook appends only into a real `spool/` (D-4418). Followed,
+ *  a link there had the sweep rename every `<id>.jsonl` in its target (a transcript's `<uuid>.jsonl` included) into a
+ *  `.draining/` it made there, and unlink each once drained (final pass FP3). While it stands, no spool work runs through it:
+ *  nothing is renamed out of it, no `.draining` is made, tidied, listed, journaled or drained through it, and the tick makes no
+ *  `spool/`. A drain counts it `non_regular`, both halves print SPOOL_REFUSED_LINE, and every other step of the pass goes on. */
+function spoolRefused(home) { return dirKind(historyPaths(home).spool) === 'other'; }
+const SPOOL_REFUSED_LINE = 'history-sweep: spool-refused: spool/ is not a real directory\n';
+
+/** True when `spool/`, or the `.draining` directory under it, is a real directory this user cannot read, write and search
+ *  (access(2) R_OK|W_OK|X_OK; FU8, D-4347 (history-planted-entries-never-wedge)). A 000 or 0500 one failed every pass's
+ *  lstat, readdir or rename with EACCES before ingest, on the drain and the hold alike. While it stands no spool work runs, as
+ *  for `spoolRefused`, and both halves print SPOOL_UNUSABLE_LINE. It is counted nowhere: status measures the directory's
+ *  mode itself (FAIL `mode-wrong`, remedy `chmod 0700`). */
+function spoolUnusable(home) {
+  const P = historyPaths(home);
+  const usable = (p) => { try { accessSync(p, constants.R_OK | constants.W_OK | constants.X_OK); return true; } catch { return false; } };
+  if (dirKind(P.spool) !== 'dir') return false;
+  if (!usable(P.spool)) return true;
+  return dirKind(P.draining) === 'dir' && !usable(P.draining);
+}
+const SPOOL_UNUSABLE_LINE = 'history-sweep: spool-refused: spool/ or spool/.draining is not readable, writable and searchable by this user\n';
+
 /** Rename each regular spool/<id>.jsonl into .draining/ under a fresh name, chmod 0600 (uncounted, §9.2; the 0700
  *  directory is the protection, slug history-spool-mode-by-directory, D-4233). A name no hook writes (an id outside the
  *  grammar), a dot-file, a link or a FIFO stays where it is and is never read. A name already present in .draining/ (or
  *  its .obs) is never renamed onto: that spool file waits for the next half. */
 export function renameSpoolFiles(home, tickMs, pid) {
   const P = historyPaths(home);
+  // FU8 (D-4347 (history-planted-entries-never-wedge)): only a real spool/ is read; through a link this renamed, and the
+  // drain then unlinked, `<id>.jsonl` files outside the history root (FP3).
+  if (dirKind(P.spool) !== 'dir') return [];
   let names;
   try { names = readdirSync(P.spool).sort(); } catch (e) { if (e && e.code === 'ENOENT') return []; throw e; }
   const out = [];
@@ -766,6 +808,10 @@ export function recordHeldMatches(home, name, nowMs) {
 export function journalHalf(home, ids, nowMs) {
   const held = [];
   let journalFailed = false;
+  // FU8 (D-4347 (history-planted-entries-never-wedge)): no spool work through a spool/ that is not a real directory, as on
+  // the drain (FP3); no DB holds a counter here (IV2), so it is only named.
+  if (spoolRefused(home)) { process.stderr.write(SPOOL_REFUSED_LINE); return { held, journalFailed }; }
+  if (spoolUnusable(home)) { process.stderr.write(SPOOL_UNUSABLE_LINE); return { held, journalFailed }; }
   // Rename first, so this pass's spool files are observed and journaled in this same pass (§9.2: "renames,
   // observes and journals each spool file as step 1 does"). A line a hook lands on the old inode after this
   // grows the file, and the next pass re-journals it under the same `t` (journalFile compares byte counts).
@@ -912,6 +958,15 @@ export function tidyDraining(home, tickMs, pid) {
  *    drain order, never inverts when the block lifts (FU3F review F1). */
 export function drainSpool(db, c) {
   const tickMs = c.now();
+  // FU8 (D-4347 (history-planted-entries-never-wedge)): no spool work through a spool/ that is not a real directory (FP3):
+  // counted and named once per drain, and the tick goes on without it.
+  if (spoolRefused(c.home)) {
+    countOutside(db, 'non_regular');
+    process.stderr.write(SPOOL_REFUSED_LINE);
+    return [];
+  }
+  // FU8: nor through a spool/ or .draining this user cannot use; uncounted, because status names its mode (mode-wrong).
+  if (spoolUnusable(c.home)) { process.stderr.write(SPOOL_UNUSABLE_LINE); return []; }
   if (ensureSpoolDirs(c.home)) countOutside(db, 'non_regular');
   const t = tidyDraining(c.home, tickMs, process.pid);
   if (t.nonRegular > 0) countOutside(db, 'non_regular', t.nonRegular);
@@ -1747,8 +1802,8 @@ export function discoverAndPlan(db, c, uuids) {
  * 14. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
  * 15. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
  * 16. `markScan`: a due scan is marked done, unless the roster was unreadable.
- *  Then spool/ is made (the hook's gate is that directory, and the hook never makes it, §5.1, so a box with no bound
- *  store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
+ *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
+ *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
  *  `periodicCensus` after the tick. `bump` and `countOutside` are counters, not steps. */
 export async function tick(db, ctx) {
   // >>> history tick steps (spec §9.2; D-4224, slug history-tick-order) ──────────────────────────────────────────
@@ -1822,7 +1877,9 @@ export async function tick(db, ctx) {
   recordTick(db, ictx, ing);
   if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());
   // <<< history tick steps
-  mkdirDurable(ctx.paths.spool);
+  // FU8 (D-4347 (history-planted-entries-never-wedge)): never over a planted entry, which the drain refused and counted; a
+  // file or a dangling link there failed this mkdir on every pass (FP3).
+  if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);
   if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');
 }
 

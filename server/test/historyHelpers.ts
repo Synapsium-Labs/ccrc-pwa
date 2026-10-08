@@ -245,6 +245,8 @@ export interface DriverDeps {
   hangAfterAppend?: boolean;
   /** Once the first statfs call has answered, the first <times> (default 1) calls of fs.<fn> on a path holding <needle> throw <code> (FU4 M26). */
   throwTimesAfterFirstStatfs?: { fn: string; needle: string; code: string; times?: number };
+  /** The same throw, armed before the pass starts (FU8: FR2-c's throw out of the journal half at lock take). */
+  throwTimesAtStart?: { fn: string; needle: string; code: string; times?: number };
   /** The word an --op pass's store open answers instead of opening (FU4 M28), handed to sweep.mjs as deps.openStore. */
   openStoreWord?: string;
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];

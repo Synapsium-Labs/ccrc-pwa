@@ -1485,18 +1485,15 @@ describe('FR2-c: the {"rc":…} line is printed last on EVERY path, including a 
   const rcLines = (stdout: string): string[] => stdout.split('\n').filter((l) => l.startsWith('{"rc"'));
   const lastLine = (stdout: string): string => stdout.trimEnd().split('\n').pop()!;
 
-  // Root bypasses a directory's mode, so these cannot make a directory unlistable as uid 0.
-  it.skipIf(process.getuid?.() === 0)('a throw from the journal half at lock take (.draining/ unlistable) ends stdout with one {"rc":1}', () => {
+  // FU8: a 000 .draining is refused now (the sweep's spoolUnusable), never thrown, so the unlistable .draining is injected: the
+  // journal half's readdir of it at lock take fails EIO, a non-JournalError runJournalHalf rethrows.
+  it('a throw from the journal half at lock take (.draining/ unlistable) ends stdout with one {"rc":1}', () => {
     const box = boundBox('ccrc-hist-fr2c1-');
-    const dir = paths(box).draining;
-    fs.chmodSync(dir, 0o000);
-    try {
-      const r = runSweep(box, ['--op', 'import', '--apply']);
-      expect(r.code, r.stderr).toBe(1);
-      expect(r.stderr).toMatch(/internal error/);
-      expect(rcLines(r.stdout), r.stdout).toEqual(['{"rc":1}']);
-      expect(lastLine(r.stdout)).toBe('{"rc":1}');
-    } finally { fs.chmodSync(dir, 0o700); }
+    const r = runDriver(box, { throwTimesAtStart: { fn: 'readdirSync', needle: '/history/spool/.draining', code: 'EIO' } }, ['--op', 'import', '--apply']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/internal error: EIO: injected, readdirSync '.*\/history\/spool\/\.draining'/);
+    expect(rcLines(r.stdout), r.stdout).toEqual(['{"rc":1}']);
+    expect(lastLine(r.stdout)).toBe('{"rc":1}');
     expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker is left').toBe(false);
   });
 

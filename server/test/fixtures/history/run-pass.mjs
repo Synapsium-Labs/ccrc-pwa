@@ -19,6 +19,8 @@
 //                      of node:fs's sync function <fn> on a path containing <needle> throw an error carrying <code> (FU4 M26:
 //                      a non-JournalError out of the half at release; a second run of the half meets the fault again); every
 //                      later call runs for real
+//   throwTimesAtStart  {fn, needle, code, times?}: the same throw, armed before the pass starts (FU8: a 000 spool/.draining is
+//                      refused now, never thrown, so FR2-c's throw out of the journal half at lock take is injected)
 //   openStoreWord      the word an --op pass's store open answers instead of opening (FU4 M28: a word whose REASONS code is
 //                      not exit 5), handed to sweep.mjs as deps.openStore
 //   extraMigrations    SQL appended to MIGRATIONS as v2, v3, ... (the migration seam, DM42/DM43)
@@ -82,6 +84,19 @@ if (Array.isArray(spec.afterFirstStatfs) || spec.throwTimesAfterFirstStatfs !== 
     }
     return r;
   };
+}
+if (spec.throwTimesAtStart !== undefined) {
+  const at = spec.throwTimesAtStart;
+  const real = fs[at.fn];
+  let thrown = 0;
+  fs[at.fn] = function throwTimesAtStart(...args) {
+    if (thrown < (at.times ?? 1) && String(args[0]).includes(at.needle)) {
+      thrown += 1;
+      throw Object.assign(new Error(`${at.code}: injected, ${at.fn} '${args[0]}'`), { code: at.code });
+    }
+    return real.apply(this, args);
+  };
+  syncBuiltinESMExports();
 }
 const code = await runPass(process.argv.slice(2), deps);
 // An explicit exit, never a drained loop: an unsettled statfs (the 'hang' seam) pins a libuv thread.

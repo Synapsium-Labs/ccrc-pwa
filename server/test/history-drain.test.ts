@@ -368,6 +368,20 @@ describe('draining names (spec §5.1 SPOOL_ID_MAX, §9.2 step 1)', () => {
     expect(fs.existsSync(path.join(SPOOL(box.home), 'claude-a-demo.jsonl'))).toBe(true);
     expect(fs.readFileSync(path.join(DRAIN(box.home), 'claude-a-demo.2000.7.obs'), 'utf8'), 'the .obs is never inherited or replaced').toBe('kept');
   });
+
+  it('renameSpoolFiles reads only a real spool/: through a link it renames nothing, and the target is untouched (FU8, FP3)', () => {
+    const box = makeHistoryBox('ccrc-hist-fu8-rename-', { role: 'fleet' });
+    createStore(box.home);
+    const outside = path.join(box.home, 'outside');
+    fs.mkdirSync(outside);
+    const transcript = '0b8e2c1a-1111-4111-8111-222222222222.jsonl';
+    fs.writeFileSync(path.join(outside, transcript), '{"type":"user","uuid":"u1"}\n');
+    fs.mkdirSync(path.dirname(SPOOL(box.home)), { recursive: true });
+    fs.symlinkSync(outside, SPOOL(box.home));
+    expect(SW.renameSpoolFiles(box.home, 1000, 42)).toEqual([]);   // at cf544c151: [`${transcript minus .jsonl}.1000.42.jsonl`], moved
+    expect(fs.readdirSync(outside)).toEqual([transcript]);
+    expect(fs.readFileSync(path.join(outside, transcript), 'utf8')).toBe('{"type":"user","uuid":"u1"}\n');
+  });
 });
 
 describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "The order of writes")', () => {
@@ -1336,6 +1350,119 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
         expect(r.code, r.stderr).toBe(5);
         expect(r.stderr).not.toMatch(/internal error/);
       } finally { moveDb(box, aside, hist(box.home, 'db')); }
+    });
+
+    // FU8 (FP3): spool/ is a real directory or no spool work runs through it. Only db/ may link out of the history root
+    // (RV9), and the hook already refuses such a spool/ (D-4418); the sweep, which deletes, now refuses it too.
+    const REFUSED = 'history-sweep: spool-refused: spool/ is not a real directory\n';
+    const tickRecords = (): number => journalOf(box.home, ids.storeId).filter((x) => x['k'] === 'tick').length;
+    const TRANSCRIPT = '0b8e2c1a-1111-4111-8111-222222222222.jsonl';
+    const ROW = '{"type":"user","uuid":"u1","message":{"role":"user","content":"keep me"}}\n';
+    const plantSpool = (kind: string, outside: string): void => {
+      fs.rmSync(SPOOL(box.home), { recursive: true });
+      if (kind === 'a link to a directory') fs.symlinkSync(outside, SPOOL(box.home));
+      else if (kind === 'a dangling link') fs.symlinkSync(path.join(box.home, 'nowhere'), SPOOL(box.home));
+      else fs.writeFileSync(SPOOL(box.home), 'stray');
+    };
+
+    it.each([['a link to a directory'], ['a dangling link'], ['a regular file']])('%s at spool/ is refused: nothing renamed, made or drained through it, counted non_regular and named once per pass, and the pass goes on (FU8, FP3)', (kind) => {
+      const outside = path.join(box.home, 'outside');
+      fs.mkdirSync(outside);
+      fs.writeFileSync(path.join(outside, TRANSCRIPT), ROW);
+      plantSpool(kind, outside);
+      const before = tickRecords();
+      for (const n of [1, 2]) {
+        const r = runSweep(box);
+        expect(r.code, `${kind}, pass ${n}: ${r.stderr}`).toBe(0);   // at cf544c151: a file failed every pass, exit 1 (ENOTDIR)
+        expect(r.stderr.split(REFUSED).length - 1, `${kind}, pass ${n}`).toBe(1);
+      }
+      expect(counters(box)['non_regular']).toBe(2);
+      expect(tickRecords() - before, 'every other step of the pass went on').toBe(2);
+      expect(fs.readdirSync(outside), 'nothing renamed out of the target, no .draining made in it').toEqual([TRANSCRIPT]);   // at cf544c151 the transcript was renamed, then unlinked
+      expect(fs.readFileSync(path.join(outside, TRANSCRIPT), 'utf8')).toBe(ROW);
+      expect(fs.lstatSync(SPOOL(box.home)).isDirectory(), 'the planted entry is left for the operator').toBe(false);
+      expect(fileBlocks(journalOf(box.home, ids.storeId))).toEqual([]);
+    });
+
+    it('a link at spool/ under a hold: the journal half renames, lists, observes and journals nothing through it, and names it (FU8, FP3)', () => {
+      const outside = path.join(box.home, 'outside');
+      fs.mkdirSync(path.join(outside, '.draining'), { recursive: true });
+      fs.writeFileSync(path.join(outside, TRANSCRIPT), ROW);
+      fs.writeFileSync(path.join(outside, '.draining', `${ID}.900.1.jsonl`), `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID })}\n`);
+      plantSpool('a link to a directory', outside);
+      const aside = path.join(box.home, 'aside');
+      moveDb(box, hist(box.home, 'db'), aside);
+      try {
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(5);
+        expect(r.stderr).toContain(REFUSED);
+        expect(fs.readdirSync(outside).sort()).toEqual(['.draining', TRANSCRIPT]);
+        expect(fs.readdirSync(path.join(outside, '.draining')), 'no sidecar written into the target').toEqual([`${ID}.900.1.jsonl`]);
+        expect(fileBlocks(journalOf(box.home, ids.storeId))).toEqual([]);
+      } finally { moveDb(box, aside, hist(box.home, 'db')); }
+    });
+
+    it('a link at spool/.draining under a hold with no spool file lists nothing through it; the next drain removes it, counted non_regular (FU8)', () => {
+      const outside = path.join(box.home, 'outside');
+      fs.mkdirSync(outside);
+      fs.writeFileSync(path.join(outside, `${ID}.900.1.jsonl`), `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID })}\n`);
+      fs.rmSync(DRAIN(box.home), { recursive: true });
+      fs.symlinkSync(outside, DRAIN(box.home));
+      const aside = path.join(box.home, 'aside');
+      moveDb(box, hist(box.home, 'db'), aside);
+      try {
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(5);
+        expect(fs.readdirSync(outside), 'nothing observed through the link').toEqual([`${ID}.900.1.jsonl`]);   // at cf544c151 a sidecar was written there and the file journaled
+        expect(fileBlocks(journalOf(box.home, ids.storeId))).toEqual([]);
+      } finally { moveDb(box, aside, hist(box.home, 'db')); }
+      const r2 = runSweep(box);
+      expect(r2.code, r2.stderr).toBe(0);
+      expect(fs.lstatSync(DRAIN(box.home)).isDirectory()).toBe(true);
+      expect(counters(box)['non_regular']).toBe(1);
+      expect(fs.readdirSync(outside)).toEqual([`${ID}.900.1.jsonl`]);
+    });
+
+    // FU8: a spool directory this user cannot read, write and search (a 000 or 0500 one) failed every pass with EACCES before
+    // ingest. It is refused the same way, uncounted, because status measures its mode (FAIL mode-wrong). Root bypasses modes.
+    const UNUSABLE = 'history-sweep: spool-refused: spool/ or spool/.draining is not readable, writable and searchable by this user\n';
+    describe.skipIf(process.getuid?.() === 0)('a spool directory this user cannot use (FU8)', () => {
+      it.each([['spool/', '000'], ['spool/', '500'], ['spool/.draining', '000'], ['spool/.draining', '500']])('a %s of mode %s is refused: nothing renamed or drained through it, named once per pass, uncounted, and the pass goes on (FU8)', (which, m) => {
+        const target = which === 'spool/' ? SPOOL(box.home) : DRAIN(box.home);
+        fs.writeFileSync(path.join(DRAIN(box.home), `${ID2}.902.1.jsonl`), `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID2 })}\n`);
+        spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+        const before = tickRecords();
+        fs.chmodSync(target, parseInt(m, 8));
+        try {
+          for (const n of [1, 2]) {
+            const r = runSweep(box);
+            expect(r.code, `${which} ${m}, pass ${n}: ${r.stderr}`).toBe(0);   // at cf544c151: exit 1, EACCES, on every pass
+            expect(r.stderr.split(UNUSABLE).length - 1, `pass ${n}`).toBe(1);
+          }
+        } finally { fs.chmodSync(target, 0o700); }
+        expect(tickRecords() - before, 'every other step of the pass went on').toBe(2);
+        expect(counters(box), 'uncounted: status names its mode').toEqual({});
+        expect(fs.existsSync(path.join(SPOOL(box.home), `${ID}.jsonl`)), 'nothing renamed').toBe(true);
+        expect(drainingNames(box.home), 'nothing drained').toEqual([`${ID2}.902.1.jsonl`]);
+        const r3 = runSweep(box);                                       // usable again: it drains and renames
+        expect(r3.code, r3.stderr).toBe(0);
+        expect(receipts(box).map((x) => x.event_key)).toEqual([eventKey(`${ID2}.902.1.jsonl`, 1)]);
+        expect(fs.existsSync(path.join(SPOOL(box.home), `${ID}.jsonl`))).toBe(false);
+      });
+
+      it('a 0500 spool/ under a hold: the journal half refuses it the same way, exit 5, never an internal error (FU8)', () => {
+        spool(box.home, ID, { v: 1, ev: 'Stop', id: ID });
+        fs.chmodSync(SPOOL(box.home), 0o500);
+        const aside = path.join(box.home, 'aside');
+        moveDb(box, hist(box.home, 'db'), aside);
+        try {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(5);                              // at cf544c151: exit 1, EACCES on the rename
+          expect(r.stderr).toContain(UNUSABLE);
+          expect(r.stderr).not.toContain('internal error');
+          expect(fs.existsSync(path.join(SPOOL(box.home), `${ID}.jsonl`))).toBe(true);
+        } finally { fs.chmodSync(SPOOL(box.home), 0o700); moveDb(box, aside, hist(box.home, 'db')); }
+      });
     });
   });
 
