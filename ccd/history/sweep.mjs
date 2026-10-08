@@ -2811,7 +2811,9 @@ function isFsError(e) {
  *  ingest, transcripts or sidecars: `paused`. The scan is marked done only when both halves
  *  examined everything. A read or open error the OS raised on ONE file (a transcript or a sidecar) is that file's:
  *  counted `file_unreadable`, the file skipped with its cursor where its last committed chunk left it, the scan not
- *  marked done so the next tick finds it again, and the tick goes on (D-4340, history-ingest-read-error-skips-file). */
+ *  marked done, so the file is found again by the next tick that lists it (at once when it was behind or met by a
+ *  scan, which then runs again; a hint-only file at its next hint or the next due scan), and the tick goes on
+ *  (D-4340, history-ingest-read-error-skips-file). */
 export async function ingestTick(db, ctx, budget) {
   const scan = ingestScanDue(db, ctx.nowMs);
   const { files, uuids } = candidateFiles(db, ctx, scan);
@@ -2822,7 +2824,8 @@ export async function ingestTick(db, ctx, budget) {
   let complete = true;
   let paused = false;
   // D-4340 (history-ingest-read-error-skips-file): a file whose read failed was not examined, so the scan is not
-  // marked done and the next tick finds it again; the tick itself, its sidecars and its row go on.
+  // marked done (a scan tick's files are found again at the next tick; a hint-only file at its next hint or the next
+  // due scan); the tick itself, its sidecars and its row go on.
   let unreadable = false;
   try {
     for (const f of files) {
@@ -3146,7 +3149,8 @@ export async function ingestSidecars(db, ctx, budget, uuids) {
       r = await ingestSidecar(db, ctx, s, budget, cache);
     } catch (e) {
       // D-4340 (history-ingest-read-error-skips-file): as for a transcript, one sidecar's failed read is counted and
-      // skipped (no sidecar_seen mark, so the next tick retries it), and the rest are tried.
+      // skipped (no sidecar_seen mark, so a later tick whose candidate uuids hold its uuid takes it again), and the
+      // rest are tried.
       if (!isFsError(e)) throw e;
       countAdmission(db, 'unreadable');
       unreadable = true;

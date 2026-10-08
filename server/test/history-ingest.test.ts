@@ -3032,6 +3032,29 @@ describe('FR2-d (D-4340): a read error on one admitted file is that file\'s, nev
     expect(f.faulted()).toBe(1);
     expect(got!).toBe('/home/u/tree');
   });
+
+  it('D-4340: a file met only through a spool hint is not retried by the next unhinted tick, and is by the next due scan (review 316 F34)', async () => {
+    const box = IX.newBox('ccrc-hist-d4340h-');
+    const { db, ids } = await IX.openFixtureStore(box);
+    const at = (ms: number) => S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + ms, ids);
+    try {
+      await S.ingestTick(db, at(60_000), S.newBudget());   // a scan tick with nothing planted: the scan is marked done
+      const bad = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'late', 1)]));
+      const drainDir = path.join(box.home, '.ccrc', 'history', 'spool', '.draining');
+      fs.mkdirSync(drainDir, { recursive: true });
+      const hint = path.join(drainDir, `${IX.ID}.${IX.tsMs(0)}.1.jsonl`);
+      fs.writeFileSync(hint, '');
+      const f = failReads(bad);
+      try { await S.ingestTick(db, at(180_000), S.newBudget()); } finally { f.restore(); }
+      expect(f.faulted()).toBeGreaterThanOrEqual(1);
+      expect(counterOf(db, 'file_unreadable')).toBe(1);
+      fs.rmSync(hint);
+      await S.ingestTick(db, at(300_000), S.newBudget());
+      expect(IX.count(db, 'entries'), 'no hint, not behind, no scan due: not found').toBe(0);
+      await S.ingestTick(db, at(60_000 + 30 * 60_000), S.newBudget());
+      expect(IX.count(db, 'entries'), 'the next due scan finds it').toBe(1);
+    } finally { db.close(); }
+  });
 });
 
 describe('FR2-e (D-4341): a numeric row timestamp beyond the Date range is NULL, never a wedge', () => {
