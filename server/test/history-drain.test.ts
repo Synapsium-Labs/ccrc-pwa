@@ -13,7 +13,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
-import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, PRELOADS, SWEEP, recordDirFsyncs, type HistoryBox } from './historyHelpers.js';
+import { makeHistoryBox, runSweep, skipOnDarwin, openStoreRO, counters, plantSession, plantTranscript, PRELOADS, SWEEP, recordDirFsyncs, type HistoryBox } from './historyHelpers.js';
 import { createStore, openWriter, closeWriter } from '../../ccd/history/store.mjs';
 import { journalRecord, historyPaths, eventKey, DRAINING_NAME_MAX, SPOOL_FILE_MAX, SPOOL_FILE_LINES_MAX, OBS_FILE_MAX } from '../../ccd/history/lib.mjs';
 
@@ -1477,6 +1477,17 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       const outside = path.join(box.home, 'outside');
       fs.mkdirSync(outside);
       fs.writeFileSync(path.join(outside, TRANSCRIPT), ROW);
+      // B5M1: the hint half. A session whose transcript no scan is due to find, named ONLY by a draining name in the link's
+      // target, is hinted (its $REG uuid is read, its transcript ingested) unless hintedUuids refuses the link too.
+      const HINT_UUID = '0b8e2c1a-3333-4333-8333-444444444444';
+      const HINT_ROW = { parentUuid: null, isSidechain: false, cwd: '/home/u/tree', sessionId: HINT_UUID, type: 'user', message: { role: 'user', content: 'hint me' }, uuid: HINT_UUID, timestamp: '2026-10-05T10:00:00.000Z' };
+      expect(runSweep(box).code, 'a warm-up pass: the periodic scan has run, the next is 30 min away').toBe(0);
+      plantSession(box, ID, { uuid: HINT_UUID, generation: '0189abcd-1234-4678-9abc-0123456789ab', project: 'demo', workdir: '/home/u/tree' });
+      plantTranscript(box, Object.keys(box.accountHome)[0]!, '-home-u-tree', HINT_UUID, [HINT_ROW]);
+      if (kind === 'a link to a directory') {
+        fs.mkdirSync(path.join(outside, '.draining'));
+        fs.writeFileSync(path.join(outside, '.draining', `${ID}.900.1.jsonl`), `\n${JSON.stringify({ v: 1, ev: 'Stop', id: ID })}\n`);
+      }
       plantSpool(kind, outside);
       const before = tickRecords();
       for (const n of [1, 2]) {
@@ -1486,7 +1497,10 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
       }
       expect(counters(box)['non_regular']).toBe(2);
       expect(tickRecords() - before, 'every other step of the pass went on').toBe(2);
-      expect(fs.readdirSync(outside), 'nothing renamed out of the target, no .draining made in it').toEqual([TRANSCRIPT]);   // at cf544c151 the transcript was renamed, then unlinked
+      expect(fs.readdirSync(outside).sort(), 'nothing renamed out of the target, no .draining made in it').toEqual(kind === 'a link to a directory' ? ['.draining', TRANSCRIPT] : [TRANSCRIPT]);   // at cf544c151 the transcript was renamed, then unlinked
+      if (kind === 'a link to a directory') expect(fs.readdirSync(path.join(outside, '.draining')), 'the hint-only draining file is left as it was').toEqual([`${ID}.900.1.jsonl`]);
+      const db = openStoreRO(box);
+      try { expect((db.prepare('SELECT count(*) AS n FROM entries WHERE uuid = ?').get(HINT_UUID) as { n: number }).n, 'an id named only by a draining name in the target is not hinted, so its transcript is not found (B5M1)').toBe(0); } finally { db.close(); }
       expect(fs.readFileSync(path.join(outside, TRANSCRIPT), 'utf8')).toBe(ROW);
       expect(fs.lstatSync(SPOOL(box.home)).isDirectory(), 'the planted entry is left for the operator').toBe(false);
       expect(fileBlocks(journalOf(box.home, ids.storeId))).toEqual([]);

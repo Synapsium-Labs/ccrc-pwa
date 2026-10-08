@@ -2967,8 +2967,14 @@ function readRegUuid(home, id) {
  *  `$REG/<id>.uuid`. Not every epoch the id ever had: a long-lived id's older transcripts are
  *  done, or behind (behindFiles), and re-binding them all on every Stop line is waste. */
 function hintedUuids(db, home) {
+  const P = historyPaths(home);
+  // FU10 (D-4347 (history-planted-entries-never-wedge)): the same refusal the drain makes. Listed through a link at `spool/`
+  // or at `.draining`, a name in its target hinted that id's `$REG` uuid and epochs, hints taken from outside the history root (B5M1).
   let names;
-  try { names = readdirSync(historyPaths(home).draining); } catch { return new Set(); }
+  try {
+    if (spoolRefused(home) || dirKind(P.draining) !== 'dir') return new Set();
+    names = readdirSync(P.draining);
+  } catch { return new Set(); }   // an unreadable spool/ hints nothing, as it did before the guard
   const uuids = new Set();
   const t = tickStmts(db);
   for (const n of names) {
