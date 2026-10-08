@@ -80,6 +80,14 @@ describe('rotationGate: each mechanical condition alone holds and names itself (
       .toEqual({ open: false, hold: 'verb-missing', node: 'fleet' });
   });
 
+  it('a learned agent-predates-op hold stands until a fresh ready or the hourly re-probe (D-4401)', () => {
+    const learned = { hold: 'agent-predates-op' as const, at: 5_000_000 };
+    const now = 5_000_100;
+    expect(rotationGate(remote({ learned, lastReadyAt: 4_000_000, now }))).toEqual({ open: false, hold: 'agent-predates-op', node: 'fleet' });
+    expect(rotationGate(remote({ learned, lastReadyAt: 5_000_001, now }))).toEqual(OPEN);
+    expect(rotationGate(remote({ learned, lastReadyAt: 4_000_000, now: 5_000_000 + HOLD_REPROBE_MS }))).toEqual(OPEN);
+  });
+
   it('a recorded both box opens in local mode with agentOps NULL', () => {
     expect(rotationGate(bothLocal())).toEqual({ open: true, mode: 'both-local', nodeId: null });
   });
@@ -114,6 +122,7 @@ describe('the hold rule (R1 as amended by R5): one gate for every trigger, auto 
   it('the gate has no trigger, auto or intent input', () => {
     const src = readFileSync(path.join(here, '..', 'src', 'token', 'policy.ts'), 'utf8');
     const body = src.slice(src.indexOf('export function rotationGate('), src.indexOf('// ── the claim door'));
+    expect(body.length, 'the scan slice must not be empty (a renamed function or marker would pass vacuously)').toBeGreaterThan(200);
     expect(body).not.toMatch(/\bauto\b|\bintent\b|\btrigger\b|rotateRequested/);
     expect(Object.keys(remote()).sort()).toEqual(['agentEnvMarksFleet', 'fleetMode', 'handedOutUnconfirmed', 'lastReadyAt',
       'learned', 'linkUp', 'mintFailed', 'nodes', 'now', 'role', 'roleSource']);
@@ -303,6 +312,54 @@ describe('one rotation', () => {
     const out = applySyncResult({ ...handed(), rotationOwed: false, owedWhy: null }, G, { kind: 'refused', word: 'code-used', detail: null }, 4000);
     expect(out.state.pending).toEqual([]);
     expect([out.state.rotationOwed, out.state.owedWhy]).toEqual([true, 'code-used']);
+  });
+
+  it('predates-op is learned as the agent-predates-op hold, never a failure (D-4401)', () => {
+    const out = applySyncResult(staged(), G, { kind: 'predates-op' }, 4000);
+    expect(out.learned).toEqual({ hold: 'agent-predates-op', at: 4000 });
+    expect([out.state.failures, out.state.lastFailure]).toEqual([0, null]);
+    expect(out.promote).toBeNull();
+    expect(out.state.pending, 'a value never handed out is dropped').toEqual([]);
+    // handed out: kept (the fleet may hold it), still learned
+    const kept = applySyncResult(handed(), G, { kind: 'predates-op' }, 4000);
+    expect(kept.learned?.hold).toBe('agent-predates-op');
+    expect(kept.state.pending.map((p) => p.id)).toEqual([G]);
+  });
+
+  it('promoting an earlier handed-out value keeps a LATER handed-out one accepted (D-4400)', () => {
+    // G handed out and its result lost; past confirmBy a forward rotation hands out G2, result lost too.
+    const late = 3000 + CONFIRM_DEADLINE_MS + 1;
+    const fwd = { ...handed(3000), rotationOwed: false, owedWhy: null };
+    const two = handedOutState(stagedState(fwd, G2, late, W(3)), G2, late + 1);
+    // a generation read still showing G, measured after G's hand-out, promotes G
+    const read = { read: { kind: 'id' as const, id: G }, measuredAt: late + 2 };
+    expect(confirmedGeneration(two, read)).toBe(G);
+    const act = nextAction({ state: two, gate: OPEN, generation: read, rotateRequested: false, backoffUntil: null, now: late + 2 });
+    expect(act).toEqual({ kind: 'promote', generation: G, via: 'generation-read' });
+    const after = promotedState(two, G, late + 2, W(4));
+    expect(after.current.id).toBe(G);
+    expect(after.pending.map((p) => [p.id, p.handedOutAt !== null])).toEqual([[G2, true]]);
+    // G2's later confirmation promotes it normally and clears the rest
+    const read2 = { read: { kind: 'id' as const, id: G2 }, measuredAt: late + 10 };
+    expect(confirmedGeneration(after, read2)).toBe(G2);
+    const done = promotedState(after, G2, late + 10, W(5));
+    expect([done.current.id, done.pending, done.previous?.id]).toEqual([G2, [], G]);
+  });
+
+  it('promotion drops earlier values and later values never handed out (D-4400)', () => {
+    const G3 = '3'.repeat(16);
+    const s0 = handedOutState(stagedState(handed(3000), G2, 4000, W(3)), G2, 4001);   // G (seq 2), G2 (seq 3) both handed out
+    const s1 = stagedState(s0, G3, 4002, W(4));                                       // G3 staged only
+    expect(promotedState(s1, G2, 5000, W(9)).pending).toEqual([]);                    // G earlier, G3 never handed out
+    expect(promotedState(s1, G, 5000, W(9)).pending.map((p) => p.id)).toEqual([G2]); // G3 dropped, G2 kept
+  });
+
+  it('"Rotate now" bypasses backoff also while a rotation is owed (D-4402)', () => {
+    const owed = { ...base(), rotationOwed: true, owedWhy: 'adopted' as const, failures: 2 };
+    expect(nextAction({ state: owed, gate: OPEN, generation: null, rotateRequested: false, backoffUntil: 9000, now: 5000 }))
+      .toEqual({ kind: 'backoff', until: 9000 });
+    expect(nextAction({ state: owed, gate: OPEN, generation: null, rotateRequested: true, backoffUntil: 9000, now: 5000 }))
+      .toEqual({ kind: 'stage', why: 'adopted' });
   });
 
   it('a both box promotes a staged value by its own write', () => {

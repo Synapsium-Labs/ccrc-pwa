@@ -121,7 +121,7 @@ export interface GateInput {
   agentEnvMarksFleet: boolean;
   nodes: readonly GateNode[] | null;
   linkUp: boolean;
-  learned: { hold: 'verb-missing' | 'stale-client'; at: number } | null;
+  learned: { hold: 'verb-missing' | 'stale-client' | 'agent-predates-op'; at: number } | null;
   lastReadyAt: number | null;
   handedOutUnconfirmed: number;
   mintFailed: boolean;
@@ -291,7 +291,7 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
     : overdue ? 'confirm-deadline' : behind ? 'fleet-behind' : i.rotateRequested ? 'rotate-now' : null;
   if (why === null) return { kind: 'none' };
   if (!gate.open) return { kind: 'hold', hold: gate.hold, node: gate.node };
-  if (i.backoffUntil !== null && now < i.backoffUntil && why !== 'rotate-now') return { kind: 'backoff', until: i.backoffUntil };
+  if (i.backoffUntil !== null && now < i.backoffUntil && !i.rotateRequested) return { kind: 'backoff', until: i.backoffUntil };
   return { kind: 'stage', why };
 }
 
@@ -299,7 +299,7 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
  *  if it is still outstanding and was handed out; anything else confirms nothing. A value never handed out is
  *  dropped from `pending` (the driver removes its file and revokes its code). */
 export function applySyncResult(state: BoxTokenState, sent: string, r: SyncResult, now: number):
-  { state: BoxTokenState; promote: string | null; learned: { hold: 'verb-missing' | 'stale-client'; at: number } | null } {
+  { state: BoxTokenState; promote: string | null; learned: { hold: 'verb-missing' | 'stale-client' | 'agent-predates-op'; at: number } | null } {
   const gen = state.pending.find((p) => p.id === sent);
   if (gen === undefined) return { state, promote: null, learned: null };
   const transportOf = (t: TokenTransport | 'unmeasured' | null): TokenTransport | 'unmeasured' => t ?? state.lastSync?.transport ?? 'unmeasured';
@@ -312,7 +312,10 @@ export function applySyncResult(state: BoxTokenState, sent: string, r: SyncResul
     }
     return { state: dropUnclaimed({ ...state, lastSync }), promote: null, learned: null };
   }
-  if (r.kind === 'predates-op' || r.kind === 'unsent') return { state: dropUnclaimed(state), promote: null, learned: null };
+  // An agent that advertised the op yet answers bad-request is a learned hold, never a failure (D-4401): without it the
+  // driver would re-stage and re-send every tick, invisibly. The gate re-probes it on a fresh ready or after an hour.
+  if (r.kind === 'predates-op') return { state: dropUnclaimed(state), promote: null, learned: { hold: 'agent-predates-op', at: now } };
+  if (r.kind === 'unsent') return { state: dropUnclaimed(state), promote: null, learned: null };
   if (r.kind === 'lost') {
     const s = { ...state, failures: state.failures + 1, lastFailure: r.why };
     return { state: dropUnclaimed(s), promote: null, learned: null };
@@ -344,8 +347,9 @@ export function handedOutState(state: BoxTokenState, id: string, at: number): Bo
   return { ...state, pending: state.pending.map((p) => (p.id === id ? { ...p, handedOutAt: at, confirmBy: at + CONFIRM_DEADLINE_MS } : p)) };
 }
 
-/** Promotion step (d): G is current, the old current is previous with its grace deadline, every other pending
- *  value is discarded and the owed flag clears. `previousWrite` is null only when the old current could not be
+/** Promotion step (d): G is current, the old current is previous with its grace deadline, and the owed flag clears.
+ *  Every other pending value is discarded except one handed out AFTER G (a later seq): that value may be the one the
+ *  fleet holds, so it stays accepted (D-4400). `previousWrite` is null only when the old current could not be
  *  copied (a promotion finished at boot over a broken file): then no previous slot is kept. */
 export function promotedState(state: BoxTokenState, id: string, now: number, previousWrite: WriteRecord | null): BoxTokenState {
   const g = state.pending.find((p) => p.id === id);
@@ -353,7 +357,9 @@ export function promotedState(state: BoxTokenState, id: string, now: number, pre
   return {
     ...state, origin: 'rotated', rotationOwed: false, owedWhy: null,
     current: { id: g.id, seq: g.seq, since: now, write: g.write },
-    pending: [],
+    // Only values handed out AFTER this one stay accepted (spec: a handed-out value is dropped only when a later value
+    // is confirmed or the fleet reports the code used; D-4400). Earlier and never-handed-out values go.
+    pending: state.pending.filter((p) => p.handedOutAt !== null && p.seq > g.seq),
     previous: previousWrite === null ? null : { id: state.current.id, seq: state.current.seq, graceUntil: now + GRACE_MS,
       hardUntil: now + GRACE_HARD_MS, currentPresented: false, write: previousWrite },
     promoting: null, recovering: null, fleetConfirmed: g.id, lastRotationAt: now,
