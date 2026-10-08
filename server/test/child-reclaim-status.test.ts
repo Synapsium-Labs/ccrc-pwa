@@ -79,13 +79,21 @@ const ROWS: readonly { readonly name: string; readonly input: ChildReclaimStatus
   // Wave 3's post-start failures are journal-only `LcRefusalToken`s: their words
   // live in `LC_REFUSAL_WORD`, and `refusalSentence` alone would answer the
   // generic `ccrc declined: pin-failed.` The non-null assertion below proves
-  // these two rows cannot pass on a missing word.
+  // these rows cannot pass on a missing word.
   { name: 'failed pin-failed → deferred, wave 3’s journal word, not the audit fallback',
     input: base({ event: ev('failed', 'pin-failed') }),
     want: { word: 'deferred', sentence: lcRefusalWord('pin-failed'), at: EV_AT } },
   { name: 'failed unit-still-active → deferred, wave 3’s journal word, not the audit fallback',
     input: base({ event: ev('failed', 'unit-still-active') }),
     want: { word: 'deferred', sentence: lcRefusalWord('unit-still-active'), at: EV_AT } },
+  { name: 'failed branch-unmeasured → deferred, its journal word, not the audit fallback',
+    input: base({ event: ev('failed', 'branch-unmeasured') }),
+    want: { word: 'deferred', sentence: lcRefusalWord('branch-unmeasured'), at: EV_AT } },
+  // Wave 6 (spec §5.9): the probe that could not run, at audit time or under the lock, is a
+  // `failed` line with its own journal word. It needs no table entry, only its word.
+  { name: 'failed probe-unmeasured → deferred, its journal word, not the audit fallback',
+    input: base({ event: ev('failed', 'probe-unmeasured') }),
+    want: { word: 'deferred', sentence: lcRefusalWord('probe-unmeasured'), at: EV_AT } },
   { name: 'failed with no token → deferred, the failure sentence', input: base({ event: ev('failed', null) }),
     want: { word: 'deferred', sentence: S.failed, at: EV_AT } },
   { name: 'intent (an act with no recorded end), with the marked row → falls through to pending (spec §5.9)',
@@ -248,6 +256,13 @@ const ROWS: readonly { readonly name: string; readonly input: ChildReclaimStatus
     input: base({ event: ev('refused', 'flock-unavailable'), fleetPaused: true }), want: switchPaused },
   { name: 'refused lock-unopenable under a fleet pause → paused',
     input: base({ event: ev('refused', 'lock-unopenable'), fleetPaused: true }), want: switchPaused },
+  // Wave 6 (spec §5.9): the two id-tied argv dies are pre-lock refusals too.
+  { name: 'refused token-malformed → deferred, its journal word, never refused',
+    input: base({ event: ev('refused', 'token-malformed') }),
+    want: { word: 'deferred', sentence: lcRefusalWord('token-malformed'), at: EV_AT } },
+  { name: 'refused run-id-malformed → deferred, its journal word, never refused',
+    input: base({ event: ev('refused', 'run-id-malformed') }),
+    want: { word: 'deferred', sentence: lcRefusalWord('run-id-malformed'), at: EV_AT } },
   { name: 'refused bad-session-id (journal-only, not a pre-lock token) → refused, its journal word',
     input: base({ event: ev('refused', 'bad-session-id') }),
     want: { word: 'refused', sentence: lcRefusalWord('bad-session-id'), at: EV_AT } },
@@ -278,7 +293,7 @@ describe('childReclaimStatus — every mapping row (wave 5, spec §5.7–§5.9)'
   });
 
   it('reads a failure token’s journal word ahead of the audit sentences, never the generic fallback', () => {
-    for (const token of ['pin-failed', 'unit-still-active', 'flock-unavailable', 'lock-unopenable']) {
+    for (const token of ['pin-failed', 'unit-still-active', 'flock-unavailable', 'lock-unopenable', 'branch-unmeasured', 'probe-unmeasured', 'token-malformed', 'run-id-malformed']) {
       const word = lcRefusalWord(token);
       expect(word, `${token} has no LC_REFUSAL_WORD entry: wave 3's journal words did not land`).not.toBeNull();
       expect(word).not.toBe(refusalSentence(token));

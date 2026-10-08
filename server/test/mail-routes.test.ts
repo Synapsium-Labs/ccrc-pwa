@@ -19,6 +19,8 @@ import { okRun } from './coordReadHelpers.js';
 import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
 import { isStallKebab } from '../src/coord/stall.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
+import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
+import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -836,8 +838,23 @@ describe('the rejection table is total, in both directions', () => {
         // a mail rejection or a run refusal — they ride the lane's memory and the feed, never a `refused` or
         // `reject.code`. Admitted through the exported guard, derived from `archivedExpiry.ts`'s Records, never
         // NOT_CODES, for the reason every union above gives.
-        || isArchivedExpiryKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word or expiry word`).toBe(true);
+        || isArchivedExpiryKebab(tok)
+        // STALL WATCH SETTINGS, W1: the FOURTEENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/stallsettings.ts` spells a mail-gate mode in its ladder, and
+        // the settings routes spell the POST's refusal code and the feed actor
+        // of an unarmed gate. None is a mail rejection or a run refusal: they
+        // are admitted through the exported guard, never NOT_CODES, for the
+        // reason every union above gives.
+        || isStallSettingsKebab(tok)
+        // WORKSPACE LIFECYCLE WAVE 4: the FIFTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/endDeadCoordinator.ts` (the dead-coordinator lane's one executor) spells
+        // its outcome and report kinds, and `coord/close.ts` and `coord/store.ts` spell the compare-and-set refusal
+        // `claimant-changed`. None is a mail rejection or a run refusal — no route answers with one; they ride the lane's
+        // memory and the feed. Admitted through the exported guard, derived from `deadCoordinator.ts`'s Records, never
+        // NOT_CODES, for the reason every union above gives.
+        || isDeadCoordinatorKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word or dead-coordinator word`).toBe(true);
     }
   });
 });

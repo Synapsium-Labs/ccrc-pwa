@@ -30,7 +30,8 @@ import {
  *   4. a person looking at the session defers it — WITHOUT a ceiling (spec §5.3: "Presence defers WITHOUT a
  *      ceiling");
  *   5. the audit, and its `expiresAt` through the one reader: a document without it is NO EVIDENCE, and nothing is
- *      composed; an archive other than the one the lane queued is a row that moved, retried;
+ *      composed; an archive other than the one the lane queued is a row that moved, retried — checked BEFORE a
+ *      refusal is classified, so another archive's refusal is never folded onto the queued one (review 313, F2);
  *   6. the switches read ONCE MORE, nearest the argv — `expire-lane-live` decides SHADOW or LIVE at the act, and a
  *      pause raised during the audit stops it — whatever the lane believed when it queued the row;
  *   7. shadow: "would expire", and stop. Live: the verb, the capability asked AGAIN in the act's own scope.
@@ -81,8 +82,14 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   }
   // 5 — the audit, and the threshold through its one reader.
   const audit = await expireAudit(deps, sessionId);
-  if (audit.kind === 'unreadable') return answer({ kind: 'failed', detail: audit.detail });
+  if (audit.kind === 'unreadable') return answer({ kind: 'failed', resumable: true, detail: audit.detail });
   if (audit.expiresAt.kind === 'absent') return answer({ kind: 'no-evidence' });
+  // An audit that read ANOTHER archive (a row returned and archived again since the lane queued it) is a row that
+  // moved, whatever it answered: its refusal, and its instant, are about that archive (review 313, F2).
+  if (audit.archivedAt !== null && audit.archivedAt !== archivedAt) {
+    return answer({ kind: 'deferred', why: 'state-changed',
+      detail: `the audit read archive ${String(audit.archivedAt)}, not the ${archivedAt} this pass queued` });
+  }
   if (audit.verdict.kind === 'refused') {
     const { token, detail } = audit.verdict;
     return EXPIRE_TOKEN_KIND[token] === 'gone' ? answer({ kind: 'gone' })
@@ -108,7 +115,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
     case 'refused':
       return EXPIRE_TOKEN_KIND[verb.token] === 'gone' ? answer({ kind: 'gone' })
         : answer({ kind: 'refused', token: verb.token, detail: verb.detail, inUse: [] });
-    case 'failed': return answer({ kind: 'failed', detail: verb.detail });
+    case 'failed': return answer({ kind: 'failed', resumable: verb.resumable, detail: verb.detail });
     case 'box': return answer({ kind: 'box', word: verb.word, detail: verb.detail });
     case 'composition': return answer({ kind: 'composition', detail: verb.detail });
   }
@@ -229,7 +236,8 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
     case 'deferred': return `${who}: deferred (${r.why}) — ${r.detail}.`;
     case 'refused': return `${who}: ccd refused (${r.token}) — ${r.detail}`;
     case 'gone': return `${who} left the archive before it was cleaned up.`;
-    case 'failed': return `${who}: failed — ${r.detail}. It is retried, backing off in between.`;
+    case 'failed': return `${who}: failed — ${r.detail}. ${r.resumable ? 'It is retried, backing off in between.'
+      : 'It is not retried: the box said it will not resume, so the lane stops asking for this archive.'}`;
     case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.`;
     case 'composition': return `${who}: ccd rejected the call this server composed — ${r.detail}. It is not retried.`;
     case 'no-evidence': return `${who}: the fleet box's ccd does not say when this archive expires; nothing was composed.`;

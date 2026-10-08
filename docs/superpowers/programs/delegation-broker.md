@@ -1,8 +1,9 @@
 # Program: delegation-broker
 
 Spec: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` (approved 2026-10-05, revisions R1–R9 included)
-Plans: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md` (wave 1); waves 2–6 are planned one at
-a time from wave 1's measured fields, before each wave's run opens
+Plans: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md` (wave 1). Wave 2 is a close-out run
+driven by that plan's own sections and this ledger's rulings. Waves 3–7 are planned one at a time from the measured
+fields, each before its run dispatches
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-soft-basin` (the session that wrote the spec; claimant of run 271)
 Workspace: **a fresh child per wave**
 
@@ -19,11 +20,12 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
-| 2 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | wave 1's matrix and its real-lane cross-check | — | **run 306 open** (`planned`) since 2026-10-06 20:20 UTC; its plan comes first (Next-wave brief) |
-| 3 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 2 | — | to plan |
-| 4 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 3 | — | to plan |
-| 5 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 4 | — | to plan |
-| 6 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 5; CCR-15 wave 4's sweep (merged #215, live) | — | to plan |
+| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | — | **run 306 dispatched** 2026-10-07 08:46 UTC to `ccrc-pwa-plain-hollow` (operator decision: the cross-check folds into a close-out wave) |
+| 3 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | 2 | — | to plan once wave 2's cross-check is in the measurement section |
+| 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 3 | — | to plan |
+| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
+| 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
+| 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; CCR-15 wave 4's sweep (merged #215, live) | — | to plan |
 
 ## Measurement matrix (wave 1 fills this section)
 
@@ -530,6 +532,20 @@ a `D-` token in this file until a plan defines it. **Wave 1 (run 271):** twenty 
 2026-10-05 15:20 UTC. The plan's ten slugs take the first ten in the order the plan lists them; the rest are for
 departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used stay unused; nothing re-issues them.
 
+- **2026-10-07 — operator decision: the real-lane cross-check moves to a worker, in a close-out wave 2.** Wave 1's plan
+  had the coordinator start two `-hookcap` lanes with `ccd start`, which coordinator clause 1 forbids. That
+  assignment was a planning error: in the stall-watch precedent, the wave's own executing session ran those lanes.
+  Asked to choose, the operator picked "fold into wave 2A":
+  - Run 306 becomes a close-out wave: the cross-check, a capture of every fleet Claude Code version the corpus
+    lacks, review 304's residue, and the one re-capture script that the residue ruling F12 asks for.
+  - The broker's observe stage moves to wave 3, so the programme is now 7 waves. Run 306's stored denominator
+    still reads 6; it is cosmetic and is corrected at wave 3's open.
+- **2026-10-07 — wave 2's routing:** Opus · xhigh main loop, Sonnet · high implementers, an Opus · high reviewer per
+  task, Haiku scouts, workflows off, compact 40. This raises the spec'd-plan row's high by one rung on wave 1's
+  evidence: two fix rounds of missed-test findings, and the round run at xhigh landed 29 of 36 cleanly.
+- **2026-10-07 — wave 2's deviation block:** ten numbers, 4364 through 4373, minted before dispatch. They are defined
+  in wave 1's plan's "Deviations found", because every departure this close-out can make is from that plan.
+
 ## Carried constraints
 
 - macOS CI legs are flaky by ruling and gate nothing; mutation-table discipline (every guard ships with a red);
@@ -553,24 +569,19 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
 
 ## Next-wave brief
 
-**Wave 2 — observe (report-only).** Run 306 is open and not dispatched. In order:
+**Wave 2 — the measurement close-out (run 306), dispatched 2026-10-07.** In order:
+1. Review 304's residue, as ruled above, with the F12 re-capture script first.
+2. A capture of every Claude Code version the fleet runs that the corpus lacks, read at the start: 2.1.292 at least.
+3. The real-lane cross-check, run by the worker under wave 1's plan "After the merge" standing rules. Its reduced
+   tables go into the measurement section under "Real-lane cross-check", each difference as an amendment slug.
 
-1. **The real-lane cross-check** (wave 1's plan, "After the merge"). This is the coordinator's job, once the release
-   carrying #284 reaches the fleet box through `ccrc update`. Rolling the fleet out is the operator's act, never this
-   session's. Use two `-hookcap` lanes, the lowest and the highest Claude Code version then running. Write their
-   reduced tables into the measurement matrix section, vetting Workflow key names before they are committed (they
-   can be agent names).
-2. **Re-read the lane versions, and capture any version the corpus lacks** (carried constraint): 2.1.292 was on 4
-   of 15 lanes at 19:13 UTC on 2026-10-06. Fold that into wave 2's first task, using F12's one re-capture script.
-3. **Write wave 2's plan** from the measured fields only:
-   - The spool, ingestion and cursors, the one `delegation_*` migration, the census extension, correlation and
-     reconciliation (report-only), the coordinator-intent route, and coordinator clause 17.
-   - Its first tasks are review 304's residue, as ruled above.
-   - It carries the spool-line constraint: a listing of about 3.9 KB nearly fills the 4 KiB line.
-   - Check the plan's format before writing it. The operator's global instructions now prefer HTML plans, so
-     confirm whether `deviation-refs`, the ledger floor seed and the ledger sweep read a `.html` plan; if they read
-     Markdown only, ask the operator first.
-   - The plan goes to the operator for review before run 306 dispatches.
+One PR from a fresh child. A review run on the held-out panel follows.
 
-Deploy class: fleet first, then server; skills. Dispatch preconditions: the plan is on `main`, a slot under the
-fleet's daily dispatch cap, and the cross-check's tables in the matrix section.
+**Wave 3 — observe (report-only)** comes next:
+- It is planned only once wave 2's cross-check is in the measurement section, from the measured fields only.
+- Its contents: the spool, ingestion and cursors, the one `delegation_*` migration, the census extension, correlation
+  and reconciliation (report-only), the coordinator-intent route, and coordinator clause 17.
+- It carries the spool-line constraint: a listing of about 3.9 KB nearly fills the 4 KiB line.
+- Check the plan's format first. The operator's global instructions prefer HTML plans, so confirm that the
+  deviation and ledger guards read a `.html` plan, and ask the operator if they read Markdown only.
+- The operator reviews the plan before its run dispatches.

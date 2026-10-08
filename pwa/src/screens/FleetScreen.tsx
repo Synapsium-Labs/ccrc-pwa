@@ -1016,7 +1016,7 @@ export function FleetScreen({
         open={archiveAllFor !== null}
         onClose={() => setArchiveAllFor(null)}
         title="Archive released workspaces?"
-        consequence={`Archives ${archiveAllCount} released ${archiveAllCount === 1 ? 'workspace' : 'workspaces'} in ${archiveAllFor ?? ''}, one at a time. ${archiveAllLive} of them ${archiveAllLive === 1 ? 'still has a live pane' : 'still have a live pane'}, which is stopped. Restore brings any of them back for 7 days; after that they are cleaned up. Child workspaces are skipped, and so is any row that stops being released before its turn.`}
+        consequence={`Archives ${archiveAllCount} released ${archiveAllCount === 1 ? 'workspace' : 'workspaces'} in ${archiveAllFor ?? ''}, one at a time. ${archiveAllLive} of them ${archiveAllLive === 1 ? 'still has a live pane' : 'still have a live pane'}, which is stopped. Restore brings any of them back; once automatic cleanup is on, each is cleaned up seven days after its archive. Child workspaces are skipped, and so is any row that stops being released before its turn.`}
         confirmLabel={`Archive ${archiveAllCount}`}
         onConfirm={() => {
           if (archiveAllFor !== null) void runArchiveAll(archiveAllFor);

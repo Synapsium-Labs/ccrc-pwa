@@ -288,9 +288,9 @@ _plat_ctime() { if [ "$CCD_OS" = darwin ]; then stat -f %c "$@"; else stat -c %Z
 _plat_mtime() {   # <file> -> mtime, epoch seconds
   if [ "$CCD_OS" = darwin ]; then stat -f %m "$@"; else stat -c %Y "$@"; fi
 }
-_plat_size() {    # <file> -> size in bytes
-  if [ "$CCD_OS" = darwin ]; then stat -f %z "$@"; else stat -c %s "$@"; fi
-}
+_plat_size() { if [ "$CCD_OS" = darwin ]; then stat -f %z "$@"; else stat -c %s "$@"; fi; }   # <file> -> size in bytes
+# Birth time, for the temp root's witness: `%W` and `%B` print 0 (BSD may print -1) where the filesystem keeps none.
+_plat_btime() { if [ "$CCD_OS" = darwin ]; then stat -f %B "$@"; else stat -c %W "$@"; fi; }   # <file> -> birth time, epoch seconds
 _plat_devino() {  # <file> -> "<device>:<inode>", the identity of a lock
   if [ "$CCD_OS" = darwin ]; then stat -f '%d:%i' "$@"; else stat -c '%d:%i' "$@"; fi
 }

@@ -196,7 +196,8 @@ describe('a vanished worktree is reclaimed from what is left; a directory git do
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'branch').toBe('');
     expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'git’s stale record was cleared').not.toMatch(/^prunable /m);
     expect(fs.existsSync(path.join(h.home, '.cc-clips', CHILD_ID)), 'clips').toBe(false);
-    expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);
+    // Darwin keeps the temp root: the in-use probe answers unmeasured there (spec §5.6).
+    if (process.platform !== 'darwin') expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);
     for (const field of ['uuid', 'child', 'reaping', 'workdir']) expect(h.reg(CHILD_ID, field), field).toBeNull();
     // Unsupervise and the ANCHORED kill run FIRST on this arm too (spec §5.6).
     expect(unsupervised()).toEqual([`unsupervise ${CHILD_ID} agent agent`]);

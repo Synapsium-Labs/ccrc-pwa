@@ -1374,10 +1374,14 @@ describe('childReclaimFailureLine — the one reading of "a line of a run of fai
     ['failed', 'pin-failed', true],
     ['refused', 'flock-unavailable', true],
     ['refused', 'lock-unopenable', true],
+    // Wave 6 (spec §5.9): the two id-tied argv dies, journaled once the session id is valid.
+    ['refused', 'token-malformed', true],
+    ['refused', 'run-id-malformed', true],
     ['refused', 'held', false],
     ['refused', 'containment-unproven', false],
-    // A journal-only token outside the two is NOT a failure line: a token ccd journals under
-    // `reclaim` later is classified when it is added, never inherited.
+    // A journal-only token outside the pre-lock set is NOT a failure line: a token ccd journals under
+    // `reclaim` later is classified when it is added, never inherited. `bad-session-id` in particular is
+    // never journaled under `reclaim` (spec §5.9: an id that failed its shape check is no id to journal against).
     ['refused', 'bad-session-id', false],
     ['refused', 'from-a-newer-ccd', false],
     ['refused', null, false],
@@ -1387,8 +1391,12 @@ describe('childReclaimFailureLine — the one reading of "a line of a run of fai
     expect(childReclaimFailureLine(line(outcome, refusal))).toBe(expected);
   });
 
-  it('the pre-lock tokens are exactly the two lock dies, each a word ccd journals', () => {
-    expect(Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN).sort()).toEqual(['flock-unavailable', 'lock-unopenable']);
+  it('the pre-lock tokens are exactly the two lock dies and the two id-tied argv dies, each a word ccd journals', () => {
+    // Widened at wave 6 (spec §5.9): `token-malformed` and `run-id-malformed` are journaled `refused` by
+    // `_lc_refuse` before the lock, after the session id is validated. The usage, bad-session-id and python3
+    // dies journal nothing, so they never enter this set.
+    expect(Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN).sort())
+      .toEqual(['flock-unavailable', 'lock-unopenable', 'run-id-malformed', 'token-malformed']);
     for (const t of Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN)) {
       expect(isLcRefusalToken(t), t).toBe(true);
       expect(isChildReclaimPreLockToken(t), t).toBe(true);
