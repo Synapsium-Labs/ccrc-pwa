@@ -47,6 +47,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 15:58 — wave 7's task drafts are in and ruled; reconciliation runs.**
+  - **The drafts.** Workflow `wf_cf7b2003-df7` ran nine Opus drafters on Tasks 1 to 9, about 12,000 lines in all, with
+    87 open items and 13 departures. Every one is ruled in `ccr15-evidence-archive/wave7/drafts-rulings.md`.
+  - **What the rulings change:**
+    - the `collect` act is declared at the start of Task 4, before anything journals it;
+    - each new word is declared with its first journal site;
+    - the move is one function, exempted by name in the macOS platform guard;
+    - the floor has one function, and that function is its only test seam;
+    - the quarantine record carries no path;
+    - the row rule compares an absent spelling literally.
+  - **One possible pre-existing hazard, found while drafting.** git lists an admin `HEAD` at mode 000 with an
+    all-zero object id, and the vanished-worktree arm would pin that zero id. Task 2 now reads an all-zero recorded
+    head as unmeasured, and measures what the pin does with it today.
+  - **The `.generation` binding is safe on the fleet.** Measured read-only: all 35 `.child` rows carry a generation,
+    so binding the reclaim token to it strands none.
+  - **Next.** Workflow `wf_157a236e-61a` reconciles the cross-task names and turns the rulings into exact edits. Then
+    the plan is assembled and attacked.
+
 - **2026-10-08 14:30 — wave 8's run is opened, and both waves have their blocks.**
   - Run **348** is wave 8 (`planned`, 8 of 9).
   - The allocator issued wave 7 (run 347) 32 numbers starting at 4502, and wave 8 (run 348) 16 numbers starting at
