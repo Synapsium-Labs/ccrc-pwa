@@ -1143,9 +1143,12 @@ export function drainSpool(db, c) {
     // FU8 (FPM8): the drain could not finish (D-4346's 'fail' arm: FULL, IOERR, CORRUPT, a foreign trigger; or any other
     // throw), so the rest of this tick is the journal half's, as a hold's is (§9.2: "the journal half runs whenever the drain
     // cannot"): this tick's spool files are renamed and observed (D-4232), and every draining file the loop did not reach is
-    // journaled. So no id's spool file grows toward SPOOL_FILE_LINES_MAX while the failure lasts, and no renamed file waits with a
-    // `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick than every file the loop
-    // met, so the journaling order holds. The loop's error is thrown after it, and an error of the journal half never replaces it.
+    // journaled. So, for a failure the drain meets, no id's spool file grows toward SPOOL_FILE_LINES_MAX while it lasts, and no
+    // renamed file waits with a `journaled: null` sidecar that status would read as a journal hold. Its renames take a later tick
+    // than every file the loop met, so the journaling order holds. The loop's error is thrown after it, and an error of the
+    // journal half never replaces it. A failure met at a write the pass makes before the drain (the migration verdict's meta
+    // write, the secrets step, the FTS probe, the phrase re-index and the re-derivation) ends the pass before drainSpool, so this
+    // half never runs for it (FR2a, review 344 F5).
     try {
       // failedCounted is always false here: the loop sets it only right before a `break`, and countOutside never throws.
       if (journalHalf(c.home, c.ids, c.now()).journalFailed) countOutside(db, 'journal_write_failed');
