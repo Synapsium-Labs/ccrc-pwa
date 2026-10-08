@@ -603,16 +603,24 @@ describe('the second redaction pass bounds its depth (final-review I1)', () => {
 
 // ---- Docs W2 fix round 1, F2: refinement (g)'s one reader of `killed` and `signal`, as a mechanism ----
 
+/** A keyword that precedes an expression, at the end of the text so far. */
+const EXPR_KEYWORD_END = /(?:^|[^\w$.])(?:return|typeof|void|throw|case|delete|in|of|else|yield|await)$/;
+
 /** Whether a `/` met in code, with `before` the current line so far (comments and literals already blanked), starts a
- *  regex literal rather than a division: after `(`, `,`, `=`, `:`, `[`, `!`, `&`, `|`, `?`, `{`, `}`, `;`, an operator
- *  that cannot end an operand, a keyword that precedes an expression (`return`, `typeof`, ...), or at line start. */
+ *  regex literal rather than a division: after `(`, `,`, `=`, `:`, `[`, a PREFIX `!`, `&`, `|`, `?`, `{`, `}`, `;`, an
+ *  operator that cannot end an operand, a keyword that precedes an expression (`return`, `typeof`, ...), or at line
+ *  start. A `!` after an operand (an identifier, `)` or `]`) is TypeScript's postfix non-null, and the slash is a division. */
 function startsRegex(before: string): boolean {
   const b = before.trimEnd();
   if (b === '') return true;
   const last = b[b.length - 1]!;
-  if ('(,=:[!&|?{};'.includes(last)) return true;
+  if (last === '!') {
+    const prev = b.slice(0, -1).trimEnd();
+    return !(/[\w$)\]]$/.test(prev) && !EXPR_KEYWORD_END.test(prev));
+  }
+  if ('(,=:[&|?{};'.includes(last)) return true;
   if ('<>+-*%~^'.includes(last)) return !/(?:\+\+|--)$/.test(b);
-  return /(?:^|[^\w$.])(?:return|typeof|void|throw|case|delete|in|of|else|yield|await)$/.test(b);
+  return EXPR_KEYWORD_END.test(b);
 }
 
 /**
@@ -751,9 +759,13 @@ const CCD_PIN = ['r.killed', 'r.killed', 'r.signal', 'r.signal'] as const;
  *  - bracket access (`res['killed']`, also through an alias key) and destructuring (`const { killed } = res`);
  *  - for `.signal`, a `CcdResult` that reaches a file which never imports `lifecycle.js`, through an inferred type
  *    (a function result the file never names): the scope rule cannot see it;
- *  - a regex literal the blanker takes for a division, because it follows `)`, `]` or an identifier (`if (x) /'/.test(s)`),
- *    and a division at the start of a line, which it takes for a regex. A text guard stops at the ordinary spellings,
- *    and these are named here instead of chased.
+ *  - a dynamic import whose specifier is a template literal (``await import(`../lifecycle.js`)``): the file is not
+ *    seen as an importer;
+ *  - a regex literal the blanker takes for a division, because it follows `)`, `]` or an identifier. The reach is not
+ *    the end of the line: a regex holding a backtick or a `/*` (`if (res.ok) /`/.test(res.stderr);`) opens a template or
+ *    a block comment that swallows the code on the lines after it, a reader included. And a division at the start of a
+ *    line, which the blanker takes for a regex. A text guard stops at the ordinary spellings, and these are named here
+ *    instead of chased.
  */
 function oneReaderProblems(files: readonly { name: string; text: string }[]): string[] {
   const problems: string[] = [];
@@ -969,6 +981,17 @@ describe('refinement (g): killed and signal have one reader, ccdEnding', () => {
       expect(blankCommentsAndStrings('f(a, /\'/, b)')).toBe('f(a, / /, b)');
       expect(blankCommentsAndStrings('if (!/\'/.test(s)) {}')).toBe('if (!/ /.test(s)) {}');
       expect(blankCommentsAndStrings('/x\'y/.test(s)')).toBe('/   /.test(s)');
+    });
+    it('CONTROL: a postfix non-null ! before a slash is part of a division, so the reader after it is still named', () => {
+      const planted = '  const n = res.stdout.length! / (res.killed ? 1 : 2);';
+      const files = withPlanted(CLASSIFY, AFTER_BINDING, planted);
+      expect(oneReaderProblems(files)).toEqual([`${CLASSIFY}:${lineOf(files, CLASSIFY, planted)}: res.killed`]);
+      expect(blankCommentsAndStrings("a! / 'cc' + b[0]! / 'dd' + f()! / 'ee'")).toBe("a! / '  ' + b[0]! / '  ' + f()! / '  '");
+    });
+    it('NEAR-MISS: a prefix ! before a slash still starts a regex literal', () => {
+      expect(blankCommentsAndStrings("if (!/x'y/.test(s)) {}")).toBe('if (!/   /.test(s)) {}');
+      expect(blankCommentsAndStrings("ok = a && !/x'y/.test(s)")).toBe('ok = a && !/   /.test(s)');
+      expect(blankCommentsAndStrings("return !/x'y/.test(s)")).toBe('return !/   /.test(s)');
     });
     it("blanker: a slash after an operand is division, not a regex", () => {
       // `a / b / 'c'` would blank ` b ` as a regex; the string after it must still be the only blanked span
