@@ -10333,7 +10333,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
 
   it('S12: an unwritable spool file costs the line, never the exit status, the silence or the hookstate write', () => {
     plantSpool();
-    fs.mkdirSync(spoolFile());   // a DIRECTORY where the file would be: `>>` cannot open it
+    fs.mkdirSync(spoolFile());   // a DIRECTORY where the file would be: refused before the open (D-4418)
     const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
     expect(r.stderr).toBe('');
     expect(readState().state).toBe('done');
@@ -10612,5 +10612,75 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
   it('F37: the spool block expands EPOCHREALTIME exactly once', () => {
     const code = spoolBlock(fs.readFileSync(HOOK, 'utf8')).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length).toBe(1);
+  });
+
+  /** The hook with a wall-clock bound: a hook blocked in open(2) is killed, never left to hang the suite. */
+  const runBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL',
+    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...SCRUB },
+  });
+
+  it('F24: a FIFO at the spool path writes no line and never blocks: exit 0, silent, hookstate written, the FIFO left as it was (D-4418)', () => {
+    plantSpool();
+    execFileSync('mkfifo', [spoolFile()]);
+    const r = runBounded({ hook_event_name: 'Stop', session_id: SID });
+    expect(r.signal).toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+    expect(fs.lstatSync(spoolFile()).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('F24: a symlink at the spool path writes no line and leaves its target byte-identical (D-4418)', () => {
+    plantSpool();
+    const outside = path.join(home, 'outside.txt');
+    fs.writeFileSync(outside, 'outside\n');
+    fs.symlinkSync(outside, spoolFile());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('outside\n');
+    expect(fs.lstatSync(spoolFile()).isSymbolicLink()).toBe(true);
+  });
+
+  it('F24: a dangling symlink at the spool path creates nothing at its target (D-4418)', () => {
+    plantSpool();
+    const nowhere = path.join(home, 'nowhere.jsonl');
+    fs.symlinkSync(nowhere, spoolFile());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.existsSync(nowhere)).toBe(false);
+  });
+
+  it('F24: a symlinked spool directory gets no line (D-4418)', () => {
+    fs.mkdirSync(path.join(home, '.ccrc', 'history'), { recursive: true });
+    const elsewhere = path.join(home, 'elsewhere');
+    fs.mkdirSync(elsewhere, { mode: 0o700 });
+    fs.symlinkSync(elsewhere, spoolDir());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it('F24 CONTROL: an existing regular spool file is appended to (D-4418)', async () => {
+    plantSpool();
+    fs.writeFileSync(spoolFile(), '');
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec?.['ev'])).toEqual(['Stop', 'Stop']);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('F24 (S12\'s guard kept): a regular spool file the hook cannot open costs the line, never the exit status, the silence or the hookstate write (D-4418)', () => {
+    plantSpool();
+    fs.writeFileSync(spoolFile(), '');
+    fs.chmodSync(spoolFile(), 0o400);
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe('');
+  });
+
+  it('F24: the block names its residue\'s bound, and the installer defines it (D-4418)', () => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    expect(block).toContain('HOOK_TIMEOUT_S');
+    expect(block).toContain('D-4418');
+    expect(fs.readFileSync(path.resolve(__dirname, '../../ccd/install-session-hooks.sh'), 'utf8')).toMatch(/^HOOK_TIMEOUT_S=\d+$/m);
   });
 });

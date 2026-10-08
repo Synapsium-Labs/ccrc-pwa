@@ -3038,22 +3038,22 @@ fi
 # — the hook never creates it, so a box with no store writes nothing; the id fits
 # SPOOL_ID_MAX = 224, so `.draining/<id>.<ms>.<pid>.jsonl` fits a 255-byte name.
 # The off-switch silences Stop and PostCompact and never the SessionStart epoch
-# lines D-4252. Only startup, resume and clear are
-# spooled D-4253: compact exited in its arm, and
-# fork and any other source write nothing D-4173. A
-# SessionStart line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires,
-# so without a lowercase-UUID sid none is written at all. A
-# startup or resume line carries `reg`, this hook's own read of `.uuid`
-# D-4175. No summary hash rides the
-# line D-4177.
+# lines D-4252. Only startup, resume and clear are spooled D-4253: compact exited
+# in its arm, and fork and any other source write nothing D-4173. A SessionStart
+# line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires, so without a
+# lowercase-UUID sid none is written at all. A startup or resume line carries
+# `reg`, this hook's own read of `.uuid` D-4175. No summary hash rides it D-4177.
 #
 # THE FENCE: `\n<json>\n` in one write(2) on an O_APPEND descriptor, so a short
 # write under a full disk leaves a torn line the next append cannot fuse with
-# D-4176. The braces put the redirection's own failure
-# under 2>/dev/null (the note at the hookstate write below), and `|| true`
-# keeps exit 0 on every path.
-_hs="" _hs_g="" _hs_s="" _hs_f="" _hs_t=""
-if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); then
+# D-4176. The braces put the redirection's own failure under 2>/dev/null (the
+# note at the hookstate write below), and `|| true` keeps exit 0 on every path.
+# A REGULAR FILE OR NOTHING D-4418: a symlink (a dangling one too), FIFO or other
+# node at the path, or a symlinked spool/, writes no line (builtin tests). Bash has no
+# O_NOFOLLOW or O_NONBLOCK redirection, so a node swapped in after the test is opened:
+# a link is followed; a FIFO blocks until Claude Code kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+_hs="" _hs_g="" _hs_s="" _hs_f="" _hs_t="" _hs_p="$HOME/.ccrc/history/spool/$id.jsonl"
+if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); then
   case "$event" in
     Stop) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"Stop"' ;;
     PostCompact) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"PostCompact"' ;;
@@ -3085,7 +3085,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); th
       _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
     fi
     _hs+='}'
-    { printf '\n%s\n' "$_hs" >> "$HOME/.ccrc/history/spool/$id.jsonl"; } 2>/dev/null || true
+    [[ ! -L "$_hs_p" && ( -f "$_hs_p" || ! -e "$_hs_p" ) ]] && { printf '\n%s\n' "$_hs" >> "$_hs_p"; } 2>/dev/null || true
   fi
 fi
 # <<< history-spool

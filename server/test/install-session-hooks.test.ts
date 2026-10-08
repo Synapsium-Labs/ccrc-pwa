@@ -244,3 +244,60 @@ describe('installer wiring cannot drift from the hook it installs (D-306)', () =
     expect(handledEvents().length).toBeGreaterThanOrEqual(10);
   });
 });
+
+describe('every managed hook entry but SessionEnd\'s carries HOOK_TIMEOUT_S, a bounded timeout (D-4418)', () => {
+  const SRC = fs.readFileSync(INSTALLER, 'utf8');
+  const CLAUDE_CODE_DEFAULT_S = 600;   // a command hook's default timeout, measured on 2.1.289 (history spec §4.1, Tl=600000)
+  const timeoutS = (): number => Number(/^HOOK_TIMEOUT_S=(\d+)$/m.exec(SRC)![1]);
+  /** `run`, with the session environment scrubbed (Global Constraints: test isolation). */
+  const runScrubbed = (): void => {
+    execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal')], {
+      env: { ...process.env, HOME: home, CLAUDECODE: '', CLAUDE_CONFIG_DIR: '', TMUX: '', TMUX_PANE: '',
+        ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])) },
+    });
+  };
+
+  it('defined once, a positive integer no larger than Claude Code\'s default', () => {
+    expect([...SRC.matchAll(/^HOOK_TIMEOUT_S=(\d+)$/gm)]).toHaveLength(1);
+    expect(timeoutS()).toBeGreaterThan(0);
+    expect(timeoutS()).toBeLessThanOrEqual(CLAUDE_CODE_DEFAULT_S);
+  });
+
+  it('every event\'s managed entry but SessionEnd\'s, PreToolUse\'s included, carries timeout === HOOK_TIMEOUT_S; SessionEnd\'s and every foreign entry carry none', () => {
+    runScrubbed();
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    let managed = 0;
+    for (const [ev, entries] of Object.entries(s.hooks as Record<string, any[]>)) {
+      for (const entry of entries) {
+        for (const h of entry.hooks as any[]) {
+          if (String(h.command).includes('/session-hook.sh')) {
+            managed++;
+            if (ev === 'SessionEnd') expect(h, ev).not.toHaveProperty('timeout');
+            else expect(h.timeout, ev).toBe(timeoutS());
+          } else {
+            expect(h, ev).not.toHaveProperty('timeout');
+          }
+        }
+      }
+    }
+    expect(managed).toBe((JSON.parse(/^EVENTS_JSON='(.*)'$/m.exec(SRC)![1]!) as string[]).length + 1);   // +1: PreToolUse
+  });
+
+  it('managed entries written in another timeout shape converge, and the next run is a byte no-op', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.Stop = [{ hooks: [{ type: 'command', command: 'bash "$HOME/.cc-sessions/session-hook.sh"' }] }];
+    s.hooks.SessionEnd.push({ hooks: [{ type: 'command', command: 'bash "$HOME/.cc-sessions/session-hook.sh"', timeout: 600 }] });
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s, null, 2));
+    runScrubbed();
+    const after = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    const managedIn = (ev: string): any[] => (after.hooks[ev] as any[]).flatMap((e) => e.hooks as any[])
+      .filter((h) => String(h.command).includes('/session-hook.sh'));
+    expect(managedIn('Stop')).toHaveLength(1);
+    expect(managedIn('Stop')[0].timeout).toBe(timeoutS());
+    expect(managedIn('SessionEnd')).toHaveLength(1);
+    expect(managedIn('SessionEnd')[0]).not.toHaveProperty('timeout');
+    const bytes = fs.readFileSync(cfg('.claude'), 'utf8');
+    runScrubbed();
+    expect(fs.readFileSync(cfg('.claude'), 'utf8')).toBe(bytes);
+  });
+});
