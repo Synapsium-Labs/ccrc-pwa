@@ -47,6 +47,25 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-08 23:29 — wave 7's Task 3 question, ruled: lock the generation read. The question reached nobody for two hours.**
+  - **The question.** At 21:28 clear-summit asked, through AskUserQuestion, how to fix one thing. X1's generation
+    read in `_ws_reclaim_generation` reads with no compaction lock held, and `session-hook.test.ts`'s lock census reds on
+    it. The plan had predicted green. Its three options: lock the read, widen the census, or drop Task 3.
+  - **The ruling (mail 4060): lock the read.** Every other `_reg_generation_read` caller already holds
+    `_compact_lock_acquire`: the spawn, its re-check, and the purge under its stable lock. An acquire miss answers
+    rc 2, which reads as unmeasured: no token, and a retry, so the read fails closed. The nesting reap lock → compaction lock is the purge's own.
+    The boundary grows by exactly two prose numerals, seven → eight: `ccd/session-hook.sh`'s acquire-site sentence,
+    and the compaction-card spec's, only if the census counts it. `session-hook.test.ts` (claim 1117) is not
+    edited. The accepted residuals are a wait inside the reap lock during a PreCompact, and an audit that may mint
+    the id's compaction lock file, which the purge takes anyway. Departure slugs:
+    `generation-read-under-the-compaction-lock` and `acquire-site-prose-seven-to-eight`.
+  - **Why it sat.** No ask row exists (`asks list` is empty), and the worker's hookstate never read `waiting`. It
+    still read `working`, last written by a SubagentStop at 21:39, which preserves the prior state. So the ask route
+    never saw the question, the mail gate holds mail for a `working` session, and the stall watch recorded nothing
+    (`runs signals 347`). The worker's main loop was parked on the dialog: its last commit was 21:38, and its
+    transcript was last written at 22:31. A coordinator may not type into a worker's pane (clause 11). The operator
+    is asked to pick option 1 there, and the ruling waits in mail 4060.
+
 - **2026-10-08 22:22 — the wave 8 amendment is MERGED (#334, `0d9f1b042`), and claim 1113 is split for workspace-lifecycle
   wave 5.**
   - **planSha** `0d9f1b042d71070a142bc88b1833304c7871bd9b`. Every gating check was green, including the macOS legs,
