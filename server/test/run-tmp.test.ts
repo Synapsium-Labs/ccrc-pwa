@@ -19,11 +19,12 @@
 //   - End to end (T5): a real nested vitest under the `globalSetup` DERIVED from `vitest.config.ts`, killed every
 //     way a run is killed, and refused under a TMPDIR too long for a socket.
 //
-// Every owner is a child this file spawned, and only those pids are ever signalled. Socket bases live under a
+// Every owner is a child this file spawned, and only those are ever signalled — through the handle Node keeps for
+// it, which is inert once the child has exited, so a reused pid is never hit. Socket bases live under a
 // short `/tmp/ccrc-rt-XXXXXX` — a `mkTmp` path is too long for `sun_path` on macOS (104 bytes), the same reason
 // `delegation-rig.test.ts` uses a short `/tmp` base — and each is removed after its test.
 import { describe, it, expect, afterEach } from 'vitest';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync,
@@ -43,24 +44,27 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const MOD_URL = pathToFileURL(path.join(here, 'run-tmp.globalsetup.mjs')).href;
 const isRoot = process.getuid?.() === 0;
 
-/** Every pid this file started. `afterEach` SIGKILLs them; nothing else is ever signalled. */
-const spawned: number[] = [];
-/** Every process GROUP this file started — only ever a child spawned `detached: true`, so its pid is its group. */
-const groups: number[] = [];
+/** Every child this file started. `afterEach` SIGKILLs the ones still running; nothing else is ever signalled. */
+const spawned: ChildProcess[] = [];
+/** The ones started `detached: true`, each the leader of a process group of its own. */
+const groups: ChildProcess[] = [];
 const bases: string[] = [];
 
-/** Signal a group this file made, and its leader. Refuses anything that could be pid 0, 1 or a typo. */
-function killGroup(pid: number, signal: NodeJS.Signals): void {
-  if (!Number.isInteger(pid) || pid <= 1) throw new Error(`killGroup refuses pid ${pid}`);
-  try { process.kill(-pid, signal); } catch { /* already gone */ }
-  try { process.kill(pid, signal); } catch { /* already gone */ }
+const running = (c: ChildProcess): boolean => c.exitCode === null && c.signalCode === null;
+
+/** Signal a group this file made: the group (which outlives its leader while orphan workers run in it), and the
+ *  leader through its handle. Refuses anything that could be pid 0, 1 or a typo. */
+function killGroup(c: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = c.pid;
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 1) throw new Error(`killGroup refuses pid ${pid}`);
+  try { process.kill(-pid, signal); } catch { /* the group is empty */ }
+  if (running(c)) c.kill(signal);
 }
 
 afterEach(() => {
-  for (const pid of groups.splice(0)) killGroup(pid, 'SIGKILL');
-  for (const pid of spawned.splice(0)) {
-    try { process.kill(pid, 'SIGCONT'); } catch { /* already gone */ }
-    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  for (const c of groups.splice(0)) killGroup(c, 'SIGKILL');
+  for (const c of spawned.splice(0)) {
+    if (running(c)) { c.kill('SIGCONT'); c.kill('SIGKILL'); }
   }
   for (const b of bases.splice(0)) rmSync(b, { recursive: true, force: true });
 });
@@ -108,10 +112,9 @@ async function startOwner(base: string, opts: { forkChild?: boolean } = {}): Pro
     IDLE_SRC,
   ].join('\n');
   const c = spawn(process.execPath, ['--input-type=module', '-e', src, base], { stdio: ['ignore', 'pipe', 'inherit'] });
-  spawned.push(c.pid!);
+  spawned.push(c);
   const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => r({ code, signal })));
   const line = await firstJsonLine<{ run?: string; refused?: string; childPid?: number }>(c.stdout!, exit);
-  if (line.childPid) spawned.push(line.childPid);
   expect(line.refused, 'the owner\'s openRun refused').toBeUndefined();
   return { pid: c.pid!, run: line.run!, childPid: line.childPid, exit };
 }
@@ -151,8 +154,13 @@ describe('probeRun — six verdicts, never folded', () => {
     const o = await startOwner(socketBase(), { forkChild: true });
     expect(o.childPid, 'the owner printed no child pid').toBeTruthy();
     await killOwner(o);
-    expect(alive(o.childPid!), 'the forked child died with its parent, so this case proves nothing').toBe(true);
-    expect(await probeRun(o.run)).toBe('dead');
+    try {
+      expect(alive(o.childPid!), 'the forked child died with its parent, so this case proves nothing').toBe(true);
+      expect(await probeRun(o.run)).toBe('dead');
+    } finally {
+      // Measured alive just above, and it idles until its own clock ends it: this pid is still the grandchild.
+      if (alive(o.childPid!)) process.kill(o.childPid!, 'SIGKILL');
+    }
   });
 
   it('T2e: a connecting socket is authoritative — live even with owner.json gone', async () => {
@@ -483,7 +491,7 @@ describe('armSignals — a persistent arm that collects the run and always exits
       IDLE_SRC,
     ].join('\n');
     const c = spawn(process.execPath, ['--input-type=module', '-e', src, base], { stdio: ['ignore', 'pipe', 'pipe'] });
-    spawned.push(c.pid!);
+    spawned.push(c);
     let stderr = '';
     c.stderr!.setEncoding('utf8').on('data', (d: string) => { stderr += d; });
     const watchdog = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* gone */ } }, 15_000);
@@ -605,7 +613,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
   ].join('\n');
 
   interface Record { pid: number; tmpdir: string; runDir?: string; refused?: string; baseListing: string[] }
-  interface Nested { pid: number; fx: string; exit: Promise<Exit>; output: () => string }
+  interface Nested { child: ChildProcess; pid: number; fx: string; exit: Promise<Exit>; output: () => string }
 
   /** A PLAIN-OBJECT config (it lives outside the package, so it may import nothing) naming the real
    *  `globalSetup` by absolute path, one fixture test, and a record file. */
@@ -626,13 +634,13 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     for (const k of [RUN_DIR_ENV, RUN_REFUSED_ENV, RUN_QUIET_ENV]) delete env[k];
     Object.assign(env, { TMPDIR: base, CI: '1', FX_BASE: base, FX_RECORD: path.join(fx, 'record.jsonl'), FX_MODE: mode }, extra);
     const c = spawn(process.execPath, [VITEST, 'run', '--root', fx], { cwd: fx, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    groups.push(c.pid!);
+    groups.push(c);
     let out = '';
     c.stdout!.setEncoding('utf8').on('data', (d: string) => { out += d; });
     c.stderr!.setEncoding('utf8').on('data', (d: string) => { out += d; });
-    const watchdog = setTimeout(() => killGroup(c.pid!, 'SIGKILL'), 90_000);
+    const watchdog = setTimeout(() => killGroup(c, 'SIGKILL'), 90_000);
     const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
-    return { pid: c.pid!, fx, exit, output: () => out };
+    return { child: c, pid: c.pid!, fx, exit, output: () => out };
   }
 
   const records = (n: Nested): Record[] => {
@@ -662,7 +670,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     const rec = await firstRecord(n);
     process.kill(n.pid, 'SIGKILL');
     await n.exit;
-    killGroup(n.pid, 'SIGKILL');
+    killGroup(n.child, 'SIGKILL');
     expect(rec.runDir, 'the killed run recorded no run directory').toBeTruthy();
     return rec.runDir!;
   }

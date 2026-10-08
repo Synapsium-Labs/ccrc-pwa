@@ -137,6 +137,7 @@ function tryConnect(sock, ms) {
  *  | absent        | –                  | present      | `unmeasurable:ENOENT`       |
  *  | not a socket  | –                  | any          | `unmeasurable:not-a-socket` |
  *  | socket        | other error, 2 s   | any          | `unmeasurable:<code>`       |
+ *  | too long      | –                  | any          | `unmeasurable:EINVAL`       |
  *
  *  `unowned` is a directory nobody finished making, or one an orphan worker re-created; `unmeasurable` is never
  *  acted on.
