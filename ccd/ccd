@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5a66fab1d58317b3a09f4f9fac7f9ed1cfad88c5f23a8e0ec09b0917bf22b226
+# ccrc:generated 1 sha256=83cf837eeb7d3641da17a3d774eb12409dd60269dcb2e65c3b8d71ec07d1b6c9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -25830,6 +25830,13 @@ _ws_reclaim_normalise() {   # dir -> 0 when every directory under it is u+rwx an
   # is still unreadable afterwards — an entry another uid owns, a chmod that did
   # not take — is named, and rung 8 refuses on it.
   #
+  # EVERY REASON IS ONE CAPPED LINE (spec §5.5, §5.9): `$left` is a name the
+  # session chose and `$d` a path, and a long or non-UTF-8 one, raw, grows at
+  # the journal's encoder until the refusal row loses its `detail`, `verb` and
+  # `dec.*`. So each reason that carries one goes through `_ws_leaf_why_line`
+  # (printable ASCII, 300 bytes, the cut marked). The two fixed sentences are
+  # short ASCII already. No token reads this reason.
+  #
   # `-user` GOVERNS BOTH ARMS, so the disjunction is parenthesised as a whole:
   # find's `-o` binds looser than the implicit `-a`, and an unwrapped
   # `-user me \( dir-arm \) -o \( file-arm \)` parses as
@@ -25844,17 +25851,17 @@ _ws_reclaim_normalise() {   # dir -> 0 when every directory under it is u+rwx an
     \( \( -type d ! -perm -u=rwx -exec chmod u+rwx {} \; \) \
     -o \( -type f ! -perm -u=r -exec chmod u+r {} \; \) \) 2>"$errf"; rc=$?
   if (( rc == 124 )); then
-    rm -f "$errf"; _WS_NORMALISE_WHY="the permission pass over $d did not finish within ${REAP_SCAN_SECONDS}s"; return 2
+    rm -f "$errf"; _WS_NORMALISE_WHY=$(_ws_leaf_why_line "the permission pass over $d did not finish within ${REAP_SCAN_SECONDS}s"); return 2
   fi
   # find answers 0, or 1 for an entry it could not read or fix — the pass RAN.
   # Anything else (125-127: it never started; above 128: a signal) means it did
   # not run to the end, and what is still unreadable is not its verdict.
   if (( rc != 0 && rc != 1 )); then
-    rm -f "$errf"; _WS_NORMALISE_WHY="the permission pass over $d did not run to completion (rc $rc)"; return 2
+    rm -f "$errf"; _WS_NORMALISE_WHY=$(_ws_leaf_why_line "the permission pass over $d did not run to completion (rc $rc)"); return 2
   fi
   left=$(find -P "$d" -xdev \( -type d ! -perm -u=rwx -o -type f ! -perm -u=r \) -print -quit 2>>"$errf")
   if [[ -n "$left" || -s "$errf" ]]; then
-    _WS_NORMALISE_WHY="${left:+$left is still unreadable after the permission pass}${left:+ }$(head -1 "$errf" 2>/dev/null)"
+    _WS_NORMALISE_WHY=$(_ws_leaf_why_line "${left:+$left is still unreadable after the permission pass}${left:+ }$(head -1 "$errf" 2>/dev/null)")
     rm -f "$errf"; return 1
   fi
   rm -f "$errf"
