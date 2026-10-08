@@ -381,6 +381,7 @@ export interface HealthInputs {
   readonly spoolDisplaced: number;
   readonly spoolBlocked: number;
   readonly spoolUnreadable: number;
+  readonly spoolNotDirectory: boolean;
   readonly exportSegmentNewer: readonly string[];
   readonly exportSegmentMissing: number;
   readonly journalUnwritable: boolean;

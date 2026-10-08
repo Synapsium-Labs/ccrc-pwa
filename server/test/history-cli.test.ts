@@ -756,6 +756,31 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
   });
 
+  // FU8 (FP3): a link or a file at spool/ stops the hook and the drain alike. Status names it under WARN spool-planted from its
+  // own lstat (so the clause clears when the entry goes), and reads no spool/.draining through it.
+  it.each([['a link to a directory'], ['a regular file']])('%s at spool/ is WARN spool-planted, and status reads no .draining through it (FU8, FP3)', (kind) => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-spool-refused-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const spoolDir = healthPath.join(box.home, '.ccrc', 'history', 'spool');
+    const outside = healthPath.join(box.home, 'outside');
+    healthFs.mkdirSync(healthPath.join(outside, '.draining'), { recursive: true, mode: 0o700 });
+    healthFs.writeFileSync(healthPath.join(outside, '.draining', 'x.900.1.jsonl'), '', { mode: 0o600 });
+    healthFs.writeFileSync(healthPath.join(outside, '.draining', 'x.900.1.obs'), JSON.stringify(fullObs(Date.now() - 6 * 60 * 60_000)), { mode: 0o600 });
+    healthFs.rmSync(spoolDir, { recursive: true, force: true });
+    if (kind === 'a link to a directory') healthFs.symlinkSync(outside, spoolDir);
+    else healthFs.writeFileSync(spoolDir, 'stray');
+    const h = statusOf(box).env!['health'];
+    const warn = (h['warn'] as Array<{ word: string; detail: string }>).find((i) => i.word === 'spool-planted');
+    expect(warn?.detail).toContain('spool/ is not a real directory');                     // at cf544c151: no word names it
+    expect(wordsOf(h['fail']), 'nothing read through it').not.toContain('journal-unwritable');   // at cf544c151, the link: FAIL, read through it
+    expect(wordsOf(h['fail'])).not.toContain('status-unreadable');                        // at cf544c151, the file: FAIL, its readdir ENOTDIR
+    healthFs.rmSync(spoolDir, { recursive: true, force: true });                         // a link is removed, never its target
+    healthFs.mkdirSync(spoolDir, { mode: 0o700 });                                        // CONTROL: a real directory again
+    expect(wordsOf(statusOf(box).env!['health']['warn'])).not.toContain('spool-planted');
+    expect(healthFs.existsSync(healthPath.join(outside, '.draining', 'x.900.1.obs'))).toBe(true);
+  });
+
   it('an observation sidecar whose draining file is gone is not a held file, however old (review 316 F20)', () => {
     const box = healthHh.makeHistoryBox('ccrc-history-health-sidecar-orphan-', { role: 'fleet', shim: true });
     ageFile(shimOf(box), 60 * 60_000);

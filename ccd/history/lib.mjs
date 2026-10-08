@@ -2747,7 +2747,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
   'drain-rejected': `the files are kept in ~/.ccrc/history/spool/.draining/rejected/ and their lines in the journal, and nothing in this build drains them again; the refusal is in the sweep's log: ${SWEEP_LOG}`,
   // D-4347 (history-planted-entries-never-wedge). Never reset in B1, like drain-rejected and blob-undecodable: B2's repair owns resets.
-  'spool-planted': `remove the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; a file the sweep cannot read stays in .draining/ with its .obs sidecar until both are readable by this user (chmod 600, or chown them) or removed, and its id's later files drain once it does; the sweep's log names each one: ${SWEEP_LOG}`,
+  'spool-planted': `remove a link or file that stands at ~/.ccrc/history/spool itself (the next pass makes the directory again) and the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; a file the sweep cannot read stays in .draining/ with its .obs sidecar until both are readable by this user (chmod 600, or chown them) or removed, and its id's later files drain once it does; the sweep's log names each one: ${SWEEP_LOG}`,
 });
 
 const minutesOf = (ms) => Math.round(ms / 60_000);
@@ -2933,8 +2933,11 @@ export function deriveHealth(h) {
   if (h.drainRejected > 0) warn.push(item('drain-rejected', `${h.drainRejected} spool file(s) were set aside in .draining/rejected/ because the store refused their rows`));
   // D-4347 (history-planted-entries-never-wedge): a displaced spool file's lines are out of the store, as a rejected one's are.
   // FU8 (FP5): a file the sweep could not read waits in place with its id's later files behind it, and is counted apart.
-  if (h.spoolDisplaced + h.spoolBlocked + h.spoolUnreadable > 0) {
+  // FU8 (FP3): a link or a file at spool/ itself stops the hook and the drain alike; status measures it (no counter), so the
+  // clause clears when the entry goes.
+  if (h.spoolNotDirectory || h.spoolDisplaced + h.spoolBlocked + h.spoolUnreadable > 0) {
     const parts = [];
+    if (h.spoolNotDirectory) parts.push('spool/ is not a real directory (a link or a file stands there), so no hook spools a line and no pass drains one while it stands');
     if (h.spoolDisplaced + h.spoolBlocked > 0) parts.push(`${h.spoolDisplaced} spool file(s) set aside under .draining/planted/ and ${h.spoolBlocked} skipped drain(s) of a file whose sidecar name is blocked, because of entries planted in .draining/`);
     if (h.spoolUnreadable > 0) parts.push(`${h.spoolUnreadable} skipped drain(s) of a draining file or its sidecar the sweep could not read, whose id's later files wait behind it`);
     warn.push(item('spool-planted', parts.join('; ')));

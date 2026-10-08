@@ -2725,7 +2725,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     ...o,
@@ -2803,6 +2803,14 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const both = healthLib.deriveHealth(base({ spoolDisplaced: 2, spoolUnreadable: 1 })).warn.find((x) => x.word === 'spool-planted');
     expect(both?.detail).toContain('2 spool file(s) set aside under .draining/planted/ and 0 skipped drain(s)');
     expect(both?.detail).toContain('; 1 skipped drain(s) of a draining file or its sidecar the sweep could not read');
+  });
+
+  it('spool-planted names a spool/ that is not a real directory on its own, with its own remedy (FU8, FP3)', () => {
+    const i = healthLib.deriveHealth(base({ spoolNotDirectory: true })).warn.find((x) => x.word === 'spool-planted');
+    expect(i?.detail).toContain('spool/ is not a real directory (a link or a file stands there), so no hook spools a line and no pass drains one while it stands');
+    expect(i?.detail, 'the counted clauses are left out when their counts are 0').not.toContain('skipped drain(s)');
+    expect(i?.remedy).toContain('remove a link or file that stands at ~/.ccrc/history/spool itself (the next pass makes the directory again)');
+    expect(healthLib.deriveHealth(base()).warn.find((x) => x.word === 'spool-planted'), 'CONTROL: a real spool/ and no counts').toBeUndefined();
   });
 
   it('blob-undecodable names how many stored blobs did not decode, and its remedy says the damage is storage corruption (D-4346)', () => {

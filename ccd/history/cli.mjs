@@ -611,12 +611,16 @@ async function readHealthExtras(home, env, nowMs) {
   const store = env.exit === healthLib.EXIT.OK
     ? readStoreExtras(p, nowMs)
     : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, copyBps: null, unmeasured: [] };
-  const held = env.exit === healthLib.EXIT.OK ? oldestUnjournaledMs(p) : { oldest: null, unreadable: false };
+  // FU8 (FP3): a link or a file at spool/ is measured by lstat, never followed, and no spool/.draining is read through it.
+  let spoolNotDirectory = false;
+  try { spoolNotDirectory = !healthFs.lstatSync(p.spool).isDirectory(); } catch { spoolNotDirectory = false; }
+  const held = env.exit === healthLib.EXIT.OK && !spoolNotDirectory ? oldestUnjournaledMs(p) : { oldest: null, unreadable: false };
   if (held.unreadable) store.unmeasured.push('spool/.draining');
   return {
     ...store,
     modesWrong: healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
     rootIsSymlink,
+    spoolNotDirectory,
     dbPath,
     rosterUnreadable: !rosterReadable(p.accountsSh),
     journalUnwritable: healthLib.journalHeldTooLong(held.oldest, nowMs),
@@ -673,6 +677,7 @@ function healthInputsOf(env, x, nowMs) {
     spoolDisplaced: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.spoolDisplaced]) ?? 0),
     spoolBlocked: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.spoolBlocked]) ?? 0),
     spoolUnreadable: Number((env.counters && env.counters[healthLib.HEALTH_COUNTERS.spoolUnreadable]) ?? 0),
+    spoolNotDirectory: x.spoolNotDirectory,
     exportSegmentNewer: x.exportSegmentNewer,
     exportSegmentMissing: x.exportSegmentMissing,
     extrasUnmeasured: x.unmeasured,
