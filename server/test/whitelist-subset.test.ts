@@ -609,8 +609,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
   });
 });
 
-// Spec §10 and its §15 W4 row: "the whitelist pin tests gain a case that the `update` op reaches no exec path". The `update` op is the
-// ONE wire-triggered spawn outside the exec whitelist, so its whole safety is that nothing else can reach its spawn port and that it
+// Spec §10 and its §15 W4 row: "the whitelist pin tests gain a case that the `update` op reaches no exec path". The `update` op is
+// one of TWO wire-triggered spawns outside the exec whitelist (the box token's `token-sync` op is the other, layer 4b below), so the whole safety of each is that nothing else can reach its spawn port and that it
 // reaches nothing of the whitelist's. It is a SOURCE scan, because no behavioural case can see an extra call whose answer comes out
 // the same. It lives in THIS whitelist pin test, and not in one of the agent's three, because this is the one that reads the agent's
 // exec surface from OUTSIDE it (layer 3: "the list never drifts wider than the code") and this describe is that layer's other half: the
@@ -709,6 +709,62 @@ describe('layer 4 — the update op is not an exec path, and its spawn port has 
     ]);
     for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
       expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')), `${f} references the update spawn port`).not.toMatch(/\b(?:makeUpdateSpawn|realUpdateSpawn)\b/);
+    }
+  });
+});
+
+// Layer 4b (box-token lifecycle, Task A2): the `token-sync` op is the SECOND wire-triggered spawn outside the exec
+// whitelist. The same two properties as layer 4, for its own port: its case names no exec-surface symbol, and
+// `spawnTokenSync(` has exactly one call site, inside `case 'token-sync'` of handleReq.
+describe("layer 4b — the token-sync op is not an exec path, and its spawn port has one caller", () => {
+  let readFileSync: typeof import('node:fs').readFileSync;
+  let readdirSync: typeof import('node:fs').readdirSync;
+  let path: typeof import('node:path');
+  let SRC_DIR = '';
+  let serverSrc = '';
+  let handleReq = '';
+  const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+  const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+  const CASE_END = /\n    (?:case '|default:)/;
+  function caseBody(src: string, word: string): string {
+    const open = `case '${word}': {`;
+    const at = src.indexOf(open);
+    expect(at, `${open} not found`).toBeGreaterThanOrEqual(0);
+    const rest = src.slice(at + open.length);
+    const end = CASE_END.exec(rest);
+    expect(end, `no end after ${open}`).not.toBeNull();
+    return rest.slice(0, end!.index);
+  }
+  beforeAll(async () => {
+    ({ readFileSync, readdirSync } = await import('node:fs'));
+    path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    serverSrc = readFileSync(path.join(SRC_DIR, 'server.ts'), 'utf8');
+    const at = serverSrc.indexOf('async function handleReq(');
+    expect(at, 'handleReq not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\n\}\n/.exec(rest);
+    expect(end, 'no end after handleReq').not.toBeNull();
+    handleReq = rest.slice(0, end!.index);
+  });
+
+  it("(a) `case 'token-sync'` and agent/src/tokensync.ts name no exec-surface symbol", () => {
+    const body = caseBody(handleReq, 'token-sync');
+    expect(code(body)).not.toMatch(EXEC_PATH);
+    expect(code(body), 'the cut is the token-sync op, not an empty slice').toMatch(/\bspawnTokenSync\s*\(/);
+    expect(code(readFileSync(path.join(SRC_DIR, 'tokensync.ts'), 'utf8'))).not.toMatch(EXEC_PATH);
+  });
+
+  it("(b) `spawnTokenSync(` is called exactly once in agent/src, inside `case 'token-sync'`, and nowhere outside it", () => {
+    const body = caseBody(handleReq, 'token-sync');
+    const call = /\bspawnTokenSync\s*\(/g;
+    expect(code(body).match(call)?.length ?? 0, "one call inside case 'token-sync'").toBe(1);
+    const outside = serverSrc.replace(body, '');
+    expect(outside.length, 'the case was cut out of the scan').toBeLessThan(serverSrc.length);
+    expect(code(outside).match(call)?.length ?? 0, "call sites outside case 'token-sync' in server.ts").toBe(0);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls spawnTokenSync(`).toBe(0);
     }
   });
 });

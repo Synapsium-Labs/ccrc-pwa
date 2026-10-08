@@ -25,14 +25,17 @@ import type {
   TailData,
   TailOpenReq,
   TailReset,
+  TokenSyncOpError,
+  TokenSyncReq,
   UpdateOpError,
   UpdateReq,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, UPDATE_OP,
-  UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
-  lockHeldBusyDetail, updateLauncherPath, updateSpawnArgv, updateWriterMayLive,
+  CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP,
+  TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
+  inFlightBusyDetail, isClaimCode, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
+  updateSpawnArgv, updateWriterMayLive,
   type KillProbeOutcome, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
@@ -54,6 +57,7 @@ import {
 } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
+import { makeTokenSyncSpawn, tokenSyncAnswer, tokenSyncEnv, type TokenSyncSpawn } from './tokensync.js';
 import { canonicalize, checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
 /**
@@ -72,6 +76,7 @@ export interface AgentOpts {
   helloTimeoutMs?: number;  // default 3000 — override for fast tests only
   spawnPty?: PtySpawn;      // default spawnFleetPty (real node-pty) — tests inject a fake spawn
   spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (a process-group spawn) — tests inject a recorder; the `update` op's ONLY spawn
+  spawnTokenSync?: TokenSyncSpawn; // default makeTokenSyncSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `token-sync` op's ONLY spawn
 }
 
 export interface RunningAgent {
@@ -212,6 +217,11 @@ function failUpdate(id: number, err: UpdateOpError, detail?: string): ResErr {
   return fail(id, err, detail);
 }
 
+/** The `token-sync` op's refusals, typed to its closed vocabulary (`TOKEN_SYNC_OP_ERRORS`) the same way. */
+function failTokenSync(id: number, err: TokenSyncOpError, detail?: string): ResErr {
+  return fail(id, err, detail);
+}
+
 /** Builds the `read` op's wire payload from `readWhole`'s result. `data`
  *  keeps its exact pre-existing meaning (null for BOTH absent and
  *  unreadable) so an older server's `typeof data === 'string' ? data : null`
@@ -332,9 +342,10 @@ function runExec(
 }
 
 /**
- * The `update` op's spawn port (design 2026-09-20 §10). It is the ONE place a
- * wire-triggered request reaches a process spawn outside the exec whitelist,
- * and it is deliberately NOT `runExec`: `runExec` is the exec op's executor,
+ * The `update` op's spawn port (design 2026-09-20 §10). It is one of the TWO
+ * places a wire-triggered request reaches a process spawn outside the exec
+ * whitelist (the other is the `token-sync` op's port, `./tokensync.ts`, its
+ * own body by D-4390), and it is deliberately NOT `runExec`: `runExec` is the exec op's executor,
  * and a call to it here would put this op on the exec path in the reader's
  * mind, which is exactly what §18 "the op never execs" forbids. Production is
  * `realUpdateSpawn`; tests inject a recorder through `AgentOpts.spawnUpdate`.
@@ -464,6 +475,11 @@ export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);
  *  (wave 4 Task 3), so both would pass it and write `queued`. */
 interface UpdateGate { spawning: boolean }
 
+/** ONE per agent PROCESS as well, for the `token-sync` op (spec 4.4, "one gate per agent process allows one sync at
+ *  a time"), for UpdateGate's reason: a server that reconnects on a new socket and re-sends the op must not start a
+ *  second verb beside the first. Separate from UpdateGate: the driver itself holds while an update is in flight. */
+interface TokenSyncGate { spawning: boolean }
+
 interface PtyEntry {
   proc: PtyProcess;
   dataSub: { dispose(): void };
@@ -479,6 +495,8 @@ interface ConnCtx {
   spawnPty: PtySpawn;
   spawnUpdate: UpdateSpawn;
   updateGate: UpdateGate;
+  spawnTokenSync: TokenSyncSpawn;
+  tokenSyncGate: TokenSyncGate;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -551,7 +569,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       //
       // ONE exception to that fallback (F12/D-3195, fix round 1 dispatch C).
       // `~/.ccrc` is not itself independently whitelisted in the common case
-      // (only its eight literal node-file paths are), so `parent === null`
+      // (only its nine literal node-file paths are), so `parent === null`
       // usually fires for a node-file request, and the fallback subject would
       // then be `p` — `checkPath`'s CANONICAL, already symlink-resolved,
       // answer. That is correct when the node file is admitted through
@@ -566,7 +584,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       // unchanged, whether or not `~/.ccrc` itself happens to be
       // independently admitted (e.g. `~/.ccrc` itself under another prefix):
       // only when the request literally names `<canonical
-      // ~/.ccrc>/<one of the eight basenames>` does the subject become that
+      // ~/.ccrc>/<one of the nine basenames>` does the subject become that
       // literal path directly, never the parent-probe fallback. The basename
       // check runs FIRST — a cheap array lookup — so the two `canonicalize`
       // calls (realpath walks) below run only when it can possibly matter,
@@ -632,8 +650,8 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       return;
     }
     case 'update': {
-      // Design 2026-09-20 §10. THE ONE wire-triggered spawn outside the exec
-      // whitelist (agent/CLAUDE.md). `validateReq` has already refused a tag
+      // Design 2026-09-20 §10. One of the TWO wire-triggered spawns outside the
+      // exec whitelist (agent/CLAUDE.md; the other is `token-sync`'s). `validateReq` has already refused a tag
       // that fails `isReleaseTag` and a kind outside `RequestKind`, so this body
       // never sees an unvalidated argument. `updateSpawnArgv` checks both AGAIN
       // and throws on a caller bug, so an edit that lets one through reaches
@@ -703,6 +721,36 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, { accepted: true }));
       return;
     }
+    case 'token-sync': {
+      // Box-token lifecycle spec 4.4. The second wire-triggered spawn outside the exec whitelist (agent/CLAUDE.md).
+      // `validateReq` has already refused a code that fails `isClaimCode`; it is checked AGAIN here, and a caller bug
+      // that lets one through throws into the envelope's `.catch`, never into a spawn. The argv is one frozen
+      // template with no variable token: the code rides the child's stdin, never argv, and the port hands the child
+      // an explicit {HOME, PATH, LANG}. Nothing here consults the exec whitelist, and nothing may.
+      //
+      // No `await` before the busy decision: the gate is checked and taken in one synchronous stretch.
+      if (ctx.tokenSyncGate.spawning) {
+        send(ws, failTokenSync(req.id, 'busy', 'a token-sync op is already running on this agent'));
+        return;
+      }
+      if (!isClaimCode(req.code)) throw new RangeError('token-sync: the code is not a claim code — a caller bug; nothing was spawned');
+      const file = updateLauncherPath(ctx.cfg.home);
+      const argv = tokenSyncSpawnArgv();
+      ctx.tokenSyncGate.spawning = true;
+      let spawned: Awaited<ReturnType<TokenSyncSpawn>>;
+      try {
+        spawned = await ctx.spawnTokenSync(file, argv, req.code, TOKEN_SYNC_SPAWN_TIMEOUT_MS);
+      } finally {
+        ctx.tokenSyncGate.spawning = false;
+      }
+      // The ONE mapping (`tokenSyncAnswer`): exit code AND first stderr line, or the synced line; neither carries
+      // the code or a value. `transport` is always sent by this build; its one reader is `readTokenTransport`.
+      const answer = tokenSyncAnswer(spawned);
+      send(ws, answer.ok
+        ? ok(req.id, { synced: answer.synced, transport: answer.transport })
+        : failTokenSync(req.id, answer.err, answer.detail));
+      return;
+    }
     default: {
       // Exhaustive today (every `AgentReq` op above), but kept as a
       // defensive fallback rather than removed — a future protocol variant
@@ -733,7 +781,10 @@ function isStringArray(v: unknown): v is string[] {
  *  `failUpdate(id, refuse)` before any case body runs. It is not `null`,
  *  because the handler answers `null` with `bad-request`, which from the
  *  `update` op must mean exactly one thing: this agent predates it. */
-export interface ReqRefusal { refuse: Extract<UpdateOpError, 'bad-tag' | 'bad-kind'>; id: number }
+export interface ReqRefusal {
+  refuse: Extract<UpdateOpError, 'bad-tag' | 'bad-kind'> | Extract<TokenSyncOpError, 'bad-code'>;
+  id: number;
+}
 
 /**
  * Runtime shape/type validation for an already-JSON-parsed `req` frame.
@@ -814,6 +865,12 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | null
       const kind = msg.kind === undefined ? 'update' : msg.kind;
       if (!isRequestKind(kind)) return { refuse: 'bad-kind', id };
       return { t: 'req', id, op: 'update', tag: msg.tag, kind } satisfies UpdateReq;
+    }
+    case 'token-sync': {
+      // The ONE code guard (`isClaimCode`, never a regex here). A missing, non-string or malformed code is a
+      // `ReqRefusal` carrying `bad-code`; `bad-request` from this op keeps meaning "this agent predates it".
+      if (!isClaimCode(msg.code)) return { refuse: 'bad-code', id };
+      return { t: 'req', id, op: 'token-sync', code: msg.code } satisfies TokenSyncReq;
     }
     default:
       return null;
@@ -1100,7 +1157,7 @@ async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
 
 function handleConnection(
   ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache,
-  updateGate: UpdateGate,
+  updateGate: UpdateGate, tokenSyncGate: TokenSyncGate,
 ): void {
   let authed = false;
   const ctx: ConnCtx = {
@@ -1112,6 +1169,8 @@ function handleConnection(
     spawnPty: opts.spawnPty,
     spawnUpdate: opts.spawnUpdate,
     updateGate,
+    spawnTokenSync: opts.spawnTokenSync,
+    tokenSyncGate,
   };
 
   const helloTimer = setTimeout(() => {
@@ -1153,10 +1212,11 @@ function handleConnection(
       // contract is unchanged — a key is written only when there is
       // something to write.
       // `ops` (design 2026-09-20 §10): the request ops this agent answers beyond
-      // the closed set every agent has always had, which is exactly one today.
-      // It is required in `ReadyFrame`, so it cannot be dropped silently.
+      // the closed set every agent has always had: `update`, and `token-sync`
+      // (box-token lifecycle spec 4.4). It is required in `ReadyFrame`, so it
+      // cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -1184,7 +1244,7 @@ function handleConnection(
       }
       // A well-shaped op whose ARGUMENT failed its guard (design 2026-09-20
       // §10) is answered with the op's own word, never `bad-request`.
-      if ('refuse' in req) { send(ws, failUpdate(req.id, req.refuse)); return; }
+      if ('refuse' in req) { send(ws, fail(req.id, req.refuse)); return; }
       // Defense in depth: even a validated request could hit an unforeseen
       // rejection downstream — this `.catch` guarantees no rejection from
       // the fire-and-forget dispatch is ever left unhandled.
@@ -1241,6 +1301,9 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     projectsRoot: resolveProjectsRoot(rawOpts.projectsRoot),
     spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
     spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,
+    // The child's environment is built from the agent's CONFIGURED home, not `process.env.HOME`, so the verb's
+    // `~/.cc-secrets` and `~/.ccrc` are the ones the launcher path (`updateLauncherPath(home)`) belongs to.
+    spawnTokenSync: rawOpts.spawnTokenSync ?? makeTokenSyncSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
@@ -1258,7 +1321,9 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
   const wss = new WebSocketServer({ server: httpServer });
   // ONE update gate per agent process, shared by every connection (D-3392).
   const updateGate: UpdateGate = { spawning: false };
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate));
+  // ONE token-sync gate per agent process, shared by every connection (spec 4.4).
+  const tokenSyncGate: TokenSyncGate = { spawning: false };
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate, tokenSyncGate));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);

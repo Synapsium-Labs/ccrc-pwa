@@ -2973,8 +2973,9 @@ general remote-shell:
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
-  fleet's projects root, and exactly the eight `$HOME/.ccrc` node files by
-  name (`NODE_FILES`, `shared/agent-protocol.ts`) — a live symlink inside
+  fleet's projects root, and exactly the nine `$HOME/.ccrc` node files by
+  name (`NODE_FILES`, `shared/agent-protocol.ts`; the ninth,
+  `box-token-generation`, holds a generation id, never a token) — a live symlink inside
   `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
@@ -2986,6 +2987,11 @@ general remote-shell:
   `--to <tag> --detach --from pwa`, with the tag checked by the one release-tag guard
   first — never through the exec whitelist, never an arbitrary command. The agent
   names it in its ready frame, and the server sends it to no agent that does not.
+- **Token-sync op**: `token-sync` only ever spawns `~/.local/bin/ccrc token sync --from agent`,
+  with the one-time claim code (checked by the one code guard first) on the child's stdin, never
+  argv, and an environment of exactly `HOME`, `PATH` and `LANG`, so the agent's own bearer never
+  reaches the verb. The verb, not the agent, claims and writes the token; the agent reads and
+  writes no secret file. It is named in the ready frame beside `update`.
 
 ### Degraded mode
 
