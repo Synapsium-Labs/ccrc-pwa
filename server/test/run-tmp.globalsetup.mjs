@@ -34,6 +34,15 @@
 // it was given — through whatever spelling of that base it was given, since a bind mount is one directory with
 // two names.
 //
+// THE MAIN PROCESS COLLECTS ITS OWN RUN ON A SIGNAL (D-4498). `globalSetup`'s teardown never runs on a signal:
+// under `timeout 4 vitest run` 6 of 6 runs leaked with teardown alone, and 5 of 6 with an `exit` hook added,
+// because GNU `timeout` signals its child and then the child's process group, so vitest's main process gets
+// SIGTERM TWICE — and vitest's own listener is a `once`, gone by the second delivery, whose default action then
+// kills main before vitest's 1 ms exit timer fires. vitest installs no SIGHUP handler at all (2 of 2 leaked). So
+// the arm is PERSISTENT listeners for SIGTERM, SIGINT and SIGHUP plus an `exit` listener; with it, 6 of 6 runs
+// under `timeout` were clean, and so were double SIGTERM, SIGTERM to main only, and SIGINT and SIGHUP to the
+// group, exiting 143, 130 and 129.
+//
 // WHY A `.mjs` THAT IMPORTS ONLY `node:` BUILTINS. Bare-`node` children import it (`run-tmp.test.ts` spawns
 // real owners), and the node floor (22.16) cannot strip types; `shared/base-url.mjs` is the precedent.
 import {
@@ -53,6 +62,8 @@ export const RUN_TMP = 'tmp';
 /** The run's own name, and nothing else: `mkdtemp`'s six characters, optionally mid-removal. Built from the two
  *  names above so it cannot drift from them. */
 export const RUN_NAME_RE = new RegExp(`^${RUN_PREFIX}[A-Za-z0-9]{6}(${DEAD_SUFFIX.replace('.', '\\.')})?$`);
+/** The signals the arm collects on, by number, so an armed exit is 128+n as a default action's would be. */
+export const RUN_SIGNALS = Object.freeze({ SIGHUP: 1, SIGINT: 2, SIGTERM: 15 });
 /** How long a dead or unowned run must have been quiet before a later run condemns it (D-4496). */
 export const RUN_QUIET_S = 600;
 const PROBE_TIMEOUT_MS = 2000;
@@ -161,6 +172,27 @@ export function openRun(base) {
       resolve({ run, server });
     });
   });
+}
+
+/** Arm the main process to collect `run` on SIGTERM, SIGINT, SIGHUP and `exit` (D-4498). Persistent `on`, never
+ *  `once`: GNU timeout delivers SIGTERM to main twice, and a second delivery after the last listener is gone
+ *  takes the default action mid-`rm` (measured). Each signal condemns the run, keeps an exit code already set
+ *  (vitest's own listener sets the same one) or sets 128+n, and exits on a 1 ms timer — vitest's own exit,
+ *  kept for when its `once` is spent. Returns the disarm, which teardown calls first.
+ *  @param {string} run @returns {() => void} */
+export function armSignals(run) {
+  const collect = () => { condemn(run); };
+  const onSignal = (sig) => {
+    collect();
+    process.exitCode ??= 128 + RUN_SIGNALS[sig];
+    setTimeout(() => process.exit(), 1);
+  };
+  for (const s of Object.keys(RUN_SIGNALS)) process.on(s, onSignal);
+  process.on('exit', collect);
+  return () => {
+    for (const s of Object.keys(RUN_SIGNALS)) process.off(s, onSignal);
+    process.off('exit', collect);
+  };
 }
 
 /** The next run's collector: walk `base` for this suite's run directories and condemn the dead or unowned ones

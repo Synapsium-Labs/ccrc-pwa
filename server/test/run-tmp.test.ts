@@ -13,6 +13,8 @@
 //   - `condemn`: rename first, then remove; a second actor gets `gone`; a failure is reported, never thrown.
 //   - `reapRuns`: what the NEXT run removes — only a run-named, real, own directory whose owner is dead (or
 //     absent) and that has been quiet for the window, through any spelling of the base, never throwing.
+//   - `armSignals`: the main process's own collector on SIGTERM, SIGINT, SIGHUP and `exit` — persistent, so a
+//     second SIGTERM mid-removal cannot kill it, always exiting 128+n, and gone again once disarmed.
 //
 // Every owner is a child this file spawned, and only those pids are ever signalled. Socket bases live under a
 // short `/tmp/ccrc-rt-XXXXXX` — a `mkTmp` path is too long for `sun_path` on macOS (104 bytes), the same reason
@@ -417,5 +419,96 @@ describe('reapRuns — only dead, quiet, ours, by name', () => {
     } finally {
       chmodSync(base, 0o700);
     }
+  });
+});
+
+describe('armSignals — a persistent arm that collects the run and always exits', () => {
+  // The harness child disarms BEFORE it prints the run, never after: a SIGTERM that arrives between the print
+  // and the disarm is caught by libuv and then dropped once the last listener goes, and the child hangs
+  // (measured). Every child also has a 15 s kill-after watchdog, so a mutant that never exits reads as SIGKILL.
+  type Variant = 'wait' | 'throw' | 'disarm' | 'noarm';
+  interface Armed { pid: number; run: string; exit: Promise<Exit> }
+
+  async function armed(base: string, variant: Variant, plant = 0): Promise<Armed> {
+    const src = [
+      "import { writeFileSync } from 'node:fs';",
+      "import path from 'node:path';",
+      `import * as m from ${JSON.stringify(MOD_URL)};`,
+      'const o = await m.openRun(process.argv[1]);',
+      `for (let i = 0; i < ${plant}; i++) writeFileSync(path.join(o.run, ${JSON.stringify(RUN_TMP)}, 'f' + i), 'x');`,
+      variant === 'noarm' ? '' : 'const disarm = m.armSignals(o.run);',
+      variant === 'disarm' ? 'disarm();' : '',
+      'console.log(JSON.stringify({ run: o.run }));',
+      variant === 'throw' ? "setTimeout(() => { throw new Error('a crash of the main process'); }, 50);" : '',
+      IDLE_SRC,
+    ].join('\n');
+    const c = spawn(process.execPath, ['--input-type=module', '-e', src, base], { stdio: ['ignore', 'pipe', 'pipe'] });
+    spawned.push(c.pid!);
+    let stderr = '';
+    c.stderr!.setEncoding('utf8').on('data', (d: string) => { stderr += d; });
+    const watchdog = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* gone */ } }, 15_000);
+    const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
+    const line = await firstJsonLine<{ run: string }>(c.stdout!, exit)
+      .catch((e: Error) => { throw new Error(`${e.message}\n--- child stderr ---\n${stderr}`); });
+    return { pid: c.pid!, run: line.run, exit };
+  }
+
+  const clean = (run: string): boolean => !existsSync(run) && !existsSync(run + DEAD_SUFFIX);
+
+  it('T4a: SIGTERM collects the run and exits 143', async () => {
+    const a = await armed(socketBase(), 'wait');
+    process.kill(a.pid, 'SIGTERM');
+    expect(await a.exit).toEqual({ code: 143, signal: null });
+    expect(clean(a.run)).toBe(true);
+  });
+
+  it('T4b: SIGINT collects the run and exits 130', async () => {
+    const a = await armed(socketBase(), 'wait');
+    process.kill(a.pid, 'SIGINT');
+    expect(await a.exit).toEqual({ code: 130, signal: null });
+    expect(clean(a.run)).toBe(true);
+  });
+
+  it('T4c: SIGHUP — vitest installs no handler for it — collects the run and exits 129', async () => {
+    const a = await armed(socketBase(), 'wait');
+    process.kill(a.pid, 'SIGHUP');
+    expect(await a.exit).toEqual({ code: 129, signal: null });
+    expect(clean(a.run)).toBe(true);
+  });
+
+  it('T4d: a second SIGTERM while the removal is under way (GNU timeout\'s shape) does not kill it mid-rm', async () => {
+    // Two SIGTERMs sent back to back merge into one pending signal, so a `once` arm passes that shape. The
+    // second one is sent only once the rename has happened and the `rm` of 4,000 files is running.
+    const a = await armed(socketBase(), 'wait', 4000);
+    process.kill(a.pid, 'SIGTERM');
+    const t0 = Date.now();
+    while (!(existsSync(a.run + DEAD_SUFFIX) && !existsSync(a.run)) && Date.now() - t0 < 5000) {
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    expect(existsSync(a.run + DEAD_SUFFIX), 'the removal was over before the second signal; plant more files').toBe(true);
+    process.kill(a.pid, 'SIGTERM');
+    expect(await a.exit).toEqual({ code: 143, signal: null });
+    expect(clean(a.run)).toBe(true);
+  });
+
+  it('T4e: a crash of the main process collects the run through the exit listener', async () => {
+    const a = await armed(socketBase(), 'throw');
+    expect(await a.exit).toEqual({ code: 1, signal: null });
+    expect(clean(a.run)).toBe(true);
+  });
+
+  it('T4f: once disarmed, a SIGTERM takes its default action and leaves the run alone', async () => {
+    const a = await armed(socketBase(), 'disarm');
+    process.kill(a.pid, 'SIGTERM');
+    expect(await a.exit).toEqual({ code: null, signal: 'SIGTERM' });
+    expect(existsSync(a.run)).toBe(true);
+  });
+
+  it('T4g: the positive control — a run that was never armed is left by a SIGTERM', async () => {
+    // Without it, T4a's "clean" would also be the reading if the harness removed the run some other way.
+    const a = await armed(socketBase(), 'noarm');
+    process.kill(a.pid, 'SIGTERM');
+    expect(await a.exit).toEqual({ code: null, signal: 'SIGTERM' });
+    expect(existsSync(a.run)).toBe(true);
   });
 });
