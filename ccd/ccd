@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2011ee290b83e7d73cab91d3db705fd31cdca64555eed05cd116133509e23f19
+# ccrc:generated 1 sha256=18757d4ca843caaa97706950643c8e5898c34d88b7d46220e56a4ad86596a412
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23198,8 +23198,8 @@ _carry_py() {   # walk src dst budget | route a b — the carry's ONE embedded p
   # carry from the bind-mount move (2026-09-22) until D-4500 was a `cp -a`,
   # which preserves mtime_ns — and every carry since is a link (the same inode,
   # equal by identity) or still that copy — so a file untouched since its last
-  # carry passes it; measured on the box's 673
-  # real return-visit pairs, it cuts the walk's p90 cost from 764 MiB to 208 MiB
+  # carry passes it; measured on the box's 673 real return-visit pairs, it
+  # cuts the walk's p90 cost from 764 MiB to 208 MiB
   # — about the bytes that are actually new. Its named cost: two different
   # files of identical size AND identical nanosecond mtime read as equal.
   #
@@ -23542,17 +23542,19 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   # `workflows/<runId>.json` is written whole at the run's end), so a linked
   # tree shares those appends between the two accounts. That is harmless —
   # both names are this session's own record, and a later merge reads a shared
-  # inode as equal. HISTORY, dated: from
-  # 2026-09-22 every account root on the fleet was its own bind mount, link(2)
-  # across two mounts answers EXDEV even on one filesystem (measured), and every
-  # carry logged `(copy)`. Since D-4500 a failed `cp -al` asks `_carry_link_route`
-  # for a read-write mount of that filesystem exposing both trees, and links
-  # through it, logged `(link: via-mount)`; only when there is none, or the link
-  # through it fails too (`root-failed`), does it copy. The mode is logged so the
-  # evidence exists if a future defect implicates a shared file, and a copy logs
-  # WHY and HOW MUCH (D-4501): `(copy: <cause> <bytes|?> bytes)`, one
-  # `CARRY_CAUSES` word, with the same sentence on stderr. A bare `(copy)` is
-  # what a carry before D-4501 wrote; the stage-1 instrument still reads it.
+  # inode as equal.
+  #
+  # HISTORY, dated: from 2026-09-22 every account root on the fleet was its own
+  # bind mount, link(2) across two mounts answers EXDEV even on one filesystem
+  # (measured), and every carry logged `(copy)`. Since D-4500 a failed `cp -al`
+  # asks `_carry_link_route` for a read-write mount of that filesystem exposing
+  # both trees, and links through it, logged `(link: via-mount)`; only when
+  # there is none, or the link through it fails too (`root-failed`), does it
+  # copy. The mode is logged so the evidence exists if a future defect
+  # implicates a shared file, and a copy logs WHY and HOW MUCH (D-4501):
+  # `(copy: <cause> <bytes|?> bytes)`, one `CARRY_CAUSES` word, with the same
+  # sentence on stderr. A bare `(copy)` is what a carry before D-4501 wrote;
+  # the stage-1 instrument still reads it.
   #
   # AN EXISTING DESTINATION IS MERGED, NOT LEFT ALONE (C8, reversing this
   # branch's old rule): `_swap_carry_merge_walk` above, under the carry slot and

@@ -50,7 +50,7 @@ const carryCauses = (): string[] => {
   return m ? [...m[1]!.matchAll(/'([a-z-]+)'/g)].map((x) => x[1]!) : [];
 };
 
-// The fake kernel's `/dev/shm` — a real second filesystem — exists only on Linux.
+// A REAL second filesystem for R9 — `/dev/shm`, a tmpfs — exists only on Linux.
 const SHM = '/dev/shm';
 const crossDevice = ((): boolean => {
   try { return fs.statSync(SHM).isDirectory() && fs.statSync(SHM).dev !== fs.statSync(os.tmpdir()).dev; }
