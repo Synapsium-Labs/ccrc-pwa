@@ -1016,6 +1016,33 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     `LcRefusalToken`, `LC_REFUSAL_WORD` and `LifecycleAct`. Whichever of runs 345 and 347 lands second merges main.
     The consent was relayed to keen-hollow as addendum 2 (mail 4058). Run 320's README and `routes.ts` claims still
     follow the brief's rule for a refused claim.
+- **2026-10-08 23:40 — run 345 progress (keen-hollow's mail 4061; not a wave-done). Task 6's review F1 is ruled (mail
+  4062).**
+  - **Where the run stands:** Tasks 1–12 are committed on `ws/keen-hollow` at `4d6dae2c0`.
+    - Each task's Opus review approved it with no Critical finding.
+    - Every red, green and mutation-row count matched the plan's.
+    - The `ccd/ccd` stamp is the plan's own.
+    - The worker checked that every edit inside claims it does not hold stayed within the consented regions:
+      bright-mesa's 4056 (`routes.ts`, README) and CCR-15's 4052 (via 4058).
+    - Addendum 4050 (Order B) did not fire: `origin/main` carries no `leafKeptWord`. So Task 13 skips its merge step,
+      as worker clause 16 requires.
+    - Task 13 is running: the full verification, the whole-branch Opus review and Task 12's review. Then the PR and the
+      wave-done.
+  - **Correction to the 20:00 entry's restated item 3 ("narrows; it never widens"): that holds for one window
+    only.** Task 6 reads the journal's trust (the mirror's gap list and its last write-error instant) BEFORE the
+    claimant's measure.
+    - The revive window narrows to that measure's own round trip.
+    - The journal window is no longer narrow: a gap recorded during the measure's round trip is missed, and the
+      journal clause then fails open.
+  - **Ruled: keep the plan's order.** A missed revive closes a live coordinator's runs, and the claimant's measure
+    (tmux and the heartbeat) is the direct evidence of life. A gap recorded in that one round trip fails open only if
+    it also hides a deliberate act by the same claimant.
+    - The worker restates the departure `a-stale-mirror-at-the-act-is-a-hold` (4485) in the plan to name both windows,
+      in a docs-only commit if verification is already past.
+    - No code changes in wave 5.
+    - Wave 6 re-reads the gap list after the claimant's measure. `lifecycleGapGens` is synchronous, so the re-read
+      does not reopen the revive window; only the write-error stat stays early.
+    - Both windows go into the dead-coordinator lane's arming notes.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -1145,6 +1172,9 @@ head `f8ec01cc4`), and merged as #333 (`b2b438d0b`). The brief is in the 22:10 e
   recommended order, on the expiry lane being armed first. The operator should know the worker's open items 1 and 3
   (the 12:02 entry): a lane gap over ten minutes trips the breaker for every crashed coordinator at once, and a
   same-id revive in the act's last instant can still lose its runs.
+  From wave 5's Task 6 (the 23:40 entry), the operator should also know which window narrows. The revive window
+  narrows to the claimant measure's round trip. In exchange, a journal gap recorded during that round trip is missed,
+  until wave 6 re-reads the gap list.
 - **Operator question (f), from review 339's F5:** when a coordinator revived under a crashed id opens a new run
   under its abandoned programme, should the programme row return to active? Today it stays `abandoned` until the next
   close of the programme's last open run rewrites it (measured in a fixture store). Meanwhile, `toId:'coordinator'` mail
@@ -1156,6 +1186,8 @@ head `f8ec01cc4`), and merged as #333 (`b2b438d0b`). The brief is in the 22:10 e
   parser reads `crumb:true` as resumable (question (k), an arming blocker for the expiry lane). `containment-refuted`
   gets attention at once (CCR-15's `stuck` class). Also from wave 5's act-safety lens (the 21:55 entry): a count
   for a `restart` that recurs, so it climbs the failure ladder; and a control case with HEAD symbolic to `ws/<slug>`,
-  pinning that a branch deleted in the window ends at the pin as `pin-failed`.
+  pinning that a branch deleted in the window ends at the pin as `pin-failed`. From Task 6's review F1 (the 23:40
+  entry): `stillCrashed` re-reads the mirror's gap list after the claimant's measure. The read is synchronous, so the
+  revive window stays closed.
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
   L5's sentence.
