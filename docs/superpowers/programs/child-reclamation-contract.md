@@ -1523,7 +1523,7 @@ This note amends; it edits no earlier text.
       the resume's own reads (an unreadable tombstone, for one) while an earlier attempt's breadcrumb (for example
       `reclaim:artifacts`) still stands. The server reads it `not-resumable`, so the feed says the act is retried from
       the start, but the box's next attempt resumes from that breadcrumb and completes. It is the mirror image of the
-      `pin-failed` case: the same symptom, a wrong sentence and never a wrong act. The classification is unchanged in
+      `pin-failed` case: the same kind of fault, a wrong sentence and never a wrong act. The classification is unchanged in
       wave 6. It agrees with the scoped sentence of `LC_REFUSAL_WORD['probe-unmeasured']` ("this attempt started
       nothing and removed nothing"), which says only what THIS attempt did.
   - `die "bad run id"` was reclaim's alone, so the sanctioned unjournaled set narrows by one.

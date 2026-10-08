@@ -1078,7 +1078,7 @@ approved on a narrow one.
      attempt's breadcrumb stands. The locked recomputation prints it for any unmeasured verdict, and on a resume that
      verdict can come from the resume's own reads (an unreadable tombstone, for one). The feed says the act is retried
      from the start, but the box's next attempt resumes from that breadcrumb and completes. This is the mirror image
-     of the residual above: the same symptom, a wrong sentence and never a wrong act, and the same additive field
+     of the residual above: the same kind of fault, a wrong sentence and never a wrong act, and the same additive field
      tells the cases apart. Wave 7 carries it.
    - The in-use probe reads each process's environment as exec'd, so a TMPDIR set after exec is not seen.
      - A cwd or fd reached through another mount of the same directory has a spelling neither of its compared

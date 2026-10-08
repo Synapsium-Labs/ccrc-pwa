@@ -9544,7 +9544,7 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     resume's own reads (an unreadable tombstone, for one) while an earlier attempt's breadcrumb (for example
     `reclaim:artifacts`) still stands. The server reads it `not-resumable`, so the feed says the act is retried from
     the start, but the box's next attempt resumes from that breadcrumb and completes. It is the mirror image of the
-    `pin-failed` case: the same symptom, a wrong sentence and never a wrong act, carried to wave 7 with the same
+    `pin-failed` case: the same kind of fault, a wrong sentence and never a wrong act, carried to wave 7 with the same
     `crumb` field, which marks a document with or without a breadcrumb and so covers both directions. The
     classification is unchanged in wave 6. It agrees with `probe-unmeasured-word-scoped-to-attempt`, whose sentence
     says only what THIS attempt did and started.
