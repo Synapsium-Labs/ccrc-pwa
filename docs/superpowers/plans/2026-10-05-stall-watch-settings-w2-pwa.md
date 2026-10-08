@@ -3671,7 +3671,11 @@ Each is pinned, and the plan takes no number for any of them:
   too. X48 and X60 are retargeted to the network arm's new line.
 - `quiet-select-shows-no-unanswered-value` (Task 3). A stored quiet time the list does not hold selects one empty,
   hidden, disabled option (X38). The one stored value that is not "unanswered" is a quiet time equal to the built-in,
-  as a number (fix round 1, F3): it selects the built-in option, since the list omits that step.
+  as a number: the server keeps it apart from the built-in (`quietSource: 'chosen'`; a `default` write over it is a
+  real change; only NULL follows the built-in), so the select shows it as its own option, value the stored number,
+  labelled with the quiet line's own "chosen here" wording, and selects that one (fix round 2, F1; fix round 1's merge
+  of it into the built-in option was replaced). "Built-in" stays an unselected option, so picking it is one change
+  that writes `default`. A stored number off the list that is not the built-in still selects the blank option.
 - `readme-section-sentence-pinned-to-l0` (Task 4). A new server test file the spec does not name.
 
 ## Residue settled by this plan

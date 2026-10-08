@@ -17,7 +17,7 @@
 //     reading and every write's effect come from the wire, and every word is an L0 STALL_* constant (apart from
 //     the shared `UNCONFIRMED_TEXT` (§13 step 3)), filled by `fillStallText`. There is no viewport,
 //     pointer or user-agent branch.
-import { useId, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   STALL_BUSY_GATE_OFF_TEXT, STALL_BUSY_GATE_TEXT, STALL_CONFIRM_TEXT, STALL_FALLBACK_TEXT, STALL_FILES_EXCEED_TEXT,
@@ -265,9 +265,11 @@ const NOW_CLASS: Record<StallNowTone, string> = {
   warn: 'settings-catalogue settings-catalogue--amber',
 };
 /** The select's value for the built-in, and for a stored value the list does not hold (an unreadable one): an
- *  empty option, drawn blank, so the select never shows a value the server did not answer. A stored number equal to
- *  the view's built-in is the built-in, whichever way it was stored: the list omits that step, so it selects the
- *  built-in option, not the blank one (departure `quiet-select-shows-no-unanswered-value`). */
+ *  empty option, drawn blank, so the select never shows a value the server did not answer. A stored NUMBER equal to
+ *  the view's built-in is not the built-in: the server reports it as a pinned choice (`chosen`), a `default` write
+ *  over it is a real change, and only a NULL follows the built-in. The list omits that step, so the select carries
+ *  it as its own option, labelled as the quiet line labels it, and selects that one; "Built-in" stays an unselected
+ *  option, so picking it is one change that writes `default` (departure `quiet-select-shows-no-unanswered-value`). */
 const QUIET_BUILT_IN = 'default';
 const QUIET_NONE = '';
 
@@ -328,9 +330,10 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   const next = stallNextLines(view.effective);
   const choices = quietChoices(view);
   const stored = view.chosen.quietMs;
-  const quietValue = stored === 'default' || stored === view.quiet.builtInMs
+  const pinnedBuiltIn = typeof stored === 'number' && stored === view.quiet.builtInMs ? stored : null;
+  const quietValue = stored === 'default'
     ? QUIET_BUILT_IN
-    : choices.some((c) => c.value === stored) ? String(stored) : QUIET_NONE;
+    : pinnedBuiltIn !== null || choices.some((c) => c.value === stored) ? String(stored) : QUIET_NONE;
   const quietLine = fillStallText(
     view.quiet.source === 'chosen' ? STALL_SECTION_TEXT.chosenHere : STALL_SECTION_TEXT.builtIn,
     { value: quietText(view.quiet.effectiveMs) });
@@ -375,7 +378,14 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
         >
           {quietValue === QUIET_NONE && <option value={QUIET_NONE} disabled hidden />}
           {choices.map((c) => (
-            <option key={String(c.value)} value={String(c.value)}>{c.label}</option>
+            <Fragment key={String(c.value)}>
+              <option value={String(c.value)}>{c.label}</option>
+              {c.value === 'default' && pinnedBuiltIn !== null && (
+                <option value={String(pinnedBuiltIn)}>
+                  {fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(pinnedBuiltIn) })}
+                </option>
+              )}
+            </Fragment>
           ))}
         </select>
         <p className="settings-note">{STALL_QUIET_NOTE}</p>

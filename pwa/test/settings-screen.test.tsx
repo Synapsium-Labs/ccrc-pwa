@@ -2372,15 +2372,22 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(select.value).toBe('');
   });
 
-  it('a stored quiet time equal to the built-in as a number selects the built-in option; one off the list that is not the built-in (the server cannot send it today) selects none', async () => {
+  it('a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled as the quiet line says; one off the list (the server cannot send it today) selects none', async () => {
     const select = (): HTMLSelectElement =>
       within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    const selectedText = (): string | null => select().selectedOptions[0]?.textContent ?? null;
     const builtIn = swView().quiet.builtInMs;
     expect(builtIn, 'the fixture\'s built-in is the 2 h the stored number below equals').toBe(2 * SW_H);
     expect(quietChoices(swView()).some((c) => c.value === builtIn), 'the list omits the built-in step').toBe(false);
 
     await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'chosen' } }));
-    expect(select().value, 'the built-in stored as a number selects the built-in option').toBe('default');
+    const quietLine = fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(builtIn) });
+    expect(within(section()).getByText(quietLine, { selector: 'p' }), 'the quiet line says it is chosen here').toBeInTheDocument();
+    expect(select().value, 'the pinned number is the selected option').toBe(String(builtIn));
+    expect(selectedText(), 'and it reads as the quiet line reads').toBe(quietLine);
+    const builtInOption = within(select()).getByRole('option', { name: fillStallText(STALL_SECTION_TEXT.builtInOption, { value: quietText(builtIn) }) }) as HTMLOptionElement;
+    expect(builtInOption.selected, 'Built-in is present and not selected').toBe(false);
+    expect(builtInOption.value).toBe('default');
     cleanup();
 
     const offGrid = 75 * 60_000;
@@ -2388,6 +2395,19 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(quietChoices(swView()).some((c) => c.value === offGrid), 'the off-grid value is not on the list').toBe(false);
     expect(select().value, 'a value off the list that is not the built-in selects none').toBe('');
     cleanup();
+  });
+
+  it('from a pinned built-in number, picking Built-in is one change that writes default exactly once', async () => {
+    const builtIn = swView().quiet.builtInMs;
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'chosen' } }));
+    const write = vi.spyOn(api, 'setStallWatch').mockResolvedValue(swView());
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    expect(select.value).toBe(String(builtIn));
+    fireEvent.change(select, { target: { value: 'default' } });
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    expect(write).toHaveBeenNthCalledWith(1, { quietMs: 'default' });
+    await waitFor(() => expect(select.value).toBe('default'));
+    expect(write).toHaveBeenCalledTimes(1);
   });
 
   it('P5: the run-less footnote is always shown — zero counts, and counts that could not be read', async () => {
