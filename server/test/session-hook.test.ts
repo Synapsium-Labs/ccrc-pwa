@@ -10226,7 +10226,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     ).toBeNull();
     expect(
       code.match(/(?<![\w$])[A-Za-z_]\w*\[(?!-?\d+\]|[@*]\])/)?.[0] ?? null,
-      'a name[subscript] whose subscript is not a literal, @ or *: in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes, quoted or not (review 351 F1)',
+      'a name[subscript] whose subscript is not a literal, @ or *: in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes, the whole word quoted or not (review 351 F1)',
     ).toBeNull();
     expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');
     expect(code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null, 'let and an integer attribute evaluate arithmetic (review 351 F1)').toBeNull();
@@ -10515,11 +10515,13 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
    *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`; and
    *  (FR3a, review 351 F1) arithmetic whose operand is anything but an integer literal or `${#name}`, in `(( ))`,
    *  `$(( ))`, `$[ ]`, a `${name:offset:length}` or a `name[subscript]` anywhere (a `${…}`, an assignment, or a name
-   *  `read`, `printf -v` or `[[ -v ]]` takes, quoted or not), and the `-eq -ne -lt -le -gt -ge` operators
-   *  of `[[ ]]`: each evaluates its operands as arithmetic, so a variable holding `a[$(…)]` forks there.
+   *  `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not), and the `-eq -ne -lt -le -gt -ge`
+   *  operators of `[[ ]]`: each evaluates its operands as arithmetic, so a variable holding `a[$(…)]` forks there.
    *  Not chased (the S1 stopping line, review 351 F1): ${!x} indirection, [[ -v $v ]], and printf -v "$v" or
-   *  read -r "$v" with a dynamic name (a literal name with a variable subscript is named above). Each forks when the
-   *  name it reads holds a[$(…)], and each is a deliberate spelling; the spool block uses none of them.
+   *  read -r "$v" with a dynamic name (a literal name with a variable subscript is named above); and a name split
+   *  from its `[` by a quote or a backslash (x"[v]", x'[v]', x\[v\]), which quote removal joins before the subscript
+   *  is read. Each forks when the name it reads holds a[$(…)], and each is a deliberate spelling; the spool block
+   *  uses none of them.
    *  [] = builtins only. Conservative by construction: what it cannot classify is reported, never passed. */
   const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
     const found: string[] = [];
@@ -10560,8 +10562,9 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     };
     const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
     // FR3c (review 351 F1): a `name[subscript]` anywhere (a `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes,
-    // quoted or not) evaluates a subscript that is not a literal, `@` or `*` as arithmetic, so it is named on the whole source,
-    // before step 1 masks quoted text. An unbraced `$x[v]` is `$x` and literal text, no subscript, hence the `$` in the lookbehind.
+    // the whole word quoted or not) evaluates a subscript that is not a literal, `@` or `*` as arithmetic, so it is named on the
+    // whole source, before step 1 masks quoted text. An unbraced `$x[v]` is `$x` and literal text, no subscript, hence the `$` in
+    // the lookbehind. A name split from its `[` by a quote or a backslash is on the stopping line (forkForms' header).
     if (/(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])/.test(src)) found.push('subscript');
     // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
     let out = '';
