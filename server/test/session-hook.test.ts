@@ -10211,6 +10211,8 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(code).not.toContain('$(');
     expect(code).not.toContain('`');
     expect(code).not.toContain('sha');
+    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
+    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the spool block (@P forks)').toBeNull();
     const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
     expect(code.match(external)?.[0] ?? null, 'an external command in the spool block forks on the hot path').toBeNull();
   });
@@ -10492,6 +10494,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
 
   // ── review 316 F38: S1 as SYNTAX — the spool block, and every function it calls, fork nothing ──
   /** Every form in `code` that makes bash fork or run a program: command or process substitution, a backtick,
+   *  a `${…@…}` parameter transformation (FR2a, review 344 F1: `@P` runs prompt expansion, and so command substitution),
    *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`.
    *  [] = builtins only. Conservative by construction: what it cannot classify is reported, never passed. */
   const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
@@ -10510,6 +10513,14 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
       }
       return -1;
     };
+    /** FR2a (review 344 F1): does the `${` whose body starts at `p` apply a transformation, `${name@op}` (`name` a
+     *  variable, a positional or special parameter, `!`/`#` before it, a subscript after it)? Every operator is named,
+     *  not `@P` alone: the block needs none, and only `@P` was measured to fork, so naming them all is the conservative read. */
+    const transformAt = (s: string, p: number): boolean => {
+      const re = /[!#]?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[[^\]\n]*\])?@[^}]/y;
+      re.lastIndex = p;
+      return re.test(s);
+    };
     const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
     // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
     let out = '';
@@ -10525,6 +10536,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
       if (c === '$' && src[i + 1] === '(' && src[i + 2] !== '(') { found.push('command substitution'); out += '__'; i++; continue; }
       if (c === '$' && src[i + 1] === '(' && arithEnd(src, i + 1) < 0) { found.push('command substitution'); out += '$( '; i++; continue; }   // FPM3: `$((` that is no arithmetic is a substitution holding a subshell
       if (c === '"' || (c === '$' && src[i + 1] === '{')) {
+        if (c === '$' && transformAt(src, i + 2)) found.push('parameter transformation');
         const stack: string[] = [c === '"' ? '"' : '}'];
         let j = c === '"' ? i + 1 : i + 2;
         for (; j < src.length && stack.length > 0; j++) {
@@ -10533,7 +10545,7 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
           if (d === '\\') { j++; continue; }
           if (d === '`') found.push('backtick');
           else if (d === '$' && src[j + 1] === '(' && (src[j + 2] !== '(' || arithEnd(src, j + 1) < 0)) found.push('command substitution');
-          else if (d === '$' && src[j + 1] === '{') { stack.push('}'); j++; }
+          else if (d === '$' && src[j + 1] === '{') { if (transformAt(src, j + 2)) found.push('parameter transformation'); stack.push('}'); j++; }
           else if (d === "'" && top === '}' && !stack.includes('"')) { const k = src.indexOf("'", j + 1); j = k < 0 ? src.length : k; }   // B3M16: inside double quotes a ${…} word's single quotes are literal, so what they enclose is live
           else if (d === '"') { if (top === '"') stack.pop(); else stack.push('"'); }
           else if (d === '}' && top === '}') stack.pop();
@@ -10610,6 +10622,13 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     ['a subshell inside $( (', T, "_hs+='}'; _hs_x=$( (echo x) )", 'command substitution'],
     ['a substitution spelled $((', T, "_hs+='}'; _hs_x=$((echo x) )", 'command substitution'],
     ['a substitution spelled $(( inside double quotes', T, '_hs+=\'}\'; _hs_x="$((true) && (mkdir x))"', 'command substitution'],
+    // FR2a (review 344 F1): `${name@op}`, at each place step 1 meets a `${`. `@Q` forks nothing; it is named by choice (transformAt).
+    ['an @P transformation inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION@P}"', 'parameter transformation'],
+    ['an @P transformation outside double quotes', A, '_hs_g=${CCRC_SESSION_GENERATION@P}', 'parameter transformation'],
+    ['an @P transformation nested in a ${} default word', A, '_hs_g="${CCRC_SESSION_GENERATION:-${_hs@P}}"', 'parameter transformation'],
+    ['an @P transformation in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'${_hs@P}\'}"', 'parameter transformation'],
+    ['an @P transformation of a subscripted name', A, '_hs_g="${_hs[0]@P}"', 'parameter transformation'],
+    ['an @Q transformation', A, '_hs_g="${CCRC_SESSION_GENERATION@Q}"', 'parameter transformation'],
   ];
   /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
   const INERT: Array<[string, string, string]> = [
@@ -10622,6 +10641,11 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     ['a (( )) arithmetic command', T, "_hs+='}'; (( i++ ))"],
     ['a $(( )) arithmetic expansion', T, "_hs+='}'; printf x $(( 1 + 2 ))"],
     ['a $(( )) arithmetic expansion inside double quotes', T, '_hs+=\'}\'; printf "$(( 1 + (2 * 3) ))"'],
+    // FR2a (review 344 F1): an `@` bash applies no transformation at: in plain single quotes, in a ${} word past its operator, and
+    // in a ${} word's single quotes outside double quotes (B3M16's skip; measured inert, as the first two are).
+    ['an @P transformation inside plain single quotes', A, "_hs_g='${CCRC_SESSION_GENERATION@P}'"],
+    ['an @ in a ${} default word', A, '_hs_g="${CCRC_SESSION_GENERATION:-a@P}"'],
+    ['an @P transformation in single quotes inside a ${} outside double quotes', A, "_hs_g=${CCRC_SESSION_GENERATION:-'${_hs@P}'}"],
   ];
 
   it('S1 (syntax, F38): the spool block and every function it calls hold no fork form', () => {
