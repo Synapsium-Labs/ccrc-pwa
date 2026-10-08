@@ -40,14 +40,16 @@ import {
  */
 
 /** The executor's ports (L2, declared by this consumer). `abandon` is the ONLY way it ends a run. `journalTrust` is the
- *  lane's own reading of the lifecycle mirror's health, gaps and ccd's write failures, asked fresh at each re-measure. */
+ *  lane's own reading of the lifecycle mirror's health, gaps and ccd's write failures, asked fresh at each re-measure —
+ *  WHOLE, `hold` with `trust`, so a mirror that turned `unknown` or `stale` since the pass stops the act as a `hold`
+ *  (the anchor stands) and is never read as an untrusted journal (`remeasured`, which deletes it; review 339, F4). */
 export interface EndDeadCoordinatorDeps {
   coord: CoordStore;
   io: FleetIO;
   cfg: CcrcConfig;
   tmux: ReclaimDeps['tmux'];
   notifyLog?: NotifyLog;
-  journalTrust: () => Promise<DeadCoordinatorJournalTrust>;
+  journalTrust: () => Promise<{ readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust }>;
   abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>;
   /** The lane's clock, read at the moment each re-measure measures. A re-measure NEVER takes the pass's instant: a
    *  supervisor heartbeat stamped after that instant would read "from the future", not fresh, and a RESTARTING
@@ -122,8 +124,12 @@ export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Pr
   if (names === null) return { kind: 'switch', why: `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   if (names.includes(RECLAIM_PAUSE_MARKER)) return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
   if (!deadCoordinatorLaneArmed(names)) return { kind: 'switch', why: 'the lane was disarmed during the act' };
+  // The journal's own trust FIRST, and whole: a mirror gone `unknown` or `stale` since the pass stops the act as the
+  // pass's own hold does — nothing learned, the anchor standing (review 339, F4).
+  const journal = await deps.journalTrust();
+  if (journal.hold !== null) return { kind: 'hold', why: `${journal.hold} — the act waits, and its hour stands` };
   const m = await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.now());
-  const c = deadCoordinatorCrash(m, deadCoordinatorJournalOf(deps.coord, id, await deps.journalTrust()));
+  const c = deadCoordinatorCrash(m, deadCoordinatorJournalOf(deps.coord, id, journal.trust));
   switch (c.kind) {
     case 'crashed': return null;
     case 'alive': return { kind: 'remeasured', why: `re-measured alive: ${c.why}` };

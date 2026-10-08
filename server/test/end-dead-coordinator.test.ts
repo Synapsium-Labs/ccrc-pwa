@@ -36,6 +36,8 @@ interface Opts {
   onVerb?: (verb: string) => void;
   /** The lane's reading of the journal itself (default: trusted). */
   trust?: DeadCoordinatorJournalTrust;
+  /** The mirror's hold, as the lane reads it at the act (default: none). */
+  hold?: string;
   /** The executor's clock at each re-measure (default: the pass's own instant, `NOW`). */
   clockAt?: number;
 }
@@ -61,7 +63,7 @@ const rig = async (o: Opts = {}) => {
     coord, cfg: base.cfg, notifyLog,
     io: o.unlistable === true ? { ...base.io, readdir: async () => null } : base.io,
     tmux: { sessionVerdict: async () => { asked += 1; o.onMeasure?.(asked); return o.verdict?.(asked) ?? { verdict: 'gone' }; } },
-    journalTrust: async () => o.trust ?? DEAD_COORDINATOR_JOURNAL_TRUSTED,
+    journalTrust: async () => ({ hold: o.hold ?? null, trust: o.trust ?? DEAD_COORDINATOR_JOURNAL_TRUSTED }),
     now: () => o.clockAt ?? NOW,
     // The sweep's abandon exactly as the serialiser's handle runs it (`routes.ts`'s `withSweepAbandon`): the REAL
     // `closeRun`, `'sweep'`, the crashed id and the executor's re-measure.
@@ -212,6 +214,15 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
     expect((err as DeadCoordinatorActThrew).outcome).toEqual({ kind: 'ended', programmes: [{ slug: 'alpha', runIds: [a] }],
       open: [{ slug: 'beta', runIds: [b] }], stuck: [], stoppedBy: null, failed: 'database or disk is full', failedRun: b });
     expect([a, b].map(r.stateOf)).toEqual(['failed', 'working']);
+  });
+
+  it('a mirror gone stale since the pass is a HOLD, never a re-measure: nothing composed, nothing closed (review 339, F4)', async () => {
+    const r = await rig({ hold: 'the lifecycle mirror is stale' });
+    const a = r.working('alpha', 'demo-w1');
+    expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toMatchObject({ kind: 'ended', programmes: [],
+      stoppedBy: { kind: 'hold', why: 'the lifecycle mirror is stale — the act waits, and its hour stands' } });
+    expect(r.calls, 'nothing composed').toEqual([]);
+    expect(r.stateOf(a)).toBe('working');
   });
 
   it('a deliberate act journaled since the pass — the operator stopped it — ends the act too', async () => {

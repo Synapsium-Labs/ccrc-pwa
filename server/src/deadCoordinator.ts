@@ -353,11 +353,16 @@ export interface DeadCoordinatorProgramme { readonly slug: string; readonly runI
  *     so neither can be ruled out. Nothing about the claimant was learned: the run of passes resets (a pause forgets a
  *     sighting) and the anchor stands;
  *   - `successor`: a run's claimant is no longer the crashed id (`claimant-changed`). Nothing about the crashed
- *     claimant is learned, so nothing resets. */
+ *     claimant is learned, so nothing resets;
+ *   - `hold`: the lifecycle mirror turned `unknown` or `stale` between the pass and the act (review 339, F4, ruled). The
+ *     journal could not be read, so nothing about the claimant was learned — the adapter's own contract, "a slow mirror
+ *     never deletes an anchor": the anchor AND the run of passes stand, and the act waits one pass, as the switch's
+ *     does. Never `remeasured`, which would delete the anchor on a mirror's lateness. */
 export type DeadCoordinatorStop =
   | { readonly kind: 'remeasured'; readonly why: string }
   | { readonly kind: 'switch'; readonly why: string }
-  | { readonly kind: 'successor'; readonly why: string };
+  | { readonly kind: 'successor'; readonly why: string }
+  | { readonly kind: 'hold'; readonly why: string };
 
 /** The one executor's answer (`coord/endDeadCoordinator.ts`). `ended` lists what closed (`programmes`), what was left
  *  open (`open`: the runs the abandon arm could not move, the run the act stopped at and those after it), what the arm
@@ -460,7 +465,7 @@ export function deadCoordinatorNextEntry(
         programmes: o.programmes } };
     case 'ended': {
       const stop = o.stoppedBy?.kind;
-      const crashedPasses = stop === 'remeasured' || stop === 'switch' ? 0 : e.crashedPasses;
+      const crashedPasses = stop === 'remeasured' || stop === 'switch' ? 0 : e.crashedPasses;   // `hold` keeps them
       const at = e.report?.kind === 'stuck' ? e.report.at : nowMs;
       // An act that STOPPED having closed a run or released a worker is news the operator reads (the stop's feed row
       // is only for a programme with a closed run): what it did, and that the programme is NOT ended.
@@ -470,7 +475,7 @@ export function deadCoordinatorNextEntry(
         && (o.programmes.length > 0 || released.length > 0 || reheld.length > 0)
         ? { closed: o.programmes, released, reheld, stop: o.stoppedBy.why } : undefined;
       if (o.stuck.length === 0) {
-        return { ...base, crashedPasses, attempts: 0, nextAskAt: stop === 'switch' ? nowMs + passMs : 0,
+        return { ...base, crashedPasses, attempts: 0, nextAskAt: stop === 'switch' || stop === 'hold' ? nowMs + passMs : 0,
           report: after === undefined ? null : { kind: 'stuck', at, runs: [], after } };
       }
       const attempts = e.attempts + 1;

@@ -317,12 +317,14 @@ describe('the lane’s memory of one claimant', () => {
 
   it('an act that STOPPED on a re-measure or a switch forgets its passes; a successor does not', () => {
     const e = { ...deadCoordinatorEntry(), crashedPasses: 61 };
-    const ended = (stoppedBy: { kind: 'remeasured' | 'switch' | 'successor'; why: string }) =>
+    const ended = (stoppedBy: { kind: 'remeasured' | 'switch' | 'successor' | 'hold'; why: string }) =>
       deadCoordinatorNextEntry(e, { kind: 'ended', programmes: [], open: [{ slug: 'p', runIds: [1] }], stuck: [], stoppedBy },
         'orphan', NOW, NOW, PASS);
     expect(ended({ kind: 'remeasured', why: 're-measured alive' })).toMatchObject({ crashedPasses: 0, nextAskAt: 0 });
     expect(ended({ kind: 'switch', why: 'reclaim-paused was raised' })).toMatchObject({ crashedPasses: 0, nextAskAt: NOW + PASS });
     expect(ended({ kind: 'successor', why: 'x' })).toMatchObject({ crashedPasses: 61 });
+    // A mirror gone stale at the act learned nothing: the passes stand, and it waits one pass (review 339, F4).
+    expect(ended({ kind: 'hold', why: 'the lifecycle mirror is stale' })).toMatchObject({ crashedPasses: 61, nextAskAt: NOW + PASS });
   });
 
   it('an act that THREW is reported and asked again only after the backoff, never every pass', () => {

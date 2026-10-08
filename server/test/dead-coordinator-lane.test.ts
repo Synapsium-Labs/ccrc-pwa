@@ -311,6 +311,26 @@ describe('the act’s own re-measure', () => {
       .toMatchObject({ firstDeadAt: T0 + HOUR - 60_000 + 2 * (CHILD_RECLAIM_SWEEP_MS + 1) });
   });
 
+  it('a mirror that goes STALE between the pass and the act stops it as a hold: the anchor and the run of passes stand (review 339, F4)', async () => {
+    let slow = false;
+    const f: Fixture = await fixture({ beforeAct: () => { if (slow) f.advance(20_000); } });   // three sweep intervals and more
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A);
+    await f.pass(); await walk(f, HOUR - 60_000);
+    const anchor = f.anchorOf(A);
+    slow = true;
+    f.next(); await f.pass();
+    slow = false;
+    expect(f.acts(), 'the act was asked').toBe(1);
+    expect(f.stateOf(r), 'nothing ended').toBe('working');
+    expect(f.calls, 'nothing composed').toEqual([]);
+    expect(f.anchorOf(A), 'a slow mirror never deletes an anchor').toMatchObject({ firstDeadAt: (anchor as { firstDeadAt: number }).firstDeadAt });
+    expect(f.watcher().currentDeadCoordinators().get(A)?.crashedPasses, 'nor the run of passes').toBeGreaterThanOrEqual(2);
+    f.next(); await f.pass();
+    expect(f.stateOf(r), 'the mirror is fresh again: the hour it kept is due on the next pass').toBe('failed');
+  });
+
   it('a revive that lands AFTER the worker was released is recorded: a feed row and an attention entry, though no run was closed', async () => {
     const f: Fixture = await fixture({ onCcd: (args) => { if (args[0] === 'ws-release') f.live.add(A); } });
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
