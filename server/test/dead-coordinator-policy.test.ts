@@ -286,6 +286,17 @@ describe('the lane’s memory of one claimant', () => {
     expect(back).toMatchObject({ crashedPasses: 0, report: null });
   });
 
+  it('a reading that ENDS the episode forgets the last recorded outcome, so a second episode is recorded again (review 339, F2)', () => {
+    let e = deadCoordinatorSighted(deadCoordinatorEntry(), { kind: 'crashed', cause: 'orphan' }, NOW);
+    e = deadCoordinatorNextEntry(e, { kind: 'would-end', programmes: [{ slug: 'p', runIds: [1] }] }, 'orphan', NOW, NOW, PASS);
+    expect(e.lastOutcome, 'the CONTROL: the shadow record is remembered').toBe('would-end:p=1');
+    expect(deadCoordinatorSighted(e, { kind: 'crashed', cause: 'orphan' }, NOW + PASS).lastOutcome, 'a crashed pass keeps it').toBe('would-end:p=1');
+    for (const c of [{ kind: 'alive', why: 'x' }, { kind: 'stopped' }, { kind: 'deliberate', act: 'stop' },
+      { kind: 'unmeasured', why: 'w' }, { kind: 'unmeasurable', why: 'u' }] as const) {
+      expect(deadCoordinatorSighted(e, c, NOW + PASS).lastOutcome, c.kind).toBeNull();
+    }
+  });
+
   it('unmeasured IS a report, kept with its first instant until a pass can tell; stuck stands until its runs move', () => {
     const u = deadCoordinatorSighted(deadCoordinatorEntry(), { kind: 'unmeasured', why: 'w' }, NOW);
     expect(deadCoordinatorSighted(u, { kind: 'unmeasured', why: 'w' }, NOW + PASS).report).toEqual({ kind: 'unmeasured', at: NOW, why: 'w' });

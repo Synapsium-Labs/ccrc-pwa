@@ -416,7 +416,9 @@ export const deadCoordinatorEntry = (): DeadCoordinatorEntry =>
 
 /** One pass's reading, folded into memory: a crashed pass extends the run (and ends an `unmeasured` report — the lane
  *  can tell now); anything else ends it, and the report goes with it — save `unmeasured`, which IS a report, and
- *  `stuck`, which stands until the runs move. */
+ *  `stuck`, which stands until the runs move. Anything else also ENDS THE EPISODE (its anchor is deleted, ruling E), so
+ *  the last recorded outcome goes too: a coordinator that crashes, is revived and crashes again is a second episode,
+ *  and its shadow record is written again (review 339, F2). */
 export function deadCoordinatorSighted(e: DeadCoordinatorEntry, c: DeadCoordinatorCrash, nowMs: number): DeadCoordinatorEntry {
   if (c.kind === 'crashed') {
     return { ...e, crashedPasses: e.crashedPasses + 1, report: e.report?.kind === 'unmeasured' ? null : e.report };
@@ -424,7 +426,7 @@ export function deadCoordinatorSighted(e: DeadCoordinatorEntry, c: DeadCoordinat
   const report: DeadCoordinatorReport | null = c.kind === 'unmeasured'
     ? { kind: 'unmeasured', at: e.report?.kind === 'unmeasured' ? e.report.at : nowMs, why: c.why }
     : e.report?.kind === 'stuck' ? e.report : null;
-  return { ...e, crashedPasses: 0, report };
+  return { ...e, crashedPasses: 0, report, lastOutcome: null };
 }
 
 /** The backoff: `min(DEAD_COORDINATOR_BACKOFF_CEILING_MS, passMs × 2^k)`. */

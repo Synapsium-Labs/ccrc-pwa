@@ -174,6 +174,21 @@ describe('the lane SHIPS SHADOWED', () => {
     expect(f.watcher().currentCoord()?.expiryAttention, 'never the expiry lane’s list').toEqual([]);
   });
 
+  it('a coordinator that crashes, is revived and crashes again is recorded TWICE in shadow — one row per episode (review 339, F2)', async () => {
+    const f = await fixture();
+    f.plant(A);
+    f.working(A, 'alpha');
+    await anHourDead(f);
+    const rows = () => f.feed().filter(([, t]) => t === 'dead coordinator: programme would be ended');
+    expect(rows(), 'the first episode').toHaveLength(1);
+    f.live.add(A);
+    f.next(); await f.pass();                      // revived: the episode ends, and its anchor with it
+    expect(f.anchorOf(A)).toBeNull();
+    f.live.delete(A);                              // and it crashes again
+    f.next(); await anHourDead(f);
+    expect(rows(), 'the second episode is the operator’s arming evidence too').toHaveLength(2);
+  });
+
   it('with the live file, the programme is ENDED after the hour and two crashed passes — failed, by the sweep, one row per programme', async () => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);

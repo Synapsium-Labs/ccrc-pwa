@@ -3611,7 +3611,7 @@ Drafted on `origin/main` `b0647d850`; revised on `226bb881c`. Before Task 1, `gi
 
 Named by slug, in the order the brief's numbers are written against them (the callout at the top). Each reaches the spec by its effect — the residue's through §5.4's "As wave 5 corrects the lane" (Task 7), the expiry's through §5.3's "As wave 5 closes the lane's follow-ups" (Task 12) — one short sentence each, no number spelled there.
 
-- `a-second-crash-is-a-second-record` (Task 2) — §5.4 and wave 4 write a shadow row when the outcome CHANGES; an episode-ending reading now forgets the last outcome, so crash → revive → crash writes a second `would-end` row (review 339, F2).
+- **D-4480** `a-second-crash-is-a-second-record` (Task 2) — §5.4 and wave 4 write a shadow row when the outcome CHANGES; an episode-ending reading now forgets the last outcome, so crash → revive → crash writes a second `would-end` row (review 339, F2).
 - `a-release-and-a-re-hold-are-two-acts` (Task 3) — `sweep-stopped` carried `released: boolean` for a release AND a re-hold; it now carries which act ran (`fleetAct`), and the feed row and the attention sentence word each (review 339, F3).
 - `sweep-stopped-names-the-fleet-act` (Task 3) — the `POST /api/runs/:id/close` 409 body for `sweep-stopped` names `fleetAct` in place of `released` (no route reaches that arm; the exhaustive switch moves with the union).
 - `every-thrown-act-is-recorded` (Task 4) — every thrown act writes one `dead coordinator: act failed` feed row naming the programmes it closed, the run whose abandon failed, and that nothing more is known; the outcome gains `failedRun` (review 339, F13).
