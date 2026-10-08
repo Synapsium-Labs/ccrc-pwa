@@ -2041,6 +2041,17 @@ function leadOffsets(plain, raw, leads, idx) {
   return [...flagged].sort((x, y) => x - y);
 }
 
+/** `flagged` (ascending) with every offset of `carried` (ascending: where a fragment that ends in the mark ends) that has
+ *  a span character after it, ascending, each once (D-4307; final review 316 FP4). The joined text is built from the
+ *  per-fragment results, so a key a sequence split after its shape's or its pair's first characters reads
+ *  `[redacted]<rest>` there and no layer matches the rest; the mark is carried across the sequence to the end of the
+ *  span instead (fail closed: span characters glued right after a token coloured in whole are marked with it). */
+function carriedMarks(plain, carried, flagged) {
+  const at = carried.filter((o) => o < plain.length && isSpanByte(plain.charCodeAt(o)));
+  if (at.length === 0) return flagged;
+  return [...new Set([...flagged, ...at])].sort((x, y) => x - y);
+}
+
 /** `plain` with the span at each flagged offset replaced by the mark (an empty span gets the mark inserted). */
 function markSpansAt(plain, offsets) {
   let out = '';
@@ -2081,8 +2092,10 @@ function markSpansAt(plain, offsets) {
  *  part (`ESC` + `S` + `ECR` + a CSI + `ET`) loses its `S` to the joined
  *  reading and keeps the CSI's remnant glued on in the raw one, a DCS header
  *  or a single shift takes a value's first characters. Text the lead reading
- *  finds is marked in `P`, from its first character to its span's end, before
- *  `C` is computed. `C === P` (nothing new, no lead found) returns `A`
+ *  finds is marked in `P`, from its first character to its span's end, and so
+ *  is the rest of a span after a sequence that a fragment's mark ends right
+ *  before (a key grep highlights in part after its shape's first characters,
+ *  final review 316 FP4), before `C` is computed. `C === P` (nothing new, no lead found) returns `A`
  *  with its colours; otherwise `C` is returned, the sequences dropped from
  *  that one field's output (presentation only, the stored blob stays
  *  verbatim). A field with no escape introducer takes the plain path alone,
@@ -2103,11 +2116,13 @@ export function redactField(text, idx) {
   let last = 0;
   let sawCsi = false;
   const leads = [];
+  const carried = [];
   ANSI_ESCAPE_RE.lastIndex = 0;
   for (let m = ANSI_ESCAPE_RE.exec(raw); m !== null; m = ANSI_ESCAPE_RE.exec(raw)) {
     const frag = redactRun(raw.slice(last, m.index), idx);
     out += frag + m[0];
     plain += frag;
+    if (frag.endsWith(REDACTED_MARK)) carried.push(plain.length);
     leads.push(plain.length, m.index, m.index + m[0].length);
     last = m.index + m[0].length;
     sawCsi = true;
@@ -2118,7 +2133,7 @@ export function redactField(text, idx) {
   // `plain` is accumulated from the fragments, never rebuilt by re-matching an escape in `perFragment`: a redaction can
   // create an escape shape (a bare ESC before `[redacted]` reads as `ESC[r...`), and a re-strip would eat the mark.
   plain += tail;
-  const flagged = leadOffsets(plain, raw, leads, idx);
+  const flagged = carriedMarks(plain, carried, leadOffsets(plain, raw, leads, idx));
   const joined = redactRun(flagged.length === 0 ? plain : markSpansAt(plain, flagged), idx);
   return joined === plain ? perFragment : joined;
 }

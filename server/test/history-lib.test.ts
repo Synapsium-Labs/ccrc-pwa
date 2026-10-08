@@ -2754,6 +2754,65 @@ describe('entryIndexText: redact a window ENTRY_REDACT_MARGIN past ENTRY_FTS_BYT
 });
 
 // ===========================================================================
+// FU7 (D-4307 amended, final review FP4): the joined reading's text is built from the per-fragment results, so a key a
+// colour code split after its shape's first characters was `[redacted]<rest>` to it, and the rest reached blobs_fts even
+// with the key's pair registered. A mark that ends a fragment right before a sequence is carried across it to the end of
+// its span.
+// ===========================================================================
+describe('redactField: a mark that ends a fragment before a sequence is carried to the end of its span (D-4307, FU7 FP4)', () => {
+  const M = libRedact.REDACTED_MARK;
+  const none = (): libRedact.PairIndex => libRedact.makePairIndex([]);
+  const pairOf = (v: string): libRedact.PairIndex => libRedact.makePairIndex(libRedact.secretPairs([v]).pairs);
+  // Fixed fixture characters, never a real key: the shape arms read only the prefix and the run class.
+  const SK = `${['sk', 'ant', 'api03'].join('-')}-${'Qx7Lm2Np9Rs4Tv6Wy8Za1Cb3De5Fg0Hj'.repeat(2).slice(0, 60)}`;
+  const GHP = `${'ghp'}_${'Kd8Jf2Lg5Mh9Nj3Pk6Ql1Rm4Sn7Tp0Uq2Vr5'.slice(0, 36)}`;
+  /** Every `w`-character piece of `key` the stripped output holds (sequences and their escaped forms removed). */
+  const pieces = (out: string, key: string, w: number): string[] => {
+    const plain = out.replace(/(?:\x1b|\\+u001b)(?:\[[0-?]*[ -/]*[@-~]|\([0-~])/g, '');
+    const hit: string[] = [];
+    for (let i = 0; i + w <= key.length; i += 1) if (plain.includes(key.slice(i, i + w))) hit.push(key.slice(i, i + w));
+    return hit;
+  };
+  it('grep\'s highlight of characters 40-50 of an sk- key: the rest of the key is marked, pair registered or not', () => {
+    const t = `x ${SK.slice(0, 40)}\x1b[01;31m\x1b[K${SK.slice(40, 50)}\x1b[m\x1b[K${SK.slice(50)} y`;
+    for (const idx of [none(), pairOf(SK)]) {
+      expect(pieces(libRedact.redactField(t, idx), SK, 8)).toEqual([]);
+      expect(pieces(libRedact.redactForIndex(t, idx), SK, 8)).toEqual([]);
+    }
+    expect(libRedact.redactField(t, none())).toBe(`x ${M}${M} y`);
+  });
+  it('a ghp_ token a bold code splits after 18 characters: its last 18 are marked, pair registered or not', () => {
+    const t = `x ${GHP.slice(0, 22)}\x1b[1m${GHP.slice(22)} y`;
+    for (const idx of [none(), pairOf(GHP)]) expect(libRedact.redactField(t, idx)).toBe(`x ${M}${M} y`);
+  });
+  it('CONTROL: a token coloured in whole, a space after its closing code, keeps its colours (nothing to carry)', () => {
+    expect(libRedact.redactField(`x \x1b[1m${GHP}\x1b[m y`, none())).toBe(`x \x1b[1m${M}\x1b[m y`);
+  });
+  it('fail closed: span characters right after a token coloured in whole are marked with it', () => {
+    expect(libRedact.redactField(`x \x1b[1m${GHP}\x1b[0m.txt y`, none())).toBe(`x ${M}${M} y`);
+  });
+  it('a fixed-seed sweep of ghp_ pair values split by one to three realistic sequences, at JSON escape levels 0-2, leaks no 8-character piece', () => {
+    const SEQS = ['\x1b[1m', '\x1b[0m', '\x1b[m', '\x1b[01;31m', '\x1b[K', '\x1b[01;31m\x1b[K', '\x1b[m\x1b[K', '\x1b[32m', '\x1b[1;32m',
+      '\x1b[39m', '\x1b[22m', '\x1b(B', '\x1b[0;1;31m', '\x1b[38;5;196m', '\x1b[4m', '\x1b[7m'];
+    const AL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let x = 20261008;
+    const rnd = (n: number): number => { x = (x * 1103515245 + 12345) % 2147483648; return x % n; };
+    const leaks: string[] = [];
+    for (let trial = 0; trial < 2000; trial += 1) {
+      const tok = `ghp_${Array.from({ length: 36 }, () => AL[rnd(AL.length)]).join('')}`;
+      const cuts = [...new Set(Array.from({ length: 1 + rnd(3) }, () => 1 + rnd(tok.length - 1)))].sort((a, b) => a - b);
+      let s = '';
+      let last = 0;
+      for (const c of cuts) { s += tok.slice(last, c) + SEQS[rnd(SEQS.length)]; last = c; }
+      let text = `word ${s}${tok.slice(last)} more`;
+      for (let l = rnd(3); l > 0; l -= 1) text = JSON.stringify(text).slice(1, -1);
+      if (pieces(libRedact.redactForIndex(text, pairOf(tok)), tok, 8).length > 0) leaks.push(JSON.stringify(text));
+    }
+    expect(leaks.slice(0, 3)).toEqual([]);
+  }, 60_000);
+});
+
+// ===========================================================================
 // Task 25 review round 1 (F1): the op marker's one grammar, `<verb> <pid> <start_ms>` (§9.6 op-running). Task 28's
 // status reads it through this parser, and a pass's stale-marker sweep decides on its null.
 // ===========================================================================
