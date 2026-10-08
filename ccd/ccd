@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=83cf837eeb7d3641da17a3d774eb12409dd60269dcb2e65c3b8d71ec07d1b6c9
+# ccrc:generated 1 sha256=10b2a324555b5d6dd9b60271e044cb25ffa1cb08bac23759437d1562f166a2ff
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -27067,8 +27067,14 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   elif (( rc == 0 )); then
     _ws_reclaim_unmeasured "$main records a worktree at $workdir, but git cannot resolve the directory's repository"; return 1
   fi
-  (( rc == 0 )) \
-    || { _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1; }
+  # A list that printed NO record is believed only once git's admin entries
+  # are read (`_ws_reclaim_no_record`): an entry it could not read, or one that
+  # names this tree, is unmeasured and retried, never the terminal word.
+  if (( rc != 0 )); then
+    _ws_reclaim_no_record "$mainreal" "$workdir" \
+      || { _ws_reclaim_unmeasured "$_WS_NOREC_WHY"; return 1; }
+    _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1
+  fi
   # THE RECORD MUST NOT BE THE MAIN CHECKOUT'S. A row naming `$main` itself
   # would pin the project's own checkout and hand the tail its branch's
   # name; no child is ever the main worktree. The vanished arm
@@ -27274,6 +27280,23 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
   _ws_reclaim_record "$main" "$workdir"; rec=$?
   (( rec == 2 )) \
     && { _ws_reclaim_unmeasured "could not read $main's worktree list, so whether git still records $workdir was never asked"; return 1; }
+  # "No record" is an INPUT here (`record=1`), and with it the pin keeps no
+  # HEAD of git's record — so it is believed only once git's admin entries are
+  # read (`_ws_reclaim_no_record`), exactly as on the present arm.
+  if (( rec == 1 )); then
+    _ws_reclaim_no_record "$mainreal" "$workdir" \
+      || { _ws_reclaim_unmeasured "$_WS_NOREC_WHY"; return 1; }
+  fi
+  # AN ALL-ZERO HEAD NAMES NO COMMIT THAT WAS READ (spec §5.5, rung 8's rule).
+  # git lists the null id for a record in TWO shapes (measured, git 2.43): an
+  # admin `HEAD` it cannot read (no `branch` line), and a `HEAD` symbolic to a
+  # branch that no longer exists (its `branch` line kept). As the pin's
+  # recorded head it would bind the token, then stop the pin; so either shape
+  # is unmeasured here, at the one read of `RECLAIM_REC_HEAD`, and retried.
+  if (( rec == 0 )) && [[ "$RECLAIM_REC_HEAD" =~ ^0+$ ]]; then
+    _ws_reclaim_unmeasured "git's worktree record of $workdir names the all-zero HEAD — git prints that for a record whose admin HEAD it cannot read, or whose HEAD names a branch that no longer exists — so no commit of it was read and none could be pinned"
+    return 1
+  fi
   # The branch deleted is the REGISTRY's, exactly as on the present arm; a
   # record left on ANOTHER branch (the tree drifted before it vanished) keeps
   # that one, recorded — the pin of this arm reads no HEAD, so it is noted here.
@@ -28061,7 +28084,7 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
   # `worktree.useRelativePaths`, which git 2.43 prints verbatim, so there both
   # readers miss together) — its HEAD reflog was never located, and removing
   # that record would delete it unkept. So it fails, and the record stands.
-  local main="$1" kind="$2" arg="$3" recorded="${4:-0}" common f d g gd real rc n=0
+  local main="$1" kind="$2" arg="$3" recorded="${4:-0}" common f gd rc
   common=$(_ws_common_dir "$main") \
     || { _WS_KEEP_WHY="could not resolve the repository of $main, so no reflog of it could be located"; return 1; }
   if [[ "$kind" == branch ]]; then
@@ -28088,6 +28111,19 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
   _ws_reclaim_absent "$arg"; rc=$?
   (( rc == 0 )) \
     || { _WS_KEEP_WHY="${_WS_ABSENT_WHY:-something that is not a directory stands at $arg} — the HEAD reflog of the checkout there could not be located"; return 1; }
+  _ws_reclaim_admin_entries "$common" "$arg" "$recorded"
+}
+
+_ws_reclaim_admin_entries() {   # common path recorded -> 0 with `<d>/logs/HEAD` and `gitdir:<d>` appended to
+  #                                  _WS_LOGS for every <common>/worktrees/<d> whose `gitdir` names <path>/.git (as
+  #                                  given, or resolved); 1 (_WS_KEEP_WHY) when `worktrees/` or an entry could not
+  #                                  be read, or `recorded` is 1 and no entry names it
+  # GIT'S ADMIN ENTRIES, READ WHOLE — `_ws_reclaim_log_of`'s walk of a gone
+  # checkout, and the ONE matcher of an entry to a path: the ladder asks it
+  # too, of a STANDING tree git's list printed no record of
+  # (`_ws_reclaim_no_record`). `_ws_reclaim_log_of` says why each refusal here
+  # is a failure and never "no entry".
+  local common="$1" arg="$2" recorded="${3:-0}" d g real rc n=0
   _ws_reclaim_absent "$common/worktrees"; rc=$?
   if (( rc == 0 )); then
     (( recorded )) || return 0
@@ -28113,6 +28149,33 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
   done
   (( n || ! recorded )) \
     || { _WS_KEEP_WHY="git records a checkout at $arg, but no $common/worktrees/*/gitdir entry names $arg/.git — its HEAD reflog could not be located, so it was never read"; return 1; }
+  return 0
+}
+
+_WS_NOREC_WHY=''
+_ws_reclaim_no_record() {   # common workdir -> 0 when NO admin entry of the repository whose common dir is
+  #                              common names <workdir>/.git, every entry read; 1 (_WS_NOREC_WHY) when one does —
+  #                              git's list omitted a record that exists; 2 (_WS_NOREC_WHY) when `worktrees/` or
+  #                              an entry could not be read
+  # GIT'S "NO RECORD" IS BELIEVED ONLY ONCE ITS ADMIN ENTRIES ARE READ (spec
+  # §5.5, rung 8's rule: a read that failed measured nothing). `git worktree
+  # list` exits 0 and OMITS the stanza of a record whose `gitdir` it cannot
+  # read — every linked stanza when `worktrees/` cannot be listed (measured,
+  # git 2.43) — so `_ws_reclaim_record`'s rc 1 alone reads an unreadable
+  # record as none. Asked of the entries themselves, through the one matcher
+  # (`_ws_reclaim_admin_entries`), whether the tree stands or is gone. Its
+  # readers' globals are shadowed: asking this changes nothing a caller read.
+  local common="$1" w="$2" e
+  local -a _WS_LOGS=()
+  local _WS_KEEP_WHY=''
+  _WS_NOREC_WHY=''
+  _ws_reclaim_admin_entries "$common" "$w" 0 \
+    || { _WS_NOREC_WHY="$_WS_KEEP_WHY — git's worktree list leaves out a record it cannot read, so its silence about $w measured nothing"; return 2; }
+  for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
+    [[ "$e" == gitdir:* ]] || continue
+    _WS_NOREC_WHY="${e#gitdir:} names $w/.git, but git's worktree list printed no record of it — the list omitted a record that exists"
+    return 1
+  done
   return 0
 }
 
@@ -29871,6 +29934,15 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
           "$id's own tree is gone, yet a checkout stands at $cpath — ccd cannot prove it went with the tree, so nothing further was deleted"
         return 1
       fi
+      # THE ALL-ZERO ID IS NO HEAD TO COMPARE AGAINST (spec §5.6): `update-ref -d
+      # --no-deref <ref> <all-zero id>` exits 0 and deletes the ref whatever it
+      # names (measured, git 2.43), so a record naming it is unmeasured.
+      if [[ -n "$cbr" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$cbr" \
+         && [[ "$chead" =~ ^0{40}$ ]]; then
+        _ws_reclaim_fail "$id" "$lctx" branch-unmeasured \
+          "the record names the all-zero id as the head of $cbr (the checkout at $cpath), which git's update-ref reads as an unconditional delete — so the branch was kept and nothing further was deleted"
+        return 1
+      fi
       if [[ -n "$cbr" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$cbr" \
          && ! [[ "$chead" =~ ^[0-9a-f]{40}$ ]]; then
         _ws_reclaim_fail "$id" "$lctx" branch-moved \
@@ -30029,6 +30101,14 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       return 1
     fi
     if [[ "$bstate" == "present "* ]]; then
+      # THE ALL-ZERO ID IS NO TIP TO COMPARE AGAINST (spec §5.6): `update-ref -d
+      # --no-deref <ref> <all-zero id>` exits 0 and deletes the ref whatever it
+      # names (measured, git 2.43), so a tombstone naming it is unmeasured.
+      if [[ "$tip" =~ ^0{40}$ ]]; then
+        _ws_reclaim_fail "$id" "$lctx" branch-unmeasured \
+          "the tombstone records the all-zero id as the tip of $branch, which git's update-ref reads as an unconditional delete — so the branch was kept and nothing further was deleted"
+        return 1
+      fi
       if ! [[ "$tip" =~ ^[0-9a-f]{40}$ ]]; then
         _ws_reclaim_fail "$id" "$lctx" branch-moved \
           "the tombstone records no tip for $branch — a branch is never deleted at an unknown commit, so it was kept and nothing further was deleted"
