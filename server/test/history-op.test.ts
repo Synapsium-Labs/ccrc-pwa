@@ -912,6 +912,35 @@ describe('the op marker (§9.6)', () => {
   });
 });
 
+describe('DI13: a migration\'s done attempt marker is cleared at both call sites (review 316 F27)', () => {
+  /** N at or below the store's version is done; N above it is pending. */
+  const plantMarkers = (box: HistoryBox): { done: string; pending: string } => {
+    const v = versionOf(paths(box).db);
+    const done = `.pre-v${v}.attempt`;
+    const pending = `.pre-v${v + 1}.attempt`;
+    fs.mkdirSync(paths(box).backups, { recursive: true, mode: 0o700 });
+    for (const n of [done, pending]) fs.writeFileSync(path.join(paths(box).backups, n), '1\n', { mode: 0o600 });
+    return { done, pending };
+  };
+
+  it('a scheduled pass clears a marker at or below the store\'s version and keeps a later one', () => {
+    const box = boundBox('ccrc-hist-di13a-');
+    const m = plantMarkers(box);
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(names(paths(box).backups).filter((n) => n.endsWith('.attempt'))).toEqual([m.pending]);
+  });
+
+  it('an --op pass clears it too', () => {
+    const box = boundBox('ccrc-hist-di13b-');
+    const m = plantMarkers(box);
+    const r = runShim(box, ['--op', 'import', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(names(paths(box).backups).filter((n) => n.endsWith('.attempt'))).toEqual([m.pending]);
+  });
+});
+
 // ── Task 26: the periodic census (§9.2 step 2, §9.15, W1-j, W1-k) ─────────────────────────────────
 
 describe('O38: the export\'s due rule (B1 half)', () => {
