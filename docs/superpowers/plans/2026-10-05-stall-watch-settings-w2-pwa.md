@@ -236,8 +236,9 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
     `typecheck-tests`. On the PWA side under load, the prototype measured `contrast`, `swap-sheet`, `session-pickers`
     and `fleet-screen`.
 - **Deviation numbers.**
-  - This plan defines exactly four: D-4035, D-4036, the one for `malformed-optional-block-is-dropped` (fix round 1) and
-    the one for `unanswered-write-has-its-own-l0-line` (fix round 1's F1, numbered by fix round 2).
+  - This plan defines exactly five: D-4035, D-4036, the one for `malformed-optional-block-is-dropped` (fix round 1), the
+    one for `unanswered-write-has-its-own-l0-line` (fix round 1's F1, numbered by fix round 2) and the one for
+    `pinned-built-in-value-is-its-own-option` (fix round 2's pinned option, numbered by fix round 3).
   - It cites D-4033, D-4034, D-4037 and D-4038, which the W1 plan defines.
   - The coordinator holds this programme's reserve numbers. A departure found during this wave goes into the
     wave-done mail by slug, and the coordinator assigns its number then.
@@ -3599,10 +3600,11 @@ MSG
 
 ## Deviations found
 
-This plan defines four numbers that W2 alone owns. D-4035 and D-4036 were issued by the allocator at plan time
+This plan defines five numbers that W2 alone owns. D-4035 and D-4036 were issued by the allocator at plan time
 (`POST /api/ledger/deviations`, 2026-10-05 17:47). D-4042 (`malformed-optional-block-is-dropped`) was issued by the
-coordinator in ruling R24, fix round 1, and D-4043 (`unanswered-write-has-its-own-l0-line`) by the coordinator in
-ruling R27, fix round 2; neither came from that 17:47 call. A departure found during execution is named by slug in the wave-done mail,
+coordinator in ruling R24, fix round 1, D-4043 (`unanswered-write-has-its-own-l0-line`) by the coordinator in
+ruling R27, fix round 2, and D-4044 (`pinned-built-in-value-is-its-own-option`) in ruling R29, fix round 3;
+none of those three came from that 17:47 call. A departure found during execution is named by slug in the wave-done mail,
 and the coordinator assigns its number.
 
 - **D-4035** — `older-server-404-reads-not-configured` (Tasks 1 and 3)
@@ -3682,6 +3684,31 @@ and the coordinator assigns its number.
   - **Cost if wrong:** if the operator wants the network arm to read `UNCONFIRMED_TEXT` after all, it is the key's
     removal and one line in `StallWatchSection`'s `write`, with the same rows retargeted. If the key is wanted but the
     wording is not, it is one L0 string.
+- **D-4044** — `pinned-built-in-value-is-its-own-option` (Task 3; added by fix round 2, numbered by fix round 3)
+  - **Departs from:** spec §13 item 4 (≈:1301–1302), which says the select offers "Built-in (<builtInMs>)" and every
+    step except the one equal to `builtInMs`, "so the built-in value appears once".
+  - **What W2 does:** when the stored quiet time is a NUMBER equal to the view's `builtInMs`, the select carries that
+    step as its own option, value the stored number, label plain `quietText(stored)` exactly as `quietChoices`
+    labels every step ("2 h", never "2 h (chosen here)"), at that step's numeric place between the step below and
+    the step above, and selects it. "Built-in (2 h)" stays in the list, unselected. A step label never claims a
+    source: the quiet line above alone says where the effective value comes from. `quietChoices` itself is
+    unchanged and still omits the built-in step; the section shows the pinned step back.
+  - **Why:** a pinned 7 200 000 is the server's `chosen` value (`quietSource: 'chosen'`; a `default` write over it is a
+    real change; only NULL follows the built-in). Selecting nothing would hide a value the server did answer, and
+    selecting Built-in would show a value the server did not answer. The value then appears twice in the select,
+    once as Built-in and once as itself, and that is the departure.
+  - **Pinned by:** `pwa/test/settings-screen.test.tsx`:
+    - "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled
+      plain like every step; one off the list … selects none" (source `chosen`; selected option reads plain "2 h");
+    - "a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source
+      default) …" (the quiet line reads "2 h (built-in)", the selected option still reads plain "2 h");
+    - "a pinned built-in number sits at its step's numeric place among the steps, between the step below and the step
+      above";
+    - "from a pinned built-in number, picking Built-in is one change that writes default exactly once".
+    - The pinned-option mutation rows of Task 3's table.
+  - **Cost if wrong:** if the operator wants the built-in value to appear once after all, the extra option goes and
+    a pinned built-in number selects Built-in, which shows a value the server did not answer. That is the section's `shown` list and `quietValue`, and the
+    inversion of the four rows above.
 
 **Numbers this wave cites but does not define.** The W1 plan defines all four. Defining any of them here too would red
 `deviation-refs`' two-plans row.
@@ -3696,7 +3723,7 @@ and the coordinator assigns its number.
   reader fault over a listed registry never answers `{ measured: false }`. W2 renders what arrives (Residue, below).
 
 **Departures found during this wave's execution** are numbered by the coordinator at wave-done, from the programme's
-reserve. None beyond the two fix-round entries above is defined here, and none is written as a number in code or commits before then: a departure goes into
+reserve. None beyond the three fix-round entries above is defined here, and none is written as a number in code or commits before then: a departure goes into
 the wave-done mail by slug only.
 
 **Candidates the coordinator may number at wave-done.** The tasks made each of these choices where the spec was silent.
@@ -3712,12 +3739,9 @@ Each is pinned, and the plan takes no number for any of them:
   (`unanswered-write-has-its-own-l0-line`, above). The 2xx-unreadable arm, which §15's "A write's reply cannot be
   read" row words, keeps `UNCONFIRMED_TEXT` and re-reads too.
 - `quiet-select-shows-no-unanswered-value` (Task 3). A stored quiet time the list does not hold selects one empty,
-  hidden, disabled option (X38). The one stored value that is not "unanswered" is a quiet time equal to the built-in,
-  as a number: the server keeps it apart from the built-in (`quietSource: 'chosen'`; a `default` write over it is a
-  real change; only NULL follows the built-in), so the select shows it as its own option, value the stored number,
-  labelled with the quiet line's own "chosen here" wording, and selects that one (fix round 2, F1; fix round 1's merge
-  of it into the built-in option was replaced). "Built-in" stays an unselected option, so picking it is one change
-  that writes `default`. A stored number off the list that is not the built-in still selects the blank option.
+  hidden, disabled option (X38). A stored number off the list that is not the built-in still selects the blank
+  option. The one stored value that is not "unanswered", a number equal to the built-in, is a numbered departure of
+  its own (`pinned-built-in-value-is-its-own-option` (D-4044), above).
 - `readme-section-sentence-pinned-to-l0` (Task 4). A new server test file the spec does not name.
 
 ## Residue settled by this plan

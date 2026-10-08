@@ -2372,7 +2372,7 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(select.value).toBe('');
   });
 
-  it('a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled as the quiet line says; one off the list (the server cannot send it today) selects none', async () => {
+  it('a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list (the server cannot send it today) selects none', async () => {
     const select = (): HTMLSelectElement =>
       within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
     const selectedText = (): string | null => select().selectedOptions[0]?.textContent ?? null;
@@ -2384,7 +2384,7 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     const quietLine = fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(builtIn) });
     expect(within(section()).getByText(quietLine, { selector: 'p' }), 'the quiet line says it is chosen here').toBeInTheDocument();
     expect(select().value, 'the pinned number is the selected option').toBe(String(builtIn));
-    expect(selectedText(), 'and it reads as the quiet line reads').toBe(quietLine);
+    expect(selectedText(), 'and it reads plain, as every step reads, never "chosen here"').toBe(quietText(builtIn));
     const builtInOption = within(select()).getByRole('option', { name: fillStallText(STALL_SECTION_TEXT.builtInOption, { value: quietText(builtIn) }) }) as HTMLOptionElement;
     expect(builtInOption.selected, 'Built-in is present and not selected').toBe(false);
     expect(builtInOption.value).toBe('default');
@@ -2395,6 +2395,30 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(quietChoices(swView()).some((c) => c.value === offGrid), 'the off-grid value is not on the list').toBe(false);
     expect(select().value, 'a value off the list that is not the built-in selects none').toBe('');
     cleanup();
+  });
+
+  it('a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) the line reads built-in and the option still reads plain', async () => {
+    const builtIn = swView().quiet.builtInMs;
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'default' } }));
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    expect(within(section()).getByText(fillStallText(STALL_SECTION_TEXT.builtIn, { value: quietText(builtIn) }), { selector: 'p' }),
+      'the quiet line says the value is the built-in').toBeInTheDocument();
+    expect(select.value, 'the pinned number is still the selected option').toBe(String(builtIn));
+    expect(select.selectedOptions[0]?.textContent, 'and it reads plain, claiming no source').toBe(quietText(builtIn));
+  });
+
+  it('a pinned built-in number sits at its step\'s numeric place among the steps, between the step below and the step above', async () => {
+    const builtIn = swView().quiet.builtInMs;
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'chosen' } }));
+    const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
+    const values = within(select).getAllByRole('option').map((o) => (o as HTMLOptionElement).value);
+    const { stepMs } = swView().quiet;
+    const at = values.indexOf(String(builtIn));
+    expect(values[0], 'Built-in stays first').toBe('default');
+    expect(values.indexOf(String(builtIn - stepMs)), 'the step below sits before it').toBeGreaterThan(0);
+    expect(at, 'it sits after the step below').toBeGreaterThan(values.indexOf(String(builtIn - stepMs)));
+    expect(at, 'and before the step above').toBeLessThan(values.indexOf(String(builtIn + stepMs)));
+    expect(values.slice(1).map(Number), 'the steps stay in numeric order').toEqual(values.slice(1).map(Number).sort((a, b) => a - b));
   });
 
   it('from a pinned built-in number, picking Built-in is one change that writes default exactly once', async () => {

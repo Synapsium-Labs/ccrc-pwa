@@ -17,7 +17,7 @@
 //     reading and every write's effect come from the wire, and every word is an L0 STALL_* constant (apart from
 //     the shared `UNCONFIRMED_TEXT` (§13 step 3)), filled by `fillStallText`. There is no viewport,
 //     pointer or user-agent branch.
-import { Fragment, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   STALL_BUSY_GATE_OFF_TEXT, STALL_BUSY_GATE_TEXT, STALL_CONFIRM_TEXT, STALL_FALLBACK_TEXT, STALL_FILES_EXCEED_TEXT,
@@ -56,8 +56,9 @@ export function quietText(ms: number): string {
 export interface StallQuietChoice { value: number | 'default'; label: string }
 
 /** "Built-in (<builtInMs>)", then every `stepMs` step from `minMs` to `maxMs` except the one equal to `builtInMs`,
- *  so the built-in value appears once. Every number is the reply's own (`useStallWatchView`'s guard bounds the
- *  list's length). */
+ *  so the built-in value appears once in this list. Every number is the reply's own (`useStallWatchView`'s guard
+ *  bounds the list's length). The list omits the built-in step on purpose; the section shows a pinned built-in
+ *  number back as its own option at that step's place (`pinned-built-in-value-is-its-own-option` (D-4044)). */
 export function quietChoices(view: StallWatchView): StallQuietChoice[] {
   const { builtInMs, minMs, maxMs, stepMs } = view.quiet;
   const choices: StallQuietChoice[] = [
@@ -268,8 +269,10 @@ const NOW_CLASS: Record<StallNowTone, string> = {
  *  empty option, drawn blank, so the select never shows a value the server did not answer. A stored NUMBER equal to
  *  the view's built-in is not the built-in: the server reports it as a pinned choice (`chosen`), a `default` write
  *  over it is a real change, and only a NULL follows the built-in. The list omits that step, so the select carries
- *  it as its own option, labelled as the quiet line labels it, and selects that one; "Built-in" stays an unselected
- *  option, so picking it is one change that writes `default` (departure `quiet-select-shows-no-unanswered-value`). */
+ *  it as its own option, labelled plain like every step (`quietText`; the quiet line above alone says where the
+ *  effective value comes from), at that step's numeric place, and selects that one; "Built-in" stays an unselected
+ *  option, so picking it is one change that writes `default`
+ *  (`pinned-built-in-value-is-its-own-option` (D-4044); candidate `quiet-select-shows-no-unanswered-value`). */
 const QUIET_BUILT_IN = 'default';
 const QUIET_NONE = '';
 
@@ -332,6 +335,14 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   const choices = quietChoices(view);
   const stored = view.chosen.quietMs;
   const pinnedBuiltIn = typeof stored === 'number' && stored === view.quiet.builtInMs ? stored : null;
+  // The pinned step, shown back (`pinned-built-in-value-is-its-own-option` (D-4044)): between the step below and the
+  // step above it, so the options stay in numeric order; the list never holds it, so it is never doubled.
+  const shown: StallQuietChoice[] = (() => {
+    if (pinnedBuiltIn === null) return choices;
+    const above = choices.findIndex((c) => typeof c.value === 'number' && c.value > pinnedBuiltIn);
+    const at = above === -1 ? choices.length : above;
+    return [...choices.slice(0, at), { value: pinnedBuiltIn, label: quietText(pinnedBuiltIn) }, ...choices.slice(at)];
+  })();
   const quietValue = stored === 'default'
     ? QUIET_BUILT_IN
     : pinnedBuiltIn !== null || choices.some((c) => c.value === stored) ? String(stored) : QUIET_NONE;
@@ -378,16 +389,7 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
           onChange={(e) => choose({ quietMs: e.target.value === QUIET_BUILT_IN ? 'default' : Number(e.target.value) })}
         >
           {quietValue === QUIET_NONE && <option value={QUIET_NONE} disabled hidden />}
-          {choices.map((c) => (
-            <Fragment key={String(c.value)}>
-              <option value={String(c.value)}>{c.label}</option>
-              {c.value === 'default' && pinnedBuiltIn !== null && (
-                <option value={String(pinnedBuiltIn)}>
-                  {fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(pinnedBuiltIn) })}
-                </option>
-              )}
-            </Fragment>
-          ))}
+          {shown.map((c) => <option key={String(c.value)} value={String(c.value)}>{c.label}</option>)}
         </select>
         <p className="settings-note">{STALL_QUIET_NOTE}</p>
       </fieldset>
