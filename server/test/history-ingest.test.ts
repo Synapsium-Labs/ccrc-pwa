@@ -2908,6 +2908,8 @@ describe('history ingest: the FTS index (plan task 23)', () => {
   });
 });
 
+interface IxSweep { firstUuidRowCwd(homes: string[], userHome: string, uuid: string, cache?: unknown): string | null; }
+
 describe('FR2-d (D-4340): a read error on one admitted file is that file\'s, never the tick\'s', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
   let S: IxSweep;
@@ -3017,6 +3019,18 @@ describe('FR2-d (D-4340): a read error on one admitted file is that file\'s, nev
       await expect(S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget())).rejects.toThrow(TypeError);
       expect(counterOf(db, 'file_unreadable')).toBeUndefined();
     } finally { (fs as { readSync: unknown }).readSync = realRead; syncBuiltinESMExports(); db.close(); }
+  });
+
+  it('D-4298 (Task 18 site): an EIO on the first home\'s copy skips that copy and the next home\'s copy places the epoch', () => {
+    const box = IX.newBox('ccrc-hist-d4298a-');
+    const bad = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'first home', 1, { cwd: '/home/u/elsewhere' })]));
+    IX.plantCopy(box.homes[1]!, IX.U, IX.jsonl([IX.user(IX.uuidN(2), null, 'second home', 2, { cwd: '/home/u/tree' })]));
+    expect(S.firstUuidRowCwd(box.homes, box.home, IX.U), 'CONTROL: the first home\'s copy is tried first').toBe('/home/u/elsewhere');
+    const f = failReads(bad);
+    let got: string | null;
+    try { got = S.firstUuidRowCwd(box.homes, box.home, IX.U); } finally { f.restore(); }
+    expect(f.faulted()).toBe(1);
+    expect(got!).toBe('/home/u/tree');
   });
 });
 
