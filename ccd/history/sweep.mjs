@@ -39,7 +39,7 @@ import {
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, eventKey, historyPaths, idOk, joinGeneration, journalRecord, parseSpoolLine,
   passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
-  SQLITE_CODES, decideDrainFailure, BLOB_DECODE_MAX, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
+  SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
@@ -572,7 +572,7 @@ function clearNonDirectory(dir) {
 }
 
 /** Set a draining file aside (D-4337, history-spool-file-size-cap): moved into the sibling directory
- *  `.draining/oversize/` (0700, made on demand, the same filesystem, the name unchanged at its at-most-253 bytes, which a
+ *  `.draining/<sub>/` (0700, made on demand, the same filesystem, the name unchanged at its at-most-253 bytes, which a
  *  `<name>.oversize` rename would push past the 255-byte NAME_MAX), which `listDraining` never lists, so it is never
  *  journaled, drained or unlinked by the sweep (the operator removes it). Its observation sidecar, which nothing lists once
  *  the `.jsonl` is gone, is removed. `counter` is `spool_oversize` (over SPOOL_FILE_MAX, decided from its lstat by
@@ -580,7 +580,7 @@ function clearNonDirectory(dir) {
  *  bumped in a committed transaction FIRST and the file moved after, so a crash between the two may count a file twice and
  *  can never lose the count; a count that cannot commit, or a move that fails, leaves the file where it is for the next
  *  tick (recounted then: once per tick while the failure lasts, never a thrown tick). A name that is not a directory at
- *  `oversize` is removed and counted `non_regular`. True on every path: the caller never journals the file.
+ *  `<sub>` is removed and counted `non_regular`. True on every path: the caller never journals the file.
  *  `sub` is OVERSIZE_DIR (counted spool_oversize or spool_overlines, D-4337) or REJECTED_DIR (counted drain_rejected,
  *  D-4346, history-permanent-failures-classified). */
 export function setAside(db, home, name, sub, counter) {
@@ -602,7 +602,6 @@ export function setAside(db, home, name, sub, counter) {
  *  `.draining/rejected/`, which `listDraining` never lists, and counted `drain_rejected` before the move. A move that
  *  fails leaves it for the next tick, which recounts it. Only files the store refused for their own rows go here. */
 export function setAsideRejected(db, home, name) { setAside(db, home, name, REJECTED_DIR, HEALTH_COUNTERS.drainRejected); }
-
 
 /** The lines that pass parseSpoolLine AND name the file's own id. Only those are journaled and drained (slug
  *  history-journal-spool-grammar, D-4174; the fence that gives empty lines no ordinal, history-spool-line-fenced, D-4176). A line claiming another id would be decided from the wrong id's observation; only
@@ -2281,7 +2280,7 @@ export function parseStoredJson(bytes) {
 
 /** A stored body, parsed; null for a tombstone, a body that is not JSON, or one over the structure bound (D-4345), or one
  *  whose raw_len is over BLOB_DECODE_MAX, which is never decompressed (D-4346). */
-function storedBody(s, blobId) {
+export function storedBody(s, blobId) {
   const r = s.blobZ.get(blobId);
   if (r === undefined || r.z === null) return null;
   if (blobOverDecodeCap(r.raw_len)) return null;   // D-4346 (history-permanent-failures-classified): an over-cap body is never decoded whole for the variant compare
@@ -2291,7 +2290,7 @@ function storedBody(s, blobId) {
 /** The tool_use a tool_result answers, when it was written in an earlier tick: walked up the
  *  stored `parentUuid` chain, PAIR_WALK_HOPS at most. null when not found. provenanceOf then
  *  classifies the result as plain `tool`, the searchable side. */
-function pairedFromStore(db, toolUseId, parentUuid) {
+export function pairedFromStore(db, toolUseId, parentUuid) {
   const s = stmts(db);
   let uuid = parentUuid;
   for (let hop = 0; hop < PAIR_WALK_HOPS && typeof uuid === 'string'; hop += 1) {
@@ -3598,18 +3597,23 @@ export async function rederiveFts(db, ctx, budget) {
   let group = [];
   let chars = 0;
   const commit = (completed) => {
+    let changed = 0;
     withTx(db, 'NORMAL', () => {
       let bad = 0;
       for (const g of group) {
         const removed = Number(f.del.run(g.id).changes);
         if (g.undecodable === true && removed > 0) bad += 1;   // counted once: the row is gone, so no later generation counts it again (D-4346)
         if (g.text !== null) f.ins.run(g.id, g.text);
+        if (removed > 0 || g.text !== null) changed += 1;
       }
       if (bad > 0) bump(db, HEALTH_COUNTERS.blobUndecodable, bad);
-      if (group.length > 0) d.pending.run(MERGE_STEP, 1);
+      // Only a group in which a row was removed or inserted reopens the merge step and counts as re-indexed: an undecodable
+      // or over-cap blob keeps fts_indexed = 1, so every later generation pushes it again for a delete that answers 0 (M10, FU2).
+      if (changed > 0) d.pending.run(MERGE_STEP, 1);
       setMeta(db, REDERIVE_META, formatRederiveState({ ...plan, cursor }));
       if (completed) setMeta(db, REINDEX_META, String(plan.target));
     });
+    reindexed += changed;
     group = [];
     chars = 0;
   };
@@ -3621,7 +3625,6 @@ export async function rederiveFts(db, ctx, budget) {
       const row = d.blobForFts.get(b.blob_id);
       if (row === undefined || row.z === null) {
         group.push({ id: b.blob_id, text: null });   // a tombstone keeps no index row
-        reindexed += 1;
       } else {
         idx.probe.hits = 0;
         const t = await ftsTextOfBlob(row.z, row.is_sidecar === 1, idx, row.raw_len);
@@ -3631,10 +3634,9 @@ export async function rederiveFts(db, ctx, budget) {
         } else if (t.undecodable) {
           // D-4346 (history-permanent-failures-classified): never skipped; its row cannot be shown free of an owed pair, so it is deleted and none inserted.
           group.push({ id: b.blob_id, text: null, undecodable: true });
-          reindexed += 1;
         } else {
           const final = redactForIndex(t.text, idx);
-          if (idx.probe.hits > 0) { group.push({ id: b.blob_id, text: final }); chars += final.length; reindexed += 1; }
+          if (idx.probe.hits > 0) { group.push({ id: b.blob_id, text: final }); chars += final.length; }
         }
       }
       const zlen = b.zlen ?? 0;

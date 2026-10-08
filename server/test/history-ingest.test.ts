@@ -1807,6 +1807,8 @@ describe('history ingest: sidecars (plan task 21)', () => {
 interface IxSweep {
   ftsPrepare(db: DatabaseSync, nowMs: number): { state: string; tables: boolean };
   deriveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<void>;
+  storedBody(s: { blobZ: { get(id: number): unknown } }, blobId: number): unknown;
+  pairedFromStore(db: DatabaseSync, toolUseId: string, parentUuid: string | null): { id: string } | null;
   ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown, rawLen: number): Promise<{ text: string; decoded: number; undecodable: false; overCap?: true } | { text: null; decoded: number; undecodable: true }>;
 }
 interface IxSweep {
@@ -2737,6 +2739,66 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const again = runSweep(box);
       expect(again.code, again.stderr).toBe(0);
       expect(counters(box)[HEALTH_COUNTERS.blobUndecodable]).toBe(1);
+    });
+
+    it('M10: a second generation over a blob that no longer decodes deletes nothing, so it reports reindexed 0 and registers no merge step (D-4346)', async () => {
+      const { sweep: S } = await IX.api();
+      const box = IX.newBox('ccrc-hist-undec-gen2-');
+      try {
+        const a = `zqe${hex(12)}5`;
+        const b = `zqf${hex(12)}6`;
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `note é${a}${b} end`, 1)]));
+        IX.sweepTwice(box);
+        const { store, lib } = await IX.api();
+        const P = lib.historyPaths(box.home);
+        const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+        const db = store.openWriter(P.dbFile);
+        try {
+          expect(matches(db, '"ezqe"*')).toBe(1);   // CONTROL: indexed in full
+          db.prepare('UPDATE blobs SET z = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(BAD, IX.uuidN(1));
+          const ctx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+          secretFile(box, 'a.env', `ZQ_A=${a}\n`);
+          S.secretsStep(db, ctx, []);
+          ctx.fts = S.ftsPrepare(db, ctx.nowMs).tables;
+          expect(await S.rederiveFts(db, ctx, S.newBudget())).toEqual({ state: 'completed', reindexed: 1 });   // the row is deleted: a change
+          expect(matches(db, '"ezqe"*')).toBe(0);
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(1);
+          db.prepare("UPDATE derivation_state SET completed_ms = ? WHERE step = 'fts-merge'").run(1);   // the merge step is idle: a second generation that deletes nothing must not reopen it
+          secretFile(box, 'b.env', `ZQ_B=${b}\n`);
+          S.secretsStep(db, ctx, []);
+          expect(await S.rederiveFts(db, ctx, S.newBudget())).toEqual({ state: 'completed', reindexed: 0 });   // nothing left to delete: no change
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(1);
+          expect((db.prepare("SELECT completed_ms AS c FROM derivation_state WHERE step = 'fts-merge'").get() as { c: number | null }).c).toBe(1);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    it('M13: storedBody and pairedFromStore refuse a stored body whose raw_len is over BLOB_DECODE_MAX, though its bytes would decode (D-4346)', async () => {
+      const { store, lib } = await IX.api();
+      const { sweep: S } = await IX.api();
+      const box = IX.newBox('ccrc-hist-m13-');
+      try {
+        const tu = { type: 'tool_use', id: 'toolu_01M13', name: 'Read', input: { file_path: '/home/u/tree/a.txt' } };
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+          IX.user(IX.uuidN(1), null, 'zqm13 words', 1),
+          IX.assistant(IX.uuidN(2), IX.uuidN(1), [tu], 2),
+        ]));
+        IX.sweepTwice(box);
+        const db = store.openWriter(lib.historyPaths(box.home).dbFile);
+        try {
+          const blobOf = (n: number): number => (db.prepare('SELECT blob_id AS id FROM entries WHERE uuid = ?').get(IX.uuidN(n)) as { id: number }).id;
+          const over = (id: number): void => { db.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(lib.BLOB_DECODE_MAX + 1, id); };
+          const s = { blobZ: db.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?') };
+          // storedBody: the variant compare's reader
+          expect(S.storedBody(s, blobOf(1)), 'CONTROL: a small body is read').not.toBeNull();
+          over(blobOf(1));
+          expect(S.storedBody(s, blobOf(1))).toBeNull();
+          // pairedFromStore: the walk up parentUuid; the tool_use sits in the row whose body is made over-cap
+          expect(S.pairedFromStore(db, 'toolu_01M13', IX.uuidN(2)), 'CONTROL: the tool_use is found').toMatchObject({ id: 'toolu_01M13' });
+          over(blobOf(2));
+          expect(S.pairedFromStore(db, 'toolu_01M13', IX.uuidN(2))).toBeNull();
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     });
 
     it('a body whose stored raw_len is over BLOB_DECODE_MAX is never decompressed: it indexes empty and uncounted (D-4346)', async () => {
