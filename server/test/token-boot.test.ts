@@ -17,7 +17,7 @@ import {
   appendRetired, mintGenerationId, mintValue, readState, renameOverAtomic, tokenPaths, valueDigestHex,
   writeState, writeValueFileAtomic,
 } from '../src/token/files.js';
-import { confirmedGeneration, handedOutState, promotedState, stagedState, type BoxTokenState } from '../src/token/policy.js';
+import { PENDING_HARD_CAP, confirmedGeneration, handedOutState, promotedState, stagedState, type BoxTokenState } from '../src/token/policy.js';
 import { checkMailToken, MailTokenFileUnusable, MailTokenPlaceholderUnedited, PLACEHOLDER_TOKEN } from '../src/coord/token.js';
 import { FLEET_TOKEN_FILE_COMMENT, GENERATION_ID_RE, TOKEN_VALUE_RE } from '../../shared/box-token.js';
 import { buildServer } from '../src/server.js';
@@ -303,6 +303,35 @@ describe('auxiliary files', () => {
     expect(r.state?.pending).toEqual([]);
     expect(r.state).toMatchObject({ rotationOwed: true, owedWhy: 'aux-unusable' });
     expect(existsSync(paths.pending(b))).toBe(false);
+  });
+
+  // F4 (review 349) with D-4413: a state file with more pending entries than the cap reads unusable, so boot takes the
+  // unusable-state path (a warning, the usable mail.token adopted as unverifiable) and never reaches the holder's
+  // RangeError, which killed the process before. Three handed-out entries (the cap with the exit's slot) boot normally.
+  it('pending entries at the cap boot with every slot filled; one more than the cap is an unusable state, never a RangeError (F4)', async () => {
+    const seed = async (n: number): Promise<{ home: string; values: string[] }> => {
+      const home = mkHome();
+      const paths = P(home);
+      const r0 = await boot(home);
+      let s = r0.state as BoxTokenState;
+      const values: string[] = [];
+      for (let i = 0; i < n; i++) {
+        const id = mintGenerationId();
+        const v = mintValue();
+        values.push(v);
+        s = handedOutState(stagedState(s, id, Date.now(), await writeValueFileAtomic(paths.pending(id), `${v}\n`)), id, Date.now());
+      }
+      await writeState(paths.state, s);
+      return { home, values };
+    };
+    const ok = await seed(PENDING_HARD_CAP);
+    const r = await boot(ok.home);
+    expect(r.state?.pending).toHaveLength(PENDING_HARD_CAP);
+    for (const v of ok.values) expect(checkMailToken(r.holder, v)).toBe('ok');
+    const over = await seed(PENDING_HARD_CAP + 1);
+    const r2 = await boot(over.home);                                  // resolves: no RangeError from setSlots
+    expect(r2.warnings.join('\n')).toContain(`${P(over.home).state} is unusable`);
+    expect(r2.state).toMatchObject({ origin: 'adopted', rotationOwed: true });
   });
 
   // Review Focus 1, its restart sub-case (plan assembly): the server restarts between the claim's 200 (the hand-out

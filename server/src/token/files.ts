@@ -15,7 +15,7 @@ import {
   FLEET_TOKEN_FILE_COMMENT, GENERATION_ID_RE, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS,
 } from '../../../shared/box-token.js';
 import { CCRC_DIR_NAME, NODE_FILES, TOKEN_TRANSPORTS } from '../../../shared/agent-protocol.js';
-import type { BoxTokenState, WriteRecord } from './policy.js';
+import { PENDING_HARD_CAP, type BoxTokenState, type WriteRecord } from './policy.js';
 import type { BothRoleWriter, FileMeta, RetiredRead, StateRead, TokenPaths, TokenStore, ValueRead } from './ports.js';
 
 export type { FileMeta, RetiredRead, StateRead, TokenPaths, ValueRead } from './ports.js';
@@ -121,7 +121,8 @@ function isBoxTokenState(v: unknown): v is BoxTokenState {
   if (v.owedWhy !== null && !(OWED_REASONS as readonly unknown[]).includes(v.owedWhy)) return false;
   const c = v.current;
   if (!isObj(c) || !isStrOrNull(c.id) || !isNum(c.seq) || !isNum(c.since) || !(c.write === null || isWrite(c.write))) return false;
-  if (!Array.isArray(v.pending) || !v.pending.every((p) => isObj(p) && typeof p.id === 'string' && GENERATION_ID_RE.test(p.id)
+  // F4 / D-4413: `pending` is bounded to the cap, so no consumer (BoxTokenHolder.setSlots) is handed a list it throws on.
+  if (!Array.isArray(v.pending) || v.pending.length > PENDING_HARD_CAP || !v.pending.every((p) => isObj(p) && typeof p.id === 'string' && GENERATION_ID_RE.test(p.id)
     && isNum(p.seq) && isNum(p.stagedAt) && isNumOrNull(p.handedOutAt) && isNumOrNull(p.confirmBy) && isWrite(p.write))) return false;
   const pr = v.previous;
   if (pr !== null && !(isObj(pr) && isStrOrNull(pr.id) && isNum(pr.seq) && isNum(pr.graceUntil) && isNum(pr.hardUntil)

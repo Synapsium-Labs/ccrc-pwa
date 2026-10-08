@@ -8,9 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   BURNED_CODES_KEPT, CLAIM_MISS_BUDGET, CLAIM_MISS_WINDOW_MS, CONFIRM_DEADLINE_MS, GRACE_HARD_MS, GRACE_MS,
-  HOLD_REPROBE_MS, MAX_PENDING, applySyncResult, backoffMs, bothRoleWriterArmed, claimVerdict, codeExpiresAt,
+  HOLD_REPROBE_MS, MAX_PENDING, PENDING_HARD_CAP, applySyncResult, backoffMs, bothRoleWriterArmed, claimVerdict, codeExpiresAt,
   confirmedGeneration, extendedGraceState, handedOutState, mintedState, nextAction, phaseOf, promotedState,
-  recoveryPlan, retireDue, rotationGate, stagedState,
+  pendingExitOpen, recoveryPlan, retireDue, rotationGate, stagedState,
   type BoxTokenState, type ClaimDoorState, type FileMetaLike, type GateInput, type GateNode, type GateVerdict,
 } from '../src/token/policy.js';
 import { CLAIM_CODE_TTL_MS } from '../../shared/agent-protocol.js';
@@ -30,12 +30,12 @@ const serverRow = (over: Partial<GateNode> = {}): GateNode => ({
 const remote = (over: Partial<GateInput> = {}): GateInput => ({
   fleetMode: 'remote', role: 'server', roleSource: 'recorded', agentEnvMarksFleet: false,
   nodes: [serverRow(), fleetRow()], linkUp: true, learned: null, lastReadyAt: 0,
-  handedOutUnconfirmed: 0, mintFailed: false, now: 10_000_000, ...over,
+  handedOutUnconfirmed: 0, pendingExit: false, mintFailed: false, now: 10_000_000, ...over,
 });
 const bothLocal = (over: Partial<GateInput> = {}): GateInput => ({
   fleetMode: 'local', role: 'both', roleSource: 'recorded', agentEnvMarksFleet: false,
   nodes: [serverRow({ role: 'both', agentOps: null })], linkUp: true, learned: null, lastReadyAt: null,
-  handedOutUnconfirmed: 0, mintFailed: false, now: 10_000_000, ...over,
+  handedOutUnconfirmed: 0, pendingExit: false, mintFailed: false, now: 10_000_000, ...over,
 });
 const OPEN: GateVerdict = { open: true, mode: 'remote', nodeId: NODE };
 const base = (): BoxTokenState => mintedState(1000, W(1), null, null, 'c'.repeat(16));
@@ -125,7 +125,7 @@ describe('the hold rule (R1 as amended by R5): one gate for every trigger, auto 
     expect(body.length, 'the scan slice must not be empty (a renamed function or marker would pass vacuously)').toBeGreaterThan(200);
     expect(body).not.toMatch(/\bauto\b|\bintent\b|\btrigger\b|rotateRequested/);
     expect(Object.keys(remote()).sort()).toEqual(['agentEnvMarksFleet', 'fleetMode', 'handedOutUnconfirmed', 'lastReadyAt',
-      'learned', 'linkUp', 'mintFailed', 'nodes', 'now', 'role', 'roleSource']);
+      'learned', 'linkUp', 'mintFailed', 'nodes', 'now', 'pendingExit', 'role', 'roleSource']);
   });
 
   it('an owed rotation and "Rotate now" stage on the same open gate, and both hold on the same closed one', () => {
@@ -485,5 +485,84 @@ describe('ring L1', () => {
     const froms = [...src.matchAll(/^import[^;]*?from '([^']+)'/gms)].map((m) => m[1]);
     expect(froms.length).toBeGreaterThan(0);
     for (const f of froms) expect(f, f).toMatch(/^\.\.\/\.\.\/\.\.\/shared\/[a-z-]+\.js$/);
+  });
+});
+
+// ── fix round 1, batch 1: D-4413 (the pending cap's exit), F3(c), F7 ─────────────────────────────────────────────
+describe('the pending cap has an exit (D-4413)', () => {
+  const ids = ['1', '2', '3', '4'].map((c) => c.repeat(16));
+  /** `n` pending generations handed out at `at`; each confirmBy is `at + CONFIRM_DEADLINE_MS`. */
+  const handedOutN = (n: number, at = 3000): BoxTokenState => {
+    let s: BoxTokenState = { ...base(), rotationOwed: true, owedWhy: 'adopted' };
+    for (let i = 0; i < n; i++) s = handedOutState(stagedState(s, ids[i], 2000, W(2 + i)), ids[i], at + i);
+    return s;
+  };
+
+  it('the cap constants: two handed-out values hold the gate, three pending is the hard bound', () => {
+    expect([MAX_PENDING, PENDING_HARD_CAP]).toEqual([2, 3]);
+  });
+
+  it('pendingExitOpen: exactly the two cap values, both strictly past confirmBy', () => {
+    const s = handedOutN(2);                                               // confirmBy 3000+300000 and 3001+300000
+    const last = s.pending[1].confirmBy as number;
+    expect(pendingExitOpen(s.pending, last)).toBe(false);                  // the second still waits AT its deadline (nextAction's `now <= confirmBy`)
+    expect(pendingExitOpen(s.pending, last + 1)).toBe(true);
+    expect(pendingExitOpen(s.pending, (s.pending[0].confirmBy as number) + 1)).toBe(false);   // one waiting
+    expect(pendingExitOpen(handedOutN(1).pending, 9_999_999)).toBe(false);                    // below the cap: no exit needed
+    expect(pendingExitOpen(handedOutN(3).pending, 9_999_999)).toBe(false);                    // the third slot is in use: never a fourth
+    const withStaged = stagedState(s, ids[2], last + 5, W(9));             // the exit's own staged value is not a cap value
+    expect(pendingExitOpen(withStaged.pending, last + 6)).toBe(true);
+    expect(pendingExitOpen([], 1)).toBe(false);
+  });
+
+  it('the gate: two handed out hold pending-cap unless the exit is open; three always hold', () => {
+    expect(rotationGate(remote({ handedOutUnconfirmed: 2, pendingExit: false }))).toEqual({ open: false, hold: 'pending-cap', node: 'fleet' });
+    expect(rotationGate(remote({ handedOutUnconfirmed: 2, pendingExit: true }))).toEqual(OPEN);
+    expect(rotationGate(remote({ handedOutUnconfirmed: 3, pendingExit: true }))).toEqual({ open: false, hold: 'pending-cap', node: 'fleet' });
+    expect(rotationGate(remote({ handedOutUnconfirmed: 1, pendingExit: true }))).toEqual(OPEN);
+  });
+
+  it('nextAction never stages a fourth pending value, whatever the gate says', () => {
+    const three = handedOutN(3);
+    const owed = { ...three, rotationOwed: true, owedWhy: 'adopted' as const };
+    const late = 3000 + 3 * CONFIRM_DEADLINE_MS;
+    expect(nextAction({ state: owed, gate: OPEN, generation: null, rotateRequested: false, backoffUntil: null, now: late }))
+      .toEqual({ kind: 'hold', hold: 'pending-cap', node: null });
+  });
+
+  it('two overdue handed-out values stage the exit rotation once the gate is open', () => {
+    const two = handedOutN(2);
+    const late = (two.pending[1].confirmBy as number) + 1;
+    expect(nextAction({ state: two, gate: OPEN, generation: null, rotateRequested: false, backoffUntil: null, now: late }))
+      .toEqual({ kind: 'stage', why: 'adopted' });
+  });
+
+  it("the exit's confirmation drops both older values (the existing later-confirmed rule)", () => {
+    const withExit = handedOutState(stagedState(handedOutN(2), ids[2], 400_000, W(7)), ids[2], 400_001);
+    expect(withExit.pending).toHaveLength(3);
+    const done = promotedState(withExit, ids[2], 500_000, W(9));
+    expect(done.pending).toEqual([]);
+    expect(done.current.id).toBe(ids[2]);
+  });
+});
+
+describe('F3(c): the own-write promote waits out the backoff', () => {
+  const G = '1'.repeat(16);
+  const staged = (): BoxTokenState => stagedState({ ...base(), rotationOwed: true, owedWhy: 'adopted' }, G, 2000, W(2));
+
+  it('a staged value on a both box is not promoted while a backoff stands, and is when it ends', () => {
+    const gate = rotationGate(bothLocal());
+    expect(nextAction({ state: staged(), gate, generation: null, rotateRequested: false, backoffUntil: 9000, now: 5000 }))
+      .toEqual({ kind: 'backoff', until: 9000 });
+    expect(nextAction({ state: staged(), gate, generation: null, rotateRequested: false, backoffUntil: 9000, now: 9000 }))
+      .toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+    expect(nextAction({ state: staged(), gate, generation: null, rotateRequested: false, backoffUntil: null, now: 5000 }))
+      .toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+  });
+});
+
+describe('F7: the timings that bound a live re-probe are pinned by value', () => {
+  it('HOLD_REPROBE_MS is one hour (a 55-minute re-probe is faster than the plan, and reds here)', () => {
+    expect(HOLD_REPROBE_MS).toBe(60 * 60_000);
   });
 });

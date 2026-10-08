@@ -1004,3 +1004,318 @@ describe('an unreadable retired list is kept in memory at retirement (D-4403 ite
     } finally { await r.app.close(); }
   });
 });
+
+// ── fix round 1, batch 1: D-4413 (the pending cap's exit), F3 (backoff on every route) ────────────────────────
+describe('the pending cap has an exit (D-4413)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  /** The claim route stamps a hand-out with `Date.now()`, so these tests drive the one clock the route and the driver
+   *  share: `Date` is faked after the rig is built (the rig's own offset stays 0) and moved with `at`. */
+  function clock(): (ms: number) => void {
+    const base = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(base);
+    return (ms) => { vi.setSystemTime(base + ms); };
+  }
+  /** Two hand-outs lost: G1, then (past its confirmBy) G2. Returns their ids and values. */
+  async function twoLost(r: Rig, at: (ms: number) => void): Promise<{ ids: string[]; values: string[] }> {
+    r.agent.mode = 'claim-only';
+    await r.driver.tick();                                             // G1 handed out at 0, its result lost (confirmBy 300 s)
+    at(CONFIRM_DEADLINE_MS + 1000);
+    await r.driver.tick();                                             // G1 overdue: G2 handed out at 301 s (confirmBy 601 s), result lost
+    const pend = (await onDisk(r)).pending;
+    expect(pend.map((p) => p.handedOutAt !== null)).toEqual([true, true]);
+    const ids = pend.map((p) => p.id);
+    return { ids, values: ids.map((id) => r.boot.holder.pendingValue(id) as string) };
+  }
+
+  it('after two lost hand-outs the exit rotation runs and confirms, and both older values leave', async () => {
+    const leaked = 'e'.repeat(64);
+    const r = await rig({ handMade: leaked });
+    const at = clock();
+    try {
+      const { ids, values } = await twoLost(r, at);
+      expect(r.agent.calls).toBe(2);
+      // G2 still waits for its confirmation: no third value is staged (the exit is for BOTH past confirmBy)
+      at(CONFIRM_DEADLINE_MS + 2000);
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(2);
+      expect((await onDisk(r)).pending).toHaveLength(2);
+      // both are past confirmBy: the exit stages a third value, hands it out, and its confirmation drops the two
+      r.agent.mode = 'normal';
+      at(2 * CONFIRM_DEADLINE_MS + 2000);
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(3);
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+      expect(r.driver.view()).toMatchObject({ origin: 'rotated', rotationOwed: false, hold: null });
+      for (const id of ids) expect(r.boot.holder.pendingValue(id)).toBeNull();
+      for (const v of values) expect(await r.lane(v), 'an older lost value is refused once the exit is confirmed').toBe(401);
+      expect(await r.lane(leaked)).toBe(400);                           // the previous value stays in grace
+      expect((await onDisk(r)).pending).toEqual([]);
+      expect(pendingFiles(r)).toEqual([]);
+    } finally { await r.app.close(); }
+  });
+
+  it('never more than three pending: with the exit\'s own hand-out lost too, the gate holds and no fourth is staged', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    const at = clock();
+    try {
+      await twoLost(r, at);
+      at(2 * CONFIRM_DEADLINE_MS + 2000);
+      await r.driver.tick();                                           // the exit: a third value handed out, its result lost
+      expect(r.agent.calls).toBe(3);
+      expect((await onDisk(r)).pending).toHaveLength(3);
+      expect(r.boot.holder.pendingValue((await onDisk(r)).pending[2].id)).not.toBeNull();   // the third holder slot is filled
+      for (let i = 1; i <= 4; i++) {
+        at((2 + i * 2) * CONFIRM_DEADLINE_MS);
+        await r.driver.tick();
+        expect((await onDisk(r)).pending, `tick ${i}`).toHaveLength(3);
+        expect(r.driver.view()).toMatchObject({ phase: 'held', hold: 'pending-cap' });
+      }
+      expect(r.agent.calls).toBe(3);
+      expect(pendingFiles(r)).toHaveLength(3);
+    } finally { await r.app.close(); }
+  });
+
+  it('Rotate now at the cap with nothing in flight answers the pending-cap hold, not joined; it starts once the exit is open', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    const at = clock();
+    try {
+      await twoLost(r, at);
+      at(CONFIRM_DEADLINE_MS + 2000);                                   // G2 still waits: the exit is shut
+      const held = await r.driver.rotateNow(Date.now());
+      expect(held).toMatchObject({ ok: false, error: 'held', hold: 'pending-cap', node: 'fleet' });
+      expect(r.agent.calls).toBe(2);
+      r.agent.mode = 'normal';
+      at(2 * CONFIRM_DEADLINE_MS + 2000);                               // both past confirmBy: the exit is open
+      const started = await r.driver.rotateNow(Date.now());
+      expect(started).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(3);
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+    } finally { await r.app.close(); }
+  });
+
+  it('Rotate now with three handed out (the exit spent) also answers the hold', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    const at = clock();
+    try {
+      await twoLost(r, at);
+      at(2 * CONFIRM_DEADLINE_MS + 2000);
+      await r.driver.tick();                                           // the exit's hand-out is lost too
+      at(6 * CONFIRM_DEADLINE_MS);
+      expect(await r.driver.rotateNow(Date.now())).toMatchObject({ ok: false, error: 'held', hold: 'pending-cap' });
+    } finally { await r.app.close(); }
+  });
+
+  it('Rotate now below the cap joins a handed-out value that is inside its confirm deadline, and sets no flag', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    try {
+      r.agent.mode = 'claim-only';
+      await r.driver.tick();                                           // G1 handed out, its result lost: waiting for its confirmation
+      expect(await r.driver.rotateNow(Date.now())).toMatchObject({ ok: true, outcome: 'joined' });
+      r.agent.mode = 'normal';
+      await r.driver.tick();
+      expect(r.agent.calls, 'a joined press staged nothing of its own').toBe(1);
+    } finally { await r.app.close(); }
+  });
+
+  it('Rotate now answers joined while a send is actually in flight, and starts nothing', async () => {
+    let release: (v: SyncResult) => void = () => {};
+    let entered: () => void = () => {};
+    const inSend = new Promise<void>((res) => { entered = res; });
+    const link: TokenSyncLink = { send: () => { entered(); return new Promise<SyncResult>((res) => { release = res; }); } };
+    const r = await rig({ handMade: 'e'.repeat(64), link });
+    try {
+      const tick = r.driver.tick();
+      await inSend;
+      r.rows.linkUp = false;                                           // the gate shuts under the running send: it is still in flight
+      const a = await r.driver.rotateNow(Date.now());
+      expect(a).toMatchObject({ ok: true, outcome: 'joined' });
+      release({ kind: 'unsent' });
+      await tick;
+    } finally { await r.app.close(); }
+  });
+
+  it('boot\'s unverifiable pending files take the same exit: once both are past confirmBy a rotation runs and drops them', async () => {
+    const home = mkTmp('ccrc-token-e2e-orphan-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const paths = tokenPaths(path.join(home, '.ccrc', 'mail.token'), home);
+    const orphans = ['a', 'b'].map((c) => ({ id: c.repeat(16), value: c.repeat(64) }));
+    for (const o of orphans) writeFileSync(paths.pending(o.id), `${o.value}\n`, { mode: 0o600 });
+    const r = await rig({ home, handMade: 'e'.repeat(64) });
+    try {
+      expect(r.driver.view()).toMatchObject({ origin: 'adopted', rotationOwed: true, phase: 'handed-out' });
+      expect(r.printed.join('\n')).toContain('stay accepted as unverifiable');
+      for (const o of orphans) expect(await r.lane(o.value)).toBe(400);
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(0);                                   // inside confirmBy: they wait, like any handed-out value
+      r.clock.offset = CONFIRM_DEADLINE_MS + 1000;
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(1);
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+      for (const o of orphans) {
+        expect(await r.lane(o.value), 'an unverifiable value is dropped by the exit rotation').toBe(401);
+        expect(existsSync(paths.pending(o.id))).toBe(false);
+      }
+    } finally { await r.app.close(); }
+  });
+});
+
+describe('F3: backoff applies on every route (review 349)', () => {
+  const TEN_MINUTES = 10;
+  /** Tick once a minute for ten minutes of failures. */
+  async function tenMinutes(r: Rig): Promise<void> {
+    for (let m = 1; m <= TEN_MINUTES; m++) {
+      r.clock.offset = m * 60_000;
+      await r.driver.tick();
+    }
+  }
+  const enospc = (): Error => Object.assign(new Error('injected'), { code: 'ENOSPC' });
+  /** The backoff ladder's most attempts in the first ten minutes (60 s, 120 s, 240 s, 480 s: attempts at 0, 1, 3, 7). */
+  const LADDER_MAX = 4;
+
+  it('(a) one Rotate now press, then ten minutes of staging failures, stays within the ladder', async () => {
+    let attempts = 0;
+    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st, writeValue: async (p, v) => {
+      if (p.includes('mail-pending-')) { attempts++; throw enospc(); }
+      return st.writeValue(p, v);
+    } }) });
+    try {
+      const first = await r.driver.rotateNow(Date.now());
+      expect(first).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();                                           // joins the tick the press started
+      expect(attempts).toBe(1);
+      await tenMinutes(r);
+      expect(attempts).toBeGreaterThan(2);                             // it does retry
+      expect(attempts).toBeLessThanOrEqual(LADDER_MAX);
+      // the flag is spent: a later press is a new start, not 'joined' on a stale flag
+      r.clock.offset = 20 * 60_000;
+      expect(await r.driver.rotateNow(Date.now() + r.clock.offset)).toMatchObject({ ok: true, outcome: 'started' });
+    } finally { await r.app.close(); }
+  });
+
+  it('(a) a press that meets a failed stage does not leave the flag set for the next successful stage', async () => {
+    let fail = false;
+    let attempts = 0;
+    const r = await rig({ wrap: (st) => ({ ...st, writeValue: async (p, v) => {
+      if (fail && p.includes('mail-pending-')) { attempts++; throw enospc(); }
+      return st.writeValue(p, v);
+    } }) });
+    try {
+      // a minted, fully-rotated install: nothing is owed, so only the press asks for a stage
+      r.rows.row = fleetRow();
+      await r.driver.tick();
+      const calls = r.agent.calls;
+      expect(r.driver.view()).toMatchObject({ origin: 'rotated', rotationOwed: false, phase: 'grace' });
+      fail = true;
+      expect(await r.driver.rotateNow(Date.now())).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();
+      expect(attempts).toBe(1);
+      fail = false;
+      r.clock.offset = 90_000;                                         // past the 60 s backoff
+      await r.driver.tick();
+      expect(r.agent.calls, 'a spent press stages nothing by itself').toBe(calls);
+      expect(attempts).toBe(1);
+    } finally { await r.app.close(); }
+  });
+
+  it('(b) staging failures with the state file failing the same way: the backoff is set before the commit that throws', async () => {
+    let attempts = 0;
+    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st,
+      writeValue: async (p, v) => {
+        if (p.includes('mail-pending-')) { attempts++; throw enospc(); }
+        return st.writeValue(p, v);
+      },
+      writeState: async () => { throw enospc(); } }) });
+    try {
+      await r.driver.tick();                                           // the stage fails, then its commit throws too
+      expect(attempts).toBe(1);
+      expect(r.printed.some((l) => l.includes('a driver tick failed'))).toBe(true);
+      await tenMinutes(r);
+      expect(attempts).toBeLessThanOrEqual(LADDER_MAX);
+      expect(attempts).toBeGreaterThan(2);
+    } finally { await r.app.close(); }
+  });
+
+  /** A recorded both box; the staged value is promoted by the server's own write. `writerFails`: that write fails;
+   *  `failState`: the state file then fails the same way; `stageFailsOnce`: the first pending-file write fails. */
+  async function bothBox(opts: { failState?: boolean; writerFails?: boolean; stageFailsOnce?: boolean }): Promise<{
+    driver: BoxTokenDriver; writes: () => number; off: (ms: number) => void; printed: string[]; paths: ReturnType<typeof tokenPaths> }> {
+    const home = mkTmp('ccrc-token-e2e-both-f3-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const paths = tokenPaths(path.join(home, '.ccrc', 'mail.token'), home);
+    writeFileSync(paths.current, `${'a'.repeat(64)}\n`, { mode: 0o600 });
+    let offset = 0;
+    const now = (): number => Date.now() + offset;
+    const printed: string[] = [];
+    const boot = await bootBoxToken({ mailTokenPath: paths.current, home, role: 'both', roleSource: 'recorded', fleetMode: 'local', now: now() });
+    const own: GateNode = { nodeId: 'x', nodeIdMeasured: true, label: 'self', role: 'both', reachable: true, os: 'linux',
+      caps: ['token-sync'], agentOps: null, updateState: 'idle', reportedPhase: null };
+    let writes = 0;
+    let stageFailed = false;
+    const base = fileTokenStore(paths);
+    const store: TokenStore = { ...base,
+      writeValue: async (p, v) => {
+        if (opts.stageFailsOnce && !stageFailed && p.includes('mail-pending-')) { stageFailed = true; throw enospc(); }
+        return base.writeValue(p, v);
+      },
+      writeState: async (s) => { if (opts.failState && s.lastFailure === 'write-failed') throw enospc(); return base.writeState(s); } };
+    const real = fileBothRoleWriter(paths);
+    const driver = new BoxTokenDriver({ store, holder: boot.holder, link: null, generation: null,
+      rows: { nodes: () => [own], linkUp: () => false, lastReadyAt: () => null },
+      env: { fleetMode: 'local', role: 'both', roleSource: 'recorded', agentEnvMarksFleet: false },
+      bothWriter: { write: async (v, g) => { writes++; if (opts.writerFails) throw enospc(); await real.write(v, g); } },
+      now, warn: (l) => printed.push(l) }, boot);
+    return { driver, writes: () => writes, off: (ms) => { offset = ms; }, printed, paths };
+  }
+
+  it('(c) a both box whose fleet-file write keeps failing is retried on the ladder, not every tick', async () => {
+    const b = await bothBox({ writerFails: true });
+    await b.driver.tick();
+    expect(b.writes()).toBe(1);
+    for (let m = 1; m <= TEN_MINUTES; m++) { b.off(m * 60_000); await b.driver.tick(); }
+    expect(b.writes()).toBeLessThanOrEqual(LADDER_MAX);
+    expect(b.writes()).toBeGreaterThan(2);
+    expect(b.driver.view()).toMatchObject({ lastFailure: 'write-failed' });
+    expect(b.printed.filter((l) => l.includes('could not write the fleet file')).length).toBeLessThanOrEqual(LADDER_MAX);
+  });
+
+  it('(b, own write) a both box whose state file fails the same way sets the backoff before the commit that throws', async () => {
+    const b = await bothBox({ writerFails: true, failState: true });
+    await b.driver.tick();
+    expect(b.writes()).toBe(1);
+    for (let m = 1; m <= TEN_MINUTES; m++) { b.off(m * 60_000); await b.driver.tick(); }
+    expect(b.writes()).toBeLessThanOrEqual(LADDER_MAX);
+    expect(b.writes()).toBeGreaterThan(2);
+  });
+
+  it('(a) a press whose gate closes before its stage runs is spent: reopening the gate stages nothing by itself', async () => {
+    const r = await rig();
+    try {
+      await r.driver.tick();                                           // a fresh install's first rotation completes
+      expect(r.driver.view()).toMatchObject({ origin: 'rotated', rotationOwed: false });
+      const calls = r.agent.calls;
+      expect(await r.driver.rotateNow(Date.now())).toMatchObject({ ok: true, outcome: 'started' });
+      r.rows.row = fleetRow({ agentOps: ['update'] });                 // the gate closes before the started tick reads it
+      await r.driver.tick();
+      expect(r.driver.view()).toMatchObject({ phase: 'held', hold: 'agent-predates-op' });
+      r.rows.row = fleetRow();
+      r.clock.offset = 5 * 60_000;
+      await r.driver.tick();
+      await r.driver.tick();
+      expect(r.agent.calls, 'a spent press stages nothing when the gate reopens').toBe(calls);
+    } finally { await r.app.close(); }
+  });
+
+  it('a stage that works after a bypassed backoff does not leave the backoff standing for the own-write promote', async () => {
+    const b = await bothBox({ stageFailsOnce: true });
+    await b.driver.tick();                                             // the stage fails: a backoff of a minute
+    expect(b.driver.view()).toMatchObject({ failures: 1 });
+    expect(b.writes()).toBe(0);
+    b.off(10_000);
+    expect(await b.driver.rotateNow(Date.now() + 10_000)).toMatchObject({ ok: true, outcome: 'started' });
+    await b.driver.tick();                                             // the press bypasses the backoff: staged and promoted at once
+    expect(b.writes()).toBe(1);
+    expect(b.driver.view()).toMatchObject({ origin: 'rotated', rotationOwed: false });
+  });
+});

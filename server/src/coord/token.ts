@@ -160,16 +160,20 @@ export function readMailToken(tokenPath: string): string | null {
   return token;
 }
 
-/** The accept-set's four slots, in the fixed order every match compares them
+/** The accept-set's five slots, in the fixed order every match compares them
  *  (box-token lifecycle spec 4.3). */
-export type TokenSlot = 'current' | 'pending0' | 'pending1' | 'previous';
-export const TOKEN_SLOTS: readonly TokenSlot[] = ['current', 'pending0', 'pending1', 'previous'];
+export type TokenSlot = 'current' | 'pending0' | 'pending1' | 'pending2' | 'previous';
+/** Five slots since D-4413: the third pending slot exists only for the pending cap's exit (a forward rotation staged
+ *  while both cap values are past `confirmBy`). `token/policy.ts`'s `PENDING_HARD_CAP` is the count of the three. */
+export const TOKEN_SLOTS: readonly TokenSlot[] = ['current', 'pending0', 'pending1', 'pending2', 'previous'];
+
+const PENDING_SLOTS = TOKEN_SLOTS.filter((s) => s.startsWith('pending')).length;
 
 /** What the driver and the boot hand the holder: the values themselves, never
  *  their digests (those are the holder's own, in memory only). */
 export interface HolderSlots {
   current: string | null;
-  /** At most two (`MAX_PENDING`); a third is a programming error and throws. */
+  /** At most three (`PENDING_HARD_CAP`); a fourth is a programming error and throws. */
   pending: readonly { id: string; value: string }[];
   /** `until` is the hard bound (ms since the epoch); at and after it the slot
    *  compares a dummy. The driver removes the slot at retirement. */
@@ -215,7 +219,7 @@ export function matchDigestSlots(presented: Buffer, slots: readonly Buffer[],
 /**
  * The box token's accept-set, held in memory and mutated in place by the boot
  * and the driver, so every lane that reads `deps.mailToken ?? null` at request
- * time sees a rotation with no restart (spec 4.2). It holds the four values and
+ * time sees a rotation with no restart (spec 4.2). It holds the five values and
  * their sha256 digests; the digests are recomputed by {@link setSlots} and never
  * written anywhere. It records which slot matched (for the console's "previous
  * still presented" count and the grace rule); that record never promotes
@@ -228,7 +232,7 @@ export class BoxTokenHolder {
   private slots: HolderSlots = { current: null, pending: [], previous: null };
   private digests: Buffer[] = [...SLOT_DUMMIES];
   private retired: Buffer[] = [];
-  private readonly matched: Record<TokenSlot, number> = { current: 0, pending0: 0, pending1: 0, previous: 0 };
+  private readonly matched: Record<TokenSlot, number> = { current: 0, pending0: 0, pending1: 0, pending2: 0, previous: 0 };
   private retiredTotal = 0;
   private readonly retiredLanes: Record<string, number> = {};
   private lastRetiredWarnAt: number | null = null;
@@ -239,15 +243,17 @@ export class BoxTokenHolder {
   }
 
   setSlots(s: HolderSlots): void {
-    if (s.pending.length > 2) throw new RangeError('BoxTokenHolder: at most two pending generations');
+    if (s.pending.length > PENDING_SLOTS) throw new RangeError(`BoxTokenHolder: at most ${PENDING_SLOTS} pending generations`);
     this.slots = { current: s.current, pending: [...s.pending], previous: s.previous };
     const p0 = s.pending[0];
     const p1 = s.pending[1];
+    const p2 = s.pending[2];
     this.digests = [
       s.current === null ? SLOT_DUMMIES[0]! : sha256(s.current),
       p0 === undefined ? SLOT_DUMMIES[1]! : sha256(p0.value),
       p1 === undefined ? SLOT_DUMMIES[2]! : sha256(p1.value),
-      s.previous === null ? SLOT_DUMMIES[3]! : sha256(s.previous.value),
+      p2 === undefined ? SLOT_DUMMIES[3]! : sha256(p2.value),
+      s.previous === null ? SLOT_DUMMIES[4]! : sha256(s.previous.value),
     ];
   }
 
@@ -273,13 +279,13 @@ export class BoxTokenHolder {
   /** For the both-role writer and the retirement self-check only. */
   currentValue(): string | null { return this.slots.current; }
 
-  /** The slot `presented` matches, or null. All four slots are compared every
+  /** The slot `presented` matches, or null. All five slots are compared every
    *  time; the previous slot compares its dummy at and after its hard bound. */
   match(presented: string): TokenSlot | null {
     const prev = this.slots.previous;
     const live = prev !== null && this.now() < prev.until
       ? this.digests
-      : [this.digests[0]!, this.digests[1]!, this.digests[2]!, SLOT_DUMMIES[3]!];
+      : [this.digests[0]!, this.digests[1]!, this.digests[2]!, this.digests[3]!, SLOT_DUMMIES[4]!];
     const i = matchDigestSlots(sha256(presented), live, this.compare);
     if (i < 0) return null;
     const slot = TOKEN_SLOTS[i]!;

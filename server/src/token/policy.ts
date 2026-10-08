@@ -25,7 +25,12 @@ export const BACKOFF_MIN_MS = 60_000;
 export const BACKOFF_MAX_MS = 60 * 60_000;
 export const HOLD_REPROBE_MS = 60 * 60_000;
 export const FAILURES_FOR_BANNER = 3;
+/** Handed-out values at which the gate holds `pending-cap` (spec §5.1). */
 export const MAX_PENDING = 2;
+/** Never more than this many pending values (D-4413): the third slot exists only for the cap's exit, a forward
+ *  rotation staged while both cap values are past `confirmBy`. `BoxTokenHolder` has this many pending slots and
+ *  `isBoxTokenState` refuses a longer list. */
+export const PENDING_HARD_CAP = 3;
 export const CLAIM_MISS_BUDGET = 30;
 export const CLAIM_MISS_WINDOW_MS = 60_000;
 export const CLAIM_ALERT_EVERY_MS = 60_000;
@@ -124,6 +129,9 @@ export interface GateInput {
   learned: { hold: 'verb-missing' | 'stale-client' | 'agent-predates-op'; at: number } | null;
   lastReadyAt: number | null;
   handedOutUnconfirmed: number;
+  /** D-4413: the cap's exit is open (`pendingExitOpen`): both cap values are past `confirmBy`. Computed by the caller
+   *  from the state it holds; the gate only reads the answer. */
+  pendingExit: boolean;
   mintFailed: boolean;
   now: number;
 }
@@ -142,6 +150,14 @@ const busy = (n: GateNode): boolean =>
 
 export function bothRoleWriterArmed(i: { role: NodeRole; roleSource: GateInput['roleSource']; fleetMode: 'local' | 'remote'; agentEnvMarksFleet: boolean }): boolean {
   return i.role === 'both' && i.roleSource === 'recorded' && i.fleetMode === 'local' && !i.agentEnvMarksFleet;
+}
+
+/** D-4413: the exit from `pending-cap`. True exactly when the cap's two handed-out values are both past `confirmBy`
+ *  (strictly: a value at its deadline still waits, as `nextAction` reads it). Below the cap there is nothing to exit,
+ *  and with the third slot in use there is no fourth. Staged (never handed out) values are not cap values. */
+export function pendingExitOpen(pending: readonly PendingGen[], now: number): boolean {
+  const handedOut = pending.filter((p) => p.handedOutAt !== null);
+  return handedOut.length === MAX_PENDING && handedOut.every((p) => p.confirmBy !== null && now > p.confirmBy);
 }
 
 /** One verdict for every trigger: there is no trigger kind and no auto input (R1 as amended by R5). */
@@ -169,7 +185,9 @@ export function rotationGate(i: GateInput): GateVerdict {
     const reprobed = i.lastReadyAt !== null && i.lastReadyAt > i.learned.at;
     if (!reprobed && i.now - i.learned.at < HOLD_REPROBE_MS) return held(i.learned.hold, f.label);
   }
-  if (i.handedOutUnconfirmed >= MAX_PENDING) return held('pending-cap', f.label);
+  // D-4413: a third pending slot ONLY while both cap values are past confirmBy; never more than three pending.
+  if (i.handedOutUnconfirmed >= PENDING_HARD_CAP) return held('pending-cap', f.label);
+  if (i.handedOutUnconfirmed >= MAX_PENDING && !i.pendingExit) return held('pending-cap', f.label);
   return { open: true, mode: 'remote', nodeId: f.nodeId };
 }
 
@@ -270,7 +288,11 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
     if (confirmed !== null) return { kind: 'promote', generation: confirmed, via: 'generation-read' };
   }
   const staged = state.pending.find((p) => p.handedOutAt === null);
-  if (staged && gate.open && gate.mode === 'both-local') return { kind: 'promote', generation: staged.id, via: 'own-write' };
+  // F3(c): the own-write promote waits out the backoff like every other retry; "Rotate now" asks for a stage, not for this.
+  if (staged && gate.open && gate.mode === 'both-local') {
+    if (i.backoffUntil !== null && now < i.backoffUntil) return { kind: 'backoff', until: i.backoffUntil };
+    return { kind: 'promote', generation: staged.id, via: 'own-write' };
+  }
   if (state.previous !== null) {
     const due = retireDue(state.previous, now);
     if (due === 'grace' || due === 'hard-bound') return { kind: 'retire', why: due };
@@ -291,6 +313,8 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
     : overdue ? 'confirm-deadline' : behind ? 'fleet-behind' : i.rotateRequested ? 'rotate-now' : null;
   if (why === null) return { kind: 'none' };
   if (!gate.open) return { kind: 'hold', hold: gate.hold, node: gate.node };
+  // D-4413: never a fourth pending value, whatever the gate said (the gate counts handed-out values, this counts all).
+  if (state.pending.length >= PENDING_HARD_CAP) return { kind: 'hold', hold: 'pending-cap', node: null };
   if (i.backoffUntil !== null && now < i.backoffUntil && !i.rotateRequested) return { kind: 'backoff', until: i.backoffUntil };
   return { kind: 'stage', why };
 }

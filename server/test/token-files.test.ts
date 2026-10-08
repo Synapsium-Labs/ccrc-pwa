@@ -15,7 +15,7 @@ import {
   readState, readValueFile, tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile, writeState,
   writeValueFileAtomic,
 } from '../src/token/files.js';
-import { mintedState } from '../src/token/policy.js';
+import { PENDING_HARD_CAP, handedOutState, mintedState, stagedState } from '../src/token/policy.js';
 import { extractToken, PLACEHOLDER_TOKEN } from '../src/coord/token.js';
 import { FLEET_TOKEN_FILE_COMMENT, GENERATION_ID_RE, TOKEN_VALUE_RE } from '../../shared/box-token.js';
 import { isClaimCode } from '../../shared/agent-protocol.js';
@@ -215,6 +215,32 @@ describe('box-token.json and box-token-retired.json', () => {
       writeFileSync(p, JSON.stringify(v));
       expect(await readState(p), name).toEqual({ kind: 'unusable' });
     }
+  });
+
+  // F4 (review 349) with D-4413: `pending` is bounded by the cap, so an over-cap list is never handed to a consumer
+  // that throws on it (BoxTokenHolder.setSlots) - it reads unusable, like every other malformed shape.
+  it('pending is bounded to the cap: three read as a state, a fourth reads unusable (F4, D-4413)', async () => {
+    const { dir } = fixture();
+    const p = path.join(dir, 'box-token.json');
+    let s = mintedState(1000, { dev: 1, ino: 2, writtenAtMs: 1000 }, null, null, '0123456789abcdef');
+    const withN = (n: number) => {
+      let x = s;
+      for (let i = 0; i < n; i++) {
+        const id = String(i + 1).repeat(16);
+        x = handedOutState(stagedState(x, id, 2000 + i, { dev: 1, ino: 10 + i, writtenAtMs: 2000 }), id, 3000 + i);
+      }
+      return x;
+    };
+    expect(PENDING_HARD_CAP).toBe(3);
+    for (let n = 0; n <= PENDING_HARD_CAP; n++) {
+      writeFileSync(p, JSON.stringify(withN(n)));
+      expect((await readState(p)).kind, `${n} pending`).toBe('state');
+    }
+    writeFileSync(p, JSON.stringify(withN(PENDING_HARD_CAP + 1)));
+    expect(await readState(p)).toEqual({ kind: 'unusable' });
+    s = withN(PENDING_HARD_CAP + 3);
+    writeFileSync(p, JSON.stringify(s));
+    expect(await readState(p)).toEqual({ kind: 'unusable' });
   });
 
   // Conventions I1 (D-4403 item 2): a read FAILURE is not malformed content; the two need different handling.

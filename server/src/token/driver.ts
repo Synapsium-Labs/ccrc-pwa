@@ -12,7 +12,7 @@ import { ClaimDoor } from './door.js';
 import {
   DRIVER_TICK_MS, FAILURES_FOR_BANNER, ROTATE_NOW_MIN_INTERVAL_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, applySyncResult,
   backoffMs, extendedGraceState, handedOutState, nextAction, owe, mintedState, phaseOf, promotedState, rotationGate,
-  stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type SyncResult, type WriteRecord,
+  pendingExitOpen, stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type SyncResult, type WriteRecord,
 } from './policy.js';
 import type { BothRoleWriter, GateRowsSource, GenerationReader, TokenStore, TokenSyncLink } from './ports.js';
 import type { BoxTokenHolder, HolderSlots } from '../coord/token.js';
@@ -49,6 +49,8 @@ export class BoxTokenDriver implements TokenRouteDriver {
   private backoffUntil: number | null = null;
   private lastReadySeen: number | null = null;
   private rotateRequested = false;
+  /** A send or a promotion is running (D-4413): the only in-flight state "Rotate now" may call `joined` on. */
+  private busy = 0;
   private lastRotateStart = Number.NEGATIVE_INFINITY;
   private running: Promise<void> | null = null;
   private timer: NodeJS.Timeout | null = null;
@@ -72,7 +74,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
   // Final review (D-4409 item 6): the generations presented in a pending slot, and the slot layout they are read against.
   private readonly presentedPending = new Set<string>();
   private slotIds: string[] = [];
-  private pendSeen: number[] = [0, 0];
+  private pendSeen: number[] = [0, 0, 0];
 
   constructor(private readonly deps: DriverDeps, boot: BootResult) {
     this.now = deps.now ?? Date.now;
@@ -110,14 +112,20 @@ export class BoxTokenDriver implements TokenRouteDriver {
     return this.running;
   }
 
+  /** "Rotate now". `joined` only while a rotation is actually under way: a send or a promotion running, a promotion
+   *  recorded and not finished, or a press whose stage has not run yet (D-4413), or, with the gate open, a staged value
+   *  about to be sent or a handed-out one inside its confirm deadline. At the pending cap with nothing in flight the
+   *  answer is the `pending-cap` hold, not `joined`: nothing will ever run to finish that "rotation". */
   async rotateNow(now: number): Promise<RotateAnswer> {
     const s = this.state;
-    if ((s !== null && s.pending.length > 0) || this.rotateRequested) return { ok: true, outcome: 'joined', view: this.view() };
+    if (this.busy > 0 || s?.promoting != null || this.rotateRequested) return { ok: true, outcome: 'joined', view: this.view() };
+    const gate = this.gate(now);
+    const underway = s?.pending.some((p) => p.handedOutAt === null || (p.confirmBy !== null && now <= p.confirmBy)) ?? false;
+    if (gate.open && underway) return { ok: true, outcome: 'joined', view: this.view() };
     const since = now - this.lastRotateStart;
     if (since < ROTATE_NOW_MIN_INTERVAL_MS) {
       return { ok: false, error: 'rate-limited', retryAfterS: Math.ceil((ROTATE_NOW_MIN_INTERVAL_MS - since) / 1000) };
     }
-    const gate = this.gate(now);
     if (!gate.open) return { ok: false, error: 'held', hold: gate.hold, node: gate.node, view: this.view() };
     this.rotateRequested = true;
     this.lastRotateStart = now;
@@ -211,11 +219,13 @@ export class BoxTokenDriver implements TokenRouteDriver {
       if (a.kind !== 'hold') await this.setHold(null);
       switch (a.kind) {
         case 'none': case 'backoff': return;
-        case 'hold': await this.setHold({ hold: a.hold, node: a.node }); return;
+        case 'hold':
+          this.rotateRequested = false;   // a closed gate spends the press (F3a): it must not outlive the hold and bypass a later backoff
+          await this.setHold({ hold: a.hold, node: a.node }); return;
         case 'retry-mint': if (!(await this.retryMint(now))) return; break;
         case 'stage': if (!(await this.stage(a.why, now))) return; break;
-        case 'send': await this.send(a.generation, a.nodeId); return;
-        case 'promote': await this.promote(a.generation, a.via); return;
+        case 'send': await this.inFlight(() => this.send(a.generation, a.nodeId)); return;
+        case 'promote': await this.inFlight(() => this.promote(a.generation, a.via)); return;
         case 'retire': await this.retire(a.why); break;
         case 'extend-grace': await this.commit(extendedGraceState(this.mustState(), now));
           this.warn('ccrc-server: box token: grace extended: the new value has not been presented yet; a forward rotation is owed');
@@ -228,7 +238,14 @@ export class BoxTokenDriver implements TokenRouteDriver {
     const handedOut = this.state?.pending.filter((p) => p.handedOutAt !== null).length ?? 0;
     return rotationGate({ ...this.deps.env, nodes: this.deps.rows.nodes(), linkUp: this.deps.rows.linkUp(),
       learned: this.learned, lastReadyAt: this.deps.rows.lastReadyAt(), handedOutUnconfirmed: handedOut,
-      mintFailed: this.mintFailed, now });
+      pendingExit: pendingExitOpen(this.state?.pending ?? [], now), mintFailed: this.mintFailed, now });
+  }
+
+  /** Run a send or a promotion with `busy` raised, so `rotateNow` can tell one in flight from a pending value that
+   *  nothing is working on (D-4413). */
+  private async inFlight(fn: () => Promise<void>): Promise<void> {
+    this.busy++;
+    try { await fn(); } finally { this.busy--; }
   }
 
   private async retryMint(now: number): Promise<boolean> {
@@ -277,13 +294,17 @@ export class BoxTokenDriver implements TokenRouteDriver {
       // The write may have replaced the file before its directory fsync rejected; the id is recorded nowhere, so the
       // file would be an orphan holding a value: remove it (idempotent).
       await store.removeValue(store.paths.pending(id)).catch(() => {});
-      await this.commit({ ...s, failures: s.failures + 1, lastFailure: 'mint-failed' });
+      // F3(a)(b): the press is spent whether the stage worked or not, and the backoff is set BEFORE the commit, which
+      // can throw on the same fault (ENOSPC, EROFS) and would otherwise leave no backoff at all.
+      this.rotateRequested = false;
       this.backoffUntil = now + backoffMs(s.failures + 1);
       this.warn(`ccrc-server: box token: could not stage a generation (${errno(e)}); retrying with backoff`);
+      await this.commit({ ...s, failures: s.failures + 1, lastFailure: 'mint-failed' });
       return false;
     }
     if (why !== 'rotate-now') s = owe(s, why);
     this.rotateRequested = false;
+    this.backoffUntil = null;   // a stage that worked proves the disk: a bypassed backoff was spent on this value (F3c)
     this.state = s;
     this.pend.set(id, v);
     this.pushSlots();                 // the check accepts G from staging (spec §5)
@@ -335,9 +356,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (via === 'own-write') {
       try { await this.deps.bothWriter?.write(value, id); } catch (e) {
         const f = s0.failures + 1;
-        await this.commit({ ...s0, failures: f, lastFailure: 'write-failed' });
-        this.backoffUntil = this.now() + backoffMs(f);
+        this.backoffUntil = this.now() + backoffMs(f);   // F3(b): before the commit, which can throw on the same fault
         this.warn(`ccrc-server: box token: could not write the fleet file on this both box (${errno(e)}); retrying with backoff`);
+        await this.commit({ ...s0, failures: f, lastFailure: 'write-failed' });
         return;
       }
     }
@@ -445,7 +466,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
    *  driver only records; `promotedState` decides what it means (spec §5: the fleet's own proof call presents it). */
   private attributePending(): void {
     const m = this.deps.holder.counters().matched;
-    const counts = [m.pending0, m.pending1];
+    const counts = [m.pending0, m.pending1, m.pending2];
     this.slotIds.forEach((id, i) => {
       if ((counts[i] ?? 0) > (this.pendSeen[i] ?? 0) && (this.state?.pending.find((p) => p.id === id)?.handedOutAt ?? null) !== null) {
         this.presentedPending.add(id);
@@ -536,7 +557,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (!same && h !== null) this.warn(`ccrc-server: box token: held: ${h.hold}${h.node !== null ? ` (${h.node})` : ''}`);
     // Spec §5.1 "Pending values": reaching the cap takes repeated lost hand-outs, which is itself the alert.
     if (!same && h?.hold === 'pending-cap') {
-      this.warn('ccrc-server: box token: handed-out values unaccounted for: the pending cap is reached, and no rotation starts until the fleet confirms one');
+      this.warn('ccrc-server: box token: handed-out values unaccounted for: the pending cap is reached, and no rotation starts until the fleet confirms one, or both are past their confirm deadline');
     }
     if (changed) await this.commit(this.mustState());
   }

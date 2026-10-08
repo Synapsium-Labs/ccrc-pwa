@@ -19,6 +19,7 @@ import {
   BoxTokenHolder, TOKEN_SLOTS, checkMailToken, extractToken, matchDigestSlots,
   MailTokenFileUnusable, MailTokenPlaceholderUnedited, PLACEHOLDER_TOKEN, readMailToken,
 } from '../src/coord/token.js';
+import { PENDING_HARD_CAP } from '../src/token/policy.js';
 import { buildServer } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -253,8 +254,10 @@ const P0 = 'b'.repeat(64);
 const P1 = 'c'.repeat(64);
 const PREV = 'd'.repeat(64);
 const RETIRED = 'e'.repeat(64);
+const P2 = 'f'.repeat(64);
 const G0 = '0'.repeat(16);
 const G1 = '1'.repeat(16);
+const G2 = '2'.repeat(16);
 
 const fullHolder = (now: () => number = () => 1_000,
   compare?: (a: Buffer, b: Buffer) => boolean): BoxTokenHolder => {
@@ -264,7 +267,14 @@ const fullHolder = (now: () => number = () => 1_000,
   return h;
 };
 
-describe('BoxTokenHolder: current, two pending and previous, one check', () => {
+const threePendingHolder = (compare?: (a: Buffer, b: Buffer) => boolean): BoxTokenHolder => {
+  const h = new BoxTokenHolder({ now: () => 1_000, ...(compare ? { compare } : {}) });
+  h.setSlots({ current: CUR, pending: [{ id: G0, value: P0 }, { id: G1, value: P1 }, { id: G2, value: P2 }],
+    previous: { value: PREV, until: 2_000 } });
+  return h;
+};
+
+describe('BoxTokenHolder: current, up to three pending and previous, one check', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it('accepts every filled slot and names which one matched', () => {
@@ -275,7 +285,22 @@ describe('BoxTokenHolder: current, two pending and previous, one check', () => {
     expect(h.match(PREV)).toBe('previous');
     expect(h.match('f'.repeat(64))).toBeNull();
     for (const v of [CUR, P0, P1, PREV]) expect(checkMailToken(h, v)).toBe('ok');
-    expect(h.counters().matched).toEqual({ current: 2, pending0: 2, pending1: 2, previous: 2 });
+    expect(h.counters().matched).toEqual({ current: 2, pending0: 2, pending1: 2, pending2: 0, previous: 2 });
+  });
+
+  it('accepts a third pending value (the cap exit, D-4413) and names its slot', () => {
+    const h = threePendingHolder();
+    for (const [v, slot] of [[CUR, 'current'], [P0, 'pending0'], [P1, 'pending1'], [P2, 'pending2'], [PREV, 'previous']] as const) {
+      expect(h.match(v)).toBe(slot);
+      expect(checkMailToken(h, v)).toBe('ok');
+    }
+    expect(h.pendingValue(G2)).toBe(P2);
+    expect(h.counters().matched).toEqual({ current: 2, pending0: 2, pending1: 2, pending2: 2, previous: 2 });
+  });
+
+  it('the pending slots are exactly the policy cap: three, and TOKEN_SLOTS says so', () => {
+    expect(TOKEN_SLOTS.filter((s) => s.startsWith('pending'))).toHaveLength(PENDING_HARD_CAP);
+    expect(TOKEN_SLOTS).toEqual(['current', 'pending0', 'pending1', 'pending2', 'previous']);
   });
 
   it('refuses the previous value at and after its hard deadline', () => {
@@ -311,14 +336,14 @@ describe('BoxTokenHolder: current, two pending and previous, one check', () => {
     expect(checkMailToken(h, [CUR, CUR])).toBe('bad');     // a repeated header arrives as an array
   });
 
-  it('serves the pending and current values from memory, and refuses a third pending generation', () => {
+  it('serves the pending and current values from memory, and refuses a fourth pending generation', () => {
     const h = fullHolder();
     expect(h.pendingValue(G0)).toBe(P0);
     expect(h.pendingValue(G1)).toBe(P1);
-    expect(h.pendingValue('2'.repeat(16))).toBeNull();
+    expect(h.pendingValue('9'.repeat(16))).toBeNull();
     expect(h.currentValue()).toBe(CUR);
     expect(() => h.setSlots({ current: CUR, previous: null, pending: [
-      { id: G0, value: P0 }, { id: G1, value: P1 }, { id: '2'.repeat(16), value: RETIRED }] }))
+      { id: G0, value: P0 }, { id: G1, value: P1 }, { id: G2, value: P2 }, { id: '3'.repeat(16), value: RETIRED }] }))
       .toThrow(RangeError);
   });
 
@@ -385,17 +410,20 @@ describe('matchDigestSlots: every slot compared, every time', () => {
     expect(matchDigestSlots(sha('x'), [])).toBe(-1);
   });
 
-  it('the holder compares all four slots on every match, however many are filled', () => {
-    for (const fill of ['all', 'current-only'] as const) {
+  it('the holder compares all five slots (current, three pending, previous) on every match, however many are filled', () => {
+    expect(TOKEN_SLOTS).toHaveLength(5);                              // D-4413: the fixed-slot compare grew by exactly one
+    for (const fill of ['all', 'two-pending', 'current-only'] as const) {
       const c = counting();
       const h = new BoxTokenHolder({ compare: c.compare });
       h.setSlots(fill === 'all'
-        ? { current: CUR, pending: [{ id: G0, value: P0 }, { id: G1, value: P1 }], previous: { value: PREV, until: Infinity } }
-        : { current: CUR, pending: [], previous: null });
-      for (const v of [CUR, PREV, 'f'.repeat(64)]) {
+        ? { current: CUR, pending: [{ id: G0, value: P0 }, { id: G1, value: P1 }, { id: G2, value: P2 }], previous: { value: PREV, until: Infinity } }
+        : fill === 'two-pending'
+          ? { current: CUR, pending: [{ id: G0, value: P0 }, { id: G1, value: P1 }], previous: { value: PREV, until: Infinity } }
+          : { current: CUR, pending: [], previous: null });
+      for (const v of [CUR, PREV, P2, 'a1'.repeat(32)]) {
         const before = c.calls();
         h.match(v);
-        expect(c.calls() - before, `${fill}: ${v.slice(0, 1)}`).toBe(TOKEN_SLOTS.length);
+        expect(c.calls() - before, `${fill}: ${v.slice(0, 1)}`).toBe(5);
       }
     }
   });
