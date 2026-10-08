@@ -10597,4 +10597,20 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(block).toContain(anchor);
     expect(forkForms(block.replace(anchor, replacement), allowed)).toContain(form);
   });
+
+  it('F37: EPOCHREALTIME is read once: a clock that moves between the test and the slice writes no ts or the tested reading, never a mix', async () => {
+    plantSpool();
+    const trapFile = path.join(home, 'epochtrap.bash');
+    fs.writeFileSync(trapFile, 'unset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
+      + 'trap \'case $BASH_COMMAND in *"=~ ^[1-9]"*) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac\' DEBUG\n');
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: trapFile });
+    const [l] = await parsed();
+    expect(l!.rec).not.toBeNull();
+    expect([undefined, 1700000000999]).toContain(l!.rec!['ts']);
+  });
+
+  it('F37: the spool block expands EPOCHREALTIME exactly once', () => {
+    const code = spoolBlock(fs.readFileSync(HOOK, 'utf8')).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length).toBe(1);
+  });
 });

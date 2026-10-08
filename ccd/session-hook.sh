@@ -3052,7 +3052,7 @@ fi
 # D-4176. The braces put the redirection's own failure
 # under 2>/dev/null (the note at the hookstate write below), and `|| true`
 # keeps exit 0 on every path.
-_hs="" _hs_g="" _hs_s="" _hs_f=""
+_hs="" _hs_g="" _hs_s="" _hs_f="" _hs_t=""
 if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); then
   case "$event" in
     Stop) [[ -e "$HOME/.ccrc/history-off" ]] || _hs='{"v":1,"ev":"Stop"' ;;
@@ -3076,12 +3076,12 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" ]] && (( ${#id} <= 224 )); th
     [[ "$event" == PostCompact ]] && case "${trig:-}" in manual|auto) _hs+=",\"trig\":\"$trig\"" ;; esac
     _hs_g="${CCRC_SESSION_GENERATION:-}"
     [[ "$_hs_g" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && _hs+=",\"gen\":\"$_hs_g\""
-    # `_hook_epoch_ms`'s parameter-expansion form, inline (that function forks
-    # `date` when EPOCHREALTIME is unset). Either decimal point, since the
-    # locale formats it; a value that is not `<1-12 digits, no leading 0>[.,]<digits>`
-    # writes no `ts`, and the drain stamps the receive time instead D-4315.
-    if [[ "${EPOCHREALTIME:-}" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]]; then
-      _hs_s="${EPOCHREALTIME%%[.,]*}" _hs_f="${EPOCHREALTIME#*[.,]}000"
+    # `_hook_epoch_ms`'s expansion form, inline (it forks `date` when EPOCHREALTIME is unset), read ONCE into `_hs_t`:
+    # each expansion reads the clock anew, so two reads can straddle a second. Either decimal point (the locale's); a value
+    # that is not `<1-12 digits, no leading 0>[.,]<digits>` writes no `ts`, and the drain stamps receive time D-4315.
+    _hs_t="${EPOCHREALTIME:-}"
+    if [[ "$_hs_t" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]]; then
+      _hs_s="${_hs_t%%[.,]*}" _hs_f="${_hs_t#*[.,]}000"
       _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
     fi
     _hs+='}'
