@@ -3300,6 +3300,8 @@ function countSidecarTooLarge(db) {
  *    projects/ root).
  *  - It is read whole up to SIDECAR_WHOLE_MAX, else streamed through compressFdRange.
  *  - It is hashed and stored as a blob of its bytes, and linked by linkSidecar.
+ *  - Its index text is made from those same bytes, before the transaction: the whole read's buffer, or the streamed
+ *    arm's compressed blob through ftsTextOfBlob's bounded prefix decoder, never a second read of the file (FPM6).
  *  - The `sidecars` row and the `sidecar_seen` mark commit in one transaction.
  *  - A file that has to be read is one ingest unit for §9.3's floor: the probe runs before it, as
  *    before an ingest chunk, and anything but `ok` stops the run's sidecars (`floor`).
@@ -3326,20 +3328,29 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
     const size = Number(st.size);
     if (size > SIDECAR_MAX_BYTES) { countSidecarTooLarge(db); return null; }   // grew between the lstat and the open (D-4310)
     let sha;
-    let head;
     let z = null;
+    // The index text comes from the bytes hashed and stored, never from a second read of the file: a rewrite between two
+    // reads would index text the blob does not hold, and D-4344's re-derivation recomputes the stored blob's own text
+    // (final review 316 FPM6). It is made outside the transaction, only for a blob not indexed yet; null indexes nothing.
+    let text = null;
+    const unindexed = (h) => {
+      if (ctx.fts !== true) return false;
+      const b = stmts(db).blobId.get(h);
+      return b === undefined || b.fts_indexed === 0;
+    };
     if (size <= SIDECAR_WHOLE_MAX) {
       const buf = readAt(a.fd, 0, size);
       if (buf.length < size) return null;                 // it shrank under the read: next tick
       sha = blobShaOfBytes(buf);
-      head = buf;
       if (stmts(db).blobId.get(sha) === undefined) z = brotli(buf);
+      if (unindexed(sha)) text = sidecarIndexText(buf, ctx.pairIdx);
     } else {
       const c = await compressFdRange(a.fd, 0, size);
       if (c === null) return null;
       sha = c.sha;
-      head = readAt(a.fd, 0, SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN);   // D-4312 (history-sidecar-redact-before-cut): the redaction window, not just the cut
       if (stmts(db).blobId.get(sha) === undefined) z = c.z;
+      // D-4312 (history-sidecar-redact-before-cut): the redaction window, decoded from the compressed bytes by the backfill's own bounded reader
+      if (unindexed(sha)) text = (await ftsTextOfBlob(c.z, true, ctx.pairIdx, size)).text;
     }
     // Task 18's ensureTranscript expects its caller's transaction (bindFile's); here it gets its own.
     const transcriptPk = withTx(db, 'NORMAL', () => ensureTranscript(db, s.uuid));
@@ -3350,7 +3361,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
       const ins = q.sidecarIns.run(transcriptPk, s.name, blobId, entryId, ctx.nowMs);
       if (ins.changes === 1 && entryId === null) bump(db, 'sidecar_unlinked');
       q.seenUpsert.run(s.path, st.size, st.mtimeNs, blobId);
-      if (ctx.fts === true && stmts(db).blobId.get(sha).fts_indexed === 0) indexBlob(db, blobId, sidecarIndexText(head, ctx.pairIdx), ctx.pairIdx);
+      if (text !== null && stmts(db).blobId.get(sha).fts_indexed === 0) indexBlob(db, blobId, text, ctx.pairIdx);
     });
     budget.bytes += size;
     return { bytes: size };

@@ -317,3 +317,30 @@ import { DatabaseSync as DatabaseSyncM30 } from 'node:sqlite';
     syncM30();
   }
 }
+
+// HISTORY_TEST_READ_SWAP=<from>:<to> (FU7, final review 316 FPM6): a file rewritten right after the first read that saw
+//   <from>. The first fs.readSync call whose bytes hold the ASCII text <from> is passed through; every later one has each
+//   occurrence replaced by <to> (the same length). When HISTORY_TEST_READ_SWAP_LOG names a file, each replacing read
+//   appends one line `read-swap <replacements>` to it, so a case sees whether a second read of that text happened at all.
+const readSwap = process.env.HISTORY_TEST_READ_SWAP ?? '';
+if (readSwap !== '') {
+  const [swapFrom = '', swapTo = ''] = readSwap.split(':');
+  if (swapFrom === '' || swapFrom.length !== swapTo.length || !/^[ -~]+$/.test(swapFrom + swapTo)) {
+    throw new Error(`preload-faults: HISTORY_TEST_READ_SWAP=${readSwap} is not <from>:<to>, ASCII and of one length`);
+  }
+  const swapLog = process.env.HISTORY_TEST_READ_SWAP_LOG ?? '';
+  const realReadSync = fs.readSync;
+  let sawFrom = false;
+  fs.readSync = function readSwapped(fd, buffer, ...rest) {
+    const got = realReadSync.call(this, fd, buffer, ...rest);
+    const offset = typeof rest[0] === 'number' ? rest[0] : 0;
+    const view = Buffer.from(buffer.buffer, buffer.byteOffset + offset, got);
+    if (view.indexOf(swapFrom) < 0) return got;
+    if (!sawFrom) { sawFrom = true; return got; }
+    let hits = 0;
+    for (let at = view.indexOf(swapFrom); at >= 0; at = view.indexOf(swapFrom, at + swapFrom.length)) { view.write(swapTo, at, 'latin1'); hits += 1; }
+    if (swapLog !== '') fs.appendFileSync(swapLog, `read-swap ${hits}\n`);
+    return got;
+  };
+  syncBuiltinESMExports();
+}

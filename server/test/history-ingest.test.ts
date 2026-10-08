@@ -2525,6 +2525,55 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     }, 300_000);
 
+    it('FPM6: a streamed sidecar is indexed from the bytes it stored, never from a second read of the file', () => {
+      // preload-faults' HISTORY_TEST_READ_SWAP passes the first read that sees zqorig and makes every later read of it see
+      // zqswap, as a rewrite right after the first read would, logging each such read.
+      const head = Buffer.from('zqfirst zqorig zqlast\n');
+      const plant = (box: HistoryBox, name: string, size: number): void => {
+        const fd = fs.openSync(sideFile(box, name), 'w');
+        try {
+          fs.writeSync(fd, head, 0, head.length, 0);
+          fs.ftruncateSync(fd, size);                                    // a hole past the head, at no disk cost
+        } finally { fs.closeSync(fd); }
+      };
+      const opts = (box: HistoryBox): { preloads: string[]; env: Record<string, string> } => ({
+        preloads: [PRELOADS.faults],
+        env: { HISTORY_TEST_READ_SWAP: 'zqorig:zqswap', HISTORY_TEST_READ_SWAP_LOG: path.join(box.home, 'swap.log') },
+      });
+      const swaps = (box: HistoryBox): string => (fs.existsSync(path.join(box.home, 'swap.log')) ? fs.readFileSync(path.join(box.home, 'swap.log'), 'utf8') : '');
+      // CONTROL: two whole-read sidecars with one head. The second one's single read is swapped, so the seam fires, and each
+      // blob's index text agrees with it because both come from that one read.
+      const ctl = IX.newBox('ccrc-hist-fpm6c-');
+      try {
+        IX.plantCopy(ctl.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+        plant(ctl, 'one.txt', 4096);
+        plant(ctl, 'two.txt', 4096);
+        IX.sweepTwice(ctl, opts(ctl));
+        expect(swaps(ctl)).toBe('read-swap 1\n');
+        const db = openStoreRO(ctl);
+        try {
+          expect(IX.count(db, 'sidecars')).toBe(2);
+          expect(matches(db, 'zqorig')).toBe(1);
+          expect(matches(db, 'zqswap')).toBe(1);
+          expect(IX.blobsHold(db, 'zqorig')).toBe(true);
+          expect(IX.blobsHold(db, 'zqswap')).toBe(true);
+        } finally { db.close(); }
+      } finally { fs.rmSync(ctl.home, { recursive: true, force: true }); }
+      const box = IX.newBox('ccrc-hist-fpm6-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
+        plant(box, 'swap.txt', 67_108_864 + 4096);                       // over SIDECAR_WHOLE_MAX: the streamed arm
+        IX.sweepTwice(box, opts(box));
+        expect(swaps(box)).toBe('');                                     // the file's head is read once, by the compress
+        const db = openStoreRO(box);
+        try {
+          expect(IX.count(db, 'sidecars')).toBe(1);
+          expect(matches(db, 'zqorig')).toBe(1);                         // what the stored blob holds
+          expect(matches(db, 'zqswap')).toBe(0);
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    }, 300_000);
+
     it('S6: a secret not yet known, straddling the cut, leaves no partial run at it: the cut run is dropped', () => {
       const box = IX.newBox('ccrc-hist-s6c-');
       const tok = hex(24);
