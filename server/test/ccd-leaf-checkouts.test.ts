@@ -227,6 +227,17 @@ describe('_ws_leaf_checkouts — unmeasured: rc 2, never "nothing there"', () =>
     expect(ask(leafOf()).rc).toBe('2');
   }, 60_000);
 
+  it('a `.git` file of more than 4096 bytes is unmeasured even when its first 4096 would pass — it is never read in part', () => {
+    fs.mkdirSync(path.join(leafOf(), 'x'), { recursive: true });
+    fs.mkdirSync(path.join(leafOf(), 'admin'));
+    fs.writeFileSync(path.join(leafOf(), 'x', '.git'), `gitdir: ${path.join(leafOf(), 'admin')}\n`);
+    expect(ask(leafOf()).rc, 'the CONTROL: the same line, alone, names a dir inside the leaf').toBe('0');
+    fs.writeFileSync(path.join(leafOf(), 'x', '.git'), `gitdir: ${path.join(leafOf(), 'admin')}${'\n'.repeat(5000)}`);
+    const a = ask(leafOf());
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain('more than 4096 bytes');
+  }, 60_000);
+
   it('a gitdir naming its admin dir through a `..` AFTER another component is unmeasured — a logical walk and git’s read it apart', () => {
     fs.mkdirSync(path.join(leafOf(), 'x', 'y'), { recursive: true });
     fs.writeFileSync(path.join(leafOf(), 'x', '.git'), 'gitdir: y/../y\n');
