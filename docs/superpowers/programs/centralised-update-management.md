@@ -1125,6 +1125,9 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - The hourly check's job had expired. It was re-created at 11:17, so the gap had no probe.
       - STATUS: fleet and server v0.0.122, newest v0.0.122, backups fleet 144M/server 585M, disk free fleet 216G/work
         volume 264G/server 33G, no anomalies.
+    - **2026-10-08 12:42 UTC — v0.0.123 auto-converged unattended.** No action was taken.
+      - STATUS: fleet and server v0.0.123, newest v0.0.123, backups fleet 144M/server 588M, disk free fleet 216G/work
+        volume 268G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
