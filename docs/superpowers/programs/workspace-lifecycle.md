@@ -23,7 +23,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
 | 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deployed (both boxes on v0.0.119, 10-07); the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
 | 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); DISPATCHED 2026-10-07 22:28 → `ccrc-pwa-swift-cove`; wave-done 10-08 04:3x, PR #328 @ `701839b52`; review run 339 (`ccrc-pwa-keen-summit`), no fix round; **merged 2026-10-08 (`669b8305`)**, prerelease v0.0.123; run 314 closed; deploy via ccrc's updater; the lane ships SHADOWED |
-| 5 | 3–4, follow-ups | FIRST: review 339's residue and the dead-coordinator lane's arming blockers; then the expiry lane's follow-ups: the kept-leaf reader, the `state-changed` reading, the answer to a repeating resumable failure, the in-lock window close | server (+ **AGENT-FIRST** if the window close lands in ccd) | wave 4; CCR-15 wave 6 (#326) merged | — | run 345 open (planned; the run's wave 6 of 6), block 4480–4495; plan drafted and verified (`30b841c01`, 13 tasks), being revised for the 20:00 rulings |
+| 5 | 3–4, follow-ups | FIRST: review 339's residue and the dead-coordinator lane's arming blockers; then the expiry lane's follow-ups: the kept-leaf reader, the `state-changed` reading, the answer to a repeating resumable failure, the in-lock window close | server (+ **AGENT-FIRST** if the window close lands in ccd) | wave 4; CCR-15 wave 6 (#326) merged | — | run 345 open (planned; the run's wave 6 of 6), block 4480–4495; plan revised for the 20:00 rulings and verified (`f8ec01cc4`, 13 tasks), plan PR #333 |
 
 ## Decisions & deviations
 
@@ -952,6 +952,41 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - (i) kept entries live until a server restart;
     - (j) B4 refuses a branch made inside the lock as well as one deleted.
     (h) is ruled and (k) is routed.
+- **2026-10-08 21:55 — wave 5's plan is revised for the 20:00 rulings, verified again, and in plan PR #333.**
+  - **The revision:** workflow wf_f00582c4-463, four agents over 1.9 h.
+    - The reviser's `0459dcb73` applies R1–R5: the 4 h persistent tier, the `restart` reading, `keptLeafWord`,
+      (k) routed to wave 6, and the prose. There are still 14 slugs, two of them renamed.
+    - The Opus act-safety lens on that change found it act-safe on the destructive path. Every re-ask runs a fresh
+      audit and spends that audit's token, the lane still composes at most one act per pass, and no sentence names a
+      destructive verb. It found one important problem: the would-expire, retry-refusal and in-use arms dropped the
+      standing entry and reset its run. The shadow arm replaced the entry with "nothing was deleted", said of a
+      workspace that may be part-cleaned.
+    - The fixer's `c8861bfc8` adds `standingThrough(entry)`, spread last in every arm that ends no attempt: deferred,
+      would-expire, retry refusals, in-use, not-expired and no-evidence. These are rows T10.7–T10.14.
+    - The Sonnet verifier says PASS on `origin/main` `21683c0d8`:
+      - all 132 anchors matched exactly once;
+      - every suite count agreed;
+      - every mutation row went red at its own stage;
+      - the stamp is `940c0208…fc3b`;
+      - server and PWA `tsc` exit 0;
+      - there is no D-number and no docserver URL.
+  - **Correction to the 20:00 entry: the lane holds no token.** Every act audits first and spends that audit's token,
+    so "the entry forgets its token" is implemented as forgetting the learned instant and sightings: the row returns
+    to learning. An old server's retry is already a fresh audit.
+  - **Ruled, on the fixer's two open questions:**
+    - The standing sentence reads "…keeps this entry until an attempt completes, finds that none had begun or stops
+      for good, or the workspace is archived again." Accepted: the 20:00 wording was false for `restart` and for
+      final verdicts.
+    - An in-use refusal under a standing entry stays in its feed row (ccd's detail names the processes). There is
+      no new report field; the standing entry keeps the row's one report slot.
+  - **The lens's two minor findings are stated in the plan (`f8ec01cc4`) and carried to wave 6:**
+    - A `restart` is uncounted. A `state-changed` that recurs (only a racing actor can cause one) composes again
+      about every three passes, writes its feed row once, and is never listed: invisibility, not deletion.
+    - Task 11's measurement uses a detached HEAD. With HEAD symbolic to `ws/<slug>`, a branch deleted in the window
+      ends at the pin as `pin-failed` (resumable), never as `restart`.
+  - **CCR-15 mail 4040 agrees.** Its wave 8 Task 1 MOVES `keptLeafWord` to L0 (`shared/api.ts`) as `leafKeptWord`
+    once wave 5 lands. Answered in 4045: consent to L0. The word half reads null as `unmeasured`; null → null is the
+    done-document carrier's arm. The plan's test now pins that.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -1055,8 +1090,8 @@ the operator creates `$REG/dead-coordinator-lane-live` by hand.
 
 **Wave 5 is run 345** (planned; the run's wave 6 of 6), with numbers 4480–4495, written bare. Its plan is
 `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md` on
-`docs/workspace-lifecycle-wave5-plan`. It was verified at `30b841c01` and is being revised for the 20:00 rulings
-(wf_f00582c4-463). Then come the plan PR and the dispatch.
+`docs/workspace-lifecycle-wave5-plan`. It was revised for the 20:00 rulings and verified again (the 21:55 entry,
+head `f8ec01cc4`), and is in plan PR #333. Then comes the dispatch.
 - **Its FIRST commit is review 339's residue,** as ruled in the 2026-10-08 12:02 entry. First the dead-coordinator
   lane's arming blockers: F1, F2, F3, F13 and the worker's open item 2. Then F4, F5's spec sentence, F6's entry, and
   the plan corrections F7, F8, F10, F11 and F12. Review 339's report is
@@ -1090,6 +1125,8 @@ the operator creates `$REG/dead-coordinator-lane-live` by hand.
   directions. (h) is ruled (the 20:00 entry).
 - **After wave 5 — wave 6, once CCR-15 wave 7 is on `main`:** ws-expire sets `crumb` on its resumed arm, and the
   parser reads `crumb:true` as resumable (question (k), an arming blocker for the expiry lane). `containment-refuted`
-  gets attention at once (CCR-15's `stuck` class).
+  gets attention at once (CCR-15's `stuck` class). Also from wave 5's act-safety lens (the 21:55 entry): a count
+  for a `restart` that recurs, so it climbs the failure ladder; and a control case with HEAD symbolic to `ws/<slug>`,
+  pinning that a branch deleted in the window ends at the pin as `pin-failed`.
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
   L5's sentence.
