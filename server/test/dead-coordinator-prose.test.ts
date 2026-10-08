@@ -33,6 +33,19 @@ describe('README: a coordinator that crashed', () => {
     expect(para).toContain('in shadow every due one is recorded');
     expect(para).toContain('one per worker, each naming the coordinator');
   });
+  it('is exact about which mirror states LIST a coordinator and which make a pass decide nothing (final review, B-F2)', () => {
+    const at = readme.indexOf('**A coordinator that crashed is ended after an hour**');
+    const para = readme.slice(at, at + 6200);
+    expect(para, '`unavailable` lists it unmeasured').toContain('the lifecycle mirror `unavailable` (the fleet\'s ccd does not journal)');
+    expect(para, 'no such state as "not current" — it blurred the two').not.toContain('mirror not current');
+    expect(para).toContain('while the mirror has not swept since a restart, or has gone stale, a pass decides nothing at all');
+  });
+  it('says the breaker trips after a lane gap of over ten minutes, and that the hour starts afresh then (final review, A-I3)', () => {
+    const at = readme.indexOf('**A coordinator that crashed is ended after an hour**');
+    const para = readme.slice(at, at + 6200);
+    expect(para).toContain('A lane gap of more than ten minutes (a restart, a pause, a stale mirror) starts the hour afresh');
+    expect(para).toContain('and trips the breaker when two or more coordinators were crashed');
+  });
   it('every passage that names what the one cleanup switch stops names this lane too', () => {
     expect(readme).toContain('pauses every reclamation, every expiry and the dead-coordinator lane fleet-wide');
     expect(readme).toContain('and the expiry of archived workspaces stops too, as does the dead-coordinator lane');
@@ -47,6 +60,15 @@ describe('the skill corpora', () => {
     expect(r).toContain('has stayed dead an hour has its open runs closed `failed`');
     expect(r).toContain('Until the operator arms it, the lane only records what it would end.');
     expect(r).toContain('A revive within the hour keeps the program either way.');
+  });
+
+  it('the runbook does not overstate it: runs closed `failed`, marked workers reclaimed and unmarked ones released, the program can be opened again, and a vanished registry row is a cause (final review, B-F3)', () => {
+    const r = flat('ccd/coordinator-skill/references/resume.md');
+    expect(r).not.toContain('retired for good');
+    expect(r).not.toContain('its workers cleaned up');
+    expect(r).toContain('each child-marked worker is reclaimed and each unmarked worker is released');
+    expect(r).toContain('can open it again with a new `POST /api/runs` naming the program');
+    expect(r).toContain('or its registry row is gone');
   });
 
   it('no skill file names the lane’s live switch — a session told about the dial could arm the end of a programme', () => {

@@ -3491,9 +3491,11 @@ journaled since its last successful spawn — a stop, an archive, a reap, a dest
 expiry, or an unsupervise somebody declared — and that has stayed so for an hour on two passes in a row, has its open
 runs closed `failed` by the server once the operator has armed the lane with `$REG/dead-coordinator-lane-live`; until
 then the lane only records what it would end. The hour counts from the first pass that measured the crash, kept in
-`coord.db` across restarts and raised, never lowered, by a later supervisor heartbeat. A stopped coordinator is never
+`coord.db` across restarts and raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten
+minutes (a restart, a pause, a stale mirror) starts the hour afresh, and trips the breaker when two or more coordinators
+were crashed, since each re-anchors on the same pass. A stopped coordinator is never
 ended, nor one a supervisor is bringing back, nor one the server cannot measure. A coordinator whose journal the
-server cannot trust to hold every deliberate act — the lifecycle mirror not current, a gap it recorded since the
+server cannot trust to hold every deliberate act — the lifecycle mirror `unavailable` (the fleet's ccd does not journal), a gap it recorded since the
 coordinator's last start, a journal line ccd could not write — is listed and never acted on, and so are one with no
 registry row and no journal history, one that never started, and one whose journal holds a failed spawn and no successful one; while the mirror has not swept since a restart, or has
 gone stale, a pass decides nothing at all. The act runs on the coordination serialiser: it re-measures the coordinator
