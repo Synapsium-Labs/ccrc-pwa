@@ -16,6 +16,8 @@ import { makeHistoryBox, runSweep, spoolLine, plantSession, openStoreRO, scrubbe
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = path.join(ROOT, 'deploy', 'measure-history.py');
+/** Isolated (-I: no user site, no PYTHON* env, no script dir on sys.path) AND bytecode-free (-B): -I ignores PYTHONDONTWRITEBYTECODE, so only -B keeps a loaded instrument from writing deploy/__pycache__ (review 316 F25). */
+const PY_ISOLATED = ['-I', '-B'] as const;
 
 interface Window { boundary_uuid: string; boundary_ts_ms: number; end_ts_ms: number | null; assistant_entries: number; calls: number | null }
 interface W2 {
@@ -248,12 +250,22 @@ describe('measure-history.py: the store path is percent-encoded into its read-on
 
   it.each(['d#x', 'd?x', 'd%23x', 'd x'])('a store under %j opens read-only: a write through the connection fails and nothing is created beside it', (dirName) => {
     const o = oddStore(dirName);
-    const r = spawnSync('python3', ['-I', '-c', OPEN(o.db), SCRIPT, o.db], { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+    const r = spawnSync('python3', [...PY_ISOLATED, '-c', OPEN(o.db), SCRIPT, o.db], { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
     expect(r.stderr).toBe('');
     expect(r.stdout.split('\n')[0]).toMatch(/^READONLY /);
     expect(r.stdout.split('\n')[1]).toBe('True');
     expect(readdirSync(o.root), 'a stray file where the URI parser cut the path').toEqual([dirName]);
     expect(report(['--db', o.db]).user_version).toBeGreaterThan(0);
+  });
+
+  it('the isolated launch loads the instrument without writing bytecode beside it (F25)', () => {
+    const dir = mkTmp('ccrc-measure-history-pyc-');
+    const copy = path.join(dir, 'measure-history.py');
+    copyFileSync(SCRIPT, copy);
+    const LOAD = ['import importlib.util, sys', "spec = importlib.util.spec_from_file_location('mh', sys.argv[1]); mh = importlib.util.module_from_spec(spec); spec.loader.exec_module(mh)"].join('\n');
+    const r = spawnSync('python3', [...PY_ISOLATED, '-c', LOAD, copy], { encoding: 'utf8', env: { ...scrubbedEnv(process.env), PYTHONDONTWRITEBYTECODE: '1' }, timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readdirSync(dir)).toEqual(['measure-history.py']);
   });
 });
 
