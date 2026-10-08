@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -43,7 +43,7 @@ describe('lib.mjs is L1: its import block is node:crypto and nothing else (spec 
   const src = readFileSync(LIB, 'utf8');
 
   it('imports exactly node:crypto — no fs, no sqlite, no child_process, nothing that imports them', () => {
-    const specs = [...src.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);
+    const specs = specsOf(src);
     // Non-vacuity: a reader that matched nothing would pass every ring.
     expect(specs.length, 'the import scan matched nothing').toBeGreaterThan(0);
     expect(specs).toEqual(['node:crypto']);
@@ -56,6 +56,97 @@ describe('lib.mjs is L1: its import block is node:crypto and nothing else (spec 
     expect(src).not.toMatch(/process\.binding\s*\(/);
     // A decision takes its inputs as arguments; an env read is a seam (§10.1).
     expect(src).not.toMatch(/process\.env/);
+  });
+});
+
+// The code lines of a source: every line that starts a `//` or `/*` comment, or continues a `*` comment, is
+// dropped, and so is a trailing ` //` comment. Comment LINES are dropped, never a block-comment span by regex:
+// lib.mjs holds `'.cc-secrets/*'` as a string literal, and a span regex would eat the code between it and the
+// next block end. A `https://` inside a string survives (it is not preceded by whitespace).
+const codeOf = (src: string): string => src.split('\n').filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+// Every module specifier a source imports: `from '…'` (named, default, namespace, multi-line, export-from) and a side-effect `import '…';`.
+const specsOf = (src: string): string[] => {
+  const c = codeOf(src);
+  return [...new Set([...[...c.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!), ...[...c.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]!)])];
+};
+const DOORS = [/\brequire\s*\(/, /(?<![.\w])import\s*\(/, /\bcreateRequire\b/, /process\.binding\s*\(/];
+const otherDoors = (src: string): string[] => DOORS.filter((r) => r.test(codeOf(src))).map(String);
+
+describe('every ccd/history module and history test fixture keeps its ring (spec §6.4, §13; plan Global Constraints "Rings"; review 316 F26)', () => {
+  const HIST = join(REPO, 'ccd', 'history');
+  const FIX = join(REPO, 'server', 'test', 'fixtures', 'history');
+  /** L3 never imports an outer ring and only L4 may reach `../compact-card.mjs`; store.mjs is the sole node:sqlite importer. */
+  const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {
+    'lib.mjs': { ring: 'L1', forbids: (s) => s !== 'node:crypto' },
+    'store.mjs': { ring: 'L3', forbids: (s) => s === './sweep.mjs' || s === './cli.mjs' || s.startsWith('../') },
+    'sweep.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
+    'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
+  };
+  /**
+   * - A preload is a seam from outside (D-4247). It imports only node builtins, never the module graph it patches.
+   * - run-pass imports the three history modules and node builtins, never `node:sqlite`, so it reaches SQLite only through store.mjs.
+   */
+  const FIXTURE_RING = (name: string): ((s: string) => boolean) | null =>
+    /^preload-[a-z0-9-]+\.mjs$/.test(name) ? (s) => !s.startsWith('node:')
+    : name === 'run-pass.mjs' ? (s) => !(/^(\.\.\/){4}ccd\/history\/(sweep|store|lib)\.mjs$/.test(s) || (s.startsWith('node:') && s !== 'node:sqlite'))
+    : null;
+  const LAZY_IMPORTS: Record<string, string[]> = { 'preload-faults.mjs': ['../../../../ccd/history/store.mjs'] };
+
+  it("CONTROL: the scanner reads named, default, namespace, multi-line, export-from and side-effect imports, skips comment lines, and is not blinded by a /* inside a string", () => {
+    expect(specsOf("import a from 'x1';\nimport * as b from 'x2';\nimport {\n c,\n} from 'x3';\nexport { d } from 'x4';\nimport 'x5';\n// import 'x6'\n/* import 'x7' */").sort()).toEqual(['x1', 'x2', 'x3', 'x4', 'x5']);
+    expect(otherDoors("const m = await import('x');")).not.toEqual([]);
+    expect(otherDoors('/** Evidence-only import (§8.4): x */')).toEqual([]);
+    expect(otherDoors("const g = '.x/*';\nconst m = require('y');\nconst h = '*/';")).not.toEqual([]);
+  });
+
+  it('every ccd/history/*.mjs has a ring', () => {
+    expect(readdirSync(HIST).filter((n) => n.endsWith('.mjs')).sort()).toEqual(Object.keys(RINGS).sort());
+  });
+
+  it('each module imports nothing its ring forbids, and reaches no module by another door', () => {
+    for (const m of Object.keys(RINGS)) {
+      const src = readFileSync(join(HIST, m), 'utf8');
+      const specs = specsOf(src);
+      expect(specs.length, `${m}: the scan matched nothing`).toBeGreaterThan(0);
+      expect(specs.filter(RINGS[m]!.forbids), m).toEqual([]);
+      expect(otherDoors(src), m).toEqual([]);
+    }
+  });
+
+  it('store.mjs is the sole node:sqlite importer', () => {
+    expect(Object.keys(RINGS).filter((m) => specsOf(readFileSync(join(HIST, m), 'utf8')).includes('node:sqlite'))).toEqual(['store.mjs']);
+  });
+
+  it('only L4 imports ../compact-card.mjs, and at most isBoundaryLine', () => {
+    let seen = 0;
+    for (const m of Object.keys(RINGS)) {
+      const src = readFileSync(join(HIST, m), 'utf8');
+      if (!specsOf(src).includes('../compact-card.mjs')) continue;
+      seen += 1;
+      expect(RINGS[m]!.ring, m).toBe('L4');
+      const imports = [...codeOf(src).matchAll(/import\s+([^'";]*?)\s+from\s+['"]\.\.\/compact-card\.mjs['"]/g)].map((x) => x[1]!.replace(/\s+/g, ' ').trim());
+      expect(imports.length, `${m}: the import form was not read`).toBeGreaterThan(0);
+      for (const i of imports) expect(i, m).toBe('{ isBoundaryLine }');
+    }
+    expect(seen, 'no module imports compact-card: the scan is vacuous').toBeGreaterThan(0);
+  });
+
+  it('every fixture under server/test/fixtures/history keeps its ring', () => {
+    const names = readdirSync(FIX).filter((n) => n.endsWith('.mjs'));
+    expect(names.length, 'no fixture found').toBeGreaterThan(0);
+    for (const n of names) {
+      const forbids = FIXTURE_RING(n);
+      expect(forbids, `${n} has no ring`).not.toBeNull();
+      const src = readFileSync(join(FIX, n), 'utf8');
+      expect(specsOf(src).filter(forbids!), n).toEqual([]);
+      // The one dynamic-import door a fixture may hold is named per file and exact (a list, not a switch): FU4's M30 fault
+      // takes StoreError from store.mjs lazily, past its patches. Any other `import(` in a fixture reds.
+      const dynamic = [...codeOf(src).matchAll(/(?<![.\w])import\s*\(\s*['"]([^'"]+)['"]\s*\)/g)].map((x) => x[1]!);
+      expect(dynamic, `${n}: dynamic imports`).toEqual(LAZY_IMPORTS[n] ?? []);
+      expect([...codeOf(src).matchAll(/(?<![.\w])import\s*\(/g)].length, `${n}: an import( with a non-literal specifier`).toBe(dynamic.length);
+      expect(otherDoors(src).filter((d) => d !== String(DOORS[1])), n).toEqual([]);
+      if (!(n in LAZY_IMPORTS)) expect(otherDoors(src), n).toEqual([]);
+    }
   });
 });
 
