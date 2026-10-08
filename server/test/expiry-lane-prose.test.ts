@@ -24,6 +24,16 @@ describe('README: what happens to an archived workspace now', () => {
     expect(para).toContain('`$REG/reclaim-paused` is the fleet’s one cleanup switch');
     expect(para).toContain('never kills');
   });
+  it('says a kept leaf is listed, an older ccd’s silence is the feed row’s, and a day of resumable failures slows the asking (wave 5)', () => {
+    const at = readme.indexOf('**Archived workspaces are cleaned up after seven days**');
+    const para = readme.slice(at, at + 4200);
+    expect(para).toContain('is listed, saying what was kept and why, until the server restarts');
+    expect(para).toContain('a fleet box whose ccd predates that report says so in the feed row only');
+    expect(para).toContain('is retried, backing off, for a day;');
+    expect(para).toContain('and asked again every four hours, never stopping.');
+    expect(para).toContain('The entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again');
+    expect(para).not.toContain('stops asking for that archive');
+  });
   it('the coordinator’s own workspace: by a human — or, with no child marker, by the server seven days after its archive', () => {
     expect(readme).toContain('a coordinator\'s own workspace is still cleaned up by a human — or, when it carries no child marker, by the server seven days after it is archived, once the operator has armed the expiry lane with `$REG/expire-lane-live` (until then the lane only records what it would expire)');
   });
@@ -84,5 +94,15 @@ describe('the specs', () => {
       'is a row that moved', 'names its instant (`due <instant>`), never a period']) expect(s).toContain(said);
     // An ineligible sighting does NOT clear every report: the box's own verdicts stand (review of wave 4's Task 4, I1).
     expect(s).not.toContain('clears every report');
+  });
+  it('§5.3 records wave 5’s follow-ups: the consent binds the branch, a failed state-changed is audited afresh, a kept leaf, a day of failures', () => {
+    const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    expect(s).toContain("**As wave 5 closes the lane's follow-ups**");
+    for (const item of ['**The consent binds the branch.**', '**A `failed` `state-changed` is audited afresh.**', '**A kept leaf is listed.**',
+      '**A day of resumable failures slows the asking.**', 'A branch already absent when the token was minted reads absent twice and expires with its work in the attic',
+      'An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing',
+      'mints a fresh token over what stands', 'The lane asks again every four hours, never stopping',
+      'No answer that ends no attempt replaces the entry or resets its run', 'finds that none had begun']) expect(s).toContain(item);
+    for (const gone of ['is final.**', 'stops the asking.**', 'The lane does not ask again until the archive changes']) expect(s).not.toContain(gone);
   });
 });

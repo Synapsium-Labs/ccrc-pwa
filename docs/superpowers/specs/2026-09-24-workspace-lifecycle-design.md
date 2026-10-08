@@ -481,6 +481,37 @@ each item is a departure named there).
   expiry's entries (a shadow `would-expire`, a `held` row past its instant, a standing `in-use`, a refusal, a failure, no
   evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the list over
   the next ones, which can delay an expiry and never cause one.
+- **As wave 5 closes the lane's follow-ups** (each a departure named in the wave-5 plan,
+  `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`).
+  - **The consent binds the branch.** Inside its lock `ws-expire` reads the branch three ways at the recompute and
+    again at the pin; if the two reads differ (a branch deleted, or made, in between) it stops there, `failed`
+    `state-changed`, after the pin, which only keeps, and before the tombstone and the breadcrumb. A branch already
+    absent when the token was minted reads absent twice and expires with its work in the attic. A branch deleted
+    between the fresh pin and the tail's settle is as wave 6 of CCR-15 left it: its tip was pinned at the fresh pin.
+  - **A `failed` `state-changed` is audited afresh.** ccd prints that document only on a fresh expiry, before the
+    tombstone and the breadcrumb, so nothing started. As on the reclaim side, "not resumable" means start over, not
+    final: the lane forgets the instant it learned and its sightings and returns to learning, so a later pass's audit
+    mints a fresh token over what stands, and the row is asked again only once seen eligible twice past its instant. A
+    feed row records it, and nothing is listed. `probe-unmeasured` is still read as final, but ccd prints it on a
+    resumed expiry too, after an earlier attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not
+    answer), so there it can stop the lane on a part-expired archive until a restart. That is a known gap, routed to
+    this programme's wave 6 once CCR-15 wave 7's `crumb` field is on `main`, and an arming blocker for the lane until
+    then. `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each after the
+    breadcrumb too; the `crumb` field is what can tell those apart.
+  - **A kept leaf is listed.** The `expired` document's `clipsKept` and `tmpRootKept` are read by name. A kept word
+    (`refused`, `unmeasured`, `in-use`) lists the archive, though its row is gone, saying what was kept and why, until
+    the server restarts. An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing, so a
+    rollout skew raises no alarm on every expiry.
+  - **A day of resumable failures slows the asking.** After 24 hours of `failed` (resumable) or `lock-unopenable`
+    answers to the act on one archive, the row moves to a persistent tier. Its report stands on the list, naming the
+    first failure, the attempts and the last detail, saying the expiry may have stopped part-way (the server cannot
+    yet tell), and suggesting no destructive verb. The lane asks again every four hours, never stopping. No answer
+    that ends no attempt replaces the entry or resets its run: a hold, a deferral, a shadow audit (its feed row's
+    "nothing was deleted" is about that audit alone), a refusal the box retries, an in-use, ccd's "not yet", an older
+    ccd's silence.
+    The entry goes when an attempt completes, finds that none had begun (a `failed` `state-changed`, which ccd prints
+    only before the breadcrumb) or stops for good, or when the workspace is archived again; a restart re-learns. A
+    terminal refusal and a composition error are still never asked again.
 
 ### 5.4 Stage 4 — the dead-coordinator lane (L4)
 
