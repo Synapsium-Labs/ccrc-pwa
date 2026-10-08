@@ -1119,6 +1119,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       halt banner is live on the server box.
       - STATUS: fleet and server v0.0.116, newest v0.0.116, backups fleet 142M/server 573M, disk free fleet 218G/work
         volume 88G/server 33G, no anomalies.
+    - **2026-10-08 11:17 UTC — v0.0.117 to v0.0.122 auto-converged unattended.** No action was taken.
+      - The operator paused auto-install for the GPT-lane window (2026-10-07 10:06 to 11:21 UTC), then restored it to
+        `channel` on dev. Both boxes moved on from there by themselves.
+      - The hourly check's job had expired. It was re-created at 11:17, so the gap had no probe.
+      - STATUS: fleet and server v0.0.122, newest v0.0.122, backups fleet 144M/server 585M, disk free fleet 216G/work
+        volume 264G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
