@@ -34,8 +34,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
-  DEAD_SUFFIX, RUN_DIR_ENV, RUN_OWNER, RUN_PREFIX, RUN_QUIET_ENV, RUN_QUIET_S, RUN_REFUSED_ENV, RUN_SOCKET, RUN_TMP,
-  condemn, openRun, probeRun, reapRuns,
+  DEAD_SUFFIX, RUN_DIR_ENV, RUN_OWNER, RUN_PREFIX, RUN_QUIET_ENV, RUN_QUIET_S, RUN_REFUSED_ENV, RUN_SOCKET,
+  RUN_SUN_PATH_MAX, RUN_TMP, condemn, openRun, probeRun, reapRuns,
 } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -203,6 +203,30 @@ describe('probeRun — six verdicts, never folded', () => {
     const r = await openRun(longBase);
     expect(r).toEqual({ refused: 'EINVAL' });
     expect(readdirSync(longBase), 'the refused run left its directory').toEqual([]);
+  });
+
+  it('T2k: the envelope — a socket path of exactly RUN_SUN_PATH_MAX bytes opens and answers; one byte more refuses', async () => {
+    // Past `sun_path` Node 24+ fails EINVAL, but Node 22 silently TRUNCATES and binds at the shorter name
+    // (measured on Linux, 22.23.3), so the module checks the length itself. This pins that check to the
+    // platform's own limit: not one byte stricter, not one byte laxer.
+    const root = socketBase();
+    const sockBytes = (base: string): number => Buffer.byteLength(path.join(base, `${RUN_PREFIX}XXXXXX`, RUN_SOCKET));
+    const padded = (n: number): string => { const b = path.join(root, 'p'.repeat(n)); mkdirSync(b); return b; };
+    const exact = padded(RUN_SUN_PATH_MAX - sockBytes(root) - 1);
+    expect(sockBytes(exact)).toBe(RUN_SUN_PATH_MAX);
+    const r = await openRun(exact);
+    expect(r, 'a socket path of exactly the limit was refused').not.toHaveProperty('refused');
+    const { run, server } = r as { run: string; server: { close: () => void } };
+    try {
+      expect(await probeRun(run)).toBe('live');
+    } finally {
+      server.close();
+      condemn(run);
+    }
+    const over = padded(RUN_SUN_PATH_MAX - sockBytes(root));
+    expect(sockBytes(over)).toBe(RUN_SUN_PATH_MAX + 1);
+    expect(await openRun(over)).toEqual({ refused: 'EINVAL' });
+    expect(readdirSync(over)).toEqual([]);
   });
 });
 

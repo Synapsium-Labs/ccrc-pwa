@@ -138,7 +138,7 @@ All of these were measured:
 - A SIGSTOPped owner still connects.
 - A SIGKILLed owner whose forked IPC child is still alive gives ECONNREFUSED, because the workers do not inherit the listening fd.
 - On Linux a regular file gives ECONNREFUSED; on macOS it gives ENOTSOCK. Hence the `lstat` check comes first.
-- The `sun_path` limit is 104 on macOS and 108 on Linux; beyond it the error is EINVAL.
+- The `sun_path` limit is 104 bytes on macOS and 108 on Linux (each measured at the boundary). Beyond it Node 24+ fails `listen` and `connect` with EINVAL, but **Node 22 and Node 20 silently truncate** the path and bind or connect at the shorter name (measured on Linux, 22.23.3 and 20.20.2; found at Task 7, see D-4497's amendment). So the module checks the byte length itself before either call, and answers EINVAL on every Node.
 - In Docker, the socket answers identically through a bind-mount spelling and a whole-volume spelling of one directory.
 
 **`reapRuns(base, {now, uid, quietS})`:**
@@ -321,6 +321,7 @@ Four numbers, issued by the allocator for this plan's four departures from #316'
   - **Proposed:** nothing.
   - **Precedent:** the reclamation spec's "a temp root that cannot be made private is not used".
   - **Shape:** `TMPDIR` is left alone, an inherited `CCRC_TEST_RUN_DIR` is deleted, `CCRC_TEST_RUN_REFUSED=<code>` is set, and one `ccrc-test: per-run temp dir refused (<code>) under <base>; fixtures go loose in TMPDIR as before` line is printed. Ruled on 2026-10-08 (ruling 3) over a degraded mode.
+  - **Amendment (Task 7): the length is checked here, not left to `listen`.** The draft relied on `listen` failing EINVAL past `sun_path`, measured on Node 26 (macOS) and Node 24 (Linux). Run on Linux under Node 22.23.3 — the version CI runs — T2i, T2j and T5f were red: `listen` SUCCEEDED on an overlong path, and a probe through an overlong spelling answered ENOENT. Node 22 and 20 truncate the path to `sun_path` and bind or connect at the shorter name (measured at the boundary: 108 bytes binds at its full path, 109 binds elsewhere; Node 24 refuses 109). Left alone, a long `TMPDIR` would bind a socket at a path nobody named and run on with a liveness no other spelling can reach. So `openRun` refuses with EINVAL when `live.sock`'s path is longer than `RUN_SUN_PATH_MAX` (108 on Linux, 104 elsewhere), before `listen`, through the same refusal that removes what was made; and `probeRun` answers `unmeasurable:EINVAL` without connecting. T2k pins the envelope at the platform's own limit.
 - **D-4498** — *Persistent SIGTERM, SIGINT and SIGHUP listeners, plus an `exit` listener, in vitest's main process remove the run dir, then exit with 128+n.*
   - **Proposed:** "removes it in teardown".
   - **Why:** teardown never runs on a signal (6 of 6 runs leaked). GNU `timeout` delivers SIGTERM twice, after vitest's `once` listener is gone. An `exit` hook alone leaked in 5 of 6 runs. HUP has no handler at all.
@@ -385,6 +386,7 @@ Four numbers, issued by the allocator for this plan's four departures from #316'
   | T2h | owner SIGKILLed, `live.sock` replaced by a regular file | exactly `unmeasurable:not-a-socket` |
   | T2i | owner SIGKILLed, probed through a symlink spelling longer than 108 bytes | `unmeasurable:EINVAL`; the short spelling still gives `dead` |
   | T2j | `openRun` on `join(base, 'x'.repeat(90))` | `{ refused: 'EINVAL' }`, and the directory holds nothing afterwards |
+  | T2k | the envelope: a base whose socket path is exactly `RUN_SUN_PATH_MAX` bytes, then one byte more (added at Task 7) | the first opens and probes `live`; the second refuses `EINVAL` and leaves nothing |
 
   `describe('condemn', …)`:
 
@@ -515,9 +517,12 @@ Four numbers, issued by the allocator for this plan's four departures from #316'
 | M1 | `probeRun` | any connect error → `dead` | T2i |
 | M2 | `probeRun` | drop the `isSocket()` check | T2h (exact string), on both platforms |
 | M3 | `probeRun` | `owner.json` checked before connect, with `unowned` returned first | T2e |
-| M4 | `openRun` | the refusal path does not `rm` the run dir | T2j |
+| M4 | `openRun` | the one refusal helper does not `rm` the run dir | T2j, T2k, T5f |
 | M5 | `condemn` | `rm` without the rename first | C3 (`dir` still exists) |
 | M6 | `condemn` | ENOENT on the rename throws | C2 |
+| M7 | `openRun` | no length check before `listen` | T2j, T2k, T5f on Node 22 (Linux); green on Node 26, whose `listen` fails EINVAL itself |
+| M8 | the length check | `>=` in place of `>` (one byte too strict) | T2k, on every Node |
+| M9 | `probeRun` | no length check before `connect` | T2i on Node 22 (Linux); green on Node 26 |
 | R1 | `reapRuns` | no quiet gate | T3c, T3d (fresh) |
 | R2 | `reapRuns` | `statSync` in place of `lstatSync` | T3f (the link is renamed away) |
 | R3 | `reapRuns` | no uid check | T3g |

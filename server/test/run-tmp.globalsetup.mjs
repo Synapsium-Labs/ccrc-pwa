@@ -22,7 +22,11 @@
 //     (measured in Docker), where a pid answers differently in every pid namespace and is reused;
 //   - a regular file at the socket's path gives ECONNREFUSED on Linux and ENOTSOCK on macOS, hence the `lstat`
 //     check comes FIRST and a non-socket is `unmeasurable`, never `dead`;
-//   - `sun_path` is 104 bytes on macOS and 108 on Linux; past it both `listen` and `connect` fail EINVAL.
+//   - `sun_path` takes 104 bytes on macOS and 108 on Linux. Past it Node 24+ fails `listen` and `connect` with
+//     EINVAL, but Node 22 — the version CI runs — and Node 20 silently TRUNCATE the path and bind or connect at
+//     the shorter name (measured on Linux, 22.23.3 and 20.20.2): a socket left at a path nobody named, and a
+//     probe through a long spelling answered by whatever sits at the short one. So the byte length is checked
+//     HERE, before either call, and is EINVAL on every Node (`RUN_SUN_PATH_MAX`).
 // `owner.json` (pid, host, start time) is for a human reading a leftover directory. It decides nothing a socket
 // can answer: a socket that connects is `live` whatever else is true.
 //
@@ -82,6 +86,9 @@ export const RUN_REFUSED_ENV = 'CCRC_TEST_RUN_REFUSED';
 export const RUN_QUIET_ENV = 'CCRC_TEST_RUN_QUIET_S';
 /** The signals the arm collects on, by number, so an armed exit is 128+n as a default action's would be. */
 export const RUN_SIGNALS = Object.freeze({ SIGHUP: 1, SIGINT: 2, SIGTERM: 15 });
+/** The longest unix socket path, in bytes, the platform's `sockaddr_un.sun_path` takes: 108 on Linux, 104 on
+ *  macOS and the BSDs (each measured at the boundary). A longer one is EINVAL here, whatever the Node. */
+export const RUN_SUN_PATH_MAX = process.platform === 'linux' ? 108 : 104;
 /** How long a dead or unowned run must have been quiet before a later run condemns it (D-4496). */
 export const RUN_QUIET_S = 600;
 const PROBE_TIMEOUT_MS = 2000;
@@ -103,6 +110,9 @@ export function condemn(dir) {
     return `left:${e.code ?? 'rm'}`;
   }
 }
+
+/** True when `sock` is too long to bind or connect without truncation. */
+const tooLong = (sock) => Buffer.byteLength(sock) > RUN_SUN_PATH_MAX;
 
 /** Connect once: `'ok'`, the error's code, or `'timeout'`. Never rejects.
  *  @param {string} sock @param {number} ms @returns {Promise<string>} */
@@ -137,7 +147,7 @@ export async function probeRun(dir, timeoutMs = PROBE_TIMEOUT_MS) {
   let isSock = false;
   let sockErr = null;
   try { isSock = lstatSync(sock).isSocket(); } catch (e) { sockErr = e.code ?? 'lstat'; }
-  const conn = isSock ? await tryConnect(sock, timeoutMs) : null;
+  const conn = !isSock ? null : tooLong(sock) ? 'EINVAL' : await tryConnect(sock, timeoutMs);
   if (conn === 'ok') return 'live';
   let owned;
   try {
@@ -159,19 +169,23 @@ function unmake(run) {
   try { rmSync(run, { recursive: true, force: true }); } catch { /* the reaper's quiet gate collects it */ }
 }
 
-/** Make this run's directory under `base` and start listening on its socket: `mkdtemp`, `mkdir tmp`, `listen`
- *  (unref'd, so it never holds vitest open), then `owner.json` (`wx`, 0600). Any failure removes what was made
- *  and answers `{ refused: <code> }` — a TMPDIR too long for `sun_path` answers `EINVAL`.
+/** Make this run's directory under `base` and start listening on its socket: `mkdtemp`, `mkdir tmp`, the
+ *  length check, `listen` (unref'd, so it never holds vitest open), then `owner.json` (`wx`, 0600). Any failure
+ *  removes what was made and answers `{ refused: <code> }` — a TMPDIR too long for `sun_path` answers `EINVAL`.
  *  @param {string} base
  *  @returns {Promise<{ run: string, server: import('node:net').Server } | { refused: string }>} */
 export function openRun(base) {
   let run;
   try { run = mkdtempSync(path.join(base, RUN_PREFIX)); } catch (e) { return Promise.resolve({ refused: e.code ?? 'mkdtemp' }); }
-  try { mkdirSync(path.join(run, RUN_TMP)); } catch (e) { unmake(run); return Promise.resolve({ refused: e.code ?? 'mkdir' }); }
+  /** Every refusal after the `mkdtemp` goes through here, so none of them can leave the directory behind. */
+  const refused = (code) => { unmake(run); return { refused: code }; };
+  try { mkdirSync(path.join(run, RUN_TMP)); } catch (e) { return Promise.resolve(refused(e.code ?? 'mkdir')); }
+  const sock = path.join(run, RUN_SOCKET);
+  if (tooLong(sock)) return Promise.resolve(refused('EINVAL'));
   return new Promise((resolve) => {
     const server = net.createServer((c) => { c.on('error', () => {}); c.destroy(); });
-    server.once('error', (e) => { unmake(run); resolve({ refused: e.code ?? 'listen' }); });
-    server.listen(path.join(run, RUN_SOCKET), () => {
+    server.once('error', (e) => { resolve(refused(e.code ?? 'listen')); });
+    server.listen(sock, () => {
       server.unref();
       server.on('error', () => {});       // a listening server that errors later must not crash vitest's main process
       try {
@@ -183,8 +197,7 @@ export function openRun(base) {
         }
       } catch (e) {
         server.close();
-        unmake(run);
-        resolve({ refused: `owner-${e.code ?? 'write'}` });
+        resolve(refused(`owner-${e.code ?? 'write'}`));
         return;
       }
       resolve({ run, server });
