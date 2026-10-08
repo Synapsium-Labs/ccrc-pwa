@@ -55,6 +55,9 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     docs-only commit.
   - Without consent, the wave-done ships the text as an artifact, which the scoped review reads. It is applied in one
     docs-only commit after the review closes, never during it, and that commit is measured before the merge.
+  - **Settled the same minute (3976, relayed to amber-river in 3978).** Claim 1097 was already released, and
+    quiet-river's answer was yes in any case. So the first path applies. Run 314 is at wave-done (PR #328): whichever
+    of #326 and #328 lands second merges main and re-runs `expiry-lane-prose.test.ts`.
 
 - **2026-10-08 01:42 — fix round 1 gets an addendum (mail 3962), after workspace-lifecycle's coordinator measured
   the tip (3961; answered in 3963).** The binding text is the rulings file's final section.
