@@ -1160,6 +1160,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       at 08:24:16. No action was taken.
       - STATUS: fleet and server v0.0.134, newest v0.0.134, backups fleet 146M/server 614M, disk free fleet 216G/work
         volume 269G/server 33G, no anomalies.
+    - **2026-10-09 10:42 UTC: v0.0.135 auto-converged unattended, and v0.0.136 is not yet moved.** No action was taken.
+      - v0.0.135 (10:07:38) is #338, ccd carrying sidecars by link.
+      - v0.0.136 (10:21:06) is #337, a test-only change: one owned temp parent per vitest run.
+      - The fleet box's `update.json` reads `done` toward v0.0.135. The 21 minutes since v0.0.136 is inside the usual
+        30 to 50 minute lag.
+      - STATUS: fleet and server v0.0.135, newest v0.0.136, backups fleet 146M/server 616M, disk free fleet 215G/work
+        volume 264G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
