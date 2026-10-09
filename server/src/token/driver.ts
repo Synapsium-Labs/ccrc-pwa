@@ -244,7 +244,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
       obs = await this.deps.generation.read();
       this.lastObs = obs;
     }
-    let retireHeld = false;   // D-4414 (F3): a retirement that could not record its digest waits for a later tick, and blocks nothing else
+    let retireHeld = false;   // D-4414 (F3): a retirement that could not record its digest waits for a later tick; the retire arms step aside, but a confirmed generation still selects promote, which loops held until the file reads (policy.ts nextAction)
     for (let step = 0; step < MAX_STEPS; step++) {
       const now = this.now();
       const a = nextAction({ state: this.state, gate: this.gate(now), generation: obs,
