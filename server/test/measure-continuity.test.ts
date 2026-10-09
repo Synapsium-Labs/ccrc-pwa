@@ -20,7 +20,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
-import { bindFixture, plantFakeKernel } from './fixtures/fakeMountKernel.js';
+import { bindFixture, fixtureTable, plantFakeKernel } from './fixtures/fakeMountKernel.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-measure-continuity-'); });
@@ -144,8 +144,7 @@ describe('the carry section reads why a carry copied, and how much (D-4500, D-45
     const k = plantFakeKernel(h.home);
     const env = { ...bindFixture(h.home), ...k.env };
     const bare = path.join(h.home, 'no-common-mountinfo');
-    fs.writeFileSync(bare, fs.readFileSync(env.CCD_MOUNTINFO!, 'utf8').split('\n')
-      .filter((l) => !l.includes(' 0:99 / ')).join('\n'));
+    fs.writeFileSync(bare, fixtureTable(h.home, { common: 'none' }));
     const carry = (u: string, e: Record<string, string>): void => {
       h.sh(`${k.cpStub} _swap_carry_sidecars "$HOME/.claude" "$HOME/.claude-d" ${u} 2>/dev/null`, e);
     };

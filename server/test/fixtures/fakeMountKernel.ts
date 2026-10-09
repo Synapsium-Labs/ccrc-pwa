@@ -37,6 +37,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FIXTURE_MOUNTINFO } from '../ccdWsHelpers.js';
 
+/** The fixture filesystem's `major:minor`: every account root and the whole
+ *  mount are mounts of it. Exported so a case names it rather than typing it. */
+export const FIXTURE_DEV = '0:99';
+
 /** The kernel's escaping of a mountinfo path field: space, tab, newline and
  *  backslash as three-digit octal (`\040`, `\011`, `\012`, `\134`). */
 export const mountEsc = (p: string): string =>
@@ -45,7 +49,7 @@ export const mountEsc = (p: string): string =>
 export interface MountRow {
   id: number;
   parent?: number;
-  /** `major:minor`. The fixture filesystem is `0:99`. */
+  /** `major:minor`. The fixture filesystem is `FIXTURE_DEV`. */
   majmin: string;
   /** Where the mount sits INSIDE its filesystem (`/` for the whole of it). */
   root: string;
@@ -83,6 +87,20 @@ function skeleton(src: string, dst: string): void {
   }
 }
 
+/** The geometry's mount TABLE alone, as text: nothing is written. A case
+ *  that needs a second table for one geometry (the same roots, say, with no
+ *  common mount) asks for it here rather than editing the first one's rows. */
+export function fixtureTable(home: string, o: BindOpts = {}): string {
+  const roots = o.roots ?? ['.claude', '.claude-d'];
+  const vol = path.join(home, o.vol ?? 'vol');
+  const common = o.common ?? 'rw';
+  return [
+    mountRow({ id: 20, parent: 1, majmin: '8:1', root: '/', target: '/' }),
+    ...(common === 'none' ? [] : [mountRow({ id: 29, majmin: FIXTURE_DEV, root: '/', target: vol, opts: `${common},relatime` })]),
+    ...roots.map((r, i) => mountRow({ id: 31 + i, majmin: FIXTURE_DEV, root: `/home/${r}`, target: path.join(home, r) })),
+    ...(o.extra ?? []), ''].join('\n');
+}
+
 /** Build the geometry under `home` and write its table at the harness's
  *  `FIXTURE_MOUNTINFO`. Call it AFTER planting the sidecars when `decoy` is set:
  *  the decoy copies the directory shape that exists at that moment. Returns the
@@ -97,13 +115,8 @@ export function bindFixture(home: string, o: BindOpts = {}): Record<string, stri
     if (o.decoy) skeleton(path.join(home, r), alias);
     else fs.symlinkSync(path.join(home, r), alias);
   }
-  const common = o.common ?? 'rw';
   const mi = path.join(home, FIXTURE_MOUNTINFO);
-  fs.writeFileSync(mi, [
-    mountRow({ id: 20, parent: 1, majmin: '8:1', root: '/', target: '/' }),
-    ...(common === 'none' ? [] : [mountRow({ id: 29, majmin: '0:99', root: '/', target: vol, opts: `${common},relatime` })]),
-    ...roots.map((r, i) => mountRow({ id: 31 + i, majmin: '0:99', root: `/home/${r}`, target: path.join(home, r) })),
-    ...(o.extra ?? []), ''].join('\n'));
+  fs.writeFileSync(mi, fixtureTable(home, o));
   return { CCD_MOUNTINFO: mi, FAKE_KERNEL_MOUNTINFO: mi };
 }
 

@@ -31,8 +31,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, CCD } from './ccdWsHelpers.js';
-import { bindFixture, mountRow, plantFakeKernel, type BindOpts } from './fixtures/fakeMountKernel.js';
+import { makeCcdHarness, type CcdHarness, CCD, FIXTURE_MOUNTINFO } from './ccdWsHelpers.js';
+import { bindFixture, FIXTURE_DEV, mountRow, plantFakeKernel, type BindOpts } from './fixtures/fakeMountKernel.js';
 import { IS_LINUX } from './platformFixtures.js';
 
 let h: CcdHarness;
@@ -42,6 +42,9 @@ afterEach(() => {
   try { fs.chmodSync(path.join(h.home, 'vol', 'home'), 0o755); } catch { /* not every case has one */ }
   h.cleanup();
 });
+
+/** The table the harness hands ccd (`CCD_MOUNTINFO`), for a case that writes its own. */
+const tablePath = (): string => path.join(h.home, FIXTURE_MOUNTINFO);
 
 /** The words ccd's route may answer, read from the one place they are spelled
  *  (empty when ccd spells none, which the census cases then report). */
@@ -60,8 +63,8 @@ const crossDevice = ((): boolean => {
 describe('_carry_link_route: the geometry', () => {
   const A = (): string => path.join(h.home, '.claude', 'projects', 'P');
   const B = (): string => path.join(h.home, '.claude-d', 'projects', 'P');
-  const COMMON = (): string => mountRow({ id: 29, majmin: '0:99', root: '/', target: path.join(h.home, 'vol') });
-  /** The two account roots, each its own mount of 0:99, plus `rows`; `vol/home/<root>` symlinked. */
+  const COMMON = (): string => mountRow({ id: 29, majmin: FIXTURE_DEV, root: '/', target: path.join(h.home, 'vol') });
+  /** The two account roots, each its own mount of FIXTURE_DEV, plus `rows`; `vol/home/<root>` symlinked. */
   const table = (...rows: string[]): void => {
     fs.mkdirSync(A(), { recursive: true });
     fs.mkdirSync(B(), { recursive: true });
@@ -87,14 +90,14 @@ describe('_carry_link_route: the geometry', () => {
   });
 
   it('R3 a mount rooted at /home/.cl is not an ancestor of /home/.claude (component boundary): exdev-no-root', () => {
-    table(mountRow({ id: 33, majmin: '0:99', root: '/home/.cl', target: path.join(h.home, 'trap') }));
+    table(mountRow({ id: 33, majmin: FIXTURE_DEV, root: '/home/.cl', target: path.join(h.home, 'trap') }));
     expect(word(routed(route()))).toBe('exdev-no-root');
   });
 
   it('R4 two rows on one target, read-only then read-write: the LATER row is the mount on top, so via', () => {
     const vol = path.join(h.home, 'vol');
-    table(mountRow({ id: 29, majmin: '0:99', root: '/', target: vol, opts: 'ro' }),
-      mountRow({ id: 30, majmin: '0:99', root: '/', target: vol, opts: 'rw' }));
+    table(mountRow({ id: 29, majmin: FIXTURE_DEV, root: '/', target: vol, opts: 'ro' }),
+      mountRow({ id: 30, majmin: FIXTURE_DEV, root: '/', target: vol, opts: 'rw' }));
     expect(word(routed(route()))).toBe('via');
   });
 
@@ -106,20 +109,20 @@ describe('_carry_link_route: the geometry', () => {
   it('R6 one mount holds both trees, so the link failed for another reason: link-failed', () => {
     fs.mkdirSync(A(), { recursive: true });
     fs.mkdirSync(B(), { recursive: true });
-    fs.writeFileSync(path.join(h.home, '.fixture-mountinfo'), `${mountRow({ id: 20, parent: 1, majmin: '8:1', root: '/', target: '/' })}\n`);
+    fs.writeFileSync(tablePath(), `${mountRow({ id: 20, parent: 1, majmin: '8:1', root: '/', target: '/' })}\n`);
     expect(word(routed(route()))).toBe('link-failed');
   });
 
   it('R7 a table with no line that parses: mounts-unreadable', () => {
     table();
-    fs.writeFileSync(path.join(h.home, '.fixture-mountinfo'), 'garbage\nmore garbage\n');
+    fs.writeFileSync(tablePath(), 'garbage\nmore garbage\n');
     expect(word(routed(route()))).toBe('mounts-unreadable');
   });
 
   it('R7b a table in which no mount holds the path: mounts-unreadable', () => {
     table();
-    fs.writeFileSync(path.join(h.home, '.fixture-mountinfo'),
-      `${mountRow({ id: 40, majmin: '0:99', root: '/', target: path.join(h.home, 'elsewhere') })}\n`);
+    fs.writeFileSync(tablePath(),
+      `${mountRow({ id: 40, majmin: FIXTURE_DEV, root: '/', target: path.join(h.home, 'elsewhere') })}\n`);
     expect(word(routed(route()))).toBe('mounts-unreadable');
   });
 
@@ -141,7 +144,7 @@ describe('_carry_link_route: the geometry', () => {
     fs.mkdirSync(A(), { recursive: true });
     fs.mkdirSync(B(), { recursive: true });
     bindFixture(h.home, { common: 'none', roots: ['.claude'] });
-    fs.appendFileSync(path.join(h.home, '.fixture-mountinfo'),
+    fs.appendFileSync(tablePath(),
       `${mountRow({ id: 32, majmin: '0:98', root: '/', target: path.join(h.home, '.claude-d') })}\n`);
     expect(word(routed(route()))).toBe('exdev-other-fs');
   });
@@ -269,7 +272,7 @@ describe('the first carry: a failed cp -al routes before it copies (D-4500), and
 
   it('C7 a mount INSIDE the source sidecar rules the alias out: root-mismatch, the content still lands', () => {
     plantSource();
-    carry(rig({ extra: [mountRow({ id: 40, parent: 31, majmin: '0:99',
+    carry(rig({ extra: [mountRow({ id: 40, parent: 31, majmin: FIXTURE_DEV,
       root: `/home/.claude/projects/${PDIR}/${UUID}/tool-results`, target: side('.claude', 'tool-results') })] }));
     expect(copied()[0]).toBe('root-mismatch');
     expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
