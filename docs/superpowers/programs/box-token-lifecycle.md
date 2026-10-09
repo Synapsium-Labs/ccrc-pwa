@@ -241,6 +241,13 @@ spec's after wave 1.
     worker first merges `main` and re-runs the shared pins (mail 4084). A test edit beyond the merge stops and comes
     to me, because claim 1124 (run 342) now holds `server.ts`, `gate.ts`, `auth-gate`, `box-token-census` and
     `single-definition`.
+  - **06:28: two overnight claim agreements by the worker, read late and adopted.** Both are on the 4032 terms: separate
+    regions, and the PR that lands second merges `main` and keeps both sides.
+    - 4057: `server/src/coord/routes.ts` and `README.md`, with workspace lifecycle's wave 5.
+    - 4078: claim 1124's five files, with the native docs reader's wave 3 (`ccrc-pwa-calm-canyon`, mail 4075). Its
+      extra term is that the second PR re-derives every route and census count by measurement.
+    - So mail 4085 corrected 4084's step 3: a count numeral re-derived after the merge needs no stop. Any other
+      test edit still does.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
