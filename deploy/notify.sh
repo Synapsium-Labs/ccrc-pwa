@@ -28,9 +28,10 @@ umask 077
 # `curl ... >/dev/null 2>&1 || true` here, or the `>/dev/null 2>&1` ccd wraps
 # this script's invocation in). `deploy/ccrc-mail.token.example`'s own
 # `#`-comment preamble is exactly that content, which is why comment lines
-# are skipped rather than folded into the token: without the skip, the
-# documented `cp *.example ccrc-mail.token && edit` setup path would ship a
-# secret whose leading bytes are a comment nobody meant to sign with.
+# are skipped rather than folded into the token: without the skip, a copy of
+# that example left in place (which the example now says never to make; the
+# server mints the token) would be read as a secret whose leading bytes are a
+# comment nobody meant to sign with.
 TOKEN_FILE="${CCRC_MAIL_TOKEN_FILE:-$HOME/.cc-secrets/ccrc-mail.token}"
 tok=""
 if [ -r "$TOKEN_FILE" ]; then

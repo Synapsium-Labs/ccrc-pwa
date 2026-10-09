@@ -201,7 +201,7 @@ describe('install-coordinator-skill.sh default homes are the roster, behavioural
   });
 });
 
-describe('the deploy ships the skill, agent-side — and PR I’s token lane is there', () => {
+describe('the deploy ships the skill, agent-side — and no longer ships the token (its rsync excludes are kept)', () => {
   const repo = (f: string): string => readFileSync(path.resolve(__dirname, '../..', f), 'utf8');
   const deploy = repo('deploy/deploy.sh');
   const agentArm = deploy.slice(deploy.indexOf('if [ "$TARGET" = "agent" ]'), deploy.indexOf('\nelse\n'));

@@ -1537,8 +1537,9 @@ CCRC_DDNS_UNIT="ccrc-ddns"
 # directory exists anywhere in `ccd/` or `deploy/` today (measured by grep);
 # when Task 22 adds one it should not chmod an existing directory in either
 # direction: widening one silently would be worse than the state it found, and
-# narrowing one is a decision about a directory `deploy/deploy.sh`'s
-# `ship_secret` also writes into. The 0600 on the FILE is what will protect the
+# narrowing one is a decision about a directory the box token's fleet copy is
+# written into (by `ccrc token sync`, or by the server itself on a box recorded
+# as `CCRC_ROLE=both`; `deploy/deploy.sh` no longer ships it). The 0600 on the FILE is what will protect the
 # secret, exactly as CLAUDE.md argues for `~/.ccrc` being 0775 on the reference
 # fleet.
 ACCT_SECRETS_DIR="$HOME/.cc-secrets"

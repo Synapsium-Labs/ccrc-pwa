@@ -172,7 +172,7 @@ Download it, or use `bash <(curl -fsSL …)`.
   All three packages declare the same floor and a test pins it.
 - **git**, **tmux**, **bash**, **curl**, **rsync**, **diff** — `ccrc install` refuses by
   name without `rsync` (it places the tree) or `diff` (every skill installer compares
-  with it). **`openssl`** only mints the box and agent tokens by hand (`openssl rand -hex 32`).
+  with it). **`openssl`** only mints the agent token by hand (`openssl rand -hex 32`).
 - **`gh`** (the GitHub CLI, authenticated with `repo` scope: `gh auth login --scopes repo`)
   — PR state, opening a PR and the merges your sessions make go through it. Doctor FAILs
   without it, or with a token that lacks `repo`, so the install's own exit code does too.
@@ -535,7 +535,11 @@ agent); on a single box whose role is recorded as `CCRC_ROLE=both` in `~/.ccrc/c
 that copy itself. Never mint, copy or edit either file by hand: a value found at boot is adopted
 once and retired by the first rotation. Check them with `ls -l`, never `cat`; `ccrc doctor`'s
 `box-token` check and the console's Settings card report both. What the server does when a mint
-fails: "The mail bus and its token", under "Fleet coordination" below.
+fails: "The mail bus and its token", under "Fleet coordination" below. One case is the exception: a
+single box whose role is only derived as `both` (placed by `deploy.sh`, or a dev launch with
+`CCRC_FLEET` unset and no `CCRC_ROLE` recorded) never gets the fleet copy written, so `notify.sh` sends
+nothing and `ccrc-api` answers `no-token`; the server warns at boot, and the remedy is to record
+`CCRC_ROLE=both` in `~/.ccrc/ccrc.env`.
 
 The block below is the single-box form of the two steps:
 
@@ -3150,7 +3154,8 @@ four operator doors that carry no box token (`POST /api/coord/pause`,
 `ccrc update` do not, so on a box placed by the release lane it is not there
 until you place it ("What the install does not place", under Install). The
 token it reads is the server's to place: minted at boot, handed to the fleet
-box over the agent link, never shipped by `deploy.sh`.
+box over the agent link (or written by the server itself on a box recorded as
+`CCRC_ROLE=both`), never shipped by `deploy.sh`.
 
 **Three surfaces.** `/runs` is the board — runs grouped by program, with their
 own status words (a run is a lifecycle position, not an attention state, so it

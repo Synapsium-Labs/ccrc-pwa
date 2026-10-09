@@ -661,11 +661,12 @@ describe('the both-role boot write: recorded role only (spec 4.10)', () => {
   });
 
   // Mixed versions (spec 10.1 "Notify tolerance removed"): the real notify.sh, through the loopback curl front, to
-  // a server built with the boot's holder. A recorded both box is accepted; a derived one (no file) is refused.
+  // a server built with the boot's holder. A recorded both box is accepted; on a derived one (no fleet file)
+  // notify.sh finds no token and sends nothing (D-4393), so no request reaches the server at all.
   const tool = (n: string): string => spawnSync('bash', ['-c', `command -v ${n}`], { encoding: 'utf8' }).stdout.trim();
   it.each([
     ['recorded both: notify.sh is accepted', 'recorded', true],
-    ['derived both: no fleet file, so notify.sh is refused', 'derived-absent', false],
+    ['derived both: no fleet file, so notify.sh sends nothing', 'derived-absent', false],
   ] as const)('%s', async (_n, roleSource, accepted) => {
     const home = mkHome();
     const r = await boot(home, { ...both, roleSource });
