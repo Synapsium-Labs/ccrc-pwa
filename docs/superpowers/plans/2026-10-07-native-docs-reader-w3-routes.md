@@ -11979,7 +11979,20 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n
 **Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them.
 
 ```json
-[]
+[
+{
+ "id": "W3-T11-M1",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  const typed = payloadAbsent && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;\n",
+ "new": "  const typed = false && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;\n",
+ "tests": [
+  "test/docs-policy.test.ts",
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-policy + docs-headers: 7 failed | 641 passed (648) \u2014 the gate's bodiless 401 passes with the four headers and no-store; the gate's bodiless 403 passes with the four headers and no-store; a bodiless 500 passes with the four headers and no-store; a bodiless 200 with no cache-control is no-store too, and a route-set value is kept; a bodiless pass carries no content-type header: it decorates, it does not type; an upgrade with no cookie and the right Origin: the gate's 401, the four headers, no-store, no defect line; an upgrade from a foreign Origin: the gate's 403, decorated, no defect line"
+}
+]
 ```
 
 ### Task 12: Close the wave: the W3 suites and the full server suite, the census-free invariants, the mutation table, the results record, the push, the ONE pull request, the fingerprint and the wave-done
