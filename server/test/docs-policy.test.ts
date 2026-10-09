@@ -1713,3 +1713,46 @@ describe("W3 T2: docsCacheHitAnswer, the request's pin over the stored content (
     expect(hit).not.toBe(STORED);
   });
 });
+
+// ===== Task 11 review 2-1: a bodiless response is not a content type to refuse =====
+import { docsHookVerdict } from '../src/docs/policy.js';
+
+describe('T11 review 2-1: docsHookVerdict passes a response with no payload and no content type, decorated', () => {
+  const NO_STORE = { ...DOCS_RESPONSE_HEADERS, 'cache-control': 'no-store' };
+  const IMMUTABLE = 'private, max-age=31536000, immutable';
+  const JSON_CT = 'application/json; charset=utf-8';
+
+  it.each([
+    ["the gate's bodiless 401", 401], ["the gate's bodiless 403", 403], ['a bodiless 500', 500],
+  ] as const)('%s passes with the four headers and no-store', (_what, status) => {
+    expect(docsHookVerdict(true, status, '', undefined)).toStrictEqual({ kind: 'pass', headers: NO_STORE });
+  });
+
+  it('a bodiless 200 with no cache-control is no-store too, and a route-set value is kept', () => {
+    expect(docsHookVerdict(true, 200, '', undefined)).toStrictEqual({ kind: 'pass', headers: NO_STORE });
+    expect(docsHookVerdict(true, 200, '', 'no-store')).toStrictEqual({ kind: 'pass', headers: DOCS_RESPONSE_HEADERS });
+  });
+
+  it.each([200, 401, 403, 500])('a response WITH a body and no content type is still refused (%i)', (status) => {
+    expect(docsHookVerdict(false, status, '', undefined)).toStrictEqual(docsSendPolicy(status, '', undefined));
+    expect(docsHookVerdict(false, status, '', undefined).kind).toBe('refuse');
+  });
+
+  it.each(['text/html', 'text/plain; charset=utf-8', 'image/svg+xml'])(
+    'a bodiless response that DOES carry the forbidden type %j is still refused', (ct) => {
+      expect(docsHookVerdict(true, 200, ct, undefined)).toStrictEqual(docsSendPolicy(200, ct, undefined));
+      expect(docsHookVerdict(true, 200, ct, undefined).kind).toBe('refuse');
+    });
+
+  it.each([
+    [200, JSON_CT, undefined], [200, 'image/png', IMMUTABLE], [404, JSON_CT, IMMUTABLE], [200, 'text/html', undefined],
+  ] as const)('a response with a body answers exactly docsSendPolicy: %i %j', (status, ct, cc) => {
+    expect(docsHookVerdict(false, status, ct, cc)).toStrictEqual(docsSendPolicy(status, ct, cc));
+  });
+
+  it('a bodiless pass carries no content-type header: it decorates, it does not type', () => {
+    const v = docsHookVerdict(true, 401, '', undefined);
+    expect(v.kind).toBe('pass');
+    expect(Object.keys(v.headers)).not.toContain('content-type');
+  });
+});

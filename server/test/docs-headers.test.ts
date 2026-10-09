@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { AddressInfo } from 'node:net';
+import WebSocket from 'ws';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { installDocsRequestPolicy, installDocsResponsePolicy, sendDocsFailure } from '../src/docs/hooks.js';
 import { DOCS_CACHE_IMMUTABLE, docsBusyBody } from '../src/docs/policy.js';
@@ -638,5 +640,58 @@ describe('M5.4 — every docs route in the real server\'s table carries the four
       expect(res.json(), key).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
       expectDecorated(key, res);
     }
+  });
+});
+
+// ===== Task 11 review 2-1: a bodiless gate refusal on a docs route keeps its status, decorated =====
+// The gate answers a WebSocket upgrade it refuses with `reply.code(401).send()` / `reply.code(403).send()`: no payload
+// and no content type. Over a REAL listening armed server and a real `ws` client (the upgrade request is the only
+// way to reach those two lines).
+
+/** The armed real server, listening on loopback. */
+async function listeningArmed(): Promise<FastifyInstance> {
+  const { app } = await m54Server({ auth: true });
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  return app;
+}
+
+/** Upgrade `url` with `headers`; resolve with the refusal the server answered (status, headers, body). */
+function upgradeRefusal(app: FastifyInstance, url: string, headers: Record<string, string>):
+    Promise<{ status: number | undefined; headers: Record<string, unknown>; body: string }> {
+  const port = (app.server.address() as AddressInfo).port;
+  return new Promise((resolve, reject) => {
+    const c = new WebSocket(`ws://127.0.0.1:${port}${url}`, { headers });
+    c.on('upgrade', () => { c.close(); reject(new Error('the upgrade was accepted')); });
+    c.on('unexpected-response', (_req, res) => {
+      let body = '';
+      res.on('data', (d) => { body += String(d); });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    });
+    c.on('error', () => { /* the refusal is reported by unexpected-response */ });
+  });
+}
+
+describe('T11 review 2-1: a bodiless gate refusal on a docs route keeps its status, decorated', () => {
+  it('an upgrade with no cookie and the right Origin: the gate\'s 401, the four headers, no-store, no defect line', async () => {
+    const app = await listeningArmed();
+    const res = await upgradeRefusal(app, '/api/docs/projects', { ...PWA, origin: 'http://localhost:7788' });
+    expect(res.status).toBe(401);
+    expectDecorated('ws 401', { statusCode: 401, headers: res.headers });
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('response refused'))).toStrictEqual([]);
+  });
+
+  it('an upgrade from a foreign Origin: the gate\'s 403, decorated, no defect line', async () => {
+    const app = await listeningArmed();
+    const res = await upgradeRefusal(app, '/api/docs/projects', { ...PWA, origin: 'https://evil.example' });
+    expect(res.status).toBe(403);
+    expectDecorated('ws 403', { statusCode: 403, headers: res.headers });
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('response refused'))).toStrictEqual([]);
+  });
+
+  it('a response WITH a body and no content type is still refused at the hook (M5.5 kept)', async () => {
+    const app = await open();
+    const res = await app.inject({ method: 'GET', url: '/api/docs/sent/bare-string', headers: PWA });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'response-type-refused' });
   });
 });

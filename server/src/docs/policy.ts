@@ -1063,3 +1063,24 @@ export function docsCacheHitAnswer(stored: DocsShowOk, pin: Extract<DocPin, { ki
     commit: pin.commit, blob, onRef: 'contains',
   };
 }
+
+// ===== Task 11 review 2-1: a response with no payload and no content type =====
+
+/**
+ * What the plugin's `onSend` hook applies (section 5.3), over `docsSendPolicy`. Fastify hands `onSend` a payload of
+ * `undefined` when the route or hook sent none (`reply.code(401).send()`, as the root gate answers a refused
+ * WebSocket upgrade) and sets no content-type then; a payload of any other value, `''` included, is a body and
+ * Fastify gives it a content-type of its own. `payloadAbsent` is exactly that `undefined` test, one meaning.
+ *
+ * A response with NO payload and NO content type (`''`) is not a type to refuse: it passes, decorated exactly like
+ * any passing response (the four `DOCS_RESPONSE_HEADERS`, `no-store` unless it is a 200 whose route set a
+ * cache-control), and sets no content-type, since it carries nothing to type. Every other response, a body with no
+ * content type (M5.5) and a payload-free one that DOES name a content type included, is `docsSendPolicy`'s verdict
+ * unchanged.
+ */
+export function docsHookVerdict(
+  payloadAbsent: boolean, statusCode: number, contentType: string, cacheControl: string | undefined,
+): DocsSendVerdict {
+  const typed = payloadAbsent && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;
+  return docsSendPolicy(statusCode, typed, cacheControl);
+}

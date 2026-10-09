@@ -13,7 +13,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { DocsFailureBody } from '../../../shared/docs.js';
 import {
   DOCS_DEFECT_MESSAGE, DOCS_FAILURE_HTTP, docsBodyErrorVerdict, docsForeignRequestBody, docsLogDue, docsProvenance,
-  docsRetryAfterSeconds, docsSendPolicy,
+  docsHookVerdict, docsRetryAfterSeconds,
 } from './policy.js';
 
 /**
@@ -74,15 +74,17 @@ export function installDocsRequestPolicy(app: FastifyInstance, nowMs: () => numb
 }
 
 /**
- * The plugin's response policy: an `onSend` hook applying `docsSendPolicy` to every docs response, a gate refusal,
- * a provenance refusal and a default 500 included (each runs the matched route's `onSend`). It sets every header the
- * verdict carries; on `pass` it sends the payload unchanged; on `refuse` it removes the verdict's `remove` headers,
- * answers the verdict's status with the JSON of its body, and logs the refused type.
+ * The plugin's response policy: an `onSend` hook applying `docsHookVerdict` to every docs response, a gate refusal
+ * (a bodiless one included), a provenance refusal and a default 500 included (each runs the matched route's
+ * `onSend`). It sets every header the verdict carries; on `pass` it sends the payload unchanged; on `refuse` it
+ * removes the verdict's `remove` headers, answers the verdict's status with the JSON of its body, and logs the
+ * refused type.
  */
 export function installDocsResponsePolicy(app: FastifyInstance): void {
   app.addHook('onSend', async (_req, reply, payload) => {
-    const v = docsSendPolicy(
-      reply.statusCode, replyHeaderText(reply, 'content-type') ?? '', replyHeaderText(reply, 'cache-control'),
+    const v = docsHookVerdict(
+      payload === undefined, reply.statusCode, replyHeaderText(reply, 'content-type') ?? '',
+      replyHeaderText(reply, 'cache-control'),
     );
     reply.headers(v.headers);
     if (v.kind === 'pass') return payload;
