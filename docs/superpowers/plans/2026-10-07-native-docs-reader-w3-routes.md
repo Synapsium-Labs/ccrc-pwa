@@ -12091,6 +12091,39 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n
   "test/docs-routes.test.ts"
  ],
  "red": "server docs-routes: 2 failed | 124 passed (126) \u2014 a cold projects GET under two held reads queues (no third exec), and runs once a slot frees; a projects GET whose client goes while it is queued is dequeued over a real socket, and its docs-index never runs"
+},
+{
+ "id": "W3-T11-M7",
+ "pkg": "server",
+ "file": "server/src/docs/hooks.ts",
+ "old": "    if (v.ok) return;\n    const now = nowMs();\n",
+ "new": "    if (v.ok || req.headers.upgrade !== undefined) return;\n    const now = nowMs();\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 2 failed | 60 passed (62) \u2014 (a) dark: a browser-shaped upgrade (same origin, no marker) is refused 403 foreign-request {why:marker}, decorated, no exec; (a) armed, with a session: the same browser-shaped upgrade is refused by provenance, decorated, no exec"
+},
+{
+ "id": "W3-T11-M8",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  const typed = payloadAbsent && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;\n",
+ "new": "  const typed = false && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 3 failed | 59 passed (62) \u2014 an upgrade with no cookie and the right Origin: the gate's 401, the four headers, no-store, no defect line; an upgrade from a foreign Origin: the gate's 403, decorated, no defect line; (b) armed, no session: the gate refuses the upgrade 401 before provenance, and the refusal carries the four headers (the same mutation as W3-T11-M1, repeated under this id because no other W3 file can red (b) alone)"
+},
+{
+ "id": "W3-T11-M9",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "  app.addHook('onClose', async () => {\n",
+ "new": "  app.addHook('onRequest', async (req) => {\n    if (req.headers.upgrade !== undefined) await reader.index({ node });\n  });\n  app.addHook('onClose', async () => {\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 1 failed | 61 passed (62) \u2014 (c) an upgrade that passes the gate and provenance gets 101 and runs ZERO docs execs: no body, the socket closed (the mutation adds a docs-index exec to the read plugin's onRequest for an upgrade: no W3 handler runs on an upgrade, so a plugin hook is the closest W3-file mutation that makes an upgrade exec)"
 }
 ]
 ```
@@ -13810,3 +13843,4 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 - **D-4468 (2026-10-09)** — the fetch lane serialises per (node, project) with ONE FIFO of accepted, not-yet-started jobs and a set of keys with a running job, not "a `KeyedQueue` (`server/src/inject/queue.ts:6`) per (node, project)" (spec §6.4). `single-definition.test.ts`'s "one KeyedQueue for the process" holds `new KeyedQueue(` to `server/src/index.ts`, the composition root, so a `KeyedQueue` in `lane.ts` reds it (measured), and refinement (n) rules out the process's own queue, which serialises session operations by session id. The behaviour §6.4 states holds exactly: serial and in acceptance order per key, at most `DOCS_FETCH_GLOBAL` = 2 at once, a queue of 8 jobs that have not started (a new job is pumped first and refused only when it is left waiting as the ninth), a 20 s wait from acceptance, and `docs-busy {lane:'fetch'}` past either. Refinement (v); Task 4.
 - **D-4469 (2026-10-09)** — a JSON file reply's `show` carries the bytes check 8 verified, not the answer's own content field verbatim (spec §3.5: "wraps these answers unchanged"): a `utf8` `text` is the verified bytes decoded (a lone surrogate, which passes check 8 as U+FFFD's three bytes, is served as U+FFFD), a `base64` `b64` is the canonical one check 8 proved, and a stray second content field is dropped. For every answer within ccd's contract the served `show` equals the answer field for field; it differs only for an answer outside that contract. Raised by W2's review 317 (its note 1 for W3); refinement (w); pinned by W3-T2-M39, W3-T2-M40 and Task 6's two `docs-file-bytes` route cases.
 - **D-4470 (2026-10-09)** — the listing map charges each recorded commit at least one toward `DOCS_LISTING_MAP_ENTRIES` (its charge is `max(1, file entries)`), not its file entries alone (this plan's refinement (l): "counts FILE entries toward its 50 000"). A tree with no committed file rows (a project with no docs at that commit, or one whose rows are all drafts) still records a commit and its `refsAt`; charged zero, such commits never reached the bound, so a long-lived server kept one entry per branch-tip commit of a doc-less project without limit, against spec §6.5's "at most 50 000 entries in total". The floor keeps §6.5's bound true; every hit, fill and answer is unchanged. Raised by Task 5's task review and ruled by the worker's controller; pinned by Task 5's `a commit with no committed rows is charged at least one` case and W3-T5-M30.
+- **D-4471 (2026-10-09)** — a WebSocket upgrade to a docs route that passes the session gate and provenance is answered `101 Switching Protocols` by `@fastify/websocket`, which the server registers at the root and which wraps every route's handler, docs routes included: the reply is hijacked before the plugin's `onSend`, so the 101 carries none of the four §5.3 headers (spec §5.3 and M5.4: "every docs response" carries them). Three conditions make it safe, each pinned: the gate and provenance run first, so a browser-shaped upgrade (which cannot set `x-ccrc-docs`) is refused `403 foreign-request {why:'marker'}` with the four headers, and an upgrade with no session is refused by the gate, decorated; the hijacked socket is closed at once with no body; and such an upgrade runs zero docs execs and reaches no lane, cache or flight. The four headers are browser protections and no browser reaches the 101. The same shape as refinement (d)'s router-level refusals (D-4464); refusing the upgrade would add a fourth `why` to an L0 vocabulary W3 must not edit, and decorating the 101 would edit `server.ts` outside W3's block. Ruled by the coordinator (mail 4082, option A); Task 11 review 2-2.
