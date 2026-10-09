@@ -1145,6 +1145,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       child-reclamation's wave 8 plan (#332). No action was taken.
       - STATUS: fleet and server v0.0.127, newest v0.0.127, backups fleet 146M/server 601M, disk free fleet 216G/work
         volume 264G/server 33G, no anomalies.
+    - **2026-10-09 06:27 UTC: v0.0.128 to v0.0.132 auto-converged unattended.** No action was taken.
+      - Two of the five carry code: v0.0.130 (02:12:56) is ccrc history W1-B1 (#315), and v0.0.131 (03:11:12) is the
+        native docs reader's wave 2 (#319). The other three are docs.
+      - The hourly check did not fire between 21:42 and 06:27, because this session was waiting on an operator
+        question. The gap had no probe.
+      - STATUS: fleet and server v0.0.132, newest v0.0.132, backups fleet 145M/server 612M, disk free fleet 216G/work
+        volume 262G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
