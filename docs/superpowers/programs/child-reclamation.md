@@ -47,6 +47,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 08:26 — workspace-lifecycle wave 5 is MERGED first (#335, `6fc7ef115`, v0.0.134; quiet-river's 4102): Order A.**
+  - **Wave 8's Task 1 moves the word half.** Every line Step 4 (d) quotes stands exactly once on `main`
+    (`archivedExpiry.ts:220-239` and `:742`, and the policy test's import). No other source line under `shared`,
+    `server/src`, `pwa/src` or `agent/src` spells the three words. Measured read-only.
+  - **Wave 7 is the second lander** on the two consented regions. `git merge-tree` of `ws/clear-summit` against
+    `origin/main` shows ONE conflict: `ccd/ccd`'s line-2 generated stamp. Clear-summit is told (4103) to absorb main
+    once, before its whole-branch verification, taking either stamp side and re-stamping.
+
 - **2026-10-09 07:43 — consent to box-token-lifecycle part B inside claim 1125 (bright-river's 4087, answered in 4088).**
   - **What run 350's Task B6 may do.** It may add one import line from `./box-token.js` beside `shared/api.ts`'s
     sibling imports, and one optional `boxToken?: BoxTokenView` field in `UpdatesView`. Both are disjoint from wave 7's
