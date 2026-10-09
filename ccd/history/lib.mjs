@@ -3032,3 +3032,239 @@ export function deriveHealth(h) {
   }
   return result();
 }
+
+// ===========================================================================
+// W1-B2 recall, Task 1: identity, scope and ids (spec §8.2, §6.1, §6.9,
+// §6.10, §8.4 describe, §8.6, §9.7). The CLI measures (the bounded tmux read,
+// the registry files) and these functions decide; none reads a file, a
+// process or the environment. Every registry fact arrives as a Presence, the
+// three states the store-open table already takes, so a file that exists but
+// cannot be read is never answered as absent (rev 3.2 review, IV5).
+// ===========================================================================
+
+/** The scope a read verb answers in (§8.2, the §8.3 header). Plan-chosen
+ *  spelling of the three kinds the spec's header names. */
+export const SCOPE_KINDS = Object.freeze(['family', 'project', 'workspace']);
+
+/** The fewest hex digits a displayed node id keeps after its `L` or `N`,
+ *  chosen (§6.1). Counted in hex digits so every display prefix passes the
+ *  card's grammar gate, `L[0-9a-f]{6,20}` (§8.6). Prefixes are unique within
+ *  the scope, never across it; `--json` always prints the full id. */
+export const NODE_ID_DISPLAY_MIN = 6;
+
+/** A full node id: `L` (leaf) or `N` (parent) plus 20 hex (§6.1). */
+export const HISTORY_NODE_ID_RE = /^[LN][0-9a-f]{20}$/;
+
+/** The directory under the history root that holds the eval control arm's
+ *  per-id files (§9.7). Spelled once; the W2 verb writes it, B2 only reads. */
+export const RECALL_OFF_DIR = 'recall-off';
+
+/** `tmux display-message` prints `#S`; ccd names every session `cc-<id>`, and
+ *  the hook requires the same prefix (spec §8.2). decideOpGate's pane test
+ *  spells the prefix too, for a different decision (an irreversible form). */
+const TMUX_SESSION_PREFIX = 'cc-';
+const PANE_RE = /^%[0-9]+$/;
+
+function refuseScope(reason) {
+  return { ok: false, rc: EXIT.REFUSED, reason };
+}
+
+/** The session's id from tmux (§8.2, D-4675 (history-identity-from-tmux)). The
+ *  caller ran `tmux display-message -p -t "$TMUX_PANE" '#S'` bounded at
+ *  TMUX_DEADLINE_MS, ALWAYS with `-t`, and passes what came back; `tmux` is
+ *  null when it never ran (no valid pane). A pane that is not `%<n>`, a run
+ *  that did not settle or failed, or a name that is not `cc-<something>`
+ *  answers `no-identity`; never "the most recent session". The stripped id
+ *  then passes idOk before any path is formed from it, else `bad-id`
+ *  (D-4170). */
+export function decideIdentity({ pane, tmux }) {
+  if (typeof pane !== 'string' || !PANE_RE.test(pane)) return refuseScope('no-identity');
+  if (tmux === null || tmux.settled !== true || tmux.status !== 0 || typeof tmux.stdout !== 'string') {
+    return refuseScope('no-identity');
+  }
+  const name = tmux.stdout.replace(/\r?\n$/, '');
+  if (!name.startsWith(TMUX_SESSION_PREFIX) || name.length === TMUX_SESSION_PREFIX.length) return refuseScope('no-identity');
+  const id = name.slice(TMUX_SESSION_PREFIX.length);
+  return idOk(id) ? { ok: true, id } : refuseScope('bad-id');
+}
+
+/** The family's generation (§8.2, D-4192): the
+ *  session's `CCRC_SESSION_GENERATION` when it has the uuid grammar, else
+ *  `$REG/<id>.generation` read-only when IT has the grammar, else the id's
+ *  newest family (§8.8: an unreadable or malformed file falls back too,
+ *  because the generation only narrows a scope the id already bounds). */
+export function resolveGeneration({ envGen, regGen }) {
+  if (typeof envGen === 'string' && UUID_RE.test(envGen)) return { value: envGen, via: 'env' };
+  if (regGen.state === 'value' && UUID_RE.test(regGen.value.trim())) return { value: regGen.value.trim(), via: 'registry' };
+  return { value: null, via: 'newest' };
+}
+
+/** The harness check every read verb runs after the identity (§6.10 item 4,
+ *  D-4679 (history-harness-unsupported-refused)). `$REG/<id>.harness` absent is
+ *  Claude Code, today's only harness, which is HARNESSES' first row; a value
+ *  with no HARNESS_TABLE row is `harness-unsupported`, never "not indexed
+ *  yet"; a file that exists but cannot be read is `harness-unreadable`, never
+ *  read as the default. */
+export function decideHarness(p) {
+  if (p.state === 'absent') return { ok: true, harness: HARNESSES[0] };
+  if (p.state !== 'value') return refuseScope('harness-unreadable');
+  const v = p.value.trim();
+  return Object.hasOwn(HARNESS_TABLE, v) ? { ok: true, harness: v } : refuseScope('harness-unsupported');
+}
+
+/** A registry file's trimmed text, or null when it holds none: absent, empty,
+ *  or unreadable. A decision that treats unreadable apart asks B1's
+ *  module-private `presenceUnreadable` (beside `decideStoreOpen`) first
+ *  (IV5), so this null never stands for two things it must tell apart. */
+const presenceText = (p) => (p !== null && p.state === 'value' && p.value.trim() !== '' ? p.value.trim() : null);
+
+/** Every scope decision a read verb takes (§8.2), in one place:
+ *  - the scope source is DATA (`SCOPE_SOURCES`, D-4167):
+ *    a source outside it is refused `no-identity`, never defaulted to tmux.
+ *    W1 holds `tmux` only; W2 adds `env` with the headless seam;
+ *  - `--project` with `--workspace`, or either with `--session`, is
+ *    `bad-args`: each names a different scope;
+ *  - `--session <id>` passes idOk (`bad-id`) and must share this session's
+ *    project: a `.project` on either side that exists but cannot be read is
+ *    `project-unreadable`; otherwise both must be present and equal, so an
+ *    absent or empty one, which can never be shown equal, is
+ *    `cross-project` like a different one (§8.2). Its generation is left to
+ *    the caller (null);
+ *  - `--project` needs this session's project (`project-unreadable`, absent
+ *    or empty folded in on purpose: REASONS has no absent word, and an
+ *    absent project widens nothing; D-4677 (history-recall-all-lanes));
+ *  - `--workspace` needs this session's workdir AND project; either
+ *    unreadable, absent or empty is `workspace-unreadable`, never a wider or
+ *    narrower scope (D-4676 (history-workspace-scope));
+ *  - otherwise the family (id, generation), the generation null when the
+ *    caller must take the id's newest family. */
+export function decideScope(i) {
+  if (!SCOPE_SOURCES.includes(i.source)) return refuseScope('no-identity');
+  if (!idOk(i.id)) return refuseScope('bad-id');
+  const { project, workspace, session } = i.flags;
+  if ((project ? 1 : 0) + (workspace ? 1 : 0) + (session !== null ? 1 : 0) > 1) return refuseScope('bad-args');
+  const ownProject = presenceText(i.reg.project);
+  const verdict = (kind, o) => ({
+    ok: true, kind, source: i.source, id: i.id, generation: i.generation.value, project: ownProject, workdir: null, ...o,
+  });
+  if (session !== null) {
+    if (!idOk(session)) return refuseScope('bad-id');
+    const theirsFile = i.reg.sessionProject ?? { state: 'absent' };
+    if (presenceUnreadable(i.reg.project) || presenceUnreadable(theirsFile)) return refuseScope('project-unreadable');
+    const theirs = presenceText(theirsFile);
+    if (ownProject === null || theirs !== ownProject) return refuseScope('cross-project');
+    return verdict('family', { id: session, generation: session === i.id ? i.generation.value : null });
+  }
+  if (project) {
+    if (ownProject === null) return refuseScope('project-unreadable');
+    return verdict('project', {});
+  }
+  if (workspace) {
+    const workdir = presenceText(i.reg.workdir);
+    if (workdir === null || ownProject === null) return refuseScope('workspace-unreadable');
+    return verdict('workspace', { workdir });
+  }
+  return verdict('family', {});
+}
+
+/** The shortest prefix of each id, its letter plus at least
+ *  NODE_ID_DISPLAY_MIN hex digits, that no other id in THE SAME SET shares (§6.1: unique within the scope). The
+ *  sorted neighbours bound it: an id needs one char past its longest common
+ *  prefix with either neighbour. */
+export function displayPrefixes(ids) {
+  const sorted = [...new Set(ids)].sort();
+  const lcp = (a, b) => {
+    let n = 0;
+    while (n < a.length && n < b.length && a[n] === b[n]) n += 1;
+    return n;
+  };
+  const out = new Map();
+  sorted.forEach((id, k) => {
+    const shared = Math.max(k > 0 ? lcp(id, sorted[k - 1]) : 0, k + 1 < sorted.length ? lcp(id, sorted[k + 1]) : 0);
+    out.set(id, id.slice(0, Math.min(id.length, Math.max(1 + NODE_ID_DISPLAY_MIN, shared + 1))));
+  });
+  return out;
+}
+
+/** An id or display prefix the session typed, resolved INSIDE its scope
+ *  (§8.2, RV19; D-4678 (history-scope-on-every-verb)): exactly one in-scope match
+ *  wins even when ids outside the scope share the prefix; none inside but
+ *  some outside is `out-of-scope` (exit 2), never `not-found` (exit 3);
+ *  several inside is `ambiguous`, which the CLI answers exit 2 `bad-args`
+ *  with the candidates as a hint. */
+export function resolveScopedId({ wanted, inScope, outOfScope }) {
+  if (typeof wanted !== 'string' || !/^[LN][0-9a-f]{6,20}$/.test(wanted)) return { kind: 'bad' };
+  const hits = [...new Set(inScope.filter((id) => id.startsWith(wanted)))];
+  if (hits.length === 1) return { kind: 'ok', id: hits[0] };
+  if (hits.length > 1) return { kind: 'ambiguous', candidates: hits.sort() };
+  return outOfScope.some((id) => id.startsWith(wanted)) ? { kind: 'out-of-scope' } : { kind: 'not-found' };
+}
+
+// derived from lossless-claw src/tools/lcm-describe-id.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const NODE_BARE_RE = /^[LN][0-9a-f]{6,20}…?$/;
+const NODE_TOKEN_RE = /(?<![A-Za-z0-9])[LN][0-9a-f]{6,20}(?![A-Za-z0-9])/g;
+const NODE_LOOSE_RE = /(?<![A-Za-z0-9])[LN][0-9A-Fa-f]{6,}(?![A-Za-z0-9])/i;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const NODE_CARD_RE = new RegExp(`^${escapeRe(CARD_PREFIX)}node (L[0-9a-f]{6,20})…?(?=\\s|$)`);
+
+/** `describe <id | pasted line>` (§8.4, §11 P28): a bare id or display
+ *  prefix (the card's trailing ellipsis tolerated), or a pasted card line,
+ *  whose structural id is the one right after `History: node ` (§8.6: the
+ *  same node is named again as the describe argument, and a parent beside
+ *  it, so counting mentions would refuse every card line). Free text is
+ *  refused rather than guessed: several distinct ids, an uppercase or
+ *  malformed one, or one id in prose each answer an error the CLI prints as
+ *  exit 2 `bad-args`. An all-zero body is never an id. The error text echoes
+ *  the input, so the CLI redacts it like any recalled field. */
+export function extractNodeId(raw) {
+  const trimmed = String(raw).trim();
+  if (NODE_BARE_RE.test(trimmed)) return validNodeId(trimmed.replace(/…$/, ''));
+  const card = NODE_CARD_RE.exec(trimmed);
+  if (card !== null) return validNodeId(card[1]);
+  const tokens = [...new Set(trimmed.match(NODE_TOKEN_RE) ?? [])];
+  if (tokens.length > 1) {
+    return { ok: false, error: `input names several node ids (${tokens.join(', ')}); give one bare id or one pasted ${CARD_PREFIX.trim()} line` };
+  }
+  const loose = NODE_LOOSE_RE.exec(trimmed)?.[0];
+  if (loose === undefined) return { ok: false, error: `not a node id: ${raw}` };
+  const checked = validNodeId(loose);
+  if (!checked.ok) return checked;
+  if (!/^[LN][0-9a-f]{6,20}$/.test(loose)) {
+    return { ok: false, error: `malformed node id: ${loose}; an id is L or N plus 6 to 20 lowercase hex` };
+  }
+  return {
+    ok: false, error: `not a node id or a card line: ${raw}`,
+    hint: `give the bare id (${loose}) or paste the whole ${CARD_PREFIX.trim()} line`,
+  };
+}
+
+function validNodeId(id) {
+  return /^[LN]0+$/.test(id) ? { ok: false, error: `a node id cannot be all zeros: ${id}` } : { ok: true, id };
+}
+
+/** `~/.ccrc/history/recall-off/<id>` (§9.7). The id passes idOk BEFORE the
+ *  path exists, so `../x` can never name a file outside the store
+ *  (D-4170, C66). */
+export function recallOffPath(home, id) {
+  if (!idOk(id)) throw new TypeError(`recallOffPath: not a session id: ${JSON.stringify(id)}`);
+  return `${historyPaths(home).root}/${RECALL_OFF_DIR}/${id}`;
+}
+
+/** Whether `recall-off/<id>` holds this family (§9.7,
+ *  D-4680 (history-recall-off-generation)). Its content is the generation it was
+ *  assigned to (`''` for a legacy family): equal to the resolved generation
+ *  is `off` (exit 8, counted); another generation is `stale` (the id was
+ *  purged and reused: recall proceeds and the drain counts
+ *  `recall_off_stale`); absent is `none`. A file that exists but cannot be
+ *  read is `off`: the id WAS assigned an arm, so answering it as the
+ *  treatment arm would mix the eval's arms, while exit 8 only withholds
+ *  recall. `generation` is the RESOLVED family's: when resolveGeneration
+ *  answers `via: 'newest'`, the caller finds the id's newest family first
+ *  and passes ITS generation: `''` only when that family is legacy or the
+ *  store holds no family of the id, never resolveGeneration's unresolved
+ *  `value ?? ''` before the family is known (§8.2, §8.8, §9.7). */
+export function decideRecallOff({ file, generation }) {
+  if (file.state === 'absent') return 'none';
+  if (file.state !== 'value') return 'off';
+  return file.value.trim() === generation ? 'off' : 'stale';
+}

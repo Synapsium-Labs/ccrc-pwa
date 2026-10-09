@@ -35,6 +35,7 @@ import * as libRedact from '../../ccd/history/lib.mjs';
 import * as historyCrypto from 'node:crypto';
 import * as libExport from '../../ccd/history/lib.mjs';
 import * as healthLib from '../../ccd/history/lib.mjs';
+import * as libScope from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -3297,5 +3298,215 @@ describe('phraseValues: the same-tick phrase path searches `fresh` only while a 
   it.each(ROWS)('%s', (_name, mark, text, want) => {
     const state = healthLib.parseRederiveState(text);
     expect(healthLib.phraseValues(mark, state, values, fresh)).toBe(want);
+  });
+});
+
+// ===========================================================================
+// W1-B2 Task 1: identity, scope and ids (spec §8.2, §6.1, §6.9, §6.10, §8.6,
+// §9.7), in-process on lib.mjs alone. C50 is owned here; the CLI halves of
+// C3, C4, C5, C29, C39, C46-C48, C53, C54, C66-C68 are Tasks 10-16's.
+// ===========================================================================
+describe('decideIdentity: the id comes from tmux, with -t, and must be cc-<id> (spec 8.2)', () => {
+  const ran = (stdout: string, o: Partial<libScope.TmuxRead> = {}): libScope.TmuxRead => ({ settled: true, status: 0, stdout, ...o });
+  it('a cc- session name is stripped to its id, the trailing newline dropped', () => {
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran('cc-claude-a-demo\n') })).toEqual({ ok: true, id: 'claude-a-demo' });
+    expect(libScope.decideIdentity({ pane: '%12', tmux: ran('cc-a.b.c') })).toEqual({ ok: true, id: 'a.b.c' });
+  });
+  it('no pane, a pane that is not %<n>, or a tmux run that never settled or failed is no-identity', () => {
+    const noId = { ok: false, rc: 2, reason: 'no-identity' };
+    expect(libScope.decideIdentity({ pane: null, tmux: null })).toEqual(noId);
+    expect(libScope.decideIdentity({ pane: '%x', tmux: ran('cc-a') })).toEqual(noId);
+    expect(libScope.decideIdentity({ pane: '3', tmux: ran('cc-a') })).toEqual(noId);
+    expect(libScope.decideIdentity({ pane: '%3', tmux: null })).toEqual(noId);
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran('', { settled: false, status: null }) })).toEqual(noId);
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran('cc-a\n', { status: 1 }) })).toEqual(noId);
+  });
+  it('a session not named cc-<something> is no-identity, never the most recent session', () => {
+    const noId = { ok: false, rc: 2, reason: 'no-identity' };
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran('main\n') })).toEqual(noId);
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran('cc-\n') })).toEqual(noId);
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran('xcc-a\n') })).toEqual(noId);
+  });
+  it('a stripped id outside the id grammar is bad-id, before any path is formed (C66 pure half)', () => {
+    const badId = { ok: false, rc: 2, reason: 'bad-id' };
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran('cc-..\n') })).toEqual(badId);
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran('cc-a/b\n') })).toEqual(badId);
+    expect(libScope.decideIdentity({ pane: '%3', tmux: ran(`cc-${'x'.repeat(libScope.SPOOL_ID_MAX + 1)}\n`) })).toEqual(badId);
+  });
+});
+
+describe('resolveGeneration and decideHarness (spec 8.2, 6.10)', () => {
+  const G = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G2 = '0189abcd-1234-4678-9abc-ba9876543210';
+  it("the env generation wins when it has the uuid grammar; else the registry's; else the id's newest family", () => {
+    expect(libScope.resolveGeneration({ envGen: G, regGen: { state: 'value', value: G2 } })).toEqual({ value: G, via: 'env' });
+    expect(libScope.resolveGeneration({ envGen: null, regGen: { state: 'value', value: `${G2}\n` } })).toEqual({ value: G2, via: 'registry' });
+    expect(libScope.resolveGeneration({ envGen: 'not-a-uuid', regGen: { state: 'value', value: G2 } })).toEqual({ value: G2, via: 'registry' });
+    for (const regGen of [{ state: 'absent' }, { state: 'unreadable' }, { state: 'value', value: 'garbled' }] as const) {
+      expect(libScope.resolveGeneration({ envGen: null, regGen })).toEqual({ value: null, via: 'newest' });
+    }
+  });
+  it('an absent harness is claude-code, the one HARNESS_TABLE row; a listed value reads', () => {
+    expect(libScope.decideHarness({ state: 'absent' })).toEqual({ ok: true, harness: 'claude-code' });
+    expect(libScope.decideHarness({ state: 'value', value: 'claude-code\n' })).toEqual({ ok: true, harness: 'claude-code' });
+  });
+  it('a harness with no table row is harness-unsupported, and an unreadable one harness-unreadable (C54, C67 pure halves)', () => {
+    expect(libScope.decideHarness({ state: 'value', value: 'codex' })).toEqual({ ok: false, rc: 2, reason: 'harness-unsupported' });
+    expect(libScope.decideHarness({ state: 'value', value: '' })).toEqual({ ok: false, rc: 2, reason: 'harness-unsupported' });
+    expect(libScope.decideHarness({ state: 'unreadable' })).toEqual({ ok: false, rc: 2, reason: 'harness-unreadable' });
+  });
+});
+
+describe('decideScope: the scope source is data, and every widening is decided once (spec 8.2, 6.9; C50)', () => {
+  const G = '0189abcd-1234-4678-9abc-0123456789ab';
+  const v = (value: string): libScope.Presence<string> => ({ state: 'value', value });
+  const unreadable: libScope.Presence<string> = { state: 'unreadable' };
+  const absent: libScope.Presence<string> = { state: 'absent' };
+  const base = (o: Partial<libScope.ScopeInputs> = {}): libScope.ScopeInputs => ({
+    source: 'tmux', id: 'claude-a-demo', generation: { value: G, via: 'env' },
+    flags: { project: false, workspace: false, session: null },
+    reg: { project: v('demo'), workdir: v('/home/u/tree/demo'), sessionProject: null },
+    ...o,
+  });
+  /** One row per verdict the CLI must reproduce: the C50 table. */
+  const TABLE: ReadonlyArray<readonly [string, libScope.ScopeInputs, unknown]> = [
+    ['family by default', base(), { ok: true, kind: 'family', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: null }],
+    ['family, newest generation', base({ generation: { value: null, via: 'newest' } }),
+      { ok: true, kind: 'family', source: 'tmux', id: 'claude-a-demo', generation: null, project: 'demo', workdir: null }],
+    ['--project', base({ flags: { project: true, workspace: false, session: null } }),
+      { ok: true, kind: 'project', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: null }],
+    ['--workspace', base({ flags: { project: false, workspace: true, session: null } }),
+      { ok: true, kind: 'workspace', source: 'tmux', id: 'claude-a-demo', generation: G, project: 'demo', workdir: '/home/u/tree/demo' }],
+    ['--session, same project', base({ flags: { project: false, workspace: false, session: 'claude-b-demo' }, reg: { project: v('demo'), workdir: v('/w'), sessionProject: v('demo\n') } }),
+      { ok: true, kind: 'family', source: 'tmux', id: 'claude-b-demo', generation: null, project: 'demo', workdir: null }],
+    ['--session, another project (C5)', base({ flags: { project: false, workspace: false, session: 'claude-b-other' }, reg: { project: v('demo'), workdir: v('/w'), sessionProject: v('other') } }),
+      { ok: false, rc: 2, reason: 'cross-project' }],
+    ['--session ..', base({ flags: { project: false, workspace: false, session: '..' } }), { ok: false, rc: 2, reason: 'bad-id' }],
+    ['--session with its project unreadable', base({ flags: { project: false, workspace: false, session: 'claude-b-demo' }, reg: { project: v('demo'), workdir: v('/w'), sessionProject: unreadable } }),
+      { ok: false, rc: 2, reason: 'project-unreadable' }],
+    ['--session with this project unreadable', base({ flags: { project: false, workspace: false, session: 'claude-b-demo' }, reg: { project: unreadable, workdir: v('/w'), sessionProject: v('demo') } }),
+      { ok: false, rc: 2, reason: 'project-unreadable' }],
+    ['--session whose project file is absent (C5, IV5: never project-unreadable)', base({ flags: { project: false, workspace: false, session: 'claude-b-gone' }, reg: { project: v('demo'), workdir: v('/w'), sessionProject: absent } }),
+      { ok: false, rc: 2, reason: 'cross-project' }],
+    ['--session with this project absent (C5)', base({ flags: { project: false, workspace: false, session: 'claude-b-demo' }, reg: { project: absent, workdir: v('/w'), sessionProject: v('demo') } }),
+      { ok: false, rc: 2, reason: 'cross-project' }],
+    ['--project with the project absent: refused like unreadable, a deliberate fold', base({ flags: { project: true, workspace: false, session: null }, reg: { project: absent, workdir: v('/w'), sessionProject: null } }),
+      { ok: false, rc: 2, reason: 'project-unreadable' }],
+    ['--project and --workspace together', base({ flags: { project: true, workspace: true, session: null } }), { ok: false, rc: 2, reason: 'bad-args' }],
+    ['--project and --session together', base({ flags: { project: true, workspace: false, session: 'claude-b-demo' } }), { ok: false, rc: 2, reason: 'bad-args' }],
+    ['--project with the project unreadable (C39)', base({ flags: { project: true, workspace: false, session: null }, reg: { project: unreadable, workdir: v('/w'), sessionProject: null } }),
+      { ok: false, rc: 2, reason: 'project-unreadable' }],
+    ['--workspace with the workdir unreadable (C53)', base({ flags: { project: false, workspace: true, session: null }, reg: { project: v('demo'), workdir: unreadable, sessionProject: null } }),
+      { ok: false, rc: 2, reason: 'workspace-unreadable' }],
+    ['--workspace with the project unreadable', base({ flags: { project: false, workspace: true, session: null }, reg: { project: unreadable, workdir: v('/w'), sessionProject: null } }),
+      { ok: false, rc: 2, reason: 'workspace-unreadable' }],
+    ['an id outside the grammar', base({ id: '../x' }), { ok: false, rc: 2, reason: 'bad-id' }],
+  ];
+  it.each(TABLE)('%s', (_name, input, want) => {
+    expect(libScope.decideScope(input)).toEqual(want);
+  });
+  it('C50: every SCOPE_SOURCES member answers the same table, and a source outside it is refused, never defaulted', () => {
+    expect(libScope.SCOPE_SOURCES.length, 'SCOPE_SOURCES is empty').toBeGreaterThan(0);
+    for (const source of libScope.SCOPE_SOURCES) {
+      for (const [name, input, want] of TABLE) {
+        const got = libScope.decideScope({ ...input, source });
+        expect(got, `${source}: ${name}`).toEqual(typeof want === 'object' && want !== null && (want as { ok: boolean }).ok ? { ...(want as object), source } : want);
+      }
+    }
+    for (const source of ['env', 'x', '', 'TMUX'].filter((s) => !(libScope.SCOPE_SOURCES as readonly string[]).includes(s))) {
+      for (const [name, input] of TABLE) {
+        expect(libScope.decideScope({ ...input, source }), `${source}: ${name}`).toEqual({ ok: false, rc: 2, reason: 'no-identity' });
+      }
+    }
+  });
+});
+
+describe('display prefixes and in-scope id resolution (spec 6.1, 8.2 RV19)', () => {
+  const A = 'L03a9c000000000000001';
+  const B = 'L03a9c000000000000002';
+  const C = 'L7e0c1d2e3f40516273a8';
+  const P = 'N7c1e2a0b1c2d3e4f5a6b';
+  it('ids are L or N plus 20 hex', () => {
+    for (const id of [A, B, C, P]) expect(libScope.HISTORY_NODE_ID_RE.test(id), id).toBe(true);
+    expect(libScope.HISTORY_NODE_ID_RE.test('L03a9c')).toBe(false);
+  });
+  it('the prefix is the shortest unique one within the set, never under the letter plus 6 hex', () => {
+    const p = libScope.displayPrefixes([A, B, C, P]);
+    expect(p.get(C)).toBe('L7e0c1d');
+    expect(p.get(P)).toBe('N7c1e2a');
+    expect(p.get(A)).toBe('L03a9c000000000000001');
+    expect(p.get(B)).toBe('L03a9c000000000000002');
+    expect(libScope.displayPrefixes([C]).get(C)).toBe('L7e0c1d');
+    expect(libScope.NODE_ID_DISPLAY_MIN).toBe(6);
+  });
+  it('one in-scope match wins even when an out-of-scope id shares the prefix', () => {
+    expect(libScope.resolveScopedId({ wanted: 'L7e0c1d', inScope: [C], outOfScope: ['L7e0c1dffffffffffffff'] })).toEqual({ kind: 'ok', id: C });
+  });
+  it('no in-scope match but an out-of-scope one is out-of-scope, never not-found (C29 pure half)', () => {
+    expect(libScope.resolveScopedId({ wanted: 'L7e0c1d', inScope: [A], outOfScope: [C] })).toEqual({ kind: 'out-of-scope' });
+    expect(libScope.resolveScopedId({ wanted: 'L7e0c1d', inScope: [A], outOfScope: [] })).toEqual({ kind: 'not-found' });
+  });
+  it('several in-scope matches are ambiguous, naming them; a malformed id is bad', () => {
+    expect(libScope.resolveScopedId({ wanted: 'L03a9c0', inScope: [B, A], outOfScope: [] })).toEqual({ kind: 'ambiguous', candidates: [A, B] });
+    expect(libScope.resolveScopedId({ wanted: 'L03a9c', inScope: [A], outOfScope: [] })).toEqual({ kind: 'bad' });
+    expect(libScope.resolveScopedId({ wanted: 'X03a9c0', inScope: [A], outOfScope: [] })).toEqual({ kind: 'bad' });
+  });
+});
+
+describe('extractNodeId: a bare id or one pasted card line (spec 8.4 describe, 8.6; P28)', () => {
+  const CARD = 'History: node L03a9c0… (this compaction) · parent N7c1e2a… · ~/.local/bin/ccrc history describe L03a9c0';
+  it('a bare id or display prefix passes, the card ellipsis tolerated', () => {
+    expect(libScope.extractNodeId('L03a9c000000000000001')).toEqual({ ok: true, id: 'L03a9c000000000000001' });
+    expect(libScope.extractNodeId('  N7c1e2a  ')).toEqual({ ok: true, id: 'N7c1e2a' });
+    expect(libScope.extractNodeId('L03a9c0…')).toEqual({ ok: true, id: 'L03a9c0' });
+  });
+  it("a card line's structural id is the one after 'History: node ', though it names three", () => {
+    expect(libScope.extractNodeId(CARD)).toEqual({ ok: true, id: 'L03a9c0' });
+    expect(libScope.extractNodeId(`${CARD}\nand some trailing text`)).toEqual({ ok: true, id: 'L03a9c0' });
+    expect(libScope.extractNodeId('History: node L03a9c0… (this compaction) · ~/.local/bin/ccrc history describe L03a9c0')).toEqual({ ok: true, id: 'L03a9c0' });
+  });
+  it('free text with several distinct ids is refused, not guessed', () => {
+    const r = libScope.extractNodeId('compare L03a9c0 with L7e0c1d please');
+    expect(r.ok).toBe(false);
+    expect(r).toMatchObject({ error: expect.stringContaining('several node ids') });
+  });
+  it('one id inside prose is refused with a hint naming the bare id', () => {
+    expect(libScope.extractNodeId('look at L03a9c0 again')).toEqual({
+      ok: false, error: 'not a node id or a card line: look at L03a9c0 again',
+      hint: 'give the bare id (L03a9c0) or paste the whole History: line',
+    });
+  });
+  it('an uppercase, an all-zero, a too-short or a missing id is refused', () => {
+    expect(libScope.extractNodeId('L03A9C0')).toMatchObject({ ok: false, error: expect.stringContaining('malformed node id') });
+    expect(libScope.extractNodeId('L000000')).toMatchObject({ ok: false, error: expect.stringContaining('all zeros') });
+    expect(libScope.extractNodeId('L03a9')).toMatchObject({ ok: false, error: 'not a node id: L03a9' });
+    expect(libScope.extractNodeId('')).toMatchObject({ ok: false });
+  });
+});
+
+describe('recall-off: the path is formed only from a checked id, and the file names one family (spec 9.7)', () => {
+  const G = '0189abcd-1234-4678-9abc-0123456789ab';
+  const G2 = '0189abcd-1234-4678-9abc-ba9876543210';
+  it('the path sits under the history root, spelled once', () => {
+    expect(libScope.recallOffPath('/home/u', 'claude-a-demo')).toBe('/home/u/.ccrc/history/recall-off/claude-a-demo');
+    expect(libScope.RECALL_OFF_DIR).toBe('recall-off');
+  });
+  it('an id outside the grammar never becomes a path (C66 pure half)', () => {
+    for (const id of ['..', '.', '../x', 'a/b', '', 'x'.repeat(libScope.SPOOL_ID_MAX + 1)]) {
+      expect(() => libScope.recallOffPath('/home/u', id), JSON.stringify(id)).toThrow(TypeError);
+    }
+  });
+  it('content equal to the resolved generation is off; another generation is stale; absent is none', () => {
+    expect(libScope.decideRecallOff({ file: { state: 'value', value: `${G}\n` }, generation: G })).toBe('off');
+    expect(libScope.decideRecallOff({ file: { state: 'value', value: '' }, generation: '' })).toBe('off');
+    expect(libScope.decideRecallOff({ file: { state: 'value', value: G2 }, generation: G })).toBe('stale');
+    expect(libScope.decideRecallOff({ file: { state: 'value', value: '' }, generation: G })).toBe('stale');
+    // Why the caller passes the RESOLVED family's generation (R-recalloff): an unresolved `''`
+    // against a file holding G answers stale, so recall would run for an id whose arm is off.
+    expect(libScope.decideRecallOff({ file: { state: 'value', value: G }, generation: '' })).toBe('stale');
+    expect(libScope.decideRecallOff({ file: { state: 'absent' }, generation: G })).toBe('none');
+  });
+  it('an unreadable file holds the arm (off), never silently recalls', () => {
+    expect(libScope.decideRecallOff({ file: { state: 'unreadable' }, generation: G })).toBe('off');
   });
 });

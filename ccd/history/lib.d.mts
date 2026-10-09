@@ -425,3 +425,37 @@ export function modeWantOf(rel: string, kind: 'dir' | 'file'): '0600' | '0700' |
 export function modesWrongOf(entries: readonly ModeEntry[]): ModeWrong[];
 export function journalHeldTooLong(oldestUnjournaledMs: number | null, nowMs: number): boolean;
 export function deriveHealth(h: HealthInputs): HealthResult;
+
+// --- W1-B2 Task 1: identity, scope and ids (spec §8.2, §6.1, §6.9, §6.10, §8.6, §9.7)
+export type ScopeKind = 'family' | 'project' | 'workspace';
+export const SCOPE_KINDS: readonly ['family', 'project', 'workspace'];
+export const NODE_ID_DISPLAY_MIN: 6;
+export const HISTORY_NODE_ID_RE: RegExp;
+export const RECALL_OFF_DIR: 'recall-off';
+export interface ScopeRefusal<R extends string> { ok: false; rc: 2; reason: R }
+export interface TmuxRead { settled: boolean; status: number | null; stdout: string }
+export function decideIdentity(i: { pane: string | null; tmux: TmuxRead | null }):
+  { ok: true; id: string } | ScopeRefusal<'no-identity' | 'bad-id'>;
+export interface GenerationChoice { value: string | null; via: 'env' | 'registry' | 'newest' }
+export function resolveGeneration(i: { envGen: string | null; regGen: Presence<string> }): GenerationChoice;
+export function decideHarness(p: Presence<string>):
+  { ok: true; harness: string } | ScopeRefusal<'harness-unsupported' | 'harness-unreadable'>;
+export interface ScopeInputs {
+  source: string;
+  id: string;
+  generation: GenerationChoice;
+  flags: { project: boolean; workspace: boolean; session: string | null };
+  reg: { project: Presence<string>; workdir: Presence<string>; sessionProject: Presence<string> | null };
+}
+export type ScopeVerdict =
+  | ScopeRefusal<'no-identity' | 'bad-args' | 'bad-id' | 'cross-project' | 'project-unreadable' | 'workspace-unreadable'>
+  | { ok: true; kind: ScopeKind; source: string; id: string; generation: string | null; project: string | null; workdir: string | null };
+export function decideScope(i: ScopeInputs): ScopeVerdict;
+export function displayPrefixes(ids: readonly string[]): Map<string, string>;
+export type ScopedId =
+  | { kind: 'ok'; id: string } | { kind: 'out-of-scope' } | { kind: 'not-found' }
+  | { kind: 'ambiguous'; candidates: string[] } | { kind: 'bad' };
+export function resolveScopedId(i: { wanted: string; inScope: readonly string[]; outOfScope: readonly string[] }): ScopedId;
+export function extractNodeId(raw: string): { ok: true; id: string } | { ok: false; error: string; hint?: string };
+export function recallOffPath(home: string, id: string): string;
+export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';
