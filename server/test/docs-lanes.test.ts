@@ -734,3 +734,28 @@ describe('W3 T7: the fetch lane and the read lane are separate (section 6.4: fet
     expect(bf.started()).toBe(DOCS_FETCH_GLOBAL);
   });
 });
+
+describe('FR1 review F6: a settled flight detaches its joiners, so a joiner that goes later touches nothing of the dead flight', () => {
+  it.each(['fulfilled', 'rejected'] as const)('a joiner whose signal aborts AFTER a %s flight settled leaves the flight\'s own signal unaborted', async (how) => {
+    const flights = docsFlights();
+    const b = blocker<string>();
+    const joiner = new AbortController();
+    let flight: AbortSignal | undefined;
+    const settled = flights.join('k', joiner.signal, (s) => {
+      flight = s;
+      return b.exec();
+    });
+    if (how === 'fulfilled') {
+      b.release(0, 'v');
+      await settled;
+    } else {
+      b.fail(0, new Error('boom'));
+      await expect(settled).rejects.toThrow('boom');
+    }
+    await flush();
+    expect(flights.size()).toBe(0);
+    expect(flight?.aborted).toBe(false);
+    joiner.abort();
+    expect(flight?.aborted, 'the settled flight kept a listener on its joiner').toBe(false);
+  });
+});

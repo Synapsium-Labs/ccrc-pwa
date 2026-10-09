@@ -1490,3 +1490,57 @@ describe('FR1 review F1: a committed show line that passes check 8 and carries a
     expect(warn).toHaveBeenCalledWith('ccrc-server: docs show answer failed its shape check');
   });
 });
+
+describe('FR1 review F5: a read whose every requester left is taken from Fastify and its socket ended, never answered late', () => {
+  it('a queued tree GET whose response closes unfinished is dequeued, its reply hijacked and its raw response destroyed, and no hook runs for it', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown): void => { unhandled.push(e); };
+    process.on('unhandledRejection', onUnhandled);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const b = blocker<CcdResult>();
+      const rec = scripted(() => b.exec());
+      const late: string[] = [];
+      let captured: import('fastify').FastifyReply | undefined;
+      const { app, docs } = await open({
+        run: rec.run,
+        root: (root) => {
+          root.addHook('onRequest', async (req, reply) => {
+            if (req.headers['x-test-capture'] !== undefined) captured = reply;
+          });
+          root.addHook('onSend', async (req, _reply, payload) => {
+            if (req.headers['x-test-capture'] !== undefined) late.push('onSend');
+            return payload;
+          });
+          root.addHook('onResponse', async (req) => {
+            if (req.headers['x-test-capture'] !== undefined) late.push('onResponse');
+          });
+        },
+      });
+      const lane = nodeLanes(docs).read;
+      const held = ['a', 'b'].map((ref) => app.inject({ url: `/api/docs/demo/tree?ref=${ref}`, headers: PWA_HEADERS }));
+      await until(() => rec.calls.length === 2, 'two tree execs');
+      const third = app.inject({ url: '/api/docs/demo/tree?ref=c', headers: { ...PWA_HEADERS, 'x-test-capture': '1' } });
+      third.then(() => undefined, () => undefined);
+      await until(() => lane.load().queued === 1 && captured !== undefined, 'the third read queued');
+      const reply = captured as import('fastify').FastifyReply;
+      expect(reply.sent).toBe(false);
+      expect(reply.raw.destroyed).toBe(false);
+      // The client's response closes unfinished while its socket is still open: the requester has gone.
+      reply.raw.emit('close');
+      await until(() => lane.load().queued === 0, 'the read dequeued');
+      await until(() => reply.sent, 'the reply taken from Fastify');
+      expect(reply.raw.destroyed).toBe(true);
+      b.release(0, faultRes());
+      b.release(1, faultRes());
+      await Promise.all(held);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(rec.calls).toHaveLength(2);
+      expect(late).toEqual([]);
+      expect(unhandled).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});
