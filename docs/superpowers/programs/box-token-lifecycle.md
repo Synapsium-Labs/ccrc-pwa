@@ -294,6 +294,18 @@ spec's after wave 1.
   the worker (4091). B6's import line and `UpdatesView` field are disjoint from wave 7's regions. The import moves
   every README `shared/api.ts` anchor by one, so whichever PR lands second re-points them by content and re-runs the
   session-hook citation cases.
+- **2026-10-09 07:42 UTC: part A measured live, read-only, on v0.0.133. It behaves as the plan says.**
+  - **Server log:** the server restarted at 07:05:29. It logged "box token: adopted the hand-made value … the first
+    rotation is owed", then "held: update-in-flight (server)", then at 07:07:29 "held: verb-missing (fleet)".
+  - **`box-token.json`** (no secret; 0600) reads `origin: adopted`, `rotationOwed: true`, `owedWhy: adopted` and
+    `hold: verb-missing`. It shows 0 failures, 0 pending, no previous, no fleet confirmation and no sync. Both counters
+    are 0, so no retired or previous value has been presented.
+  - **The token files:** no `box-token-retired.json` exists, and `mail.token` is untouched (Sep 09). On the fleet box,
+    neither `box-token-generation` nor `token-sync.json` exists. The source, fleet and server copies are still equal,
+    measured by digest comparison only.
+  - **No 401:** the box-token lanes still answer 200 (`GET /api/ledger`, mail list). The agent restarted cleanly at
+    07:03, and the server logged no notify refusal. `/api/notify`'s answers themselves were not measured.
+  - So part A rotates nothing live. The leaked value stays valid until part B's merge arms the first rotation.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
