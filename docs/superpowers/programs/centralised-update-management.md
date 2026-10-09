@@ -1170,6 +1170,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - **2026-10-09 11:42 UTC: v0.0.136 auto-converged unattended.** No action was taken.
       - STATUS: fleet and server v0.0.136, newest v0.0.136, backups fleet 147M/server 617M, disk free fleet 215G/work
         volume 263G/server 33G, no anomalies.
+    - **2026-10-09 14:42 UTC: v0.0.137 published at 14:32:53; not yet moved, inside the usual lag.** It is #325, the
+      route read-back fix in `ccd/ccd`, merged at 14:31:58. No action was taken.
+      - **Wave 15 (run 300) is still held, by live claims now rather than by open PRs.** #325, #315 and #326 have all
+        landed. But claim 1132 (child reclamation's wave 7, run 347) holds `ccd/ccd` and
+        `server/test/macos-platform.test.ts`. Claim 1129 (box-token part B, run 350) holds `ccd/ccrc`. `ccd/ccd` edits
+        merge serially, so wave 15 waits for wave 7's to land.
+      - STATUS: fleet and server v0.0.136, newest v0.0.137, backups fleet 147M/server 617M, disk free fleet 210G/work
+        volume 258G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
