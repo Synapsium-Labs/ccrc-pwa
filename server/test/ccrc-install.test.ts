@@ -8282,7 +8282,11 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  RE-MEASURED again when doctor gained its `history` check (spec 2026-10-05
  *  §9.6): the three maps each gained `"history": "PASS"` (`first-tick-pending`:
  *  the shim landed seconds before, and no sweep has ticked) and nothing else
- *  moved.
+ *  moved. RE-MEASURED once more
+ *  when doctor gained `box-token` (box-token lifecycle Task B5), by the same case: the
+ *  three maps each gained `"box-token": "SKIP"` (wave 1 reports a box with no token
+ *  subject, and every state that will be a FAIL or WARN once armed, as SKIP; the live
+ *  shape's own word was not read off the case) and nothing else moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8302,6 +8306,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
+        "box-token": "SKIP",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
@@ -8352,6 +8357,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
+        "box-token": "SKIP",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
@@ -8472,6 +8478,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
     "classes": {
       "accounts": "PASS",
       "auth": "SKIP",
+      "box-token": "SKIP",
       "build": "PASS",
       "caddy": "SKIP",
       "caddyfile": "SKIP",
