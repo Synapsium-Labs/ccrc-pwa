@@ -8,7 +8,9 @@ own process start (D-3526) and rules 2–3 as re-planned on its reader, 2026-09-
 rev 7 counts rule 3's rescues on their landing and restates §9's stage-4 target (review 246, ruled 2026-10-03),
 and records stage 7 as planned by its wave-3 plan, 2026-10-04 · rev 8 ships stage 6's sweep with its stop SHADOWED
 until the operator arms it, BEFORE the spawn variable (which follows baseline B's week), and defines §9's stage-6
-counts as measured (wave 4, 2026-10-05) ·
+counts as measured (wave 4, 2026-10-05) · rev 9 amends stage 1 for issue #317 (D-4500, D-4501): a link that
+`EXDEV` refused routes through a read-write mount of the whole filesystem, proved by inode, and a copy names its cause
+and its bytes (§1.2 item 1, §5.1, §8, §9; 2026-10-08) ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -99,7 +101,9 @@ Six mechanisms, read off the source at `bbb5e714`:
    onto an existing one nests it) and avoids a half-merged tree; its own comment records that a partially built
    destination makes the skip permanent. Journals and agent logs are appended in place (§5.1).
    Every account root is its own bind mount of one volume, and `link(2)` across two mounts answers `EXDEV`, so
-   every first carry since 2026-09-22 is `(copy)`, never `(link)`.
+   every first carry since 2026-09-22 is `(copy)`, never `(link)`. *(History, dated: true from 2026-09-22 until
+   D-4500, 2026-10-08. Since then a failed link routes through a read-write mount of the whole volume that exposes
+   both roots, proved by inode, and copies only where none exists, saying why (§5.1).)*
 2. **The restarted session is told nothing specific.** The redrive prompt is one constant (`RESUME_PROMPT`,
    `ccd/ccd:1208`): background work "is gone: re-check their journals". Resuming by run id works across accounts
    when the journal is present; the eight journal-missing refusals are the carry, and the five scriptPath
@@ -226,15 +230,15 @@ in 4,447 files, and `workflows/<runId>.json` is written whole at the run's end i
 fallbacks come from the mounts, not the device: every account root is its own bind mount of one volume, `link(2)`
 across two mounts answers `EXDEV`, every dated `(copy)` involved a root that was already a mount (262 of 262), and
 every dated `(link)` ran while both roots were plain directories (163 of 163). Since 2026-09-22 every first carry is
-`(copy)`, so a file carried since then never shares an inode with its source. The rules below are written for
-append-in-place logs and rewritten records.
+`(copy)`, so a file carried since then never shares an inode with its source (until D-4500, below). The rules below
+are written for append-in-place logs and rewritten records.
 
 In `_swap_carry_sidecars`, the branch taken when the destination exists walks the source tree file by file and
 decides on size, modification time and content; a shared inode can answer only "equal":
 
 | Source vs destination | Action | Counted |
 |---|---|---|
-| absent at destination | hardlink, or copy when linking fails | `+N` |
+| absent at destination | hardlink; on `EXDEV`, a hardlink through a verified common mount (D-4500); else a copy, counted by cause (D-4501) | `+N` |
 | the same inode; or equal size and equal nanosecond mtime; or equal bytes | nothing | no |
 | append-only log (`*.jsonl`), destination a strict byte-prefix of a larger source | replace by temp file and rename | `~R` |
 | append-only log, destination longer than source and source its prefix | keep destination (it is further along) | no |
@@ -250,9 +254,27 @@ the fleet box it takes the walk's read from p50 80 MiB / p90 764 MiB (bytes comp
 208 MiB, the bytes that are actually new.
 
 Nothing is deleted. The first carry to an account keeps today's path unchanged, including the anti-nesting guard
-and the clear-then-copy fallback. A destination left partial by an earlier failure is repaired by the walk rather
+and the clear-then-copy fallback (amended by D-4500, below: the direct `cp -al` is unchanged, but its failure now
+routes before it copies). A destination left partial by an earlier failure is repaired by the walk rather
 than kept forever. The log line becomes `sidecar <uuid> -> <dst> (merged +N ~R !D)`, and each `!D` adds a line
 `sidecar <uuid> diverged <kept> longer <longer>` naming the longer copy's path, which stage 3's manifest reads.
+
+**Amended 2026-10-08 (issue #317): a link `EXDEV` refused routes through a common mount (D-4500), and a copy says
+why and how much (D-4501).** `link(2)` answers `EXDEV` between two vfsmounts even on one superblock, so the bind-mount
+geometry above made every first carry copy and every merged absent file copy, silently. Since D-4500, when the
+direct link fails — the first carry's `cp -al`, or the walk's `os.link` with `EXDEV` (any other errno is
+`link-failed` and never routes) — ccd reads the kernel's own mount table (`/proc/self/mountinfo`), finds a
+read-write mount of the same filesystem under which both trees appear, and links through it only when each alias's
+`(st_dev, st_ino)` equals its original's. A mount stacked over an alias path, or one inside either tree, rules the
+alias out, and a read-only destination mount is `link-failed`, never routed around. The route runs only after a link
+has failed, so a box where linking works runs as before; a wrong table costs a copy, never a link into another tree.
+Every copy that remains names one cause from a closed vocabulary —
+`exdev-other-fs`, `exdev-no-root`, `root-unreachable`, `root-mismatch`, `root-failed`, `mounts-absent`,
+`mounts-unreadable`, `link-failed`, `route-error` — and its bytes (D-4501). The first carry logs `(link)`,
+`(link: via-mount)`, or `(copy: <cause> <bytes|?> bytes)`; a merge appends `, via-mount V` and one
+`, copy: <cause> <F> files <B> bytes` per cause to `(merged +N ~R !D[, deferred K])`; any copy says the same on
+stderr. A bare `(copy)` is what a carry before D-4501 wrote. Transcripts keep their copy semantics (they are
+appended to), `~R` replacements stay temp-and-rename copies, and the budget still prices an absent file at its size.
 
 **Bounded.** The walk reads both copies, where `(kept)` read nothing. It takes a box-wide non-blocking slot of
 its own, `$REG/.carry.lock`, inside the carry itself; park-and-wake R4's lock has not shipped. `_swap_carry_sidecars`
@@ -688,6 +710,15 @@ bound to a pane instance).
   spawn path; §9 measures `(kept: busy)`, `(kept: budget)`, `(kept: error)` and the `unmeasured` rate.
 - **Two different files of equal size and equal nanosecond mtime read as equal:** the quick check's named cost;
   equality is never decided on size alone, pinned.
+- **A stale, forged or overmounted mount table names the wrong alias** (D-4500): an alias is used only when its
+  `(st_dev, st_ino)` equals the original's for both trees, so the table can cost a copy, never a link into another
+  tree (pinned with a decoy of the right shape). The proof covers the two roots; beneath them, the alias shows the
+  same files only if the table lists every mount inside the trees, which the kernel's own table always does — a
+  hand-made `CCD_MOUNTINFO` that left one out could link the file such a mount hides (harness-only; production reads
+  `/proc/self/mountinfo`). The residue is TOCTOU: a mount between the proof and the link could still redirect it;
+  only root can make one, and the window is a few syscalls wide.
+- **The whole-volume mount is missing, read-only or not traversable for the caller:** every carry copies, as before
+  D-4500, but the log names it (`exdev-no-root`, `root-unreachable`) and §9 counts it.
 - **The model ignores the manifest:** counts reach the operator and the coordinator anyway; §9 retires prompt text
   that measures no change.
 - **A carried-in banner rescues a session that is not blocked:** the pane's own process start, with a swap after
@@ -719,7 +750,7 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 
 | Stage | Metric | Baseline | Target |
 |---|---|---|---|
-| 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0 |
+| 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals; sidecar bytes copied, by cause (D-4501: first carries, merged files, bytes) | 774 of 1,310, all by existence; 8; every first carry `(copy)` since 2026-09-22, unsized | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0; `exdev-*` at 0 on a box whose filesystem has a read-write mount exposing every account root |
 | 2 | spike outcome | — | decides stage 3 |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
 | 4 | sessions with a fourth auto-rescue in an hour that no chain wait preceded, counting rescues that landed and asking it only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace — rule 3's own gate; the raw count of sessions with 4 or more is reported beside it); chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner (since D-3526, only a landing whose Claude Code never came up); near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4), owed at the stage-4 reading, not re-measured for the restated metric; —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; reported; reported; reported; reported |
