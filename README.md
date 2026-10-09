@@ -2379,7 +2379,8 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
 
 A swap carries more than the transcript: beside it sits the session's sidecar directory — every subagent
 transcript, workflow journal and tool result it wrote. A first carry onto an account copies that tree whole
-(`cp -al`, falling back to `cp -a`; `swap.log` says `(link)` or `(copy)`). A return visit — a session carried back
+(`cp -al`, then the link route below, falling back to `cp -a`; `swap.log` says `(link)`, `(link: via-mount)` or
+`(copy: <cause> <bytes> bytes)`). A return visit — a session carried back
 onto an account it once left — used to find the directory already there and log `(kept)`, leaving everything
 written since on the source: 774 of 1,310 carries in the measured window, and every "journal not on disk" resume
 refusal measured came after `(kept)` carries only. Now the carry walks the source file by file and deletes
@@ -2397,6 +2398,36 @@ rest, newest first within each — so what does not fit is deferred whole to the
 the first action alone overruns the budget, or `(kept: error)` — no `flock`, no `python3`, a destination that is
 not a real directory, or the walker's own failure. `python3 deploy/measure-continuity.py --stage 1` reads it back,
 read-only.
+
+**A link that the mounts refuse goes through a common mount, and a copy says why (issue #317).** `link(2)` answers
+`EXDEV` between two mounts even when both are one filesystem, so on a box where each `~/.claude-*` is its own bind
+mount every carry used to copy. When a direct link fails — a first carry's `cp -al`, or the walk's link of an absent
+file, and then only for `EXDEV` — ccd reads the kernel's mount table (`/proc/self/mountinfo`), looks for a read-write
+mount of the same filesystem under which both trees appear, and links through it only when each alias is provably the
+same directory (equal device and inode). A mount stacked over the alias, or one inside either tree, rules it out, and
+a read-only destination mount is never routed around. Nothing is asked while linking works. A wrong table costs a copy,
+never a link into another tree: the inode proof covers both roots, and beneath them the alias shows the same files
+only if the table lists every mount inside the trees — the kernel's own table always does. A first carry that
+linked this way logs `(link: via-mount)`; a merge adds `, via-mount V`. Every copy that remains names its cause and
+its bytes — `(copy: <cause> <bytes> bytes)` (`?` when the tree could not be sized), and on a merge one
+`, copy: <cause> <F> files <B> bytes` per cause — with the same sentence on stderr. A bare `(copy)` is a line written
+before this change.
+
+| cause | what it means | the fix |
+|---|---|---|
+| `exdev-other-fs` | the two roots are on different filesystems (by `stat`, or their mounts name different devices) | put both roots on one filesystem |
+| `exdev-no-root` | separate mounts, and no read-write mount of that filesystem exposes both | mount the filesystem, or a directory above every account root, read-write at a second path |
+| `root-unreachable` | the alias could not be stat'ed | give the fleet user search permission along the common mount's path |
+| `root-mismatch` | the alias is another directory, or a mount sits inside a tree (also when one mount holds both trees) | inspect `findmnt`: a mount inside an account tree makes every carry of it copy; nothing was written through the alias |
+| `root-failed` | the link failed through a proved alias | check the filesystem is writable, and for EMLINK, ENOSPC or a quota |
+| `mounts-absent` | no mount table: expected on macOS; on Linux, no `/proc` | nothing on macOS; on Linux, mount `/proc` |
+| `mounts-unreadable` | the table could not be read, no line in it parses, or no mount in it holds a tree | check that the fleet user can read `/proc/self/mountinfo`; otherwise report it |
+| `link-failed` | the link failed on one mount for a reason other than `EXDEV` (EMLINK, ENOSPC, EPERM), or the destination's own mount is read-only | check the disk and the link counts, and whether the destination account root is mounted read-only |
+| `route-error` | `python3` is missing, the route program crashed, or it answered outside its shape | read the swap's stderr: `ccd: carry route failed:` or a traceback names a crash; with neither, install `python3` if the box has none, else report it (a malformed answer is a defect) |
+
+Transcripts still copy (they are appended to, so a shared inode would grow a conversation the other account never
+had). `--stage 1` counts the new forms: `link_via_mount`, `merged_via_mount`, `copy_by_cause` (first carries, merged
+files and bytes per cause), `copied_bytes`, `copy_legacy` for a bare `(copy)` and `copy_unsized` for `?`.
 
 ### Account health and the telemetry keepalive
 
