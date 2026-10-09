@@ -1,8 +1,9 @@
 // Settings screen (route `/settings`, centralised update management W3 —
-// design 2026-09-20 §13). Two sections and no more — Updates (the channel,
-// auto-install, *Check now*, the catalogue line, the release list, the node
-// inventory) and Notifications (the bell, release notifications, the
-// unarmed-exposure banner) — both shipped in this file, below the header
+// design 2026-09-20 §13). Updates (the channel, auto-install, *Check now*, the
+// catalogue line, the release list, the node inventory), the Box token card
+// (box-token lifecycle wave 1, Task B6: age, state, fleet confirmation,
+// transport, *Rotate now*) and Notifications (the bell, release notifications,
+// the unarmed-exposure banner) — all shipped in this file, below the header
 // (Tasks 7–10 of the W3 plan; fix rounds 1–2 widened several of their
 // guards in place — see the plan's `## Deviations found`, D-3315/D-3316).
 //
@@ -23,7 +24,8 @@ import { isManagedNode, planMove, rollbackBlockers, type MoveIntent, type Planne
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../fleet/updateAck';
 import { isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
-import { ApiError, api, moveSkipText, noBundleRollbackText, updateErrorText } from '../lib/api';
+import { ApiError, api, apiErrorText, moveSkipText, noBundleRollbackText, readBoxTokenView, updateErrorText } from '../lib/api';
+import type { BoxTokenView, RotateAnswer, TokenHold } from '../../../shared/box-token';
 import { readAuthStatus } from '../lib/auth';
 import { elapsedWords } from '../lib/elapsed';
 import { pushSupported } from '../lib/push';
@@ -663,6 +665,144 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
   );
 }
 
+// ── The box-token card (box-token lifecycle wave 1, Task B6; spec 4.7, D-4392) ──
+// A THIRD section, over the same one /api/updates poll: `view.boxToken`, read
+// through `readBoxTokenView` (lib/api.ts) and nothing else. Three rules it keeps,
+// each pinned in box-token-card.test.tsx:
+//   * THE SERVER'S WORDS ARE WHAT IS SHOWN. Phase, hold, owed reason, failure
+//     word and fleet word are the driver's; this block only puts them into
+//     sentences, keyed by the L0 types so a new word is a compile error here.
+//   * ABSENT AND MALFORMED ARE TWO SENTENCES. An older server sends no field; a
+//     field this build cannot read is "not reported". Neither offers the button.
+//   * NO VALUE, CODE OR HASH. The view carries none, and nothing here derives one.
+// "Rotate now" is the session-only `POST /api/token/rotate`; its refusals are
+// answers said in place, and the card re-polls after every tap.
+
+const BOX_TOKEN_HOLD_TEXT: Record<TokenHold, (node: string | null) => string> = {
+  'update-in-flight': (n) => `an update is in flight on ${n ?? 'a node'}`,
+  'agent-predates-op': () => 'fleet agent predates token-sync',
+  'verb-missing': (n) => `release not yet on ${n ?? 'the fleet box'} (its ccrc has no token verb)`,
+  'stale-client': (n) => `a stale ccrc-api on ${n ?? 'the fleet box'}`,
+  'fleet-rows': () => 'not exactly one reachable fleet node',
+  'node-id-unmeasured': (n) => `the node id of ${n ?? 'the fleet box'} is not measured`,
+  'link-down': () => 'the agent link is down',
+  'pending-cap': () => 'two handed-out values still await confirmation',
+  'no-coord': () => 'no coordination database',
+  'role-unrecorded': () => "this box's role is not recorded as both (CCRC_ROLE in ~/.ccrc/ccrc.env)",
+  'mint-failed': () => 'the server could not mint a value',
+};
+
+/** "held: …", the card's spelling of the server's hold word (spec 4.7's own examples). */
+export function boxTokenHoldText(hold: TokenHold, node: string | null): string {
+  return `held: ${BOX_TOKEN_HOLD_TEXT[hold](node)}`;
+}
+
+export function boxTokenStateText(v: BoxTokenView): string {
+  switch (v.phase) {
+    case 'unconfigured': return 'no current value';
+    case 'idle': return 'idle';
+    case 'staged': return 'rotating (a new value is staged)';
+    case 'handed-out': return 'rotating (handed out, awaiting the fleet box)';
+    case 'promoting': return 'rotating (promoting)';
+    case 'grace': return 'grace (the previous value is still accepted)';
+    case 'held': return v.hold !== null ? boxTokenHoldText(v.hold, v.holdNode) : 'held';
+    case 'failed': return `failed (${v.lastFailure ?? 'unknown'})`;
+  }
+}
+
+/** Plain http is said as unencrypted and still rotates (R2); `unmeasured` is never folded into https. */
+export function boxTokenTransportText(t: BoxTokenView['fleetTransport']): string {
+  if (t === null) return 'transport: no sync yet';
+  if (t === 'unmeasured') return 'transport: not measured';
+  return t === 'http' ? 'transport: http (unencrypted)' : 'transport: https';
+}
+
+const BOX_TOKEN_FLEET_TEXT: Record<BoxTokenView['fleetConfirmed'], string> = {
+  current: 'confirmed the current generation',
+  behind: 'behind (it holds an older generation)',
+  absent: 'no generation recorded on the fleet box',
+  unreadable: "the fleet box's generation file could not be read",
+  'own-write': 'this box writes the fleet copy itself',
+  unknown: 'not yet measured',
+};
+
+const BOX_TOKEN_ABSENT_TEXT = 'This server reports no box-token state.';
+const BOX_TOKEN_UNREADABLE_TEXT = "Box-token state: not reported (the server's answer could not be read).";
+const ROTATE_UNREADABLE_TEXT = "Asked — the server's answer could not be read; the card will re-check.";
+
+function rotateAnswerText(a: RotateAnswer | 'unreadable'): string {
+  if (a === 'unreadable') return ROTATE_UNREADABLE_TEXT;
+  if (a.ok) return a.outcome === 'started' ? 'Rotation started.' : 'Joined the rotation already running.';
+  if (a.error === 'held') return `Not started — ${boxTokenHoldText(a.hold, a.node)}`;
+  if (a.error === 'rate-limited') return `At most one Rotate now a minute — try again in ${a.retryAfterS} s.`;
+  return 'This server runs no box-token driver.';
+}
+
+function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number; reload: () => void }): ReactNode {
+  const titleId = useId();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const v = view.boxToken === undefined ? undefined : readBoxTokenView(view.boxToken);
+
+  const rotate = (): void => {
+    setBusy(true);
+    setNote(null);
+    void api.rotateBoxToken()
+      .then((a) => setNote(rotateAnswerText(a)), (err: unknown) => toast(apiErrorText(err), 'error'))
+      .finally(() => { setBusy(false); reload(); });
+  };
+
+  let body: ReactNode;
+  if (v === undefined) body = <p className="settings-note">{BOX_TOKEN_ABSENT_TEXT}</p>;
+  else if (v === null) body = <p className="settings-note">{BOX_TOKEN_UNREADABLE_TEXT}</p>;
+  else {
+    const lines: string[] = [`state: ${boxTokenStateText(v)}`];
+    lines.push(v.currentSeq !== null && v.currentSince !== null && isPlaceableInstant(v.currentSince)
+      ? `current value: generation #${v.currentSeq}, ${elapsedWords(now - v.currentSince)} old${v.origin === 'adopted' ? ' (hand-made, adopted)' : ''}`
+      : 'current value: none');
+    lines.push(v.lastRotationAt !== null && isPlaceableInstant(v.lastRotationAt)
+      ? `last rotation: ${elapsedWords(now - v.lastRotationAt)} ago` : 'last rotation: never');
+    if (v.rotationOwed) lines.push(`rotation owed: ${v.owedWhy ?? 'unspecified'}`);
+    lines.push(`fleet: ${BOX_TOKEN_FLEET_TEXT[v.fleetConfirmed]}`);
+    lines.push(boxTokenTransportText(v.fleetTransport));
+    if (v.lastSync !== null) lines.push(`last sync: ${v.lastSync.word} · ${dayClock(v.lastSync.at, now)}`);
+    lines.push(`previous still presented: ${v.previousPresented} · retired value presented: ${v.retiredPresented}`);
+    // Spec 10.3's proof that the leak is retired, shown where the coordinator reads it (plan assembly).
+    lines.push(`retired value refused: ${v.retiredRefused ? 'yes' : 'not yet'}`);
+    if (v.lastBootRecovery !== null) {
+      lines.push(`recovered at boot from the ${v.lastBootRecovery.source} file, ${dayClock(v.lastBootRecovery.at, now)}`);
+    }
+    if (v.fileProblem !== null) {
+      lines.push(`server token file: ${v.fileProblem.file} ${v.fileProblem.word} on re-read (the last good value is kept), ${dayClock(v.fileProblem.at, now)}`);
+    }
+    // One alert: three failures, or a stall that no failure counts (a hold standing for a day, a failed mint). Wave 1's
+    // doctor reports these as SKIP, which no exit code sees (plan assembly, review: the downside of the arms off).
+    const alert = v.banner
+      ? `Box-token rotation has failed ${v.failures} times in a row (last: ${v.lastFailure ?? 'unknown'}).`
+      : v.stalled?.why === 'mint-failed'
+        ? 'The server could not mint a box token; every box-token call is refused until a mint succeeds.'
+        : v.stalled?.why === 'owed'
+          ? `A box-token rotation has been owed for ${elapsedWords(now - v.stalled.since)} and has not completed${v.hold !== null ? ` (${boxTokenHoldText(v.hold, v.holdNode)})` : ''}.`
+          : null;
+    body = (
+      <>
+        {alert !== null && (
+          <div className="settings-unarmed" role="alert">{alert}</div>
+        )}
+        {lines.map((l) => <p key={l} className="settings-note">{l}</p>)}
+        <button type="button" className="btn-ghost settings-check" disabled={busy} onClick={rotate}>Rotate now</button>
+        {note !== null && <p className="settings-note" aria-live="polite">{note}</p>}
+      </>
+    );
+  }
+  return (
+    <section className="settings-section" aria-labelledby={titleId}>
+      <h2 id={titleId} className="settings-section-title">Box token</h2>
+      {body}
+    </section>
+  );
+}
+
 export function SettingsScreen(): ReactNode {
   // ONE poll and ONE clock for the whole screen: every section reads the same
   // answer (Tasks 7–10), so two sections can never disagree about the fleet.
@@ -678,6 +818,7 @@ export function SettingsScreen(): ReactNode {
       </header>
       <UnarmedExposureBanner />
       <UpdatesSection poll={poll} now={now} />
+      {poll.view !== null && <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />}
       <NotificationsSection view={poll.view} reload={poll.reload} />
     </div>
   );

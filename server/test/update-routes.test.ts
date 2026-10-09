@@ -39,6 +39,8 @@ import { spawnFromRunner } from './updateSpawnFake.js';
 import { REFRESH_MIN_INTERVAL_MS, parseIntentBody, toNodeWire } from '../src/update/routes.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { CatalogueState, NodeWire, UpdatesView } from '../../shared/api.js';
+import type { BoxTokenView } from '../../shared/box-token.js';
+import type { TokenRouteDriver } from '../src/token/routes.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -143,6 +145,7 @@ const open = async (
     // hence a factory, never a pre-built poller, for this one case.
     catalogueFactory?: (coord: CoordStore) => CataloguePoller;
     updateRunner?: LocalUpdateSpawn;
+    tokenDriver?: TokenRouteDriver;
   } = {},
 ): Promise<Opened> => {
   const home = mkTmp('ccrc-update-routes-');
@@ -165,6 +168,7 @@ const open = async (
     ...(o.catalogueFactory ? { catalogue: o.catalogueFactory(coord) } : {}),
     ...(o.push ? { push: o.push as never } : {}),
     ...(o.updateRunner ? { updateRunner: o.updateRunner } : {}),
+    ...(o.tokenDriver ? { tokenDriver: o.tokenDriver } : {}),
     // Task 11's `fleetState` fixture shape, disconnected: the sweep writes the
     // agent connection's row as unreachable on the sweep that sees it.
     ...(o.remote
@@ -303,6 +307,58 @@ describe('GET /api/updates', () => {
     // §18 "stampRead keeps EACCES from unversioned": the columns may still hold
     // an old stamp, and the wire must not present it as this node's build.
     expect(toNodeWire({ ...row, stampRead: 'unreadable' }).current).toBeNull();
+  });
+});
+
+// Box-token lifecycle wave 1, Task B6 (D-4392): the console's box-token card
+// rides `GET /api/updates` as ONE optional fleet-wide object, produced by the
+// driver's `view()` and nothing else. The driver here is a fake: the route only
+// reads `view()`, at request time, and never decides what it says.
+const BT_VIEW: BoxTokenView = {
+  phase: 'idle', origin: 'rotated', currentSeq: 3, currentSince: 5_000, lastRotationAt: 5_000,
+  rotationOwed: false, owedWhy: null, hold: null, holdNode: null, failures: 0, lastFailure: null, banner: false,
+  fleetConfirmed: 'current', fleetTransport: 'https', lastSync: { at: 5_000, word: 'synced' },
+  previousPresented: 0, retiredPresented: 0, retiredRefused: true, lastBootRecovery: null, role: 'server',
+  stalled: null, fileProblem: null,
+};
+const fakeTokenDriver = (views: BoxTokenView[]): TokenRouteDriver & { calls: () => number } => {
+  let n = 0;
+  return {
+    door: null as never,
+    commitHandOut: async () => { throw new Error('the update route must never hand out'); },
+    rotateNow: async () => { throw new Error('the update route must never rotate'); },
+    view: () => views[Math.min(n++, views.length - 1)]!,
+    calls: () => n,
+  };
+};
+
+describe('GET /api/updates carries the box-token view (Task B6, D-4392)', () => {
+  it('a server with a driver answers its view() as `boxToken`, beside the four fields that were there', async () => {
+    const driver = fakeTokenDriver([BT_VIEW]);
+    const f = await open({ tokenDriver: driver });
+    const r = await f.app.inject({ method: 'GET', url: '/api/updates' });
+    expect(r.statusCode, r.body).toBe(200);
+    const view = r.json() as UpdatesView;
+    expect(view.boxToken).toEqual(BT_VIEW);
+    expect(Object.keys(view).sort()).toEqual(['boxToken', 'catalogue', 'intent', 'nodes', 'releases']);
+  });
+
+  it('reads view() at REQUEST time, once per request — a later answer shows the later state', async () => {
+    const later: BoxTokenView = { ...BT_VIEW, phase: 'held', hold: 'update-in-flight', holdNode: 'fleet' };
+    const driver = fakeTokenDriver([BT_VIEW, later]);
+    const f = await open({ tokenDriver: driver });
+    const first = (await f.app.inject({ method: 'GET', url: '/api/updates' })).json() as UpdatesView;
+    const second = (await f.app.inject({ method: 'GET', url: '/api/updates' })).json() as UpdatesView;
+    expect(first.boxToken?.phase).toBe('idle');
+    expect(second.boxToken).toMatchObject({ phase: 'held', hold: 'update-in-flight', holdNode: 'fleet' });
+    expect(driver.calls()).toBe(2);
+  });
+
+  it('a server with no driver OMITS the field — never null, never a made-up idle (absence permits)', async () => {
+    const f = await open();
+    const r = await f.app.inject({ method: 'GET', url: '/api/updates' });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(Object.keys(r.json() as object)).not.toContain('boxToken');
   });
 });
 

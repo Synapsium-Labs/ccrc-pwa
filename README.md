@@ -964,7 +964,12 @@ notes as plain text, never markup) and the node inventory (what each node runs a
 and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
 that would move a node — Install, Roll back, Update, Update all — opens one confirm sheet
 (below). A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
-address. Settings has a second section, **Notifications**: the phone-push bell for this browser (the same
+address. A **Box token** card follows, read from the same answer's `boxToken` field: the current value's
+generation and age, the last rotation, the state (idle, rotating, grace, held with the server's reason,
+failed with its word), whether a rotation is owed and why, the fleet's confirmed generation, its transport
+(`http` said as unencrypted), the previous and retired values still presented, a boot recovery, an alert
+after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now** (`POST /api/token/rotate`, session-only). Settings then has
+a further section, **Notifications**: the phone-push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
 as the fleet intent's `notify` through `POST /api/updates/intent`. In remote mode the foot of the fleet screen always
 carries `BuildLine`: `fleet <version> · server <version>`, read from the node inventory. A side reads
@@ -4839,8 +4844,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7873-7875`), each with an operator sentence of its own at `:7919`,
-`:7927` and `:7940`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7874-7876`), each with an operator sentence of its own at `:7920`,
+`:7928` and `:7941`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
