@@ -10,6 +10,8 @@ import { ChildReclaimBanner } from '../src/fleet/ChildReclaimBanner';
 import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from '../src/fleet/childReclaimWords';
+import { EXPIRY_KIND_WORD, expiryAttentionOf } from '../src/fleet/expiryWords';
+import { DEAD_COORDINATOR_KIND_WORD, deadCoordinatorAttentionOf } from '../src/fleet/deadCoordinatorWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
@@ -27,8 +29,9 @@ const makeStore = (): FleetStore => createFleetStore({
 const coord = (over: Partial<CoordStatus> = {}): CoordStatus =>
   ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
-const item = (over: Partial<ChildReclaimAttention> = {}): ChildReclaimAttention => ({
-  sessionId: 'ccrc-pwa-quiet-basin', runId: 41, token: 'tree-unreadable',
+const item = (over: Partial<Extract<ChildReclaimAttention, { kind: 'terminal' }>> = {}):
+  Extract<ChildReclaimAttention, { kind: 'terminal' }> => ({
+  kind: 'terminal', sessionId: 'ccrc-pwa-quiet-basin', runId: 41, token: 'tree-unreadable',
   sentence: 'ccrc could not read this worktree, so it cannot prove nothing here would be lost. Nothing was removed.',
   at: Date.now() - 60_000, ...over,
 });
@@ -69,7 +72,7 @@ describe('the reclaim row', () => {
     const glyph = document.querySelector('.child-reclaim-glyph');
     expect(glyph?.textContent).toBe(CHILD_RECLAIM_MARKER_GLYPH.set);
     expect(glyph).toHaveAttribute('aria-hidden', 'true');
-    expect(screen.getByRole('button', { name: 'Resume reclaim' })).toHaveClass('child-reclaim-toggle');
+    expect(screen.getByRole('button', { name: 'Resume cleanup' })).toHaveClass('child-reclaim-toggle');
   });
 
   it('degrades a MarkerState from a newer build to unmeasurable, never a blank cell', () => {
@@ -83,7 +86,7 @@ describe('the reclaim row', () => {
   // read (above) and a registry that did not list at all, so it names
   // neither cause.
   it("the 'unmeasurable' word blames no cause — it also covers a value the registry did list", () => {
-    expect(CHILD_RECLAIM_MARKER_WORD.unmeasurable).toBe('reclaim switch unreadable');
+    expect(CHILD_RECLAIM_MARKER_WORD.unmeasurable).toBe('cleanup switch unreadable');
     expect(CHILD_RECLAIM_MARKER_WORD.unmeasurable).not.toMatch(/registry/i);
   });
 
@@ -94,7 +97,7 @@ describe('the reclaim row', () => {
   // capability-less box's honesty comes from the tap's own inline 501, not
   // from this word overclaiming what the frame cannot back.
   it("the 'clear' word claims only the switch's state — never that reclamation is running", () => {
-    expect(CHILD_RECLAIM_MARKER_WORD.clear).toBe('reclaim not paused');
+    expect(CHILD_RECLAIM_MARKER_WORD.clear).toBe('cleanup not paused');
     expect(CHILD_RECLAIM_MARKER_WORD.clear).not.toMatch(/reclaimed when|runs close|is running/i);
   });
 
@@ -103,7 +106,7 @@ describe('the reclaim row', () => {
     seen(store, coord({ reclaim: 'clear' }));
     const childReclaimPause = vi.fn(() => new Promise<void>(() => {}));
     render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Pause reclaim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause cleanup' }));
     expect(childReclaimPause).toHaveBeenCalledWith('on');
     expect(await screen.findByText('pausing…')).toBeInTheDocument();
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.clear)).toBeInTheDocument();
@@ -114,7 +117,7 @@ describe('the reclaim row', () => {
     seen(store, coord({ reclaim: 'set' }));
     const childReclaimPause = vi.fn(() => new Promise<void>(() => {}));
     render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Resume reclaim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume cleanup' }));
     expect(childReclaimPause).toHaveBeenCalledWith('off');
   });
 
@@ -125,7 +128,7 @@ describe('the reclaim row', () => {
     seen(store, coord({ reclaim: 'set' }));
     const childReclaimPause = vi.fn(() => new Promise<void>(() => {}));
     render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Resume reclaim' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume cleanup' }));
     expect(childReclaimPause).toHaveBeenCalledWith('off');
     expect(await screen.findByText('resuming…')).toBeInTheDocument();
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.set)).toBeInTheDocument();
@@ -158,7 +161,7 @@ describe('the reclaim row', () => {
     seen(store, { ...coord(), reclaim: 'quarantined' });
     expect(screen.getByText('pausing…')).toBeInTheDocument();
     seen(store, coord({ reclaim: 'set' }));
-    expect(await screen.findByText('Resume reclaim')).toBeInTheDocument();
+    expect(await screen.findByText('Resume cleanup')).toBeInTheDocument();
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.set)).toBeInTheDocument();
   });
 
@@ -342,5 +345,254 @@ describe('the two tolerant readers', () => {
   it('childReclaimAttentionOf accepts a member with no token or at — the renderer never reads either', () => {
     const bare = { sessionId: 'ccrc-pwa-bare-item', runId: null, sentence: 'a sentence with no token or at' };
     expect(childReclaimAttentionOf({ childReclaimAttention: [bare] })).toEqual([bare]);
+  });
+
+  // `kind` is ADDITIVE on the wire (spec §5.9): a server older than the arms
+  // sends items with none, and the one reader reads such an item as it always
+  // did. Deleting `kind` from a built item is the older server's frame.
+  it('an item from a server older than the arms (no `kind`) still renders its sentence', () => {
+    const { kind: _kind, ...older } = item();
+    expect(_kind).toBe('terminal');
+    expect(childReclaimAttentionOf({ childReclaimAttention: [older] })).toEqual([older]);
+    const store = makeStore();
+    seen(store, coord({ childReclaimAttention: [older as unknown as ChildReclaimAttention] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = [...document.querySelectorAll('.child-reclaim-item')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain(older.sentence);
+    expect(rows[0]!.textContent).toContain(older.sessionId);
+  });
+});
+
+// The collapsed kept line (spec §5.9): more than five children kept for one
+// reason arrive as ONE `kept-many` item, which has no `sessionId` and carries
+// the server's sentence — already stating the count — and the children behind
+// it. The PWA counts nothing and maps no word: it renders what it is given.
+describe('the collapsed kept line', () => {
+  const keptMany = (n: number, over: Partial<Extract<ChildReclaimAttention, { kind: 'kept-many' }>> = {}):
+    Extract<ChildReclaimAttention, { kind: 'kept-many' }> => ({
+    kind: 'kept-many', word: 'minting-run-absent',
+    members: Array.from({ length: n }, (_, i) => ({ sessionId: `ccrc-pwa-kept-${i + 1}`, runId: 200 + i })),
+    sentence: `${n} child workspaces are kept for the same reason. For each one: ccrc cannot see the run that minted it, so it keeps the workspace.`,
+    ...over,
+  });
+  const kept = (over: Partial<Extract<ChildReclaimAttention, { kind: 'kept' }>> = {}):
+    Extract<ChildReclaimAttention, { kind: 'kept' }> => ({
+    kind: 'kept', sessionId: 'ccrc-pwa-kept-single', runId: 171, word: 'coordinating',
+    sentence: 'This child coordinates a programme of its own, so ccrc keeps it.', ...over,
+  });
+  const rowsOf = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.child-reclaim-item')];
+  const whoOf = (li: HTMLElement): string[] =>
+    [...li.querySelectorAll('.child-reclaim-who')].map((n) => n.textContent ?? '');
+
+  // (i)
+  it('a kept-many item with six members renders ONE row: the sentence, then six "run #N · id" lines', () => {
+    const store = makeStore();
+    const many = keptMany(6);
+    seen(store, coord({ childReclaimAttention: [many] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(many.sentence);
+    expect(whoOf(rows[0]!)).toEqual(many.members.map((m) => `run #${m.runId} · ${m.sessionId}`));
+    expect(whoOf(rows[0]!)).toHaveLength(6);
+    // The sentence, THEN the member lines: the order of the li's own children.
+    expect([...rows[0]!.children].map((c) => c.className))
+      .toEqual(['child-reclaim-sentence', ...Array.from({ length: 6 }, () => 'child-reclaim-who')]);
+    // The PWA maps no word: the word is a React key and is never the rendered text.
+    expect(rows[0]!.textContent).not.toContain(many.word);
+    // A report, not a tap: the collapsed line adds no control.
+    expect([...screen.queryAllByRole('button'), ...screen.queryAllByRole('link')]).toHaveLength(1);
+  });
+
+  // (ii) The existing reader's path: a `kept` item has a `sessionId` and no
+  // `at`, and renders like any other item.
+  it('a kept item renders "run #171 · id" and its sentence, like any item', () => {
+    const store = makeStore();
+    const one = kept();
+    seen(store, coord({ childReclaimAttention: [one] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(whoOf(rows[0]!)).toEqual([`run #171 · ${one.sessionId}`]);
+    expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(one.sentence);
+    expect(rows[0]!.textContent).not.toContain(one.word);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [one] })).toEqual([one]);
+  });
+
+  // (iii)
+  it('a member that is not { sessionId: string, runId: number } is dropped on its own — the other five render', () => {
+    const store = makeStore();
+    const many = keptMany(6);
+    const members = [...many.members];
+    members[2] = { sessionId: 'ccrc-pwa-kept-bad', runId: 'x' as unknown as number };
+    seen(store, coord({ childReclaimAttention: [{ ...many, members }] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(whoOf(rows[0]!)).toEqual(many.members.filter((_, i) => i !== 2).map((m) => `run #${m.runId} · ${m.sessionId}`));
+    expect(rows[0]!.textContent).not.toContain('run #x');
+    expect(rows[0]!.textContent).not.toContain('ccrc-pwa-kept-bad');
+  });
+
+  // (iv)
+  it('mixed kept and kept-many items keep the SERVER\'s order', () => {
+    const store = makeStore();
+    const first = kept({ sessionId: 'ccrc-pwa-kept-first', runId: 11 });
+    const many = keptMany(6);
+    const last = kept({ sessionId: 'ccrc-pwa-kept-last', runId: 12 });
+    seen(store, coord({ childReclaimAttention: [first, many, last] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.textContent).toContain(first.sessionId);
+    expect(rows[1]!.textContent).toContain(many.sentence);
+    expect(rows[2]!.textContent).toContain(last.sessionId);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [first, many, last] }).map((a) => a.sentence))
+      .toEqual([first.sentence, many.sentence, last.sentence]);
+    // A group first and a single after it is no different: the reader sorts nothing.
+    expect(childReclaimAttentionOf({ childReclaimAttention: [many, last, first] }).map((a) => a.sentence))
+      .toEqual([many.sentence, last.sentence, first.sentence]);
+  });
+
+  // The two shapes are told apart by `sessionId` — the field the reader
+  // checks — never by `members`, which it does not check on a single item. A
+  // single child whose wire object carries a stray `members` (null, empty, or
+  // anything else) is still one ordinary row with its own run and id, and a
+  // collapsed line that also carries a `sessionId` and a `runId` is read as the
+  // single child the reader's own check takes it for, its members never rendered.
+  it('a single child carrying a stray `members` renders as one ordinary row, never as a collapsed line', () => {
+    const base = kept({ sessionId: 'ccrc-pwa-kept-stray', runId: 1 });
+    for (const stray of [null, [], 'x']) {
+      cleanup();
+      const store = makeStore();
+      seen(store, coord({ childReclaimAttention: [{ ...base, members: stray } as unknown as ChildReclaimAttention] }));
+      render(<ChildReclaimBanner store={store} />);
+      const rows = rowsOf();
+      expect(rows).toHaveLength(1);
+      expect(whoOf(rows[0]!)).toEqual(['run #1 · ccrc-pwa-kept-stray']);
+      expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(base.sentence);
+    }
+  });
+
+  it('a kept-many item that also carries a sessionId and runId reads as a single child — its members are never rendered unchecked', () => {
+    const many = keptMany(3);
+    const members = [{ sessionId: 'ccrc-pwa-kept-bad', runId: 'x' as unknown as number }, ...many.members];
+    const store = makeStore();
+    seen(store, coord({ childReclaimAttention: [
+      { ...many, sessionId: 'ccrc-pwa-stray', runId: 7, members } as unknown as ChildReclaimAttention] }));
+    render(<ChildReclaimBanner store={store} />);
+    const rows = rowsOf();
+    expect(rows).toHaveLength(1);
+    expect(whoOf(rows[0]!)).toEqual(['run #7 · ccrc-pwa-stray']);
+    expect(rows[0]!.textContent).not.toContain('run #x');
+  });
+
+  // The reader drops a collapsed line that names nobody, and one wrong in
+  // exactly one field — kind, word, sentence, members — each on its own, so each
+  // check pins itself.
+  it('childReclaimAttentionOf drops a kept-many item left with no member, and one wrong in a single field', () => {
+    const good = keptMany(6);
+    const noMembers = { ...good, members: [] };
+    const allBad = { ...good, members: [{ sessionId: 7, runId: 1 }, { sessionId: 'ccrc-pwa-x', runId: '1' }, null, 'y'] };
+    const noWord = { kind: good.kind, sentence: good.sentence, members: good.members };
+    const noSentence = { kind: good.kind, word: good.word, members: good.members };
+    const membersNotArray = { ...good, members: 'ccrc-pwa-kept-1' };
+    // Wrong in `kind` alone: another arm's kind, and none at all.
+    const keptKind = { ...good, kind: 'kept' };
+    const noKind = { word: good.word, sentence: good.sentence, members: good.members };
+    for (const bad of [noMembers, allBad, noWord, noSentence, membersNotArray, keptKind, noKind]) {
+      expect(childReclaimAttentionOf({ childReclaimAttention: [good, bad] })).toEqual([good]);
+    }
+    // A member wrong in only its sessionId is dropped alone.
+    const oneBadId = { ...good, members: [{ sessionId: 7, runId: 1 }, ...good.members] };
+    expect(childReclaimAttentionOf({ childReclaimAttention: [oneBadId] })).toEqual([good]);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 3b (spec 2026-09-24 §5.3, §6 item 1): `reclaim-paused` is the fleet's ONE cleanup switch —
+// it stops child reclamation AND the expiry of archived workspaces — so the row's words name the cleanup, not the
+// children alone, and the expiry lane's own list renders in the same row, under the children's, from its own field.
+describe('the one cleanup switch (wave 3b)', () => {
+  it('its words name the cleanup — set, clear and unreadable alike', () => {
+    expect(CHILD_RECLAIM_MARKER_WORD).toEqual({
+      clear: 'cleanup not paused', set: 'cleanup paused', unmeasurable: 'cleanup switch unreadable' });
+    const store = makeStore();
+    seen(store, coord({ reclaim: 'clear' }));
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.getByRole('button', { name: 'Pause cleanup' })).toBeInTheDocument();
+  });
+
+  it('lists the archived workspaces the expiry lane reports, under the children, each with the server’s sentence', () => {
+    const store = makeStore();
+    seen(store, { ...coord({ childReclaimAttention: [item()] }), expiryAttention: [
+      { sessionId: 'ccrc-pwa-brisk-mesa', kind: 'in-use', archivedAt: 1, expiresAt: 2, at: 3,
+        sentence: 'kept: process 3453108 (“tmux: server”) in /w/brisk-mesa has its working directory in this archived workspace' },
+      { sessionId: 'ccrc-pwa-old-dune', kind: 'would-expire', archivedAt: 1, expiresAt: 2, at: 4,
+        sentence: 'would be cleaned up now: the cleanup is not armed (shadow), so nothing was deleted.' },
+    ] });
+    render(<ChildReclaimBanner store={store} />);
+    const list = screen.getByRole('list', { name: 'archived workspaces the cleanup is reporting' });
+    expect(list.textContent).toContain(`${EXPIRY_KIND_WORD['in-use']} · ccrc-pwa-brisk-mesa`);
+    expect(list.textContent).toContain('process 3453108 (“tmux: server”)');
+    expect(list.textContent).toContain(`${EXPIRY_KIND_WORD['would-expire']} · ccrc-pwa-old-dune`);
+    expect(list.querySelectorAll('button, a'), 'a report, never a tap').toHaveLength(0);
+    // The children's list is its own, and holds no expiry.
+    const children = screen.getByRole('list', { name: 'children reclamation could not clean up' });
+    expect(children.textContent).not.toContain('brisk-mesa');
+  });
+
+  it('the one reader: an absent field reads as no items, a malformed member is dropped alone, an unknown kind is "reported"', () => {
+    expect(expiryAttentionOf(coord())).toEqual([]);
+    expect(expiryAttentionOf({ expiryAttention: [{ sessionId: 'a', kind: 'held', sentence: 's' }, { sessionId: 7 }] }))
+      .toEqual([{ sessionId: 'a', kind: 'held', sentence: 's' }]);
+    const store = makeStore();
+    seen(store, { ...coord(), expiryAttention: [{ sessionId: 'x', kind: 'newer-kind', sentence: 's' }] });
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.getByRole('list', { name: 'archived workspaces the cleanup is reporting' }).textContent).toContain('reported · x');
+  });
+
+  it('renders no expiry list when there is nothing to report', () => {
+    const store = makeStore();
+    seen(store, { ...coord(), expiryAttention: [] });
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.queryByRole('list', { name: 'archived workspaces the cleanup is reporting' })).toBeNull();
+  });
+});
+
+describe('the dead-coordinator lane’s list (workspace lifecycle wave 4)', () => {
+  it('lists what the lane reports, under the expiry lane’s list — the breaker naming every claimant it holds — and is never a tap', () => {
+    const store = makeStore();
+    seen(store, { ...coord(), deadCoordinatorAttention: [
+      { kind: 'breaker', claimants: ['demo-coord-a', 'demo-coord-b'], at: 5,
+        sentence: '2 coordinators read crashed within 10 minutes of each other (demo-coord-a, demo-coord-b) — a box fault is likelier than 2 crashes, so the lane ends nothing.' },
+      { kind: 'would-end', claimants: ['demo-coord-c'], at: 4,
+        sentence: 'coordinator demo-coord-c crashed (its pane is gone and nothing is bringing it back) and has stayed dead since 2026-10-07 10:00 UTC.' },
+    ] });
+    render(<ChildReclaimBanner store={store} />);
+    const list = screen.getByRole('list', { name: 'coordinators the cleanup is reporting' });
+    expect(list.textContent).toContain(`${DEAD_COORDINATOR_KIND_WORD.breaker} · demo-coord-a, demo-coord-b`);
+    expect(list.textContent).toContain(`${DEAD_COORDINATOR_KIND_WORD['would-end']} · demo-coord-c`);
+    expect(list.textContent).toContain('so the lane ends nothing');
+    expect(list.querySelectorAll('button, a'), 'a report, never a tap').toHaveLength(0);
+    expect(screen.queryByRole('list', { name: 'archived workspaces the cleanup is reporting' }), 'never the expiry lane’s list').toBeNull();
+  });
+
+  it('the one reader: an absent field reads as no items, a malformed member is dropped alone, an unknown kind is "reported"', () => {
+    expect(deadCoordinatorAttentionOf(coord())).toEqual([]);
+    expect(deadCoordinatorAttentionOf({ deadCoordinatorAttention: [
+      { kind: 'stuck', claimants: ['a'], sentence: 's' }, { kind: 'stuck', claimants: [7], sentence: 's' }, { kind: 'stuck' }] }))
+      .toEqual([{ kind: 'stuck', claimants: ['a'], sentence: 's' }]);
+    const store = makeStore();
+    seen(store, { ...coord(), deadCoordinatorAttention: [{ kind: 'newer-kind', claimants: ['x'], sentence: 's' }] });
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.getByRole('list', { name: 'coordinators the cleanup is reporting' }).textContent).toContain('reported · x');
+  });
+
+  it('renders no list when there is nothing to report', () => {
+    const store = makeStore();
+    seen(store, { ...coord(), deadCoordinatorAttention: [] });
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.queryByRole('list', { name: 'coordinators the cleanup is reporting' })).toBeNull();
   });
 });

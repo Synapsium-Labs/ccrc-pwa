@@ -661,6 +661,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // fleet host 2026-09-22), shipped the same way.
       'systemd/ccd-tmp-sweep.service',
       'systemd/ccd-tmp-sweep.timer',
+      // history spec 2026-10-05 §9.5: the history sweep's pair, shipped the same way.
+      'systemd/ccd-history-sweep.service',
+      'systemd/ccd-history-sweep.timer',
+      // The pane-scope sweep's pair (session-continuity wave 4), shipped the same way.
+      'systemd/ccd-scope-sweep.service',
+      'systemd/ccd-scope-sweep.timer',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
@@ -676,6 +682,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the model catalogue probe is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-tmp-sweep')),
       'the temp-dir reaper is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-history-sweep')),
+      'the history sweep shim is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-scope-sweep')),
+      'the pane-scope sweep is not in the repo').toBe(true);
 
     // Fix round 1, Finding 1 (Important, plan-mandated): measured on the
     // fleet host, read-only — every `systemd --user` unit's process carries a
@@ -735,6 +745,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The temp-dir reaper's pair, installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer',
+      // The history sweep's pair, installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.service ~/.config/systemd/user/ccd-history-sweep.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.timer ~/.config/systemd/user/ccd-history-sweep.timer',
+      // The pane-scope sweep's pair, installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
@@ -780,6 +796,15 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // already picked up the unit AGENT_BUILD_CMD installed.
     const tmpSweepTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-tmp-sweep.timer'));
     expect(tmpSweepTimerAt, 'the tmp-sweep timer is never enabled').toBeGreaterThan(reloadAt);
+    // The history sweep's timer, needing the same daemon-reload, and enabled
+    // before the agent restart like every timer in this chain.
+    const historyTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-history-sweep.timer'));
+    expect(historyTimerAt, 'the history-sweep timer is never enabled').toBeGreaterThan(reloadAt);
+    expect(historyTimerAt, 'the history-sweep timer is enabled after the agent restart')
+      .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
+    // The pane-scope sweep's timer, on the same daemon-reload.
+    const scopeSweepTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-scope-sweep.timer'));
+    expect(scopeSweepTimerAt, 'the scope-sweep timer is never enabled').toBeGreaterThan(reloadAt);
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -808,6 +833,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-pool-sync .local/bin/ccd-pool-sync 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-history-sweep .local/bin/ccd-history-sweep 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });

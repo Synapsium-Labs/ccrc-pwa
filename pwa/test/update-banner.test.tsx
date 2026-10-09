@@ -394,3 +394,47 @@ describe('UpdateBanner — a class of its own, a tap floor, and text only', () =
     expect(bannerSrc).not.toMatch(/dangerouslySetInnerHTML/);
   });
 });
+
+// Programme wave 14, R15(b): on a halted fleet, Update all is disabled and says why and where the remedy is, so a
+// tap can no longer come back as a 202 the operator cannot act on (the 2026-10-05 12:18:59 and 12:19:15 taps).
+describe('UpdateBanner — Update all while a node halts the fleet (R15(b))', () => {
+  const halted = (): NodeWire => fleetNode({ update: { state: 'failed', target: 'v0.0.9', startedAt: NOW - 60_000, detail: 'gate: unit not up' } });
+
+  it('is disabled, described by a line that names the halting node and the Ack, and opens no sheet', () => {
+    const apply = vi.spyOn(api, 'applyUpdate');
+    render(<UpdateBanner updates={view({ nodes: [halted(), serverNode()] })} />);
+    const all = screen.getByRole('button', { name: 'Update all' });
+    expect(all).toBeDisabled();
+    const reasonId = all.getAttribute('aria-describedby');
+    expect(reasonId).not.toBeNull();
+    const reason = document.getElementById(reasonId!);
+    expect(reason?.textContent).toBe('Update all waits: nothing moves until fleet is acknowledged — tap Ack on it in the halt banner.');
+    expect(reason?.className, 'an existing class: no new rule for the contrast audit').toBe('update-banner-msg');
+    expect(all).toHaveAccessibleDescription(reason!.textContent!);
+    fireEvent.click(all);
+    expect(screen.queryByRole('list', { name: 'Nodes this moves, in order' })).toBeNull();
+    expect(apply).not.toHaveBeenCalled();
+    // The release line still speaks; only the move waits.
+    expect(screen.getByText(/^v0\.0\.9 is out on stable/)).toBeInTheDocument();
+  });
+
+  it('a reverted server row halts it too, and a failed provenance verdict does not', () => {
+    render(<UpdateBanner updates={view({ nodes: [fleetNode(), serverNode({ update: { state: 'reverted', target: 'v0.0.9', startedAt: null, detail: null } })] })} />);
+    expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled();
+    expect(screen.getByText(/^Update all waits: nothing moves until server is acknowledged/)).toBeInTheDocument();
+    cleanup();
+    render(<UpdateBanner updates={view({ nodes: [fleetNode({ update: { state: 'failed', target: 'v0.0.9', startedAt: null, detail: 'provenance: unsigned bundle' } }), serverNode()] })} />);
+    const all = screen.getByRole('button', { name: 'Update all' });
+    expect(all).not.toBeDisabled();
+    expect(all).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText(/^Update all waits/)).toBeNull();
+  });
+
+  it('enables again on the poll after the ack, with no reason line', () => {
+    const { rerender } = render(<UpdateBanner updates={view({ nodes: [halted(), serverNode()] })} />);
+    expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled();
+    rerender(<UpdateBanner updates={view({ nodes: [fleetNode({ update: { state: 'idle', target: 'v0.0.9', startedAt: null, detail: 'acknowledged by the operator' } }), serverNode()] })} />);
+    expect(screen.getByRole('button', { name: 'Update all' })).not.toBeDisabled();
+    expect(screen.queryByText(/^Update all waits/)).toBeNull();
+  });
+});

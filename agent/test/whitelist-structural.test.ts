@@ -132,6 +132,30 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the reclaim kill-switch granted without the flag that is its whole argument surface',
     codes: ['TS2322'],
   },
+  // WORKSPACE LIFECYCLE wave 3, g13's shape for ws-reclaim's sibling: the archived workspace's teardown, enrolled on
+  // its confirmation token, so the narrowed grant is a compile error.
+  'g15-ws-expire-without-expect.ts': {
+    what: 'the archived-workspace expiry verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
+  // NATIVE DOCS READER wave 2, g14's shape for the four docs verbs: read-only, no confirmation token, so the flag is
+  // each verb's whole argument surface, and the enrolment is what makes the narrowed grant a compile error.
+  'g16-docs-index-without-all.ts': {
+    what: 'the fleet-wide docs listing granted without --all, its whole argument surface',
+    codes: ['TS2322'],
+  },
+  'g17-docs-tree-without-project.ts': {
+    what: 'the docs tree verb granted without --project',
+    codes: ['TS2322'],
+  },
+  'g18-docs-show-without-project.ts': {
+    what: 'the docs show verb (one grant, both argv shapes) granted without --project',
+    codes: ['TS2322'],
+  },
+  'g19-docs-fetch-without-project.ts': {
+    what: 'the docs fetch verb granted without --project',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -340,6 +364,39 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
   // takes on import, which proves the crash fires, not that THIS verb's rule
   // is what fires it. This case runs the audit over a CONSTRUCTED table, so
   // the row reds here as an assertion instead.
+  it('throws on a ws-expire with no confirmation token, the third destructive verb (workspace lifecycle wave 3)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-expire']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-expire', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-expire', '--expect']]))).not.toThrow();
+  });
+
+  // NATIVE DOCS READER wave 2: the four docs verbs, enrolled for their ARGUMENT SURFACE (`coord-pause`'s reason).
+  // Run over CONSTRUCTED tables, so narrowing a shipped docs grant reds here as an assertion naming the verb's own
+  // rule, not only as the module-load crash every importer of `whitelist.ts` takes. The flag must be the token
+  // IMMEDIATELY after the verb, so a misplaced `--project` is refused like a missing one.
+  it('throws on a docs verb with no flag, the wrong flag, or the flag out of place (docs W2)', () => {
+    const REFUSED: readonly (readonly [prefix: readonly string[], flag: string])[] = [
+      [['docs-index'], '--all'],
+      [['docs-index', '--project'], '--all'],
+      [['docs-tree'], '--project'],
+      [['docs-show', '--all'], '--project'],
+      [['docs-fetch'], '--project'],
+      [['docs-show', '--ref', '--project'], '--project'],
+    ];
+    for (const [prefix, flag] of REFUSED) {
+      expect(() => auditExecWhitelist(withCcd([prefix])), prefix.join(' '))
+        .toThrow(new RegExp(`only grantable with '${flag}'`));
+    }
+    const LAWFUL: readonly (readonly string[])[] = [
+      ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+    ];
+    for (const prefix of LAWFUL) {
+      expect(() => auditExecWhitelist(withCcd([prefix])), prefix.join(' ')).not.toThrow();
+    }
+  });
+
   it('throws on a ws-reclaim with no confirmation token, the second destructive verb', () => {
     expect(() => auditExecWhitelist(withCcd([['ws-reclaim']])))
       .toThrow(/only grantable with '--expect'/);

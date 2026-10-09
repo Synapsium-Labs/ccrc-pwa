@@ -29,7 +29,7 @@ const lineAt = (s: string, i: number): string => {
   return s.slice(a, b === -1 ? undefined : b).trim();
 };
 
-/** D4's four destructive verbs, and ws-reclaim (child reclamation, wave 3) as the fifth. Floors are measured minima, not guesses. */
+/** D4's four destructive verbs, ws-reclaim (child reclamation, wave 3) as the fifth and ws-expire (workspace lifecycle, wave 3) as the sixth. Floors are measured minima, not guesses. */
 const VERBS: readonly (readonly [string, string, number])[] = [
   ['cmd_ws_rm', 'cmd_ws_rename', 8000],
   ['cmd_forget', 'cmd_ls', 2000],
@@ -38,17 +38,21 @@ const VERBS: readonly (readonly [string, string, number])[] = [
   // Measured 4091 characters for cmd_ws_reclaim's pre-lock parse and lock when
   // this entry was written; the floor sits under it with room for an edit.
   ['cmd_ws_reclaim', '_ws_reclaim_locked', 3500],
+  // Measured 3761 characters for cmd_ws_expire's pre-lock parse and lock when this entry was written.
+  ['cmd_ws_expire', '_ws_expire_locked', 3200],
 ];
 
 /**
- * THE THIRTEEN DIES A REFUSAL RECORD CANNOT DESCRIBE, each for one stated reason.
+ * THE FOURTEEN DIES A REFUSAL RECORD CANNOT DESCRIBE, each for one stated reason.
  * Four are `cmd_ws_reap`'s pre-lock rungs, which D15 leaves alone: three run
  * before `$id` has been validated at all and the fourth is the `_json_str`
  * probe — the emitter itself is what is missing there, so an emit would be the
  * thing being reported. Two are the `--reason` loop arms, which run before any
- * id is bound. The set is EXACT: a fourteenth sanctioned die reds the count.
+ * id is bound. The set is EXACT: a fifteenth sanctioned die reds the count.
  *
- * Seven are cmd_ws_reclaim's (child reclamation, wave 3), for reap's own reasons: its usage line and run-id shape check run before $id is bound, its four --actor/--reason checks are the loop arms that run before any id is bound, and its _json_str probe is the emitter being missing. Its "bad token" and "bad session id" are the SAME literals as reap's and need no second entry.
+ * Six are cmd_ws_reclaim's (child reclamation, wave 3), for reap's own reasons: its usage line runs before $id is bound, its four --actor/--reason checks are the loop arms that run before any id is bound, and its _json_str probe is the emitter being missing. Its "bad session id" is the SAME literal as reap's and needs no second entry; it stays a die because an id that failed its own shape check is no id to journal against (spec §5.9). Its token and run-id checks are NOT here: since wave 6 they run after the session id is validated and journal through `_lc_refuse` (spec §5.9) — "bad token" stays in this set for reap's and ws-expire's own literal.
+ *
+ * Two are cmd_ws_expire's (workspace lifecycle, wave 3), for the same reasons: its usage line runs before $id is bound, and its _json_str probe is the emitter being missing. Its four --actor/--reason checks are the SAME literals as ws-reclaim's, and its "bad token" and "bad session id" the SAME as reap's, and need no second entry.
  */
 const SANCTIONED: readonly string[] = [
   'die "usage: ccd ws-rm [--reason <text>] <id>"',
@@ -58,12 +62,13 @@ const SANCTIONED: readonly string[] = [
   'die "bad session id"',
   'die "python3 unavailable — cannot quote the reap record safely"',
   'die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"',
-  'die "bad run id"',
   'die "python3 unavailable — cannot quote the reclaim record safely"',
   'die "--actor must be non-blank"',
   'die "--actor is longer than $_LC_DEC_MAX bytes"',
   'die "--reason must be non-blank"',
   'die "--reason is longer than $_LC_DEC_MAX bytes"',
+  'die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"',
+  'die "python3 unavailable — cannot quote the expiry record safely"',
 ];
 
 describe('every die in a destructive verb is reached through _lc_refuse or _lc_fail', () => {
@@ -102,7 +107,7 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
   it('every sanctioned die is STILL THERE — a stale exemption is a hole', () => {
     // Mutant: convert `die "bad token"` and leave it in SANCTIONED -> this fails
     // with `a sanctioned die that no longer exists: [ 'die "bad token"' ]`.
-    expect(SANCTIONED.length, 'the sanctioned set changed size').toBe(13);
+    expect(SANCTIONED.length, 'the sanctioned set changed size').toBe(14);
     const all = VERBS.map(([n, u]) => bodyOf(n, u)).join('\n');
     expect(SANCTIONED.filter((s) => !all.includes(s)), 'a sanctioned die that no longer exists')
       .toEqual([]);
@@ -143,6 +148,23 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
     const region = src.slice(src.indexOf('RECLAIM-BEGIN'), src.indexOf('RECLAIM-END'));
     expect(region.length, 'the reclaim region could not be sliced').toBeGreaterThan(20000);
     expect([...region.matchAll(/_lc_emit reclaim refused/g)]).toHaveLength(2);
+  });
+
+  it('holds the expiry emits at exactly two in ws-expire — one verdict point, one flock decline (workspace lifecycle, wave 3)', () => {
+    // `_ws_expire_locked` routes every ladder refusal, the token mismatch and the flavour refusals through one
+    // `_lc_emit`; the lock decline in `cmd_ws_expire` is the second. Comment lines are not code.
+    const region = src.slice(src.indexOf('EXPIRE-BEGIN'), src.indexOf('EXPIRE-END'));
+    expect(region.length, 'the expire region could not be sliced').toBeGreaterThan(10000);
+    const code = region.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect([...code.matchAll(/_lc_emit expire refused "\$id" "" verb ws-expire /g)]).toHaveLength(2);
+  });
+
+  it('_ws_expire_locked contains NO die — past the lock, a failure is _lc_fail and JSON', () => {
+    const from = src.indexOf('_ws_expire_locked() {');
+    const body = from > -1 ? src.slice(from, src.indexOf('\n}\n', from)) : '';
+    expect(body.length, '_ws_expire_locked could not be sliced').toBeGreaterThan(2500);
+    expect([...body.matchAll(/(^|\s|\|\|\s*|;\s*)die "/g)].map((m) => lineAt(body, m.index!)),
+      '_ws_expire_locked grew a die — past the lock, route it through _lc_fail and the "failed" document').toEqual([]);
   });
 
   it('the reclaim lock\'s two inner functions contain NO die — past the lock, a failure is _lc_fail and JSON', () => {

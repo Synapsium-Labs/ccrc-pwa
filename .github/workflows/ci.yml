@@ -292,8 +292,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           # Above the engines floor in server/agent/pwa package.json
-          # (>=22.13.0, where node:sqlite stopped needing --experimental-sqlite).
-          # server/test/node-floor.test.ts runs THREE assertions on whichever
+          # (>=22.16.0: node:sqlite stopped needing --experimental-sqlite at
+          # 22.13, and gained FTS5 and a gc-safe `.iterate()` at 22.16).
+          # server/test/node-floor.test.ts runs FOUR assertions on whichever
           # server shard receives it, and they are not symmetric. (An edit to
           # this line is an edit under .github/, which always selects the full
           # suite — so node-floor always runs against a changed node-version.)
@@ -303,22 +304,19 @@ jobs:
           # floor itself being lowered to meet a low node-version — a floor at
           # or below whatever interpreter is running stays green on assertion 2
           # alone. Measured, not assumed: mirroring all three package.jsons to
-          # `>=22.0.0` left assertions 1-2 green under this box's 24.x
-          # interpreter, well ABOVE the real node:sqlite flag boundary — so
-          # that experiment says nothing about assertion 3. (Not independently
-          # re-measured under a 22.x interpreter: this box has no other `node`
-          # binary and no nvm/fnm/volta/n to fetch one, and this branch has
-          # never been pushed, so CI's own 22.x leg has never run it either —
-          # the 24.x result alone is enough to support the point above.)
-          # Assertion 3 is ABSOLUTE: it `import()`s node:sqlite and round-trips
-          # a DatabaseSync, reading no package.json at all, so it fails on any
-          # interpreter below 22.13.0 no matter what `engines.node` says. It is
-          # what catches BOTH sides — this node-version AND every
-          # `engines.node` — being lowered together (e.g. to appease a pinned
-          # 22.10 runner), which is exactly the case assertion 2 cannot see.
-          # Nothing anywhere pins this node-version string against
-          # `engines.node`'s number directly; that gap is closed only by
-          # assertion 3 actually exercising node:sqlite.
+          # `>=22.0.0` left assertions 1-2 green under a 24.x interpreter.
+          # Assertions 3 and 4 are ABSOLUTE: they read no package.json at all.
+          # 3 round-trips a DatabaseSync (the 22.13 boundary); 4 runs FTS5 and a
+          # gc-pressured `.iterate()` in a child (the 22.16 boundary). With
+          # engines lowered to 22.13, 22.15.1 keeps 1-3 green and only 4 reds
+          # (measured). They catch BOTH sides — this node-version AND every
+          # `engines.node` — being lowered together, the case assertion 2
+          # cannot see; but '22' resolves the newest 22.x, far above the floor,
+          # so on THIS leg they fire only if this string itself drops. The
+          # `node-floor` job below runs the file on EXACTLY the floor's version,
+          # and ci-pipeline.test.ts pins that job's string equal to
+          # `engines.node`. This leg's '22' is pinned by nothing; the floor is
+          # pinned by that job.
           node-version: '22'
           cache: npm
           cache-dependency-path: |
@@ -686,9 +684,10 @@ jobs:
           # never invokes vitest, so server/test/node-floor.test.ts — which
           # only exists as a `server` package test — does NOT execute on this
           # leg. Lowering node-version here, alone, is caught by nothing in
-          # this workflow; only the `server-shard` job's node-version is
-          # gated, and only against the interpreter falling below the
-          # declared floor (see the comment on that job's setup-node step).
+          # this workflow: the `server-shard` job's node-version is gated only
+          # against the interpreter falling below the declared floor (see the
+          # comment on that job's setup-node step), and the `node-floor` job's
+          # is the one string pinned equal to the floor.
           node-version: '22'
           cache: npm
           cache-dependency-path: pwa/package-lock.json
@@ -699,6 +698,68 @@ jobs:
       # no artifact is the failure this repo has already shipped once.
       - if: env.CCRC_LEG == 'run'
         run: test -f server/dist-pwa/index.html
+
+  # THE FLOOR ITSELF, on exactly its own version (ccrc history spec
+  # 2026-10-05 §9.9; O18). Every other leg runs '22', which setup-node
+  # resolves to the newest 22.x — far above `engines.node` — so no other leg
+  # can tell a floor that holds from one that only holds on a newer
+  # interpreter. This one runs node-floor.test.ts (and, from W1-B1 on, every
+  # history test file, each appended to the list below by the PR that adds
+  # it) on the floor's own version, through vitest.select.config.ts so the
+  # list is exact. Its `node-version` is pinned equal to `engines.node` by
+  # server/test/ci-pipeline.test.ts, and so is its name.
+  #
+  # Not required BY NAME (making it a required PR check is a branch-protection
+  # setting, the operator's act), but `full-suite` needs it, so it gates a
+  # stable promotion. No job-level `if:` and no `needs:`: it skips by STEP on a
+  # refresh or a rebuild, like the required legs, because a job skipped by
+  # `if:` reads as red in full-suite. Default checkout depth: nothing on its
+  # list reads the commit range.
+  node-floor:
+    name: node floor (22.16.0)
+    runs-on: ubuntu-latest
+    # server-deps installs three packages from a cold cache in about three
+    # minutes; the list runs in seconds. 30 is a deadline, not an estimate.
+    timeout-minutes: 30
+    env:
+      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.CCRC_LEG == 'run'
+      - uses: actions/setup-node@v4
+        if: env.CCRC_LEG == 'run'
+        with:
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            agent/package-lock.json
+            pwa/package-lock.json
+      - uses: ./.github/actions/server-deps
+        if: env.CCRC_LEG == 'run'
+        with:
+          platform: linux
+      # One server-relative path per line between the EOF markers; a PR that
+      # adds a history test file appends it here (an edit under .github/,
+      # which selects the full suite). ci-pipeline.test.ts requires every
+      # listed file to exist.
+      - name: Test
+        if: env.CCRC_LEG == 'run'
+        working-directory: server
+        run: |
+          cat > "$RUNNER_TEMP/tests.txt" <<'EOF'
+          test/node-floor.test.ts
+          test/history-lib.test.ts
+          test/history-store.test.ts
+          test/history-sweep.test.ts
+          test/history-drain.test.ts
+          test/history-ingest.test.ts
+          test/history-holds.test.ts
+          test/history-op.test.ts
+          test/history-cli.test.ts
+          test/measure-history.test.ts
+          EOF
+          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 
   # The traced runs that build the dependency map (design 2026-09-23 §5): each
   # listed server test in its own vitest process under strace. Scheduled
@@ -905,14 +966,15 @@ jobs:
 
   # THE STABLE GATE'S EVIDENCE (design 2026-09-23 §8). Exists only in `full`
   # mode, and is green iff every leg is — the Linux shards through their
-  # summary, the typecheck, agent, pwa, the build, and the macOS shards.
+  # summary, the typecheck, agent, pwa, the build, the macOS shards, and the
+  # Node-floor leg.
   # release-stable.yml looks for a successful job with this name in a trusted
   # run of the commit it promotes — this file's daily or manual full run on
   # main, or its own earlier call (`<caller job> / full-suite`), never a pull
   # request's run (main-artifact.mjs green-full-suite) — and reads the
   # `verdict` output when it called this file itself.
   full-suite:
-    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos]
+    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor]
     # Never on a merge-queue run: a queue run skips test-macos, and one that
     # fell back to `full` would read that skip as a red leg (landing-order
     # stage 2; a queue run is never the stable gate's evidence anyway —
@@ -939,7 +1001,7 @@ jobs:
       - name: Verdict
         id: verdict
         env:
-          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }}
+          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }}
         run: |
           node .github/ci/verdict.mjs full
           echo "verdict=green" >> "$GITHUB_OUTPUT"

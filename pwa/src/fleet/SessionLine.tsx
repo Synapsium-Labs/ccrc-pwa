@@ -29,6 +29,7 @@ import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
 import { elapsedWords, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
+import { childOfRunLabel } from './runWords';
 import { sessionLabel } from './sessionLabel';
 import { spawnChip } from './spawnWords';
 import './fleet.css';
@@ -203,6 +204,10 @@ export function SessionLine({
   // marker (§2.4). Neither touches `state` above: the bucket ladder is
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = lifecycleQualifier(session);
+
+  // Child-reclamation wave 5: which run minted this workspace, when it is a
+  // child. `childOfRunLabel` is the one reader of `session.child`.
+  const childOf = childOfRunLabel(session);
 
   // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
   // `session.ask` directly — the live `fleet` frame is cast, not revived
@@ -556,6 +561,16 @@ export function SessionLine({
                 {session.held}
               </button>
             )
+          )}
+
+          {/* Wave 5: the child-of-run label. Informational only, in
+              `.sess-substrate`'s shape: a short, fixed,
+              never-truncated ink-tertiary fact about which run this
+              workspace belongs to. The full sentence lives in `title`. */}
+          {childOf !== null && (
+            <span className="sess-child" data-child={childOf.data} title={childOf.title}>
+              {childOf.text}
+            </span>
           )}
 
           {/* Task 19: the ask pre-emption lane's chip (design doc §2.8).

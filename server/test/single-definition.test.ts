@@ -1330,10 +1330,12 @@ const bashFiles = (dir: string): string[] => {
 // so a checkout without it fails the liveness row below, not every rule.
 const bashExtra = [path.join(ccrcRoot, 'install.sh')].filter((f) => existsSync(f));
 const BASH = [...bashRoots.flatMap(bashFiles), ...bashExtra];
+/** One notion of a bash comment line, shared by every scan in this file that drops them (codeLines, the USAGE_PROSE describe's code()). */
+const isBashComment = (l: string): boolean => l.trim().startsWith('#');
 /** A bash line that is not a comment. Either path is discussed in prose all
  *  over these tools; only an actual line of shell is a reader or a writer. */
 const codeLines = (f: string): string[] =>
-  readFileSync(f, 'utf8').split('\n').filter((l) => !l.trim().startsWith('#'));
+  readFileSync(f, 'utf8').split('\n').filter((l) => !isBashComment(l));
 const holdersOf = (needle: string): string[] =>
   BASH.filter((f) => codeLines(f).some((l) => l.includes(needle))).map(rel).sort();
 
@@ -1829,6 +1831,19 @@ describe('the model files, and who reads each one', () => {
     // this scan cannot see. Within this repo it must stay one reader, because
     // a second one would be a second opinion about which providers may serve.
     expect(spell('providers-whitelist.json')).toEqual(['deploy/models-op.mjs']);
+  });
+
+  it('a lane file\'s type-tested read is DEFINED once, in shared/modelenv.mjs, and deploy/models-op.mjs imports it (Plan 3b A-6)', () => {
+    // A definition, not a mention: `shared/modelenv.d.mts` declares it
+    // (`export declare function …`) and every reader calls it, and neither is
+    // a second opinion about what "a lane file's read" means. Two copies were
+    // what Plan 3a's MF-2 left (one per module), and ruling A-6 makes it one.
+    const defines = MODELS_CORPUS
+      .filter((f) => /^(?:export\s+)?function\s+readRegular\s*\(/m.test(codeOf(f)))
+      .map(rel).sort();
+    expect(defines).toEqual(['shared/modelenv.mjs']);
+    expect(readFileSync(path.join(ccrcRoot, 'deploy', 'models-op.mjs'), 'utf8'))
+      .toMatch(/import\s*\{[^}]*\breadRegular\b[^}]*\}\s*from\s*'\.\.\/shared\/modelenv\.mjs'/);
   });
 
   it('the four class names are enumerated only where a walk needs the sequence', () => {
@@ -3069,7 +3084,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // `pwa/src/lib/api.ts` at 8 of 24, so the margin is 15 tokens.
     const enumerates = (src: string): boolean =>
       LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
-    expect(LIFECYCLE_ACTS.length).toBe(26);
+    expect(LIFECYCLE_ACTS.length).toBe(27);
     expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'pwa/src/lib/api.ts'), 'utf8'))).toBe(false);
@@ -3723,13 +3738,13 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
    *  SILENTLY the moment a NODE_FILES value is renamed (it would simply stop
    *  matching anything, never redding the "declared once" case above, which
    *  scans for a DIFFERENT literal). A DYNAMIC import, not a static
-   *  top-of-file one: this file's own lines above `EIGHT_BASENAMES` are
+   *  top-of-file one: this file's own lines above `NINE_BASENAMES` are
    *  `session-hook.test.ts`'s citation anchors (`:32-37`, `:1274`, `:1303`),
    *  and every edit in this describe stays END-OF-FILE only — a new
    *  top-of-file import line would shift every one of them. */
-  let EIGHT_BASENAMES: readonly string[] = [];
+  let NINE_BASENAMES: readonly string[] = [];
   beforeAll(async () => {
-    ({ NODE_FILE_BASENAMES: EIGHT_BASENAMES } = await import('../../shared/agent-protocol.js'));
+    ({ NODE_FILE_BASENAMES: NINE_BASENAMES } = await import('../../shared/agent-protocol.js'));
   });
 
   it('is declared in exactly one file, and that file is shared/agent-protocol.ts', () => {
@@ -3751,14 +3766,15 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
   // its own CONTROL below — a REDECLARED copy in the CONTROL tested nothing
   // about the case it claimed to control (measured: reverting the real
   // case's regex to single-quote-only stayed green, CONTROL included).
-  const QUOTED = /(['"`])(?:ccrc-caps|update\.json|update-intent)\1/;
+  const QUOTED = /(['"`])(?:ccrc-caps|update\.json|update-intent|box-token-generation)\1/;
 
-  it('the three names no older code spells are quoted nowhere else — every reader goes through NODE_FILES', () => {
+  it('the four names no older code spells are quoted nowhere else — every reader goes through NODE_FILES', () => {
     // `build.json`, `installed`, `floor` and `previous` are ordinary words older
     // code already spells (`config.ts`'s `buildInfoPath`, the agent's own stamp
     // reader), and `node-id` is also a W1 CAP word (`ccd/ccrc`'s
     // `CCRC_CAP_WORDS`) a later task may test for; these three are new with the
-    // control plane, so a second quoted copy is a second definition. F16: a
+    // control plane (and `box-token-generation` with the box-token lifecycle,
+    // wave 1), so a second quoted copy is a second definition. F16: a
     // BACKREFERENCE, not a fixed `'…'` — a double-quoted or backtick re-list
     // is the same second definition, and the un-widened regex missed both.
     const holders = ALL.filter((f) => QUOTED.test(blankComments(readFileSync(f, 'utf8')))).map(rel);
@@ -3769,6 +3785,7 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
     expect(QUOTED.test('const x = "ccrc-caps";'), 'double-quoted went unseen').toBe(true);
     expect(QUOTED.test('const x = `update-intent`;'), 'backtick-quoted went unseen').toBe(true);
     expect(QUOTED.test("const x = 'update.json';"), 'single-quoted (the original case) regressed').toBe(true);
+    expect(QUOTED.test("const x = 'box-token-generation';"), 'the ninth name went unseen').toBe(true);
     expect(QUOTED.test('const x = "update.json`;'), 'mismatched quote characters falsely matched').toBe(false);
   });
 
@@ -3780,32 +3797,32 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
     expect(wl).toMatch(/import\s*\{[^}]*\bNODE_FILE_BASENAMES\b[^}]*\}\s*from\s*'\.\.\/\.\.\/shared\/agent-protocol\.js'/);
   });
 
-  /** Every file under `agent/src` (any depth) that spells ALL EIGHT basenames
+  /** Every file under `agent/src` (any depth) that spells ALL NINE basenames
    *  as string literals (any quote style) — a file that does is a second
    *  list, whether or not it also imports `NODE_FILE_BASENAMES`. Takes
    *  fixture pairs so the CONTROL below can drive it without touching a real
    *  file (F16). */
   const agentBasenameHolders = (files: readonly { path: string; src: string }[]): string[] =>
     files
-      .filter(({ src }) => EIGHT_BASENAMES.every((n) => new RegExp(`(['"\`])${n.replace('.', '\\.')}\\1`).test(src)))
+      .filter(({ src }) => NINE_BASENAMES.every((n) => new RegExp(`(['"\`])${n.replace('.', '\\.')}\\1`).test(src)))
       .map((f) => f.path);
 
-  it('no file in agent/src re-lists all eight basenames beside the NODE_FILE_BASENAMES import (F16)', () => {
-    // Anti-vacuity (F16, m2): the derived list really does carry all eight —
+  it('no file in agent/src re-lists all nine basenames beside the NODE_FILE_BASENAMES import (F16)', () => {
+    // Anti-vacuity (F16, m2): the derived list really does carry all nine —
     // a NODE_FILES shrink or a broken import would otherwise let this
     // describe run over an empty or partial set and pass for the wrong reason.
-    expect(EIGHT_BASENAMES, 'NODE_FILE_BASENAMES did not import, or the vocabulary shrank').toHaveLength(8);
+    expect(NINE_BASENAMES, 'NODE_FILE_BASENAMES did not import, or the vocabulary shrank').toHaveLength(9);
     const files = ALL.filter((f) => rel(f).startsWith('agent/src/'))
       .map((f) => ({ path: rel(f), src: readFileSync(f, 'utf8') }));
     expect(files.length, 'the agent/src scan is over nothing').toBeGreaterThan(3);
     expect(agentBasenameHolders(files)).toEqual([]);
   });
 
-  it('CONTROL: a planted re-list of all eight basenames beside the import reds the check above (F16)', () => {
+  it('CONTROL: a planted re-list of all nine basenames beside the import reds the check above (F16)', () => {
     const real = readFileSync(path.join(ccrcRoot, 'agent', 'src', 'whitelist.ts'), 'utf8');
-    const planted = `${real}\nconst ALSO = ["build.json", 'installed', \`ccrc-caps\`, 'floor', "previous", 'node-id', \`update.json\`, "update-intent"];\n`;
+    const planted = `${real}\nconst ALSO = ["build.json", 'installed', \`ccrc-caps\`, 'floor', "previous", 'node-id', \`update.json\`, "update-intent", 'box-token-generation'];\n`;
     expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: planted }]),
-      'a planted re-list of all eight went unseen').toEqual(['agent/src/whitelist.ts']);
+      'a planted re-list of all nine went unseen').toEqual(['agent/src/whitelist.ts']);
     expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: real }]),
       'the real file false-reds with no re-list planted').toEqual([]);
   });
@@ -4180,7 +4197,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });
@@ -4310,5 +4327,1272 @@ describe('worker stall watch wave 5: the largest epoch a Date holds is spelled o
 
   it('is spelled on a code line in server/src/coord/stall.ts alone', () => {
     expect(ALL.filter((f) => SPELLING.test(stallCode(f))).map(rel).sort(), 'a second spelling').toEqual(['server/src/coord/stall.ts']);
+  });
+});
+
+// Docs reader W1a (design 2026-10-01: section 2 (a), section 2 (f), section 6.1, mutation row 48's TypeScript
+// half): every docs cap and every value grammar is declared ONCE, in L0 `shared/docs.ts`. The python parity copies
+// in `ccd/ccd` sit outside ROOTS, so `docs-parity.test.ts` binds those; this pins the one TypeScript copy. APPENDED
+// after the file's last line: `session-hook.test.ts`'s citation audit cites this file by line, so nothing above
+// may move.
+describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
+  const DOCS_TS = path.join(ccrcRoot, 'shared', 'docs.ts');
+  /** A declaration of `name`, exported or not; an import or a re-export declares nothing. */
+  const DEF = (name: string): RegExp =>
+    new RegExp(String.raw`^\s*(?:export\s+)?(?:const|let|var)\s+` + name + String.raw`\b`, 'm');
+  const text = new Map<string, string>();
+  const src = (f: string): string => {
+    const hit = text.get(f);
+    if (hit !== undefined) return hit;
+    const t = readFileSync(f, 'utf8');
+    text.set(f, t);
+    return t;
+  };
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(src(f))).map(rel);
+
+  it('CONTROL: DEF sees a declaration and an un-exported copy, and not an import, a re-export or a longer name', () => {
+    expect(DEF('DOCS_MAX_ENTRIES').test('export const DOCS_MAX_ENTRIES = 5000;')).toBe(true);
+    expect(DEF('DOCS_MAX_ENTRIES').test('  const DOCS_MAX_ENTRIES = 5000;'), 'an un-exported copy is still a copy').toBe(true);
+    expect(DEF('DOCS_MAX_ENTRIES').test("import { DOCS_MAX_ENTRIES } from '../../shared/docs.js';")).toBe(false);
+    expect(DEF('DOCS_MAX_ENTRIES').test('export { DOCS_MAX_ENTRIES };'), 'a re-export declares nothing').toBe(false);
+    expect(DEF('DOCS_MAX_ENTRIES').test('export const DOCS_MAX_ENTRIES_SEEN = 1;'), 'another name').toBe(false);
+  });
+
+  // Each cap holds its OWN literal. DOCS_MAX_DOC_BYTES and DOCS_MAX_IMAGE_BYTES are both 2 MiB by two separate
+  // rulings, so "one definition" must mean an own-value literal, never an alias of the neighbour that happens to
+  // hold the same integer (HOLD_ROUTE_REASON_MAX_BYTES's argument, above). The grammar bounds are held to the same
+  // rule.
+  describe('docs caps are declared once, in shared/docs.ts, each its own literal', () => {
+    const CAPS = [
+      'DOCS_MAX_FILE_BYTES', 'DOCS_MAX_DOC_BYTES', 'DOCS_MAX_IMAGE_BYTES', 'DOCS_ENVELOPE_RESERVE',
+      'DOCS_MAX_ANSWER_BYTES', 'DOCS_MAX_LISTING_WIRE_BYTES', 'DOCS_MAX_ENTRIES', 'DOCS_DRAFT_HASH_BUDGET',
+      'DOCS_MAX_DRAFTS', 'DOCS_MAX_IMAGES_PER_PAGE', 'DOCS_FETCH_MIN_INTERVAL_MS', 'DOCS_STALE_MS',
+      'DOCS_RETRY_FLOOR_MS',
+      'DOCS_REF_MAX_CHARS', 'DOCS_PATH_MAX_BYTES', 'DOCS_PATH_MAX_COMPONENT_BYTES', 'DOCS_PATH_MAX_DEPTH',
+    ];
+    const OWN = (name: string): RegExp => new RegExp('^export const ' + name + String.raw`\s*=\s*\d+\s*;`, 'm');
+
+    it('CONTROL: OWN accepts an integer literal and refuses an alias and an expression', () => {
+      expect(OWN('DOCS_MAX_IMAGE_BYTES').test('export const DOCS_MAX_IMAGE_BYTES = 2097152;')).toBe(true);
+      expect(OWN('DOCS_MAX_IMAGE_BYTES').test('export const DOCS_MAX_IMAGE_BYTES = DOCS_MAX_DOC_BYTES;'), 'an alias').toBe(false);
+      expect(OWN('DOCS_MAX_IMAGE_BYTES').test('export const DOCS_MAX_IMAGE_BYTES = 2 * 1024 * 1024;'), 'an expression').toBe(false);
+    });
+
+    it.each(CAPS)('%s is declared in shared/docs.ts and nowhere else across the four roots', (name) => {
+      expect(holders(DEF(name))).toEqual(['shared/docs.ts']);
+    });
+
+    it.each(CAPS)('%s holds its own integer literal', (name) => {
+      expect(OWN(name).test(src(DOCS_TS)), `${name} must read \`export const ${name} = <digits>;\``).toBe(true);
+    });
+  });
+
+  // Each grammar is a pattern body. DEF pins its declaration. LITERAL pins the body text itself, by a
+  // backslash-free fingerprint, so a copy written as a regex literal, a raw template or an escaped string is seen
+  // alike. The commit and fingerprint bodies are plain hex runs that unrelated code already spells (measured at
+  // planning: `[0-9a-f]{40}` in four server/src files, `[0-9a-f]{64}` in one), so those two are pinned by DEF alone.
+  // The section body is derived by `join`, so its spelled-out form belongs in no file at all. KNOWN WIDTH: a body
+  // rebuilt from fragments evades LITERAL; `docs-parity.test.ts` still compares the helper's copy with the value.
+  describe('docs grammar bodies are declared once, in L0', () => {
+    const BODIES = [
+      'DOC_SECTIONS', 'DOCS_PROJECT_RE_BODY', 'DOCS_BARE_REF_RE_BODY', 'DOCS_QUALIFIED_PREFIX_RE_BODY',
+      'DOCS_QUALIFIED_REF_RE_BODY', 'DOCS_SHA_RE_BODY', 'DOCS_FINGERPRINT_RE_BODY', 'DOCS_MAX_BYTES_RE_BODY',
+      'DOCS_SECTION_RE_BODY', 'DOCS_REL_PATH_RE_BODY', 'DOCS_PATH_EXCLUDED_CATEGORIES', 'DOCS_PATH_EXCLUDED_RANGES',
+    ];
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    /** [what, fingerprint, the files that may hold it, a planted copy it must see, a near miss it must not]. */
+    const LITERALS: readonly (readonly [string, RegExp, readonly string[], string, string])[] = [
+      ['project', new RegExp(esc('[A-Za-z0-9_][A-Za-z0-9._-]{0,99}')), ['shared/docs.ts'],
+        'const P = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;', 'const P = /^[A-Za-z0-9._-]+$/;'],
+      ['bare ref', new RegExp(esc('(?!HEAD$)(?!refs/)')), ['shared/docs.ts'],
+        "const R = '^(?!HEAD$)(?!refs/)(?!.*\\\\.\\\\.)';", "if (s === 'HEAD') return false;"],
+      ['qualified prefix', new RegExp(esc('(?:refs/heads/|refs/remotes/origin/)')), ['shared/docs.ts'],
+        "new RegExp('^(?:refs/heads/|refs/remotes/origin/)')", "s.startsWith('refs/heads/')"],
+      ['max-bytes', new RegExp(esc('[1-9][0-9]{0,7}')), ['shared/docs.ts'],
+        'const N = /^[1-9][0-9]{0,7}$/;', 'const N = /^[0-9]+$/;'],
+      ['rel path', new RegExp(esc('(?!/)(?!.*/$)(?!.*//)')), ['shared/docs.ts'],
+        'const X = String.raw`(?!/)(?!.*/$)(?!.*//)`;', "const X = '(?!/)';"],
+      ['section map', /(['"`])docs\/product-design\1/, ['shared/docs.ts'],
+        "  'product-design': 'docs/product-design',", '// docs/product-design is a section'],
+      ['section', new RegExp(esc('specs|plans|product-design|conventions')), [],
+        "const S = 'specs|plans|product-design|conventions';", "const S = 'specs|plans';"],
+      ['path categories', /(['"])Cf\1,\s*(['"])Zl\2,\s*(['"])Zp\3,\s*(['"])Co\4,\s*(['"])Cn\5/, ['shared/docs.ts'],
+        'const C = ["Cf","Zl","Zp","Co","Cn"];', "const C = ['Cf', 'Zl'];"],
+      ['selector ranges', /0xe0100\s*,\s*0xe01ef/i, ['shared/docs.ts'],
+        'const V = [[0xFE00, 0xFE0F], [0xE0100, 0xE01EF]];', 'const V = 0xe0100;'],
+    ];
+
+    it('CONTROL: each fingerprint sees its planted copy and not its near miss', () => {
+      for (const [what, re, , copy, miss] of LITERALS) {
+        expect(re.test(copy), `${what}: the planted copy`).toBe(true);
+        expect(re.test(miss), `${what}: the near miss`).toBe(false);
+      }
+    });
+
+    it.each(BODIES)('%s is declared in shared/docs.ts and nowhere else across the four roots', (name) => {
+      expect(holders(DEF(name))).toEqual(['shared/docs.ts']);
+    });
+
+    it.each(LITERALS.map(([what, re, files]) => [what, re, files] as const))(
+      'the %s body is spelled out only where it is declared', (_what, re, files) => {
+        expect(holders(re)).toEqual([...files]);
+      });
+  });
+});
+
+// Docs W1, Task 2 (spec 2026-10-01 section 2 (b), section 2 (i), section 3.5): the failure vocabulary, its retry
+// classes, the redactor and the ccd wire types each have ONE home, `shared/docs.ts`. The server's L1 status table,
+// its L3 adapter and the PWA's sentence table all key on these names, so a second declaration is a second
+// vocabulary that nothing forces to agree. The python copies (`FAILURES`, `REDACT_RULES`) live in `ccd/ccd`,
+// outside ROOTS; `docs-parity.test.ts` binds those. APPENDED after the file's last line:
+// `session-hook.test.ts`'s citation audit cites this file by line, so nothing above may move.
+describe('docs failure vocabulary, redactor and ccd wire types are declared once, in shared/docs.ts (docs W1)', () => {
+  const DOCS = path.join(ccrcRoot, 'shared', 'docs.ts');
+  const TYPES = [
+    'DocsFailure', 'DocsRetryClass', 'DocsFetchFailure', 'DocsNotAFileKind', 'DocsFailureContext', 'DocsFailureBody',
+    'DocsVerb', 'DocsGithub', 'DocsTreeOk', 'DocsEntry', 'DraftsFacts', 'DocsShowOk', 'DocsFetchOk', 'DocsIndexOk',
+    'DocsIndexRow', 'DocsCcdFailure',
+  ] as const;
+  const VALUES = ['DOCS_FAILURES', 'DOCS_FAILURE_RETRY', 'DOCS_CCD_FAILURES', 'DOCS_REDACT_RULES'] as const;
+  const FUNCTIONS = ['redactDocsText'] as const;
+  // The declaration shapes of the update-control-plane describe above (its `DEF_OF` is block-local there): a
+  // type needs its `=` and an interface its keyword, so an inline `type X,` import specifier is no holder.
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  const FUNCTION_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+  const holdersOf = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('CONTROL: each shape sees a declaration and an un-exported copy, and not an import, a re-export or a longer name', () => {
+    expect(TYPE_DEF('DocsFailure').test("export type DocsFailure = keyof typeof DOCS_FAILURES;")).toBe(true);
+    expect(TYPE_DEF('DocsFailure').test("type DocsFailure = 'bad-ref';"), 'an un-exported copy is still a copy').toBe(true);
+    expect(TYPE_DEF('DocsTreeOk').test('export interface DocsTreeOk {'), 'an interface').toBe(true);
+    expect(TYPE_DEF('DocsFailure').test("import {\n  type DocsFailure,\n} from '../../../shared/docs.js';"), 'an import specifier').toBe(false);
+    expect(TYPE_DEF('DocsFailure').test('export type DocsFailureBody = { ok: false };'), 'a longer name').toBe(false);
+    expect(VALUE_DEF('DOCS_FAILURES').test('export const DOCS_FAILURES = {'), 'a declaration').toBe(true);
+    expect(VALUE_DEF('DOCS_FAILURES').test("export { DOCS_FAILURES } from './docs.js';"), 'a re-export').toBe(false);
+    expect(VALUE_DEF('DOCS_FAILURES').test('const DOCS_FAILURES_SEEN = 1;'), 'a longer name').toBe(false);
+    expect(FUNCTION_DEF('redactDocsText').test('export function redactDocsText(s: string): string {')).toBe(true);
+    expect(FUNCTION_DEF('redactDocsText').test('const x = redactDocsText(s);'), 'a call').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares type ${name} exactly once, in shared/docs.ts`, () => {
+      expect(holdersOf(TYPE_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+
+  it('declares every value and the redactor function exactly once, in shared/docs.ts', () => {
+    for (const name of VALUES) expect(holdersOf(VALUE_DEF(name)), name).toEqual(['shared/docs.ts']);
+    for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
+  });
+
+  it('spells the redactor patterns in one TS file: no second copy of a rule', () => {
+    // Fragments every copy of rules 2 and 3 must contain however it is escaped or quoted.
+    for (const fragment of ['(?:access_token|token)=', 'gh[opsu]_']) {
+      expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(fragment)).map(rel), fragment).toEqual(['shared/docs.ts']);
+    }
+  });
+
+  it('DOCS_CCD_FAILURES is derived from DOCS_FAILURES, never hand-listed', () => {
+    const src = readFileSync(DOCS, 'utf8');
+    expect(src).toMatch(
+      /^export const DOCS_CCD_FAILURES: readonly DocsFailure\[\] =\n {2}\(Object\.keys\(DOCS_FAILURES\) as DocsFailure\[\]\)\.filter\(\(w\) => DOCS_FAILURES\[w\] === 'ccd'\);$/m,
+    );
+  });
+
+  it('DOCS_FAILURE_RETRY is typed by the vocabulary, so a new word does not compile until it is placed', () => {
+    const src = readFileSync(DOCS, 'utf8');
+    expect(src).toMatch(/^export const DOCS_FAILURE_RETRY: Record<DocsFailure, DocsRetryClass> = \{$/m);
+    expect(src).toMatch(/^export type DocsFailure = keyof typeof DOCS_FAILURES;$/m);
+  });
+});
+
+// Native Docs reader, W1 Task 3 (spec 5.1, 5.3, 6.1, 3.5, 4.11): the content-class table, the raster table,
+// the class caps, the docs response headers, the HTTP wrappers and the link resolver each have ONE declaring
+// file, shared/docs.ts. The server's file route and its onSend hook (W2) and the PWA's renderer and link policy
+// (W5, W6) import them; a second copy would be a second answer to "what class is this file", "what may this
+// route send" or "where does this link go". APPENDED after the file's last line: `session-hook.test.ts`'s
+// citation audit cites this file by line, so nothing above may move.
+describe('docs content classes, headers, wrappers and resolver are declared once, in shared/docs.ts (docs W1 Task 3)', () => {
+  const TYPES = [
+    'DocContentClass', 'RasterType', 'RasterMime', 'DocRefResolution',
+    'DocsProjectsResponse', 'DocsTreeResponse', 'DocsFileResponse', 'DocsRefreshFetch', 'DocsRefreshResponse',
+  ] as const;
+  const VALUES = [
+    'DOC_CONTENT_CLASS_BY_EXT', 'DOCS_CLASS_CAP', 'DOCS_RASTER_TYPES', 'DOCS_RASTER_EXT',
+    'DOCS_RESPONSE_CSP', 'DOCS_RESPONSE_HEADERS', 'DOCS_ALLOWED_CONTENT_TYPES',
+  ] as const;
+  const FUNCTIONS = ['contentClass', 'sniffRaster', 'resolveDocRef'] as const;
+  // The declaration shapes of the update-control-plane block above: a type needs its `=` (or `interface`), so
+  // an inline `type X,` import specifier is not a holder; a value is a `const`/`let`/`var`; a function is a
+  // `function` declaration. `export` is optional throughout: an un-exported local copy is still a copy.
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  const FUNCTION_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+  const holdersOf = (def: RegExp): string[] => ALL.filter((f) => def.test(readFileSync(f, 'utf8'))).map(rel);
+
+  it('CONTROL: each pattern sees a planted declaration, exported or not, and not an import or a use', () => {
+    expect(TYPE_DEF('DocContentClass').test("export type DocContentClass = 'markdown';")).toBe(true);
+    expect(TYPE_DEF('DocContentClass').test("type DocContentClass = 'a';"), 'an un-exported copy').toBe(true);
+    expect(TYPE_DEF('DocsFileResponse').test('export interface DocsFileResponse { ok: true }')).toBe(true);
+    expect(TYPE_DEF('DocContentClass').test("import {\n  type DocContentClass,\n} from '../../../shared/docs.js';"),
+      'an import specifier').toBe(false);
+    expect(TYPE_DEF('DocContentClass').test("  contentClass: Exclude<DocContentClass, 'raster'>;"), 'a use').toBe(false);
+    expect(VALUE_DEF('DOCS_CLASS_CAP').test('export const DOCS_CLASS_CAP: Record<DocContentClass, number> = {')).toBe(true);
+    expect(VALUE_DEF('DOCS_CLASS_CAP').test('const DOCS_CLASS_CAP = {};'), 'an un-exported copy').toBe(true);
+    expect(VALUE_DEF('DOCS_CLASS_CAP').test("import { DOCS_CLASS_CAP } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(VALUE_DEF('DOCS_CLASS_CAP').test('  const cap = DOCS_CLASS_CAP[cls];'), 'a use').toBe(false);
+    expect(FUNCTION_DEF('contentClass').test('export function contentClass(path: string): DocContentClass {')).toBe(true);
+    expect(FUNCTION_DEF('contentClass').test('function contentClass(p: string) {'), 'an un-exported copy').toBe(true);
+    expect(FUNCTION_DEF('contentClass').test('  const cls = contentClass(pin.path);'), 'a call').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares the type ${name} once, in shared/docs.ts`, () => {
+      expect(holdersOf(TYPE_DEF(name))).toEqual(['shared/docs.ts']);
+    });
+  }
+
+  it('declares every table and header value once, in shared/docs.ts', () => {
+    for (const name of VALUES) expect(holdersOf(VALUE_DEF(name)), name).toEqual(['shared/docs.ts']);
+  });
+
+  it('declares contentClass, sniffRaster and resolveDocRef once, in shared/docs.ts', () => {
+    for (const name of FUNCTIONS) expect(holdersOf(FUNCTION_DEF(name)), name).toEqual(['shared/docs.ts']);
+  });
+
+  it("spells the docs CSP text once: the server's hook and the browser leg import DOCS_RESPONSE_CSP", () => {
+    const CSP_TEXT = "img-src data:; style-src 'unsafe-inline'; sandbox; frame-ancestors 'none'";
+    expect(ALL.filter((f) => readFileSync(f, 'utf8').includes(CSP_TEXT)).map(rel)).toEqual(['shared/docs.ts']);
+  });
+
+  it('spells the PNG signature once: the L1 raster verdict wraps sniffRaster rather than copying the table', () => {
+    const PNG_MAGIC = /0x89\s*,\s*0x50\s*,\s*0x4e\s*,\s*0x47/i;
+    expect(PNG_MAGIC.test('[0x89, 0x50, 0x4E, 0x47, 0x0d]'), 'CONTROL: a copy in another case').toBe(true);
+    expect(PNG_MAGIC.test('[0x89, 0x51, 0x4e, 0x47]'), 'CONTROL: another signature').toBe(false);
+    expect(ALL.filter((f) => PNG_MAGIC.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+  });
+});
+
+// Docs W1a, Task 4 (spec 2026-10-01 4.6 and 3.11): the entry view and the GitHub link builder
+// are declared once, in shared/docs.ts. The PWA's rows and leaf headers both call entryView
+// ("one badge function", spec 2 (d)), so a second derivation of a badge, or a second URL
+// builder, anywhere in the four roots is the drift this pins. The pattern-2 bundle shape of
+// the update control plane block above, with a planted CONTROL. APPENDED after the file's
+// last line: `session-hook.test.ts`'s citation audit cites this file by line.
+describe('docs section H is declared once, in shared/docs.ts (docs W1a)', () => {
+  const TYPES = ['EntryMode', 'EntryBadge', 'WithheldReason', 'EntryView', 'GithubTarget', 'GithubLink'] as const;
+  const FUNCTIONS = ['admitDraft', 'entryView', 'githubBlobUrl'] as const;
+  // A type is declared by `type <Name> =` or `interface <Name>`, `export`/`declare` optional:
+  // an un-exported local copy is still a copy, and an inline import specifier is not one.
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  // A function is declared by `function <name>` or bound by `const|let|var <name>`: an arrow
+  // copy is the likeliest second copy, and a call or an import binds nothing.
+  const FN_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+
+  it('CONTROL: the patterns see a declaration, a local copy and an arrow copy, and not an import, a call or another name', () => {
+    expect(TYPE_DEF('EntryView').test('export interface EntryView {')).toBe(true);
+    expect(TYPE_DEF('EntryBadge').test("type EntryBadge = 'new' | 'deleted';"), 'an un-exported local type').toBe(true);
+    expect(TYPE_DEF('EntryView').test("import {\n  type EntryView,\n} from '../../../shared/docs.js';"), 'an import specifier').toBe(false);
+    expect(TYPE_DEF('EntryView').test('export interface EntryViewRow {'), 'another name').toBe(false);
+    expect(FN_DEF('entryView').test('export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryView {')).toBe(true);
+    expect(FN_DEF('entryView').test('const entryView = (e: DocsEntry) => e;'), 'an arrow copy').toBe(true);
+    expect(FN_DEF('entryView').test("import { entryView } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(FN_DEF('entryView').test("  const v = entryView(e, drafts, 'ref');"), 'a call').toBe(false);
+    expect(FN_DEF('githubBlobUrl').test('export function githubBlobUrls('), 'another name').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => TYPE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+  for (const name of FUNCTIONS) {
+    it(`defines ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => FN_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+});
+
+// Docs W1a, Task 5 (spec 2026-10-01 3.1, 3.2, 3.8): the page grammar, the pin and the one docs API URL builder
+// are declared once, in shared/docs.ts. The server's L1 query parser (W2) and the PWA's router and loaders (W5)
+// import them; a second parser or builder is a second grammar nothing forces to agree. The marker header word
+// is quoted once for the same reason: the server's provenance hook and the PWA's funnel must read the one
+// constant, so a rename cannot leave one side sending a header the other no longer checks. DOCS_PAGE_PREFIX's
+// own pin is M7.3, in docs-parity.test.ts. APPENDED after the file's last line: `session-hook.test.ts`'s
+// citation audit cites this file by line.
+describe('docs page URLs and the API URL builder are declared once, in shared/docs.ts (docs W1a)', () => {
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const VALUE_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+  const FUNCTION_DEF = (name: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+  const TYPES = ['DocsPageLocation', 'DocsPageParseFailure', 'DocsPageParse', 'DocPin'] as const;
+  const VALUES = [
+    'DOCS_PAGE_PREFIX', 'DOCS_API_PREFIX', 'DOCS_REQUEST_HEADER', 'DOCS_REQUEST_HEADER_VALUE', 'DOCS_PAGE_KEYS',
+    'DOCS_PIN_KEYS', 'docsApi',
+  ] as const;
+  const FUNCTIONS = ['parseDocsPage', 'docsPageUrl'] as const;
+
+  it('CONTROL: each pattern sees a declaration, local or exported, and not an import, a re-export or a use', () => {
+    expect(TYPE_DEF('DocPin').test('type DocPin = { kind: string };'), 'un-exported local type').toBe(true);
+    expect(TYPE_DEF('DocPin').test("import {\n  type DocPin,\n} from '../../../shared/docs.js';"), 'import specifier').toBe(false);
+    expect(VALUE_DEF('docsApi').test('const docsApi = {};'), 'un-exported local const').toBe(true);
+    expect(VALUE_DEF('docsApi').test("export { docsApi } from '../../shared/docs.js';"), 're-export').toBe(false);
+    expect(VALUE_DEF('docsApi').test('const url = docsApi.tree(p, null);'), 'a use').toBe(false);
+    expect(FUNCTION_DEF('parseDocsPage').test('function parseDocsPage(p: string) {}'), 'local function').toBe(true);
+    expect(FUNCTION_DEF('parseDocsPage').test('const r = parseDocsPage(path, search);'), 'a call').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares the type ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => TYPE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+
+  it('declares every constant and builder exactly once, in shared/docs.ts', () => {
+    for (const name of VALUES) {
+      expect(ALL.filter((f) => VALUE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/docs.ts']);
+    }
+    for (const name of FUNCTIONS) {
+      expect(ALL.filter((f) => FUNCTION_DEF(name).test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/docs.ts']);
+    }
+  });
+
+  const HEADER_LITERAL = /(['"])x-ccrc-docs\1/;
+
+  it('CONTROL: the header literal scan sees a quoted copy, and not prose or a longer word', () => {
+    expect(HEADER_LITERAL.test("headers['x-ccrc-docs']")).toBe(true);
+    expect(HEADER_LITERAL.test('headers: { "x-ccrc-docs": "1" }')).toBe(true);
+    expect(HEADER_LITERAL.test('the `x-ccrc-docs` marker'), 'a backticked prose mention').toBe(false);
+    expect(HEADER_LITERAL.test("'x-ccrc-docs-v2'"), 'another word').toBe(false);
+  });
+
+  it('quotes the marker header word in shared/docs.ts and nowhere else across the four roots', () => {
+    expect(ALL.filter((f) => HEADER_LITERAL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+  });
+});
+
+// Docs W1 final review (minors-triage MT-1): Task 1's sections and grammar predicates, its ref spec and its two
+// types, declared once in shared/docs.ts (the plan's pattern 2 for each type or function name). W2's L1 query parser
+// and W5's link code call these; a second `isDocsRelPath` (a regex alone, without the category, byte and depth
+// checks) would pass every grammar pin while the TS-to-python parity measured a copy no server ran. APPENDED after
+// the file's last line: `session-hook.test.ts`'s citation audit cites this file by line.
+describe('docs sections, grammar predicates and ref spec are declared once, in shared/docs.ts (docs W1, Task 1)', () => {
+  const TYPES = ['DocSectionSlug', 'DocsRefSpec'] as const;
+  const FUNCTIONS = [
+    'isDocsSection', 'docRepoPath', 'isDocsProject', 'isDocsBareRef', 'isDocsQualifiedRef', 'isDocsCommit',
+    'isDocsRelPath', 'isDocsFingerprint', 'isDocsMaxBytes', 'parseDocsRef', 'docsRefText',
+  ] as const;
+  // Section H's shapes: a type by `type <Name> =` or `interface <Name>`, a function by `function <name>` or a
+  // `const|let|var <name>` binding (an arrow copy), `export`/`declare` optional.
+  const TYPE_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  const FN_DEF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:function\\s+${name}\\b|(?:const|let|var)\\s+${name}\\b)`, 'm');
+
+  it('CONTROL: the patterns see a declaration, a local copy and an arrow copy, and not an import, a call or another name', () => {
+    expect(TYPE_DEF('DocsRefSpec').test("export type DocsRefSpec = { kind: 'bare'; name: string };")).toBe(true);
+    expect(TYPE_DEF('DocSectionSlug').test("type DocSectionSlug = 'specs';"), 'an un-exported local type').toBe(true);
+    expect(TYPE_DEF('DocsRefSpec').test("import {\n  type DocsRefSpec,\n} from '../../../shared/docs.js';"), 'an import specifier').toBe(false);
+    expect(FN_DEF('isDocsRelPath').test('export function isDocsRelPath(s: string): boolean {')).toBe(true);
+    expect(FN_DEF('isDocsRelPath').test('const isDocsRelPath = (s: string): boolean => /^x$/.test(s);'), 'an arrow copy').toBe(true);
+    expect(FN_DEF('isDocsRelPath').test("import { isDocsRelPath } from '../../../shared/docs.js';"), 'an import').toBe(false);
+    expect(FN_DEF('isDocsRelPath').test('  if (!isDocsRelPath(p)) return null;'), 'a call').toBe(false);
+    expect(FN_DEF('isDocsSection').test('export function isDocsSectionSlug('), 'another name').toBe(false);
+  });
+
+  for (const name of TYPES) {
+    it(`declares the type ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => TYPE_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+  for (const name of FUNCTIONS) {
+    it(`defines ${name} exactly once, in shared/docs.ts`, () => {
+      expect(ALL.filter((f) => FN_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
+    });
+  }
+});
+
+// SESSION-CONTINUITY WAVE 4 (spec §5.6, the coordinator's safety ruling). APPENDED, for the reason the stall-watch
+// blocks above state: `session-hook.test.ts`'s citation audit cites this file by line.
+describe('the pane-scope sweep: its arming file has no writer in the tree', () => {
+  // `scope-sweep-live` arms `ccd-scope-sweep`'s stop: without it every inert scope is only recorded `would-stop`.
+  // Like `stall-watch-live` the operator touches and removes it by hand, so the ONE line of shell that may name
+  // it is the sweep's own read, no TypeScript names it at all, and no other file under ccd/ or deploy/ does on a
+  // code line. KNOWN WIDTH: a name assembled from pieces is not seen; the bar is the ordinary copy.
+  it('scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; no TS holder', () => {
+    expect(holdersOf('scope-sweep-live'), 'a line of shell other than the sweep names it — a writer in waiting').toEqual(['ccd/ccd-scope-sweep']);
+    expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccd-scope-sweep')).filter((l) => l.includes('scope-sweep-live')))
+      .toEqual(['[ -e "$REG/scope-sweep-live" ] && MODE=live']);
+    expect(ALL.filter((f) => stallCode(f).includes('scope-sweep-live')).map(rel)).toEqual([]);
+  });
+
+  // A writer need not be shell: every OTHER file under ccd/ and deploy/ — Python, .mjs, a unit file's
+  // `ExecStartPre=` — is read on its non-comment lines too (`#`, `//`, `*` and `/*` lines dropped; Markdown,
+  // which is prose, skipped).
+  const nonShell = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+  });
+  it('scope-sweep-live: no other file under ccd/ or deploy/ names it on a code line — no Python, .mjs or unit-file writer', () => {
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('scope-sweep-live'))).map(rel)).toEqual([]);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 3b (spec 2026-09-24 §5.3, the coordinator's safety ruling (E)). APPENDED, for the reason
+// the stall-watch blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The expiry lane
+// SHIPS SHADOWED: until `$REG/expire-lane-live` exists it audits and records "would expire" and never composes
+// `ws-expire`. The file is the operator's to touch BY HAND on the fleet box, beside `stall-watch-live` above — so no
+// line of shell names it (a writer, or a reader the design never had), and its one TS holder is its definer, an L1
+// file that reaches no `node:` module and so cannot write it.
+describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no writer in the tree', () => {
+  const NAME = 'expire-lane-live';
+  const DEFINER = 'server/src/archivedExpiry.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER: a file that imports the switch's ONE spelling, `EXPIRE_LANE_LIVE_MARKER`, and holds an `io` could
+  // write it without ever spelling its name. So the files whose code names the constant are pinned, and none of them
+  // may reach a write — the executor reads the registry listing and nothing else. KNOWN WIDTH, stated: a write through
+  // a helper defined in another file is not seen; the bar is the ordinary call.
+  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('EXPIRE_LANE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/coord/expireArchived.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// THE THRESHOLD IS NEVER TYPED BY THE SERVER (the coordinator's ruling (C), wave 3b): ccd's `ws-audit --expire`
+// document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`), and the server reads it through ONE reader. Both
+// halves pinned: no seven-day literal in the server or the PWA beside the one that is not an expiry (`limits.ts`'s
+// usage window), and the audit document is parsed in one place and its `expiresAt` key read in one file. KNOWN WIDTH:
+// a reader spelling `doc.expiresAt` on a raw document is not seen — the raw document reaches the server only through
+// `parseExpireAudit`, whose one caller is pinned.
+describe('workspace lifecycle wave 3b: the expiry threshold is ccd’s, read through one reader', () => {
+  const SEVEN_DAYS = /\b604_?800\b|\b7\s*\*\s*86_?400\b|\b7\s*\*\s*24\s*\*\s*60\b/;
+  const lane = ALL.filter((f) => /^(server|pwa)\/src\//.test(rel(f)));
+
+  it('no seven-day literal in server/src or pwa/src, but the usage window’s', () => {
+    expect(SEVEN_DAYS.test('const S = 7 * 86_400;'), 'CONTROL').toBe(true);
+    expect(lane.filter((f) => SEVEN_DAYS.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/limits.ts']);
+  });
+
+  it('the audit document is parsed in one place, and its `expiresAt` key is read in one file', () => {
+    expect(ALL.filter((f) => /\bparseExpireAudit\s*\(/.test(stallCode(f))).map(rel).sort())
+      .toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts']);
+    expect(ALL.filter((f) => /['"]expiresAt['"]/.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/archivedExpiry.ts']);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 4 (review 313, F3). APPENDED, for the reason the blocks above state. The seven-day pin above
+// reads numeric spellings only, so the expiry lane's operator text typed "past its seven days" and nothing reddened.
+// MEASURED before deciding how wide: a prose pin over every code line of `server/src` and `pwa/src` holds five files —
+// `wsaudit.ts` (ccd's own `not-expired` and `child` sentences, rendered verbatim), `watch.ts` and `coord/schema.ts`
+// (the deviation ledger's unrelated seven-day stale window, in a log line and a migration's SQL comment), and the PWA's
+// two archive confirms, which are the operator's copy. So the pin is scoped to the lane's own two files, where a
+// period in a sentence is the defect.
+describe('workspace lifecycle wave 4: the expiry lane’s own words type no period (review 313, F3)', () => {
+  const PROSE = /\b(?:seven|7)[ -]days?\b/i;
+  it('no seven-day prose on a code line of archivedExpiry.ts or coord/expireArchived.ts', () => {
+    expect(PROSE.test('`held (“x”) past its seven days`'), 'CONTROL').toBe(true);
+    expect(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts']
+      .filter((f) => PROSE.test(stallCode(path.join(ccrcRoot, f))))).toEqual([]);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 4 (spec 2026-09-24 §5.4, the coordinator's safety ruling (B)). APPENDED, for the reason the
+// blocks above state. The dead-coordinator lane SHIPS SHADOWED: until `$REG/dead-coordinator-lane-live` exists it
+// measures, anchors, trips its breaker and records "would end programme <slug> (<n> runs)", and never reaches
+// `closeRun`'s abandon arm. The file is the operator's to touch BY HAND in the registry the server reads, beside
+// `expire-lane-live`, `scope-sweep-live` and `stall-watch-live` above — so no line of shell names it, and its one TS
+// holder on a code line is its definer, an L1 file that reaches no `node:` module and so cannot write it.
+describe('workspace lifecycle wave 4: the dead-coordinator lane’s live switch has no writer in the tree', () => {
+  const NAME = 'dead-coordinator-lane-live';
+  const DEFINER = 'server/src/deadCoordinator.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
+  // without spelling its name. The files whose code names the constant are pinned, and none of them reaches a write.
+  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('DEAD_COORDINATOR_LANE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// CCRC HISTORY (spec 2026-10-05 §9.11 O13, O14; §10.1 Seams). APPENDED after the last describe, for the reason
+// the blocks above state: session-hook.test.ts's citation audit cites this file by line, so no import line is
+// added at the head either — the history modules are imported dynamically inside each case.
+const HISTORY_DIR = path.join(ccrcRoot, 'ccd', 'history');
+/** Every `.mjs` under a root: never a `.d.mts` (a type mirror declares types, it defines nothing), and the
+ *  `__`-prefixed mutants and node_modules skipped — the MODELS_CORPUS walk, restated because that one is scoped
+ *  to its own describe. */
+const mjsUnder = (dir: string): string[] => {
+  const out: string[] = [];
+  if (!existsSync(dir)) return out;
+  for (const e of readdirSync(dir)) {
+    if (e.startsWith('__') || e === 'node_modules') continue;
+    const p = path.join(dir, e);
+    if (statSync(p).isDirectory()) { out.push(...mjsUnder(p)); continue; }
+    if (/\.mjs$/.test(p)) out.push(p);
+  }
+  return out;
+};
+const HISTORY_MJS = mjsUnder(HISTORY_DIR);
+/** Any `.mjs` a writer could live in: ccd/ (compact-card and history), deploy/, shared/. */
+const ALL_MJS = [...new Set([...mjsUnder(path.join(ccrcRoot, 'ccd')), ...mjsUnder(path.join(ccrcRoot, 'deploy')),
+  ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+
+describe('ccrc history: the operator switches have readers only (spec 2026-10-05 §9.11 O13)', () => {
+  // Each switch is touched and removed BY HAND (§9.7): no line of shell or .mjs may write one. `lib.mjs`'s
+  // SWITCHES is the one sanctioned definer (the stall-watch MARKERS precedent above); the hook and the shim read
+  // `history-off` with a bash test. `_uninst_purge` spells its kept set as the globs `history` and `history-*`
+  // and doctor names the cap file from `status --json`, so neither is a holder. B2 adds the skill's files to
+  // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
+  // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
+  // and nothing else, and a split spelling is pinned by the case that reads the literal back.
+  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
+  // `sweep.mjs` (`--op recall-off`, spec :1863 and the :2007 lifecycle row), which ships in W2. B1 holds the half
+  // it can: the last case below reds when any corpus file but `ccd/history/sweep.mjs` writes it. The other half,
+  // that `sweep.mjs` DOES write it and is the only file naming it, lands with W2's `--op recall-off`: W2 adds
+  // `recall-off` to this describe's holders as `['recall-off', ['ccd/history/sweep.mjs']]` and drops the
+  // exemption below.
+  const HOLDERS: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ['history-off', ['ccd/ccd-history-sweep', 'ccd/history/lib.mjs', 'ccd/session-hook.sh']],
+    ['history-steer-off', ['ccd/history/lib.mjs']],
+    ['history-steer-live', ['ccd/history/lib.mjs']],
+    ['history-max-gb', ['ccd/history/lib.mjs']],
+    ['steer-on', ['ccd/history/lib.mjs']],
+    ['headless-on', ['ccd/history/lib.mjs']],
+  ];
+  const CORPUS = [...new Set([...BASH, ...ALL_MJS])];
+  /** A switch is a PATH, so a line names one only as `/<name>`. The bare words are vocabulary, not files: the
+   *  exit-2 reason `history-off` (REASONS, Task 3; decideOpGate's refusal, Task 6) names the CONDITION, and
+   *  lib.mjs spells it as a reason word, never as the file. */
+  const needle = (name: string): string => `/${name}`;
+  /** The help text NAMES the pause path for the operator; it neither reads nor writes the switch. The allowance is
+   *  line-scoped: only the lines of `fn`'s body (its `fn() {` line to the next line that is exactly `}`) that hold a
+   *  needle in a single-quoted printf argument: a quoted line that belongs to the run of `\` continuations starting at
+   *  a `printf` line of `fn` (FU9, B4M2), so a continuation of any other command inside `fn` is not covered. Every
+   *  other `file` line naming the path still reds the scan. The allowance departs from spec O13: D-4550. */
+  const USAGE_PROSE = { file: 'ccd/ccrc', fn: '_usage_history_paragraph', needles: ['/history-off'] } as const;
+  /** The line numbers of `fn`'s body the allowance covers, and the body itself (null when `fn` is not found). */
+  const usageProse = (text: string): { body: string[] | null; allowed: Set<number> } => {
+    const lines = text.split('\n');
+    const at = lines.indexOf(`${USAGE_PROSE.fn}() {`);
+    if (at < 0) return { body: null, allowed: new Set() };
+    let end = at + 1;
+    while (end < lines.length && lines[end] !== '}') end += 1;
+    const allowed = new Set<number>();
+    let inPrintf = false;   // true while the previous line was a printf line, or a quoted argument line, that ends in `\`
+    for (let i = at + 1; i < end; i += 1) {
+      const l = lines[i]!;
+      const continues = /\\\s*$/.test(l);
+      if (/^\s*printf\b/.test(l)) { inPrintf = continues; continue; }
+      const m = /^\s*'([^']*)'(?:\s*\\)?$/.exec(l);
+      if (inPrintf && m && USAGE_PROSE.needles.some((n) => m[1]!.includes(n))) allowed.add(i);
+      inPrintf = inPrintf && m !== null && continues;
+    }
+    return { body: lines.slice(at + 1, end), allowed };
+  };
+  /** A file's code lines, comment lines dropped in either language. The one allowance is applied here, so the
+   *  holder count and the `writes()` classifier both skip it. */
+  const code = (f: string): string[] => {
+    if (!BASH.includes(f)) return stallCode(f).split('\n');
+    const text = readFileSync(f, 'utf8');   // once per call: ccd/ccrc is about 24k lines
+    const skip = rel(f) === USAGE_PROSE.file ? usageProse(text).allowed : new Set<number>();
+    return text.split('\n').filter((l, i) => !skip.has(i) && !isBashComment(l));
+  };
+  /** A line READS a switch when it tests or reads the path. */
+  const READ = /\[\[?\s+!?\s*-[efrs]\s|\b(?:existsSync|readFileSync|statSync|lstatSync)\s*\(/;
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** A line WRITES the switch when a redirection, a file-changing command or a writing fs call targets it. */
+  const writes = (line: string, lang: 'bash' | 'mjs', name: string): boolean => {
+    const n = esc(name);
+    if (lang === 'mjs') {
+      return new RegExp(`\\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\\s*\\([^;]*${n}`).test(line);
+    }
+    const l = line.replace(/\d?>\s*\/dev\/null|>&\d/g, '');
+    return new RegExp(`>{1,2}\\s*["']?[^\\s"'<>|;&]*${n}`).test(l)
+      || new RegExp(`(?:^|[\\s;&|({])(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)\\s[^;&|]*${n}`).test(l);
+  };
+  /** lib.mjs's SWITCHES declaration: its first line through the line that closes it. */
+  const switchesBlock = (): string[] => {
+    const lines = stallCode(path.join(HISTORY_DIR, 'lib.mjs')).split('\n');
+    const at = lines.findIndex((l) => /\bconst SWITCHES\s*=/.test(l));
+    expect(at, 'ccd/history/lib.mjs declares no SWITCHES').toBeGreaterThan(-1);
+    let end = at;
+    while (end < lines.length - 1 && !/\}\s*\)\s*;?\s*$/.test(lines[end]!)) end += 1;
+    return lines.slice(at, end + 1);
+  };
+
+  it('CONTROL: both corpora were walked, and the classifiers see a read, a write and neither', () => {
+    expect(BASH.map(rel)).toEqual(expect.arrayContaining(['ccd/ccd-history-sweep', 'ccd/session-hook.sh']));
+    expect(ALL_MJS.map(rel)).toContain('ccd/history/lib.mjs');
+    expect(READ.test('[ -e "$HOME/.ccrc/history-off" ] && exit 0')).toBe(true);
+    expect(READ.test('[[ ! -e "$HOME/.ccrc/history-off" ]] || _hs=x')).toBe(true);
+    expect(READ.test('if (existsSync(p.off)) return 0;')).toBe(true);
+    expect(writes('touch "$HOME/.ccrc/history-off"', 'bash', 'history-off')).toBe(true);
+    expect(writes(': > "$HOME/.ccrc/history-off"', 'bash', 'history-off')).toBe(true);
+    expect(writes('rm -f -- "$HOME/.ccrc/history-max-gb"', 'bash', 'history-max-gb')).toBe(true);
+    expect(writes('[ -e "$HOME/.ccrc/history-off" ] 2>/dev/null', 'bash', 'history-off')).toBe(false);
+    expect(writes('[[ -e "$HOME/.ccrc/history-off" ]] || { printf x >> "$spool"; }', 'bash', 'history-off')).toBe(false);
+    expect(writes("writeFileSync(home + '/.ccrc/history-off', '')", 'mjs', 'history-off')).toBe(true);
+    expect(writes("if (existsSync(home + '/.ccrc/history-off')) return;", 'mjs', 'history-off')).toBe(false);
+    // The reason word is not the file: REASON_ROWS' `'history-off'` names no switch path.
+    expect("'irreversible-in-pane', 'history-off', 'span-pruned',".includes(needle('history-off'))).toBe(false);
+    expect('[ -e "$HOME/.ccrc/history-off" ] && exit 0'.includes(needle('history-off'))).toBe(true);
+  });
+
+  it('USAGE_PROSE: the allowance covers one real spelling, the literal path, and exactly one line (FU5)', () => {
+    const text = readFileSync(path.join(ccrcRoot, USAGE_PROSE.file), 'utf8');
+    const { body, allowed } = usageProse(text);
+    expect(body, `${USAGE_PROSE.file} has no ${USAGE_PROSE.fn}`).not.toBeNull();
+    // A split spelling (`local off=history-off`, `~/.ccrc/$off`) would hold no needle and so pass the scan blind:
+    // the help text must carry the path whole, so a future split fails here.
+    expect(body!.join('\n')).toContain('~/.ccrc/history-off');
+    expect(allowed.size).toBe(1);
+    // The classifier: a single-quoted prose line is allowed, a code line that reads or writes the path is not.
+    const probe = (...l: string[]): number => usageProse(`${USAGE_PROSE.fn}() {\n${l.join('\n')}\n}\n`).allowed.size;
+    const PROSE = "    '            a session printed included; touch ~/.ccrc/history-off to pause' \\";
+    expect(probe("  printf '\\n%s' \\", PROSE)).toBe(1);
+    expect(probe(PROSE), 'a quoted line outside a printf run is not prose').toBe(0);
+    // FU9 (B4M2): a quoted line is covered only as the continuation of a printf line, never of another command.
+    expect(probe('  touch \\', "    '/abs/.ccrc/history-off'")).toBe(0);
+    expect(probe("  printf '\\n%s' \\", "    'one' \\", '  touch \\', "    '/abs/.ccrc/history-off'")).toBe(0);
+    expect(probe("  printf '\\n%s' \\", "    'one'", "    '/abs/.ccrc/history-off'"), 'a quoted line with no `\\` ends the run').toBe(0);
+    expect(probe('    touch "$HOME/.ccrc/history-off"')).toBe(0);
+    expect(probe('    [ -e "$HOME/.ccrc/history-off" ] && return 0')).toBe(0);
+  });
+
+  it('SWITCHES names every switch, so the rows below compare against a real definer', () => {
+    const block = switchesBlock().join('\n');
+    for (const [name] of HOLDERS) expect(block, `SWITCHES does not name ${name}`).toContain(name);
+  });
+
+  it.each(HOLDERS)('%s: named on a code line only by its declaration and its readers %j, and never written', (name, want) => {
+    const holders = CORPUS.filter((f) => code(f).some((l) => l.includes(needle(name)))).map(rel).sort();
+    expect(holders, `${name}: a new line names it — a writer, or a reader this design does not list`).toEqual([...want].sort());
+    const block = switchesBlock();
+    for (const f of CORPUS.filter((x) => want.includes(rel(x)))) {
+      const naming = code(f).filter((l) => l.includes(needle(name)));
+      if (rel(f) === 'ccd/history/lib.mjs') {
+        expect(naming.filter((l) => !block.includes(l)), `${name}: lib.mjs names it outside SWITCHES`).toEqual([]);
+        continue;
+      }
+      const lang = BASH.includes(f) ? 'bash' : 'mjs';
+      for (const l of naming) {
+        expect(READ.test(l), `${rel(f)}: \`${l.trim()}\` names ${name} and reads nothing`).toBe(true);
+        expect(writes(l, lang, name), `${rel(f)}: \`${l.trim()}\` WRITES ${name}`).toBe(false);
+      }
+    }
+  });
+
+  it('recall-off/<id>: no corpus file but sweep.mjs writes it (B1 holds this half; W2 adds sweep.mjs as its one writer)', () => {
+    const W2_WRITER = 'ccd/history/sweep.mjs';
+    // CONTROL: the writer shapes this describe classifies are seen against this name too.
+    expect(writes('touch "$H/recall-off/$id"', 'bash', 'recall-off')).toBe(true);
+    expect(writes("writeFileSync(path.join(dir, 'recall-off', id), gen)", 'mjs', 'recall-off')).toBe(true);
+    expect(writes("if (existsSync(home + '/.ccrc/history/recall-off/' + id)) return;", 'mjs', 'recall-off')).toBe(false);
+    const writers = CORPUS.filter((f) => rel(f) !== W2_WRITER)
+      .filter((f) => code(f).some((l) => l.includes('recall-off') && writes(l, BASH.includes(f) ? 'bash' : 'mjs', 'recall-off')))
+      .map(rel).sort();
+    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13): a write here is a second one').toEqual([]);
+  });
+});
+describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)', () => {
+  const LIB = path.join(HISTORY_DIR, 'lib.mjs');
+  const VOCABS = ['NODE_KINDS', 'PARSE_STATUS', 'PROVENANCE', 'SPOOL_EVENTS', 'EPOCH_CAUSES', 'REFUSALS', 'ERROR_CODES',
+    'COVERAGE', 'SCOPE_SOURCES', 'VARIANT_CAUSES', 'BACKENDS', 'HARNESS_TABLE', 'HARNESSES', 'JOURNAL_KINDS',
+    'JOURNAL_VERDICTS', 'BIND_KINDS', 'MIGRATION_VERDICTS', 'HEALTH_WORDS', 'REASONS', 'WRITING_FORMS', 'STORE_FILES',
+    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT'] as const;
+  /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
+   *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
+  const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+  const declares = (name: string): RegExp => new RegExp(`(?:^|[\\s;])(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`);
+  /** The `"ev":"…"` literals a bash file writes, and the `ev: '…'` keys a `.mjs` file builds. */
+  const EV_BASH = /"ev":"([A-Za-z]+)"/g;
+  const EV_MJS = /\bev\s*:\s*['"`]([A-Za-z]+)['"`]/g;
+  /** SPOOL_EVENTS members whose emitter ships in a later PR. A member found emitted while listed here reds, so
+   *  the PR that adds the emitter removes its line. */
+  const PENDING_EMITTERS: Record<string, string> = { recall: 'B2 (cli.mjs read verbs)', steer: 'W3 (the steering hook)' };
+  type Lib = Record<string, unknown>;
+  const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
+
+  it('CONTROL: the corpus holds the four history modules, and the declaration pattern sees a declaration and nothing else', () => {
+    expect(HISTORY_MJS.map(rel).sort()).toEqual(expect.arrayContaining(
+      ['ccd/history/cli.mjs', 'ccd/history/lib.mjs', 'ccd/history/store.mjs', 'ccd/history/sweep.mjs']));
+    expect(declares('BACKENDS').test("export const BACKENDS = Object.freeze(['anthropic', 'other', 'unknown']);")).toBe(true);
+    expect(declares('BACKENDS').test('const BACKENDS = x;')).toBe(true);
+    expect(declares('BACKENDS').test('if (BACKENDS.includes(b)) return b;')).toBe(false);
+    expect(declares('BACKENDS').test("const { BACKENDS } = await import('./lib.mjs');")).toBe(false);
+    expect(declares('EXIT').test('export const EXIT_CODES = 1;')).toBe(false);
+  });
+
+  it.each(VOCABS)('%s is declared in ccd/history/lib.mjs and in no other .mjs, exported, and frozen', async (name) => {
+    expect(DECL_CORPUS.filter((f) => stallCode(f).split('\n').some((l) => declares(name).test(l))).map(rel).sort(),
+      `${name}: a second declaration`).toEqual(['ccd/history/lib.mjs']);
+    const v = (await lib())[name];
+    expect(v, `${name} is not exported`).toBeDefined();
+    if (typeof v === 'object' && v !== null) expect(Object.isFrozen(v), `${name} is not frozen`).toBe(true);
+  });
+
+  it('REFUSALS is REASONS\' exit-2 keys and HARNESSES is HARNESS_TABLE\'s keys, each derived, never declared apart', async () => {
+    const l = await lib();
+    const reasons = l['REASONS'] as Record<string, number>;
+    const exits = Object.values(l['EXIT'] as Record<string, number>);
+    for (const [w, x] of Object.entries(reasons)) expect(exits, `REASONS.${w} = ${x} is not an EXIT value`).toContain(x);
+    expect([...(l['REFUSALS'] as readonly string[])].sort())
+      .toEqual(Object.keys(reasons).filter((k) => reasons[k] === 2).sort());
+    expect([...(l['HARNESSES'] as readonly string[])]).toEqual(Object.keys(l['HARNESS_TABLE'] as object));
+    const src = stallCode(LIB).split('\n');
+    expect(src.find((x) => declares('HARNESSES').test(x)), 'HARNESSES is spelled, not derived').toContain('Object.keys(HARNESS_TABLE)');
+    expect(src.find((x) => declares('REFUSALS').test(x)), 'REFUSALS is spelled, not derived').toContain('Object.keys(REASONS)');
+  });
+
+  it('every "ev" the hook writes is a SPOOL_EVENTS member, and every member has an emitter or is named pending', async () => {
+    const members = [...((await lib())['SPOOL_EVENTS'] as readonly string[])];
+    const hook = codeLines(path.join(ccrcRoot, 'ccd', 'session-hook.sh')).join('\n');
+    const fromHook = [...hook.matchAll(EV_BASH)].map((m) => m[1]!);
+    const fromMjs = HISTORY_MJS.flatMap((f) => [...stallCode(f).matchAll(EV_MJS)].map((m) => m[1]!));
+    expect(fromHook.length, 'the hook scan matched nothing — the spool block is gone or its spelling moved').toBeGreaterThan(0);
+    for (const e of [...fromHook, ...fromMjs]) expect(members, `"${e}" is written but is not a SPOOL_EVENTS member`).toContain(e);
+    const emitted = new Set([...fromHook, ...fromMjs]);
+    for (const k of Object.keys(PENDING_EMITTERS)) expect(members, `PENDING_EMITTERS names ${k}, not a member`).toContain(k);
+    for (const m of members) {
+      if (m in PENDING_EMITTERS) expect(emitted.has(m), `${m} has an emitter now: remove it from PENDING_EMITTERS`).toBe(false);
+      else expect(emitted.has(m), `${m} is a SPOOL_EVENTS member with no emitter`).toBe(true);
+    }
+  });
+
+  it('every kind the sweep journals is a JOURNAL_KINDS member', async () => {
+    const members = [...((await lib())['JOURNAL_KINDS'] as readonly string[])];
+    const CALL = /\bjournalRecord\(\s*['"`]([a-z-]+)['"`]/g;
+    const kinds = HISTORY_MJS.flatMap((f) => [...stallCode(f).matchAll(CALL)].map((m) => [rel(f), m[1]!] as const));
+    expect(kinds.length, 'no journalRecord call names its kind as a literal — the scan saw nothing').toBeGreaterThan(0);
+    expect(kinds.filter(([, k]) => !members.includes(k)).map(([f, k]) => `${f}: ${k}`)).toEqual([]);
+  });
+
+  it('every word _check_history spells is a HEALTH_WORDS member, every class is pass|warn|fail, and every remedy is keyed by a word', async () => {
+    const l = await lib();
+    const words = Object.keys(l['HEALTH_WORDS'] as object);
+    for (const c of Object.values(l['HEALTH_WORDS'] as Record<string, string>)) expect(['pass', 'warn', 'fail']).toContain(c);
+    for (const k of Object.keys(l['HEALTH_REMEDIES'] as object)) expect(words, `HEALTH_REMEDIES keys ${k}`).toContain(k);
+    const lines = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');
+    const at = lines.findIndex((x) => /^_check_history\(\) \{$/.test(x));
+    expect(at, 'ccd/ccrc-doctor-checks has no _check_history').toBeGreaterThan(-1);
+    const end = lines.findIndex((x, i) => i > at && x === '}');
+    const body = lines.slice(at, end).filter((x) => !x.trim().startsWith('#')).join('\n');
+    const spelled = [...body.matchAll(/_dr_(?:pass|warn|fail)\s+history\s+"([a-z][a-z0-9-]*):/g)].map((m) => m[1]!);
+    expect(spelled.length, 'the scan matched no word in _check_history').toBeGreaterThan(0);
+    expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
+  });
+
+  it('the literal .ccrc/history/db is spelled in ccd/history/*.mjs once, as STORE_DB_REL', async () => {
+    expect((await lib())['STORE_DB_REL']).toBe('.ccrc/history/db');
+    expect(HISTORY_MJS.filter((f) => stallCode(f).includes('.ccrc/history/db')).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    const lines = stallCode(LIB).split('\n').filter((x) => x.includes('.ccrc/history/db'));
+    expect(lines, 'lib.mjs spells the store directory more than once').toHaveLength(1);
+    expect(lines[0]).toMatch(/\bSTORE_DB_REL\s*=\s*['"]\.ccrc\/history\/db['"]/);
+  });
+
+  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half lands in B3)', async () => {
+    const l = await lib();
+    expect([...(l['COVERAGE'] as readonly string[])]).toEqual(['this-box']);
+    expect(HISTORY_MJS.filter((f) => /['"`]this-box['"`]/.test(stallCode(f))).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    expect(l['CARD_PREFIX']).toBe('History: ');
+  });
+
+  it('NODE_KINDS is the schema-v1 CHECK list in store.mjs, member for member', async () => {
+    const kinds = [...((await lib())['NODE_KINDS'] as readonly string[])];
+    const { MIGRATIONS } = await import('../../ccd/history/store.mjs');
+    const m = /\bkind IN \(([^)]*)\)/.exec(MIGRATIONS[0] ?? '');
+    expect(m, 'schema v1 declares no nodes.kind CHECK').not.toBeNull();
+    expect(m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).sort()).toEqual(kinds.sort());
+  });
+});
+describe('ccrc history: process.env is read by name, from a four-name allow-list (spec 2026-10-05 §10.1 Seams)', () => {
+  // D-4247: no env var arms a seam in the shipped modules. A test's faults arrive through
+  // a NODE_OPTIONS preload it writes itself, and `process.env` is read only for these four names.
+  const ALLOWED = ['CCRC_SESSION_GENERATION', 'CLAUDECODE', 'HOME', 'TMUX_PANE'];
+  const READS = /process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*(['"])([A-Za-z_][A-Za-z0-9_]*)\2\s*\])?/g;
+  const envReads = (code: string): string[] => [...code.matchAll(READS)].map((m) => m[1] ?? m[3] ?? '<not by name>');
+
+  it('CONTROL: the reader names dotted and bracketed reads, and flags a whole-env use and a computed name', () => {
+    expect(envReads("const h = process.env.HOME; const g = process.env['CCRC_SESSION_GENERATION'];"))
+      .toEqual(['HOME', 'CCRC_SESSION_GENERATION']);
+    expect(envReads('spawnSync(bin, args, { env: process.env });')).toEqual(['<not by name>']);
+    expect(envReads('const v = process.env[name];')).toEqual(['<not by name>']);
+  });
+
+  it('every process.env read in ccd/history/*.mjs names an allowed variable', () => {
+    const seen = HISTORY_MJS.flatMap((f) => envReads(stallCode(f)).map((n) => [rel(f), n] as const));
+    expect(seen.length, 'no history module reads process.env at all — the scan saw nothing').toBeGreaterThan(0);
+    expect(seen.filter(([, n]) => !ALLOWED.includes(n)).map(([f, n]) => `${f}: ${n}`)).toEqual([]);
+  });
+});
+
+// Task 36G item 2 (Task 34's O13): the `.mjs` arm above looks for a switch's PATH TEXT (`/history-off`), and
+// the sanctioned spelling in `.mjs` is symbolic — `SWITCHES.off`, or the `off`/`cap` field of a `historyPaths(...)`
+// result (`P.off`) — which carries no `/name` at all, so `writeFileSync(P.off, '')` is invisible to it. This arm
+// reads the symbols instead. KNOWN WIDTH: an alias of an alias (`const x = P.off; unlinkSync(x)`) is not seen.
+describe('ccrc history: no .mjs writes a switch through its symbolic spelling (spec 2026-10-05 §9.11 O13)', () => {
+  /** The verb list of the O13 describe's `writes()` for `.mjs`, restated (that one is closed over its describe). */
+  const VERB = /\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\s*\(/;
+  /** `historyPaths` has two switch fields, `off` and `cap`; every other SWITCHES key is named alongside. */
+  const symbolic = (keys: readonly string[]): RegExp =>
+    new RegExp(`SWITCHES\\.|\\.(?:off|cap|${keys.join('|')})\\b`);
+  const writesSymbolically = (line: string, keys: readonly string[]): boolean => {
+    const m = VERB.exec(line);
+    return m !== null && symbolic(keys).test(line.slice(m.index + m[0].length));
+  };
+  const KEYS = ['maxGb', 'steerOff', 'steerLivePrefix', 'steerOnDir', 'headlessOn'] as const;
+
+  it('CONTROL: the classifier sees a write through P.off, a historyPaths(...) field and SWITCHES., and not a read', () => {
+    expect(writesSymbolically("writeFileSync(P.off, '')", KEYS)).toBe(true);
+    expect(writesSymbolically("existsSync(P.off)", KEYS)).toBe(false);
+    expect(writesSymbolically("unlinkSync(historyPaths(home).cap);", KEYS)).toBe(true);
+    expect(writesSymbolically("fs.writeFileSync(join(home, SWITCHES.maxGb), '9')", KEYS)).toBe(true);
+    expect(writesSymbolically("mkdirSync(`${home}/${SWITCHES.steerOnDir}`, { recursive: true })", KEYS)).toBe(true);
+    expect(writesSymbolically("rmSync(c.paths.headlessOn)", KEYS)).toBe(true);
+    expect(writesSymbolically("if (existsSync(P.off)) return 0;", KEYS)).toBe(false);
+    expect(writesSymbolically("const cap = capOf(capText(P.cap));", KEYS)).toBe(false);
+  });
+
+  it('SWITCHES keys named here are exactly lib.mjs\'s, so a key added there is not unwatched', async () => {
+    const lib = (await import('../../ccd/history/lib.mjs')) as unknown as { SWITCHES: Record<string, string> };
+    expect(Object.keys(lib.SWITCHES).sort()).toEqual(['off', ...KEYS].sort());
+  });
+
+  it('no line of any .mjs under ccd/, deploy/ or shared/ pairs a write verb with a switch symbol', () => {
+    expect(ALL_MJS.map(rel)).toContain('ccd/history/sweep.mjs');
+    const hits = ALL_MJS.flatMap((f) => stallCode(f).split('\n')
+      .filter((l) => writesSymbolically(l, KEYS)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(hits, 'a switch is touched and removed by hand (§9.7): a .mjs write through SWITCHES or historyPaths is a writer').toEqual([]);
+  });
+});
+
+// Docs W2, Task 8 (spec 2026-10-01 M7.10, section 1's ring column): the files under server/src/docs are classified
+// by their IMPORTS, never by their path. policy.ts (L1) imports only shared/; ports.ts (L2) is type-only;
+// ccdsource.ts (L3) names no fastify, no `reply` and no timer, and imports only from its stated list; only W3's
+// routes.ts, hooks.ts, lane.ts and cache.ts (L4) may import fastify or own a timer. A file the table does not name
+// is held to L3's rules, so a new file is never an exemption. The file list is read from the directory (`sources`,
+// a readdirSync walk), never hand-kept. Every rule reads comment-stripped text (`stallCodeText`), so a sentence
+// ABOUT fastify or a timer is never counted as one. APPENDED after the file's last line: `session-hook.test.ts`'s
+// citation audit cites this file by line, so nothing above may move.
+describe('the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10)', () => {
+  const docsDir = path.join(ccrcRoot, 'server/src/docs');
+  type DocsRing = 'L1' | 'L2' | 'L3' | 'L4';
+  /** Each known file's ring. W3's four L4 files are named now, so W3 adding them reds nothing here. */
+  const DOCS_RING_ROLES: Readonly<Record<string, DocsRing>> = {
+    'policy.ts': 'L1', 'ports.ts': 'L2', 'ccdsource.ts': 'L3',
+    'routes.ts': 'L4', 'hooks.ts': 'L4', 'lane.ts': 'L4', 'cache.ts': 'L4',
+  };
+  /** The files W2 created. A FLOOR, not a count (the update ring's argument): a new file raises it, and a listed
+   *  file that is gone reds instead of disarming the scan. */
+  const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts', 'routes.ts', 'hooks.ts', 'lane.ts', 'cache.ts'];
+  /** What L3 may import (the W2 plan's Global Constraints): its server neighbours, node's hash, its own ring's
+   *  policy and ports, and L0. A type import is an import. */
+  const L3_IMPORTS: ReadonlySet<string> = new Set([
+    '../ccdargv.js', '../lifecycle.js', '../exec.js', '../fleetstate.js', 'node:crypto', './policy.js', './ports.js',
+    '../../../shared/docs.js',
+  ]);
+  /** A fastify import in any of its forms: `from`, a bare `import`, a dynamic `import(...)` or a `require(...)`;
+   *  either quote; the package, a subpath, a `fastify-*` package or an `@fastify/*` one. */
+  const FASTIFY = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:@fastify\/[^'"\n]*|fastify(?:[-/][^'"\n]*)?)\1/;
+  const TIMERS = /\b(?:setTimeout|setInterval|setImmediate)\s*\(/;
+  const RUNTIME_LOAD = /\bimport\s*\(|\brequire\s*\(/;
+  const REPLY = /\breply\b/;
+  const L2_RUNTIME_EXPORT = /^\s*export\s+(?:default\b|(?:async\s+)?(?:const|let|var|function|class|abstract|enum)\b|\{|\*)/m;
+  /** Every static specifier: `import ... from 'x'`, `export ... from 'x'` and a bare `import 'x'`. */
+  const specifiers = (code: string): string[] => [
+    ...[...code.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s*(['"])([^'"\n]+)\1/gm)].map((m) => m[2]),
+    ...[...code.matchAll(/^\s*import\s*(['"])([^'"\n]+)\1/gm)].map((m) => m[2]),
+  ];
+  /** Over `[name, source]` pairs, so the CONTROLs below plant their shapes as text: no fixture directory, and so
+   *  no new import line in this file. */
+  const ringViolations = (files: readonly (readonly [string, string])[]): string[] =>
+    files.flatMap(([name, text]) => {
+      const role: DocsRing = DOCS_RING_ROLES[name] ?? 'L3';
+      const code = stallCodeText(text);
+      const at = `${name} (${role})`;
+      const specs = specifiers(code);
+      const out: string[] = [];
+      if (role !== 'L4' && FASTIFY.test(code)) out.push(`${at} imports fastify`);
+      if (role !== 'L4' && TIMERS.test(code)) out.push(`${at} owns a timer`);
+      if (role === 'L1') {
+        for (const s of specs) if (!/^(?:\.\.\/)+shared\//.test(s)) out.push(`${at} imports ${s}, outside shared/`);
+        if (RUNTIME_LOAD.test(code)) out.push(`${at} loads a module at run time`);
+      }
+      if (role === 'L2') {
+        for (const l of code.split('\n')) {
+          if (/^\s*import\b/.test(l) && !/^\s*import\s+type\b/.test(l)) out.push(`${at} has a value import: ${l.trim()}`);
+        }
+        if (L2_RUNTIME_EXPORT.test(code)) out.push(`${at} exports a runtime value`);
+        if (RUNTIME_LOAD.test(code)) out.push(`${at} loads a module at run time`);
+      }
+      if (role === 'L3') {
+        if (REPLY.test(code)) out.push(`${at} names reply`);
+        for (const s of specs) if (!L3_IMPORTS.has(s)) out.push(`${at} imports ${s}, not on L3's list`);
+        if (RUNTIME_LOAD.test(code)) out.push(`${at} loads a module at run time`);
+      }
+      return out;
+    });
+  const docsNames = (): string[] => sources(docsDir).map((f) => path.relative(docsDir, f));
+  const onDisk = (): (readonly [string, string])[] =>
+    docsNames().map((n) => [n, readFileSync(path.join(docsDir, n), 'utf8')] as const);
+  /** One live file with one planted line above its own text: the live text is clean, so the answer is exactly what
+   *  the planted line breaks. */
+  const planted = (name: string, line: string): (readonly [string, string])[] =>
+    [[name, `${line}\n${readFileSync(path.join(docsDir, name), 'utf8')}`]];
+
+  it('covers the directory — every floor file is visited by the directory walk (never a hand list)', () => {
+    expect(existsSync(docsDir), 'server/src/docs is not on disk — was the directory moved?').toBe(true);
+    const names = docsNames();
+    for (const f of DOCS_RING_FLOOR) expect(names, `${f} is listed but not visited`).toContain(f);
+    expect(names.length).toBeGreaterThanOrEqual(DOCS_RING_FLOOR.length);
+  });
+
+  it('the live tree: no file under server/src/docs breaks its ring', () => {
+    expect(ringViolations(onDisk())).toEqual([]);
+  });
+
+  it('CONTROL: L1 (policy.ts) — fastify in each form, a node builtin, a server module, a timer', () => {
+    expect(ringViolations(planted('policy.ts', "import fastify from 'fastify';"))).toEqual([
+      'policy.ts (L1) imports fastify', 'policy.ts (L1) imports fastify, outside shared/',
+    ]);
+    expect(ringViolations(planted('policy.ts', "import 'fastify';"))).toEqual([
+      'policy.ts (L1) imports fastify', 'policy.ts (L1) imports fastify, outside shared/',
+    ]);
+    expect(ringViolations(planted('policy.ts', 'const f = await import("fastify");'))).toEqual([
+      'policy.ts (L1) imports fastify', 'policy.ts (L1) loads a module at run time',
+    ]);
+    expect(ringViolations(planted('policy.ts', "import { readFileSync } from 'node:fs';"))).toEqual([
+      'policy.ts (L1) imports node:fs, outside shared/',
+    ]);
+    expect(ringViolations(planted('policy.ts', "import type { CcdArgv } from '../ccdargv.js';"))).toEqual([
+      'policy.ts (L1) imports ../ccdargv.js, outside shared/',
+    ]);
+    expect(ringViolations(planted('policy.ts', 'const t = setTimeout(() => {}, 1);'))).toEqual([
+      'policy.ts (L1) owns a timer',
+    ]);
+  });
+
+  it('CONTROL: L2 (ports.ts) — a value import and each runtime export are caught; a type re-export is not', () => {
+    expect(ringViolations(planted('ports.ts', "import { DOCS_CAP } from '../ccdargv.js';"))).toEqual([
+      "ports.ts (L2) has a value import: import { DOCS_CAP } from '../ccdargv.js';",
+    ]);
+    expect(ringViolations(planted('ports.ts', 'export const X = 1;'))).toEqual(['ports.ts (L2) exports a runtime value']);
+    expect(ringViolations(planted('ports.ts', 'export function f(): void {}'))).toEqual(['ports.ts (L2) exports a runtime value']);
+    expect(ringViolations(planted('ports.ts', "export { DOCS_CAP } from '../ccdargv.js';"))).toEqual([
+      'ports.ts (L2) exports a runtime value',
+    ]);
+    expect(ringViolations(planted('ports.ts', "export type { DocsJob } from './policy.js';"))).toEqual([]);
+    expect(ringViolations(planted('ports.ts', 'const m = await import("node:fs");'))).toEqual([
+      'ports.ts (L2) loads a module at run time',
+    ]);
+  });
+
+  it('CONTROL: L3 (ccdsource.ts) — reply, a timer, a fastify type and an unlisted import are caught; prose is not', () => {
+    expect(ringViolations(planted('ccdsource.ts', 'reply.code(500);'))).toEqual(['ccdsource.ts (L3) names reply']);
+    expect(ringViolations(planted('ccdsource.ts', 'setTimeout(() => {}, 1);'))).toEqual(['ccdsource.ts (L3) owns a timer']);
+    expect(ringViolations(planted('ccdsource.ts', "import type { FastifyReply } from 'fastify';"))).toEqual([
+      'ccdsource.ts (L3) imports fastify', "ccdsource.ts (L3) imports fastify, not on L3's list",
+    ]);
+    expect(ringViolations(planted('ccdsource.ts', "import { readFileSync } from 'node:fs';"))).toEqual([
+      "ccdsource.ts (L3) imports node:fs, not on L3's list",
+    ]);
+    expect(ringViolations(planted('ccdsource.ts', 'const m = await import("node:fs");'))).toEqual([
+      'ccdsource.ts (L3) loads a module at run time',
+    ]);
+    expect(ringViolations(planted('ccdsource.ts', '// reply, setTimeout( and import fastify are named here in prose only'))).toEqual([]);
+  });
+
+  it('CONTROL: an L4 file may import fastify and own a timer; an unclassified file is held to L3', () => {
+    expect(ringViolations([
+      ['routes.ts', "import type { FastifyInstance } from 'fastify';\nexport const t = setTimeout(() => {}, 1);\n"],
+    ])).toEqual([]);
+    expect(ringViolations([['extra.ts', "import fastify from 'fastify';\n"]])).toEqual([
+      'extra.ts (L3) imports fastify', "extra.ts (L3) imports fastify, not on L3's list",
+    ]);
+    expect(ringViolations([['extra.ts', 'import fastifyStatic from "@fastify/static";\n']])).toEqual([
+      'extra.ts (L3) imports fastify', "extra.ts (L3) imports @fastify/static, not on L3's list",
+    ]);
+  });
+});
+
+// Docs W2, Task 8: the names W2 declares, each with ONE home. W3's routes and later waves import them; a second
+// declaration would be a second answer that nothing forces to agree. Two directions: a hand-kept table pins each
+// W2 name to its file, and a derived scan holds EVERY export under server/src/docs (W3's included, with no list to
+// maintain) to exactly one declaration across the four roots. The table is checked against the scan, so the scan
+// cannot go blind to a name the table knows. Plus two docs-only spellings: the qualified ref prefixes are derived
+// from L0 and never quoted under server/src/docs, and the adapter is the one caller of the docs builders (row 49's
+// exact `docsFetch(` count is W3's). APPENDED, for the citation audit's reason above.
+describe('docs W2 names are defined once (spec 2026-10-01 section 1, M7.10)', () => {
+  const docsDir = path.join(ccrcRoot, 'server/src/docs');
+  const POLICY = 'server/src/docs/policy.ts';
+  const PORTS = 'server/src/docs/ports.ts';
+  const SOURCE = 'server/src/docs/ccdsource.ts';
+  const HOMES: Readonly<Record<string, string>> = {
+    // policy.ts (L1): values, functions, types.
+    DOCS_FAILURE_HTTP: POLICY, DOCS_CAPS_UNKNOWN_RETRY_AFTER_S: POLICY, DOCS_REF_PREFIXES: POLICY,
+    DOCS_LANE_EXECS: POLICY, DOCS_LANE_BYTES: POLICY, DOCS_LANE_LARGE_RAW: POLICY, DOCS_LANE_QUEUE: POLICY,
+    DOCS_LANE_MAX_WAIT_MS: POLICY, LISTING_JOB: POLICY, DOCS_CACHE_IMMUTABLE: POLICY, DOCS_CACHE_NO_STORE: POLICY,
+    DOCS_JSON_CONTENT_TYPE: POLICY,
+    docsRetryAfterSeconds: POLICY, docsRefTarget: POLICY, fetchBranchFor: POLICY, refreshDue: POLICY,
+    parseDocsApiQuery: POLICY, parseDocsProjectParam: POLICY, parseDocsRefreshBody: POLICY, docsProvenance: POLICY,
+    laneAdmit: POLICY, showRawBound: POLICY, showWire: POLICY, docsShowPlan: POLICY, cacheControlFor: POLICY,
+    docsSendPolicy: POLICY,
+    DocsRefTarget: POLICY, DocsFetchPlan: POLICY, DocsApiRoute: POLICY, DocsApiRequest: POLICY,
+    DocsRefreshRequest: POLICY, DocsHeaderBag: POLICY, DocsProvenance: POLICY, DocsJob: POLICY, LaneLoad: POLICY,
+    DocsShowPlan: POLICY, DocsSendVerdict: POLICY,
+    // ports.ts (L2): types only.
+    DocsNodeId: PORTS, DocsSourceId: PORTS, DocsShowAsk: PORTS, DocsIndexRead: PORTS, DocsTreeRead: PORTS,
+    DocsShowRead: PORTS, DocsFetchRun: PORTS, DocsReader: PORTS, DocsFetcher: PORTS,
+    // ccdsource.ts (L3): the deps type and the two factories.
+    CcdDocsDeps: SOURCE, ccdDocsReader: SOURCE, ccdDocsFetcher: SOURCE,
+    // Outside server/src/docs: the cap token, and the single reader of killed/signal.
+    DOCS_CAP: 'server/src/ccdargv.ts', CcdEnding: 'server/src/lifecycle.ts', ccdEnding: 'server/src/lifecycle.ts',
+  };
+  /** A declaration of `name` in any of its shapes: a function (async or not), a `const|let|var|class|enum` binding,
+   *  a type alias by its `=`, an interface; `export`/`declare` optional. An import, a re-export or a call declares
+   *  nothing. */
+  const DEF = (name: string): RegExp => new RegExp(
+    `^\\s*(?:export\\s+)?(?:declare\\s+)?(?:(?:async\\s+)?function\\s+${name}\\b|(?:const|let|var|class|enum)\\s+${name}\\b|type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`,
+    'm');
+  /** Every name a file exports by declaration. */
+  const exportedNames = (text: string): string[] =>
+    [...text.matchAll(/^export\s+(?:declare\s+)?(?:async\s+)?(?:const|let|var|function|class|enum|interface|type)\s+([A-Za-z_$][\w$]*)/gm)]
+      .map((m) => m[1]);
+  const text = new Map<string, string>();
+  const src = (f: string): string => {
+    const hit = text.get(f);
+    if (hit !== undefined) return hit;
+    const t = readFileSync(f, 'utf8');
+    text.set(f, t);
+    return t;
+  };
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(src(f))).map(rel);
+  /** A qualified ref prefix inside a string literal of any quote, a template included. */
+  const QUOTED_PREFIX = /(['"`])refs\/(?:heads|remotes\/origin)\//;
+  const DOCS_CALL = /\bCCD_ARGV\.docs\w*\s*\(/;
+
+  it('CONTROL: DEF sees each declaration shape and an un-exported copy, and not an import, a re-export, a call or a longer name', () => {
+    for (const decl of [
+      'export const X = 1;', 'const X = 1;', 'export interface X {', 'export type X<T> = T;', 'type X = 1;',
+      'export async function X(): Promise<void> {', 'function X(): void {', 'export class X {',
+    ]) expect(DEF('X').test(decl), decl).toBe(true);
+    for (const miss of [
+      "import { X } from './policy.js';", "import {\n  type X,\n} from './policy.js';", 'export { X };',
+      'export const X_SEEN = 1;', 'const y = X(1);', 'export type XY = 1;',
+    ]) expect(DEF('X').test(miss), miss).toBe(false);
+  });
+
+  it('CONTROL: exportedNames reads every exported declaration and nothing else', () => {
+    expect(exportedNames(
+      'export const A = 1;\nexport function b(): void {}\nexport interface C {}\nexport type D = 1;\n'
+      + 'export async function e(): Promise<void> {}\nconst f = 1;\nexport { f };\n  export const g = 1;\n',
+    )).toEqual(['A', 'b', 'C', 'D', 'e']);
+  });
+
+  it.each(Object.entries(HOMES))('%s is declared exactly once, in %s', (name, home) => {
+    expect(holders(DEF(name))).toEqual([home]);
+  });
+
+  it('every export under server/src/docs is declared exactly once across the four roots, in its own file', () => {
+    const files = sources(docsDir);
+    expect(files.length).toBeGreaterThanOrEqual(3);
+    for (const f of files) {
+      for (const name of exportedNames(src(f))) expect(holders(DEF(name)), name).toEqual([rel(f)]);
+    }
+  });
+
+  it('the table is seen by the scan: every listed name under server/src/docs is an export of its home', () => {
+    for (const [name, home] of Object.entries(HOMES)) {
+      if (!home.startsWith('server/src/docs/')) continue;
+      expect(exportedNames(src(path.join(ccrcRoot, home))), `${name} in ${home}`).toContain(name);
+    }
+  });
+
+  it('CONTROL: QUOTED_PREFIX sees a quoted prefix in each quote, and not prose or the derived name', () => {
+    for (const hit of ["const l = 'refs/heads/' + b;", 'const o = `refs/remotes/origin/${b}`;', 'x === "refs/heads/main"']) {
+      expect(QUOTED_PREFIX.test(stallCodeText(hit)), hit).toBe(true);
+    }
+    for (const miss of [' * - `refs/heads/b`: skipped, local-ref', '// refs/remotes/origin/b', 'const [l, o] = DOCS_REF_PREFIXES;']) {
+      expect(QUOTED_PREFIX.test(stallCodeText(miss)), miss).toBe(false);
+    }
+  });
+
+  it("the qualified ref prefixes are quoted nowhere under server/src/docs (derived from L0's prefix body)", () => {
+    expect(sources(docsDir).filter((f) => QUOTED_PREFIX.test(stallCode(f))).map(rel)).toEqual([]);
+  });
+
+  it('CONTROL: DOCS_CALL sees a builder call, and not the builder table or a comment', () => {
+    expect(DOCS_CALL.test(stallCodeText('await deps.runCcd(CCD_ARGV.docsFetch(project, branch));'))).toBe(true);
+    expect(DOCS_CALL.test(stallCodeText("  docsFetch: (project: string, branch: string | null) =>"))).toBe(false);
+    expect(DOCS_CALL.test(stallCodeText('/** the ONE `CCD_ARGV.docsFetch(` in server/src */'))).toBe(false);
+  });
+
+  it('the docs builders have one caller across the four roots: the adapter', () => {
+    expect(ALL.filter((f) => DOCS_CALL.test(stallCode(f))).map(rel)).toEqual([SOURCE]);
+  });
+});
+
+// Docs W3, Task 9 (spec 2026-10-01 section 2 (g)'s walls, section 2 (j) row 49, section 3.13's new scans; W3
+// refinement (q)). GET never fetches, read as text: row 49's literal half (exactly one `CCD_ARGV.docsFetch(` across
+// the four roots, in the adapter), WIDENED for W2's review carry, which found that `DOCS_CALL` above cannot see an
+// optional-chain, a bracket or an aliased call. The identifier `docsFetch` is held to its two code lines (the builder
+// key and the one call), and every other `CCD_ARGV` in code must be a plain member access, so the builder table is
+// never indexed, destructured, aliased or passed. And the visible half of "L4 decides nothing": no failure word of
+// `shared/docs.ts`'s `DOCS_FAILURES` is quoted in the code of `routes.ts`, `hooks.ts`, `lane.ts` or `cache.ts`. The
+// words are read from that file's TEXT (and held equal to the module's keys by a dynamic import), so this append adds
+// no import above. `DOCS_RING_FLOOR` (edited in place, above) names those four files too, so a deleted L4 file reds
+// the floor. Every scan reads comment-stripped text (`stallCodeText`). APPENDED, for the citation audit's reason above.
+describe('docs W3 — GET never fetches, and the L4 files quote no failure word (spec 2026-10-01 §2 row 49, §3.13)', () => {
+  type Text = readonly [string, string];
+  const SOURCE = 'server/src/docs/ccdsource.ts';
+  const ARGV = 'server/src/ccdargv.ts';
+  const L4_FILES = ['routes.ts', 'hooks.ts', 'lane.ts', 'cache.ts'];
+  /** Every file of the four roots as `[repo-relative path, text]`, read once. */
+  const LIVE: readonly Text[] = ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const);
+  /** The live corpus with `shape` planted after `name`'s own text (a copy: nothing is written). */
+  const plantedIn = (name: string, shape: string): Text[] =>
+    LIVE.map(([n, t]) => [n, n === name ? `${t}\n${shape}\n` : t] as const);
+
+  const LITERAL = 'CCD_ARGV.docsFetch(';
+  /** One entry per literal `CCD_ARGV.docsFetch(` in code, naming its file. */
+  const literalCalls = (files: readonly Text[]): string[] =>
+    files.flatMap(([n, t]) => new Array<string>(stallCodeText(t).split(LITERAL).length - 1).fill(n));
+  const DOCS_FETCH_ID = /\bdocsFetch\b/;
+  /** One entry per comment-stripped LINE that names the identifier `docsFetch`, naming its file. */
+  const docsFetchLines = (files: readonly Text[]): string[] =>
+    files.flatMap(([n, t]) => stallCodeText(t).split('\n').filter((l) => DOCS_FETCH_ID.test(l)).map(() => n));
+  /** A whole static import statement, single- or multi-line (lazy, and never across a `;`). */
+  const IMPORT_STATEMENT = /^\s*import\s[^;]*?\bfrom\s*(['"])[^'"\n]+\1\s*;?/gm;
+  /** `CCD_ARGV` NOT followed by a plain member access (`.name`, whitespace and newlines allowed around the dot). */
+  const ARGV_ESCAPE = /\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
+  const ARGV_DECLARATION = 'export const CCD_ARGV = {';
+  /** Every `CCD_ARGV` in code, imports removed, that is not a plain member access, as `file: line`; the table's one
+   *  declaration excepted. */
+  const argvEscapes = (files: readonly Text[]): string[] => files.flatMap(([n, t]) => {
+    const code = stallCodeText(t).replace(IMPORT_STATEMENT, '');
+    const out: string[] = [];
+    for (const m of code.matchAll(ARGV_ESCAPE)) {
+      const start = code.lastIndexOf('\n', m.index) + 1;
+      const end = code.indexOf('\n', m.index);
+      const at = code.slice(start, end === -1 ? code.length : end).trim();
+      if (n === ARGV && at === ARGV_DECLARATION) continue;
+      out.push(`${n}: ${at}`);
+    }
+    return out;
+  });
+
+  it('row 49, literal: exactly one `CCD_ARGV.docsFetch(` across the four roots, in the adapter', () => {
+    expect(literalCalls(LIVE)).toEqual([SOURCE]);
+  });
+
+  it('row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call', () => {
+    expect(docsFetchLines(LIVE).sort()).toEqual([ARGV, SOURCE]);
+  });
+
+  it('row 49, widened by use: `CCD_ARGV` is only ever a plain member access, outside its one declaration', () => {
+    expect(argvEscapes(LIVE)).toEqual([]);
+    expect(LIVE.filter(([n]) => n === ARGV).flatMap(([, t]) => stallCodeText(t).split('\n'))
+      .filter((l) => l.trim() === ARGV_DECLARATION), 'the declaration the escape scan excepts moved').toHaveLength(1);
+  });
+
+  it('CONTROL: every call shape the literal scan misses is caught by one of the two widened scans; prose by neither', () => {
+    const base = {
+      literal: literalCalls(LIVE).length, lines: docsFetchLines(LIVE).length, escapes: argvEscapes(LIVE).length,
+    };
+    const SHAPES: readonly (readonly [string, boolean, boolean])[] = [
+      // [the planted text, seen by the identifier scan, seen by the escape scan]
+      ['const a = CCD_ARGV?.docsFetch(p, b);', true, true],
+      ["const a = CCD_ARGV['docsFetch'](p, b);", true, true],
+      ['const a = CCD_ARGV["docsFetch"](p, b);', true, true],
+      ['const { docsFetch } = CCD_ARGV;', true, true],
+      ['const A = CCD_ARGV; A.docsFetch(p, b);', true, true],
+      ['const a = CCD_ARGV\n  .docsFetch(p, b);', true, false],
+      ["const f = Reflect.get(CCD_ARGV, 'docsFetch');", true, true],
+    ];
+    for (const [shape, byId, byEscape] of SHAPES) {
+      const planted = plantedIn(SOURCE, shape);
+      expect(literalCalls(planted).length, `${shape}: the literal scan was expected to miss it`).toBe(base.literal);
+      expect(docsFetchLines(planted).length > base.lines, `${shape}: identifier scan`).toBe(byId);
+      expect(argvEscapes(planted).length > base.escapes, `${shape}: escape scan`).toBe(byEscape);
+      expect(byId || byEscape, shape).toBe(true);
+    }
+    for (const prose of ['// a CCD_ARGV?.docsFetch( or `const { docsFetch } = CCD_ARGV` in prose',
+      ' * CCD_ARGV[\'docsFetch\'] named in a docstring']) {
+      const planted = plantedIn(SOURCE, prose);
+      expect(docsFetchLines(planted).length, prose).toBe(base.lines);
+      expect(argvEscapes(planted).length, prose).toBe(base.escapes);
+    }
+    expect(literalCalls(plantedIn(SOURCE, 'void CCD_ARGV.docsFetch(p, b);')).length, 'the literal scan is blind')
+      .toBe(base.literal + 1);
+  });
+
+  /** `DOCS_FAILURES`' keys, read from `shared/docs.ts`'s TEXT: its `export const DOCS_FAILURES = {` block. */
+  const failureWords = (): string[] => {
+    const text = readFileSync(path.join(ccrcRoot, 'shared/docs.ts'), 'utf8');
+    const open = text.indexOf('export const DOCS_FAILURES = {');
+    const close = text.indexOf('} as const', open);
+    expect(open, 'the DOCS_FAILURES block moved').toBeGreaterThan(-1);
+    expect(close, 'the DOCS_FAILURES block has no end').toBeGreaterThan(open);
+    return [...text.slice(open, close).matchAll(/^\s*'([a-z][a-z-]*)':/gm)].map((m) => m[1]);
+  };
+  /** The words of `words` quoted as a whole literal (single, double or backtick) in `text`'s code. */
+  const quotedWords = (text: string, words: readonly string[]): string[] => {
+    const code = stallCodeText(text);
+    return words.filter((w) => new RegExp(`(['"\`])${w}\\1`).test(code));
+  };
+  const l4 = (): Text[] =>
+    L4_FILES.map((n) => [n, readFileSync(path.join(ccrcRoot, 'server/src/docs', n), 'utf8')] as const);
+
+  it('the failure words read from the text are exactly DOCS_FAILURES\' keys', async () => {
+    const { DOCS_FAILURES } = await import('../../shared/docs.js');
+    expect(failureWords()).toEqual(Object.keys(DOCS_FAILURES));
+  });
+
+  it('CONTROL: a quoted word is seen in each quote; a backticked word in a prose comment is not', () => {
+    const words = failureWords();
+    for (const hit of ["const w = 'docs-busy';", 'const w = "bad-query";', 'const w = `foreign-request`;']) {
+      expect(quotedWords(hit, words), hit).toHaveLength(1);
+    }
+    for (const miss of ['// the lane answers `docs-busy` past its wait', ' * a `bad-query {why}` refusal',
+      'const w = docsBusyBody(lane);']) {
+      expect(quotedWords(miss, words), miss).toEqual([]);
+    }
+  });
+
+  it('L4 decides nothing (the visible half): routes.ts, hooks.ts, lane.ts and cache.ts quote no failure word', () => {
+    const words = failureWords();
+    const files = l4();
+    expect(files.map(([n]) => n)).toEqual(L4_FILES);
+    expect(files.flatMap(([n, t]) => quotedWords(t, words).map((w) => `${n}: '${w}'`))).toEqual([]);
   });
 });

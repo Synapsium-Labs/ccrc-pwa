@@ -15,6 +15,7 @@ import {
   CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childIndex, childReclaimVerb, evalOf, hookRuns, makeChild,
   plantRepoPrograms, plantTmux, type Child,
 } from './childReclaimFixture.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-audit-'); });
@@ -30,7 +31,7 @@ const audit = (flags = ''): Record<string, unknown> =>
 const runCcd = (...args: string[]): { code: number; stdout: string; stderr: string } => {
   try {
     return { code: 0, stderr: '', stdout: execFileSync('bash', ['-p', CCD, ...args], { encoding: 'utf8', cwd: h.home,
-      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) }).trim() };
+      env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }) }).trim() };
   } catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string };
     return { code: err.status ?? 1, stdout: String(err.stdout ?? '').trim(), stderr: String(err.stderr ?? '') };
@@ -67,7 +68,7 @@ describe('ws-audit --reclaim', () => {
     expect(a['token']).toBe(evalOf(h).token);
   }, 60_000);
 
-  it('a probe that could not RUN EXITS 1 — a reclaim document saying unmeasured, no token, no terminal word, nothing journaled', () => {
+  it('a probe that could not RUN EXITS 1 — a reclaim document saying unmeasured, no token, no terminal word, journaled as ONE failure (spec §5.9)', () => {
     // `_ws_reclaim_unmeasured` (Task 2): the server reads ANY audit exit 1 as
     // `failed` and retries; a terminal word here would never be retried.
     makeChild(h);
@@ -78,7 +79,9 @@ describe('ws-audit --reclaim', () => {
     expect(a['mode'], 'still the RECLAIM document').toBe('reclaim');
     expect(a['token'], 'no token for a ladder that did not finish').toBeUndefined();
     expect(a['verdict']).toBe('unmeasured');
-    expect(eventsOf(h.home, 'reclaim'), 'an unmeasured answer is journaled nowhere').toEqual([]);
+    expect(eventsOf(h.home, 'reclaim').map((e) => [e['outcome'], e['refusal'], e['verb']]),
+      'an unmeasured answer is ONE failed line, verb ws-audit (spec §5.9), never a refusal')
+      .toEqual([['failed', 'probe-unmeasured', 'ws-audit']]);
   }, 60_000);
 
   it.each(Object.entries(TMUX_FAULTS))('rung 5: tmux answering %s EXITS 1 unmeasured — never "no session", never a token', (_what, fault) => {
@@ -113,7 +116,9 @@ describe('ws-audit --reclaim', () => {
     expect(a['mode']).toBe('reclaim');
     expect(a['verdict']).toBe('unmeasured');
     expect(a['token']).toBeUndefined();
-    expect(eventsOf(h.home, 'reclaim'), 'unmeasured is journaled nowhere').toEqual([]);
+    expect(eventsOf(h.home, 'reclaim').map((e) => [e['outcome'], e['refusal'], e['verb']]),
+      'unmeasured is ONE failed line (spec §5.9)')
+      .toEqual([['failed', 'probe-unmeasured', 'ws-audit']]);
   }, 60_000);
 
   it('a child whose worktree has VANISHED is reclaimable — exists:false, and the token the verb spends (spec §5.5)', () => {
@@ -209,7 +214,7 @@ describe('ws-audit --reclaim', () => {
       ['--defer-expired', '--reclaim']]) {
       const r = runCcd('ws-audit', '--session', CHILD_ID, ...argv);
       expect(r.code, argv.join(' ')).toBe(1);
-      expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired]]');
+      expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]');
     }
   });
 
@@ -286,7 +291,7 @@ describe('reachable: the capability token and the dispatcher arm', () => {
 // A session entered `<child>/server` through `$HOME/alias -> <child>`; the
 // alias is gone, so its row's spelling now resolves only as text projected
 // below a proven-absent `alias`. The audit answers it as a probe that could
-// not be placed — exit 1, `unmeasured`, no token, nothing journaled — and
+// not be placed — exit 1, `unmeasured`, no token, one failed line (spec §5.9) — and
 // names the row by its id alone: `.workdir` is writable by any session, and a
 // newline in it would forge a `ccd:` line on stderr. Top level, so the exact
 // titles anchor the mutation table's selectors.
@@ -342,7 +347,14 @@ it('absent-suffix alternate row is unmeasured and mints no token', () => {
     expect(String(a['detail']), `the detail never prints ${leak}`).not.toContain(leak);
     expect(r.stderr, `stderr never prints ${leak}`).not.toContain(leak);
   }
-  expect(eventsOf(h.home, 'reclaim'), 'a retry is journaled nowhere — no terminal refusal row').toEqual([]);
+  expect(eventsOf(h.home, 'reclaim').map((e) => [e['outcome'], e['refusal'], e['verb']]),
+    'a retry is ONE failed line, never a terminal refusal row (spec §5.9)')
+    .toEqual([['failed', 'probe-unmeasured', 'ws-audit']]);
+  const journaled = String(eventsOf(h.home, 'reclaim')[0]!['detail']);
+  expect(journaled, 'the journal carries the document’s detail, no more').toBe(String(a['detail']));
+  for (const leak of [raw, `${h.home}/alias`, 'alias/server']) {
+    expect(journaled, `the journal never carries ${leak}`).not.toContain(leak);
+  }
   expect(auditState(c), 'the tree, branch, row, pane model and unit record stand').toEqual(before);
 }, 60_000);
 

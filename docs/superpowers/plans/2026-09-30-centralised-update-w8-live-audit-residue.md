@@ -1501,3 +1501,13 @@ In the OFF arm, `gate_how` is a local built before the echo: "set CCRC_AUTH=on t
 | G-M5 | install follows the redirect | `gsec="$BOX_AUTH_FILE"; grc=0` | G2c, G2d | `ccrc-install` | pending |
 | G-M6 | install says `CCRC_AUTH=on` only when it is | the present arm always prints the OFF words | G2e | `ccrc-install` | pending |
 | G-M9 | the fail-shut arm | drop the absent arm's `CCRC_AUTH=on` branch | G2f | `ccrc-install` | pending |
+
+## Design
+
+**Posture:** none
+
+Residue on screens that already exist — the move sheet, Settings and Mail keep their shapes. Nothing new to look at.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

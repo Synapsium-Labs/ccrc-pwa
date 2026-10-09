@@ -52,9 +52,12 @@ import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
-import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
+import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
+import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
+import { registerTokenRoutes, type TokenRouteDriver } from './token/routes.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -84,7 +87,7 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { archiveInterrupts } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, archiveInterrupts } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, refusedAtStop, stopVerdict, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
@@ -296,12 +299,25 @@ export interface Deps {
    *  session's own `KeyedQueue` — so a close and a sweep reclaim identically.
    *  A test sets it to assert what the lane asks for without a fleet box. */
   childReclaimExec?: (req: ChildReclaimRequest) => Promise<ChildReclaimOutcome>;
+  /** The process's monotonic clock in ms, read by the child-reclaim sweep lane alone. Unset in production: the lane
+   *  reads `performance.now()`. A test sets it. */
+  monotonicMs?: () => number;
   /** The box token every fleet->server POST must carry (coord/token.ts).
-   *  Optional the same way `push`/`notifyLog` are: a box with none configured
-   *  keeps working, unauthenticated, and says so once at boot. NOT optional the
+   *  Optional the same way `push`/`notifyLog` are in what a test must supply: a
+   *  box with none configured (no holder, or a holder with no current value
+   *  because its mint failed) refuses every box-token lane with a 401, verdict
+   *  `unconfigured`, and boot says so; there is no unauthenticated mode. NOT optional the
    *  way `queue` refuses to be — there is no fallback here that could quietly
-   *  construct a second, different token. */
-  mailToken?: string | null;
+   *  construct a second, different token. A `BoxTokenHolder` since the box-token
+   *  lifecycle (spec 4.2): the process's one accept-set, mutated in place by the
+   *  driver, so every lane reads it here at request time and a rotation needs no
+   *  restart. A literal string is what tests inject, with today's meaning. */
+  mailToken?: string | BoxTokenHolder | null;
+  /** The box-token driver as the token routes see it (`token/routes.ts`): the
+   *  claim door, the hand-out commit, "Rotate now" and the view. Read at request
+   *  time. Absent (tests, or a box whose driver was not built) means the claim
+   *  door answers `404 no-claim` and the rotate route `501 not-configured`. */
+  tokenDriver?: TokenRouteDriver;
   /** The coordination database (Build 7). Optional exactly like `push` and
    *  `notifyLog`: absent means the coord routes answer 501 and the mail lane
    *  never runs, which is what a box with no coordination configured should
@@ -1548,27 +1564,35 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   //
   // AUTHENTICATED SINCE BUILD 7 (operator ruling, spec:150-155). This was the
   // one box->server ingress carrying zero identity while the server
-  // regex-routed its body INTO a session's chat stream — see `checkMailToken`
-  // for the one-deploy-generation tolerance and for when it comes out.
+  // regex-routed its body INTO a session's chat stream. FAIL-SHUT since the
+  // box-token lifecycle (spec 4.3): the one-deploy-generation `legacy`
+  // tolerance and the `unconfigured` pass-through are both gone, so every
+  // verdict but `'ok'` is a 401 here exactly as on every other box-token lane.
   app.post('/api/notify', async (req, reply) => {
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/notify');
+    if (verdict === 'legacy' || verdict === 'unconfigured') {
+      // Logged for the same reason the wrong-token arm below is: three silent
+      // layers (notify.sh's `|| true`, ccd's `/dev/null`, `logger: false`) sit
+      // between this refusal and any operator.
+      console.warn(verdict === 'legacy'
+        ? 'ccrc-server: /api/notify refused a request with NO box token (401) — the fleet box\'s ' +
+          'notify.sh has no token file to read'
+        : 'ccrc-server: /api/notify refused a request: this server holds no box token (401)');
+      return reply.code(401).send({ ok: false, error: 'unauthenticated' });
+    }
     if (verdict === 'bad') {
       // `Fastify({ logger: false })` (above) means a bare 401 leaves NOTHING
       // in the journal — three silent layers stack on top of it too
       // (notify.sh's own `|| true`, and ccd invoking it with its output
       // redirected to `/dev/null`), so this line is the only place a wrong
       // token — a stray trailing space, a stale copy after a rotation — ever
-      // becomes visible to an operator, the same way `legacy` already is
-      // below. Never logs the presented value: that would put the secret
+      // becomes visible to an operator, the same way `legacy` and
+      // `unconfigured` already are above (they refuse too). Never logs the presented value: that would put the secret
       // (or a caller's guess at it) in a log file readable by anyone who can
       // read the log.
       console.warn('ccrc-server: /api/notify refused a request with the WRONG box token (401) — ' +
         'check that deploy/ccrc-mail.token matches on both boxes byte-for-byte');
       return reply.code(401).send({ ok: false, error: 'unauthenticated' });
-    }
-    if (verdict === 'legacy') {
-      console.warn('ccrc-server: /api/notify accepted a request with NO box token (legacy ' +
-        'tolerance, one deploy generation) — deploy the agent to ship the new notify.sh');
     }
     const body = (req.body ?? {}) as { message?: unknown };
     if (typeof body.message !== 'string') {
@@ -1646,6 +1670,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // It answers with its handle (workspace lifecycle §5.2): the coordination serialiser with the operator abandon inside
   // it, which the archive door below runs its `{programme:'end'}` on.
   const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
+  // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
+  // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
+  // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
+  watcher?.useCoordSerialiser?.(coordRoutes);
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
   // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
@@ -1654,6 +1682,29 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that finds no row for this box yet measures once instead of answering an
   // empty node list.
   registerUpdateRoutes(app, deps, sessionAuth, watcher);
+
+  // The box-token lifecycle's claim door and "Rotate now" (spec 4.6), registered
+  // from their own file — the fourth that `auth-gate.test.ts`'s `ROUTES` and
+  // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
+  // is read at request time, so a box with no driver answers `no-claim`/`501`.
+  registerTokenRoutes(app, deps);
+
+  // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
+  // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
+  // nothing else; which is why `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts`'s docs describe read
+  // `docs/routes.ts` by name. The root's gate hook runs before the plugin's own, so a signed-out request meets the
+  // gate first. The composition is built here, once per `buildServer` (two servers share no lane and no cache), over
+  // a getter: the adapter reads `deps.fleetState` at every call, so it sees the one state object the link mutates in
+  // place, and a replaced one too. Registered UNCONDITIONALLY: before the handshake, and in local mode with no
+  // measured caps, the adapter itself refuses every call before any exec. The read registration is never handed a
+  // fetcher; only the refresh is.
+  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });
+  await app.register(async (app) => {
+    installDocsRequestPolicy(app);
+    installDocsResponsePolicy(app);
+    registerDocsReadRoutes(app, docs.readers, docs.lanes);
+    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+  });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
@@ -2798,7 +2849,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/pools/epoch');
         if (token !== 'ok') {
           return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: session.verdict });
         }
@@ -3234,13 +3285,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/archive', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    // A registry that did not LIST is `503 registry-unmeasurable` — never folded into `404 unknown-session`, which is
+    // what `knownId` alone answers for it (workspace lifecycle wave 3b, wave 2's carried follow-up). Asked BEFORE
+    // `knownId`, whose call is left as every other request-id gate's (`routes.test.ts` derives that census).
+    if ((await deps.io.readdir(deps.cfg.registryDir)) === null) {
+      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    }
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const flags = archiveFlags(req.body);
     if (flags === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    // The row itself, `/stop`'s ladder. An unlistable registry has already answered 404 `unknown-session` through
-    // `knownId` above, exactly as before this wave; the `unlistable` arm below can only answer if the registry goes
-    // unreadable between the two reads (503). The identity fields are a separate arm: an unmeasured one is refused
-    // rather than guessed at — the stop argv recomputes a tmux name from them.
+    // The row itself, `/stop`'s ladder. An unlistable registry has already answered 503 above; the `unlistable` arm
+    // below can only answer if the registry goes unreadable between the two reads (503 too). The identity fields are a
+    // separate arm: an unmeasured one is refused rather than guessed at — the stop argv recomputes a tmux name from them.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
     if (!read.found) {
       return reply.code(read.reason === 'unlistable' ? 503 : 404)
@@ -3275,7 +3331,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         abandonRefusal,
         abandon,
       }, id, flags, measure));
-    if (!plan.ok) return reply.code(plan.reply.status).send(plan.reply.body);
+    if (!plan.ok) {
+      // A store this box could not read refuses fail-shut WITH its detail, and the server says so in its log
+      // (workspace lifecycle wave 3b: the base dropped both).
+      const { error, detail } = plan.reply.body;
+      if (typeof detail === 'string'
+          && (error === ARCHIVE_REFUSALS.runOpen || error === ARCHIVE_REFUSALS.coordinatorHasOpenRuns)) {
+        console.warn(`ccrc-server: archive ${id}: the coordination store could not be read (${detail}) — refused fail-shut`);
+      }
+      return reply.code(plan.reply.status).send(plan.reply.body);
+    }
     const endedSpread = plan.ended.length > 0 ? { ended: plan.ended } : {};
     let stopped = false;
     if (plan.stop) {
@@ -3293,7 +3358,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       stopped = true;
     }
     if (archiveArgv === null || !plan.wsArchive) return { ok: true, archived: true, stopped, ended: plan.ended };
-    const out = archiveOutcome(stopped, plan.ended, await deps.runCcd(archiveArgv));
+    const archived = await deps.runCcd(archiveArgv);
+    // REVIEW 240's F1 (workspace lifecycle wave 3b): `ws-archive` answers `already archived <id>` at exit 0 having
+    // stopped NOTHING — a row archived earlier whose pane came back without a spawn path clearing the stamp (a pre-#143
+    // pane). Read as `archived:true` alone, the door said a session was put away that tmux still runs. A pane tmux
+    // PROVES up is stopped here, as the archive's own act would have — but only after the turn is re-read at the act,
+    // fail-closed (`stopVerdictFor`, the rule for a stop nobody agreed to: this branch is never `interrupt`'s, whose
+    // stop has already run), because `ws-archive`'s own fail-closed `_ws_status` is skipped on `already archived` and
+    // the turn the door measured came from the frame's row. Only an `idle` answer stops; a busy or unreadable turn, a
+    // pane gone, or one tmux cannot be asked about, is left as before — archived, not stopped.
+    if (archived.ok && !stopped && /^already archived /m.test(archived.stdout)
+        && (await deps.tmux.sessionVerdict(id)).verdict === 'live'
+        && (await stopVerdictFor(rec, identity.uuid)) === 'idle') {
+      const res = await deps.runCcd(stopArgvFor(id, rec, identity));
+      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
+      stopped = true;
+    }
+    const out = archiveOutcome(stopped, plan.ended, archived);
     return reply.code(out.status).send(out.body);
   });
 

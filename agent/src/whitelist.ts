@@ -56,7 +56,9 @@ function underClaudeGlob(canonicalHome: string, canonicalTarget: string): boolea
 export type PathMode = 'read' | 'write';
 
 /**
- * The eight `~/.ccrc` NODE FILES (design 2026-09-20 §8) — the one read grant
+ * The nine `~/.ccrc` NODE FILES (design 2026-09-20 §8; the ninth,
+ * `box-token-generation`, is box-token lifecycle wave 1's and holds an id,
+ * never a value) — the one read grant
  * in this file that is not a prefix. `~/.ccrc` also holds `agent.env` (this
  * agent's own bearer), `auth.scrypt`, `coord.db`, `deploy.env` and every other
  * secret-bearing file `ccd/ccrc` writes, so an `isUnder(…/.ccrc)` arm would
@@ -64,7 +66,7 @@ export type PathMode = 'read' | 'write';
  * against the names `NODE_FILES` declares (`shared/agent-protocol.ts`), in a
  * Set built once per check.
  *
- * TWO conditions. `canonicalTarget` must BE one of the eight, AND it must be
+ * TWO conditions. `canonicalTarget` must BE one of the nine, AND it must be
  * the path the caller literally named — canonical === `<canonical
  * ~/.ccrc>/<the literal basename>`. Without the second: `~/.ccrc/floor` as a
  * live symlink to `~/.ccrc/installed` canonicalises onto a member, and this
@@ -73,9 +75,9 @@ export type PathMode = 'read' | 'write';
  * honest; it is independent of `lstat`, which has its own guard (D-3195,
  * F12/fix round 1, below).
  *
- * What this function refuses: a live symlink carrying one of the eight names
+ * What this function refuses: a live symlink carrying one of the nine names
  * whose FULLY RESOLVED target — following any chain to its end — lies
- * outside every admitted prefix, or is another of the eight; both fail the
+ * outside every admitted prefix, or is another of the nine; both fail the
  * second condition, and — in the common case, `~/.ccrc` itself not being a
  * symlink into an admitted prefix (N-1, fix round 1 dispatch C re-review) —
  * no other `checkPath` arm admits a `~/.ccrc`-rooted
@@ -84,7 +86,7 @@ export type PathMode = 'read' | 'write';
  * `.cc-sessions/x`, not to `installed`.
  *
  * What this function alone CANNOT refuse: a live symlink carrying one of the
- * eight names whose fully resolved target lies in a *different* admitted
+ * nine names whose fully resolved target lies in a *different* admitted
  * prefix (`.cc-sessions`, `.cc-clips`, a `.claude*` dir, the projects root) —
  * that target is a regular file the OTHER prefix's own arm in `checkPath`
  * admits independently, so the request is granted, just not through this
@@ -94,14 +96,14 @@ export type PathMode = 'read' | 'write';
  * directory entry, never `checkPath`'s canonical (already-resolved) answer
  * (F12/D-3195, fix round 1 dispatch C, `server.ts`'s `lstat` case) — so it
  * still reports `symlink`, which the server's inventory sweep refuses to
- * trust as the node file. A DANGLING symlink carrying one of the eight names
+ * trust as the node file. A DANGLING symlink carrying one of the nine names
  * canonicalises onto its own literal path and IS admitted by this function;
  * `lstat` reports it as `symlink` too, which the sweep also refuses.
  *
  * `canonicalCcrc` is `canonicalize(<home>/.ccrc)`, not `<canonical home>/.ccrc`,
- * so a `~/.ccrc` that is itself a symlink admits its own eight and nothing else —
+ * so a `~/.ccrc` that is itself a symlink admits its own nine and nothing else —
  * in the common case (N-1): if that symlink's target is ITSELF under an
- * admitted prefix, the prefix arm admits all of `~/.ccrc`, not just its eight.
+ * admitted prefix, the prefix arm admits all of `~/.ccrc`, not just its nine.
  */
 function isCcrcNodeFile(canonicalCcrc: string, targetPath: string, canonicalTarget: string): boolean {
   const admitted = new Set(NODE_FILE_BASENAMES.map((b) => path.join(canonicalCcrc, b)));
@@ -112,7 +114,7 @@ function isCcrcNodeFile(canonicalCcrc: string, targetPath: string, canonicalTarg
 /**
  * Whitelist check for ALL file ops. Reads: `.cc-sessions/`, `.cc-limits/`,
  * `.cc-clips/`, `.claude*` (glob) under $HOME, plus the fleet projects root,
- * plus exactly the eight `~/.ccrc` node files by name (`isCcrcNodeFile`).
+ * plus exactly the nine `~/.ccrc` node files by name (`isCcrcNodeFile`).
  * Writes: `.cc-clips/` under $HOME only. Returns the canonical path to operate on when
  * allowed, `null` otherwise — canonicalizing here means every downstream fs
  * call in fileops.ts/tail.ts already has symlink-escapes resolved.
@@ -303,6 +305,19 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * ever grow, reached (wave 3) from a route the PWA will hit with no box token
  * of any kind.
  *
+ * The four docs verbs (native Docs reader, spec 2026-10-01 section 2 (a)) are
+ * the next family, enrolled for `coord-pause`'s reason rather than
+ * `ws-reap`'s. `docs-index`, `docs-tree` and `docs-show` read and write
+ * nothing; `docs-fetch` writes one remote-tracking ref and ccd's own fetch
+ * stamp. None takes a confirmation token, so the flag — `--all` for the
+ * index, `--project` for the other three — is each verb's whole argument
+ * surface. They are reached from session-gated routes (three GETs and one
+ * POST) that carry no box token of any kind, and a bare grant would admit
+ * every positional form a verb might grow while staying green in
+ * `whitelist-subset.test.ts`'s layers 2 and 3, because the bare verb is a
+ * genuine prefix of every argv the server builds. `g16`-`g19` are the other
+ * side.
+ *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
  * different questions) is the one to avoid while fixing P1.
@@ -311,7 +326,8 @@ export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
   'project-pool': '--project', 'route': '--session',
   'win-size': '--session', 'ws-reclaim': '--expect',
-  'reclaim-pause': '--state',
+  'reclaim-pause': '--state', 'ws-expire': '--expect',
+  'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -419,6 +435,11 @@ export const EXEC_WHITELIST = {
     // `--child-of` the server composed. `ws-audit --reclaim` needs NO grant of
     // its own: it rides `['ws-audit','--session']`, and it destroys nothing.
     ['ws-reclaim', '--expect'],
+    // ARCHIVED-WORKSPACE EXPIRY (workspace lifecycle spec 2026-09-24 §5.3): ws-reclaim's sibling, the second
+    // destructive verb the SERVER sends with no human in the path. Granted on its confirmation token for the same
+    // reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g15), and its audit rides `['ws-audit','--session']`. ccd
+    // re-proves the token — which binds the archive's epoch — inside the reap lock.
+    ['ws-expire', '--expect'],
     ['ws-attic', '--session'],
     // The workspace-hold pair. The spec's "zero new agent whitelist grants"
     // bullet is about KEYS — no `gh`, no new command — and its own next clause
@@ -548,6 +569,20 @@ export const EXEC_WHITELIST = {
     // `win-size is grantable ONLY with --session` case, and why the enrolment
     // above exists: one of the two is in a different package from the other.
     ['win-size',   '--session'],
+    // NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): the four
+    // verbs `docs-v1` names, each ENROLLED in `REQUIRED_VERB_FLAG` above on the
+    // flag that is its whole argument surface (g16-g19 are the other side).
+    // Every token after the flag is unconstrained here; the exact argv is
+    // ccd's (a usage die on any other shape) and the server's layer-2c table.
+    // The fleet-wide listing: `--all` is its only argument.
+    ['docs-index', '--all'],
+    // One project's listing, at the origin default or at `--ref R`.
+    ['docs-tree',  '--project'],
+    // One file's bytes. ONE grant reaches BOTH argv shapes: committed (12
+    // tokens after the verb) and draft (14).
+    ['docs-show',  '--project'],
+    // The one docs verb that writes: a fetch of one branch from origin.
+    ['docs-fetch', '--project'],
   ],
 } as const satisfies ExecWhitelist;
 

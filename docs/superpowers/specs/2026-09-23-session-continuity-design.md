@@ -6,7 +6,11 @@ rulings on the written spec (C9–C11, C13, C14; §11 items 1–5 ruled 2026-09-
 them; rev 5 reconciles it with its first wave plans, 2026-09-24; rev 6 records rule 1 (C12) as shipped on the pane's
 own process start (D-3526) and rules 2–3 as re-planned on its reader, 2026-09-30 ·
 rev 7 counts rule 3's rescues on their landing and restates §9's stage-4 target (review 246, ruled 2026-10-03),
-and records stage 7 as planned by its wave-3 plan, 2026-10-04 ·
+and records stage 7 as planned by its wave-3 plan, 2026-10-04 · rev 8 ships stage 6's sweep with its stop SHADOWED
+until the operator arms it, BEFORE the spawn variable (which follows baseline B's week), and defines §9's stage-6
+counts as measured (wave 4, 2026-10-05) · rev 9 amends stage 1 for issue #317 (D-4500, D-4501): a link that
+`EXDEV` refused routes through a read-write mount of the whole filesystem, proved by inode, and a copy names its cause
+and its bytes (§1.2 item 1, §5.1, §8, §9; 2026-10-08) ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -97,7 +101,9 @@ Six mechanisms, read off the source at `bbb5e714`:
    onto an existing one nests it) and avoids a half-merged tree; its own comment records that a partially built
    destination makes the skip permanent. Journals and agent logs are appended in place (§5.1).
    Every account root is its own bind mount of one volume, and `link(2)` across two mounts answers `EXDEV`, so
-   every first carry since 2026-09-22 is `(copy)`, never `(link)`.
+   every first carry since 2026-09-22 is `(copy)`, never `(link)`. *(History, dated: true from 2026-09-22 until
+   D-4500, 2026-10-08. Since then a failed link routes through a read-write mount of the whole volume that exposes
+   both roots, proved by inode, and copies only where none exists, saying why (§5.1).)*
 2. **The restarted session is told nothing specific.** The redrive prompt is one constant (`RESUME_PROMPT`,
    `ccd/ccd:1208`): background work "is gone: re-check their journals". Resuming by run id works across accounts
    when the journal is present; the eight journal-missing refusals are the carry, and the five scriptPath
@@ -224,15 +230,15 @@ in 4,447 files, and `workflows/<runId>.json` is written whole at the run's end i
 fallbacks come from the mounts, not the device: every account root is its own bind mount of one volume, `link(2)`
 across two mounts answers `EXDEV`, every dated `(copy)` involved a root that was already a mount (262 of 262), and
 every dated `(link)` ran while both roots were plain directories (163 of 163). Since 2026-09-22 every first carry is
-`(copy)`, so a file carried since then never shares an inode with its source. The rules below are written for
-append-in-place logs and rewritten records.
+`(copy)`, so a file carried since then never shares an inode with its source (until D-4500, below). The rules below
+are written for append-in-place logs and rewritten records.
 
 In `_swap_carry_sidecars`, the branch taken when the destination exists walks the source tree file by file and
 decides on size, modification time and content; a shared inode can answer only "equal":
 
 | Source vs destination | Action | Counted |
 |---|---|---|
-| absent at destination | hardlink, or copy when linking fails | `+N` |
+| absent at destination | hardlink; on `EXDEV`, a hardlink through a verified common mount (D-4500); else a copy, counted by cause (D-4501) | `+N` |
 | the same inode; or equal size and equal nanosecond mtime; or equal bytes | nothing | no |
 | append-only log (`*.jsonl`), destination a strict byte-prefix of a larger source | replace by temp file and rename | `~R` |
 | append-only log, destination longer than source and source its prefix | keep destination (it is further along) | no |
@@ -248,9 +254,27 @@ the fleet box it takes the walk's read from p50 80 MiB / p90 764 MiB (bytes comp
 208 MiB, the bytes that are actually new.
 
 Nothing is deleted. The first carry to an account keeps today's path unchanged, including the anti-nesting guard
-and the clear-then-copy fallback. A destination left partial by an earlier failure is repaired by the walk rather
+and the clear-then-copy fallback (amended by D-4500, below: the direct `cp -al` is unchanged, but its failure now
+routes before it copies). A destination left partial by an earlier failure is repaired by the walk rather
 than kept forever. The log line becomes `sidecar <uuid> -> <dst> (merged +N ~R !D)`, and each `!D` adds a line
 `sidecar <uuid> diverged <kept> longer <longer>` naming the longer copy's path, which stage 3's manifest reads.
+
+**Amended 2026-10-08 (issue #317): a link `EXDEV` refused routes through a common mount (D-4500), and a copy says
+why and how much (D-4501).** `link(2)` answers `EXDEV` between two vfsmounts even on one superblock, so the bind-mount
+geometry above made every first carry copy and every merged absent file copy, silently. Since D-4500, when the
+direct link fails — the first carry's `cp -al`, or the walk's `os.link` with `EXDEV` (any other errno is
+`link-failed` and never routes) — ccd reads the kernel's own mount table (`/proc/self/mountinfo`), finds a
+read-write mount of the same filesystem under which both trees appear, and links through it only when each alias's
+`(st_dev, st_ino)` equals its original's. A mount stacked over an alias path, or one inside either tree, rules the
+alias out, and a read-only destination mount is `link-failed`, never routed around. The route runs only after a link
+has failed, so a box where linking works runs as before; a wrong table costs a copy, never a link into another tree.
+Every copy that remains names one cause from a closed vocabulary —
+`exdev-other-fs`, `exdev-no-root`, `root-unreachable`, `root-mismatch`, `root-failed`, `mounts-absent`,
+`mounts-unreadable`, `link-failed`, `route-error` — and its bytes (D-4501). The first carry logs `(link)`,
+`(link: via-mount)`, or `(copy: <cause> <bytes|?> bytes)`; a merge appends `, via-mount V` and one
+`, copy: <cause> <F> files <B> bytes` per cause to `(merged +N ~R !D[, deferred K])`; any copy says the same on
+stderr. A bare `(copy)` is what a carry before D-4501 wrote. Transcripts keep their copy semantics (they are
+appended to), `~R` replacements stay temp-and-rename copies, and the budget still prices an absent file at its size.
 
 **Bounded.** The walk reads both copies, where `(kept)` read nothing. It takes a box-wide non-blocking slot of
 its own, `$REG/.carry.lock`, inside the carry itself; park-and-wake R4's lock has not shipped. `_swap_carry_sidecars`
@@ -503,7 +527,9 @@ accepting transcript loss.
 ### 5.6 Stage 6 — background processes: stop the wrong kills, collect the real orphans (ccd)
 
 1. **Stop the wrong kills.** ccd sets `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in every spawn environment,
-   beside the resume variables, from stage 6's first deploy; it does not wait for item 2. The reap stops only
+   beside the resume variables, once baseline B (§9) has been counted with the reap still on: rev 8 ships items 2
+   and 3 first (wave 4), and the variable a week after their deploy (wave 4b); it does not wait for item 2's stop
+   to be armed. The reap stops only
    background shells of a live, idle Claude Code, and every process in a dead scope has already lost its Claude
    Code, so no collector frees memory the reap would have freed (§1.3). Watchers can already opt out today by using
    the Monitor tool instead of Bash `run_in_background`; stage 5's worker clause says so.
@@ -531,7 +557,25 @@ accepting transcript loss.
      Claude Code's native adopt record, naming a background shell handed "to the next wake", if the stage-2 spike
      makes native handoff primary; the stage-3 launch record carries run and agent ids, never a pid, so under
      manifest-primary, and before stage 3, no record exists and that predicate is satisfied. A predicate it cannot
-     measure skips that scope for the tick and records nothing; a scope seen live drops its entry.
+     measure skips that scope for the tick and records nothing new; a scope seen live drops its entry, except one
+     carried for a child cgroup or for the parent-walk hop cap, which keeps its previous line even live and gets
+     no `old` listing (a scope with a child cgroup is never stopped).
+   - **The stop ships SHADOWED** (the coordinator's safety ruling at wave 4's planning): a scope that passes every
+     predicate is recorded `would-stop`, and the stop is issued only while `$REG/scope-sweep-live` exists. Nothing
+     in the tree writes that file — the operator arms it by hand after reading the shadow verdicts, as with
+     `stall-watch-live` — and `$REG/scope-sweep-paused` still stops everything, the shadow record included. Armed,
+     one tick stops at most three scopes; an inert scope past that is recorded `held` for the next tick. A
+     server pid that now names another process, or a tmux server younger than the scope, is reported and never
+     stopped. The first-seen clock is boot-relative, and a carried one earlier than the scope or later than now
+     starts again; a process in another network namespace (whose sockets the sweep's tables cannot see), a
+     process on the box whose parent cannot be read, and a tmux that does not answer for a scope whose server
+     still runs are each unmeasurable, and so is a scope whose cgroup holds any child cgroup or whose cgroup
+     directory cannot be read and searched: `systemctl stop` kills the whole cgroup subtree and every predicate
+     reads only the scope's own `cgroup.procs`, so its line is carried and it is never stopped
+     (`scope-sweep-child-cgroups-are-unmeasurable`); a carried `first=` or `cpu0=` outside the bounds the sweep
+     writes is not believed, and the clock starts again. The record also holds one line per process older than a day in a live pane
+     scope, other than the pane's own process and the MCP servers its Claude Code started in its first two
+     minutes, for doctor.
    - Every other dead scope is **reported**, never stopped: doctor lists scope, processes, age, sockets and memory,
      and the operator stops it or moves the service into a unit. Doctor also lists every process older than a day
      in a live pane scope, other than the pane's own process and its Claude Code's MCP servers.
@@ -555,7 +599,14 @@ victim, and under `OOMPolicy=stop` the kill of any process in a pane scope ends 
 sessions die with the reap on (§1.3), because the slice fills while the host still reads plenty free. §9 counts OOM
 stops of scopes whose session had been idle 30 minutes or more with a live background shell — the reap's own class
 — for a week with the reap still on, before the variable ships (baseline B); the variable is removed when that
-class exceeds B + 2 in any week after it ships, and the removal takes effect at each session's next start. An aggregate `MemoryHigh` must never return to the slice.
+class exceeds B + 2 in any week after it ships, and the removal takes effect at each session's next start. B is
+counted by `deploy/measure-continuity.py --stage 6` over the week that starts at wave 4's deploy: it reads the pane
+scopes' starts and OOM stops from the user journal, maps a scope to the session whose ccd `spawn` event followed its
+start within ten seconds (a stop it cannot map to exactly one session is `unmapped`; a spawn that more than one
+scope start precedes within that window is claimed by neither, and those stops are `unmapped` — two scopes started
+before one spawn — because ccd writes no spawn event for a same-rc respawn within 300 s: the named trade), and reads that session's
+transcript for no user or assistant row in the 30 minutes before the stop and a Bash `run_in_background` start since
+the spawn with no `<task-notification>` for it. An aggregate `MemoryHigh` must never return to the slice.
 
 ### 5.7 Stage 7 — the operator's choice survives a restart (ccd)
 
@@ -593,10 +644,13 @@ none) — and no command older than it is read, because an older ccd typed its k
 outside the vocabulary is logged by name when it is one token, by size otherwise; and a stop that cannot read at
 all (no floor yet, a transcript that is not a readable regular file, no python, a failed reader), or whose newest
 `/model` or `/effort` has no acknowledgement in the wording this ccd recognises (drifted wording, a command Claude
-Code itself refused, or a dismissed `/effort` slider: `Kept effort level as …`), logs `unmeasured`, once per keep. §9's stage-7 row counts the keep-time stops whose `/model` ccd
+Code itself refused — `/effort`'s `Invalid argument …`, 18 rows in 6,794 fleet transcripts counted on 2026-10-05, where
+a dismissed `/effort` slider wrote no row at all), logs `unmeasured`, once per keep, unless the field was written after
+the command (that check is asked first). §9's stage-7 row counts the keep-time stops whose `/model` ccd
 logged as outside the vocabulary or refused, with `stops_that_could_not_read_the_transcript` beside it (it counts KEEPS that
 could not measure, one per `unmeasured` line, keeps at a spawn and the acknowledgement-drift line included, and a refused
-command repeats at every keep until a later operator command of its kind is acknowledged, a ccd keystroke not clearing it); it counts those STOPS, not
+command repeats at every keep until a later operator command of its kind is acknowledged or its field is written after
+it, a ccd keystroke not clearing it); it counts those STOPS, not
 distinct choices or restarts, because a `/model` ccd cannot keep is logged again at every later keep until a newer
 command replaces it, and a session stopped for good, or archived and then removed, is counted although no restart
 happened (an over-count by design). A session on a non-Anthropic lane is skipped, and a swap that crosses
@@ -656,6 +710,15 @@ bound to a pane instance).
   spawn path; §9 measures `(kept: busy)`, `(kept: budget)`, `(kept: error)` and the `unmeasured` rate.
 - **Two different files of equal size and equal nanosecond mtime read as equal:** the quick check's named cost;
   equality is never decided on size alone, pinned.
+- **A stale, forged or overmounted mount table names the wrong alias** (D-4500): an alias is used only when its
+  `(st_dev, st_ino)` equals the original's for both trees, so the table can cost a copy, never a link into another
+  tree (pinned with a decoy of the right shape). The proof covers the two roots; beneath them, the alias shows the
+  same files only if the table lists every mount inside the trees, which the kernel's own table always does — a
+  hand-made `CCD_MOUNTINFO` that left one out could link the file such a mount hides (harness-only; production reads
+  `/proc/self/mountinfo`). The residue is TOCTOU: a mount between the proof and the link could still redirect it;
+  only root can make one, and the window is a few syscalls wide.
+- **The whole-volume mount is missing, read-only or not traversable for the caller:** every carry copies, as before
+  D-4500, but the log names it (`exdev-no-root`, `root-unreachable`) and §9 counts it.
 - **The model ignores the manifest:** counts reach the operator and the coordinator anyway; §9 retires prompt text
   that measures no change.
 - **A carried-in banner rescues a session that is not blocked:** the pane's own process start, with a swap after
@@ -687,12 +750,12 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 
 | Stage | Metric | Baseline | Target |
 |---|---|---|---|
-| 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0 |
+| 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals; sidecar bytes copied, by cause (D-4501: first carries, merged files, bytes) | 774 of 1,310, all by existence; 8; every first carry `(copy)` since 2026-09-22, unsized | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0; `exdev-*` at 0 on a box whose filesystem has a read-write mount exposing every account root |
 | 2 | spike outcome | — | decides stage 3 |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
 | 4 | sessions with a fourth auto-rescue in an hour that no chain wait preceded, counting rescues that landed and asking it only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace — rule 3's own gate; the raw count of sessions with 4 or more is reported beside it); chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner (since D-3526, only a landing whose Claude Code never came up); near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4), owed at the stage-4 reading, not re-measured for the restated metric; —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; reported; reported; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
-| 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0; at most B + 2 a week, reported |
+| 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0 (from wave 4b's variable); 0 once the operator arms the stop — while it is shadowed every inert scope survives by design, and `--stage 6` reports the count off the sweep's verdict record; at most B + 2 a week, reported |
 | 7 | keep-time stops that revert an operator's `/model` (those ccd logs: a value outside the vocabulary, or refused; the stops that could not read the transcript or recognise its acknowledgement are reported beside it; a session stopped for good, or archived then removed, is counted with no restart: an over-count by design) | this session's case | 0 |
 
 Stage 1's first merges meet the backlog C9 does not backfill: 43 of the 673 return-visit pairs on the box exceed
@@ -706,8 +769,9 @@ redesigned.
 
 1 → 2 → 3 → {4, 5}, with one exception: stage 4's rescue policy (rules 1–3 and their tests) reads only the
 transcript, the limits files and the swap log, needs nothing from stages 1–3, and ships any time; stage 4's refusal
-of swaps that cut work reads stage 3's manifest scan and ships after it. Stage 6 ships in two parts. The first — the spawn variable (after its one-week baseline, §5.6),
-the dead-scope report, the inert stop, and the harness fix — needs nothing from stages 1–5 and
+of swaps that cut work reads stage 3's manifest scan and ships after it. Stage 6 ships in two parts. The first — the dead-scope report, the inert stop
+(shipped shadowed), and the harness fix, then the spawn variable once the one-week baseline their deploy starts has
+been counted (§5.6; rev 8: waves 4 and 4b) — needs nothing from stages 1–5 and
 can ship any time. Before stage 3 no handoff record exists, so a handed-over waiter with no CPU and no socket can be
 stopped; that is §5.6's named cost. The second, ccd stopping a scope when it ends a pane, ships with or after stage
 3 and the stage-2 decision on native handoff, whose record it reads. Stage 7 is independent. Stage 5's clauses are appended after the landing spec's
@@ -750,7 +814,8 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
    six hours and serve nothing, and reports the rest (§5.6 item 2), rather than only reporting. On 2026-09-23 it
    stops 5 scopes, 22 processes, 20 MB, all test and probe leaks, and reports the other 7, including the two
    services live sessions still used; it collects the orphaned and zombied without touching anything that runs,
-   serves or forks. The pressure-reap variable ships first (§10). The operator stopped the DynamoDB Local server the
+   serves or forks. The pressure-reap variable was to ship first; rev 8 ships it after the sweep, once baseline B
+   has been counted with the reap still on (§10). The operator stopped the DynamoDB Local server the
    same day (2026-09-23 21:13 UTC, data file unchanged); MekWarLive restarts it from its own script when it needs it.
 5. **The slice ceiling** (C14). 16 session deaths in 10 sessions from the OOM killer in a week, with the reap on,
    while the host had memory to spare (§1.3). The kill itself chose sensibly, usually a background worker; what

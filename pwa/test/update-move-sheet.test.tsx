@@ -524,3 +524,33 @@ describe('one sheet for every move (D-3389)', () => {
     expect(src('fleet', 'UpdateMoveSheet.tsx')).not.toMatch(/dangerouslySetInnerHTML/);
   });
 });
+
+// Programme wave 14, R15(b) (D-4269): a `halted` skip is about the whole fleet, so it is said even for a node the plan
+// never named. The shape: the server row FAILED on the tag this move names (it runs it already, so the plan does not
+// list it), and the fleet node is requested — the request then waits behind that halt until the ack. Before this
+// wave the sheet closed on that 202 as if the fleet had started moving.
+describe('UpdateMoveSheet — a halted skip of a node the plan never named (R15(b))', () => {
+  it('is said in the sheet, beside what was requested, and the sheet stays open', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue(requestAllAnswer([
+      { nodeId: FLEET_ID, fleet: true, does: 'requested' }, { nodeId: SERVER_ID, fleet: false, does: 'halted' },
+    ]));
+    const halting = server({ current: stamp('v0.0.10'), update: { state: 'failed', target: 'v0.0.10', startedAt: T0, detail: 'gate: unit not up' } });
+    const { onClose, onDone } = mount(plan(UP, [halting, node()]));
+    expect(lines(), 'the plan names only the fleet node').toEqual(['1. fleet (fleet) v0.0.9 → v0.0.10']);
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    const said = await screen.findByRole('alert');
+    expect(said.textContent).toBe(`Not requested — server: ${moveSkipText('halted')} Requested: fleet.`);
+    expect(onDone, 'a request was written — re-poll').toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('every other word a node the plan never named was skipped with stays unsaid (the plan agreeing with the server)', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({
+      ok: true, requested: [FLEET_ID], skipped: [{ nodeId: SERVER_ID, why: 'busy' }],
+    });
+    const { onClose } = mount(plan(UP, [server({ current: stamp('v0.0.10') }), node()]));
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

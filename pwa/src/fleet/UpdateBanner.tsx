@@ -33,13 +33,23 @@
 // After a 2xx the sheet calls onMoved: the screen's re-poll when the view was
 // injected, this banner's own when it polls. "See what's new" opens /settings,
 // where the release list is.
-import { useState } from 'react';
+//
+// WHILE A NODE HALTS THE FLEET (programme wave 14, R15(b)), Update all is
+// disabled, and a second line says why and where the remedy is: the halt
+// banner's Ack. Before this wave the tap opened the sheet, the route answered
+// 202, and the sheet said "acknowledge that node" with no Ack in sight. Who
+// halts is `haltingNodes` (updateHalt.ts), the dispatcher's own rule from L0;
+// the line is tied to the button by aria-describedby. The route is unchanged:
+// `{all: true}` still answers 202 for a tap that lands before the poll sees
+// the halt, and the sheet says that skip (UpdateMoveSheet's moveSkippedText).
+import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, UpdateChannel, UpdatesView } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../../shared/update-summary';
 import { navigate } from '../lib/router';
 import { planMove, type PlannedMove } from './movePlan';
+import { haltingNodes, updateAllHaltedText } from './updateHalt';
 import { UpdateMoveSheet } from './UpdateMoveSheet';
 import { UPDATES_POLL_MS, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView } from './useUpdatesView';
 import './fleet.css';
@@ -113,19 +123,25 @@ export function UpdateBanner({ updates: injected, health = null, onMoved }: {
   // The move being confirmed — a plan taken at the tap, so a poll landing
   // while the sheet is open cannot change the list under a thumb.
   const [move, setMove] = useState<PlannedMove | null>(null);
+  const haltedId = useId();
   // After a 2xx: the screen's re-poll when it handed one down, else this
   // banner's own (useUpdatesView(0)'s reload is a no-op, by its contract).
   const moved = injected === undefined ? polled.reload : (onMoved ?? (() => {}));
   const release = view !== null ? bannerRelease(view) : null;
   const text = view !== null ? updateBannerText(view, health) : null;
+  const halting = view !== null ? haltingNodes(view.nodes) : [];
+  const halted = halting.length > 0 ? updateAllHaltedText(halting) : null;
   return (
     <>
       {view !== null && release !== null && text !== null && (
         <div className="update-banner" role="status">
           <span className="update-banner-msg">{text}</span>
+          {halted !== null && <span className="update-banner-msg" id={haltedId}>{halted}</span>}
           <div className="update-banner-actions">
             <Button
               variant="ghost"
+              disabled={halted !== null}
+              aria-describedby={halted !== null ? haltedId : undefined}
               onClick={() => setMove(planMove(view, { scope: 'fleet', direction: 'update', tag: release.tag }))}
             >
               Update all

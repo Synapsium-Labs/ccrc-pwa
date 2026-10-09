@@ -10,6 +10,7 @@ import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
+import { HaltBanner } from '../fleet/HaltBanner';
 import { useFleetHealth } from '../fleet/useFleetHealth';
 import { UpdateBanner } from '../fleet/UpdateBanner';
 import { useUpdatesView } from '../fleet/useUpdatesView';
@@ -638,7 +639,10 @@ export function FleetScreen({
         </div>
       </header>
 
-      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} />
+      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} intent={updates.view?.intent ?? null} />
+      {/* The halt, with each halting node's Ack in place (programme wave 14, R15(a)): above Update all, which it
+          disables while it stands. Re-polls on every Ack. */}
+      <HaltBanner updates={updates.view} seq={updates.seq} onAcked={updates.reload} />
       <UpdateBanner updates={updates.view} health={fleetHealth} onMoved={updates.reload} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
@@ -1006,7 +1010,7 @@ export function FleetScreen({
         open={archiveAllFor !== null}
         onClose={() => setArchiveAllFor(null)}
         title="Archive released workspaces?"
-        consequence={`Archives ${archiveAllCount} released ${archiveAllCount === 1 ? 'workspace' : 'workspaces'} in ${archiveAllFor ?? ''}, one at a time. ${archiveAllLive} of them ${archiveAllLive === 1 ? 'still has a live pane' : 'still have a live pane'}, which is stopped. Restore brings any of them back. Child workspaces are skipped, and so is any row that stops being released before its turn.`}
+        consequence={`Archives ${archiveAllCount} released ${archiveAllCount === 1 ? 'workspace' : 'workspaces'} in ${archiveAllFor ?? ''}, one at a time. ${archiveAllLive} of them ${archiveAllLive === 1 ? 'still has a live pane' : 'still have a live pane'}, which is stopped. Restore brings any of them back; once automatic cleanup is on, each is cleaned up seven days after its archive. Child workspaces are skipped, and so is any row that stops being released before its turn.`}
         confirmLabel={`Archive ${archiveAllCount}`}
         onConfirm={() => {
           if (archiveAllFor !== null) void runArchiveAll(archiveAllFor);

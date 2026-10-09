@@ -161,6 +161,15 @@ export const TREE_FILES = [
   // non-Darwin, every-ROLE arm; without it `_inst_atomic` dies naming a source
   // the fixture tree does not carry.
   'ccd/ccd-tmp-sweep',
+  // history spec 2026-10-05 §9.5: the history sweep's shim, placed by
+  // `_inst_bins` on the non-Darwin arm for every role but server; without it
+  // `_inst_atomic` dies naming a source the tree does not carry. And the
+  // directory its `exec node` and doctor's `status --json` read, copied whole.
+  'ccd/ccd-history-sweep',
+  'ccd/history',
+  // The pane-scope sweep (session-continuity wave 4), shipped by `_inst_bins` on
+  // the same non-Darwin, every-ROLE arm as the reaper above.
+  'ccd/ccd-scope-sweep',
   // account-pool-membership wave 1, Task 4 fix round 1 (F1): the leased-
   // projection puller, shipped by `_inst_bins` on the same non-Darwin, every-
   // ROLE arm as the four above. Without this row `_inst_atomic` dies naming a

@@ -20,8 +20,8 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe) |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
-| 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | — | dispatched 2026-10-04 22:21 as run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
-| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | to plan after wave 3 merges |
+| 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
+| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
@@ -536,6 +536,101 @@ carries it (spec §5.1, amended 2026-09-24).
     - F5 (a)–(j): text and tests.
   - **The worker's ledger note (a), carried as an OPERATOR CANDIDATE:** today any jq runtime error passes the deny.
     A held or child session whose payload holds `merge` could fail CLOSED instead. Not this wave's.
+- **2026-10-06 07:02 — `ccd/ccd` shared by region** (mail 3648, for the record). Run 250's claim 1043 keeps the stamp and
+  its `pr-state` lines. Runs 245 and 274 edit their own regions of `ccd/ccd` without a claim. The second to land
+  merges main and re-stamps. Fix round 2 is unchanged.
+- **2026-10-06 07:27 — fix round 2 done at `6850f261`** (wave-done 3650; three commits, plus a merge of main at
+  `21f536a5`; no new number, 3918–3920 unused).
+  - **What landed:**
+    - F1: the tight multi-byte fixture; row MB reds 1 of 123 on jq 1.7 and on 1.8.2.
+    - F2: THE COST sentence names the accepted class, and the refusal names `ccrc-api mail send --json <file>`;
+      row F2P reds 3.
+    - F3: main merged; README and the doctor test keep both sides; only the stamp line was resolved by hand.
+    - F4: the rows are in the plan as JSON.
+    - F5 (a)–(j): text corrections.
+    - Claim 1043 released.
+  - **Re-measured:**
+    - The tip matches the claim, and the four required checks are green (CI 37427142508).
+    - #248 merges clean onto `9221416a` (#291).
+    - The canary denies on the merged hook under jq 1.7 and 1.8.2.
+  - **Run state:** the run went to `awaiting-review`, with its items already settled.
+  - **Acceptance review 289** is opened, and its brief names the held-out panel. Its dispatch was refused `cap-daily`
+    (24 of 24 in the rolling day). It dispatches when run 266's dispatch ages out at 07:47.
+  - **2026-10-06 07:49 — review 289 dispatched** to `ccrc-pwa-bright-summit`. The tip was re-read first and is still
+    `6850f261`.
+  - **Merge order with #286:** whichever acceptance lands first merges first. The second merges main and
+    re-stamps `ccd/ccd`, by the shared-region ruling.
+- **2026-10-06 20:21 — review 289 ACCEPTED wave 3** (review-done 3656, reviewed tip `6850f261`; report copied on receipt).
+  This session's mail was held for about twelve hours behind a background planning workflow, so 3656 was read only
+  at 20:15.
+  - **The verdict:** 15 agents, no unverified lens. 4 confirmed and 0 refuted. Six findings, all minor and text-only.
+    Everything the brief asked holds: MB 1 and F2P 3 on both jqs; the accepted class in both directions; the canary
+    deny/deny and fail-open on 3f9cca09; 54 deny shapes still denied; ordinary commands pass.
+  - **The landing round was sent** (mail 3751; run 250 back at `working`):
+    - `git merge origin/main`, where only `ccd/ccd`'s stamp conflicts (#286), then re-stamp;
+    - the text fixes F1–F4 and F6, with no number;
+    - the re-gate, and the canary on the merged hook.
+  - **F5, the stale PR #248 body, is the coordinator's.** I re-write it from the plan's Task 5 text before merging.
+  - **ccrc-history** (quiet-ridge's runs 293 and 302) edits README, the doctor checks and deploy.sh. It has consent
+    (3750); the second lander merges main.
+- **2026-10-06 23:31 — the landing round is done at `cf0170e7`** (wave-done 3771). It merged main twice, because main moved
+  during the first re-gate: `b27fabc15`, then `8d85c7cf4`. Each time only the stamp conflicted, with README's SKIP
+  sentence kept both ways. The text fixes F1–F4 and F6 landed. The re-gate on `cf0170e7` was all green on the first
+  run: canary deny/deny on jq 1.7 and 1.8.2, fail-open on 3f9cca09 under 1.8.2. The four required checks are green.
+  The round's own commits are text only (verified).
+  - **Main moved a THIRD time** (#299, `1bb88d5e`, the coordinator's merge). #248 conflicts on ccd/ccd's stamp line
+    ONLY (merge-tree). Clause 16 allows one absorb per conflict, so a **merge-only round** names #248 NEXT TO LAND
+    (mail 3772): merge, re-stamp, and a narrow re-gate. CI is the arbiter for the doctor and install files #299
+    changed. Nothing else of this coordinator's that touches ccd/ccd merges before #248.
+  - **F5 is done:** #248's description was re-written from the plan's Task 5 text, with the jq 1.8 fix and the
+    canary added, through the REST API, because `gh pr edit` fails on GitHub's retired classic-projects field. The
+    retired regex and "gh's flags pass unparsed" are gone from it.
+  - **Lesson for ccd/ccd waves:** every merge to main that changes ccd/ccd re-conflicts every open ccd/ccd PR on the
+    generated stamp line. Land them one at a time, each with a merge-only round just before its merge.
+- **2026-10-06 23:53 — the merge-only round is done at `eb6cb5a0`** (wave-done 3773). It is one merge commit, of main
+  `1bb88d5e`, where only the stamp conflicted. The narrow re-gate was green, including the canary deny/deny. Landing
+  3b is opened as **run 310** (the run's wave 4, planned; block 4326–4335, written bare), ready for wave 3's final close.
+  - **CI is red on one test,** `pools-prose`'s README size ratchet. Main's README is exactly 5,800 lines, at the edge
+    against CLAUDE.md's "~5700". #248 adds one line, making 5,801. The test asks the PR that crosses the edge to
+    re-measure, so fix round 5 (mail 3774) makes ONE line of CLAUDE.md read `~5800`.
+- **2026-10-07 00:26 — wave 3 MERGED: #248** (`9a255a74`, squash at 00:24 UTC). Fix round 5 (wave-done 3782, tip `4c8f8048`)
+  is the one CLAUDE.md line, `~5800`, made with quiet-ridge's consent over claim 1055 (mail 3779). Verified before the
+  merge: the commit is that line alone, all four required checks green on `4c8f8048` (macOS legs advisory), the head
+  unchanged and merge-tree clean against main `1bb88d5e`.
+  - **Runs:** 250 advanced to `merging`, then closed final (`merged`). Its child reclaim is deferred, because the
+    programme still holds the workspace while run 310 (wave 3b) is open.
+  - **Task 7, in order:** (1) both boxes carry `9a255a74` (the operator applies dev builds from the console; the time
+    is recorded here); (2) a trusted full CI run on `main`; (3) Task 7 Steps 1–7 from the wave-2 plan's runbook, canary
+    first, with the rollback JSON written before the first ruleset write. Wave 2b follows the proof run.
+- **2026-10-07 00:33 — Task 7's sequence, ruled.** The operator delegated Task 7 to this coordinator on 2026-10-04 ("Run
+  task 7 when you think it's most appropriate").
+  1. **Step 1.** It waits until both boxes run a build containing `9a255a74` (v0.0.111 or later). The trusted full run
+     is 37552120108, a `workflow_dispatch` on `9a255a74` started at 00:28. Then the canary, the census and Step 2's
+     reads.
+  2. **Step 4,** the ruleset write. The coordinator keeps `ruleset-rollback.json` in its evidence folder.
+  3. **(a0) runs FIRST,** on the coordinator's next ledger PR (slot C), before any proof dispatch. If gh refuses
+     because the repository has auto-merge off, that is stop rule 4. The proof halts and the operator decides. The
+     queue stays on meanwhile: the admin bypass keeps every other programme's landing exactly as it was.
+  4. **Only after a clean (a0),** the proof programme `landing-order-proof` is dispatched: three runs, each on a fresh
+     workspace, with ledger `docs/superpowers/programs/landing-order-proof.md`. Their route is the matrix's docs row:
+     Sonnet · medium, Haiku subagents, workflow off.
+  5. **The proof itself:**
+     - (a1) on slot D. The coordinator pushes an empty commit to start D's checks, then enqueues.
+     - The three landings, A, B and C, enqueued within a minute, then readings (a)–(d).
+     - (e) on slot D. The coordinator removes it from the queue with GraphQL's `dequeuePullRequest` (the same removal
+       as the UI's button), then closes D unmerged.
+     - (f) is in slot D's brief: its held worker runs `gh pr merge 248` once and reports the refusal.
+  6. **Step 7** records every reading here, on its own ledger PR.
+  - **Departures from the runbook, and why.**
+    - Three dispatches instead of five. The fleet's rolling daily cap is full (24 of 24 at 00:30), and every proof
+      workspace costs one dispatch. So the coordinator's own ledger PR is landing PR C, and (a1) runs on slot D before
+      (e) instead of on a fifth PR. PR C is a workspace PR, so `is_ours` has a workspace to bind, and it is how every
+      coordinator lands after this runbook.
+    - The proof runs advance to `merging` before they are enqueued. So the lane's `merged:#<pr>` mail is measured
+      too, which the runbook leaves to the first programme landing.
+    - (d) is read before each run's final close, because the close reclaims the child workspace.
+    - (e)'s feed body may not read "No open run names a coordinator to tell", because D's workspace belongs to an
+      open run (at `awaiting-review`, not `merging`). It is recorded as found.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

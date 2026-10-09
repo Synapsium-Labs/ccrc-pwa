@@ -441,7 +441,7 @@ ACCOUNTS_JSON="${CCRC_ACCOUNTS_JSON:-deploy/accounts.default.json}"
 require_node() {
   command -v node >/dev/null 2>&1 || {
     echo "deploy: FAILED — no \`node\` on PATH on THIS machine (the one running deploy.sh)." >&2
-    echo "  deploy/gen-accounts.mjs projects the roster into bash and needs node >=22.13.0 locally;" >&2
+    echo "  deploy/gen-accounts.mjs projects the roster into bash and needs node locally;" >&2
     echo "  this is NOT a problem with $ACCOUNTS_JSON or with the roster on $BOX. Install node and re-run." >&2
     exit 1
   }
@@ -737,6 +737,14 @@ if [ "$TARGET" = "agent" ]; then
   # and placed below the noise list for the same D-2600 reason the usage sweep
   # gives: `graph-noise-ship.test.ts` has no slack left beside ccd-graph-sweep.
   install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755
+  # The history sweep's shim (history spec 2026-10-05 §9.5), placed below the
+  # noise list for the tmp sweep's reason above. Unconditional, unlike
+  # `_inst_bins`' role-gated copy: this agent lane IS a session host, so the
+  # gate has nothing to exclude here D-4254.
+  install_atomic ccd/ccd-history-sweep .local/bin/ccd-history-sweep 755
+  # The pane-scope sweep (session-continuity wave 4), beside the reaper and on
+  # its terms; its stop is shadowed until ~/.cc-sessions/scope-sweep-live exists.
+  install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -832,6 +840,10 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.service ~/.config/systemd/user/ccd-history-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.timer ~/.config/systemd/user/ccd-history-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.service ~/.config/systemd/user/ccrc-codex-usage@.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.timer ~/.config/systemd/user/ccrc-codex-usage@.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
@@ -969,6 +981,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccrc-models.timer \
     && systemctl --user enable --now ccd-usage-sweep.timer \
     && systemctl --user enable --now ccd-tmp-sweep.timer \
+    && systemctl --user enable --now ccd-history-sweep.timer \
+    && systemctl --user enable --now ccd-scope-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"

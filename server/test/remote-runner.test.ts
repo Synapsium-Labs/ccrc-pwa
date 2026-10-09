@@ -92,6 +92,8 @@ describe('per-verb timeouts', () => {
     [['ws-reap', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
     // Child reclamation: ws-reap's destruction plus a pin phase and a settle.
     [['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'x'], 240_000],
+    // Archived-workspace expiry: the same machinery, so the same budget.
+    [['ws-expire', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
     // The two SPAWNING verbs (F8, 2026-08-12). Both run `_spawn`, which blocks
     // in `_accept_first_run_prompts` until the new pane renders a ready banner
     // — a COLD Claude Code start in a fresh workspace HOME, which on the live
@@ -112,6 +114,13 @@ describe('per-verb timeouts', () => {
     // cover. A verb whose worst case exceeds its budget should say so here.
     [['start', 'demo-quiet-basin'], 300_000],
     [['enable', 'demo-quiet-basin'], 300_000],
+    // The four Docs verbs (spec 2026-10-01 section 2 (a), Budgets): each outlasts ccd's own helper deadline plus
+    // its 2 s kill grace plus 5 s, which `docs-budget.test.ts` holds against ccd's source. Without these rows a
+    // missing entry silently inherits the flat 90 s and nothing here reds.
+    [['docs-index', '--all'], 20_000],
+    [['docs-tree', '--project', 'x'], 20_000],
+    [['docs-show', '--project', 'x', '--commit', 'c'], 15_000],
+    [['docs-fetch', '--project', 'x'], 60_000],
   ])('sends %j with a %i ms budget', async (args, ms) => {
     seen.length = 0;
     await createRunner(client)('/home/u/.local/bin/ccd', args as string[]);

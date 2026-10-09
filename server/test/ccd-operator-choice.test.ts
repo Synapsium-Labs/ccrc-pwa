@@ -253,6 +253,20 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(h.reg(ID, 'class')).toBe('default');
   });
 
+  it('ONE reader, two questions: its `ran-model` line (the read-back\'s — what RAN) beside the keep\'s line (what was CHOSEN), and the keep reads only its own', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    const p = writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Sonnet 5 (default)'))]);
+    const typed = h.reg(ID, 'typed')!;
+    expect(h.sh(`_operator_choice_read ${JSON.stringify(p)} ${JSON.stringify(typed)}`).split('\n')).toEqual([
+      `model default ${t} 7`,
+      `ran-model Sonnet ${t} Sonnet 5 (default)`,
+    ]);
+    keep();
+    expect(h.reg(ID, 'class'), 'the keep still writes the chosen row').toBe('default');
+    expect(routeLines()).toHaveLength(1);
+    expect(swapLog(), 'and says nothing about the line it does not read').not.toMatch(/operator-choice/);
+  });
+
   it('/effort high, and both kinds in one transcript', () => {
     seed(); record({ class: 'fable', effort: 'ultracode' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(t + 30, 'effort'), ack(t + 30, EFFORT_ACK('high'))]);
@@ -825,5 +839,95 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
     const SPAWN = /tmux new-session|_tmux_new_session |new-window|respawn-pane/;
     const owners = new Set(src.flatMap((l, i) => (!/^\s*#/.test(l) && SPAWN.test(l) ? [owner(i)] : [])));
     expect([...owners].sort(), 'a function creates a pane outside _spawn_start').toEqual([...SPAWNS, ...Object.keys(EXCEPTIONS)].sort());
+  });
+});
+
+// ── WAVE 3'S RESIDUE (review 272, carried to wave 4's first commit) ───────────
+// F1: a failed kill keeps the marker only on `gone` or on tmux's own words "no
+// server running" — never on a missing socket, which a server can outlive. F4:
+// cmd_swap's two guarded lines are pinned by behaviour, not only by the census's
+// text. F6: the record-newer check comes FIRST, so a command older than its field
+// is not logged either. F8: ccd's own ARGLESS keystroke (the picker) whose
+// acknowledgement drifted is explained by its journal row. F9: ws-restore after
+// ws-archive is one restart — its spawn does not read again, and ends the marker.
+describe('wave 3\'s residue: the marker, the order of the checks, and the swap and restore pins', () => {
+  const OOV = (id = ID): number => swapLog().split('\n').filter((l) => l.includes(`operator-choice ${id}: /model gpt-5.6-sol is outside the class vocabulary`)).length;
+  const marked = (id = ID): boolean => fs.existsSync(regFile(`${id}.choicekept`));
+
+  it('a stop whose kill failed with tmux\'s socket DELETED unmarks: a missing socket is not proof that no server runs', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    // the REAL probe over a tmux whose socket file is gone: verdict `unknown`, substrate `absent`, and no "no server running"
+    const NO_SOCKET = '_ws_unsupervise() { :; }; tmux() { echo "error connecting to /tmp/tmux-1000/default (No such file or directory)" >&2; return 1; };';
+    h.sh(`${NO_SOCKET} cmd_stop ${ID}`);
+    expect(OOV(), 'the stop read').toBe(1);
+    expect(marked(), 'a server may still run with its socket deleted: its next revival must read').toBe(false);
+  });
+
+  it('a swap whose kill failed on a session that is still there leaves no marker', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    h.sh(`systemctl() { :; }; launchctl() { :; }; sleep() { :; };
+      tmux() { [[ "\${1:-}" == kill-session ]] && return 1; return 0; };
+      _session_probe() { PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; };
+      cmd_swap ${ID} claude-d`, { TMUX: '' });
+    expect(OOV(), 'the swap\'s keep read').toBe(1);
+    expect(marked(), 'a live session is never left marked by a swap').toBe(false);
+  });
+
+  it('a swap of a session already stopped and read (marked) does not read again', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    h.sh(`_reg_set ${ID} choicekept "$(date +%s)"`);
+    h.sh(`${SWAP} cmd_swap ${ID} claude-d`, { TMUX: '' });
+    expect(OOV(), 'the marker gates the swap\'s keep').toBe(0);
+  });
+
+  it('an out-of-vocabulary /model older than its field is not logged: the later write is the operator\'s choice', () => {
+    seed(); record({ class: 'opus' }, ID, 60); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))]);
+    expect(keep()).toContain('rc=0');
+    expect(OOV(), 'nothing was reverted: the field was written after the command').toBe(0);
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+
+  it('an unrecognised acknowledgement older than its field is not logged as drift', () => {
+    seed(); record({ class: 'opus' }, ID, 60); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, 'Model switched to Opus 5.5')]);
+    keep();
+    expect(driftLines()).toEqual([]);
+  });
+
+  it('control: the same unrecognised acknowledgement newer than its field is logged once', () => {
+    seed(); record({ class: 'opus' }, ID, 3600); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, 'Model switched to Opus 5.5')]);
+    keep();
+    expect(driftLines()).toHaveLength(1);
+  });
+
+  it('ccd\'s own ARGLESS keystroke (the picker) whose acknowledgement drifted is explained by its journal row: no line', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    fs.writeFileSync(regFile(`${ID}.typed`), `${now() - 2 * DAY} since\n${t} model opus\n`);
+    writeTranscript([cmd(t, 'model', ''), ack(t, 'Model switched to Opus 5.5')]);
+    keep();
+    expect(driftLines()).toEqual([]);
+  });
+
+  it('ccd ws-restore after ws-archive is one restart: the restore\'s spawn does not read again, and ends the marker', () => {
+    h.makeRepo('demo');
+    h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+    const WS = 'demo-quiet-basin';
+    journal(WS); record({ class: 'fable' }, WS); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'gpt-5.6-sol'), ack(t, MODEL_ACK('gpt-5.6-sol'))], WS);
+    const STUBS = `_ws_unsupervise() { :; }; _ws_supervise() { :; }; _spawn_settle() { :; }; _session_verdict() { echo gone; };
+      _session_probe() { PROBE_VERDICT=gone; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; };
+      tmux() { ${WIDE_PANE} case "\${1:-}" in new-session) echo "spawn $*" >> "$HOME/ccd-calls"; return 0 ;; kill-session|has-session) return 1 ;; esac; return 0; };`;
+    expect(h.sh(`${STUBS} cmd_ws_archive --session ${WS}`)).toMatch(/^archived /);
+    expect(OOV(WS), 'the archive read').toBe(1);
+    expect(marked(WS), 'the archived session is dead and read').toBe(true);
+    expect(h.sh(`${STUBS} cmd_ws_restore --session ${WS}`)).toMatch(/^restored /);
+    expect(h.calls().join('\n'), 'the restore spawned through _spawn_start').toContain('spawn new-session');
+    expect(OOV(WS), 'the restore\'s spawn did not read again').toBe(1);
+    expect(marked(WS), 'the restore\'s spawn ended the marker').toBe(false);
   });
 });

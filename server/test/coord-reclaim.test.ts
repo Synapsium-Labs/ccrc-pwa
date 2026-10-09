@@ -10,10 +10,12 @@
 // calls a non-goal precisely because nothing in this build arbitrates it.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { measureClaimant, reclaimRun, type ReclaimDeps } from '../src/coord/reclaim.js';
+import { CLAIMANT_DEAD_CAUSES } from '../src/deadCoordinator.js';
+import { DEAD_LIFECYCLES } from '../../shared/api.js';
 import { readSessionRecord } from '../src/registry.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import type { SessionVerdict } from '../src/exec.js';
@@ -229,6 +231,31 @@ describe('measureClaimant — three answers, and the inputs that collapse into e
     const v = await measureClaimant(depsFor(home, store(home), GONE), DEAD, NOW);
     expect(v.state).toBe('alive');
     expect(v.why).toContain('restarting');
+  });
+
+  // WORKSPACE LIFECYCLE WAVE 4 (spec 2026-09-24 §5.4, "The verdict is widened, not re-derived"): the dead-coordinator
+  // lane is the THIRD consumer that needs to know WHICH death — D-1145's note says the third must widen the type rather
+  // than re-split the prose `why` by hand. So the dead arm carries `cause`, set in this ladder and nowhere else.
+  it('the dead arm names its CAUSE, one of four, set in the ladder itself', async () => {
+    const cases: [string, Record<string, string> | null, boolean, string][] = [
+      ['a proven absence', null, true, 'absent'],
+      ['a stop stamp', { stopped: `${SEC} ccd` }, true, 'stopped'],
+      ['a supervisor heartbeat long gone', { supervised: String(SEC - 3600) }, true, 'orphan'],
+      ['a row that never started', {}, false, 'never-started'],
+    ];
+    for (const [name, extra, started, cause] of cases) {
+      const home = mkTmp('ccrc-reclaim-');
+      seedRow(home, LIVE);
+      if (extra !== null) seedRow(home, DEAD, extra);
+      if (!started) rmSync(path.join(home, '.cc-sessions', `${DEAD}.started`));
+      const v = await measureClaimant(depsFor(home, store(home), GONE), DEAD, NOW);
+      expect(v, name).toMatchObject({ state: 'dead', cause });
+    }
+  });
+
+  it('the four causes are exactly the absence and L0’s dead lifecycles — a new dead word is a red here, not a silent cast', () => {
+    expect([...DEAD_LIFECYCLES].sort()).toEqual(['never-started', 'orphan', 'stopped']);
+    expect([...CLAIMANT_DEAD_CAUSES].sort()).toEqual(['absent', ...DEAD_LIFECYCLES].sort());
   });
 });
 

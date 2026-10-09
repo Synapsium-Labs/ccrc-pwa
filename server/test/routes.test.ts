@@ -38,7 +38,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
  *  mkdtemp dir created inside this call, so it can't be known before calling. */
 async function makeApp(
   panes: (string | null)[] | ((home: string) => (string | null)[]),
-  opts: { status?: 'busy' | 'idle'; io?: FleetIO } = {},
+  opts: { status?: 'busy' | 'idle'; io?: FleetIO; mailToken?: string } = {},
 ): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkTmp('ccrc-');
   seedRoster(home);
@@ -68,7 +68,8 @@ async function makeApp(
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
   const app = await buildServer(
-    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue() },
+    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue(),
+      ...(opts.mailToken !== undefined ? { mailToken: opts.mailToken } : {}) },
     bus,
   );
   return { app, calls, bus, home };
@@ -832,15 +833,20 @@ describe('clip route', () => {
   });
 });
 
+// `/api/notify` fails shut since the box-token lifecycle (spec 4.3), so ingestion is
+// exercised with the token a fleet box's notify.sh presents.
+const NOTIFY_TOKEN = 'f'.repeat(64);
+
 describe('notify ingestion', () => {
   it('POST /api/notify with a swap message emits notice and the session event', async () => {
-    const { app, bus } = await makeApp(['❯ \n']);
+    const { app, bus } = await makeApp(['❯ \n'], { mailToken: NOTIFY_TOKEN });
     const notices: string[] = [];
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
     const message = `cc swap: ${ID} moved claude-a -> claude (limits) — reopen it on claude.ai under the claude account`;
-    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message },
+      headers: { 'x-ccrc-mail-token': NOTIFY_TOKEN } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(notices).toEqual([message]);
@@ -849,13 +855,14 @@ describe('notify ingestion', () => {
   });
 
   it('POST /api/notify with a non-swap message emits only notice', async () => {
-    const { app, bus } = await makeApp(['❯ \n']);
+    const { app, bus } = await makeApp(['❯ \n'], { mailToken: NOTIFY_TOKEN });
     const notices: string[] = [];
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
     const message = 'deploy finished on the server box';
-    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message },
+      headers: { 'x-ccrc-mail-token': NOTIFY_TOKEN } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(notices).toEqual([message]);
@@ -1302,8 +1309,9 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
     expect(res.statusCode).toBe(409);
     // The SHAPE does not change with the condition — `runs` is present and
-    // empty, because no row was read. Fail-shut at a destructive act.
-    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
+    // empty, because no row was read. Fail-shut at a destructive act. And the
+    // store's own words ride it (workspace lifecycle wave 3b).
+    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [], detail: expect.stringMatching(/\S/) });
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await app.close();
   });

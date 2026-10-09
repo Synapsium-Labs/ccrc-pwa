@@ -46,9 +46,14 @@ export interface UpdatesPoll {
   view: UpdatesView | null;
   /** The latest poll's failure; null after a good answer. */
   failure: UpdatesFailure | null;
-  /** One poll now (after a write), under the same newest-issued guard. A no-op
-   *  in the injected mode: a consumer handed its view re-polls through its parent. */
-  reload: () => void;
+  /** The issue number of the read that set `view` (D-4273): 0 before any good read, and unchanged by a failed,
+   *  malformed or 501 read, because the view is kept and so is its number. Set in the SAME `setState` call as
+   *  `view`, so the two always describe one read. */
+  seq: number;
+  /** One poll now (after a write), under the same newest-issued guard; it returns that poll's issue number (D-4273),
+   *  the number `seq` takes when that read's good answer is the one that lands. In the injected mode (`pollMs <= 0`)
+   *  it issues nothing and returns 0: a consumer handed its view re-polls through its parent. */
+  reload: () => number;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
@@ -180,30 +185,36 @@ const failureOf = (err: unknown): UpdatesFailure =>
  * never overwrites a newer one (`useFleetHealth`'s issued/mine guard). State is
  * set functionally, so a failure keeps whatever view the previous commit held.
  * `pollMs <= 0` is the injected mode: no request, no interval, no listener.
+ * Each request carries an issue number from one ref-held counter (monotonic across a `pollMs` change): `seq` is the
+ * number of the read that set `view`, and `reload()` returns the number it issued, so a caller can tell a read issued
+ * after some event from one issued before it (D-4273).
  */
 export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
-  const [state, setState] = useState<{ view: UpdatesView | null; failure: UpdatesFailure | null }>(
-    { view: null, failure: null });
-  const loadRef = useRef<() => void>(() => {});
+  const [state, setState] = useState<{ view: UpdatesView | null; failure: UpdatesFailure | null; seq: number }>(
+    { view: null, failure: null, seq: 0 });
+  const loadRef = useRef<() => number>(() => 0);
+  const issuedRef = useRef(0);
 
   useEffect(() => {
     if (pollMs <= 0) return undefined;   // an injected consumer never polls
     let live = true;
-    let issued = 0;
-    const load = (): void => {
-      const mine = ++issued;
+    const load = (): number => {
+      const mine = ++issuedRef.current;
       void api.updates().then(
         (raw) => {
-          if (!live || mine !== issued) return;
+          if (!live || mine !== issuedRef.current) return;
           const view = asUpdatesView(raw);
-          setState((prev) => (view === null ? { view: prev.view, failure: 'failed' } : { view, failure: null }));
+          setState((prev) => (view === null
+            ? { view: prev.view, failure: 'failed', seq: prev.seq }
+            : { view, failure: null, seq: mine }));
         },
         (err: unknown) => {
-          if (!live || mine !== issued) return;
+          if (!live || mine !== issuedRef.current) return;
           const failure = failureOf(err);
-          setState((prev) => ({ view: prev.view, failure }));
+          setState((prev) => ({ view: prev.view, failure, seq: prev.seq }));
         },
       );
+      return mine;
     };
     const onVisible = (): void => {
       if (document.visibilityState === 'visible') load();
@@ -214,12 +225,12 @@ export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       live = false;
-      loadRef.current = () => {};
+      loadRef.current = () => 0;
       clearInterval(t);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [pollMs]);
 
-  const reload = useCallback(() => { loadRef.current(); }, []);
-  return { view: state.view, failure: state.failure, reload };
+  const reload = useCallback((): number => loadRef.current(), []);
+  return { view: state.view, failure: state.failure, seq: state.seq, reload };
 }

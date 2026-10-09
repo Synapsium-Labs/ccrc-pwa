@@ -2010,3 +2010,21 @@ describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on t
     }
   });
 });
+
+// ── child-reclamation wave 5's child-of-run label ───────────────────────────
+describe('the child-of-run label is measured, not left in the blind spot (wave 5)', () => {
+  it('grounds .sess-child on the project card and clears both themes', () => {
+    // Same shape as .sess-spawn/.sess-repo: a .sess-meta cell whose selector
+    // names no painted ancestor, so without its INHERITED_GROUNDS entry it
+    // would join the uncovered census, which new rules may not do.
+    const key = 'fleet.css .sess-child';
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
+    expect(report.uncovered).not.toContain(key);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    // THEME_COUNT, not 2: this branch's audit measures every palette in the
+    // catalogue, not only DARK and LIGHT — the same count its siblings
+    // .sess-spawn and .sess-repo are held to a few describes above.
+    expect(rows, key).toHaveLength(THEME_COUNT);
+    for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+  });
+});

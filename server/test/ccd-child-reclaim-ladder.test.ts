@@ -15,6 +15,7 @@ import {
   CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, makeChild, plantTmux,
   wideDigitLocale, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-ladder-'); });
@@ -418,14 +419,14 @@ describe('a probe that could not RUN, continued — the permission pass and rung
    *  the shape rung 9 passes when every read of it succeeds. */
   const foreignClone = (wt: string): string => {
     const origin = path.join(h.home, 'origins', 'other.git');
-    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin], { env: inheritedEnv() });
     const seedRepo = path.join(h.home, 'seed-other');
-    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo], { env: inheritedEnv() });
     fs.writeFileSync(path.join(seedRepo, 'r'), 'r');
     h.git(seedRepo, 'add', 'r'); h.git(seedRepo, 'commit', '-m', 'r');
     h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
     const clone = path.join(wt, 'vendor', 'other');
-    execFileSync('git', ['clone', '-q', origin, clone]);
+    execFileSync('git', ['clone', '-q', origin, clone], { env: inheritedEnv() });
     return clone;
   };
 
@@ -458,7 +459,7 @@ describe('rung 9 — containment', () => {
     const { wt } = makeChild(h);
     const nested = path.join(wt, 'vendor', 'lib');
     fs.mkdirSync(nested, { recursive: true });
-    execFileSync('git', ['init', '-q', '-b', 'main', nested]);
+    execFileSync('git', ['init', '-q', '-b', 'main', nested], { env: inheritedEnv() });
     fs.writeFileSync(path.join(nested, 'x'), 'x');
     h.git(nested, 'add', 'x');
     h.git(nested, 'commit', '-m', 'local only');
@@ -470,14 +471,14 @@ describe('rung 9 — containment', () => {
   it('refuses a DIRTY nested checkout of another repository, and passes a clean, pushed one', () => {
     const { wt } = makeChild(h);
     const origin = path.join(h.home, 'origins', 'other.git');
-    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin], { env: inheritedEnv() });
     const seedRepo = path.join(h.home, 'seed-other');
-    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo], { env: inheritedEnv() });
     fs.writeFileSync(path.join(seedRepo, 'r'), 'r');
     h.git(seedRepo, 'add', 'r'); h.git(seedRepo, 'commit', '-m', 'r');
     h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
     const clone = path.join(wt, 'vendor', 'other');
-    execFileSync('git', ['clone', '-q', origin, clone]);
+    execFileSync('git', ['clone', '-q', origin, clone], { env: inheritedEnv() });
     expect(evalOf(h).verdict, 'clean and pushed: nothing of it is lost').toBe('reclaimable');
     fs.writeFileSync(path.join(clone, 'dirty'), 'd');
     expect(evalOf(h).verdict).toBe('containment-unproven');
@@ -1462,14 +1463,14 @@ describe('the hidden-edit PATH set is a fingerprint input — the audit and the 
   /** A clean, pushed clone of ANOTHER repository at `<wt>/vendor/other`, its `cfg.yml` flagged skip-worktree. */
   const foreignFlagged = (wt: string): string => {
     const origin = path.join(h.home, 'origins', 'other.git');
-    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin], { env: inheritedEnv() });
     const seedRepo = path.join(h.home, 'seed-other');
-    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo], { env: inheritedEnv() });
     fs.writeFileSync(path.join(seedRepo, 'cfg.yml'), 'orig\n');
     h.git(seedRepo, 'add', 'cfg.yml'); h.git(seedRepo, 'commit', '-m', 'cfg');
     h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
     const clone = path.join(wt, 'vendor', 'other');
-    execFileSync('git', ['clone', '-q', origin, clone]);
+    execFileSync('git', ['clone', '-q', origin, clone], { env: inheritedEnv() });
     h.git(clone, 'update-index', '--skip-worktree', 'cfg.yml');
     return clone;
   };
@@ -2142,7 +2143,8 @@ it('a complete row listed before a projected row lends it no placement proof', (
 
 // THE HOLD IS D-3731'S COST, PINNED (review 212, F1; D-3734). A row whose directory is gone resolves only as a
 // projection, so it holds EVERY child's reclaim at `unmeasured` — a present child, a vanished one, and two vanished
-// children each other. R19's own arm is unchanged: each vanished child alone still reclaims. Recovery is not here.
+// children each other. R19's own arm is unchanged: each vanished child alone still reclaims. Spec §5.5's recovery
+// needs positive evidence, and these rows carry none (ccd-child-reclaim-recovery.test.ts).
 it('ambiguous row hold: a present child beside an unrelated gone-directory row is unmeasured', () => {
   const c = makeChild(h);
   const retired = path.join(h.home, 'projects', 'retired', 'x');
@@ -2194,6 +2196,14 @@ it('ambiguous row hold: two vanished children hold each other', () => {
   expect(first.verdict, `the CONTROL: R19 — one vanished child reclaims while the other stands — ${first.detail}`)
     .toBe('reclaimable');
   fs.rmSync(otherWt, { recursive: true, force: true });
+  // Spec §5.5: a hand-deleted workspace whose record git still keeps (`prunable`) is placed by that record and
+  // holds nobody (ccd-child-reclaim-recovery.test.ts). The hold pinned here is the shape with NO positive evidence:
+  // both records pruned by the fixture, and no breadcrumb.
+  h.git(c.main, 'worktree', 'prune');
+  expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git records neither tree')
+    .not.toContain('still-harbor');
+  expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git records neither tree')
+    .not.toContain('quiet-basin');
   const mine = evalOf(h);
   expect(mine.verdict, mine.detail).toBe('unmeasured');
   expect(mine.detail).toContain(`registry row(s) ${other} ${PROJECTED_WHY}`);

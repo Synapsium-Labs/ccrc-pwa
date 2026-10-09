@@ -1,9 +1,15 @@
-// Three states, and the middle one is the whole operator ruling: a fleet host
-// still running yesterday's notify.sh must not go dark the moment the server
-// deploys. Absent is ACCEPTED and LOGGED; wrong is 401; right is 200.
+// Right is 200; wrong, absent and unconfigured are 401. Absent used to be
+// ACCEPTED and LOGGED for a one-deploy-generation rollout window (a fleet host
+// still running yesterday's notify.sh); the box-token lifecycle removed that
+// tolerance and the unconfigured pass-through with it (spec 4.3), so this
+// route fails shut like every other box-token lane.
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
+import { BoxTokenHolder } from '../src/coord/token.js';
 import { Bus } from '../src/bus.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -58,11 +64,21 @@ describe('POST /api/notify with a box token', () => {
     expect(sessionMsgs).toEqual([]);
   });
 
-  it('accepts an ABSENT token for one deploy generation, and says so in the log', async () => {
+  it('refuses an ABSENT token — the rollout tolerance is gone (box-token lifecycle, spec 4.3)', async () => {
+    // It used to be accepted and logged as `legacy`. The server now mints its own
+    // token at boot and the fleet file is written for it, so the state the
+    // tolerance bridged no longer exists, and a tokenless notify is a caller
+    // with no credential at all.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    app = await buildServer({ ...testDeps(mkTmp('ccrc-')), mailToken: TOKEN });
-    expect((await post(app)).statusCode).toBe(200);
-    expect(warn.mock.calls.flat().join(' ')).toMatch(/legacy/);
+    const bus = new Bus();
+    const noticed: string[] = [];
+    bus.on('notice', (n) => noticed.push(n.message));
+    app = await buildServer({ ...testDeps(mkTmp('ccrc-')), mailToken: TOKEN }, bus);
+    const res = await post(app);
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ ok: false, error: 'unauthenticated' });
+    expect(noticed).toEqual([]);
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/NO box token \(401\)/);
   });
 
   it('still fans the notice out on the bus when it accepts', async () => {
@@ -74,9 +90,39 @@ describe('POST /api/notify with a box token', () => {
     expect(seen).toEqual(['cc swap: x moved a -> b']);
   });
 
-  it('accepts everything, unauthenticated, when no token is configured', async () => {
-    // A box that has never been given a token must not lose its swap notices.
+  it('refuses every caller when no token is configured — unconfigured fails shut like every lane', async () => {
+    // It used to accept everything here. A server with no current value is now
+    // one whose boot mint failed, and every box-token lane answers 401 there.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     app = await buildServer(testDeps(mkTmp('ccrc-')));
-    expect((await post(app)).statusCode).toBe(200);
+    expect((await post(app)).statusCode).toBe(401);
+    expect((await post(app, { 'x-ccrc-mail-token': TOKEN })).statusCode).toBe(401);
+  });
+
+  it('a holder with no current value refuses the same way as no token', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    app = await buildServer({ ...testDeps(mkTmp('ccrc-')), mailToken: new BoxTokenHolder() });
+    expect((await post(app, { 'x-ccrc-mail-token': TOKEN })).statusCode).toBe(401);
+  });
+});
+
+describe('gate.ts reason 2 says what is true about an unconfigured box (F12)', () => {
+  const gate = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'auth', 'gate.ts'), 'utf8');
+  const para = gate.slice(gate.indexOf('`/api/notify` is now a plain box-token lane'), gate.indexOf('ORDER-PINNED PARAGRAPH'));
+
+  it('the notify paragraph is found', () => {
+    expect(para.length).toBeGreaterThan(200);
+  });
+
+  it('it does not claim "never given one" cannot happen: a failed boot mint leaves exactly that state', () => {
+    expect(para.replace(/\s*\n\s*\*\s*/g, ' ')).not.toMatch(/no longer a state a box is left in/);
+  });
+
+  it('it says a failed boot mint leaves the box unconfigured until the retry mints, and that notify refuses it', () => {
+    const flat = para.replace(/\s*\n\s*\*\s*/g, ' ');
+    expect(flat).toMatch(/boot whose mint failed/);
+    expect(flat).toMatch(/unconfigured/);
+    expect(flat).toMatch(/until the (?:driver's )?retry mints/);
+    expect(flat).toMatch(/refuses (?:that state|it)/);
   });
 });

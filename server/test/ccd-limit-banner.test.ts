@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE, BOUNDED, ghContainedEnv } from './ccdWsHelpers.js';
 import { RATE_LIMIT_ERROR } from '../../shared/api.js';
 
 let h: CcdHarness;
@@ -82,9 +82,10 @@ const detect = (p: string): { rc: string; out: string } => {
 };
 /** The same function under a cross-platform five-second alarm in a child bash
  *  that inherits only the function's text — the only way to prove a read does
- *  NOT block. Perl is available on both supported userlands; SIGALRM exits 142. */
+ *  NOT block. `BOUNDED` (ccdWsHelpers.ts) kills the child's WHOLE process group
+ *  on the alarm and exits 142 (session-continuity spec §5.6 item 3). */
 const detectTimed = (fn: string, p: string): string =>
-  h.sh(`perl -e 'alarm shift; exec @ARGV' 5 bash -c "$(declare -f ${fn}); REDRIVE_TAIL_LINES=$REDRIVE_TAIL_LINES; ${fn} \\"\\$1\\"" _ ${JSON.stringify(p)} >/dev/null 2>&1; echo "rc=$?"`);
+  h.sh(`${BOUNDED} 5 bash -c "$(declare -f ${fn}); REDRIVE_TAIL_LINES=$REDRIVE_TAIL_LINES; ${fn} \\"\\$1\\"" _ ${JSON.stringify(p)} >/dev/null 2>&1; echo "rc=$?"`);
 
 describe('_transcript_limit_banner (D-2362)', () => {
   it('the newest real row is the banner: rc 0, prints resetsAt and rateLimitType', () => {
@@ -145,6 +146,25 @@ describe('_transcript_limit_banner (D-2362)', () => {
   it('a FIFO at the path: rc 2 without blocking — `-r` alone would open it and wait for ever (D-2370)', () => {
     seed(); const f = path.join(h.home, 'fifo.jsonl'); execFileSync('mkfifo', [f]);
     expect(detectTimed('_transcript_limit_banner', f)).toBe('rc=2');
+  });
+  it('the timed harness kills its child\'s WHOLE process group on timeout: a grandchild blocked on a FIFO does not outlive it', () => {
+    // A stand-in for a detector whose FIFO guard is gone: it forks `tail`, which blocks opening the FIFO for ever.
+    seed(); const f = path.join(h.home, `leak-${process.pid}.fifo`); execFileSync('mkfifo', [f]);
+    const holders = (): string[] => execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).split('\n').filter((l) => l.includes(f) && !l.includes('ps -eo'));
+    try {
+      // Bounded from OUTSIDE too (10 s, no ccd sourced: the case needs none), so a harness that cannot kill
+      // its group fails this case instead of hanging the file — and the `finally` below still runs.
+      const r = spawnSync('bash', ['-c', `_leaky() { tail -n 1 -- "$1"; }; ${BOUNDED} 1 bash -c "$(declare -f _leaky); _leaky \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`],
+        { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL',
+          env: ghContainedEnv(h.home, { PATH: process.env['PATH'] ?? '', HOME: h.home }, { systemd: true, tmux: true }) });
+      expect(r.error, 'the bounded run did not return within 10 s: the group was not killed').toBeUndefined();
+      expect(r.stdout.trim()).toBe('rc=142');
+      expect(holders(), 'a process still holds the FIFO after the harness timed out').toEqual([]);
+    } finally {
+      // Release any leftover reader (a writer opening the FIFO ends its `tail`), then kill what is left.
+      try { fs.closeSync(fs.openSync(f, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)); } catch { /* no reader: nothing to release */ }
+      for (const l of holders()) { try { process.kill(Number(l.trim().split(/\s+/)[0]), 'SIGKILL'); } catch { /* gone */ } }
+    }
   });
   it("the detector's error literal is shared's RATE_LIMIT_ERROR — one bash copy, one TS copy, pinned", () => {
     const src = fs.readFileSync(CCD, 'utf8');

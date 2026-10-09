@@ -908,6 +908,7 @@
 .sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
+.sess-line--active .sess-child,
 /* Task 6: .sess-repo paints --ink-tertiary of its own — it sits inside
    `.sess-open` on the row's FIRST line, beside the label, not inside
    `.sess-meta` like the cells above, but the same rule applies: a child's
@@ -1378,6 +1379,22 @@
    achromatic group above — see that rule's comment for the ratios this
    costs while a cell is not. */
 .sess-substrate {
+  color: var(--ink-tertiary);
+  flex: none;
+}
+
+/* Child-reclamation wave 5: which run minted this workspace, on a child's
+   fleet line. .sess-substrate's shape: ink-tertiary, fixed
+   words, `flex: none`, never truncated, so the hold reason beside it stays
+   the row's one shrinkable cell. It is a rule of its OWN, not a second
+   selector on the rule above, because that rule's key is grandfathered in
+   the contrast gate's uncovered census and renaming it would read as a new
+   blind spot. Its own `color` takes it out of .sess-meta's
+   inheritance, so it is also named in .sess-line--active's achromatic group,
+   which answers the selected row. The unselected row's ground is the project
+   card: design/audit.mjs's INHERITED_GROUNDS entry for this rule is what makes
+   that pair MEASURED rather than a new entry in the uncovered census. */
+.sess-child {
   color: var(--ink-tertiary);
   flex: none;
 }
@@ -2062,13 +2079,13 @@ button.proj-card-pool::before {
   display: flex; align-items: center; gap: var(--sp-1);
   min-height: var(--tap-min); width: 100%; padding: 0;
   background: none; border: 0; cursor: pointer; text-align: left;
-  font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary);
+  font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-tertiary);
 }
 /* Disabled while the selection holds the fold open: a tap does nothing, so the pointer no longer offers one. */
 .proj-released-toggle:disabled { cursor: default; }
 .proj-released-heading, .proj-released-note {
   display: block; padding: var(--sp-1) 0 0;
-  font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary);
+  font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-tertiary);
 }
 .proj-released-archive { margin-top: var(--sp-1); min-height: var(--tap-min); }
 .proj-archived-toggle {
@@ -2481,6 +2498,30 @@ button.proj-card-pool::before {
 .run-row .run-resumed {
   font-size: var(--fs-2xs); color: var(--ink-tertiary);
 }
+/* Child-reclamation wave 5 (spec §5.9): what became of a finished run's CHILD
+   workspace. Scoped under `.run-row`, which is self-grounded (background and
+   colour both set), so these inherit the recovered ground `.run-row .run-kind`
+   does: no new token pair for design/contrast-check.mjs to price. The chip takes
+   `--ink-secondary` like `.run-kind`, and its glyph `--ink-tertiary` like every
+   glyph on this row. A refusal is told apart by its WORD and its glyph, never
+   by a hue. Its sentence gets its own wrapped line in the amber `.run-warn`
+   already prices (`--status-attention-text`), because a terminal refusal is the
+   one word here the operator may need to read in full. NO --glow, NO animation,
+   NO box-shadow: runs are not living panes (`fleet-css.test.ts`). */
+.run-row .run-child-reclaim {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-child-reclaim-glyph { color: var(--ink-tertiary); }
+.run-row .run-child-reclaim-sentence {
+  flex: 1 0 100%;
+  min-width: 0;
+  padding-bottom: var(--sp-1);
+  font-size: var(--fs-2xs);
+  color: var(--status-attention-text);
+}
 /* Task 12, spec §4.3, D-287: a SIBLING of `.run-open` inside `.run-row`'s
    own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on
    why a nested button is the defect this shape avoids. Self-grounded via
@@ -2572,7 +2613,7 @@ button.proj-card-pool::before {
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
 }
 /* The switch readout (glyph, word, toggle,
@@ -2592,9 +2633,9 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .child-reclaim-toggle:active { transform: scale(0.96); }
 .child-reclaim-toggle:disabled { cursor: default; }
@@ -3043,7 +3084,7 @@ button.proj-card-pool::before {
 }
 .settings-release-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 /* Wave 8 item F2 (D-3591): the running row's words, in place of a button — quiet, not a badge or a warning. */
-.settings-release-running { font-size: var(--text-xs); color: var(--ink-tertiary); }
+.settings-release-running { font-size: var(--fs-xs); color: var(--ink-tertiary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the row. Compound on purpose: it
    wins .btn-ghost's `width: 100%` by SPECIFICITY (0,2,0 over 0,1,0), not by
@@ -3212,6 +3253,57 @@ button.proj-card-pool::before {
   color: var(--status-dead-text);
 }
 
+/* HaltBanner (centralised-update programme wave 14, R15(a)): the home screen's halt, with each halting node's Ack
+   in place. Self-grounded on the attention pair the fleet-host banner's warn arms and .substrate-banner already use
+   (--status-attention-text on --status-attention-tint, both solid, floored at 4.5 by design/contrast-check.mjs), so
+   no new colour pairing and no inherited ground; the children set no colour of their own. The Ack is the shared
+   .btn-primary, which paints itself; the override below is layout only, as .update-banner-actions' is. No margin:
+   it is a child of the .fleet column, whose padding is the gutter and whose gap is the spacing. Not sticky: the
+   fleet-host banner owns the sticky slot. */
+.halt-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border: 1px solid var(--status-attention);
+  border-radius: var(--r-md);
+  background: var(--status-attention-tint);
+  color: var(--status-attention-text);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+}
+.halt-banner-msg {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.halt-banner-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* One row per halting node: its line, then its Ack. The row wraps at phone width, so a long detail pushes the
+   button onto its own line rather than squeezing it below the tap floor. */
+.halt-banner-node {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+.halt-banner-node-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The shared button is a full-width sheet button (primitives.css); here it sizes to its label and keeps its
+   --tap-min height. */
+.halt-banner-node .btn-primary {
+  flex: none;
+  width: auto;
+  padding: 0 var(--sp-3);
+}
+
 /* ------------------------------------------------------------------ *
  *  Appearance — the theme picker (SettingsScreen.tsx).                *
  *                                                                     *
@@ -3274,8 +3366,8 @@ button.proj-card-pool::before {
    A SECOND block, and its POSITION is the whole point. A media query adds
    no specificity, so the block near the top of this file can only beat a
    rule declared BEFORE it — every selector it names is, which is why it
-   works. These three are declared later (.acct-fill:813,
-   .program-start-door:2789, .program-start-go:2859), so naming them up
+   works. These three are declared later (.acct-fill:804,
+   .program-start-door:2821, .program-start-go:2891), so naming them up
    there sets `transition: none` and then the rule's own `transition`
    re-declares it a thousand lines down and wins. Measured: adding them to
    the first block changed nothing.

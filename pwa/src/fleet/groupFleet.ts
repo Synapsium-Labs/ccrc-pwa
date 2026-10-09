@@ -137,11 +137,13 @@ export interface FleetGroup {
  * a fold "can never hide the one thing this screen exists to surface" (the `attention` field above) — so such a
  * row stays at the top level, released or not, and folds on the first frame where none of them holds. The
  * strand is read as `(s.stranded ?? null) !== null`, the `stranded` count's own spelling, dead or alive: a
- * marker the row still carries is the operator's to see. `archived` is excluded here too, though `releasedFrom`
- * already is null for an archived row: the two folds must never share a row.
+ * marker the row still carries is the operator's to see. A row in the ARCHIVED fold is excluded too — by
+ * `inArchivedFold`, the one predicate that fold reads, so a stopped main checkout is covered as well as an archived
+ * workspace — though `releasedFrom` is already null for an archived row on the server: the two folds must never
+ * share a row, and the PWA no longer leans on the server alone for it (FM7, workspace lifecycle wave 3b).
  */
 export function inReleasedFold(s: FleetSession): boolean {
-  return releasedFromOf(s) !== null && s.bucket !== 'archived' && s.bucket !== 'attention'
+  return releasedFromOf(s) !== null && !inArchivedFold(s) && s.bucket !== 'attention'
     && s.bucket !== 'working' && (s.stranded ?? null) === null;
 }
 

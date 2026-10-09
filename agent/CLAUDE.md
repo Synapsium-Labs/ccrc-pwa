@@ -22,7 +22,8 @@ get wrong when editing `src/whitelist.ts`.
   command missing an entry → loud non-fatal; one route answers 502).
 - **Gated verbs:** `ws-reap` requires `--expect` (confirmation token), `ws-rename` requires `--session` (its argv is
   built from model output with no human in the path), `ws-reclaim` requires `--expect` (the child-reclaim token; the
-  server composes it for a child with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+  server composes it for a child with no human in the path), `ws-expire` requires `--expect` (the expiry token, which
+  binds the archive; the server composes it for an archived workspace with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail
@@ -43,14 +44,16 @@ get wrong when editing `src/whitelist.ts`.
 - **Write whitelist:** the agent may write files only under `$HOME/.cc-clips/`. Every other fleet mutation crosses
   the WS as a whitelisted `ccd`/`tmux` verb, never a raw file write. Read whitelist is canonical-prefix,
   realpath-resolved (closes symlink escapes): `~/.cc-sessions/`, `~/.cc-limits/`, `~/.cc-clips/`, `~/.claude*`,
-  and the fleet projects root — plus ONE non-prefix grant: exactly the eight `~/.ccrc` node files
+  and the fleet projects root — plus ONE non-prefix grant: exactly the nine `~/.ccrc` node files
   (`NODE_FILES`, `shared/agent-protocol.ts`: `build.json`, `installed`, `ccrc-caps`, `floor`, `previous`,
-  `node-id`, `update.json`, `update-intent`), by canonical-path EQUALITY, a live symlink inside `~/.ccrc`
+  `node-id`, `update.json`, `update-intent`, `box-token-generation` — the last holds a generation id, never a token
+  value), by canonical-path EQUALITY, a live symlink inside `~/.ccrc`
   carrying one of those names is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the server's update inventory refuses to read as that file (design 2026-09-20 §8). Never `isUnder(~/.ccrc)`: that directory holds `agent.env`,
   `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
 - `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
-- The **`update` op** (design 2026-09-20 §10) is the ONE wire-triggered spawn outside the exec whitelist. It spawns
+- The **`update` op** (design 2026-09-20 §10) is one of the TWO wire-triggered spawns outside the exec whitelist (the
+  other is `token-sync`, below). It spawns
   exactly one of two argv templates — `$HOME/.local/bin/ccrc update|rollback --to <tag> --detach --from pwa`, built by
   `updateLauncherPath` + `updateSpawnArgv` (`shared/agent-protocol.ts`), `tag` the only variable token — validated by
   `isReleaseTag` in `validateReq` BEFORE any case body runs (`bad-tag`/`bad-kind`, never `bad-request`, which from this
@@ -61,6 +64,14 @@ get wrong when editing `src/whitelist.ts`.
   member in `shared/agent-protocol.ts`; a `validateReq` case that type-checks every field (an argument failing its
   guard answers a `ReqRefusal` word, a shape failure `null`); a `handleReq` case; and, when the server must know this
   agent answers it, a word in the ready frame's `ops` (`readReadyOps`, `server/src/remote/client.ts`, is its reader).
+- The **`token-sync` op** (box-token lifecycle spec 2026-10-07 §4.4) is the other. It spawns exactly
+  `$HOME/.local/bin/ccrc token sync --from agent` (`updateLauncherPath` + `tokenSyncSpawnArgv`, no variable token) and
+  writes the one-time claim code to the child's STDIN, then EOF — never argv. `validateReq` refuses a code that fails
+  `isClaimCode` with `bad-code` before any case body. Its port (`src/tokensync.ts`) is its OWN bounded body, not a third
+  twin of the update spawn (D-4390): the child gets an explicit `{HOME, PATH, LANG}`, never `process.env` (which carries
+  `CCRC_AGENT_TOKEN`), and at 40 s its process group gets SIGTERM, then SIGKILL 2 s later. One gate per agent process
+  answers a second op `busy`. The agent still reads and writes no secret file: the verb, not the agent, claims and
+  writes the token. `test/token-sync-op.test.ts`'s source scan reds the day the op reaches an exec path.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.

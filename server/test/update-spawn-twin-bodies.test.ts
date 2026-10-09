@@ -41,3 +41,28 @@ describe('the two bounded-spawn bodies are one text', () => {
     expect(agent).toEqual(server);
   });
 });
+
+// D-4390 (box-token lifecycle wave 1): the `token-sync` op's spawn is its OWN bounded body in `agent/src/tokensync.ts`
+// (stdin piped, an explicit {HOME, PATH, LANG}, SIGTERM then SIGKILL), not a third twin and not the twin with stdin
+// as a parameter. The twins stay two; the third body stays visibly separate, so an edit that copies the twin into it
+// (or folds it into the twin) is a red here rather than a silent fourth way to read the pair above.
+describe('the token-sync spawn is not a third twin (D-4390)', () => {
+  const tokensync = read('../../agent/src/tokensync.ts');
+  const count = (src: string, sentinel: string): number => src.split('\n').filter((l) => l.trim().startsWith(sentinel)).length;
+
+  it('agent/src/tokensync.ts carries no bounded-spawn sentinel, and agent/src/server.ts still carries exactly one pair', () => {
+    expect(count(tokensync, BEGIN), 'a twin sentinel in tokensync.ts').toBe(0);
+    expect(count(tokensync, END), 'a twin sentinel in tokensync.ts').toBe(0);
+    const agentSrc = read('../../agent/src/server.ts');
+    expect(count(agentSrc, BEGIN)).toBe(1);
+    expect(count(agentSrc, END)).toBe(1);
+  });
+
+  it('its body is its own: stdin piped, an explicit env, SIGTERM before SIGKILL; the twins pipe no stdin', () => {
+    expect(tokensync).toContain("stdio: ['pipe', 'pipe', 'pipe'], env: childEnv");
+    expect(tokensync).toContain("signalGroup('SIGTERM')");
+    expect(tokensync).toContain("signalGroup('SIGKILL')");
+    expect(tokensync.indexOf("signalGroup('SIGTERM')")).toBeLessThan(tokensync.indexOf("signalGroup('SIGKILL')"));
+    expect(region(read('../../agent/src/server.ts'), 'agent/src/server.ts').join('\n')).toContain("stdio: ['ignore', 'pipe', 'pipe']");
+  });
+});

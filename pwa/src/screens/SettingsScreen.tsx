@@ -20,6 +20,7 @@ import { BackButton, Button, PHOSPHOR, SYSTEM, Skeleton, THEMES, elapsedWords, t
 import { NotificationBell } from '../fleet/NotificationBell';
 import { isManagedNode, planMove, rollbackBlockers, type MoveIntent, type PlannedMove, type RollbackBlocker } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
+import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../fleet/updateAck';
 import { isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, api, moveSkipText, noBundleRollbackText, updateErrorText } from '../lib/api';
 import { readAuthStatus } from '../lib/auth';
@@ -335,7 +336,9 @@ function ReleaseList({ releases, nodes, onMove }: {
 // re-polled either way.
 
 export const MACOS_UNMANAGED_TEXT = 'macOS: not centrally managed';
-export const ACK_UNREADABLE_TEXT = "Acknowledged — the server's answer could not be read; the screen will re-check.";
+// The Ack's gate and tap live in fleet/updateAck.ts since wave 14 (D-4267): the home screen's halt banner offers the
+// same Ack. Re-exported so this screen's callers and tests keep their import.
+export { ACK_UNREADABLE_TEXT, canAck };
 
 export function currentText(n: NodeWire): string {
   if (typeof n.measuredAt !== 'number') return 'not measured';
@@ -349,16 +352,6 @@ export function currentIsAmber(n: NodeWire): boolean {
     || nodeVersion(n) === null
     || n.provenance !== 'verified'
     || n.installState !== 'complete';
-}
-
-export function canAck(n: NodeWire, releases: readonly ReleaseWire[]): boolean {
-  const state = n.update?.state;
-  // A busy lease (pending, applying, unknown), an absent state or a word this build cannot name: ackNode answers busy.
-  if (typeof state !== 'string' || !(SETTLED_UPDATE_STATES as readonly string[]).includes(state)) return false;
-  if (state === 'failed' || state === 'reverted') return true;
-  if (typeof n.request === 'object' && n.request !== null) return true;
-  return releases.some((r) => Array.isArray(r.refused) && r.refused.some((x: unknown) =>
-    typeof x === 'object' && x !== null && (x as { by?: unknown }).by === n.nodeId));
 }
 
 export function requestLine(n: NodeWire, now: number): string | null {
@@ -450,10 +443,7 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }
 
   const ack = (): void => {
     setAcking(true);
-    void api.ackUpdateNode(n.nodeId).then(
-      (answer) => { if (answer === 'unreadable') toast(ACK_UNREADABLE_TEXT); },
-      (err: unknown) => { toast(updateErrorText(err), 'error'); },
-    ).finally(() => {
+    void sendAck(n.nodeId).finally(() => {
       setAcking(false);
       onAcked();
     });

@@ -55,13 +55,16 @@
 // writing the fix, so the measurement is against the same test file the fix
 // is graded by, not an earlier draft missing the grep/tail/cut/tr symlinks.
 import { describe, it, expect } from 'vitest';
-import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import {
   existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { loopbackCurlFront } from './containedTools.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -127,7 +130,7 @@ const REAL_TOOLS = ['jq', 'grep', 'tail', 'cut', 'tr'];
  *  own env before `extraEnv` is applied, so neither can leak in from
  *  whatever happens to be set on the box running the suite; a test that wants
  *  to exercise the `CCRC_ADDR` override passes it back via `extraEnv`. */
-function runNotify(home: string, extraEnv: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
+function runNotify(home: string, extraEnv: NodeJS.ProcessEnv = {}, input?: string): SpawnSyncReturns<string> {
   const bin = stubBinDir(home);
   for (const name of REAL_TOOLS) {
     if (!existsSync(path.join(bin, name))) symlinkSync(realPath(name), path.join(bin, name));
@@ -136,7 +139,7 @@ function runNotify(home: string, extraEnv: NodeJS.ProcessEnv = {}): SpawnSyncRet
   delete env.CCRC_ADDR;
   delete env.CCRC_MAIL_TOKEN_FILE;
   Object.assign(env, extraEnv, { HOME: home, PATH: bin });
-  return spawnSync(BASH, [notifyShPath, 'test message'], { env, encoding: 'utf8' });
+  return spawnSync(BASH, [notifyShPath, 'test message'], { env, encoding: 'utf8', input });
 }
 
 describe('deploy/notify.sh address resolution', () => {
@@ -295,5 +298,111 @@ describe('deploy/notify.sh address resolution', () => {
     const r = runNotify(home);
     expect(curlCalls(home), 'an empty value must not become http:// with no host').toEqual([]);
     expect(r.status, r.stderr).toBe(0);
+  });
+});
+
+// R16 (centralised-update wave 13): the box token rides curl's STDIN as a `-K -`
+// config line, never its argv, where every process listing on the box can read
+// it for the life of the call. The token is a fixture value, in a token DOCUMENT
+// (a `#` preamble above one value line) at `CCRC_MAIL_TOKEN_FILE`; reading it
+// takes `head`, which the address cases above never reach.
+describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (R16)', () => {
+  const TOKEN = 'z'.repeat(64);
+  const CONFIG = `header = "x-ccrc-mail-token: ${TOKEN}"\n`;
+  const tokenFile = (home: string): string => {
+    const f = path.join(home, 'mail.token');
+    writeFileSync(f, `# fixture token document\n\n${TOKEN}\n`, { mode: 0o600 });
+    return f;
+  };
+  /** A curl that records one argv word per line, and its stdin, and dials nothing. */
+  const recordingCurl = (home: string): void => {
+    writeFileSync(path.join(stubBinDir(home), 'curl'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/curl.argv"\ncat > "$HOME/curl.stdin"\nexit 0\n', { mode: 0o755 });
+    for (const t of ['head', 'cat']) symlinkSync(realPath(t), path.join(stubBinDir(home), t));
+  };
+  const words = (home: string): string[] => readFileSync(path.join(home, 'curl.argv'), 'utf8').split('\n');
+  const fed = (home: string): string => readFileSync(path.join(home, 'curl.stdin'), 'utf8');
+
+  it('with a token: argv holds neither the token nor its header, and stdin carries the one config line', () => {
+    const home = mkTmp('ccrc-notify-tok-');
+    recordingCurl(home);
+    const r = runNotify(home, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: tokenFile(home) });
+    expect(r.status, r.stderr).toBe(0);
+    const w = words(home);
+    expect(w).toContain('http://127.0.0.1:9/api/notify');
+    expect(w.filter((x) => x.includes(TOKEN)), 'the token is on curl\'s argv').toEqual([]);
+    expect(w.filter((x) => /x-ccrc-mail-token/i.test(x)), 'the token header is on curl\'s argv').toEqual([]);
+    expect(w.some((x, i) => x === '-K' && w[i + 1] === '-'), `no \`-K -\` in argv: ${w.join(' ')}`).toBe(true);
+    expect(fed(home)).toBe(CONFIG);
+  });
+
+  it('with no token: it still sends (the tolerance), and the config curl reads is empty', () => {
+    const home = mkTmp('ccrc-notify-notok-');
+    recordingCurl(home);
+    const r = runNotify(home, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: path.join(home, 'absent.token') });
+    expect(r.status, r.stderr).toBe(0);
+    expect(words(home)).toContain('http://127.0.0.1:9/api/notify');
+    expect(fed(home), 'an absent token must send no header line').toBe('');
+  });
+
+  // THE OTHER DIRECTION (wave 13, R16): the hook's own stdin, whatever ccd or a
+  // caller hands it, must never reach curl's `-K -` parser — a `url` or `output`
+  // line there would carry the token header somewhere else.
+  it.each([
+    ['with a token', true],
+    ['with no token', false],
+  ])('%s: the hook\'s own stdin never reaches curl\'s config', (_w, withToken) => {
+    const home = mkTmp('ccrc-notify-stdin-');
+    recordingCurl(home);
+    const hostile = 'url = "http://127.0.0.1:7788/stolen"\noutput = "/tmp/pwn"\nheader = "x-evil: 1"\n';
+    const r = runNotify(home, {
+      CCRC_ADDR: 'http://127.0.0.1:9',
+      CCRC_MAIL_TOKEN_FILE: withToken ? tokenFile(home) : path.join(home, 'absent.token'),
+    }, hostile);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fed(home), 'curl was handed the hook\'s stdin as config').toBe(withToken ? CONFIG : '');
+  });
+
+  // Through the REAL curl, behind the test front that admits `-K -` with
+  // `header = "…"` lines only, to a listener in this process: the header still
+  // ARRIVES. ASYNC, because a sync spawn would block the listener.
+  it.each([
+    ['with a token', true],
+    ['with no token', false],
+  ])('%s, through the loopback curl front to a listener: the body arrives, and the header iff there is a token', async (_w, withToken) => {
+    const home = mkTmp('ccrc-notify-front-');
+    const got: { auth: string | undefined; body: string }[] = [];
+    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        got.push({ auth: req.headers['x-ccrc-mail-token'] as string | undefined, body });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const port = (server.address() as AddressInfo).port;
+      const bin = stubBinDir(home);
+      writeFileSync(path.join(bin, 'curl'), loopbackCurlFront(realPath('curl')), { mode: 0o755 });
+      writeFileSync(path.join(home, 'curl-allow-ports'), `${port}\n`);
+      for (const t of [...REAL_TOOLS, 'head', 'cat']) symlinkSync(realPath(t), path.join(bin, t));
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      delete env.CCRC_ADDR;
+      Object.assign(env, {
+        HOME: home, PATH: bin, CCRC_ADDR: `http://127.0.0.1:${port}`,
+        CCRC_MAIL_TOKEN_FILE: withToken ? tokenFile(home) : path.join(home, 'absent.token'),
+      });
+      const code = await new Promise<number>((resolve) => {
+        const child = spawn(BASH, [notifyShPath, 'test message'], { env, stdio: ['ignore', 'ignore', 'ignore'] });
+        child.on('close', (c) => resolve(c ?? -1));
+      });
+      expect(code).toBe(0);
+      expect(existsSync(path.join(home, 'curl-poison')), 'the front refused notify.sh\'s call').toBe(false);
+      expect(got).toEqual([{ auth: withToken ? TOKEN : undefined, body: '{"message":"test message"}' }]);
+    } finally {
+      await new Promise<void>((r) => { server.close(() => r()); });
+    }
   });
 });

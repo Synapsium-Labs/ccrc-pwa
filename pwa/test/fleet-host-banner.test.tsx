@@ -6,7 +6,7 @@
 // other box was a false claim about the reader's machine.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { FleetHealth, NodeWire } from '../../shared/api';
+import type { FleetHealth, NodeWire, UpdateIntentWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { FleetHostBanner } from '../src/fleet/FleetHostBanner';
@@ -265,5 +265,73 @@ describe('FleetHostBanner', () => {
     render(<FleetHostBanner health={health({ connected: true, downSince: null, roster: 'divergent' })} />);
     expect(await screen.findByText(/different account rosters/i)).toBeInTheDocument();
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+// Programme wave 14, R15(c): the skew arm's remedy is skewRemedy's (updateHalt.ts). The TRIGGER is unchanged
+// (`health.build`, D-3312); only the advice moves. The existing cases above keep the terminal verbs because their
+// rows carry no `detach` cap and no intent: that is the `cli` arm, pinned below in its own right.
+describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
+  const skewed = health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+  const movable = (role: 'fleet' | 'server', current: BuildInfo): NodeWire =>
+    ({ ...inventoryNode(role, current), caps: ['detach', 'update-gate'], agentOps: role === 'fleet' ? ['update'] : null,
+      desiredTag: current.version === 'v0.0.9' ? null : 'v0.0.9' });
+  const autoOn: UpdateIntentWire[] = [{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'stable', notify: 'off', setAt: 1, setBy: 'pwa' }];
+  // `.banner-msg` since the warn arms took the Banner primitive: the message
+  // span is the component's, and `.fleet-host-banner-msg` names markup this
+  // screen no longer writes.
+  const msg = (): string => document.querySelector('.banner-msg')?.textContent ?? '';
+
+  it('while a node halts the fleet and auto will move the box after the ack, it points at the halt, never at the terminal', () => {
+    const fleet = { ...movable('fleet', FLEET_V7), update: { state: 'failed' as const, target: 'v0.0.9', startedAt: 1, detail: 'gate: unit not up' } };
+    render(<FleetHostBanner health={skewed} nodes={[fleet, movable('server', SERVER_V9)]} intent={autoOn} />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1). '
+      + 'Nothing moves until fleet is acknowledged — tap Ack on it in the halt banner; auto-install then moves the lagging box.');
+    expect(screen.queryByText(/ccrc rollout/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('a halt is named even with auto off and nodes the console cannot move — and then the terminal, never a console move', () => {
+    const fleet = { ...inventoryNode('fleet', FLEET_V7), update: { state: 'reverted' as const, target: 'v0.0.9', startedAt: 1, detail: null } };
+    render(<FleetHostBanner health={skewed} nodes={[fleet, inventoryNode('server', SERVER_V9)]} />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1). '
+      + 'Nothing moves until fleet is acknowledged — tap Ack on it in the halt banner, then run ccrc rollout from the '
+      + 'deploying machine, or ccrc update on the lagging box, fleet box first.');
+    expect(msg()).not.toMatch(/auto-install|console/i);
+  });
+
+  it('a halt with auto on but a box auto would not move (no update-gate): the halt, then the terminal', () => {
+    const fleet = { ...movable('fleet', FLEET_V7), caps: ['detach'], update: { state: 'failed' as const, target: 'v0.0.9', startedAt: 1, detail: 'x' } };
+    render(<FleetHostBanner health={skewed} nodes={[fleet, movable('server', SERVER_V9)]} intent={autoOn} />);
+    expect(msg()).toContain('tap Ack on it in the halt banner, then run ccrc rollout');
+    expect(msg()).not.toMatch(/auto-install/i);
+  });
+
+  it('auto on and every node movable from the console: it points at the console\'s own move, in Settings', () => {
+    render(<FleetHostBanner health={skewed} nodes={[movable('fleet', FLEET_V7), movable('server', SERVER_V9)]} intent={autoOn} />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1). '
+      + 'Auto-install is on and the console can move the lagging box — follow the move in Settings.');
+    expect(screen.queryByText(/ccrc rollout|ccrc update/)).not.toBeInTheDocument();
+  });
+
+  it('auto off, a node the console cannot move, or no intent: the terminal verbs, as before', () => {
+    const cli = 'Run ccrc rollout from the deploying machine, or ccrc update on the lagging box, fleet box first.';
+    const off: UpdateIntentWire[] = [{ ...autoOn[0]!, auto: 'off' }];
+    const { rerender } = render(<FleetHostBanner health={skewed} nodes={[movable('fleet', FLEET_V7), movable('server', SERVER_V9)]} intent={off} />);
+    expect(msg()).toContain(cli);
+    rerender(<FleetHostBanner health={skewed} nodes={[{ ...inventoryNode('fleet', FLEET_V7), desiredTag: 'v0.0.9' }, movable('server', SERVER_V9)]} intent={autoOn} />);
+    expect(msg()).toContain(cli);
+    rerender(<FleetHostBanner health={skewed} nodes={[movable('fleet', FLEET_V7), movable('server', SERVER_V9)]} />);
+    expect(msg()).toContain(cli);
+    rerender(<FleetHostBanner health={skewed} nodes={null} intent={autoOn} />);
+    expect(msg(), 'no inventory answer: the console cannot vouch for a move').toContain(cli);
+  });
+
+  it('auto on but the lagging box has no tag to move to (rolled back): the terminal verbs, never auto', () => {
+    const fleet = { ...movable('fleet', FLEET_V7), desiredTag: null };
+    const server = { ...movable('server', SERVER_V9), desiredTag: 'v0.0.10' };
+    render(<FleetHostBanner health={skewed} nodes={[fleet, server]} intent={autoOn} />);
+    expect(msg()).toContain('Run ccrc rollout from the deploying machine, or ccrc update on the lagging box, fleet box first.');
+    expect(msg()).not.toMatch(/auto-install/i);
   });
 });

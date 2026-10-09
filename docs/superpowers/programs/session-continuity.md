@@ -22,8 +22,8 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | #230 | merged 2026-10-02 (`a934a59b`); run 219 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
-| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | — | planning (workflow, 2026-10-05 17:05); run 274 open (planned), block 4012–4021 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
+| 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | run 308 open (planned; the run's wave 5), block 4316–4325; to plan; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …) |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -445,6 +445,95 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     them reap-class. Baseline B is read one week after this wave deploys; the deploy time is recorded here when it
     happens.
   - The brief and its dispatch body are ready. Run 274 dispatches when #288 merges.
+- **2026-10-06 05:20 — #288 merged** (`0dad0fdf`, 05:19, required checks green). The ledgers' own PR #289 merged beside it
+  (`21f536a5`).
+  - **Run 274's dispatch was refused `cap-concurrency`** (seven of seven active runs fleet-wide). Nothing on the
+    run was touched; it stays planned, with the same brief and route.
+  - It dispatches when a slot frees. Review 284 closing frees one of this coordinator's own.
+- **2026-10-06 06:53 — wave 4 dispatched** (run 274 → `ccrc-pwa-still-river`; worker skill present; route Opus · high,
+  Sonnet subagents, workflow off, compact 40; eight items, one per plan task).
+  - **The concurrency cap refused it three times first** (05:19, 05:53 and 06:23, seven of seven). A slot freed
+    by 06:53.
+  - **The workspace branch is at `9221416a`**, origin/main (after #291), with nothing ahead. It contains #288.
+- **2026-10-06 07:02 — ask 18 answered: option 0, Task 1 edits `ccd/ccd` now** and stays the first commit. Explained in
+  mails 3646–3648.
+  - **`ccd/ccd` is shared by region, not by claim.** Claim 1043 (run 250) does not block a disjoint-region edit,
+    and nobody takes, breaks or waits on a `ccd/ccd` claim for it. The regions: run 250 has the stamp and its
+    `pr-state` lines; run 245 has the RECLAIM/EXPIRE region and the spawn paths' refusal; run 274 has wave 3's
+    operator-choice section, then what its plan names. The second to land merges main, re-stamps and re-runs the
+    citation cases, cite-remeasure and the `_reg_get` census. A worker whose edit must leave its region asks first.
+- **2026-10-06 20:21 — wave 4 done: PR #299 at `34cfe5ee`** (wave-done 3694; progress 3662; 14 commits plus a merge of
+  main `77c11245`; report copied to the coordinator's evidence on receipt; the mail was read at 20:15, held behind a
+  background workflow).
+  - **What landed:** Tasks 1–8, each reviewed by Opus, with the kill-safety lens on the sweep. The whole-branch
+    review says ready to merge.
+  - **The spares, all three used:**
+    - 4091: a spawn is claimed by one scope only;
+    - 4092: a scope with a child cgroup, or an unreadable cgroup dir, is carried and never stopped. This was a
+      CRITICAL wrong-stop path, caught before merge: a stop kills the whole subtree.
+    - 4093: the merge block keeps one stamp line.
+  - **The stop ships shadowed,** and nothing writes `scope-sweep-live`.
+  - **Pre-deploy readings, counts only:**
+    - 2026-09-16 to 2026-09-24: 16 stops, 0 reap-class;
+    - 2026-09-28 to 2026-10-05 17:00: 40 stops, 2 reap-class.
+  - **Re-measured:**
+    - The tip matches the claim, and the four required checks are green (CI 37463910980).
+    - #299 now conflicts with main `b27fabc15` (#290) on `ccd/ccd`, `ccrc-install.test.ts` and
+      `single-definition.test.ts`. It merges main after the review, not during it.
+    - The run went from `dispatched` to `working` to `awaiting-review`, and its eight items were settled.
+  - **Acceptance review 305** was dispatched to `ccrc-pwa-warm-mesa`, with the held-out panel named.
+  - **The worker's residue for wave 4b:**
+    - I1, a record line kind for carried or unmeasurable scopes;
+    - `s6_inert`'s staleness;
+    - the zombie child;
+    - the paused log line;
+    - baseline B's non-zero check;
+    - the per-task minors.
+  - **ccrc-history's runs 293 and 302** are cleared to edit README, the doctor checks, deploy.sh and the other paths
+    in their own regions, while 274's claim 1046 stands (3750).
+- **2026-10-06 21:53 — review 305 ACCEPTED wave 4** (review-done 3757, reviewed tip `34cfe5ee`; report copied on receipt).
+  - **The verdict:** 39 agents, none unverified; 9 confirmed (one important) and 3 refuted. All 30 mutation rows are
+    red, covering every never-stop class (4092's child cgroup included), the shadow gate and the paused file, three per
+    tick, the unmeasurable carry, the forged-record bounds, 4091, the doctor bounds and the harness group kill.
+  - **No path to a stop while shadowed or paused:** there is one read of `scope-sweep-live` and one stop call. The
+    readings reproduce: 16 stops / 0 reap-class, and 40 / 2. Departures 4091, 4092 and 4093 are confirmed.
+  - **The landing round was sent** (mail 3758; run 274 is back at `working`):
+    - merge main, keeping both sides of `ccrc-install.test.ts` and `single-definition.test.ts`, then re-stamp;
+    - the text and one-byte fixes F2 (qualified), F3, F4, F6–F9;
+    - one clause in 4020's entry naming F1's (a)–(c) and F5.
+  - **Rulings:**
+    - F2 is accepted as 4092's cost. A scope with a child cgroup is never stopped, even live, and the text says so.
+    - F6: the worker's in-plan definitions were sanctioned by the brief, so the plan's three sentences were stale.
+  - **CARRIED to wave 4b's FIRST commit:**
+    - F1(a): a line doctor cannot read answers through the "cannot read" WARN with its rewrite remedy, never the
+      dead-scope stop remedy;
+    - doctor's PASS line, qualified for a carried live scope.
+    These sit beside the worker's residue (I1, `s6_inert`'s staleness, the zombie, the paused log line, baseline B's
+    non-zero check).
+- **2026-10-06 22:54 — wave 4 MERGED: #299** (`1bb88d5e`, 22:54; after review 305 and the landing round).
+  - **The landing round** (wave-done 3766 at `8c48de36`) merged main `8d85c7cf4` and hit FOUR conflicts, not the three
+    measured. The fourth was `ccd/ccrc-doctor-checks`: main's `_check_model-default` (#302) and this wave's
+    `_check_scope-sweep` were both appended after `_check_timeout`, and both were kept byte-identical. The round's own
+    commits are text, comments, one blank line and the stamp (verified file by file).
+  - **The re-gate** was green on every file's first run. Correction 3767: the round did not re-run the whole suite. By
+    clause 15 its suite word is `unrun`; the last whole run is 3694's, with 4 known environmental reds.
+  - **Runs:** 274 advanced to `merging`, then closed final (`merged`), and its child workspace is queued for
+    reclamation. **Run 308 (wave 4b, the run's wave 5) was opened first,** planned, with numbers 4316–4325 written bare.
+  - **Next:** wave 4b waits for baseline B's week, which starts at THIS wave's deploy. The deploy time is recorded
+    here when both boxes carry `1bb88d5e`. The stop stays shadowed until the operator arms `scope-sweep-live`.
+- **2026-10-07 00:26 — wave 4 DEPLOYED: baseline B starts 2026-10-06 23:16 UTC.** Both boxes run v0.0.110 (`1bb88d5e`), applied
+  from the console. The fleet box finished at 23:16:17 and the server box at 23:16:50 (each box's `update.json`, phase
+  `done`; `ccrc version` reads `1bb88d5e` on both). Baseline B's week ends 2026-10-13 23:16 UTC. Wave 4b (run 308) is
+  planned after that reading, and the stop stays shadowed until the operator arms `scope-sweep-live`.
+- **2026-10-08 — issue #317 amends stage 1, off-wave: a link `EXDEV` refused goes through a common mount, and a copy
+  says why and how much.** Items 1–2 of the issue, the scope the operator set in its comment; items 3–4 (drop the
+  source, `carry-dedupe`) are not part of it. Plan `docs/superpowers/plans/2026-10-08-carry-link-via-mount.md` defines
+  D-4500 (`carry-links-through-common-mount`) and D-4501 (`carry-copy-says-why`), issued by the allocator; the spec's
+  rev 9 carries them into §1.2 item 1, §5.1, §8 and §9. The plan's doctor `carry` check was dropped at dispatch and
+  follows separately. Deploy **AGENT-FIRST** (ccd and the instrument), after the read-only pre-check: each account
+  root and its path under the whole-volume mount share one `dev:inode`, the mount is read-write for the fleet user,
+  and no unit has a private mount namespace (verified by the operator at dispatch). Afterwards, stage 1's
+  `--stage 1 --json` should show `link_via_mount` rising and no `exdev-*` key in `copy_by_cause`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
