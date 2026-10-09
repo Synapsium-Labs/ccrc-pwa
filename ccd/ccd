@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5215de5d67a1492f0758d3cf885761b98bbfe4b3e8a749bfccbb30442a9e92e4
+# ccrc:generated 1 sha256=132d0e6616f4ee6cb1e95a6f48568ea14f2f001c531a2fdd07793d1c0493599a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29313,9 +29313,13 @@ _ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read 
   return 0
 }
 _WS_CHECKOUTS_WHY=''
-_ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 refused; 2 unmeasured (_WS_CHECKOUTS_WHY)
+_WS_CHECKOUTS_ACCEPTED=''   # `_ws_leaf_checkouts`' rc 0: every OUTSIDE admin directory a back-link let pass, with that back-link
+_ws_leaf_checkout_accepted() {   # admin back-link -> appends `<admin>=<back-link>`, each `_ws_collect_enc`'s spelling, to _WS_CHECKOUTS_ACCEPTED
+  _WS_CHECKOUTS_ACCEPTED+="${_WS_CHECKOUTS_ACCEPTED:+,}$(_ws_collect_enc "$1")=$(_ws_collect_enc "$2")"
+}
+_ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the leaf's own; 1 refused; 2 unmeasured (_WS_CHECKOUTS_WHY)
   # ONE `.git` entry, asked without following it (`_ws_leaf_checkouts` says why).
-  local lp="$1" f="$2" d="${2%/.git}" buf gd rest adp rec rc
+  local lp="$1" f="$2" d="${2%/.git}" alias="${3-}" accepted="${4-}" buf gd rest adp rec rc pre
   if [[ -L "$f" ]]; then
     _WS_CHECKOUTS_WHY="$f is a symbolic link — git follows a .git link and ccd never does, so the tree at $d may be a checkout git records elsewhere"
     return 1
@@ -29350,6 +29354,21 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 re
   case "/$rest/" in
     */../*) _WS_CHECKOUTS_WHY="$f names its git directory through a '..' after another component, which a logical and a physical walk read apart — where it lands was never asked"; return 2 ;;
   esac
+  # THE COLLECTOR'S ALIAS, INSIDE THE LEAF (spec §5.10). A linked worktree of a
+  # clone that is itself in the leaf names its git directory ABSOLUTELY, git's
+  # default, by the leaf's PRE-MOVE spelling, which the collector's move took
+  # away. Under the alias that spelling is read at the leaf's new place, and
+  # only while nothing stands at it again, PROVEN; the INSIDE THE LEAF rule
+  # below then answers for the tree exactly as the pre-move ask did, so no
+  # accepted pair is needed. A relative gitdir was joined to the tree's own
+  # directory above and never begins with the alias, and an absolute one
+  # holding a `..` was refused above.
+  if [[ -n "$alias" && ( "$gd" == "${alias%/}" || "$gd" == "${alias%/}/"* ) ]]; then
+    _ws_reclaim_absent "$gd"; rc=$?
+    (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whether anything stands again at $gd, the git directory $f names in the leaf's pre-move spelling, was never asked"; return 2; }
+    (( rc != 1 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, in the leaf's pre-move spelling, where something stands again — not the leaf's own"; return 1; }
+    gd="${lp%/}${gd#"${alias%/}"}"
+  fi
   _ws_reclaim_absent "$gd"; rc=$?
   (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which no longer exists — git no longer records the tree at $d"; return 1; }
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — where $f's git directory stands was never asked"; return 2; }
@@ -29360,8 +29379,9 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 re
   [[ "$adp" != "$lp" && "$adp" != "${lp%/}/"* ]] || return 0
   # OUTSIDE IT: only a linked worktree whose admin directory's `gitdir` names
   # THIS `.git` back is the leaf's — rung 9's `_ws_reclaim_gitdir_own`, asked
-  # of any repository. Anything else is a tree git records elsewhere: moved
-  # here, or an admin name a later worktree recycled.
+  # of any repository — or, under the collector's alias, the pre-move spelling
+  # the two conditions below admit. Anything else is a tree git records
+  # elsewhere: moved here, or an admin name a later worktree recycled.
   _ws_reclaim_absent "$adp/gitdir"; rc=$?
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whose tree $adp records was never asked"; return 2; }
   (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which lies outside the leaf and holds no record of which tree it belongs to — the tree at $d is not provably the leaf's own"; return 1; }
@@ -29369,15 +29389,36 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 re
     || { _WS_CHECKOUTS_WHY="$adp/gitdir could not be read whole, so whose tree $adp records was never asked"; return 2; }
   rec="$_WS_SMALL"
   while [[ "$rec" == *$'\n' ]]; do rec="${rec%$'\n'}"; done
-  [[ "$rec" != "$f" ]] || return 0
+  [[ "$rec" != "$f" ]] || { _ws_leaf_checkout_accepted "$adp" "$rec"; return 0; }
   _ws_dir_physical "$d" \
     || { _WS_CHECKOUTS_WHY="$d cannot be resolved ($_WS_PHYS_WHY), so whether $adp records it was never asked"; return 2; }
-  [[ "$rec" != "${_WS_PHYS%/}/.git" ]] || return 0
+  [[ "$rec" != "${_WS_PHYS%/}/.git" ]] || { _ws_leaf_checkout_accepted "$adp" "$rec"; return 0; }
+  # THE COLLECTOR'S ALIAS (spec §5.10): a leaf asked again after the collector
+  # moved it into a quarantine slot. Its trees' back-links still name the leaf's
+  # PRE-MOVE spelling (`alias`, the leaf's physical path before the move), and
+  # such a back-link counts as the leaf's own ONLY when (1) the pre-move ask
+  # accepted this same admin directory with this same back-link value
+  # (`accepted`, the quarantine record's list), and (2) nothing stands at that
+  # pre-move spelling now, PROVEN. A later worktree that recycled the admin
+  # name — a recycled slug's `git worktree add` at the same spelling — fails one
+  # or the other and refuses, as it does with no alias.
+  if [[ -n "$alias" ]]; then
+    if [[ "$d" == "$lp" ]]; then pre="${alias%/}"; else pre="${alias%/}/${d#"${lp%/}/"}"; fi
+    if [[ "$rec" == "$pre/.git" ]] \
+       && [[ ",$accepted," == *",$(_ws_collect_enc "$adp")=$(_ws_collect_enc "$rec"),"* ]]; then
+      _ws_reclaim_absent "$pre"; rc=$?
+      (( rc != 0 )) || return 0
+      (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whether anything stands again at $pre, where the tree at $d stood before it was moved, was never asked"; return 2; }
+      _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which git records as $rec's — the spelling the tree at $d had before it was moved, where something stands again — not the leaf's own"
+      return 1
+    fi
+  fi
   _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which git records as $rec's — the tree at $d is a checkout git records elsewhere, not the leaf's own"
   return 1
 }
-_ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records elsewhere; 1 refused; 2 unmeasured
-  #                         (each with _WS_CHECKOUTS_WHY naming the checkout, or why it was never asked)
+_ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is one git records elsewhere; 1 refused;
+  #                         2 unmeasured (each with _WS_CHECKOUTS_WHY naming the checkout, or why it was never asked);
+  #                         on 0, _WS_CHECKOUTS_ACCEPTED lists every outside admin directory a back-link let pass
   # ANOTHER SESSION'S TREE MOVED INTO A LEAF IS NOT THE LEAF'S (spec §5.5, §5.6).
   # A `mv` keeps a worktree's `.git` FILE, which still names the admin directory
   # its repository keeps for it; git's record of the tree then reads
@@ -29403,9 +29444,23 @@ _ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records e
   # this `.git` back (literally, or by its directory's physical path), and
   # refuses otherwise. Anything else named `.git` is unmeasured. A refusal
   # outranks an unmeasured entry, whatever order the walk lists them in.
-  local lp outf errf err rc f why='' n=0
+  # THE ALIAS (the collector's alone, spec §5.10): `alias` is the leaf's physical
+  # path BEFORE the collector moved it, and `accepted` the record's list of what
+  # that pre-move ask let pass (`_WS_CHECKOUTS_ACCEPTED`'s spelling). With them,
+  # a back-link naming the pre-move spelling is the leaf's own under the two
+  # conditions `_ws_leaf_checkout_one` states, and a git directory spelled
+  # absolutely inside the pre-move leaf is read at the leaf's new place while
+  # nothing stands at that spelling. Every other caller passes neither, and
+  # nothing it is answered changes.
+  local lp outf errf err rc f why='' n=0 alias="${2-}" accepted="${3-}"
   local -a gits=()
-  _WS_CHECKOUTS_WHY=''
+  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''
+  if [[ -n "$alias" ]]; then
+    [[ "$alias" == /* && "$alias" != *$'\n'* ]] \
+      || { _WS_CHECKOUTS_WHY="the leaf's pre-move spelling '$alias' is not an absolute path, so no back-link is compared with it"; return 2; }
+    _ws_collect_pairs_ok "$accepted" \
+      || { _WS_CHECKOUTS_WHY="the accepted checkouts handed with $alias are not a list ccd writes"; return 2; }
+  fi
   _ws_dir_physical "$1" \
     || { _WS_CHECKOUTS_WHY="$1 cannot be resolved ($_WS_PHYS_WHY), so the checkouts in it were never looked for"; return 2; }
   lp="$_WS_PHYS"
@@ -29431,7 +29486,7 @@ _ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records e
   (( n <= WS_LEAF_CHECKOUTS_CAP )) \
     || { _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git, so not every checkout in it was examined"; return 2; }
   for f in ${gits[@]+"${gits[@]}"}; do
-    _ws_leaf_checkout_one "$lp" "$f"; rc=$?
+    _ws_leaf_checkout_one "$lp" "$f" "$alias" "$accepted"; rc=$?
     (( rc != 1 )) || return 1
     (( rc == 0 )) || [[ -n "$why" ]] || why="$_WS_CHECKOUTS_WHY"
   done
@@ -29439,7 +29494,7 @@ _ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records e
   [[ -z "$why" ]] || return 2
   return 0
 }
-_ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
+_ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
   #                       1 refused (_WS_LEAF_WHY); 2 unmeasured (_WS_LEAF_WHY)
   # THE ONE REMOVAL of `<root>/<id>`, a per-session leaf under a box-wide root:
   # the reclaim and expiry tail's clips directory and temp root, and wave 7's
@@ -29527,7 +29582,12 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   (iii) a clone, a submodule of one, or a worktree of one inside the leaf
   #   is the leaf's own, and goes with it; (iv) a bind-mount alias spelling of
   #   the leaf is not compared.
-  local root="$1" id="$2" want="${3-}" rroot leaf me owner lreal have ldev rdev err rc
+  # - THE COLLECTOR'S ALIAS (spec §5.10): `alias` and `accepted`, passed by the
+  #   collector alone, with the witness's dev:ino, for a leaf in a quarantine
+  #   slot (`<slot>/leaf`), and handed to the checkout question unchanged
+  #   (`_ws_leaf_checkouts` says what they admit). Every other caller passes
+  #   neither, and is answered exactly as before.
+  local root="$1" id="$2" want="${3-}" alias="${4-}" accepted="${5-}" rroot leaf me owner lreal have ldev rdev err rc
   _WS_LEAF_WHY=''
   if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$id" == . || "$id" == .. ]]; then
     _WS_LEAF_WHY="'$id' is not a session id ccd mints, so nothing under $root was touched"; return 1
@@ -29564,7 +29624,8 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
       || { _WS_LEAF_WHY="$leaf cannot be entered, so where it resolves was never asked"; return 2; }
     [[ "$lreal" == "$leaf" ]] \
       || { _WS_LEAF_WHY="$leaf resolves to $lreal — ccd never removes a tree it would reach through another path"; return 1; }
-    _ws_leaf_checkouts "$leaf"; rc=$?
+    if [[ -n "$alias" ]]; then _ws_leaf_checkouts "$leaf" "$alias" "$accepted"; rc=$?
+    else _ws_leaf_checkouts "$leaf"; rc=$?; fi
     (( rc == 0 )) || { _WS_LEAF_WHY="$_WS_CHECKOUTS_WHY — nothing under $leaf was removed"; (( rc == 1 )) && return 1; return 2; }
     _ws_reclaim_normalise "$leaf"; rc=$?
     (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 2; }
