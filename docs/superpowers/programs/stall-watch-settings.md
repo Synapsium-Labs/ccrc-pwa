@@ -571,6 +571,44 @@ time.
   - After the merge: run 322 closes with `final:true`, the programme's last close. Then this session checks the
     deploy read-only and opens a docs PR for this ledger, writing the three fix-round numbers only once their
     definitions are on `main`.
+- **R32 (2026-10-09 00:53)**, cross-programme finding 4063: a worker's ask was invisible, and the stall watch's
+  dialog cap kept being pushed back.
+  - Child-reclamation's coordinator (`ccrc-pwa-calm-mesa`, mail 4063) reported that worker
+    `ccrc-pwa-clear-summit` (run 347; Claude Code 2.1.294, `bypassPermissions`) has been parked on an
+    AskUserQuestion since 2026-10-08 21:28:43Z. There is no ask row, the hookstate reads `working` with a null ask,
+    and no stall signal or mail went out.
+  - This session ran a read-only forensic workflow (`wf_3df2ac3d-c0a`; three Opus·high lenses: transcript
+    timeline, hook and ask path, stall watch). Its output is saved to `finding-4063-forensics.json`. All three
+    lenses support one cause.
+    - The hook. `ccd/session-hook.sh` parses a subagent's `agent_id` into `paid` but checks it only for the turn
+      marker. Every PreToolUse or PostToolUse writes `state=working, ask=null` over the session's hookstate,
+      whoever sent it.
+    - The timeline. A background subagent launched 29 s before the ask made its first tool call 3.1 s after it,
+      then 57 more until its SubagentStop at 21:39:30, which carried the clobbered state forward.
+    - The control. `ccrc-pwa-bright-river`, on the same version and mode with no subagent running, recorded
+      `waiting` with its questions through PermissionRequest.
+    - The server. It mints an ask row only on the first pane tick that sees a new menu (`watch.ts` ≈:6567), so an
+      ask clobbered within about 3 s is never recovered.
+  - The stall watch's part, which is this lineage's.
+    - With no ask, the case falls to the dialog hold (2b). The design means 2a, where a pending AskUserQuestion is
+      legitimate and goes to the asks lane.
+    - The dialog cap's quiet clock counts the newest mail sent to the worker even when the gate cannot deliver it,
+      and a `waiting` pane is never delivered to. The coordinator's mails 4055 and 4060 each restarted the 2 h
+      clock, so it falls due at 2026-10-09 01:29:13Z.
+    - At the box's arming (`stall-watch-live` without `stall-watch-escalate`, level Check), the dialog cap records
+      only a shadow row and pushes nothing. A stuck dialog reaches no human unless the operator chooses Alert or
+      above.
+    - `runs signals` carries no stall fields, so its silence was never evidence that no stall row exists.
+  - Owners, as this session reads them. None of the fixes is in this programme's scope, and none is implemented
+    here.
+    - (1) The hook: subagent events (non-empty `paid`) must not change the main thread's state or ask, carrying
+      them forward as SubagentStart and SubagentStop already do. The test is main AskUserQuestion, then a Bash with
+      `agent_id`, then SubagentStop, still `waiting` with the questions. It belongs to the ask lane's owner.
+    - (2) The dialog cap times a `waiting` dialog from the live stamp, or counts only delivered mail. It belongs to
+      the stall watch: a follow-up to this lineage.
+    - (3) Arming stays the operator's.
+  - Routed: a reply to `ccrc-pwa-calm-mesa`, and a report to the operator, who decides whether (1) and (2) open as
+    a programme.
 
 ## Carried constraints (reviewers get these)
 
