@@ -431,7 +431,7 @@ export function laneAdmit(load: LaneLoad, job: DocsJob): boolean {
   if (load.execs === 0) return true;
   if (load.execs >= DOCS_LANE_EXECS) return false;
   if (load.bytes + job.wire > DOCS_LANE_BYTES) return false;
-  if (job.raw > DOCS_LANE_LARGE_RAW && load.large > 0) return false;
+  if (laneLarge(job) && load.large > 0) return false;
   return true;
 }
 
@@ -1115,4 +1115,37 @@ export type DocsStoredShow = Pick<DocsShowOk, 'size' | 'sha256' | 'encoding' | '
 export function docsStoredShow(answer: DocsShowOk, bytes: Uint8Array): DocsStoredShow {
   const { size, sha256, encoding, text, b64 } = servedShow(answer, bytes);
   return encoding === 'base64' ? { size, sha256, encoding, b64 } : { size, sha256, encoding, text };
+}
+
+// ===== Review 361 F8: the lane verdicts live here (section 6.3, section 6.4) =====
+
+/**
+ * Whether `job` is a large answer (section 6.3): `raw` over `DOCS_LANE_LARGE_RAW`, so exactly at it is not large.
+ * THE one large-job predicate: `laneAdmit`'s fourth clause refuses a second large answer with it, and the read lane
+ * counts a started and a finished job in `LaneLoad.large` with it.
+ */
+export function laneLarge(job: DocsJob): boolean {
+  return job.raw > DOCS_LANE_LARGE_RAW;
+}
+
+/**
+ * Whether a lane's jobs that have not started, COUNTING the one just arriving, exceed that lane's queue bound
+ * (section 6.3, section 6.4): `DOCS_LANE_QUEUE` for the read lane, `DOCS_FETCH_QUEUE` for the fetch lane. Exactly at
+ * the bound is not over it. The read lane asks before it queues a job (`waiting` is its FIFO plus the new job); the
+ * fetch lane asks after it has queued and pumped (`waiting` is the FIFO).
+ */
+export function laneOverflow(lane: DocsLaneName, waiting: number): boolean {
+  return waiting > (lane === 'read' ? DOCS_LANE_QUEUE : DOCS_FETCH_QUEUE);
+}
+
+/**
+ * The fetch lane's admission for ONE queued job (section 6.4), in order: `running` fetches at `DOCS_FETCH_GLOBAL` is
+ * `'full'` (the pump stops, whatever the key); else a fetch already running under the job's key is `'skip'` (jobs
+ * under one key run one at a time: it stays queued and the pump considers the next); else `'start'`. A word for the
+ * lane's own bookkeeping, never a body.
+ */
+export function fetchAdmit(running: number, keyRunning: boolean): 'start' | 'skip' | 'full' {
+  if (running >= DOCS_FETCH_GLOBAL) return 'full';
+  if (keyRunning) return 'skip';
+  return 'start';
 }

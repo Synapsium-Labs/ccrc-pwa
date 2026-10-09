@@ -3,15 +3,17 @@
 // single-flight with abandonment, and the per-(node, project) generation counter. The routes (Tasks 6 and 7) build
 // one of each per node in `composeDocs`, never at module scope, and join a flight BEFORE a lane (refinement (k)).
 //
-// Ring (M7.10; the ring guard in `single-definition.test.ts`): this file owns timers and DECIDES NOTHING. Whether
-// the head job is admitted is L1's `laneAdmit`; every bound, wait and busy body is an L1 constant or `docsBusyBody`.
-// What stays here is bookkeeping: the counters `laneAdmit` reads, the FIFO, the timers, the listeners. A running
+// Ring (M7.10; the ring guard in `single-definition.test.ts`): this file owns timers and DECIDES NOTHING. L1
+// decides whether the read lane's head job is admitted (`laneAdmit`), whether a fetch job starts, waits behind its
+// key or finds the lane full (`fetchAdmit`), whether either lane's queue has overflowed (`laneOverflow`) and which
+// job is large (`laneLarge`); every wait and busy body is an L1 constant or `docsBusyBody`. What stays here is
+// bookkeeping: the counters `laneAdmit` reads, the FIFOs, the timers, the listeners. A running
 // exec is never cancelled (the agent has no cancel op, section 6.3): abandonment only ever removes a job that has
 // not started.
 import type { DocsFailureBody } from '../../../shared/docs.js';
 import {
-  DOCS_FETCH_GLOBAL, DOCS_FETCH_MAX_WAIT_MS, DOCS_FETCH_QUEUE, DOCS_LANE_LARGE_RAW, DOCS_LANE_MAX_WAIT_MS,
-  DOCS_LANE_QUEUE, docsBusyBody, laneAdmit, type DocsJob, type DocsLaneName, type LaneLoad,
+  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneLarge, laneOverflow,
+  type DocsJob, type DocsLaneName, type LaneLoad,
 } from './policy.js';
 
 /**
@@ -69,7 +71,7 @@ interface ReadWaiter {
 
 /**
  * A read lane (section 6.3). A job starts at once only when the FIFO is empty and `laneAdmit` admits it; else it
- * queues (or is `busy` when `DOCS_LANE_QUEUE` jobs already wait). Only the HEAD is ever considered, so a large job
+ * queues (or is `busy` when `laneOverflow` says `DOCS_LANE_QUEUE` jobs already wait). Only the HEAD is ever considered, so a large job
  * cannot starve. Every settle of a running exec releases its share exactly once (in `finally`) and pumps; so does a
  * queued job leaving, since the job behind it may now admit.
  */
@@ -77,8 +79,6 @@ export function docsReadLane(): DocsReadLane {
   const load: LaneLoad = { execs: 0, bytes: 0, large: 0 };
   const queue: ReadWaiter[] = [];
   let closed = false;
-
-  const isLarge = (job: DocsJob): boolean => job.raw > DOCS_LANE_LARGE_RAW;
 
   /** Detach a waiter from its timer and its signal (on admission, expiry, abandonment or close). */
   const detach = (w: ReadWaiter): void => {
@@ -108,14 +108,14 @@ export function docsReadLane(): DocsReadLane {
   const release = (job: DocsJob): void => {
     load.execs -= 1;
     load.bytes -= job.wire;
-    if (isLarge(job)) load.large -= 1;
+    if (laneLarge(job)) load.large -= 1;
     pump();
   };
 
   async function running<T>(job: DocsJob, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
     load.execs += 1;
     load.bytes += job.wire;
-    if (isLarge(job)) load.large += 1;
+    if (laneLarge(job)) load.large += 1;
     try {
       return { kind: 'ran', value: await exec() };
     } finally {
@@ -128,7 +128,7 @@ export function docsReadLane(): DocsReadLane {
       if (signal.aborted) return Promise.resolve(ABANDONED);
       if (closed) return Promise.resolve(busy('read'));
       if (queue.length === 0 && laneAdmit(load, job)) return running(job, exec);
-      if (queue.length >= DOCS_LANE_QUEUE) return Promise.resolve(busy('read'));
+      if (laneOverflow('read', queue.length + 1)) return Promise.resolve(busy('read'));
       return new Promise<DocsLaneRun<T>>((resolve) => {
         const w: ReadWaiter = {
           job, signal, timer: undefined,
@@ -168,10 +168,11 @@ interface FetchWaiter {
  * `DOCS_FETCH_GLOBAL` run across keys. One FIFO holds every accepted job that has not started, behind its key or
  * the global bound, and each job's `DOCS_FETCH_MAX_WAIT_MS` runs from acceptance. A new job is queued and pumped
  * FIRST: one the pump starts at once never counts against the queue bound, and one left waiting as the
- * (`DOCS_FETCH_QUEUE` + 1)th job that has not started leaves at once as `busy`, having started nothing (refinement
- * (n): a pre-check on the queue's length would refuse a job on an idle key while a global slot is free).
- * A pump starts, in FIFO order, every job whose key has nothing running while a global slot is free;
- * a job whose key is busy is passed over, never reordered within its key. The per-key serialisation is this FIFO,
+ * (`DOCS_FETCH_QUEUE` + 1)th job that has not started (`laneOverflow`) leaves at once as `busy`, having started
+ * nothing (refinement (n): a pre-check on the queue's length would refuse a job on an idle key while a global slot
+ * is free). A pump starts, in FIFO order, every job `fetchAdmit` says `start` (its key has nothing running while a
+ * global slot is free); a job it says `skip` (its key is busy) is passed over, never reordered within its key, and
+ * `full` ends the pump. The per-key serialisation is this FIFO,
  * not a `KeyedQueue`: `single-definition.test.ts` ("one KeyedQueue for the process") holds the constructor to the
  * composition root, and the process's queue serialises session operations.
  */
@@ -187,8 +188,10 @@ export function docsFetchLane(): DocsFetchLane {
   };
 
   const pump = (): void => {
-    for (let i = 0; i < queue.length && running < DOCS_FETCH_GLOBAL;) {
-      if (runningKeys.has(queue[i].key)) {
+    for (let i = 0; i < queue.length;) {
+      const verdict = fetchAdmit(running, runningKeys.has(queue[i].key));
+      if (verdict === 'full') break;
+      if (verdict === 'skip') {
         i += 1;
         continue;
       }
@@ -241,7 +244,7 @@ export function docsFetchLane(): DocsFetchLane {
         signal.addEventListener('abort', w.onAbort, { once: true });
         queue.push(w);
         pump();
-        if (queue.length > DOCS_FETCH_QUEUE) leave(w, busy('fetch'));
+        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));
       });
     },
     load: () => ({ running, queued: queue.length }),

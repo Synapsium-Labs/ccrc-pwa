@@ -1828,3 +1828,38 @@ describe('FR1 review F4: the tree shape guard refuses a non-finite attemptAgeMs 
     expect(JSON.parse('{"attemptAgeMs":1e999}').attemptAgeMs).toBe(Infinity);
   });
 });
+
+import { fetchAdmit, laneLarge, laneOverflow } from '../src/docs/policy.js';
+
+describe('FR1 review F8: lane verdicts are L1\'s', () => {
+  it.each([
+    [DOCS_LANE_LARGE_RAW - 1, false],
+    [DOCS_LANE_LARGE_RAW, false],
+    [DOCS_LANE_LARGE_RAW + 1, true],
+  ])('laneLarge: raw %i is large=%s (exactly at the bound is not large)', (raw, large) => {
+    expect(laneLarge({ raw, wire: 0 })).toBe(large);
+  });
+
+  it.each([
+    ['read', DOCS_LANE_QUEUE - 1, false],
+    ['read', DOCS_LANE_QUEUE, false],
+    ['read', DOCS_LANE_QUEUE + 1, true],
+    ['fetch', DOCS_FETCH_QUEUE - 1, false],
+    ['fetch', DOCS_FETCH_QUEUE, false],
+    ['fetch', DOCS_FETCH_QUEUE + 1, true],
+  ] as const)('laneOverflow: the %s lane with %i waiting overflows=%s', (lane, waiting, over) => {
+    expect(laneOverflow(lane, waiting)).toBe(over);
+  });
+
+  it.each([
+    [0, false, 'start'],
+    [0, true, 'skip'],
+    [DOCS_FETCH_GLOBAL - 1, false, 'start'],
+    [DOCS_FETCH_GLOBAL - 1, true, 'skip'],
+    [DOCS_FETCH_GLOBAL, false, 'full'],
+    [DOCS_FETCH_GLOBAL, true, 'full'],
+    [DOCS_FETCH_GLOBAL + 1, true, 'full'],
+  ] as const)('fetchAdmit: %i running, key running=%s is %s (full wins over skip)', (running, keyRunning, word) => {
+    expect(fetchAdmit(running, keyRunning)).toBe(word);
+  });
+});
