@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2645cd31de43095159d725c0d519ec5615e77165cc2cb0fac4c3a45ed3a711b2
+# ccrc:generated 1 sha256=e46bc0af5f9144cc34dc24c593a2edbe6b768440a1f3af3e89f5eb1474c35bb7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31820,6 +31820,102 @@ _ws_collect_move() {   # src dst dev:ino btime -> 0 PROVEN moved: dst is that di
   fi
   _WS_MOVE_WHY="neither $dst nor $src is the directory $want after the rename (mv exit $mrc${err:+: ${err%%$'\n'*}})"
   return 2
+}
+
+WS_COLLECT_IDLE_SCAN_S=30     # bound on one leaf's idle walk (departure idle-walk-bound-30s: with the in-use probe's 10 s and the
+                              # checkout scan's 30 s, the audit fits ws-audit's 90 s runner row; measured 2026-10-08: the largest
+                              # live leaf, 76,915 entries, in at most 4.8 s). A timeout is unmeasured, and the leaf is retried.
+WS_COLLECT_IDLE_CAP=2000000   # the most entries one walk counts; more is unmeasured
+_WS_IDLE_NEWEST_NS=''; _WS_IDLE_COUNT=''; _WS_IDLE_WHY=''; _WS_IDLE_DETAIL=''; _WS_IDLE_LEAF=''
+_ws_collect_idle() {   # leaf -> 0 with _WS_IDLE_NEWEST_NS = the newest CTIME under leaf, leaf included, in epoch ns,
+  #                       _WS_IDLE_COUNT = the entries walked, leaf included, and _WS_IDLE_LEAF = leaf; 2 unmeasured,
+  #                       _WS_IDLE_WHY one word of `timeout`, `unreadable`, `cap` or `walk-failed`, _WS_IDLE_DETAIL why
+  # CTIME ONLY (spec §5.10). mtime is user-settable — a future one would hold a
+  # leaf for ever — and every change that moves it stamps ctime too: a write, a
+  # create, a delete, a rename, a chmod, a utimensat. The walk is GNU `find -P
+  # <leaf> -xdev`: it never follows a link (a link's own ctime is read) and
+  # never crosses a file system. It writes nothing inside the leaf: no pass
+  # before it makes anything readable, so an unreadable entry is unmeasured,
+  # said in its own word, and never normalised here. Bounded by
+  # `WS_COLLECT_IDLE_SCAN_S` and `WS_COLLECT_IDLE_CAP`. The newest value is
+  # kept as two exact integers, seconds then nanoseconds, never one float.
+  local LC_ALL=C leaf="${1-}" errf res tail err frc arc
+  _WS_IDLE_NEWEST_NS=''; _WS_IDLE_COUNT=''; _WS_IDLE_WHY=''; _WS_IDLE_DETAIL=''; _WS_IDLE_LEAF=''
+  if [[ "$CCD_OS" == darwin ]]; then
+    _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="the idle walk is GNU find's, and this box is Darwin"; return 2
+  fi
+  [[ -d "$leaf" && ! -L "$leaf" ]] \
+    || { _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="$leaf is not a real directory, so it was not walked"; return 2; }
+  errf=$(_plat_mktemp) || { _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="could not make a scratch file to walk $leaf"; return 2; }
+  res=$(LC_ALL=C _plat_timeout "$WS_COLLECT_IDLE_SCAN_S" find -P "$leaf" -xdev -printf '%C@\n' 2>"$errf" \
+        | LC_ALL=C awk -v cap="$WS_COLLECT_IDLE_CAP" '
+            { if (++n > cap) { over = 1; exit }
+              if ($0 !~ /^[0-9]+[.][0-9]+$/) { bad = 1; exit }
+              i = index($0, ".")
+              s = substr($0, 1, i - 1) + 0
+              f = substr(substr($0, i + 1) "000000000", 1, 9) + 0
+              if (n == 1 || s > ms || (s == ms && f > mf)) { ms = s; mf = f } }
+            END { if (over) exit 3
+                  if (bad || n == 0) exit 4
+                  printf "%d %.0f%09d\n", n, ms, mf }'
+        printf '\nrc %s %s' "${PIPESTATUS[0]}" "${PIPESTATUS[1]}")
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  tail="${res##*$'\n'}"; res="${res%$'\n'*}"; res="${res%$'\n'}"
+  read -r _ frc arc <<< "$tail"
+  if [[ "$arc" == 3 ]]; then
+    _WS_IDLE_WHY=cap; _WS_IDLE_DETAIL="$leaf holds more than $WS_COLLECT_IDLE_CAP entries, so its newest change was never found"; return 2
+  fi
+  if [[ "$frc" == 124 ]]; then
+    _WS_IDLE_WHY=timeout; _WS_IDLE_DETAIL="the walk of $leaf did not finish within ${WS_COLLECT_IDLE_SCAN_S}s"; return 2
+  fi
+  if [[ "$frc" != 0 || -n "$err" ]]; then
+    if [[ "$err" == *"Permission denied"* ]]; then _WS_IDLE_WHY=unreadable; else _WS_IDLE_WHY=walk-failed; fi
+    _WS_IDLE_DETAIL="could not read all of $leaf (find exit $frc${err:+: ${err%%$'\n'*}}), so a change under what it could not read was never seen"
+    return 2
+  fi
+  [[ "$arc" == 0 && "$res" =~ ^([1-9][0-9]*)\ ([0-9]{1,19})$ ]] \
+    || { _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="the walk of $leaf printed what is not a change time (awk exit $arc)"; return 2; }
+  _WS_IDLE_COUNT="${BASH_REMATCH[1]}"; _WS_IDLE_NEWEST_NS="${BASH_REMATCH[2]}"; _WS_IDLE_LEAF="$leaf"
+  return 0
+}
+
+_ws_collect_floor_s() {   # -> the idle floor, whole seconds: 86400 (24 h, spec §5.10), or WS_COLLECT_IDLE_FLOOR_S when it
+  #                          is a whole number ABOVE that. The knob only RAISES the floor. This is the floor's ONE
+  #                          definition (ruling G4): the only test-only seam that lowers it is a sourced harness
+  #                          redefining this function (`_ws_collect_floor_s() { echo 0; };`), never the knob
+  local b=86400 o="${WS_COLLECT_IDLE_FLOOR_S-}"
+  if [[ "$o" =~ ^[0-9]{1,9}$ ]] && (( 10#$o > b )); then b=$(( 10#$o )); fi
+  printf '%s' "$b"
+}
+_ws_collect_floor_held() {   # newest-ns -> 0 when the clock is at least the floor past it; 1 when not yet (a clock
+  #                              stepped backwards only delays it); 2 when the input or the clock cannot be read
+  local nw="${1-}" now fl
+  [[ "$nw" =~ ^[0-9]{1,19}$ ]] || return 2
+  now=$(_ws_collect_now_ns) && [[ "$now" =~ ^[1-9][0-9]{9,18}$ ]] || return 2
+  fl=$(_ws_collect_floor_s)
+  (( 10#$now - 10#$nw >= fl * 1000000000 )) || return 1
+  return 0
+}
+
+_ws_collect_token() {   # id -> the collector's token on stdout; rc 2, nothing printed, when an input was not measured
+  # THE CONSENT (spec §5.10), in `_ws_reclaim_fingerprint`'s encoding: named
+  # key=value inputs, `mode=collect` first, so it never equals a reclaim, an
+  # expiry or a resume token. It binds the id; the witness the caller read last
+  # (`_ws_tmproot_witness_read <id>`: dev, ino, btime, run, at); and the walk the
+  # caller made last (`_ws_collect_idle` of the leaf named `<id>`: the newest
+  # ctime in ns and the entry count). Any change under the leaf stamps a ctime,
+  # and a re-witness changes run or at, so either mints another token. An
+  # unmeasured input — an empty field, a `-` birth time, a walk of another leaf —
+  # mints NOTHING.
+  local LC_ALL=C id="${1-}"
+  _ws_tmproot_id_ok "$id" || return 2
+  [[ "${_WS_WIT_DEV-}" =~ ^[0-9]+$ && "${_WS_WIT_INO-}" =~ ^[0-9]+$ && "${_WS_WIT_BTIME-}" =~ ^[1-9][0-9]*$ \
+     && "${_WS_WIT_AT-}" =~ ^[0-9]{13}$ ]] || return 2
+  _child_runid_valid "${_WS_WIT_RUN-}" || return 2
+  [[ "${_WS_IDLE_NEWEST_NS-}" =~ ^[0-9]{1,19}$ && "${_WS_IDLE_COUNT-}" =~ ^[1-9][0-9]*$ \
+     && "${_WS_IDLE_LEAF-}" == */"$id" ]] || return 2
+  _ws_reclaim_fingerprint "mode=collect" "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" "btime=$_WS_WIT_BTIME" \
+    "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT" "newestCtimeNs=$_WS_IDLE_NEWEST_NS" "entries=$_WS_IDLE_COUNT"
 }
 # ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
