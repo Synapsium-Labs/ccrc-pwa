@@ -107,11 +107,18 @@ export function realMounts(h: PrHarness): void {
 export const holderAt = (body: string, ready: string): string =>
   `( ( exec {lfd}>&-; ${body} ) </dev/null >/dev/null 2>&1 & echo $! > "$HOME/holder.pid" );`
   + ` for _ in $(seq 100); do _hp=$(cat "$HOME/holder.pid"); ${ready} && break; sleep 0.05; done`;
-/** Kills the holder `holderAt` started, if one is still running. */
+/** Kills the holder `holderAt` started, if one is still running — and ONLY it: the pid is killed only while
+ *  `/proc/<pid>/cmdline` still names the holder's `sleep 30`, so a pid the kernel reused for another process of this
+ *  uid is never signalled. */
 export function killHolder(h: PrHarness): void {
   const p = path.join(h.home, 'holder.pid');
   if (!fs.existsSync(p)) return;
-  try { process.kill(Number(fs.readFileSync(p, 'utf8').trim()), 'SIGKILL'); } catch { /* gone */ }
+  const pid = Number(fs.readFileSync(p, 'utf8').trim());
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  let argv: string[];
+  try { argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { return; /* gone */ }
+  if (path.basename(argv[0] ?? '') !== 'sleep' || argv[1] !== '30') return;
+  try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
 }
 
 const floor = (o: { floor?: boolean }): string => (o.floor === false ? '' : IDLE_FLOOR_SEAM);

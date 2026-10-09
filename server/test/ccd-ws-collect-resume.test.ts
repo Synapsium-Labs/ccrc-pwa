@@ -69,6 +69,20 @@ describe.skipIf(!LINUX)('a run that died resumes FROM ITS RECORD', () => {
     expect(docOf(collectVerb(h, collectToken(h)).stdout)).toMatchObject({ collected: COL_ID, resumed: false });
   });
 
+  it('died before the move, then a slot or record that cannot be cleared: failed quarantine-kept — the record KEPT, the leaf and its witness where they were', () => {
+    const o = makeOrphan(h);
+    expect(collectVerb(h, collectToken(h), { pre: crashAt('slotted') }).code).toBe(137);
+    const nodrop = "_ws_collect_record_drop() { _WS_QREC_WHY='stub: not proven gone'; return 2; };";
+    const r = collectVerb(h, collectToken(h), { pre: nodrop });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: the leaf never left /);
+    expect(records(h), 'the record, kept').toHaveLength(1);
+    expect(inoAt(o.leaf), 'the leaf, where it was').toBe(o.ino);
+    expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
+  });
+
   for (const [point, witness] of [['removed', 'dropped'], ['emptied', 'dropped'], ['witnessed', 'absent']] as const) {
     it(`died at ${point}: the order finishes from there — witness ${witness}, the record last`, () => {
       makeOrphan(h);

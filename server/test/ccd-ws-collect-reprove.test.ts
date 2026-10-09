@@ -4,12 +4,13 @@
 // FIXTURE HOME ONLY. A case that narrows `$REG`'s mode restores it in `finally`; a case that starts a real process
 // kills it in `finally`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import {
-  COL_ID, MOUNTS_SEAM, PROBE_STUB, ROWS_CLEAR, ROWS_STUB, collectToken, collectVerb, docOf, gapAt, holderAt, inoAt,
+  COL_ID, MOUNTS_SEAM, PROBE_STUB, ROWS_CLEAR, ROWS_STUB, collectAudit, collectToken, collectVerb, docOf, gapAt, holderAt, inoAt,
   killHolder, leafOf, linesOf, makeOrphan, origOf, quarantineOf, realMounts, records, regOf, slots, witnessOf,
   type Orphan,
 } from './wsCollectFixture.js';
@@ -243,18 +244,20 @@ describe.skipIf(!LINUX)('(f) — identity, asked LAST, directly before the remov
     journaled('refused', 'quarantine-kept');
   });
 
-  it('the slot’s leaf GONE after the move is no swap: failed quarantine-kept at exit 1, the record and slot kept — and the next pass finishes from them', () => {
+  it('the slot’s leaf GONE after the move is no swap: failed probe-unmeasured at exit 1, nothing moved back, the record and slot standing — and the next pass finishes from them', () => {
     // `_ws_collect_ident`'s rc 1 is also "nothing stands, PROVEN". A leaf that left its slot is not something else
-    // standing there, so it is never the terminal refusal: the record stays, and its next pass reads the phase
-    // `removed` off the disk and finishes the order.
+    // standing there, and there is nothing to move back: no restore is tried, the word is the resume's own for the
+    // same vanish, and the next pass reads the phase `removed` off the disk and finishes the order.
     makeOrphan(h);
     const r = collectVerb(h, collectToken(h), { pre: gapAt('moved', 'rm -rf -- "$3/leaf"') });
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const doc = docOf(r.stdout);
-    expect(doc['failed']).toBe('quarantine-kept');
-    expect(String(doc['detail'])).toContain('vanished');
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toMatch(/^the record and its slot stand, and nothing was moved back or removed: .*vanished/);
     expect(records(h)).toHaveLength(1);
-    journaled('failed', 'quarantine-kept');
+    expect(fs.readdirSync(path.join(quarantineOf(h), slots(h)[0]!)), 'the slot stands, empty').toEqual([]);
+    expect(fs.existsSync(leafOf(h)), 'nothing was moved back').toBe(false);
+    journaled('failed', 'probe-unmeasured');
     const r2 = collectVerb(h, collectToken(h));
     expect(r2.code, r2.stdout + r2.stderr).toBe(0);
     expect(docOf(r2.stdout)).toMatchObject({ collected: COL_ID, resumed: true, witness: 'dropped' });
@@ -264,6 +267,38 @@ describe.skipIf(!LINUX)('(f) — identity, asked LAST, directly before the remov
 });
 
 describe.skipIf(!LINUX)('the record, re-read after the move as the authority', () => {
+  it('a record PROVEN gone after the move (the reader’s rc 1): failed quarantine-kept, the leaf kept in its slot — and the next audit refuses that slot as the operator’s', () => {
+    // Only an actor that does not take the reap lock removes a record. The leaf stays in its slot, nothing is moved
+    // back or removed, and with no record naming the slot the next audit answers it TERMINAL, the witness kept.
+    const o = makeOrphan(h);
+    const r = collectVerb(h, collectToken(h), { pre: gapAt('moved', 'rm -f -- "$REG/tmpquarantine/${3##*/slot.}"') });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toMatch(/^the leaf stays in its slot .*: its quarantine record .* vanished after the move$/);
+    expect(inoAt(slotLeaf()), 'the leaf, still in its slot').toBe(o.ino);
+    expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
+    journaled('failed', 'quarantine-kept');
+    const audit = JSON.parse(collectAudit(h).stdout.trim().split('\n').pop()!) as Record<string, unknown>;
+    expect(audit['verdict'], 'a slot with no record is the operator’s').toBe('quarantine-kept');
+    expect(inoAt(slotLeaf())).toBe(o.ino);
+    expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
+  });
+
+  it('a record that no longer reads as ccd writes it after the move (the reader’s rc 2): failed quarantine-kept, the record and the leaf kept in its slot', () => {
+    const o = makeOrphan(h);
+    const r = collectVerb(h, collectToken(h),
+      { pre: gapAt('moved', 'printf \'v=1 junk\\n\' > "$REG/tmpquarantine/${3##*/slot.}"') });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: .*could not be read back after the move$/);
+    expect(records(h)).toHaveLength(1);
+    expect(inoAt(slotLeaf()), 'the leaf, still in its slot').toBe(o.ino);
+    expect(fs.existsSync(o.leaf)).toBe(false);
+    journaled('failed', 'quarantine-kept');
+  });
+
   it('a re-read whose slot cannot be derived (the reader’s rc 3, ruling R-a): failed probe-unmeasured — the record and its slot stand, nothing moved or removed', () => {
     const o = makeOrphan(h);
     const unresolved = gapAt('moved', "_ws_collect_record_read() { _WS_QPATH_WHY='stub: ~/.cc-tmp cannot be resolved'; return 3; }");
@@ -323,5 +358,25 @@ describe.skipIf(!LINUX)('the restore — NOREPLACE, proven by lstat, or the reco
     expect(inoAt(o.leaf), 'the leaf itself did go back').toBe(o.ino);
     expect(fs.readFileSync(path.join(quarantineOf(h), slots(h)[0]!, 'stray'), 'utf8')).toBe('s');
     expect(records(h)).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!LINUX)('the test holder is killed only while it is the holder', () => {
+  it('`killHolder` signals the pid in holder.pid only while its cmdline is `sleep 30`: a reused pid is never killed', async () => {
+    const other = spawn('sleep', ['31'], { stdio: 'ignore' });
+    const holder = spawn('sleep', ['30'], { stdio: 'ignore' });
+    const holderExit = new Promise<string | null>((res) => { holder.once('exit', (_c, sig) => res(sig)); });
+    try {
+      await new Promise((r) => { setTimeout(r, 200); });
+      fs.writeFileSync(path.join(h.home, 'holder.pid'), `${other.pid}\n`);
+      killHolder(h);
+      fs.writeFileSync(path.join(h.home, 'holder.pid'), `${holder.pid}\n`);
+      killHolder(h);
+      expect(await holderExit, 'the holder itself is killed').toBe('SIGKILL');
+      expect([other.exitCode, other.signalCode], 'another process under the recorded pid is left alone').toEqual([null, null]);
+    } finally {
+      other.kill('SIGKILL'); holder.kill('SIGKILL');
+      fs.rmSync(path.join(h.home, 'holder.pid'), { force: true });
+    }
   });
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c365018072a330c867ab7a1b83954c0aa8f0a48f8970816ca3f66f691d0b8c17
+# ccrc:generated 1 sha256=d46a87277dff6ee7169d25978605932ac5c26f254b00c385ef1f2ae4dde0c096
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29520,7 +29520,9 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
   # - A LINK OR FILE LEAF is unlinked with `rm -f --`, never followed: `-L` is
   #   asked first, so a link's target, wherever it points, is untouched. Such a
   #   leaf is what `_child_tmpdir`'s rc 2 leaves in place; kept, a recycled
-  #   slug would meet it on every spawn.
+  #   slug would meet it on every spawn. A COLLECTOR'S call (an alias passed)
+  #   never unlinks one: its leaf is the recorded directory and nothing else,
+  #   so a link or file there is refused (1), untouched (spec §5.10).
   # - A DIRECTORY LEAF goes only when it is this uid's own (`_ws_leaf_uid`,
   #   `ls -dn`, never follows it), its dev:ino is the one the caller recorded
   #   (when the caller names one), it is not a mount of another file system, and
@@ -29606,6 +29608,8 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
   [[ -n "$rroot" && "$rroot" != / ]] || { _WS_LEAF_WHY="$root resolved to an unusable path"; return 2; }
   leaf="${rroot%/}/$id"
   if [[ -L "$leaf" || ( -e "$leaf" && ! -d "$leaf" ) ]]; then
+    [[ -z "$alias" ]] \
+      || { _WS_LEAF_WHY="$leaf is a link or not a directory, never the recorded one, so it was not unlinked"; return 1; }
     err=$(rm -f -- "$leaf" 2>&1) \
       || { _WS_LEAF_WHY="$leaf could not be unlinked: $(printf '%s' "${err:-rm said nothing}" | head -1)"; return 2; }
   elif [[ -d "$leaf" ]]; then
@@ -32126,7 +32130,9 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # A probe that cannot answer ends it at its rung as `unmeasured`, and names
 # itself in `collect.unmeasured`. A witness whose leaf is PROVEN absent, with
 # no record standing, is collectable at once with a token of its own: the verb
-# then drops the witness, and nothing else (spec §5.10, "no orphaned slot").
+# then drops the witness, and nothing else (spec §5.10, "no orphaned slot") —
+# unless a quarantine slot of the id stands, which with no record naming it is
+# the operator's (`quarantine-kept`), and the witness stays beside it.
 #
 # THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
 # `collectable` MEANS a token, spelled through `_json_str` as the other audits'
@@ -32220,6 +32226,46 @@ _ws_collect_registered() {   # id -> 0 when no registry row stands for id; 1 whe
   return 1
 }
 
+_WS_QSLOTS=(); _WS_QSLOTS_WHY=''
+_ws_collect_slots_of() {   # id -> 0 with _WS_QSLOTS = the path of every quarantine slot named for id EXACTLY (none
+  #                             when the quarantine, or ~/.cc-tmp itself, is PROVEN absent); 2 (_WS_QSLOTS_WHY) when
+  #                             the quarantine could not be listed
+  # EXACT PARSE, NEVER A PREFIX: a slot's name less `slot.` and less its two
+  # trailing all-digit fields (`_ws_collect_rec_id`, the record's own grammar)
+  # must be the id. Ids admit dots, so `slot.<id>.*` would also match a nested
+  # id's slot (`<id>.v2-quiet-river`). A quarantine that is a link, is not a
+  # directory, or cannot be listed answers 2, never "no slot". Reads only.
+  local LC_ALL=C id="${1-}" q outf errf err rc n
+  _WS_QSLOTS=(); _WS_QSLOTS_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_QSLOTS_WHY="'$id' is not an id a slot is named for"; return 2; }
+  _ws_reclaim_absent "$HOME/.cc-tmp"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_QSLOTS_WHY="$_WS_ABSENT_WHY — whether a quarantine slot of $id stands was never asked"; return 2; }
+  _ws_collect_qpath || { _WS_QSLOTS_WHY="$_WS_QPATH_WHY — whether a quarantine slot of $id stands was never asked"; return 2; }
+  q="$_WS_QPATH"
+  [[ ! -L "$q" ]] || { _WS_QSLOTS_WHY="$q is a link, which is never followed, so whether a quarantine slot of $id stands was never asked"; return 2; }
+  _ws_reclaim_absent "$q"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_QSLOTS_WHY="$_WS_ABSENT_WHY — whether a quarantine slot of $id stands was never asked"; return 2; }
+  [[ -d "$q" ]] || { _WS_QSLOTS_WHY="$q is not a directory, so whether a quarantine slot of $id stands was never asked"; return 2; }
+  outf=$(_plat_mktemp) || { _WS_QSLOTS_WHY="could not make a scratch file to list $q"; return 2; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_QSLOTS_WHY="could not make a scratch file to list $q"; return 2; }
+  find -P "$q" -mindepth 1 -maxdepth 1 -name 'slot.*' -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$outf"
+    _WS_QSLOTS_WHY="could not list $q (find exit $rc${err:+: ${err%%$'\n'*}}), so whether a quarantine slot of $id stands was never asked"
+    return 2
+  fi
+  while IFS= read -r -d '' n; do
+    n="${n##*/}"
+    _ws_collect_rec_id "${n#slot.}" && [[ "$_WS_REC_ID" == "$id" ]] || continue
+    _WS_QSLOTS+=("$q/$n")
+  done < "$outf"
+  rm -f "$outf"
+  return 0
+}
+
 _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP_TOKEN), a word, or `unmeasured`
   #                        (_WS_COLLECT_PROBE). The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
   local id="$1" leaf="$HOME/.cc-tmp/$1" rc floor why=walk-failed
@@ -32235,8 +32281,15 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
   if (( rc == 0 )); then
     # A WITNESS WITH NO LEAF (and the fork found no record of the id): nothing
-    # to walk, probe or remove; the verb drops the witness, compared first.
+    # to walk, probe or remove; the verb drops the witness, compared first —
+    # unless a quarantine slot of the id stands. With no record naming it, that
+    # slot (which may hold the leaf) is the operator's: TERMINAL, and the
+    # witness stays beside it, so the slot is never orphaned in silence.
     _WS_COLLECT_LEAF=absent
+    _ws_collect_slots_of "$id"; rc=$?
+    (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
+    (( ${#_WS_QSLOTS[@]} == 0 )) \
+      || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
     _ws_collect_paused || return 1
     REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-absent "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" \
       "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT")
@@ -32622,7 +32675,8 @@ _ws_collect_mounts_clear() {   # dir -> 0 when no mount point is at dir or under
 
 _WS_REPROVE_WORD=''; _WS_REPROVE_WHY=''
 _ws_collect_reprove() {   # id slotleaf dev:ino btime -> 0 when every proof after the move holds; 1 one answered a
-  #                            doubt (_WS_REPROVE_WORD, _WS_REPROVE_WHY); 2 one could not be asked (_WS_REPROVE_WHY)
+  #                            doubt (_WS_REPROVE_WORD, _WS_REPROVE_WHY); 2 one could not be asked (_WS_REPROVE_WHY);
+  #                            3 the slot's leaf is PROVEN gone (_WS_REPROVE_WHY): nothing there to move back or remove
   # STEP 5 (spec §5.10), never the tree token or the idle floor (the move
   # stamped the leaf's ctime). Identity is asked LAST, so the removal that
   # follows runs directly after an lstat of the slot's leaf in this lock.
@@ -32659,15 +32713,16 @@ _ws_collect_reprove() {   # id slotleaf dev:ino btime -> 0 when every proof afte
   # (f) LAST: the slot's leaf is still the witnessed one. What is not is never
   # moved back to the id's path: the caller KEEPS it (ruling T8 OPEN5). An rc 1
   # is also "nothing stands, PROVEN": a leaf that left its slot is no foreign
-  # object in it, so that is unmeasured, and the record finishes it later.
+  # object in it, and there is nothing to move back, so that is its own answer
+  # (3), the retry the resume's identity check answers too; the record finishes it.
   _ws_collect_ident "$sl" "$want" "$bt"; rc=$?
   (( rc != 0 )) || return 0
   (( rc != 2 )) || { _WS_REPROVE_WHY="the identity of $sl could not be read"; return 2; }
   _ws_reclaim_absent "$sl"; rc=$?
-  (( rc != 0 )) || { _WS_REPROVE_WHY="the witnessed leaf moved to $sl vanished from its slot, so there is nothing there to move back or remove"; return 2; }
+  (( rc != 0 )) || { _WS_REPROVE_WHY="the witnessed leaf vanished from its slot, so there is nothing there to move back or remove ($sl)"; return 3; }
   (( rc != 2 )) || { _WS_REPROVE_WHY="$_WS_ABSENT_WHY"; return 2; }
   _WS_REPROVE_WORD=quarantine-kept
-  _WS_REPROVE_WHY="$sl is not the witnessed directory $want born $bt — something else stands in the slot"
+  _WS_REPROVE_WHY="the slot's leaf is not the witnessed directory $want born $bt: something else stands at $sl"
   return 1
 }
 
@@ -32689,7 +32744,7 @@ _ws_collect_keep() {   # id rec lctx why -> journals and prints the failure that
   # further in the record or its slot is removed here, and no session acts on
   # one (spec §5.10). Its next pass resumes from it, or refuses it.
   _ws_reclaim_fail "$1" "$3" quarantine-kept \
-    "$(_ws_leaf_why_line "$4 — the quarantine record ${2##*/} is kept, with its slot where it stands; nothing further in either was removed")"
+    "$(_ws_leaf_why_line "the quarantine record ${2##*/} is kept, and nothing further was removed: $4")"
 }
 
 _ws_collect_putback() {   # id slot rec orig lctx why surface actor reason -> 0 when the slot's leaf is back at orig,
@@ -32707,17 +32762,17 @@ _ws_collect_putback() {   # id slot rec orig lctx why surface actor reason -> 0 
   _ws_collect_move "$slot/leaf" "$orig" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; mrc=$?
   if (( mrc == 0 )); then
     _ws_collect_unwind "$slot" "$rec" && return 0
-    _ws_collect_keep "$id" "$rec" "$lctx" "$why — $id is back at $orig, but its slot $slot or its record could not be cleared"
+    _ws_collect_keep "$id" "$rec" "$lctx" "$id is back at $orig, but its slot or its record could not be cleared after: $why"
     return 1
   fi
   if (( mrc == 1 )); then _ws_reclaim_absent "$orig"; arc=$?; fi
   if (( mrc == 1 && arc == 1 )); then
     _ws_collect_refused "$id" "$lctx" quarantine-kept \
-      "$why — and $orig was taken again since the move, so the leaf cannot go back: it is kept in $slot with the quarantine record ${rec##*/}, listed for the operator; nothing was removed" \
+      "kept in its slot with the quarantine record ${rec##*/}, listed for the operator, and nothing was removed: $orig was taken again since the move, so the leaf cannot go back, after: $why" \
       "$7" "$8" "$9"
     return 2
   fi
-  _ws_collect_keep "$id" "$rec" "$lctx" "$why — and what $slot/leaf holds could not be proven back at $orig${_WS_MOVE_WHY:+ ($_WS_MOVE_WHY)}"
+  _ws_collect_keep "$id" "$rec" "$lctx" "what the slot's leaf holds could not be proven back at $orig, after: $why${_WS_MOVE_WHY:+ ($_WS_MOVE_WHY)}"
   return 1
 }
 
@@ -32814,7 +32869,7 @@ _ws_collect_witness_only() {   # id surface actor reason — a witness whose lea
     detail "$(_ws_leaf_why_line "no leaf stands at $HOME/.cc-tmp/$id: dropping its witness")" \
     dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
   _ws_collect_witness_cad "$id" "${_WS_WIT_DEV-}" "${_WS_WIT_INO-}" "${_WS_WIT_BTIME-}" "${_WS_WIT_RUN-}" "${_WS_WIT_AT-}" \
-    || { _ws_reclaim_fail "$id" "$lctx" probe-unmeasured "$(_ws_leaf_why_line "the witness of $id, whose leaf is gone, could not be compared and dropped: $_WS_CAD_WHY — nothing was removed")"; return 1; }
+    || { _ws_reclaim_fail "$id" "$lctx" probe-unmeasured "$(_ws_leaf_why_line "nothing was removed: the witness of $id, whose leaf is gone, could not be compared and dropped: $_WS_CAD_WHY")"; return 1; }
   _ws_collect_gap witnessed "$id"
   _ws_collect_reap_temps "$id"
   _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "" \
@@ -32827,7 +32882,7 @@ _ws_collect_finish() {   # id rec slot lctx resumed — the order (spec §5.10),
   local id="$1" rec="$2" slot="$3" lctx="$4" resumed="$5" rc cad
   # the slot's leaf, PROVEN gone
   _ws_reclaim_absent "$slot/leaf"; rc=$?
-  (( rc == 0 )) || { _ws_collect_keep "$id" "$rec" "$lctx" "$slot/leaf is not proven gone${_WS_ABSENT_WHY:+ ($_WS_ABSENT_WHY)}"; return 1; }
+  (( rc == 0 )) || { _ws_collect_keep "$id" "$rec" "$lctx" "the slot's leaf is not proven gone${_WS_ABSENT_WHY:+ ($_WS_ABSENT_WHY)}"; return 1; }
   # the EMPTY slot, by rmdir — never a recursive remove: what else it holds is not this verb's
   _ws_reclaim_absent "$slot"; rc=$?
   if (( rc == 1 )); then
@@ -32835,7 +32890,7 @@ _ws_collect_finish() {   # id rec slot lctx resumed — the order (spec §5.10),
     _ws_reclaim_absent "$slot"; rc=$?
   fi
   (( rc == 0 )) \
-    || { _ws_collect_keep "$id" "$rec" "$lctx" "the slot $slot could not be removed empty: it holds something this verb did not put there, or could not be looked at"; return 1; }
+    || { _ws_collect_keep "$id" "$rec" "$lctx" "the slot could not be removed empty: it holds something this verb did not put there, or could not be looked at ($slot)"; return 1; }
   _ws_collect_gap emptied "$id" "$slot"
   # the witness, compared and dropped
   _ws_collect_witness_cad "$id" "${_WS_QREC_DEV-}" "${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}" "${_WS_QREC_RUN-}" "${_WS_QREC_AT-}" \
@@ -32866,7 +32921,15 @@ _ws_collect_after_move() {   # id rec orig lctx resumed surface actor reason —
   _ws_collect_record_read "$rec"; rc=$?
   if (( rc == 3 )); then
     _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
-      "$(_ws_leaf_why_line "the quarantine record $name could not be read back after the move: ${_WS_QPATH_WHY:-the physical $HOME/.cc-tmp could not be resolved} — the record and its slot stand; nothing was moved back or removed")"
+      "$(_ws_leaf_why_line "the record and its slot stand, and nothing was moved back or removed: the quarantine record $name could not be read back after the move: ${_WS_QPATH_WHY:-the physical $HOME/.cc-tmp could not be resolved}")"
+    return 1
+  fi
+  # 1 is the record PROVEN gone since the move: nothing this verb did, and no
+  # record for the next pass to finish from. The leaf stays in its slot, which
+  # the next audit refuses as a slot with no record, the operator's.
+  if (( rc == 1 )); then
+    _ws_reclaim_fail "$id" "$lctx" quarantine-kept \
+      "$(_ws_leaf_why_line "the leaf stays in its slot slot.$name, listed for the operator, and nothing was moved back or removed: its quarantine record $name vanished after the move")"
     return 1
   fi
   (( rc == 0 )) || { _ws_collect_keep "$id" "$rec" "$lctx" "the quarantine record $name could not be read back after the move"; return 1; }
@@ -32875,11 +32938,19 @@ _ws_collect_after_move() {   # id rec orig lctx resumed surface actor reason —
   # PROVEN restore clears the slot and the record. A slot's leaf that is not
   # the witnessed one is never moved back: it is KEPT (ruling T8 OPEN5).
   _ws_collect_reprove "$id" "$slot/leaf" "$dev:$ino" "$bt"; rc=$?
+  # The slot's leaf PROVEN gone (3) is no doubt to move back from: nothing is
+  # there. The record and the slot stand, and the next pass reads the phase
+  # off the disk and finishes the order — the word the resume answers too.
+  if (( rc == 3 )); then
+    _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
+      "$(_ws_leaf_why_line "the record and its slot stand, and nothing was moved back or removed: $_WS_REPROVE_WHY")"
+    return 1
+  fi
   if (( rc != 0 )); then
     why="$_WS_REPROVE_WHY"; word="$_WS_REPROVE_WORD"
     if (( rc == 1 )) && [[ "$word" == quarantine-kept ]]; then
       _ws_collect_refused "$id" "$lctx" quarantine-kept \
-        "$why — it is kept in $slot with the quarantine record $name, listed for the operator; nothing was moved back or removed" \
+        "kept in its slot with the quarantine record $name, listed for the operator, and nothing was moved back or removed: $why" \
         "$surface" "$actor" "$reason"
       return 0
     fi
@@ -32888,10 +32959,10 @@ _ws_collect_after_move() {   # id rec orig lctx resumed surface actor reason —
     (( prc == 0 )) || return 1
     if (( rc == 2 )); then
       _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
-        "$(_ws_leaf_why_line "$why — so $id was moved back to $orig, and nothing was removed")"
+        "$(_ws_leaf_why_line "$id was moved back to $orig and nothing was removed: $why")"
       return 1
     fi
-    _ws_collect_refused "$id" "$lctx" "$word" "$why — so $id was moved back to $orig, and nothing was removed" \
+    _ws_collect_refused "$id" "$lctx" "$word" "$id was moved back to $orig and nothing was removed: $why" \
       "$surface" "$actor" "$reason"
     return 0
   fi
@@ -32913,7 +32984,7 @@ _ws_collect_after_move() {   # id rec orig lctx resumed surface actor reason —
        _ws_collect_putback "$id" "$slot" "$rec" "$orig" "$lctx" "$why" "$surface" "$actor" "$reason"; prc=$?
        (( prc != 2 )) || return 0
        (( prc == 0 )) || return 1
-       _ws_collect_refused "$id" "$lctx" containment-unproven "$why — so $id was moved back to $orig" \
+       _ws_collect_refused "$id" "$lctx" containment-unproven "$id was moved back to $orig and nothing was removed: $why" \
          "$surface" "$actor" "$reason"
        return 0 ;;
     *) # UNMEASURED, and possibly part-removed (an rm that failed part-way):
@@ -32930,7 +33001,7 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
   # bound (`_ws_collect_fork`, in this lock, a moment ago): the record holds exactly those.
   local id="$1" q="$2" orig="$3" lctx="$4" surface="$5" actor="$6" reason="$7"
   local dev="${_WS_WIT_DEV-}" ino="${_WS_WIT_INO-}" bt="${_WS_WIT_BTIME-}" run="${_WS_WIT_RUN-}" at="${_WS_WIT_AT-}" token="${REAP_TOKEN-}"
-  local name slot rec rc why
+  local name slot rec rc why dropped
   # 2 — LSTAT THE LEAF (Task 4's `_ws_collect_ident`): a real directory with
   # the witness's identity. A link, a file or a mismatch is never moved and
   # never unlinked: it is the operator's. NOTHING standing there, PROVEN, is
@@ -32943,16 +33014,16 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
     1) _ws_reclaim_absent "$orig"; rc=$?
        if (( rc == 0 )); then
          _ws_collect_refused "$id" "" state-changed \
-           "$orig, which the evaluation in this lock saw, is gone — nothing was moved; the next audit judges its witness alone" \
+           "nothing was moved, and the next audit judges its witness alone: $orig, which the evaluation in this lock saw, is gone" \
            "$surface" "$actor" "$reason"
          return 0
        fi
-       (( rc != 2 )) || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${_WS_ABSENT_WHY:-whether anything stands at $orig could not be asked} — nothing was moved")"; return 1; }
+       (( rc != 2 )) || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: ${_WS_ABSENT_WHY:-whether anything stands at $orig could not be asked}")"; return 1; }
        _ws_collect_refused "$id" "" witness-mismatch \
-         "$orig is not the real directory its witness names ($dev:$ino, born $bt) — a leaf that is not the witnessed one is never moved and never unlinked; it is the operator's" \
+         "nothing was moved or unlinked, and what stands is the operator's: it is not the real directory its witness names ($dev:$ino, born $bt) — $orig" \
          "$surface" "$actor" "$reason"
        return 0 ;;
-    *) _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "the identity of $orig could not be read — nothing was moved")"; return 1 ;;
+    *) _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: the identity of $orig could not be read")"; return 1 ;;
   esac
   # 3a — THE CHECKOUT QUESTION, of the ORIGINAL path, before anything moves.
   # Anything but 0 stops here; on 0 the accepted pairs it leaves (each outside
@@ -32961,15 +33032,15 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
   _ws_leaf_checkouts "$orig"; rc=$?
   case "$rc" in
     0) : ;;
-    1) _ws_collect_refused "$id" "" containment-unproven "${_WS_CHECKOUTS_WHY-} — nothing was moved" "$surface" "$actor" "$reason"
+    1) _ws_collect_refused "$id" "" containment-unproven "nothing was moved: ${_WS_CHECKOUTS_WHY-}" "$surface" "$actor" "$reason"
        return 0 ;;
-    *) _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${_WS_CHECKOUTS_WHY-} — nothing was moved")"; return 1 ;;
+    *) _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: ${_WS_CHECKOUTS_WHY-}")"; return 1 ;;
   esac
   # 3b — THE RECORD, before the slot and the move: a failed write stops here.
   # The slot is NAMED first, not made (Task 4's `_ws_collect_slot_path`): the
   # record's name is the slot's, less `slot.`, which pairs the two.
   _ws_collect_slot_path "$q" "$id" \
-    || { _ws_reclaim_fail "$id" "" probe-unmeasured "no quarantine slot could be named for $id (its id or the clock could not be used) — nothing was moved"; return 1; }
+    || { _ws_reclaim_fail "$id" "" probe-unmeasured "nothing was moved: no quarantine slot could be named for $id (its id or the clock could not be used)"; return 1; }
   slot="$_WS_SLOT"; name="${_WS_SLOT##*/slot.}"
   rec="$(_ws_collect_qrec_dir)/$name"
   # The writer reads the caller's `_WS_WIT_*`, which carry no id: so this id's
@@ -32978,26 +33049,26 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
   # the consent bound, so a witness rewritten since the evaluation stops here.
   _ws_tmproot_witness_read "$id" || :
   _ws_collect_record_write "$id" "$slot" "$token" \
-    || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "the quarantine record for $id could not be written${_WS_QREC_WHY:+ ($_WS_QREC_WHY)} — nothing was moved")"; return 1; }
+    || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: the quarantine record for $id could not be written${_WS_QREC_WHY:+ ($_WS_QREC_WHY)}")"; return 1; }
   _ws_collect_gap recorded "$id" "$slot"
   if ! _ws_collect_record_read "$rec" || [[ "${_WS_QREC_ID-}" != "$id" || "${_WS_QREC_SLOT-}" != "$slot" \
        || "${_WS_QREC_DEV-}" != "$dev" || "${_WS_QREC_INO-}" != "$ino" || "${_WS_QREC_BTIME-}" != "$bt" \
        || "${_WS_QREC_RUN-}" != "$run" || "${_WS_QREC_AT-}" != "$at" || "${_WS_QREC_TOKEN-}" != "$token" ]]; then
-    _ws_collect_record_drop "$rec" || :
+    if _ws_collect_record_drop "$rec"; then dropped='and the record was dropped'
+    else dropped="and the record could not be dropped (${_WS_QREC_WHY:-not proven gone}): the next pass clears it"; fi
     _ws_reclaim_fail "$id" "" probe-unmeasured \
-      "the quarantine record $name did not read back as written, or its witness is not the one the consent bound — it was dropped, and nothing was moved"
+      "$(_ws_leaf_why_line "nothing was moved, $dropped: the quarantine record $name did not read back as written, or its witness is not the one the consent bound")"
     return 1
   fi
   # 3c — THE SLOT, made EXCLUSIVELY (Task 4's `_ws_collect_slot_make`): a name
   # that already stands is never adopted and, not being this verb's, never removed.
   _ws_collect_slot_make "$slot"; rc=$?
   if (( rc != 0 )); then
-    _ws_collect_record_drop "$rec" || :
-    if (( rc == 1 )); then
-      _ws_reclaim_fail "$id" "" probe-unmeasured "the quarantine slot $slot already stood, and a slot is never adopted — nothing was moved"
-    else
-      _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${_WS_SLOT_WHY:-the quarantine slot $slot could not be made} — nothing was moved")"
-    fi
+    why="${_WS_SLOT_WHY:-the quarantine slot $slot could not be made}"
+    (( rc != 1 )) || why="the quarantine slot already stood, and a slot is never adopted ($slot)"
+    if _ws_collect_record_drop "$rec"; then dropped='and the record was dropped'
+    else dropped="and the record could not be dropped (${_WS_QREC_WHY:-not proven gone}): the next pass clears it"; fi
+    _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved, $dropped: $why")"
     return 1
   fi
   _ws_collect_gap slotted "$id" "$slot"
@@ -33016,10 +33087,10 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
        # a NOREPLACE refusal, or an mv that answered without moving it).
        if _ws_collect_unwind "$slot" "$rec"; then
          _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
-           "$(_ws_leaf_why_line "the move of $id into its slot was not proven ($why) — nothing was moved")"
+           "$(_ws_leaf_why_line "nothing was moved, and the slot and the record were cleared: the move of $id into its slot was not proven ($why)")"
          return 1
        fi
-       _ws_collect_keep "$id" "$rec" "$lctx" "the move of $orig was not proven, and its slot could not be cleared"
+       _ws_collect_keep "$id" "$rec" "$lctx" "the move of $id was not proven, and its slot could not be cleared ($why)"
        return 1 ;;
     *) # UNMEASURED: neither path is provably the witnessed leaf, or the source
        # was not it before the rename (nothing renamed). Whatever reached the
@@ -33029,16 +33100,16 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
        _ws_reclaim_absent "$slot/leaf"; rc=$?
        if (( rc == 1 )); then
          _ws_collect_refused "$id" "$lctx" quarantine-kept \
-           "what reached the slot of record $name is not proven the witnessed leaf moved from a free $orig ($why) — it is kept in its slot with its record, listed for the operator; nothing was moved back or removed" \
+           "kept in its slot with its record, listed for the operator, and nothing was moved back or removed: what reached the slot of record $name is not proven the witnessed leaf moved from a free $orig ($why)" \
            "$surface" "$actor" "$reason"
          return 0
        fi
        if (( rc == 0 )) && _ws_collect_unwind "$slot" "$rec"; then
          _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
-           "$(_ws_leaf_why_line "the move of $id was not proven and nothing reached its slot ($why) — nothing was moved")"
+           "$(_ws_leaf_why_line "nothing was moved, and the empty slot and the record were cleared: the move of $id was not proven and nothing reached its slot ($why)")"
          return 1
        fi
-       _ws_collect_keep "$id" "$rec" "$lctx" "$why"
+       _ws_collect_keep "$id" "$rec" "$lctx" "the move of $id was not proven, and whether anything reached its slot could not be asked ($why)"
        return 1 ;;
   esac
   _ws_collect_gap moved "$id" "$slot"
@@ -33064,13 +33135,13 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
   _ws_collect_record_read "$rec"; rc=$?
   if (( rc == 1 )); then
     _ws_collect_refused "$id" "" state-changed \
-      "record $name, which the evaluation in this lock read, vanished before this verb read it — nothing was moved or removed; the next audit reads $id afresh" \
+      "nothing was moved or removed, and the next audit reads $id afresh: record $name, which the evaluation in this lock read, vanished before this verb read it" \
       "$surface" "$actor" "$reason"
     return 0
   fi
   if (( rc == 3 )); then
     _ws_reclaim_fail "$id" "" probe-unmeasured \
-      "$(_ws_leaf_why_line "the slot of record $name was never derived: the physical $HOME/.cc-tmp could not be resolved${_WS_QPATH_WHY:+ ($_WS_QPATH_WHY)} — the record and its slot stand; nothing was moved or removed")"
+      "$(_ws_leaf_why_line "the record and its slot stand, and nothing was moved or removed: the slot of record $name was never derived, as the physical $HOME/.cc-tmp could not be resolved${_WS_QPATH_WHY:+ ($_WS_QPATH_WHY)}")"
     return 1
   fi
   # Every other failure (2: a body naming another id, or a bad `checkouts=`),
@@ -33079,7 +33150,7 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
   # defence in depth.
   if (( rc != 0 )) || [[ "${_WS_QREC_ID-}" != "$id" || "${_WS_QREC_SLOT-}" != "$q/slot.$name" ]]; then
     _ws_collect_refused "$id" "" quarantine-kept \
-      "$rec is not a quarantine record this verb wrote for $id at $q/slot.$name — a record not provably this verb's is the operator's, never taken" \
+      "kept as it stands, listed for the operator, and nothing was moved or removed: record $name is not a quarantine record this verb wrote for $id at its slot slot.$name" \
       "$surface" "$actor" "$reason"
     return 0
   fi
@@ -33096,15 +33167,15 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
         1) _ws_reclaim_absent "$slot/leaf"; rc=$?
            if (( rc == 0 )); then
              _ws_reclaim_fail "$id" "" probe-unmeasured \
-               "the slot leaf of record $name vanished since the evaluation read it — nothing was moved or removed; the next pass reads its phase again"
+               "the record and its slot stand, and nothing was moved or removed: the slot leaf of record $name vanished since the evaluation read it; the next pass reads its phase again"
              return 1
            fi
-           (( rc != 2 )) || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${_WS_ABSENT_WHY:-whether $slot/leaf stands could not be asked} — nothing was moved or removed")"; return 1; }
+           (( rc != 2 )) || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved or removed: ${_WS_ABSENT_WHY:-whether the leaf in its slot stands could not be asked}")"; return 1; }
            _ws_collect_refused "$id" "" quarantine-kept \
-             "$slot/leaf is not the directory record $name names — the slot's leaf is the operator's, never taken" \
+             "kept as it stands, listed for the operator, and nothing was moved or removed: the slot's leaf is not the directory record $name names" \
              "$surface" "$actor" "$reason"
            return 0 ;;
-        *) _ws_reclaim_fail "$id" "" probe-unmeasured "the identity of $slot/leaf could not be read — nothing was moved or removed"; return 1 ;;
+        *) _ws_reclaim_fail "$id" "" probe-unmeasured "nothing was moved or removed: the identity of $slot/leaf could not be read"; return 1 ;;
       esac
       _lc_intent collect "$id" "$lctx" verb ws-collect meas.resumed "$name" \
         detail "$(_ws_leaf_why_line "resuming record $name: $slot/leaf")" \
@@ -33122,11 +33193,11 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
         dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
       if _ws_collect_unwind "$slot" "$rec"; then
         _ws_collect_refused "$id" "$lctx" state-changed \
-          "record $name described a collection whose move never happened or was undone — $orig stands with its witness and is audited afresh; nothing was removed" \
+          "nothing was removed, the slot and the record were cleared, and $id stands with its witness to be audited afresh: record $name described a collection whose move never happened or was undone" \
           "$surface" "$actor" "$reason"
         return 0
       fi
-      _ws_collect_keep "$id" "$rec" "$lctx" "record $name's leaf never left $orig, but its slot or the record could not be cleared"
+      _ws_collect_keep "$id" "$rec" "$lctx" "the leaf never left $orig, but its slot or the record could not be cleared"
       return 1 ;;
     removed)
       # THE REMOVAL HAD FINISHED before the run stopped: the order resumes from
@@ -33137,7 +33208,7 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
       _ws_collect_finish "$id" "$rec" "$slot" "$lctx" "$name"
       return ;;
   esac
-  _ws_reclaim_fail "$id" "" probe-unmeasured "the evaluation named no phase this verb acts on for record $name (${_WS_COLLECT_PHASE:-none}) — nothing was moved or removed"
+  _ws_reclaim_fail "$id" "" probe-unmeasured "nothing was moved or removed: the evaluation named no phase this verb acts on for record $name (${_WS_COLLECT_PHASE:-none})"
   return 1
 }
 
@@ -33192,14 +33263,14 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   local wf rrc=0
   if [[ -L "$REG/tmproots" ]]; then
     _ws_reclaim_fail "$id" "" probe-unmeasured \
-      "no lock was taken: $REG/tmproots is a link, which ccd never follows, so whether $id is witnessed was never asked — nothing was moved or removed"
+      "no lock was taken, and nothing was moved or removed: $REG/tmproots is a link, which ccd never follows, so whether $id is witnessed was never asked"
     return 1
   fi
   wf=$(_ws_tmproot_witness_file "$id")
   _ws_collect_records_of "$id" >/dev/null || rrc=$?
   if [[ ! -e "$wf" && ! -L "$wf" ]] && (( rrc == 0 && ${#_WS_QRECS[@]} == 0 )); then
     _ws_collect_refused "$id" "" not-witnessed \
-      "no witness ($wf) and no quarantine record names $id, so there is nothing to collect — no lock was taken" \
+      "no lock was taken, and there is nothing to collect: no witness ($wf) and no quarantine record names $id" \
       "$lc_surface" "$lc_actor" "$lc_reason"
     return 0
   fi
@@ -33209,7 +33280,7 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   # stands puts the id in the population whatever the listing said.
   if [[ ! -e "$wf" && ! -L "$wf" ]] && (( rrc != 0 )); then
     _ws_reclaim_fail "$id" "" probe-unmeasured \
-      "$(_ws_leaf_why_line "no lock was taken: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked — nothing was moved or removed")"
+      "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked")"
     return 1
   fi
   # THE SHARED LOCK: `$REG/.reap-<id>.lock`, the one ws-reap, ws-reclaim,
@@ -33240,7 +33311,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
   # a resume and a witness-only drop alike stop on it. `_ws_collect_paused` is
   # Task 5's reader, the one the pause census pins; it sets REAP_DETAIL.
   if ! _ws_collect_paused; then
-    _ws_collect_refused "$id" "" paused "${REAP_DETAIL-} — nothing was moved or removed" "$surface" "$actor" "$reason"
+    _ws_collect_refused "$id" "" paused "nothing was moved or removed: ${REAP_DETAIL-}" "$surface" "$actor" "$reason"
     return 0
   fi
   # 1 — THE CONSENT IS THE TOKEN, recomputed HERE by the one evaluation
@@ -33252,7 +33323,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
   [[ -n "${REAP_VERDICT-}" ]] || { REAP_VERDICT=unmeasured; REAP_DETAIL="the collection evaluation answered no verdict for $id"; }
   if [[ "${REAP_VERDICT-}" == collectable && "$token" != "${REAP_TOKEN-}" ]]; then
     REAP_VERDICT=state-changed
-    REAP_DETAIL="expected ${REAP_TOKEN-}, was given $token — $id changed since the audit that minted the token; nothing was moved"
+    REAP_DETAIL="nothing was moved: $id changed since the audit that minted the token (expected ${REAP_TOKEN-}, was given $token)"
   fi
   if [[ "${REAP_VERDICT-}" == unmeasured ]]; then
     _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${REAP_DETAIL-}")"
@@ -33265,7 +33336,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
   _ws_collect_gap consented "$id"
   # LINUX-FIRST: Task 4's move is one rename that never copies, or nothing.
   _ws_collect_mv_ok \
-    || { _ws_reclaim_fail "$id" "" probe-unmeasured "the collector is Linux-first and moves only by a rename that never copies: on $CCD_OS, or with an mv that offers no --no-copy, that move cannot be made — nothing was moved"; return 1; }
+    || { _ws_reclaim_fail "$id" "" probe-unmeasured "nothing was moved: the collector is Linux-first and moves only by a rename that never copies, and on $CCD_OS, or with an mv that offers no --no-copy, that move cannot be made"; return 1; }
   # THE WITNESS-ONLY ARM (Task 5's DEP3): the witness stands, its leaf is
   # PROVEN absent and no record names the id. Nothing to move or remove.
   if [[ -z "${_WS_COLLECT_RECORD-}" && "${_WS_COLLECT_LEAF-}" == absent ]]; then
@@ -33273,7 +33344,7 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
     return
   fi
   if ! _ws_collect_qdir || [[ "${_WS_Q-}" != /?*/.ccd-quarantine ]]; then
-    _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${_WS_Q_WHY:-the quarantine directory is not <physical ~/.cc-tmp>/.ccd-quarantine} — nothing was moved")"
+    _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: ${_WS_Q_WHY:-the quarantine directory is not <physical ~/.cc-tmp>/.ccd-quarantine}")"
     return 1
   fi
   q="${_WS_Q-}"; rroot="${q%/.ccd-quarantine}"; orig="$rroot/$id"

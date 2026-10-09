@@ -262,8 +262,19 @@ describe('the two TERMINAL words are declared, each with a sentence true under a
   it.each(['witness-mismatch', 'quarantine-kept'] as const)('%s', (t) => {
     expect(isLcRefusalToken(t)).toBe(true);
     expect(LC_REFUSAL_WORD[t]).toMatch(/Nothing (further )?was removed/);
-    expect(LC_REFUSAL_WORD[t]).toMatch(/on its own/);
     expect(LC_REFUSAL_WORD[t]).toMatch(/listed for you/);
+  });
+
+  it('witness-mismatch promises no later removal: ccrc never removes it on its own', () => {
+    expect(LC_REFUSAL_WORD['witness-mismatch']).toMatch(/on its own/);
+  });
+
+  it('quarantine-kept is true of BOTH its uses: the operator’s terminal refusal, and ws-collect’s `failed` whose record a later pass finishes from', () => {
+    // ws-collect (Task 6) also journals the word `failed` when it keeps a record it can finish from later, so the
+    // sentence may not say ccrc never finishes; it says when it can.
+    expect(LC_REFUSAL_WORD['quarantine-kept']).toMatch(/could not finish/);
+    expect(LC_REFUSAL_WORD['quarantine-kept']).toMatch(/only while they are as it left them/);
+    expect(LC_REFUSAL_WORD['quarantine-kept']).not.toMatch(/will not finish|on its own/);
   });
 });
 

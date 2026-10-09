@@ -11,8 +11,8 @@ import { CCD } from './ccdWsHelpers.js';
 import { decOf, eventsOf } from './lifecycleHelpers.js';
 import { LC_REFUSAL_WORD, isLcRefusalToken } from '../../shared/api.js';
 import {
-  COL_ID, GAP_LOG, IDLE_FLOOR_SEAM, WRONG_TOKEN, collectToken, collectVerb, docOf, evalSays, gaps, inoAt,
-  leafOf, makeOrphan, quarantineOf, records, recordsDir, regOf, slots, witnessOf,
+  COL_ID, GAP_LOG, IDLE_FLOOR_SEAM, WRONG_TOKEN, collectAudit, collectToken, collectVerb, crashAt, docOf, evalSays,
+  gapAt, gaps, inoAt, leafOf, makeOrphan, quarantineOf, records, recordsDir, regOf, slots, witnessOf, type Run,
 } from './wsCollectFixture.js';
 
 let h: PrHarness;
@@ -20,6 +20,9 @@ beforeEach(() => { h = makePrHarness('ccrc-ws-collect-verb-'); });
 afterEach(() => { h.cleanup(); });
 
 const LINUX = process.platform === 'linux';
+const ROOT = process.getuid?.() === 0;
+const auditDoc = (): Record<string, unknown> =>
+  JSON.parse(collectAudit(h).stdout.trim().split('\n').pop() || '{}') as Record<string, unknown>;
 const rows = (): unknown[][] => eventsOf(h.home, 'collect').map((e) => [e['outcome'], e['refusal'] ?? null]);
 
 describe.skipIf(!LINUX)('a collection, end to end', () => {
@@ -75,6 +78,124 @@ describe.skipIf(!LINUX)('a collection, end to end', () => {
     expect(records(h)).toEqual([]);
     expect(gaps(h)).toEqual(['locked', 'consented', 'witnessed']);
     expect(eventsOf(h.home, 'collect').map((e) => e['outcome'])).toEqual(['intent', 'done']);
+  });
+});
+
+describe.skipIf(!LINUX)('stdout is ONE JSON line', () => {
+  it('on every arm — refused, failed, resumed, collected and witness-only — exactly one line, and it parses', () => {
+    // `docOf` reads the LAST line, so a stray line above the document (a helper printing to stdout) would pass every
+    // other case unseen. Each answer is read whole here.
+    const one = (r: Run, label: string): Record<string, unknown> => {
+      const ls = r.stdout.replace(/\n$/, '').split('\n');
+      expect(ls, `${label}: ${r.stdout}${r.stderr}`).toHaveLength(1);
+      return JSON.parse(ls[0]!) as Record<string, unknown>;
+    };
+    makeOrphan(h);
+    expect(one(collectVerb(h, WRONG_TOKEN), 'refused')['refused']).toBe('state-changed');
+    expect(one(collectVerb(h, WRONG_TOKEN, { pre: `${evalSays(WRONG_TOKEN)} CCD_OS=darwin;` }), 'failed')['failed'])
+      .toBe('probe-unmeasured');
+    expect(collectVerb(h, collectToken(h), { pre: crashAt('moved') }).code).toBe(137);
+    expect(one(collectVerb(h, collectToken(h)), 'resumed')).toMatchObject({ collected: COL_ID, resumed: true });
+    makeOrphan(h);
+    expect(one(collectVerb(h, collectToken(h)), 'collected')).toMatchObject({ collected: COL_ID, resumed: false });
+    makeOrphan(h);
+    fs.rmSync(leafOf(h), { recursive: true });
+    expect(one(collectVerb(h, collectToken(h)), 'witness-only')).toMatchObject({ collected: COL_ID, record: null });
+  });
+});
+
+describe.skipIf(!LINUX)('a witness whose leaf is gone, beside a quarantine slot of its id that NO record names', () => {
+  // The witness-without-leaf arm refuses while a slot of the id stands: with no record naming it, that slot (which
+  // may hold the leaf) is the operator's, and dropping the witness would leave it for no audit to visit again.
+  const slotFor = (id: string): string => path.join(quarantineOf(h), `slot.${id}.1791000000000000000.4242`);
+
+  it('a slot of this id: refused quarantine-kept at the audit and at the verb — the witness kept, the slot untouched', () => {
+    const o = makeOrphan(h);
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    fs.mkdirSync(slotFor(COL_ID), { mode: 0o700 });
+    fs.renameSync(o.leaf, path.join(slotFor(COL_ID), 'leaf'));
+    expect(auditDoc()['verdict'], 'the audit').toBe('quarantine-kept');
+    const r = collectVerb(h, WRONG_TOKEN);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const doc = docOf(r.stdout);
+    expect(doc['refused']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toMatch(/^kept as it stands, listed for the operator, and the witness of demo-quiet-reef stays: /);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness, kept').toBe(o.witness);
+    expect(inoAt(path.join(slotFor(COL_ID), 'leaf')), 'the slot and the leaf in it, untouched').toBe(o.ino);
+    expect(records(h)).toEqual([]);
+    expect(rows(), 'the audit’s and the verb’s refusal').toEqual([['refused', 'quarantine-kept'], ['refused', 'quarantine-kept']]);
+  });
+
+  it('a NESTED id’s slot is another id’s, never this one’s: not counted — the witness alone is collected, that slot untouched', () => {
+    // `slot.<id>.*` would match `slot.<id>.v2-quiet-river.<ns>.<pid>`; the exact parse reads its id as
+    // `<id>.v2-quiet-river`.
+    makeOrphan(h);
+    fs.rmSync(leafOf(h), { recursive: true });
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    const other = slotFor(`${COL_ID}.v2-quiet-river`);
+    fs.mkdirSync(path.join(other, 'leaf'), { recursive: true, mode: 0o700 });
+    const r = collectVerb(h, collectToken(h));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(docOf(r.stdout)).toEqual({ collected: COL_ID, record: null, resumed: false, witness: 'dropped' });
+    expect(fs.existsSync(path.join(other, 'leaf')), 'the other id’s slot').toBe(true);
+  });
+
+  it('a quarantine that is a link: unmeasured at the audit, failed probe-unmeasured at the verb — never "no slot", the witness kept', () => {
+    const o = makeOrphan(h);
+    fs.rmSync(leafOf(h), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'elsewhere-q'), { mode: 0o700 });
+    fs.symlinkSync(path.join(h.home, 'elsewhere-q'), quarantineOf(h));
+    const audit = auditDoc();
+    expect([audit['verdict'], (audit['collect'] as Record<string, unknown>)['unmeasured']]).toEqual(['unmeasured', 'quarantine']);
+    const r = collectVerb(h, WRONG_TOKEN);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
+    expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
+  });
+
+  it.skipIf(ROOT)('a quarantine that cannot be listed: unmeasured, never "no slot" — the witness kept', () => {
+    const o = makeOrphan(h);
+    fs.rmSync(leafOf(h), { recursive: true });
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    try {
+      fs.chmodSync(quarantineOf(h), 0o300);
+      const audit = auditDoc();
+      expect([audit['verdict'], (audit['collect'] as Record<string, unknown>)['unmeasured']]).toEqual(['unmeasured', 'quarantine']);
+      expect(String(audit['detail'])).toContain('could not list');
+    } finally { fs.chmodSync(quarantineOf(h), 0o700); }
+    expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
+  });
+});
+
+describe.skipIf(!LINUX)('the stop arms before the move', () => {
+  it.skipIf(ROOT)('a witness-only drop whose compare-and-drop cannot move the witness aside: failed probe-unmeasured — nothing removed, the witness kept', () => {
+    const o = makeOrphan(h);
+    fs.rmSync(leafOf(h), { recursive: true });
+    const t = collectToken(h);
+    try {
+      const r = collectVerb(h, t, { pre: gapAt('consented', 'chmod 0500 "$REG/tmproots"') });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const doc = docOf(r.stdout);
+      expect(doc['failed']).toBe('probe-unmeasured');
+      expect(String(doc['detail'])).toMatch(/^nothing was removed: the witness of demo-quiet-reef, whose leaf is gone, could not be compared and dropped: /);
+    } finally { fs.chmodSync(path.dirname(witnessOf(h)), 0o700); }
+    expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
+    expect(rows()).toEqual([['intent', null], ['failed', 'probe-unmeasured']]);
+  });
+
+  it('a quarantine that is not a real directory of this uid at 0700: failed probe-unmeasured before any record — nothing moved', () => {
+    const o = makeOrphan(h);
+    fs.mkdirSync(path.join(h.home, 'elsewhere-q'), { mode: 0o700 });
+    fs.symlinkSync(path.join(h.home, 'elsewhere-q'), quarantineOf(h));
+    const r = collectVerb(h, collectToken(h));
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toMatch(/^nothing was moved: .* is not a real directory/);
+    expect(inoAt(o.leaf)).toBe(o.ino);
+    expect(records(h)).toEqual([]);
+    expect(fs.readdirSync(path.join(h.home, 'elsewhere-q')), 'nothing went through the link').toEqual([]);
+    expect(rows()).toEqual([['failed', 'probe-unmeasured']]);
   });
 });
 

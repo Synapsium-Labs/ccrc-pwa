@@ -158,11 +158,31 @@ describe.skipIf(!LINUX)('steps 3b and 3c — the record, then the slot, made exc
     const r = collectVerb(h, collectToken(h), { pre: `${GAP_LOG} ${bad}` });
     expect(r.code).toBe(1);
     expect(String(docOf(r.stdout)['detail'])).toContain('did not read back as written');
+    expect(String(docOf(r.stdout)['detail']), 'what was measured').toMatch(/^nothing was moved, and the record was dropped: /);
     expect(gaps(h)).toEqual(['locked', 'consented', 'recorded']);
     expect(records(h)).toEqual([]);
     expect(slots(h)).toEqual([]);
     expect(inoAt(o.leaf)).toBe(o.ino);
   });
+
+  const NO_DROP = "_ws_collect_record_drop() { _WS_QREC_WHY='stub: not proven gone'; return 2; };";
+  const BAD_WRITE = '_ws_collect_record_write() { mkdir -p "$(_ws_collect_qrec_dir)";'
+    + ' printf \'v=1 id=%s\\n\' "$1" > "$(_ws_collect_qrec_dir)/${2##*/slot.}"; };';
+  for (const [what, pre] of [
+    ['a record that does not read back', `${BAD_WRITE} ${NO_DROP}`],
+    ['a slot that already stood', `${gapAt('recorded', 'mkdir "$3"')} ${NO_DROP}`],
+  ] as const) {
+    it(`${what}, then a record drop that cannot be proven: the detail says the record could NOT be dropped, never that it was`, () => {
+      const o = makeOrphan(h);
+      const r = collectVerb(h, collectToken(h), { pre });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const doc = docOf(r.stdout);
+      expect(doc['failed']).toBe('probe-unmeasured');
+      expect(String(doc['detail'])).toMatch(/^nothing was moved, and the record could not be dropped \(stub: not proven gone\): the next pass clears it: /);
+      expect(records(h), 'the record the drop could not prove gone').toHaveLength(1);
+      expect(inoAt(o.leaf)).toBe(o.ino);
+    });
+  }
 
   it('the slot is made EXCLUSIVELY: a name that already stands is never adopted and, not being this verb’s, never removed', () => {
     const o = makeOrphan(h);
@@ -208,6 +228,39 @@ describe.skipIf(!LINUX)('step 4 — ONE rename, proven by lstat, never by mv’s
       expect(journal()).toEqual([['intent', null], ['failed', 'probe-unmeasured']]);
     });
   }
+
+  it('an mv that moves nothing, then a slot and record that cannot be cleared: failed quarantine-kept — the record KEPT, the leaf where it was', () => {
+    // step 4's `1)` arm: proven NOT moved, and the unwind could not prove the record gone. Never "cleared".
+    const o = makeOrphan(h);
+    const nodrop = "_ws_collect_record_drop() { _WS_QREC_WHY='stub: not proven gone'; return 2; };";
+    const r = collectVerb(h, collectToken(h), { pre: `${intoSlot('return 0')} ${nodrop}` });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: .*the move of demo-quiet-reef was not proven, and its slot could not be cleared/);
+    expect(records(h)).toHaveLength(1);
+    expect(inoAt(o.leaf), 'the leaf, where it was').toBe(o.ino);
+    expect(journal()).toEqual([['intent', null], ['failed', 'quarantine-kept']]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a move that answers unmeasured, then a slot whose leaf cannot be looked at: failed quarantine-kept — the record and the slot KEPT, never cleared', () => {
+    // step 4's `*)` arm: whether anything reached the slot could not be asked (the slot cannot be searched), so it is
+    // neither refused as KEPT-foreign nor cleared as empty.
+    const o = makeOrphan(h);
+    const blind = "_ws_collect_move() { _WS_MOVE_WHY='stub: the move answered unmeasured'; chmod 000 \"${2%/leaf}\"; return 2; };";
+    try {
+      const r = collectVerb(h, collectToken(h), { pre: blind });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const doc = docOf(r.stdout);
+      expect(doc['failed']).toBe('quarantine-kept');
+      expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: .*whether anything reached its slot could not be asked/);
+    } finally {
+      for (const sl of slots(h)) fs.chmodSync(path.join(quarantineOf(h), sl), 0o700);
+    }
+    expect(slots(h), 'the slot, kept').toHaveLength(1);
+    expect(records(h), 'the record, kept').toHaveLength(1);
+    expect(inoAt(o.leaf), 'the leaf, where it was').toBe(o.ino);
+  });
 
   it('an mv that COPIES: what reaches the slot is not the witnessed inode — KEPT there with its record, never moved back or unlinked', () => {
     const o = makeOrphan(h);

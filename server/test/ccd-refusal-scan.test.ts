@@ -40,7 +40,7 @@ const VERBS: readonly (readonly [string, string, number])[] = [
   ['cmd_ws_reclaim', '_ws_reclaim_locked', 3500],
   // Measured 3761 characters for cmd_ws_expire's pre-lock parse and lock when this entry was written.
   ['cmd_ws_expire', '_ws_expire_locked', 3200],
-  // Measured 5661 characters for cmd_ws_collect's pre-lock parse, population check and lock when this entry was written.
+  // Measured 5667 characters for cmd_ws_collect's pre-lock parse, population check and lock when this entry was written.
   ['cmd_ws_collect', '_ws_collect_locked', 5100],
 ];
 
@@ -194,9 +194,9 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
 
   it('the collector’s locked functions contain NO die — past the lock, a failure is _ws_reclaim_fail and JSON', () => {
     for (const [name, floor] of [
-      // Measured 2998, 7499, 5900, 4180 and 1950 characters when this entry was written; each floor is that less 500, rounded down to a hundred.
-      ['_ws_collect_locked', 2400], ['_ws_collect_fresh', 6900], ['_ws_collect_resume', 5400],
-      ['_ws_collect_after_move', 3600], ['_ws_collect_finish', 1400],
+      // Measured 2999, 7930, 6036, 5145 and 1957 characters when this entry was written; each floor is that less 500, rounded down to a hundred.
+      ['_ws_collect_locked', 2400], ['_ws_collect_fresh', 7400], ['_ws_collect_resume', 5500],
+      ['_ws_collect_after_move', 4600], ['_ws_collect_finish', 1400],
     ] as const) {
       const from = src.indexOf(`${name}() {`);
       const body = from > -1 ? src.slice(from, src.indexOf('\n}\n', from)) : '';
