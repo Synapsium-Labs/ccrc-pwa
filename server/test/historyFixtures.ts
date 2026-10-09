@@ -144,3 +144,57 @@ export const localCommandEchoRow = (o: RowBase & { stdout: string }): Row => ({
 
 /** Rows as a transcript file's text: one JSON object per line, LF-terminated. */
 export const jsonl = (rows: readonly Row[]): string => rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
+
+// --- W1-B2 Task 4: summary text and steered blocks (spec 2026-10-05 §7.4) ---
+/** The sections of Claude Code's full (and partial `from`) compaction prompt,
+ *  and of its partial `up_to` prompt. MEASURED: the last two titles of each
+ *  (spec §7.4 item 8, from the prompt text); the others are fixture-chosen. */
+export const FULL_SECTIONS = [
+  'Primary Request and Intent', 'Key Technical Concepts', 'Files and Code Sections', 'Errors and fixes',
+  'Problem Solving', 'All user messages', 'Pending Tasks', 'Current Work', 'Optional Next Step',
+] as const;
+export const UP_TO_SECTIONS = [
+  'Primary Request and Intent', 'Key Technical Concepts', 'Files and Code Sections', 'Errors and fixes',
+  'Problem Solving', 'All user messages', 'Work Completed', 'Context for Continuing Work',
+] as const;
+
+export interface SummaryTextOpts {
+  /** Section titles in order, numbered from 1; FULL_SECTIONS when omitted. */
+  sections?: readonly string[];
+  /** A section's text by title; `- fixture point for <title>` when omitted. */
+  body?: Readonly<Record<string, string>>;
+  /** `8. Current Work:` (plain), `## 8. Current Work` (hash) or `**8. Current Work:**` (bold). */
+  style?: 'plain' | 'hash' | 'bold';
+  /** No tags (a stored Claude-run summary), `<summary>…</summary>`, or an open never closed. */
+  wrap?: 'none' | 'closed' | 'unclosed';
+  before?: string;
+  after?: string;
+}
+
+/** A summary row's text in the nine-section shape the native gist reads. */
+export const summaryText = (o: SummaryTextOpts = {}): string => {
+  const heading = (n: number, t: string): string =>
+    (o.style === 'hash' ? `## ${n}. ${t}` : o.style === 'bold' ? `**${n}. ${t}:**` : `${n}. ${t}:`);
+  const text = (o.sections ?? FULL_SECTIONS)
+    .map((t, k) => `${heading(k + 1, t)}\n${o.body?.[t] ?? `- fixture point for ${t.toLowerCase()}`}\n`)
+    .join('\n');
+  const wrapped = o.wrap === 'closed' ? `<summary>\n${text}</summary>\n` : o.wrap === 'unclosed' ? `<summary>\n${text}` : text;
+  return `${o.before ?? ''}${wrapped}${o.after ?? ''}`;
+};
+
+/** A steered `<ccrc-leaf|node>` block as W3's template asks for it (spec §7.4
+ *  item 3). An id-less block carries `v="1"`, because the grammar needs one
+ *  attribute after the tag name. */
+export const steeredBlock = (o: {
+  kind?: 'leaf' | 'node'; id?: string; gist: string; expand?: string; refs?: string | null; extra?: string;
+}): string => {
+  const kind = o.kind ?? 'leaf';
+  return [
+    `<ccrc-${kind} ${o.id === undefined ? 'v="1"' : `id="${o.id}"`}>`,
+    `gist: ${o.gist}`,
+    ...(o.expand === undefined ? [] : [`Expand for details about: ${o.expand}`]),
+    ...(o.refs === undefined || o.refs === null ? [] : [`refs: ${o.refs}`]),
+    ...(o.extra === undefined ? [] : [o.extra]),
+    `</ccrc-${kind}>`,
+  ].join('\n');
+};

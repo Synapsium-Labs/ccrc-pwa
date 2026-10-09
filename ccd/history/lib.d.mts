@@ -534,3 +534,47 @@ export function exploreKindOf(path: string | null): ExploreKind | null;
 export function explore(text: string, kind: ExploreKind, fileName?: string): string;
 export function costRow(chars: number, cap?: number): { chars: number; fits: 'in' | 'over' };
 export function pickExpandBody(i: { primary: unknown; variants: readonly { body: unknown; cause: string }[] }): unknown;
+
+// --- W1-B2 Task 4: the parser (spec §7.4, §7.8, §6.2, §11 V8, P29)
+export const EXPAND_LABEL: 'Expand for details about:';
+export const BLOCK_RE_SOURCE: string;
+export const GIST_MAX: 1200;
+export const NATIVE_GIST_MAX: 600;
+export const GIST_MIN: 40;
+export const TOPICS_MAX: 16;
+export const TOPIC_CHARS: 80;
+export const REFS_MAX: 40;
+export const NODE_PARSER_VERSION: 1;
+export type RefKind = 'path' | 'path:symbol' | 'sha' | 'issue' | 'd-number' | 'url' | 'test';
+export const REF_KINDS: readonly RefKind[];
+export type BlockReason = 'no-receipt' | 'no-block' | 'gist-short' | 'carried-copy' | 'id-mismatch' | 'topics-missing' | 'refs-missing';
+export const BLOCK_REASONS: readonly BlockReason[];
+export function capText(text: string, max: number): { text: string; capped: boolean };
+export function capTopics(items: Iterable<string>): { topics: string[]; capped: boolean };
+export function gistSha(gist: string): string;
+export interface Block {
+  kind: 'leaf' | 'node'; attrs: Record<string, string>; gist: string | null; expand: string | null;
+  refs: string[] | null; refsNone: boolean; inAnalysis: boolean;
+}
+export function parseBlocks(text: string): Block[];
+export function selectBlock(i: { blocks: readonly Block[]; kind: 'leaf' | 'node'; computedId: string; generic: boolean }):
+  { block: Block | null; idMismatch: boolean };
+export type BlockStatus = 'ok' | 'degraded' | 'invalid' | 'absent' | 'not-requested';
+export function blockStatus(i: { receipt: boolean; block: Block | null; idMismatch: boolean; priorGistShas: ReadonlySet<string> }):
+  { status: BlockStatus; reason: BlockReason | null };
+export function summaryParts(text: string): { bodyStart: number; opens: number; unclosed: boolean; analysisSurvives: boolean };
+export function summaryRowFor(i: {
+  boundaryUuid: string; anchorUuid: string | null; rows: readonly { uuid: string; isCompactSummary: boolean; isEcho: boolean }[];
+}): { uuid: string | null; anchorIsBoundary: boolean };
+export interface GistKit {
+  HEADING_RE: RegExp;
+  fencedRanges: (t: string) => { ranges: Array<[number, number]>; closed: number };
+}
+export function nativeGist(i: { text: string; direction: 'from' | 'up_to' | null }, kit: GistKit, idx: PairIndex):
+  { gist: string | null; capped: boolean; pair: 'current' | 'completed' | null };
+export function nativeTopics(i: { text: string; prevText: string | null }, kit: GistKit, idx: PairIndex):
+  { topics: string[]; capped: boolean };
+export function classifyRef(v: string): RefKind | null;
+export interface NodeRef { kind: string; value: string; origin: 'model' | 'tool_use' | 'meta' }
+export function capRefs(refs: Iterable<NodeRef>): { refs: NodeRef[]; capped: boolean };
+export function directiveFlag(text: string): boolean;

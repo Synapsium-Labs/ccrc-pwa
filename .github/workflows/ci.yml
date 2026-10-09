@@ -734,6 +734,7 @@ jobs:
           test/history-holds.test.ts
           test/history-op.test.ts
           test/history-cli.test.ts
+          test/history-parser.test.ts
           test/measure-history.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts

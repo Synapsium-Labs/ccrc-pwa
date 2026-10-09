@@ -4009,3 +4009,304 @@ function sanitizedSideOf(a, b) {
   }
   return 'b';
 }
+
+
+// ===========================================================================
+// W1-B2 recall, Task 4: pure parser decisions over one boundary summary.
+// The card's heading utilities are injected; this L1 module never imports them.
+// Every native field is redacted before it is capped.
+// ===========================================================================
+
+// derived from lossless-claw src/summarize.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+export const EXPAND_LABEL = 'Expand for details about:';
+export const BLOCK_RE_SOURCE = String.raw`<ccrc-(leaf|node)\s+([^>\n]*)>\n?([\s\S]*?)<\/ccrc-\1>`;
+export const GIST_MAX = 1200;
+export const NATIVE_GIST_MAX = 600;
+export const GIST_MIN = 40;
+export const TOPICS_MAX = 16;
+export const TOPIC_CHARS = 80;
+export const REFS_MAX = 40;
+export const NODE_PARSER_VERSION = 1;
+export const REF_KINDS = Object.freeze(['path', 'path:symbol', 'sha', 'issue', 'd-number', 'url', 'test']);
+export const BLOCK_REASONS = Object.freeze([
+  'no-receipt', 'no-block', 'gist-short', 'carried-copy', 'id-mismatch', 'topics-missing', 'refs-missing',
+]);
+
+/** A surrogate-safe field cut that reports the cap separately from its text. */
+export function capText(text, max) {
+  const s = String(text);
+  return s.length <= max ? { text: s, capped: false } : { text: s.slice(0, cutBefore(s, max)), capped: true };
+}
+
+export function capTopics(items) {
+  const seen = new Set();
+  const topics = [];
+  let capped = false;
+  for (const raw of items) {
+    const one = capText(String(raw).replace(/\s+/g, ' ').trim(), TOPIC_CHARS);
+    if (one.text === '' || seen.has(one.text)) continue;
+    if (topics.length === TOPICS_MAX) { capped = true; break; }
+    seen.add(one.text);
+    topics.push(one.text);
+    capped ||= one.capped;
+  }
+  return { topics, capped };
+}
+
+/** Hash precisely the stored representation, including its cap normalization. */
+export function gistSha(gist) {
+  return sha256Hex(capText(String(gist).trim(), GIST_MAX).text.trimEnd());
+}
+
+const BLOCK_ATTR_RE = /([A-Za-z][A-Za-z0-9_-]*)="([^"]*)"/g;
+const BLOCK_KEY_RE = /^([a-z][a-z0-9_-]*):[ \t]?(.*)$/;
+
+function analysisRanges(s) {
+  const ranges = [];
+  let from = 0;
+  for (;;) {
+    const open = s.indexOf('<analysis>', from);
+    if (open < 0) return ranges;
+    const close = s.indexOf('</analysis>', open);
+    const end = close < 0 ? s.length : close + '</analysis>'.length;
+    ranges.push([open, end]);
+    from = end;
+  }
+}
+
+/** Parse every steer block in a row, treating lower-case unknown keys as fields. */
+export function parseBlocks(text) {
+  const s = String(text);
+  const analysis = analysisRanges(s);
+  const out = [];
+  for (const m of s.matchAll(new RegExp(BLOCK_RE_SOURCE, 'g'))) {
+    const attrs = {};
+    for (const a of m[2].matchAll(BLOCK_ATTR_RE)) attrs[a[1]] = a[2];
+    const fields = { gist: null, expand: null, refs: null };
+    let current = null;
+    for (const line of m[3].split('\n')) {
+      let key = null;
+      let value = '';
+      if (line.startsWith(EXPAND_LABEL)) {
+        key = 'expand';
+        value = line.slice(EXPAND_LABEL.length);
+      } else {
+        const k = BLOCK_KEY_RE.exec(line);
+        if (k !== null) {
+          key = k[1] === 'gist' || k[1] === 'refs' ? k[1] : 'ignored';
+          value = k[2];
+        }
+      }
+      if (key !== null) {
+        current = key;
+        if (key !== 'ignored') fields[key] = value.trim();
+        continue;
+      }
+      if (current === null || current === 'ignored' || line.trim() === '') continue;
+      fields[current] = fields[current] === '' ? line.trim() : `${fields[current]}\n${line.trim()}`;
+    }
+    const refsNone = fields.refs !== null && /^none$/i.test(fields.refs);
+    out.push({
+      kind: m[1], attrs, gist: fields.gist, expand: fields.expand,
+      refs: fields.refs === null ? null : refsNone ? [] : fields.refs.split(/[\s,]+/).filter(Boolean),
+      refsNone,
+      inAnalysis: analysis.some(([a, b]) => m.index >= a && m.index < b),
+    });
+  }
+  return out;
+}
+
+export function selectBlock({ blocks, kind, computedId, generic }) {
+  const usable = blocks.filter((b) => b.kind === kind && !b.inAnalysis);
+  const exact = usable.filter((b) => (generic ? !Object.hasOwn(b.attrs, 'id') : b.attrs.id === computedId));
+  if (exact.length > 0) return { block: exact[exact.length - 1], idMismatch: false };
+  if (usable.length > 0) return { block: usable[usable.length - 1], idMismatch: true };
+  return { block: null, idMismatch: false };
+}
+
+export function blockStatus({ receipt, block, idMismatch, priorGistShas }) {
+  if (!receipt) return { status: 'not-requested', reason: 'no-receipt' };
+  if (block === null) return { status: 'absent', reason: 'no-block' };
+  if (block.gist === null || block.gist.trim().length < GIST_MIN) return { status: 'invalid', reason: 'gist-short' };
+  if (priorGistShas.has(gistSha(block.gist))) return { status: 'invalid', reason: 'carried-copy' };
+  if (idMismatch) return { status: 'degraded', reason: 'id-mismatch' };
+  if (block.expand === null || block.expand.trim() === '') return { status: 'degraded', reason: 'topics-missing' };
+  if (block.refs === null || (block.refs.length === 0 && !block.refsNone)) return { status: 'degraded', reason: 'refs-missing' };
+  return { status: 'ok', reason: null };
+}
+
+export function summaryParts(text) {
+  const s = String(text);
+  let opens = 0;
+  let last = -1;
+  for (let i = s.indexOf('<summary>'); i >= 0; i = s.indexOf('<summary>', i + 1)) {
+    opens += 1;
+    last = i;
+  }
+  return {
+    bodyStart: last < 0 ? 0 : last + '<summary>'.length,
+    opens,
+    unclosed: last >= 0 && s.indexOf('</summary>', last) < 0,
+    analysisSurvives: s.includes('<analysis>'),
+  };
+}
+
+export function summaryRowFor({ boundaryUuid, anchorUuid, rows }) {
+  if (typeof anchorUuid !== 'string' || anchorUuid === '') return { uuid: null, anchorIsBoundary: false };
+  if (anchorUuid === boundaryUuid) {
+    const at = rows.findIndex((r) => r.uuid === boundaryUuid);
+    for (let k = at < 0 ? rows.length : at + 1; k < rows.length; k += 1) {
+      if (rows[k].isCompactSummary && !rows[k].isEcho) return { uuid: rows[k].uuid, anchorIsBoundary: true };
+    }
+    return { uuid: null, anchorIsBoundary: true };
+  }
+  const row = rows.find((r) => r.uuid === anchorUuid);
+  return { uuid: row !== undefined && !row.isEcho ? row.uuid : null, anchorIsBoundary: false };
+}
+
+const GIST_PAIRS = Object.freeze({
+  current: Object.freeze(['current work', 'optional next step']),
+  completed: Object.freeze(['work completed', 'context for continuing work']),
+});
+
+/** Return numbered sections at the smallest indentation outside code fences. */
+function sectionsOf(body, kit) {
+  const flags = kit.HEADING_RE.flags.includes('g') ? kit.HEADING_RE.flags : `${kit.HEADING_RE.flags}g`;
+  const { ranges } = kit.fencedRanges(body);
+  const found = [];
+  let fence = 0;
+  for (const m of body.matchAll(new RegExp(kit.HEADING_RE.source, flags))) {
+    while (fence < ranges.length && m.index >= ranges[fence][1]) fence += 1;
+    if (fence < ranges.length && m.index >= ranges[fence][0]) continue;
+    const num = /(\d+)\./.exec(m[0]);
+    found.push({
+      start: m.index, end: m.index + m[0].length, title: m[1].trim(), num: num === null ? null : Number(num[1]),
+      indent: /^[ \t]*/.exec(m[0])[0].length,
+    });
+  }
+  const floor = found.reduce((lo, h) => Math.min(lo, h.indent), Infinity);
+  const heads = found.filter((h) => h.indent === floor);
+  return heads.map((h, k) => ({ ...h, stop: k + 1 < heads.length ? heads[k + 1].start : body.length }));
+}
+
+function lastSection(sections, body, name) {
+  for (let k = sections.length - 1; k >= 0; k -= 1) {
+    const t = sections[k].title;
+    const low = t.toLowerCase();
+    if (low === name || low.startsWith(`${name}:`)) {
+      const inline = low === name ? '' : t.slice(name.length + 1);
+      return { at: sections[k].start, label: t.slice(0, name.length), text: `${inline} ${body.slice(sections[k].end, sections[k].stop)}` };
+    }
+  }
+  return null;
+}
+
+function summaryBody(redacted, kit) {
+  const { bodyStart } = summaryParts(redacted);
+  const tail = redacted.slice(bodyStart);
+  const close = tail.lastIndexOf('</summary>');
+  if (close < 0) return tail;
+  const heads = sectionsOf(tail, kit);
+  return close > (heads.length === 0 ? -1 : heads[heads.length - 1].start) ? tail.slice(0, close) : tail;
+}
+
+function pickNativeGist(redacted, direction, kit) {
+  const body = summaryBody(redacted, kit);
+  const sections = sectionsOf(body, kit);
+  const found = (pair) => GIST_PAIRS[pair].map((name) => lastSection(sections, body, name));
+  const latest = (pair) => Math.max(-1, ...found(pair).filter((s) => s !== null).map((s) => s.at));
+  const order = direction === 'up_to' ? ['completed', 'current']
+    : direction === 'from' ? ['current', 'completed']
+      : ['current', 'completed'].sort((a, b) => latest(b) - latest(a));
+  const pair = order.find((p) => latest(p) >= 0);
+  if (pair === undefined) return null;
+  const text = found(pair).filter((s) => s !== null).map((s) => `${s.label}: ${s.text.replace(/\s+/g, ' ').trim()}`).join('\n');
+  return { text, pair };
+}
+
+export function nativeGist({ text, direction }, kit, idx) {
+  const picked = pickNativeGist(redactField(String(text), idx), direction, kit);
+  if (picked === null) return { gist: null, capped: false, pair: null };
+  const out = capText(picked.text, NATIVE_GIST_MAX);
+  return { gist: out.text, capped: out.capped, pair: picked.pair };
+}
+
+function topicItemsOf(text, kit, idx) {
+  if (text === null) return [];
+  const body = summaryBody(redactField(String(text), idx), kit);
+  const sections = sectionsOf(body, kit);
+  const { ranges } = kit.fencedRanges(body);
+  const items = [];
+  for (const num of [2, 3]) {
+    const s = [...sections].reverse().find((x) => x.num === num);
+    if (s === undefined) continue;
+    let offset = s.end;
+    for (const line of body.slice(s.end, s.stop).split('\n')) {
+      const fenced = ranges.some(([a, b]) => offset >= a && offset < b);
+      const m = /^\s*[-*+]\s+(.+)$/.exec(line);
+      if (!fenced && m !== null) items.push(m[1].replace(/\s+/g, ' ').trim());
+      offset += line.length + 1;
+    }
+  }
+  return items;
+}
+
+export function nativeTopics({ text, prevText }, kit, idx) {
+  const before = new Set(topicItemsOf(prevText, kit, idx));
+  return capTopics(topicItemsOf(text, kit, idx).filter((item) => !before.has(item)));
+}
+
+export function classifyRef(v) {
+  const s = String(v).trim();
+  if (s === '' || s.length > 512) return null;
+  if (/^https?:\/\/\S+$/.test(s)) return 'url';
+  if (/^D-[0-9]+$/.test(s)) return 'd-number';
+  if (/^#[0-9]+$/.test(s)) return 'issue';
+  if (/^[\w./-]*[\w-]\.(?:test|spec)\.[cm]?[jt]sx?$/.test(s)) return 'test';
+  if (/^[\w./-]*\.[A-Za-z][A-Za-z0-9]{0,7}:[A-Za-z_$][\w$.]*$/.test(s)) return 'path:symbol';
+  if (/^(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}$/.test(s)) return 'sha';
+  if (/^[\w.-]*(?:\/[\w.-]+)+(?::[0-9]+(?:-[0-9]+)?)?$/.test(s)) return 'path';
+  if (/^[\w-]+(?:\.[\w-]+)*\.[A-Za-z][A-Za-z0-9]{0,7}(?::[0-9]+(?:-[0-9]+)?)?$/.test(s)) return 'path';
+  return null;
+}
+
+export function capRefs(refs) {
+  const seen = new Set();
+  const out = [];
+  let capped = false;
+  for (const r of refs) {
+    const key = `${r.kind}\0${r.value}`;
+    if (seen.has(key)) continue;
+    if (out.length === REFS_MAX) { capped = true; break; }
+    seen.add(key);
+    out.push({ kind: r.kind, value: r.value, origin: r.origin });
+  }
+  return { refs: out, capped };
+}
+
+// derived from lossless-claw src/summary-fallback.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const OPTIONAL_DIRECTIVE_SCOPE_PREFIX = String.raw`(?:all\s+)?(?:of\s+)?(?:(?:the|your|my|any|these|those)\s+)?`;
+const DIRECTIVE_SCOPE = String.raw`(?:(?:previous|prior|above|earlier)(?:\s+(?:system|developer))?|(?:system|developer))`;
+const UNSCOPED_DIRECTIVE_TARGET = String.raw`(?:(?:all|any)\s+)?(?:of\s+)?(?:(?:the|your|my|these|those|current|existing|original)\s+)?(?:instructions?|prompts?|rules?)`;
+const ANSWER_DAN_OBJECT = String.raw`(?:(?:me|us)|(?:(?:(?:the|this|that|your|my|any|these|those|all|every)\s+)?(?:future\s+)?(?:users?|requests?|questions?|prompts?|messages?)))`;
+const DAN_PERSONA_DIRECTIVE_PREFIX = String.raw`(?:^\s*|^\s*[A-Za-z][A-Za-z0-9 _/-]{0,40}:\s*)`;
+const DIRECTIVE_SHAPED_PATTERNS = Object.freeze([
+  new RegExp([
+    String.raw`\b(ignore|disregard|forget|override)\s+${OPTIONAL_DIRECTIVE_SCOPE_PREFIX}${DIRECTIVE_SCOPE}\s+(instructions?|prompts?|rules?)\b`,
+    String.raw`\b(ignore|disregard|forget|override)\s+${UNSCOPED_DIRECTIVE_TARGET}\s*(?:$|[.,;:!?]|\s+(?:and|then|now|before|after|instead|to|with|from)\b)`,
+    String.raw`\byou\s+are\s+now\b`, String.raw`\bfrom\s+now\s+on\b`, String.raw`\breply\s+only\s+with\b`,
+    String.raw`\b(reveal|print|show|dump|exfiltrate|provide|give|send)\s+(?:me\s+)?(?:(?:the|your|my|any)\s+)?(system|developer)\s+prompt\b`,
+    String.raw`\bjailbreak\s+(?:mode|prompt|instructions?|the\s+model|the\s+assistant)\b`,
+  ].join('|'), 'i'),
+  /\bdan\s+mode\b/i, /\byou\s+are\s+dan\b/i,
+  new RegExp(String.raw`\banswer\s+${ANSWER_DAN_OBJECT}\s+as\s+dan\b`, 'i'),
+  new RegExp(String.raw`${DAN_PERSONA_DIRECTIVE_PREFIX}(?:act\s+as|pretend\s+to\s+be)\s+dan\b`, 'i'),
+  /\b(?:[Aa][Cc][Tt]\s+[Aa][Ss]|[Pp][Rr][Ee][Tt][Ee][Nn][Dd]\s+[Tt][Oo]\s+[Bb][Ee])\s+(?!Dan\b)[Dd][Aa][Nn]\b/,
+  /\b(?:[Ee][Nn][Aa][Bb][Ll][Ee]|[Aa][Cc][Tt][Ii][Vv][Aa][Tt][Ee]|[Uu][Nn][Ll][Oo][Cc][Kk]|[Ee][Nn][Tt][Ee][Rr]|[Ss][Tt][Aa][Rr][Tt]|[Uu][Ss][Ee])\s+(?!Dan\b)[Dd][Aa][Nn]\b/,
+]);
+
+export function directiveFlag(text) {
+  const s = String(text);
+  const units = s.match(/\n+|[^\n.!?]+[.!?]*\s*/g) ?? [s];
+  return units.some((unit) => !/^\n+$/.test(unit) && DIRECTIVE_SHAPED_PATTERNS.some((p) => p.test(unit)));
+}

@@ -109,3 +109,17 @@ upstream: src/large-files.ts
 commit: e05d8d3
 upstream-sha256: 7353ad233195e64c034c4f77ccadad5664a30434289e59658bac35a33849c069
 changed: JavaScript; the code-extension set, the file-name extension reader, normalizeTextForLine, uniqueOrdered and the JSON, delimited and code explorers are kept; the Read line-number prefix is stripped first, the kind comes from the paired tool_use path instead of a MIME type, JSON past a size bound gets counts, and the YAML, XML, text and model-summary paths are not ported
+
+item: Expand-for-details label (V8)
+ours: ccd/history/lib.mjs
+upstream: src/summarize.ts
+commit: e05d8d3
+upstream-sha256: 86deb98017c94d1992eaa45bdfa1d1b1fcb6238192418bfa2660698ce9d21e25
+changed: the label text only (upstream line 1173), as EXPAND_LABEL: the steer grammar's topics key, which the parser reads as a field, and the skill's trigger; upstream asks its summariser to end with the line and never parses it
+
+item: directive-shaped patterns, flag only (P29)
+ours: ccd/history/lib.mjs
+upstream: src/summary-fallback.ts
+commit: e05d8d3
+upstream-sha256: 3964bc606fe439c672760f4ca98d1386030eace2313a55011967edd731d85ec9
+changed: JavaScript as directiveFlag; the pattern list and the sentence-unit split (upstream lines 12-16, 19-42 and 48) are kept and only set a flag; the omission markers, the continuation heuristic and the summary builder are not ported, and nothing is stripped
