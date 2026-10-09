@@ -515,7 +515,7 @@ export function SessionScreen({
               : "Can't read the fleet host right now"}
           </span>
           <span className="banner-path">{missingFile ?? file ?? ''}</span>
-          <Button variant="ghost" onClick={openTerminal}>
+          <Button variant="ghost" size="fit" onClick={openTerminal}>
             Open terminal
           </Button>
         </div>
@@ -526,6 +526,8 @@ export function SessionScreen({
           <span className="banner-copy">Not running — the chat is read-only.</span>
           <Button
             variant="ghost"
+            size="fit"
+            className="flex-none"
             onClick={() => void restart()}
             disabled={restarting || fault !== null}
             title={faultTitle}

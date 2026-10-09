@@ -284,7 +284,7 @@ function ReleaseItem({ release: r, nodes, onMove }: {
         {direction === 'running'
           ? <span className="settings-release-running">{releaseRunningText(r.tag, nodes)}</span>
           : (
-            <Button variant="ghost" className="settings-move" disabled={blockers.length > 0} onClick={() => onMove(intent as MoveIntent)}>
+            <Button variant="ghost" size="fit" className="settings-move" disabled={blockers.length > 0} onClick={() => onMove(intent as MoveIntent)}>
               {direction === 'rollback' ? 'Roll back' : 'Install'}
             </Button>
           )}
@@ -500,14 +500,14 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }
         {!darwin && (
           <>
             <Button
-              variant="ghost" className="settings-move"
+              variant="ghost" size="fit" className="settings-move"
               disabled={next === null}
               onClick={() => { if (next !== null) onMove({ scope: 'node', direction: 'update', nodeId: n.nodeId, tag: next }); }}
             >
               Update
             </Button>
             <Button
-              variant="ghost" className="settings-move"
+              variant="ghost" size="fit" className="settings-move"
               disabled={previous === null || previousRefusal !== null}
               onClick={() => { if (previous !== null && previousRefusal === null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
             >
@@ -515,7 +515,7 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }
             </Button>
           </>
         )}
-        <Button variant="ghost" className="settings-move" disabled={!ackable || acking} onClick={ack}>Ack</Button>
+        <Button variant="ghost" size="fit" className="settings-move" disabled={!ackable || acking} onClick={ack}>Ack</Button>
       </div>
     </li>
   );

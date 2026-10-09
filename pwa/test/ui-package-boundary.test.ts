@@ -170,19 +170,21 @@ const LAYOUT_PROPS = new Set([
 
 /** The appearance reach-ins that predate this guard, each with its reason.
  *
- *  Asserted in both directions like the import allowlist above: a fourth
+ *  Asserted in both directions like the import allowlist above: a second
  *  cannot be added silently, and one that is fixed must be removed here or the
- *  census reds as stale. */
+ *  census reds as stale.
+ *
+ *  Down from three. The two chat-banner entries called themselves an UNDO of
+ *  the banner's own `color`, and were measured to be undoing nothing: Button's
+ *  ghost variant declares `text-ink-primary` ON the button, and an element
+ *  that declares its own colour never inherits one. Both deleted with no
+ *  visual change — the stale half of this census is what would have caught
+ *  them had they been written the other way round. */
 const APPEARANCE_CENSUS: Record<string, string> = {
   "fleet.css .acct-list .acct-row[data-disabled='true'] .limit-fill":
     'greys a condemned lane’s gauge: nothing runs there to refresh the statusline, '
     + 'so a frozen crit-red bar reads as live pressure on a row that says expired. '
     + 'The honest fix is a disabled variant on LimitBar, which has three bands and no fourth.',
-  'chat.css .chat-banner--dead .btn-ghost':
-    'restores --ink-primary that the banner’s own `color` would otherwise be '
-    + 'inherited into the button. An UNDO of an app rule, not a new appearance.',
-  'chat.css .chat-banner--missing .btn-ghost':
-    'same undo, one banner over.',
 };
 
 /** Every declared property name in a rule body, custom properties included. */

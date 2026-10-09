@@ -3090,8 +3090,6 @@ button.proj-card-pool::before {
    wins .btn-ghost's `width: 100%` by SPECIFICITY (0,2,0 over 0,1,0), not by
    which sheet loads last, and any disabled move button on this screen (the
    node rows' Update / Roll back too) can carry the same pair of classes. */
-.btn-ghost.settings-move { width: auto; padding: 0 var(--sp-3); }
-
 /* — centralised update management W3, Task 9: the node inventory —
    One row per live node, in the server's order (label, then nodeId). Same
    unfilled row as the release list above it — a hairline, no fill — so the
@@ -3207,14 +3205,6 @@ button.proj-card-pool::before {
   align-items: center;
   gap: var(--sp-2);
 }
-/* The shared buttons are full-width sheet buttons (primitives.css); in a
-   banner row they size to their label and keep their --tap-min height. */
-.update-banner-actions .btn-primary,
-.update-banner-actions .btn-ghost {
-  flex: none;
-  width: auto;
-  padding: 0 var(--sp-3);
-}
 
 /* — centralised update management, programme wave 5 Task 8: the move sheet —
    The ONE confirm sheet every move control opens (UpdateMoveSheet.tsx): the
@@ -3295,13 +3285,6 @@ button.proj-card-pool::before {
   flex: 1 1 12rem;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-/* The shared button is a full-width sheet button (primitives.css); here it sizes to its label and keeps its
-   --tap-min height. */
-.halt-banner-node .btn-primary {
-  flex: none;
-  width: auto;
-  padding: 0 var(--sp-3);
 }
 
 /* ------------------------------------------------------------------ *

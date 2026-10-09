@@ -226,6 +226,22 @@ const pairs = (T, name) => [
   // would redden the gate for a state that cannot occur — the plate is what
   // they actually sit on.
   [`${name} selected-row meta ink / slab`, T.edgeStrong, T.inkP, 4.5],
+
+  // A GHOST BUTTON'S LABEL ON A TINTED BANNER. Button's ghost variant paints
+  // its own --ink-primary and its background is transparent, so it is neither
+  // self-grounded (utility-pairs.test.ts derives bg+text on ONE element) nor
+  // visible to the stylesheet scan (it writes no rule). Both halves of the gate
+  // look straight past it.
+  //
+  // These two pairs WERE measured, by accident: chat.css carried
+  // `.chat-banner--dead .btn-ghost { color: var(--ink-primary) }` and a twin
+  // one banner over, each registered as an "undo" of the banner's own colour.
+  // They were undoing nothing — an element that declares its own colour never
+  // inherits one — so deleting them cost no pixels and 24 gate checks. Stated
+  // here instead, where the claim is the contract rather than a redundant rule
+  // nobody meant to rely on.
+  [`${name} ink-primary / dead banner tint`, T.inkP, T.deadTintSolid, 4.5],
+  [`${name} ink-primary / attention tint`, T.inkP, T.attTint, 4.5],
 ];
 
 let fail = 0, n = 0;

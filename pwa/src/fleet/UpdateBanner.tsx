@@ -140,13 +140,15 @@ export function UpdateBanner({ updates: injected, health = null, onMoved }: {
           <div className="update-banner-actions">
             <Button
               variant="ghost"
+              size="fit"
+              className="flex-none"
               disabled={halted !== null}
               aria-describedby={halted !== null ? haltedId : undefined}
               onClick={() => setMove(planMove(view, { scope: 'fleet', direction: 'update', tag: release.tag }))}
             >
               Update all
             </Button>
-            <Button variant="primary" onClick={() => navigate('/settings')}>
+            <Button variant="primary" size="fit" className="flex-none" onClick={() => navigate('/settings')}>
               {"See what's new"}
             </Button>
           </div>

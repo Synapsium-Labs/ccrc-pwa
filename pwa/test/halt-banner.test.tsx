@@ -493,10 +493,14 @@ describe('HaltBanner — a class of its own, a tap floor, and text only', () => 
     // with the utility deleted. `min-h-tap` is `var(--tap-min)` —
     // theme.css's `--spacing-tap`, pinned by theme-bridge.test.ts.
     expect(buttonVariants({ variant: 'primary' })).toContain('min-h-tap');
-    const rule = ruleIn(haltCss, '.halt-banner-node .btn-primary');
-    expect(declValue(rule, 'width')).toBe('auto');
-    expect(declValue(rule, 'min-height')).toBeNull();
-    expect(declValue(rule, 'height')).toBeNull();
+    // The width override was `.halt-banner-node .btn-primary` in fleet.css and
+    // is now Button's `fit`; the rule is gone. `fit` sets width and padding and
+    // nothing else, so the tap floor in the base survives it.
+    const fit = buttonVariants({ variant: 'primary', size: 'fit' });
+    expect(fit).toContain('w-auto');
+    expect(fit).toContain('min-h-tap');
+    expect(fit).not.toMatch(/\bh-\d|max-h-/);
+    expect(() => ruleIn(haltCss, '.halt-banner-node .btn-primary')).toThrow();
   });
 
   it('no rule but the banner\'s own sets a colour, so every child inherits the measured pair', () => {

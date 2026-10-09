@@ -18,7 +18,7 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 
 export const buttonVariants = cva(
-  'flex w-full min-h-tap cursor-pointer items-center justify-center rounded-md font-ui transition-transform duration-press ease-swift motion-reduce:transition-none enabled:active:scale-[0.97] disabled:cursor-default',
+  'flex min-h-tap cursor-pointer items-center justify-center rounded-md font-ui transition-transform duration-press ease-swift motion-reduce:transition-none enabled:active:scale-[0.97] disabled:cursor-default',
   {
     variants: {
       variant: {
@@ -27,8 +27,23 @@ export const buttonVariants = cva(
         ghost:
           'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
       },
+      /** How wide. `full` is the sheet shape and the default — a sheet's
+       *  commit button spans it. `fit` is the one every OTHER row wanted:
+       *  six app rules said `width: auto; padding: 0 var(--sp-3)` in six
+       *  different sheets, which is one variant written out six times.
+       *
+       *  Deliberately only those TWO declarations. Four of the six also set
+       *  `flex: none`, and two did not; folding it in here would change how
+       *  the other two shrink, and this wave changes no visual output. A call
+       *  site that needs it passes `className="flex-none"` — placement is the
+       *  call site's business and always was (`ui-package-boundary.test.ts`),
+       *  and in the JSX it is at least visible. */
+      size: {
+        full: 'w-full',
+        fit: 'w-auto px-3',
+      },
     },
-    defaultVariants: { variant: 'primary' },
+    defaultVariants: { variant: 'primary', size: 'full' },
   },
 );
 
@@ -36,6 +51,6 @@ export interface ButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {}
 
-export function Button({ className, variant, type = 'button', ...props }: ButtonProps): ReactNode {
-  return <button type={type} className={cn(buttonVariants({ variant }), className)} {...props} />;
+export function Button({ className, variant, size, type = 'button', ...props }: ButtonProps): ReactNode {
+  return <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />;
 }

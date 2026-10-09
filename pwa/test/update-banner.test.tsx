@@ -16,6 +16,7 @@ import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
+import { buttonVariants } from '@ccrc/ui';
 import { useFleetStore } from '../src/stores/fleet';
 import { UPDATES_POLL_MS } from '../src/fleet/useUpdatesView';
 import { bannerRelease, UpdateBanner, updateBannerText } from '../src/fleet/UpdateBanner';
@@ -382,11 +383,15 @@ describe('UpdateBanner — a class of its own, a tap floor, and text only', () =
       .toContain('min-h-tap');
     expect(themeCss, '--spacing-tap no longer maps to --tap-min')
       .toContain('--spacing-tap:  var(--tap-min)');
+    // Both action buttons sized to their label through a fleet.css rule. That
+    // rule is gone: it was Button's `fit` written out, in one of six sheets
+    // that each wrote it out. Asserted on the cva, and on the rule's absence.
+    const fit = buttonVariants({ size: 'fit' });
+    expect(fit).toContain('w-auto');
+    expect(fit).toContain('min-h-tap');
+    expect(fit).not.toMatch(/\bh-\d|max-h-/);
     for (const sel of ['.update-banner-actions .btn-primary', '.update-banner-actions .btn-ghost']) {
-      const rule = ruleIn(fleetCss, sel);
-      expect(declValue(rule, 'width'), sel).toBe('auto');
-      expect(declValue(rule, 'min-height'), sel).toBeNull();
-      expect(declValue(rule, 'height'), sel).toBeNull();
+      expect(() => ruleIn(fleetCss, sel), sel).toThrow();
     }
   });
 

@@ -29,7 +29,7 @@ import {
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
-import { DOOR, ToastHost } from '@ccrc/ui';
+import { buttonVariants, DOOR, ToastHost } from '@ccrc/ui';
 import { declValue, ruleIn } from './cssRule';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -1470,8 +1470,11 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
     expect(declValue(ruleIn(css, '.settings-node-current--amber'), 'color')).toBe('var(--status-attention-text)');
     expect(declValue(ruleIn(css, '.settings-node-label'), 'overflow-wrap')).toBe('anywhere');
-    // The row's three buttons carry Task 8's pair; its compound rule is what keeps them inline.
-    expect(declValue(ruleIn(css, '.btn-ghost.settings-move'), 'width')).toBe('auto');
+    // The row's buttons size to their label. That was `.btn-ghost.settings-move`
+    // in this sheet and is now Button's own `fit`, so the claim moves with it:
+    // asserted through the cva, and the rule is gone from fleet.css.
+    expect(buttonVariants({ variant: 'ghost', size: 'fit' })).toContain('w-auto');
+    expect(() => ruleIn(css, '.btn-ghost.settings-move')).toThrow();
   });
 
   // Wave 8 item F1 (D-3590): a node at its own floor, on the newest eligible release, renders the resolver's own

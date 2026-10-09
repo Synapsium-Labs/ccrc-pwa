@@ -366,12 +366,6 @@ button.metachip:active {
   flex: 1;
   min-width: 0;
 }
-.chat-banner--dead .btn-ghost {
-  width: auto;
-  flex: none;
-  padding: 0 var(--sp-3);
-  color: var(--ink-primary);
-}
 .chat-banner--missing {
   align-items: flex-start;
   flex-direction: column;
@@ -384,11 +378,6 @@ button.metachip:active {
   font: var(--weight-regular) var(--fs-xs) / var(--lh-mono) var(--family-mono);
   color: var(--ink-secondary);
   overflow-wrap: anywhere;
-}
-.chat-banner--missing .btn-ghost {
-  width: auto;
-  padding: 0 var(--sp-3);
-  color: var(--ink-primary);
 }
 
 /* ------------------------------------------------------------------ *

@@ -82,6 +82,8 @@ function HaltRow({ node: n, releases, seq, onAcked }: {
       <span className="halt-banner-node-text">{haltLine(n)}</span>
       <Button
         variant="primary"
+        size="fit"
+        className="flex-none"
         aria-label={`${label} ${n.label}`}
         disabled={!canAck(n, releases) || acking || held}
         onClick={ack}
