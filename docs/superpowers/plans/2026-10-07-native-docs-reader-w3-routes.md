@@ -13948,7 +13948,7 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 
 ## Wave 3 results
 
-Measured 2026-10-09 07:13 UTC on the tree at `87126057c672` (base `5a6e5d3d7ef5`, 25 W3 commits on the first-parent line). Every number below was printed by a Task 12 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+Measured 2026-10-09 09:21 UTC on the tree at `8fff7c916195` (base `5a6e5d3d7ef5`, 27 W3 commits on the first-parent line). Every number below was printed by a Task 12 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
 
 Deviation numbers spent (issued block 4464-4479): D-4464, D-4465, D-4466, D-4467, D-4468, D-4469, D-4470, D-4471.
 
@@ -13959,74 +13959,74 @@ The every-wave, W3 and existing suites (spec section 7.9), run in the foreground
 | # | Command | Test Files | Tests | s | rc |
 |---|---|---|---|---|---|
 | 01 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )` | 1 passed (1) | 55 passed (55) | 10 | 0 |
-| 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 530 passed (530) | 15 | 0 |
-| 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` | 2 passed (2) | 32 passed (32) | 10 | 0 |
-| 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 46 | 0 |
+| 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 530 passed (530) | 17 | 0 |
+| 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` | 2 passed (2) | 32 passed (32) | 12 | 0 |
+| 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 55 | 0 |
 | 05 | `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-cache.test.ts test/docs-lanes.test.ts test/docs-headers.test.ts test/docs-file-bytes.test.ts test/docs-policy.test.ts )` | 6 passed (6) | 914 passed (914) | 4 | 0 |
-| 06 | `( cd server && ./node_modules/.bin/vitest run test/docs-console-latency.test.ts )` | 1 passed (1) | 4 passed (4) | 11 | 0 |
-| 07 | `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/coord-routes-single-file.test.ts test/coord-pause-route.test.ts test/verb-gate.test.ts test/whitelist-subset.test.ts )` | 6 passed (6) | 336 passed (336) | 6 | 0 |
-| 08 | `( cd server && ./node_modules/.bin/vitest run test/capsupported.test.ts test/routes.test.ts test/update-routes.test.ts test/boot.test.ts test/auth-passkey.test.ts test/auth-wire.test.ts )` | 6 passed (6) | 308 passed (308) | 22 | 0 |
-| 09 | `( cd server && ./node_modules/.bin/vitest run test/docs-source.test.ts test/docs-budget.test.ts test/docs-shared.test.ts test/docs-parity.test.ts )` | 4 passed (4) | 471 passed (471) | 5 | 0 |
-| 10 | `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )` | 1 passed (1) | 13 passed \| 437 skipped (450) | 3 | 0 |
+| 06 | `( cd server && ./node_modules/.bin/vitest run test/docs-console-latency.test.ts )` | 1 passed (1) | 4 passed (4) | 12 | 0 |
+| 07 | `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/coord-routes-single-file.test.ts test/coord-pause-route.test.ts test/verb-gate.test.ts test/whitelist-subset.test.ts )` | 6 passed (6) | 346 passed (346) | 6 | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/capsupported.test.ts test/routes.test.ts test/update-routes.test.ts test/boot.test.ts test/auth-passkey.test.ts test/auth-wire.test.ts )` | 6 passed (6) | 308 passed (308) | 33 | 0 |
+| 09 | `( cd server && ./node_modules/.bin/vitest run test/docs-source.test.ts test/docs-budget.test.ts test/docs-shared.test.ts test/docs-parity.test.ts )` | 4 passed (4) | 471 passed (471) | 6 | 0 |
+| 10 | `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )` | 1 passed (1) | 13 passed \| 437 skipped (450) | 4 | 0 |
 
 The full server suite, in 53 batches that hold every file vitest's include reaches exactly once (files one call cannot hold run as `-t` pieces of their top-level describes). This run's first pass: red (red on the first run: F24, F25). First full run of this wave: **red** (at `87126057c672`).
 
 | # | Command | Test Files | Tests | s | rc |
 |---|---|---|---|---|---|
-| F01 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-a/> )` | 11 passed (11) | 548 passed (548) | 79 | 0 |
-| F02 | `( cd server && ./node_modules/.bin/vitest run <the 27 files whose name matches /^ccd-(b\|c[a-h])/> )` | 27 passed (27) | 997 passed \| 1 skipped (998) | 340 | 0 |
-| F03 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-c/> )` | 5 passed (5) | 178 passed (178) | 53 | 0 |
-| F04 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-[d-h]/> )` | 11 passed (11) | 683 passed (683) | 53 | 0 |
-| F05 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-[i-o]/> )` | 14 passed (14) | 584 passed (584) | 102 | 0 |
-| F06 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-p/> )` | 14 passed (14) | 408 passed (408) | 101 | 0 |
-| F07 | `( cd server && ./node_modules/.bin/vitest run <the 13 files whose name matches /^ccd-r[a-e]/> )` | 13 passed (13) | 245 passed (245) | 69 | 0 |
-| F08 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccd-r/> )` | 9 passed (9) | 246 passed (246) | 49 | 0 |
-| F09 | `( cd server && ./node_modules/.bin/vitest run <the 16 files whose name matches /^ccd-s/> )` | 16 passed (16) | 389 passed \| 8 skipped (397) | 26 | 0 |
-| F10 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-[t-v]/> )` | 6 passed (6) | 119 passed (119) | 8 | 0 |
-| F11 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-ws-expire/> )` | 6 passed (6) | 135 passed (135) | 103 | 0 |
-| F12 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-(w[a-r]\|wsa\|ws-[a-g])/> )` | 5 passed (5) | 191 passed (191) | 69 | 0 |
-| F13 | `( cd server && ./node_modules/.bin/vitest run <the 4 files whose name matches /^ccd-/> )` | 4 passed (4) | 82 passed (82) | 36 | 0 |
-| F14 | `( cd server && ./node_modules/.bin/vitest run <the 34 files whose name matches /^[ab]/> )` | 34 passed (34) | 1080 passed (1080) | 49 | 0 |
-| F15 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^(ca\|ccdargv\|ccg)/> )` | 9 passed (9) | 274 passed \| 5 skipped (279) | 16 | 0 |
-| F16 | `( cd server && ./node_modules/.bin/vitest run <the 1 files whose name matches /^ccrc-install-graphify\./> )` | 1 passed (1) | 58 passed (58) | 126 | 0 |
-| F17 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccrc-[a-h]/> )` | 9 passed (9) | 562 passed \| 3 skipped (565) | 178 | 0 |
-| F18 | `( cd server && ./node_modules/.bin/vitest run <the 10 files whose name matches /^ccrc-/> )` | 10 passed (10) | 562 passed \| 4 skipped (566) | 67 | 0 |
-| F19 | `( cd server && ./node_modules/.bin/vitest run <the 23 files whose name matches /^ch/> )` | 23 passed (23) | 1072 passed (1072) | 171 | 0 |
-| F20 | `( cd server && ./node_modules/.bin/vitest run <the 47 files whose name matches /^c/> )` | 47 passed (47) | 5869 passed (5869) | 139 | 0 |
-| F21 | `( cd server && ./node_modules/.bin/vitest run <the 78 files whose name matches /^[d-k]/> )` | 78 passed (78) | 4521 passed \| 3 skipped (4524) | 154 | 0 |
-| F22 | `( cd server && ./node_modules/.bin/vitest run <the 59 files whose name matches /^[l-o]/> )` | 59 passed (59) | 1401 passed \| 11 skipped (1412) | 128 | 0 |
-| F23 | `( cd server && ./node_modules/.bin/vitest run <the 65 files whose name matches /^[p-r]/> )` | 65 passed (65) | 1877 passed \| 5 skipped (1882) | 155 | 0 |
-| F24 | `( cd server && ./node_modules/.bin/vitest run <the 48 files whose name matches /^[st]/> )` | 1 failed (1) | 1 failed \| 13 passed (14) | 131 | 1; re-run alone: 1 |
+| F01 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-a/> )` | 11 passed (11) | 548 passed (548) | 99 | 0 |
+| F02 | `( cd server && ./node_modules/.bin/vitest run <the 27 files whose name matches /^ccd-(b\|c[a-h])/> )` | 27 passed (27) | 997 passed \| 1 skipped (998) | 495 | 0 |
+| F03 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-c/> )` | 5 passed (5) | 178 passed (178) | 63 | 0 |
+| F04 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-[d-h]/> )` | 11 passed (11) | 683 passed (683) | 69 | 0 |
+| F05 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-[i-o]/> )` | 14 passed (14) | 584 passed (584) | 112 | 0 |
+| F06 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-p/> )` | 14 passed (14) | 408 passed (408) | 110 | 0 |
+| F07 | `( cd server && ./node_modules/.bin/vitest run <the 13 files whose name matches /^ccd-r[a-e]/> )` | 13 passed (13) | 245 passed (245) | 75 | 0 |
+| F08 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccd-r/> )` | 9 passed (9) | 246 passed (246) | 53 | 0 |
+| F09 | `( cd server && ./node_modules/.bin/vitest run <the 16 files whose name matches /^ccd-s/> )` | 16 passed (16) | 389 passed \| 8 skipped (397) | 29 | 0 |
+| F10 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-[t-v]/> )` | 6 passed (6) | 119 passed (119) | 9 | 0 |
+| F11 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-ws-expire/> )` | 6 passed (6) | 135 passed (135) | 110 | 0 |
+| F12 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-(w[a-r]\|wsa\|ws-[a-g])/> )` | 5 passed (5) | 191 passed (191) | 82 | 0 |
+| F13 | `( cd server && ./node_modules/.bin/vitest run <the 4 files whose name matches /^ccd-/> )` | 4 passed (4) | 82 passed (82) | 38 | 0 |
+| F14 | `( cd server && ./node_modules/.bin/vitest run <the 34 files whose name matches /^[ab]/> )` | 34 passed (34) | 1088 passed (1088) | 54 | 0 |
+| F15 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^(ca\|ccdargv\|ccg)/> )` | 9 passed (9) | 274 passed \| 5 skipped (279) | 19 | 0 |
+| F16 | `( cd server && ./node_modules/.bin/vitest run <the 1 files whose name matches /^ccrc-install-graphify\./> )` | 1 passed (1) | 58 passed (58) | 136 | 0 |
+| F17 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccrc-[a-h]/> )` | 9 passed (9) | 562 passed \| 3 skipped (565) | 180 | 0 |
+| F18 | `( cd server && ./node_modules/.bin/vitest run <the 10 files whose name matches /^ccrc-/> )` | 10 passed (10) | 562 passed \| 4 skipped (566) | 72 | 0 |
+| F19 | `( cd server && ./node_modules/.bin/vitest run <the 23 files whose name matches /^ch/> )` | 23 passed (23) | 1072 passed (1072) | 187 | 0 |
+| F20 | `( cd server && ./node_modules/.bin/vitest run <the 47 files whose name matches /^c/> )` | 47 passed (47) | 5885 passed (5885) | 175 | 0 |
+| F21 | `( cd server && ./node_modules/.bin/vitest run <the 78 files whose name matches /^[d-k]/> )` | 78 passed (78) | 4521 passed \| 3 skipped (4524) | 159 | 0 |
+| F22 | `( cd server && ./node_modules/.bin/vitest run <the 59 files whose name matches /^[l-o]/> )` | 59 passed (59) | 1405 passed \| 11 skipped (1416) | 145 | 0 |
+| F23 | `( cd server && ./node_modules/.bin/vitest run <the 65 files whose name matches /^[p-r]/> )` | 65 passed (65) | 1877 passed \| 5 skipped (1882) | 176 | 0 |
+| F24 | `( cd server && ./node_modules/.bin/vitest run <the 54 files whose name matches /^[st]/> )` | 1 failed (1) | 1 failed \| 13 passed (14) | 193 | 1; re-run alone: 1 |
 |  | FAIL: test/tmp-sweep.test.ts > ccd-tmp-sweep: refusals and brakes > FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed |  |  |  |  |
-| F25 | `( cd server && ./node_modules/.bin/vitest run <the 50 files whose name matches no earlier pattern> )` | 1 passed (1) | 43 passed (43) | 111 | 1; re-run alone: 0 |
-| F26 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part1 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 58 passed \| 87 skipped (145) | 146 | 0 |
-| F27 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part2 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 77 passed \| 68 skipped (145) | 184 | 0 |
-| F28 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: rest>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 6 passed \| 139 skipped (145) | 2 | 0 |
-| F29 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part1 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 65 passed \| 49 skipped (114) | 192 | 0 |
-| F30 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part2 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 49 passed \| 65 skipped (114) | 191 | 0 |
-| F31 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: rest>' test/ccd-ws-reap.test.ts )` | 1 skipped (1) | 114 skipped (114) | 2 | 0 |
+| F25 | `( cd server && ./node_modules/.bin/vitest run <the 50 files whose name matches no earlier pattern> )` | 1 passed (1) | 43 passed (43) | 137 | 1; re-run alone: 0 |
+| F26 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part1 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 58 passed \| 87 skipped (145) | 162 | 0 |
+| F27 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part2 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 77 passed \| 68 skipped (145) | 196 | 0 |
+| F28 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: rest>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 6 passed \| 139 skipped (145) | 1 | 0 |
+| F29 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part1 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 65 passed \| 49 skipped (114) | 208 | 0 |
+| F30 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part2 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 49 passed \| 65 skipped (114) | 197 | 0 |
+| F31 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: rest>' test/ccd-ws-reap.test.ts )` | 1 skipped (1) | 114 skipped (114) | 1 | 0 |
 | F32 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part1 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 96 passed \| 261 skipped (357) | 28 | 0 |
-| F33 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part2 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 156 passed \| 201 skipped (357) | 91 | 0 |
+| F33 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part2 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 156 passed \| 201 skipped (357) | 98 | 0 |
 | F34 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part3 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 44 passed \| 313 skipped (357) | 18 | 0 |
-| F35 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part4 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 59 passed \| 298 skipped (357) | 42 | 0 |
+| F35 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part4 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 59 passed \| 298 skipped (357) | 44 | 0 |
 | F36 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: rest>' test/ccrc-account.test.ts )` | 1 passed (1) | 2 passed \| 355 skipped (357) | 2 | 0 |
-| F37 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part1 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 73 passed \| 815 skipped (888) | 50 | 0 |
-| F38 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part2 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 125 passed \| 763 skipped (888) | 115 | 0 |
-| F39 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part3 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 127 passed \| 761 skipped (888) | 120 | 0 |
-| F40 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part4 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 185 passed \| 703 skipped (888) | 122 | 0 |
-| F41 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part5 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 97 passed \| 791 skipped (888) | 74 | 0 |
-| F42 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part6 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 113 passed \| 775 skipped (888) | 31 | 0 |
-| F43 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: rest>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 153 passed \| 735 skipped (888) | 158 | 0 |
-| F44 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part1 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 60 passed \| 258 skipped (318) | 163 | 0 |
-| F45 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part2 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 63 passed \| 255 skipped (318) | 199 | 0 |
-| F46 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part3 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 68 passed \| 250 skipped (318) | 184 | 0 |
-| F47 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part4 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 73 passed \| 245 skipped (318) | 60 | 0 |
-| F48 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: rest>' test/ccrc-install.test.ts )` | 1 passed (1) | 34 passed \| 284 skipped (318) | 161 | 0 |
-| F49 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part1 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 99 passed \| 415 skipped (514) | 88 | 0 |
-| F50 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part2 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 156 passed \| 358 skipped (514) | 91 | 0 |
-| F51 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part3 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 94 passed \| 420 skipped (514) | 183 | 0 |
-| F52 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part4 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 153 passed \| 361 skipped (514) | 229 | 0 |
-| F53 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: rest>' test/ccrc-update.test.ts )` | 1 skipped (1) | 514 skipped (514) | 4 | 0 |
+| F37 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part1 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 73 passed \| 815 skipped (888) | 54 | 0 |
+| F38 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part2 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 125 passed \| 763 skipped (888) | 118 | 0 |
+| F39 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part3 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 127 passed \| 761 skipped (888) | 127 | 0 |
+| F40 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part4 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 185 passed \| 703 skipped (888) | 140 | 0 |
+| F41 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part5 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 97 passed \| 791 skipped (888) | 78 | 0 |
+| F42 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part6 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 113 passed \| 775 skipped (888) | 32 | 0 |
+| F43 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: rest>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 153 passed \| 735 skipped (888) | 155 | 0 |
+| F44 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part1 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 60 passed \| 258 skipped (318) | 151 | 0 |
+| F45 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part2 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 63 passed \| 255 skipped (318) | 200 | 0 |
+| F46 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part3 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 68 passed \| 250 skipped (318) | 178 | 0 |
+| F47 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part4 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 73 passed \| 245 skipped (318) | 59 | 0 |
+| F48 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: rest>' test/ccrc-install.test.ts )` | 1 passed (1) | 34 passed \| 284 skipped (318) | 155 | 0 |
+| F49 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part1 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 99 passed \| 415 skipped (514) | 82 | 0 |
+| F50 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part2 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 156 passed \| 358 skipped (514) | 90 | 0 |
+| F51 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part3 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 94 passed \| 420 skipped (514) | 166 | 0 |
+| F52 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part4 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 153 passed \| 361 skipped (514) | 198 | 0 |
+| F53 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: rest>' test/ccrc-update.test.ts )` | 1 skipped (1) | 514 skipped (514) | 3 | 0 |
 
 ```text
 FULL 53 batches
@@ -14043,7 +14043,7 @@ OK test/ccrc-update.test.ts: 502 tests ran once each across its pieces, 12 skipp
 From `w3-invariants.py` (scope from W3's own commits; net shapes against the base, or the last merge of main):
 
 ```text
-base 5a6e5d3d7ef5, ref 5a6e5d3d7ef5, tip 87126057c672, 25 W3 commits, 0 merges of main
+base 5a6e5d3d7ef5, ref f82cb9fbcabf, tip 8fff7c916195, 27 W3 commits, 1 merges of main
 PASS scope          20 files touched by W3 commits; outside the scope: none; scope files untouched: none
 PASS untouched      ccd/, shared/, pwa/, agent/, index.ts, docs/ports.ts, docs/ccdsource.ts, lifecycle.ts, ccdargv.ts, remote/runner.ts, README.md, CLAUDE.md changed vs ref: none
 PASS docs-files     tracked ['cache.ts', 'ccdsource.ts', 'hooks.ts', 'lane.ts', 'policy.ts', 'ports.ts', 'routes.ts']; on disk ['cache.ts', 'ccdsource.ts', 'hooks.ts', 'lane.ts', 'policy.ts', 'ports.ts', 'routes.ts']
@@ -14055,14 +14055,14 @@ PASS no-l4-ccd      CCD_ARGV in routes.ts, hooks.ts, lane.ts, cache.ts: none
 PASS no-req-log     req.log or request.log under server/src/docs: none
 PASS no-box-token   requireMailToken or checkMailToken under server/src/docs: none
 PASS gate-shape     gate.ts vs ref: ['-8,1 +8,1']
-PASS sd-shape       single-definition.test.ts vs ref (5453 lines): 1 DOCS_RING_FLOOR line in place, 1 EOF append (135 lines), other hunks: none
+PASS sd-shape       single-definition.test.ts vs ref (5455 lines): 1 DOCS_RING_FLOOR line in place, 1 EOF append (135 lines), other hunks: none
 PASS deviations     ## Deviations found x1; defined ['D-4464', 'D-4465', 'D-4466', 'D-4467', 'D-4468', 'D-4469', 'D-4470', 'D-4471'] (issued 4464-4479; the first 8 expected in order); malformed definition lines: 0
 13 invariants, 13 PASS
 ```
 
 ### Mutation table
 
-Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `87126057c672`, one row at a time, each file restored byte for byte after its row.
+Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `8fff7c916195`, one row at a time, each file restored byte for byte after its row.
 
 | Row | Task | File | Result | First red case (measured) |
 |---|---|---|---|---|
@@ -14270,14 +14270,14 @@ Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W3-T8-M2 | T8 | `server/src/server.ts` | red | test/auth-gate.test.ts > the scanner is COMPLETE — measured against Fastify's own route table > …and in the other direction: nothing the scan found is a phantom |
 | W3-T8-M3 | T8 | `server/src/server.ts` | red | test/auth-gate.test.ts > the scanner is COMPLETE — measured against Fastify's own route table > …and in the other direction: nothing the scan found is a phantom |
 | W3-T8-M4 | T8 | `server/src/server.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > every /api/docs route lives i |
-| W3-T8-M5 | T8 | `server/src/auth/gate.ts` | red | test/auth-gate.test.ts > EXEMPT is complete in both directions > exempts exactly the six classes the plan names — nothing has crept in |
-| W3-T8-M6 | T8 | `server/src/auth/gate.ts` | red | test/auth-gate.test.ts > the gate sweep states the route counts it derives > gate.ts's own docstring names the HTTP-route count it stands in front of |
+| W3-T8-M5 | T8 | `server/src/auth/gate.ts` | red | test/auth-gate.test.ts > EXEMPT is complete in both directions > exempts exactly the seven classes the plan names — nothing has crept in |
+| W3-T8-M6 | T8 (re-anchored in T11) | `server/src/auth/gate.ts` | red | test/auth-gate.test.ts > the gate sweep states the route counts it derives > gate.ts's own docstring names the HTTP-route count it stands in front of |
 | W3-T8-M7 | T8 | `server/src/docs/routes.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > no docs file consults the box |
 | W3-T8-M8 | T8 | `server/src/docs/hooks.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > no docs file consults the box |
 | W3-T8-M9 | T8 | `server/test/box-token-census.test.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > docs/routes.ts registers what |
 | W3-T8-M10 | T8 | `server/src/docs/routes.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > docs/routes.ts registers what |
 | W3-T8-M11 | T8 | `server/src/docs/routes.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > docs/routes.ts registers what |
-| W3-T8-M12 | T8 | `server/test/box-token-census.test.ts` | red | test/box-token-census.test.ts > the box-token surface is derived, and no prose site under-claims it > CLAUDE.md's box-token bullet is TRUE, not merely present |
+| W3-T8-M12 | T8 (re-anchored in T11) | `server/test/box-token-census.test.ts` | red | test/box-token-census.test.ts > the box-token surface is derived, and no prose site under-claims it > CLAUDE.md's box-token bullet is TRUE, not merely present |
 | W3-T8-M13 | T8 | `server/test/box-token-census.test.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > docs/routes.ts registers what |
 | W3-T9-M1 | T9 | `server/src/server.ts` | red | test/docs-routes.test.ts > T9: the real server — the composition reads deps.fleetState through a getter (refinement (i); W2 carry) > no fleet state: caps-unknow |
 | W3-T9-M2 | T9 | `server/src/docs/routes.ts` | red | test/typecheck-tests.test.ts > every test file typechecks — the directory the gates could not see > server/test/ is clean under a tests-inclusive project |
@@ -14321,13 +14321,15 @@ Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 ### Notes
 
 - Task 11: Findings: 16 (fixed 14, carried 0, not a defect 1, ruled departures 1). Commits: 7fbb195b2 0102095ed fabb83849 79651fb14 4380db8a6 f419310a3 8e663c862 0b1367fb0 e1ae037d2 90642272c 0bb98422b 7f19adbd3 87126057c. Panel tip 7a1936dd4e640610931b1ec596f1c656a9ce323a; fix-wave tip 87126057c672d90dd06e11f3cf5ac14983201e76.
-- suite F25 full-rest: red on the first run (test/update-store-nodes.test.ts, the `heir guard IS isHalting` case: Test timed out in 20000ms under load), green re-run alone (43 passed); a load flake.
-- suite F24: test/tmp-sweep.test.ts `FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed` red on the first run, red alone, and red in a `git archive` copy of the base (14 tests, 1 failed); main-red, reported once, not W3's.
-- Mutation rows: 249 ids from 253 rows in 12 blocks (T1 25, T2 40, T3 19, T4 32, T5 30, T6 31, T7 23, T8 13, T9 14, T10 6, T11 20, T12 0); the extractor reports 4 re-anchors by Task 11 (W3-T5-M7, W3-T5-M18, W3-T5-M19, W3-T6-M27); no row needed a re-anchor in this task; the tools' plan-era count of 232 is superseded by the measured 249.
-- Route counts on this base (Task 8, re-derived): HTTP 92, ROUTES.length 95, gated 60, exempt 32; the plan's arithmetic gave 90, 93 and 58, and the +2 is the coordinator's stall-watch drift (#320). No invariant hard-coded a plan-era count.
+- Merged origin/main (#330) at a316d60b3 under worker clause 16 (merge-tree conflict); counts re-derived; W3-T8-M6 and W3-T8-M12 re-anchored at 8fff7c916.
+- This section replaces the one written at 633010a1b, which measured the tree before that merge; the wave's FIRST full-run verdict (`red`, at 87126057c672) is unchanged and was never rewritten. This re-run is on the merged tip.
+- suite F25 full-rest: red on this run's first pass (test/update-store-nodes.test.ts, the `heir guard IS isHalting` case: Test timed out in 20000ms under load; the same case timed out on the pre-merge run too), green re-run alone (43 passed in 56 s); a load flake.
+- suite F24: test/tmp-sweep.test.ts `FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed` red on this run's first pass and red alone (1 failed | 13 passed); it was measured red in a `git archive` copy of the base (5a6e5d3d7) on the pre-merge run; main-red, not W3's.
+- Coordinator ruling (mail 4080, 2026-10-09) on main-red tmp-sweep: the wave brief lists tmp-sweep's FAILS CLOSED row as a known red; recorded, not fixed by W3 (red at the base 5a6e5d3d7 too).
+- Mutation rows: 249 ids from 255 rows in 12 blocks (T1 25, T2 40, T3 19, T4 32, T5 30, T6 31, T7 23, T8 13, T9 14, T10 6, T11 22, T12 0); the extractor reports 6 re-anchors by Task 11 (W3-T5-M7, W3-T5-M18, W3-T5-M19, W3-T6-M27, W3-T8-M6, W3-T8-M12); no row needed a re-anchor in this task.
+- Route counts on the merged tree (re-derived by the coordinator at a316d60b3): ROUTES.length 97 = 51+33+7+2+4, HTTP 94, gated 61, exempt-HTTP 33, gate.ts numeral 94; the plan's arithmetic gave 90/93/58 on its base, and the difference is main's own routes (#320 stall-watch, #330 box-token lifecycle). The `gate-shape` and `sd-shape` invariants are judged against the merge's second parent (main), so main's edits do not count as W3's.
 - Deviation count: the plan's "five deviations" reads six (brief override), and the section holds eight entries, D-4464..D-4471 (six refinements, D-4470 the listing-map floor from Task 5's review, D-4471 the WebSocket-upgrade escape from Task 11's review 2-2).
 - 43 per-task minors (Tasks 1-10) were deferred, none load-bearing, listed in the worker's SDD ledger.
-- Coordinator ruling (mail 4080, 2026-10-09) on main-red tmp-sweep: the wave brief lists tmp-sweep's FAILS CLOSED row as a known red; recorded, not fixed by W3 (red at the base 5a6e5d3d7 too).
 
 ### Carried, not fixed
 
