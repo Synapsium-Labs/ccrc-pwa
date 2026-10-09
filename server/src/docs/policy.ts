@@ -1084,3 +1084,19 @@ export function docsHookVerdict(
   const typed = payloadAbsent && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;
   return docsSendPolicy(statusCode, typed, cacheControl);
 }
+
+// ===== Task 11 review 3-1: a tree answer names the project the request named =====
+
+/**
+ * Whether an ok tree the adapter passed answers the project the request named: its `project` is, with `===` and no
+ * normalisation (no lowering, trimming or decoding), the `project` the route parsed from `:project`. The listing map
+ * files a tree under the answer's own `project`, so a tree naming another project would be filed under that one: its
+ * file reads would then be refused against a blob that is not theirs, or served another file's cached bytes. An
+ * echo that is not that exact text (another project, a different case, absent, not text) is
+ * `malformed-answer {why:'pin'}`, the word for an answer that does not echo its request. A fresh body each call.
+ * Runs after `docsAnswerShape` and before anything records or replies.
+ */
+export function docsTreeEcho(answer: DocsTreeOk, project: string): { ok: true } | DocsFailureBody {
+  if (answer.project === project) return { ok: true };
+  return { ok: false, failure: 'malformed-answer', why: 'pin' };
+}

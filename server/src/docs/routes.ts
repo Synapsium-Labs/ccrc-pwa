@@ -26,8 +26,8 @@ import {
   DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
   docsCacheVerdict, docsFileReply, docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsLogDue, docsNodeKey,
   docsProjectKey, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
-  docsShowPlan, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam, parseDocsRefreshBody,
-  refreshDue, type DocsApiRequest, type DocsFileReply, type DocsJob, type DocsListedFile, type DocsRefreshHalf,
+  docsShowPlan, docsTreeEcho, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam,
+  parseDocsRefreshBody, refreshDue, type DocsApiRequest, type DocsFileReply, type DocsJob, type DocsListedFile, type DocsRefreshHalf,
   type DocsRefreshRequest,
 } from './policy.js';
 import type {
@@ -148,14 +148,21 @@ function believeIndex(at: DocsNodeLanes, node: string, gen: number, got: DocsInd
   return got;
 }
 
-/** An ok tree the adapter passed, believed only after `docsAnswerShape` (refinement (f)): only then does it feed the
- *  listing map and the draft size map, and only then may `refreshDue` read it. A failure is handed back as it came. */
-function believeTree(at: DocsNodeLanes, node: string, got: DocsTreeRead): DocsTreeRead {
+/** An ok tree the adapter passed, believed only after `docsAnswerShape` (refinement (f)) and `docsTreeEcho` (it names
+ *  the project the request named): only then does it feed the listing map and the draft size map, and only then may
+ *  `refreshDue` read it. A failure is handed back as it came. */
+function believeTree(at: DocsNodeLanes, src: DocsSourceId, got: DocsTreeRead): DocsTreeRead {
+  const node = src.node;
   if (!got.ok) return got;
   const shape = docsAnswerShape('docs-tree', got.answer);
   if (!shape.ok) {
     console.warn('ccrc-server: docs tree answer failed its shape check');
     return shape;
+  }
+  const echo = docsTreeEcho(got.answer, src.project);
+  if (!echo.ok) {
+    console.warn('ccrc-server: docs tree answer named another project');
+    return echo;
   }
   at.caches.listing.record(node, got.answer, at.nowMs());
   at.caches.draftSizes.record(node, got.answer);
@@ -192,7 +199,7 @@ function readTree(reader: DocsReader, at: DocsNodeLanes, src: DocsSourceId, ref:
   signal: AbortSignal): Promise<DocsLaneRun<DocsTreeRead>> {
   const gen = at.gens.current(docsProjectKey(src.node, src.project));
   return at.flights.join(docsTreeFlightKey(src.node, src.project, ref, gen), signal,
-    (flight) => at.read.run(LISTING_JOB, flight, async () => believeTree(at, src.node, await reader.tree(src, ref))));
+    (flight) => at.read.run(LISTING_JOB, flight, async () => believeTree(at, src, await reader.tree(src, ref))));
 }
 
 /** A believed tree's 200 body: the tree as ccd answered it, and L1's `refreshDue` over it. */

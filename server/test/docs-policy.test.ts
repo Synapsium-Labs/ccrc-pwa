@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DOCS_FAILURE_HTTP, DOCS_CAPS_UNKNOWN_RETRY_AFTER_S, DOCS_REF_PREFIXES, docsRetryAfterSeconds, docsRefTarget,
-  fetchBranchFor, refreshDue,
+  fetchBranchFor, refreshDue, docsTreeEcho,
 } from '../src/docs/policy.js';
 import { DOCS_FAILURES } from '../../shared/docs.js';
 import type { DocsFailure, DocsFailureBody, DocsFetchFailure, DocsTreeOk } from '../../shared/docs.js';
@@ -1754,5 +1754,30 @@ describe('T11 review 2-1: docsHookVerdict passes a response with no payload and 
     const v = docsHookVerdict(true, 401, '', undefined);
     expect(v.kind).toBe('pass');
     expect(Object.keys(v.headers)).not.toContain('content-type');
+  });
+});
+
+describe('T11 review 3-1: a tree answer naming another project is refused, never filed under it', () => {
+  const PIN = { ok: false, failure: 'malformed-answer', why: 'pin' };
+
+  it.each([
+    ['the requested project', 'a', 'a', true],
+    ['another project', 'demo', 'a', false],
+    ['a case-different project', 'Demo', 'demo', false],
+    ['a padded project', 'a ', 'a', false],
+    ['an empty project', '', 'a', false],
+    ['an absent project', undefined, 'a', false],
+    ['null', null, 'a', false],
+    ['an array holding the project', ['a'], 'a', false],
+    ['a number', 1, '1', false],
+  ] as const)('%s: ok is %s only for exactly the requested project', (_label, echoed, requested, ok) => {
+    const verdict = docsTreeEcho({ project: echoed } as unknown as DocsTreeOk, requested);
+    expect(verdict).toStrictEqual(ok ? { ok: true } : PIN);
+  });
+
+  it('each refusal is a fresh body', () => {
+    const one = docsTreeEcho({ project: 'x' } as unknown as DocsTreeOk, 'a');
+    const two = docsTreeEcho({ project: 'x' } as unknown as DocsTreeOk, 'a');
+    expect(one).not.toBe(two);
   });
 });

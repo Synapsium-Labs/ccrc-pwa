@@ -855,7 +855,8 @@ describe('T7: M6.10 — the fetch lane at the route: serial per project, 2 globa
 
   it(`${DOCS_FETCH_GLOBAL} running and ${DOCS_FETCH_QUEUE} queued: the next refresh is 503 docs-busy {lane: fetch} Retry-After 5 with no new exec, and a read is still served`, async () => {
     const f = blocker<CcdResult>();
-    const rec = fleet({ fetch: () => f.exec() });
+    // The tree answers the project it was asked (argv[2]): the routes refuse a tree naming another one.
+    const rec = fleet({ fetch: () => f.exec(), tree: (argv) => okRes(line(treeOk({ project: argv[2] }))) });
     const { app, docs } = await open({ run: rec.run });
     const lane = nodeLanes(docs).fetch;
     const running = ['demo', 'a'].map((project) => refresh(app, null, 'auto', project));
@@ -1264,5 +1265,81 @@ describe('T9: row 49 — the read registration\'s type has no fetcher (section 2
     };
     expect(pinned).toBe(true);
     expect(fetcherAsReader).toBeTypeOf('function');
+  });
+});
+
+describe('T11 review 3-1: a tree answer naming another project is refused, never filed under it', () => {
+  const BLOB_X = 'a'.repeat(40);
+  const BLOB_Y = 'e'.repeat(40);
+  const PIN_REFUSED = { ok: false, failure: 'malformed-answer', why: 'pin' };
+
+  it('GET /api/docs/a/tree answered with project demo: 502 malformed-answer {why: pin}, logged, nothing recorded under a or demo', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = scripted(() => okRes(line(treeOk({ project: 'demo', entries: [committedEntry('a.md', BLOB_X, 4)] }))));
+    const { app, docs } = await open({ run: rec.run });
+    const res = await app.inject({ url: '/api/docs/a/tree', headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toStrictEqual(PIN_REFUSED);
+    const caches = nodeLanes(docs).caches;
+    expect(caches.listing.commits()).toBe(0);
+    expect(caches.listing.lookup('primary', 'a', FIXTURE_COMMIT, 'specs', 'a.md')).toBeUndefined();
+    expect(caches.listing.lookup('primary', 'demo', FIXTURE_COMMIT, 'specs', 'a.md')).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs tree answer named another project');
+  });
+
+  it.each([['an other project', 'Demo'], ['an absent project', undefined], ['a non-string project', ['a']]])(
+    'a tree for a answered with %s is refused the same way', async (_label, project) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const rec = scripted(() => okRes(line({ ...treeOk({ entries: [committedEntry('a.md', BLOB_X, 4)] }), project })));
+      const { app, docs } = await open({ run: rec.run });
+      const res = await app.inject({ url: '/api/docs/a/tree', headers: PWA_HEADERS });
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toStrictEqual(PIN_REFUSED);
+      expect(nodeLanes(docs).caches.listing.commits()).toBe(0);
+    });
+
+  it('the refresh\'s tree half: a tree answered with another project is the tree half\'s failure, nothing recorded', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = fleet({ tree: () => okRes(line(treeOk({ project: 'demo', entries: [committedEntry('a.md', BLOB_X, 4)] }))) });
+    const { app, docs } = await open({ run: rec.run });
+    const res = await refresh(app, null, 'auto', 'a');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({ ok: true, fetch: { state: 'ran', answer: fetchOk() }, tree: PIN_REFUSED });
+    const caches = nodeLanes(docs).caches;
+    expect(caches.listing.commits()).toBe(0);
+    expect(caches.listing.lookup('primary', 'demo', FIXTURE_COMMIT, 'specs', 'a.md')).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs tree answer named another project');
+  });
+
+  it('review 1-1: a tree for b naming a never poisons a\'s listing, so no cache hit serves another file\'s bytes', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const bytesOf = new Map([['x.md', Buffer.from('# x', 'utf8')], ['z.md', Buffer.from('# z', 'utf8')]]);
+    const blobOf = new Map([['x.md', BLOB_Y], ['z.md', BLOB_X]]);
+    const pinOf = (p: string) => ({
+      kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: p,
+    }) as const;
+    const rec = scripted((argv) => {
+      if (argv[0] === 'docs-tree') {
+        const entries = argv[2] === 'a'
+          ? [committedEntry('x.md', BLOB_Y, 3), committedEntry('z.md', BLOB_X, 3)]
+          : [committedEntry('x.md', BLOB_X, 3)];
+        return okRes(line(treeOk({ project: 'a', entries })));
+      }
+      if (argv[0] === 'docs-show') {
+        const p = argv[argv.indexOf('--path') + 1] as string;
+        return okRes(showLine(pinOf(p), bytesOf.get(p) as Buffer, { blob: blobOf.get(p) }));
+      }
+      return faultRes();
+    });
+    const { app } = await open({ run: rec.run });
+    const file = (p: string) => `/api/docs/a/file?commit=${FIXTURE_COMMIT}&servedRef=${enc(FIXTURE_SERVED)}&section=specs&path=${p}`;
+    expect((await app.inject({ url: '/api/docs/a/tree', headers: PWA_HEADERS })).statusCode).toBe(200);
+    expect((await app.inject({ url: file('z.md'), headers: PWA_HEADERS })).json()).toMatchObject({ ok: true, from: 'ccd' });
+    const foreign = await app.inject({ url: '/api/docs/b/tree', headers: PWA_HEADERS });
+    expect(foreign.statusCode).toBe(502);
+    expect(foreign.json()).toStrictEqual(PIN_REFUSED);
+    const x = (await app.inject({ url: file('x.md'), headers: PWA_HEADERS })).json();
+    expect(x).toMatchObject({ ok: true, from: 'ccd', show: { path: 'x.md', blob: BLOB_Y } });
+    expect(Buffer.from(x.show.b64 ?? Buffer.from(x.show.text).toString('base64'), 'base64').toString()).toBe('# x');
   });
 });
