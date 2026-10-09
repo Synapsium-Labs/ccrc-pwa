@@ -185,18 +185,23 @@ export class BoxTokenDriver implements TokenRouteDriver {
     const s = this.state;
     const c = this.deps.holder.counters();
     const obs = this.lastObs?.read;
+    // Review 362 F1: a view field never claims what the holder does not hold. A boot whose mint failed over a box with
+    // history keeps the old record in `state`, but `holder.hasCurrent()` is false and every box-token call is refused, so
+    // the record's current generation and the fleet's confirmation of it are not this box's to report: they read null and
+    // fall to the observation, exactly as `phase` (which reads the same fact) already does.
+    const holds = this.deps.holder.hasCurrent();
     const fleetConfirmed: BoxTokenView['fleetConfirmed'] =
-      s !== null && s.current.id !== null && s.fleetConfirmed === s.current.id ? (this.deps.bothWriter !== null ? 'own-write' : 'current')
+      holds && s !== null && s.current.id !== null && s.fleetConfirmed === s.current.id ? (this.deps.bothWriter !== null ? 'own-write' : 'current')
         : obs === undefined ? 'unknown' : obs.kind === 'id' ? 'behind' : obs.kind;
     const now = this.now();
     const stalled: BoxTokenView['stalled'] = this.mintFailed && this.mintFailedSince !== null
       ? { why: 'mint-failed', since: this.mintFailedSince }
       : this.owedSince !== null && now - this.owedSince >= STALL_ALERT_MS ? { why: 'owed', since: this.owedSince } : null;
     return {
-      phase: phaseOf(s, this.hold?.hold ?? null, this.deps.holder.hasCurrent()),
+      phase: phaseOf(s, this.hold?.hold ?? null, holds),
       origin: s?.origin ?? null,
-      currentSeq: s?.current.seq ?? null,
-      currentSince: s?.current.since ?? null,
+      currentSeq: holds ? s?.current.seq ?? null : null,
+      currentSince: holds ? s?.current.since ?? null : null,
       lastRotationAt: s?.lastRotationAt ?? null,
       rotationOwed: s?.rotationOwed ?? false,
       owedWhy: s?.owedWhy ?? null,
@@ -399,10 +404,11 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (s0.previous !== null) {
       const early = await this.retireValue();
       // D-4414 (F3): the previous value's file would not read, so its digest could not be recorded, and step (b) below would
-      // replace that file. The promotion waits for a later tick. This return comes BEFORE `promoting` is recorded, so a
-      // promotion confirmed only by this op result is selected again only by a generation read; otherwise G stays pending
-      // and accepted until it is overdue and a later rotation drops it. That is safe under G3 (the value the fleet holds is
-      // never dropped unconfirmed), at the cost of one extra rotation.
+      // replace that file. The promotion waits for a later tick. This return comes BEFORE `promoting` is recorded, and it
+      // is not left to age: once a generation read confirms G (the normal case), `nextAction` selects `promote` again from
+      // that read, ahead of the hard-bound retire, the stage and every hold. So the ticks loop promote -> held until the
+      // file reads again, and then the retirement and the promotion complete. No forward rotation starts meanwhile and
+      // nothing is dropped, so G3 (the value the fleet holds is never dropped unconfirmed) holds without an extra rotation.
       if (early.kind === 'held') return;
       this.logRetired('later-confirmed', early.refused);
     }

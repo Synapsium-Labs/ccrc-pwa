@@ -344,6 +344,27 @@ describe('Rotate now: its rate limit and its hold (review: driver guards)', () =
   });
 });
 
+describe('F1 (review 362): the view never claims a current value the holder does not hold', () => {
+  it.skipIf(isRoot)('a box with history whose boot mint fails: no current generation, no fleet confirmation of it', async () => {
+    const first = await rig({ handMade: 'e'.repeat(64) });
+    await first.driver.tick();                                                   // rotated: generation #2, the fleet confirmed it
+    expect(first.driver.view()).toMatchObject({ currentSeq: 2, fleetConfirmed: 'current' });
+    await first.app.close();
+    const dir = path.join(first.home, '.ccrc');
+    rmSync(path.join(dir, 'mail.token'));
+    rmSync(path.join(dir, 'mail-previous.token'), { force: true });
+    const r = await rig({ home: first.home, fleetHome: first.fleetHome, lockDirForBoot: true });   // ~/.ccrc unwritable at boot (EACCES)
+    try {
+      expect(r.boot.mintFailed).toBe(true);
+      expect(r.boot.holder.hasCurrent()).toBe(false);
+      const v = r.driver.view();
+      expect(v).toMatchObject({ phase: 'unconfigured', stalled: { why: 'mint-failed' }, currentSeq: null, currentSince: null });
+      expect(['current', 'own-write'], 'the fleet confirmed a generation the holder does not hold').not.toContain(v.fleetConfirmed);
+      expect(v.fleetConfirmed).toBe('unknown');
+    } finally { await r.app.close(); }
+  });
+});
+
 describe('a failed boot mint is retried (spec 10.1, review: driver guards)', () => {
   it.skipIf(isRoot)('boot mints nothing, every lane refuses, the stall alert names mint-failed; one tick later a lane answers ok', async () => {
     const r = await rig({ lockDirForBoot: true });

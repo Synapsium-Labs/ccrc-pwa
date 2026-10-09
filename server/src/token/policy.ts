@@ -326,7 +326,10 @@ export function backoffMs(failures: number): number {
 export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; generation: GenerationObservation | null;
   rotateRequested: boolean; backoffUntil: number | null; now: number;
   /** D-4414 (F3): the driver could not retire the previous value this tick (its file would not read, so no digest could
-   *  be recorded). The retirement waits for a later tick; nothing else is blocked by it. */
+   *  be recorded). The retirement waits for a later tick: both retire arms step aside for the rest of this one. It does
+   *  NOT unblock the promote path: a generation read that confirms a pending generation still selects `promote`, ahead of
+   *  every arm below it, and `promote` returns held while the file will not read. The ticks loop there until the file
+   *  reads, with no forward rotation started and nothing dropped. */
   retireHeld?: boolean }): DriverAction {
   const { state, gate, now } = i;
   if (state === null || (!gate.open && gate.hold === 'mint-failed')) return { kind: 'retry-mint' };

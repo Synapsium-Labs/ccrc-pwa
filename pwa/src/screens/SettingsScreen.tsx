@@ -719,7 +719,9 @@ export function boxTokenTransportText(t: BoxTokenView['fleetTransport']): string
 
 const BOX_TOKEN_FLEET_TEXT: Record<BoxTokenView['fleetConfirmed'], string> = {
   current: 'confirmed the current generation',
-  behind: 'behind (it holds an older generation)',
+  // `behind` says only what the server's word means: the fleet's generation read is not the current id (review 362 F3).
+  // It may hold an older generation or, mid-promotion, a newer one; the card never says which.
+  behind: 'not on the current generation',
   absent: 'no generation recorded on the fleet box',
   unreadable: "the fleet box's generation file could not be read",
   'own-write': 'this box writes the fleet copy itself',

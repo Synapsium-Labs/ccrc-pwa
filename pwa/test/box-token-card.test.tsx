@@ -95,6 +95,40 @@ describe('the card words (spec 4.7)', () => {
     expect(boxTokenHoldText('agent-predates-op', null)).toBe('held: fleet agent predates token-sync');
   });
 
+  // F6 (review 362): the card's six fleet sentences, each pinned by its exact text. A `Record` keyed by the server's
+  // word, so a word this build gains has no entry here and `satisfies` fails the typecheck until it is pinned.
+  const FLEET_SENTENCES = {
+    current: 'fleet: confirmed the current generation',
+    behind: 'fleet: not on the current generation',                   // F3: says only what `behind` means, nothing about older or newer
+    absent: 'fleet: no generation recorded on the fleet box',
+    unreadable: "fleet: the fleet box's generation file could not be read",
+    'own-write': 'fleet: this box writes the fleet copy itself',
+    unknown: 'fleet: not yet measured',
+  } as const satisfies Record<BoxTokenView['fleetConfirmed'], string>;
+
+  it.each(Object.entries(FLEET_SENTENCES))('the fleet word %s renders exactly "%s" and no other fleet sentence', async (word, sentence) => {
+    const card = await mount(view(BT({ fleetConfirmed: word as BoxTokenView['fleetConfirmed'] })));
+    expect(within(card).getByText(sentence)).toBeInTheDocument();
+    const fleetLines = within(card).getAllByText(/^fleet: /).map((e) => e.textContent);
+    expect(fleetLines).toEqual([sentence]);
+  });
+
+  it('`behind` never says which side the fleet is on (review 362 F3)', async () => {
+    const card = await mount(view(BT({ fleetConfirmed: 'behind' })));
+    expect(card.textContent ?? '').not.toMatch(/older|newer|holds an/);
+  });
+
+  // F1 (review 362): the view a box with history whose boot mint failed now answers (see token-rotation-e2e.test.ts's
+  // F1 pin for the server half). The card reads "none" and "not yet measured" from the view's own fields.
+  it('a box whose boot mint failed over history: no current value, no fleet confirmation of one', async () => {
+    const card = await mount(view(BT({ phase: 'unconfigured', currentSeq: null, currentSince: null, fleetConfirmed: 'unknown',
+      stalled: { why: 'mint-failed', since: Date.now() - 5 * MIN } })));
+    expect(within(card).getByText('state: no current value')).toBeInTheDocument();
+    expect(within(card).getByText('current value: none')).toBeInTheDocument();
+    expect(within(card).getByText('fleet: not yet measured')).toBeInTheDocument();
+    expect(card.textContent ?? '').not.toMatch(/confirmed the current generation|writes the fleet copy itself|generation #/);
+  });
+
   it('says plain http is unencrypted, and never folds an unmeasured transport into https', () => {
     expect(boxTokenTransportText('http')).toBe('transport: http (unencrypted)');
     expect(boxTokenTransportText('https')).toBe('transport: https');
