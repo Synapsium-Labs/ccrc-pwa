@@ -270,7 +270,7 @@ spec's after wave 1.
 - **2026-10-09 06:50 UTC: run 350 (part B) dispatched to `ccrc-pwa-brisk-basin`.**
   - **R0 comes first:** review 352's F1 to F13 and number 4411's wording, on part A's files, which are admitted for R0
     only. The rules are in `partB-r0-residue.md`, beside the review report.
-  - **D-4414 is ruled and assigned now, for the worker to define.** No path retires or drops a value without its
+  - **Number 4414 is ruled and assigned now, bare until the worker defines it.** No path retires or drops a value without its
     durable digest, and no failure makes boot adopt a value it did not write. It covers four cases:
     - F1: an unusable `box-token.json` takes D-4410's foreign posture;
     - F3: an unreadable value file is never deleted unrecorded;
