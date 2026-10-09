@@ -9321,8 +9321,9 @@ export const MAIL_REPLAY_MS = 600_000;
 // the compaction card cite this file by line, and an insertion above them moves every anchor under it. Every string
 // the Settings page's Stall watch section shows is one of the constants below, and no other file spells one. A
 // `{name}` slot is filled by the PWA's one helper, `fillStallText`. No text spells a registry marker name, a rung
-// code, a wave number or a duration: the durations live in code alone, and the window reaches the counts heading
-// from the wire. The ladder's flag and mail-mode columns are L1's (`STALL_LADDER`, `server/src/coord/stallsettings.ts`),
+// code or a wave number; the level `does` and stage `stops` and `gate` texts (`stall-settings.test.ts` pins them)
+// spell no duration, and `unread` below does name one. The counts heading takes its window from the wire. The ladder's
+// flag and mail-mode columns are L1's (`STALL_LADDER`, `server/src/coord/stallsettings.ts`),
 // keyed by the same `StallLevel`, so a level added to one Record and not the other is a compile error.
 
 /** The six ladder levels, in ladder order, each with its label and what it does (§5). Each includes the ones below it
@@ -9524,6 +9525,9 @@ export const STALL_CONFIRM_TEXT = {
   quietDialogs: 'A dialog left open longer than {value} is pushed to you from the next sweep, and repeat pushes about one open dialog can come {value} apart.',
   unknown: "The fleet box's files could not be read, so what this choice turns on cannot be shown.",
   refused: 'Nothing was changed: {detail}',
+  // A write with no answer (a network failure): unanswered-write-has-its-own-l0-line (D-4043). The 2xx-unreadable
+  // arm keeps the PWA's shared UNCONFIRMED_TEXT.
+  unanswered: 'Not confirmed — the server did not answer; the screen will re-check.',
 } as const;
 export const STALL_RUNLESS_FOOTNOTE = 'Counts notices on runs only. Notices about a session on no run, or about a coordinator itself, sent or shadow, are not counted here; shadow ones appear only in the server log.';
 /** The section's headings and small words. `counts` takes the window from the reply's `windowMs`, so no text copies

@@ -964,9 +964,25 @@ notes as plain text, never markup) and the node inventory (what each node runs a
 and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
 that would move a node — Install, Roll back, Update, Update all — opens one confirm sheet
 (below). A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
-address. Settings has a second section, **Notifications**: the phone-push bell for this browser (the same
+address. Settings has a second section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
-as the fleet intent's `notify` through `POST /api/updates/intent`. In remote mode the foot of the fleet screen always
+as the fleet intent's `notify` through `POST /api/updates/intent`. Settings has a third section, **Stall watch**
+(stall-watch-settings W2), read and written through `/api/coord/stall-watch` by a poll of its own, once a minute and
+whenever the page is shown again. It shows the watch's level now, what it does and where it comes from (following
+the fleet box's files, chosen here, or chosen but held back by the fleet box's kill switch or strict mail gate), the
+next step and what it waits on, and the notice counts for the last 48 h, sent and shadow, on runs only. Its two
+controls are the **Level** — `Follow the fleet box's files` (the default, today's behaviour) or one of six levels,
+each including the ones below it: `Off`, `Log only`, `Check silent workers`, `Alert coordinator and you`,
+`Deliver mail to busy sessions`, `Everything` — and the **Quiet time before a worker check** (built-in 2 h; 30 min
+to 12 h in 30 min steps), which also times the pushes about a dialog left open. The checked option is the stored
+answer, never the tap. The server answers 409, with what the write would do, to any write that would turn something
+on, leave the further checks, or move the quiet time below what it was, and to every write
+while the fleet box's files cannot be read; the section opens one confirm sheet from that answer, and **Set**
+re-sends the write with the server's key, so nothing is written until the operator has confirmed what the server
+will do. The choice is one row in `coord.db` and applies to the whole fleet. It never overrides
+`stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; a lost row, or a field of it that cannot be read,
+means the files and the built-in quiet time.
+A server without the route shows the section as not available. In remote mode the foot of the fleet screen always
 carries `BuildLine`: `fleet <version> · server <version>`, read from the node inventory. A side reads
 `unversioned (<sha>)` for a stamp with no tag and adds `dirty` for a dirty tree; it is amber unless the side
 is a clean versioned release, and `—` when that node's stamp cannot be stated (never measured, unread, or the

@@ -39,12 +39,15 @@ from the server's answer, never from the tap. In the same wave:
 - `SettingsScreen.tsx` renders `<StallWatchSection/>` after `<NotificationsSection/>`. Its header and "ONE poll"
   comments now name three sections and two reads.
 - `QuickConfirm`'s `consequence` widens to `string | string[]`. Every existing caller is unchanged.
-- W2 does not touch `shared/`, `server/src`, `agent/` or `ccd/`. W1's L0 block is complete, and W2 adds no string to
-  it. The one server-side file is a new test, `server/test/stall-settings-readme.test.ts`, which ties README's new
-  sentence to the L0 labels and the L1 bounds.
+- Tasks 1 to 4 do not touch `shared/`, `server/src`, `agent/` or `ccd/`. W1's L0 block is complete for Tasks 1 to 4, and they add no
+  string to it. Their one server-side file is a new test, `server/test/stall-settings-readme.test.ts`, which ties
+  README's new sentence to the L0 labels and the L1 bounds. Fix round 1 adds one key to W1's block
+  (`unanswered-write-has-its-own-l0-line`, below). The review's item 5 edits are the coordinator's scope (ledger R20,
+  R21): comments in `server/src/watch.ts`, the header of `shared/api.ts`'s stall-watch block, and tests in
+  `server/test/coord-db.test.ts` and `server/test/stall-sweep.test.ts`.
 
 **Tech Stack:** React and TypeScript in the PWA (Vite build, `tsc --noEmit && vite build`). Tests run on vitest with
-jsdom and Testing Library (`pwa/test/`), and the README pin on vitest in `server/test/`. Node `>=22.13.0`. Mutation
+jsdom and Testing Library (`pwa/test/`), and the README pin on vitest in `server/test/`. Node `>=22.16.0`. Mutation
 instruments live outside the tree and are never committed.
 
 **Spec:** `docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md` rev 3.2, at `51aa5f0d8`: **APPROVED by the
@@ -99,8 +102,8 @@ The prototype of every task was built and measured on branch `proto/sws-w2`:
 1. **The spec and this plan are on `origin/main`.**
    - `git show origin/main:docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md | grep -c 'APPROVED by the
      operator 2026-10-05 17:46 UTC'` prints `1`.
-   - `git ls-tree origin/main` on this plan's own path prints one line. This plan alone defines D-4035 and D-4036, and
-     the tasks write both, with D-4033 and D-4034, into tracked comments.
+   - `git ls-tree origin/main` on this plan's own path prints one line. This plan alone defines D-4035 and D-4036 and, since fix rounds 1 and 2,
+     the numbers for `malformed-optional-block-is-dropped` and `unanswered-write-has-its-own-l0-line`; the tasks write them, with D-4033 and D-4034, into tracked comments.
 2. **W1 has merged on `main`.** Each of these prints the number shown:
    - `git show origin/main:server/src/coord/stallsettings.ts | grep -c '^export function stallWriteEffect'` → `1`;
    - `git show origin/main:server/src/coord/routes.ts | grep -cE "app\.(get|post)\('/api/coord/stall-watch'"` → `2`;
@@ -194,9 +197,10 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
   `confirm`. A 409 `confirm-required` that passes `asStallConfirm` opens the sheet from the server's `effect`. Set
   re-sends the same body with `confirm: effectKey`. Cancel sends nothing. The section never previews a choice.
 - **The server's answer is what is shown, never the tap; never optimistic** (§13, P2). A 2xx view is installed with
-  `settle(view)`. An unreadable 2xx gives `toast(UNCONFIRMED_TEXT)`, then `reload()`. So does a write whose answer
-  never arrived (a network failure after the POST may have left): it may have landed, so it never says "Nothing was
-  changed" (§15's "A write's reply cannot be read" row). Any other refusal gives `STALL_CONFIRM_TEXT.refused` with its
+  `settle(view)`. An unreadable 2xx gives `toast(UNCONFIRMED_TEXT)`, then `reload()`. A write whose answer
+  never arrived (a network failure after the POST may have left) gives `toast(STALL_CONFIRM_TEXT.unanswered)` (fix
+  round 1, F1), then `reload()`: it may have landed, so it never says "Nothing was changed" (§15's "A write's reply
+  cannot be read" row). Any other refusal gives `STALL_CONFIRM_TEXT.refused` with its
   detail (the server's `detail`, else the 500 body's `message`, else the error's own text), then `reload()`. The
   controls are locked while a write is in flight or its sheet is open.
 - **Not-configured wins over a landed view** (§13, D-4035). Only 501 `not-configured` and 404 `not-found` map to
@@ -207,8 +211,10 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
 - **One reader per field** (§14 item 10): `asStallWatchView` reads the view and `asStallConfirm` reads the 409 body. A
   malformed answer is a failed read, never a level.
 - **Single definition** (§14 item 12, P9). Every section string is an L0 `STALL_*` constant, filled by `fillStallText`.
-  The section spells no level id, copies no stall constant's value and keeps no short form of a level label. W2 adds no
-  L0 string.
+  The section spells no level id, copies no stall constant's value and keeps no short form of a level label. Tasks 1
+  to 4 add no L0 string; fix round 1 adds one key (`unanswered-write-has-its-own-l0-line`, below). The review's item 5
+  comment and test edits in `server/src/watch.ts`, `shared/api.ts`'s block header, `server/test/coord-db.test.ts` and
+  `server/test/stall-sweep.test.ts` are the coordinator's scope (ledger R20, R21).
 - **`QuickConfirm` keeps every existing caller unchanged** (§13). A string renders one `<p className="qc-consequence">`
   as before. A list renders one per line, with the same class.
 - **CSS:** only existing classes in `fleet.css` (§13). No new CSS.
@@ -230,7 +236,9 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
     `typecheck-tests`. On the PWA side under load, the prototype measured `contrast`, `swap-sheet`, `session-pickers`
     and `fleet-screen`.
 - **Deviation numbers.**
-  - This plan defines exactly two: D-4035 and D-4036.
+  - This plan defines exactly five: D-4035, D-4036, the one for `malformed-optional-block-is-dropped` (fix round 1), the
+    one for `unanswered-write-has-its-own-l0-line` (fix round 1's F1, numbered by fix round 2) and the one for
+    `pinned-built-in-value-is-its-own-option` (fix round 2's pinned option, numbered by fix round 3).
   - It cites D-4033, D-4034, D-4037 and D-4038, which the W1 plan defines.
   - The coordinator holds this programme's reserve numbers. A departure found during this wave goes into the
     wave-done mail by slug, and the coordinator assigns its number then.
@@ -310,19 +318,31 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
 | `pwa/src/screens/SettingsScreen.tsx` | header comment (≈1–7, "Two sections and no more"); the Notifications row label (≈650) and its comment; `<StallWatchSection />` after `<NotificationsSection/>`; the "ONE poll" comment (≈677) (13/7) | 3 |
 | `pwa/test/settings-screen.test.tsx` | the label pin (≈1771) moved; the new import (≈33); three describes, 51 rows (26 helpers, 22 section, 3 scans) (688/1) | 3 |
 | `README.md` | the Settings paragraph gains "Settings has a third section, **Stall watch** …" (one line becomes seventeen; ≈953 at `77f8d63a5`, ≈960 at `d12b5aba0`) | 4 |
-| `server/test/stall-settings-readme.test.ts` | **new** (81 lines, 5 rows): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word (the PWA's own device-word list) | 4 |
+| `server/test/stall-settings-readme.test.ts` | **new** (93 lines, 6 rows as shipped): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word (the PWA's own device-word list) | 4 |
+| `pwa/src/screens/settingsText.ts` | **new** (fix round 1, F4): `UNCONFIRMED_TEXT` and its docstring, imports nothing; `SettingsScreen.tsx` re-exports it and `StallWatchSection.tsx` imports it, so the two screens no longer import each other | fix round 1 |
+| `shared/api.ts` | one key, `STALL_CONFIRM_TEXT.unanswered`, inside W1's stall-watch block (`unanswered-write-has-its-own-l0-line`), and, in fix round 2, the two-line D-4043 comment above that key (no string changed); the review's item 5 edit to the block's header comment is the coordinator's (ledger R20, R21) | fix round 1 |
+| `server/test/coord-db.test.ts` | the stall_settings slot found by its DDL, not hard-coded (fix round 1, Q), and, in fix round 2, the needle stops at the name: `/CREATE TABLE stall_settings(?![A-Za-z0-9_])/` (R27 item 4), so a later `stall_settings_new` table is not counted; the review's item 5 edit is the coordinator's (ledger R20, R21) | fix round 1 |
+| `server/test/stall-sweep.test.ts` | the review's item 5 test edit, the coordinator's scope (ledger R20, R21) | coordinator |
+| `server/src/watch.ts` | the review's item 5 comment lines only (no behaviour), the coordinator's scope (ledger R20, R21) | coordinator |
+
+The line and row counts in this table are first-cut figures; the shipped files govern, and no count here is chased.
 
 **Deliberately unchanged** (measured):
-- **`shared/api.ts`.** W1's L0 holds every string the section shows.
-- **`server/src/**`, `agent/`, `ccd/` and `server/src/coord/schema.ts`.**
+- **`shared/api.ts`, by Tasks 1 to 4.** W1's L0 holds every string the section shows. Fix round 1 adds one key,
+  `STALL_CONFIRM_TEXT.unanswered` (`unanswered-write-has-its-own-l0-line`, below); the review's item 5 edit to the
+  block's header comment is the coordinator's scope (ledger R20, R21).
+- **`server/src/**`, `agent/`, `ccd/` and `server/src/coord/schema.ts`, by Tasks 1 to 4.** Item 5's comment-only edits
+  in `server/src/watch.ts` are the coordinator's scope (ledger R20, R21). `schema.ts` is untouched over the whole wave.
 - **`server/test/stall-settings.test.ts` and `single-definition.test.ts`.** W1's `stall-settings.test.ts` tail still
   moves under W1's own tasks, so Task 4's README pin lives in its own file.
 - **`fleet.css`.** No new class.
 - **`pwa/src/fleet/AbandonSheet.tsx` :8 and `pwa/src/fleet/SwapSheet.tsx` :459.** Each cites `QuickConfirm.tsx:33-34`,
   already one line off at `77f8d63a5`. They stay as history, and no test pins them.
 - **README ≈951 (≈958 at `d12b5aba0`), "the phone-push bell for this browser".** Spec §13 measured that README does
-  not spell the renamed label, and §18 gives W2's README edit as the third-section sentence only. It is put to the
-  operator under "Open questions for the operator" below.
+  not spell the renamed label, and §18 gives W2's README edit as the third-section sentence only. It was put to the
+  operator under "Open questions for the operator" below. **Settled by the operator's 2026-10-05 directive** (no
+  device distinction): README already reads "the push bell for this browser" (`a5771e471`), and
+  `stall-settings-readme.test.ts`'s device row pins it. The paragraph is kept here as the history of why it was asked.
 - **README ≈3751, the strict runbook's "`rm` it to go back".** That residue is W1's (§20, coordinator lens).
 
 ---
@@ -396,15 +416,18 @@ export function useStallWatchView(pollMs?: number): StallWatchPoll;
   the body's `message` (Fastify's 500 carries the cause the route threw: "stall settings unreadable, nothing written:
   …" or "… changed outside the server twice during one write; nothing written"), and `apiErrorText(err)`, the app's
   existing floor: the error code (`confirm-required`, `bad-request`), Fastify's `Internal Server Error` when its
-  `message` is blank, or `request failed (<status>)` for a non-JSON body. No new string is added, and L0 is not
-  touched.
+  `message` is blank, or `request failed (<status>)` for a non-JSON body. When all of those are blank, the detail is
+  `HTTP ${status}` (fix round 1, F9). That string fills the server-answer detail slot, as `apiErrorText`'s
+  `request failed (<status>)` floor does, and is not section copy; it is not an L0 string.
 - **A rejection that is not an `ApiError`** (a network failure, after which the POST may have landed) is
   `{ kind: 'unconfirmed' }`, never a refusal: "Nothing was changed" would be a claim nobody measured. The section
-  answers it as it answers an unreadable 2xx (Task 3). W1's L0 has no text of its own for this case and W2 adds none,
-  so the section uses the PWA's one existing text for an answer that could not be read, `UNCONFIRMED_TEXT`, which
-  spec §13 step 3 and §15's "A write's reply cannot be read" row already prescribe, followed by a re-read that shows
-  what was stored. Its lead word, "Saved", overstates a request that never left; the re-read corrects it within one
-  answer, and the wording is listed for the operator under "Open questions for the operator".
+  answers it with a toast and a re-read (Task 3). W1's L0 had no text of its own for this case, and the PWA's one
+  existing text for an answer that could not be read, `UNCONFIRMED_TEXT` (spec §13 step 3, §15's "A write's reply
+  cannot be read" row), leads with "Saved", which overstates a request that never left. Fix round 1 (F1) therefore
+  gave the network arm its own L0 line, `STALL_CONFIRM_TEXT.unanswered` ("Not confirmed — the server did not answer;
+  the screen will re-check."), numbered as `unanswered-write-has-its-own-l0-line`. The 2xx-unreadable arm keeps
+  `UNCONFIRMED_TEXT`, and the re-read shows what was stored either way. The wording is listed for the operator under
+  "Open questions for the operator".
 - **The wire guard's two choices §12 leaves open.** A present but malformed `next` or `filesExceed` is dropped and read
   as not stated, like a missing one, with the one `console.warn` that also counts dropped `counts` elements. A present
   but malformed `fallback` refuses the whole answer, because reading it as `null` would claim the choice applies when
@@ -1717,9 +1740,10 @@ table.
   StallWatchRequest) => Promise<StallWatchView | 'unreadable'>`.
 - Consumes, from Task 2 (`pwa/src/components/QuickConfirm.tsx`): `QuickConfirm(props: QuickConfirmProps)` with
   `consequence: string | string[]`; Confirm runs `onConfirm(); onClose();` in that order.
-- Consumes, from `SettingsScreen.tsx`: `UNCONFIRMED_TEXT` (≈:72). `StallWatchSection.tsx` imports it, and
-  `SettingsScreen.tsx` imports `StallWatchSection`: a cycle that is safe because the constant is read only inside a
-  write's handler, never while either module evaluates (measured: the build and every suite are green).
+- Consumes `UNCONFIRMED_TEXT`. Since fix round 1 (R24 F4) the text lives in `pwa/src/screens/settingsText.ts`;
+  `SettingsScreen.tsx` re-exports it and `StallWatchSection.tsx` imports it from `settingsText.ts`, so the two screens
+  do not import each other and there is no import cycle. (The first cut imported it from `SettingsScreen.tsx`, a cycle
+  that was safe only because the constant is read inside a write's handler, never while either module evaluates.)
 - Produces (`pwa/src/screens/StallWatchSection.tsx`):
 
 ```ts
@@ -1754,8 +1778,8 @@ export function StallWatchSection(): ReactNode;
   empty and a 500 names its cause. The section calls it and adds nothing. Pinned by "P2: a 500 toasts the cause the
   server named in its message…" (X59).
 - **A write whose answer never arrived** (a network failure): Task 1 reads it as `unconfirmed`, and the section
-  toasts `UNCONFIRMED_TEXT` and re-reads, as for an unreadable 2xx, never "Nothing was changed". Pinned by "a write
-  whose answer never arrived…" (X48, X60).
+  toasts `STALL_CONFIRM_TEXT.unanswered` (fix round 1, F1; an unreadable 2xx keeps `UNCONFIRMED_TEXT`) and re-reads,
+  never "Nothing was changed". Pinned by "a write whose answer never arrived…" (X48, X60).
 - **The lock** (§13 item 3): `busy || pending !== null` disables both fieldsets, and `choose` refuses to write while
   locked, because a dispatched event can still reach a disabled control's handler (measured: with the guard deleted,
   that row's change on the disabled select and click on a disabled radio each send a write, 3 calls where 1 is
@@ -2527,7 +2551,7 @@ with `Test Files  1 failed (1)` and `Tests  no tests`. The baseline before Step 
 
 - [ ] **Step 4: Implement**
 
-(a) Create `pwa/src/screens/StallWatchSection.tsx`, in full:
+(a) Create `pwa/src/screens/StallWatchSection.tsx`, in full. The listing is the first cut: fix rounds 1 and 2 changed the network arm, the quiet select and the imports, and the shipped file governs.
 
 ````tsx
 // The Settings screen's third section, Stall watch (stall watch settings, design 2026-10-05 §13; programme
@@ -3169,7 +3193,7 @@ the rejection arm's `'error');`).
 | X45 | P3 `choose` sends nothing while locked | SWS: `if (!locked) write(request);` → `write(request);` | `1 failed`: "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them" |
 | X46 | P2 the quiet select from the server, never the tap | SWS: add `const [tappedQuiet, setTappedQuiet] = useState<string \| null>(null);` after `const locked = …`; `value={quietValue}` → `value={tappedQuiet ?? quietValue}`; the select's `onChange` also runs `setTappedQuiet(e.target.value)` before `choose(…)` | `1 failed`: "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap" |
 | X47 | P1b a 501 first read is not available | SWS: `{failure === 'not-configured' ? (` → `{failure === 'not-configured' && view !== null ? (` | `1 failed`: "P1b: a 501 not-configured first read is the not-available text, not the unread line" |
-| X48 | a network failure is never "Nothing was changed" | SWS: `          if (refusal.kind === 'unconfirmed') toast(UNCONFIRMED_TEXT);` and the `else ` before the next `toast(` deleted, so every non-confirm rejection takes the `refused` toast | `1 failed`: "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads" |
+| X48 | a network failure is never "Nothing was changed" | SWS: `          if (refusal.kind === 'unconfirmed') toast(STALL_CONFIRM_TEXT.unanswered);` and the `else ` before the next `toast(` deleted, so every non-confirm rejection takes the `refused` toast | `1 failed` of 187 (re-measured at fix round 3 against the shipped line): "a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads" |
 | X49 | P3c the fresh sheet shows the fresh effect, never the first | SWS: `setPending({ request, confirm: refusal.confirm });` → `setPending({ request, confirm: confirm === undefined \|\| pending === null ? refusal.confirm : { ...refusal.confirm, effect: pending.confirm.effect } });` | `1 failed`: "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key" |
 | X50 | P6 no device word (section) | SWS: append the line `// the same on a phone` to the file | `1 failed`: "P6: the section and its hook have no device branch and no device word" |
 | X51 | P6 no device branch (hook) | H: `export const STALL_WATCH_POLL_MS = 60_000;` → `export const STALL_WATCH_POLL_MS = window.innerWidth < 600 ? 120_000 : 60_000;` | `1 failed`: "P6: the section and its hook have no device branch and no device word" |
@@ -3180,9 +3204,15 @@ the rejection arm's `'error');`).
 | X56 | P3d the due group under mail off | SWS: delete the line `    else lines.push(after.alerts ? STALL_CONFIRM_TEXT.dueMailOff : STALL_CONFIRM_TEXT.dueMailOffHeld);` | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
 | X58 | P3d the repeat line at Check takes `quietRepeatMailOff` under mail off | SWS: `mailOff ? STALL_CONFIRM_TEXT.quietRepeatMailOff : STALL_CONFIRM_TEXT.quietRepeat` → `STALL_CONFIRM_TEXT.quietRepeat` (in `const repeat = …`) | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
 | X59 | Task 1's 500 `message` arm, seen in the section | H: `nonBlank(body.detail) ?? nonBlank(body.message) ?? apiErrorText(err)` → `nonBlank(body.detail) ?? apiErrorText(err)` | `1 failed`: "P2: a 500 toasts the cause the server named in its message, and re-reads" |
-| X60 | Task 1's unconfirmed arm, seen in the section | H: `  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };` → `  if (!(err instanceof ApiError)) return { kind: 'refused', detail: apiErrorText(err) };` | `1 failed`: "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads" |
+| X60 | Task 1's unconfirmed arm, seen in the section | H: `  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };` → `  if (!(err instanceof ApiError)) return { kind: 'refused', detail: apiErrorText(err) };` | `1 failed` of 187 (re-measured at fix round 3): "a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads" |
+| X61 | a stored number off the list selects the blank option (fix round 1, re-measured at fix round 3) | SWS: in `quietValue`, `choices.some((c) => c.value === stored)` → `typeof stored === 'number'` | `1 failed` of 187: "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list … selects none" |
+| X62 | the pinned option is not the built-in (M1a, fix round 2, re-measured) | SWS: `  const quietValue = stored === 'default'` → `  const quietValue = stored === 'default' \|\| stored === view.quiet.builtInMs`, so a pinned built-in number selects Built-in | `3 failed` of 187: "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list … selects none"; "a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) …"; "from a pinned built-in number, picking Built-in is one change that writes default exactly once" |
+| X63 | the pinned option is rendered (M1b, fix round 2, re-measured) | SWS: in `shown`, `if (pinnedBuiltIn === null) return choices;` → `if (pinnedBuiltIn === null \|\| pinnedBuiltIn !== null) return choices;`, so the extra option is never added | `4 failed` of 187: "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list … selects none"; "a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) …"; "a pinned built-in number sits at its step's numeric place among the steps, between the step below and the step above"; "from a pinned built-in number, picking Built-in is one change that writes default exactly once" |
+| X64 | the pinned option reads as a step, not as Built-in (M1c, fix round 2, re-measured) | SWS: the extra option's `label: quietText(pinnedBuiltIn)` → `label: fillStallText(STALL_SECTION_TEXT.builtIn, { value: quietText(pinnedBuiltIn) })` | `2 failed` of 187: "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list … selects none"; "a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) …" |
+| X65 | the pinned option's label claims no source (fix round 3) | SWS: the extra option's `label: quietText(pinnedBuiltIn)` → `label: fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(pinnedBuiltIn) })` | `2 failed` of 187: "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list … selects none"; "a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) …" |
+| X66 | the pinned option sits at its step's numeric place (fix round 3) | SWS: in `shown`, `const at = above === -1 ? choices.length : above;` → `const at = 1;`, so it sits right after Built-in | `1 failed` of 187: "a pinned built-in number sits at its step's numeric place among the steps, between the step below and the step above" |
 
-Every row reds, so no guard here is unpinned. Rows X44 to X60 were added by the plan review's fix round. X57, added
+Every row reds, so no guard here is unpinned. Rows X44 to X60 were added by the plan review's fix round. X61 guards the blank option for a stored number off the list (fix round 1, the candidate quiet-select-shows-no-unanswered-value). X62 to X66 guard the pinned option (fix rounds 2 and 3, D-4044). All are counted out of 187. X57, added
 with them for the repeat line on a raise, was removed with that line by the final fix round (D-4037), so the table has
 no X57. X58 stays, re-described as the guard of the repeat line's mail-off variant at Check and re-measured at the tip
 `e13dc1a6a`. X14 and X18 are back at their first counts, 3 and 4.
@@ -3197,7 +3227,7 @@ no X57. X58 stays, re-described as the guard of the repeat line's mail-off varia
 - Modify: `README.md` (≈953 at `77f8d63a5`, ≈960 at `origin/main` `d12b5aba0`): the Settings paragraph (it opens
   `**Settings, the update banner and release pushes (update-management W3).**`, ≈939) gains its third section after the
   Notifications sentence and before "In remote mode". One line becomes seventeen: `git diff --numstat` reads `17	1`.
-- Create: `server/test/stall-settings-readme.test.ts` (81 lines): the README pin, five rows.
+- Create: `server/test/stall-settings-readme.test.ts` (93 lines as shipped): the README pin, six rows.
 - Test: `server/test/stall-settings-readme.test.ts`.
 - Run unedited: the whole PWA suite, the PWA build, `server/test/typecheck-tests.test.ts`,
   `single-definition.test.ts`, `topology-clean.test.ts`, the README citation instrument in `session-hook.test.ts`, and
@@ -3230,7 +3260,11 @@ with W1's `quiet-raise-asks-nothing` (D-4037): a stage turning on, leaving the f
 the one before (never a raise), and every write while the registry cannot be listed. The paragraph's existing "the
 phone-push bell" (≈951) is left as it is: §13 measured that nothing in README spells the Notifications row's label, so
 `notifications-label-says-push` (D-4036) reaches no README line, and row 5 scans the third section's sentences only.
-That phrase is put to the operator under "Open questions for the operator".
+That phrase was put to the operator under "Open questions for the operator"; it is settled there (README now reads
+"push bell"). **Superseded in place (shipped):** the phone-push phrase was not left as it was. README :967 reads
+"push bell" (`a5771e471`, the operator's 2026-10-05 directive), and the device row, the README pin's sixth `it`
+(`stall-settings-readme.test.ts:90`), scans the whole Settings paragraph, not only the new section's sentences
+(`505ffbff4`).
 
 **README is in the citation corpus.** The edit adds 16 lines inside one paragraph. The citation instrument stays
 `7 passed | 328 skipped (335)`, measured before and after:
@@ -3575,9 +3609,13 @@ MSG
 
 ## Deviations found
 
-Issued by the coordinator from the programme's block (`POST /api/ledger/deviations`, 2026-10-05 17:47). This plan
-defines the two numbers that W2 alone owns. A departure found during execution is named by slug in the wave-done mail,
-and the coordinator assigns its number.
+This plan defines five numbers that W2 alone owns, all issued by the allocator in this programme's 17:47 block
+(`POST /api/ledger/deviations`, 2026-10-05 17:47, "stall-watch-settings: W1 server, W2 PWA"). D-4035 and D-4036 were
+assigned to W2 at plan time. D-4042 (`malformed-optional-block-is-dropped`), D-4043
+(`unanswered-write-has-its-own-l0-line`) and D-4044 (`pinned-built-in-value-is-its-own-option`) came from the same
+block as reserve and were assigned by the coordinator, D-4042 in ruling R24 (fix round 1), D-4043 in ruling R27 (fix
+round 2) and D-4044 in ruling R29 (fix round 3). A departure found during execution is named by slug in the wave-done
+mail, and the coordinator assigns its number.
 
 - **D-4035** — `older-server-404-reads-not-configured` (Tasks 1 and 3)
   - **Departs from:** the approved shape follows the Updates section's discipline. Spec §2 item 7 says "W2 is the PWA
@@ -3610,14 +3648,78 @@ and the coordinator assigns its number.
     does the block's comment ("The PHONE-PUSH toggle" becomes "The PUSH toggle").
   - **Why:** the operator's 2026-10-05 directive: "same functionality identical across anywhere the PWA is installed".
     Alert's `does` text points at this row, so the row must not name a device either.
-  - **Pinned by:** "P6: no L0 STALL_* string names a device, and the Notifications row says push" and the moved
-    label pin in "reuses the literal NotificationBell where the browser can do Web Push", both red under X22 (the label
-    put back to Phone). Nothing else pins this number: Task 4's no-device row scans only the third section's
-    sentences, which never spell the Notifications label, so it stays green if the label reverts.
+  - **Pinned by:**
+    - the Notifications LABEL: "P6: no L0 STALL_* string names a device, and the Notifications row says push" and the
+      moved label pin in "reuses the literal NotificationBell where the browser can do Web Push", both red under X22
+      (the label put back to Phone). The README never spells the label, so `stall-settings-readme.test.ts` stays green
+      if the label reverts;
+    - README's own "push bell" wording: `stall-settings-readme.test.ts`'s device row, "the Settings paragraph names no
+      device", which scans the whole Settings paragraph (not the third section's sentences alone), so the paragraph
+      saying "phone" again reds it.
   - **Cost if wrong:**
     - One label, and one moved test line.
-    - README ≈951 still says "the phone-push bell for this browser". That is outside this number's text and outside
-      §18's README edit, and is put to the operator under "Open questions for the operator" below.
+    - README ≈951 said "the phone-push bell for this browser" when this number was written. The final-fix round
+      rewrote it to "push bell" and pinned the whole paragraph (above), so no line of README's Settings paragraph names a
+      device now.
+- **D-4042** — `malformed-optional-block-is-dropped` (Task 1)
+  - **Departs from:** spec §13's wire guard (≈:1211–1213), which drops only malformed `counts` elements and reads a
+    MISSING `next`, `filesExceed` or `fallback` as not stated. Anything else is a failed read.
+  - **What W2 does:** `asStallWatchView` also drops a PRESENT but malformed `next` or `filesExceed`, with the same one
+    `console.warn` per answer, and renders the rest. A malformed `fallback` still fails the whole answer.
+  - **Why:** a skewed or buggy server's malformed optional block costs only that block, as a malformed `counts`
+    element already does. Reading the whole answer as failed would hide a good level and choice behind a Next-step or
+    files-exceed line that the screen can do without.
+  - **Pinned by:** the guard's own rows in `pwa/test/use-stall-watch-view.test.tsx`:
+    - G8, "drops a malformed next or filesExceed as not stated, keeps the rest, and warns exactly once";
+    - G7, "reads a missing next or filesExceed as not stated, passing the answer through unchanged";
+    - G4, "reads a MISSING fallback as none stated, with no warning; refuses a MALFORMED one", for the half that does
+      not change: the fallback still refuses.
+  - **Cost if wrong:** if the operator wants a malformed `next` or `filesExceed` to fail the read, the section shows
+    "could not be read" (or the last good view, stale) instead of a reading missing one block. That is a two-line change
+    in `readEffective` and the inversion of G8's expectation.
+- **D-4043** — `unanswered-write-has-its-own-l0-line` (Task 3; added by fix round 1, F1, and numbered by fix round 2)
+  - **Departs from:** spec §12's enumeration of `STALL_CONFIRM_TEXT`'s keys (≈:1147), which ends "and the refusal toast
+    `refused`" and has no key for a write that got no answer.
+  - **What W2 does:** `STALL_CONFIRM_TEXT` gains one key, `unanswered` ("Not confirmed — the server did not answer; the
+    screen will re-check."), in W1's stall-watch block of `shared/api.ts`. The section toasts it for a rejection that
+    is not an `ApiError` (a network failure), then re-reads. The 2xx-unreadable arm keeps `UNCONFIRMED_TEXT`.
+  - **Why:** fix round 1's F1. A write whose answer never arrived may still have landed, so "Nothing was changed" is
+    false for it, and `UNCONFIRMED_TEXT` ("Saved — the server's answer could not be read") is false the other way: the
+    server did not answer at all. Neither existing line is true of it, and the section's strings are all L0 constants.
+  - **Pinned by:** `pwa/test/settings-screen.test.tsx`'s "a write whose answer never arrived says it was not
+    confirmed, never "Saved" or "Nothing was changed", and re-reads" (mutations X48 and X60, each `1 failed` of 187 on
+    exactly that title, re-measured against the shipped `toast(STALL_CONFIRM_TEXT.unanswered)`), and the 2xx row "an
+    unreadable 2xx says the write may have landed and re-reads; it installs nothing", which asserts the new line is
+    absent. The sibling "a 2xx body that fails the wire guard is the same unconfirmed outcome" keeps the 2xx-unreadable
+    arm on `UNCONFIRMED_TEXT`.
+  - **Cost if wrong:** if the operator wants the network arm to read `UNCONFIRMED_TEXT` after all, it is the key's
+    removal and one line in `StallWatchSection`'s `write`, with the same rows retargeted. If the key is wanted but the
+    wording is not, it is one L0 string.
+- **D-4044** — `pinned-built-in-value-is-its-own-option` (Task 3; added by fix round 2, numbered by fix round 3)
+  - **Departs from:** spec §13 item 4 (≈:1301–1302), which says the select offers "Built-in (<builtInMs>)" and every
+    step except the one equal to `builtInMs`, "so the built-in value appears once".
+  - **What W2 does:** when the stored quiet time is a NUMBER equal to the view's `builtInMs`, the select carries that
+    step as its own option, value the stored number, label plain `quietText(stored)` exactly as `quietChoices`
+    labels every step ("2 h", never "2 h (chosen here)"), at that step's numeric place between the step below and
+    the step above, and selects it. "Built-in (2 h)" stays in the list, unselected. A step label never claims a
+    source: the quiet line above alone says where the effective value comes from. `quietChoices` itself is
+    unchanged and still omits the built-in step; the section shows the pinned step back.
+  - **Why:** a pinned 7 200 000 is the server's `chosen` value (`quietSource: 'chosen'`; a `default` write over it is a
+    real change; only NULL follows the built-in). Selecting nothing would hide a value the server did answer, and
+    selecting Built-in would show a value the server did not answer. The value then appears twice in the select,
+    once as Built-in and once as itself, and that is the departure.
+  - **Pinned by:** `pwa/test/settings-screen.test.tsx`:
+    - "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled
+      plain like every step; one off the list … selects none" (source `chosen`; selected option reads plain "2 h");
+    - "a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source
+      default) …" (the quiet line reads "2 h (built-in)", the selected option still reads plain "2 h");
+    - "a pinned built-in number sits at its step's numeric place among the steps, between the step below and the step
+      above";
+    - "from a pinned built-in number, picking Built-in is one change that writes default exactly once".
+    - The pinned-option mutation rows of Task 3's table.
+  - **Cost if wrong:** if the operator wants the built-in value to appear once after all, the extra option goes and
+    a pinned built-in number selects Built-in, which shows a value the server did not answer. That is the section's `shown` list and `quietValue`, and the
+    inversion of the four rows above.
 
 **Numbers this wave cites but does not define.** The W1 plan defines all four. Defining any of them here too would red
 `deviation-refs`' two-plans row.
@@ -3632,21 +3734,25 @@ and the coordinator assigns its number.
   reader fault over a listed registry never answers `{ measured: false }`. W2 renders what arrives (Residue, below).
 
 **Departures found during this wave's execution** are numbered by the coordinator at wave-done, from the programme's
-reserve. None is defined here, and none is written as a number in code or commits before then: a departure goes into
+reserve. None beyond the three fix-round entries above is defined here, and none is written as a number in code or commits before then: a departure goes into
 the wave-done mail by slug only.
 
 **Candidates the coordinator may number at wave-done.** The tasks made each of these choices where the spec was silent.
 Each is pinned, and the plan takes no number for any of them:
 - `quiet-range-bounds-the-select` (Task 1). A quiet range is readable only with `stepMs > 0`, `minMs <= maxMs` and at
   most 1000 steps (G10, G11).
-- `malformed-fallback-refuses-the-answer` (Task 1). A malformed `next` or `filesExceed` is dropped as not stated, with
-  one warning. A malformed `fallback` refuses the whole answer (G4, G7, G8).
+- `malformed-fallback-refuses-the-answer` (Task 1). A malformed `fallback` refuses the whole answer (G4). The
+  neighbouring drop of a malformed `next` or `filesExceed` is a numbered departure of its own
+  (`malformed-optional-block-is-dropped`, above).
 - `unanswered-write-reads-unconfirmed` (Tasks 1 and 3). A rejection that is not an `ApiError` (a network failure,
-  after which the POST may have landed) reads as `unconfirmed`: the section toasts `UNCONFIRMED_TEXT` and re-reads,
-  as §15's "A write's reply cannot be read" row does for an unreadable 2xx, and never says "Nothing was changed" (G18,
-  X48, X60).
+  after which the POST may have landed) reads as `unconfirmed`, never as a refusal: the section re-reads and never says
+  "Nothing was changed" (G18; X48 and X60, re-measured against the shipped line). The line it toasts is a numbered departure of its own
+  (`unanswered-write-has-its-own-l0-line`, above). The 2xx-unreadable arm, which §15's "A write's reply cannot be
+  read" row words, keeps `UNCONFIRMED_TEXT` and re-reads too.
 - `quiet-select-shows-no-unanswered-value` (Task 3). A stored quiet time the list does not hold selects one empty,
-  hidden, disabled option (X38).
+  hidden, disabled option (X38). A stored number off the list that is not the built-in still selects the blank
+  option. The one stored value that is not "unanswered", a number equal to the built-in, is a numbered departure of
+  its own (`pinned-built-in-value-is-its-own-option` (D-4044), above).
 - `readme-section-sentence-pinned-to-l0` (Task 4). A new server test file the spec does not name.
 
 ## Residue settled by this plan
@@ -3698,10 +3804,11 @@ From spec §20, each settled where the task names it:
   - A network failure is not a refusal at all: it reads `unconfirmed` (below).
   - No new L0 string.
 - **A write whose answer never arrived** (the plan review; §15's "A write's reply cannot be read" row). A rejection
-  that is not an `ApiError` may have stored the write, so it gives `toast(UNCONFIRMED_TEXT)` and a re-read, never
-  "Nothing was changed". W1 provides no L0 text for it and W2 adds none, so the PWA's existing `UNCONFIRMED_TEXT` is
-  used, the text §13 step 3 and §15 already prescribe for an answer that could not be read. Pinned by G18, X48 and
-  X60.
+  that is not an `ApiError` may have stored the write, so it gives a toast and a re-read, never "Nothing was changed".
+  Fix round 1 (F1) gave the network arm its own L0 line, `STALL_CONFIRM_TEXT.unanswered` ("Not confirmed — the server
+  did not answer; the screen will re-check."), so the line shown here is no longer `UNCONFIRMED_TEXT`. That text stays
+  the 2xx-unreadable arm's, the text §13 step 3 and §15 prescribe for an answer that could not be read. Pinned by G18,
+  X48 and X60.
 - **"An absent row sends `chosen.level` `'unreadable'`, so no radio is checked"** (Task 3). The section checks a radio
   only on `chosen.level === value`. Pinned by the `stored: 'absent'` render row ("an absent or unreadable stored level
   checks no radio…"), which also shows the absent stored line.
@@ -3725,13 +3832,18 @@ Two of the remaining items reach this wave's screen unchanged, and the section d
 ## Open questions for the operator
 
 Neither blocks the wave; each is the operator's to rule on, and the wave-done mail repeats them.
-- **README ≈951 (≈958 at `d12b5aba0`), "the phone-push bell for this browser".** It is in the Settings paragraph W2
-  edits, but outside D-4036 (which renames the Notifications row's label, a string README never spells) and outside
+- **README ≈951 (≈958 at `d12b5aba0`), "the phone-push bell for this browser".** **Settled by the operator's
+  2026-10-05 directive** (no device distinction): README already reads "the push bell for this browser" (`a5771e471`),
+  and `stall-settings-readme.test.ts`'s device row pins it. Nothing is left to rule; the question stays below as
+  history. It is in the Settings paragraph W2 edits, but outside D-4036 (which renames the Notifications row's label, a string README never spells) and outside
   §18's README edit list (the third-section sentence only). Rewording it to "the push bell for this browser" would
   carry the 2026-10-05 "no device distinction" directive into README.
 - **`UNCONFIRMED_TEXT` for a write whose answer never arrived.** Its lead word, "Saved —", overstates a request that
-  may never have left; the re-read that follows shows what was stored within one answer. A text that says only "could
-  not be confirmed" would need an L0 or PWA string that neither wave adds today.
+  may never have left; the re-read that follows shows what was stored within one answer. (Settled for the network arm
+  by fix round 1, F1: it now toasts `STALL_CONFIRM_TEXT.unanswered`, which says only "Not confirmed". The question
+  stands for the 2xx-unreadable arm, which keeps `UNCONFIRMED_TEXT`.) The network arm has its own line now
+  (`STALL_CONFIRM_TEXT.unanswered`, D-4043); a text that says only "could not be confirmed" for the 2xx arm would need
+  another one.
 
 ## If this PR is overtaken before it merges
 
