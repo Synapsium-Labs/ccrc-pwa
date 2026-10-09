@@ -185,7 +185,7 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
   - While it runs, drain and ingest wait and cursors do not move, and every writing `--op` form is refused exit 2 `recovering` (RB6) except restore, rebuild, W2's recall-off (RB12), `--migrate` on a store not at the code's version (RB13) and `--adopt` on an unbound store (RB14); dry runs and read verbs still answer, read verbs with `lag=unmeasured`.
   - It works within the run budget (90 s and 512 MiB, never reset per file) and the free-space floor, checked before each chunk. The cursor advances in the same transaction as the records it applies.
   - It maintains meta `HEALTH_META.recoverUnmovedTicks`.
-  - Redact records come first. Only files with a `drained` record replay. Replay never reads `$REG` and writes no journal record.
+  - Redact records come first. Only files with a `drained` record replay. A spool record of a file with no `drained` record is skipped, and counts `journal_spool_undrained_gone` only when its file is kept nowhere: not in `.draining/`, not in B1's `.draining/rejected/` (⟦D:history-permanent-failures-classified⟧) and not in any `.draining/planted/<area>/` (⟦D:history-planted-entries-never-wedge⟧). Replay never reads `$REG` and writes no journal record.
   - Unknown, malformed and newer records are skipped and counted (`journal_line_malformed`, `journal_record_unknown`).
   - The executor contract (Task 25): `RECOVER_EXECUTORS[phase](db, run, cursor)` answers `{ cursor, moved, phaseDone }`, or a Promise of it; `{ moved: false, phaseDone: false }` ends the step for this pass, as a throw does (counted `recover_chunk_failed`). Task 29's `recoverReindex(db, ctx, cur, budget)` reaches that contract through `recoverReindexChunk`, whose placeholder body (Task 25) Task 29 replaces with an adapter. A phase table gives B4 its segment-replay seam, between `apply` and `reindex`.
 - **Test isolation.**
@@ -22583,7 +22583,7 @@ kill seam."
   - **O44**, minus its segment case, which is B4's;
   - **O48**'s replay-order half. Its eventKey half is B1's;
   - RB6's "every writing --op form but restore and rebuild is refused 'recovering'", for every form `--op` runs by this task, through both doors, on a bound store at the code's version, so `migrate` is refused as RB13 rules (its exempt arm is Task 19's case; adopt's two RB14 arms are Task 26's; that restore and rebuild are never refused is Tasks 27 and 28's);
-  - the streaming executor's agreement with Task 7's `planReplay`: a merge group, a foreign head, a head-less file and an undrained spool record.
+  - the streaming executor's agreement with Task 7's `planReplay`: a merge group, a foreign head, a head-less file and an undrained spool record, gone, held, or set aside by B1 into `.draining/rejected/` or `.draining/planted/<area>/` (only the gone one counted).
 - Fork records (ruled Q16; Task 34): `replayVerdict` applies an `epoch-confirmed` record with the cause it carries, and `replayEpochLine` asks lib's `decideEpochLine` about a line with no verdict. Neither enumerates a source or a cause, so once Task 34 admits `fork` in lib, a fork line and its verdicts replay through this task's code unchanged. Write no fork case here: Task 34's DM48 rebuild case (in this test file) pins it.
 - Departures:
   - ⟦D:history-recovery-replay⟧
@@ -22599,6 +22599,8 @@ kill seam."
   - ⟦D:history-free-space-floor⟧
   - ⟦D:history-b4-after-b2⟧
   - ⟦D:history-test-seams-not-env⟧
+  - ⟦D:history-permanent-failures-classified⟧ (B1's `.draining/rejected/`: a set-aside file is kept, never counted gone)
+  - ⟦D:history-planted-entries-never-wedge⟧ (B1's `.draining/planted/<area>/`: a displaced file is kept, never counted gone)
   - NEW:
     - ⟦D:history-recovery-scratch-tables⟧: the index pass's results must survive the several passes a large replay spans, and schema v1 has no table for them.
     - ⟦D:history-replay-receipt-sha-from-record⟧: the journal keeps a spool line's parsed object, not its bytes. Replay hashes the object's re-serialisation, which equals the bytes every in-tree writer produces, and never counts a replayed duplicate as a `receipt_collision`.
@@ -23139,7 +23141,7 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
     }
   });
 
-  it('in-process: a file whose head names another store is dropped and counted once; a file with no head is kept, as planReplay keeps it; an undrained spool record counts journal_spool_undrained_gone only when its .draining file is gone', async () => {
+  it('in-process: a file whose head names another store is dropped and counted once; a file with no head is kept, as planReplay keeps it; an undrained spool record counts journal_spool_undrained_gone only when its file is gone from .draining/, .draining/rejected/ and every .draining/planted/<area>/', async () => {
     const box = makeHistoryBox('ccrc-history-recover-files-');
     const P = historyPaths(box.home);
     const ids = createStore(box.home);
@@ -23149,15 +23151,21 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
     const [GA, GB, GC, S] = [u(0xe1), u(0xe2), u(0xe3), u(0xe9)];
     const family = (id: string, g: string, t: number): string =>
       journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
-    // Two journaled spool files with no `drained` record: GONE has left .draining/, HELD is still there (the live
-    // drain decides it after the step).
+    // Four journaled spool files with no `drained` record: GONE has left .draining/, HELD is still there (the live
+    // drain decides it after the step), and B1 set REJECTED aside into .draining/rejected/ (the store refused its rows,
+    // ⟦D:history-permanent-failures-classified⟧) and DISPLACED into .draining/planted/<area>/ (a directory stood at its
+    // sidecar name, ⟦D:history-planted-entries-never-wedge⟧). Only GONE is gone.
     const GONE = `${ID}.${t0 + 5}.4242.jsonl`;
     const HELD = `${ID}.${t0 + 6}.4242.jsonl`;
+    const REJECTED = `${ID}.${t0 + 7}.4242.jsonl`;
+    const DISPLACED = `${ID}.${t0 + 8}.4242.jsonl`;
     const stop = (t: number): Record<string, unknown> => ({ v: 1, ev: 'Stop', id: ID, sid: S, ts: t });
     plantJournalFile(box, ids.storeId, M, 'feedbeef', t0, [
       family(ID, GA, t0 + 1),
       journalRecord('file', t0 + 5, { name: GONE }), journalRecord('spool', t0 + 5, { ord: 1, rec: stop(t0 + 5) }),
       journalRecord('file', t0 + 6, { name: HELD }), journalRecord('spool', t0 + 6, { ord: 1, rec: stop(t0 + 6) }),
+      journalRecord('file', t0 + 7, { name: REJECTED }), journalRecord('spool', t0 + 7, { ord: 1, rec: stop(t0 + 7) }),
+      journalRecord('file', t0 + 8, { name: DISPLACED }), journalRecord('spool', t0 + 8, { ord: 1, rec: stop(t0 + 8) }),
     ]);
     // In this store's directory, a head naming ANOTHER store: never replayed.
     plantJournalFile(box, ids.storeId, M, '77777777', t0 + 2, [family(ID2, GB, t0 + 3)], u(0x77));
@@ -23165,6 +23173,12 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
     fs.writeFileSync(path.join(box.root, 'journal', ids.storeId, `${M}.cccccccc.jsonl`), `${family(ID3, GC, t0 + 4)}\n`, { mode: 0o600 });
     fs.mkdirSync(P.draining, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(P.draining, HELD), `\n${JSON.stringify(stop(t0 + 6))}\n`, { mode: 0o600 });
+    fs.mkdirSync(path.join(P.draining, 'rejected'), { mode: 0o700 });
+    fs.writeFileSync(path.join(P.draining, 'rejected', REJECTED), `\n${JSON.stringify(stop(t0 + 7))}\n`, { mode: 0o600 });
+    // An empty area first, as another drain's would stand beside it.
+    fs.mkdirSync(path.join(P.draining, 'planted', `${t0 + 1}.4241`), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.join(P.draining, 'planted', `${t0 + 2}.4242`), { mode: 0o700 });
+    fs.writeFileSync(path.join(P.draining, 'planted', `${t0 + 2}.4242`, DISPLACED), `\n${JSON.stringify(stop(t0 + 8))}\n`, { mode: 0o600 });
     const db = openWriter(P.dbFile);
     try {
       db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
@@ -23346,7 +23360,10 @@ Then confirm the CI pin is green: `(cd server && ./node_modules/.bin/vitest run 
 //   apply    Reads the same records again through lib replayStep (⟦D:history-recovery-replay⟧):
 //            - a receipt is applied with its drain-time verdicts, at the spool record's own position;
 //            - a verdict with no event_key is applied at its own position;
-//            - a spool record of a file with no `drained` record is skipped (⟦D:history-journal-drained-record⟧).
+//            - a spool record of a file with no `drained` record is skipped (⟦D:history-journal-drained-record⟧),
+//              and counted journal_spool_undrained_gone only when B1 keeps its file nowhere: not in .draining/,
+//              .draining/rejected/ (⟦D:history-permanent-failures-classified⟧) or .draining/planted/<area>/
+//              (⟦D:history-planted-entries-never-wedge⟧).
 //            It never reads $REG and writes no journal record.
 //   reindex  W1-B2 Task 29's FTS re-derivation, for pairs the index pass added. A no-op until then.
 // W1-B4 inserts its export phases between apply and reindex, in RECOVER_PHASES and here (⟦D:history-b4-after-b2⟧).
@@ -23752,6 +23769,20 @@ function replayReceipt(db, run, a) {
   }
 }
 
+/** Whether a journaled spool file with no `drained` record is still kept. In `.draining/` it was held, or drained by the
+ *  lost store before its verdicts were flushed, and the live drain decides it after the step. B1 also sets a journaled
+ *  file aside with no `drained` record, its bytes kept and its lines in no store: into `.draining/rejected/<name>` when
+ *  the store refused its rows (⟦D:history-permanent-failures-classified⟧), and into `.draining/planted/<area>/<name>` when
+ *  a directory at its sidecar name displaced it (⟦D:history-planted-entries-never-wedge⟧). Replay skips all three, as
+ *  the lost store held none of a set-aside file's lines; only a file kept in none of them is gone. */
+function undrainedFileKept(draining, name) {
+  if (existsSync(`${draining}/${name}`)) return true;
+  if (existsSync(`${draining}/${REJECTED_DIR}/${name}`)) return true;
+  let areas;
+  try { areas = readdirSync(`${draining}/${PLANTED_DIR}`); } catch { return false; }
+  return areas.some((area) => existsSync(`${draining}/${PLANTED_DIR}/${area}/${name}`));
+}
+
 /** One replayStep action. A `tick` record is the lag series' copy. replayStep answers it only when it is newer than
  *  the ticks the store held below the bind (ReplayState.ticksAfter) and older than the bind itself
  *  (ReplayState.ticksBefore): a recovery pass journals its own tick record, whose row it already wrote
@@ -23775,8 +23806,9 @@ function applyReplayAction(db, run, a) {
       return;
     case 'skip-undrained':
       // Its file was held, or drained by the lost store before its verdicts were flushed: either way it is still in
-      // .draining/ with its sidecar, and the live drain decides it after the step. Counted only when it is gone.
-      if (typeof a.file !== 'string' || !existsSync(`${run.P.draining}/${a.file}`)) bump(db, 'journal_spool_undrained_gone');
+      // .draining/ with its sidecar, and the live drain decides it after the step. Or B1 set it aside after journaling
+      // it (undrainedFileKept). Counted only when it is gone.
+      if (typeof a.file !== 'string' || !undrainedFileKept(run.P.draining, a.file)) bump(db, 'journal_spool_undrained_gone');
       return;
     default:
       return;   // 'file': the replay state carries it
@@ -24277,14 +24309,37 @@ EOF
 #   RED: …: expected [ 'claude-a-demo' ] to deeply equal [ 'claude-a-demo', 'claude-c-demo' ]
 cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
 
-# journal_spool_undrained_gone counts only a spool file that has left .draining/ (always counted, then never)
+# journal_spool_undrained_gone counts only a spool file kept nowhere: not in .draining/, .draining/rejected/ or any
+# .draining/planted/<area>/ (always counted, then never, then each set-aside arm removed)
 cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"
 python3 - <<'EOF'
 p = 'ccd/history/sweep.mjs'
 s = open(p).read()
-a = "      if (typeof a.file !== 'string' || !existsSync(`${run.P.draining}/${a.file}`)) bump(db, 'journal_spool_undrained_gone');\n"
+a = "      if (typeof a.file !== 'string' || !undrainedFileKept(run.P.draining, a.file)) bump(db, 'journal_spool_undrained_gone');\n"
 assert s.count(a) == 1, 'mutation anchor not found once'
 open(p, 'w').write(s.replace(a, "      bump(db, 'journal_spool_undrained_gone');\n", 1))
+EOF
+(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a file whose head names another store')
+#   RED: expected { …, journal_spool_undrained_gone: 4, … } to deeply equal { …, journal_spool_undrained_gone: 1, … }
+cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
+cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"
+python3 - <<'EOF'
+p = 'ccd/history/sweep.mjs'
+s = open(p).read()
+a = "      if (typeof a.file !== 'string' || !undrainedFileKept(run.P.draining, a.file)) bump(db, 'journal_spool_undrained_gone');\n"
+assert s.count(a) == 1, 'mutation anchor not found once'
+open(p, 'w').write(s.replace(a, '', 1))
+EOF
+(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a file whose head names another store')
+#   RED: expected { …, journal_spool_undrained_gone: 0, … } to deeply equal { …, journal_spool_undrained_gone: 1, … }
+cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
+cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"
+python3 - <<'EOF'
+p = 'ccd/history/sweep.mjs'
+s = open(p).read()
+a = "  if (existsSync(`${draining}/${REJECTED_DIR}/${name}`)) return true;\n"
+assert s.count(a) == 1, 'mutation anchor not found once'
+open(p, 'w').write(s.replace(a, '', 1))
 EOF
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a file whose head names another store')
 #   RED: expected { …, journal_spool_undrained_gone: 2, … } to deeply equal { …, journal_spool_undrained_gone: 1, … }
@@ -24293,12 +24348,12 @@ cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"
 python3 - <<'EOF'
 p = 'ccd/history/sweep.mjs'
 s = open(p).read()
-a = "      if (typeof a.file !== 'string' || !existsSync(`${run.P.draining}/${a.file}`)) bump(db, 'journal_spool_undrained_gone');\n"
+a = "  return areas.some((area) => existsSync(`${draining}/${PLANTED_DIR}/${area}/${name}`));\n"
 assert s.count(a) == 1, 'mutation anchor not found once'
-open(p, 'w').write(s.replace(a, '', 1))
+open(p, 'w').write(s.replace(a, '  return false;\n', 1))
 EOF
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a file whose head names another store')
-#   RED: expected { …, journal_spool_undrained_gone: 0, … } to deeply equal { …, journal_spool_undrained_gone: 1, … }
+#   RED: expected { …, journal_spool_undrained_gone: 2, … } to deeply equal { …, journal_spool_undrained_gone: 1, … }
 cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
 
 # §9.14: a replayed recall line never re-decides recall_off_stale from today's recall-off/<id>. With the flag gone,
@@ -31173,6 +31228,8 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-genless-line-joins-registry-generation⟧ (Tasks 25, 28): A gen-less line of any kind (a startup or resume line at confirmation, a clear line at drain) joins the registry's generation, and a `''` family is re-keyed when its row gains one (§6.1; Q8). B1-defined.
 - ⟦D:history-replay-receipt-sha-from-record⟧ (Task 25): NEW departure (no spec §16 row). The journal keeps a spool line's parsed object, not its bytes; replay hashes the object's compact re-serialisation (equal to every in-tree writer's bytes) and never counts a replayed duplicate as a `receipt_collision`.
 - ⟦D:history-recovery-chunk-failure-counted⟧ (Task 25): NEW departure (no spec §16 row). §9.14 names the stall but not its cause's counter: `recover_chunk_failed`, with one stderr line per failed chunk.
+- ⟦D:history-permanent-failures-classified⟧ (Task 25): A drain transaction the store refuses for the file's own rows sets the already-journaled file aside into `.draining/rejected/`, its lines in the journal with no `drained` record; replay skips them and counts the file kept, never `journal_spool_undrained_gone` (§9.2, §9.14). B1-defined.
+- ⟦D:history-planted-entries-never-wedge⟧ (Task 25): A drain moves a live spool file whose sidecar name a directory occupies into that drain's `.draining/planted/<tickMs>.<pid>/`, even one a hold pass already journaled, its lines in the journal with no `drained` record; replay skips them and counts the file kept, never `journal_spool_undrained_gone` (§9.2, §9.10, §9.14). B1-defined.
 - ⟦D:history-pre-migration-snapshot⟧ (Task 27): The writer copies the store to `db/backups/pre-v<N>.db` (temp then rename, newest kept, an attempt marker while one runs) before every schema migration, and refuses the migration, pausing capture, when `planCopy` finds no room; the verdict is `lib.mjs`'s `planMigration`, and `store.mjs` only executes it (§6.11; ruled Q6, W1-B1). B1-defined.
 - ⟦D:history-spool-journal-retained⟧ (Task 28): Drained spool lines, the verdicts taken from registry state or an operator's argument, learned redaction pairs and tick records are kept in an append-only journal, `journal/<store_id>/<YYYY-MM>.<writer>.jsonl` on the home filesystem; a drained file's lines and its verdicts are both fsynced there before it is unlinked (§9.2, §9.14; ruled Q6, W1-B1). B1-defined.
 - ⟦D:history-redaction-fail-closed-node-rewrite⟧ (Task 29): NEW departure (no spec §16 row). A leaf whose summary is pruned, a raw leaf and a condensed node cannot be re-derived from text, so when a pair is learned their stored gist, topics and refs are rewritten through `redactField` instead. A leaf whose re-derivation throws is rewritten the same way and counted `parser_crash`, never retried by the next pass (coordinator ruling RB5).
