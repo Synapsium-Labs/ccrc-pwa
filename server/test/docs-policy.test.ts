@@ -1182,3 +1182,534 @@ describe('W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4,
     expect(docsProjectKey(N, 'demo')).not.toBe(docsDraftSizeKey(N, 'demo'));
   });
 });
+
+// ===== W3 Task 2: the routes' L1, part 2 =====
+// The ok-answer shape guard (refinement (f), W2's carry), the show-bytes bound (refinement (g), W2's carry), the raster
+// check and the file representation (section 3.6, section 5.2 steps 2, 5 and 6; M5.2's L1 half), the known size
+// (section 6.2) and the cache verdicts and hit answer (section 6.5; refinement (l)). Every expected value below is
+// written out from the spec, never read back from `policy.ts`. Raster bytes are built from L0's `DOCS_RASTER_TYPES`,
+// never typed: the PNG signature has one home (`single-definition.test.ts`).
+//
+// Imports sit here for W2 Task 3's reason: no line above this block moves.
+import {
+  DOCS_ANSWER_MAX_DEPTH, docsAnswerShape, docsCacheFill, docsCacheHitAnswer, docsCacheVerdict, docsFileReply,
+  docsKnownSize, docsRasterType, docsShowBound, rasterVerdict,
+  type DocsCacheVerdict, type DocsFileReply, type DocsListedFile,
+} from '../src/docs/policy.js';
+import {
+  DOCS_RASTER_EXT, DOCS_RASTER_TYPES, contentClass, type DocsShowOk, type DocsVerb, type RasterType,
+} from '../../shared/docs.js';
+
+const T2_COMMIT = 'a'.repeat(40);
+const T2_FP = 'b'.repeat(64);
+const T2_SERVED = DOCS_REF_PREFIXES[1] + 'main';
+const T2_SCHEMA: DocsFailureBody = { ok: false, failure: 'malformed-answer', why: 'schema' };
+const T2_OVERSIZE: DocsFailureBody = { ok: false, failure: 'malformed-answer', why: 'oversize' };
+
+/** A COMPLETE ok tree: every `DocsTreeOk` field present, placeholders only. `demo` on its origin default, fetched 5 s
+ *  ago; two committed entries (a file, and an exec of size 0) and one untracked draft. `over` replaces top-level
+ *  fields; a fresh object every call. */
+function t2Tree(over: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
+  const tree: DocsTreeOk = {
+    v: 1, verb: 'docs-tree', ok: true, elapsedMs: 3, project: 'demo',
+    repo: { key: 'a'.repeat(32), objectFormat: 'sha1', shallow: false },
+    github: { state: 'named', slug: 'example-org/example-repo' },
+    ref: {
+      requested: null, served: T2_SERVED, name: 'main', side: 'origin', commit: T2_COMMIT,
+      via: 'default:origin-head', tried: [{ ref: T2_SERVED, result: 'resolved' }], relation: 'equal',
+      counterpart: { ref: DOCS_REF_PREFIXES[0] + 'main', commit: T2_COMMIT, ahead: 0, behind: 0, count: 'measured' },
+    },
+    mainCheckout: { path: '/srv/demo', branch: 'main', head: T2_COMMIT },
+    sections: [
+      { slug: 'specs', path: 'docs/superpowers/specs', state: 'present', count: 2 },
+      { slug: 'plans', path: 'docs/superpowers/plans', state: 'present', count: 1 },
+      { slug: 'product-design', path: 'docs/product-design', state: 'absent', count: 0 },
+      { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+    ],
+    entries: [
+      { section: 'specs', path: 'a.md', committed: { kind: 'file', blob: 'c'.repeat(40), size: 12 }, draft: null },
+      { section: 'plans', path: 'dir/run.sh', committed: { kind: 'exec', blob: 'd'.repeat(40), size: 0 }, draft: null },
+      {
+        section: 'specs', path: 'new.md', committed: null,
+        draft: { state: 'untracked', kind: 'file', size: 7, fp: T2_FP, trust: 'hash' },
+      },
+    ],
+    unlisted: { count: 0, byReason: {} },
+    drafts: {
+      state: 'holder', branch: 'main', worktree: { path: '/srv/demo', head: T2_COMMIT, class: 'main' },
+      baseEqual: true, base: null, caveats: [], opaque: [],
+    },
+    freshness: {
+      remote: 'origin', trackedRef: T2_SERVED,
+      stamp: { okAgeMs: 5000, attemptAgeMs: 5000, lastOutcome: 'ok', okCommit: T2_COMMIT },
+      fetchHead: { ageMs: 5000, bytes: 90 },
+    },
+  };
+  return { ...structuredClone(tree), ...over };
+}
+
+/** `t2Tree()` with one nested change, made on a fresh copy (`any`: the change is meant to break the type). */
+function t2TreeWith(change: (t: any) => void): Record<string, unknown> {
+  const t = t2Tree();
+  change(t);
+  return t;
+}
+
+/** `n` containers nested inside one another, alternating array and object, the innermost empty: `t2Nest(1)` is `[]`,
+ *  `t2Nest(2)` is `{k: []}`, `t2Nest(3)` is `[{k: []}]`. Held under a top-level key, its innermost container sits at
+ *  depth `n` (the answer itself is depth 0). */
+function t2Nest(n: number): unknown {
+  let v: unknown = [];
+  for (let level = 2; level <= n; level++) v = level % 2 === 0 ? { k: v } : [v];
+  return v;
+}
+
+describe('W3 T2: docsAnswerShape, the depth bound (refinement (f), W2 carry)', () => {
+  it('DOCS_ANSWER_MAX_DEPTH is 16, its own literal on exactly one line', () => {
+    expect(DOCS_ANSWER_MAX_DEPTH).toBe(16);
+    expect(T4_POLICY_SRC.split('\n').filter((l) => l === 'export const DOCS_ANSWER_MAX_DEPTH = 16;')).toHaveLength(1);
+  });
+
+  it('the complete tree fixture is ok, and serialises', () => {
+    const tree = t2Tree();
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual({ ok: true });
+    expect(() => JSON.stringify(tree)).not.toThrow();
+  });
+
+  it('a 16-deep nest under an unknown key is ok: the boundary', () => {
+    expect(docsAnswerShape('docs-tree', t2Tree({ extra: t2Nest(16) }))).toStrictEqual({ ok: true });
+  });
+
+  it.each(['docs-tree', 'docs-index', 'docs-show', 'docs-fetch'] as const)(
+    '%s: a 17-deep nest under an unknown key is schema', (verb: DocsVerb) => {
+      const base = verb === 'docs-tree' ? t2Tree() : { v: 1, verb, ok: true, elapsedMs: 1, projects: [], duplicates: [] };
+      expect(docsAnswerShape(verb, { ...base, extra: t2Nest(17) })).toStrictEqual(T2_SCHEMA);
+    });
+
+  it('a 17-deep nest of arrays only, and of objects only, is schema', () => {
+    let arrays: unknown = [];
+    let objects: unknown = {};
+    for (let i = 1; i < 17; i++) {
+      arrays = [arrays];
+      objects = { k: objects };
+    }
+    expect(docsAnswerShape('docs-fetch', { v: 1, extra: arrays })).toStrictEqual(T2_SCHEMA);
+    expect(docsAnswerShape('docs-fetch', { v: 1, extra: objects })).toStrictEqual(T2_SCHEMA);
+  });
+
+  it('a 500 000-deep listing value is schema, and the guard itself never throws', () => {
+    const deep: unknown = JSON.parse('['.repeat(500000) + ']'.repeat(500000));
+    const tree = t2Tree({ extra: deep });
+    // The threat the guard exists for: a reply carrying this value cannot be serialised.
+    expect(() => JSON.stringify(tree)).toThrow(RangeError);
+    let verdict: unknown;
+    expect(() => { verdict = docsAnswerShape('docs-tree', tree); }).not.toThrow();
+    expect(verdict).toStrictEqual(T2_SCHEMA);
+  });
+
+  it.each(['docs-fetch', 'docs-show'] as const)('%s: a flat answer is ok (depth is all it checks)', (verb) => {
+    expect(docsAnswerShape(verb, { v: 1, verb, ok: true, elapsedMs: 1, anything: 'at all' })).toStrictEqual({ ok: true });
+  });
+
+  it.each([
+    ['an array', []], ['null', null], ['a string', 'x'], ['a number', 7],
+  ] as const)('the answer itself must be a plain object: %s is schema for every verb', (_what, answer) => {
+    for (const verb of ['docs-tree', 'docs-index', 'docs-show', 'docs-fetch'] as const) {
+      expect(docsAnswerShape(verb, answer), verb).toStrictEqual(T2_SCHEMA);
+    }
+  });
+});
+
+describe('W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry)', () => {
+  it.each([
+    ['freshness deleted', t2TreeWith((t) => { delete t.freshness; })],
+    ['ref deleted', t2TreeWith((t) => { delete t.ref; })],
+    ['repo deleted', t2TreeWith((t) => { delete t.repo; })],
+    ["freshness.remote 'upstream'", t2TreeWith((t) => { t.freshness.remote = 'upstream'; })],
+    ['freshness.stamp {} (no attemptAgeMs)', t2TreeWith((t) => { t.freshness.stamp = {}; })],
+    ["stamp.attemptAgeMs the string '1'", t2TreeWith((t) => { t.freshness.stamp.attemptAgeMs = '1'; })],
+    ['stamp.lastOutcome 7', t2TreeWith((t) => { t.freshness.stamp.lastOutcome = 7; })],
+    ['ref.requested 7', t2TreeWith((t) => { t.ref.requested = 7; })],
+    ['ref.served absent', t2TreeWith((t) => { delete t.ref.served; })],
+    ['ref.served empty', t2TreeWith((t) => { t.ref.served = ''; })],
+    ['ref.served holding a NUL', t2TreeWith((t) => { t.ref.served = T2_SERVED + String.fromCharCode(0); })],
+    ['ref.commit absent', t2TreeWith((t) => { delete t.ref.commit; })],
+    ['ref.commit not a sha', t2TreeWith((t) => { t.ref.commit = 'main'; })],
+    ['repo.key absent', t2TreeWith((t) => { delete t.repo.key; })],
+    ['repo.key holding a NUL', t2TreeWith((t) => { t.repo.key = 'a' + String.fromCharCode(0) + 'b'; })],
+    ['entries not an array', t2TreeWith((t) => { t.entries = {}; })],
+    ['an entry that is null', t2TreeWith((t) => { t.entries.push(null); })],
+    ['an entry with section 9', t2TreeWith((t) => { t.entries[0].section = 9; })],
+    ["an entry with section 'docs'", t2TreeWith((t) => { t.entries[0].section = 'docs'; })],
+    ['an entry with no path', t2TreeWith((t) => { delete t.entries[0].path; })],
+    ['an entry whose committed is {} (no kind, no blob)', t2TreeWith((t) => { t.entries[0].committed = {}; })],
+    ['an entry with no committed key at all', t2TreeWith((t) => { delete t.entries[0].committed; })],
+    ["an entry whose committed kind is 'tree'", t2TreeWith((t) => { t.entries[0].committed.kind = 'tree'; })],
+    ['an entry whose committed blob is not a sha', t2TreeWith((t) => { t.entries[0].committed.blob = 'x'; })],
+    ['an entry whose committed size is -1', t2TreeWith((t) => { t.entries[0].committed.size = -1; })],
+    ["an entry whose committed size is '12'", t2TreeWith((t) => { t.entries[0].committed.size = '12'; })],
+    ['an entry whose draft.fp is 7', t2TreeWith((t) => { t.entries[2].draft.fp = 7; })],
+    ["an entry whose draft.fp is 'x', not a fingerprint", t2TreeWith((t) => { t.entries[2].draft.fp = 'x'; })],
+    ['an entry whose draft.size is 1.5', t2TreeWith((t) => { t.entries[2].draft.size = 1.5; })],
+    ['an entry with no draft key at all', t2TreeWith((t) => { delete t.entries[2].draft; })],
+  ])('%s is schema', (_what, tree) => {
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual(T2_SCHEMA);
+  });
+
+  it.each([
+    ['ref.requested a string', t2TreeWith((t) => { t.ref.requested = 'main'; })],
+    ['no origin remote and no stamp', t2TreeWith((t) => { t.freshness.remote = null; t.freshness.stamp = null; })],
+    ['a listed size of null and a draft with no fp', t2TreeWith((t) => {
+      t.entries[0].committed.size = null;
+      t.entries[2].draft.fp = null;
+      t.entries[2].draft.size = null;
+    })],
+    ['no entries at all', t2TreeWith((t) => { t.entries = []; })],
+    ['a stamp with a failed last outcome', t2TreeWith((t) => { t.freshness.stamp.lastOutcome = 'fetch-transport'; })],
+  ])('%s is ok', (_what, tree) => {
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual({ ok: true });
+  });
+
+  it('the order the routes keep: refreshDue is reached only after an ok shape', () => {
+    // The carry: `refreshDue` over a tree with no freshness throws a TypeError, so the shape comes first.
+    const broken = t2TreeWith((t) => { delete t.freshness; });
+    expect(() => refreshDue(broken as unknown as DocsTreeOk)).toThrow(TypeError);
+    expect(docsAnswerShape('docs-tree', broken)).toStrictEqual(T2_SCHEMA);
+    const tree = t2Tree();
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual({ ok: true });
+    expect(refreshDue(tree as unknown as DocsTreeOk)).toBe(false);
+  });
+});
+
+describe('W3 T2: docsAnswerShape, the index (refinement (f), W2 carry)', () => {
+  const index = (projects: unknown): Record<string, unknown> =>
+    ({ v: 1, verb: 'docs-index', ok: true, elapsedMs: 1, unlisted: 0, duplicates: [], projects });
+
+  it('an empty project list is ok, and so is a list of rows', () => {
+    expect(docsAnswerShape('docs-index', index([]))).toStrictEqual({ ok: true });
+    expect(docsAnswerShape('docs-index', index([{ project: 'demo', state: 'ready', github: { state: 'none' } }])))
+      .toStrictEqual({ ok: true });
+  });
+
+  it.each([
+    ['projects not an array', index({})],
+    ['projects absent', { v: 1, verb: 'docs-index', ok: true, elapsedMs: 1 }],
+    ['projects [7]', index([7])],
+    ['projects [null]', index([null])],
+    ['projects [[]]', index([[]])],
+  ])('%s is schema', (_what, answer) => {
+    expect(docsAnswerShape('docs-index', answer)).toStrictEqual(T2_SCHEMA);
+  });
+});
+
+describe('W3 T2: docsShowBound, decoded show bytes held to the bound the server declared (refinement (g))', () => {
+  const job: DocsJob = { raw: 10, wire: 65552 };
+
+  it('exactly raw bytes is ok; one more is malformed-answer {why:oversize}', () => {
+    expect(docsShowBound(job, new Uint8Array(10))).toStrictEqual({ ok: true });
+    expect(docsShowBound(job, new Uint8Array(11))).toStrictEqual(T2_OVERSIZE);
+  });
+
+  it("the class cap's plan: 2 097 152 bytes ok, 2 097 153 oversize", () => {
+    const plan = docsShowPlan('a.md', undefined);
+    expect(plan.job.raw).toBe(2097152);
+    expect(docsShowBound(plan.job, new Uint8Array(2097152))).toStrictEqual({ ok: true });
+    expect(docsShowBound(plan.job, new Uint8Array(2097153))).toStrictEqual(T2_OVERSIZE);
+  });
+
+  it('a listed size lowers the bound: a 5-byte listing answered with 6 bytes is oversize', () => {
+    const plan = docsShowPlan('a.md', 5);
+    expect(docsShowBound(plan.job, new Uint8Array(5))).toStrictEqual({ ok: true });
+    expect(docsShowBound(plan.job, new Uint8Array(6))).toStrictEqual(T2_OVERSIZE);
+  });
+
+  it('a listed size of 0 holds the answer to no bytes at all', () => {
+    expect(docsShowBound(docsShowPlan('a.png', 0).job, new Uint8Array(1))).toStrictEqual(T2_OVERSIZE);
+  });
+});
+
+/** `type`'s first magic alternative, read from L0's table. */
+function t2Runs(type: RasterType): readonly { readonly at: number; readonly bytes: readonly number[] }[] {
+  return DOCS_RASTER_TYPES[type].magic[0];
+}
+
+/** Bytes that are `type` by L0's table: its first magic alternative's runs, written into 16 zero bytes. */
+function t2Magic(type: RasterType): Uint8Array {
+  const out = new Uint8Array(16);
+  for (const run of t2Runs(type)) out.set(run.bytes, run.at);
+  return out;
+}
+
+/** `type`'s magic cut one byte short of its last run's end: too short to hold it. */
+function t2Short(type: RasterType): Uint8Array {
+  const end = Math.max(...t2Runs(type).map((run) => run.at + run.bytes.length));
+  return t2Magic(type).slice(0, end - 1);
+}
+
+const T2_RASTER_TYPES = Object.keys(DOCS_RASTER_TYPES) as RasterType[];
+const T2_SVG_BYTES = new TextEncoder().encode('<svg/>');
+
+describe('W3 T2: docsRasterType, the declared raster type of a path (section 5.2 step 5)', () => {
+  it.each([
+    ['a.png', 'png'], ['A.PNG', 'png'], ['dir/x.Png', 'png'], ['x.jpg', 'jpeg'], ['x.JPEG', 'jpeg'],
+    ['x.jpeg', 'jpeg'], ['x.gif', 'gif'], ['x.webp', 'webp'], ['x.WebP', 'webp'],
+    ['x.png.html', null], ['x.svg', null], ['.png', null], ['dir/.png', null], ['x.', null], ['x', null],
+    ['dir.png/readme', null], ['x.pngx', null], ['x.md', null],
+  ] as const)('%s is %s, agreeing with contentClass', (p, want) => {
+    expect(docsRasterType(p)).toBe(want);
+    expect(docsRasterType(p) === null).toBe(contentClass(p) !== 'raster');
+  });
+});
+
+describe("W3 T2: rasterVerdict, the declared type against the bytes (section 5.2 step 5; M5.2's L1 half)", () => {
+  it('the table holds the four raster types the spec names', () => {
+    expect(T2_RASTER_TYPES).toEqual(['png', 'jpeg', 'gif', 'webp']);
+  });
+
+  it.each(T2_RASTER_TYPES.flatMap((declared) => T2_RASTER_TYPES.map((actual) => [declared, actual] as const)))(
+    'declared %s over the bytes of %s: match only on the diagonal', (declared, actual) => {
+      expect(rasterVerdict(declared, t2Magic(actual))).toBe(declared === actual ? 'match' : 'mismatch');
+    });
+
+  it.each(T2_RASTER_TYPES)('declared %s: SVG text, no bytes, three bytes and its own magic cut short are mismatch', (d) => {
+    expect(rasterVerdict(d, T2_SVG_BYTES)).toBe('mismatch');
+    expect(rasterVerdict(d, new Uint8Array(0))).toBe('mismatch');
+    expect(rasterVerdict(d, new Uint8Array([0, 1, 2]))).toBe('mismatch');
+    expect(rasterVerdict(d, t2Short(d))).toBe('mismatch');
+  });
+});
+
+/** A show answer for `path`, committed, base64: L1 never re-checks it (the adapter's check 8 did). */
+function t2Show(p: string, bytes: Uint8Array): DocsShowOk {
+  return {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 4, source: 'committed', section: 'specs', path: p,
+    size: bytes.byteLength, sha256: 'f'.repeat(64), encoding: 'base64', b64: Buffer.from(bytes).toString('base64'),
+    commit: T2_COMMIT, blob: 'c'.repeat(40), mode: '100644', onRef: 'contains',
+  };
+}
+const t2Committed = (p: string): Extract<DocPin, { kind: 'committed' }> =>
+  ({ kind: 'committed', commit: T2_COMMIT, servedRef: T2_SERVED, section: 'specs', path: p });
+const t2Draft = (p: string): DocPin =>
+  ({ kind: 'draft', branch: 'ws/a', head: T2_COMMIT, section: 'specs', path: p, fp: T2_FP });
+
+describe('W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2)', () => {
+  it.each([
+    ['a.png', 'png', 'image/png'], ['x.jpg', 'jpeg', 'image/jpeg'], ['x.GIF', 'gif', 'image/gif'],
+    ['x.webp', 'webp', 'image/webp'],
+  ] as const)('a committed %s holding %s bytes is raw bytes, %s, immutable', (p, type, mime) => {
+    const bytes = t2Magic(type);
+    const reply: DocsFileReply = docsFileReply(t2Committed(p), t2Show(p, bytes), bytes, 'ccd');
+    expect(reply).toStrictEqual({ kind: 'bytes', mime, cacheControl: DOCS_CACHE_IMMUTABLE, bytes });
+    if (reply.kind !== 'bytes') throw new Error('not bytes');
+    expect(reply.bytes).toBe(bytes);
+  });
+
+  it('a draft a.png holding PNG bytes is raw bytes, no-store', () => {
+    const bytes = t2Magic('png');
+    expect(docsFileReply(t2Draft('a.png'), t2Show('a.png', bytes), bytes, 'ccd'))
+      .toStrictEqual({ kind: 'bytes', mime: 'image/png', cacheControl: DOCS_CACHE_NO_STORE, bytes });
+  });
+
+  it('a cache hit on a committed raster is the same bytes reply', () => {
+    const bytes = t2Magic('gif');
+    expect(docsFileReply(t2Committed('x.gif'), t2Show('x.gif', bytes), bytes, 'cache'))
+      .toStrictEqual({ kind: 'bytes', mime: 'image/gif', cacheControl: DOCS_CACHE_IMMUTABLE, bytes });
+  });
+
+  it.each([
+    ['JPEG bytes', t2Magic('jpeg')],
+    ['GIF bytes', t2Magic('gif')],
+    ['SVG text', T2_SVG_BYTES],
+    ['no bytes', new Uint8Array(0)],
+    ['three bytes', new Uint8Array([0, 1, 2])],
+    ['its own magic cut short', t2Short('png')],
+  ] as const)('a.png holding %s is refused: raster-mismatch {declared, size}, no bytes', (_what, bytes) => {
+    for (const pin of [t2Committed('a.png'), t2Draft('a.png')]) {
+      expect(docsFileReply(pin, t2Show('a.png', bytes), bytes, 'ccd')).toStrictEqual({
+        kind: 'refuse', body: { ok: false, failure: 'raster-mismatch', declared: 'png', size: bytes.byteLength },
+      });
+    }
+  });
+
+  it("x.jpg holding PNG bytes names its declared type as the table's key: jpeg", () => {
+    const bytes = t2Magic('png');
+    expect(docsFileReply(t2Committed('x.jpg'), t2Show('x.jpg', bytes), bytes, 'ccd')).toStrictEqual({
+      kind: 'refuse', body: { ok: false, failure: 'raster-mismatch', declared: 'jpeg', size: 16 },
+    });
+  });
+
+  it.each([
+    ['a.md', 'markdown'], ['a.svg', 'svg'], ['a.html', 'html'], ['a.json', 'text'], ['a.woff2', 'other'],
+    ['a.pdf', 'other'], ['a', 'other'], ['a.png.html', 'html'],
+  ] as const)('%s is DocsFileResponse JSON of class %s, from carried', (p, cls) => {
+    const bytes = t2Magic('png');
+    for (const from of ['ccd', 'cache'] as const) {
+      const answer = t2Show(p, bytes);
+      const reply = docsFileReply(t2Committed(p), answer, bytes, from);
+      expect(reply).toStrictEqual({ kind: 'json', body: { ok: true, contentClass: cls, show: answer, from } });
+      if (reply.kind !== 'json') throw new Error('not json');
+      expect(reply.body.show).not.toBe(answer);
+    }
+  });
+
+  it.each(['a.svg', 'a.html', 'a.htm', 'a.md'])('%s never yields raw bytes, even holding PNG bytes, committed or draft', (p) => {
+    const bytes = t2Magic('png');
+    for (const pin of [t2Committed(p), t2Draft(p)]) {
+      expect(docsFileReply(pin, t2Show(p, bytes), bytes, 'ccd').kind).toBe('json');
+    }
+  });
+});
+
+describe("W3 T2: the JSON show is the verified bytes, never the answer's content field (W2 review, check 8)", () => {
+  /** A committed utf8 answer for a.md whose `text` is `text`, over `bytes` (the bytes check 8 decoded). */
+  function t2Utf8(text: string, bytes: Uint8Array): DocsShowOk {
+    const { b64: _b64, ...facts } = t2Show('a.md', bytes);
+    return { ...facts, encoding: 'utf8', text };
+  }
+  const shown = (answer: DocsShowOk, bytes: Uint8Array): DocsShowOk => {
+    const reply = docsFileReply(t2Committed('a.md'), answer, bytes, 'ccd');
+    if (reply.kind !== 'json') throw new Error('not json');
+    return reply.body.show;
+  };
+
+  it("a lone-surrogate text (its UTF-8 is the replacement character's bytes) is served as U+FFFD", () => {
+    const bytes = new Uint8Array([0xef, 0xbf, 0xbd]);
+    const answer = t2Utf8('\ud800', bytes);
+    expect(shown(answer, bytes)).toStrictEqual({ ...answer, text: '\ufffd' });
+  });
+
+  it('a stray text beside a canonical b64 is dropped: the show carries the b64 alone', () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const show = shown({ ...t2Show('a.md', bytes), text: 'not the bytes' }, bytes);
+    expect(Object.hasOwn(show, 'text')).toBe(false);
+    expect(show).toStrictEqual(t2Show('a.md', bytes));
+  });
+
+  it('a stray b64 beside a utf8 text is dropped: the show carries the text alone', () => {
+    const bytes = Buffer.from('hi', 'utf8');
+    const show = shown({ ...t2Utf8('hi', bytes), b64: 'AAAA' }, bytes);
+    expect(Object.hasOwn(show, 'b64')).toBe(false);
+    expect(show.text).toBe('hi');
+  });
+
+  it('a leading byte-order mark is one of the bytes: the text keeps it', () => {
+    const bytes = Buffer.from('\ufeff' + 'hi', 'utf8');
+    expect(shown(t2Utf8('\ufeff' + 'hi', bytes), bytes).text).toBe('\ufeff' + 'hi');
+  });
+});
+
+describe('W3 T2: the raster extension rule in its two homes, held to one table (carried to W7)', () => {
+  const spellings = (ext: string): string[] => [ext, ext.toUpperCase(), ext.charAt(0).toUpperCase() + ext.slice(1)];
+
+  it.each(Object.keys(DOCS_RASTER_EXT))(
+    '.%s in every ASCII case: raster to contentClass, its type to docsRasterType', (ext) => {
+      const want = DOCS_RASTER_EXT[ext as keyof typeof DOCS_RASTER_EXT];
+      for (const s of spellings(ext)) {
+        const p = `dir/x.${s}`;
+        expect(contentClass(p), p).toBe('raster');
+        expect(docsRasterType(p), p).toBe(want);
+      }
+    });
+
+  it.each(['x.' + '\uff50\uff4e\uff47', 'x.p' + '\u0274' + 'g', 'x.' + '\u212a' + 'png'])(
+    'a non-ASCII spelling (%s) is raster to neither home', (p) => {
+      expect(contentClass(p)).not.toBe('raster');
+      expect(docsRasterType(p)).toBeNull();
+    });
+});
+
+describe('W3 T2: docsKnownSize, a size the server holds (section 6.2: never the request)', () => {
+  const listed = (size: number | null): DocsListedFile => ({ blob: 'c'.repeat(40), size, kind: 'file' });
+  const COMMITTED = t2Committed('a.md');
+  const DRAFT = t2Draft('a.md');
+
+  it.each([
+    ['committed, listed size 0: a fact', COMMITTED, listed(0), undefined, 0],
+    ['committed, listed size 12', COMMITTED, listed(12), undefined, 12],
+    ['committed, listed size null: no fact', COMMITTED, listed(null), undefined, undefined],
+    ['committed, unlisted: no fact', COMMITTED, undefined, undefined, undefined],
+    ['committed: a draft size is ignored', COMMITTED, listed(12), 9, 12],
+    ['committed, unlisted: a draft size is still ignored', COMMITTED, undefined, 9, undefined],
+    ['draft with a size of 9', DRAFT, undefined, 9, 9],
+    ['draft with a size of 0', DRAFT, undefined, 0, 0],
+    ['draft: a listed size is ignored', DRAFT, listed(12), 9, 9],
+    ['draft without a size', DRAFT, listed(12), undefined, undefined],
+  ] as const)('%s', (_what, pin, entry, draftSize, want) => {
+    expect(docsKnownSize(pin, entry, draftSize)).toBe(want);
+  });
+
+  it('a listed size of 0 reaches the show plan as a bound of 0', () => {
+    expect(docsShowPlan('a.md', docsKnownSize(COMMITTED, listed(0), undefined)).job.raw).toBe(0);
+  });
+});
+
+describe('W3 T2: docsCacheVerdict and docsCacheFill (section 6.5; refinement (l))', () => {
+  const entry = (kind: DocsListedFile['kind']): DocsListedFile => ({ blob: 'c'.repeat(40), size: 12, kind });
+
+  it.each([
+    ['unlisted', undefined, 1000, { eligible: false, why: 'unlisted' }],
+    ['unlisted, no provenance either', undefined, undefined, { eligible: false, why: 'unlisted' }],
+    ['a symlink entry', entry('symlink'), 1000, { eligible: false, why: 'kind' }],
+    ['a submodule entry', entry('submodule'), 1000, { eligible: false, why: 'kind' }],
+    ['a symlink entry with no provenance: kind first', entry('symlink'), undefined, { eligible: false, why: 'kind' }],
+    ['a file whose servedRef was never recorded', entry('file'), undefined, { eligible: false, why: 'provenance' }],
+    ['a file recorded 0 ms ago', entry('file'), 0, { eligible: true }],
+    ['a file recorded 599 999 ms ago', entry('file'), 599999, { eligible: true }],
+    ['a file recorded 600 000 ms ago', entry('file'), 600000, { eligible: false, why: 'provenance' }],
+    ['an exec recorded 1000 ms ago', entry('exec'), 1000, { eligible: true }],
+    ['a clock that went back: a negative age', entry('file'), -1, { eligible: false, why: 'provenance' }],
+    ['a NaN age', entry('file'), NaN, { eligible: false, why: 'provenance' }],
+  ] as const)('%s', (_what, listed, age, want) => {
+    const verdict: DocsCacheVerdict = docsCacheVerdict(listed, age);
+    expect(verdict).toStrictEqual(want);
+  });
+
+  it.each([
+    ['committed, file', t2Committed('a.md'), entry('file'), true],
+    ['committed, exec', t2Committed('a.md'), entry('exec'), true],
+    ['committed, symlink', t2Committed('a.md'), entry('symlink'), false],
+    ['committed, submodule', t2Committed('a.md'), entry('submodule'), false],
+    ['committed, unlisted', t2Committed('a.md'), undefined, false],
+    ['draft, listed file', t2Draft('a.md'), entry('file'), false],
+    ['draft, unlisted', t2Draft('a.md'), undefined, false],
+  ] as const)('fill: %s', (_what, pin, listed, want) => {
+    expect(docsCacheFill(pin, listed)).toBe(want);
+  });
+});
+
+describe("W3 T2: docsCacheHitAnswer, the request's pin over the stored content (section 6.5; refinement (l))", () => {
+  const STORED: DocsShowOk = {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 9, source: 'committed', section: 'specs', path: 'old.md', size: 5,
+    sha256: 'e'.repeat(64), encoding: 'utf8', text: 'hello', commit: 'c'.repeat(40), blob: '1'.repeat(40),
+    mode: '100644', onRef: 'not-contained',
+  };
+  const PIN = { kind: 'committed', commit: 'd'.repeat(40), servedRef: T2_SERVED, section: 'plans', path: 'new.md' } as const;
+  const BLOB = '2'.repeat(40);
+
+  it("answers the pin's commit, section and path, the listing's blob, onRef contains, elapsedMs 0, no mode", () => {
+    const hit = docsCacheHitAnswer(STORED, PIN, BLOB);
+    expect(hit).toStrictEqual({
+      v: 1, verb: 'docs-show', ok: true, elapsedMs: 0, source: 'committed', section: 'plans', path: 'new.md', size: 5,
+      sha256: 'e'.repeat(64), encoding: 'utf8', text: 'hello', commit: 'd'.repeat(40), blob: BLOB, onRef: 'contains',
+    });
+    for (const key of ['mode', 'b64', 'worktree', 'branch', 'head', 'fp']) {
+      expect(Object.hasOwn(hit, key), key).toBe(false);
+    }
+  });
+
+  it('a base64 stored answer keeps b64 and carries no text key', () => {
+    const stored: DocsShowOk = { ...STORED, encoding: 'base64', b64: 'aGVsbG8=' };
+    delete stored.text;
+    const hit = docsCacheHitAnswer(stored, PIN, BLOB);
+    expect(hit.encoding).toBe('base64');
+    expect(hit.b64).toBe('aGVsbG8=');
+    expect(Object.hasOwn(hit, 'text')).toBe(false);
+  });
+
+  it('never mutates the stored answer, and answers a new object', () => {
+    const before = structuredClone(STORED);
+    const hit = docsCacheHitAnswer(STORED, PIN, BLOB);
+    expect(STORED).toStrictEqual(before);
+    expect(hit).not.toBe(STORED);
+  });
+});
