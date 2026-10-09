@@ -36,9 +36,9 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
 - `ccd/history/sweep.mjs` gains one import and seven call sites, all above the R1 entry guard:
   - `cardStep(db, ictx, ctx.budget)`, directly below B2's `deriveNodes` line and under the same ingest/not-paused gate, with `withdrawCards` directly below it over the tick's facts (its pause, its per-chunk floor stop, an ingest an unreadable roster skipped, the budget read before the card step);
   - `withdrawCards` on the three other ways a pass ends: in `holdPass` (no DB open: the count goes on the pass's outcome line), below `scheduledPass`'s `held` line, and below its `planRun` line for every arm that is not `run` (the migrate, recover and hold arms);
-  - `ensureHistoryDirs(db, ctx.home)`, directly below B1's spool `mkdirSync`;
+  - `ensureHistoryDirs(db, ctx.home)`, unconditionally, directly below B1's spool-directory line `if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);`;
   - `if (scan) collectPurgedHistoryFiles(db, ctx.home, ctx.now())`, directly above B1's `markScan` line.
-  `makeIngestCtx`'s object also gains `readRegPresence`. The recover arm (`recoverPass`) never ticks, so no card is written or consumed while a recovery step runs; the pass that takes that arm withdraws every prediction first.
+  `makeIngestCtx`'s object also gains `readRegPresence`. `tick`'s doc comment gains one numbered item for each new step the body calls with `db` (`cardStep`, `withdrawCards`, `collectPurgedHistoryFiles`, `ensureHistoryDirs`), in body order, because B1's `history-sweep.test.ts` reads that list against the body (its review 316 F39 describe). The recover arm (`recoverPass`) never ticks, so no card is written or consumed while a recovery step runs; the pass that takes that arm withdraws every prediction first.
 
 *The hook, `ccd/session-hook.sh`* (bash; enqueue-only contract):
 - **Above `state="" ask_json=`**, the ONE sanctioned insertion above README's anchor (⟦D:history-card-reader-above-the-arm⟧; Task 9): `HISTORY_CARD_MAX=512`, `HISTORY_CARD_RE='<the spec grammar>'`, `HISTORY_SCOPE_DIR`, `HISTORY_CARD_DIR` and `_hook_history_card`. The reader is builtin-only and forks nothing. Its checks run in this order:
@@ -46,7 +46,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   2. `history-off` absent;
   3. the 224-char id bound and a lowercase-UUID psid;
   4. `recall-off/<id>` honoured for this family's resolved generation, read the way B2's CLI reads it, and a read that fills its `CCRC_ID_MAX`-character window read as OFF (ruling RC4);
-  5. a fresh `main <psid> <ms>` scope marker, its age taken from `EPOCHREALTIME` inline and at most `COMPACT_CARD_MAX_AGE`;
+  5. a fresh `main <psid> <ms>` scope marker, its age taken from `EPOCHREALTIME`, read once into a local as B1's spool block reads it, and at most `COMPACT_CARD_MAX_AGE`;
   6. a regular card file, read with `read -N $(( HISTORY_CARD_MAX + 1 ))`, one LF stripped;
   7. the grammar;
   8. the room.
@@ -90,7 +90,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
 - **S16**, and the marker halves of **S2**, **S3** and **S8**: Task 8.
 - **C18**, **C19** (with C68's card half, which B2 hands to B3), **C20**, **C21**, **C22** and **C37**, and the card halves of **S2**, **S3** and **S8**: Task 9. C37's end-to-end case consumes Task 8's marker.
 - **C38**: Task 10.
-- Every one of them is measured red with a mutant before it goes green (IV6): Task 8's twelve mutants, Task 9's thirty-one and Task 10's five. Two kinds of case are not a mutant's: a CONTROL, and C37's `empty` marker row, which two guards refuse independently (the scope-word test and the ms digit test), so no single-guard mutant can red it. Task 9 names it as defence in depth rather than claim it measured.
+- Every one of them is measured red with a mutant before it goes green (IV6): Task 8's thirteen mutants, Task 9's thirty-three and Task 10's five. Two kinds of case are not a mutant's: a CONTROL, and C37's `empty` marker row, which two guards refuse independently (the scope-word test and the ms digit test), so no single-guard mutant can red it. Task 9 names it as defence in depth rather than claim it measured.
 - Halves B1 left for B3: O17's B3 rows (`history-scope-markers`, `history-card-files`) in Task 12, and O14's hook half of `CARD_PREFIX` in Task 11.
 - Plan pins with no spec number:
   - the pure decisions: Tasks 1–3;
@@ -160,7 +160,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   - A display prefix is `L` or `N` plus at least 6 hex (`NODE_ID_DISPLAY_MIN`, ruling RB2), unique within the family.
 - **Hook contract.**
   - The hook only enqueues.
-  - `_hook_history_card`, the reserve gate, the marker's early invalidation and the marker gate fork nothing: no `$( )` (not even `$(_hook_epoch_ms)` in the reader), no backticks, and no `jq`, `find`, `cat`, `date` or `stat`. The marker block may fork only after its builtin gates pass, because PreCompact is not on the hot path.
+  - `_hook_history_card`, the reserve gate, the marker's early invalidation and the marker gate fork nothing: no `$( )` (not even `$(_hook_epoch_ms)` in the reader), no backticks, no `${…@…}` transformation (`@P` runs prompt expansion, B1's S1 rule), and no `jq`, `find`, `cat`, `date` or `stat`. The reader expands `EPOCHREALTIME` once, as B1's spool block does. The marker block may fork only after its builtin gates pass, because PreCompact is not on the hot path.
   - Every working variable is `local`. The hook never makes a directory, and it gains no new `case "$event"` arm (install-session-hooks parity).
   - `$'\n'` never appears inside `${…:+…}`: `nl=$'\n'` is assigned outside the quotes, because `bash --posix` does not expand it there (measured).
   - Every redirection sits under `{ …; } 2>/dev/null`, so nothing reaches stdout or stderr.
@@ -171,7 +171,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
   - B3 pays the census once, in Task 9. The hook insertion, the `:2893` edit, the README re-point and the dated census paragraph land in ONE commit, gated on the census guard's rc read green in a separate call.
   - README's quoted `ccd/session-hook.sh:2900` is re-pointed by content BEFORE the census is measured. With README stale, the census reads 22 for the hook and reds the README case (measured).
   - The instrument is the landing-order wave-1 plan's `cite-remeasure.py`, run with an ABSOLUTE scratch dir and `--files` naming every cited file the step edited. Its default swaps only `ccd/ccd` and README, and its base leg then reads red.
-  - Expect `stated = base = tree` for every key (at `f7e51156f`: `ccd/session-hook.sh` 21, `single-definition.test.ts` 8, total 197, row array 54, site array 35; trust the instrument's own `stated` at the base), with `ENTERED []` and `LEFT []`. Never `--write`.
+  - Expect `stated = base = tree` for every key, at the values the instrument prints as `stated` at B3's base (B1's and B2's merges, and other programmes', can move them, so this plan quotes no number; trust the instrument's own `stated`), with `ENTERED []` and `LEFT []`. Never `--write`.
   - The frozen corpus documents (`specs/2026-09-09-graphify-compaction-card-design.md`, `plans/2026-09-10-graphify-compaction-card-plan-a.md`) stay byte-identical.
   - New README prose carries no `file.ext:N` token (README's resolved and checked counts stay 7).
   - `session-hook.test.ts` and `single-definition.test.ts` are end-append only, with no new import line; the one in-place edit is Task 11's inside B1's end-appended O14 describe. The dated paragraph goes in the byFile map's comment block above `'ccd/ccd': <n>,`, plus one line above `expect(total, …)`, and quotes none of the instrument's anchor strings.
@@ -257,13 +257,14 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `ccd/history/lib.d.mts` | modify | One hand-written declaration per new export, plus `CardBoundary`, `CardSlot`, `CardPredictionInputs`, `CardPrediction`, `CardBoundaryAt`, `CardConsumedScope`, `CardWithdrawReason` and `CardPassFacts`; reuses B1's `Presence` | types | 1, 2, 3 |
 | `ccd/history/derive.mjs` | modify | Behaviour-neutral extraction: `deriveEpochParents`' slot loop becomes the exported `epochCopySlots`; `holdingCopyOf` wraps the private `holdingCopy` | L4 | 4 |
 | `ccd/history/card.mjs` | create | `ensureHistoryDirs`; `consumeAndWriteCards` (predict, consume, write `card/<id>/<uuid>.txt` temp-then-rename 0600, one file per id, end-of-file-gated writes that the budget bounds, each consumption counted by its compaction's scope marker); `withdrawCards` (every prediction unlinked on a pass that runs no card step); `measureCardDelivery` (derivation step `card-measure`, version 1); `cardStep`; `collectPurgedHistoryFiles`. No entry guard | L4 | 5, 6, 7 |
-| `ccd/history/sweep.mjs` | modify | One import from `card.mjs`; `makeIngestCtx` hands `readRegPresence`; in `tick`, `cardStep` below `deriveNodes` with `withdrawCards` below it, `ensureHistoryDirs` below the spool `mkdirSync`, and the collector above `markScan`; `withdrawCards` in `holdPass`, on `scheduledPass`'s `held` path and below its `planRun` line. All above the R1 guard | L4 | 5, 7 |
+| `ccd/history/sweep.mjs` | modify | One import from `card.mjs`; `makeIngestCtx` hands `readRegPresence`; in `tick`, `cardStep` below `deriveNodes` with `withdrawCards` below it, `ensureHistoryDirs` below B1's spool-directory line (`if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);`), and the collector above `markScan`; `tick`'s doc comment gains a numbered item per new step (B1's F39 list); `withdrawCards` in `holdPass`, on `scheduledPass`'s `held` path and below its `planRun` line. All above the R1 guard | L4 | 5, 7 |
 | `ccd/session-hook.sh` | modify | Above `state="" ask_json=`: the four constants and `_hook_history_card`. In place: the compact guard's call and `:1515`'s reserve. Tail: the scope marker's early invalidation directly below `esac`, the reserve's reset and gated set, `unset CS_SCOPE`, the `history-scope` block; the turn-marker note and B1's spool-block sentence reworded | hook (bash) | 8, 9, 10 |
 | `README.md` | modify | Task 9: the quoted emitter call's `ccd/session-hook.sh:<n>` re-pointed by content, line-neutral. Task 14: an 8-line card-line paragraph in B2's history section, with no `file:N` token | docs (citation corpus) | 9, 14 |
 | `CLAUDE.md` | modify, only if needed | The `README.md (~N lines)` figure, re-measured by the round-to-100 rule | docs | 14 |
 | `shared/lifecycle.ts` | modify | The `history-scope-markers` and `history-card-files` rows, before the closing `];` | L0 | 12 |
 | `server/test/lifecycle.test.ts` | modify | `HISTORY_LANDED` gains `'B3'`; two `declares …` cases and one case binding the rows' numbers to lib | test | 12 |
 | `server/test/history-card.test.ts` | create | The pure lib cases (on darwin too), the withdrawal and scope-fold tables among them; the slot-list cases; the sweep cases for the writer, consumer, parity, end-of-file gate, modes, registry, the withdrawal on each pass that runs no card step, the consumption's scope, delivery counters and window, and the collector (each sweep describe skips on darwin) | test | 1–7 |
+| `server/test/history-lib.test.ts` | modify | In place, one row in B1's ring census `RINGS`: `'card.mjs'` (L4, forbidding `node:sqlite`, `./sweep.mjs` and `./cli.mjs`), because `every ccd/history/*.mjs has a ring` compares the directory with `RINGS` exactly | test | 5 |
 | `server/test/historyFixtures.ts` | modify | Appended: `sessionStartAttachment({ uuid, ts, text, … })` over B1's `attachmentRow` | test helper | 6 |
 | `server/test/session-hook.test.ts` | modify | End-appended describes for the scope marker, the card line and the reserve (no import line); the dated S6-R11 paragraph beside the byFile map and the headline (comments only) | test (citation corpus) | 8, 9, 10 |
 | `server/test/single-definition.test.ts` | modify | In place in B1's O14 describe: `VOCABS` gains B3's lib names, and one case title is reworded. End-appended: the describe binding the hook's grammar, cap, directory names and marker age to lib | test (citation corpus) | 11 |
@@ -1785,10 +1786,12 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
   - one import line directly below the import statement whose last line ends `from './derive.mjs';` (B2 Tasks 8, 21 and 23 grow that statement's name list; anchor on its last line);
   - in place, in `makeIngestCtx`: the return object's tail `fts: false, admitFile, budgetLeft, isBusy };` (B2 Task 8) gains `readRegPresence`, and one sentence joins its doc comment;
   - in `tick`, one comment and three lines directly below B2 Task 8's line `  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);`, inside the `// >>> history tick steps` … `// <<< history tick steps` markers: the tick's facts for the withdrawal, the card step, and the withdrawal;
-  - in `tick`, one line directly below B1's `  mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });`, after the markers;
+  - in `tick`, one line directly below B1's spool-directory line `  if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);` (below the `// <<< history tick steps` marker and its FU8 comment, above `  if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');`);
+  - in `tick`'s doc comment (the `/**` directly above `export async function tick(db, ctx) {`), three numbered items: `cardStep` and `withdrawCards` directly below B2's `deriveNodes` item, and `ensureHistoryDirs` directly below the `markScan` item, every item renumbered in order. B1's `history-sweep.test.ts` describe `tick()'s docstring names its steps in the order the body runs them (review 316 F39)` requires every `name(db` call in the body to be a numbered item, in body order;
   - in `holdPass` (B1 Task 24), one line directly above its `  return holdExit(word);` (two-space indent, the only such line);
   - in `scheduledPass` (B1 Task 24), one line directly below `      out('history-sweep: held');` (the writer-token hold), and a comment and one line directly below the line that begins `    const run = planRun({ historyOff: false, store: { act: 'open' },` (four-space indent; B2 Task 25 ends it `recovering: isRecovering(db) });`, and `importRoom`'s own two-space, multi-line `planRun({` call is not it).
 - Modify: `server/test/history-card.test.ts`: one import line edited in place and three added below the last top-of-file import; one module-scope helper block and one describe at the end of the file.
+- Modify: `server/test/history-lib.test.ts` (B1-created, B2-extended), in place, one line and no import: B1's ring census `RINGS` gains `'card.mjs'`. Its case `every ccd/history/*.mjs has a ring` compares `readdirSync(ccd/history)`'s `.mjs` names with `Object.keys(RINGS)` exactly, so `card.mjs` reds it until the row lands, and no `card.mjs` fix can green it (B2 Task 8 adds `derive.mjs` the same way).
 - Scratch, gitignored: `.superpowers/sdd/history-w1-b3/scratch/mutants-task5.json`.
 
 **Interfaces:**
@@ -1801,14 +1804,15 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
 - Produces:
   - `card.mjs`: `export function ensureHistoryDirs(db: DatabaseSync, home: string): { scope: 'made' | 'present' | 'refused'; card: 'made' | 'present' | 'refused' }`; `export function consumeAndWriteCards(db, ictx, budget): { written: number; consumed: number; deleted: number }`; `export function cardStep(db, ictx, budget): { measure: object | null; cards: object | null }` (Task 6 fills `measure`); `export function withdrawCards(db: DatabaseSync | null, home: string, pass: CardPassFacts, out: (line: string) => void): number`.
   - Counters: `card_written`, `card_consumed:<main|other|unknown>` (W1-e's denominator by scope, ruling RC3), `card_withdrawn:<reason>` (a `CARD_WITHDRAW_REASONS` word, ruling RC2), `card_skipped:<reason>` (a write due at end-of-file that the prediction refused; `fork-qualified` in practice), `card_dir_refused`, `card_write_failed`, `card_cleanup_failed` (the id's other predictions could not all be removed after a write that landed), `history_dir_refused:<scope|card>`. A hold with no DB open prints `history-sweep: card_withdrawn:<reason> <n>` instead, after its own word.
-  - `sweep.mjs`: `import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';`; `makeIngestCtx`'s object gains `readRegPresence`; in `tick`, `if (ctx.ingest && !(ing !== null && ing.paused)) cardStep(db, ictx, ctx.budget);` with `withdrawCards(db, ctx.home, cardPass, ctx.out);` below it, and `ensureHistoryDirs(db, ctx.home);`; `withdrawCards` in `holdPass`, on the writer-token hold and for every `planRun` arm that is not `run`.
+  - `sweep.mjs`: `import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';`; `makeIngestCtx`'s object gains `readRegPresence`; in `tick`, `if (ctx.ingest && !(ing !== null && ing.paused)) cardStep(db, ictx, ctx.budget);` with `withdrawCards(db, ctx.home, cardPass, ctx.out);` below it, and `ensureHistoryDirs(db, ctx.home);`; `tick`'s doc comment items `cardStep`, `withdrawCards` and `ensureHistoryDirs`; `withdrawCards` in `holdPass`, on the writer-token hold and for every `planRun` arm that is not `run`.
+  - `history-lib.test.ts`: the `RINGS` row `'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },`.
   - `history-card.test.ts` module scope: `CARD_SLUG`, `CARD_GEN`, `T0C`, `FS_C`, `FLOOR_C`, `sidC`, `SeqC`, `cutBefore`, `firstUuidC`, `plantC`, `passC`, `settleC`, `pokeC`, `appendRows`, `cardPath`, `cardOf`, `qC`, `leavesC`, `childrenC`, `familyC`, `consumedC`, `expectedCard`, `printed` (Tasks 6 and 7 reuse them).
-- Later consumers: Task 6 (`cardStep` gains the measure), Task 7 (the collector beside it), Task 12 (the `history-card-files` row's collector promises), Tasks 9 and 10 (the hook reads `card/<id>/<psid>.txt` and gates its reserve on `card/` existing).
+- Later consumers: Task 6 (`cardStep` gains the measure), Task 7 (the collector beside it, and its own doc-comment item), Task 12 (the `history-card-files` row's collector promises), Tasks 9 and 10 (the hook reads `card/<id>/<psid>.txt` and gates its reserve on `card/` existing).
 
 **Spec:**
 - §8.6 Timing: the file is written only when the transcript's cursor is at end-of-file, and deleted when the indexer ingests the boundary that consumed it; §9.2 step 6 (derive; measure delivery; then write `card/` files temp-then-rename; under the tick's budget, never on the recover arm, which never ticks); §5.1 S4 (the hook never makes a directory); §5.2; §9.6 (card files 0600, history directories 0700); §9.4 `history-card-files`; §5.1 (the scope marker the consumption's scope is read from); §9.3 and §9.14 (the pauses and holds a withdrawal follows).
 - Rulings: RC2 (fail closed: every pass that runs no card step withdraws every prediction; the budget bounds a write, never the consume/delete decision) and RC3 (each consumption counted by the scope marker its compaction left).
-- Pins: this task's plan pins (parity with derivation for the first compaction, the 8th leaf and the newest condensed fallback; a not-final slot names no parent; the fork skip, and a consumption just before one still counted; a spooled fork's epoch predicted from the parent's boundary its copy holds, its prediction replacing the parent's (ruled Q16); the end-of-file gate with a consumption off end-of-file; the file's text, mode, one-per-id and the symlink refusal; registry-named sessions only; a write failure counted, never fatal, and leaving no temp; a failed cleanup counted apart from the write; the two directories made 0700 by a bound store's first tick and by nothing else; a consumption counted `main`, `other` or `unknown` by its compaction's marker, never through a link; every prediction withdrawn, never through a link, under a floor pause, on the recover arm, under a spent budget after the consume and delete ran, on a writer-token hold and on a refused store with no DB open).
+- Pins: this task's plan pins (parity with derivation for the first compaction, the 8th leaf and the newest condensed fallback; a not-final slot names no parent; the fork skip, and a consumption just before one still counted; a spooled fork's epoch predicted from the parent's boundary its copy holds, its prediction replacing the parent's (ruled Q16); the end-of-file gate with a consumption off end-of-file; the file's text, mode, one-per-id and the symlink refusal; registry-named sessions only; a write failure counted, never fatal, and leaving no temp (a CONTROL on B1's `writeFileAtomic`, which removes its own temp on a failure before the rename); a failed cleanup counted apart from the write; the two directories made 0700 by a bound store's first tick and by nothing else; a consumption counted `main`, `other` or `unknown` by its compaction's marker, never through a link; every prediction withdrawn, never through a link, under a floor pause, on the recover arm, under a spent budget after the consume and delete ran, on a writer-token hold and on a refused store with no DB open).
 - Departures:
   - ⟦D:history-tick-order⟧ (the card step's place: after the leaves and parents, under their gate).
   - ⟦D:history-card-dirs-made-by-sweep⟧ (NEW): the spec says the hook never makes `scope/`, which it writes, and never says who does; the sweep makes both directories at every bound store's tick, so the hook's marker and the render reserve arm within one tick of `ccrc update` and never on a box without history.
@@ -1831,7 +1835,7 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
 
 ```bash
 grep -c "^  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);$" ccd/history/sweep.mjs   # 1
-grep -c "^  mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });$" ccd/history/sweep.mjs                        # 1
+grep -c "^  if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);$" ccd/history/sweep.mjs             # 1
 grep -c "fts: false, admitFile, budgetLeft, isBusy };" ccd/history/sweep.mjs                                               # 1
 grep -c "^export function readRegPresence(path) {$" ccd/history/sweep.mjs                                                   # 1
 grep -n "from './derive.mjs';$" ccd/history/sweep.mjs                                                                       # one line
@@ -1843,9 +1847,13 @@ grep -cF "      out('history-sweep: held');" ccd/history/sweep.mjs              
 grep -c "^    const run = planRun({ historyOff: false, store: { act: 'open' }," ccd/history/sweep.mjs                   # 1
 grep -c "^    if (run.arm === 'recover') {$" ccd/history/sweep.mjs                                                        # 1 (B2 Task 25)
 grep -cxF '  const ing = ctx.ingest && !ctx.rosterUnreadable ? await ingestTick(db, ictx, ctx.budget) : null;' ccd/history/sweep.mjs   # 1
+grep -cE '^ \* +[0-9]+\. `deriveNodes`' ccd/history/sweep.mjs                                                              # 1 (B2's tick doc-comment item)
+grep -cE '^ \* +[0-9]+\. `markScan`' ccd/history/sweep.mjs                                                                 # 1
+grep -c "^    'derive.mjs': { ring: 'L4'" server/test/history-lib.test.ts                                                 # 1 (B2 Task 8's RINGS row)
+grep -c "^    'card.mjs':" server/test/history-lib.test.ts                                                                # 0
 ```
 
-Expected: `1`, `1`, `1`, `1`, exactly one line number, `1`, `1`, `ABSENT`, then `1` five times. The `1` after the guard's count is `writeFileAtomic`'s temp name, which `oneCard` unlinks after a failed write; a `0` there means B1 merged another name: spell `oneCard`'s unlink and `removeOtherCards`' pattern to match it, and report it. The last five are the withdrawal's anchors: `holdPass`'s return, the writer-token hold's outcome line, `scheduledPass`'s `planRun` line, B2's recover arm (which the `planRun` line's withdrawal must precede), and the tick's `ing` line (`null` when an unreadable roster skips the ingest). Any other difference: B1 or B2 merged a different spelling. Read the merged `tick`, `makeIngestCtx`, `holdPass` and `scheduledPass`, re-anchor on the merged lines that do the same thing, and report the difference.
+Expected: `1`, `1`, `1`, `1`, exactly one line number, `1`, `1`, `ABSENT`, then `1` five times, then `1`, `1`, `1` and `0`. The second `1` is B1's spool-directory line (FU8: it makes `spool/` only when what stands there is not `'other'`), which `ensureHistoryDirs` goes below; the new line stays unconditional, whatever stands at `spool/`. The `1` after the guard's count is `writeFileAtomic`'s temp name, `<path>.tmp.<pid>`, which `removeOtherCards`' pattern matches for a writer killed mid-write (B1's `writeFileAtomic` removes its own temp on any failure before the rename, so `oneCard` unlinks none); a `0` there means B1 merged another name: spell `removeOtherCards`' pattern to match it, and report it. The five after `ABSENT` are the withdrawal's anchors: `holdPass`'s return, the writer-token hold's outcome line, `scheduledPass`'s `planRun` line, B2's recover arm (which the `planRun` line's withdrawal must precede), and the tick's `ing` line (`null` when an unreadable roster skips the ingest). The last four: `tick`'s doc comment carries a `deriveNodes` item and a `markScan` item (B1's F39 case already requires B2's `deriveNodes(db` call to be listed, so a `0` for it means B2 merged with that case red: stop and report it), B2's `derive.mjs` row is in `RINGS`, and no `card.mjs` row is yet. Any other difference: B1 or B2 merged a different spelling. Read the merged `tick` and its doc comment, `makeIngestCtx`, `holdPass`, `scheduledPass` and `RINGS`, re-anchor on the merged lines that do the same thing, and report the difference.
 
 - [ ] **Step 2: Edit the test file's imports.** In `server/test/history-card.test.ts`, replace the line `import { compactionSequence } from './historyFixtures.js';` with:
 
@@ -2191,7 +2199,9 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     }
   }, 240_000);
 
-  it("a card write that fails after its temp exists leaves no temp behind; a cleanup that fails never loses the write's count", () => {
+  // The temp half is a CONTROL on B1's writeFileAtomic, which removes its own `<path>.tmp.<pid>` on any failure before
+  // the rename: card.mjs unlinks no temp, so no card.mjs mutant reds it. The cleanup half is card.mjs's own guard.
+  it("a card write that fails after its temp exists leaves no temp behind (CONTROL: B1's writeFileAtomic cleanup, not card.mjs); a cleanup that fails never loses the write's count", () => {
     const box = makeHistoryBox('ccrc-hist-card-temp-');
     const [ID, U] = ['card-temp', sidC(0xfe)];
     plantC(box, ID, U, compactionSequence({ n: 1, trigger: 'manual', seed: 0xfe, sessionId: U, startMs: T0C }).rows);
@@ -2651,9 +2661,8 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
       unlinkSync(file);
     }
   } catch {
-    // writeFileAtomic leaves `<file>.tmp.<pid>` when it fails after its open (a write, fsync or rename error), and
-    // every pass has a new pid: this pass's is unlinked, so a lasting failure leaves no temp per tick.
-    try { unlinkSync(`${file}.tmp.${process.pid}`); } catch { /* absent: the open itself failed */ }
+    // writeFileAtomic removes its own `<file>.tmp.<pid>` on any failure before the rename, so nothing is left here to
+    // unlink; a temp a KILLED writer left is removeOtherCards' (its `.tmp.<pid>` arm) at the id's next write.
     bump(db, 'card_write_failed');
     return;
   }
@@ -2736,7 +2745,7 @@ export function withdrawCards(db, home, pass, out) {
 Notes:
 - `cardIdsIn`, `cardWindowComplete`, `decideCardDelivery`, `decidePurgedEntry`, `eofAfterBoundary`, `producerOf`, `CARD_MEASURE_ROWS`, `CARD_ATTACHMENT_MAX_BYTES`, `getStep`, `setStep`, `unbrotli`, `withTx`, `holdingCopyOf` and `rmdirSync` are imported here once and first used by Tasks 6 and 7, which append to this file; an unused import is harmless in an ES module.
 - `card.mjs` reads no `process.env` (B1's allow-list pin over `ccd/history/*.mjs` holds), declares none of the O14 vocabularies, spells no `/history-off` (history-off reaches it as `ictx.historyOff()`), never spells `.ccrc/history/db`, and has no `SELECT *`.
-- The temp name `<file>.tmp.<pid>` is B1's `writeFileAtomic`'s own (`const tmp = `${path}.tmp.${process.pid}`;` in `store.mjs`); Step 1 measures it, and `removeOtherCards` already matches that shape for a killed writer's leftovers. `process.pid` is not the environment.
+- The temp name `<file>.tmp.<pid>` is B1's `writeFileAtomic`'s own (`const tmp = `${path}.tmp.${process.pid}`;` in `store.mjs`), and so is its cleanup: `writeFileAtomic` removes any entry at that name first, and in its `finally` removes the temp on every failure before the rename (its doc comment: "a failure before the rename removes the temp"). So `oneCard`'s catch only counts `card_write_failed`; a second unlink there would be a guard nothing can trip. A temp that a KILLED writer left, which no `finally` reaches, is matched by `removeOtherCards`' `\.tmp\.[0-9]+` arm and unlinked at the id's next write. Step 1 measures the name.
 - A busy store throws out of `bump` or `writeFileAtomic`'s neighbours exactly as it does out of `deriveNodes`: the sweep is the only writer under its lock, so busy is a test's injection, and the pass handles it where it handles derivation's. A tick that meets the lock returns before the card step and before its withdrawal; that residual is named in the PR body (Task 14).
 - Ruling RC2 says "lstat-checked" for the withdrawal, and ruling RC3 "lstat-typed, never following a link" for the scope read. The withdrawal lstats the two directories a link could be walked through, `card/` and each `card/<id>`, and only unlinks the names under them: an unlink removes a link itself and refuses a directory, so a per-name lstat could change no answer, and this plan does not spell a guard nothing can trip. Both directory checks have mutants (Step 8: `RC2: a withdrawal through a linked card/` and `… through a linked card/<id>`). The scope read uses `readCard`, whose `O_NOFOLLOW | O_NONBLOCK` open refuses a link and whose `fstat` refuses anything but a regular file: the type an lstat gives, without the race between an lstat and a later open. One guard, not two, so its mutant reds (Step 8, `RC3: a scope marker read through a link`).
 - A withdrawal's outcome line on a hold with no DB open is `history-sweep: card_withdrawn:<reason> <n>`, printed only when something was withdrawn, after the hold's own word (and `journal-unwritable`, when that line is printed). The shim reads no stdout, and no B1 or B2 case plants a card file before a hold, so no existing outcome assertion meets the line.
@@ -2762,11 +2771,58 @@ import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';
   withdrawCards(db, ctx.home, cardPass, ctx.out);
 ```
 
-  4. Directly below the line `  mkdirSync(ctx.paths.spool, { recursive: true, mode: 0o700 });`, add:
+  4. Directly below B1's spool-directory line `  if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);` (after the `// <<< history tick steps` marker and its FU8 comment), and so above `  if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');`, add this line. It is unconditional: B1's line skips `spool/` when something that is not a directory stands there, and `ensureHistoryDirs` measures `scope/` and `card/` itself, whatever stands at `spool/`.
 
 ```js
   ensureHistoryDirs(db, ctx.home);
 ```
+
+  4a. Name the three new steps in `tick`'s doc comment, the `/**` directly above `export async function tick(db, ctx) {`. B1's `history-sweep.test.ts` describe `tick()'s docstring names its steps in the order the body runs them (review 316 F39)` reads every `name(db` call in the body (comments stripped; `bump`, `countOutside` and `scanDue` excepted) and requires each to be an item matching `^\s*\*\s+\d+\.\s+`name``, listed in the order the body first calls them. `cardStep(db`, `withdrawCards(db` and `ensureHistoryDirs(db` are new calls, so the case `every step the body calls with db is listed` reds without this edit. From the repository root:
+
+```bash
+python3 - <<'PYEOF'
+import re
+p = 'ccd/history/sweep.mjs'
+t = open(p, encoding='utf8').read()
+at = t.index('export async function tick(db, ctx) {')
+start = t.rindex('/**', 0, at)
+lines = t[start:at].split('\n')
+item = re.compile(r'^ \*\s*\d+\. `([A-Za-z]\w*)`')
+cont = re.compile(r'^ \*\s{4,}\S')                   # an item's continuation line: four or more spaces after the `*`
+names = [m.group(1) for l in lines if (m := item.match(l))]
+assert names.count('deriveNodes') == 1 and names.count('markScan') == 1, names
+assert not {'cardStep', 'withdrawCards', 'ensureHistoryDirs'} & set(names), names
+def after(name):
+    i = next(k for k, l in enumerate(lines) if (m := item.match(l)) and m.group(1) == name)
+    while i + 1 < len(lines) and cont.match(lines[i + 1]) and not item.match(lines[i + 1]):
+        i += 1
+    return i
+i = after('deriveNodes')
+lines[i + 1:i + 1] = [
+    ' * 0. `cardStep`: §9.2 step 6 under the derivation\'s gate: the card delivery measure, then the card/ predictions',
+    ' *     consumed, deleted and written (card.mjs; W1-B3 Tasks 5 and 6);',
+    ' * 0. `withdrawCards`: every card/ prediction unlinked when this tick ran no card step over a caught-up ingest',
+    ' *     (ruling RC2: fail closed; lib decideCardWithdraw names the reason);',
+]
+j = after('markScan')
+assert lines[j].endswith('.'), lines[j]
+lines[j] = lines[j][:-1] + ';'
+lines[j + 1:j + 1] = [
+    ' * 0. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link',
+    ' *     or a file there refused and counted (card.mjs; W1-B3 Task 5).',
+]
+n = 0
+for k, l in enumerate(lines):
+    if item.match(l):
+        n += 1
+        lines[k] = re.sub(r'^ \*\s*\d+\.', ' *' + f'{n:>3}' + '.', l, count=1)
+t = t[:start] + '\n'.join(lines) + t[at:]
+open(p, 'w', encoding='utf8').write(t)
+print(f'tick doc comment: {n} steps')
+PYEOF
+```
+
+Expected: `tick doc comment: <n> steps`, where `<n>` is the count B1 and B2 left plus three (B1 left 16; with B2's `deriveNodes`, 17, then 20). The items keep B1's form, ` *  9.` below ten and ` * 10.` from ten.
 
   5. In `holdPass`, directly above its line `  return holdExit(word);`, add:
 
@@ -2788,6 +2844,14 @@ import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';
     if (run.arm !== 'run') withdrawCards(db, home, { arm: run.arm, word: run.holdWord ?? 'held' }, out);
 ```
 
+  7a. Give `card.mjs` its ring. In `server/test/history-lib.test.ts`, in B1's `const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {` object, directly below the row that begins `    'derive.mjs': { ring: 'L4'` (B2 Task 8's), add this one line, with no import change:
+
+```ts
+    'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
+```
+
+  B1's `every ccd/history/*.mjs has a ring` compares the directory's `.mjs` names with `Object.keys(RINGS)` exactly, so `card.mjs` reds it without this row, and no change to `card.mjs` can green it. With the row, the cases that walk `Object.keys(RINGS)` read `card.mjs` too: `each module imports nothing its ring forbids, and reaches no module by another door` (it imports `node:fs`, `./lib.mjs`, `./store.mjs` and `./derive.mjs` only, through `from` forms), `store.mjs is the sole node:sqlite importer`, and B2's per-module compact-card form table, which `card.mjs` never meets because it imports nothing from `../compact-card.mjs`.
+
   8. Check placement and syntax, from the repository root:
 
 ```bash
@@ -2807,9 +2871,13 @@ grep -nE '^(await|(const|let|var) [^=]+= *await)\b' ccd/history/sweep.mjs ccd/hi
 grep -nE "^import|^} from" ccd/history/card.mjs                                                                 # node:fs, ./lib.mjs, ./store.mjs, ./derive.mjs only
 grep -c 'process.env' ccd/history/card.mjs                                                                      # 0
 node --check ccd/history/card.mjs && node --check ccd/history/sweep.mjs
+grep -cE '^ \* +[0-9]+\. `(cardStep|withdrawCards|ensureHistoryDirs)`' ccd/history/sweep.mjs                  # 3
+grep -c "^    'card.mjs': { ring: 'L4'" server/test/history-lib.test.ts                                        # 1
+(cd server && ./node_modules/.bin/vitest run test/history-sweep.test.ts -t 'docstring names its steps')
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'has a ring|imports nothing its ring forbids|sole node:sqlite importer')
 ```
 
-Expected: the eight counts are `1`, the guard's count is `1`; all six lines print `above the guard`; then `withdrawn before the recover arm`; the `grep -nE` for top-level await prints nothing; `card.mjs` imports only `node:fs`, `./lib.mjs`, `./store.mjs` and `./derive.mjs` (no `./sweep.mjs`, no `./cli.mjs`: no cycle); `0`; `node --check` prints nothing.
+Expected: the eight counts are `1`, the guard's count is `1`; all six lines print `above the guard`; then `withdrawn before the recover arm`; the `grep -nE` for top-level await prints nothing; `card.mjs` imports only `node:fs`, `./lib.mjs`, `./store.mjs` and `./derive.mjs` (no `./sweep.mjs`, no `./cli.mjs`: no cycle); `0`; `node --check` prints nothing; `3` and `1`; then `3 passed` (B1's F39 describe: at least ten items, every item called in order, every `name(db` call listed) and `3 passed` (the ring census, the ring case and the `node:sqlite` case). A red in the F39 describe means an item is missing or out of body order: fix the doc comment, never the case.
 
 - [ ] **Step 7: Run the card cases, then every suite the tick touches, and the typecheck.** In the foreground, with a timeout of at least 600000 ms, each line as its own call:
 
@@ -2827,7 +2895,8 @@ Expected: the eight counts are `1`, the guard's count is `1`; all six lines prin
 Expected: every case green; `tsc` clean.
   - Every B1 and B2 tick now also measures (nothing, until Task 6), consumes and writes predictions for registered sessions, and makes `scope/` and `card/`. B1's two exact counters-map assertions (`S6/O25`, `DM17 (store half)`) run no tick; B1's `S7` lists the root only for a refused store, where no tick runs. So no B1 or B2 assertion meets the new counters, files or directories.
   - Every B1 and B2 hold, pause, migration and recovery pass now also asks lib whether to withdraw, and withdraws only `card/<id>/<uuid>.txt` names. No B1 or B2 case plants one, so each such pass withdraws nothing, bumps no `card_withdrawn:*` counter and prints no outcome line; on a store with no `card/` the withdrawal stops at its first lstat. `history-holds.test.ts` (in the second line above) runs every hold and pause; `history-recover.test.ts` runs the recover arm.
-  - A red there is this task's defect: fix `card.mjs` or its wiring, never a B1 or B2 assertion. If one of them asserts an exact counters map or an exact outcome after a pass and reds only on a `card_*` or `history_dir_refused:*` key or a `card_withdrawn:` line, stop and report it: the coordinator rules on that pin.
+  - Two B1 cases read this task's edits as text, and stay green only through them: `history-sweep.test.ts`'s F39 describe (`tick()'s docstring names its steps …`, in the second line above) through Step 6's doc-comment items, and `history-lib.test.ts`'s `every ccd/history/*.mjs has a ring` (in the fourth line) through Step 6's `RINGS` row. A red in either is fixed by those edits, never by loosening an assertion.
+  - Any other red there is this task's defect: fix `card.mjs` or its wiring, never a B1 or B2 assertion. If one of them asserts an exact counters map or an exact outcome after a pass and reds only on a `card_*` or `history_dir_refused:*` key or a `card_withdrawn:` line, stop and report it: the coordinator rules on that pin.
   - `history-ingest.test.ts`'s O20 RSS case measures a tick that now also predicts; if it reds on the floor interpreter, report it, never raise the bound.
   - Known load flakes: re-run an isolated red file alone before calling it a break.
 
@@ -2844,8 +2913,6 @@ cat > .superpowers/sdd/history-w1-b3/scratch/mutants-task5.json <<'EOF'
     "edits": [{ "anchor": "  const d = decideCardFile({ current, prediction, atEof: mayWrite });", "replacement": "  const d = decideCardFile({ current, prediction, atEof: copy !== null });" }] },
   { "name": "one file per id: a /clear's prediction leaves the last", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "one per id",
     "edits": [{ "anchor": "    try { removeOtherCards(dir, uuid); } catch { bump(db, 'card_cleanup_failed'); }\n", "replacement": "" }] },
-  { "name": "a failed write leaves its temp", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "leaves no temp behind",
-    "edits": [{ "anchor": "    try { unlinkSync(`${file}.tmp.${process.pid}`); } catch { /* absent: the open itself failed */ }\n", "replacement": "" }] },
   { "name": "a failed cleanup loses the write's count", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "leaves no temp behind",
     "edits": [{ "anchor": "    try { removeOtherCards(dir, uuid); } catch { bump(db, 'card_cleanup_failed'); }\n", "replacement": "" },
               { "anchor": "      writeFileAtomic(file, ", "replacement": "      removeOtherCards(dir, uuid);\n      writeFileAtomic(file, " }] },
@@ -2898,7 +2965,7 @@ EOF
 ```
 
 Expected: every row `red (…)` then `green`; the last line `every guard measured red, then green`; exit 0. As root the `a failed card write ends the tick` row prints `STAYED GREEN` (its case is skipped there): run that row as a non-root user, or report it unmeasured as root, never drop it. Each row re-runs one case of real sweep passes: a row takes a minute or two.
-  - The temp row reds `a failed write left its temp behind`: the listing holds `<uuid>.txt.tmp.<pid>` beside the directory.
+  - No row targets the temp: `writeFileAtomic` (B1) removes it, and `card.mjs` spells no unlink of it, so the case's `a failed write left its temp behind` is a CONTROL on B1's cleanup, measured by B1's own suite.
   - The cleanup row runs the cleanup inside the write's `try`, ahead of the write; its throw is counted `card_write_failed` and the write never happens, so the case reds at `the write landed`.
   - The fork-rule row reds both fork cases: the consumed-then-skip case at its CONTROL (`the fixture reached the fork skip`).
   - The consumed-before-a-fork-skip rule itself is Task 2's lib mutant; this task's sweep case is its integration, and it reds under that mutant too.
@@ -2918,7 +2985,7 @@ Expected: every row `red (…)` then `green`; the last line `every guard measure
 Only after `RESTORED`, in a separate call:
 
 ```bash
-git add ccd/history/card.mjs ccd/history/sweep.mjs server/test/history-card.test.ts
+git add ccd/history/card.mjs ccd/history/sweep.mjs server/test/history-card.test.ts server/test/history-lib.test.ts
 git commit -m "feat(history): write and consume card/<id>/<uuid>.txt at end-of-file, count each consumption by scope, withdraw them all on a pass that runs no card step; the sweep makes scope/ and card/ (W1-B3 task 5)"
 ```
 
@@ -2932,7 +2999,7 @@ git commit -m "feat(history): write and consume card/<id>/<uuid>.txt at end-of-f
 
 **Interfaces:**
 - Consumes:
-  - B2 `store.mjs`: `getStep(db, step, version): { cursor: string | null; completedMs: number | null } | null`, `setStep(db, step, version, cursor, completedMs?)`; B1 `withTx`, `bump`, `unbrotli`.
+  - B2 `store.mjs`: `getStep(db, step, version): { cursor: string | null; completedMs: number | null } | null`, `setStep(db, step, version, cursor, completedMs?)`; B1 `withTx`, `bump`, and `unbrotli(z, maxLen)` (`maxLen` is the blob's stored `raw_len`, required).
   - B2 lib: `eofAfterBoundary({ eofMs, boundaryTsMs })` (with `RAW_LEAF_GRACE_MS`); B1 lib `producerOf(models)`.
   - Task 4 `holdingCopyOf`; Task 3 `cardIdsIn`, `cardWindowComplete`, `decideCardDelivery`, `CARD_MEASURE_ROWS`, `CARD_MEASURE_MAX_WAIT_MS`, `CARD_ATTACHMENT_MAX_BYTES`; B1's `blobs.raw_len` (the byte length of the stored JSON body, which for an attachment row is its `attachment` object).
   - B1 `historyFixtures.ts`: `attachmentRow(o: RowBase & { attachment: Record<string, unknown> }): Row`, `type RowBase`, `type Row`.
@@ -3310,12 +3377,14 @@ function measureStmts(db) {
 /** An attachment row's stored body (its `attachment` object, B1's blobBodyOf), or null for a tombstone, a body that
  *  is not JSON, or a body whose raw_len is over CARD_ATTACHMENT_MAX_BYTES, which is skipped unread: a SessionStart
  *  attachment never comes near that bound, and a re-attached file of many MiB is not decompressed only to read its
- *  `type`. The compressed bytes of a body read count against the run's byte budget, as derivation's reads do. */
+ *  `type`. The compressed bytes of a body read count against the run's byte budget, as derivation's reads do. The
+ *  decode is bounded by the blob's own stored raw_len, as B1's unbrotli requires (it throws a TypeError without a
+ *  bound, and a RangeError for a body that decodes past it): either throw reads as no body here. */
 function attachmentOf(s, blobId, budget) {
   const r = s.blobZ.get(blobId);
   if (r === undefined || r.z === null || Number(r.raw_len) > CARD_ATTACHMENT_MAX_BYTES) return null;
   budget.bytes += r.z.length;
-  try { return JSON.parse(unbrotli(r.z).toString('utf8')); } catch { return null; }
+  try { return JSON.parse(unbrotli(r.z, Number(r.raw_len)).toString('utf8')); } catch { return null; }
 }
 
 /** The boundary's producer: B1's producerOf over the assistant rows after it, read lazily, in its copy's order. */
@@ -3394,6 +3463,7 @@ Then, in `cardStep`, replace the line `  const measure = null;` with:
 
 Notes:
 - The window's rows are filtered by `type = 'attachment'` before a blob is read, and by the blob's `raw_len` against lib's `CARD_ATTACHMENT_MAX_BYTES`, so only attachment bodies of a bounded size are decompressed; a skipped row still counts toward `rowsSeen`. lib's `cardIdsIn` still decides which attachment counts (`hook_additional_context`). The bound is a read bound, as `CARD_MEASURE_ROWS` is the window query's `LIMIT`: lib holds the number, and this module only applies it.
+- The decode itself is bounded by the blob's own stored `raw_len`: `unbrotli(r.z, Number(r.raw_len))`. B1's `unbrotli(z, maxLen)` throws a `TypeError` when `maxLen` is not a safe non-negative integer and a `RangeError` for a body that decodes past it (its FPM10 rule; B1's own census pins that bound on `sweep.mjs`'s decodes). Called with no bound it would throw on every row, which `attachmentOf`'s catch would turn into `null`: no attachment would ever be read, and `card_served` and `card_id_mismatch` would never be counted. The size mutant (`window: an attachment of any size decoded`) still reds: with the size test removed, the planted body whose `raw_len` is declared `CARD_ATTACHMENT_MAX_BYTES + 1` decodes under that bound (its stored bytes are small), and its line counts as a mismatch.
 - `window` reads at most `CARD_MEASURE_ROWS` rows after the boundary and stops at the next boundary row of the same copy, so a later compaction's attachment is never read as this one's.
 - `modelsAfter` is read lazily through `iterate()`; `producerOf` stops at the first backend that is not `unknown`, and the generator's return ends the statement. Nothing writes between the read and the `withTx`.
 - Check: `node --check ccd/history/card.mjs` prints nothing, and `grep -c '^  const measure = measureCardDelivery(db, ictx, budget);$' ccd/history/card.mjs` prints `1`.
@@ -3463,7 +3533,8 @@ git commit -m "feat(history): measure card delivery from the transcript's Sessio
 - Modify: `ccd/history/card.mjs` (Tasks 5, 6): append one section at the END of the file.
 - Modify: `ccd/history/sweep.mjs` (every edit by content, above the entry guard):
   - in place: Task 5's line `import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';`;
-  - in `tick`, one comment and one call directly above B1's line `  if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());`, inside the tick-steps markers.
+  - in `tick`, one comment and one call directly above B1's line `  if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());`, inside the tick-steps markers;
+  - in `tick`'s doc comment, one numbered item, `collectPurgedHistoryFiles`, directly above the `markScan` item, every item renumbered: B1's F39 describe in `history-sweep.test.ts` requires the new `collectPurgedHistoryFiles(db` call to be listed, between `recordTick` and `markScan`, as the body calls it.
 - Modify: `server/test/history-card.test.ts`: one describe at the end of the file (no import change: Task 5 imported `runDriver`).
 - Scratch, gitignored: `.superpowers/sdd/history-w1-b3/scratch/mutants-task7.json`.
 
@@ -3475,7 +3546,7 @@ git commit -m "feat(history): measure card delivery from the transcript's Sessio
 - Produces:
   - `card.mjs`: `export function collectPurgedHistoryFiles(db: DatabaseSync, home: string, nowMs: number): { scope: number; card: number }` (entries removed).
   - Counters `scope_files_purged` and `card_files_purged`.
-  - `sweep.mjs`: `import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards } from './card.mjs';`; in `tick`, `if (scan) collectPurgedHistoryFiles(db, ctx.home, ctx.now());`.
+  - `sweep.mjs`: `import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards } from './card.mjs';`; in `tick`, `if (scan) collectPurgedHistoryFiles(db, ctx.home, ctx.now());`, and its doc-comment item between `recordTick` and `markScan`.
 - Later consumers: Task 12 (both lifecycle rows' collector text names this behaviour).
 
 **Spec:**
@@ -3489,9 +3560,10 @@ git commit -m "feat(history): measure card delivery from the transcript's Sessio
 grep -c "^  const scan = scanDue(db, ctx.now());$" ccd/history/sweep.mjs                      # 1
 grep -c "^  if (scan && !ctx.rosterUnreadable) markScan(db, ctx.now());$" ccd/history/sweep.mjs # 1
 grep -c "^import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';$" ccd/history/sweep.mjs    # 1
+grep -cE '^ \* +[0-9]+\. `(recordTick|markScan)`' ccd/history/sweep.mjs                                    # 2
 ```
 
-Expected: `1`, `1`, `1`; otherwise re-anchor on the merged lines that do the same thing and report it.
+Expected: `1`, `1`, `1`, `2` (the doc comment's `recordTick` and `markScan` items, which the collector's item goes between); otherwise re-anchor on the merged lines that do the same thing and report it.
 
 - [ ] **Step 2: Write the failing tests.** Append to the end of `server/test/history-card.test.ts`:
 
@@ -3707,16 +3779,48 @@ import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards }
   if (scan) collectPurgedHistoryFiles(db, ctx.home, ctx.now());
 ```
 
+  2a. Name the step in `tick`'s doc comment (the `/**` directly above `export async function tick(db, ctx) {`), directly above the `markScan` item, renumbering every item. B1's F39 describe requires every `name(db` call to be an item, in body order, and the collector is called between `recordTick` and `markScan`. From the repository root:
+
+```bash
+python3 - <<'PYEOF'
+import re
+p = 'ccd/history/sweep.mjs'
+t = open(p, encoding='utf8').read()
+at = t.index('export async function tick(db, ctx) {')
+start = t.rindex('/**', 0, at)
+lines = t[start:at].split('\n')
+item = re.compile(r'^ \*\s*\d+\. `([A-Za-z]\w*)`')
+names = [m.group(1) for l in lines if (m := item.match(l))]
+assert names.count('markScan') == 1 and 'collectPurgedHistoryFiles' not in names, names
+assert names.index('recordTick') + 1 == names.index('markScan'), names
+j = next(k for k, l in enumerate(lines) if (m := item.match(l)) and m.group(1) == 'markScan')
+lines[j:j] = [' * 0. `collectPurgedHistoryFiles`: at a due scan, the scope markers and card directories of purged sessions,',
+              ' *     7 days on (card.mjs; W1-B3 Task 7);']
+n = 0
+for k, l in enumerate(lines):
+    if item.match(l):
+        n += 1
+        lines[k] = re.sub(r'^ \*\s*\d+\.', ' *' + f'{n:>3}' + '.', l, count=1)
+t = t[:start] + '\n'.join(lines) + t[at:]
+open(p, 'w', encoding='utf8').write(t)
+print(f'tick doc comment: {n} steps')
+PYEOF
+```
+
+Expected: `tick doc comment: <n> steps`, one more than Task 5 left (21 over B1's 16 plus B2's `deriveNodes`).
+
   3. Check, from the repository root:
 
 ```bash
 grep -c "^import { cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards } from './card.mjs';$" ccd/history/sweep.mjs   # 1
 grep -c '^  if (scan) collectPurgedHistoryFiles(db, ctx.home, ctx.now());$' ccd/history/sweep.mjs                         # 1
+grep -cE '^ \* +[0-9]+\. `collectPurgedHistoryFiles`' ccd/history/sweep.mjs                                                # 1
 g=$(grep -n 'import.meta.url === pathToFileURL' ccd/history/sweep.mjs | cut -d: -f1); l=$(grep -nF 'collectPurgedHistoryFiles(db, ctx.home' ccd/history/sweep.mjs | cut -d: -f1); [ "$l" -lt "$g" ] && echo above || echo BELOW
 node --check ccd/history/card.mjs && node --check ccd/history/sweep.mjs
+(cd server && ./node_modules/.bin/vitest run test/history-sweep.test.ts -t 'docstring names its steps')
 ```
 
-Expected: `1`, `1`, `above`, and `node --check` prints nothing.
+Expected: `1`, `1`, `1`, `above`, `node --check` prints nothing, and `3 passed` (B1's F39 describe). Without step 2a its `every step the body calls with db is listed` reds with `expected [ 'collectPurgedHistoryFiles' ] to deeply equal []`.
 
 - [ ] **Step 6: Run the whole file, the suites the tick touches, and the typecheck.** In the foreground, with a timeout of at least 600000 ms, each line as its own call:
 
@@ -3789,7 +3893,7 @@ git commit -m "feat(history): collect purged sessions' scope markers and card di
   - `CS_SCOPE`, a plain global with no initialiser. `_hook_compact_scope` empties it first, then answers `main`, `subagent` or `ambiguous` with rc 0, or rc 1 when nothing may be said. `_hook_compact_pre` overlays `ambiguous` on an overlap, and returns before scoping under compact-card-off (`[ -e "$COMPACT_CARD_OFF" ] && return 0`) or when its payload read fails;
   - `_hook_compact_scope <transcript_path> <trigger>` (`:950`) and `_hook_epoch_ms` (`:41`).
 - Consumes, from B1: the `# >>> history-spool` block (the epoch line S8 asks for), and `SPOOL_ID_MAX` (224) from `ccd/history/lib.mjs`, in the test only.
-- Consumes, from the test file's module scope: `runFull` (asserts exit 0 and returns stdout and stderr), `home`, `HOOK`, `GENERATION`, `preCompact(tree, transcript, trigger)`, `plantSession({ sid, lines, parentAge, subagents })`, `setFile()`, `tl`, `LIVE` (5 s), `DEAD` (600 s), `itLinux` and `spawnSync`. `preCompact` hard-codes `session_id: 'sess-1'`, so the cases override it with a UUID.
+- Consumes, from the test file's module scope: `runFull` (asserts exit 0 and returns stdout and stderr), `hookEnv(env)` (B1's one definition of every hook spawn's env, which `run`, `runFull` and the spool describe's `runSpoolBounded` share; a hand-built spawn takes `env: hookEnv(SCRUB)`), `home`, `HOOK`, `GENERATION`, `preCompact(tree, transcript, trigger)`, `plantSession({ sid, lines, parentAge, subagents })`, `setFile()`, `tl`, `LIVE` (5 s), `DEAD` (600 s), `itLinux` and `spawnSync`. `preCompact` hard-codes `session_id: 'sess-1'`, so the cases override it with a UUID.
 - Consumes, from Task 1, in the test only: lib's `cardLine`, by dynamic import.
 - Produces:
   - the marker `~/.ccrc/history/scope/<id>`, one line `<scope> <psid> <ms>\n`. `scope` is `main`, `subagent` or `ambiguous`, `psid` a lowercase UUID, `ms` epoch milliseconds; 61 bytes at most. Every main-thread PreCompact first empties an existing marker (the line below `esac`, before any tail exit); the block then writes only a decided verdict. So an undecided verdict, or a run that exits before the block, leaves the marker empty, and no file is created where none was. Task 9's reader consumes it;
@@ -3806,7 +3910,7 @@ git commit -m "feat(history): collect purged sessions' scope markers and card di
 **Choices this task makes:**
 - **`.` and `..` get no test of their own.** The hook's id grammar admits both. Under `scope/` they name directories: `scope/.` is `scope/` itself and `scope/..` is the history root. Neither the write nor the truncation can open a directory. A builtin test there could not be told apart from its absence by any input, and this repo does not ship a guard nothing can trip (`_hook_compact_mark_served`'s own comment says so). One case pins the structural fact instead: ids `.` and `..` leave `scope/` empty and touch nothing else. The 224-char bound does get a test, because a 225-char name is writable.
 - **A lowercase-UUID psid is required.** The card file is `card/<id>/<uuid>.txt`, so a marker for any other psid could never be read.
-- **A symlink at the marker's path is left alone.** The write would follow it.
+- **A symlink at the marker's path is left alone.** The write would follow it. The tests are builtin, and bash has no `O_NOFOLLOW` or `O_NONBLOCK` redirection, so a node swapped in after the test is opened: a link is followed, a FIFO blocks until Claude Code kills the hook (`install-session-hooks.sh` `HOOK_TIMEOUT_S`). That is the residue B1's spool block names in the same words (its "a regular file or nothing" comment); no case can measure the swap window, so none is added, and the block's comment names it.
 - **The unset arm parses the payload with one jq**, printing `.transcript_path` and `.trigger // "auto"` on two lines, as `_hook_compact_pre` reads them. A failed parse leaves the path empty, the scope rule answers rc 1, and the verdict is undecided.
 - **The invalidation runs first, directly below `esac`, and is builtin-only.** The tail can exit between `esac` and the marker block (the hookstate compose, the 64 KB cap, the hookstate write and `mv`), and a hook kill can land there too. Emptying the marker before any of them means each of those leaves an empty marker, never an older fresh `main` one. It runs under `history-off` too: emptying serves nothing and grows nothing, and the reader refuses under `history-off` anyway. It needs neither the id bound nor the psid test, because it only truncates a regular file that already exists.
 - **A spooled SessionStart(fork) (ruled Q16) changes nothing here.** The marker is written and emptied on PreCompact only, and a SessionStart(fork) neither writes nor reads it (the reader runs on a compact SessionStart only, Task 9). A fork's own compactions write and empty `scope/<id>` as any main thread's do, keyed on its own psid, so a marker the parent left before a `/branch` names the parent's sid and cannot serve a fresh-sid fork. B2's one hook edit is `fork` added in place to the spool block's source whitelist, outside this block and below README's anchor, so no line this task anchors on or measures moves.
@@ -3832,14 +3936,18 @@ Expected: `1`, `1`, `1`, `1`, `0`, `0`, then `case <n> esac <m>`, the event case
 ```ts
 // ── ccrc history: the PreCompact scope marker (history spec 2026-10-05 §5.1, §5.5 S16; W1-B3 task 8) ──
 // APPENDED, with NO new import line: the citation census cites this file by line.
-// `runFull`/`home`/`preCompact`/`plantSession`/`setFile`/`tl`/`LIVE`/`DEAD`/`GENERATION` are
+// `runFull`/`hookEnv`/`home`/`preCompact`/`plantSession`/`setFile`/`tl`/`LIVE`/`DEAD`/`GENERATION` are
 // this file's module-level fixture (a fixture HOME, a stub tmux answering
 // cc-demo-quiet-basin, the row's 36-byte generation file).
 describe('history scope marker: PreCompact records whose context is compacting (spec §5.1, S16)', () => {
   const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
   const ID = 'demo-quiet-basin';
-  /** spec §10.1: the operator's own session must not reach the hook through `run`'s `...process.env`. */
-  const SCRUB: Record<string, string> = { TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '' };
+  /** spec §10.1: the operator's own session must not reach the hook through `hookEnv`'s `...process.env`; every
+   *  inherited `CCRC_RECALL_*` is blanked too, as B1's spool describe blanks them. */
+  const SCRUB: Record<string, string> = {
+    TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+    ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])),
+  };
   const histDir = (...p: string[]): string => path.join(home, '.ccrc', 'history', ...p);
   const scopeDir = (): string => histDir('scope');
   const marker = (id = ID): string => histDir('scope', id);
@@ -3887,9 +3995,7 @@ describe('history scope marker: PreCompact records whose context is compacting (
     const forks = (): number => {
       const trace = path.join(home, 'scope-trace.txt');
       const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
-        input: JSON.stringify(pre(transcript)), encoding: 'utf8',
-        env: { ...process.env, ...SCRUB, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-          TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv(SCRUB),
       });
       expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
       const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
@@ -4081,6 +4187,13 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(at, 'below the event case').toBeGreaterThan(src.indexOf('\nesac\n'));
     expect(at, 'above the hookstate compose and every exit after it').toBeLessThan(src.indexOf('\nout=$(jq -cn'));
     expect(early[0], 'the invalidation forks').not.toMatch(/\$\(|`/);
+    // B1's S1 form (its FR2a): a `${…@…}` transformation forks too, since `@P` runs prompt expansion and so command
+    // substitution. The early line, the gate and `_hook_history_scope`'s body spell none (past the gates the body may
+    // fork, but only by the forms its comment names: one jq, the scope rule, the clock).
+    const fnAt = src.indexOf('\n_hook_history_scope() {');
+    expect(fnAt, 'no _hook_history_scope definition').toBeGreaterThan(-1);
+    const fnCode = src.slice(fnAt, src.indexOf('\n}\n', fnAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(`${early[0]!}\n${gate!}\n${fnCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
   });
 });
 ```
@@ -4158,7 +4271,10 @@ Directly below that same line, and above `if [[ "$event" == PostCompact ]]; then
 # history-off absent. Then the id's bound (SPOOL_ID_MAX, as the spool block's;
 # `.` and `..` need no test of their own, since under scope/ they name
 # directories, which no write can open), a lowercase-UUID psid (the card file
-# is keyed on it), and no symlink where the marker goes.
+# is keyed on it), and no symlink where the marker goes. The tests are builtin,
+# here and on the early line below the event `case`; a node swapped in after
+# the test is opened: a link is followed, a FIFO blocks until Claude Code kills
+# the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
 # PreCompact is off the hot path, so past the gates this block may
 # fork (one jq on the unset arm, the scope rule's finds, the clock). Every
 # redirection is under `{ …; } 2>/dev/null`, so nothing reaches stdout or
@@ -4300,11 +4416,13 @@ MUTANTS = [
         (r'''  scope="${CS_SCOPE-}"''', r'''  scope="${CS_SCOPE:-main}"''')]),
     ('T8-M12-no-scope-dir-gate', H, T, 'with no scope/ directory the gate forks nothing', [
         (r''' && [[ -d "$HOME/.ccrc/history/scope" ]] && [[ ! -e''', r''' && [[ ! -e''')]),
+    ('T8-M13-transformation', H, T, "the block sits after the card's call", [
+        (r'''  scope="${CS_SCOPE-}"''', r'''  scope="${CS_SCOPE-}"; scope="${scope@P}"''')]),
 ]
 PYEOF
 ```
 
-Run them in the foreground, with a timeout of at least 2400000 ms (twelve mutants, two vitest runs each):
+Run them in the foreground, with a timeout of at least 2600000 ms (thirteen mutants, two vitest runs each):
 
 ```bash
 SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b3/scratch"
@@ -4312,7 +4430,7 @@ python3 "$SCRATCH/mutate.py" "$SCRATCH/mutants-t8.py"; echo "rc=$?"
 git status --short
 ```
 
-Expected: twelve `RED->GREEN` lines, then `rc=0`, then `git status` lists only `ccd/session-hook.sh` and `server/test/session-hook.test.ts` as modified. Each mutant and its red, as measured on a prototype of this exact text for T8-M1 to T8-M4 and T8-M6 to T8-M10; T8-M5's target line, T8-M11 and T8-M12 were added after the prototype, and their reds below are argued from the code, so a `NOT MEASURED` there is reported with the case's output:
+Expected: thirteen `RED->GREEN` lines, then `rc=0`, then `git status` lists only `ccd/session-hook.sh` and `server/test/session-hook.test.ts` as modified. Each mutant and its red, as measured on a prototype of this exact text for T8-M1 to T8-M4 and T8-M6 to T8-M10; T8-M5's target line, T8-M11, T8-M12 and T8-M13 (the B1 re-check's `${…@…}` form) were added after the prototype, and their reds below are argued from the code, so a `NOT MEASURED` there is reported with the case's output:
 
 | Mutant | Guard removed | The case that goes red, and how |
 |---|---|---|
@@ -4328,6 +4446,7 @@ Expected: twelve `RED->GREEN` lines, then `rc=0`, then `git status` lists only `
 | T8-M10-fork-before-gate | a fork added above the gate | the strace AMBIGUOUS run: `expected { '(subshell)': 2, … } to deeply equal { '(subshell)': 1, … }` |
 | T8-M11-empty-scope-as-main | an empty verdict read as `main` (`${CS_SCOPE:-main}`) | scope rc 1: `expected true to be false` (a `main` marker lands); the undecided case: `expected 'main …' to be ''` |
 | T8-M12-no-scope-dir-gate | `[[ -d … scope ]]` in the gate | the new strace case: `the block forked although scope/ is absent` (the block's jq, scope finds and clock run, and its write fails silently into the missing directory) |
+| T8-M13-transformation | none: it ADDS `; scope="${scope@P}"` to `_hook_history_scope`'s verdict line, a `${…@…}` transformation (`@P` runs prompt expansion, so command substitution) | the source pin: `a ${…@…} transformation in the marker lines (@P forks): expected '${scope@' to be null` |
 
 A `NOT MEASURED` row means its case passed with the guard gone. The case is then wrong: fix the case, never the mutant. A run killed mid-mutant leaves `keep/<file with / as __>.orig`, and the runner refuses to start until it is restored with the loop its docstring gives (the same loop as `mutate.mjs`'s header). Never use `git stash`.
 
@@ -4374,8 +4493,8 @@ bash "$SCRATCH/cite-run.sh" ccd/session-hook.sh,README.md
 
 Expected:
 - the first line reads `files swapped to HEAD: ccd/session-hook.sh, README.md`, and the last `keep-cite: the tree matches its copies; copies removed`;
-- every `byFile[…]` line reads `stated N  base N  tree N`, with no `<-- MOVED or unstated`. `ccd/session-hook.sh` reads 21 at f7e51156f, and B1 and B2 leave it there; trust the printed `stated`;
-- `total` reads three equal numbers (197 at f7e51156f);
+- every `byFile[…]` line reads `stated N  base N  tree N`, with no `<-- MOVED or unstated`, at the values B3's base carries (trust the printed `stated`; this plan quotes no number, because B1's, B2's and other programmes' merges can move them);
+- `total` reads three equal numbers;
 - `ENTERED []` and `LEFT    []` for the composition, the row array and the site array.
 
 The scratch argument must be an absolute path (`cite-run.sh` passes one): a relative one fails with `FileNotFoundError` on `byfile.json`. If any `base` differs from its `stated`, the tree was red before this task: stop and report it. If anything moved, the insertion landed above an anchor: move the insertion. Never pass `--write`. If `cite-run.sh` prints `REFUSED` or `NOT RESTORED`, restore from `keep-cite/` with the loop in its header before anything else. Then run the citation cases and the hook's structural suites, each in the foreground:
@@ -4415,7 +4534,7 @@ census does not move."
 
 **Files:**
 - Modify: `ccd/session-hook.sh`:
-  - Insert the reader block directly above the line that begins `state="" ask_json=`. That line is `:2770` at f7e51156f, where it ends `hts="" msid=""`; origin/main 9a255a746 appends ` sessend=""`, so anchor on the prefix. The two lines above it are `[[ -n "$event" ]] || exit 0` and a blank line, and the blank line stays. The block is 100 lines followed by one new blank line, 101 lines in all (95 before ruling RC4 widened its recall-off read by six lines). It is the ONE insertion above README's anchor this PR makes. Nothing in the spec or the plan cites a hook line between the highest corpus anchor (`:2472`) and this one.
+  - Insert the reader block directly above the line that begins `state="" ask_json=`. That line is `:2770` at f7e51156f, where it ends `hts="" msid=""`; origin/main 9a255a746 appends ` sessend=""`, so anchor on the prefix. The two lines above it are `[[ -n "$event" ]] || exit 0` and a blank line, and the blank line stays. The block is 105 lines followed by one new blank line, 106 lines in all (95 before ruling RC4 widened its recall-off read by six lines; 101 before the re-check against B1's final code read the clock once, one line, and named the swap residue and the one-read rule in the header, four lines). It is the ONE insertion above README's anchor this PR makes. Nothing in the spec or the plan cites a hook line between the highest corpus anchor (`:2472`) and this one.
   - In place, line-neutral: `    [[ "$src" == compact ]] && { _hook_compact_card || true; }` (`:2893` at f7e51156f and at origin/main) becomes `    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }`.
   - In place, in Task 8's lines in the tail: the three lines that spell `"$HOME/.ccrc/history/scope"` (the block's `local f=…` and its gate, and the early invalidation below `esac`) spell `"$HISTORY_SCOPE_DIR"` instead.
   - The turn-marker note's last line is extended and gains five lines after it. That line is the only one matching `^# that line \(marker-logic-in-the-tail \(D-[0-9]+\)\)\.$` (`:2945` at f7e51156f, `:2946` at origin/main); this plan quotes it as a pattern because it writes no deviation number. The note's existing text, its deviation number included, stays verbatim.
@@ -4438,7 +4557,7 @@ census does not move."
   - B1: `SPOOL_ID_MAX`;
   - B2: `decideRecallOff({ file: Presence<string>, generation: string }) → 'off' | 'stale' | 'none'` and `resolveGeneration({ envGen, regGen }) → { value: string | null, via }`;
   - Task 1: `cardLine({ leaf, parent }) → string`, with `leaf` an `L` id or display prefix and `parent` an `N` one or `null`, and `CARD_LINE_MAX` (512).
-- Consumes, from the test file's module scope: `runFull`, `card(stdout)` (asserts exactly one stdout line, a SessionStart envelope, and returns its `additionalContext`), `home`, `HOOK`, `HELPER_SRC` (the path of `ccd/compact-card.mjs`), `GENERATION`, `setFile()`, `cardFile()`, `cardTree()`, `plantSession`, `preCompact`, `LIVE`, `DEAD`, `tl`, `itLinux`, `IS_DARWIN`, `execFileSync` and `spawnSync`. The describe-local `plantPair` (in `'the compaction card — SessionStart(compact) (spec §3.3)'`) is not in scope, so the describe re-declares its shape as `plantCompactCard`.
+- Consumes, from the test file's module scope: `runFull`, `hookEnv(env)` (B1's one spawn env; the FIFO and strace spawns take `env: hookEnv(SCRUB)`), `card(stdout)` (asserts exactly one stdout line, a SessionStart envelope, and returns its `additionalContext`), `home`, `HOOK`, `HELPER_SRC` (the path of `ccd/compact-card.mjs`), `GENERATION`, `setFile()`, `cardFile()`, `cardTree()`, `plantSession`, `preCompact`, `LIVE`, `DEAD`, `tl`, `itLinux`, `IS_DARWIN`, `execFileSync` and `spawnSync`. The describe-local `plantPair` (in `'the compaction card — SessionStart(compact) (spec §3.3)'`) is not in scope, so the describe re-declares its shape as `plantCompactCard`.
 - Produces:
   - four constants above the `case`: `HISTORY_CARD_MAX=512`, `HISTORY_CARD_RE='<the spec grammar>'`, `HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"` and `HISTORY_CARD_DIR="$HOME/.ccrc/history/card"`. Task 10 uses the first and the last; Task 11 binds all four to lib;
   - `_hook_history_card`, called only from the SessionStart arm's compact guard, after `_hook_compact_card`, so it folds into the compact card that function set;
@@ -4462,8 +4581,9 @@ census does not move."
 - **No separate length test.** §8.6 says the read "refuses a value over 512 chars". The read takes at most `HISTORY_CARD_MAX + 1` chars, and the grammar admits no line over 145 chars, so a test of `${#v} <= 512` could never refuse what the grammar did not. It was measured: deleting it left every case green, while its sibling mutant (a permissive grammar) reds the over-512 case. C21's over-512 case stands and is measured through the grammar.
 - **`.` and `..` get no test**, for the reason in Task 8: `scope/.` and `scope/..` are directories, which `_ct_read` refuses as rc 2.
 - **No clock, no line.** Without a well-formed `EPOCHREALTIME` the marker's age cannot be measured without a fork, so nothing is served. A malformed value would otherwise abort `$(( ))` under `set -u`; its case pins both.
+- **The clock is read once.** Each expansion of `EPOCHREALTIME` reads the clock anew, so a reader that tests one expansion and slices another can take its seconds and its fraction from two readings (B1's spool block reads it once into `_hs_t` for this reason, and pins it). The reader reads it once into the local `t`, tests `t` with B1's grammar `^[1-9][0-9]{0,11}[.,][0-9]*$` (one clock grammar in the hook), and slices `t`. The case `EPOCHREALTIME is read once …`, modelled on B1's, moves the clock between the test and the slice with a `BASH_ENV` DEBUG trap (`set -T` carries it into the function), and the source pin counts one expansion. Neither was run on a prototype; a red at the fixture (a trap that does not reach the function) is the fixture's to fix, never the reader's.
 - **A future `<ms>` is not fresh.** The marker is written by the PreCompact that precedes this SessionStart, so its ms is never after now on one clock.
-- **A regular file only.** A FIFO at the card's path would block `read` with the serve lock held. `[[ -f ]]` refuses it, and a case runs the hook against a FIFO under a 20 s deadline.
+- **A regular file only.** A FIFO at the card's path would block `read` with the serve lock held. `[[ -f ]]` refuses a FIFO that is there when the test runs, and a case runs the hook against one under a 20 s deadline. The test is builtin, and bash has no `O_NOFOLLOW` or `O_NONBLOCK` redirection, so a node swapped in after it is opened: a link is followed, a FIFO blocks until Claude Code kills the hook (`install-session-hooks.sh` `HOOK_TIMEOUT_S`). B1's spool block names the same residue in the same words, and the reader's header now does too; no case can measure the window, so none is added.
 - **`recall-off` is read the way the CLI reads it, and a read that fills its window is OFF (ruling RC4).** A symlink, a non-file or an unreadable file is OFF, and a symlinked or unreadable `.generation` names no generation. The hook reads `recall-off/<id>` itself, with `_ct_read`'s bound (`CCRC_ID_MAX`, 128 chars), type tests and trim, where the CLI's `presenceOf` keeps 4,096 bytes. A read that fills those 128 chars is OFF before it is trimmed or compared, so text a hand edit pads past char 128 always withholds the line:
   - with THIS generation after the padding, both withhold: the CLI reads the generation and answers OFF, exit 8 (the parity row `130 spaces followed by the resolved generation G`, mutant `T9-M30-recall-off-window`);
   - with no generation resolved, the hook withholds where the CLI reads the text as stale: the side that withholds a line, which the ruling accepts.
@@ -4503,7 +4623,7 @@ Expected:
 ```ts
 // ── ccrc history: the card line SessionStart(compact) folds into the compact subject (history spec 2026-10-05 §8.6, §8.9; W1-B3 task 9) ──
 // APPENDED, with NO new import line: the citation census cites this file by line.
-// The history lib is reached by dynamic import. `run`/`runFull`/`card`/`home`/
+// The history lib is reached by dynamic import. `run`/`runFull`/`hookEnv`/`card`/`home`/
 // `HOOK`/`HELPER_SRC`/`GENERATION`/`setFile`/`cardFile`/`cardTree`/`plantSession`/
 // `preCompact`/`LIVE`/`DEAD`/`tl` are this file's module-level fixture.
 describe('history card line: SessionStart(compact) serves the sweep\'s prediction to a main compaction (spec §8.6)', () => {
@@ -4512,7 +4632,11 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   const G2 = '0189abcd-1234-5678-9abc-0123456789ff';
   const ID = 'demo-quiet-basin';
   const ROOT = process.getuid?.() === 0;
-  const SCRUB: Record<string, string> = { TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '' };
+  /** spec §10.1, as B1's spool describe scrubs: the operator's session, and every inherited `CCRC_RECALL_*`. */
+  const SCRUB: Record<string, string> = {
+    TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+    ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])),
+  };
   let lib: typeof import('../../ccd/history/lib.mjs');
   let LINE = '';
   beforeEach(async () => {
@@ -4682,9 +4806,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     plantDirs(); mark();
     execFileSync('mkfifo', [cardPath()]);
     const r = spawnSync('bash', [HOOK], {
-      input: JSON.stringify(start()), encoding: 'utf8', timeout: 20_000,
-      env: { ...process.env, ...SCRUB, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+      input: JSON.stringify(start()), encoding: 'utf8', timeout: 20_000, killSignal: 'SIGKILL', env: hookEnv(SCRUB),
     });
     expect(r.status, 'the hook blocked on the FIFO').toBe(0);
     expect(r.stdout).toBe('');
@@ -4772,6 +4894,20 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   ] as const)('EPOCHREALTIME %s serves no line and never forks a clock', (_what, value) => {
     plantAll();
     expect(served(start(), { BASH_ENV: epochEnv(value) })).toBeNull();
+  });
+
+  // B1's F37 shape (its spool block): each expansion of EPOCHREALTIME reads the clock anew, so the reader reads it ONCE.
+  // A DEBUG trap (`set -T` carries it into the function) hands the grammar test a valid reading, 1700000000.999999, and
+  // every other command one with no fraction, 1700000001. Read once, the reader tests and slices the no-fraction reading
+  // and serves nothing; the tested reading alone would put the marker 101 ms in the future and serve nothing either. Only
+  // a reader that tests one reading and slices another serves: its `now` takes 1700000001's digits as the fraction.
+  it('EPOCHREALTIME is read once: a clock that moves between the test and the slice serves no mis-aged line', () => {
+    plantAll();
+    mark(`main ${SID} 1700000001100`);
+    const trapFile = path.join(home, 'epochtrap.bash');
+    fs.writeFileSync(trapFile, 'set -T\nunset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
+      + 'trap \'case $BASH_COMMAND in *"=~ ^[1-9]"*) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac\' DEBUG\n');
+    expect(served(start(), { BASH_ENV: trapFile }), 'a line served on a clock no single reading gave').toBeNull();
   });
 
   // RECALL-OFF PARITY (spec §9.7; ⟦D:history-recall-off-generation⟧): every row runs the hook, and its
@@ -4872,19 +5008,23 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     expect(calls).toEqual(['    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }']);
     const body = src.slice(def, src.indexOf('\n}\n', def));
     const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // B1's S1 string pin, in its final grammar, over the reader: no `$(` (an arithmetic `$((` is not one), no backtick,
+    // no `${…@…}` transformation (its FR2a: `@P` runs prompt expansion, and so command substitution), and none of its
+    // external commands, plus `find` and `link`, which the card path could reach for.
     expect(code, 'a command substitution forks').not.toMatch(/\$\((?!\()/);
     expect(code).not.toContain('`');
-    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|find|readlink|realpath|env|timeout|flock|link|node|tmux|command|eval|exec|source)(?![\w-])/;
+    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the reader (@P forks)').toBeNull();
+    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|find|readlink|realpath|dirname|basename|env|timeout|flock|link|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
     expect(code.match(external)?.[0] ?? null, 'an external command in the reader').toBeNull();
+    // B1's F37 rule: the clock is read once, so its test and its slice see one reading.
+    expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length, 'EPOCHREALTIME expanded more than once').toBe(1);
   });
 
   itLinux('forks nothing at runtime: serving the line takes exactly the forks a box without history takes', () => {
     const traced = (): { forks: number; stdout: string } => {
       const trace = path.join(home, 'card-trace.txt');
       const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=clone,clone3,fork,vfork', 'bash', HOOK], {
-        input: JSON.stringify(start()), encoding: 'utf8',
-        env: { ...process.env, ...SCRUB, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-          TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+        input: JSON.stringify(start()), encoding: 'utf8', env: hookEnv(SCRUB),
       });
       expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
       const lines = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l !== '');
@@ -4916,13 +5056,13 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'history card line')
 ```
 
-Expected on Linux: `25 failed | 37 passed` among the describe's 62 cases. On Darwin the two `C.UTF-8` rows and the strace case are absent, and under root the two unreadable-file parity rows are skipped. The 25 are every case that expects the line, plus the source pin and the runtime fork pin:
+Expected on Linux: `25 failed | 38 passed` among the describe's 63 cases. On Darwin the two `C.UTF-8` rows and the strace case are absent, and under root the two unreadable-file parity rows are skipped. The 25 are every case that expects the line, plus the source pin and the runtime fork pin:
 - every case that expects the line fails with `expected null to be 'History: node L03a9c1… (this compacti…'`, or with the folded text, or with `the measured run served the line: expected false to be true`. These are the plain serve, the parent-less and 20-hex lines, C18's reserved card and both inclusive rows, the standing-cards case, C19, C21's two served rows, C22, C37's in-bound marker and its end-to-end case, the id bound, the seven parity rows whose CLI verdict is not `off`, and the three fold-under-a-locale rows;
 - `_hook_history_card is defined above the case …` fails with `no _hook_history_card definition: expected -1 to be greater than -1`.
 
-The 37 that pass assert that no line is served, which a hook without a reader cannot violate; the parity row `130 spaces followed by the resolved generation` (ruling RC4) is among them. Step 7's mutants measure every one of them but two. The parity table's CONTROL is pure and guards nothing. C37's `empty` marker row is refused by two guards at once (the scope-word test and the ms digit test), so no single-guard mutant can red it: it is defence in depth, and it is named here rather than claimed measured.
+The 38 that pass assert that no line is served, which a hook without a reader cannot violate; the parity row `130 spaces followed by the resolved generation` (ruling RC4) and `EPOCHREALTIME is read once …` are among them. Step 7's mutants measure every one of them but two. The parity table's CONTROL is pure and guards nothing. C37's `empty` marker row is refused by two guards at once (the scope-word test and the ms digit test), so no single-guard mutant can red it: it is defence in depth, and it is named here rather than claimed measured.
 
-- [ ] **Step 4: Write the reader and its call.** In `ccd/session-hook.sh`, directly above the line that begins `state="" ask_json=`, insert these 100 lines and then one blank line. The existing blank line above stays where it is:
+- [ ] **Step 4: Write the reader and its call.** In `ccd/session-hook.sh`, directly above the line that begins `state="" ask_json=`, insert these 105 lines and then one blank line. The existing blank line above stays where it is:
 
 ```bash
 # ── THE HISTORY CARD LINE (ccrc history spec 2026-10-05 §8.6, W1-B3) ─────
@@ -4943,9 +5083,10 @@ The 37 that pass assert that no line is served, which a hook without a reader ca
 #
 # BUILTINS ONLY: no command substitution and no external command, because the
 # compact card's serve lock may still be held when the arm calls this. `_ct_read`
-# is a builtin `read -N` that sets CT_V. The clock is EPOCHREALTIME read inline,
-# and without it no line is served (never a `date` fork). `$(( ))` is arithmetic,
-# not a fork.
+# is a builtin `read -N` that sets CT_V. The clock is EPOCHREALTIME, read ONCE
+# into `t` (each expansion reads the clock anew, so two reads could straddle a
+# second: the spool block's rule), and without it no line is served (never a
+# `date` fork). `$(( ))` is arithmetic, not a fork.
 #
 # THE CHECKS, in the spec's order (§8.6):
 #   1. the main thread (`$paid` empty);
@@ -4970,7 +5111,10 @@ The 37 that pass assert that no line is served, which a hook without a reader ca
 #      block the read), at most HISTORY_CARD_MAX + 1 chars, ONE trailing LF
 #      stripped. The read's bound IS the 512-char cap: the grammar admits no
 #      line over 145 chars, so a separate length test would be one no input
-#      can reach, and this file does not spell guards nothing can trip;
+#      can reach, and this file does not spell guards nothing can trip. The
+#      tests are builtin; a node swapped in after the test is opened: a link is
+#      followed, a FIFO blocks until Claude Code kills the hook
+#      (install-session-hooks.sh HOOK_TIMEOUT_S), as the spool block says;
 #   7. the grammar, one positive pattern held in a variable;
 #   8. the room: line + LF + card within COMPACT_CARD_MAX_CHARS.
 # THE FOLD puts the line on its own line ABOVE the compact card, and only when it
@@ -4990,7 +5134,7 @@ HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"
 HISTORY_CARD_DIR="$HOME/.ccrc/history/card"
 _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; builtins only
   local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-  local off="$HOME/.ccrc/history/recall-off/$id" gen="" o="" ms="" now="" s="" f="" v="" nl=$'\n'
+  local off="$HOME/.ccrc/history/recall-off/$id" gen="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n'
   [[ -z "$paid" ]] || return 0
   [[ -e "$HOME/.ccrc/history-off" ]] && return 0
   (( ${#id} <= 224 )) || return 0
@@ -5012,8 +5156,9 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
   [[ "$CT_V" == "main $psid "* ]] || return 0
   ms="${CT_V#"main $psid "}"
   [[ "$ms" =~ ^[1-9][0-9]{0,15}$ ]] || return 0
-  [[ "${EPOCHREALTIME:-}" =~ ^[1-9][0-9]{0,12}[.,][0-9]*$ ]] || return 0
-  s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}000"
+  t="${EPOCHREALTIME:-}"
+  [[ "$t" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]] || return 0
+  s="${t%%[.,]*}" f="${t#*[.,]}000"
   now=$(( s * 1000 + 10#${f:0:3} ))
   (( now >= ms && now - ms <= COMPACT_CARD_MAX_AGE * 1000 )) || return 0
   f="$HISTORY_CARD_DIR/$id/$psid.txt"
@@ -5073,7 +5218,7 @@ awk '/^# ── THE HISTORY CARD LINE/{s=NR} /^state="" ask_json=/{print NR-s}' 
 grep -cF '$HOME/.ccrc/history/scope' ccd/session-hook.sh
 ```
 
-Expected: `in-place edits applied`, `hook-syntax-ok`, `1` (the grammar holds a literal `…`, not an escape), `101`, and `1`: the one constant, `HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"`, is now the only line that spells it.
+Expected: `in-place edits applied`, `hook-syntax-ok`, `1` (the grammar holds a literal `…`, not an escape), `106`, and `1`: the one constant, `HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"`, is now the only line that spells it.
 
 - [ ] **Step 5: Re-point README's anchor by content.** README is repaired, never counted. Do it before Step 8 measures: with README stale, the census reads `ccd/session-hook.sh` 22 and `total` 198 (README's stale `:2900` counts as a failing reference into the hook), and the README case reds with `a README anchor stopped naming what its own sentence quotes: expected [ 'ccd/session-hook.sh:2900' ] to deeply equal []`. Both were measured. The hook has a second, comment-line mention of the call (`:2053` at f7e51156f), so the lookup skips comment lines. From the repository root:
 
@@ -5096,7 +5241,7 @@ PYEOF
 git diff --stat README.md
 ```
 
-Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 101>`, where `<old>` is the number README carried at this task's base. Then `1 file changed, 1 insertion(+), 1 deletion(-)`: README keeps its length, so `CLAUDE.md`'s README figure does not move.
+Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 106>`, where `<old>` is the number README carried at this task's base. Then `1 file changed, 1 insertion(+), 1 deletion(-)`: README keeps its length, so `CLAUDE.md`'s README figure does not move.
 
 - [ ] **Step 6: Run the cases and see them pass.** In the foreground:
 
@@ -5106,7 +5251,7 @@ Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 101>`, where `
 ```
 
 Expected:
-- the first: all 62 cases of this describe and Task 8's 18 green, so `80 passed` on Linux as a non-root user. Task 8's `a hookstate write that fails empties an older fresh main marker …` now runs end to end: its SessionStart(compact) meets a real reader and an emptied marker, and serves no line;
+- the first: all 63 cases of this describe and Task 8's 18 green, so `81 passed` on Linux as a non-root user. Task 8's `a hookstate write that fails empties an older fresh main marker …` now runs end to end: its SessionStart(compact) meets a real reader and an emptied marker, and serves no line;
 - the second: green. It covers the strace pins, the `:2721` argv case, the two-clips case, the spill-budget case and the `served` scan (`raw union matches` 11).
 
 - [ ] **Step 7: Measure every guard red with a mutant.** Tasks 8 to 11 share the runner, which Task 8 Step 6 wrote. From the repository root:
@@ -5143,7 +5288,7 @@ MUTANTS = [
     ('T9-M11-marker-prefix', H, T, 'C37: a scope marker reading a bare ms', [
         (r'''  [[ "$CT_V" == "main $psid "* ]] || return 0''', r'''  :''')]),
     ('T9-M12-clock-guard', H, T, 'EPOCHREALTIME (unset|malformed)', [
-        (r'''  [[ "${EPOCHREALTIME:-}" =~ ^[1-9][0-9]{0,12}[.,][0-9]*$ ]] || return 0''', r'''  :''')]),
+        (r'''  [[ "$t" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]] || return 0''', r'''  :''')]),
     ('T9-M13-regular-file', H, T, 'a FIFO at the card path', [
         (r'''  [[ -f "$f" ]] || return 0''', r'''  :''')]),
     ('T9-M14-keep-the-LF', H, T, 'C21: a trailing LF is stripped', [
@@ -5190,13 +5335,18 @@ MUTANTS = [
     ('T9-M31-fork-source', H, T, 'only a compact SessionStart serves', [
         (r'''    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }''',
          r'''    [[ "$src" == compact || "$src" == fork ]] && { _hook_compact_card || true; _hook_history_card || true; }''')]),
+    ('T9-M32-transformation', H, T, 'spells no fork', [
+        (r'''  v="${v%"$nl"}"''', r'''  v="${v@P}"''')]),
+    ('T9-M33-clock-read-twice', H, T, 'EPOCHREALTIME is read once|spells no fork', [
+        ('  t="${EPOCHREALTIME:-}"\n  [[ "$t" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]] || return 0\n  s="${t%%[.,]*}" f="${t#*[.,]}000"\n',
+         '  [[ "${EPOCHREALTIME:-}" =~ ^[1-9][0-9]{0,11}[.,][0-9]*$ ]] || return 0\n  s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}000"\n')]),
 ]
 PYEOF
 python3 "$SCRATCH/mutate.py" "$SCRATCH/mutants-t9.py"; echo "rc=$?"
 git status --short
 ```
 
-Run it in the foreground, with a timeout of at least 4960000 ms: 31 mutants, two runs each. Expected: 31 `RED->GREEN` lines, `rc=0`, and only this task's three files modified. Each mutant's red, as measured on a prototype of this exact text for T9-M1 to T9-M24; T9-M25 to T9-M29 were added after the prototype, and their reds were measured on an extract of the reader against the same marker and parity rows. Ruling RC4 then replaced the recall-off read's three `_ct_read` lines with the bounded read, so T9-M6's and T9-M26's anchors are the new read's lines and T9-M30 is new: those three reds are argued from the code, not measured on the prototype. T9-M31 came with ruling Q16, and its red is argued the same way: the SessionStart arm treats `fork` as it treats `startup`, which T9-M23 measured (a `NOT MEASURED` among these four is reported with the case's output):
+Run it in the foreground, with a timeout of at least 5280000 ms: 33 mutants, two runs each. Expected: 33 `RED->GREEN` lines, `rc=0`, and only this task's three files modified. Each mutant's red, as measured on a prototype of this exact text for T9-M1 to T9-M24; T9-M25 to T9-M29 were added after the prototype, and their reds were measured on an extract of the reader against the same marker and parity rows. Ruling RC4 then replaced the recall-off read's three `_ct_read` lines with the bounded read, so T9-M6's and T9-M26's anchors are the new read's lines and T9-M30 is new: those three reds are argued from the code, not measured on the prototype. T9-M31 came with ruling Q16, and its red is argued the same way: the SessionStart arm treats `fork` as it treats `startup`, which T9-M23 measured. T9-M32 and T9-M33 came with the re-check against B1's final code (its `${…@…}` form and its read-once clock), and T9-M12's anchor moved to the read-once test: those three reds are argued from the code too (a `NOT MEASURED` among these seven is reported with the case's output):
 
 | Mutant | Guard removed or inverted | The case that goes red |
 |---|---|---|
@@ -5211,7 +5361,7 @@ Run it in the foreground, with a timeout of at least 4960000 ms: 31 mutants, two
 | T9-M9-stale-marker | the age bound | C37: older than COMPACT_CARD_MAX_AGE |
 | T9-M10-future-marker | `now >= ms` | C37: in the future |
 | T9-M11-marker-prefix | `[[ "$CT_V" == "main $psid "* ]]` | C37: a bare ms |
-| T9-M12-clock-guard | the EPOCHREALTIME grammar | EPOCHREALTIME malformed and unset: `exit 0 on every path: expected 1 to be +0` (a `set -u` abort on the unset variable, and `$(( ))` on the malformed one) |
+| T9-M12-clock-guard | the clock grammar test on `t` | EPOCHREALTIME malformed and unset: `exit 0 on every path: expected 1 to be +0` (`$(( ))` aborts on the empty reading, whose `s` is empty, and on the malformed one) |
 | T9-M13-regular-file | `[[ -f "$f" ]]` | the FIFO: `the hook blocked on the FIFO: expected null to be +0` (it waits out the 20 s deadline) |
 | T9-M14-keep-the-LF | the one-LF strip | C21: a trailing LF |
 | T9-M15-strip-every-line | the strip made greedy | C21: two LFs, and an extra line |
@@ -5231,6 +5381,8 @@ Run it in the foreground, with a timeout of at least 4960000 ms: 31 mutants, two
 | T9-M29-inherits-compact-card-off | none: it ADDS compact-card-off's test to the reader, the inheritance §8.6 forbids | C19, independent of compact-card-off: `expected null to be 'History: node …'` |
 | T9-M30-recall-off-window | `(( ${#o} < CCRC_ID_MAX ))`, the window test ruling RC4 adds | parity: 130 spaces followed by the resolved generation G (`the CLI reads off: expected 'History: node …' to be null`: the read keeps 128 spaces, which trim to empty, and an empty value is not this generation) |
 | T9-M31-fork-source | the compact guard widened to `fork`, the source B2 spools (ruled Q16) | only a compact SessionStart serves: `fork: expected true to be false` (the startup, resume and clear rows stay green under it) |
+| T9-M32-transformation | none: it makes the one-LF strip `v="${v@P}"`, a `${…@…}` transformation (`@P` runs prompt expansion, so command substitution) | the source pin: `a ${…@…} transformation in the reader (@P forks): expected '${v@' to be null` |
+| T9-M33-clock-read-twice | the one read into `t`, made the two-expansion form (the grammar test on one reading, the slice on another) | `EPOCHREALTIME is read once …`: `a line served on a clock no single reading gave: expected 'History: node …' to be null` (the slice takes 1700000001 whole as the fraction's digits, so `now` reads 1700000001170, and the marker 70 ms old); and the source pin: `EPOCHREALTIME expanded more than once: expected 3 to be 1` |
 
 A `NOT MEASURED` row means its case is wrong: fix the case, never the mutant. Never use `git stash`.
 
@@ -5244,10 +5396,10 @@ SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b3/scratch
 bash "$SCRATCH/cite-run.sh" ccd/session-hook.sh,README.md
 ```
 
-`--files` must name the hook. With the default, only `ccd/ccd` and README are swapped, the edited hook stays in the base leg, and `base` reads red. The census was measured on a prototype that carried this block before ruling RC4, 95 lines in all, over origin/main plus B1's spool block. RC4 grew the block to 101 lines in all, every added line inside it. The census keys do not depend on the block's length, because no spec or plan anchor lies between the highest corpus anchor (`:2472`) and the insertion. Only README's re-pointed number moves with the length, by Step 5's content lookup. So the expectation below stands for the 101-line block, and this run is its measurement:
+`--files` must name the hook. With the default, only `ccd/ccd` and README are swapped, the edited hook stays in the base leg, and `base` reads red. The census was measured on a prototype that carried this block before ruling RC4, 95 lines in all, over origin/main plus B1's spool block. RC4 grew the block to 101 lines in all, and the re-check against B1's final code (the one clock read, the swap residue named) to 106, every added line inside it. The census keys do not depend on the block's length, because no spec or plan anchor lies between the highest corpus anchor (`:2472`) and the insertion. Only README's re-pointed number moves with the length, by Step 5's content lookup. So the expectation below stands for the 106-line block, and this run is its measurement:
 - `files swapped to HEAD: ccd/session-hook.sh, README.md`, and last `keep-cite: the tree matches its copies; copies removed`;
-- every `byFile[…]` line `stated N  base N  tree N` with no `<-- MOVED or unstated`: `ccd/session-hook.sh` 21, `ccd/ccd` 147, total 197 at f7e51156f. Trust the printed `stated` at this base;
-- `ENTERED []` / `LEFT    []` for the composition, the row array (54) and the site array (35).
+- every `byFile[…]` line `stated N  base N  tree N` with no `<-- MOVED or unstated`, `total` likewise, at the values B3's base carries. Trust the printed `stated` at this base; this plan quotes no number, because B1's, B2's and other programmes' merges can move them;
+- `ENTERED []` / `LEFT    []` for the composition, the row array and the site array.
 
 If anything moved, the insertion landed above a cited anchor, or README was not re-pointed. Find which and fix it; never `--write`. Then write the dated paragraph. The script reads the date with `date -u` and the base with `git rev-parse`, and takes both numbers from the test's own literals. It quotes none of the instrument's anchor strings, which the instrument asserts occur exactly once:
 
@@ -5265,7 +5417,7 @@ para = (
     f"      // {n} -> {n} at ccrc history W1-B3 (Task 9), measured {date} by `cite-remeasure.py` with\n"
     f"      // `--files ccd/session-hook.sh,README.md` against `{base}`: stated = base = tree for every key,\n"
     "      // `ENTERED []`, `LEFT []`, and the row and site arrays unmoved. The hook gained one block ABOVE\n"
-    "      // README's anchor (`_hook_history_card` and its four constants, 101 lines with their blank line,\n"
+    "      // README's anchor (`_hook_history_card` and its four constants, 106 lines with their blank line,\n"
     "      // defined above the event `case` because the SessionStart arm calls it before the tail runs), and\n"
     "      // every spec and plan anchor into the hook sits above that block (the highest is `:2472`), so none\n"
     "      // moved. README's own anchor moved with the block, and README is repaired, never counted: its quoted\n"
@@ -5340,7 +5492,7 @@ content, and the S6-R11 census is re-measured: no key moved."
   - `COMPACT_CARD_MAX_CHARS` (4000, `:2464`);
   - `event`, and Task 8's `unset CS_SCOPE` comment as the anchor;
   - Task 1's `CARD_LINE_MAX` (lib, test only);
-  - the test file's module scope: `runFull`, `home`, `HOOK`, `GENERATION`, `stub(name, body)`, `HELPER_ONLY` (narrows a `timeout` stub to the helper's call), `plantHelper()`, `cardTree()`, `plantSession`, `workLines(tree)`, `preCompact`, `itLinux` and `spawnSync`.
+  - the test file's module scope: `runFull`, `hookEnv(env)` (B1's one spawn env; the strace spawn takes `env: hookEnv(SCRUB)`), `home`, `HOOK`, `GENERATION`, `stub(name, body)`, `HELPER_ONLY` (narrows a `timeout` stub to the helper's call), `plantHelper()`, `cardTree()`, `plantSession`, `workLines(tree)`, `preCompact`, `itLinux` and `spawnSync`.
 - Produces:
   - `HISTORY_CARD_RESERVE`: 0 on every run, and `HISTORY_CARD_MAX + 1` (513) on PreCompact when `card/` exists and `history-off` is absent;
   - the helper's `--max-chars`: `COMPACT_CARD_MAX_CHARS - HISTORY_CARD_RESERVE`, so 3487 on a history box and 4000 elsewhere.
@@ -5369,11 +5521,15 @@ Expected: `1`, `1`, `1`, `2`, `0`.
 
 ```ts
 // ── ccrc history: the compact card's reserved room (history spec 2026-10-05 §8.6, §8.9 C38; W1-B3 task 10) ──
-// APPENDED, with NO new import line: the citation census cites this file by line. `run`/`runFull`/`home`/
+// APPENDED, with NO new import line: the citation census cites this file by line. `run`/`runFull`/`hookEnv`/`home`/
 // `HOOK`/`stub`/`HELPER_ONLY`/`plantHelper`/`cardTree`/`plantSession`/`workLines`/`preCompact` are this
 // file's module-level fixture.
 describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 chars short on a history box (spec §8.6, C38)', () => {
-  const SCRUB: Record<string, string> = { TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '' };
+  /** spec §10.1, as B1's spool describe scrubs: the operator's session, and every inherited `CCRC_RECALL_*`. */
+  const SCRUB: Record<string, string> = {
+    TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+    ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])),
+  };
   const cardDir = (): string => path.join(home, '.ccrc', 'history', 'card');
   /** PreCompact through the real arm with a stub `timeout` recording the helper's argv (the `:2721` case's idiom). */
   const helperArgv = (env: Record<string, string> = {}): string => {
@@ -5411,8 +5567,7 @@ describe('history card reserve: the compact card renders HISTORY_CARD_MAX + 1 ch
     const trace = path.join(home, 'reserve-trace.txt');
     const r = spawnSync('strace', ['-f', '-o', trace, '-e', 'trace=file', 'bash', HOOK], {
       input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: {}, cwd: home }), encoding: 'utf8',
-      env: { ...process.env, ...SCRUB, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-        TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
+      env: hookEnv(SCRUB),
     });
     expect(r.status, `strace ran the hook: ${r.stderr}`).toBe(0);
     const touched = fs.readFileSync(trace, 'utf8').split('\n').filter((l) => l.includes('/.ccrc/history/card'));
@@ -5580,8 +5735,8 @@ before. Builtin tests, the event first; census unmoved."
 
 **Interfaces:**
 - Consumes:
-  - from B1's end-appended O14 describe: only its `it.each(VOCABS)` row `'%s is declared in ccd/history/lib.mjs and in no other .mjs, exported, and frozen'`, which re-runs over the widened `VOCABS`. That describe stays the sole consumer of `DECL_CORPUS` and `declares`, which are local to its callback (`:4924-4925` at B1's head), so the appended describe cannot see them and does not use them; nor does it use the module-scope `HISTORY_DIR` (`:4793`) or `HISTORY_MJS` (`:4808`);
-  - from the file's module scope: `ccrcRoot` (`:32`), `codeLines(f)` (`:1327`; a bash file's lines that are not comments), `path`. These are the new describe's only dependencies;
+  - from B1's end-appended O14 describe: only its `it.each(VOCABS)` row `'%s is declared in ccd/history/lib.mjs and in no other .mjs, exported, and frozen'`, which re-runs over the widened `VOCABS`. That describe stays the sole consumer of `DECL_CORPUS` and `declares`, which are local to its callback, so the appended describe cannot see them and does not use them; nor does it use the module-scope `HISTORY_DIR` or `HISTORY_MJS`. Each is found by its name (`const DECL_CORPUS =`, `const declares =`, `const HISTORY_DIR =`, `const HISTORY_MJS =`); no step reads a line number of them, and B1's fix rounds moved them;
+  - from the file's module scope: `ccrcRoot` (`:32`), `codeLines(f)` (`const codeLines = (f: string): string[] =>`; a bash file's lines that are not comments), `path`. These are the new describe's only dependencies;
   - from `ccd/history/lib.mjs`, by dynamic import:
     - B1: `CARD_PREFIX` (`'History: '`) and `HISTORY_ROOT_REL` (`'.ccrc/history'`);
     - B2: `RECALL_OFF_DIR` (`'recall-off'`);
@@ -6377,10 +6532,10 @@ git status --short
 
 The extraction was checked against the landing-order plan as it stands on main: it yields one block, which compiles. Expected:
 - the first printed line names `ccd/session-hook.sh, README.md, server/test/single-definition.test.ts` as the swapped files;
-- every `byFile[…]` line reads `stated N  base N  tree N`, with no `<-- MOVED or unstated`. `ccd/session-hook.sh` reads 21 and `server/test/single-definition.test.ts` 8, as at f7e51156f;
-- `total` reads the same three numbers: 197 at f7e51156f, and B1 and B2 leave it there. Trust the printed `stated`;
+- every `byFile[…]` line reads `stated N  base N  tree N`, with no `<-- MOVED or unstated`, at the values B3's base carries (this plan quotes no number: B1's, B2's and other programmes' merges can move them);
+- `total` reads the same three numbers. Trust the printed `stated`;
 - the `byFile composition` lines read `ENTERED []` and `LEFT    []`;
-- the row array and the site array each read equal stated, base and tree numbers (54 and 35 at f7e51156f), each with `ENTERED []` and `LEFT    []`;
+- the row array and the site array each read equal stated, base and tree numbers, each with `ENTERED []` and `LEFT    []`;
 - `git status --short` prints nothing: the instrument restores every file it swapped, and asserts it byte for byte.
 
 If anything moved, an edit landed above a cited anchor. Find which task's edit it is and move the edit. Never run `--write`, and never touch the census literals by hand. Task 9's dated paragraph already records this PR's zero move, so a clean run adds nothing to the test file.
@@ -6419,7 +6574,7 @@ SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b3/scratch
 git diff --name-only "$BASE" HEAD | sort > "$SCRATCH/changed.txt"
 printf '%s\n' .github/workflows/ci.yml CLAUDE.md README.md ccd/history/card.mjs ccd/history/derive.mjs ccd/history/lib.d.mts \
   ccd/history/lib.mjs ccd/history/sweep.mjs ccd/session-hook.sh deploy/measure-history.py server/test/history-card.test.ts \
-  server/test/historyFixtures.ts server/test/lifecycle.test.ts server/test/measure-history.test.ts \
+  server/test/history-lib.test.ts server/test/historyFixtures.ts server/test/lifecycle.test.ts server/test/measure-history.test.ts \
   server/test/session-hook.test.ts server/test/single-definition.test.ts shared/lifecycle.ts | sort > "$SCRATCH/planned.txt"
 comm -23 "$SCRATCH/changed.txt" "$SCRATCH/planned.txt"
 ```
@@ -6462,6 +6617,7 @@ Expected, in order:
 
 Expected: every line is green, and tsc prints nothing. Copy each line's `Test Files … | Tests …` summary, as printed, into the PR body (Step 12).
 - Every spawning history suite skips on darwin; on Linux they run whole.
+- `history-lib.test.ts`'s `every ccd/history/*.mjs has a ring` now sees `card.mjs` through Task 5's `RINGS` row, and `history-sweep.test.ts`'s F39 describe sees Tasks 5 and 7's `tick` doc-comment items: a red in either means a row or an item is missing, never an assertion to loosen.
 - Why these suites:
   - `history-recover` and `history-maint` run the sweep paths `cardStep`'s tick wiring sits beside: a recovery pass must still write no card.
   - `ccrc-doctor` relays the history check, which mode-checks `card/` (dirs 0700, files 0600).

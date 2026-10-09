@@ -105,7 +105,7 @@ B4 adds no schema migration (v1 already has `exported_ms` and `exported_seg`), n
 - **No `historyPaths` key.** B3 adds `scope` and `card` to `historyPaths`, and B3 and B4 merge in either order. B4 builds `${historyPaths(home).root}/${EXPORT_DIR}/${storeId}`, B2's `RECALL_OFF_DIR` precedent.
 - **B2 rulings that bind.** Add no `WRITING_FORMS` entry, so RB6's `GT_FORMS` and the recovering-forms CONTROLs stay green and no new op is refused `recovering`. Prune stays gated on reachability only (ruled by the operator, rev 3.4; no longer provisional) and B4 does not touch it. Display prefixes are untouched. The export pass never runs on the recover arm: `recoverPass` never calls `tick`.
 - **Tests.** Run from `server/` with `./node_modules/.bin/vitest run test/<f>.test.ts`, in the FOREGROUND, with a timeout of at least 600000 ms; never bare `npx`. Use fixture HOMEs only (`makeHistoryBox`, `mkTmp`), with `tmux`, `claude` and `gh` poisoned and `CLAUDECODE`, `CLAUDE_CONFIG_DIR`, `TMUX`, `TMUX_PANE` and `CCRC_RECALL_*` scrubbed (B1's helpers do this). Sweep tests skip on darwin (`skipOnDarwin()`, or the `beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); })` spelling O24 also accepts); lib and store tests run there, so Task 4's cases in history-store.test.ts must pass on macOS. They use only node:fs, node:sqlite, a plain-node child (under the fault preload, as B1's own store cases do) and `/bin/sh` for the umask. Every guard is pinned red-first: watch the test fail on the unguarded code, then measure the mutant red after the guard lands, with scratch copies under `.superpowers/sdd/history-w1-b4/scratch` and never `git stash`. The new `history-export.test.ts` joins `ci.yml`'s node-floor heredoc in the same commit; `ci-pipeline` derives the list from `server/test`. CLAUDE.md's load flakes are re-run in isolation before a red is called a break.
-- **Citation corpus.** B4 edits none of `ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccd`, `deploy/deploy.sh` or `server/test/session-hook.test.ts`. `single-definition.test.ts` gets only in-place edits inside B1/B2's end-appended blocks, and no import line. README edits are in place and add no `file.ext:N` token. CLAUDE.md's `README.md (~N lines)` figure is re-measured only if README's line count moves (`pools-prose`: within 100). `ccrc-doctor.test.ts` is cited by line from other tests (`:66`, `:70`, `:195` and `:884` at f7e51156f), so its edits stay in place inside the history describes, which B1 appended below all four.
+- **Citation corpus.** B4 edits none of `ccd/session-hook.sh`, `ccd/ccrc`, `ccd/ccd`, `deploy/deploy.sh` or `server/test/session-hook.test.ts`. `single-definition.test.ts` gets only in-place edits inside B1/B2's end-appended blocks, and no import line. README edits are in place and add no `file.ext:N` token. CLAUDE.md's `README.md (~N lines)` figure is re-measured only if README's line count moves (`pools-prose`: within 100). `ccrc-doctor.test.ts` is cited by line from other tests (`:66`, `:70`, `:195`, `:884` at f7e51156f). B1 inserted the history-CLI link block at `:110-115` (`// The history CLI (spec 2026-10-05 §9.6): …` through `symlinkSync(join(REPO, 'ccd', 'history'), join(ccd, 'history'));`), so at B1's tip (561609adc) the last two read `:200` and `:889`; `ccrc-account.test.ts:209` and `:5092` still cite the old numbers, and refreshing them is a B1/B2 follow-up, never a B4 task. B4's edits to `ccrc-doctor.test.ts` are all in place inside the history describes (from the history imports at `:1248` down: the O41 `export-due` row, the two new `STATES` rows, the steady-state `it` and `cleanInputs` at `:13648`, all at 561609adc), so B4 adds or removes no line above `:1248` and moves none of the four cites.
 - **Deviations.** Never write a deviation number. A departure carries `⟦D:<slug>⟧` with a spec §16 slug, or a NEW kebab slug marked NEW with a one-line why; "Deviations found" lists each. The coordinator mints the numbers. Read existing `D-N` refs in source comments as history and never delete them.
 - **Public repo.** No hostnames, usernames, account, wrapper or home names, real pool names, session ids, IPs or docserver URLs in plan text, fixtures, commits or the PR body. Fixtures are synthetic, in the `/home/u/tree` style.
 - **Live-box safety.** No worker step touches the live store, journal, export, registry, tmux, units or any account home, and no worker runs `ccd`, `ccrc` or history verbs against the live HOME. The W1-k dates, the rollout and any real-data drill are coordinator or operator steps named in the PR body.
@@ -140,8 +140,8 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 
 | Path | Action | Responsibility | Ring | Task(s) |
 |---|---|---|---|---|
-| `ccd/history/lib.mjs` | modify | The export constants (above `MODE_CHECKED_FILE_ROOTS`); segment names, order and numbering; `decideExportPass` (with its `intervalMs`), `exportPassIntervalMs` and `EXPORT_MARK_BACKOFF_MAX_MS`, `planExportRoom`, `exportedSourceKey`; the marks' decisions (RD2): `exportMarkFailsOf`, `decideMarkOutcome`, `decideMarkCheck`, `missingSegmentNames`; `EXPORT_ROW_META_BYTES`, `planSegment` and `planExport`'s `oldestDueSinceMs`; `RECOVER_PHASES` with the export phases, the cursor's export arm, `decideSegmentReplay`; `HEALTH_META`'s three new keys; `MODE_CHECKED_FILE_ROOTS`' `EXPORT_DIR`; `deriveHealth`'s `export-due` arms with their detail and remedy | L1 | 1, 2, 3, 9 |
-| `ccd/history/lib.d.mts` | modify | One declaration per new lib export and type (`ExportProbe`, `ExportRoom`, `ExportMarkOutcome`, `SegmentBlob`, `SegmentCandidate`, `SegmentPlan`); `HEALTH_META`'s keys; `planExport`'s widened answer; `HealthInputs`' two new fields | types | 1, 2, 3, 9 |
+| `ccd/history/lib.mjs` | modify | The export constants (above `MODE_CHECKED_FILE_ROOTS`); segment names, order and numbering; `decideExportPass` (with its `intervalMs`), `exportPassIntervalMs` and `EXPORT_MARK_BACKOFF_MAX_MS`, `planExportRoom`, `exportedSourceKey`; the marks' decisions (RD2): `exportMarkFailsOf`, `decideMarkOutcome`, `decideMarkCheck`, `missingSegmentNames`; `EXPORT_ROW_META_BYTES`, `planSegment` and `planExport`'s `oldestDueSinceMs`; `RECOVER_PHASES` with the export phases, the cursor's export arm, `decideSegmentReplay`; `HEALTH_META`'s three new keys; `MODE_CHECKED_FILE_ROOTS`' `EXPORT_DIR`; `deriveHealth`'s `export-due` arms with their detail and remedy; the census due-since's one writer and one reader (`EXPORT_DUE_OLDEST_UNMEASURED`, `exportDueOldestMeta`, `readExportDueOldest`) | L1 | 1, 2, 3, 9 |
+| `ccd/history/lib.d.mts` | modify | One declaration per new lib export and type (`ExportProbe`, `ExportRoom`, `ExportMarkOutcome`, `SegmentBlob`, `SegmentCandidate`, `SegmentPlan`); `HEALTH_META`'s keys; `planExport`'s widened answer; `HealthInputs`' two new fields; the due-since meta's three declarations | types | 1, 2, 3, 9 |
 | `ccd/history/store.mjs` | modify | The segment format (`SEGMENT_DDL` from one row-table declaration); `ensureSegmentDir`, `createSegment`, `segmentInserts`, `publishSegment`, `setSegmentSeq`, `openSegment`, `segmentMeta`, `segmentBlobsAfter`, `segmentRowsAfter`, `listSegments`, `removeStaleSegmentTemps` | L3 | 4 |
 | `ccd/history/store.d.mts` | modify | One declaration per new store export, with `SegmentMeta`, `SegmentHandle`, `SegmentRows`, `SegmentRowKind`, `SegmentInserts`, `SegmentRowRead`, `SegmentBlobRow`, `SegmentInt` | types | 4 |
 | `ccd/history/sweep.mjs` | modify | Placeholder, then real, export executors in `RECOVER_EXECUTORS`; `exportPass` (select, write, publish, mark), its EEXIST retry, its mark-failure record and its busy record (RD3); `exportStep` in the tick (bind check, cadence with its backoff, stale temps, preflight), acting on lib's mark decisions (RD2); `checkSegmentMarks`; the late-variant mark clear in B1's `writeChunk` and the late-sidecar one in B1's `ingestSidecar`; the census's oldest due-since; segment replay. Every block above the R1 guard | L4 | 3, 5, 6, 7, 8, 9, 10 |
@@ -155,7 +155,7 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `server/test/historyHelpers.ts` | modify | Appended: `exportDirOf`, `segmentsOf`, `segmentRows` (Task 5); `SegmentRowKind`, `PlantSegmentRow`, `PlantSegmentBlob`, `PlantSegmentSpec`, `segmentSha`, `plantSegment`, built through store.mjs (Task 10) | test helper | 5, 10 |
 | `server/test/fixtures/history/preload-statfs.mjs` | modify | An appended block: `HISTORY_TEST_STATFS_EXPORT=<bavail>:<size>\|hang\|throw`, answering only statfs calls under `/.ccrc/history/export` | test fixture | 6 |
 | `server/test/ccrc-doctor.test.ts` | modify | In place, inside B1's history describes: O41's `export-due` row re-planted on the last-pass arm; rows for the wait arm and `export-paused-low-disk`; a steady-state PASS case; `cleanInputs` gains the two new fields | test | 9 |
-| `server/test/history-cli.test.ts` | re-run only | Its STATUS_SQL cost pin is re-run; B1 put `base()` in `history-lib.test.ts`, so this file is not edited (Task 9's Files list says why) | test | 9 |
+| `server/test/history-cli.test.ts` | re-run only | Its STATUS_SQL cost pin is re-run; B1 put `base()` in `history-lib.test.ts`, so this file is not edited (Task 9's Files list says why). Re-checked after B1's fix round 3 (at 561609adc): its one changed status row pins the refused-node count, its `Envelope` type's `export` member (`:35`) is a read-side annotation, and no case asserts the whole `export['claude-code']` object (`:341` pins only `Object.keys(e.export)`), so B4's new members stay additive here | test | 9 |
 | `.github/workflows/ci.yml` | modify | The node-floor leg's heredoc gains `test/history-export.test.ts`; its deadline only if Task 12 Step 5 measures past 15 minutes | CI | 5, 12 |
 | `server/test/single-definition.test.ts` | modify, only if needed | `VOCABS` gains any NEW frozen lib vocabulary, in place; none is expected | test (citation corpus) | 12 |
 | `README.md` | modify | One in-place reflow in B2's history section: the store and its export are the text's only copies, the export's place and cadence, and `--rebuild` replays it (⟦D:history-readme-export-sentence⟧, NEW: §10.5 assigns B4 no README edit). No `file.ext:N` token | docs (citation corpus) | 12 |
@@ -994,8 +994,10 @@ git commit -m "feat(history): export segment names and numbers, the hourly caden
   - `interface SegmentPlan { take: string[]; carry: string[]; stubs: string[]; bytes: number; leftDue: number; oldestLeftDueSinceMs: number | null }`, `bytes` the counted bytes of the taken rows: their new blob bytes plus `EXPORT_ROW_META_BYTES` each;
   - `export const EXPORT_ROW_META_BYTES = 1536`: what one taken row's metadata is counted for in the bound (chosen, an estimate);
   - `planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reducer = EXPORT_REDUCERS.perCopy, takenBefore = false }): SegmentPlan`, the same `reducer` parameter and default as `planExport` (RD1's one clock); `takenBefore` says an earlier call of the same pass (an earlier page) already took a row, so this call's first due row must fit too;
-  - `planExport`'s answer gains `oldestDueSinceMs: number | null` (additive: B1's and B2's callers and tests read `.due`, `.overdue` and `.horizonDays` only);
-  - module-private `dueSinceMs(dueAtMs)`, the reducer's due time with `-Infinity` read as 0 (the epoch), read by both functions.
+  - `planExport`'s answer gains `oldestDueSinceMs: number | null`: the earliest due-since over the due blobs that carry one, null when none does. Null is never a time and never "due since the epoch": the same answer's `due` says whether anything is due, so `due: []` with null is nothing due, and a non-empty `due` with null is due but undated (additive: B1's and B2's callers and tests read `.due`, `.overdue` and `.horizonDays` only);
+  - `SegmentPlan.oldestLeftDueSinceMs` reads the same way beside `leftDue`;
+  - module-private `dueSinceMs(candidate, homeRetentionDays, reducer): number | null`, read by both functions. It answers the reducer's due time when the reducer names one. When the reducer answers `-Infinity`, it answers B2's own W1-k dating through `holderDueDateMs`: the last write the candidate's RECORDED files saw, else its row's time. It answers null (undated) when the candidate has neither, or when the only clock is not after the epoch. Never 0 (⟦D:history-export-wait-from-census⟧).
+- Consumes (B2 Task 35, `lib.mjs`, module-private, same module): `holderDueDateMs(h, homeRetentionDays, reducer): number | null`, the one definition of "a candidate nothing on disk holds back is dated by a real clock, never a sentinel". B4 calls it and never writes a second copy.
 - Later consumers: Task 5 (`planSegment` over its candidate page, with `takenBefore` from the second page on; `stubs` written as stub blobs; `EXPORT_ROW_META_BYTES` in its file-size case), Task 9 (B1's `exportCensus` records `oldestDueSinceMs` as `HEALTH_META.exportDueOldestMs`).
 
 **Spec:** §9.15 "What is due" (its inputs; the per-row file set; a file's due date; a row is due; a blob is due; a due row is exported whole), "The pass" (Write: within the run budget, at most 256 MiB), "The gap guard" (a due blob that has waited more than two pass intervals), §6.6 (a pruned blob is never exported or counted due), §15.1 and §15.3 Q15 (ruled yes, rev 3.4: the per-copy rule is the default "wherever the due rule is computed", B4's pass included; one reducer, no signature change). Pins: **O39**'s pure halves (a hot blob's old row carries it while the census says not due, BK12; an exported blob never carried again; a pruned blob never carried or counted; the bound, with at least one row; input order), **O58**'s B4 half (`planSegment` with no reducer argument answers by `EXPORT_REDUCERS.perCopy`, "RD1's one clock", with both of O58's CONTROLs: the node-shortest default and the row clock), and the B4 input of **O41** (`oldestDueSinceMs`, with its CONTROL). Departures:
@@ -1010,7 +1012,7 @@ Choices this task makes (each copied into the PR body by Task 12 Step 9):
 - The bound counts each taken row's new blob bytes plus `EXPORT_ROW_META_BYTES` for its metadata (⟦D:history-export-segment-bound-estimated⟧). A candidate page bounds one statement's work, never the segment's row count: the metadata term is what bounds that, so a run of rows that bring no new bytes fills a segment instead of growing it until the wall clock.
 - The first due row of the PASS is taken whatever its size, never the first of each call: the sweep pages its candidates, and passes `takenBefore` once an earlier page took a row, so a later page's first row must fit what is left (the paged answer equals the one-page answer).
 - A segment is a PREFIX of the backlog: once a due row does not fit, no later row is taken, even one that would. The sweep passes rows oldest first, so the oldest text always leaves first.
-- A blob falls due when its LAST referrer falls due. A referrer the reducer answers due from the start (`-Infinity`: under the per-copy rule, no holding file on record, or every one gone from disk) reads as due since 0, the epoch: the early side, never a time in the future.
+- A blob falls due when its LAST referrer falls due. A referrer the reducer answers due from the start (`-Infinity`: under the per-copy rule, no holding file on record, or every one gone from disk) is dated as B2 dates W1-k's holders (`holderDueDateMs`): by the last write its RECORDED files saw (it cannot have fallen due before that, so the date errs early, as the rule does), else by its row's time. It is never dated as 0, the epoch. That value would reach `status --json` as a 1970 date and fire doctor's wait arm the moment the census counted the blob, with a detail of some 29 million minutes. A referrer with neither clock, or whose only clock is not after the epoch (B1's `transcriptFiles` reads a NULL `mtime_ns` as 0), is undated. A blob dates by its dated referrers, the early side. A blob with none stays due and counted, is undated, and is left out of the earliest, so it never hides a dated one and never stands in for one (⟦D:history-export-wait-from-census⟧).
 - A CONTROL of the shape "a mutant that takes a row only when its blob is due" cannot be written here: a candidate row carries no other referrers of its blobs. BK12 is pinned instead by the hot-blob case asserting both answers side by side (planSegment takes the row, planExport says the blob is not due), and Task 5's candidate query owns the rest.
 
 - [ ] **Step 1: Write the mutation runner.** It is a gitignored scratch tool (`.superpowers/` is in `.gitignore`), never committed: B2's runner with its scratch path moved to this plan's directory. Tasks 1–4 write this same file, byte for byte, so each task stands alone and rewriting it changes nothing. A mutant is `{name, file, test, filter, edits: [{anchor, replacement}]}`, and each anchor must occur exactly once in the file as the earlier edits leave it. For each mutant the runner copies the pristine file to `.superpowers/sdd/history-w1-b4/scratch/keep/`, applies the edits and runs the named tests, which must fail; it then restores the file from the copy, removes the copy, and runs the same tests again, which must pass. Only a kill no handler sees leaves a copy in `scratch/keep/`; the next run then refuses, and the runner's header gives the one-line restore. From the repository root:
@@ -1091,6 +1093,15 @@ grep -n -A8 '^export function planExport(' ccd/history/lib.mjs
 ```
 
 Expected: `EXPORT_REDUCERS` holds both `perCopy` and `shortestHome` (and `lib.d.mts` declares both); `planExport`'s parameter list reads `reducer = EXPORT_REDUCERS.perCopy`; and its due test reads a reducer's answer as a due TIME, `reducer(r, homeRetentionDays) < nowMs`, with no `referrerAgeMs` call left in it. If the merged reducers answer anything else (B1's retention in days, a boolean, a function of `nowMs`), or `perCopy` is not the default, stop and report it to the coordinator: never adapt `planSegment` to a different contract here, because `planSegment` and the census must read one clock (RD1).
+
+Then check B2's W1-k dating, which this task's `dueSinceMs` calls (one definition of "dated by a real clock, never a sentinel"):
+
+```bash
+grep -c '^function holderDueDateMs(h, homeRetentionDays, reducer) {' ccd/history/lib.mjs   # 1
+grep -n -A6 '^function holderDueDateMs(' ccd/history/lib.mjs
+```
+
+Expected: `1`. The body must answer the reducer's time when that is not `-Infinity`, else the max recorded file mtime when the candidate has files, else `h.tsMs`. If it is absent, renamed or answers otherwise, stop and report it to the coordinator. Never copy its body into B4: the census's W1-k date and the wait clock must date a due-from-the-start candidate the same way.
 
 Then append to the END of `server/test/history-lib.test.ts`:
 
@@ -1217,6 +1228,19 @@ describe('W1-B4: planSegment, the row-level due rule and what a segment carries 
     expect(seg.take).toEqual(census.due);
     expect(seg.take).toEqual(['e-1', 'e-3', 'e-6', 'e-7']);
   });
+  it('a left-behind row due from the start dates by the last write its recorded files saw, never the epoch; one with no clock on record is counted but undated', () => {
+    const r = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 1, rows: [
+      row('e-first', 160, [blob('b-first', 5_000)]),                                // the pass's first row: taken whatever its size
+      row('e-gone', 3, [blob('b-gone', 1)], [{ ...file(3), present: false }]),       // its one file deleted: due from the start, last written 3 days ago
+      row('e-clockless', null, [blob('b-none', 1)], []),                             // no file and no time on record: due, undated
+    ] });
+    expect(r.take).toEqual(['e-first']);
+    expect(r.leftDue).toBe(2);
+    expect(r.oldestLeftDueSinceMs, 'the recorded last write, never 0 (1970)').toBe(NOW - 3 * DAY);
+    const undated = libCarry.planSegment({ nowMs: NOW, homeRetentionDays: homes, boundBytes: 1, takenBefore: true,
+      rows: [row('e-clockless', null, [blob('b-none', 1)], [])] });
+    expect(undated).toMatchObject({ take: [], leftDue: 1, oldestLeftDueSinceMs: null });
+  });
 });
 
 describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s wait rule (spec 9.15 "The gap guard"; O41 B4 input)', () => {
@@ -1239,9 +1263,22 @@ describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s w
     expect(r.due).toEqual(['b-late', 'b-early']);
     expect(r.oldestDueSinceMs).toBe(NOW - 40 * DAY);
   });
-  it('null when nothing is due; a referrer with no holding file on record reads as due since the epoch, the early side', () => {
-    expect(census([{ key: 'b-young', referrers: [ref(1)] }]).oldestDueSinceMs).toBeNull();
-    expect(census([{ key: 'b-clockless', referrers: [ref(null)] }]).oldestDueSinceMs).toBe(0);
+  it('null when nothing is due; a blob nothing on disk holds back is dated by the last write its recorded files saw, else its row\'s time, never the epoch (1970); one with no clock on record is due, counted and undated (null), and never hides a dated one', () => {
+    expect(census([{ key: 'b-young', referrers: [ref(1)] }])).toMatchObject({ due: [], oldestDueSinceMs: null });
+    /** Written `ageDays` ago, its one file of home A since deleted: due from the start under the per-copy rule. */
+    const gone = (ageDays: number): libCarry.ExportCandidate =>
+      ({ tsMs: NOW - ageDays * DAY, files: [{ home: A, mtimeMs: NOW - ageDays * DAY, present: false }] });
+    expect(libCarry.EXPORT_REDUCERS.perCopy(gone(3), homes), 'precondition: the reducer answers due from the start').toBe(Number.NEGATIVE_INFINITY);
+    expect(census([{ key: 'b-gone', referrers: [gone(3)] }])).toMatchObject({ due: ['b-gone'], oldestDueSinceMs: NOW - 3 * DAY });
+    expect(census([{ key: 'b-fileless', referrers: [{ tsMs: NOW - 2 * DAY, files: [] }] }]))
+      .toMatchObject({ due: ['b-fileless'], oldestDueSinceMs: NOW - 2 * DAY });
+    expect(census([{ key: 'b-clockless', referrers: [ref(null)] }])).toMatchObject({ due: ['b-clockless'], oldestDueSinceMs: null });
+    // A recorded mtime of 0 (B1's transcriptFiles reads a NULL mtime_ns as 0) is no clock either.
+    expect(census([{ key: 'b-zero', referrers: [{ tsMs: null, files: [{ home: A, mtimeMs: 0, present: false }] }] }]))
+      .toMatchObject({ due: ['b-zero'], oldestDueSinceMs: null });
+    // The dated blob first, so an undated one met after it must not overwrite it.
+    expect(census([{ key: 'b-early', referrers: [ref(190)] }, { key: 'b-clockless', referrers: [ref(null)] }]).oldestDueSinceMs)
+      .toBe(NOW - 40 * DAY);
   });
 });
 ```
@@ -1252,7 +1289,7 @@ describe('W1-B4: planExport\'s oldest due-since, the census input of doctor\'s w
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'W1-B4: plan')
 ```
 
-Expected: FAIL, `Tests 14 failed`: the twelve planSegment cases with `TypeError: planSegment is not a function` (the metadata case may fail first on `expected undefined to be 1536`), and the two due-since cases with `expected undefined to be …` (`r.oldestDueSinceMs` does not exist yet; their `r.due` assertion already holds on B2's per-copy default).
+Expected: FAIL, `Tests 15 failed`. The thirteen planSegment cases fail with `TypeError: planSegment is not a function` (the metadata case may fail first on `expected undefined to be 1536`). The two due-since cases fail on `oldestDueSinceMs`, which does not exist yet (`expected undefined to be …`, or a `toMatchObject` diff naming `oldestDueSinceMs`); their `due` assertions already hold on B2's per-copy default.
 
 - [ ] **Step 4: Implement.** In `ccd/history/lib.mjs`:
 
@@ -1273,11 +1310,16 @@ insert:
 
 ```js
     // W1-B4: when this blob fell due — when its LAST referrer fell due, by the reducer's own due time (B2's per-copy
-    // default, ⟦D:history-export-due-per-copy⟧) — and the earliest over every due blob, which doctor's wait rule reads
-    // from the census (§9.15 "The gap guard"; ⟦D:history-export-wait-from-census⟧).
-    let since = Number.NEGATIVE_INFINITY;
-    for (const r of blob.referrers) since = Math.max(since, dueSinceMs(reducer(r, homeRetentionDays)));
-    if (oldestDueSinceMs === null || since < oldestDueSinceMs) oldestDueSinceMs = since;
+    // default, ⟦D:history-export-due-per-copy⟧), a referrer due from the start dated by its recorded files — and the
+    // earliest over every DATED due blob, which doctor's wait rule reads from the census (§9.15 "The gap guard";
+    // ⟦D:history-export-wait-from-census⟧). A blob with an undated referrer dates by its dated ones (the early side);
+    // one with none stays due and counted, undated, and never stands in for the epoch.
+    let since = null;
+    for (const r of blob.referrers) {
+      const t = dueSinceMs(r, homeRetentionDays, reducer);
+      if (t !== null && (since === null || t > since)) since = t;
+    }
+    if (since !== null && (oldestDueSinceMs === null || since < oldestDueSinceMs)) oldestDueSinceMs = since;
 ```
 
 The loop is not a spread: a hot blob can have tens of thousands of referrers (DM3), past `Math.max(...)`'s argument limit.
@@ -1318,13 +1360,17 @@ Under the per-copy rule `horizonDays` decides nothing; it is the reported horizo
  *  or the pass's memory, without limit (⟦D:history-export-segment-bound-estimated⟧). */
 export const EXPORT_ROW_META_BYTES = 1536;
 
-/** When a candidate fell due: the reducer's due time, `reducer(candidate, homeRetentionDays)`, the one clock, so
- *  due-ness and due-since never disagree: a candidate is due exactly when that time is before nowMs. Called only for
- *  a due candidate. One due from the start (the reducer answers -Infinity: under the per-copy rule, no holding file on
- *  record, or every one gone from disk) answers 0, the epoch: the export errs early, never late
- *  (⟦D:history-export-due-per-copy⟧). */
-function dueSinceMs(dueAtMs) {
-  return Number.isFinite(dueAtMs) ? dueAtMs : 0;
+/** When a due candidate fell due, as a real clock, or null when it has none (W1-B4; ⟦D:history-export-wait-from-census⟧).
+ *  The reducer's due time when it names one, the one clock, so due-ness and due-since never disagree. A candidate the
+ *  reducer answers due from the start (-Infinity: under the per-copy rule, no holding file on disk) is dated by B2's
+ *  own W1-k rule, holderDueDateMs, never by a sentinel: the last write its RECORDED files saw (it cannot have fallen
+ *  due before that, so the date errs early, as the rule does), else its row's time. Null, undated, when it has
+ *  neither, or when the only clock is not after the epoch (B1's transcriptFiles reads a NULL mtime_ns as 0): the
+ *  candidate stays due and counted, and no 1970 due-since is ever answered for it (⟦D:history-export-due-per-copy⟧).
+ *  Called only for a due candidate. */
+function dueSinceMs(candidate, homeRetentionDays, reducer) {
+  const at = holderDueDateMs(candidate, homeRetentionDays, reducer);
+  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : null;
 }
 
 /** One segment's contents (§9.15). A row is DUE when the reducer's due time for it is before nowMs: by default B2's
@@ -1364,8 +1410,8 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
     if (full || ((take.length > 0 || takenBefore) && bytes + add > boundBytes)) {
       full = true;
       leftDue += 1;
-      const since = dueSinceMs(dueAt);
-      if (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs) oldestLeftDueSinceMs = since;
+      const since = dueSinceMs(row, homeRetentionDays, reducer);
+      if (since !== null && (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs)) oldestLeftDueSinceMs = since;
       continue;
     }
     take.push(row.key);
@@ -1386,6 +1432,8 @@ export function planSegment({ nowMs, homeRetentionDays, rows, boundBytes, reduce
 ```
 
 `dueSinceMs` is a function declaration, so `planExport` (above it in the file) calls it after hoisting. `EXPORT_ROW_META_BYTES` is a `const` above `planSegment` in the same block, read only when `planSegment` is called, and so is `EXPORT_REDUCERS.perCopy` in its default parameter (B2 declares it with `EXPORT_REDUCERS`, above). `!(dueAt < nowMs)` rather than `dueAt >= nowMs`, so a reducer answering `NaN` leaves the row waiting rather than exporting it on a non-number. Neither B4 function reads B1's `referrerAgeMs`: if B2 keeps it, it belongs to `shortestHome`'s row clock, and a second reader here would be a second clock.
+
+`dueSinceMs` calls B2's module-private `holderDueDateMs` (B2 Task 35's export block, above both B4 functions in the file; Step 2 checked it), which runs the reducer once more. That is pure and cheap, and it is only reached for a due candidate. `dueSinceMs` never answers 0: `planExport` and `planSegment` skip a null from it, so `oldestDueSinceMs` and `oldestLeftDueSinceMs` are each a time or null, and the `due` / `leftDue` beside them says whether anything is due.
 
 - [ ] **Step 5: Declare the types.** In `ccd/history/lib.d.mts`, in `planExport`'s declaration, replace its last line
 
@@ -1423,7 +1471,7 @@ Check: `grep -c '^export function planSegment(' ccd/history/lib.d.mts`, `grep -c
 (cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)
 ```
 
-Expected: `Tests 14 passed`; then every case in the file (B1's `planExport and retentionLowered` describe and B2's per-copy cases included, unchanged); `tsc` prints nothing. B1's census (`exportCensus` in sweep.mjs) reads `.due` and `.overdue` only, so its pins stay green too: `(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'O38|O58')` (B1 Task 26's describe `O38: the export's due rule (B1 half)`, as B2 re-ran its due cases under the per-copy default, and any O58 case B2's per-copy task put in that file).
+Expected: `Tests 15 passed`; then every case in the file (B1's `planExport and retentionLowered` describe and B2's per-copy cases included, unchanged); `tsc` prints nothing. B1's census (`exportCensus` in sweep.mjs) reads `.due` and `.overdue` only, so its pins stay green too: `(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'O38|O58')` (B1 Task 26's describe `O38: the export's due rule (B1 half)`, as B2 re-ran its due cases under the per-copy default, and any O58 case B2's per-copy task put in that file).
 
 - [ ] **Step 7: Measure every guard red, then green.** From the repository root:
 
@@ -1533,35 +1581,63 @@ cat > .superpowers/sdd/history-w1-b4/scratch/mutants-task2.json <<'MUT_EOF'
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
   "filter": "W1-B4: planSegment",
-  "edits": [{ "anchor": "      if (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs) oldestLeftDueSinceMs = since;", "replacement": "      if (oldestLeftDueSinceMs === null || since > oldestLeftDueSinceMs) oldestLeftDueSinceMs = since;" }]
+  "edits": [{ "anchor": "      if (since !== null && (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs)) oldestLeftDueSinceMs = since;", "replacement": "      if (since !== null && (oldestLeftDueSinceMs === null || since > oldestLeftDueSinceMs)) oldestLeftDueSinceMs = since;" }]
+ },
+ {
+  "name": "no epoch: an undated left-behind row overwrites the earliest",
+  "file": "ccd/history/lib.mjs",
+  "test": "test/history-lib.test.ts",
+  "filter": "W1-B4: planSegment",
+  "edits": [{ "anchor": "      if (since !== null && (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs)) oldestLeftDueSinceMs = since;", "replacement": "      if (oldestLeftDueSinceMs === null || since < oldestLeftDueSinceMs) oldestLeftDueSinceMs = since;" }]
  },
  {
   "name": "O41: the census's oldest due-since answers the maximum",
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
   "filter": "W1-B4: planExport's oldest due-since",
-  "edits": [{ "anchor": "    if (oldestDueSinceMs === null || since < oldestDueSinceMs) oldestDueSinceMs = since;", "replacement": "    if (oldestDueSinceMs === null || since > oldestDueSinceMs) oldestDueSinceMs = since;" }]
+  "edits": [{ "anchor": "    if (since !== null && (oldestDueSinceMs === null || since < oldestDueSinceMs)) oldestDueSinceMs = since;", "replacement": "    if (since !== null && (oldestDueSinceMs === null || since > oldestDueSinceMs)) oldestDueSinceMs = since;" }]
+ },
+ {
+  "name": "no epoch: an undated blob overwrites the census's earliest",
+  "file": "ccd/history/lib.mjs",
+  "test": "test/history-lib.test.ts",
+  "filter": "W1-B4: planExport's oldest due-since",
+  "edits": [{ "anchor": "    if (since !== null && (oldestDueSinceMs === null || since < oldestDueSinceMs)) oldestDueSinceMs = since;", "replacement": "    if (oldestDueSinceMs === null || since < oldestDueSinceMs) oldestDueSinceMs = since;" }]
  },
  {
   "name": "O41: a blob falls due at its FIRST referrer's crossing",
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
   "filter": "W1-B4: planExport's oldest due-since",
-  "edits": [{ "anchor": "    let since = Number.NEGATIVE_INFINITY;\n    for (const r of blob.referrers) since = Math.max(since,", "replacement": "    let since = Number.POSITIVE_INFINITY;\n    for (const r of blob.referrers) since = Math.min(since," }]
+  "edits": [{ "anchor": "      if (t !== null && (since === null || t > since)) since = t;", "replacement": "      if (t !== null && (since === null || t < since)) since = t;" }]
  },
  {
-  "name": "due-per-copy: a due-from-the-start due-since left at minus infinity",
+  "name": "THE OLD BEHAVIOUR: due from the start read as the epoch (1970)",
+  "file": "ccd/history/lib.mjs",
+  "test": "test/history-lib.test.ts",
+  "filter": "W1-B4: plan",
+  "edits": [{ "anchor": "  const at = holderDueDateMs(candidate, homeRetentionDays, reducer);\n  return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : null;", "replacement": "  const at = reducer(candidate, homeRetentionDays);\n  return Number.isFinite(at) ? at : 0;" }]
+ },
+ {
+  "name": "W1-k dating bypassed: a due-from-the-start candidate left undated",
+  "file": "ccd/history/lib.mjs",
+  "test": "test/history-lib.test.ts",
+  "filter": "W1-B4: plan",
+  "edits": [{ "anchor": "  const at = holderDueDateMs(candidate, homeRetentionDays, reducer);", "replacement": "  const at = reducer(candidate, homeRetentionDays);" }]
+ },
+ {
+  "name": "no epoch: a recorded mtime of 0 passed through as a time",
   "file": "ccd/history/lib.mjs",
   "test": "test/history-lib.test.ts",
   "filter": "W1-B4: planExport's oldest due-since",
-  "edits": [{ "anchor": "  return Number.isFinite(dueAtMs) ? dueAtMs : 0;", "replacement": "  return dueAtMs;" }]
+  "edits": [{ "anchor": "Number.isFinite(at) && at > 0 ? at : null;", "replacement": "Number.isFinite(at) ? at : null;" }]
  }
 ]
 MUT_EOF
 (cd server && node ../.superpowers/sdd/history-w1-b4/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b4/scratch/mutants-task2.json)
 ```
 
-Foreground, timeout at least 600000 ms. Expected: every row `red (N failed)` then `green`, and `every guard measured red, then green`, exit 0. Measured while drafting, before the metadata term, `takenBefore` and the per-copy rewrite (rev 3.4): every row red with 1 failed case, except `9.15: the segment bound ignored` (2). With them, `9.15: row metadata not counted toward the bound` reds every planSegment case that asserts `bytes` as well as the metadata case, the bound rows may red the metadata case too, and the per-copy rows each red at least the case their name points at: `9.15: a row not yet due taken` the not-yet-passed case (and others), `O58 CONTROL: planSegment's default stays the node-shortest reducer` the per-copy, O58 and RD1 cases (O58's add-B CONTROL), `O58 CONTROL: a row aged by its own ts_ms` the per-copy case (`e-long`, `e-gone`) and the RD1 case (O58's long-lived-file CONTROL), `FE13: planSegment bypasses the reducer it is given` the O58 case's explicit-reducer assertions. These rows were not re-measured after that rewrite: the worker records the counts, and only a `STAYED GREEN` is a failure.
+Foreground, timeout at least 600000 ms. Expected: every row `red (N failed)` then `green`, and `every guard measured red, then green`, exit 0. Measured while drafting, before the metadata term, `takenBefore` and the per-copy rewrite (rev 3.4): every row red with 1 failed case, except `9.15: the segment bound ignored` (2). With them, `9.15: row metadata not counted toward the bound` reds every planSegment case that asserts `bytes` as well as the metadata case, the bound rows may red the metadata case too, and the per-copy rows each red at least the case their name points at: `9.15: a row not yet due taken` the not-yet-passed case (and others), `O58 CONTROL: planSegment's default stays the node-shortest reducer` the per-copy, O58 and RD1 cases (O58's add-B CONTROL), `O58 CONTROL: a row aged by its own ts_ms` the per-copy case (`e-long`, `e-gone`) and the RD1 case (O58's long-lived-file CONTROL), `FE13: planSegment bypasses the reducer it is given` the O58 case's explicit-reducer assertions. These rows were not re-measured after that rewrite: the worker records the counts, and only a `STAYED GREEN` is a failure. `THE OLD BEHAVIOUR` reinstates B4's first `dueSinceMs` exactly and must red both new cases (`expected 0 to be …`, and `oldestLeftDueSinceMs: 0` where null was expected). `W1-k dating bypassed` reds `b-gone`, `b-fileless` and `e-gone` (null where a time was expected). The two `no epoch: … overwrites` rows red the cases that put a dated blob or row before an undated one.
 
 - [ ] **Step 8: Confirm the restore, and commit.** In the foreground, timeout at least 600000 ms:
 
@@ -2056,20 +2132,20 @@ git commit -m "feat(history): the recovery step's export phases, their cursor ar
 ### Task 4: store.mjs: export segments: the format and its DDL, a temp written O_EXCL with mode 0600 and published by link(), the read-only open, page readers, the listing and stale temps
 
 **Files:**
-- Modify: `ccd/history/store.mjs` (B1-created; B2 appends to it). Add `orderSegmentNames`, `parseSegmentName`, `segmentName` and `segmentTempName` to its existing `from './lib.mjs'` import clause, in that clause's sorted order (B2 Task 12 added `ftsTextOf` the same way). Then append one section at the END of the file (store.mjs has no entry guard). Its `node:fs` import already holds every function the section calls (`chmodSync`, `closeSync`, `constants as FS`, `existsSync`, `fsyncSync`, `linkSync`, `lstatSync`, `mkdirSync`, `openSync`, `readdirSync`, `rmSync`, `unlinkSync`): check it on the base, and add a missing one to that clause rather than a second import.
+- Modify: `ccd/history/store.mjs` (B1-created; B2 appends to it). Add `orderSegmentNames`, `parseSegmentName`, `segmentName` and `segmentTempName` to its existing `from './lib.mjs'` import clause, in that clause's sorted order (B2 Task 12 added `ftsTextOf` the same way). Then append one section at the END of the file (store.mjs has no entry guard). Its `node:fs` import already holds every function the section calls (`chmodSync`, `closeSync`, `constants as FS`, `existsSync`, `fsyncSync`, `linkSync`, `lstatSync`, `openSync`, `readdirSync`, `unlinkSync`): check it on the base, and add a missing one to that clause rather than a second import. The section imports no `rmSync` (B1's store.mjs has none): it removes a name it owns through B1's own `removeEntry(path)` (by type: unlink, then rmdir of an EMPTY directory, answering `'removed' | 'absent' | 'kept-dir'`, never recursive; review 316 F22, B1's history-planted-entries-never-wedge departure), and makes its directories through B1's `mkdirDurable(dir, mode)` (every new entry fsynced up the chain; review 316 F23). Both are exports of store.mjs itself, declared in B1's `store.d.mts`, so nothing is imported for them.
 - Modify: `ccd/history/store.d.mts`: append one block at the end.
-- Test: `server/test/history-store.test.ts` (B1-created): append one block at the END (its imports at the block's head, namespaced, the B2 Task 9 idiom). It uses the file's B1 imports (`describe`, `it`, `expect`, `spawnSync`, `fs`, `path`, `pathToFileURL`, `DatabaseSync`, `mkTmp`, `StoreError`).
+- Test: `server/test/history-store.test.ts` (B1-created): append one block at the END (its imports at the block's head, namespaced, the B2 Task 9 idiom). It uses the file's B1 imports (`describe`, `it`, `expect`, `spawnSync`, `fs`, `path`, `pathToFileURL`, `DatabaseSync`, `mkTmp`, `StoreError`, and `recordDirFsyncs` from `./historyHelpers.js`, which B1's review 316 F23 cases import there).
 - Scratch, gitignored: `.superpowers/sdd/history-w1-b4/scratch/mutate.mjs` and `.superpowers/sdd/history-w1-b4/scratch/mutants-task4.json`.
 
 **Interfaces:**
-- Consumes (B1 `store.mjs`, same module): `StoreError(word, message)` (its `.word`); the file-local `fsyncDir(dir)`; the O_CREAT|O_EXCL 0600 temp idiom and the sidecar refusal of `createStore`; `openReader`'s read-only pragmas (`readOnly: true` plus `PRAGMA query_only = ON`); `StatementSync.setReadBigInts(true)` for the dev, ino and nanosecond columns (B1 Task 21's `ingest_files` reads).
+- Consumes (B1 `store.mjs`, same module): `StoreError(word, message)` (its `.word`); the file-local `fsyncDir(dir)`; `removeEntry(path): 'removed' | 'absent' | 'kept-dir'` and `mkdirDurable(dir, mode?): boolean` (both exported, review 316 F22 and F23); the O_CREAT|O_EXCL 0600 temp idiom and the sidecar refusal of `createStore`; `openReader`'s read-only pragmas (`readOnly: true` plus `PRAGMA query_only = ON`); `StatementSync.setReadBigInts(true)` for the dev, ino and nanosecond columns (B1 Task 21's `ingest_files` reads).
 - Consumes (Task 1, `lib.mjs`): `segmentName`, `segmentTempName`, `parseSegmentName`, `orderSegmentNames`, `EXPORT_DIR` and `EXPORT_SEGMENT_FORMAT` (tests); `UUID_RE`, `WRITER_RE` (B1).
 - Produces (`store.mjs`, each declared once in `store.d.mts`):
   - `SEGMENT_DDL: readonly string[]`: `meta (k, v)`; `blobs (sha256 BLOB PRIMARY KEY, codec, raw_len, z, pruned)` with `CHECK (pruned IN (0, 1) AND (z IS NULL) = (pruned = 1))`; and the row tables `families`, `transcripts`, `epochs`, `files`, `entries`, `variants`, `boundaries`, `sidecars`, `memberships`, each `ord INTEGER PRIMARY KEY` then its columns, keyed by natural keys only. Derived from the module-private `SEGMENT_ROW_TABLES` (each row kind's table and columns, the one declaration);
   - `interface SegmentMeta { storeId; writer; seq; harnesses: readonly string[]; cutoffMs; format }` (meta keys `store_id`, `writer`, `seq`, `harnesses` as a JSON array, `cutoff_ms`, `format`);
   - `interface SegmentHandle { db: DatabaseSync | null; readonly temp: string; readonly name: string }`;
   - `interface SegmentRows` (one row shape per kind, exactly its table's columns, below), `type SegmentRowKind`, `type SegmentInserts`, `type SegmentRowRead`, `interface SegmentBlobRow`, `type SegmentInt = number | bigint`;
-  - `ensureSegmentDir(exportRoot: string, storeId: string): string` (export/ and export/<store_id>/, both chmod 0700; answers the store's directory);
+  - `ensureSegmentDir(exportRoot: string, storeId: string): string` (export/ and export/<store_id>/, made by `mkdirDurable` so every new directory entry is fsynced, both chmod 0700; answers the store's directory);
   - `createSegment(dir, name, meta: SegmentMeta): SegmentHandle`;
   - `segmentInserts(seg): SegmentInserts`: `blob(row)` and one insert per row kind, each taking exactly its columns and answering the `ord` it drew;
   - `publishSegment(seg, dir, name): 'linked' | 'exists'`;
@@ -2096,7 +2172,8 @@ Choices this task makes (each copied into the PR body by Task 12 Step 9):
 - **One write order across row kinds.** Every row table shares `ord`, drawn from one counter, so replay walks a segment with one cursor `(segment, ord)` and meets each row after the rows it names: Task 5 writes family, transcript, epoch and file before an entry, and an entry before its variants, boundary, sidecars and memberships.
 - **A stub blob** (`pruned` 1, `z` NULL) is the shape Task 2's `stubs` travel in; the CHECK refuses a mix.
 - **Meta is stable across formats.** Every later format keeps the six meta keys with their meaning, so `segmentMeta` reads a newer segment's meta and lib's `decideSegmentReplay` refuses it by name; a format bump changes tables, never meta. The test's format literal is keyed by `EXPORT_SEGMENT_FORMAT`, so a DDL change without a bump, or a bump without its literal, is red.
-- **`ensureSegmentDir`** is the one directory maker the segment I/O needs: export/ and export/<store_id>/ are `chmod`ed 0700 on every call, as `createStore` does the root, so a hand-made 0755 directory is brought to the mode doctor checks. The store id must match `UUID_RE`, so no path is formed from anything else.
+- **`ensureSegmentDir`** is the one directory maker the segment I/O needs: export/ and export/<store_id>/ are made by B1's `mkdirDurable` (review 316 F23: each directory that gained an entry is fsynced, so after a power loss a published segment's directory, and the `export/` entry naming it, are still there; the marks a segment carries are committed only after its link), and `chmod`ed 0700 on every call, as `createStore` does the root, so a hand-made 0755 directory is brought to the mode doctor checks. The store id must match `UUID_RE`, so no path is formed from anything else.
+- **Every removal is by type, through B1's `removeEntry`** (review 316 F22): a stale temp, its sidecar or a failed build's temp is unlinked, an empty directory at its name is rmdir'd, and a non-empty directory planted there is kept, not listed and never recursed into. `fs.rmSync(path, { force: true })` without `recursive` throws on a directory, so a same-user directory planted at `.<seq>.<writer>.db.tmp` would make the stale-temp removal, which runs before the preflight on every tick whose cadence runs (Task 6), throw on every pass: the export would wedge loudly for good.
 - **`publishSegment` checks the name against the temp's own meta** (re-read on a handle of its own), so a renumbered temp is published under its new number only, and a name and its meta never disagree.
 - **Every insert takes exactly its columns**: a missing or an unknown key throws `TypeError`, so a misspelt column in Task 5 never writes NULL.
 - The build runs with `journal_mode = OFF` and `synchronous = OFF`, then one fsync before the link: the temp is discarded whole on any failure, so nothing in it needs a journal. Task 5 may wrap its inserts in `BEGIN`/`COMMIT` on `seg.db` for speed; it adds no durability.
@@ -2347,6 +2424,32 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
     expect(segStore.listSegments(path.join(root, 'absent'))).toEqual([]);
   });
 
+  it('F22: a non-empty directory planted at a temp\'s name is kept and not listed, and the stale-temp removal never throws on it; an empty one is removed', () => {
+    const dir = freshDir();
+    const planted = path.join(dir, segLib.segmentTempName(nameOf(7)));
+    fs.mkdirSync(planted);
+    fs.writeFileSync(path.join(planted, 'not-ours.txt'), 'a same-user process put this here');
+    const empty = path.join(dir, segLib.segmentTempName(nameOf(8)));
+    fs.mkdirSync(empty);
+    const stale = segLib.segmentTempName(nameOf(9));
+    fs.writeFileSync(path.join(dir, stale), '');
+    let removed: string[] = [];
+    expect(() => { removed = segStore.removeStaleSegmentTemps(dir); }, 'a planted directory never wedges the pass').not.toThrow();
+    expect(removed, 'the kept directory is not listed').toEqual([segLib.segmentTempName(nameOf(8)), stale]);
+    expect(fs.readdirSync(planted), 'never recursed into').toEqual(['not-ours.txt']);
+    expect(fs.existsSync(empty)).toBe(false);
+    expect(segStore.removeStaleSegmentTemps(dir), 'the next pass meets it again and still does not throw').toEqual([]);
+  });
+
+  it('F23: ensureSegmentDir fsyncs every directory that gained an entry, up to and including export/, and nothing on a second call', () => {
+    const base = mkTmp('ccrc-history-seg-durable-');
+    const exportRoot = path.join(base, segLib.EXPORT_DIR);
+    const first = recordDirFsyncs(() => segStore.ensureSegmentDir(exportRoot, SID));
+    expect(first.out).toBe(path.join(exportRoot, SID));
+    expect(first.dirs, 'the history root gained export/, and export/ gained <store_id>/').toEqual([base, exportRoot]);
+    expect(recordDirFsyncs(() => segStore.ensureSegmentDir(exportRoot, SID)).dirs).toEqual([]);
+  });
+
   it('modes: under an inherited umask 0002 the segment is 0600 and export/ and export/<store_id>/ are 0700; a hand-made export/ at 0755 is brought to 0700', () => {
     const root = path.join(mkTmp('ccrc-history-seg-umask-'), segLib.EXPORT_DIR);
     const r = childPublish(root, 1, { umask: '0002' });
@@ -2480,18 +2583,15 @@ describe('store.mjs: export segments (W1-B4; spec 9.15 "Write", "Who reads it"; 
 (cd server && ./node_modules/.bin/vitest run test/history-store.test.ts -t 'export segments')
 ```
 
-Expected: FAIL, `Tests 9 failed`. Seven fail `TypeError: ensureSegmentDir is not a function`, and the two child cases (the kill and the umask) fail on the child's `SyntaxError: The requested module '…/ccd/history/store.mjs' does not provide an export named 'createSegment'` (the kill case reads `expected null to be 'SIGKILL'`, the umask case `expected 1 to be +0`).
+Expected: FAIL, `Tests 11 failed`. Nine fail `TypeError: ensureSegmentDir is not a function` (the F22 case through `freshDir`, the F23 case directly), and the two child cases (the kill and the umask) fail on the child's `SyntaxError: The requested module '…/ccd/history/store.mjs' does not provide an export named 'createSegment'` (the kill case reads `expected null to be 'SIGKILL'`, the umask case `expected 1 to be +0`).
 
-- [ ] **Step 4: Implement.** In `ccd/history/store.mjs`, add `orderSegmentNames`, `parseSegmentName`, `segmentName` and `segmentTempName` to the existing `from './lib.mjs'` import clause, in its sorted order. On B1's text the clause becomes:
+- [ ] **Step 4: Implement.** In `ccd/history/store.mjs`, add the four names `orderSegmentNames`, `parseSegmentName`, `segmentName` and `segmentTempName` to the existing `from './lib.mjs'` import clause, in its sorted order, keeping every name already there (B1 has `CONTROL_FILE_MAX`, which its `readBindingFile` and `readAttempts` read; B2 added `ftsTextOf`). B1's clause is a single line; with the four names, and before B2's addition, it reads:
 
 ```js
-import {
-  BUSY_TIMEOUT_MS, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256, orderSegmentNames,
-  parseSegmentName, segmentName, segmentTempName,
-} from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256, orderSegmentNames, parseSegmentName, segmentName, segmentTempName } from './lib.mjs';
 ```
 
-(keep every name B2 added there). Then append to the END of the file:
+Never copy that line over the base's clause: add the four names to the clause as the base has it. Then append to the END of the file:
 
 ```js
 // ── export segments (spec §9.15 "Write", "Who reads it"; §9.14 "Export replay"; §6.4: store.mjs owns them; W1-B4) ──
@@ -2591,11 +2691,13 @@ function checkSegmentMeta(meta) {
 }
 
 /** export/ and export/<store_id>/ exist, each 0700 (§9.6), whatever the umask or a hand-made export/ left; answers
- *  the store's segment directory. `storeId` is a store id (UUID_RE), so no path is formed from anything else. */
+ *  the store's segment directory. `storeId` is a store id (UUID_RE), so no path is formed from anything else.
+ *  F23: every new directory entry is fsynced (mkdirDurable), so a published segment's directory survives a power
+ *  loss, and the marks committed after its link never name a segment the disk lost with its directory. */
 export function ensureSegmentDir(exportRoot, storeId) {
   if (!UUID_RE.test(String(storeId))) throw new TypeError(`ensureSegmentDir: not a store id: ${JSON.stringify(storeId)}`);
   const dir = `${exportRoot}/${storeId}`;
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  mkdirDurable(dir, 0o700);
   chmodSync(exportRoot, 0o700);
   chmodSync(dir, 0o700);
   return dir;
@@ -2629,7 +2731,7 @@ export function createSegment(dir, name, meta) {
     return { db, temp, name };
   } catch (e) {
     try { db?.close(); } catch { /* the throw below is the signal */ }
-    rmSync(temp, { force: true });
+    removeEntry(temp);   // by type (review 316 F22); the next pass's stale-temp removal takes what this leaves
     throw e;
   }
 }
@@ -2809,7 +2911,10 @@ export function listSegments(dir) {
 
 /** The temps a killed pass left in `dir` (`.<segment name>.tmp`, with any SQLite sidecar), removed; answers their
  *  names. Only the pass holding the lock builds a temp, so every one found is stale. An absent directory answers
- *  []; any other listing failure throws. */
+ *  []; any other listing failure throws. A name is removed BY TYPE (B1's removeEntry): a file, link or FIFO is
+ *  unlinked and an empty directory rmdir'd; a non-empty directory planted at the name is kept, not listed, never
+ *  recursed into, and blocks nothing, so it cannot wedge the step that runs this before its preflight every tick
+ *  (review 316 F22; B1's history-planted-entries-never-wedge). */
 export function removeStaleSegmentTemps(dir) {
   let names;
   try {
@@ -2822,8 +2927,7 @@ export function removeStaleSegmentTemps(dir) {
   for (const n of names.sort()) {
     const m = /^\.(.+)\.tmp(?:-journal|-wal|-shm)?$/.exec(n);
     if (m === null || parseSegmentName(m[1]) === null) continue;
-    rmSync(`${dir}/${n}`, { force: true });
-    removed.push(n);
+    if (removeEntry(`${dir}/${n}`) === 'removed') removed.push(n);   // a non-empty directory planted at the name is kept (review 316 F22)
   }
   return removed;
 }
@@ -2904,7 +3008,7 @@ Expected: every line ends ` 1`, and the last count is 1.
 (cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'ccrc history')
 ```
 
-Expected: `Tests 9 passed`; then every case in the file (B1's and B2's binding, migration, lineage and backup cases unchanged); `tsc` silent; single-definition green (store.mjs stays the sole `node:sqlite` importer, no `process.env` read, no switch spelled). Measured while drafting: the nine cases and the file's B1 cases pass on Node 24.14.1, and the typecheck of the file is clean; the CI node-floor leg re-runs the file on 22.16.0 (B1 Task 36 put it in that leg's list).
+Expected: `Tests 11 passed`; then every case in the file (B1's and B2's binding, migration, lineage and backup cases unchanged); `tsc` silent; single-definition green (store.mjs stays the sole `node:sqlite` importer, no `process.env` read, no switch spelled). Measured while drafting: the first nine cases and the file's B1 cases pass on Node 24.14.1 (the F22 and F23 cases were added after B1's review 316 fix rounds and are not yet measured), and the typecheck of the file is clean; the CI node-floor leg re-runs the file on 22.16.0 (B1 Task 36 put it in that leg's list).
 
 - [ ] **Step 7: Measure every guard red, then green.** From the repository root:
 
@@ -2923,7 +3027,28 @@ cat > .superpowers/sdd/history-w1-b4/scratch/mutants-task4.json <<'MUT_EOF'
   "file": "ccd/history/store.mjs",
   "test": "test/history-store.test.ts",
   "filter": "export segments",
-  "edits": [{ "anchor": "    if (e && e.code === 'EEXIST') return 'exists';", "replacement": "    if (e && e.code === 'EEXIST') { rmSync(seg.temp, { force: true }); return 'exists'; }" }]
+  "edits": [{ "anchor": "    if (e && e.code === 'EEXIST') return 'exists';", "replacement": "    if (e && e.code === 'EEXIST') { removeEntry(seg.temp); return 'exists'; }" }]
+ },
+ {
+  "name": "F23: export/ and export/<store_id>/ made by a plain mkdir, no entry fsynced",
+  "file": "ccd/history/store.mjs",
+  "test": "test/history-store.test.ts",
+  "filter": "export segments",
+  "edits": [{ "anchor": "  mkdirDurable(dir, 0o700);\n  chmodSync(exportRoot, 0o700);", "replacement": "  mkdirSync(dir, { recursive: true, mode: 0o700 });\n  chmodSync(exportRoot, 0o700);" }]
+ },
+ {
+  "name": "F22: removeStaleSegmentTemps unlinks by name, not by type (B4's first rmSync), so a planted directory throws",
+  "file": "ccd/history/store.mjs",
+  "test": "test/history-store.test.ts",
+  "filter": "export segments",
+  "edits": [{ "anchor": "    if (removeEntry(`${dir}/${n}`) === 'removed') removed.push(n);   // a non-empty directory planted at the name is kept (review 316 F22)", "replacement": "    unlinkSync(`${dir}/${n}`);\n    removed.push(n);" }]
+ },
+ {
+  "name": "F22: a kept directory listed as removed",
+  "file": "ccd/history/store.mjs",
+  "test": "test/history-store.test.ts",
+  "filter": "export segments",
+  "edits": [{ "anchor": "    if (removeEntry(`${dir}/${n}`) === 'removed') removed.push(n);   // a non-empty directory planted at the name is kept (review 316 F22)", "replacement": "    removeEntry(`${dir}/${n}`);\n    removed.push(n);" }]
  },
  {
   "name": "9.15: a segment published under a name its meta does not give",
@@ -3056,7 +3181,7 @@ MUT_EOF
 (cd server && node ../.superpowers/sdd/history-w1-b4/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b4/scratch/mutants-task4.json)
 ```
 
-Foreground, timeout at least 600000 ms. Expected: every row `red (N failed)` then `green`, and `every guard measured red, then green`, exit 0. Measured while drafting: every row red with 1 failed case, except the rename CONTROL (2: the EEXIST case, whose planted segment it replaces, and the kill case, whose killed `linkSync` is never called).
+Foreground, timeout at least 600000 ms. Expected: every row `red (N failed)` then `green`, and `every guard measured red, then green`, exit 0. Measured while drafting: every row red with 1 failed case, except the rename CONTROL (2: the EEXIST case, whose planted segment it replaces, and the kill case, whose killed `linkSync` is never called). The three rows added after B1's review 316 fix rounds are predicted, not measured: `F23: … a plain mkdir` reds the F23 case (`expected [] to deeply equal [ <base>, <base>/export ]`); `F22: … unlinks by name` reds the F22 case (`EISDIR`, or `EPERM` on macOS, thrown where no throw was expected); `F22: a kept directory listed as removed` reds it on the returned list.
 
 - [ ] **Step 8: Confirm the restore, and commit.** In the foreground, timeout at least 600000 ms:
 
@@ -3976,7 +4101,7 @@ function writeSegmentRows(db, ctx, seg, sel) {
 /** A segment that will not be published: its handle closed (publishSegment may have closed it already) and its temp gone. */
 function discardSegment(seg) {
   try { seg.db.close(); } catch { /* already closed */ }
-  rmSync(seg.temp, { force: true });
+  removeEntry(seg.temp);   // B1's removal by type (review 316 F22); store.mjs owns the temp's name
 }
 
 /** What a pass that ran to its end records, inside the caller's transaction: the last-pass clock doctor's export-due
@@ -4063,8 +4188,8 @@ want = {
                   'planSegment', 'HEALTH_META', 'CLAUDE_CODE_DEFAULT_RETENTION_DAYS', 'shortestRetention', 'exportHorizonDays',
                   'dueTranscriptKeys'],
     './store.mjs': ['ensureSegmentDir', 'createSegment', 'segmentInserts', 'publishSegment', 'listSegments',
-                    'withTx', 'bump', 'getMeta', 'setMeta'],
-    'node:fs': ['existsSync', 'rmSync'],
+                    'withTx', 'bump', 'getMeta', 'setMeta', 'removeEntry'],
+    'node:fs': ['existsSync'],
 }
 for mod, names in want.items():
     m = re.search(r"import (?:fs, )?\{([^}]*)\} from '" + re.escape(mod) + r"';", s)
@@ -4139,7 +4264,7 @@ git commit -m "feat(history): the sole-copy export pass — due rows into one se
   - merge the names Step 5's script prints into the `from './lib.mjs'` and `from './store.mjs'` import statements.
 - Modify: `server/test/fixtures/history/preload-statfs.mjs` (B1-created; B1 Tasks 19 and 26 and B2 appended to it): append one delimited block at the end of the file.
 - Modify: `server/test/history-export.test.ts` (Task 5): in place, its `./historyHelpers.js` import list gains `runDriver` and `recoverRow`, and its `interface SweepExport` gains one member; append the module-scope helpers `driverAt` and `passAt` and one describe at the end of the file.
-- Modify: `shared/lifecycle.ts`: insert one row directly below B2's `history-backups` row (its last line ends `removes a stale .tmp first)' },`), before the closing `];`. Measured at f7e51156f, `];` is `shared/lifecycle.ts:45`; at origin/main 1bb88d5ea it is `:53` (#299 added `scope-sweep-verdicts`), and B1 and B2 insert above it. If B3 has merged, its two rows may sit between B2's row and `];`; this row still goes directly below B2's.
+- Modify: `shared/lifecycle.ts`: insert one row directly below B2's `history-backups` row (its last line ends `removes a stale .tmp first)' },`), before the closing `];`. Measured at B1's tip (561609adc), `];` is `shared/lifecycle.ts:78`, below B1's six history rows (the last, `history-switches`, ends at `:77`); the B2 and B3 rows land above it. If B3 has merged, its two rows may sit between B2's row and `];`; this row still goes directly below B2's.
 - Modify: `server/test/lifecycle.test.ts` (inside `describe('shared/lifecycle.ts — the policy §4(a) manifest'`, in B1 Task 33's block): the `HISTORY_LANDED` line in place, and one case directly below B2's `it('declares history-backups: …` case (below that case's closing `  });`).
 - Modify, only as Step 7 finds: the B1/B2 test files whose cases the export now reaches, each change listed by file and case title in the commit body.
 
@@ -4147,10 +4272,10 @@ git commit -m "feat(history): the sole-copy export pass — due rows into one se
 - Consumes:
   - Task 1 (`lib.mjs`): `decideExportPass({ nowMs, lastPassMs: number | null, firstTickMs: number | null }): 'run' | 'wait'`; `planExportRoom(free): { admit: boolean; word: 'ok' | 'low-disk' | 'unsettled'; needBytes: number | null }`, whose input is `statfsWithDeadline`'s answer (`{ state: 'ok', bytes, fsSize } | { state: 'unsettled' } | { state: 'threw' }`); `EXPORT_DIR`; `HEALTH_META.exportPassMs`, `HEALTH_META.exportPaused` (`'export_paused'`).
   - Task 5 (`sweep.mjs`): `exportPass(db, ctx)`, `ExportPassResult`, `ensureExportDirs`, `exportDirFor`, `EXPORT_ATTEMPT_META`.
-  - Task 4 (`store.mjs`): `removeStaleSegmentTemps(dir)` (`[]` for an absent directory; any other listing failure throws).
+  - Task 4 (`store.mjs`): `removeStaleSegmentTemps(dir)` (`[]` for an absent directory; any other listing failure throws; each name removed by type through B1's `removeEntry`, so a non-empty directory planted at a temp's name is kept and not listed, and never makes this step throw on every tick).
   - B1 `sweep.mjs`: `statfsWithDeadline(p, ms, statfs?)` (the statfs seam receives the path), `tick`'s `// <<< history tick steps` marker, `passCtx`'s `deps`, `countOutside(db, name)`; B1 `lib.mjs`: `STATFS_DEADLINE_MS`; B1 `store.mjs`: `withTx`, `bump`, `getMeta`, `setMeta`.
   - B2: `isRecovering` and the recover arm (`recoverPass` never calls `tick`); `historyHelpers`' `recoverRow(box)`; `passCtx`'s budget from `deps.budget`.
-  - B1 test side: `runDriver(box, deps, args?, opts?)` with `DriverDeps.offsetMs` and `DriverDeps.sizeBytes` (the measured-size seam that puts a store at its cap); the statfs preload's top-level `fs`, `real`, `answer` and `syncBuiltinESMExports`; `lifecycle.test.ts`'s `HISTORY_ROWS_BY_PR` (`B4: ['history-export']`) and `HISTORY_LANDED`; `LifecycleClass` (`shared/lifecycle.ts:5-16` at f7e51156f).
+  - B1 test side: `runDriver(box, deps, args?, opts?)` with `DriverDeps.offsetMs` and `DriverDeps.sizeBytes` (the measured-size seam that puts a store at its cap); the statfs preload's top-level `fs`, `real`, `answer` and `syncBuiltinESMExports`; `lifecycle.test.ts`'s `HISTORY_ROWS_BY_PR` (`B4: ['history-export']`) and `HISTORY_LANDED`; `LifecycleClass` (`shared/lifecycle.ts:5-14` at B1's tip, 561609adc: `name`, `root`, `pattern`, `creators`, `collector`, `bound`, `tier`, `ruling`).
 - Produces:
   - `sweep.mjs`: `export async function exportStep(db, ctx): Promise<ExportPassResult | null>`: null when the cadence waits; `{ state: 'paused', … }` when the preflight refuses; otherwise `exportPass`'s answer. `ExportPassResult['state']` gains `'paused'`.
   - `tick` runs `if (ctx.ids !== null) await exportStep(db, ctx);` as its last step inside the `>>> history tick steps` markers, after `recordTick` and `markScan`.
@@ -4478,6 +4603,8 @@ Record every red case (file and title). Then, for each:
 - **A red in a file CLAUDE.md lists as a load flake** (`session-hook`, `ccd-session-state`, …): re-run it alone; green alone is a flake.
 - **Any other red** is a B4 defect: fix `ccd/history/sweep.mjs`, never the test, and re-run that file.
 - Never delete an assertion and never weaken a guard. Re-run every changed file alone until green.
+
+One red is known in advance, read (not run) from B1's tip (561609adc): `history-op.test.ts`, describe `'O38: the export\'s due rule (B1 half)'`. Its `census(box, MS, k)` helper (module-local, directly below `censusBox`) is `runDriver(box, { offsetMs: k * 31 * MIN, managedSettings: MS })` with no `opts`, and its cases read `export_due` / `export_overdue` exactly while only the pass clock crosses the hour: at k=2 the clock is 62 min, past the store's first tick plus an hour, so the export runs and takes due blobs before the census counts. Expect three cases to red until the helper changes: `'a home without the key: 30, horizon 0, everything due, and retention-lowered names that home'` (its `census(box, MS, 2)` then `due` 2), `'a managed-settings file with 90 under homes of 180 gives 90, and a managed-settings.d/ drop-in with 60 gives 60'` (k=2, `due` 4) and `'overdue by the file clock: a due blob whose holding file is gone, or past its mtime plus its home\'s retention, FAILs; fresh files never'` (k=2, `export_overdue` `'2'`, should a due blob be exported first). The counts are B1's; B2's per-copy task re-ran these cases, so read them on the base. The fix is rule 1, applied in the helper, since the cases cannot reach the spawn's env: give `census` a 4th `runDriver` argument (after an empty `args`), `runDriver(box, { offsetMs: k * 31 * MIN, managedSettings: MS }, [], { env: { HISTORY_TEST_STATFS_EXPORT: '0:1099511627776' } })`. Cases at k=1, or at a fixed 31–34 min offset, stay inside the first hour and are unaffected; none of the helper's cases reads an exact counters map, a meta listing or health, so rule 1's limits hold.
 
 - [ ] **Step 8: Mutations — each new guard reds its case.** From the repository root: `cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.t6"; cp shared/lifecycle.ts "$SCRATCH/lifecycle.ts.t6"` (`SCRATCH` as Task 5 Step 8 set it: `$PWD/.superpowers/sdd/history-w1-b4/scratch`). Apply each by hand, run from inside `server/` with the filter shown, see it red, restore with `cp` from the scratch copy, and see the file green again after the last one. Never `git stash`.
 
@@ -4967,7 +5094,7 @@ git commit -m "feat(history): export crash and collision safety — never a repl
   - B1 `lib.mjs`: `HEALTH_META.exportSegmentMissing` (`'export_segment_missing'`), whose `deriveHealth` rule WARNs `export-segment-missing` while it is above 0.
   - Task 4 (`store.mjs`): `listSegments(dir)`. Task 5: `exportDirFor`, `noteExportPassDone(db, nowMs, complete)` and the `complete` it is given (true only when every due row the pass found fit). Task 6: `exportStep`.
   - Task 1 (`lib.mjs`), the check after a bind's decisions (coordinator ruling RD2): `decideMarkCheck({ metaKeys, checkedRecord }): { check; facts; record }` (whether this step checks, by KEY and never by clock, and the JSON record the check writes) and `missingSegmentNames({ named, present }): string[]`.
-  - Test side: Task 5's and Task 6's module scope; B1 `historyHelpers`' `CLI`, `preloadOptions`, `PRELOADS`; `node-pty` (a server devDependency, B2 Task 25's terminal idiom).
+  - Test side: Task 5's and Task 6's module scope; B1 `historyHelpers`' `CLI`, `preloadOptions`, `PRELOADS`; `node-pty` (a server dependency, already installed by `npm ci`; B2 Task 25's terminal idiom).
 - Produces (`sweep.mjs`):
   - `stmts(db).exportClear`: `UPDATE entries SET exported_ms = NULL, exported_seg = NULL WHERE entry_id = ? AND exported_ms IS NOT NULL`, run in `writeChunk`'s variant branch, in the chunk's transaction, and in `ingestSidecar`'s transaction when a NEW sidecar row links to an entry (`ins.changes === 1 && entryId !== null`); a no-op for an entry not yet exported (⟦D:history-export-late-sidecar-clears-marks⟧).
   - `export function checkSegmentMarks(db, ctx, record: string): { cleared: number; segments: string[] }`: measures the marked names and the listing, asks lib's `missingSegmentNames` which are missing, and clears every blob and entry mark naming one, in one NORMAL transaction; when it cleared any, `export_segment_missing` +1 and meta `HEALTH_META.exportSegmentMissing` = the number of marks cleared; meta `export_marks_checked_ms` = the check's clock and meta `export_marks_checked_binds` = `record` (lib's), either way. It throws on a listing that fails for any reason but ENOENT (Task 4's `listSegments`).
@@ -5341,27 +5468,28 @@ git commit -m "feat(history): export marks that move — a late variant or a lat
   - in `deriveHealth`, the one line that begins `  if (h.exportDue > 0 && !h.exportWriterLive) warn.push(item('export-due',` is replaced in place by two lines;
   - in `remedyFor`, two lines are inserted directly above its `    default:` line;
   - one section is appended at the END of the file (lib.mjs has no entry guard), after Tasks 1–3's sections.
-- Modify: `ccd/history/lib.d.mts`: in `HealthInputs`, two fields directly after the line `  readonly exportPausedLowDisk: boolean;`, in place.
+- Modify: `ccd/history/lib.d.mts`: in `HealthInputs`, two fields directly after the line `  readonly exportPausedLowDisk: boolean;`, in place; and one block appended at the END (the due-since meta's three declarations).
 - Modify: `ccd/history/sweep.mjs` (B1 Task 26's census; B2 and Tasks 3–8 extend the file). In place, all above the R1 entry guard:
   - in `exportCensus`, two lines after `    state.overdue += plan.overdue.length;`, and one line after `  setMeta(db, 'export_overdue', String(state.overdue));`;
+  - the `from './lib.mjs'` import gains `exportDueOldestMeta`, beside `planExport`;
   - in `periodicCensus`, the one line `    stepCursorSet(db, 'export-census', { last: 0, due: 0, overdue: 0, homeDays, startMs: nowMs });`.
 - Modify: `ccd/history/cli.mjs` (B1 Tasks 27–28; B2 extends it). In place, all above the R1 entry guard:
   - `emptyEnvelope`: one line after `        oldest_row_ms: null, first_due_ms: null, first_deletion_ms: null,`;
-  - `readStore`: five lines after `    ex.first_deletion_ms = num('first_deletion_ms');`;
+  - `readStore`: one block (its comments and six statements) after `    ex.first_deletion_ms = num('first_deletion_ms');`;
   - `healthInputsOf`: its two placeholder lines `exportWriterLive: false, …// B4 sets it with the export writer` and `exportPausedLowDisk: false, …// B4 sets it with the export writer` are replaced by four;
   - one helper function, `segmentCount`, inserted directly above `statusWithHealth`'s doc comment (``/** `statusEnvelope` with its `health` filled and the store's device named. */``), so that comment stays on `export async function statusWithHealth(`.
 - Modify: `server/test/history-lib.test.ts` (B1-created). In place: B1 Task 28's `base()` literal inside the describe `'deriveHealth: every §9.6 rule as a word with its class, detail and remedy (task 28)'`, its line `    thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],` (B1 Task 28F's `extrasUnmeasured` already ends it). Append one describe at the end of the file. No import line is added: B1 Task 28's namespace import `healthLib` covers every name used.
 - Modify: `server/test/history-export.test.ts` (Task 5 creates it). Add one import block directly after the file's last import statement; append two describes at the end.
-- Modify: `server/test/ccrc-doctor.test.ts`. The file is pre-existing (main-ro f7e51156f); the history describes it edits are B1 Task 32's end-appended ones, anchored by content. Other tests cite this file by line at `:66`, `:70`, `:195` and `:884` (measured at f7e51156f: `ccrc-install.test.ts`, `pool-name-parity.test.ts` and two in `ccrc-account.test.ts`); every edit here is far below all four, inside B1's history describes, which B1 appended at the end of the file:
+- Modify: `server/test/ccrc-doctor.test.ts`. The file is pre-existing (main-ro f7e51156f); the history describes it edits are B1 Task 32's end-appended ones, anchored by content. Other tests cite this file by line at `:66`, `:70`, `:195` and `:884` (measured at f7e51156f: `ccrc-install.test.ts`, `pool-name-parity.test.ts` and two in `ccrc-account.test.ts`; B1's history-CLI link block at `:110-115` moved the last two to `:200` and `:889` at B1's tip, a B1/B2 follow-up, as Global Constraints says); every edit here is far below all four, inside B1's history describes (from `:1248` down at 561609adc), which B1 appended at the end of the file:
   - in `describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, O37, O41, O55, DM43)', …)`'s `STATES` table: the three-line row whose `name` is `'O41: a due blob WARNs export-due, naming the count, and FAILs nothing while none is overdue'` is replaced; two rows are inserted after the two-line row whose `name` is `'O41: an overdue blob FAILs export-overdue'`;
   - in the same describe, one `it` is inserted after the `it` titled `'O41: nothing due and nothing overdue: neither export word'`;
   - in `describe('ccrc doctor: history — the relay (O15: every word, and the one rule no fixture can plant)', …)`, the `cleanInputs` literal's line `    journalStoreDirs: [], extrasUnmeasured: [],` (B1 Task 28F's field already on it) gains two fields on the same line.
-- Not edited: `server/test/history-cli.test.ts`. B1 Task 28 put `base()` and every pure `deriveHealth` case in `history-lib.test.ts` (namespace `healthLib`); `history-cli.test.ts` holds no `HealthInputs` literal and is only re-run here (its STATUS_SQL cost pin), never edited.
+- Not edited: `server/test/history-cli.test.ts`. B1 Task 28 put `base()` and every pure `deriveHealth` case in `history-lib.test.ts` (namespace `healthLib`); `history-cli.test.ts` holds no `HealthInputs` literal and is only re-run here (its STATUS_SQL cost pin), never edited. Re-checked at B1's tip (561609adc, after fix round 3, whose one row there pins the refused-node count): no case asserts the whole `export['claude-code']` block (`:341` pins only `Object.keys(e.export)`), and the `Envelope` type's `export` member (`:35`, `segments: number`, no `last_pass_ms`, `due_oldest_ms` or `paused_low_disk`) is a read-side annotation no case checks against the runtime value, so the new members and `segments: number | null` stay additive and the file needs no edit. If the base adds a `toEqual` on that block, add the three members (and `segments` as `number | null`) to it in place instead.
 
 **Interfaces:**
 - Consumes:
   - Task 1 (`lib.mjs`): `EXPORT_DIR = 'export'`, `EXPORT_PASS_INTERVAL_MS = 3_600_000`, `HEALTH_META.exportPassMs` (`'export_pass_ms'`), `HEALTH_META.exportDueOldestMs` (`'export_due_oldest_ms'`), `HEALTH_META.exportPaused` (`'export_paused'`), each declared in `lib.d.mts` by Task 1.
-  - Task 2 (`lib.mjs`): `planExport(…)`'s answer gains `oldestDueSinceMs: number | null` (the minimum over due blobs of each blob's latest referrer due time, by the reducer: B2's per-copy default, so a referrer falls due when its last holding file on disk passes its mtime plus its home's horizon).
+  - Task 2 (`lib.mjs`): `planExport(…)`'s answer gains `oldestDueSinceMs: number | null`: the minimum over the DATED due blobs of each blob's latest dated referrer due time, by the reducer (B2's per-copy default, so a referrer falls due when its last holding file on disk passes its mtime plus its home's horizon). A referrer nothing on disk holds back is dated by the last write its recorded files saw, else its row's time, never the epoch. It is null when no due blob carries a date, and the answer's `due` says whether any is due.
   - Task 4 (`store.mjs`): `listSegments(dir: string): { name: string; seq: number; writer: string; bytes: number }[]`, which lists by name and size and never opens a segment; it answers `[]` for an absent directory and throws for any other failure.
   - Tasks 5–6 (`sweep.mjs`): meta `HEALTH_META.exportPassMs` is the time of the last COMPLETED pass, written by every pass that ran to its end (`written`, `nothing-due`; Task 5's `noteExportPassDone`), never by a `no-horizon`, `paused`, `held` or `failed` one (a `no-horizon` pass judged nothing, so it is not a pass); meta `HEALTH_META.exportPaused` holds `planExportRoom`'s word (`low-disk` or `unsettled`) while the pass is paused for room, and `''` as soon as a preflight admits, whatever the pass then answers. `readStore` reads any non-empty value as paused.
   - B1 `lib.mjs` (Task 28): `deriveHealth`, `HealthInputs`, `HealthResult`, `HealthItem`, `HEALTH_REMEDIES`, `HEALTH_WORDS`, and the module-private `minutesOf`, `SWEEP_LOG`, `remedyFor`.
@@ -5369,13 +5497,13 @@ git commit -m "feat(history): export marks that move — a late variant or a lat
   - B1 `cli.mjs` (Tasks 27–28): `emptyEnvelope(P)`, `readStore(env, P, nowMs)` with its private `num(k)`, `healthInputsOf(env, x, nowMs)`, the namespace imports `healthLib` and `healthStore`, and `join` from `node:path`.
   - B1 test side: `historyHelpers`' `makeHistoryBox`, `runSweep`, `HistoryBox`; B2 Task 10's `runCli(box, args, opts?)`; B1 Task 32's doctor helpers `historyBox`, `withStore`, `setHistoryMeta`, `freshTick`, `setExport`, `metaOnFreshTick`, `runHistoryCheck`, `historyLines`, `HEALTH_META` (already imported there) and `deriveHealth`'s `cleanInputs`.
 - Produces:
-  - `lib.mjs`: `HealthInputs` gains `exportLastPassMs: number | null` and `exportDueOldestMs: number | null`, both required. `deriveHealth`'s `export-due` rule becomes three arms, decided by the module-private `exportGapArm(h): 'no-writer' | 'stale-pass' | 'waited' | null`:
+  - `lib.mjs`: `HealthInputs` gains `exportLastPassMs: number | null` and `exportDueOldestMs: number | null | 'unmeasured'` (a time; null: the census counted nothing due; `'unmeasured'`: no census of this build recorded one, or it could date none of the due blobs), both required. lib also exports `EXPORT_DUE_OLDEST_UNMEASURED = 'unmeasured'`, `exportDueOldestMeta(due, dueOldestMs): string` (what the census writes: `''`, a positive whole-ms time, or the word) and `readExportDueOldest(v: string | undefined): number | null | 'unmeasured'` (what status reads: `''` is null, a positive integer is a time, and anything else, an absent key and `'0'` included, is the word), each declared once in `lib.d.mts`. `deriveHealth`'s `export-due` rule becomes three arms, decided by the module-private `exportGapArm(h): 'no-writer' | 'stale-pass' | 'waited' | null`:
     - `no-writer` (B1's ruled arm, unchanged): `exportDue > 0 && !exportWriterLive`;
     - `stale-pass`: the writer live, `exportLastPassMs !== null && nowMs − exportLastPassMs > 2 × EXPORT_PASS_INTERVAL_MS`;
-    - `waited`: the writer live, `exportDueOldestMs !== null && nowMs − exportDueOldestMs > 2 × EXPORT_PASS_INTERVAL_MS`.
+    - `waited`: the writer live, `exportDueOldestMs` a number and `nowMs − exportDueOldestMs > 2 × EXPORT_PASS_INTERVAL_MS`; null and `'unmeasured'` never fire it.
     `stale-pass` outranks `waited`; each arm has its own detail (`exportDueDetail`) and remedy (`exportDueRemedy`, reached through `remedyFor`). No `HEALTH_WORDS` member is added.
-  - `sweep.mjs`: the census state gains `dueOldest: number | null` (a B1-started census that lacks it reads as null); on completion the census sets meta `HEALTH_META.exportDueOldestMs` to that time, or `''`.
-  - `cli.mjs`: the envelope's `export[h]` gains `last_pass_ms: number | null`, `due_oldest_ms: number | null` and `paused_low_disk: boolean`; `segments` and `segment_bytes` are filled from `listSegments` over `export/<store_id>/` (both `null` when the directory cannot be listed: unmeasured, never zero). `healthInputsOf` sets `exportWriterLive: true` and maps the three new inputs. No statement is added to the status path, so B1's STATUS_SQL cost pin is unchanged.
+  - `sweep.mjs`: the census state gains `dueOldest: number | null` (a B1-started census that lacks it reads as null). On completion the census sets meta `HEALTH_META.exportDueOldestMs` to `exportDueOldestMeta(state.due, state.dueOldest)`: `''` when it counted nothing due, the time, or `'unmeasured'` when it counted due blobs and could date none (the sweep delivers, lib decides).
+  - `cli.mjs`: the envelope's `export[h]` gains `last_pass_ms: number | null`, `due_oldest_ms: number | null | 'unmeasured'` (lib's `readExportDueOldest` over the meta value; `'unmeasured'` in the no-store envelope) and `paused_low_disk: boolean`; `segments` and `segment_bytes` are filled from `listSegments` over `export/<store_id>/` (both `null` when the directory cannot be listed: unmeasured, never zero). `healthInputsOf` sets `exportWriterLive: true` and maps the three new inputs. No statement is added to the status path, so B1's STATUS_SQL cost pin is unchanged.
 
 **Spec:**
 - §9.6 "WARN on": `export-due` (the B4 arm) and `export-paused-low-disk`; §9.15 "The gap guard"; §9.11 O41's B4 cases ("steady state with an hourly pass → PASS; a due blob older than two pass intervals, or a last pass older than 2 h → WARN"), O40's doctor clause.
@@ -5383,7 +5511,8 @@ git commit -m "feat(history): export marks that move — a late variant or a lat
 - Departures: ⟦D:history-export-due-escalates⟧; ⟦D:history-doctor-state-words⟧ (its precedence unchanged); ⟦D:history-export-wait-from-census⟧ (NEW: the "waited more than two pass intervals" rule needs a due-since time, and the spec names no clock for it. The census computes it from the store's rows, never from a date. Census staleness (≤ 30 min) plus the pass interval (≤ 1 h) stays under 2 h, so a steady store reads PASS); ⟦D:history-export-holding-files-by-transcript⟧ (B1's NEW departure, reused: the due-since is the census's, read through the same reducer (B2's per-copy default, ⟦D:history-export-due-per-copy⟧) and the same per-row file set, a referrer's transcript's files, as Task 5's pass decides by, so the wait arm and the pass never disagree about which rows are due).
 
 **Choices this task makes:**
-- An unmeasured clock (`null`) fires neither writer arm by itself: no pass since this build landed, or no census since, is not a gap until the other clock says so.
+- An unmeasured clock (a last pass of `null`, a due-since of `'unmeasured'`) fires neither writer arm by itself: no pass since this build landed, or no census since, is not a gap until the other clock says so.
+- The census's due-since is one of three values in meta, in `status --json`'s `due_oldest_ms` and in `HealthInputs`: a time; `null` (the census counted nothing due, meta `''`); `'unmeasured'` (no census of this build has written the key, or the census counted due blobs and could date none of them). Only lib's `exportDueOldestMeta` writes it and only `readExportDueOldest` reads it. B1's `num()` folds an absent key and `''` into one null, so it is not used here. No value at or before the epoch is a time, so status never relays a 1970 date and doctor never counts minutes from it (⟦D:history-export-wait-from-census⟧). `'unmeasured'` fires no wait arm; the stale-pass arm still guards.
 - A stale pass outranks a wait in the one `export-due` item; the paused export keeps its own `export-paused-low-disk` WARN beside it, and `export-due`'s remedy then names the room first.
 - `segments`/`segment_bytes` read `null` on a listing that throws, so status never reports an unlistable export as empty.
 
@@ -5421,7 +5550,8 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 5, exportOverdue: 0,
     exportWriterLive: true, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
-    journalGrowth30d: 0, journalSkipped: 0, exportSegmentNewer: [], exportSegmentMissing: 0,
+    journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,
+    exportSegmentNewer: [], exportSegmentMissing: 0,
     journalUnwritable: false, dbPath: '/home/u/.ccrc/history/db', freeBytes: 100_000_000_000,
     thresholdBytes: 20_000_000_000, copyBps: null, backupsDb: [], journalStoreDirs: [], extrasUnmeasured: [],
     exportLastPassMs: NOW - 10 * MIN, exportDueOldestMs: NOW - 90 * MIN,
@@ -5462,9 +5592,30 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
   });
 
   it('an unmeasured clock fires neither writer arm by itself: no pass yet and no census yet is no WARN', () => {
-    expect(healthLib.deriveHealth(live({ exportLastPassMs: null, exportDueOldestMs: null })).pass).toBe('ok');
+    expect(healthLib.deriveHealth(live({ exportLastPassMs: null, exportDueOldestMs: 'unmeasured' })).pass).toBe('ok');
     expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: null, exportDueOldestMs: NOW - GAP - MIN })))).toBeDefined();
-    expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP - MIN, exportDueOldestMs: null })))).toBeDefined();
+    expect(dueItem(healthLib.deriveHealth(live({ exportLastPassMs: NOW - GAP - MIN, exportDueOldestMs: 'unmeasured' })))).toBeDefined();
+  });
+
+  it('the census\'s due-since meta: nothing due writes \'\' and reads null; due blobs it could date none of write unmeasured; a key never written reads unmeasured, never "nothing due"; no value at or before the epoch is a time', () => {
+    expect(healthLib.EXPORT_DUE_OLDEST_UNMEASURED).toBe('unmeasured');
+    expect(healthLib.exportDueOldestMeta(0, null)).toBe('');
+    expect(healthLib.exportDueOldestMeta(0, NOW - 90 * MIN), 'nothing due: no clock is carried').toBe('');
+    expect(healthLib.exportDueOldestMeta(3, NOW - 90 * MIN + 0.4), 'a file clock\'s fraction is rounded').toBe(String(NOW - 90 * MIN));
+    for (const t of [null, 0, 0.3, -5, Number.NaN, Number.NEGATIVE_INFINITY]) expect(healthLib.exportDueOldestMeta(3, t), String(t)).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest('')).toBeNull();
+    expect(healthLib.readExportDueOldest(undefined)).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest('unmeasured')).toBe('unmeasured');
+    for (const v of ['0', '-5', '1.5', 'NaN', ' 12']) expect(healthLib.readExportDueOldest(v), v).toBe('unmeasured');
+    expect(healthLib.readExportDueOldest(String(NOW - 90 * MIN))).toBe(NOW - 90 * MIN);
+    expect(healthLib.readExportDueOldest(healthLib.exportDueOldestMeta(3, NOW - 90 * MIN)), 'round trip').toBe(NOW - 90 * MIN);
+  });
+
+  it('an unmeasured due-since never fires the wait arm, so no export-due detail ever counts minutes from the epoch', () => {
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: healthLib.readExportDueOldest('0') })))).toBeUndefined();
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: 'unmeasured' })))).toBeUndefined();
+    // CONTROL: a real clock past two intervals fires it, its minutes counted from that clock.
+    expect(dueItem(healthLib.deriveHealth(live({ exportDueOldestMs: NOW - GAP - MIN })))!.detail).toContain(`the oldest for ${gapMin + 1} min`);
   });
 
   it('nothing due, whatever the clocks: no export-due', () => {
@@ -5491,7 +5642,7 @@ describe('deriveHealth, W1-B4: with the export writer live, export-due waits for
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'export-due waits for a gap')
 ```
 
-Expected: red. The steady-state, nothing-due and without-the-writer cases already hold (B1's rule fires only without the writer). The waited, stale-pass, strict-threshold, unmeasured-clock and paused cases fail, for example `expected [] to deeply equal [ 'export-due' ]` and `expected undefined to be defined`.
+Expected: red. The steady-state, nothing-due and without-the-writer cases already hold (B1's rule fires only without the writer). The waited, stale-pass, strict-threshold, unmeasured-clock and paused cases fail, for example `expected [] to deeply equal [ 'export-due' ]` and `expected undefined to be defined`. The two new due-since cases fail too: `healthLib.exportDueOldestMeta is not a function` (and `EXPORT_DUE_OLDEST_UNMEASURED` reads undefined), and in the wait-arm case `healthLib.readExportDueOldest is not a function`.
 
 - [ ] **Step 3: Write the lib rule.** In `ccd/history/lib.mjs`, in `deriveHealth`, replace the one line
 
@@ -5527,13 +5678,15 @@ Append at the END of `ccd/history/lib.mjs`:
 // The three helpers are function declarations: deriveHealth and remedyFor, above, call them at call time, and the
 // constant they read (EXPORT_PASS_INTERVAL_MS, Task 1) is initialised by then.
 
-/** Which arm of export-due fires, or null. `no-writer` is B1's ruled arm; `stale-pass` outranks `waited`. An
- *  unmeasured clock (null: no pass since this build landed, or no census since) fires neither writer arm by itself. */
+/** Which arm of export-due fires, or null. `no-writer` is B1's ruled arm; `stale-pass` outranks `waited`. A clock
+ *  that is not a time fires neither writer arm by itself: a last pass of null (none since this build landed), and a
+ *  due-since of null (the census counted nothing due) or EXPORT_DUE_OLDEST_UNMEASURED (no census of this build has
+ *  recorded one, or it could date none of the due blobs). `over` reads only a number. */
 function exportGapArm(h) {
   if (!(h.exportDue > 0)) return null;
   if (!h.exportWriterLive) return 'no-writer';
   const gapMs = 2 * EXPORT_PASS_INTERVAL_MS;
-  const over = (t) => t !== null && h.nowMs - t > gapMs;
+  const over = (t) => typeof t === 'number' && h.nowMs - t > gapMs;
   if (over(h.exportLastPassMs)) return 'stale-pass';
   if (over(h.exportDueOldestMs)) return 'waited';
   return null;
@@ -5560,16 +5713,58 @@ function exportDueRemedy(h) {
   if (arm === 'stale-pass') return `read the sweep: ${SWEEP_LOG}; an export pass completes at least hourly, and none has for over two intervals`;
   return `none needed while the backlog drains at one segment an hour; if the count does not fall, read the sweep: ${SWEEP_LOG}`;
 }
+
+// The census's oldest due-since in meta (HEALTH_META.exportDueOldestMs), written and read back here only, so the sweep
+// delivers and status relays, and neither decides (⟦D:history-export-wait-from-census⟧). Three values, never folded:
+//   ''                            the census counted nothing due (read back: null);
+//   a positive integer            when the oldest dated due blob fell due (read back: the number);
+//   EXPORT_DUE_OLDEST_UNMEASURED  blobs are due and the census could date none (no clock on record, or only the part a
+//                                 B1 pass started counted them); a key never written reads the same, never "nothing
+//                                 due". No value at or before the epoch is a time: it would render as 1970 and the
+//                                 wait arm would count some 29 million minutes from it.
+
+/** The word for a due-since the census has not measured (status --json's due_oldest_ms, HealthInputs). */
+export const EXPORT_DUE_OLDEST_UNMEASURED = 'unmeasured';
+
+/** What the census writes on completion, from its due count and its oldest dated due-since (planExport's
+ *  oldestDueSinceMs, min over chunks). A file clock's fraction of a ms is rounded. */
+export function exportDueOldestMeta(due, dueOldestMs) {
+  if (!(due > 0)) return '';
+  const ms = typeof dueOldestMs === 'number' && Number.isFinite(dueOldestMs) ? Math.round(dueOldestMs) : 0;
+  return ms > 0 ? String(ms) : EXPORT_DUE_OLDEST_UNMEASURED;
+}
+
+/** The census's due-since read back from meta: a time, null (nothing due), or EXPORT_DUE_OLDEST_UNMEASURED. */
+export function readExportDueOldest(v) {
+  if (v === undefined) return EXPORT_DUE_OLDEST_UNMEASURED;
+  if (v === '') return null;
+  return /^[1-9][0-9]*$/.test(v) ? Number(v) : EXPORT_DUE_OLDEST_UNMEASURED;
+}
 ```
+
+`EXPORT_DUE_OLDEST_UNMEASURED` is a `const` in this appended block; `exportGapArm` names it only in its doc comment, and `readExportDueOldest` and `exportDueOldestMeta` read it at call time, after the module has loaded.
 
 In `ccd/history/lib.d.mts`, in `export interface HealthInputs`, insert directly after the line `  readonly exportPausedLowDisk: boolean;`:
 
 ```ts
   /** W1-B4 Task 9: the last completed export pass (meta HEALTH_META.exportPassMs); null before the first. */
   readonly exportLastPassMs: number | null;
-  /** W1-B4 Task 9: when the oldest due blob the census counted became due (meta HEALTH_META.exportDueOldestMs). */
-  readonly exportDueOldestMs: number | null;
+  /** W1-B4 Task 9: when the oldest due blob the census counted became due (meta HEALTH_META.exportDueOldestMs, read by
+   *  readExportDueOldest): a time; null when the census counted nothing due; 'unmeasured' when no census of this build
+   *  has recorded it, or it could date none of the due blobs. Never a time at or before the epoch. */
+  readonly exportDueOldestMs: number | null | 'unmeasured';
 ```
+
+Then append to the END of `ccd/history/lib.d.mts`:
+
+```ts
+// --- W1-B4 Task 9: the census's oldest due-since in meta, written and read back (no epoch, no overloaded null)
+export const EXPORT_DUE_OLDEST_UNMEASURED: 'unmeasured';
+export function exportDueOldestMeta(due: number, dueOldestMs: number | null): string;
+export function readExportDueOldest(v: string | undefined): number | null | 'unmeasured';
+```
+
+Check: `grep -c '^export function readExportDueOldest(' ccd/history/lib.d.mts ccd/history/lib.mjs` prints 1 for each file.
 
 - [ ] **Step 4: Run them and see them pass, then the typecheck.**
 
@@ -5580,9 +5775,9 @@ git grep -n 'exportWriterLive:' -- server/test
 ```
 
 Expected:
-- `history-lib.test.ts` green, B1 Task 28's describe included: its `['export-due', 'warn', { exportDue: 12 }]` row and its `'a B1 build WARNs export-due from the first due blob…'` case hold, because `base()` keeps `exportWriterLive: false`.
+- `history-lib.test.ts` green, B1 Task 28's describe included. Its `['export-due', 'warn', { exportDue: 12 }]` row and the first assertion of `'a B1 build WARNs export-due from the first due blob; a live export writer (B4) is B4\'s rule'` hold because `base()` keeps `exportWriterLive: false`. That case's second assertion (`exportWriterLive: true`, `exportDue: 1` → pass `'ok'`) holds only because `base()` carries `exportLastPassMs: null` and `exportDueOldestMs: null`, so neither writer arm fires. Step 1 therefore gives `base()` both fields as null, never a time (and never `'unmeasured'` either: `base()` has nothing due, which is what null says).
 - `git grep` lists every `HealthInputs` literal under `server/test`: Task 28's `base` and this task's `live` in `history-lib.test.ts`, and `cleanInputs` in `ccrc-doctor.test.ts`. Each must carry the two new fields; Step 5 adds them to `cleanInputs`. Any other literal the grep prints (one a later B2 or B4 task added) gains `exportLastPassMs: null, exportDueOldestMs: null` on its `journalStoreDirs` line, after that line's `extrasUnmeasured: [],`, the same way.
-- tsc: red on `cleanInputs` only (`Property 'exportLastPassMs' is missing`) until Step 5; after Step 5, no output.
+- tsc: red on `cleanInputs` only (`Property 'exportLastPassMs' is missing`) until Step 5; after Step 5, no output. `live` is not red because Step 1 gives it the seven fields B1's fix rounds made required on `HealthInputs` (`blobUndecodable`, `drainRejected`, `spoolDisplaced`, `spoolBlocked`, `spoolUnreadable`, `spoolNotDirectory`, `spoolNodesRefused`; `lib.d.mts:384-391` at 561609adc), as B1's `base()` and `cleanInputs` already carry them. A `live` without them is red here too (`Property 'blobUndecodable' is missing`), though its cases still pass at runtime: add them, never a cast.
 
 - [ ] **Step 5: Write the failing delivery tests.** Three files.
 
@@ -5692,7 +5887,7 @@ interface X9Sweep {
 interface X9Item { word: string; detail: string; remedy: string }
 interface X9Export {
   due_blobs: number; segments: number | null; segment_bytes: number | null;
-  last_pass_ms: number | null; due_oldest_ms: number | null; paused_low_disk: boolean;
+  last_pass_ms: number | null; due_oldest_ms: number | null | 'unmeasured'; paused_low_disk: boolean;
 }
 interface X9Envelope { exit: number; export: Record<string, X9Export>; health: { pass: string | null; warn: X9Item[]; fail: X9Item[] } }
 const X9_MIN = 60_000;
@@ -5762,6 +5957,43 @@ describe('W1-B4 Task 9: the census records when the oldest due blob became due (
     expect(r.due).toBe('2');
     expect(r.oldest).toBe(String(r.tB));
   });
+
+  it('a due blob nothing on disk holds back dates by the last write its recorded files saw, never the epoch; one with no clock on record leaves the due-since unmeasured, never "nothing due"', async () => {
+    const sw = (await import('../../ccd/history/sweep.mjs')) as unknown as X9Sweep;
+    const box = x9H.makeHistoryBox('ccrc-hist-x9-census-gone-');
+    x9Store.createStore(box.home);
+    const home = box.homes[0]!;
+    const now = Date.now();
+    const tGone = Math.floor((now - 4 * X9_HOUR) / 1000) * 1000;
+    const db = x9Store.openWriter(x9Lib.historyPaths(box.home).dbFile);
+    try {
+      const t = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)').run('90909090-0000-4000-8000-000000000003').lastInsertRowid);
+      // Ingested, then deleted out of band: its path no longer stats, and its recorded mtime is all that dates it.
+      const f = Number(db.prepare("INSERT INTO ingest_files (dev, ino, source_key, transcript_pk, mtime_ns, status, parser_version) VALUES (1, 4, '', ?, ?, 'live', 1)")
+        .run(t, BigInt(tGone) * 1_000_000n).lastInsertRowid);
+      db.prepare('INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES (?, ?, ?)')
+        .run(x9Path.join(home, 'projects', '-home-u-tree-demo', 'x9-gone.jsonl'), f, now);
+      const b = Number(db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?)')
+        .run(x9Hash('sha256').update('x9 gone').digest(), x9Store.CODEC, x9Store.brotli(Buffer.from('x9 gone')), 7).lastInsertRowid);
+      db.prepare("INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, 1, ?, ?, ?)")
+        .run('90909090-0000-4000-8000-0000000000c1', t, f, b, tGone);
+      /** One whole census over one 180-day home (horizon 150 days: only a file gone from disk makes this row due). */
+      const census = (): string | null => {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('export-census', 1, ?, NULL) ON CONFLICT (step, version) DO UPDATE SET cursor = excluded.cursor, completed_ms = NULL")
+          .run(JSON.stringify({ last: 0, due: 0, overdue: 0, homeDays: { [home]: 180 }, startMs: now, dueOldest: null }));
+        expect(sw.exportCensus(db, now, sw.newBudget(() => now)), 'the census ran to its end').toBe(true);
+        return x9Store.getMeta(db, x9Lib.HEALTH_META.exportDueOldestMs);
+      };
+      expect(census(), 'the recorded last write, 4 h ago: never \'0\' (1970)').toBe(String(tGone));
+      expect(x9Store.getMeta(db, 'export_due')).toBe('1');
+      // The same file with no mtime on record (B1's transcriptFiles reads it as 0): still due and counted, and undated.
+      db.prepare('UPDATE ingest_files SET mtime_ns = NULL WHERE file_id = ?').run(f);
+      expect(census(), 'due but undated is unmeasured, never \'\' (nothing due)').toBe('unmeasured');
+      expect(x9Store.getMeta(db, 'export_due')).toBe('1');
+    } finally {
+      x9Store.closeWriter(db);
+    }
+  });
 });
 
 describe('W1-B4 Task 9: status --json reads the export pass and counts segments; doctor\'s export-due waits for a gap (spec §9.6, §9.15)', () => {
@@ -5806,11 +6038,26 @@ describe('W1-B4 Task 9: status --json reads the export pass and counts segments;
       last_pass_ms: now - 10 * X9_MIN, due_oldest_ms: now - 40 * X9_MIN, paused_low_disk: true,
     });
     expect(e.health.warn.map((i) => i.word)).toContain('export-paused-low-disk');
-    // CONTROL: a store none of them touched.
+    // CONTROL: a store none of them touched. Its first pass's census counted nothing due, so meta holds '' and
+    // due_oldest_ms reads null: nothing due, which is not 'unmeasured'.
     const bare = x9Bound('ccrc-hist-x9-env-bare-', {});
     expect(exportOf(x9Status(bare.box))).toMatchObject({
       segments: 0, segment_bytes: 0, last_pass_ms: null, due_oldest_ms: null, paused_low_disk: false,
     });
+    // No overloaded null: a key no census of this build wrote reads 'unmeasured', never null ("nothing due").
+    const never = x9Bound('ccrc-hist-x9-env-never-', { export_due: '3', [x9Lib.HEALTH_META.exportPassMs]: String(now - 10 * X9_MIN) });
+    const ndb = x9Store.openWriter(x9Lib.historyPaths(never.box.home).dbFile);
+    try { ndb.prepare('DELETE FROM meta WHERE k = ?').run(x9Lib.HEALTH_META.exportDueOldestMs); } finally { x9Store.closeWriter(ndb); }
+    const ne = x9Status(never.box);
+    expect(exportOf(ne).due_oldest_ms).toBe('unmeasured');
+    expect(ne.health.warn.map((i) => i.word), 'an unmeasured due-since fires no wait arm').not.toContain('export-due');
+    // No epoch: a stored '0' is not a time, so status never relays 1970 and doctor never counts 29 million minutes.
+    const epoch = x9Bound('ccrc-hist-x9-env-epoch-', {
+      export_due: '3', [x9Lib.HEALTH_META.exportPassMs]: String(now - 10 * X9_MIN), [x9Lib.HEALTH_META.exportDueOldestMs]: '0',
+    });
+    const ee = x9Status(epoch.box);
+    expect(exportOf(ee).due_oldest_ms).toBe('unmeasured');
+    expect(ee.health.warn.map((i) => i.word)).not.toContain('export-due');
   }, 120_000);
 
   it('doctor\'s inputs through status: a due count with a fresh pass and a young due-since is no WARN; a due-since over two intervals, or a pass over 2 h old, WARNs export-due', () => {
@@ -5835,8 +6082,8 @@ describe('W1-B4 Task 9: status --json reads the export pass and counts segments;
 ```
 
 Expected: red.
-- The census cases fail on the due-since meta: `expected null to be '…'` (no census writes `export_due_oldest_ms` yet). `export_due` already reads `'2'`.
-- The envelope case fails at `toMatchObject`: `last_pass_ms`, `due_oldest_ms` and `paused_low_disk` are absent and `segments` reads 0.
+- The census cases fail on the due-since meta: `expected null to be '…'` (no census writes `export_due_oldest_ms` yet). `export_due` already reads `'2'`, and `'1'` in the gone-file case, whose first assertion fails as `expected null to be '<tGone>'`.
+- The envelope case fails at `toMatchObject`: `last_pass_ms`, `due_oldest_ms` and `paused_low_disk` are absent and `segments` reads 0 (the `never` and `epoch` lines after the CONTROL are not reached until it passes; after Step 7 they hold).
 - The doctor-inputs case fails at `not.toContain('export-due')`: B1's `healthInputsOf` still answers `exportWriterLive: false`, so the first due blob WARNs.
 - In `ccrc-doctor.test.ts`: the steady-state `it` fails (`WARN history: export-due` instead of one PASS line), and so does the `O40 (B4)` row (no `WARN history: export-paused-low-disk: store` line). The two `O41 (B4)` export-due rows already pass on B1's arm, as does B1's untouched overdue row.
 
@@ -5855,8 +6102,10 @@ In `ccd/history/sweep.mjs`, in `exportCensus`, directly after the line `    stat
 In the same function, directly after the line `  setMeta(db, 'export_overdue', String(state.overdue));`, insert:
 
 ```js
-  setMeta(db, HEALTH_META.exportDueOldestMs, typeof state.dueOldest === 'number' ? String(state.dueOldest) : '');
+  setMeta(db, HEALTH_META.exportDueOldestMs, exportDueOldestMeta(state.due, state.dueOldest));   // '', a time, or 'unmeasured': lib decides
 ```
+
+and, in sweep.mjs's `from './lib.mjs'` import, add `exportDueOldestMeta` beside `planExport`. Check: `grep -c 'exportDueOldestMeta' ccd/history/sweep.mjs` prints 2.
 
 In `periodicCensus`, replace the one line
 
@@ -5873,7 +6122,7 @@ with
 In `ccd/history/cli.mjs`, in `emptyEnvelope`, directly after the line `        oldest_row_ms: null, first_due_ms: null, first_deletion_ms: null,`, insert:
 
 ```js
-        last_pass_ms: null, due_oldest_ms: null, paused_low_disk: false,
+        last_pass_ms: null, due_oldest_ms: healthLib.EXPORT_DUE_OLDEST_UNMEASURED, paused_low_disk: false,
 ```
 
 In `readStore`, directly after the line `    ex.first_deletion_ms = num('first_deletion_ms');`, insert:
@@ -5882,7 +6131,9 @@ In `readStore`, directly after the line `    ex.first_deletion_ms = num('first_d
     // W1-B4 Task 9: the export pass's own record (HEALTH_META, Task 1), and its segments counted by name and size,
     // never opened (§9.15 "Who reads it": only the recovery step).
     ex.last_pass_ms = num(healthLib.HEALTH_META.exportPassMs);
-    ex.due_oldest_ms = num(healthLib.HEALTH_META.exportDueOldestMs);
+    // Never num(), which reads an absent key and '' as one null: lib's reader keeps "nothing due" (null) apart from
+    // "no census of this build measured it" ('unmeasured'), and reads no value at or before the epoch as a time.
+    ex.due_oldest_ms = healthLib.readExportDueOldest(meta.get(healthLib.HEALTH_META.exportDueOldestMs));
     ex.paused_low_disk = (meta.get(healthLib.HEALTH_META.exportPaused) ?? '') !== '';
     const segs = env.store_id === null ? { n: 0, bytes: 0 } : segmentCount(join(P.root, healthLib.EXPORT_DIR, String(env.store_id)));
     ex.segments = segs.n;
@@ -5902,7 +6153,7 @@ with
     exportWriterLive: true,        // W1-B4: this build carries the export writer (a build fact, never measured)
     exportPausedLowDisk: exp.paused_low_disk === true,
     exportLastPassMs: typeof exp.last_pass_ms === 'number' ? exp.last_pass_ms : null,
-    exportDueOldestMs: typeof exp.due_oldest_ms === 'number' ? exp.due_oldest_ms : null,
+    exportDueOldestMs: exp.due_oldest_ms === undefined ? healthLib.EXPORT_DUE_OLDEST_UNMEASURED : exp.due_oldest_ms,   // lib's reader made it
 ```
 
 Insert directly above `statusWithHealth`'s own doc comment, the line ``/** `statusEnvelope` with its `health` filled and the store's device named. */`` (B1's cli.mjs puts it on the line before `export async function statusWithHealth(home, nowMs) {`), followed by one blank line, so each function keeps its own doc comment:
@@ -5993,7 +6244,25 @@ cp ccd/history/sweep.mjs "$SCRATCH/sweep.orig"
 mut ccd/history/sweep.mjs "    const prevOldest = typeof state.dueOldest === 'number' ? state.dueOldest : null;" "    const prevOldest = state.dueOldest;"
 (cd server && ./node_modules/.bin/vitest run test/history-export.test.ts -t 'a census a B1 pass started')
 cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
-# Expected RED: expected 'NaN' to be '<tB>'.
+# Expected RED: expected 'unmeasured' to be '<tB>' (the NaN due-since is no time: lib's exportDueOldestMeta writes the word).
+
+# M7 (no overloaded null): the census writes B4's first shape, '' for "due, but undated" as for "nothing due".
+mut ccd/history/sweep.mjs "  setMeta(db, HEALTH_META.exportDueOldestMs, exportDueOldestMeta(state.due, state.dueOldest));   // '', a time, or 'unmeasured': lib decides" "  setMeta(db, HEALTH_META.exportDueOldestMs, typeof state.dueOldest === 'number' ? String(state.dueOldest) : '');"
+(cd server && ./node_modules/.bin/vitest run test/history-export.test.ts -t 'nothing on disk holds back')
+cp "$SCRATCH/sweep.orig" ccd/history/sweep.mjs
+# Expected RED: expected '' to be 'unmeasured' (the file with no mtime on record).
+
+# M8 (no overloaded null): a key no census wrote read as "nothing due".
+mut ccd/history/lib.mjs "  if (v === undefined) return EXPORT_DUE_OLDEST_UNMEASURED;" "  if (v === undefined) return null;"
+(cd server && ./node_modules/.bin/vitest run test/history-export.test.ts -t 'counts segments by name and size')
+cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
+# Expected RED: expected null to be 'unmeasured' (the store whose due-since key was never written).
+
+# M9 (no epoch): B4's first reader, num(), reads '0' as a time.
+mut ccd/history/lib.mjs '  return /^[1-9][0-9]*$/.test(v) ? Number(v) : EXPORT_DUE_OLDEST_UNMEASURED;' '  return Number.isFinite(Number(v)) ? Number(v) : EXPORT_DUE_OLDEST_UNMEASURED;'
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'never fires the wait arm')
+cp "$SCRATCH/lib.orig" ccd/history/lib.mjs
+# Expected RED: expected { word: 'export-due', detail: '… the oldest for 29… min …', … } to be undefined.
 
 git diff --stat -- ccd/history   # the three files show only this task's edits; re-run Step 8 once: green
 ```
@@ -6010,7 +6279,7 @@ git diff --stat -- ccd/history   # the three files show only this task's edits; 
 Then re-run, alone and in the foreground, every B1/B2 test file Task 6 Step 7 changed (its commit body lists them): this task maps `export_paused` into health and status, so a case Step 7 neutralised with `HISTORY_TEST_STATFS_EXPORT` now meets an `export-paused-low-disk` WARN if it reads health. A red there takes Task 6 Step 7's second rule.
 
 Expected: green.
-- `history-cli.test.ts`: its STATUS_SQL cost pin holds, because this task prepares no statement (the new fields come from the meta map `STATUS_SQL.meta` already read, and `listSegments` is a directory listing).
+- `history-cli.test.ts`: its STATUS_SQL cost pin holds, because this task prepares no statement (the new fields come from the meta map `STATUS_SQL.meta` already read, and `listSegments` is a directory listing). Its other cases hold too: at B1's tip (561609adc, fix round 3 included) none asserts the whole export block, as this task's Files list records; re-read its status rows on the base before calling a red there a B4 defect.
 - `history-op.test.ts`: B1's census cases (O38) hold with the census's new field.
 - The fresh-install case stays at `0 warned`: a fresh store's first tick writes no export meta and its census counts nothing due.
 - `single-definition`: no new `process.env` read, no `/history-off` spelling, no vocabulary declared outside lib.
@@ -7595,7 +7864,7 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-export-row-carries-blob⟧ (Tasks 2, 5, 10): A due row is exported with the bytes of every unexported blob it references, whatever that blob's younger referrers, a superset of the ruled rule; segments also carry the family, epoch and transcript rows that place it, and gone files' memberships replay onto `exported:` rows (§9.15; rev 3.1 review, BK11, BK12).
 - ⟦D:history-export-due-per-copy⟧ (Tasks 2, 5, 9): The default due rule reads each row's own copies: a row is due when every one of its holding files (B1's per-row set, its transcript's files, ⟦D:history-export-holding-files-by-transcript⟧) has passed its mtime plus its own home's retention minus 30 days, and a blob when its rows are; one reducer, `EXPORT_REDUCERS.perCopy`, made the default in W1-B2 for the census, doctor's `export-due`, `export-overdue` and `retention-lowered` arms and B4's pass, with no signature change; the node-shortest reducer is history and `retention-lowered` a reminder (§9.6, §9.15; O58; ruled Q15, rev 3.4). B2-defined. B4's `planSegment` takes the same reducer with the same default and the pass passes none (RD1's one clock); the pass also selects, whatever their time, the rows of every transcript the rule makes due now, through the census's own `dueTranscriptKeys`. It replaces B1's row clock (slug `history-export-row-age-early`, now history), on which this plan no longer departs.
 - ⟦D:history-export-pruned-row-stub⟧ (Tasks 2, 5, 10): NEW departure (no spec §16 row). §9.15 says pruned blobs are never exported or counted due and is silent on their rows; a row that falls due after prune tombstoned its blob travels with a byte-less stub (sha256, codec, raw_len), because `entries.blob_id` is NOT NULL and a rebuild would otherwise lose the row and its structure. A stub is never marked exported, and its size never counts toward the bound (its row's metadata does).
-- ⟦D:history-export-wait-from-census⟧ (Tasks 2, 9): NEW departure (no spec §16 row). "A due blob has waited more than two pass intervals" needs a due-since time the spec gives no clock for; it is measured from the census's oldest due-since (`planExport`'s `oldestDueSinceMs`), from the store's rows and never from a date, so a steady store reads PASS.
+- ⟦D:history-export-wait-from-census⟧ (Tasks 2, 9): NEW departure (no spec §16 row). "A due blob has waited more than two pass intervals" needs a due-since time the spec gives no clock for. It is measured from the census's oldest due-since (`planExport`'s `oldestDueSinceMs`), from the store's rows and never from a calendar date, so a steady store reads PASS. A blob nothing on disk holds back (the reducer answers `-Infinity`) is dated as B2 dates W1-k's holders: by the last write its recorded files saw, else its row's time. It is never dated as the epoch, which would render as 1970 and fire the wait arm the moment the census counted the blob. A blob the census can date by neither is due and counted but undated. The meta value, `status --json`'s `due_oldest_ms` and doctor's input keep three conditions apart: a time; `null`, nothing due; `'unmeasured'`, no census of this build recorded one, or it could date none of the due blobs. Neither `null` nor `'unmeasured'` fires the wait arm; the stale-pass arm still does.
 - ⟦D:history-export-segment-bound-estimated⟧ (Tasks 2, 5): NEW departure (no spec §16 row). §9.15 says a segment holds "at most 256 MiB". The bound counts each taken row's new blob bytes plus `EXPORT_ROW_META_BYTES` (1.5 KiB, chosen) for its metadata, which a prototype measured at 0.8–1.1 KiB per entry with one membership; counting blob bytes alone let a review prototype's files reach 1.14× the bound at 8 KiB blobs and 2.3× at 0.5–2 KiB, and let rows with no new bytes grow a segment and the pass's memory until the wall clock. A segment therefore lands near 256 MiB, can pass it only by the estimate's error, and holds at most about 175,000 rows; the first due row of a pass still travels whatever its size (so every pass moves the export forward), which the preflight's floor margin absorbs.
 - ⟦D:history-recovery-replay⟧ (Tasks 3, 10): Restore and rebuild share one resumable derivation step, under the free-space floor, that replays redaction pairs first, then the journal (drain-time verdicts at their lines' positions, never a `$REG` read; unknown records skipped and counted), then the export (every segment's blobs before any rows), while drain and ingest wait; replay writes no journal records (§9.14; rev 3.1, ruled Q6). B2-defined; B4 adds the export half as the phases `export-blobs` and `export-rows`, between `apply` and `reindex`.
 - ⟦D:history-b4-after-b2⟧ (Tasks 3, 10, 12): W1-B4 merges after B2, and is live before the earliest measured due date, at the latest 2026-12-19 (§9.15, §10.5; rev 3.2 review, FE15). B2-defined.
