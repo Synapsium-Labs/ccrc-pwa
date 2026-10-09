@@ -889,3 +889,123 @@ exact-head CI run 37688188835 success; the full-suite red remains explicitly unw
 - Once #321 lands at that exact head, verify the accepted tip in `main`, close run 306 `final:true`, land this approved
   plan and programme ledger through their own PR, then dispatch run 360's fresh worker from merged `main`. The worker
   must never depend on this unmerged coordinator worktree for its plan.
+
+### Run 360 dispatch package — prepared, not dispatched
+
+This package is the durable handoff for the fresh wave-3 worker. It records preparation only: run 360 remains
+`planned`, with no worker and no items. Dispatch is forbidden until #321 has merged at its accepted head, run 306 has
+closed `final:true`, the plan/ledger PR has merged, and the claim preflight below has been remeasured and settled.
+
+- **Plan and base.** Execute all 16 tasks in
+  `docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` from the merged `main` commit that contains
+  this approved plan. The dispatch brief must replace this descriptive base with that immutable merged commit before
+  it is sent; no worker may read the coordinator's branch or worktree.
+- **Execution and branch discipline.** Use `superpowers:subagent-driven-development` task by task. Commit on the
+  workspace's own branch, never a separate feature branch. Implementers run Sonnet at `high`; each task gets an
+  Opus `high` reviewer; scouts use Haiku. Dynamic workflows stay off.
+- **Route, atomically with dispatch.** `{"class":"opus","effort":"xhigh","subagent":"sonnet","workflow":"off","compact":"40"}`.
+  The main loop stays Opus `xhigh` because the preceding work required multiple fix rounds for missed guards; there
+  is no evidence for demotion. The five route fields do not encode the reviewer/scout split, so the brief states it.
+- **Deviation block.** Numbers 4633 through 4664 were issued for wave 3. Define actual departures in numerical order,
+  in the commit that first cites each one, and record every unused number as unused. Do not allocate another block.
+- **Authority boundary.** This wave observes and reports only. It may ingest bounded evidence, correlate only exact
+  evidence, append immutable evidence and linked lease identity, record unresolved/unowned work and measured absence,
+  repair the disposable synchronous SQLite projection, and report observation health. It may not invent parentage;
+  dispatch, adopt, retain, resolve, or promote generic work; write a carrier; start a lease clock; mint audit or cleanup
+  tokens; nominate or execute cleanup; weaken admission; or emit a PWA `delegation` frame. Future-facing columns land
+  inertly. Wave 3 performs no physical journal compaction.
+- **Durability decisions.** O1–O5 above bind this wave: no activity ID escapes before its checkpoint row and mapping
+  are durable; pruning remains disabled throughout reconstruction and after reconstruction failure; the authoritative
+  files are `~/.ccrc/delegation-events.log` and `~/.ccrc/delegation-checkpoint.json`, with
+  `coordination-snapshot.json` committing a consistent snapshot; the accepted naming record's `journalId` fixes the
+  natural-key mapping; and durable order is journal append, journal fsync, next-state construction, checkpoint temp
+  write, temp fsync, atomic rename, parent-directory fsync, then SQLite projection. These are approved wave-3
+  implementation answers, not retroactive spec requirements.
+- **Evidence traps carried literally.** Recovery must inspect retained evidence applicable to a checkpoint-missing
+  activity even when it predates `appliedJournalSequence`. D-4008's failed lock stat, unreadable first log, and
+  unreadable `gitdir` are never positive adoption or cleanup evidence. Carry all eight amendment slugs:
+  `agent-input-keys-are-the-callers`, `post-turn-subagentstop-is-unpaired`,
+  `real-payloads-carry-scratchpad-dir`, `toolsearch-may-precede-a-workflow-call`,
+  `parent-stop-does-not-bound-workflow-start`, `workflow-phase-is-not-always-written`,
+  `teardown-hook-event-names-another-session`, and `tool-agent-id-alone-is-unjoined-evidence`.
+- **Order that cannot move.** Task 1 is the red-first exact-pane ownership correction and its sole first implementation
+  commit is `fix(hooks): resolve ownership from the exact pane`. Task 2 is the separate raw-`agent_id` turn-marker
+  correction. Task 3 repairs all three D-3999 recapture defects before `--missing` can establish coverage. Task 6 then
+  measures the current supported Claude lanes and captures every missing version before parser/correlation logic is
+  implemented; never infer the live lane set from the dated plan.
+- **Rollout handoff, not worker authority.** Implementation itself does not deploy. After independent review, merge,
+  and release, rollout is fleet/agent first, then server, then skills/doctor verification across rostered homes;
+  validate journal/checkpoint recovery and coordination snapshots before the seven-day observation clock starts. No
+  hand rollout, stable promotion, marker mutation, cleanup, or PWA behavior belongs to the worker.
+
+**Claim snapshot, measured 2026-10-09 immediately before this package was written.** It is evidence of current
+contention, not consent and not authorization for a later dispatch. The coordinator must re-read all active claims
+immediately before dispatch and obtain explicit region consent or wait for every remaining overlap:
+
+- Claim 1126, run 347 (`ccrc-pwa-clear-summit`), holds `ccd/session-hook.sh`, directly overlapping Tasks 1, 2 and 5.
+- Claim 1125, run 347, holds `ccd/ccd` and `shared/api.ts`, directly overlapping Tasks 4, 5, 7 and 13.
+- Claim 1124, run 342 (`ccrc-pwa-plain-prairie`), holds `server/src/server.ts`, `server/src/auth/gate.ts`,
+  `server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts` and
+  `server/test/single-definition.test.ts`, directly overlapping Tasks 4, 13 and 15.
+- Claim 1129, run 350 (`ccrc-pwa-brisk-basin`), holds `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `deploy/deploy.sh`,
+  `README.md`, `CLAUDE.md`, `server/test/ccrc-update.test.ts`, `server/test/install-census.test.ts`,
+  `server/test/ccrc-doctor.test.ts` and `server/test/install-coordinator-skill.test.ts`, directly overlapping Tasks
+  8, 14, 15 and 16.
+- Claims 1123 and 1127 were also live but had no direct path overlap with the approved wave-3 file map. No overlap
+  above has been consented for run 360. Expiry timestamps are deliberately not a settlement; remeasurement governs.
+
+**Wave-specific dispatch brief.** Send this prose only after substituting the immutable merged plan commit and the
+fresh claim result where bracketed; send it in the same `/dispatch` request as the route and all 16 item titles:
+
+> Execute delegation-broker wave 3 of 7, Observe (report-only), from
+> `docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` at merged commit `[PLAN_COMMIT]`, Tasks 1–16
+> in order. Use `superpowers:subagent-driven-development` task by task. Commit on this workspace's own branch, never a
+> separate feature branch. Route: Opus `xhigh` main loop, Sonnet `high` implementers, Opus `high` per-task reviewers,
+> Haiku scouts, workflows off, compact 40. The issued deviation block is 4633–4664: define departures in order and
+> record every unused number as unused. `[CLAIM_SETTLEMENT]`
+>
+> Keep the wave report-only. Hooks are evidence, never authority. Do not invent a parent; create or attach a run;
+> adopt, retain, resolve, promote, or dispatch generic work; write a carrier; activate a lease clock; mint an audit or
+> cleanup token; nominate or execute cleanup; weaken admission; emit a PWA `delegation` frame; or physically compact
+> the journal. O1–O5 bind implementation exactly: IDs do not escape before checkpoint durability; pruning remains
+> disabled through reconstruction and after failure; the journal/checkpoint pair plus `coordination-snapshot.json`
+> are authoritative; the accepted naming record's `journalId` fixes immutable activity identity; and application is
+> journal append → journal fsync → next state → checkpoint temp write → temp fsync → atomic rename → parent-directory
+> fsync → SQLite projection. Retained evidence before the checkpoint position still participates when the checkpoint
+> lacks its activity. D-4008's three unreadable/failed folds are never positive evidence.
+>
+> Carry the amendment slugs `agent-input-keys-are-the-callers`, `post-turn-subagentstop-is-unpaired`,
+> `real-payloads-carry-scratchpad-dir`, `toolsearch-may-precede-a-workflow-call`,
+> `parent-stop-does-not-bound-workflow-start`, `workflow-phase-is-not-always-written`,
+> `teardown-hook-event-names-another-session`, and `tool-agent-id-alone-is-unjoined-evidence`. First, write the exact
+> red tests and make the exact-pane lookup correction alone as `fix(hooks): resolve ownership from the exact pane`.
+> Make the raw-`agent_id` turn-classifier correction a separate second commit. Repair all three D-3999 recapture defects
+> before relying on `--missing`; then remeasure the currently supported Claude lane versions and capture every missing
+> version before parser or correlation implementation. Do not infer current versions from the plan date.
+>
+> Work red-first and mutation-check every named W3-M guard. Keep `DatabaseSync` synchronous and the wire additive at
+> protocol 1. Implementation does not deploy. After independent review, merge and release, the handoff rollout is
+> fleet/agent first, then server, then skills and `delegation-hooks` doctor verification across every rostered home;
+> recovery and snapshot validation precede the seven-day health window. Report every red honestly and send one
+> `wave-done` only after the plan's complete
+> foreground verification.
+
+**Initial dispatch items.** These are created atomically by `/api/runs/360/dispatch`; do not pre-create or settle them
+through `/api/runs/360/items`:
+
+1. Exact-pane hook ownership — mandatory first implementation commit
+2. Bare `agent_id` main-turn classification — separate second commit
+3. Close D-3999 recapture obligations before using `--missing`
+4. Shared vocabulary and additive measured IO
+5. Fleet spool writer and hook registration
+6. Recapture the current supported Claude lanes
+7. One six-table migration and synchronous projection
+8. Journal, checkpoint, recovery, retention, backup, and restore
+9. Per-bucket ingestion with honest gaps
+10. Extend the existing worktree census without narrowing failures
+11. Pure join qualification and correlation ladder
+12. Pure report-only reconciliation and circuit breaker
+13. Watcher sibling lane and seven-day health
+14. Doctor ownership and remedies
+15. Coordinator intent route, exact CLI syntax, and clause 17
+16. Integrated compatibility, recovery, scope, and rollout gate
