@@ -17,7 +17,7 @@ spec's after wave 1.
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
 | 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGED** `f82cb9fbc` (PR #330, 2026-10-09 06:44:52 UTC; run 320 done, child reclaim queued; released as v0.0.133 at 06:45:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `d9adc2c5a` onto `main` at `d33a566bb` (`4512d88d`). That tip is `fa384df19`, which review 352 read, plus a clean merge of `main`. Every Linux leg was green. Was: **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
-| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; numbers 4414 and 4551 defined, bare until #341 merges; review run 362 dispatched 12:04 UTC to `ccrc-pwa-brisk-delta` (the held-out panel plus three lenses: security; the first live rotation; what the operator sees). Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
+| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **FIX ROUND 1 SENT** 2026-10-09 14:32 UTC (mail 4124, `rulings-run350-fix1.md`) on review 362 at `569bb148c`: F1 meets class 6, so the bar gives the one round; no number assigned (reserve 4552 to 4560). A scoped review follows. Was: **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; numbers 4414 and 4551 defined, bare until #341 merges; review run 362 dispatched 12:04 UTC to `ccrc-pwa-brisk-delta` (the held-out panel plus three lenses: security; the first live rotation; what the operator sees). Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
@@ -404,6 +404,39 @@ spec's after wave 1.
       on part A and then restarting mid-rotation, and server-first. It proves no fleet 401, the leaked value refused,
       and the worker's stated gaps closed;
     - **what the operator sees:** every doctor line, and the card for every state, at phone width and desktop.
+- **2026-10-09 14:32 UTC: review 362 closed (part B at `569bb148c`); the one fix round sent, by the committed bar.**
+  - **The panel:** the held-out three lenses, the three the brief named, and one of the reviewer's own (R0 and
+    new-pin mutation), with a second round on the gaps a completeness critic named. 115 agents ran, with none dead
+    and none unexamined; 11 findings were confirmed.
+  - **The first live rotation, simulated (classes 1 and 2):** none found.
+    - Part A (`f82cb9fbc`) and the tip were loaded side by side, with `CCRC_AUTH=on`, each build's own gate rows, a
+      TLS front, and a release-lane fleet box moving from v0.0.133's `ccrc` to the tip's.
+    - Every case started from the state part A's boot wrote live at 07:42.
+    - 18 of 18 cases passed: fleet first with restarts at the hand-out, in promotion (three kill points) and in
+      grace; part A running the whole rotation; and server first.
+    - No lane answered 401 at any step: `ccrc-api` mail and ledger, notify.sh, the agent link, pool sync and update
+      sync.
+    - At the end the old value answers `probe: 401 refused`, its digest is in the retired list, and written back it
+      is not adopted.
+    - The simulation has teeth: two planted mutations each red it.
+  - **Not measured by the review:** whether the live fleet box's `ccrc-api` passes the verb's stale-client check. The
+    coordinator measured it read-only: it resolves to the release tree's `ccd/ccrc-api` (v0.0.136), with no `-H
+    x-ccrc-mail-token` line and with `-K -`, so it passes.
+  - **Classes met:**
+    - F1, class 6: after a failed boot mint, the card says "no current value", yet shows generation #2 and "fleet
+      confirmed".
+    - F3, class 6, fault-only: the `behind` sentence says "older".
+    - F2, ruled class 11: the spec's named pin for the atomic, fsynced fleet-file write cannot red.
+    - F4, class 10: the doctor's generation-id shape and sync words are spelled again with no L0 pin.
+    - F5, class 11: the no-ship pin matches only the name `ship_secret`.
+  - **Coverage and prose, fixed in the same round:** F6 to F11.
+  - **Rulings:**
+    - F1 is fixed in `view()`: no current generation and no fleet confirmation while the holder has none.
+    - F2's three guards are pinned: temp-then-rename, the file `fsync`, and the directory `fsync`.
+    - F3's sentence becomes "not on the current generation".
+    - F4 and F5 are pinned in this round.
+  - **Residue for row 2a, or wave 2:** the refuted R-a (an in-repo slim live-topology simulation), R-f, R-g, R-i and
+    R-j. R-j asks whether D-4410's no-foreign-adoption rule extends to the sibling value files.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
