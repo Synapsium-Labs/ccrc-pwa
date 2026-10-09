@@ -15,10 +15,10 @@ import {
   fileBothRoleWriter, fileTokenStore, readRetired, readState, tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile,
 } from '../src/token/files.js';
 import {
-  CONFIRM_DEADLINE_MS, GRACE_MS, HOLD_REPROBE_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, type GateNode, type SyncResult,
+  CONFIRM_DEADLINE_MS, GRACE_HARD_MS, GRACE_MS, HOLD_REPROBE_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, type GateNode, type SyncResult,
 } from '../src/token/policy.js';
 import type { TokenStore, TokenSyncLink } from '../src/token/ports.js';
-import { extractToken } from '../src/coord/token.js';
+import { checkMailToken, extractToken } from '../src/coord/token.js';
 import { AgentOpError, LinkNotSentError } from '../src/remote/client.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -1684,5 +1684,159 @@ describe('a retired presentation on a box-token lane owes one forward rotation, 
       expect(r.agent.calls).toBe(base);
       expect(r.driver.view()).toMatchObject({ hold: 'agent-predates-op', rotationOwed: true, owedWhy: 'retired-presented' });
     } finally { await r.app.close(); }
+  });
+});
+
+// ── D-4414 (review 352 F2, F3, F6): no path retires or drops a value without its durable digest, and no failure makes
+// boot adopt a value it did not write ───────────────────────────────────────────────────────────────────────────
+/** A recorded both box over a fixture home: boot, the fleet-file writer (which can be made to fail), a shared clock. */
+async function bothAt(home: string, ctl: { off: number; writerFails: boolean; lockDirForBoot?: boolean }): Promise<{
+  driver: BoxTokenDriver; boot: BootResult; paths: ReturnType<typeof tokenPaths>; printed: string[]; now: () => number }> {
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  const paths = tokenPaths(path.join(home, '.ccrc', 'mail.token'), home);
+  const now = (): number => Date.now() + ctl.off;
+  const printed: string[] = [];
+  if (ctl.lockDirForBoot) chmodSync(path.join(home, '.ccrc'), 0o500);
+  let boot: BootResult;
+  try {
+    boot = await bootBoxToken({ mailTokenPath: paths.current, home, role: 'both', roleSource: 'recorded', fleetMode: 'local', now: now() });
+  } finally { if (ctl.lockDirForBoot) chmodSync(path.join(home, '.ccrc'), 0o700); }
+  printed.push(...boot.warnings);
+  const own: GateNode = { nodeId: 'x', nodeIdMeasured: true, label: 'self', role: 'both', reachable: true, os: 'linux',
+    caps: ['token-sync'], agentOps: null, updateState: 'idle', reportedPhase: null };
+  const real = fileBothRoleWriter(paths);
+  const driver = new BoxTokenDriver({ store: fileTokenStore(paths), holder: boot.holder, link: null, generation: null,
+    rows: { nodes: () => [own], linkUp: () => false, lastReadyAt: () => null },
+    env: { fleetMode: 'local', role: 'both', roleSource: 'recorded', agentEnvMarksFleet: false },
+    bothWriter: { write: async (v, g) => { if (ctl.writerFails) throw enospc(); await real.write(v, g); } },
+    now, warn: (l) => printed.push(l) }, boot);
+  return { driver, boot, paths, printed, now };
+}
+const retiredIn = async (paths: ReturnType<typeof tokenPaths>): Promise<string[]> => {
+  const rd = await readRetired(paths.retired);
+  return rd.kind === 'retired' ? rd.digests : [];
+};
+
+describe('D-4414 F2: a failing own-write never blocks the previous value\'s retirement at its hard bound', () => {
+  it('own-write failing persistently past hardUntil, then L written back and a restart: L is refused', async () => {
+    const L = 'a'.repeat(64);
+    const home = mkTmp('ccrc-token-e2e-f2-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'mail.token'), `${L}\n`, { mode: 0o600 });
+    const ctl = { off: 0, writerFails: false };
+    const b = await bothAt(home, ctl);
+    await b.driver.tick();                                               // G1 promoted by the own write: L is previous, in grace
+    expect(existsSync(b.paths.previous)).toBe(true);
+    ctl.writerFails = true;                                              // the fleet file can no longer be written (ENOSPC / EACCES)
+    ctl.off = 2 * 60_000;
+    expect(await b.driver.rotateNow(b.now())).toMatchObject({ ok: true, outcome: 'started' });
+    await b.driver.tick();
+    expect(b.driver.view()).toMatchObject({ lastFailure: 'write-failed' });
+    ctl.off = GRACE_HARD_MS + 5 * 60_000;                                // past L's hard bound, the write still failing
+    await b.driver.tick();
+    expect(b.driver.view()).toMatchObject({ lastFailure: 'write-failed' });
+    expect(await retiredIn(b.paths), 'L\'s digest is durable').toEqual([valueDigestHex(L)]);
+    expect(existsSync(b.paths.previous)).toBe(false);
+    expect(checkMailToken(b.boot.holder, L)).toBe('bad');
+    expect(b.printed.filter((l) => l.includes('the previous value was retired at the hard bound') || l.includes('grace ended'))).toHaveLength(1);
+    // the write-back and the restart
+    rmSync(b.paths.current);
+    writeFileSync(b.paths.current, `# an older deploy.sh shipped this\n${L}\n`, { mode: 0o600 });
+    ctl.writerFails = false;
+    const b2 = await bothAt(home, ctl);
+    expect(checkMailToken(b2.boot.holder, L)).toBe('bad');
+    expect(b2.boot.holder.currentValue()).not.toBe(L);
+    expect(b2.boot.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
+    const text = [...b.printed, ...b2.printed].join('\n');
+    expect(text.includes(L) || text.includes(valueDigestHex(L))).toBe(false);
+  });
+});
+
+describe('D-4414 F3: a value file is never deleted before its digest is durable', () => {
+  /** L adopted and rotated away (a previous in grace), the server stopped, and the previous file made unreadable. */
+  async function restartedOverUnreadablePrevious(): Promise<{ r: Rig; L: string; fresh: string; prev: string }> {
+    const L = 'e'.repeat(64);
+    const first = await rig({ handMade: L });
+    await first.driver.tick();
+    const fresh = first.fleetValue() as string;
+    await first.app.close();
+    const prev = tokPaths(first).previous;
+    chmodSync(prev, 0o000);
+    const r = await rig({ home: first.home, fleetHome: first.fleetHome });
+    return { r, L, fresh, prev };
+  }
+
+  it.skipIf(isRoot)('boot keeps an unreadable previous file; at the hard bound the driver keeps it, warns once, and records the digest once a read works', async () => {
+    const { r, L, prev } = await restartedOverUnreadablePrevious();
+    try {
+      expect(r.boot.warnings.some((w) => w.includes('cannot be read (EACCES)'))).toBe(true);
+      expect(r.boot.state?.previous, 'the record of the previous value is kept').not.toBeNull();
+      expect(await r.lane(L), 'the accept set does not hold a value it cannot read').toBe(401);
+      r.clock.offset = GRACE_HARD_MS + 1000;                              // past the hard bound
+      await r.driver.tick();
+      await r.driver.tick();
+      expect(existsSync(prev), 'no deletion').toBe(true);
+      expect(await retiredDigests(r)).toEqual([]);
+      expect((await stateOf(r)).previous).not.toBeNull();
+      expect(await r.lane(L), 'still dropped from the accept set, in memory').toBe(401);
+      expect(r.printed.filter((l) => l.includes('the read is retried each tick'))).toHaveLength(1);
+      chmodSync(prev, 0o600);
+      await r.driver.tick();                                              // a later tick: the read works
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      // The rotation that boot owed then ran, so the previous slot holds that rotation's value: never L's file.
+      expect(existsSync(prev) ? readFileSync(prev, 'utf8').includes(L) : false).toBe(false);
+      expect(r.boot.holder.currentValue()).not.toBe(L);
+      await r.app.close();
+      writeBack(r.home, L);                                                // a write-back is refused
+      const r3 = await rig({ home: r.home, fleetHome: r.fleetHome });
+      try {
+        expect(await r3.lane(L)).toBe(401);
+        expect(r3.boot.holder.currentValue()).not.toBe(L);
+      } finally { await r3.app.close(); }
+      const text = [...r.printed].join('\n');
+      expect(text.includes(L) || text.includes(valueDigestHex(L))).toBe(false);
+    } finally { if (existsSync(prev)) chmodSync(prev, 0o600); await r.app.close().catch(() => {}); }
+  });
+
+  it.skipIf(isRoot)('a promotion over an unreadable previous value does not overwrite its file: it waits, and retires it with its digest first', async () => {
+    const { r, L, fresh, prev } = await restartedOverUnreadablePrevious();
+    try {
+      const ino = statSync(prev).ino;
+      expect(await r.driver.rotateNow(Date.now() + r.clock.offset)).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();
+      expect(statSync(prev).ino, 'the file L\'s value is in is still the same file').toBe(ino);
+      expect(r.boot.holder.currentValue(), 'nothing was promoted over it').toBe(fresh);
+      expect(await retiredDigests(r)).toEqual([]);
+      chmodSync(prev, 0o600);
+      await r.driver.tick();                                              // the generation read confirms G2: L is retired, then G2 promoted
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      expect(r.boot.holder.currentValue()).not.toBe(fresh);
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+      expect(await r.lane(L)).toBe(401);
+    } finally { if (existsSync(prev)) chmodSync(prev, 0o600); await r.app.close().catch(() => {}); }
+  });
+});
+
+describe('D-4414 F6: a failed foreign mint keeps its owed rotation', () => {
+  it.skipIf(isRoot)('foreign posture, a failed mint, then the retry: the rotation owed is retired-written-back and the fleet file is rewritten', async () => {
+    const H = 'b'.repeat(64);
+    const home = mkTmp('ccrc-token-e2e-f6-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const paths = tokenPaths(path.join(home, '.ccrc', 'mail.token'), home);
+    writeFileSync(paths.current, `${H}\n`, { mode: 0o600 });             // the hand-made value, shipped to both files
+    await writeFleetTokenFile(paths.fleetFile, H);
+    writeFileSync(paths.retired, '{"v":2,"retired":[]}\n', { mode: 0o600 });   // an unusable retired file: the foreign posture
+    const ctl = { off: 0, writerFails: false, lockDirForBoot: true };
+    const b = await bothAt(home, ctl);                                   // the mint fails: the directory is read-only during boot
+    expect(b.boot.mintFailed).toBe(true);
+    expect(b.boot.mintOwed).toBe('retired-written-back');
+    expect(b.driver.view().stalled).toMatchObject({ why: 'mint-failed' });
+    await b.driver.tick();                                               // retry-mint, then the owed forward rotation, own-written
+    const fresh = b.boot.holder.currentValue() as string;
+    expect(fresh).not.toBe(H);
+    expect(extractToken(readFileSync(paths.fleetFile, 'utf8')), 'the fleet file no longer holds the foreign value').toBe(fresh);
+    expect(checkMailToken(b.boot.holder, H)).toBe('bad');
+    expect(b.printed.some((l) => l.includes('rotation started') && l.includes('retired-written-back'))).toBe(true);
+    expect(b.driver.view()).toMatchObject({ origin: 'rotated', rotationOwed: false, fleetConfirmed: 'own-write' });
   });
 });

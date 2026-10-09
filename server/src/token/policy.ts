@@ -323,7 +323,10 @@ export function backoffMs(failures: number): number {
 /** `state` may be null: a boot whose mint failed with no history has none (an addition to the contract's
  *  non-null parameter). */
 export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; generation: GenerationObservation | null;
-  rotateRequested: boolean; backoffUntil: number | null; now: number }): DriverAction {
+  rotateRequested: boolean; backoffUntil: number | null; now: number;
+  /** D-4414 (F3): the driver could not retire the previous value this tick (its file would not read, so no digest could
+   *  be recorded). The retirement waits for a later tick; nothing else is blocked by it. */
+  retireHeld?: boolean }): DriverAction {
   const { state, gate, now } = i;
   if (state === null || (!gate.open && gate.hold === 'mint-failed')) return { kind: 'retry-mint' };
   if (state.promoting !== null) return { kind: 'promote', generation: state.promoting.id, via: 'op-result' };
@@ -332,6 +335,12 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
     if (confirmed !== null) return { kind: 'promote', generation: confirmed, via: 'generation-read' };
   }
   const staged = state.pending.find((p) => p.handedOutAt === null);
+  // D-4414 (F2): the previous value's hard bound retires it (and records its digest) BEFORE the own-write branch below,
+  // which returns `backoff` or a failing promote for as long as the fleet-file write keeps failing: a retirement is never
+  // held behind a write that cannot succeed, or a written-back value would be adopted at the next boot.
+  if (state.previous !== null && now >= state.previous.hardUntil && i.retireHeld !== true) {
+    return { kind: 'retire', why: retireDue(state.previous, now) === 'grace' ? 'grace' : 'hard-bound' };
+  }
   // F3(c): the own-write promote waits out the backoff like every other retry; "Rotate now" asks for a stage, not for this.
   if (staged && gate.open && gate.mode === 'both-local') {
     if (i.backoffUntil !== null && now < i.backoffUntil) return { kind: 'backoff', until: i.backoffUntil };
@@ -339,7 +348,7 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
   }
   if (state.previous !== null) {
     const due = retireDue(state.previous, now);
-    if (due === 'grace' || due === 'hard-bound') return { kind: 'retire', why: due };
+    if ((due === 'grace' || due === 'hard-bound') && i.retireHeld !== true) return { kind: 'retire', why: due };
     if (due === 'extend' && !state.rotationOwed) return { kind: 'extend-grace' };
   }
   if (staged) {

@@ -562,6 +562,35 @@ describe('F3(c): the own-write promote waits out the backoff', () => {
   });
 });
 
+// D-4414 (review 352 F2): on a recorded both box a staged own-write generation that keeps failing must never keep the
+// previous value from being retired (and its digest recorded) at its hard bound.
+describe('D-4414 F2: the hard bound retires the previous value before the own-write branch', () => {
+  const G = '1'.repeat(16);
+  const staged = (): BoxTokenState => ({ ...stagedState({ ...base(), rotationOwed: true, owedWhy: 'adopted' }, G, 2000, W(2)),
+    previous: { id: null, seq: 0, graceUntil: 5000, hardUntil: 9000, currentPresented: true, write: W(3) } });
+  const gate = rotationGate(bothLocal());
+  const ask = (now: number, backoffUntil: number | null, retireHeld?: boolean) =>
+    nextAction({ state: staged(), gate, generation: null, rotateRequested: false, backoffUntil, now, ...(retireHeld === undefined ? {} : { retireHeld }) });
+
+  it('past hardUntil with a staged own-write generation (in a backoff or not) the answer is retire, not promote or backoff', () => {
+    expect(ask(9000, null)).toEqual({ kind: 'retire', why: 'grace' });
+    expect(ask(9500, 99_000)).toEqual({ kind: 'retire', why: 'grace' });
+    const unpresented = { ...staged(), previous: { ...(staged().previous as NonNullable<BoxTokenState['previous']>), currentPresented: false } };
+    expect(nextAction({ state: unpresented, gate, generation: null, rotateRequested: false, backoffUntil: 99_000, now: 9500 }))
+      .toEqual({ kind: 'retire', why: 'hard-bound' });
+  });
+
+  it('before hardUntil the own-write branch still goes first (grace alone does not pre-empt it)', () => {
+    expect(ask(6000, null)).toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+    expect(ask(6000, 99_000)).toEqual({ kind: 'backoff', until: 99_000 });
+  });
+
+  it('a retirement the driver could not do this tick (retireHeld) does not block the own-write branch', () => {
+    expect(ask(9500, null, true)).toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+    expect(ask(9500, 99_000, true)).toEqual({ kind: 'backoff', until: 99_000 });
+  });
+});
+
 describe('F7: the timings that bound a live re-probe are pinned by value', () => {
   it('HOLD_REPROBE_MS is one hour (a 55-minute re-probe is faster than the plan, and reds here)', () => {
     expect(HOLD_REPROBE_MS).toBe(60 * 60_000);

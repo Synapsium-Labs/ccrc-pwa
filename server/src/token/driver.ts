@@ -85,6 +85,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
   // D-4410: a retired digest whose append keeps failing is warned about once while it stands.
   private retiringWarned = false;
   private retiredUnreadableWarned = false;
+  // D-4414 (F3): the previous value's file would not read at retirement; warned once while it stands.
+  private previousUnreadableWarned = false;
+  /** D-4414 (F6): the rotation a failed boot mint owed; `retryMint` owes it when the mint finally lands. */
+  private readonly mintOwed: OwedReason | null;
 
   constructor(private readonly deps: DriverDeps, boot: BootResult) {
     this.now = deps.now ?? Date.now;
@@ -92,6 +96,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     this.state = boot.state;
     this.mintFailed = boot.mintFailed;
     this.mintFailedSince = boot.mintFailed ? (boot.state?.mintFailedAt ?? this.now()) : null;
+    this.mintOwed = boot.mintFailed ? boot.mintOwed : null;
     this.door = deps.door ?? new ClaimDoor({ valueOf: (g) => this.deps.holder.pendingValue(g), warn: this.warn });
     this.cur = deps.holder.currentValue();
     for (const p of boot.state?.pending ?? []) {
@@ -229,10 +234,11 @@ export class BoxTokenDriver implements TokenRouteDriver {
       obs = await this.deps.generation.read();
       this.lastObs = obs;
     }
+    let retireHeld = false;   // D-4414 (F3): a retirement that could not record its digest waits for a later tick, and blocks nothing else
     for (let step = 0; step < MAX_STEPS; step++) {
       const now = this.now();
       const a = nextAction({ state: this.state, gate: this.gate(now), generation: obs,
-        rotateRequested: this.rotateRequested, backoffUntil: this.backoffUntil, now });
+        rotateRequested: this.rotateRequested, backoffUntil: this.backoffUntil, now, retireHeld });
       if (a.kind !== 'hold') await this.setHold(null);
       switch (a.kind) {
         case 'none': case 'backoff': return;
@@ -243,7 +249,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
         case 'stage': if (!(await this.stage(a.why, now))) return; break;
         case 'send': await this.inFlight(() => this.send(a.generation, a.nodeId)); return;
         case 'promote': await this.inFlight(() => this.promote(a.generation, a.via)); return;
-        case 'retire': await this.retire(a.why); break;
+        case 'retire': if (!(await this.retire(a.why))) retireHeld = true; break;
         case 'extend-grace': await this.commit(extendedGraceState(this.mustState(), now));
           this.warn('ccrc-server: box token: grace extended: the new value has not been presented yet; a forward rotation is owed');
           break;
@@ -288,7 +294,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
       rec = { dev: after.meta.dev, ino: after.meta.ino, writtenAtMs: Math.ceil(after.meta.mtimeMs) };
       this.warn(`ccrc-server: box token: could not confirm the directory sync after writing ${store.paths.current} (${errno(e)}); the new value is in place`);
     }
-    const owed: OwedReason | null = this.state === null ? null : 'recovered';
+    // D-4414 (F6): a boot mint that failed over a foreign or retired value owes that rotation under its own word (boot cannot
+    // record it with no state); any other mint over a prior state owes 'recovered'.
+    const owed: OwedReason | null = this.mintOwed ?? (this.state === null ? null : 'recovered');
     this.state = mintedState(now, rec, this.state, owed, store.mintGenerationId());
     this.mintFailed = false;
     this.mintFailedSince = null;
@@ -383,7 +391,13 @@ export class BoxTokenDriver implements TokenRouteDriver {
     // A previous value still in grace is retired first: the fleet has confirmed a later one. This is the third exit from
     // Previous (D-4411, beside "grace passed and the new current presented" and the hard bound): it logs the retire
     // action's line and records its digest exactly as that action does (D-4410).
-    if (s0.previous !== null) this.logRetired('grace', await this.retireValue());
+    if (s0.previous !== null) {
+      const early = await this.retireValue();
+      // D-4414 (F3): the previous value's file would not read, so its digest could not be recorded, and step (b) below would
+      // replace that file. The promotion waits for a later tick (the fleet's confirmation stands, so it is selected again).
+      if (early.kind === 'held') return;
+      this.logRetired('grace', early.refused);
+    }
     await this.commit({ ...this.mustState(), promoting: { id } });                                   // (a)
     const renamed = (await store.readValue(store.paths.pending(id))).kind === 'absent';
     let prevWrite = null;
@@ -433,8 +447,12 @@ export class BoxTokenDriver implements TokenRouteDriver {
     this.warn(`ccrc-server: box token: generation #${g.seq} confirmed (${via}) and promoted; the previous value stays accepted for grace`);
   }
 
-  private async retire(why: 'grace' | 'hard-bound'): Promise<void> {
-    this.logRetired(why, await this.retireValue());
+  /** Answers whether the previous value was retired (false: held, to be retried on a later tick; D-4414 F3). */
+  private async retire(why: 'grace' | 'hard-bound'): Promise<boolean> {
+    const r = await this.retireValue();
+    if (r.kind === 'held') return false;
+    this.logRetired(why, r.refused);
+    return true;
   }
 
   /** The retirement line (spec §7.1): one wording for the `retire` action and for the early retirement at a promotion. */
@@ -449,12 +467,28 @@ export class BoxTokenDriver implements TokenRouteDriver {
    *  from that record on every tick and never drops the digest. If the record cannot be written, the value is not
    *  retired (it stays accepted) and this throws, so the tick retries. Then the slot is emptied, the file deleted,
    *  the check run with the retiring value and "retired value refused" recorded (spec §5, §10.3). Answers whether the
-   *  self-check refused it, the stamp it wrote being the only reading of "refused" (D-4407). */
-  private async retireValue(): Promise<boolean> {
+   *  self-check refused it, the stamp it wrote being the only reading of "refused" (D-4407).
+   *
+   *  D-4414 (F3): a file is never deleted before its digest is durable. When the value is not in memory and its file
+   *  cannot be READ (EACCES, EIO...), no digest can be made, so nothing is deleted and nothing is cleared: the file and the
+   *  `previous` record stay, one warning is printed while that stands, and the read is retried on a later tick. The accept
+   *  set is unaffected (a value not in memory is not accepted; one in memory is dropped at its bound by the holder). */
+  private async retireValue(): Promise<{ kind: 'held' } | { kind: 'done'; refused: boolean }> {
     const store = this.deps.store;
     const now = this.now();
     let v = this.prev?.value ?? null;
-    if (v === null) { const r = await store.readValue(store.paths.previous); v = r.kind === 'value' ? r.value : null; }
+    if (v === null) {
+      const r = await store.readValue(store.paths.previous);
+      if (r.kind === 'unreadable') {
+        if (!this.previousUnreadableWarned) {
+          this.previousUnreadableWarned = true;
+          this.warn(`ccrc-server: box token: ${store.paths.previous} cannot be read (${r.code}); it is kept until its digest can be recorded, and the read is retried each tick`);
+        }
+        return { kind: 'held' };
+      }
+      v = r.kind === 'value' ? r.value : null;
+    }
+    this.previousUnreadableWarned = false;
     const digest = v === null ? null : valueDigestHex(v);
     if (digest !== null) {
       await this.commit(retiringRecorded(this.mustState(), digest, now));      // durable BEFORE the value leaves
@@ -465,7 +499,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     await this.landRetiring();
     const refused = v !== null && this.deps.holder.match(v) === null && this.deps.holder.isRetired(v);
     await this.commit({ ...this.mustState(), previous: null, retiredRefusedAt: refused ? now : this.mustState().retiredRefusedAt });
-    return refused;
+    return { kind: 'done', refused };
   }
 
   /** The retired list in memory after a read of the file: its digests plus those still waiting in `box-token.json`
