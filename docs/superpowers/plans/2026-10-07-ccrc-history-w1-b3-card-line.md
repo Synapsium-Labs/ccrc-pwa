@@ -306,6 +306,9 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 - Pins: this task's plan pins (the grammar equals the spec's; the builder answers only grammar-valid lines, the longest 145 chars; the path helpers refuse `.`, `..`, `../x`, a 225-char id and a non-lowercase-UUID uuid before forming a path). The hook's half of each binding is Task 11's.
 - Departures: B1's D-4170 (`history-id-grammar`) (every id and uuid checked before it becomes a path); ⟦D:history-card-fold-and-reserve⟧ (`CARD_LINE_MAX` is the spec's 512 cap, the reserve its + 1; the longest grammar-valid line is 145 characters, and the cap is not tightened here); ⟦D:history-skill-literal-path⟧ (the card spells `~/.local/bin/ccrc`, the grammar's spelling; spec rev 3.3 corrected the slug's §16 row to agree with §8.6, the card line `~/.local/bin/ccrc` and the skill `$HOME/.local/bin/ccrc`, so the spec now agrees and no erratum is left: ruling RC1).
 
+Choices this task makes:
+- **The path helpers check first** (B1's D-4170 (`history-id-grammar`)): `cardDirOf`, `cardFileOf` and `scopeMarkerOf` run `idOk` on the id, and `cardFileOf` runs `UUID_RE` on the uuid, before any path is formed, and throw `TypeError` otherwise. The hook's half of the grammar (the 224-char builtin bound; `.` and `..` refused structurally) is Tasks 8 and 9's.
+
 - [ ] **Step 1: Confirm the B1 and B2 names this task builds on.** From the repository root:
 
 ```bash
@@ -1787,7 +1790,7 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
   - in place, in `makeIngestCtx`: the return object's tail `fts: false, admitFile, budgetLeft, isBusy };` (B2 Task 8) gains `readRegPresence`, and one sentence joins its doc comment;
   - in `tick`, one comment and three lines directly below B2 Task 8's line `  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);`, inside the `// >>> history tick steps` … `// <<< history tick steps` markers: the tick's facts for the withdrawal, the card step, and the withdrawal;
   - in `tick`, one line directly below B1's spool-directory line `  if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);` (below the `// <<< history tick steps` marker and its FU8 comment, above `  if (ctx.parsed.rosterUnreadable) bump(db, 'roster_unreadable');`);
-  - in `tick`'s doc comment (the `/**` directly above `export async function tick(db, ctx) {`), three numbered items: `cardStep` and `withdrawCards` directly below B2's `deriveNodes` item, and `ensureHistoryDirs` directly below the `markScan` item, every item renumbered in order. B1's `history-sweep.test.ts` describe `tick()'s docstring names its steps in the order the body runs them (review 316 F39)` requires every `name(db` call in the body to be a numbered item, in body order;
+  - in `tick`'s doc comment (the `/**` directly above `export async function tick(db, ctx) {`), three numbered items: `cardStep` and `withdrawCards` directly below B2's `deriveNodes` item, and `ensureHistoryDirs` below the last item (`markScan`, or B4's `exportStep` if B4 merged first; the body calls `ensureHistoryDirs` last on either base), every item renumbered in order. B1's `history-sweep.test.ts` describe `tick()'s docstring names its steps in the order the body runs them (review 316 F39)` requires every `name(db` call in the body to be a numbered item, in body order;
   - in `holdPass` (B1 Task 24), one line directly above its `  return holdExit(word);` (two-space indent, the only such line);
   - in `scheduledPass` (B1 Task 24), one line directly below `      out('history-sweep: held');` (the writer-token hold), and a comment and one line directly below the line that begins `    const run = planRun({ historyOff: false, store: { act: 'open' },` (four-space indent; B2 Task 25 ends it `recovering: isRecovering(db) });`, and `importRoom`'s own two-space, multi-line `planRun({` call is not it).
 - Modify: `server/test/history-card.test.ts`: one import line edited in place and three added below the last top-of-file import; one module-scope helper block and one describe at the end of the file.
@@ -1824,6 +1827,7 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
   - ⟦D:history-fork-spooled⟧ (B2-defined, ruled Q16): consumed by the spooled-fork case only. No B3 code reads an epoch's cause.
 
 **Choices this task makes:**
+- **The card step's place in the tick** (B1's D-4224 (`history-tick-order`)): `cardStep` runs directly after B2's `deriveNodes`, under the same ingest-and-not-paused gate, with `withdrawCards` below it; `ensureHistoryDirs` runs last, below B1's spool-directory line. None of them runs on the recover arm, which never ticks: that pass withdraws every prediction before it runs (Step 6 item 7).
 - **Spooled forks (ruled Q16) need no code here, and one case pins them.**
   - `cardStmts`' `epochOf` reads any confirmed epoch of an unmerged family, whatever its `cause` or `declared_by` (derive.mjs's own rule). So a `fork` epoch is predicted for exactly as a startup, clear or import epoch is, from the drain that confirms it (B2's fork line, observed at the rename as a resume line is) rather than from the 30-minute registry scan B1 left forks to.
   - The registry gate (⟦D:history-card-registry-names-the-session⟧) follows `.uuid`, which `_sync_uuid` moves to the fork's sid. One file per id (⟦D:history-card-one-file-per-id⟧) then removes the parent's prediction, as after a `/clear`.
@@ -2777,7 +2781,7 @@ import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';
   ensureHistoryDirs(db, ctx.home);
 ```
 
-  4a. Name the three new steps in `tick`'s doc comment, the `/**` directly above `export async function tick(db, ctx) {`. B1's `history-sweep.test.ts` describe `tick()'s docstring names its steps in the order the body runs them (review 316 F39)` reads every `name(db` call in the body (comments stripped; `bump`, `countOutside` and `scanDue` excepted) and requires each to be an item matching `^\s*\*\s+\d+\.\s+`name``, listed in the order the body first calls them. `cardStep(db`, `withdrawCards(db` and `ensureHistoryDirs(db` are new calls, so the case `every step the body calls with db is listed` reds without this edit. From the repository root:
+  4a. Name the three new steps in `tick`'s doc comment, the `/**` directly above `export async function tick(db, ctx) {`. B1's `history-sweep.test.ts` describe `tick()'s docstring names its steps in the order the body runs them (review 316 F39)` reads every `name(db` call in the body (comments stripped; `bump`, `countOutside` and `scanDue` excepted) and requires each to be an item matching `^\s*\*\s+\d+\.\s+`name``, listed in the order the body first calls them. `cardStep(db`, `withdrawCards(db` and `ensureHistoryDirs(db` are new calls, so the case `every step the body calls with db is listed` reds without this edit. The script is order-independent with B4, as B4's own is. `cardStep` and `withdrawCards` go directly below the `deriveNodes` item. `ensureHistoryDirs` goes below the LAST item, whatever it is: the body calls it below B1's spool-directory line, after the `// <<< history tick steps` marker, so it is the body's last `name(db` call on every base. That last item is `markScan` on B1 and B2, or B4's `exportStep` if B4 merged first (B4 calls it directly above that marker, after `markScan`). The last item's closing `.` becomes `;` when it has one, with no assertion on it, and the new item takes the `.`. From the repository root:
 
 ```bash
 python3 - <<'PYEOF'
@@ -2804,9 +2808,12 @@ lines[i + 1:i + 1] = [
     ' * 0. `withdrawCards`: every card/ prediction unlinked when this tick ran no card step over a caught-up ingest',
     ' *     (ruling RC2: fail closed; lib decideCardWithdraw names the reason);',
 ]
-j = after('markScan')
-assert lines[j].endswith('.'), lines[j]
-lines[j] = lines[j][:-1] + ';'
+names = [m.group(1) for l in lines if (m := item.match(l))]
+prev = names[-1]                                     # the body's last step before this one: markScan, or B4's exportStep
+assert prev in ('markScan', 'exportStep'), names
+j = after(prev)
+if lines[j].endswith('.'):
+    lines[j] = lines[j][:-1] + ';'
 lines[j + 1:j + 1] = [
     ' * 0. `ensureHistoryDirs`: last, below the spool/ line the next sentence names, scope/ and card/ made 0700, a link',
     ' *     or a file there refused and counted (card.mjs; W1-B3 Task 5).',
@@ -2818,11 +2825,11 @@ for k, l in enumerate(lines):
         lines[k] = re.sub(r'^ \*\s*\d+\.', ' *' + f'{n:>3}' + '.', l, count=1)
 t = t[:start] + '\n'.join(lines) + t[at:]
 open(p, 'w', encoding='utf8').write(t)
-print(f'tick doc comment: {n} steps')
+print(f'tick doc comment: {n} steps, ensureHistoryDirs at {n}, below {prev}')
 PYEOF
 ```
 
-Expected: `tick doc comment: <n> steps`, where `<n>` is the count B1 and B2 left plus three (B1 left 16; B2 left 18, with its Task 8's `deriveNodes` at 15 and its Task 29's `beltNodesStep` at 7; so 21 here). The items keep B1's form, ` *  9.` below ten and ` * 10.` from ten.
+Expected: `tick doc comment: 21 steps, ensureHistoryDirs at 21, below markScan` on a base with B1 and B2 only (B1 left 16; B2 left 18, with its Task 8's `deriveNodes` at 15 and its Task 29's `beltNodesStep` at 7; so 21 here), or `tick doc comment: 22 steps, ensureHistoryDirs at 22, below exportStep` if B4 merged first (its `exportStep` at 19, below `markScan`). An assertion error means the list is not one this plan knows: read `tick` and its doc comment, place each item where the body calls it, and report it. The items keep B1's form, ` *  9.` below ten and ` * 10.` from ten, and the numbering runs 1 to `<n>` in body order, which is what B1's F39 describe reads (its `every listed step is called in the body, in the listed order` and `every step the body calls with db is listed`).
 
   5. In `holdPass`, directly above its line `  return holdExit(word);`, add:
 
@@ -3018,6 +3025,7 @@ git commit -m "feat(history): write and consume card/<id>/<uuid>.txt at end-of-f
 - Known undercount, listed in the PR body's fixed `### Known W1-e distortions` (Task 14): a boundary whose parse crashed before its leaf was written (RB5's `leaf-crashed` marker) has no leaf, so its delivery is never measured.
 
 **Choices this task makes:**
+- **The delivery counters are keyed by the producer** (B1's D-4196 (`history-producer-backend`)): `card_served:<backend>` and `card_id_mismatch:<backend>`, where `<backend>` is the boundary's producer, the first real assistant row after its summary (`unknown` for a NULL or `<synthetic>` model), never the last row before it.
 - **Spooled forks (ruled Q16) change nothing in the measure.** A leaf is measured in its own boundary's holding copy: `holdingCopyOf` picks among the files of that boundary's transcript (`boundaries.transcript_pk`, the first claim). So a parent's leaf is read in the parent's copy, never in a fork's file that copied its boundary and the SessionStart attachment after it, and no attachment is counted for two leaves. A fork's own leaves are measured in the fork's copy, as any epoch's are. The measure reads no epoch cause and keys nothing by one, and a fork adds no counter, so this task gains no case.
 - **`attachmentOf` parses the decoded body with `JSON.parse`, not B1's `parseStoredJson` (accepted by the coordinator).** `parseStoredJson` carries the nesting bound of B1's D-4345 (`history-json-structure-bound`), but it lives in `sweep.mjs`, which `card.mjs` may not import, and B1's census scans `sweep.mjs` only. This fails closed: a body nested too deep for `JSON.parse` throws, `attachmentOf`'s catch returns `null`, and the measure reads no body for that row (no card id, so it counts nothing served). The body is already bounded by `CARD_ATTACHMENT_MAX_BYTES` (1 MiB, by its stored `raw_len`) before it is decoded.
 
@@ -3808,7 +3816,7 @@ print(f'tick doc comment: {n} steps')
 PYEOF
 ```
 
-Expected: `tick doc comment: <n> steps`, one more than Task 5 left (22: B1's 16, B2's `beltNodesStep` and `deriveNodes`, Task 5's three, and this one).
+Expected: `tick doc comment: <n> steps`, one more than Task 5 left (22: B1's 16, B2's `beltNodesStep` and `deriveNodes`, Task 5's three, and this one; 23 if B4 merged first, with its `exportStep` below `markScan`, which this item does not touch).
 
   3. Check, from the repository root:
 
@@ -3909,6 +3917,7 @@ git commit -m "feat(history): collect purged sessions' scope markers and card di
 - ⟦D:history-scope-marker-cleared-on-undecided⟧ NEW, ruled RC1: accepted as implemented. §5.1 says a set-but-empty verdict writes nothing, and puts the write after `_hook_compact_pre`, which runs after the hookstate write's two `exit 0`s. Either leaves a fresh `main` marker from an earlier compaction of the same psid in place, and the next SessionStart(compact), which may be a subagent's, would serve the card line from it. So every main-thread PreCompact empties an existing marker directly below `esac`, before any tail exit, and only a decided verdict is written after the card's call. §5.1's spec text ("a hookstate write that fails → no marker") holds only with no earlier marker; this makes it hold always. An emptied marker also folds a later consumption as `card_consumed:unknown` (Task 5, ruling RC3), which stays in W1-e's denominator.
 
 **Choices this task makes:**
+- **The id bound is a builtin test** (B1's D-4170 (`history-id-grammar`), applied as bash can): `_hook_history_scope` tests `(( ${#id} <= 224 ))`, B1's `SPOOL_ID_MAX`, before anything at `scope/<id>` is tested or opened (mutant `T8-M6-id-bound`); `.` and `..` are refused structurally (next item).
 - **`.` and `..` get no test of their own.** The hook's id grammar admits both. Under `scope/` they name directories: `scope/.` is `scope/` itself and `scope/..` is the history root. Neither the write nor the truncation can open a directory. A builtin test there could not be told apart from its absence by any input, and this repo does not ship a guard nothing can trip (`_hook_compact_mark_served`'s own comment says so). One case pins the structural fact instead: ids `.` and `..` leave `scope/` empty and touch nothing else. The 224-char bound does get a test, because a 225-char name is writable.
 - **A lowercase-UUID psid is required.** The card file is `card/<id>/<uuid>.txt`, so a marker for any other psid could never be read.
 - **A symlink at the marker's path is left alone.** The write would follow it. The tests are builtin, and bash has no `O_NOFOLLOW` or `O_NONBLOCK` redirection, so a node swapped in after the test is opened: a link is followed, a FIFO blocks until Claude Code kills the hook (`install-session-hooks.sh` `HOOK_TIMEOUT_S`). That is the residue B1's spool block names in the same words (its "a regular file or nothing" comment); no case can measure the swap window, so none is added, and the block's comment names it.
