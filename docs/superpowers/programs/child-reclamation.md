@@ -47,6 +47,22 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 21:43 — review 368 is NOT accepted as wave 7's review; review run 369 is dispatched in its place.**
+  - **What 368 was.** Its reviewer, `ccrc-pwa-calm-cove`, was born on a Claude account at 19:08 and swapped to the
+    Codex lane `gpt2` at 19:38, probably by a rescue swap. Its report (`reviews/review-368-7a4b0a19.md`, 11 lines)
+    ran none of the brief's mandatory lenses: no held-out panel, no SAFETY or SECURITY lens, no suites. Under
+    coordinator clause 14, an unrun lens is unverified, never approval.
+  - **What was done with it.** Run 368 was closed with its own `{reviewedTip, report}`, and the server accepted it.
+    Its one finding, F1, is carried to 369 for the panel's refuters. F1: `server/src/remote/runner.ts:49` keeps
+    `ws-audit --collect` at the generic 90 s deadline, while its bounded probes may reach about 94 s.
+  - **Review run 369** went to `ccrc-pwa-brisk-prairie` on `claude-dev1` and is at `working`. Its brief
+    (`review-369-brief.md`) repeats 368's, tells the reviewer to stop and mail if it is not on an Anthropic account
+    or is swapped off one, and adjudicates F1.
+  - **Cost.** The first dispatch was refused `oversize` (9070 of 8192 bytes, nothing written); the trimmed brief
+    went through.
+  - **Open for the operator.** Both Codex lanes are ordinary placement and swap targets, and nothing in a route keeps
+    a review off them. A review whose panel names Opus lenses cannot be run on one.
+
 - **2026-10-09 19:09 — review run 368 (of run 347) is dispatched to `ccrc-pwa-calm-cove` and is at `working`.**
   - **The brief** (`review-368-brief.md` in the evidence archive) names the held-out panel and the plan's four
     lenses: SAFETY at opus·xhigh and SECURITY, both mandatory, then derivation and wire, and cost and platform.
