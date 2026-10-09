@@ -12058,6 +12058,17 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n
   "test/docs-cache.test.ts"
  ],
  "red": "server docs-cache: 3 failed | 38 passed (41) \u2014 an empty file whose show answer carries a large unknown key: the entry holds no such key; a non-empty file with an unknown key: the charge is the bytes plus the one content field held; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
+},
+{
+ "id": "W3-T11-M4",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "  if (half.kind === 'half') fetchSettled(at, src);\n",
+ "new": "  fetchSettled(at, src);\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 3 failed | 121 passed (124) \u2014 a caps-unknown 503 and an unsupported 501 refresh leave the index micro-cache standing: the next projects GET is a hit with one docs-index exec; a refresh the full fetch lane answers docs-busy 503 leaves the index micro-cache standing; a refresh refused before any exec bumps no generation: a tree GET begun before it is still joined by the next one"
 }
 ]
 ```
