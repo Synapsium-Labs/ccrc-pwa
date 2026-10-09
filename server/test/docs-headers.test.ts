@@ -26,9 +26,25 @@ import {
   DOCS_API_PREFIX, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, docsApi,
   type DocPin, type DocsFailureBody,
 } from '../../shared/docs.js';
-import { FIXTURE_COMMIT, FIXTURE_SERVED, indexOk, line, showLine, treeOk } from './docsRouteHelpers.js';
+import type { DocsComposition } from '../src/docs/routes.js';
+import { FIXTURE_COMMIT, FIXTURE_SERVED, indexOk, line, nodeLanes, showLine, treeOk } from './docsRouteHelpers.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+
+/** Every docs composition `buildServer` made, in order: the real server builds its own, and the upgrade case below
+ *  reads the lanes, flights and caches of the one it built. The mock passes `composeDocs` through unchanged. */
+const composed = vi.hoisted((): unknown[] => []);
+vi.mock('../src/docs/routes.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/docs/routes.js')>();
+  return {
+    ...real,
+    composeDocs: (...args: Parameters<typeof real.composeDocs>) => {
+      const docs = real.composeDocs(...args);
+      composed.push(docs);
+      return docs;
+    },
+  };
+});
 
 const HOOKS_SRC = readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/docs/hooks.ts'), 'utf8');
@@ -700,8 +716,9 @@ describe('T11 review 2-1: a bodiless gate refusal on a docs route keeps its stat
 // `@fastify/websocket`, registered at the root, wraps every route's handler: an upgrade that passes the gate and the
 // docs provenance hijacks the reply and is answered `101` before the plugin's `onSend`, so the 101 carries none of
 // the four headers. The departure is safe because the gate and provenance run first (a browser cannot set the marker
-// on an upgrade), and the hijacked socket runs no docs exec. Real listening servers, a real `ws` client, and a
-// recording runner (every docs verb is an exec, so an empty record is "no lane, cache or flight was reached").
+// on an upgrade), and the hijacked socket runs no docs exec. Real listening servers, a real `ws` client, a recording
+// runner, and the composition `buildServer` made (held through a pass-through mock of `composeDocs`), whose lanes,
+// flights and caches are read directly.
 
 /** The origin an armed fixture accepts (the gate's own default for a loopback server). */
 const WS_ORIGIN = 'http://localhost:7788';
@@ -711,7 +728,7 @@ const WS_ORIGIN = 'http://localhost:7788';
  * dark; armed, a session cookie is returned too.
  */
 async function listeningRecording(auth: boolean):
-    Promise<{ app: FastifyInstance; execs: string[][]; cookie: string }> {
+    Promise<{ app: FastifyInstance; execs: string[][]; cookie: string; docs: DocsComposition }> {
   const execs: string[][] = [];
   const run: Runner = async (_cmd, args) => {
     execs.push([...args]);
@@ -728,7 +745,10 @@ async function listeningRecording(auth: boolean):
   }
   const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP], rosterFp: null, build: null };
   const deps: Deps = { ...base, cfg: { ...base.cfg, authEnabled: auth, cookieSecure: false }, fleetState: state };
+  composed.length = 0;
   const app = await buildServer(deps);
+  const docs = composed.at(-1) as DocsComposition;
+  expect(composed, 'buildServer composes the docs once').toHaveLength(1);
   await app.ready();
   opened.push(app);
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -740,7 +760,21 @@ async function listeningRecording(auth: boolean):
     const first = Array.isArray(set) ? set[0] : String(set);
     cookie = first.slice(0, first.indexOf(';'));
   }
-  return { app, execs, cookie };
+  return { app, execs, cookie, docs };
+}
+
+/** Nothing of the docs machinery was touched: the node's read and fetch lanes idle, no flight, and every cache empty. */
+function expectDocsUntouched(docs: DocsComposition, label: string): void {
+  const at = nodeLanes(docs);
+  expect(at.read.load(), `${label}: read lane`).toStrictEqual({ execs: 0, bytes: 0, large: 0, queued: 0 });
+  expect(at.fetch.load(), `${label}: fetch lane`).toStrictEqual({ running: 0, queued: 0 });
+  expect(at.flights.size(), `${label}: flights`).toBe(0);
+  expect(at.caches.blobs.size(), `${label}: blob cache entries`).toBe(0);
+  expect(at.caches.blobs.bytes(), `${label}: blob cache bytes`).toBe(0);
+  expect(at.caches.listing.commits(), `${label}: listing commits`).toBe(0);
+  expect(at.caches.listing.entries(), `${label}: listing entries`).toBe(0);
+  expect(at.caches.draftSizes.size(), `${label}: draft sizes`).toBe(0);
+  expect(at.caches.index.get(docs.lanes.primary, at.nowMs()), `${label}: index cache`).toBeUndefined();
 }
 
 /** What an upgrade that was ACCEPTED saw: its 101 headers, every message before the close, and the close itself. */
@@ -781,25 +815,30 @@ describe('T11 review 2-2: a WebSocket upgrade to a docs route escapes onSend onl
     expect(execs).toStrictEqual([]);
   });
 
-  it('(b) armed, no session: the gate refuses the upgrade 401 before provenance, and the refusal carries the four headers', async () => {
-    const { app, execs } = await listeningRecording(true);
-    const res = await upgradeRefusal(app, '/api/docs/projects', { ...PWA, origin: WS_ORIGIN });
-    expect(res.status).toBe(401);
-    expectDecorated('ws gate 401', { statusCode: 401, headers: res.headers });
+  it('(b) armed, an upgrade with NEITHER a session NOR the PWA marker: the gate answers 401, not provenance\'s 403 foreign-request, and the refusal carries the four headers', async () => {
+    const { app, execs, docs } = await listeningRecording(true);
+    for (const url of ['/api/docs/projects', '/api/docs/demo/tree', '/api/docs/demo/file']) {
+      const res = await upgradeRefusal(app, url, { origin: WS_ORIGIN });
+      expect(res.status, url).toBe(401);
+      expect(res.body, `${url}: not provenance's body`).not.toContain('foreign-request');
+      expectDecorated(`ws gate 401 ${url}`, { statusCode: 401, headers: res.headers });
+    }
     expect(execs).toStrictEqual([]);
+    expectDocsUntouched(docs, 'gate-refused upgrades');
   });
 
-  it('(c) an upgrade that passes the gate and provenance gets 101 and runs ZERO docs execs: no body, the socket closed', async () => {
+  it('(c) an upgrade that passes the gate and provenance gets 101 and reaches no exec, lane, flight or cache: no body, the socket closed', async () => {
     for (const auth of [false, true]) {
-      const { app, execs, cookie } = await listeningRecording(auth);
+      const { app, execs, cookie, docs } = await listeningRecording(auth);
       const headers: Record<string, string> = { ...PWA, origin: WS_ORIGIN, ...(auth ? { cookie } : {}) };
-      for (const url of ['/api/docs/projects', '/api/docs/demo/tree']) {
+      for (const url of ['/api/docs/projects', '/api/docs/demo/tree', '/api/docs/demo/file']) {
         const seen = await upgradeAccepted(app, url, headers);
         expect(seen.status, `${url} armed=${auth}`).toBe(101);
         expect(seen.messages, `${url} armed=${auth}: no docs body`).toStrictEqual([]);
         expect(seen.closed, `${url} armed=${auth}`).toBe(true);
       }
-      expect(execs, `armed=${auth}: an upgrade reaches no exec, lane, cache or flight`).toStrictEqual([]);
+      expect(execs, `armed=${auth}: an upgrade reaches no exec`).toStrictEqual([]);
+      expectDocsUntouched(docs, `armed=${auth}: an upgrade reaches no lane, cache or flight`);
       // The same server still answers a plain GET as before: the closed upgrade left no lane slot held.
       const plain = await app.inject({ method: 'GET', url: '/api/docs/projects', headers: auth ? { ...PWA, cookie } : PWA });
       expect(plain.statusCode).toBe(200);
