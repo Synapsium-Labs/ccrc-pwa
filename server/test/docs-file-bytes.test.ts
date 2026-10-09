@@ -215,3 +215,52 @@ describe('M5.6 — Cache-Control: immutable only on a committed raster 200', () 
     }
   });
 });
+
+describe('FR1 review F3: the blob-cache hit branch of the file route, on ONE app with two GETs each', () => {
+  /** One app whose tree lists a committed `path` of `bytes` (blob `BLOB`), and whose show answers `bytes`. */
+  async function oneApp(path: string, bytes: Uint8Array) {
+    const pin = committed(path);
+    const rec = scripted((argv) => okRes(argv[0] === 'docs-tree'
+      ? line(treeOk({ entries: [committedEntry(path, BLOB, bytes.byteLength)] }))
+      : showLine(pin, bytes, { blob: BLOB })));
+    const { app, docs } = await docsApp({ run: rec.run });
+    apps.push(app);
+    expect((await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS })).statusCode).toBe(200);
+    return { app, docs, rec, pin };
+  }
+  const shows = (rec: { calls: string[][] }): number => rec.calls.filter((argv) => argv[0] === 'docs-show').length;
+
+  it('a .png holding SVG text answers 422 raster-mismatch with no bytes on BOTH reads, the second from the cache (zero execs)', async () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>', 'utf8');
+    const { app, docs, rec, pin } = await oneApp('a.png', svg);
+    const first = await app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    expect(shows(rec)).toBe(1);
+    expect(docs.lanes.byNode.get(docs.lanes.primary)?.caches.blobs.size()).toBe(1);
+    const second = await app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    expect(shows(rec)).toBe(1);
+    for (const res of [first, second]) {
+      expect(res.statusCode).toBe(422);
+      expect(res.headers['content-type']).toBe(JSON_TYPE);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.json()).toStrictEqual({ ok: false, failure: 'raster-mismatch', declared: 'png', size: svg.byteLength });
+      expect(res.rawPayload.includes(svg)).toBe(false);
+    }
+  });
+
+  it('a true committed .png answers raw image/png, immutable, with exactly its bytes on BOTH reads, the second with zero execs', async () => {
+    const png = rasterBytes('png');
+    const { app, rec, pin } = await oneApp('a.png', png);
+    const first = await app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    expect(shows(rec)).toBe(1);
+    const second = await app.inject({ url: urlOf(pin), headers: PWA_HEADERS });
+    expect(shows(rec)).toBe(1);
+    expect(rec.calls).toHaveLength(2);
+    for (const res of [first, second]) {
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('image/png');
+      expect(res.headers['cache-control']).toContain('immutable');
+      expect(res.headers['cache-control']).toBe(DOCS_CACHE_IMMUTABLE);
+      expect(new Uint8Array(res.rawPayload)).toEqual(png);
+    }
+  });
+});

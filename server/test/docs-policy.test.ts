@@ -1813,3 +1813,18 @@ describe('T11 review 3-2: docsStoredShow keeps the three facts and the one conte
     expect(stored).toStrictEqual({ size: 0, sha256: SHA, encoding: 'utf8', text: '' });
   });
 });
+
+describe('FR1 review F4: the tree shape guard refuses a non-finite attemptAgeMs and an entry path that is not key text', () => {
+  it.each([
+    ['stamp.attemptAgeMs Infinity (what 1e999 parses to)', t2TreeWith((t) => { t.freshness.stamp.attemptAgeMs = Infinity; })],
+    ['stamp.attemptAgeMs NaN', t2TreeWith((t) => { t.freshness.stamp.attemptAgeMs = NaN; })],
+    ['an entry whose path is empty', t2TreeWith((t) => { t.entries[0].path = ''; })],
+    ['an entry whose path holds a NUL', t2TreeWith((t) => { t.entries[0].path = 'a' + String.fromCharCode(0) + 'b'; })],
+  ])('%s is schema', (_what, tree) => {
+    expect(docsAnswerShape('docs-tree', tree)).toStrictEqual(T2_SCHEMA);
+  });
+
+  it('1e999 in a JSON text is Infinity, so the first case is reachable from a ccd line', () => {
+    expect(JSON.parse('{"attemptAgeMs":1e999}').attemptAgeMs).toBe(Infinity);
+  });
+});

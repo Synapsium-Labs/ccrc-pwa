@@ -807,3 +807,25 @@ describe('T11 review 2-2: a WebSocket upgrade to a docs route escapes onSend onl
     }
   });
 });
+
+describe('FR1 review F2: provenance runs at onRequest, so an unproven request\'s body is never parsed', () => {
+  const REFRESH = '/api/docs/demo/refresh';
+  const { [DOCS_REQUEST_HEADER]: _marker, ...MARKERLESS } = PWA;
+  const FOREIGN = { ok: false, failure: 'foreign-request', why: 'marker' };
+
+  it.each([
+    ['an invalid JSON body', '{bad'],
+    ['a 2 MiB body', `{"ref":"${'x'.repeat(2 * 1024 * 1024)}","reason":"auto"}`],
+  ])('a marker-less POST refresh with %s answers 403 foreign-request {why: marker}, not 400, and runs no handler', async (_what, payload) => {
+    const app = await open();
+    const res = await app.inject({
+      method: 'POST', url: REFRESH, headers: { ...MARKERLESS, 'content-type': 'application/json' }, payload,
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toStrictEqual(FOREIGN);
+    expect(res.headers['content-type']).toBe(JSON_TYPE);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expectDocsHeaders(res.headers);
+    expect(entered).toBe(0);
+  });
+});

@@ -1467,3 +1467,26 @@ describe('T11 review 4-3: the projects route rides the read lane and leaves with
     }
   });
 });
+
+describe('FR1 review F1: a committed show line that passes check 8 and carries a deep unknown key is a 502 schema, never cached, never a 500', () => {
+  it('a listed a.md whose show line carries a 500 000-deep unknown key: 502 {why: schema} on both reads, the second read runs ccd again, and the blob cache holds nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const blob = 'b'.repeat(40);
+    const pin: DocPin = { kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md' };
+    const body = Buffer.from('<p>x</p>\n', 'utf8');
+    const deep = `${showLine(pin, body).trimEnd().slice(0, -1)},"deep":${'['.repeat(500000)}${']'.repeat(500000)}}\n`;
+    const rec = scripted((argv) => okRes(argv[0] === 'docs-tree'
+      ? line(treeOk({ entries: [committedEntry('a.md', blob, null)] }))
+      : deep));
+    const { app, docs } = await open({ run: rec.run });
+    expect((await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS })).statusCode).toBe(200);
+    for (let i = 0; i < 2; i += 1) {
+      const res = await app.inject({ url: fileUrl(COMMITTED_Q), headers: PWA_HEADERS });
+      expect(res.statusCode, `read ${i + 1}`).toBe(502);
+      expect(res.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+    }
+    expect(rec.calls.map((argv) => argv[0])).toEqual(['docs-tree', 'docs-show', 'docs-show']);
+    expect(nodeLanes(docs).caches.blobs.size()).toBe(0);
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs show answer failed its shape check');
+  });
+});
