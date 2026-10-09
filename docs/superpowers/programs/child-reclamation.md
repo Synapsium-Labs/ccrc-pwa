@@ -47,6 +47,13 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 19:09 — review run 368 (of run 347) is dispatched to `ccrc-pwa-calm-cove` and is at `working`.**
+  - **The brief** (`review-368-brief.md` in the evidence archive) names the held-out panel and the plan's four
+    lenses: SAFETY at opus·xhigh and SECURITY, both mandatory, then derivation and wire, and cost and platform.
+  - **It also holds to the SAFETY standard** the worker's six hardenings, the stated residual, and R-k's all-zero
+    tip. It measures the wave-done's four reds, and asks whether the two out-of-boundary items are reachable.
+  - **Route:** opus·xhigh. The dispatch was the 19th in the rolling day, and went first try.
+
 - **2026-10-09 19:07 — wave 7's wave-done (clear-summit's 4147) is VERIFIED; run 347 is at `awaiting-review`.**
   - **The claim.** PR #344 at `7a4b0a1957df9985e52f0b910459ca3afaf59c80` (the branch tip and the handoff commit).
   - **The re-measurement.** The local and remote tips agree, the PR is open and mergeable, and `git merge-tree`
