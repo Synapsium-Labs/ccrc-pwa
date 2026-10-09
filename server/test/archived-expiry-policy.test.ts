@@ -652,6 +652,38 @@ describe('the lane’s memory of one row', () => {
     }
   });
 
+  // The tier's CLOCK is the verb's alone (review 355, F1): a run of the act's own audit failing shares the ladder and the
+  // hour-ceiling report, but never starts the day the tier counts, nor adds to its attempts.
+  const verbFailed = { kind: 'failed', resumable: true, detail: 'worktree-remove-failed: busy' } as const;
+  const auditFailed = { kind: 'audit-failed', detail: 'ws-audit --expire printed no JSON document' } as const;
+
+  it('a day of the act’s OWN AUDIT failing, then ONE resumable failure of the verb: still the ladder, never the tier (review 355, F1)', () => {
+    const { x: audits, t } = aDayOf(auditFailed);
+    const x = archivedExpiryNextEntry(audits, verbFailed, t, PASS)!;
+    expect((x.report as { attempts?: number } | null)?.attempts, 'one verb failure is no day of them').toBeUndefined();
+    expect(x.report, 'the shared run’s hour-ceiling report').toEqual({ kind: 'failing', at: NOW, detail: verbFailed.detail });
+    expect(x.nextAskAt - t, 'the ladder, never the four-hour cadence').toBeLessThanOrEqual(EXPIRE_FAILURE_CEILING_MS);
+    expect(x.failures, 'the ladder keeps the shared run').toBe(audits.failures + 1);
+  });
+
+  it('a day of verb failures after the audit’s still reaches the tier — its first failure and its attempts the verb’s own (review 355, F1)', () => {
+    const { x: audits, t: t0 } = aDayOf(auditFailed);
+    let x = audits;
+    let t = t0;
+    let verbs = 0;
+    while (t - t0 < EXPIRE_FAILURE_GIVE_UP_MS) {
+      x = archivedExpiryNextEntry(x, verbFailed, t, PASS)!;
+      verbs += 1;
+      expect((x.report as { attempts?: number } | null)?.attempts, `not yet standing after ${verbs} verb failures`).toBeUndefined();
+      t = x.nextAskAt;
+    }
+    x = archivedExpiryNextEntry(x, verbFailed, t, PASS)!;
+    verbs += 1;
+    expect(x.report, 'at and attempts from the verb run').toEqual({ kind: 'failing', at: t0, detail: verbFailed.detail, attempts: verbs });
+    expect(x.nextAskAt, 'the four-hour cadence').toBe(t + EXPIRE_PERSISTENT_RETRY_MS);
+    expect(x.failures, 'the shared run still counts every answer').toBe(audits.failures + verbs);
+  });
+
   it('an audit-stage failure under an ALREADY-standing entry ends no attempt: the entry, its run and its instant stand (final review I1)', () => {
     const { x: standing } = aDayOf({ kind: 'failed', resumable: true, detail: 'worktree-remove-failed: busy' });
     expect(standing.report).toMatchObject({ attempts: standing.failures });

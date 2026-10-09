@@ -422,6 +422,11 @@ export interface ArchivedExpiryEntry {
   /** Consecutive `failed` answers, and since when (ms). */
   readonly failures: number;
   readonly failingSince: number | null;
+  /** The VERB's run inside it (review 355, F1): consecutive `failed` (resumable) or `box` answers — never the act's own
+   *  audit's (`audit-failed`) — and since when (ms). Only this run is the persistent tier's clock and its attempts; it is
+   *  reset wherever `failures` is. */
+  readonly verbFailures: number;
+  readonly verbFailingSince: number | null;
   /** What the attention list says about this row, or null. */
   readonly report: ExpiryReport | null;
 }
@@ -437,7 +442,7 @@ export type ExpiryReport =
   | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true;
       /** Set only on the PERSISTENT TIER — a row past `EXPIRE_FAILURE_GIVE_UP_MS` of resumable failures, asked every
        *  `EXPIRE_PERSISTENT_RETRY_MS` — whose report is a STANDING entry: how many attempts failed (`at` is the first
-       *  failure, `detail` the last). Never with `final`: the row is still asked. */
+       *  failure, `detail` the last), counted on the verb's run alone (review 355, F1). Never with `final`: the row is still asked. */
       readonly attempts?: number }
   | { readonly kind: 'no-evidence'; readonly at: number }
   /** The expiry COMPLETED and kept a leaf (wave 5, the kept-leaf reader): the row is gone, so this report outlives it in
@@ -446,7 +451,7 @@ export type ExpiryReport =
 
 export const archivedExpiryEntry = (archivedAt: number): ArchivedExpiryEntry => ({
   archivedAt, expiresAt: null, nextAskAt: 0, eligibleSince: null, lastOutcome: null, inUseRun: 0, inUse: [],
-  failures: 0, failingSince: null, report: null,
+  failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null, report: null,
 });
 
 /** The entry for this pass: the previous one while its archive is still the row's, else a fresh one. */
@@ -467,8 +472,8 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
   if (read.kind === 'document' && read.archivedAt === null && read.verdict.kind === 'refused'
     && EXPIRE_TOKEN_KIND[read.verdict.token] === 'gone') return { ...entry, nextAskAt: nowMs + passMs };
   if (read.kind === 'document' && read.expiresAt.kind === 'absent') {
-    return { ...entry, failures: 0, failingSince: null, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
-      report: { kind: 'no-evidence', at: nowMs } };
+    return { ...entry, failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null,
+      nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS, report: { kind: 'no-evidence', at: nowMs } };
   }
   if (read.kind === 'unreadable' || read.archivedAt === null) {
     const why = read.kind === 'unreadable' ? read.detail : `ws-audit --expire read no archive (${read.verdict.kind === 'refused'
@@ -479,7 +484,8 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
       report: { kind: 'failing', at: failingSince, detail: `its expiry could not be learned — ${why}` } };
   }
   if (read.archivedAt !== entry.archivedAt) return { ...entry, nextAskAt: nowMs + passMs };
-  const learned = { failures: 0, failingSince: null, report: entry.report?.kind === 'failing' ? null : entry.report };
+  const learned = { failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null,
+    report: entry.report?.kind === 'failing' ? null : entry.report };
   if (read.expiresAt.kind !== 'at') {
     return { ...entry, ...learned, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
       report: read.expiresAt.kind === 'absent' ? { kind: 'no-evidence', at: nowMs } : learned.report };
@@ -508,8 +514,10 @@ export const expiryReportStands = (r: ExpiryReport | null): boolean =>
  *  part-cleaned is never replaced by a sentence about this one answer — a shadow's "nothing was deleted" least of all.
  *  Nothing for any other report. Only an attempt that completes, one that finds none had begun (`restart`: the fresh
  *  arm runs only while no breadcrumb stands), a final verdict or a new archive ends a standing report (wave 5). */
-const standingThrough = (entry: ArchivedExpiryEntry): Partial<Pick<ArchivedExpiryEntry, 'report' | 'failures' | 'failingSince'>> =>
-  expiryReportStands(entry.report) ? { report: entry.report, failures: entry.failures, failingSince: entry.failingSince } : {};
+const standingThrough = (entry: ArchivedExpiryEntry): Partial<Pick<ArchivedExpiryEntry,
+  'report' | 'failures' | 'failingSince' | 'verbFailures' | 'verbFailingSince'>> =>
+  expiryReportStands(entry.report) ? { report: entry.report, failures: entry.failures, failingSince: entry.failingSince,
+    verbFailures: entry.verbFailures, verbFailingSince: entry.verbFailingSince } : {};
 
 /** One pass's verdict, folded into memory. THE TWICE-OBSERVED RULE (spec §5.3: "all of the above held on the
  *  previous pass too"): an eligible verdict seeds `eligibleSince` on its first pass and makes the row DUE only on a
@@ -620,7 +628,8 @@ export function archivedExpiryNextEntry(
   entry: ArchivedExpiryEntry, o: ArchivedExpiryOutcome, nowMs: number, passMs: number,
 ): ArchivedExpiryEntry | null {
   const base = { ...entry, lastOutcome: archivedExpiryOutcomeKey(o) };
-  const steady = { inUseRun: 0, inUse: [] as readonly ExpireInUse[], failures: 0, failingSince: null };
+  const steady = { inUseRun: 0, inUse: [] as readonly ExpireInUse[], failures: 0, failingSince: null, verbFailures: 0,
+    verbFailingSince: null };
   switch (o.kind) {
     case 'expired':
       // A completed expiry that KEPT a leaf is reported (wave 5): the row is gone, but what stays on disk is listed,
@@ -661,7 +670,8 @@ export function archivedExpiryNextEntry(
       }
       if (o.token === 'in-use') {
         const passes = entry.inUseRun + 1;
-        return { ...base, failures: 0, failingSince: null, inUseRun: passes, inUse: o.inUse, nextAskAt: nowMs + passMs,
+        return { ...base, failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null, inUseRun: passes, inUse: o.inUse,
+          nextAskAt: nowMs + passMs,
           report: passes >= EXPIRE_IN_USE_ATTENTION_PASSES
             ? { kind: 'in-use', at: entry.report?.kind === 'in-use' ? entry.report.at : nowMs, inUse: o.inUse, passes }
             : null, ...standingThrough(entry) };
@@ -680,17 +690,20 @@ export function archivedExpiryNextEntry(
       const failures = entry.failures + 1;
       const failingSince = entry.failingSince ?? nowMs;
       // Only a failure of the VERB — `failed`, or a box word, which only the verb meets — can have stopped part-way, so
-      // only it moves a row onto the tier; the act's own audit (`audit-failed`) stays on the ladder below (final review I1).
-      if (o.kind !== 'audit-failed' && nowMs - failingSince >= EXPIRE_FAILURE_GIVE_UP_MS) {
+      // only it moves a row onto the tier, and only ITS run is the tier's clock (review 355, F1): the act's own audit
+      // (`audit-failed`) shares the ladder and the hour-ceiling report below, never the day or the attempts (final review I1).
+      const verb = o.kind === 'audit-failed' ? { verbFailures: entry.verbFailures, verbFailingSince: entry.verbFailingSince }
+        : { verbFailures: entry.verbFailures + 1, verbFailingSince: entry.verbFailingSince ?? nowMs };
+      if (o.kind !== 'audit-failed' && verb.verbFailingSince !== null && nowMs - verb.verbFailingSince >= EXPIRE_FAILURE_GIVE_UP_MS) {
         // A DAY of failures the box called resumable (the coordinator's revised ruling, wave 5): the PERSISTENT TIER. The
         // report is a standing entry — the first failure, the attempts, the last detail, never a destructive verb — and
         // the lane asks again every `EXPIRE_PERSISTENT_RETRY_MS`, never stopping: each later failure updates the entry.
-        return { ...base, inUseRun: 0, inUse: [], failures, failingSince, nextAskAt: nowMs + EXPIRE_PERSISTENT_RETRY_MS,
-          report: { kind: 'failing', at: failingSince, detail: o.detail, attempts: failures } };
+        return { ...base, inUseRun: 0, inUse: [], failures, failingSince, ...verb, nextAskAt: nowMs + EXPIRE_PERSISTENT_RETRY_MS,
+          report: { kind: 'failing', at: verb.verbFailingSince, detail: o.detail, attempts: verb.verbFailures } };
       }
       // An audit failure ends no attempt, so under a STANDING entry (one the verb's failures entered) it keeps that entry
       // and its run (`standingThrough`), as every other answer that ends none does.
-      return { ...base, inUseRun: 0, inUse: [], failures, failingSince,
+      return { ...base, inUseRun: 0, inUse: [], failures, failingSince, ...verb,
         nextAskAt: nowMs + archivedExpiryBackoffMs(failures, passMs),
         report: nowMs - failingSince >= EXPIRE_FAILURE_CEILING_MS || o.kind === 'box'
           ? { kind: 'failing', at: failingSince, detail: o.detail } : null,
