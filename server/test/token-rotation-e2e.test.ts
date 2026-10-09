@@ -1775,6 +1775,7 @@ describe('D-4414 F3: a value file is never deleted before its digest is durable'
       r.clock.offset = GRACE_HARD_MS + 1000;                              // past the hard bound
       await r.driver.tick();
       await r.driver.tick();
+      expect(r.agent.calls, 'the owed rotation still runs while the file stays unreadable').toBeGreaterThan(0);
       expect(existsSync(prev), 'no deletion').toBe(true);
       expect(await retiredDigests(r)).toEqual([]);
       expect((await stateOf(r)).previous).not.toBeNull();

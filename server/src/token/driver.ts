@@ -394,7 +394,10 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (s0.previous !== null) {
       const early = await this.retireValue();
       // D-4414 (F3): the previous value's file would not read, so its digest could not be recorded, and step (b) below would
-      // replace that file. The promotion waits for a later tick (the fleet's confirmation stands, so it is selected again).
+      // replace that file. The promotion waits for a later tick. This return comes BEFORE `promoting` is recorded, so a
+      // promotion confirmed only by this op result is selected again only by a generation read; otherwise G stays pending
+      // and accepted until it is overdue and a later rotation drops it. That is safe under G3 (the value the fleet holds is
+      // never dropped unconfirmed), at the cost of one extra rotation.
       if (early.kind === 'held') return;
       this.logRetired('grace', early.refused);
     }
