@@ -47,6 +47,25 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 19:07 — wave 7's wave-done (clear-summit's 4147) is VERIFIED; run 347 is at `awaiting-review`.**
+  - **The claim.** PR #344 at `7a4b0a1957df9985e52f0b910459ca3afaf59c80` (the branch tip and the handoff commit).
+  - **The re-measurement.** The local and remote tips agree, the PR is open and mergeable, and `git merge-tree`
+    against `main` (`5c922c866`) exits 0. The server accepted the fingerprint, by way of `working`, because the run
+    had never left `dispatched`. All 12 items are settled done.
+  - **The suite.** The first full run was red. It had one real red, `archived-expiry-policy.test.ts`, whose census
+    was not extended for the collector's own `state-changed` and `probe-unmeasured` sites; it was fixed in
+    `7a4b0a195`. The `main` reds are boot, ccd-review-335-pins and tmp-sweep. Recorded as failure kind `shallow`:
+    the route door answered `ceiling` (max needs a second failure of that kind), so nothing changed.
+  - **CI at the advance.** `probe-macos` failed (advisory by ruling), and the server shards were running.
+  - **The evidence** is in the archive's `wave7-done/`: the account, the task briefs, reviews and reports, the final
+    review, the fix wave, and the worker's SDD ledger.
+  - **Needs this coordinator, at the fix round or the close:**
+    - the residual `crash-at-moved-after-a-spawn-keeps-the-leaf-in-its-slot`, which goes to the review's SAFETY lens;
+    - two items outside the boundary: the compaction-card spec's stale "only holder is row creation" sentence, and
+      a pre-existing, crafted-only NUL back-link corner in `_ws_leaf_checkout_one`, a later-wave candidate;
+    - the departure numbers, from run 347's 32. `wave6-plan-prose-scoped` and
+      `wave6-plan-text-corrected-by-deviation-entry` count as ONE departure.
+
 - **2026-10-09 15:09 — wave 7: Tasks 1 to 10 done, and Task 11's verification is running (clear-summit's 4126).**
   - **Main was absorbed twice, both before the PR existed:** `21bdf2a11` (it brought #319, #330, #335, #337 and #338)
     and `5f87d908e` (it brought #325). Each conflicted only on `ccd/ccd`'s stamp line and was re-stamped. Accepted: no
