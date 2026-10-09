@@ -47,6 +47,15 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 22:40 — review 368's reviewer withdrew its own report (calm-cove's 4152), which agrees with this programme's
+  not accepting it.**
+  - **Why it was withdrawn.** A sub-agent sent the report before the panel and the suites finished.
+  - **What its later evidence says.** It reads F1 (the 90 s runner deadline) as an accepted fail-closed residual.
+    It confirms three other findings: the final recycled-spawn pins are missing; a resumed collect audit re-reads
+    the idle floor, which needs a ruling; and the NUL back-link prose is false.
+  - **What was done.** Addendum 4153 gives review 369 all four as leads for its refuters, not rulings. Review 369 is
+    still on `claude-dev1`.
+
 - **2026-10-09 21:43 — review 368 is NOT accepted as wave 7's review; review run 369 is dispatched in its place.**
   - **What 368 was.** Its reviewer, `ccrc-pwa-calm-cove`, was born on a Claude account at 19:08 and swapped to the
     Codex lane `gpt2` at 19:38, probably by a rescue swap. Its report (`reviews/review-368-7a4b0a19.md`, 11 lines)
