@@ -357,8 +357,9 @@ export async function closeRun(
       if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
       released = release;
       // AFTER the fleet act, before the commit: the claimant once more. A revive that landed during the release keeps
-      // its run open — its worker is released (or re-held) and unheld until its coordinator re-holds it, which is the
-      // residual a successor's race already has. What remains is the round trip of this last re-measure.
+      // its run open — a released worker is unheld until its coordinator re-holds it, and a re-held one stays claimed
+      // under the surviving run, which is the residual a successor's race already has. What remains is the round trip of
+      // this last re-measure.
       if (sweep !== undefined) {
         const stop = await sweep.stillCrashed();
         if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, fleetAct: release ? 'released' : 're-held' };

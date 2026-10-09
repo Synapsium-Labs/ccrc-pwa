@@ -95,7 +95,8 @@ export const EXPIRE_SHADOW_REAUDIT_MS = 15 * 60_000;
 export const EXPIRE_FAILURE_CEILING_MS = 60 * 60_000;
 
 /** THE LANE'S ANSWER TO A REPEATING RESUMABLE FAILURE (the coordinator's ruling, wave 5, revised): a run of `failed`
- *  (resumable) or `lock-unopenable` answers to the ACT that has lasted this long moves the row to the PERSISTENT TIER
+ *  (resumable) or `lock-unopenable` answers from the `ws-expire` VERB that has lasted this long — never the act's own
+ *  audit's (`audit-failed`: no verb ran, so nothing can have stopped part-way) — moves the row to the PERSISTENT TIER
  *  (`EXPIRE_PERSISTENT_RETRY_MS`): its report becomes a STANDING attention entry, and the lane asks again every four
  *  hours, never stopping — never +∞, because an expiry that failed after its breadcrumb leaves a part-cleaned
  *  workspace that only a completed attempt finishes once the operator fixes the cause. A completed attempt finishes
@@ -571,6 +572,10 @@ export type ArchivedExpiryOutcome =
    *  parked item 4): `false` — a wrong-row `expired`, a refusal word this build does not know, `probe-unmeasured` — is
    *  not something waiting cures, so the row is reported and not asked again for this archive. */
   | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  /** The act's OWN AUDIT (`ws-audit --expire`) could not be read, so no verb ran (final review I1): retried on the failure
+   *  backoff and reported past its ceiling, as before wave 5, and NEVER a `failed` — only the verb's failure can have
+   *  stopped part-way, so only it may move a row onto the persistent tier. Two conditions, two values at this seam. */
+  | { readonly kind: 'audit-failed'; readonly detail: string }
   /** ccd stopped before anything started because what the expiry consented to changed (`ExpireVerbRead.restart`):
    *  the lane forgets what it learned of the row and audits it afresh (wave 5). */
   | { readonly kind: 'restart'; readonly detail: string }
@@ -579,8 +584,8 @@ export type ArchivedExpiryOutcome =
   | { readonly kind: 'no-evidence' };
 
 const EXPIRY_OUTCOME_KINDS: Readonly<Record<ArchivedExpiryOutcome['kind'], true>> = {
-  expired: true, 'would-expire': true, deferred: true, refused: true, gone: true, failed: true, restart: true, box: true,
-  composition: true, 'no-evidence': true,
+  expired: true, 'would-expire': true, deferred: true, refused: true, gone: true, failed: true, 'audit-failed': true,
+  restart: true, box: true, composition: true, 'no-evidence': true,
 };
 const EXPIRY_DEFER_WHYS: Readonly<Record<ArchivedExpiryDeferWhy, true>> = {
   unsupported: true, 'paused-at-server': true, 'store-unreadable': true, 'open-run': true, coordinating: true,
@@ -663,7 +668,7 @@ export function archivedExpiryNextEntry(
       }
       return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null, ...standingThrough(entry) };
     }
-    case 'failed': case 'box': {
+    case 'failed': case 'box': case 'audit-failed': {
       if (o.kind === 'failed' && !o.resumable) {
         // The box said this will not resume: reported AT ONCE and never asked again for this archive — never an hour
         // of retries before anyone hears of it (review 313, parked item 4).
@@ -674,17 +679,22 @@ export function archivedExpiryNextEntry(
       // a failure like `lock-unopenable`, backed off and reported past the ceiling.
       const failures = entry.failures + 1;
       const failingSince = entry.failingSince ?? nowMs;
-      if (nowMs - failingSince >= EXPIRE_FAILURE_GIVE_UP_MS) {
+      // Only a failure of the VERB — `failed`, or a box word, which only the verb meets — can have stopped part-way, so
+      // only it moves a row onto the tier; the act's own audit (`audit-failed`) stays on the ladder below (final review I1).
+      if (o.kind !== 'audit-failed' && nowMs - failingSince >= EXPIRE_FAILURE_GIVE_UP_MS) {
         // A DAY of failures the box called resumable (the coordinator's revised ruling, wave 5): the PERSISTENT TIER. The
         // report is a standing entry — the first failure, the attempts, the last detail, never a destructive verb — and
         // the lane asks again every `EXPIRE_PERSISTENT_RETRY_MS`, never stopping: each later failure updates the entry.
         return { ...base, inUseRun: 0, inUse: [], failures, failingSince, nextAskAt: nowMs + EXPIRE_PERSISTENT_RETRY_MS,
           report: { kind: 'failing', at: failingSince, detail: o.detail, attempts: failures } };
       }
+      // An audit failure ends no attempt, so under a STANDING entry (one the verb's failures entered) it keeps that entry
+      // and its run (`standingThrough`), as every other answer that ends none does.
       return { ...base, inUseRun: 0, inUse: [], failures, failingSince,
         nextAskAt: nowMs + archivedExpiryBackoffMs(failures, passMs),
         report: nowMs - failingSince >= EXPIRE_FAILURE_CEILING_MS || o.kind === 'box'
-          ? { kind: 'failing', at: failingSince, detail: o.detail } : null };
+          ? { kind: 'failing', at: failingSince, detail: o.detail } : null,
+        ...(o.kind === 'audit-failed' ? standingThrough(entry) : {}) };
     }
     case 'restart':
       // START OVER (wave 5, question (h) ruled): ccd stopped before anything started because what the expiry consented

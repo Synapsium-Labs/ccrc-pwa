@@ -29,7 +29,8 @@ import {
  *      see the coordination store, so this read is the only guard of the run conjuncts at the act;
  *   4. a person looking at the session defers it — WITHOUT a ceiling (spec §5.3: "Presence defers WITHOUT a
  *      ceiling");
- *   5. the audit, and its `expiresAt` through the one reader: a document without it is NO EVIDENCE, and nothing is
+ *   5. the audit — one that cannot be read is the audit's own failure (`audit-failed`), never the verb's — and its
+ *      `expiresAt` through the one reader: a document without it is NO EVIDENCE, and nothing is
  *      composed; an archive other than the one the lane queued is a row that moved, retried — checked BEFORE a
  *      refusal is classified, so another archive's refusal is never folded onto the queued one (review 313, F2);
  *   6. the switches read ONCE MORE, nearest the argv — `expire-lane-live` decides SHADOW or LIVE at the act, and a
@@ -82,7 +83,9 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
   }
   // 5 — the audit, and the threshold through its one reader.
   const audit = await expireAudit(deps, sessionId);
-  if (audit.kind === 'unreadable') return answer({ kind: 'failed', resumable: true, detail: audit.detail });
+  // An unreadable audit is the AUDIT's failure, never the verb's: no verb ran, so nothing stopped part-way, and the lane
+  // must not read it as one that may have (final review I1) — `audit-failed`, never `failed`.
+  if (audit.kind === 'unreadable') return answer({ kind: 'audit-failed', detail: audit.detail });
   if (audit.expiresAt.kind === 'absent') return answer({ kind: 'no-evidence' });
   // An audit that read ANOTHER archive (a row returned and archived again since the lane queued it) is a row that
   // moved, whatever it answered: its refusal, and its instant, are about that archive (review 313, F2).
@@ -215,6 +218,7 @@ const FEED_TITLE: Readonly<Record<ArchivedExpiryOutcome['kind'], string>> = {
   refused: 'archived workspace cleanup refused',
   gone: 'archived workspace gone',
   failed: 'archived workspace cleanup failed',
+  'audit-failed': 'archived workspace cleanup failed',
   restart: 'archived workspace changed under its cleanup',
   box: 'archived workspace cleanup failed',
   composition: 'archived workspace cleanup failed',
@@ -247,6 +251,8 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
     case 'gone': return `${who} left the archive before it was cleaned up.`;
     case 'failed': return `${who}: failed — ${r.detail}. ${r.resumable ? 'It is retried, backing off in between.'
       : 'It is not retried: the box said it will not resume, so the lane stops asking for this archive.'}`;
+    case 'audit-failed': return `${who}: its expiry's own audit could not be read (${r.detail}), so no verb ran. `
+      + 'It is retried, backing off in between.';
     case 'restart': return `${who}: the workspace changed under the expiry's consent — its branch was deleted or made `
       + `inside the lock (${r.detail}) — so nothing was deleted, and the lane audits it afresh.`;
     case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.`;

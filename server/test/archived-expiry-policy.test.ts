@@ -608,6 +608,60 @@ describe('the lane’s memory of one row', () => {
     expect(EXPIRE_PERSISTENT_RETRY_MS, 'the persistent cadence: four ceilings, inside the day').toBe(4 * EXPIRE_FAILURE_CEILING_MS);
   });
 
+  // A day of failures of the act's OWN AUDIT (`audit-failed`: `ws-audit --expire` unreadable at the act, so no verb ran)
+  // against the same day of failures of the `ws-expire` VERB (final review I1). Only the verb's — and `box`, which is
+  // verb-only — can have stopped part-way, so only they move a row onto the persistent tier. In shadow no verb ever
+  // runs: an audit that reached the tier would keep its part-way sentence through every later would-expire, for good.
+  const aDayOf = (o: Parameters<typeof archivedExpiryNextEntry>[1]): { x: ArchivedExpiryEntry; t: number } => {
+    let x = e();
+    let t = NOW;
+    for (let k = 0; t - NOW <= EXPIRE_FAILURE_GIVE_UP_MS + EXPIRE_PERSISTENT_RETRY_MS; k += 1) {
+      x = archivedExpiryNextEntry(x, o, t, PASS)!;
+      expect(x.nextAskAt, `never stranded: asked again after ${k + 1}`).toBeLessThan(Number.POSITIVE_INFINITY);
+      t = x.nextAskAt;
+    }
+    return { x, t };
+  };
+
+  it('a day of failures of the act’s OWN AUDIT never reaches the persistent tier: the ladder, the hour-ceiling report, and would-expire replaces it (final review I1)', () => {
+    const detail = 'ws-audit --expire measured nothing: ps is missing';
+    let x = e();
+    let t = NOW;
+    for (let k = 0; t - NOW <= EXPIRE_FAILURE_GIVE_UP_MS + EXPIRE_PERSISTENT_RETRY_MS; k += 1) {
+      x = archivedExpiryNextEntry(x, { kind: 'audit-failed', detail }, t, PASS)!;
+      expect((x.report as { attempts?: number } | null)?.attempts, `never standing after ${k + 1}`).toBeUndefined();
+      expect(x.nextAskAt - t, `on the ladder, never stranded, after ${k + 1}`).toBeLessThanOrEqual(EXPIRE_FAILURE_CEILING_MS);
+      t = x.nextAskAt;
+    }
+    expect(x.report, 'the pre-wave-5 hour-ceiling report').toEqual({ kind: 'failing', at: NOW, detail });
+    expect(expiryReportSentence(x.report!, null)).toBe(`cleanup keeps failing: ${detail}. It is retried, backing off in between.`);
+    // The audit recovers: shadow's would-expire replaces the report, and the run of failures with it.
+    const after = archivedExpiryNextEntry(x, { kind: 'would-expire', sensitive: 0 }, t, PASS)!;
+    expect(after).toMatchObject({ report: { kind: 'would-expire', at: t, sensitive: 0 }, failures: 0, failingSince: null,
+      nextAskAt: t + EXPIRE_SHADOW_REAUDIT_MS });
+    expect(expiryAttention(new Map([[ID, after]])).map((a) => a.kind), 'no standing entry is left').toEqual(['would-expire']);
+  });
+
+  it('the same day of failures of the ws-expire VERB (and of a box word) still reaches it, and would-expire keeps it (wave 5)', () => {
+    for (const o of [{ kind: 'failed', resumable: true, detail: 'worktree-remove-failed: busy' },
+      { kind: 'box', word: 'lock-unopenable', detail: 'cannot open the reap lock at /r' }] as const) {
+      const { x, t } = aDayOf(o);
+      expect(x.report, o.kind).toMatchObject({ kind: 'failing', at: NOW, detail: o.detail, attempts: x.failures });
+      expect(archivedExpiryNextEntry(x, { kind: 'would-expire', sensitive: 0 }, t, PASS)!.report, `${o.kind}: shadow ends nothing`)
+        .toEqual(x.report);
+    }
+  });
+
+  it('an audit-stage failure under an ALREADY-standing entry ends no attempt: the entry, its run and its instant stand (final review I1)', () => {
+    const { x: standing } = aDayOf({ kind: 'failed', resumable: true, detail: 'worktree-remove-failed: busy' });
+    expect(standing.report).toMatchObject({ attempts: standing.failures });
+    const x = archivedExpiryNextEntry(standing, { kind: 'audit-failed', detail: 'ws-audit --expire printed no JSON document' },
+      standing.nextAskAt, PASS)!;
+    expect(x).toMatchObject({ report: standing.report, failures: standing.failures, failingSince: standing.failingSince,
+      expiresAt: standing.expiresAt });
+    expect(x.nextAskAt, 'still asked again').toBeLessThan(Number.POSITIVE_INFINITY);
+  });
+
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
     // `ExpireVerbRead.failed.resumable` is carried through the outcome, never narrowed: a wrong-row `expired`, a word
     // this build does not know, or `probe-unmeasured` is not something waiting cures — no hour of retries first.

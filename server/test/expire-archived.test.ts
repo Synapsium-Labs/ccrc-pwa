@@ -147,8 +147,25 @@ describe('the one executor', () => {
 
   it('an audit exit 1 is a failure, its document never spent', async () => {
     const s = await rig({ script: { audit: { code: 1, stdout: auditDoc('unmeasured') } } });
-    expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'failed' });
+    expect(await expireArchived(s.deps, s.req)).toMatchObject({ kind: 'audit-failed' });
     expect(s.verbs()).toEqual(['ws-audit']);
+  });
+
+  it('says WHERE a resumable failure arose: the act’s own audit is `audit-failed`, a failed ws-expire is `failed` — never one value (final review I1)', async () => {
+    // Only the verb's failure can have stopped part-way, so only it may move a row onto the persistent tier
+    // (`archivedExpiryNextEntry`); folding the two here would put a shadow lane's unreadable audit there.
+    const a = await rig({ script: { audit: { code: 1, stdout: auditDoc('unmeasured', { detail: 'ps is missing' }) } } });
+    const audit = await expireArchived(a.deps, a.req);
+    expect(audit).toEqual({ kind: 'audit-failed', detail: 'ws-audit --expire measured nothing: ps is missing',
+      sessionId: ID, archivedAt: ARCH, expiresAt: DUE });
+    expect(a.verbs(), 'no verb ran').toEqual(['ws-audit']);
+    recordExpireFeed(a.deps, audit);
+    expect(a.coord.feedEvents(5)[0]!.body).toBe(`${ID} (archived 2026-09-10 00:26 UTC, due 2026-09-17 00:26 UTC): its expiry's own `
+      + 'audit could not be read (ws-audit --expire measured nothing: ps is missing), so no verb ran. It is retried, backing off in between.');
+    const v = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'the attic pin failed' }) } } });
+    expect(await expireArchived(v.deps, v.req)).toMatchObject({ kind: 'failed', resumable: true, detail: 'pin-failed: the attic pin failed' });
+    expect(v.verbs()).toEqual(['ws-audit', 'ws-expire']);
   });
 
   it('a failure the box says will not resume is carried as such, never narrowed to a retryable one (review 313, parked item 4)', async () => {
@@ -166,8 +183,8 @@ describe('the one executor', () => {
       expect(s.coord.feedEvents(10)[0]!.body, stdout).toContain(resumable ? 'It is retried' : 'It is not retried');
     }
     const unread = await rig({ script: { audit: { code: 1, stdout: auditDoc('unmeasured') } } });
-    expect(await expireArchived(unread.deps, unread.req), 'an audit that measured nothing is retried')
-      .toMatchObject({ kind: 'failed', resumable: true });
+    expect(await expireArchived(unread.deps, unread.req), 'an audit that measured nothing is retried, as the audit’s own')
+      .toMatchObject({ kind: 'audit-failed' });
   });
 
   it('a refusal at audit carries its word — in-use with the processes; a GONE word is gone', async () => {

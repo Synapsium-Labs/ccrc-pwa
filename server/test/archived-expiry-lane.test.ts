@@ -216,6 +216,25 @@ describe('a failure that keeps resuming (wave 5)', () => {
     expect(f.verbsFor('ws-expire'), 'and composed nothing: shadow').toHaveLength(asked);
     expect(f.entry('demo-a')?.report, 'a shadow audit ends nothing').toMatchObject({ kind: 'failing', attempts: asked });
   });
+
+  it('a day in SHADOW of the act’s own audit unreadable never reaches the tier: once the audit recovers, would-expire is listed again (final review I1)', async () => {
+    // No verb runs in shadow, so nothing can have stopped part-way: the executor says the AUDIT failed, and the lane keeps
+    // the pre-wave-5 ladder and hour-ceiling report, which the next would-expire replaces.
+    let broken = false;
+    const f = await fixture({ audit: (id) => broken ? { verdict: 'unmeasured' } : { verdict: 'expirable', token: tokOf(id) } });
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.entry('demo-a')?.report).toMatchObject({ kind: 'would-expire' });
+    broken = true;
+    for (let k = 0; k < 30; k += 1) { f.advance(EXPIRE_FAILURE_CEILING_MS); f.next(); await f.pass(); }
+    expect(f.entry('demo-a')?.report, 'a day of unreadable audits: the hour-ceiling report, never a standing one')
+      .toEqual({ kind: 'failing', at: expect.any(Number) as number, detail: 'ws-audit --expire answered a verdict this build does not know: unmeasured' });
+    expect(f.verbsFor('ws-expire'), 'shadow: no verb ever ran').toEqual([]);
+    broken = false;
+    f.advance(EXPIRE_FAILURE_CEILING_MS); f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention?.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'would-expire']]);
+  });
 });
 
 describe('the record follows the row (review 313, F1)', () => {
