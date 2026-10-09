@@ -24,7 +24,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { TOKEN_HOLDS, OWED_REASONS, TOKEN_ORIGINS } from '../../shared/box-token.js';
-import { NODE_FILES, TOKEN_SYNC_OP_ERRORS, TOKEN_TRANSPORTS } from '../../shared/agent-protocol.js';
+import { GENERATION_ID_HEX, NODE_FILES, TOKEN_SYNC_OP_ERRORS, TOKEN_TRANSPORTS } from '../../shared/agent-protocol.js';
 import { TOKEN_FILE_PROBLEMS } from '../../shared/box-token.js';
 import { DRIVER_TICK_MS, FAILURES_FOR_BANNER, PENDING_HARD_CAP, type BoxTokenState } from '../src/token/policy.js';
 
@@ -482,6 +482,50 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
   });
   it('the failure count that turns failed:* FAIL is the banner threshold', () => {
     expect(arr('_BT_FAIL_AT')).toEqual([String(FAILURES_FOR_BANNER)]);
+  });
+  // Review 362 F4 (bar class 10; the plan's Global Constraint): the python in this check spells the generation id's shape
+  // three times and the sync-proof tuple by hand. L0 owns the shape (`GENERATION_ID_HEX`) and the two `proof-*` words
+  // (`TOKEN_SYNC_OP_ERRORS`); `proved` is the verb's own success word (`R_PROOF=proved`), pinned from the verb's text.
+  const checkBlock = (src: string): string => {
+    const at = src.indexOf('# ── box-token: the box token');
+    expect(at, 'the box-token block marker moved: re-point the pin').toBeGreaterThanOrEqual(0);
+    return src.slice(at);
+  };
+  /** Every `[0-9a-f]{n}` spelling in the block's code lines, less the 64-wide digest shape (a different thing). */
+  const genShapes = (src: string): string[] =>
+    checkBlock(src).split('\n').filter((l) => !/^\s*#/.test(l))
+      .flatMap((l) => [...l.matchAll(/\[0-9a-f\]\{\d+(?:,\d*)?\}/g)].map((m) => m[0]))
+      .filter((w) => w !== '[0-9a-f]{64}');
+  const proofTuple = (src: string): unknown[] | null => {
+    const hits = [...checkBlock(src).matchAll(/\bpf in \(([^)]*)\)/g)];
+    if (hits.length !== 1) return null;
+    return hits[0]![1]!.split(',').map((x) => x.trim()).filter(Boolean)
+      .map((x) => (x === 'None' ? null : /^"([^"]*)"$/.exec(x)?.[1] ?? `?${x}`));
+  };
+  const verbProofWords = (): string[] => {
+    const verb = readFileSync(join(REPO, 'ccd', 'ccrc-token-sync'), 'utf8');
+    return [...new Set([...verb.matchAll(/^\s+R_PROOF=([a-z-]+)$/gm)].map((m) => m[1]!))];
+  };
+  const l0Proof = (): string[] => TOKEN_SYNC_OP_ERRORS.filter((w) => w.startsWith('proof-'));
+  it('the generation id shape is spelled exactly three times in the check and each is GENERATION_ID_HEX', () => {
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    expect(genShapes(src)).toEqual([GENERATION_ID_HEX, GENERATION_ID_HEX, GENERATION_ID_HEX]);
+  });
+  it('the sync-proof tuple is (None, the verb\'s success word, then L0\'s proof-* sync words), exactly', () => {
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    expect(l0Proof().length, 'L0 has no proof-* sync words: the filter is empty').toBeGreaterThan(0);
+    expect(proofTuple(src)).toEqual([null, 'proved', ...l0Proof()]);
+    expect([...verbProofWords()].sort(), 'the verb\'s R_PROOF words').toEqual(['proved', ...l0Proof()].sort());
+  });
+  it('CONTROL: the scanners see a narrowed shape, a fourth spelling, a dropped word and a renamed word', () => {
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    const want = [GENERATION_ID_HEX, GENERATION_ID_HEX, GENERATION_ID_HEX];
+    expect(genShapes(src.replace('[0-9a-f]{16}', '[0-9a-f]{15}'))).not.toEqual(want);
+    expect(genShapes(src.replace(/\[0-9a-f\]\{16\}(?![\s\S]*\[0-9a-f\]\{16\})/, '[0-9a-f]{15}'))).not.toEqual(want);
+    expect(genShapes(`${src}\n    x = re.compile(r"[0-9a-f]{16}")\n`)).not.toEqual(want);
+    expect(proofTuple(src.replace(', "proof-unmeasured")', ')'))).not.toEqual([null, 'proved', ...l0Proof()]);
+    expect(proofTuple(src.replace('"proved"', '"proven"'))).not.toEqual([null, 'proved', ...l0Proof()]);
+    expect(proofTuple(src.replace('(None, ', '('))).not.toEqual([null, 'proved', ...l0Proof()]);
   });
   it('the generation file and the fleet file are the names the writers use', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');

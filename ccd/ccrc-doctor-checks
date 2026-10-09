@@ -7408,7 +7408,8 @@ _check_history() {
 # is `FAILURES_FOR_BANNER`, `_BT_PENDING_CAP` is `PENDING_HARD_CAP` and `_BT_TICK_MS` is `DRIVER_TICK_MS`
 # (`server/src/token/policy.ts`). `_BT_LOST_WORDS` are the rest of `BoxTokenView.lastFailure`'s vocabulary, which
 # has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS` (pinned by a text scan of that file) plus
-# `mint-failed`, the doctor's own extra (the console view's word for a failed mint; the state record never holds it).
+# `mint-failed`, the one word `link.ts` does not list (the console view's word for a failed mint). The state record
+# CAN hold it, as `lastFailure`: the driver commits `lastFailure: 'mint-failed'` on a failed stage write.
 # D-4551's two words are doctor-local, like `pending-overdue`: `retire-overdue:<min>` (a previous value more than
 # one driver tick past its `hardUntil`) and `retiring-unlanded:<min>` (the oldest `retiring` digest older than two
 # ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`.
