@@ -1787,8 +1787,16 @@ describe('ccrc uninstall: the codex step, in order and contained (Plan 2b-2 Task
       // signals no process and decides liveness by a socket, not a PID. What D-3533 rules out is a LANE reaper
       // there, or a setup carrying signal authority — so that is what is pinned, for every entry the config names.
       expect(config).not.toMatch(/laneReaper/);
-      const wired = /globalSetup:\s*\[([^\]]*)\]/.exec(config)?.[1] ?? '';
-      for (const entry of [...wired.matchAll(/'([^']+)'/g)].map((m) => m[1]!)) {
+      // Two conditions kept apart: a config that sets no `globalSetup` has nothing to check, but one that sets it
+      // in a shape this parse cannot read (a bare string, double-quoted entries) must not check nothing silently.
+      const code = config.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+      const list = /globalSetup:\s*\[([^\]]*)\]/.exec(code)?.[1];
+      const entries = [...(list ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+      if (/\bglobalSetup\s*:/.test(code)) {
+        expect(entries.length, 'vitest.config.ts sets globalSetup in a shape this pin cannot read, so it would check nothing')
+          .toBeGreaterThan(0);
+      }
+      for (const entry of entries) {
         expect(readFileSync(join(REPO, 'server', entry), 'utf8'), `${entry} carries signal authority`)
           .not.toMatch(/process\.kill|ps[^\n]*eww|['"]eww['"]/);
       }
