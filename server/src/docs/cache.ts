@@ -83,7 +83,8 @@ interface BlobSlot {
  * and the stored show's one content field (the one its `encoding` names), since the cache holds both. A value charged above the whole
  * budget is never stored and evicts nothing; re-setting a key gives its old charge back first; after a set, the
  * least recently used entries go until the total is within the budget, so the value just set (charged at most the
- * budget) is never evicted by its own set.
+ * budget) is never evicted by its own set. The stored bytes are the cache's own copy (its own unpooled buffer), so an
+ * entry never pins a pooled allocation and the budget bounds the memory held, not only the charge.
  */
 function docsBlobCache(): DocsBlobCache {
   const slots = new Map<string, BlobSlot>();
@@ -112,7 +113,9 @@ function docsBlobCache(): DocsBlobCache {
         slots.delete(at);
         total -= old.charge;
       }
-      slots.set(at, { value, charge: c });
+      const own = Buffer.allocUnsafeSlow(value.bytes.byteLength);
+      own.set(value.bytes);
+      slots.set(at, { value: { answer: value.answer, bytes: own }, charge: c });
       total += c;
       while (total > DOCS_CACHE_BYTES) {
         const oldest = slots.keys().next().value as string;

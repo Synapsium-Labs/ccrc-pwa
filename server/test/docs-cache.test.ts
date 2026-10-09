@@ -105,8 +105,8 @@ describe('docs caches — every key carries the node (spec 2026-10-01 M3.13, sec
     blobs.set('n1', REPO, BLOB, one);
     blobs.set('n2', REPO, BLOB, two);
     expect(blobs.size()).toBe(2);
-    expect(blobs.get('n1', REPO, BLOB)).toBe(one);
-    expect(blobs.get('n2', REPO, BLOB)).toBe(two);
+    expect(blobs.get('n1', REPO, BLOB)?.answer).toBe(one.answer);
+    expect(blobs.get('n2', REPO, BLOB)?.answer).toBe(two.answer);
   });
 
   it('listing map: the same tree under two nodes is two commits, and a lookup under a node never recorded misses', () => {
@@ -654,5 +654,21 @@ describe('T11 review 3-2: the blob cache holds and charges only the verified con
     expect(held.answer.b64!.length).toBe(1_333_336);
     expect(blobs.bytes()).toBe(2_333_336);
     expect((await app.inject({ url: url('b.md'), headers: PWA_HEADERS })).json()).toMatchObject({ from: 'cache' });
+  });
+});
+
+describe('FR1 review F9: a stored entry owns its bytes', () => {
+  it('a small pooled source is stored as the cache\'s own copy: its buffer is exactly its length, and the source is not shared', () => {
+    const src = Buffer.from('hello docs');
+    expect(src.buffer.byteLength).toBeGreaterThan(src.byteLength);
+    const { blobs } = docsCaches();
+    const value = shown(src, 'hello docs');
+    blobs.set('n', REPO, BLOB, value);
+    const got = blobs.get('n', REPO, BLOB)!;
+    expect(got.bytes.buffer.byteLength).toBe(got.bytes.byteLength);
+    expect(Buffer.from(got.bytes).toString('utf8')).toBe('hello docs');
+    expect(blobs.bytes()).toBe(src.byteLength + Buffer.byteLength('hello docs'));
+    src.fill(0x7a);
+    expect(Buffer.from(got.bytes).toString('utf8')).toBe('hello docs');
   });
 });
