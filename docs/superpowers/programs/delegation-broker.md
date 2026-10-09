@@ -20,48 +20,71 @@ worktrees in shadow (5), and finally clean them through the existing safety spin
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
-| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | — | **run 306 dispatched** 2026-10-07 08:46 UTC to `ccrc-pwa-plain-hollow` (operator decision: the cross-check folds into a close-out wave) |
+| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **fix round (review 332)**: run 306 dispatched 2026-10-07 08:46 UTC to `ccrc-pwa-plain-hollow` (operator decision: the cross-check folds into a close-out wave); PR #321 carries fix rounds for reviews 318, 324, 328 and 332 |
 | 3 | 2 Observe | hooks append to the spool; ingestion and cursors; the one `delegation_*` migration; census extension; correlation and reconciliation, report-only; the coordinator-intent route; coordinator clause 17 | fleet first, then server; skills | 2 | — | to plan once wave 2's cross-check is in the measurement section |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; CCR-15 wave 4's sweep (merged #215, live) | — | to plan |
 
-## Measurement matrix (wave 1 fills this section)
+## Measurement matrix (filled by wave 1; wave 2's close-out added 2.1.292 and the real-lane cross-check)
 
 Wave 1's answers to spec §8.1, per Claude Code version, read from the committed corpus
-(`server/test/fixtures/delegation/matrix.json`, derived by `server/test/delegation-rig/build-matrix.mjs` from 126
+(`server/test/fixtures/delegation/matrix.json`, derived by `server/test/delegation-rig/build-matrix.mjs` from 140
 synthetic rig captures: mock API, fixture HOME, fixture repo). The on-box census names projects by label only, and
-the hook-side costs are below. After wave 1 merges, the coordinator adds the real-lane cross-check (two lanes, D-3995)
-under its own heading. Until that is here, nothing in waves 2–6 may depend on a hook field (spec §8.1).
+the hook-side costs are below. Wave 2 (run 306) added the real-lane cross-check (two lanes, D-3995) under its own
+heading, and nothing in a later wave may depend on a hook field that the corpus and the cross-check have not measured
+(spec §8.1). The cross-check's evidence is not committed, so a field only it shows counts only once a later wave
+measures it again (see "Real-lane cross-check").
 
-**Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288, 2.1.289, 2.1.290 and 2.1.291, each with
-14 scenarios, and all 126 cells are `measured`. Measured means measured **within the rig**, and two of §8.1's
-situations are reached only through a proxy (`oom-and-account-swap-are-proxies`, D-4066):
+**Versions covered:** 2.1.280, 2.1.281, 2.1.285, 2.1.286, 2.1.287, 2.1.288, 2.1.289, 2.1.290, 2.1.291 and 2.1.292, each
+with 14 scenarios, and all 140 cells are `measured`. The corpus counts in the prose below the table, in "What the
+table cannot show" and the amendments ("99 of 99", "126 of 126", "on all nine", …), are over the nine versions
+2.1.280–2.1.291 they were measured on; 2.1.292's cells were compared answer by answer with them and match on every
+answer the table reads. The Q8 hook costs and the on-box census numbers are not counts over versions. Measured means
+measured **within the rig**: two of §8.1's situations are reached only through a proxy
+(`oom-and-account-swap-are-proxies`, D-4066), and one is reached but not answered, because the rig compacts a session
+but never captures the `compact` SessionStart (`compaction-is-unmeasured`, D-4364):
 - **Parent crash is a SIGKILL of the parent's Claude Code process** (`kill9` in parent-kill, wf-iso-resume and
   clear-compact-resume). It is the rig's proxy for §8.1's OOM column. A cgroup OOM kill of the pane's scope can take
   the whole process tree, not the parent alone; whether it does is the unit's OOM policy (an assumption about the
   box's systemd and cgroup settings, not measured here), and that case is unmeasured.
 - **The account swap is a config-dir swap.** swap-resume's `swapConfig` copies the fixture config dir to a second
   one under the same fixture HOME, with the same mock auth, and resumes there. It is not a swap between accounts.
+- **Q5's compaction is unmeasured.** The rig does compact a session (clear-compact-resume), but the hook exits for a
+  `compact` SessionStart before its capture arm, so no fixture holds one. Compaction shows only as PreCompact and
+  PostCompact, which carried the pre-compaction session id in all ten versions' clear-compact-resume, and the rig's
+  resume by that id continued under it. So "rotates on compaction" is not answered by this corpus; the amendment
+  `compact-sessionstart-is-not-captured` names what the observe stage's spool (spec §7 stage 2; wave 3 since the
+  2026-10-07 renumbering) must do.
 
-The corpus comes from three captures, and `matrix.json` re-derives byte-identically from it:
+The corpus comes from four captures, and `matrix.json` re-derives byte-identically from it:
 - the first capture's 91 cells: its seven versions, 2.1.280 to 2.1.289 above, every scenario but interrupt-exit;
 - those versions' seven interrupt-exit cells, re-captured in fix round 1 (D-4058);
 - fix round 2's 28 cells, 2.1.290 and 2.1.291 × 14 scenarios, captured 2026-10-06 14:20–14:41 UTC with the rig at
   `e47f3689f` (a git-archive snapshot), sanitised by the sanitiser at `858caf47d` and committed in `158bc2227`. Of
   the versions installed when that capture started (2.1.285–2.1.291), it ran the two the corpus lacked; a later
-  version is wave 2's first step (D-4004). Fix round 2's rig changes came after these runs and change none of them:
-  `claude_pid` resolves the versions directory to its own spelling on a box whose HOME is physical, as the capture
-  box's is, and the workflow scenarios' `answerDialog "Run a dynamic workflow"` step, since replaced by a 10 s sleep
-  (D-4058), waited out its 10 s timeout and pressed nothing: no dialog showed, and 36 of 36 workflow fixtures carry no
+  version was to be the observe stage's first step (then wave 2, wave 3 since the 2026-10-07 renumbering; D-4004), and
+  the close-out (run 306) ran it instead, as the fourth capture below says. Fix round 2's rig changes were not in the
+  snapshot the runs used (the git-archive snapshot of `e47f3689f` above) and change none of them: `claude_pid`
+  resolves the versions directory to its own spelling on a box whose HOME is physical, as the capture box's is, and
+  the workflow scenarios' `answerDialog "Run a dynamic workflow"` step, since replaced by a 10 s sleep (D-4058),
+  waited out its 10 s timeout and pressed nothing: no dialog showed, and 36 of 36 workflow fixtures carry no
   `dialog answered:` note.
+- the 2.1.292 capture's 14 cells, 2.1.292 × 14 scenarios, captured 2026-10-07 10:11:46–10:20:55 UTC with
+  `recapture.sh --missing` at commit `ccf0167b9` (a git-archive snapshot), sanitised by the sanitiser at that commit
+  and committed in `3cad0d2cd`. It ran the version the corpus lacked of those installed when it started (2.1.285,
+  2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291, 2.1.292). Every cell is `measured`, and the only notes are the two the
+  earlier versions carry (both read from the committed fixtures). Its raw root, with the run's log, was then removed,
+  as the README's cleanup step says, so later waves read only the committed fixtures and the matrix derived from them.
 
-The fleet's installed lanes, re-read read-only at 2026-10-06 14:58 UTC (each lane's last update result, its
-`version_to`; no lane pinned), run 2.1.286 (two lanes), 2.1.289 (one), 2.1.290 (six) and 2.1.291 (six): 15 lanes.
-**Every installed lane version is covered**, and no lane runs a version the corpus lacks. 2.1.280 and 2.1.281 are no
-longer installed on the box; their cells stay as measured history. Earlier reads had 2.1.286 on four lanes and 2.1.289
-on eleven (2026-10-05 18:45 UTC), and before that one lane on 2.1.285. Lane counts drift as lanes update; re-read them
+The fleet's installed lanes, re-read read-only at 2026-10-07 12:38 UTC (each lane's last update result, its
+`version_to`; no pin file under the versions directory), run 2.1.286 (one lane), 2.1.289 (one), 2.1.290 (five), 2.1.291
+(two) and 2.1.292 (six): 15 lanes. **Every installed lane version is covered**, and no lane runs a version the corpus
+lacks. 2.1.280, 2.1.281 and 2.1.288 are not installed on the box now (its versions directory holds 2.1.285, 2.1.286,
+2.1.287, 2.1.289, 2.1.290, 2.1.291 and 2.1.292); their cells stay as measured history. Earlier reads had 2.1.286 on two
+lanes, 2.1.289 on one, 2.1.290 on six and 2.1.291 on six (2026-10-06 14:58 UTC), 2.1.286 on four lanes and 2.1.289 on
+eleven (2026-10-05 18:45 UTC), and before that one lane on 2.1.285. Lane counts drift as lanes update; re-read them
 before relying on one.
 
 **Scenario → §8.1 source** (the matrix is keyed by version × scenario, D-3998):
@@ -78,28 +101,28 @@ before relying on one.
 Status is read first: an unmeasured cell would print `unmeasured`, and none did. Inside a measured cell, "—" means
 not observed. Session ids appear as ordinals (`s1`, `s2`), never as values. A run's notes are outcomes here, never
 failures: the only notes in the corpus are `probe ["r1-resumed"]: not reached` (wf-iso-resume) and
-`dialog answered: Background work is running` (interrupt-exit), each on all nine versions, and no fixture carries a
+`dialog answered: Background work is running` (interrupt-exit), each on all ten versions, and no fixture carries a
 failure note. Each row names the scenario it reads.
 
-| Question (scenario) | 2.1.280 | 2.1.281 | 2.1.285 | 2.1.286 | 2.1.287 | 2.1.288 | 2.1.289 | 2.1.290 | 2.1.291 |
-|---|---|---|---|---|---|---|---|---|---|
-| Q1 SubagentStart count; agent types (wf-plain) | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` |
-| Q1 SubagentStop count; agent types (wf-plain) | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` |
-| Q1 SubagentStart count (wf-iso) | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 |
-| Q2 tool name (agent-plain) | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` |
-| Q2 `isolation` in PreToolUse input (agent-iso-unchanged) | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| Q3 `agent_id` names `agent-<id>` (agent-iso-changed) | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| Q3 meta carries `worktreePath` (agent-iso-changed / wf-iso) | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
-| Q3 admin records named by a meta (agent-iso-changed / wf-iso) | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
-| Q3 `CLAUDE_BASE` (agent-iso-changed / wf-iso / raw-worktree) | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none |
-| Q4 subagent Bash events, with `agent_id` (agent-plain: the PreToolUse and PostToolUse of one Bash call) | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 |
-| Q4 subagent Bash: parent's session id (agent-plain) / `cwd` in worktree (agent-iso-changed) | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
-| Q5 SessionStarts (clear-compact-resume) | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 |
-| Q5 SessionStarts (swap-resume) | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 |
-| Q6 trees left: agent-iso-unchanged / -changed / -dirty / -bg / parent-kill / interrupt-exit / raw-worktree (the first six read `worktreesLeft`; raw-worktree reads `otherRecordsLeft`, its admin record, since its tree is outside `.claude/worktrees` and its `worktreesLeft` is 0) | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 |
-| Q6 SessionEnd: interrupt-exit reasons / parent-kill count | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 |
-| Q7 wf-iso-resume: probes missed / records before kill / at end | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 |
-| Q7 wf-limit-pause: probes missed | none | none | none | none | none | none | none | none | none |
+| Question (scenario) | 2.1.280 | 2.1.281 | 2.1.285 | 2.1.286 | 2.1.287 | 2.1.288 | 2.1.289 | 2.1.290 | 2.1.291 | 2.1.292 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Q1 SubagentStart count; agent types (wf-plain) | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` |
+| Q1 SubagentStop count; agent types (wf-plain) | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` | 2; `workflow-subagent` |
+| Q1 SubagentStart count (wf-iso) | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 |
+| Q2 tool name (agent-plain) | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` | `Agent` |
+| Q2 `isolation` in PreToolUse input (agent-iso-unchanged) | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Q3 `agent_id` names `agent-<id>` (agent-iso-changed) | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Q3 meta carries `worktreePath` (agent-iso-changed / wf-iso) | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
+| Q3 admin records named by a meta (agent-iso-changed / wf-iso) | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
+| Q3 `CLAUDE_BASE` (agent-iso-changed / wf-iso / raw-worktree) | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none | all / all / none |
+| Q4 subagent Bash events, with `agent_id` (agent-plain: the PreToolUse and PostToolUse of one Bash call) | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 | 2, 2 |
+| Q4 subagent Bash: parent's session id (agent-plain) / `cwd` in worktree (agent-iso-changed) | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all | all / all |
+| Q5 SessionStarts (clear-compact-resume) | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 | startup s1, clear s2, resume s2 |
+| Q5 SessionStarts (swap-resume) | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 | startup s1, resume s1 |
+| Q6 trees left: agent-iso-unchanged / -changed / -dirty / -bg / parent-kill / interrupt-exit / raw-worktree (the first six read `worktreesLeft`; raw-worktree reads `otherRecordsLeft`, its admin record, since its tree is outside `.claude/worktrees` and its `worktreesLeft` is 0) | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 | 0/1/1/1/1/1/1 |
+| Q6 SessionEnd: interrupt-exit reasons / parent-kill count | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 | `prompt_input_exit` / 0 |
+| Q7 wf-iso-resume: probes missed / records before kill / at end | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 | `r1-resumed` / 1 / 1 |
+| Q7 wf-limit-pause: probes missed | none | none | none | none | none | none | none | none | none | none |
 
 The SubagentStop row is read from the cell's `events` (count, each with an `agent_id`) and the fixtures'
 `agent_type`; on every version the two SubagentStops carry the same two agent ids as the two SubagentStarts.
@@ -145,7 +168,7 @@ the eleven Agent and Workflow scenarios. Each item holds on all nine versions un
 - **`workflowPhase` is a measured rig-vs-box difference.** Spec §3.1 says a Workflow worker's meta carries
   `workflowPhase`. No Workflow meta in the corpus does (0 of 63), while on the fleet box 8 of the census's 15 `wf_*`
   records with a found meta list it among their meta keys (`this-repo` 7, `project-1` 1, `project-2` 0). The
-  real-lane cross-check checks it.
+  real-lane cross-check has run, and found it on neither lane (amendment `workflow-phase-is-not-always-written`).
 - **Q5 compact is a measurement LIMIT, not "never fired".** The hook exits for a `compact` SessionStart before its
   capture arm (`ccd/session-hook.sh:2905`). That is the stall-watch exclusion its arm comment documents at
   `:2919-2922`. Compaction shows only as PreCompact/PostCompact, which carried the pre-compaction session id, and the
@@ -199,11 +222,11 @@ the eleven Agent and Workflow scenarios. Each item holds on all nine versions un
 
 ### Hook-side costs (Q8)
 
-This is a bash micro-benchmark of the operations, not of the wave-2 hook (`q8-spool-cost-is-a-micro-benchmark`,
-D-4000). It ran on 2026-10-05 against the repository with the most admin records, `project-1`'s main checkout,
-which held 185 records at the start and at the end of the run (181 at the census). The load average was
-25.06 / 22.22 / 23.77 at the start and 25.78 / 22.41 / 23.83 at the end, on 16 CPUs. Nothing in the repository was
-written; the append went to a scratch file outside it, removed after.
+This is a bash micro-benchmark of the operations, not of the observe stage's hook (wave 3 since the 2026-10-07
+renumbering; `q8-spool-cost-is-a-micro-benchmark`, D-4000). It ran on 2026-10-05 against the repository with the
+most admin records, `project-1`'s main checkout, which held 185 records at the start and at the end of the run (181
+at the census). The load average was 25.06 / 22.22 / 23.77 at the start and 25.78 / 22.41 / 23.83 at the end, on 16
+CPUs. Nothing in the repository was written; the append went to a scratch file outside it, removed after.
 
 | Operation (1000 iterations, 3 repeats) | seconds per 1000 | per operation |
 |---|---|---|
@@ -280,8 +303,9 @@ working directory of the meta's parent (the munged project directory the meta si
 
 Across the 122 records with a found meta: `ccd-workspace` 49, `main-checkout` 10, `other` 59 and `mixed` 4.
 **Assuming every `ccd-workspace`-class parent is a ccd session** (unmeasured: the class is a path prefix), the
-non-ccd share is bounded only to between 0 and 73 of 122 (about 60%), and `project-1` carries 62 of the 73. Wave 2's
-spool answers Q9 exactly: a tree whose parent wrote no spool line had a non-ccd parent.
+non-ccd share is bounded only to between 0 and 73 of 122 (about 60%), and `project-1` carries 62 of the 73. The
+observe stage's spool (wave 3 since the 2026-10-07 renumbering) answers Q9 exactly: a tree whose parent wrote no spool
+line had a non-ccd parent.
 
 **Q10, from source** (`incarnation-is-the-row-generation`, D-3996). Cited by content against `origin/main`
 `77c11245a` (`git show 77c11245a:ccd/ccd`), the newest `main` when this was written, because `main`'s lines are the
@@ -305,8 +329,8 @@ where #301 added five `caps` lines, sit five lines lower there (`:10452`, `:2187
 - The file can be absent on a LIVE row: ccd's own comments quote a 2026-09-17 measurement of 31 of 34 live rows
   without it (`:20780`, `:22068`).
 
-**So wave 2 reads the FILE, not the variable, and an ABSENT or INVALID file is an UNMEASURED incarnation, never a
-changed one.**
+**So the observe stage (wave 3 since the 2026-10-07 renumbering) reads the FILE, not the variable, and an ABSENT or
+INVALID file is an UNMEASURED incarnation, never a changed one.**
 
 ### Amendments the measurement forces
 
@@ -345,15 +369,16 @@ the exception.
   read from the pane on 2.1.280 and 2.1.289 only: interrupt-exit) or is SIGKILLed
   (parent-kill; wf-iso-resume's hung worker) leaves its tree, unchanged included, with a SubagentStart and no
   SubagentStop or notification; the quitting parent's SessionEnd says nothing about its agent. Under the ephemeral
-  rule such a tree is never due unless the parent is proved dead, so wave 2 must name what ends it (interrupt-exit,
-  parent-kill, wf-iso-resume) — spec §5.11 clocks and terminal evidence, §5.2 execution.
+  rule such a tree is never due unless the parent is proved dead, so the observe stage (wave 3 since the 2026-10-07
+  renumbering) must name what ends it (interrupt-exit, parent-kill, wf-iso-resume) — spec §5.11 clocks and terminal
+  evidence, §5.2 execution.
 - `workflow-worker-not-rerun-after-restart` — after a parent SIGKILL and `--resume`, the hung isolated worker did not
   re-run within the probe window, and its record stayed. "A paused workflow is not ended" must not wait on a resume
   the corpus never saw (wf-iso-resume, probe missed on all nine) — spec §5.11, §5.12 restart.
 - `compact-sessionstart-is-not-captured` — the hook exits for a `compact` SessionStart before capture, and compaction
-  showed no id change in PreCompact/PostCompact. "Rotates on compaction" is unmeasured, and wave 2's spool line for
-  that SessionStart must be written inside its arm before the exit (clear-compact-resume) — spec §3 `_sync_uuid` row,
-  §5.2, §5.3.
+  showed no id change in PreCompact/PostCompact. "Rotates on compaction" is unmeasured, and the observe stage's spool
+  line (wave 3 since the 2026-10-07 renumbering) for that SessionStart must be written inside its arm before the exit
+  (clear-compact-resume) — spec §3 `_sync_uuid` row, §5.2, §5.3.
 - `compaction-fires-an-unpaired-subagentstop` — `/compact` emits a SubagentStop with an agent id, an empty agent
   type, and no SubagentStart or launch, so a SubagentStop alone never opens an activity (clear-compact-resume) —
   spec §5.2 activity, §5.3.
@@ -381,9 +406,149 @@ the exception.
 
 ### Real-lane cross-check
 
-Pending: the coordinator runs it after wave 1 merges, per the plan's "After the merge" steps.
+Run 2026-10-07 by wave 2's worker (run 306), under wave 1's plan "After the merge" standing rules: two fresh `-hookcap`
+scratch sessions started with `ccd start` and stopped with `ccd stop`, driven by one mail each, each in a scratch git
+repository with one commit, outside the projects root. Lanes: the lowest and the highest Claude Code version the fleet
+ran at 08:55 UTC, **2.1.286** and **2.1.292** (D-3995). Every lane's `settings.json` registered `SessionEnd` (15 of 15),
+on ccrc v0.0.114. The mail asked for one `Agent` call with `isolation: "worktree"` whose subagent commits one file, then
+one `Workflow` with one `{ isolation: 'worktree' }` agent doing the same, then "done". No lane stopped at a permission
+dialog, none declined, and both did all three steps. Only reduced output is here: `deploy/hook-capture-reduce.mjs` over
+each capture (`--root scratch=<repo> --root worktrees=<repo>/.claude/worktrees`), `deploy/delegation-census.mjs` over
+each scratch repository with the lane's config dir as `--home`, and booleans computed on the box. The rig side is the
+same reducer run over the corpus's `agent-iso-changed` and `wf-iso` fixtures for the same version, their events written
+out as a capture directory. A lane is named by its version; the registry rows of both scratch ids stay for the operator.
+The tables, the teardown result and the agent-meta checks below rest on the lanes' capture directories, scratch
+repositories and config dirs. These stay on the fleet box, with every scratch session's registry row, until the
+operator removes them, and are never committed; after that they are a dated record that cannot be derived again. So a
+later wave may rely on a field only if the committed corpus shows it or the wave measures it again. Each amendment
+below only narrows what a later wave may assume, or has it drop or keep data it cannot attribute, so it stands either
+way.
+
+**Table 1: real lane against the rig's cells for the same version.**
+
+| check | 2.1.286 | 2.1.292 |
+|---|---|---|
+| Agent: PreToolUse input keys | `description`, `isolation`, `prompt` — the rig's mock also sends `subagent_type` (`agent-input-keys-are-the-callers`) | same as 2.1.286 |
+| Agent: isolation token | `worktree` 1, as the rig | `worktree` 1, as the rig |
+| Agent: launch PostToolUse response keys | `agentId`, `canReadOutputFile`, `description`, `isAsync`, `outputFile`, `prompt`, `resolvedModel`, `status` — as the rig; `status` `async_launched`, `isAsync` true | same keys and values |
+| Agent: SubagentStart against the launch PostToolUse | SubagentStart first, as the rig | launch first; the rig's cell has SubagentStart first — both orders are already measured (`activity-keyed-by-agent-id-not-arrival`) |
+| Agent: subagent events | its tool events carry `agent_id` and `cwd` `worktrees/*`, then SubagentStop (its transcript names the agent), as the rig | same |
+| Agent: the launch's ids | the response `agentId` is the SubagentStart `agent_id`; that SubagentStart's `prompt_id` is the launch PreToolUse's; a task notification carries the launch's `tool_use_id`; the parent's Stop `background_tasks` lists the agent id — all true | the first three true; no Stop fell while the agent ran, so `background_tasks` never listed it |
+| Workflow: PreToolUse input keys / isolation in `tool_input` | `script` / absent, as the rig | same |
+| Workflow: launch response keys | `runId`, `scriptPath`, `status`, `summary`, `taskId`, `taskType`, `transcriptDir`, `workflowName` — as the rig (vetted: none is an agent or label name); `status` `async_launched` | same |
+| Workflow: the launch's ids | `runId` names the `wf_<run>-<n>` admin record; SubagentStart `prompt_id` = launch's; notification carries `tool_use_id`; Stop `background_tasks` lists `taskId` — all true | all true |
+| Workflow: SubagentStart against the parent's Stop | before the Stop; the rig's cell has it after (`parent-stop-does-not-bound-workflow-start`) | before the Stop; as 2.1.286 |
+| Main thread before the Workflow call | — | a ToolSearch call (input keys `max_results`, `query`) loads the Workflow tool first (`toolsearch-may-precede-a-workflow-call`) |
+| Unpaired SubagentStop (no SubagentStart, empty agent type, `cwd` `scratch`) | 3, one after each of the parent's 3 Stops; the rig shows one only during `/compact` (`post-turn-subagentstop-is-unpaired`) | 2, one after each of 2 Stops |
+| Event key sets (per event, every field path) | the rig's, plus `scratchpad_dir` on every event (`real-payloads-carry-scratchpad-dir`) | the rig's, plus `scratchpad_dir`, minus Stop's `background_tasks.[].agent_type` (no Stop fell while the agent ran; see the "Agent: the launch's ids" row), plus the main-thread ToolSearch call's input keys |
+| `cwd` labels | main `scratch`, subagent `worktrees/*`, as the rig | same |
+| Session ids | one (`s1`) for every event of the turn, as the rig | same, except the SessionEnd below |
+| SessionEnd at `ccd stop` | none captured under this lane's id; its SessionEnd (reason `other`) was filed under the 2.1.292 lane's id (`teardown-hook-event-names-another-session`) | its own: none captured anywhere; the one under its id is 2.1.286's |
+
+**Table 2: the census of each scratch repository, before and after `ccd stop` (identical both times).**
+
+| record | 2.1.286 | 2.1.292 | the rig, same version |
+|---|---|---|---|
+| Agent record: meta keys | `agentType`, `description`, `requestNonInteractive`, `requestShape`, `spawnDepth`, `spawnedWithWorktree`, `toolUseId`, `worktreeBranch`, `worktreePath` | the same nine | the same nine |
+| Workflow record: meta keys | `agentType`, `description`, `requestNonInteractive`, `requestShape`, `spawnDepth`, `spawnedWithWorktree`, `worktreePath` | the same seven | the same seven |
+| `worktreePath` equals the record's tree | yes, both records | yes, both | yes |
+| `CLAUDE_BASE` | present, equals the first `logs/HEAD` line, both records | the same | the same |
+| HEAD / moved from base / locked | `ref:` / yes / no, both records | the same | the same |
+| `workflowPhase` | absent | absent | absent (0 of 63 rig Workflow metas before this wave's capture, 0 in 2.1.292's) |
+
+What this confirms, on these two lanes: `delegation-posttooluse-is-a-launch` (all four launches `async_launched`),
+`launch-response-names-the-upstream-id` (every join true), `run-end-is-a-task-notification`,
+`workflow-isolation-is-in-the-script` and `activity-keyed-by-agent-id-not-arrival` (both orders, one per lane). Not
+exercised here, so still rig-only: `agent-meta-loses-worktree-fields-on-removal` (both trees were changed and stayed),
+`orphaned-agent-tree-is-locked` and whether its lock outlives the process (no isolated tree was orphaned on purpose;
+the teardown probe below stopped two lanes, each with a non-isolated background agent still running, which left a
+SubagentStart and no SubagentStop and made no tree), the tree half of `orphaned-background-agent-has-no-terminal-event`
+(those two agents show its no-SubagentStop half at `ccd stop`), `sessionend-on-clear-is-a-rotation`, and every Q5 and
+Q7 situation.
+
+Amendments the cross-check forces (each a difference from the rig; `slug — sentence — spec §`):
+- `agent-input-keys-are-the-callers` — the Agent `tool_input` key set is whatever the calling model sends: both real
+  lanes omitted `subagent_type`, which the rig's mock always sends. Nothing may require it — spec §5.3 PreToolUse row.
+- `post-turn-subagentstop-is-unpaired` — on both lanes a SubagentStop with an agent id, an empty agent type, no
+  SubagentStart and no launch followed every one of the parent's Stops (5 of 5); the rig showed one only during
+  `/compact`. This widens `compaction-fires-an-unpaired-subagentstop`: a SubagentStop alone never opens an activity,
+  and it is routine, not rare — spec §5.2 activity, §5.3.
+- `real-payloads-carry-scratchpad-dir` — every real event carries `scratchpad_dir`, a path, which no rig payload does
+  (its cause is unmeasured: the rig's fixture HOME and mock API do not produce it). The spool's allowlist must drop it,
+  like `cwd` and `transcript_path` — spec §5.3 envelope.
+- `toolsearch-may-precede-a-workflow-call` — the 2.1.292 lane loaded the Workflow tool with a main-thread ToolSearch
+  before calling it; the 2.1.286 lane did not. Whether that follows the version or the lane's tool set is unmeasured.
+  A ToolSearch is not a delegation event and opens nothing — spec §5.3 PreToolUse row.
+- `parent-stop-does-not-bound-workflow-start` (review 318 F7) — on both real lanes an isolated Workflow worker's
+  SubagentStart arrived before the parent's Stop; in the rig's wf-iso cells for the same versions it arrived after.
+  The corpus itself shows both: wf-plain's first worker starts before the parent's Stop on all ten versions, and
+  wf-iso's workers after it. Either order occurs, so a parent Stop neither opens nor closes a Workflow activity, and a
+  worker is correlated by the workflow and agent joins (`launch-response-names-the-upstream-id`); the observe stage's
+  correlation (wave 3) must not use that order — spec §5.2 execution, §5.4 rung 2.
+- `workflow-phase-is-not-always-written` (review 304 F11) — spec §3.1 says an isolated Workflow worker's meta carries
+  `workflowPhase`. Neither real lane's Workflow meta has it, nor any of the corpus's, while 8 of the on-box census's 15
+  found `wf_*` metas list it. What decides whether it is written is unmeasured (a workflow that declares phases is
+  the candidate), so nothing may need it — spec §3.1, §5.4 rung 2.
+- `teardown-hook-event-names-another-session` — `ccd stop` of the 2.1.286 lane fired its SessionEnd (reason `other`)
+  and the hook filed it under the 2.1.292 lane's id; the 2.1.292 lane's own stop-time SessionEnd was captured nowhere.
+  The hook resolves its session with `tmux display-message -p '#S'` and no `-t "$TMUX_PANE"`
+  (`ccd/session-hook.sh:2760`). Measured on a private tmux server: once a pane's session is killed, that query answers
+  another live session, and with `-t "$TMUX_PANE"` it answers nothing. So a hook event fired during teardown is
+  attributed to whichever session tmux picks.
+  Which events fire then was measured afterwards (the coordinator's question), on three more fresh `-hookcap` lanes
+  stopped one at a time: 2.1.290 busy, then 2.1.292 idle, then 2.1.292 busy. Busy means the main thread blocked in a
+  foreground Bash loop while a non-isolated background Agent still ran; a stop during a model request is unmeasured.
+  2.1.290 stood in for the low end, because the fleet's only 2.1.286 lane and its 2.1.289 lane were at their weekly
+  limits. The idle 2.1.292 lane had declined the mailed instruction (it would not act on a mailbox whose name did not
+  match its working directory) and was stopped as it was. The first two stops' SessionEnds were filed under the busy
+  2.1.292 lane's id, whose tmux session was started before either stop (the first SessionEnd arrived before that lane's
+  own SessionStart); the third, the busy 2.1.292 lane's own, was filed under a catcher session started after the second
+  stop, again before the catcher's own SessionStart. With round 1's idle 2.1.286 stop above, every teardown measured
+  (2.1.286 idle, 2.1.290 busy, 2.1.292 idle, 2.1.292 busy) fired exactly one event: SessionEnd, reason `other`, filed
+  under the most recently started `-hookcap` session's id. No Stop, StopFailure, SubagentStop or PostToolUse fired at
+  `ccd stop`, so nothing that writes hookstate, the turn marker or the subagent set was misfiled, and SessionEnd writes
+  none of them: today only a capture is misfiled. The observe stage's spool (wave 3 since the 2026-10-07 renumbering)
+  must resolve the pane exactly (and drop an event it cannot), or every stop-time SessionEnd lands on another
+  session — spec §5.3 SessionEnd row, §5.1 parent key.
+- `tool-agent-id-alone-is-unjoined-evidence` (review 318 F1) — on each busy teardown lane above (2.1.290, 2.1.292),
+  one main-checkout `PreToolUse` (Bash) carried an `agent_id` and no `agent_type` key. Its `cwd`, `session_id` and
+  `prompt_id` were the parent turn's, and no launch response, SubagentStart, SubagentStop or `agent-*.meta.json` ever
+  named that id. Each fired about 32 s after the lane's background Agent launched, while the main thread was blocked
+  in its foreground Bash loop. Its cause is unmeasured, and the corpus has no such event (0 of 1338 hook events carry
+  `agent_id` with no `agent_type` key; the ten `/compact` SubagentStops carry an empty one). A tool event whose only
+  delegation evidence is `agent_id`, with no correlating Agent launch response, SubagentStart or agent meta, is kept
+  as evidence and opens no activity; it attaches to one once a launch response, SubagentStart or agent meta naming
+  the same `agent_id` is known, whether that join came before it or arrives later. A shared `prompt_id` names the
+  turn, not the agent, and is not such a join (`launch-response-names-the-upstream-id`). So spec §5.2's "the first
+  event that named it" is, for an `agent_id`-keyed activity, the earliest journal event of the parent (same
+  incarnation) that names that id and is retained when the activity opens, once a qualifying join is known, whichever
+  join came first; on every measured order that is the launch response or SubagentStart itself. A qualifying join
+  gates opening; it contributes no hash component and does not choose among the journal events retained when opening
+  occurs. Once the retained evidence set at opening is fixed, neither the qualifying join's kind or order nor the
+  time of a positive meta read contributes a hash component or selects among those retained events. Timing can affect
+  which events remain retained before opening only through the pruning contract below: an occurrence pruned before
+  any qualifying join is durably applied is gone permanently as evidence (review 332 F1). A bare occurrence never
+  opens an activity, but once a join is known it may be that earliest event (a refinement of review 318 F1's wording,
+  ruled with review 324). The other source kinds keep the first event naming their upstream id. A meta is a join, not
+  a journal event, and nothing of it is hashed (review 324 F3, F4). The id is selected once, at open, and never
+  changes: it is part of the checkpointed applied state, reconstruction restores it verbatim and never re-selects it
+  from the journal left after pruning, pruning cannot pass an identity event before a durable checkpoint holds its
+  id, and a bare occurrence pruned before any qualifying join is durably applied never becomes one (review 328 F1;
+  spec §5.2, §5.12). The observe stage's parser (wave 3) must not use the presence of `agent_type` to decide whether
+  an event qualifies — spec §5.2 activity id, §5.3, §5.4 rung 3 (a non-empty `agent_id` does not by itself place an
+  event inside a subagent).
+  A second reader, already shipped, places an event by a raw non-empty `agent_id`: the hook's turn-marker classifier
+  (`paid` in `ccd/session-hook.sh`) skips the main-thread marker write for such an event, so each such PreToolUse
+  above was dropped from its turn marker as a subagent's. No harm was measured, because earlier main-thread events
+  had already marked both turns `working` (review 324 F10). Wave 3 must resolve that reader against this contract
+  with a red-first phantom-main-thread case and without assuming `agent_type`, after its first-commit
+  `-t "$TMUX_PANE"` correction unless its approved plan proves the two must be one atomic change.
 
 ## Decisions & deviations
+
+Entries dated before 2026-10-07 use the six-wave numbering and are kept as written: "wave 2" in them is the observe
+stage, wave 3 since the 2026-10-07 renumbering, and each later number there is one lower than today's. Run 306 was
+opened as that stage's run and is now the close-out's.
 
 - **2026-10-01 to 2026-10-04 — the operator's rulings during design** (spec §2): route 1 (a delegation broker plus
   reconciliation); ephemeral workers render as activity under their parent; durable work outside `runs dispatch` is
@@ -506,6 +671,11 @@ Pending: the coordinator runs it after wave 1 merges, per the plan's "After the 
   - Review 304's residue, ruled for wave 2's plan:
     - F1: narrow the claim. A `..` that is not at the string's start or after `/` is a known limit, pinned by a row.
       Widening `DOTDOT` would red 18 historical strings in fixtures whose versions are no longer installed.
+      [Corrected 2026-10-07, review 318 F5: the corpus now holds 20 such strings in 10 files (` ../raw-wt`, two to a
+      file; `grep -rhoF ' ../raw-wt'` over the committed fixtures, as the plan's D-4007 counts), 18 in 9 files before
+      2.1.292's capture added two. At this ruling only 4 of the 18 were in versions no longer installed (2.1.280 and
+      2.1.281, per the lane read of 2026-10-06 14:58 UTC in this ledger as merged in `22b4eabda`); 2.1.288 is not
+      installed as of 2026-10-07, which makes six of the 20, as D-4007 states.]
     - F2: the compaction gap gets its own deviation number, and the plan header and "Versions covered" say Q5
       compaction is unmeasured.
     - F3: date each mutation count by the commit it was taken at, and drop "every count matches".
@@ -562,10 +732,62 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
 - The program runs through `runs open` / `runs dispatch`; open wave N+1's run before closing wave N's.
 - **The corpus must cover every Claude Code version the fleet runs before a wave depends on a hook field** (spec
   §8.1). Lanes update often, so each such wave begins by re-reading the lane versions and capturing any the
-  corpus lacks with the rig's recapture steps.
-- **Wave 2's spool line (review 296):** on the largest repo the worktree-name listing alone is about 3.9 KB, which
-  nearly fills spec §5.3's 4 KiB line. Wave 2's line design must measure that case: the listing is the optional
-  field that gets dropped, and the worst case is about 8.5 ms per call.
+  corpus lacks with the rig's recapture steps. `--missing` may be relied on only once the re-capture tooling
+  obligations below are closed (D-3999 in wave 1's plan); until then an unmeasured cell is not coverage.
+- **The observe stage's spool line (review 296; wave 3 since the 2026-10-07 renumbering):** on the largest repo the
+  worktree-name listing alone is about 3.9 KB, which nearly fills spec §5.3's 4 KiB line. The observe stage's line
+  design must measure that case: the listing is the optional field that gets dropped, and the worst case is about
+  8.5 ms per call.
+- **What wave 2 (run 306, reviews 318, 324, 328 and 332) hands to wave 3's plan.** Its evidence is in the
+  "Real-lane cross-check" section and the plan's D-numbers named below; a wave 3 plan reads these before it names a
+  task:
+  - Wave 3's first implementation commit is the red-first `tmux display-message -p -t "$TMUX_PANE" '#S'` ownership
+    correction in the hook, so an event fired during teardown is dropped and not filed under another live session
+    (amendment `teardown-hook-event-names-another-session`).
+  - The hook's turn-marker classifier (`paid` in `ccd/session-hook.sh`) is a second reader that treats a raw
+    non-empty `agent_id` as subagent placement. No harm was measured: earlier main-thread events had already marked
+    both turns `working`. Wave 3 must resolve that reader against the qualifying-join contract with a red-first
+    phantom-main-thread case and without assuming `agent_type`, after the first-commit correction above unless its
+    approved plan proves the two must be one atomic change (amendment `tool-agent-id-alone-is-unjoined-evidence`).
+  - Wave 3 closes three re-capture tooling obligations before any later capture relies on `--missing` (D-3999 in
+    wave 1's plan): `recapture.sh` exits 0 when single runs failed; `rig.sh versions` reads an unreadable versions
+    directory as none installed; and `recapture.sh`'s closing cleanup hint prints the raw root unescaped, so it is
+    escaped before any later capture relies on it. The obvious `%q` change reds two existing rows, the spaced real-run
+    row ("a real run over a tree and a TMPDIR whose paths carry a space …") and the "--dry-run, no version named …"
+    row, whose `<raw>` placeholder `%q` turns into `\<raw\>`, so the red-first fix updates and proves both, not one.
+    Until these close, an unmeasured cell is not coverage.
+  - D-4008's three folds, `locked` (false when its stat fails), `baseAgreesFirstLog` (null when `logs/HEAD` cannot be
+    read) and an unreadable `gitdir` (read as absent), are no positive cleanup or adoption evidence.
+  - An activity id is selected once, at open; a checkpointed id is restored, never re-hashed after pruning. Whichever
+    wave builds the journal's checkpoint, pruning and reconstruction keeps each selected id in the checkpointed
+    applied state, restores it verbatim, derives one only for an activity the checkpoint does not hold, and prunes no
+    event before a durable checkpoint covers it and no identity event before a durable checkpoint holds its id (spec
+    §5.2, §5.12 and §8.4's row; amendment `tool-agent-id-alone-is-unjoined-evidence`, review 328 F1).
+  - All eight real-lane amendment slugs carry into wave 3: `agent-input-keys-are-the-callers`,
+    `post-turn-subagentstop-is-unpaired`, `real-payloads-carry-scratchpad-dir`,
+    `toolsearch-may-precede-a-workflow-call`, `parent-stop-does-not-bound-workflow-start`,
+    `workflow-phase-is-not-always-written`, `teardown-hook-event-names-another-session` and
+    `tool-agent-id-alone-is-unjoined-evidence`.
+
+### Review-332 observations awaiting the owning implementation plan or an operator decision
+
+Five questions the activity-identity contract (spec §5.2, §5.12; review 328 F1) leaves open. They are unresolved
+implementation questions, not requirements, and they change nothing in the approved contract; the plan that owns each
+one must decide it, or ask the operator (raised by the review-328 round's per-task review, recorded by review 332
+F3).
+
+1. **A meta-opened activity before its first checkpoint.** A meta gains no journal event, so losing `coord.db` and
+   the positive meta before that checkpoint can lose the open. The first wave that writes an activity id into any
+   durable carrier must decide whether the activity must be checkpointed before its id escapes.
+2. **Pruning during reconstruction.** The replay and pruning plan must decide, and test, whether pruning is held off
+   until reconstruction has replayed the retained suffix and re-established its holds.
+3. **Where the checkpoint lives.** The checkpoint plan must name where it lives, how it survives the loss of
+   `coord.db`, and whether `ccrc backup` includes it; the current spec implies it is outside `coord.db` but does not
+   settle the backup mechanism.
+4. **Matching a checkpointed activity on replay.** Replay must decide, and test, how a checkpointed activity is
+   matched by its natural key rather than by recomputing a hash whose identity event may have been pruned.
+5. **"Durably applied".** The implementation plan must define it for a journalled join and for a positive meta. The
+   likely readings (the journal append and the checkpoint, respectively) are observations, not rulings.
 
 ## Next-wave brief
 
@@ -582,6 +804,13 @@ One PR from a fresh child. A review run on the held-out panel follows.
 - Its contents: the spool, ingestion and cursors, the one `delegation_*` migration, the census extension, correlation
   and reconciliation (report-only), the coordinator-intent route, and coordinator clause 17.
 - It carries the spool-line constraint: a listing of about 3.9 KB nearly fills the 4 KiB line.
-- Check the plan's format first. The operator's global instructions prefer HTML plans, so confirm that the
-  deviation and ledger guards read a `.html` plan, and ask the operator if they read Markdown only.
+- Its plan starts from the carried constraints above, which wave 2's review rounds added: the first
+  implementation commit (the red-first `-t "$TMUX_PANE"` ownership correction); the turn-marker `paid` reader's
+  phantom-main-thread case; the three re-capture tooling obligations, closed before any capture relies on
+  `--missing` (D-3999); D-4008's three folds as no positive cleanup or adoption evidence; activity ids restored from
+  the checkpoint, never re-hashed after pruning; and the eight real-lane amendment slugs. It also reads the
+  review-332 observations above as open questions for whichever plan owns each, not as requirements.
+- Its plan is Markdown, `docs/superpowers/plans/<date>-<topic>.md`: plans stay Markdown under the operator's
+  2026-10-07 ruling, and ccrc-pwa's deviation and ledger guards, which read `*.md` plans, are one reason (review 328
+  F2).
 - The operator reviews the plan before its run dispatches.
