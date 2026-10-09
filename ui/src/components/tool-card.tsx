@@ -23,6 +23,7 @@ import type { ChatEvent } from '../../../shared/api';
 // behaviour a test needs to flip.
 import { usePrefersReducedMotion } from '../lib/use-reduced-motion';
 import { useNow } from '../lib/use-now';
+import { Well } from '../primitives/well';
 import './tool-card.css';
 
 export type ToolUseEvent = Extract<ChatEvent, { kind: 'tool_use' }>;
@@ -169,9 +170,9 @@ function AskOutcome({ result }: { result: ToolResultEvent }): ReactNode {
             exit={{ height: 0 }}
             transition={reduced ? { duration: 0 } : { duration: 0.24, ease: [0.2, 0, 0, 1] }}
           >
-            <pre className="well tool-ask-well">
+            <Well className="tool-ask-well">
               {result.text === '' ? '(no output)' : result.text}
-            </pre>
+            </Well>
             <TruncationCue bytes={result.truncatedBytes} />
           </motion.div>
         )}
@@ -366,7 +367,7 @@ function GenericToolCard({
           >
             <div className="tool-body">
               <p className="tool-eyebrow">input</p>
-              <pre className="well">{use.input}</pre>
+              <Well>{use.input}</Well>
               {/* One cue PER WELL — the input and the result are cut against
                   two different caps (TOOL_INPUT_MAX / TOOL_RESULT_MAX) and a
                   single shared cue would report one number for two cuts. */}
@@ -374,7 +375,7 @@ function GenericToolCard({
               {result !== undefined && (
                 <>
                   <p className="tool-eyebrow">result</p>
-                  <pre className="well">{result.text === '' ? '(no output)' : result.text}</pre>
+                  <Well>{result.text === '' ? '(no output)' : result.text}</Well>
                   <TruncationCue bytes={result.truncatedBytes} />
                 </>
               )}

@@ -7,7 +7,7 @@
 // keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
-import { AttachButton, AttachTray, Button, Sheet } from '@ccrc/ui';
+import { AttachButton, AttachTray, Button, Sheet, Well } from '@ccrc/ui';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { clipboardImages, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
@@ -313,7 +313,7 @@ export function Composer({
                     + " text in the session's input box. Send both together, or replace it with"
                     + ' your message.'}
               </p>
-              <pre className="well draft-well" data-testid="draft-well">{conflict.draft}</pre>
+              <Well className="draft-well" data-testid="draft-well">{conflict.draft}</Well>
               <div className="draft-actions">
                 <Button
                   variant="primary"

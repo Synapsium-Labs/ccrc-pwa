@@ -75,6 +75,7 @@ export const OWNED = [
   'opt', 'opt--selected', 'opt-glyph', 'opt-idx',                // OptionRow
   'opt-body', 'opt-label', 'opt-desc', 'opt-enter',
   'banner', 'banner-msg',                                        // Banner / bannerVariants
+  'well',                                                        // Well / WELL
 ];
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */
@@ -158,7 +159,23 @@ describe('the design-system boundary', () => {
     expect(ownedClassLiterals('<span className="opt-wait">answering</span>')).toEqual([]);
     expect(ownedClassLiterals('<span className="opt-inert" />')).toEqual([]);
     expect(ownedClassLiterals('<span className="opt-degraded" />')).toEqual([]);
-    expect(ownedClassLiterals('<pre className="well opt-preview" />')).toEqual([]);
+    // `opt-preview` alone. This example used to read `"well opt-preview"` and
+    // was correct until `well` became owned — the app writes `<Well
+    // className="opt-preview">` now, so the owned half arrives through the
+    // component and only the marker is a literal. Kept as a POSITIVE case
+    // below, because the pair is exactly what the guard must still refuse.
+    expect(ownedClassLiterals('<pre className="opt-preview" />')).toEqual([]);
+  });
+
+  it('fires on the shape that the Well migration retired', () => {
+    // `well` is owned as of the Well primitive. The old spelling must now be
+    // refused, or the guard would let the app re-hand-write the surface the
+    // component exists to own — which is the drift it was built for.
+    expect(ownedClassLiterals('<pre className="well opt-preview" />')).toEqual(['well']);
+    expect(ownedClassLiterals('<pre className="well" />')).toEqual(['well']);
+    // and a look-alike is still not the class
+    expect(ownedClassLiterals('<div className="draft-well" />')).toEqual([]);
+    expect(ownedClassLiterals('<div className="well-bar" />')).toEqual([]);
   });
 
   it('does not fire on the variant call, which is the sanctioned route', () => {

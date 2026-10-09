@@ -107,7 +107,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk, HookAskQuestion } from '../../../shared/api';
-import { Button, OptionRow, Sheet, toast } from '@ccrc/ui';
+import { Button, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -315,7 +315,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
           This question doesn't fit tappable options. Answer it in the terminal — the
           session picks up from there.
         </p>
-        <pre className="well dlg-raw">{shown.raw}</pre>
+        <Well className="dlg-raw">{shown.raw}</Well>
         <div className="dlg-actions">
           <Button
             variant="primary"
@@ -439,7 +439,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
       >
         {details ? 'Hide full question' : 'Show full question'}
       </button>
-      {details && <pre className="well dlg-raw">{shown.raw}</pre>}
+      {details && <Well className="dlg-raw">{shown.raw}</Well>}
 
       <p className="sheet-foot">tap an option, or answer in your own words</p>
     </Sheet>
@@ -826,9 +826,9 @@ function OptionPreview({
         preview
       </button>
       {open && (
-        <pre id={previewId} className="well opt-preview">
+        <Well id={previewId} className="opt-preview">
           {text}
-        </pre>
+        </Well>
       )}
     </div>
   );

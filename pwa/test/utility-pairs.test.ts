@@ -187,6 +187,21 @@ describe('every self-grounded utility pair a component renders is measured', () 
     });
   });
 
+  it('includes the well, which this guard INHERITED from the stylesheet half', () => {
+    // `chat.css .well` was measured by the stylesheet scan for twelve
+    // palettes. The Well migration deleted that rule, and the gate's headline
+    // fell by exactly those twelve — so this is the assertion that says the
+    // coverage moved rather than evaporated. A surface whose ink and ground
+    // are both utilities is invisible to audit.mjs by construction; it is
+    // visible HERE or it is visible nowhere.
+    expect(pairs).toContainEqual({
+      file: 'well.tsx',
+      state: '',
+      ink: 'var(--ink-on-well)',
+      ground: 'var(--bg-well)',
+    });
+  });
+
   const keyOf = (p: Pair): string => `${p.file} ${p.state}${p.ink} on ${p.ground}`;
 
   for (const [theme, palette] of all) {

@@ -147,21 +147,13 @@ button.metachip:active {
 }
 
 /* Account chip — mono name first, hue second, against the screen-scoped
-   account accent (the [data-acct] rebinding in tokens.css). */
-.chat .chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
-  padding: var(--sp-1) 9px;
-  border-radius: var(--r-full);
-}
-.chat .chip i {
-  width: 5px;
-  height: 5px;
-  border-radius: var(--r-full);
-  background: currentColor;
-}
+   account accent (the [data-acct] rebinding in tokens.css).
+   THE SHAPE IS fleet.css's `.chip`, not a copy of it. This sheet carried a
+   byte-identical `.chat .chip` and `.chat .chip i`; the extra `.chat` bought
+   specificity over nothing, since the two rules set the same declarations and
+   the only other chip rules here (`--active`, `--archived`, `--repo`) set
+   colour and family, which these never touched. Both deleted. What stays are
+   the three MODIFIERS below, which is the half that is actually about chat. */
 .chip--active {
   color: var(--acct-active);
   background: var(--acct-active-tint);
@@ -1008,33 +1000,19 @@ button.metachip:active {
 /* ------------------------------------------------------------------ *
  *  Wells — the terminal peeking through, wherever it peeks.           *
  * ------------------------------------------------------------------ *
- * THIS STAYED BEHIND WHEN THE TOOL CARD MIGRATED, deliberately. It is
- * a SHARED surface with four consumers, and only two of them left:
- * `ToolCard` and `MailCard` are @ccrc/ui's now, while `DialogSheet`'s
- * raw panes and option previews and the composer's draft well are
- * still this package's. Splitting it would have made a second
- * definition of one surface, which is the drift
- * `single-definition.test.ts` exists to stop; moving it would have
- * left two app components reaching into the design system for a base
- * class. So it is reported rather than moved — the two ui components
- * still spell `className="well …"`, and their Storybook stories render
- * that <pre> unwelled, which is the visible cost of the split not
- * being made.
+ * MOVED to @ccrc/ui as the `Well` primitive. The comment that stood
+ * here argued it should stay — a shared surface with four consumers,
+ * two of them already in that package — and then named the cost of
+ * staying: "their Storybook stories render that <pre> unwelled, which
+ * is the visible cost of the split not being made."
+ *
+ * That cost was the argument. A design system whose own ToolCard and
+ * MailCard cannot render their primary surface in its own Storybook is
+ * not documenting them. The objection did not survive either: the
+ * three app consumers render a COMPONENT now, not a base class, which
+ * is the ordinary direction, and there is still exactly one
+ * definition of the surface.
  * ------------------------------------------------------------------ */
-.well {
-  background: var(--bg-well);
-  color: var(--ink-on-well);
-  border-radius: var(--r-md);
-  padding: 10px var(--sp-3);
-  font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
-  overflow-x: auto;
-  max-height: var(--well-max);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin: 0;
-}
 
 /* ------------------------------------------------------------------ *
  *  Composer — the prompt line, docked above the keyboard.             *

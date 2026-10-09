@@ -33,6 +33,7 @@
 // answering anything.
 import type { ReactNode } from 'react';
 import type { MailEnvelope } from '../../../shared/api';
+import { Well } from '../primitives/well';
 import './mail-card.css';
 
 /** `run 5 · build4 wave 4/4`, with each clause independently optional —
@@ -78,7 +79,7 @@ export function MailCard({ envelope }: { envelope: MailEnvelope }): ReactNode {
           ))}
         </ul>
       )}
-      {envelope.body !== '' && <pre className="well mail-card-body">{envelope.body}</pre>}
+      {envelope.body !== '' && <Well className="mail-card-body">{envelope.body}</Well>}
     </article>
   );
 }
