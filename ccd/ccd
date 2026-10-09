@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6adf0b73562ba629adb1e40ce49c9d2ce69e517a90f9625706296ea1881643cb
+# ccrc:generated 1 sha256=5215de5d67a1492f0758d3cf885761b98bbfe4b3e8a749bfccbb30442a9e92e4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31963,6 +31963,41 @@ _ws_collect_token() {   # id -> the collector's token on stdout; rc 2, nothing p
      && "${_WS_IDLE_LEAF-}" == */"$id" ]] || return 2
   _ws_reclaim_fingerprint "mode=collect" "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" "btime=$_WS_WIT_BTIME" \
     "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT" "newestCtimeNs=$_WS_IDLE_NEWEST_NS" "entries=$_WS_IDLE_COUNT"
+}
+
+_WS_COLLECT_ROWS_WHY=''
+_ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside or through leaf; 1 when one does, or
+  #                              id's own row stands (_WS_COLLECT_ROWS_WHY names which); 2 when that could not be asked
+  #                              (_WS_COLLECT_ROWS_WHY)
+  # A REGISTRY ROW AT, INSIDE OR THROUGH THE LEAF IS ANOTHER SESSION'S TREE
+  # (spec §5.10). The removal helper does not ask it, so the collector asks
+  # it itself — measured: without it, a stopped session's clone inside a dead
+  # child's temp root is deleted with the leaf. It is `_ws_reclaim_workdir_shared`'s
+  # own question, ONE registry pass, asked with the leaf AS the workdir: every
+  # row, standing or placed by either of its gone-row arms, compared literally
+  # and resolved — equal, inside, or spelled through it. That helper skips the
+  # id's own row; this asks it first, by its `.workdir` alone: a temp root whose
+  # id has a row is never collected. It also compares the id's clips leaf, as
+  # it does for a reclaim: a row there refuses too, and a clips leaf whose
+  # absence cannot be proven answers 2 — both fail closed. Its git reads of
+  # other rows' repositories run contained, so a caller asks this only under
+  # `_ws_reclaim_contained`. Asked on the pre-move spelling, before the move
+  # and after it.
+  local id="${1-}" leaf="${2-}" rc
+  _WS_COLLECT_ROWS_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_COLLECT_ROWS_WHY="'$id' is not an id a witness is named for"; return 2; }
+  if [[ -e "$REG/$id.workdir" || -L "$REG/$id.workdir" ]]; then
+    _WS_COLLECT_ROWS_WHY="$id's own registry row stands ($REG/$id.workdir) — a temp root whose id has a row is never collected"
+    return 1
+  fi
+  _ws_reclaim_workdir_shared "$id" "$leaf"; rc=$?
+  if (( rc == 0 )); then
+    [[ -n "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
+    _WS_COLLECT_ROWS_WHY="registry row(s) lie at, inside or through $leaf — at: ${_WS_SHARED_ROWS:-none}; inside: ${_WS_NESTED_ROWS:-none}; through: ${_WS_THROUGH_ROWS:-none}"
+    return 1
+  fi
+  _WS_COLLECT_ROWS_WHY="${_WS_SHARED_WHY:-the registry could not be compared with $leaf}"
+  return 2
 }
 # ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
