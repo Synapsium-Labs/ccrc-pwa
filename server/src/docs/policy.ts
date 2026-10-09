@@ -1054,7 +1054,7 @@ export function docsCacheFill(pin: DocPin, listed: DocsListedFile | undefined): 
  * not measured for this request, so it is absent, never copied. The same blob under a new commit or path answers that
  * commit and path. A new object; the stored answer is never written.
  */
-export function docsCacheHitAnswer(stored: DocsShowOk, pin: Extract<DocPin, { kind: 'committed' }>, blob: string):
+export function docsCacheHitAnswer(stored: DocsStoredShow, pin: Extract<DocPin, { kind: 'committed' }>, blob: string):
     DocsShowOk {
   const content = stored.encoding === 'base64' ? { b64: stored.b64 } : { text: stored.text };
   return {
@@ -1099,4 +1099,20 @@ export function docsHookVerdict(
 export function docsTreeEcho(answer: DocsTreeOk, project: string): { ok: true } | DocsFailureBody {
   if (answer.project === project) return { ok: true };
   return { ok: false, failure: 'malformed-answer', why: 'pin' };
+}
+
+// ===== Task 11 review 3-2: the blob cache holds only the verified content =====
+
+/** What a blob cache entry keeps of a show answer (`docsCacheHitAnswer` reads exactly these): `size`, `sha256`,
+ *  `encoding` and the ONE content field the encoding names. Every other key ccd sent is not kept. */
+export type DocsStoredShow = Pick<DocsShowOk, 'size' | 'sha256' | 'encoding' | 'text' | 'b64'>;
+
+/**
+ * The show a committed fill stores (section 6.5): `servedShow`'s content (the field the `encoding` names, rebuilt from
+ * the verified bytes; the other content field never rides) under the three facts `docsCacheHitAnswer` reads, and no
+ * other key. A new object; the answer is never written. The blob cache charges the one content field held here.
+ */
+export function docsStoredShow(answer: DocsShowOk, bytes: Uint8Array): DocsStoredShow {
+  const { size, sha256, encoding, text, b64 } = servedShow(answer, bytes);
+  return encoding === 'base64' ? { size, sha256, encoding, b64 } : { size, sha256, encoding, text };
 }

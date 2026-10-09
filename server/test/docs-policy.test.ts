@@ -1781,3 +1781,35 @@ describe('T11 review 3-1: a tree answer naming another project is refused, never
     expect(one).not.toBe(two);
   });
 });
+
+// ===== Task 11 review 3-2: the blob cache holds only the verified content =====
+import { docsStoredShow } from '../src/docs/policy.js';
+
+describe('T11 review 3-2: docsStoredShow keeps the three facts and the one content field the encoding names', () => {
+  const FACTS = { v: 1, verb: 'docs-show', ok: true, elapsedMs: 9, source: 'committed', section: 'specs', path: 'a.md' } as const;
+  const SHA = 'e'.repeat(64);
+  const keys = (v: object): string[] => Object.keys(v).sort();
+
+  it('utf8: text rebuilt from the bytes; every other key, a stray b64 and an unknown one included, is dropped', () => {
+    const answer = { ...FACTS, size: 4, sha256: SHA, encoding: 'utf8', text: 'stale', b64: 'AAAA', junk: 'x'.repeat(100),
+      commit: 'c'.repeat(40), blob: 'b'.repeat(40), onRef: 'contains' } as unknown as DocsShowOk;
+    const stored = docsStoredShow(answer, new TextEncoder().encode('# a\n'));
+    expect(stored).toStrictEqual({ size: 4, sha256: SHA, encoding: 'utf8', text: '# a\n' });
+  });
+
+  it('base64: the answer\'s b64 only; a stray text, even empty, is dropped', () => {
+    const answer = { ...FACTS, size: 3, sha256: SHA, encoding: 'base64', b64: 'AQID', text: '', junk: 1 } as unknown as DocsShowOk;
+    const stored = docsStoredShow(answer, new Uint8Array([1, 2, 3]));
+    expect(stored).toStrictEqual({ size: 3, sha256: SHA, encoding: 'base64', b64: 'AQID' });
+    expect(keys(stored)).toStrictEqual(['b64', 'encoding', 'sha256', 'size']);
+  });
+
+  it('answers a new object and never writes the answer', () => {
+    const answer = { ...FACTS, size: 0, sha256: SHA, encoding: 'utf8', text: '', junk: 1 } as unknown as DocsShowOk;
+    const before = structuredClone(answer);
+    const stored = docsStoredShow(answer, new Uint8Array(0));
+    expect(answer).toStrictEqual(before);
+    expect(stored).not.toBe(answer);
+    expect(stored).toStrictEqual({ size: 0, sha256: SHA, encoding: 'utf8', text: '' });
+  });
+});

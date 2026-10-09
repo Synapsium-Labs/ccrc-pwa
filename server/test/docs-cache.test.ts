@@ -599,3 +599,60 @@ describe('docs caches at the routes — row 52 and M6.11 (section 6.5; refinemen
     await Promise.all([...trees, ...queued]);
   });
 });
+
+describe('T11 review 3-2: the blob cache holds and charges only the verified content', () => {
+  const apps: FastifyInstance[] = [];
+  afterEach(async () => {
+    for (const app of apps.splice(0)) await app.close();
+  });
+
+  const url = (path: string): string =>
+    `/api/docs/demo/file?commit=${COMMIT}&servedRef=${encodeURIComponent(MAIN)}&section=specs&path=${encodeURIComponent(path)}`;
+
+  /** One app whose `docs-show` answers `answers[path]` (a ccd line built per pin), and whose tree lists `rows`. */
+  async function world(rows: DocsEntry[], answer: (pin: DocPin) => string) {
+    const rec = scripted((argv) => {
+      if (argv[0] === 'docs-tree') return okRes(line(treeOf(COMMIT, MAIN, rows)));
+      const flag = (name: string): string => argv[argv.indexOf(name) + 1] ?? '';
+      return okRes(answer({ kind: 'committed', commit: flag('--commit'), servedRef: flag('--ref'), section: 'specs', path: flag('--path') }));
+    });
+    const { app, docs } = await docsApp({ run: rec.run });
+    apps.push(app);
+    await app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    return { app, blobs: nodeLanes(docs).caches.blobs, node: docs.lanes.primary };
+  }
+
+  it('an empty file whose show answer carries a large unknown key: the entry holds no such key', async () => {
+    const empty = new Uint8Array(0);
+    const { app, blobs, node } = await world([committedEntry('e.md', BLOB, null)], (pin) =>
+      showLine(pin, empty, { blob: BLOB, encoding: 'utf8', text: '', b64: undefined, junk: 'x'.repeat(2_500_000) }));
+    const res = await app.inject({ url: url('e.md'), headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(200);
+    const held = blobs.get(node, REPO, BLOB);
+    expect(held).toBeDefined();
+    expect(Object.keys(held!.answer).sort()).toStrictEqual(['encoding', 'sha256', 'size', 'text']);
+    expect(blobs.bytes()).toBe(0);
+  });
+
+  it('a non-empty file with an unknown key: the charge is the bytes plus the one content field held', async () => {
+    const body = Buffer.from('# a\n', 'utf8');
+    const { app, blobs, node } = await world([committedEntry('a.md', BLOB, null)], (pin) =>
+      showLine(pin, body, { blob: BLOB, encoding: 'utf8', text: '# a\n', b64: undefined, junk: 'x'.repeat(1_000_000) }));
+    await app.inject({ url: url('a.md'), headers: PWA_HEADERS });
+    const held = blobs.get(node, REPO, BLOB)!;
+    expect(Object.keys(held.answer).sort()).toStrictEqual(['encoding', 'sha256', 'size', 'text']);
+    expect(blobs.bytes()).toBe(body.byteLength + Buffer.byteLength('# a\n'));
+  });
+
+  it('a base64 answer with a stray text: "" is charged bytes plus its b64 length, and holds no text', async () => {
+    const body = Buffer.alloc(1_000_000, 0x61);
+    const { app, blobs, node } = await world([committedEntry('b.md', BLOB, body.byteLength)], (pin) =>
+      showLine(pin, body, { blob: BLOB, text: '' }));
+    expect((await app.inject({ url: url('b.md'), headers: PWA_HEADERS })).statusCode).toBe(200);
+    const held = blobs.get(node, REPO, BLOB)!;
+    expect(Object.hasOwn(held.answer, 'text')).toBe(false);
+    expect(held.answer.b64!.length).toBe(1_333_336);
+    expect(blobs.bytes()).toBe(2_333_336);
+    expect((await app.inject({ url: url('b.md'), headers: PWA_HEADERS })).json()).toMatchObject({ from: 'cache' });
+  });
+});

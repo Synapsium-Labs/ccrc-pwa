@@ -9,16 +9,17 @@
 // or a show may fill is L1's `docsCacheVerdict` and `docsCacheFill`, applied by the routes. What stays here is
 // bookkeeping: insertion-ordered `Map`s used as LRUs (a read or a write moves its key to the end; eviction takes the
 // first key), the charges, the counts, and the comparisons of a running total or an age against an L1 bound.
-import type { DocSectionSlug, DocsIndexOk, DocsShowOk, DocsTreeOk } from '../../../shared/docs.js';
+import type { DocSectionSlug, DocsIndexOk, DocsTreeOk } from '../../../shared/docs.js';
 import {
   DOCS_CACHE_BYTES, DOCS_DRAFT_SIZE_ENTRIES, DOCS_INDEX_CACHE_MS, DOCS_LISTING_MAP_ENTRIES, docsBlobKey,
-  docsDraftSizeKey, docsListingKey, type DocsListedFile,
+  docsDraftSizeKey, docsListingKey, type DocsListedFile, type DocsStoredShow,
 } from './policy.js';
 
-/** One cached committed show: the verified answer and its decoded bytes (section 6.5: filled only from an ok
- *  committed answer that passed checks 8 and 9, and the routes' `docsShowBound`). */
+/** One cached committed show: the verified content (`docsStoredShow`'s projection, never the raw adapter answer) and
+ *  its decoded bytes (section 6.5: filled only from an ok committed answer that passed checks 8 and 9, and the
+ *  routes' `docsShowBound`). */
 export interface DocsCachedShow {
-  answer: DocsShowOk;
+  answer: DocsStoredShow;
   bytes: Uint8Array;
 }
 
@@ -79,7 +80,7 @@ interface BlobSlot {
 
 /**
  * The committed blob LRU. A value's charge is `Buffer.byteLength` of BOTH stored representations: the decoded bytes
- * and the answer's one content field (`text` or `b64`), since the cache holds both. A value charged above the whole
+ * and the stored show's one content field (the one its `encoding` names), since the cache holds both. A value charged above the whole
  * budget is never stored and evicts nothing; re-setting a key gives its old charge back first; after a set, the
  * least recently used entries go until the total is within the budget, so the value just set (charged at most the
  * budget) is never evicted by its own set.
@@ -88,8 +89,10 @@ function docsBlobCache(): DocsBlobCache {
   const slots = new Map<string, BlobSlot>();
   let total = 0;
 
-  const charge = (value: DocsCachedShow): number =>
-    value.bytes.byteLength + Buffer.byteLength(value.answer.text ?? value.answer.b64 ?? '');
+  const charge = (value: DocsCachedShow): number => {
+    const { encoding, b64, text } = value.answer;
+    return value.bytes.byteLength + Buffer.byteLength((encoding === 'base64' ? b64 : text) ?? '');
+  };
 
   return {
     get(node, repoKey, blob) {

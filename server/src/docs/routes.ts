@@ -26,7 +26,7 @@ import {
   DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
   docsCacheVerdict, docsFileReply, docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsLogDue, docsNodeKey,
   docsProjectKey, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
-  docsShowPlan, docsTreeEcho, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam,
+  docsShowPlan, docsStoredShow, docsTreeEcho, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam,
   parseDocsRefreshBody, refreshDue, type DocsApiRequest, type DocsFileReply, type DocsJob, type DocsListedFile, type DocsRefreshHalf,
   type DocsRefreshRequest,
 } from './policy.js';
@@ -185,7 +185,8 @@ function believeShow(at: DocsNodeLanes, node: string, pin: DocPin, listed: { rep
     return bound;
   }
   if (listed !== undefined && docsCacheFill(pin, listed.file)) {
-    at.caches.blobs.set(node, listed.repoKey, listed.file.blob, { answer: got.answer, bytes: got.bytes });
+    const answer = docsStoredShow(got.answer, got.bytes);
+    at.caches.blobs.set(node, listed.repoKey, listed.file.blob, { answer, bytes: got.bytes });
   }
   return got;
 }
