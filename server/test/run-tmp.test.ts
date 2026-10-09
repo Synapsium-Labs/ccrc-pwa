@@ -28,7 +28,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmdirSync,
-  rmSync, symlinkSync, unlinkSync, writeFileSync,
+  rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import type { Server } from 'node:net';
@@ -292,6 +292,12 @@ describe('condemn', () => {
     expect(condemn(dir + DEAD_SUFFIX)).toBe('removed');
     expect(existsSync(dir + DEAD_SUFFIX)).toBe(false);
   });
+
+  it('C4: a .dead name another actor already removed is gone, not removed — the job was not this caller\'s', () => {
+    // `rm`'s `force` ignores ENOENT, so without the check a vanished `.dead` read as `removed` and was counted.
+    const dir = path.join(mkTmp('ccrc-runtmp-condemn-'), 'run');
+    expect(condemn(dir + DEAD_SUFFIX)).toBe('gone');
+  });
 });
 
 describe('reapRuns — only dead, quiet, ours, by name', () => {
@@ -485,6 +491,49 @@ describe('reapRuns — only dead, quiet, ours, by name', () => {
     } finally {
       chmodSync(base, 0o700);
     }
+  });
+
+  it('T3m: an unmeasurable verdict is never condemned, however quiet', async () => {
+    // (a) A LIVE owner read through a spelling of its base too long to connect: `unmeasurable:EINVAL`. setup()
+    // reaps before it opens, so a too-long base is walked even by the run that then refuses.
+    const base = socketBase();
+    const live = await startOwner(base);
+    const longLink = path.join(base, 'x'.repeat(90));
+    symlinkSync(base, longLink);
+    expect(await reapRuns(longLink, { now: later() })).toEqual({ removed: [], left: [[name(live.run), 'unmeasurable:EINVAL']] });
+    expect(existsSync(live.run), 'a live run was condemned on an unmeasurable verdict').toBe(true);
+    // (b) A dead owner whose socket is now a regular file: `unmeasurable:not-a-socket`.
+    const base2 = socketBase();
+    const run = await deadOwner(base2);
+    unlinkSync(path.join(run, RUN_SOCKET));
+    writeFileSync(path.join(run, RUN_SOCKET), 'not a socket\n');
+    expect(await reapRuns(base2, { now: later() })).toEqual({ removed: [], left: [[name(run), 'unmeasurable:not-a-socket']] });
+    expect(existsSync(run)).toBe(true);
+  });
+
+  it('T3n: an entry another actor removes mid-walk is gone — neither an error nor counted as reaped', async () => {
+    // `reapRuns` lists, then runs synchronously up to its first await, the live run's connect; the removal below
+    // therefore lands between the listing and the later entry's lstat, every time.
+    const base = socketBase();
+    const live = await startOwner(base);
+    const vanishing = path.join(base, `${RUN_PREFIX}zzzzzz`);
+    mkdirSync(path.join(vanishing, RUN_TMP), { recursive: true });
+    expect(name(live.run) < name(vanishing), 'the vanishing entry must sort after the live one').toBe(true);
+    const pending = reapRuns(base, { now: later() });
+    rmSync(vanishing, { recursive: true });
+    expect(await pending).toEqual({ removed: [], left: [[name(live.run), 'live'], [name(vanishing), 'gone']] });
+  });
+
+  it('T3o: quiet is measured by ctime — an mtime set into the past (utimes, tar -x, cp -p) does not make a run quiet', async () => {
+    const base = socketBase();
+    const run = await deadOwner(base);
+    const past = new Date(Date.now() - 3_600_000);
+    utimesSync(run, past, past);
+    utimesSync(path.join(run, RUN_TMP), past, past);
+    expect(lstatSync(run).mtimeMs, 'the mtime was not rewound, so this case proves nothing').toBeLessThan(Date.now() - 3_000_000);
+    const r = await reapRuns(base, { now: Date.now() + 500, quietS: 1 });
+    expect(r.left).toEqual([[name(run), 'dead:not-quiet']]);
+    expect(existsSync(run)).toBe(true);
   });
 });
 

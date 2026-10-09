@@ -94,14 +94,17 @@ export const RUN_QUIET_S = 600;
 const PROBE_TIMEOUT_MS = 2000;
 
 /** Rename `dir` to `dir.dead`, then remove it. The rename is atomic and only one actor wins it; the loser reads
- *  `gone`. An `rm` that fails leaves the `.dead` name for a later actor and is REPORTED, never thrown: a cleanup
- *  that throws would fail a green run over a directory a test left at mode 0500.
+ *  `gone`, and so does a caller handed a `.dead` name another actor has already removed (`rm`'s `force` would
+ *  otherwise read that as `removed`). An `rm` that fails leaves the `.dead` name for a later actor and is
+ *  REPORTED, never thrown: a cleanup that throws would fail a green run over a directory a test left at mode 0500.
  *  @param {string} dir
  *  @returns {'removed' | 'gone' | `left:${string}`} */
 export function condemn(dir) {
   const dead = dir.endsWith(DEAD_SUFFIX) ? dir : dir + DEAD_SUFFIX;
   if (dead !== dir) {
     try { renameSync(dir, dead); } catch (e) { return e.code === 'ENOENT' ? 'gone' : `left:${e.code ?? 'rename'}`; }
+  } else {
+    try { lstatSync(dead); } catch (e) { if (e.code === 'ENOENT') return 'gone'; }
   }
   try {
     rmSync(dead, { recursive: true, force: true, maxRetries: 3 });
@@ -237,9 +240,10 @@ export function armSignals(run) {
  *  that throws is recorded and the walk goes on; the call never rejects.
  *
  *  `removed` holds `[name, '<why>:<removed|gone>']` with why `dead`, `unowned` or `dead-suffix`; `left` holds
- *  `[name, why]` for everything matched and kept — a verdict (`live`, `unmeasurable:*`), `<verdict>:not-quiet`,
- *  `not-a-directory`, `foreign-uid`, a failed removal's `left:<code>`, or `error:<code>`. A base that cannot be
- *  listed answers `left: [['.', 'unreadable:<code>']]`.
+ *  `[name, why]` for everything matched that this walk did not condemn — a verdict (`live`, `unmeasurable:*`),
+ *  `<verdict>:not-quiet`, `not-a-directory`, `foreign-uid`, a failed removal's `left:<code>`, `gone` for an entry
+ *  another actor removed between the listing and its `lstat` (runs overlap under a shared TMPDIR; that is not a
+ *  failure), or `error:<code>`. A base that cannot be listed answers `left: [['.', 'unreadable:<code>']]`.
  *  @param {string} base
  *  @param {{ now?: number, uid?: number, quietS?: number }} [opts]
  *  @returns {Promise<{ removed: [string, string][], left: [string, string][] }>} */
@@ -255,7 +259,8 @@ export async function reapRuns(base, { now = Date.now(), uid = process.getuid?.(
     if (!RUN_NAME_RE.test(name)) continue;
     const dir = path.join(base, name);
     try {
-      const st = lstatSync(dir);
+      let st;
+      try { st = lstatSync(dir); } catch (e) { if (e.code !== 'ENOENT') throw e; left.push([name, 'gone']); continue; }
       if (!st.isDirectory()) { left.push([name, 'not-a-directory']); continue; }
       if (st.uid !== uid) { left.push([name, 'foreign-uid']); continue; }
       if (name.endsWith(DEAD_SUFFIX)) { settle(name, 'dead-suffix', condemn(dir)); continue; }
@@ -290,7 +295,8 @@ function parseQuiet(raw) {
 async function reapAndReport(base, quietS) {
   const t0 = Date.now();
   const r = await reapRuns(base, { quietS });
-  if (r.removed.length > 0) warn(`reaped ${r.removed.length} dead test-run dir(s) under ${base} in ${Date.now() - t0} ms`);
+  const reaped = r.removed.filter(([, why]) => why.endsWith(':removed')).length;   // a `gone` was another actor's
+  if (reaped > 0) warn(`reaped ${reaped} dead test-run dir(s) under ${base} in ${Date.now() - t0} ms`);
   for (const [name, why] of r.left) {
     if (/^(left|error|unreadable):/.test(why)) warn(`could not reap ${path.join(base, name)} (${why}); the next run retries`);
   }
