@@ -761,9 +761,9 @@ interface CoordinationSnapshotManifestV1 {
 
 A snapshot manifest describes the authoritative pair plus the SQLite projection. WAL/SHM are restore-set members, not manifest members: the existing SQLite helper creates a consistent `coord.db` with no live WAL dependency.
 
-## O1–O5 Decisions Proposed for Operator Approval
+## O1–O5 Implementation Decisions Approved for Wave 3
 
-These five items originated as review-332 implementation questions. They are not retroactive requirements of the approved spec. Approval of this plan approves these answers; rejecting any one blocks the owning durability task rather than licensing a weaker fallback.
+These five items originated as review-332 implementation questions. They are not retroactive requirements of the approved spec. The operator approved this plan on 2026-10-09, approving these implementation answers for wave 3 without turning them into prior spec requirements. Any later change to one requires an operator ruling; rejection blocks the owning durability task rather than licensing a weaker fallback.
 
 - **O1 — ID escape:** A meta-opened activity ID cannot be returned, inserted into `coord.db`, logged as an outcome, or included in a report until an atomic checkpoint contains its natural-key mapping and activity row.
 - **O2 — pruning:** Disable pruning from reconstruction entry through checkpoint validation, processing all retained evidence applicable to checkpoint-missing activities (including records before `appliedJournalSequence`), retained-suffix replay, natural-key restoration, and restoration of every pruning hold. Failure leaves phase `reconstructing` and pruning disabled.
@@ -1399,4 +1399,4 @@ Before requesting the independent review:
 
 ## Deviations found
 
-No planning-time deviation is defined. This document allocates no number and invents no placeholder number. After operator approval, the coordinator allocates one contiguous wave-3 block in the same act that opens wave 3; the worker defines only departures from this approved plan within that issued block and records unused numbers as unused.
+No planning-time deviation is defined. After operator approval on 2026-10-09, the allocator issued wave 3's contiguous 32-number block: 4633, 4634, 4635, 4636, 4637, 4638, 4639, 4640, 4641, 4642, 4643, 4644, 4645, 4646, 4647, 4648, 4649, 4650, 4651, 4652, 4653, 4654, 4655, 4656, 4657, 4658, 4659, 4660, 4661, 4662, 4663 and 4664. These remain bare issued numbers until the worker defines an actual departure from this approved plan. The worker takes them in order and records every unused number as unused; no number is repurposed.

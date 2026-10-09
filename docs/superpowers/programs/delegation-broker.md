@@ -2,7 +2,7 @@
 
 Spec: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` (approved 2026-10-05, revisions R1–R9 included)
 Plans: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md` (waves 1–2) and
-`docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` (wave 3, awaiting operator approval). Waves
+`docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` (wave 3, operator-approved 2026-10-09). Waves
 4–7 are planned one at a time from the measured fields, each before its run dispatches
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-soft-basin` (the session that wrote the spec; claimant of run 271)
 Workspace: **a fresh child per wave**
@@ -23,7 +23,7 @@ never links work by a name, a path, a time or a working directory.
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
 | 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **accepted at exact tip, not merged**: review 334 independently accepted `e183237e59f481ac85730bc06ca5cef29dea1d15`; run 306 remains `awaiting-review` and PR #321 remains open until wave 3 is approved and opened |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | — | plan written and focused independent plan review folded into `docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md`; awaiting operator approval; open as `wave:3`, `waveOf:7` before run 306 closes |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | — | plan and O1–O5 implementation decisions operator-approved 2026-10-09 after focused independent plan review; block 4633–4664 issued bare; open as `wave:3`, `waveOf:7` before run 306 closes |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
@@ -774,12 +774,12 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     `workflow-phase-is-not-always-written`, `teardown-hook-event-names-another-session` and
     `tool-agent-id-alone-is-unjoined-evidence`.
 
-### Review-332 implementation questions answered by the wave-3 plan, pending operator approval
+### Review-332 implementation questions answered by the approved wave-3 plan
 
 These five points originated as implementation questions in review 332 F3; they were not requirements of the approved
-spec and this ledger does not rewrite them into retroactive requirements. The wave-3 plan proposes the following exact
-answers. Operator approval of that plan approves them; rejection of one blocks its owning durability task rather than
-licensing a weaker fallback.
+spec and this ledger does not rewrite them into retroactive requirements. The operator approved the wave-3 plan on
+2026-10-09, approving the following exact answers for wave 3. A later change requires an operator ruling; rejection of
+one blocks its owning durability task rather than licensing a weaker fallback.
 
 1. **ID escape (O1).** A meta-opened activity id cannot be returned, inserted into `coord.db`, logged as an outcome or
    included in a report until an atomic checkpoint contains its natural-key mapping and activity row.
@@ -850,8 +850,8 @@ F2 is the two “for that id” ledger corrections above. The reviewer measured 
 `session-hook.test.ts` 335/335, docs-sensitive subset 492/492, `git diff --check origin/HEAD...HEAD` rc 0 and
 exact-head CI run 37688188835 success; the full-suite red remains explicitly unwaived.
 
-**Wave 3 — observe (report-only)** is planned at
-`docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md`, pending operator approval:
+**Wave 3 — observe (report-only)** is approved at
+`docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` (operator approval 2026-10-09):
 - Its contents are the exact-pane correction as the first implementation commit; the separate turn-marker correction;
   the re-capture tooling obligations followed by a mandatory current-lane capture; bounded incarnation-bound owner
   spools; byte-exact ingestion/cursors through a named pure/framing plus serialized-durability boundary; one six-table
@@ -859,8 +859,8 @@ exact-head CI run 37688188835 success; the full-suite red remains explicitly unw
   correlation; report-only reconciliation; checkpoint-owned health and coordinator intent; `delegation-hooks` doctor;
   and coordinator clause 17.
 - It carries the 3.9 KiB listing/strict-under-4-KiB line constraint, all eight real-lane amendment slugs, D-4008's
-  folds as no positive evidence, the retained-before-checkpoint trap, and O1–O5 above as proposed decisions awaiting
-  operator approval.
+  folds as no positive evidence, the retained-before-checkpoint trap, and O1–O5 above as operator-approved wave-3
+  implementation decisions that remain nonretroactive to the spec.
 - Its one migration creates the complete future-facing six-table schema required by spec §5.2, including inert lease
   disposition, clock, cleanup-population/evidence and carrier-generation fields; later waves add code only. Wave 3's
   serialized server journal adapter alone mints a deduplicated linked lease identity at generation 0; pure policy has no
@@ -871,9 +871,13 @@ exact-head CI run 37688188835 success; the full-suite red remains explicitly unw
 - It defines named red tests for every wave-3-applicable spec §8.4 mutation and every verified plan-review correction,
   and explicitly defers fleet/PWA
   projection, adoption, carrier, promotion, audit-token and cleanup behavior to waves 4–7.
-- It allocates no deviation number, opens no run, dispatches no worker, merges no PR, deploys nothing and invokes no
-  cleanup. The operator reviews and approves the tracked plan first.
-- After approval, allocate the wave-3 block and open a fresh run as `wave:3`, `waveOf:7`, with no inherited worker
-  `sessionId`, before closing run 306. Then advance run 306 to `merging`, remeasure PR #321's exact head and required
-  CI, enqueue it through `gh pr merge <n> --match-head-commit <handoffCommit>`, verify the accepted tip landed, close
-  run 306 `final:true`, and dispatch the fresh wave-3 worker from merged `main`.
+- At the approval boundary it had allocated no deviation number, opened no run, dispatched no worker, merged no PR,
+  deployed nothing and invoked no cleanup. The operator reviewed and approved that tracked plan before the transition
+  acts recorded next.
+- The allocator issued the contiguous 32-number wave-3 block on 2026-10-09: 4633, 4634, 4635, 4636, 4637, 4638,
+  4639, 4640, 4641, 4642, 4643, 4644, 4645, 4646, 4647, 4648, 4649, 4650, 4651, 4652, 4653, 4654, 4655,
+  4656, 4657, 4658, 4659, 4660, 4661, 4662, 4663 and 4664. They remain bare until the worker defines an actual
+  departure; unused numbers are recorded as unused. Open a fresh run as `wave:3`, `waveOf:7`, with no inherited
+  worker `sessionId`, before closing run 306. Then advance run 306 to `merging`, remeasure PR #321's exact head and
+  required CI, enqueue it through `gh pr merge <n> --match-head-commit <handoffCommit>`, verify the accepted tip landed,
+  close run 306 `final:true`, and dispatch the fresh wave-3 worker from merged `main`.
