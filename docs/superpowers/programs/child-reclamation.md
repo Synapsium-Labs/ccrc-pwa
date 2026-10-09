@@ -47,6 +47,18 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 15:09 — wave 7: Tasks 1 to 10 done, and Task 11's verification is running (clear-summit's 4126).**
+  - **Main was absorbed twice, both before the PR existed:** `21bdf2a11` (it brought #319, #330, #335, #337 and #338)
+    and `5f87d908e` (it brought #325). Each conflicted only on `ccd/ccd`'s stamp line and was re-stamped. Accepted: no
+    CI restarted, and the full suite will cover the pushed tree.
+  - **New departure slugs:** `witness-only-refuses-a-standing-slot`, `alias-refuses-a-non-directory-leaf`,
+    `resume-token-binds-checkouts`, and the putback's refused `quarantine-kept` for a proven-other slot leaf.
+  - **A stated residual, `crash-at-moved-after-a-spawn-keeps-the-leaf-in-its-slot`, goes to the review's SAFETY
+    lens.** A SIGKILL between the move and the re-proof, after a recycled spawn adopted the leaf, keeps that child's
+    pre-move scratch in the slot until its row is gone. It is not ruled before the review measures it.
+  - **Scope.** Claims are 1131, 1132 and 1133. README.md and CLAUDE.md are inside the boundary (Task 10) and were
+    edited under brisk-basin's agreement (4118).
+
 - **2026-10-09 10:06 — wave 7 progress (clear-summit's 4107): Tasks 1 to 4 done, Task 5 in progress.**
   - **Task 3** applied ruling 4060 (`e04bb4588`): the generation read is under the compaction lock, the two numerals
     read eight, and `session-hook.test.ts` is untouched, 335 of 335 green.
