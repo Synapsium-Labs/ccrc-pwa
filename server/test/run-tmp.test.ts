@@ -31,6 +31,7 @@ import {
   rmSync, symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { createRequire } from 'node:module';
+import type { Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -235,6 +236,23 @@ describe('probeRun — six verdicts, never folded', () => {
     expect(sockBytes(over)).toBe(RUN_SUN_PATH_MAX + 1);
     expect(await openRun(over)).toEqual({ refused: 'EINVAL' });
     expect(readdirSync(over)).toEqual([]);
+  });
+
+  it('T2l: a listening server that errors LATER keeps its run — the refusal handler goes once listening', async () => {
+    // A `net.Server` emits `error` after `listen` when `accept` fails (EMFILE or ENFILE past libuv's reserve fd,
+    // ENOMEM, ENOBUFS). The handler `openRun` registers for `listen` itself answers with a refusal, and a refusal
+    // removes the run, so left registered it would delete a live run's whole TMPDIR mid-run.
+    const r = await openRun(socketBase());
+    expect(r, 'openRun refused').not.toHaveProperty('refused');
+    const { run, server } = r as { run: string; server: Server };
+    try {
+      server.emit('error', Object.assign(new Error('accept failed'), { code: 'EMFILE', syscall: 'accept' }));
+      expect(existsSync(run), 'an error after listen removed the live run').toBe(true);
+      expect(await probeRun(run)).toBe('live');
+    } finally {
+      server.close();
+      condemn(run);
+    }
   });
 });
 

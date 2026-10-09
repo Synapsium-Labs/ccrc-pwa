@@ -185,8 +185,13 @@ export function openRun(base) {
   if (tooLong(sock)) return Promise.resolve(refused('EINVAL'));
   return new Promise((resolve) => {
     const server = net.createServer((c) => { c.on('error', () => {}); c.destroy(); });
-    server.once('error', (e) => { resolve(refused(e.code ?? 'listen')); });
+    // `listen`'s own failure, and ONLY that: a refusal removes the run, so this handler goes the moment the server
+    // listens. A listening server errors later when `accept` fails (EMFILE, ENFILE, ENOMEM, ENOBUFS), and left
+    // here this would answer that by deleting a live run's whole TMPDIR mid-run (T2l).
+    const onListenError = (e) => { resolve(refused(e.code ?? 'listen')); };
+    server.once('error', onListenError);
     server.listen(sock, () => {
+      server.off('error', onListenError);
       server.unref();
       server.on('error', () => {});       // a listening server that errors later must not crash vitest's main process
       try {
