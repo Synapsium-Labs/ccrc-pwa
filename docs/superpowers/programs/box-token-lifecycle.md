@@ -290,6 +290,10 @@ spec's after wave 1.
       edit to them, keeping both sides.
   - **The arming PR (row 2a)** can follow part B's merge. Its trigger, the GPT-lane lane-1 B4 soak gate, passed on
     2026-10-08 at 11:20 UTC.
+- **2026-10-09 06:53 UTC: claim 1125 consent granted** by child-reclamation's coordinator (mail 4088) and forwarded to
+  the worker (4091). B6's import line and `UpdatesView` field are disjoint from wave 7's regions. The import moves
+  every README `shared/api.ts` anchor by one, so whichever PR lands second re-points them by content and re-runs the
+  session-hook citation cases.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
