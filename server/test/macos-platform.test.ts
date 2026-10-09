@@ -236,11 +236,24 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     'ccrc-adopt': 'a template-less `mktemp`',
   };
 
+  /** `ccd`'s ONE legitimate GNU spelling outside the platform block: the temp-root
+   *  collector's rename, `_ws_collect_mv` (its COLLECT region), `mv -T -n
+   *  --no-copy` — one renameat2(RENAME_NOREPLACE) that never falls back to a copy
+   *  (spec 2026-09-22 §5.10). It stays out of the platform block by design (that
+   *  block is byte-identical in `ccd` and `ccrc`, and the rename is the collector's
+   *  alone), and it is LINUX-ONLY by construction: the function's first line
+   *  answers 2 on Darwin before `mv` is reached. Cut exactly as the hook's epoch
+   *  copy is — ONE function, pinned below — so a renamed function makes the cut
+   *  MISS, which surfaces as an `mv -T` hit, never a silently wider exemption. */
+  const COLLECT_MV = /^_ws_collect_mv\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m;
+
   /** One file's scanned text: the platform block cut where the file carries
-   *  one, and the pinned epoch copy cut out of the hook. */
+   *  one, the pinned epoch copy cut out of the hook, and the pinned rename cut
+   *  out of ccd. */
   function scannedText(name: string): string {
     const src = readFileSync(path.join(ccdRoot, name), 'utf8');
-    return executableText(name === HOOK ? src.replace(HOOK_EPOCH_COPY, '') : src);
+    if (name === HOOK) return executableText(src.replace(HOOK_EPOCH_COPY, ''));
+    return executableText(name === 'ccd' ? src.replace(COLLECT_MV, '') : src);
   }
 
   function gnuHits(text: string): string[] {
@@ -303,6 +316,26 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     const text = scannedText(HOOK);
     for (const anchor of ['case "$event" in', 'GRAPH_QUERY_RE=', 'out=$(jq -cn']) {
       expect(text, `the cut swallowed the hook's body around \`${anchor}\``).toContain(anchor);
+    }
+  });
+
+  it('ccd/ccd’s exemption is the collector’s rename, and nothing else', () => {
+    // The anti-widening half, as the hook's: ONE function, ONE spelling, and
+    // its first executable line refuses Darwin before `mv` is reached.
+    const src = readFileSync(path.join(ccdRoot, 'ccd'), 'utf8');
+    const m = COLLECT_MV.exec(src);
+    expect(m, '_ws_collect_mv must be findable — the exemption is meant to be exact').not.toBeNull();
+    const cut = m![0]!;
+    expect(cut.match(/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/gm),
+      'the exemption must be ONE function, not a region that grew').toEqual(['_ws_collect_mv() {']);
+    expect(gnuHits(executableText(cut)), 'the exemption buys exactly one spelling: the no-copy rename')
+      .toEqual(['mv -T: mv -T -n --no-copy -- "$1" "$2"']);
+    expect(executableText(cut).split('\n')[1]?.trim(), 'its first line refuses Darwin')
+      .toBe('[[ "$CCD_OS" != darwin ]] || return 2');
+    // … and the rest of ccd really is scanned: the cut ends at the function.
+    const text = scannedText('ccd');
+    for (const anchor of ['_ws_collect_mv_ok() {', '_ws_collect_move() {']) {
+      expect(text, `the cut swallowed ccd around \`${anchor}\``).toContain(anchor);
     }
   });
 });

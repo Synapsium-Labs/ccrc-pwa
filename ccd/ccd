@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8a4b74f20436ee4e99ed99535fbcac3dd9c64129d9222b40b51f8bc25d31e1a1
+# ccrc:generated 1 sha256=2645cd31de43095159d725c0d519ec5615e77165cc2cb0fac4c3a45ed3a711b2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28963,13 +28963,17 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its seven callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its eight callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
   # leaf-question sites: `_ws_reclaim_workdir_shared`'s leaf placement,
   # `_ws_leaf_checkouts`' leaf, and `_ws_leaf_checkout_one`'s admin directory
-  # and checkout directory. A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
+  # and checkout directory. The eighth is the collector's quarantine path,
+  # `_ws_collect_qpath`: the quarantine maker, the record writer and the
+  # record reader all reach this function through it, never directly, so
+  # the census stays eight.
+  # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
   # removal took `<vol>/<id>` and both probes answered "nobody". Other bare
   # captures on removal paths stay bare and fail closed (a truncated root makes
@@ -31710,6 +31714,112 @@ _ws_collect_record_drop() {   # file -> 0 the record is gone, PROVEN; 1 not a re
   (( rc != 1 )) || { _WS_QREC_WHY="$f stands again after its removal"; return 2; }
   (( rc != 2 )) || { _WS_QREC_WHY="$_WS_ABSENT_WHY — that $f is gone was never proven"; return 2; }
   return 0
+}
+
+_ws_collect_now_ns() { date +%s%N; }   # the clock the idle floor and a slot's name read, epoch ns — a function, so a test can name the instant
+
+_WS_Q=''; _WS_Q_WHY=''
+_ws_collect_qdir() {   # -> 0 with _WS_Q = the quarantine, `<physical ~/.cc-tmp>/.ccd-quarantine` (made, 0700, when
+  #                       PROVEN absent); 2 (_WS_Q_WHY) when it is anything but a real directory of this uid at 0700
+  local q me owner mode rc
+  _WS_Q=''; _WS_Q_WHY=''
+  _ws_collect_qpath || { _WS_Q_WHY="$_WS_QPATH_WHY, so no quarantine was asked for"; return 2; }
+  q="$_WS_QPATH"
+  _ws_reclaim_absent "$q"; rc=$?
+  (( rc != 2 )) || { _WS_Q_WHY="$_WS_ABSENT_WHY — whether the quarantine stands was never asked"; return 2; }
+  (( rc != 0 )) || mkdir -m 0700 -- "$q" 2>/dev/null || :
+  [[ -d "$q" && ! -L "$q" ]] || { _WS_Q_WHY="$q is not a real directory (a link, not a directory, or it could not be made)"; return 2; }
+  me=$(id -u) || { _WS_Q_WHY="this uid could not be read, so whether $q is ours was never asked"; return 2; }
+  owner=$(_ws_leaf_uid "$q") || { _WS_Q_WHY="who owns $q could not be read"; return 2; }
+  [[ "$owner" == "$me" ]] || { _WS_Q_WHY="$q belongs to uid $owner, not this uid $me"; return 2; }
+  mode=$(_plat_mode "$q" 2>/dev/null) || { _WS_Q_WHY="the mode of $q could not be read"; return 2; }
+  [[ "$mode" == 700 ]] || { _WS_Q_WHY="$q is mode $mode, not 0700"; return 2; }
+  _WS_Q="$q"
+}
+
+_WS_SLOT=''; _WS_SLOT_WHY=''
+_ws_collect_slot_path() {   # q id -> 0 with _WS_SLOT = `<q>/slot.<id>.<ns>.<pid>` (not made); 2 when the id or the clock cannot be used
+  local q="${1-}" id="${2-}" ns
+  _WS_SLOT=''
+  _ws_tmproot_id_ok "$id" || return 2
+  ns=$(_ws_collect_now_ns) && [[ "$ns" =~ ^[1-9][0-9]{9,18}$ ]] || return 2
+  _WS_SLOT="${q%/}/slot.$id.$ns.$BASHPID"
+}
+_ws_collect_slot_make() {   # slot -> 0 made by THIS call, a real directory at 0700; 1 the name already stands (a slot
+  #                              is never reused); 2 could not be made (_WS_SLOT_WHY)
+  local s="${1-}" err rc
+  _WS_SLOT_WHY=''
+  _ws_reclaim_absent "$s"; rc=$?
+  (( rc != 1 )) || { _WS_SLOT_WHY="$s already stands — a slot is never reused"; return 1; }
+  (( rc != 2 )) || { _WS_SLOT_WHY="$_WS_ABSENT_WHY — whether $s stands was never asked"; return 2; }
+  # EXCLUSIVE: a plain `mkdir`, never `-p`, fails on a name that stands, whoever made it.
+  if ! err=$(mkdir -m 0700 -- "$s" 2>&1); then
+    if [[ -e "$s" || -L "$s" ]]; then _WS_SLOT_WHY="$s already stands — a slot is never reused"; return 1; fi
+    _WS_SLOT_WHY="$s could not be made: ${err%%$'\n'*}"; return 2
+  fi
+  [[ -d "$s" && ! -L "$s" ]] || { _WS_SLOT_WHY="$s is not a real directory after its mkdir"; return 2; }
+}
+
+_ws_collect_mv() {   # src dst -> mv's own exit code: ONE renameat2(RENAME_NOREPLACE), never a copy; 2 on Darwin, mv never run
+  [[ "$CCD_OS" != darwin ]] || return 2
+  mv -T -n --no-copy -- "$1" "$2"
+}
+_WS_MV_NOCOPY=''
+_ws_collect_mv_ok() {   # -> 0 when this box's `mv` has `--no-copy` (asked once, then remembered); 1 when not, or Darwin
+  local h
+  [[ "$CCD_OS" != darwin ]] || return 1
+  if [[ -z "$_WS_MV_NOCOPY" ]]; then
+    _WS_MV_NOCOPY=0
+    h=$(LC_ALL=C mv --help 2>/dev/null) && [[ "$h" == *--no-copy* ]] && _WS_MV_NOCOPY=1
+  fi
+  [[ "$_WS_MV_NOCOPY" == 1 ]]
+}
+
+_ws_collect_ident() {   # path dev:ino btime -> 0 path is a real directory (an lstat: never followed) with this device,
+  #                        inode and birth time; 1 something else stands there, or nothing does; 2 could not be read
+  local p="${1-}" want="${2-}" bt="${3-}" have hbt rc
+  if [[ -L "$p" ]] || { [[ -e "$p" ]] && [[ ! -d "$p" ]]; }; then return 1; fi
+  if [[ ! -e "$p" ]]; then
+    _ws_reclaim_absent "$p"; rc=$?
+    (( rc == 0 )) && return 1
+    return 2
+  fi
+  have=$(_plat_devino "$p" 2>/dev/null) && [[ "$have" =~ ^[0-9]+:[0-9]+$ ]] || return 2
+  hbt=$(_plat_btime "$p" 2>/dev/null) && [[ "$hbt" =~ ^-?[0-9]+$ ]] || return 2
+  [[ "$have" == "$want" && "$hbt" == "$bt" ]] || return 1
+  return 0
+}
+
+_WS_MOVE_WHY=''
+_ws_collect_move() {   # src dst dev:ino btime -> 0 PROVEN moved: dst is that directory, and nothing stands at src;
+  #                       1 PROVEN not moved: src is still that directory; 2 unmeasured (_WS_MOVE_WHY)
+  # THE PROOF IS AN lstat, NEVER mv's EXIT CODE (spec §5.10): coreutils changed
+  # what `mv -n` answers on a skip in 9.2, and a `mv` that copied would answer 0
+  # over a new inode. The same proof serves the move into a slot and the move
+  # back: the restore is proven when the original path is the directory again
+  # and the slot's `leaf` is gone. A box with no `--no-copy` never renames:
+  # without it a cross-device rename becomes a copy. A cross-device rename
+  # with it fails, and that is "not moved" here: the caller reads every
+  # non-zero answer as unmeasured.
+  local src="${1-}" dst="${2-}" want="${3-}" bt="${4-}" err mrc a b
+  _WS_MOVE_WHY=''
+  _ws_collect_mv_ok \
+    || { _WS_MOVE_WHY="this box has no 'mv --no-copy' (or is Darwin), so $src was never renamed — a rename that could copy is never used"; return 2; }
+  err=$(_ws_collect_mv "$src" "$dst" 2>&1); mrc=$?
+  _ws_collect_ident "$dst" "$want" "$bt"; a=$?
+  if (( a == 0 )); then
+    _ws_reclaim_absent "$src"; b=$?
+    (( b != 0 )) || return 0
+    _WS_MOVE_WHY="$dst is $want, but ${_WS_ABSENT_WHY:-something stands at $src again} — the move is not proven"
+    return 2
+  fi
+  _ws_collect_ident "$src" "$want" "$bt"; b=$?
+  if (( b == 0 )); then
+    _WS_MOVE_WHY="$src was not moved to $dst (mv exit $mrc${err:+: ${err%%$'\n'*}})"
+    return 1
+  fi
+  _WS_MOVE_WHY="neither $dst nor $src is the directory $want after the rename (mv exit $mrc${err:+: ${err%%$'\n'*}})"
+  return 2
 }
 # ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
