@@ -6256,6 +6256,17 @@ git commit -m "server: docs blob cache, listing map, draft sizes and index micro
    "test/docs-cache.test.ts"
   ],
   "red": "server docs-cache: 3 failed | 24 passed (27) — each docsCaches() call is its own set: nothing is shared at module scope; a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length; a base64 answer is charged its decoded bytes plus its b64 text"
+ },
+ {
+  "id": "W3-T5-M30",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      const count = Math.max(1, listed.count);",
+  "new": "      const count = listed.count;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 27 passed (28) — a commit with no committed rows is charged at least one: DOCS_LISTING_MAP_ENTRIES + 1 of them evict the oldest (added at run time by Task 5's review fix; D-4470)"
  }
 ]
 ```
@@ -9884,12 +9895,12 @@ Measured, not a row: the shell list's Docs URL (Step 4) reds only with a built b
   "id": "W3-T8-M6",
   "pkg": "server",
   "file": "server/src/auth/gate.ts",
-  "old": " * THE GATE. One `onRequest` hook stands in front of all 90 routes, the static\n",
+  "old": " * THE GATE. One `onRequest` hook stands in front of all 92 routes, the static\n",
   "new": " * THE GATE. One `onRequest` hook stands in front of all 86 routes, the static\n",
   "tests": [
    "test/auth-gate.test.ts"
   ],
-  "red": "server auth-gate: 1 failed | 161 passed (162) — gate.ts's own docstring names the HTTP-route count it stands in front of"
+  "red": "server auth-gate: 1 failed | 163 passed (164) — gate.ts's own docstring names the HTTP-route count it stands in front of (re-spelled at run time: #320 added two routes to main after this plan was written, so the measured numeral is 92, not 90)"
  },
  {
   "id": "W3-T8-M7",
