@@ -17,7 +17,7 @@ spec's after wave 1.
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
 | 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGED** `f82cb9fbc` (PR #330, 2026-10-09 06:44:52 UTC; run 320 done, child reclaim queued; released as v0.0.133 at 06:45:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `d9adc2c5a` onto `main` at `d33a566bb` (`4512d88d`). That tip is `fa384df19`, which review 352 read, plus a clean merge of `main`. Every Linux leg was green. Was: **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
-| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **FIX ROUND 1 DONE** 2026-10-09 16:10 UTC at `7424434c6` (mail 4134; six fix commits and a merge of `main` at `7c71244db`); no number spent, reserve 4552 to 4560 untouched. Scoped review run 365 dispatched 16:13 UTC to `ccrc-pwa-keen-cove`. Was: **FIX ROUND 1 SENT** 2026-10-09 14:32 UTC (mail 4124, `rulings-run350-fix1.md`) on review 362 at `569bb148c`: F1 meets class 6, so the bar gives the one round; no number assigned (reserve 4552 to 4560). A scoped review follows. Was: **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; numbers 4414 and 4551 defined, bare until #341 merges; review run 362 dispatched 12:04 UTC to `ccrc-pwa-brisk-delta` (the held-out panel plus three lenses: security; the first live rotation; what the operator sees). Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
+| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **TO THE OPERATOR** 2026-10-09 17:26 UTC: scoped review 365 found R1 and R2, class 11 (pins short of a near variant; code correct; live rotation 29 of 29). Was: **FIX ROUND 1 DONE** 2026-10-09 16:10 UTC at `7424434c6` (mail 4134; six fix commits and a merge of `main` at `7c71244db`); no number spent, reserve 4552 to 4560 untouched. Scoped review run 365 dispatched 16:13 UTC to `ccrc-pwa-keen-cove`. Was: **FIX ROUND 1 SENT** 2026-10-09 14:32 UTC (mail 4124, `rulings-run350-fix1.md`) on review 362 at `569bb148c`: F1 meets class 6, so the bar gives the one round; no number assigned (reserve 4552 to 4560). A scoped review follows. Was: **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; numbers 4414 and 4551 defined, bare until #341 merges; review run 362 dispatched 12:04 UTC to `ccrc-pwa-brisk-delta` (the held-out panel plus three lenses: security; the first live rotation; what the operator sees). Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
@@ -464,6 +464,43 @@ spec's after wave 1.
 
     It also reports whether each of F1 to F11 is closed. After it, a bar-class finding stops the merge and goes to
     the operator.
+- **2026-10-09 17:26 UTC: review 365 closed (part B fix round 1 at `7424434c6`); two findings meet class 11, so by
+  the committed bar the merge goes to the operator.**
+  - **Evidence:** the review-done (mail 4143) and the report are copied under `.superpowers/btl-w2-evidence/`. The
+    reviewer re-measured the tip, unchanged, before it sent.
+  - **The panel:** the held-out three lenses, the brief's three, four closure lenses and a completeness critic. 68
+    agents ran, with none dead and none unexamined. Four findings were confirmed (a fifth merged as a duplicate) and
+    14 were refuted.
+  - **The first live rotation, re-run (classes 1 and 2):** none found.
+    - All 29 of review 362's cases pass at the tip: round 1's 11 and round 2's 18, in both rollout orders and at
+      every restart point.
+    - No fleet lane answers 401 outside number 4414's write-back window.
+    - At the end the old value answers `probe: 401 refused`. Its digest is in the retired list, and written back it
+      is not adopted.
+    - Both of review 362's planted mutations still red the simulation.
+    - F1's `view()` change is a pure read. The driver decides from its state record and never reads the view.
+  - **What the operator sees (class 6):** none found. The reviewer made 23 renders, at 390 px and 1280 px in both
+    themes. Every sentence is true against `view()`, and nothing scrolls sideways at 390 px.
+  - **Security (classes 3, 4 and 7):** no non-comment line changed in the verb, the doctor checks, `policy.ts`,
+    `deploy.sh` or `notify.sh`. `driver.ts` adds only the `holds` gating.
+  - **Review 362's F1 and F3 to F11 are closed** by pins that red on revert, or by sentences that are now true. F2 is
+    closed only in part.
+  - **Rulings:**
+    - **R1 meets class 11.** F2's "no in-place open of the destination" pin judges only a run that starts with no
+      destination file. A mutant that truncates and rewrites an existing fleet token file in place (N1c) keeps the
+      pin green. Yet an existing destination is the first live rotation's own path, since it starts from the
+      adopted hand-made token. The ruling's own words name this mutation, so the pin cannot red when its guard is
+      mutated. The code at the tip is correct.
+    - **R2 meets class 11 on one arm.** F1's driver pin runs on a server-role rig, so the `own-write` arm the ruling
+      names is unpinned: mutant M6 stays green. The code at the tip is correct.
+    - **R3 is coverage and prose, residue for row 2a.** The doctor's fourth-spelling scanner misses `\d`-style and
+      spelled-out hex classes, so its docstring and commit subject claim more than it holds. The ruling's three
+      sites are held.
+    - **R4 is prose, residue for row 2a.** A line citation in `install-worker-skill.test.ts` moved, and that file
+      is outside the round's admitted set.
+  - **Review run 365 is closed.** Run 350 stays at `awaiting-review` until the operator rules.
+  - **Asked of the operator at 17:26:** merge #341 now and carry R1 and R2's pins in row 2a (pinned red-first,
+    before the arming lands); or run a second, test-only fix round followed by a scoped review.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
