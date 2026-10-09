@@ -305,6 +305,29 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['project-pool', '--pool', 'pool-a'])).toBe(false);
   });
 
+  // NATIVE DOCS READER wave 2 (spec 2026-10-01 section 2 (a), the verb table): every exact argv the server's
+  // builders emit crosses its grant, and nothing bare, positional, misplaced or misspelled does. The grant stops
+  // at the flag; arity is ccd's, and the server's layer-2c table in `whitelist-subset.test.ts` pins it.
+  it('grants the four docs verbs ONLY with their flag, and admits every argv the spec table names', () => {
+    const sha = 'a'.repeat(40);
+    expect(isExecAllowed('ccd', ['docs-index', '--all'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-tree', '--project', 'demo'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-tree', '--project', 'demo', '--ref', 'ws/a'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-show', '--project', 'demo', '--commit', sha, '--ref', 'refs/remotes/origin/main',
+      '--section', 'specs', '--path', 'a.md', '--max-bytes', '2097152'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-show', '--project', 'demo', '--draft-branch', 'main', '--head', sha,
+      '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-fetch', '--project', 'demo'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-fetch', '--project', 'demo', '--branch', 'ws/a'])).toBe(true);
+    for (const verb of ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch']) {
+      expect(isExecAllowed('ccd', [verb]), verb).toBe(false);
+    }
+    expect(isExecAllowed('ccd', ['docs-tree', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-tree', '--ref', 'r', '--project', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-index', '--project', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-showx', '--project', 'demo'])).toBe(false);
+  });
+
   it('is still a whitelist — plausible adjacent subcommands stay refused', () => {
     // Pinned in BOTH directions on purpose. The pair above is only worth
     // anything while this holds: a list that had been widened to accept
