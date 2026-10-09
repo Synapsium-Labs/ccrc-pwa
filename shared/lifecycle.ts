@@ -75,4 +75,12 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb', pattern: 'O',
     creators: ['operator shell'], collector: null, bound: 'until removed', tier: '<64 B each',
     ruling: 'touched by hand; persists until removed (no writer in the tree, pinned by single-definition.test.ts)' },
+  // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
+  // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
+  // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.
+  { name: 'server-test-run-dirs', root: '${TMPDIR:-/tmp}/ccrc-testrun-<6>/ (+ .dead mid-removal)', pattern: 'E',
+    creators: ['server vitest globalSetup (server/test/run-tmp.globalsetup.mjs)'],
+    collector: 'server/test/run-tmp.globalsetup.mjs (teardown; SIGTERM/SIGINT/SIGHUP/exit arm; a later run\'s reap at setup and teardown: owner socket refuses AND ctime-quiet for RUN_QUIET_S)',
+    bound: 'one test run; after a SIGKILL, until a later run under the same TMPDIR finds it quiet',
+    tier: '1,551 dirs / 5.74 GiB from five timed-out shards in one morning (#316, 2026-10-07)', ruling: null },
 ];
