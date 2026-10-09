@@ -441,7 +441,7 @@ export const CCD_ARGV = {
   /** `ws-expire` — the server-composed teardown of an ARCHIVED workspace seven days after its archive. `token` is
    *  `ws-audit --expire`'s, re-proven by ccd inside the reap lock; it binds the archive's epoch. The confirmation token
    *  LEADS (`['ws-expire','--expect']` is the grant); the dec trails, and ccd strips it before it binds a positional.
-   *  Composed by nothing in this build: workspace lifecycle wave 3b's lane is its one caller, behind `EXPIRE_CAP`. */
+   *  Workspace lifecycle wave 3b's lane is its one caller (`expireArchived`'s act), behind `EXPIRE_CAP`. */
   wsExpire: (token: string, id: string, dec: ActorFlags | null) =>
     argv(['ws-expire', '--expect', token, '--session', id, ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),

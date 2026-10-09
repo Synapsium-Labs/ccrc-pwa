@@ -76,6 +76,14 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **Identity on the fleet is attribution, not authentication:** single UNIX user, ccd has no caller auth. The
   exec whitelist guards ONLY the PWA→server→agent path; the HTTP chokepoint (caps + pause files) is a **contract
   the coordinator skill honors, not an OS wall**. Don't assume server-side checks stop a session acting directly.
+- **`ccrc history`'s writing verbs are the OPERATOR's, never a session's** (spec 2026-10-05 §8.4): every writing
+  form of `ccrc history` (`WRITING_FORMS`, `ccd/history/lib.mjs` — read it, this is not the list), including
+  `… --apply`, `import --session --file --apply` and `doctor --repair/--adopt/--restore/--rebuild/--migrate/--backup`,
+  and their direct form `~/.local/bin/ccd-history-sweep --op …`. Each refuses inside a session
+  (`CLAUDECODE` set), and the irreversible ones also refuse without a TTY or inside a `cc-*` pane: **speed bumps, not
+  walls** (`env -u CLAUDECODE` defeats the first). Never run one from a session to turn a test or a doctor line
+  green: `~/.ccrc/history` holds verbatim session text, secrets sessions printed included, and once Claude Code's
+  retention passes it is that text's only copy.
 
 ## Build / test / deploy
 **No root `package.json`, no root runner.** Four packages, each `"type":"module"`, run cd'd in:
@@ -254,8 +262,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   than open empty**. Its synchrony is a stated concurrency invariant — **do not wrap it async** (a repository/async
   interface over `CoordStore` is explicitly rejected). It is a server-side RE-MEASUREMENT of ccd's flat files
   (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
-  what it adds on top — mail, claims, asks, central pool edges, update intents — is gone without the snapshot
-  every `ccrc update` (and `ccrc backup`) takes into `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed).
+  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice —
+  is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into `~/ccrc-backups/<ts>/`
+  (`pool-edges.log` is never replayed).
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
@@ -276,11 +285,12 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4),
-  `POST /api/coord/caps` (wave 6) and `POST /api/coord/reclaim-pause` (child-reclamation wave 4) are
+  `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4) and
+  `POST /api/coord/stall-watch` (stall-watch settings wave 1) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other two are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other three are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -315,7 +325,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   stuck, marker unreadable) record shadow only until `stall-watch-w2-live` exists, and while `mail-disabled` stands every
   rung that would send mail holds. `stall-watch-disabled`, `stall-watch-live`, `stall-watch-escalate`,
   `stall-watch-w2-live`, `mail-gate-busy-shadow` and `mail-gate-busy` arm them (no `stall-watch-live`: shadow only) and,
-  like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that.
+  like `mail-gate-strict`, have **no writer in the tree** — `single-definition.test.ts` pins that. A level chosen in
+  Settings (`/api/coord/stall-watch`, the operator's control) overrides the arming markers, but never
+  `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; the markers still have no writer.
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
   workspace branch, **never a separate feature branch** (a feature branch wedges every close with `stale-tip`).
   Re-measurement reads git ref files + `.prhistory` fresh, never the claim body.

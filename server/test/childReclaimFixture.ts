@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WS_ADD } from './ccdWsHelpers.js';
 import type { PrHarness } from './ccdPrHelpers.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 export const CHILD_ID = 'demo-quiet-basin';
 export const CHILD_RUN = 7;
@@ -236,7 +237,7 @@ export function looseCommits(h: PrHarness, repo: string, n: number, label: strin
   }
   const marks = path.join(h.home, `loose-${label.replace(/[^a-z0-9]+/gi, '-')}.marks`);
   execFileSync('git', ['-C', repo, 'fast-import', '--quiet', `--export-marks=${marks}`],
-    { input: stream, env: { ...process.env, HOME: h.home } });
+    { input: stream, env: { ...inheritedEnv(), HOME: h.home } });
   h.git(repo, 'update-ref', '-d', ref);
   const byMark = new Map(fs.readFileSync(marks, 'utf8').split('\n').filter(Boolean)
     .map((l) => l.split(' ') as [string, string]));

@@ -28,6 +28,7 @@ import { itLinux } from './platformFixtures.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, evalOf, makeChild, type Child,
 } from './childReclaimFixture.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 let de: DirectEntry;
@@ -111,7 +112,7 @@ const plantModels = (): void => {
 const STARTUP_KEYS = ['BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH', 'GLOBIGNORE'];
 const cleanEnv = (): NodeJS.ProcessEnv => {
   const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) {
+  for (const [k, v] of Object.entries(inheritedEnv())) {
     if (k.startsWith('BASH_FUNC_') || STARTUP_KEYS.includes(k)) continue;
     env[k] = v;
   }

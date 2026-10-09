@@ -210,7 +210,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
-  models codex docs   # three entries on one line: every line below is cited by number elsewhere
+  models codex docs history   # four entries on one line: every line below is cited by number elsewhere
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -409,7 +409,7 @@ _check_node() {
     _dr_pass node "$running satisfies $declared (declared in $pkg), at $p"
   else
     _dr_fail node "$running is below the floor $declared declared in $pkg" \
-      "upgrade Node to at least ${maj}.${min}.${pat} — below it the server either fails to boot (node:sqlite is imported unconditionally) or boots without ccrc history's search (that node:sqlite has no FTS5)"
+      "upgrade Node to at least ${maj}.${min}.${pat} — below it a Node without node:sqlite stops the server booting, and a node:sqlite without FTS5 leaves ccrc history capturing with no search index (fts5-absent, doctor history WARN fts-unavailable)"  # D-4296 (node-floor-remedy-history-fts)
     return 1
   fi
 }
@@ -878,7 +878,7 @@ _check_services() {
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer ccrc-update-watchdog.timer ccd-pool-sync.timer ccd-update-sync.timer ccd-tmp-sweep.timer ccd-scope-sweep.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer ccrc-update-watchdog.timer ccd-pool-sync.timer ccd-update-sync.timer ccd-tmp-sweep.timer ccd-scope-sweep.timer ccd-history-sweep.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -962,6 +962,8 @@ _check_services() {
           # The temp-dir reaper: silent when stopped, loud only when `/` fills —
           # /tmp/claude-1000 reached 138G on the fleet host before it existed.
           ccd-tmp-sweep.timer) why="nothing reaps Claude Code's per-uid temp dir, which grows by gigabytes a day until / fills" ;;
+          # ccrc history (spec 2026-10-05 §9.6): silent when stopped; the store's freshness is `_check_history`'s.
+          ccd-history-sweep.timer) why="session text is not being captured into the history store, and a transcript Claude Code deletes before the next pass is lost for good" ;;
           ccd-scope-sweep.timer) why="no dead pane scope is recorded or collected, and the scope-sweep check has nothing fresh to read" ;;
           # W4a Task 9: the server box's update watchdog. Silent when stopped —
           # it acts only on the day a self-update dies mid-install, and on that
@@ -7224,4 +7226,151 @@ _check_scope-sweep() {
   _dr_warn scope-sweep "$nd dead pane scope(s) and $no long-lived process(es) in live ones, from the sweep's record (mode $mode): $detail" \
     "read each before acting: \`systemctl --user stop <unit>\` ends EVERY process in a dead scope; a service a session still needs is moved into a unit of its own (systemd-run --user --unit …); a forgotten process in a live pane is the session's to end. The sweep stops only scopes inert for six hours, and only when armed"
   return 2
+}
+
+# ── history: the session-history store ────────────────────────────────────
+# ccrc history W1-B1 (spec 2026-10-05-ccrc-history-lossless-dag-design.md
+# §9.6). APPENDED HERE, at the end of the file (after `_check_scope-sweep`),
+# for that check's own reason: lines in this file are cited by number from
+# `ccrc` and the tests, so a function inserted mid-file would move every one
+# of them. Its table entry shares `models codex docs`'s line for the same
+# reason.
+#
+# THIS CHECK DECIDES NOTHING ABOUT THE STORE. Every rule of §9.6 — the
+# freshness FAILs, the state words that hold them back, the store refusals,
+# the modes, the export's gap guard — is `deriveHealth` in
+# `ccd/history/lib.mjs`, and `ccrc history status --json` carries its answer
+# as `health`. Here the box is gated, that one bounded call is made, and its
+# answer RELAYED: each `health.fail[]` item a FAIL line, each
+# `health.warn[]` item a WARN line, each with the item's own remedy, and the
+# worse class returned. A rule restated here would be a second rule that
+# drifts from the first; `single-definition.test.ts` (O14) binds every word
+# this function spells to `HEALTH_WORDS`, and the only one it spells is
+# status-unreadable.
+#
+# GATING, in this order (D-4258):
+#  1. a box that records CCRC_ROLE=server SKIPs FIRST, read exactly as
+#     `_check_skills` reads it, so a shim left behind by a re-role can never
+#     turn a server box's doctor red;
+#  2. a box with no `~/.local/bin/ccd-history-sweep` SKIPs. The SHIM, not
+#     the timer file: a container backend carries the sweep with no unit
+#     file at all, and a timer-keyed gate would SKIP a dead sweep there for
+#     good. `ccrc install` places the shim off server boxes only, so on a
+#     fresh install the two arms agree;
+#  3. the rest is status's. Within two sweep periods of the shim's mtime,
+#     with no tick yet, it answers PASS `first-tick-pending`
+#     (D-4168: a fresh install ends green, the ruling
+#     `ccrc-install.test.ts` pins), and the states in which no fresh tick is
+#     expected answer as WARNs ahead of any freshness FAIL
+#     (D-4251).
+#
+# NO SWITCH IS SPELLED HERE (O13): status reports the cap file as `cap_file`
+# and the capture switch as the `off` word.
+#
+# BOUNDED by `CCRC_DOCTOR_GH_TIMEOUT`, the knob that already bounds this
+# file's tmux and openssl calls: a store on a dead volume blocks every stat
+# on it, and that must read as a FAIL, never as a hung doctor.
+
+# The store's filesystem against `/`, by device: information on the PASS line
+# only (§9.3). MEASURED ONCE, by status (`store_device`: `root`, `own`, or
+# null when db/ was not measurable within its stat deadline; Task 28), and
+# only WORDED here, so doctor and status can never disagree about it.
+_dr_history_fs() {
+  case "${1:-}" in
+    root) printf '%s' "the store is on the root filesystem" ;;
+    own)  printf '%s' "the store is on a filesystem of its own, not the root's" ;;
+    *)    printf '%s' "its filesystem was not measured" ;;
+  esac
+}
+
+_check_history() {
+  if [ -z "${BOX_ENV_FILE:-}" ] || [ -z "${CCRC_HERE:-}" ] \
+     || ! declare -F _box_env_value >/dev/null 2>&1 \
+     || ! declare -F _plat_timeout >/dev/null 2>&1; then
+    _dr_fail history "ccrc's own config reader is not loaded, so neither this box's role nor its history store was measured" \
+      "this is a bug in ccrc, not a fact about your box — the check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  local role=""
+  # -f BEFORE -r: `_check_skills`' guard order, for its reason (a directory answers -r too).
+  [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$role" = server ]; then
+    _dr_skip history "this box records CCRC_ROLE=server, so it hosts no sessions and keeps no history store"
+    return 3
+  fi
+  local shim="$HOME/.local/bin/ccd-history-sweep"
+  if [ ! -e "$shim" ]; then
+    # Never spell the installer's command in this sentence: a SKIP carries no
+    # remedy, and the env-less fleet-box case ('SKIPS an env-less FLEET-ROLE
+    # box…') asserts that box's WHOLE doctor output never says it. That
+    # fixture has no shim, so this line prints there.
+    _dr_skip history "no ccd-history-sweep at $shim — this box never installed the history sweep (macOS installs none, and the installer places it on every role but server)"
+    return 3
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    _dr_warn history "jq is not on PATH, so ccrc history status --json could not be read — see the 'jq' check above" \
+      "install jq (the 'jq' check above names what is missing), then re-run ccrc doctor"
+    return 2
+  fi
+
+  local cli="$CCRC_HERE/history/cli.mjs" out rc log
+  log="$(_dr_log_hint ccd-history-sweep.service)"
+  out="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" node --no-warnings "$cli" status --json 2>/dev/null)"; rc=$?
+  if [ "$rc" -eq 124 ]; then
+    _dr_fail history "status-unreadable: ccrc history status --json did not answer within ${CCRC_DOCTOR_GH_TIMEOUT}s — a store on a hung filesystem blocks every stat on it" \
+      "check the store's mount (ls -ld \$HOME/.ccrc/history/db/), then re-run ccrc doctor; the sweep's own log: $log"
+    return 1
+  fi
+  # THE REPORT IS CHECKED BEFORE ONE WORD OF IT IS PRINTED: a word this check
+  # cannot vouch for is never relayed as a verdict. A non-zero exit with a
+  # well-formed report is normal (a store refusal answers exit 5 and says so
+  # in `health`), so the exit code alone decides nothing here.
+  if ! printf '%s' "$out" | jq -e '
+        type == "object"
+        and (.health | type) == "object"
+        and (.health.fail | type) == "array"
+        and (.health.warn | type) == "array"
+        and ((.health.pass == null) or ((.health.pass | type) == "string" and (.health.pass | test("^[a-z][a-z0-9-]*$"))))
+        and ([.health.fail[], .health.warn[]]
+             | all(type == "object"
+                   and (.word | type) == "string" and (.word | test("^[a-z][a-z0-9-]*$"))
+                   and (.detail | type) == "string" and (.remedy | type) == "string"))' >/dev/null 2>&1; then
+    _dr_fail history "status-unreadable: ccrc history status --json exited $rc and printed nothing this check can read as a health report" \
+      "run it by hand to see why: node --no-warnings $cli status; the sweep's own log: $log"
+    return 1
+  fi
+
+  local nitems
+  nitems="$(printf '%s' "$out" | jq -r '(.health.fail | length) + (.health.warn | length)')"
+  if [ "$nitems" -gt 0 ]; then
+    # One field separator that is not IFS whitespace (an empty field stays a
+    # field), and every tab or newline inside a field flattened first — the
+    # contract is "the line after a non-PASS verdict is its remedy".
+    local cls word detail remedy worst=2
+    while IFS=$'\x1f' read -r cls word detail remedy; do
+      case "$cls" in
+        FAIL) _dr_fail history "$word: $detail" "$remedy"; worst=1 ;;
+        *)    _dr_warn history "$word: $detail" "$remedy" ;;
+      esac
+    done < <(printf '%s' "$out" | jq -r '(.health.fail[] | ["FAIL", .word, .detail, .remedy]), (.health.warn[] | ["WARN", .word, .detail, .remedy]) | map(gsub("[\t\n\r]"; " ")) | join("\u001f")')
+    return "$worst"
+  fi
+
+  local sid pass xc reason facts dev
+  sid="$(printf '%s' "$out" | jq -r '.store_id // "none yet"')"
+  dev="$(printf '%s' "$out" | jq -r '.store_device // empty')"
+  pass="$(printf '%s' "$out" | jq -r '.health.pass // empty')"
+  xc="$(printf '%s' "$out" | jq -r '.exit // empty')"
+  reason="$(printf '%s' "$out" | jq -r '.reason // empty')"
+  if [ -z "$pass" ] && [ "$xc" = 9 ]; then
+    _dr_skip history "ccrc history status answers exit 9${reason:+ ($reason)}: this box keeps no history store"
+    return 3
+  fi
+  if [ -z "$pass" ] && [ -n "$xc" ] && [ "$xc" != 0 ]; then
+    _dr_fail history "status-unreadable: ccrc history status --json exited $xc${reason:+ ($reason)} and reported no health verdict" \
+      "run it by hand to see why: node --no-warnings $cli status; the sweep's own log: $log"
+    return 1
+  fi
+  facts="$(printf '%s' "$out" | jq -r '"last tick " + (if (.last_tick_ms | type) == "number" then (((now * 1000 - .last_tick_ms) / 1000 | floor | tostring) + "s ago") else "none yet" end) + ", lag " + (if (.lag | type) == "number" then ((.lag | floor | tostring) + "s") else ((.lag // "unmeasured") | tostring) end)')"
+  _dr_pass history "${pass:+$pass: }store $sid: $facts; $(_dr_history_fs "$dev")"
 }
