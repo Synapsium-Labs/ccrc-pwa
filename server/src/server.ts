@@ -84,7 +84,7 @@ import {
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
-import { archiveInterrupts } from '../../shared/api.js';
+import { ARCHIVE_REFUSALS, archiveInterrupts } from '../../shared/api.js';
 import {
   archiveFlags, archiveOutcome, busyReadFailsClosed, decideArchive, refusedAtStop, stopVerdict, worktreeOf, type ArchiveMeasure,
   type TurnVerdict,
@@ -296,6 +296,9 @@ export interface Deps {
    *  session's own `KeyedQueue` — so a close and a sweep reclaim identically.
    *  A test sets it to assert what the lane asks for without a fleet box. */
   childReclaimExec?: (req: ChildReclaimRequest) => Promise<ChildReclaimOutcome>;
+  /** The process's monotonic clock in ms, read by the child-reclaim sweep lane alone. Unset in production: the lane
+   *  reads `performance.now()`. A test sets it. */
+  monotonicMs?: () => number;
   /** The box token every fleet->server POST must carry (coord/token.ts).
    *  Optional the same way `push`/`notifyLog` are: a box with none configured
    *  keeps working, unauthenticated, and says so once at boot. NOT optional the
@@ -1646,6 +1649,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // It answers with its handle (workspace lifecycle §5.2): the coordination serialiser with the operator abandon inside
   // it, which the archive door below runs its `{programme:'end'}` on.
   const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
+  // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
+  // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
+  // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
+  watcher?.useCoordSerialiser?.(coordRoutes);
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
   // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
@@ -3234,13 +3241,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/archive', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    // A registry that did not LIST is `503 registry-unmeasurable` — never folded into `404 unknown-session`, which is
+    // what `knownId` alone answers for it (workspace lifecycle wave 3b, wave 2's carried follow-up). Asked BEFORE
+    // `knownId`, whose call is left as every other request-id gate's (`routes.test.ts` derives that census).
+    if ((await deps.io.readdir(deps.cfg.registryDir)) === null) {
+      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    }
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const flags = archiveFlags(req.body);
     if (flags === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    // The row itself, `/stop`'s ladder. An unlistable registry has already answered 404 `unknown-session` through
-    // `knownId` above, exactly as before this wave; the `unlistable` arm below can only answer if the registry goes
-    // unreadable between the two reads (503). The identity fields are a separate arm: an unmeasured one is refused
-    // rather than guessed at — the stop argv recomputes a tmux name from them.
+    // The row itself, `/stop`'s ladder. An unlistable registry has already answered 503 above; the `unlistable` arm
+    // below can only answer if the registry goes unreadable between the two reads (503 too). The identity fields are a
+    // separate arm: an unmeasured one is refused rather than guessed at — the stop argv recomputes a tmux name from them.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
     if (!read.found) {
       return reply.code(read.reason === 'unlistable' ? 503 : 404)
@@ -3275,7 +3287,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         abandonRefusal,
         abandon,
       }, id, flags, measure));
-    if (!plan.ok) return reply.code(plan.reply.status).send(plan.reply.body);
+    if (!plan.ok) {
+      // A store this box could not read refuses fail-shut WITH its detail, and the server says so in its log
+      // (workspace lifecycle wave 3b: the base dropped both).
+      const { error, detail } = plan.reply.body;
+      if (typeof detail === 'string'
+          && (error === ARCHIVE_REFUSALS.runOpen || error === ARCHIVE_REFUSALS.coordinatorHasOpenRuns)) {
+        console.warn(`ccrc-server: archive ${id}: the coordination store could not be read (${detail}) — refused fail-shut`);
+      }
+      return reply.code(plan.reply.status).send(plan.reply.body);
+    }
     const endedSpread = plan.ended.length > 0 ? { ended: plan.ended } : {};
     let stopped = false;
     if (plan.stop) {
@@ -3293,7 +3314,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       stopped = true;
     }
     if (archiveArgv === null || !plan.wsArchive) return { ok: true, archived: true, stopped, ended: plan.ended };
-    const out = archiveOutcome(stopped, plan.ended, await deps.runCcd(archiveArgv));
+    const archived = await deps.runCcd(archiveArgv);
+    // REVIEW 240's F1 (workspace lifecycle wave 3b): `ws-archive` answers `already archived <id>` at exit 0 having
+    // stopped NOTHING — a row archived earlier whose pane came back without a spawn path clearing the stamp (a pre-#143
+    // pane). Read as `archived:true` alone, the door said a session was put away that tmux still runs. A pane tmux
+    // PROVES up is stopped here, as the archive's own act would have — but only after the turn is re-read at the act,
+    // fail-closed (`stopVerdictFor`, the rule for a stop nobody agreed to: this branch is never `interrupt`'s, whose
+    // stop has already run), because `ws-archive`'s own fail-closed `_ws_status` is skipped on `already archived` and
+    // the turn the door measured came from the frame's row. Only an `idle` answer stops; a busy or unreadable turn, a
+    // pane gone, or one tmux cannot be asked about, is left as before — archived, not stopped.
+    if (archived.ok && !stopped && /^already archived /m.test(archived.stdout)
+        && (await deps.tmux.sessionVerdict(id)).verdict === 'live'
+        && (await stopVerdictFor(rec, identity.uuid)) === 'idle') {
+      const res = await deps.runCcd(stopArgvFor(id, rec, identity));
+      if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr, ...endedSpread });
+      stopped = true;
+    }
+    const out = archiveOutcome(stopped, plan.ended, archived);
     return reply.code(out.status).send(out.body);
   });
 

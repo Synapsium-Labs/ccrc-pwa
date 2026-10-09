@@ -193,6 +193,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  `ccd-update-sync`, the update-intent puller (programme wave 4), joins on
  *  them again: non-Darwin only, timer-run (fleet role), no marker.
  *
+ *  `ccd-scope-sweep`, the pane-scope sweep (session-continuity wave 4), joins
+ *  on `ccd-tmp-sweep`'s terms: non-Darwin only, timer-run, no marker.
+ *
  *  AND THE CLAUSE ORDER, stated correctly here because three paragraphs above
  *  state it backwards (fix round 2, B4): the scan tests THIS SET FIRST
  *  (`TOOLCHAIN_EXECUTABLES.has(name)`) and the marker only afterwards
@@ -205,7 +208,7 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  happening to stay unmarked, which is the day this entry starts mattering
  *  and the reason it was added ahead of that day. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep', 'ccd-update-sync',
+  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-update-sync', 'ccd-history-sweep',
   // GPT-lane launcher and runtime builder, placed by _inst_bins since Plan 2b-2; ccgpt is not ours (D-3478).
   'ccrc-codex', 'ccgpt-runtime']);
 

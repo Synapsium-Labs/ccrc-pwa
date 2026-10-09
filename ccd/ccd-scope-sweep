@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+# ccd-scope-sweep — report every dead ccd pane scope, and stop only the inert
+# ones (session-continuity spec §5.6 item 2, ruling C11). A oneshot on its own
+# one-minute timer (ccd-scope-sweep.timer) BESIDE ccd-cap-scopes, never inside
+# it: a slow stop or a fault here must never delay capping a new scope.
+#
+# WHY. Every ccd pane runs in its own transient `tmux-spawn-<uuid>.scope` under
+# the session slice, and its processes stay there after the pane is gone — a
+# test server, a probe, a watcher a session started and forgot. Measured on
+# 2026-09-23: 12 scopes whose pane was gone, holding 32 processes and 1.32 GB,
+# among them a DynamoDB Local server 27 days old. Nothing collected any of it.
+#
+# WHAT IT READS — ONLY pane scopes, and only ccd's:
+#   * the `tmux-spawn-*.scope` units `systemctl --user list-units` names, each
+#     name checked again here (a list that ever returned another unit — ccd's
+#     own `ccrc-tmux-server.scope` sits in the same slice — must not reach the
+#     rest), whose `Slice` is the session slice and whose `Description` parses
+#     as `tmux child pane <pid> launched by process <pid>`. A scope in another
+#     slice is outside the sweep: never recorded, never stopped. A `show` that
+#     answers no Slice at all, or a Description that does not parse, is
+#     UNMEASURABLE.
+#   * every value from `systemctl --user show` (`ControlGroup`, `CPUUsageNSec`,
+#     `MemoryCurrent`, `ActiveEnterTimestampMonotonic`) — the cgroup path is
+#     ASKED FOR, never built from a string: building it is what left
+#     ccd-cap-scopes capping nothing for 13 days (that script's own header). A
+#     ControlGroup that does not end in the unit's own name is unmeasurable.
+#   * the scope's `cgroup.procs`, and /proc for each process: its start, its
+#     parent, its network namespace, its open sockets.
+#
+# DEAD, AND CCD'S. A scope is DEAD when none of its processes is a live pane of
+# the tmux server its Description names. It is CCD'S when that server is ccd's
+# current one (the server `tmux list-panes -a` on the default socket answers
+# from) or a tmux server that no longer runs — checked by pid, by `comm` (`tmux:
+# server`) and by a start EARLIER than the scope's, so a recycled pid never
+# passes for the server that launched the pane. A scope of any OTHER live tmux
+# server is never touched and never recorded (its panes are not ccd's to ask
+# about). A server pid that now names another process, or a process that
+# started after the scope, is `server-pid-reused`: the scope is reported, never
+# stopped. When tmux answers nothing (no server, a deleted socket, a timeout),
+# a scope whose server still RUNS cannot be judged either way: unmeasurable.
+#
+# THE STOP — every predicate, in order (spec §5.6):
+#   1. first seen dead at least SCOPE_SWEEP_DEAD_SEC (six hours) ago;
+#   2. its CPUUsageNSec has not moved since it was first seen dead;
+#   3. no process in it started in the last six hours;
+#   4. no process in it holds a TCP or UDP socket, or a LISTENING Unix socket —
+#      read from this sweep's own /proc/net tables, so a process in ANOTHER
+#      network namespace (a sandbox's) is unmeasurable, never "no socket";
+#   5. no process in it is the parent of a process in another cgroup — read
+#      over every process on the box, so one whose stat cannot be read while it
+#      still exists makes this predicate unmeasurable;
+#   6. no live handoff record names one of its processes — Claude Code's native
+#      adopt record, if the stage-2 spike makes native handoff primary. None
+#      exists before stage 3 (the stage-3 launch record carries run and agent
+#      ids, never a pid), so this predicate is satisfied by construction and has
+#      no code until then;
+#   7. `$REG/scope-sweep-paused` is absent — checked first of all: a paused
+#      sweep does NOTHING, shadow verdicts and the record included.
+#   A scope whose cgroup holds ANY child cgroup is unmeasurable too: `systemctl
+#   stop` kills the whole cgroup SUBTREE, the scope's directory is writable by
+#   the processes in it (`mkdir` and move itself in), and every predicate above
+#   reads `cgroup.procs` of the scope ITSELF — a listening server in a child
+#   cgroup is seen by none of them. Fail closed, never walk-and-proceed
+#   (scope-sweep-child-cgroups-are-unmeasurable). Likewise a record's `first=`/`cpu0=` outside the bounds this
+#   sweep writes (first: 1-16 digits, no leading zero; cpu0: 0 or 1-20 digits)
+#   is not believed — a past-2^64 value wraps in bash arithmetic and a leading
+#   zero aborts it — so the clock starts now, as for an absent line; a
+#   Description's pids must be positive without a leading zero; a socket fd
+#   that still exists but cannot be read makes the socket count unmeasurable;
+#   and a parent chain walked more than SCOPE_SWEEP_MAX_HOPS hops (a recycled
+#   pid can make a cycle) makes the scope unmeasurable, never "not elsewhere".
+# A predicate it cannot measure (a value systemd does not report, a cgroup, a
+# /proc entry or a /proc/net table it cannot read) SKIPS that scope for the tick
+# and records nothing new: the scope's previous verdict line is carried
+# unchanged, and the other scopes are judged as usual. A scope seen LIVE drops
+# its entry, so its clock starts again from zero the next time it dies. THE
+# EXCEPTION: a scope carried for a child cgroup (it is checked before liveness
+# is decided) or for the parent-walk hop cap keeps its line even when it is
+# live, and gets no `old` listing; a scope with a child cgroup is never stopped.
+#
+# THE CLOCK is boot-relative: `first=` is /proc/uptime's seconds when the scope
+# was first seen dead, so a wall-clock step (NTP, a manual `date`) moves no
+# stop. A carried `first=` earlier than the scope's own start or later than now
+# is not believed: the scope is first seen now. A reboot empties
+# $XDG_RUNTIME_DIR (a tmpfs) and with it every clock — the safe direction.
+#
+# SHADOWED (wave 4's safety ruling). A scope that passes every predicate is
+# recorded `would-stop`, and `systemctl --user stop --no-block` is issued ONLY
+# when `$REG/scope-sweep-live` exists. NOTHING IN THIS TREE WRITES THAT FILE —
+# the operator arms the stop by hand, as with stall-watch-live, and
+# `single-definition.test.ts` pins that no line of shell other than this file's
+# one read names it. Armed, at most SCOPE_SWEEP_MAX_STOPS scopes are stopped in
+# one tick; an inert scope past that budget is recorded `held` and waits for
+# the next tick, so a misjudgment the shadow week missed costs three scopes a
+# minute, not every scope at once.
+#
+# THE VERDICT RECORD, `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten whole
+# by rename every tick: a header `# ccd-scope-sweep v1 tick=<epoch> up=<s>
+# mode=<shadow|live>`, one `dead` line per dead ccd scope (first seen, CPU
+# then, verdict, why, server, processes, memory, sockets, youngest and oldest
+# process, the scope's own age, pids), and one `old` line per process older
+# than a day in a LIVE pane scope that is neither the pane's own process nor
+# one of its Claude Code's MCP servers (a direct child of the pane's process
+# started within SCOPE_SWEEP_MCP_SEC of it, and that child's descendants).
+# `ccrc doctor` READS this record and never re-derives it.
+#
+# OUTPUT. Silent on an ordinary tick; one line when a scope is first seen dead,
+# first reaches `would-stop` or `held`, or is stopped. Refusals go to stderr,
+# exit 1.
+#
+# FIXTURE SEAMS, the doctor's own names: CCRC_PROC_ROOT (default /proc) and
+# CCRC_CGROUP_ROOT (default /sys/fs/cgroup); `systemctl` and `tmux` are found
+# on PATH, so a test stubs both. No knob shortens the six hours.
+#
+# PORTABILITY. Linux-only by product shape — its only runner is a systemd
+# timer, which `_inst_units`' Darwin arm never installs — but written to pass
+# macos-platform.test.ts's GNU-spelling scan, and to run against a fixture root
+# on any platform: no `stat -c`, no `date -d`, no bare `timeout`, no flock (a
+# oneshot unit never runs twice at once; a manual run beside the timer can only
+# issue a stop twice, which systemd treats as one, and the record lands by rename).
+# A wedged tmux server would hold the `list-panes` below: the unit's
+# TimeoutStartSec is the deadline.
+set -uo pipefail
+
+REG="$HOME/.cc-sessions"
+PAUSE="$REG/scope-sweep-paused"
+PROC="${CCRC_PROC_ROOT:-/proc}"
+CGROOT="${CCRC_CGROUP_ROOT:-/sys/fs/cgroup}"
+SLICE='app-claude\x2dsession.slice'
+SCOPE_SWEEP_DEAD_SEC=21600    # six hours: first seen dead -> the earliest stop, and the youngest process a stop allows
+SCOPE_SWEEP_OLD_SEC=86400     # a process older than a day in a LIVE pane scope is listed for doctor
+SCOPE_SWEEP_MCP_SEC=120       # a direct child of the pane's Claude Code started this soon after it is one of its MCP servers
+SCOPE_SWEEP_MAX_STOPS=3       # armed: the most scopes one tick stops; the rest are `held` for the next
+SCOPE_SWEEP_MAX_HOPS=64       # the parent-chain walk's cap: past it the scope is unmeasurable (a pid-reuse cycle)
+DESC_RE='^tmux child pane ([1-9][0-9]*) launched by process ([1-9][0-9]*)$'
+
+_ss_die() { echo "scope-sweep: $*" >&2; exit 1; }
+
+[ -e "$PAUSE" ] && { echo "scope-sweep: paused ($PAUSE exists) — nothing measured, nothing recorded, nothing stopped"; exit 0; }
+[ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] \
+  || _ss_die "no-runtime-dir: \$XDG_RUNTIME_DIR is unset or not a directory, so there is nowhere to keep the verdict record and no clock can run — nothing stopped"
+STATE="$XDG_RUNTIME_DIR/ccd-scope-sweep.state"
+read -r UP _ < "$PROC/uptime" 2>/dev/null || _ss_die "no-proc: $PROC/uptime is not readable, so no process can be dated"
+UP="${UP%%.*}"
+[[ "$UP" =~ ^[0-9]+$ ]] || _ss_die "no-proc: $PROC/uptime does not read as seconds"
+TCK=$(getconf CLK_TCK 2>/dev/null) || TCK=100
+[[ "$TCK" =~ ^[1-9][0-9]*$ ]] || TCK=100
+NOW=$(date +%s)
+NETNS=$(readlink "$PROC/self/ns/net" 2>/dev/null) || NETNS=""   # this sweep's own network namespace: the one its /proc/net tables describe
+MODE=shadow
+# The ONE read of the arming file, here and nowhere else in the tree (single-definition.test.ts).
+[ -e "$REG/scope-sweep-live" ] && MODE=live
+
+# ── the previous record: first-seen clocks, the CPU then, lines to carry ─────
+declare -A FIRST=() CPU0=() PREV=() PREVV=()
+if [ -r "$STATE" ]; then
+  while IFS= read -r line; do
+    [[ "$line" =~ ^dead\ (tmux-spawn-[^ ]+\.scope)\ first=([1-9][0-9]{0,15})\ cpu0=(0|[1-9][0-9]{0,19})\ verdict=([a-z-]+) ]] || continue
+    FIRST[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}; CPU0[${BASH_REMATCH[1]}]=${BASH_REMATCH[3]}
+    PREVV[${BASH_REMATCH[1]}]=${BASH_REMATCH[4]}; PREV[${BASH_REMATCH[1]}]="$line"
+  done < "$STATE"
+fi
+
+# ── /proc readers: a process's start (ticks since boot), its age, its parent ──
+declare -A TICKS=() PARENT=()
+_ss_stat() {   # pid -> TICKS[pid], PARENT[pid]; rc 1 unreadable. Fork-free: it runs per process per tick.
+  local s rest
+  local -a f
+  [[ -n "${TICKS[$1]+x}" ]] && return 0
+  { s=$(<"$PROC/$1/stat"); } 2>/dev/null || return 1
+  rest="${s##*) }"                       # past `pid (comm) `: a comm may hold spaces and parentheses
+  read -r -a f <<<"$rest"
+  [[ "${f[1]:-}" =~ ^[0-9]+$ && "${f[19]:-}" =~ ^[0-9]+$ ]] || return 1
+  PARENT[$1]=${f[1]}; TICKS[$1]=${f[19]}
+  return 0
+}
+_ss_age() {                                              # seconds; the caller ran _ss_stat. A process forked after this tick's
+  local a=$(( UP - TICKS[$1] / TCK ))                     # /proc/uptime read starts "in the future": clamp at 0, because the doctor's
+  (( a < 0 )) && a=0                                      # reader takes only non-negative ages and a -1 would also read as youngest's "none yet"
+  echo "$a"
+}
+_ss_comm() { local c; { IFS= read -r c < "$PROC/$1/comm"; } 2>/dev/null || return 1; printf '%s' "$c"; }
+
+# ── ccd's tmux server and its live panes ──────────────────────────────────────
+# Any failure (no server, a deleted socket, no tmux) leaves SERVER empty: then a
+# scope whose server still runs cannot be told ccd's or another server's, and is
+# skipped as unmeasurable; only the scopes of a server that no longer runs are
+# judged — the safe direction for every reading.
+SERVER=""
+declare -A PANE=()
+if out=$(tmux list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); then
+  while read -r spid ppid; do
+    [[ "$spid" =~ ^[0-9]+$ && "$ppid" =~ ^[0-9]+$ ]] || continue
+    SERVER=$spid; PANE[$ppid]=1
+  done <<<"$out"
+fi
+
+# ── sockets, read once and only when some scope is dead and ccd's ─────────────
+declare -A INET=() LISTEN=()
+SOCKS_READ=0
+_ss_sockets() {   # rc 1 unmeasurable
+  local f ino flags
+  local -a a
+  (( SOCKS_READ )) && return 0
+  for f in tcp tcp6 udp udp6; do
+    [ -r "$PROC/net/$f" ] || return 1
+    while read -r -a a; do [[ "${a[9]:-}" =~ ^[0-9]+$ ]] && INET[${a[9]}]=1; done < "$PROC/net/$f"
+  done
+  [ -r "$PROC/net/unix" ] || return 1
+  while read -r _ _ _ flags _ _ ino _; do   # Num RefCount Protocol Flags Type St Inode Path
+    [[ "$ino" =~ ^[0-9]+$ && "$flags" =~ ^[0-9A-Fa-f]+$ ]] || continue
+    (( (16#$flags & 0x10000) != 0 )) && LISTEN[$ino]=1    # __SO_ACCEPTCON: a LISTENING Unix socket
+  done < "$PROC/net/unix"
+  SOCKS_READ=1
+}
+_ss_socket_count() {   # pid... -> the TCP/UDP and listening Unix sockets they hold; rc 1 unmeasurable
+  local p fd t n=0
+  for p in "$@"; do
+    # A process in another network namespace holds sockets these tables do not list: unmeasurable, never "none".
+    t=$(readlink "$PROC/$p/ns/net" 2>/dev/null) && [[ "$t" == "$NETNS" ]] || return 1
+    [ -d "$PROC/$p/fd" ] && [ -r "$PROC/$p/fd" ] && [ -x "$PROC/$p/fd" ] || return 1
+    for fd in "$PROC/$p/fd"/*; do
+      t=$(readlink "$fd" 2>/dev/null) || { [ -L "$fd" ] && return 1; continue; }   # one that still exists but cannot be read is unmeasurable; one that closed mid-tick is skipped
+      [[ "$t" =~ ^socket:\[([0-9]+)\]$ ]] || continue
+      [[ -n "${INET[${BASH_REMATCH[1]}]+x}" || -n "${LISTEN[${BASH_REMATCH[1]}]+x}" ]] && n=$((n + 1))
+    done
+  done
+  printf '%s' "$n"
+}
+
+# ── every process on the box and its parent, read once for predicate 5 ───────
+BOX_READ=0 BOX_BAD=0
+_ss_box() {   # rc 1 unmeasurable: a process that still exists but whose stat cannot be read
+  local d
+  if (( ! BOX_READ )); then
+    for d in "$PROC"/[0-9]*; do _ss_stat "${d##*/}" || { [ -e "$d" ] && BOX_BAD=1; }; done
+    BOX_READ=1
+  fi
+  (( ! BOX_BAD ))
+}
+
+# ── the scopes ────────────────────────────────────────────────────────────────
+units=$(systemctl --user list-units --no-legend --plain 'tmux-spawn-*.scope' 2>/dev/null) \
+  || _ss_die "systemctl --user list-units did not answer, so no pane scope can be listed"
+OUT=() SAID=()
+STOPS=0
+declare -A P=() MINE=()
+_ss_carry() { [[ -n "${PREV[$u]+x}" ]] && OUT+=("${PREV[$u]}"); return 0; }   # unmeasurable: the old line, unchanged
+while read -r u _; do
+  [[ "$u" == tmux-spawn-*.scope ]] || continue        # ONLY pane scopes: ccrc-tmux-server.scope never passes
+  P=()
+  while IFS='=' read -r k v; do [[ -n "$k" ]] && P[$k]="$v"; done < <(systemctl --user show "$u" -p Id -p Slice \
+    -p Description -p ControlGroup -p CPUUsageNSec -p MemoryCurrent -p ActiveEnterTimestampMonotonic 2>/dev/null)
+  [[ -n "${P[Slice]:-}" ]] || { _ss_carry; continue; }  # `show` failed or the unit vanished: unmeasurable
+  [[ "${P[Slice]}" == "$SLICE" ]] || continue           # outside the session slice: not the sweep's
+  [[ "${P[Description]:-}" =~ $DESC_RE ]] || { _ss_carry; continue; }   # a Description that does not parse: unmeasurable
+  pane=${BASH_REMATCH[1]} server=${BASH_REMATCH[2]}
+  cg="${P[ControlGroup]:-}" cpu="${P[CPUUsageNSec]:-}" mono="${P[ActiveEnterTimestampMonotonic]:-}"
+  mem="${P[MemoryCurrent]:-}"; [[ "$mem" =~ ^[0-9]+$ ]] || mem='?'
+  [[ "$cg" == /*"/$u" ]] || { _ss_carry; continue; }   # the cgroup systemd names for THIS unit, or nothing is read
+  [[ "$cpu" =~ ^[0-9]+$ ]] || { _ss_carry; continue; }
+  [[ "$mono" =~ ^[1-9][0-9]*$ ]] || { _ss_carry; continue; }
+  procs=()
+  { mapfile -t procs < "$CGROOT$cg/cgroup.procs"; } 2>/dev/null || { _ss_carry; continue; }
+  (( ${#procs[@]} )) || { _ss_carry; continue; }
+  # A child cgroup (any child directory, dotfiles included) holds processes none of the predicates read: unmeasurable.
+  [ -r "$CGROOT$cg" ] && [ -x "$CGROOT$cg" ] || { _ss_carry; continue; }
+  kids=0; shopt -s dotglob nullglob
+  for d in "$CGROOT$cg"/*; do [ -d "$d" ] && { kids=1; break; }; done
+  shopt -u dotglob nullglob
+  (( kids == 0 )) || { _ss_carry; continue; }
+  # WHOSE SERVER: by pid, comm, and a start EARLIER than the scope's. THE TWO CLOCKS DIFFER: the server's start is /proc
+  # starttime in ticks since boot (CLOCK_BOOTTIME, which counts suspended time), the scope's `mono` is systemd's
+  # ActiveEnterTimestampMonotonic (CLOCK_MONOTONIC, which does not). After a suspend an OLDER server can therefore read as
+  # `reused`: reported, never stopped, so it fails safe. On a box that suspends, suspended time also counts toward the
+  # six-hour clock and the youngest-process age below, both boot-relative; the other predicates (CPU unmoved, sockets,
+  # elsewhere) still hold. The fleet host does not suspend.
+  if [[ ! -e "$PROC/$server" ]]; then state=gone
+  else
+    _ss_stat "$server" || { _ss_carry; continue; }
+    comm=$(_ss_comm "$server") || { _ss_carry; continue; }
+    if [[ "$comm" != "tmux: server" ]] || (( TICKS[$server] * (1000000 / TCK) >= mono )); then state=reused
+    elif [[ "$server" == "$SERVER" ]]; then state=ccd
+    elif [[ -z "$SERVER" ]]; then _ss_carry; continue   # tmux answered nothing: ccd's server or another's, it cannot say
+    else continue                                       # another LIVE tmux server's pane: never touched, never recorded
+    fi
+  fi
+  live=0
+  if [[ "$state" == ccd ]]; then for p in "${procs[@]}"; do [[ -n "${PANE[$p]+x}" ]] && live=1; done; fi
+  if (( live )); then
+    # LIVE: its dead entry drops. Doctor's listing: every process older than a day
+    # but the pane's own and its Claude Code's MCP servers (a direct child of the
+    # pane started within SCOPE_SWEEP_MCP_SEC of it, and that child's descendants).
+    _ss_stat "$pane" || :
+    olds=() capped=0
+    for p in "${procs[@]}"; do
+      [[ "$p" == "$pane" ]] && continue
+      _ss_stat "$p" || continue
+      x=$p mcp=0 hops=0
+      while _ss_stat "$x"; do
+        (( ++hops > SCOPE_SWEEP_MAX_HOPS )) && { capped=1; break; }
+        if [[ "${PARENT[$x]}" == "$pane" ]]; then
+          [[ -n "${TICKS[$pane]+x}" ]] && (( (TICKS[$x] - TICKS[$pane]) / TCK <= SCOPE_SWEEP_MCP_SEC )) && mcp=1
+          break
+        fi
+        [[ "${PARENT[$x]}" =~ ^[1-9][0-9]*$ && "${PARENT[$x]}" != "$x" ]] || break
+        x=${PARENT[$x]}
+      done
+      (( mcp )) && continue
+      age=$(_ss_age "$p")
+      (( age >= SCOPE_SWEEP_OLD_SEC )) || continue
+      c=$(_ss_comm "$p") || c='?'
+      olds+=("old $u pid=$p age=$age comm=${c// /_}")
+    done
+    if (( capped )); then _ss_carry; elif (( ${#olds[@]} )); then OUT+=("${olds[@]}"); fi   # a chain it could not walk lists nothing
+    continue
+  fi
+  # DEAD. Every predicate measured; any one that cannot be carries the old line.
+  youngest=-1 oldest=-1
+  for p in "${procs[@]}"; do
+    _ss_stat "$p" || continue   # unreadable: one that still exists makes _ss_box below unmeasurable, one that has gone has no ns/net to read
+    a=$(_ss_age "$p"); (( youngest < 0 || a < youngest )) && youngest=$a; (( a > oldest )) && oldest=$a
+  done
+  _ss_sockets || { _ss_carry; continue; }
+  socks=$(_ss_socket_count "${procs[@]}") || { _ss_carry; continue; }
+  _ss_box || { _ss_carry; continue; }
+  MINE=(); for p in "${procs[@]}"; do MINE[$p]=1; done
+  elsewhere=0
+  for q in "${!PARENT[@]}"; do   # a child of one of its processes that its cgroup.procs does not hold lives in another cgroup
+    [[ -n "${MINE[${PARENT[$q]}]+x}" && -z "${MINE[$q]+x}" ]] && elsewhere=1
+  done
+  born=$(( mono / 1000000 ))     # the scope's own start, seconds on the MONOTONIC clock (see WHOSE SERVER above); UP is BOOTTIME, so after a suspend born/sage skew, failing safe
+  sage=$(( UP - born )); (( sage < 0 )) && sage=0   # a scope started after this tick's uptime read: 0, never a negative the doctor cannot read
+  first=${FIRST[$u]:-} cpu0=${CPU0[$u]:-}
+  if [[ -z "$first" ]] || (( first < born || first > UP )); then first=$UP cpu0=$cpu; fi   # a clock it cannot believe starts now
+  why=()
+  if [[ "$state" == reused ]]; then why+=(server-pid-reused)
+  else
+    (( UP - first >= SCOPE_SWEEP_DEAD_SEC )) || why+=(dead-under-6h)
+    [[ "$cpu" == "$cpu0" ]] || why+=(cpu-moved)
+    (( youngest >= SCOPE_SWEEP_DEAD_SEC )) || why+=(process-started-under-6h)
+    (( socks == 0 )) || why+=(socket)
+    (( elsewhere == 0 )) || why+=(parent-of-a-process-elsewhere)
+  fi
+  if (( ${#why[@]} )); then verdict=report
+  elif [[ "$MODE" != live ]]; then verdict=would-stop
+  elif (( STOPS >= SCOPE_SWEEP_MAX_STOPS )); then verdict=held
+  else
+    STOPS=$((STOPS + 1))
+    if systemctl --user stop --no-block "$u" 2>/dev/null; then verdict=stopped; else verdict=stop-failed; fi
+  fi
+  w="${why[*]:-none}" pl="${procs[*]}"
+  OUT+=("dead $u first=$first cpu0=$cpu0 verdict=$verdict why=${w// /,} server=$state procs=${#procs[@]} mem=$mem sockets=$socks youngest=$youngest oldest=$oldest age=$sage pids=${pl// /,}")
+  if [[ -z "${PREV[$u]+x}" ]]; then SAID+=("scope-sweep: $u is dead, its server $state, ${#procs[@]} process(es): first seen now")
+  elif [[ "$verdict" != report && "$verdict" != "${PREVV[$u]:-}" ]]; then SAID+=("scope-sweep: $u $verdict — dead $(( (UP - first) / 60 )) min, ${#procs[@]} process(es), its CPU unmoved, no socket, nothing elsewhere")
+  fi
+done <<<"$units"
+
+tmp=$(mktemp "$STATE.XXXXXX") || _ss_die "cannot write beside $STATE"
+{ echo "# ccd-scope-sweep v1 tick=$NOW up=$UP mode=$MODE"; (( ${#OUT[@]} )) && printf '%s\n' "${OUT[@]}"; } > "$tmp"
+mv -f "$tmp" "$STATE" || { rm -f "$tmp"; _ss_die "cannot write $STATE"; }
+(( ${#SAID[@]} )) && printf '%s\n' "${SAID[@]}"
+exit 0

@@ -11,6 +11,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -544,7 +545,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   ghContainedEnv(home, {}, { systemd: true, tmux: true });
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
-    ...process.env, HOME: home,
+    ...inheritedEnv(), HOME: home,
     GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
     GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
   });
@@ -557,8 +558,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   const makeRepoAt = (name: string): string => {
     const origin = path.join(home, 'origins', `${name}.git`);
     const main = path.join(home, 'projects', name);
-    execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
-    execFileSync('git', ['init', '-b', 'main', main]);
+    execFileSync('git', ['init', '--bare', '-b', 'main', origin], { env: inheritedEnv() });
+    execFileSync('git', ['init', '-b', 'main', main], { env: inheritedEnv() });
     fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
     git(main, 'add', 'README.md');
     git(main, 'commit', '-m', 'init');
@@ -583,7 +584,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
         { encoding: 'utf8', cwd: home,
-          env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
+          env: ghContainedEnv(home, { ...inheritedEnv(), HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
@@ -633,3 +634,14 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     cleanup: () => { fs.rmSync(home, { recursive: true, force: true }); },
   };
 }
+
+/** A shell prefix that runs `<secs> <argv…>` under a cross-platform alarm and, on
+ *  the alarm, kills the child's WHOLE process group, reaps it and exits 142 (the
+ *  old form's code); otherwise it exits as the child did. Perl is on both
+ *  supported userlands. The old `perl -e 'alarm shift; exec @ARGV'` BECAME the
+ *  child, so the alarm signalled bash alone and a `tail` bash had forked —
+ *  blocked opening a FIFO whenever a mutation removed a detector's guard —
+ *  outlived every timed-out run; the fleet box's dead pane scopes held such
+ *  processes for weeks (session-continuity spec §1.3, §5.6 item 3). perl now
+ *  forks the child into a process group of its own and kills that group. */
+export const BOUNDED = `perl -e '$t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;

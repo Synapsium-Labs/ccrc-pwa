@@ -153,6 +153,8 @@ function doctorEnv(home: string): NodeJS.ProcessEnv {
     PATH: containedPath(home),
     LC_ALL: 'C',
     CCRC_DOCTOR_GH_TIMEOUT: '5',
+    // `_check_scope-sweep` reads a verdict record from the runtime dir: pointed inside the fixture (absent), it SKIPs — a test never reads a real box's.
+    CCRC_SCOPE_SWEEP_STATE: join(home, 'fixture-scope-sweep.state'),
   };
 }
 

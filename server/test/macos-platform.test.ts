@@ -327,6 +327,9 @@ describe('the Linux arms are the original GNU commands', () => {
     // D-3524's ctime, the one timestamp a credential restore cannot backdate.
     // New rather than ported, so the row binds the NAME as well as the arm.
     ['_plat_ctime', /^_plat_ctime\(\) \{ if \[ "\$CCD_OS" = darwin \]; then stat -f %c "\$@"; else stat -c %Z "\$@"; fi; \}/m],
+    // The temp-root witness's birth time (child-reclamation wave 6). New rather
+    // than ported, so the row binds the NAME as well as the arm.
+    ['_plat_btime', /^_plat_btime\(\) \{ if \[ "\$CCD_OS" = darwin \]; then stat -f %B "\$@"; else stat -c %W "\$@"; fi; \}/m],
     ['_plat_bytes', /du -sb "\$1" \| head -n1 \| cut -f1/],
     ['_svc_run_detached', /systemd-run --user --collect --quiet "\$@"/],
     ['_svc_have_user_manager', /command -v systemd-run >\/dev\/null 2>&1 && systemctl --user show-environment >\/dev\/null 2>&1/],

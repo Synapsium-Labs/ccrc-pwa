@@ -2204,6 +2204,26 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  itLinux('ccd-scope-sweep lands beside it too (the pane-scope sweep) — every role, but not Darwin', () => {
+    // Mirrors the reaper's case above: its only runner is a systemd timer and it
+    // reads /proc and cgroups. Its UNIT and ENABLE are role-gated (server skips both).
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-scope-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-scope-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  itLinux('ccd-history-sweep lands too (history spec §9.5) — the one sweep shim role-gated off server boxes', () => {
+    // `_inst_bins` places it behind a one-line `[ "$INST_ROLE" = server ] ||`
+    // test: doctor and the CLI read its presence as "this box can hold a
+    // store". This install is role `both`, so it lands; the `--role server`
+    // case pins its absence, the fleet describe its presence there.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -4182,6 +4202,13 @@ const UNIT_FILES: Array<[string, string]> = [
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
   ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
+  // history spec 2026-10-05 §9.5: the history sweep's pair, ROLE-GATED `!= server`
+  // for its own reason — a server box hosts no sessions, so it keeps no store.
+  ['ccd-history-sweep.service', 'deploy/systemd/ccd-history-sweep.service'],
+  ['ccd-history-sweep.timer', 'deploy/systemd/ccd-history-sweep.timer'],
+  // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
+  ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
+  ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
   // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
   // OTHER way round from the pairs above: `_inst_units` places it on `server`
   // and `both` (this list's role) and never on `fleet`, whose node the
@@ -4485,6 +4512,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // The temp-dir reaper's timer, on the same gate and the same
       // degrade-rather-than-die idiom as the two sweeps above it.
       '--user enable --now ccd-tmp-sweep.timer',
+      '--user enable --now ccd-scope-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
@@ -4492,6 +4520,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // C5: a FIFTH enable, role-gated on the same terms and degrading the
       // same way — a server box has no lanes for this timer to refresh.
       '--user enable --now ccrc-models.timer',
+      // history spec §9.5: the history sweep's timer, on its unit files' gate,
+      // degrading rather than dying like every timer in this list.
+      '--user enable --now ccd-history-sweep.timer',
       // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
@@ -4996,8 +5027,9 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // `ccd-update-sync` joins on the same terms, and this set is the
         // mutation site for its line too (spec §18 "the puller is installed
         // where its timer looks").
-        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
+        // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
+        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
+           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
@@ -5325,6 +5357,11 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
+    // …and `history` (spec 2026-10-05 §9.6) is among the checks that PASSed, on its grace word: the shim landed
+    // seconds ago and no sweep has ticked. A WARN there would turn every fresh install yellow again
+    // (D-4168). macOS places no shim, so the check SKIPs there.
+    if (process.platform === 'darwin') expect(r.stdout).toMatch(/^SKIP history: /m);
+    else expect(r.stdout).toMatch(/^PASS history: first-tick-pending: /m);
   });
 
   it('writes ~/.ccrc/installed LAST, naming the stamped sha — and a spine that dies before its end leaves none', () => {
@@ -6045,6 +6082,10 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccrc-models.timer');
     // Fleet is the role that runs sessions, so the temp-dir reaper arms here.
     expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
+    // and the pane-scope sweep, on the reaper's gate.
+    expect(argv).toContain('--user enable --now ccd-scope-sweep.timer');
+    // history spec §9.5: fleet is not server, so the history sweep's timer arms here.
+    expect(argv).toContain('--user enable --now ccd-history-sweep.timer');
     // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
     // — the role whose install wrote the `~/.ccrc/agent.env` the binary
     // refuses without. `--role both` and `--role server` below assert the
@@ -6063,6 +6104,15 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv.join('\n')).not.toContain('ccrc-update-watchdog');
     expect(r.stdout).toContain(
       'install: services: ccrc-agent.service and ccd-cap-scopes.timer enabled, and ccrc-agent.service restarted onto the tree this run placed');
+  });
+
+  itLinux('places the history sweep\'s shim, and the closing line names it — a fleet box hosts sessions (history spec §9.5)', async () => {
+    const { home, r } = await fleet();
+    const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
+    expect(existsSync(bin), '--role fleet did not place ccd-history-sweep').toBe(true);
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
+    expect(statSync(bin).mode & 0o777).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccd-history-sweep(?![\w-])/m);
   });
 
   it('skips the server-only landing lines — no PWA address, no passphrase gate', async () => {
@@ -6142,9 +6192,11 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-tmp-sweep.timer',
+      '--user enable --now ccd-scope-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
+      '--user enable --now ccd-history-sweep.timer',
       // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
@@ -6172,7 +6224,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -6190,6 +6242,15 @@ describe('ccrc install --role: the refusals and the default', () => {
     // The temp-dir reaper: a server box runs no sessions, so no temp dir to reap.
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.timer'))).toBe(false);
+    // The pane-scope sweep: a server box runs no pane scopes.
+    expect(existsSync(unitDir(home, 'ccd-scope-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-scope-sweep.timer'))).toBe(false);
+    // history spec §9.5: no shim, no unit pair and no enable on a server box —
+    // it hosts no sessions and must never hold a store D-4183.
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-history-sweep')), '--role server placed ccd-history-sweep').toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-history-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-history-sweep.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-history-sweep');
     // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
     // NARROWER gate than the four pairs above it. Those are `!= server`;
     // this one is `= fleet`, because `both` gets no agent.env either. A
@@ -6211,6 +6272,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-codex-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-scope-sweep');
     // W4a Task 9: the watchdog is the SERVER's — its pair landed through the
     // UNIT_FILES loop above (not skipped there), and its timer is enabled.
     expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user enable --now ccrc-update-watchdog.timer');
@@ -6224,6 +6286,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     const bins = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
     expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
     expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
+    expect(bins!, 'the server-role closing line names a history shim it never placed').not.toContain('ccd-history-sweep');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
@@ -8198,7 +8261,23 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  `origin/main` into native Docs W1, when doctor gained its `docs` check, by the same
  *  case on a disposable copy of the merged tree: the three maps each gained
  *  `"docs": "PASS"` and nothing else moved (`codex: SKIP`, which the measurement
- *  also prints, stays out: the live cases spread it over this golden). It is a golden: nothing re-measures
+ *  also prints, stays out: the live cases spread it over this golden). RE-MEASURED
+ *  again when doctor gained its `model-default` check, the same way, on a disposable
+ *  `git archive` copy of `36438851d`'s tree (the commit that added the check,
+ *  on `b3b5a73ed`): the three maps each gained `"model-default": "PASS"` and
+ *  nothing else moved. RE-MEASURED once more on that branch's merge of
+ *  `origin/main` (`b27fabc15`), which carries both checks, by the same case on a
+ *  disposable `git archive` copy of the merged tree (`git write-tree` of the
+ *  resolved index): exactly `origin/main`'s three maps plus `"model-default":
+ *  "PASS"` in each — both codes 0, both refreshes equal, `codex` `SKIP` in all
+ *  three. RE-MEASURED once more when doctor gained `scope-sweep` (session-continuity
+ *  wave 4): the three maps each gained `"scope-sweep": "SKIP"` (the fixture's
+ *  runtime dir holds no verdict record) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `history` check (spec 2026-10-05
+ *  §9.6): the three maps each gained `"history": "PASS"` (`first-tick-pending`:
+ *  the shim landed seconds before, and no sweep has ticked) and nothing else
+ *  moved.
+ *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
  *  base, never hand-edited (it held on the final fix wave's merge of
@@ -8234,9 +8313,12 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "git_email": "PASS",
         "graphify": "PASS",
         "graphify-path": "PASS",
+        "history": "PASS",
         "jq": "PASS",
+        "jq_regex": "PASS",
         "linger": "PASS",
         "memory": "PASS",
+        "model-default": "PASS",
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
@@ -8247,6 +8329,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "python3": "PASS",
         "rc": "PASS",
         "routing": "PASS",
+        "scope-sweep": "SKIP",
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
@@ -8280,9 +8363,12 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "git_email": "PASS",
         "graphify": "PASS",
         "graphify-path": "PASS",
+        "history": "PASS",
         "jq": "PASS",
+        "jq_regex": "PASS",
         "linger": "PASS",
         "memory": "PASS",
+        "model-default": "PASS",
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
@@ -8293,6 +8379,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "python3": "PASS",
         "rc": "PASS",
         "routing": "PASS",
+        "scope-sweep": "SKIP",
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
@@ -8396,9 +8483,12 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "git_email": "PASS",
       "graphify": "PASS",
       "graphify-path": "PASS",
+      "history": "PASS",
       "jq": "PASS",
+      "jq_regex": "PASS",
       "linger": "PASS",
       "memory": "PASS",
+      "model-default": "PASS",
       "models": "PASS",
       "name": "SKIP",
       "node": "PASS",
@@ -8409,6 +8499,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "python3": "PASS",
       "rc": "PASS",
       "routing": "PASS",
+      "scope-sweep": "SKIP",
       "scopes": "SKIP",
       "services": "PASS",
       "skills": "PASS",

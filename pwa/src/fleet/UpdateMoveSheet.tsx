@@ -32,7 +32,12 @@
 // noted nowhere either: it is no refusal of the row), so for those this
 // sentence is the only place the operator learns why. A readable reply that requested nothing
 // at all is said the same way (MOVE_NOTHING_REQUESTED_TEXT); a skip of a node
-// the sheet never listed is the plan agreeing with the server, and is not said.
+// the sheet never listed is the plan agreeing with the server, and is not said
+// — EXCEPT `halted` (programme wave 14, R15(b); D-4269). A halting row is a
+// fact about the whole fleet, not that node: every request the same reply wrote
+// waits behind it until the ack. A failed row already at the tag is never named
+// by the plan, so before this wave the sheet closed on that 202 as if the move
+// had started.
 //
 // A fleet-wide rollback is one single-node request per node, in order,
 // stopping at the first refusal (D-3390); the
@@ -107,14 +112,16 @@ export async function sendMove(
 }
 
 /** The answers' skips of nodes this plan NAMED — the server refused them for a reason the plan could not preview.
- *  A skip of a node the plan never listed is the plan agreeing with the server, and is not said. */
+ *  A skip of a node the plan never listed is the plan agreeing with the server, and is not said, unless it is
+ *  `halted`: that node holds every other request until it is acked (D-4269), so it is named through the plan's
+ *  inventory (moveLabel). */
 export function moveSkippedText(answers: ReadonlyArray<MoveRequestAnswer | 'unreadable'>, plan: PlannedMove): string | null {
   const named = new Map(plan.nodes.map((n) => [n.nodeId, n.label] as const));
   const said: string[] = [];
   for (const a of answers) {
     if (a === 'unreadable' || !Array.isArray(a.skipped)) continue;
     for (const s of a.skipped) {
-      const label = named.get(s.nodeId);
+      const label = named.get(s.nodeId) ?? (s.why === 'halted' ? moveLabel(plan, s.nodeId) : undefined);
       if (label !== undefined) said.push(`${label}: ${moveSkipText(s.why)}`);
     }
   }
@@ -122,8 +129,8 @@ export function moveSkippedText(answers: ReadonlyArray<MoveRequestAnswer | 'unre
 }
 
 /** `{all: true}`'s 202 can REQUEST a node this plan never listed — a snapshot the server's own, fresher view has
- *  moved past (review MINOR 4). `moveSkippedText` only speaks for a SKIP of a node this plan named; silence for
- *  a REQUEST of a node it did not would close the sheet without saying anything moved beyond what it previewed.
+ *  moved past (review MINOR 4). `moveSkippedText` speaks for a SKIP of a node this plan named, and for a `halted`
+ *  skip of a node the plan never named (D-4269); silence for a REQUEST of a node it did not would close the sheet without saying anything moved beyond what it previewed.
  *  Said the same way a named skip is — in place, no confirm offered again. */
 function moveUnnamedText(requested: readonly string[], plan: PlannedMove): string | null {
   const named = new Set(plan.nodes.map((n) => n.nodeId));
@@ -198,8 +205,9 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
         setBusy(false);
         const unread = answers.includes('unreadable');
         const requested = answers.flatMap((a) => (a !== 'unreadable' && Array.isArray(a.requested) ? a.requested : []));
-        // The reply is authoritative (D-3401): a node this sheet NAMED that it skipped, a node it did NOT name
-        // that the server requested anyway (a fresher view than this plan's own), or a readable reply that
+        // The reply is authoritative (D-3401): a node this sheet NAMED that it skipped, a `halted` skip of a node it
+        // did NOT name (D-4269), a node it did NOT name that the server requested anyway (a fresher view than this
+        // plan's own), or a readable reply that
         // requested nothing at all, is said HERE and the sheet stays open — never a close that reads as "moved".
         // onDone only when something may have been written.
         const short = moveSkippedText(answers, plan) ?? moveUnnamedText(requested, plan)

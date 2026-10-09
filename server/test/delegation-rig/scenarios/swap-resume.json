@@ -1,0 +1,16 @@
+{
+  "scenario": "swap-resume", "covers": ["Q5"],
+  "steps": [
+    {"waitReady": 60}, {"type": "dlg s1"}, {"keys": ["Enter"]}, {"waitLabels": ["s1"], "timeoutS": 60},
+    {"type": "/exit"}, {"keys": ["Enter"]}, {"sleep": 5},
+    {"swapConfig": true}, {"relaunch": true}, {"waitReady": 60},
+    {"type": "dlg s2"}, {"keys": ["Enter"]}, {"waitLabels": ["s2"], "timeoutS": 60},
+    {"type": "/exit"}, {"keys": ["Enter"]}, {"sleep": 5}
+  ],
+  "settleS": 3,
+  "entries": [
+    {"label": "s1", "match": {"kind": "tools", "lastUser": "dlg s1"}, "text": "DLG-S1"},
+    {"label": "s2", "match": {"kind": "tools", "lastUser": "dlg s2"}, "text": "DLG-S2"}
+  ],
+  "default": {"text": "DLG-WAIT", "repeat": true}
+}

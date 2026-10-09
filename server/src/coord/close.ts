@@ -20,9 +20,11 @@ import {
 import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
 import type { CcdPrLine } from '../prstate.js';
+import type { DeadCoordinatorStop } from '../deadCoordinator.js';
 import {
-  childReclaimDecision, childReclaimRowListing, type ChildReclaimDecision, type ChildReclaimMinting,
-  type ChildReclaimNotWhy, type ChildReclaimRequest, type ChildReclaimReviewed,
+  CHILD_RECLAIM_FEED_QUIET_NONE, childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing,
+  type ChildReclaimDecision, type ChildReclaimMinting, type ChildReclaimNotWhy, type ChildReclaimRequest,
+  type ChildReclaimReviewed,
 } from './childReclaim.js';
 import {
   transitionsFor, type ChildMark, type DoneRejectCode, type RunRefuseCode, type RunState,
@@ -95,7 +97,33 @@ export type CloseOutcome =
   | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'unsupported' }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
-  | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> };
+  | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> }
+  /** The sweep's compare-and-set refused (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's
+   *  claimant is no longer the crashed id the dead-coordinator lane named. `claimedBy` is who holds it now. */
+  | { ok: false; kind: 'claimant-changed'; claimedBy: string | null }
+  /** The sweep's in-arm re-measure stopped it (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the claimant
+   *  is no longer crashed, or that cannot be told, or the operator raised `reclaim-paused` or disarmed the lane.
+   *  `released`: the stop came AFTER the fleet act, so the worker was released (or re-held) and the run stays open. */
+  | { ok: false; kind: 'sweep-stopped'; stop: DeadCoordinatorStop; released: boolean };
+
+/** What the dead-coordinator lane hands `closeRun` with its word (`'sweep'`): the crashed id the compare-and-set
+ *  checks, and its re-measure, which the abandon arm runs IMMEDIATELY BEFORE the fleet act and again AFTER it, before
+ *  the commit (the departure `the-sweep-re-measures-inside-the-arm`). A `claimedBy` compare-and-set cannot see a
+ *  revive of the SAME id (`ccd ensure` takes no mutex and rewrites nothing in `coord.db`); only a re-measure can. */
+export interface SweepCloseGuard {
+  readonly claimedBy: string;
+  readonly stillCrashed: () => Promise<DeadCoordinatorStop | null>;
+}
+
+/**
+ * WHO closed a run, as `run_events.causedBy` records it. THREE words, each with its own door: the coordinator's own
+ * close (`POST /api/runs/:id/close`), the operator's abandon (`POST /api/runs/:id/abandon` and the archive door's
+ * `{programme:'end'}`), and the dead-coordinator lane's — `'sweep'` (workspace lifecycle spec 2026-09-24 §5.4), a third
+ * word so the run event, the feed row and the audit never read as the operator's act. ADDITIVE on the wire, with no
+ * `FLEET_PROTO` bump: the column is free text, and every reader (`runEvents`, `RoutingEvent.causedBy`, the stall
+ * watch's notices, the landing lane) takes it as a string or ignores it.
+ */
+export type CloseCause = 'coordinator' | 'operator' | 'sweep';
 
 /** The untrusted wire shape `POST /api/runs/:id/close` accepts — validated
  *  inside `closeRun` itself, in the SAME order the route used to (after the
@@ -162,10 +190,20 @@ export function abandonRefusal(coord: CoordStore, id: number): Extract<CloseOutc
  * close records `'coordinator'` and the operator's abandon records
  * `'operator'`, and a default is exactly how the second would silently record
  * the first. Both call sites pass it explicitly.
+ *
+ * THE THIRD WORD, `'sweep'` (workspace lifecycle spec 2026-09-24 §5.4), has a signature of its own: it comes WITH its
+ * guard (`SweepCloseGuard`: the crashed claimant's id and its re-measure), so the dead-coordinator lane cannot reach
+ * this arm without its compare-and-set and its re-measure, and it only ever abandons.
  */
+export function closeRun(
+  deps: CloseRunDeps, id: number, body: unknown, causedBy: 'coordinator' | 'operator',
+): Promise<CloseOutcome>;
+export function closeRun(
+  deps: CloseRunDeps, id: number, body: unknown, causedBy: 'sweep', sweep: SweepCloseGuard,
+): Promise<CloseOutcome>;
 export async function closeRun(
   deps: CloseRunDeps, id: number, body: unknown,
-  causedBy: 'coordinator' | 'operator',
+  causedBy: CloseCause, sweep?: SweepCloseGuard,
 ): Promise<CloseOutcome> {
   const coord = deps.coord;
   const read = coord.run(id);
@@ -209,6 +247,9 @@ export async function closeRun(
     // silently ignoring half of it.
     return { ok: false, kind: 'bad-request' };
   }
+  // The sweep only ever ABANDONS (workspace lifecycle spec §5.4): a close body under its word is a caller that has
+  // confused two acts, refused before anything is read or composed.
+  if (causedBy === 'sweep' && !abandon) return { ok: false, kind: 'bad-request' };
 
   if (abandon) {
     /**
@@ -244,6 +285,20 @@ export async function closeRun(
     const move = abandonMove(run);
     if (!move.ok) return move;
     const target = move.to;
+    /** THE SWEEP'S GATE, run IMMEDIATELY BEFORE the fleet act (workspace lifecycle spec 2026-09-24 §5.4, "No
+     *  successor"). First the claimant RE-MEASURED — a revive of the same id is the race the spec names, and a
+     *  compare-and-set on `claimedBy` cannot see it — then the compare-and-set's FIRST HALF on a FRESH read of the run:
+     *  a run whose `claimedBy` is no longer the crashed id is refused before the fleet act, since a release that ran
+     *  under a close that then refused would leave a successor's worker unheld. The second half is the store's, inside
+     *  the commit's transaction (`expectClaimedBy` below). */
+    const sweepGate = async (g: SweepCloseGuard): Promise<Extract<CloseOutcome, { ok: false }> | null> => {
+      const stop = await g.stillCrashed();
+      if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, released: false };
+      const fresh = coord.run(id);
+      if (!fresh.ok) return { ok: false, kind: 'hold-invalid', detail: fresh.detail };
+      if (fresh.run === null) return { ok: false, kind: 'unknown-run' };
+      return fresh.run.claimedBy === g.claimedBy ? null : { ok: false, kind: 'claimant-changed', claimedBy: fresh.run.claimedBy };
+    };
     // The fleet act, AHEAD of the commit (D-48), and only when there is
     // something to act on: a `planned` run that never dispatched holds no
     // workspace. RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — otherwise HAND
@@ -292,15 +347,37 @@ export async function closeRun(
             sweepDec(deps.fleetState, `run:${id} close`))
         : CCD_ARGV.wsRelease(run.sessionId, sweepDec(deps.fleetState, `run:${id} close`));
       if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+      if (sweep !== undefined) {
+        const gate = await sweepGate(sweep);
+        if (gate !== null) return gate;
+      }
       const res = await deps.runCcd(argv);
       if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
       released = release;
+      // AFTER the fleet act, before the commit: the claimant once more. A revive that landed during the release keeps
+      // its run open — its worker is released (or re-held) and unheld until its coordinator re-holds it, which is the
+      // residual a successor's race already has. What remains is the round trip of this last re-measure.
+      if (sweep !== undefined) {
+        const stop = await sweep.stillCrashed();
+        if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, released: true };
+      }
+    } else if (sweep !== undefined) {
+      const gate = await sweepGate(sweep);
+      if (gate !== null) return gate;
     }
     const closed = coord.closeRun({
       runId: id, finalState: 'failed', causedBy, handoffCommit: null,
       program: run.program, viaClosing: target === 'closing',
+      ...(sweep === undefined ? {} : { expectClaimedBy: sweep.claimedBy }),
     });
-    if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
+    // A successor that took the programme DURING the fleet act (a claimant writer outside this serialiser — none
+    // exists in this build: `reclaimProgram`, the one rewriter of `claimedBy`, runs behind the same `CoordMutex`) is
+    // refused here, and the run stays open under it. The residual, stated: the release above has run, so its worker
+    // is unheld until that coordinator re-holds it.
+    if (!closed.ok) {
+      return closed.error === 'claimant-changed' ? { ok: false, kind: 'claimant-changed', claimedBy: closed.claimedBy }
+        : { ok: false, kind: 'advanceFailed', adv: closed };
+    }
     return { ok: true, id, state: 'failed', released, ...handOffChildReclaim(deps, childGate) };
   }
 
@@ -499,7 +576,7 @@ export async function closeRun(
  *  (D-2812); a fingerprint that IS present on a `failed` close is still
  *  shape-checked — malformed is refused, never silently ignored. */
 async function closeReviewRun(
-  deps: CloseRunDeps, run: RunRow, b: CloseRunBody, causedBy: 'coordinator' | 'operator',
+  deps: CloseRunDeps, run: RunRow, b: CloseRunBody, causedBy: CloseCause,
   siblingsOf: (sessionId: string) => OpenSiblingsResult,
   survivorOf: (s: readonly OpenSibling[]) => OpenSibling | null,
 ): Promise<CloseOutcome> {
@@ -678,9 +755,12 @@ async function childGateAtClose(
   }
   const minting: ChildReclaimMinting = mark.kind === 'child' ? mintingRowOf(deps.coord, mark.runId) : { kind: 'absent' };
   const reviewed = reviewedRowOf(deps.coord, minting);
-  // Whether this session has EVER coordinated a run (spec §1 rule 4): read
-  // beside the sibling list, the same store call the executor makes for the
-  // same question (`childReclaim.ts`'s own step 2a). An unreadable read is
+  // Whether this session has coordinated in its own generation
+  // (`childReclaimHasCoordinated`; spec §1 rule 4, spec §5.6: slugs recycle):
+  // read beside the sibling list, through the same fence the executor reads
+  // for the same question (`childReclaim.ts`'s own step 2a). `Date.now()` is
+  // the generation pick's clock: `CloseRunDeps` carries none, and `closeRun`
+  // stamps `closedAt` from it too. An unreadable read is
   // not "never coordinated" — but it is also NOT folded into
   // `siblings-unreadable` HERE: doing so ahead of calling the decision would
   // outrank `not-a-child` and `marker-unreadable` for every close, coordinated
@@ -691,9 +771,9 @@ async function childGateAtClose(
   // after the mark/minting checks, never ahead of them.
   let hasCoordinated: boolean | 'unreadable';
   try {
-    hasCoordinated = deps.coord.childReclaimCoordinatorIds().has(sessionId);
+    hasCoordinated = childReclaimHasCoordinated(deps.coord, sessionId, Date.now());
   } catch (err) {
-    console.warn(`ccrc-server: childReclaimCoordinatorIds() failed at close `
+    console.warn(`ccrc-server: the coordination fence (childReclaimHasCoordinated) failed at close `
       + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId}'s coordination history unreadable`);
     hasCoordinated = 'unreadable';
   }
@@ -742,12 +822,14 @@ async function childGateAtClose(
   }
   return {
     decision,
-    // `deferredSinceMs: null`: close is always a first attempt (spec §5.7).
+    // `deferredSinceMs: null`: close is always a first attempt (spec §5.7), and
+    // so the feed says nothing about it yet (`feedQuiet`, spec §5.9).
     // `mark.runId` is the MINTING run — never `run.id`, the run being closed,
     // which differ exactly when the child handed over across waves or was
     // minted by a review run this close is not.
     request: decision.reclaim && mark.kind === 'child'
-      ? { sessionId, runId: mark.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null } : null,
+      ? { sessionId, runId: mark.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
+          feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE } : null,
   };
 }
 

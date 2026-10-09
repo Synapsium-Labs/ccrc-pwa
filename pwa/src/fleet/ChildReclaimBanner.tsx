@@ -1,7 +1,8 @@
 // The reclaim row on /runs (child-reclamation spec §5.8, §5.9): the switch on
 // AUTOMATIC reclamation of child workspaces, and the one fleet-level attention
-// list — the children a terminal refusal left standing, and those whose reclaim
-// has kept failing past the defer ceiling, each with the server's sentence.
+// list — the children a terminal refusal left standing, those whose reclaim
+// has kept failing past the defer ceiling, and those the sweep keeps for a
+// person to remove, each with the server's sentence.
 // `CoordBanner`'s shape, deliberately, because an operator reading two
 // switches in one place must not have to learn two behaviours:
 //
@@ -17,7 +18,10 @@
 // The attention list is a REPORT, not a tap: no button, no link, no remedy
 // offered. Rule 4 says the human does not tend sub-workspaces; this tells them
 // what is costing disk, and asks nothing. The sentences are the SERVER's — the
-// PWA renders them and maps no token.
+// PWA renders them and maps no token. A collapsed line names its children after
+// the server's sentence; the PWA counts nothing itself. The two item shapes are
+// told apart by `sessionId`, the field the reader checks: every single item has
+// one, and a collapsed line is rebuilt by the reader with none.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MarkerState } from '../../../shared/api';
@@ -26,6 +30,8 @@ import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
+import { ExpiryAttention } from './ExpiryAttention';
+import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
 import { api, apiErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -113,7 +119,7 @@ export function ChildReclaimBanner({
     phase === 'pausing' ? 'pausing…'
     : phase === 'resuming' ? 'resuming…'
     : phase === 'unconfirmed' ? 'unconfirmed — check /runs'
-    : marker === 'set' ? 'Resume reclaim' : 'Pause reclaim';
+    : marker === 'set' ? 'Resume cleanup' : 'Pause cleanup';
 
   return (
     <div className="child-reclaim-banner">
@@ -131,7 +137,14 @@ export function ChildReclaimBanner({
       </div>
       {attention.length > 0 && (
         <ul className="child-reclaim-attention" aria-label="children reclamation could not clean up">
-          {attention.map((a) => (
+          {attention.map((a) => !('sessionId' in a) ? (
+            <li key={`kept-many ${a.word}`} className="child-reclaim-item">
+              <span className="child-reclaim-sentence">{a.sentence}</span>
+              {a.members.map((m) => (
+                <span key={m.sessionId} className="child-reclaim-who">{`run #${m.runId} · ${m.sessionId}`}</span>
+              ))}
+            </li>
+          ) : (
             <li key={a.sessionId} className="child-reclaim-item">
               <span className="child-reclaim-who">
                 {a.runId === null ? a.sessionId : `run #${a.runId} · ${a.sessionId}`}
@@ -141,6 +154,12 @@ export function ChildReclaimBanner({
           ))}
         </ul>
       )}
+      {/* Workspace lifecycle wave 3b: the expiry lane's own list, under the children's — the same switch stops both
+          lanes, and the two lists stay two (child reclamation's run chip never reads this one). */}
+      <ExpiryAttention coord={coord} />
+      {/* Workspace lifecycle wave 4: the dead-coordinator lane's own list, under the expiry lane's — the same switch stops
+          all three lanes, and each list stays its own. */}
+      <DeadCoordinatorAttention coord={coord} />
     </div>
   );
 }

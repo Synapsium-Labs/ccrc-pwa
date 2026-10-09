@@ -1322,10 +1322,12 @@ const bashFiles = (dir: string): string[] => {
 // so a checkout without it fails the liveness row below, not every rule.
 const bashExtra = [path.join(ccrcRoot, 'install.sh')].filter((f) => existsSync(f));
 const BASH = [...bashRoots.flatMap(bashFiles), ...bashExtra];
+/** One notion of a bash comment line, shared by every scan in this file that drops them (codeLines, the USAGE_PROSE describe's code()). */
+const isBashComment = (l: string): boolean => l.trim().startsWith('#');
 /** A bash line that is not a comment. Either path is discussed in prose all
  *  over these tools; only an actual line of shell is a reader or a writer. */
 const codeLines = (f: string): string[] =>
-  readFileSync(f, 'utf8').split('\n').filter((l) => !l.trim().startsWith('#'));
+  readFileSync(f, 'utf8').split('\n').filter((l) => !isBashComment(l));
 const holdersOf = (needle: string): string[] =>
   BASH.filter((f) => codeLines(f).some((l) => l.includes(needle))).map(rel).sort();
 
@@ -4185,7 +4187,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });
@@ -4703,4 +4705,749 @@ describe('docs sections, grammar predicates and ref spec are declared once, in s
       expect(ALL.filter((f) => FN_DEF(name).test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/docs.ts']);
     });
   }
+});
+
+// SESSION-CONTINUITY WAVE 4 (spec §5.6, the coordinator's safety ruling). APPENDED, for the reason the stall-watch
+// blocks above state: `session-hook.test.ts`'s citation audit cites this file by line.
+describe('the pane-scope sweep: its arming file has no writer in the tree', () => {
+  // `scope-sweep-live` arms `ccd-scope-sweep`'s stop: without it every inert scope is only recorded `would-stop`.
+  // Like `stall-watch-live` the operator touches and removes it by hand, so the ONE line of shell that may name
+  // it is the sweep's own read, no TypeScript names it at all, and no other file under ccd/ or deploy/ does on a
+  // code line. KNOWN WIDTH: a name assembled from pieces is not seen; the bar is the ordinary copy.
+  it('scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; no TS holder', () => {
+    expect(holdersOf('scope-sweep-live'), 'a line of shell other than the sweep names it — a writer in waiting').toEqual(['ccd/ccd-scope-sweep']);
+    expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccd-scope-sweep')).filter((l) => l.includes('scope-sweep-live')))
+      .toEqual(['[ -e "$REG/scope-sweep-live" ] && MODE=live']);
+    expect(ALL.filter((f) => stallCode(f).includes('scope-sweep-live')).map(rel)).toEqual([]);
+  });
+
+  // A writer need not be shell: every OTHER file under ccd/ and deploy/ — Python, .mjs, a unit file's
+  // `ExecStartPre=` — is read on its non-comment lines too (`#`, `//`, `*` and `/*` lines dropped; Markdown,
+  // which is prose, skipped).
+  const nonShell = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+    const p = path.join(dir, e);
+    return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+  });
+  it('scope-sweep-live: no other file under ccd/ or deploy/ names it on a code line — no Python, .mjs or unit-file writer', () => {
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes('scope-sweep-live'))).map(rel)).toEqual([]);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 3b (spec 2026-09-24 §5.3, the coordinator's safety ruling (E)). APPENDED, for the reason
+// the stall-watch blocks above state: `session-hook.test.ts`'s citation audit cites this file by line. The expiry lane
+// SHIPS SHADOWED: until `$REG/expire-lane-live` exists it audits and records "would expire" and never composes
+// `ws-expire`. The file is the operator's to touch BY HAND on the fleet box, beside `stall-watch-live` above — so no
+// line of shell names it (a writer, or a reader the design never had), and its one TS holder is its definer, an L1
+// file that reaches no `node:` module and so cannot write it.
+describe('workspace lifecycle wave 3b: the expiry lane’s live switch has no writer in the tree', () => {
+  const NAME = 'expire-lane-live';
+  const DEFINER = 'server/src/archivedExpiry.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER: a file that imports the switch's ONE spelling, `EXPIRE_LANE_LIVE_MARKER`, and holds an `io` could
+  // write it without ever spelling its name. So the files whose code names the constant are pinned, and none of them
+  // may reach a write — the executor reads the registry listing and nothing else. KNOWN WIDTH, stated: a write through
+  // a helper defined in another file is not seen; the bar is the ordinary call.
+  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('EXPIRE_LANE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/coord/expireArchived.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// THE THRESHOLD IS NEVER TYPED BY THE SERVER (the coordinator's ruling (C), wave 3b): ccd's `ws-audit --expire`
+// document carries `expiresAt` (`archivedAt + WS_EXPIRE_AFTER_S`), and the server reads it through ONE reader. Both
+// halves pinned: no seven-day literal in the server or the PWA beside the one that is not an expiry (`limits.ts`'s
+// usage window), and the audit document is parsed in one place and its `expiresAt` key read in one file. KNOWN WIDTH:
+// a reader spelling `doc.expiresAt` on a raw document is not seen — the raw document reaches the server only through
+// `parseExpireAudit`, whose one caller is pinned.
+describe('workspace lifecycle wave 3b: the expiry threshold is ccd’s, read through one reader', () => {
+  const SEVEN_DAYS = /\b604_?800\b|\b7\s*\*\s*86_?400\b|\b7\s*\*\s*24\s*\*\s*60\b/;
+  const lane = ALL.filter((f) => /^(server|pwa)\/src\//.test(rel(f)));
+
+  it('no seven-day literal in server/src or pwa/src, but the usage window’s', () => {
+    expect(SEVEN_DAYS.test('const S = 7 * 86_400;'), 'CONTROL').toBe(true);
+    expect(lane.filter((f) => SEVEN_DAYS.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/limits.ts']);
+  });
+
+  it('the audit document is parsed in one place, and its `expiresAt` key is read in one file', () => {
+    expect(ALL.filter((f) => /\bparseExpireAudit\s*\(/.test(stallCode(f))).map(rel).sort())
+      .toEqual(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts']);
+    expect(ALL.filter((f) => /['"]expiresAt['"]/.test(stallCode(f))).map(rel).sort()).toEqual(['server/src/archivedExpiry.ts']);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 4 (review 313, F3). APPENDED, for the reason the blocks above state. The seven-day pin above
+// reads numeric spellings only, so the expiry lane's operator text typed "past its seven days" and nothing reddened.
+// MEASURED before deciding how wide: a prose pin over every code line of `server/src` and `pwa/src` holds five files —
+// `wsaudit.ts` (ccd's own `not-expired` and `child` sentences, rendered verbatim), `watch.ts` and `coord/schema.ts`
+// (the deviation ledger's unrelated seven-day stale window, in a log line and a migration's SQL comment), and the PWA's
+// two archive confirms, which are the operator's copy. So the pin is scoped to the lane's own two files, where a
+// period in a sentence is the defect.
+describe('workspace lifecycle wave 4: the expiry lane’s own words type no period (review 313, F3)', () => {
+  const PROSE = /\b(?:seven|7)[ -]days?\b/i;
+  it('no seven-day prose on a code line of archivedExpiry.ts or coord/expireArchived.ts', () => {
+    expect(PROSE.test('`held (“x”) past its seven days`'), 'CONTROL').toBe(true);
+    expect(['server/src/archivedExpiry.ts', 'server/src/coord/expireArchived.ts']
+      .filter((f) => PROSE.test(stallCode(path.join(ccrcRoot, f))))).toEqual([]);
+  });
+});
+
+// WORKSPACE LIFECYCLE WAVE 4 (spec 2026-09-24 §5.4, the coordinator's safety ruling (B)). APPENDED, for the reason the
+// blocks above state. The dead-coordinator lane SHIPS SHADOWED: until `$REG/dead-coordinator-lane-live` exists it
+// measures, anchors, trips its breaker and records "would end programme <slug> (<n> runs)", and never reaches
+// `closeRun`'s abandon arm. The file is the operator's to touch BY HAND in the registry the server reads, beside
+// `expire-lane-live`, `scope-sweep-live` and `stall-watch-live` above — so no line of shell names it, and its one TS
+// holder on a code line is its definer, an L1 file that reaches no `node:` module and so cannot write it.
+describe('workspace lifecycle wave 4: the dead-coordinator lane’s live switch has no writer in the tree', () => {
+  const NAME = 'dead-coordinator-lane-live';
+  const DEFINER = 'server/src/deadCoordinator.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
+  // without spelling its name. The files whose code names the constant are pinned, and none of them reaches a write.
+  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('DEAD_COORDINATOR_LANE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['server/src/coord/endDeadCoordinator.ts', DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// CCRC HISTORY (spec 2026-10-05 §9.11 O13, O14; §10.1 Seams). APPENDED after the last describe, for the reason
+// the blocks above state: session-hook.test.ts's citation audit cites this file by line, so no import line is
+// added at the head either — the history modules are imported dynamically inside each case.
+const HISTORY_DIR = path.join(ccrcRoot, 'ccd', 'history');
+/** Every `.mjs` under a root: never a `.d.mts` (a type mirror declares types, it defines nothing), and the
+ *  `__`-prefixed mutants and node_modules skipped — the MODELS_CORPUS walk, restated because that one is scoped
+ *  to its own describe. */
+const mjsUnder = (dir: string): string[] => {
+  const out: string[] = [];
+  if (!existsSync(dir)) return out;
+  for (const e of readdirSync(dir)) {
+    if (e.startsWith('__') || e === 'node_modules') continue;
+    const p = path.join(dir, e);
+    if (statSync(p).isDirectory()) { out.push(...mjsUnder(p)); continue; }
+    if (/\.mjs$/.test(p)) out.push(p);
+  }
+  return out;
+};
+const HISTORY_MJS = mjsUnder(HISTORY_DIR);
+/** Any `.mjs` a writer could live in: ccd/ (compact-card and history), deploy/, shared/. */
+const ALL_MJS = [...new Set([...mjsUnder(path.join(ccrcRoot, 'ccd')), ...mjsUnder(path.join(ccrcRoot, 'deploy')),
+  ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+
+describe('ccrc history: the operator switches have readers only (spec 2026-10-05 §9.11 O13)', () => {
+  // Each switch is touched and removed BY HAND (§9.7): no line of shell or .mjs may write one. `lib.mjs`'s
+  // SWITCHES is the one sanctioned definer (the stall-watch MARKERS precedent above); the hook and the shim read
+  // `history-off` with a bash test. `_uninst_purge` spells its kept set as the globs `history` and `history-*`
+  // and doctor names the cap file from `status --json`, so neither is a holder. B2 adds the skill's files to
+  // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
+  // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
+  // and nothing else, and a split spelling is pinned by the case that reads the literal back.
+  // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
+  // `sweep.mjs` (`--op recall-off`, spec :1863 and the :2007 lifecycle row), which ships in W2. B1 holds the half
+  // it can: the last case below reds when any corpus file but `ccd/history/sweep.mjs` writes it. The other half,
+  // that `sweep.mjs` DOES write it and is the only file naming it, lands with W2's `--op recall-off`: W2 adds
+  // `recall-off` to this describe's holders as `['recall-off', ['ccd/history/sweep.mjs']]` and drops the
+  // exemption below.
+  const HOLDERS: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ['history-off', ['ccd/ccd-history-sweep', 'ccd/history/lib.mjs', 'ccd/session-hook.sh']],
+    ['history-steer-off', ['ccd/history/lib.mjs']],
+    ['history-steer-live', ['ccd/history/lib.mjs']],
+    ['history-max-gb', ['ccd/history/lib.mjs']],
+    ['steer-on', ['ccd/history/lib.mjs']],
+    ['headless-on', ['ccd/history/lib.mjs']],
+  ];
+  const CORPUS = [...new Set([...BASH, ...ALL_MJS])];
+  /** A switch is a PATH, so a line names one only as `/<name>`. The bare words are vocabulary, not files: the
+   *  exit-2 reason `history-off` (REASONS, Task 3; decideOpGate's refusal, Task 6) names the CONDITION, and
+   *  lib.mjs spells it as a reason word, never as the file. */
+  const needle = (name: string): string => `/${name}`;
+  /** The help text NAMES the pause path for the operator; it neither reads nor writes the switch. The allowance is
+   *  line-scoped: only the lines of `fn`'s body (its `fn() {` line to the next line that is exactly `}`) that hold a
+   *  needle in a single-quoted printf argument: a quoted line that belongs to the run of `\` continuations starting at
+   *  a `printf` line of `fn` (FU9, B4M2), so a continuation of any other command inside `fn` is not covered. Every
+   *  other `file` line naming the path still reds the scan. The allowance departs from spec O13: D-4550. */
+  const USAGE_PROSE = { file: 'ccd/ccrc', fn: '_usage_history_paragraph', needles: ['/history-off'] } as const;
+  /** The line numbers of `fn`'s body the allowance covers, and the body itself (null when `fn` is not found). */
+  const usageProse = (text: string): { body: string[] | null; allowed: Set<number> } => {
+    const lines = text.split('\n');
+    const at = lines.indexOf(`${USAGE_PROSE.fn}() {`);
+    if (at < 0) return { body: null, allowed: new Set() };
+    let end = at + 1;
+    while (end < lines.length && lines[end] !== '}') end += 1;
+    const allowed = new Set<number>();
+    let inPrintf = false;   // true while the previous line was a printf line, or a quoted argument line, that ends in `\`
+    for (let i = at + 1; i < end; i += 1) {
+      const l = lines[i]!;
+      const continues = /\\\s*$/.test(l);
+      if (/^\s*printf\b/.test(l)) { inPrintf = continues; continue; }
+      const m = /^\s*'([^']*)'(?:\s*\\)?$/.exec(l);
+      if (inPrintf && m && USAGE_PROSE.needles.some((n) => m[1]!.includes(n))) allowed.add(i);
+      inPrintf = inPrintf && m !== null && continues;
+    }
+    return { body: lines.slice(at + 1, end), allowed };
+  };
+  /** A file's code lines, comment lines dropped in either language. The one allowance is applied here, so the
+   *  holder count and the `writes()` classifier both skip it. */
+  const code = (f: string): string[] => {
+    if (!BASH.includes(f)) return stallCode(f).split('\n');
+    const text = readFileSync(f, 'utf8');   // once per call: ccd/ccrc is about 24k lines
+    const skip = rel(f) === USAGE_PROSE.file ? usageProse(text).allowed : new Set<number>();
+    return text.split('\n').filter((l, i) => !skip.has(i) && !isBashComment(l));
+  };
+  /** A line READS a switch when it tests or reads the path. */
+  const READ = /\[\[?\s+!?\s*-[efrs]\s|\b(?:existsSync|readFileSync|statSync|lstatSync)\s*\(/;
+  const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** A line WRITES the switch when a redirection, a file-changing command or a writing fs call targets it. */
+  const writes = (line: string, lang: 'bash' | 'mjs', name: string): boolean => {
+    const n = esc(name);
+    if (lang === 'mjs') {
+      return new RegExp(`\\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\\s*\\([^;]*${n}`).test(line);
+    }
+    const l = line.replace(/\d?>\s*\/dev\/null|>&\d/g, '');
+    return new RegExp(`>{1,2}\\s*["']?[^\\s"'<>|;&]*${n}`).test(l)
+      || new RegExp(`(?:^|[\\s;&|({])(?:touch|mv|cp|ln|rm|rmdir|mkdir|install|tee|truncate)\\s[^;&|]*${n}`).test(l);
+  };
+  /** lib.mjs's SWITCHES declaration: its first line through the line that closes it. */
+  const switchesBlock = (): string[] => {
+    const lines = stallCode(path.join(HISTORY_DIR, 'lib.mjs')).split('\n');
+    const at = lines.findIndex((l) => /\bconst SWITCHES\s*=/.test(l));
+    expect(at, 'ccd/history/lib.mjs declares no SWITCHES').toBeGreaterThan(-1);
+    let end = at;
+    while (end < lines.length - 1 && !/\}\s*\)\s*;?\s*$/.test(lines[end]!)) end += 1;
+    return lines.slice(at, end + 1);
+  };
+
+  it('CONTROL: both corpora were walked, and the classifiers see a read, a write and neither', () => {
+    expect(BASH.map(rel)).toEqual(expect.arrayContaining(['ccd/ccd-history-sweep', 'ccd/session-hook.sh']));
+    expect(ALL_MJS.map(rel)).toContain('ccd/history/lib.mjs');
+    expect(READ.test('[ -e "$HOME/.ccrc/history-off" ] && exit 0')).toBe(true);
+    expect(READ.test('[[ ! -e "$HOME/.ccrc/history-off" ]] || _hs=x')).toBe(true);
+    expect(READ.test('if (existsSync(p.off)) return 0;')).toBe(true);
+    expect(writes('touch "$HOME/.ccrc/history-off"', 'bash', 'history-off')).toBe(true);
+    expect(writes(': > "$HOME/.ccrc/history-off"', 'bash', 'history-off')).toBe(true);
+    expect(writes('rm -f -- "$HOME/.ccrc/history-max-gb"', 'bash', 'history-max-gb')).toBe(true);
+    expect(writes('[ -e "$HOME/.ccrc/history-off" ] 2>/dev/null', 'bash', 'history-off')).toBe(false);
+    expect(writes('[[ -e "$HOME/.ccrc/history-off" ]] || { printf x >> "$spool"; }', 'bash', 'history-off')).toBe(false);
+    expect(writes("writeFileSync(home + '/.ccrc/history-off', '')", 'mjs', 'history-off')).toBe(true);
+    expect(writes("if (existsSync(home + '/.ccrc/history-off')) return;", 'mjs', 'history-off')).toBe(false);
+    // The reason word is not the file: REASON_ROWS' `'history-off'` names no switch path.
+    expect("'irreversible-in-pane', 'history-off', 'span-pruned',".includes(needle('history-off'))).toBe(false);
+    expect('[ -e "$HOME/.ccrc/history-off" ] && exit 0'.includes(needle('history-off'))).toBe(true);
+  });
+
+  it('USAGE_PROSE: the allowance covers one real spelling, the literal path, and exactly one line (FU5)', () => {
+    const text = readFileSync(path.join(ccrcRoot, USAGE_PROSE.file), 'utf8');
+    const { body, allowed } = usageProse(text);
+    expect(body, `${USAGE_PROSE.file} has no ${USAGE_PROSE.fn}`).not.toBeNull();
+    // A split spelling (`local off=history-off`, `~/.ccrc/$off`) would hold no needle and so pass the scan blind:
+    // the help text must carry the path whole, so a future split fails here.
+    expect(body!.join('\n')).toContain('~/.ccrc/history-off');
+    expect(allowed.size).toBe(1);
+    // The classifier: a single-quoted prose line is allowed, a code line that reads or writes the path is not.
+    const probe = (...l: string[]): number => usageProse(`${USAGE_PROSE.fn}() {\n${l.join('\n')}\n}\n`).allowed.size;
+    const PROSE = "    '            a session printed included; touch ~/.ccrc/history-off to pause' \\";
+    expect(probe("  printf '\\n%s' \\", PROSE)).toBe(1);
+    expect(probe(PROSE), 'a quoted line outside a printf run is not prose').toBe(0);
+    // FU9 (B4M2): a quoted line is covered only as the continuation of a printf line, never of another command.
+    expect(probe('  touch \\', "    '/abs/.ccrc/history-off'")).toBe(0);
+    expect(probe("  printf '\\n%s' \\", "    'one' \\", '  touch \\', "    '/abs/.ccrc/history-off'")).toBe(0);
+    expect(probe("  printf '\\n%s' \\", "    'one'", "    '/abs/.ccrc/history-off'"), 'a quoted line with no `\\` ends the run').toBe(0);
+    expect(probe('    touch "$HOME/.ccrc/history-off"')).toBe(0);
+    expect(probe('    [ -e "$HOME/.ccrc/history-off" ] && return 0')).toBe(0);
+  });
+
+  it('SWITCHES names every switch, so the rows below compare against a real definer', () => {
+    const block = switchesBlock().join('\n');
+    for (const [name] of HOLDERS) expect(block, `SWITCHES does not name ${name}`).toContain(name);
+  });
+
+  it.each(HOLDERS)('%s: named on a code line only by its declaration and its readers %j, and never written', (name, want) => {
+    const holders = CORPUS.filter((f) => code(f).some((l) => l.includes(needle(name)))).map(rel).sort();
+    expect(holders, `${name}: a new line names it — a writer, or a reader this design does not list`).toEqual([...want].sort());
+    const block = switchesBlock();
+    for (const f of CORPUS.filter((x) => want.includes(rel(x)))) {
+      const naming = code(f).filter((l) => l.includes(needle(name)));
+      if (rel(f) === 'ccd/history/lib.mjs') {
+        expect(naming.filter((l) => !block.includes(l)), `${name}: lib.mjs names it outside SWITCHES`).toEqual([]);
+        continue;
+      }
+      const lang = BASH.includes(f) ? 'bash' : 'mjs';
+      for (const l of naming) {
+        expect(READ.test(l), `${rel(f)}: \`${l.trim()}\` names ${name} and reads nothing`).toBe(true);
+        expect(writes(l, lang, name), `${rel(f)}: \`${l.trim()}\` WRITES ${name}`).toBe(false);
+      }
+    }
+  });
+
+  it('recall-off/<id>: no corpus file but sweep.mjs writes it (B1 holds this half; W2 adds sweep.mjs as its one writer)', () => {
+    const W2_WRITER = 'ccd/history/sweep.mjs';
+    // CONTROL: the writer shapes this describe classifies are seen against this name too.
+    expect(writes('touch "$H/recall-off/$id"', 'bash', 'recall-off')).toBe(true);
+    expect(writes("writeFileSync(path.join(dir, 'recall-off', id), gen)", 'mjs', 'recall-off')).toBe(true);
+    expect(writes("if (existsSync(home + '/.ccrc/history/recall-off/' + id)) return;", 'mjs', 'recall-off')).toBe(false);
+    const writers = CORPUS.filter((f) => rel(f) !== W2_WRITER)
+      .filter((f) => code(f).some((l) => l.includes('recall-off') && writes(l, BASH.includes(f) ? 'bash' : 'mjs', 'recall-off')))
+      .map(rel).sort();
+    expect(writers, 'recall-off/<id> has exactly one writer, sweep.mjs (spec O13): a write here is a second one').toEqual([]);
+  });
+});
+describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)', () => {
+  const LIB = path.join(HISTORY_DIR, 'lib.mjs');
+  const VOCABS = ['NODE_KINDS', 'PARSE_STATUS', 'PROVENANCE', 'SPOOL_EVENTS', 'EPOCH_CAUSES', 'REFUSALS', 'ERROR_CODES',
+    'COVERAGE', 'SCOPE_SOURCES', 'VARIANT_CAUSES', 'BACKENDS', 'HARNESS_TABLE', 'HARNESSES', 'JOURNAL_KINDS',
+    'JOURNAL_VERDICTS', 'BIND_KINDS', 'MIGRATION_VERDICTS', 'HEALTH_WORDS', 'REASONS', 'WRITING_FORMS', 'STORE_FILES',
+    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT'] as const;
+  /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
+   *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
+  const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
+  const declares = (name: string): RegExp => new RegExp(`(?:^|[\\s;])(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`);
+  /** The `"ev":"…"` literals a bash file writes, and the `ev: '…'` keys a `.mjs` file builds. */
+  const EV_BASH = /"ev":"([A-Za-z]+)"/g;
+  const EV_MJS = /\bev\s*:\s*['"`]([A-Za-z]+)['"`]/g;
+  /** SPOOL_EVENTS members whose emitter ships in a later PR. A member found emitted while listed here reds, so
+   *  the PR that adds the emitter removes its line. */
+  const PENDING_EMITTERS: Record<string, string> = { recall: 'B2 (cli.mjs read verbs)', steer: 'W3 (the steering hook)' };
+  type Lib = Record<string, unknown>;
+  const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
+
+  it('CONTROL: the corpus holds the four history modules, and the declaration pattern sees a declaration and nothing else', () => {
+    expect(HISTORY_MJS.map(rel).sort()).toEqual(expect.arrayContaining(
+      ['ccd/history/cli.mjs', 'ccd/history/lib.mjs', 'ccd/history/store.mjs', 'ccd/history/sweep.mjs']));
+    expect(declares('BACKENDS').test("export const BACKENDS = Object.freeze(['anthropic', 'other', 'unknown']);")).toBe(true);
+    expect(declares('BACKENDS').test('const BACKENDS = x;')).toBe(true);
+    expect(declares('BACKENDS').test('if (BACKENDS.includes(b)) return b;')).toBe(false);
+    expect(declares('BACKENDS').test("const { BACKENDS } = await import('./lib.mjs');")).toBe(false);
+    expect(declares('EXIT').test('export const EXIT_CODES = 1;')).toBe(false);
+  });
+
+  it.each(VOCABS)('%s is declared in ccd/history/lib.mjs and in no other .mjs, exported, and frozen', async (name) => {
+    expect(DECL_CORPUS.filter((f) => stallCode(f).split('\n').some((l) => declares(name).test(l))).map(rel).sort(),
+      `${name}: a second declaration`).toEqual(['ccd/history/lib.mjs']);
+    const v = (await lib())[name];
+    expect(v, `${name} is not exported`).toBeDefined();
+    if (typeof v === 'object' && v !== null) expect(Object.isFrozen(v), `${name} is not frozen`).toBe(true);
+  });
+
+  it('REFUSALS is REASONS\' exit-2 keys and HARNESSES is HARNESS_TABLE\'s keys, each derived, never declared apart', async () => {
+    const l = await lib();
+    const reasons = l['REASONS'] as Record<string, number>;
+    const exits = Object.values(l['EXIT'] as Record<string, number>);
+    for (const [w, x] of Object.entries(reasons)) expect(exits, `REASONS.${w} = ${x} is not an EXIT value`).toContain(x);
+    expect([...(l['REFUSALS'] as readonly string[])].sort())
+      .toEqual(Object.keys(reasons).filter((k) => reasons[k] === 2).sort());
+    expect([...(l['HARNESSES'] as readonly string[])]).toEqual(Object.keys(l['HARNESS_TABLE'] as object));
+    const src = stallCode(LIB).split('\n');
+    expect(src.find((x) => declares('HARNESSES').test(x)), 'HARNESSES is spelled, not derived').toContain('Object.keys(HARNESS_TABLE)');
+    expect(src.find((x) => declares('REFUSALS').test(x)), 'REFUSALS is spelled, not derived').toContain('Object.keys(REASONS)');
+  });
+
+  it('every "ev" the hook writes is a SPOOL_EVENTS member, and every member has an emitter or is named pending', async () => {
+    const members = [...((await lib())['SPOOL_EVENTS'] as readonly string[])];
+    const hook = codeLines(path.join(ccrcRoot, 'ccd', 'session-hook.sh')).join('\n');
+    const fromHook = [...hook.matchAll(EV_BASH)].map((m) => m[1]!);
+    const fromMjs = HISTORY_MJS.flatMap((f) => [...stallCode(f).matchAll(EV_MJS)].map((m) => m[1]!));
+    expect(fromHook.length, 'the hook scan matched nothing — the spool block is gone or its spelling moved').toBeGreaterThan(0);
+    for (const e of [...fromHook, ...fromMjs]) expect(members, `"${e}" is written but is not a SPOOL_EVENTS member`).toContain(e);
+    const emitted = new Set([...fromHook, ...fromMjs]);
+    for (const k of Object.keys(PENDING_EMITTERS)) expect(members, `PENDING_EMITTERS names ${k}, not a member`).toContain(k);
+    for (const m of members) {
+      if (m in PENDING_EMITTERS) expect(emitted.has(m), `${m} has an emitter now: remove it from PENDING_EMITTERS`).toBe(false);
+      else expect(emitted.has(m), `${m} is a SPOOL_EVENTS member with no emitter`).toBe(true);
+    }
+  });
+
+  it('every kind the sweep journals is a JOURNAL_KINDS member', async () => {
+    const members = [...((await lib())['JOURNAL_KINDS'] as readonly string[])];
+    const CALL = /\bjournalRecord\(\s*['"`]([a-z-]+)['"`]/g;
+    const kinds = HISTORY_MJS.flatMap((f) => [...stallCode(f).matchAll(CALL)].map((m) => [rel(f), m[1]!] as const));
+    expect(kinds.length, 'no journalRecord call names its kind as a literal — the scan saw nothing').toBeGreaterThan(0);
+    expect(kinds.filter(([, k]) => !members.includes(k)).map(([f, k]) => `${f}: ${k}`)).toEqual([]);
+  });
+
+  it('every word _check_history spells is a HEALTH_WORDS member, every class is pass|warn|fail, and every remedy is keyed by a word', async () => {
+    const l = await lib();
+    const words = Object.keys(l['HEALTH_WORDS'] as object);
+    for (const c of Object.values(l['HEALTH_WORDS'] as Record<string, string>)) expect(['pass', 'warn', 'fail']).toContain(c);
+    for (const k of Object.keys(l['HEALTH_REMEDIES'] as object)) expect(words, `HEALTH_REMEDIES keys ${k}`).toContain(k);
+    const lines = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');
+    const at = lines.findIndex((x) => /^_check_history\(\) \{$/.test(x));
+    expect(at, 'ccd/ccrc-doctor-checks has no _check_history').toBeGreaterThan(-1);
+    const end = lines.findIndex((x, i) => i > at && x === '}');
+    const body = lines.slice(at, end).filter((x) => !x.trim().startsWith('#')).join('\n');
+    const spelled = [...body.matchAll(/_dr_(?:pass|warn|fail)\s+history\s+"([a-z][a-z0-9-]*):/g)].map((m) => m[1]!);
+    expect(spelled.length, 'the scan matched no word in _check_history').toBeGreaterThan(0);
+    expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
+  });
+
+  it('the literal .ccrc/history/db is spelled in ccd/history/*.mjs once, as STORE_DB_REL', async () => {
+    expect((await lib())['STORE_DB_REL']).toBe('.ccrc/history/db');
+    expect(HISTORY_MJS.filter((f) => stallCode(f).includes('.ccrc/history/db')).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    const lines = stallCode(LIB).split('\n').filter((x) => x.includes('.ccrc/history/db'));
+    expect(lines, 'lib.mjs spells the store directory more than once').toHaveLength(1);
+    expect(lines[0]).toMatch(/\bSTORE_DB_REL\s*=\s*['"]\.ccrc\/history\/db['"]/);
+  });
+
+  it('COVERAGE is this-box, and the word is a literal in lib.mjs alone; CARD_PREFIX is declared (its hook half lands in B3)', async () => {
+    const l = await lib();
+    expect([...(l['COVERAGE'] as readonly string[])]).toEqual(['this-box']);
+    expect(HISTORY_MJS.filter((f) => /['"`]this-box['"`]/.test(stallCode(f))).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    expect(l['CARD_PREFIX']).toBe('History: ');
+  });
+
+  it('NODE_KINDS is the schema-v1 CHECK list in store.mjs, member for member', async () => {
+    const kinds = [...((await lib())['NODE_KINDS'] as readonly string[])];
+    const { MIGRATIONS } = await import('../../ccd/history/store.mjs');
+    const m = /\bkind IN \(([^)]*)\)/.exec(MIGRATIONS[0] ?? '');
+    expect(m, 'schema v1 declares no nodes.kind CHECK').not.toBeNull();
+    expect(m![1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '')).sort()).toEqual(kinds.sort());
+  });
+});
+describe('ccrc history: process.env is read by name, from a four-name allow-list (spec 2026-10-05 §10.1 Seams)', () => {
+  // D-4247: no env var arms a seam in the shipped modules. A test's faults arrive through
+  // a NODE_OPTIONS preload it writes itself, and `process.env` is read only for these four names.
+  const ALLOWED = ['CCRC_SESSION_GENERATION', 'CLAUDECODE', 'HOME', 'TMUX_PANE'];
+  const READS = /process\.env(?:\.([A-Za-z_][A-Za-z0-9_]*)|\[\s*(['"])([A-Za-z_][A-Za-z0-9_]*)\2\s*\])?/g;
+  const envReads = (code: string): string[] => [...code.matchAll(READS)].map((m) => m[1] ?? m[3] ?? '<not by name>');
+
+  it('CONTROL: the reader names dotted and bracketed reads, and flags a whole-env use and a computed name', () => {
+    expect(envReads("const h = process.env.HOME; const g = process.env['CCRC_SESSION_GENERATION'];"))
+      .toEqual(['HOME', 'CCRC_SESSION_GENERATION']);
+    expect(envReads('spawnSync(bin, args, { env: process.env });')).toEqual(['<not by name>']);
+    expect(envReads('const v = process.env[name];')).toEqual(['<not by name>']);
+  });
+
+  it('every process.env read in ccd/history/*.mjs names an allowed variable', () => {
+    const seen = HISTORY_MJS.flatMap((f) => envReads(stallCode(f)).map((n) => [rel(f), n] as const));
+    expect(seen.length, 'no history module reads process.env at all — the scan saw nothing').toBeGreaterThan(0);
+    expect(seen.filter(([, n]) => !ALLOWED.includes(n)).map(([f, n]) => `${f}: ${n}`)).toEqual([]);
+  });
+});
+
+// Task 36G item 2 (Task 34's O13): the `.mjs` arm above looks for a switch's PATH TEXT (`/history-off`), and
+// the sanctioned spelling in `.mjs` is symbolic — `SWITCHES.off`, or the `off`/`cap` field of a `historyPaths(...)`
+// result (`P.off`) — which carries no `/name` at all, so `writeFileSync(P.off, '')` is invisible to it. This arm
+// reads the symbols instead. KNOWN WIDTH: an alias of an alias (`const x = P.off; unlinkSync(x)`) is not seen.
+describe('ccrc history: no .mjs writes a switch through its symbolic spelling (spec 2026-10-05 §9.11 O13)', () => {
+  /** The verb list of the O13 describe's `writes()` for `.mjs`, restated (that one is closed over its describe). */
+  const VERB = /\b(?:writeFile|appendFile|rename|unlink|rm|rmdir|mkdir|copyFile|cp|symlink|link|truncate|open)(?:Sync)?\s*\(/;
+  /** `historyPaths` has two switch fields, `off` and `cap`; every other SWITCHES key is named alongside. */
+  const symbolic = (keys: readonly string[]): RegExp =>
+    new RegExp(`SWITCHES\\.|\\.(?:off|cap|${keys.join('|')})\\b`);
+  const writesSymbolically = (line: string, keys: readonly string[]): boolean => {
+    const m = VERB.exec(line);
+    return m !== null && symbolic(keys).test(line.slice(m.index + m[0].length));
+  };
+  const KEYS = ['maxGb', 'steerOff', 'steerLivePrefix', 'steerOnDir', 'headlessOn'] as const;
+
+  it('CONTROL: the classifier sees a write through P.off, a historyPaths(...) field and SWITCHES., and not a read', () => {
+    expect(writesSymbolically("writeFileSync(P.off, '')", KEYS)).toBe(true);
+    expect(writesSymbolically("existsSync(P.off)", KEYS)).toBe(false);
+    expect(writesSymbolically("unlinkSync(historyPaths(home).cap);", KEYS)).toBe(true);
+    expect(writesSymbolically("fs.writeFileSync(join(home, SWITCHES.maxGb), '9')", KEYS)).toBe(true);
+    expect(writesSymbolically("mkdirSync(`${home}/${SWITCHES.steerOnDir}`, { recursive: true })", KEYS)).toBe(true);
+    expect(writesSymbolically("rmSync(c.paths.headlessOn)", KEYS)).toBe(true);
+    expect(writesSymbolically("if (existsSync(P.off)) return 0;", KEYS)).toBe(false);
+    expect(writesSymbolically("const cap = capOf(capText(P.cap));", KEYS)).toBe(false);
+  });
+
+  it('SWITCHES keys named here are exactly lib.mjs\'s, so a key added there is not unwatched', async () => {
+    const lib = (await import('../../ccd/history/lib.mjs')) as unknown as { SWITCHES: Record<string, string> };
+    expect(Object.keys(lib.SWITCHES).sort()).toEqual(['off', ...KEYS].sort());
+  });
+
+  it('no line of any .mjs under ccd/, deploy/ or shared/ pairs a write verb with a switch symbol', () => {
+    expect(ALL_MJS.map(rel)).toContain('ccd/history/sweep.mjs');
+    const hits = ALL_MJS.flatMap((f) => stallCode(f).split('\n')
+      .filter((l) => writesSymbolically(l, KEYS)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(hits, 'a switch is touched and removed by hand (§9.7): a .mjs write through SWITCHES or historyPaths is a writer').toEqual([]);
+  });
+});
+
+// Docs W2, Task 8 (spec 2026-10-01 M7.10, section 1's ring column): the files under server/src/docs are classified
+// by their IMPORTS, never by their path. policy.ts (L1) imports only shared/; ports.ts (L2) is type-only;
+// ccdsource.ts (L3) names no fastify, no `reply` and no timer, and imports only from its stated list; only W3's
+// routes.ts, hooks.ts, lane.ts and cache.ts (L4) may import fastify or own a timer. A file the table does not name
+// is held to L3's rules, so a new file is never an exemption. The file list is read from the directory (`sources`,
+// a readdirSync walk), never hand-kept. Every rule reads comment-stripped text (`stallCodeText`), so a sentence
+// ABOUT fastify or a timer is never counted as one. APPENDED after the file's last line: `session-hook.test.ts`'s
+// citation audit cites this file by line, so nothing above may move.
+describe('the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10)', () => {
+  const docsDir = path.join(ccrcRoot, 'server/src/docs');
+  type DocsRing = 'L1' | 'L2' | 'L3' | 'L4';
+  /** Each known file's ring. W3's four L4 files are named now, so W3 adding them reds nothing here. */
+  const DOCS_RING_ROLES: Readonly<Record<string, DocsRing>> = {
+    'policy.ts': 'L1', 'ports.ts': 'L2', 'ccdsource.ts': 'L3',
+    'routes.ts': 'L4', 'hooks.ts': 'L4', 'lane.ts': 'L4', 'cache.ts': 'L4',
+  };
+  /** The files W2 created. A FLOOR, not a count (the update ring's argument): a new file raises it, and a listed
+   *  file that is gone reds instead of disarming the scan. */
+  const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts'];
+  /** What L3 may import (the W2 plan's Global Constraints): its server neighbours, node's hash, its own ring's
+   *  policy and ports, and L0. A type import is an import. */
+  const L3_IMPORTS: ReadonlySet<string> = new Set([
+    '../ccdargv.js', '../lifecycle.js', '../exec.js', '../fleetstate.js', 'node:crypto', './policy.js', './ports.js',
+    '../../../shared/docs.js',
+  ]);
+  /** A fastify import in any of its forms: `from`, a bare `import`, a dynamic `import(...)` or a `require(...)`;
+   *  either quote; the package, a subpath, a `fastify-*` package or an `@fastify/*` one. */
+  const FASTIFY = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:@fastify\/[^'"\n]*|fastify(?:[-/][^'"\n]*)?)\1/;
+  const TIMERS = /\b(?:setTimeout|setInterval|setImmediate)\s*\(/;
+  const RUNTIME_LOAD = /\bimport\s*\(|\brequire\s*\(/;
+  const REPLY = /\breply\b/;
+  const L2_RUNTIME_EXPORT = /^\s*export\s+(?:default\b|(?:async\s+)?(?:const|let|var|function|class|abstract|enum)\b|\{|\*)/m;
+  /** Every static specifier: `import ... from 'x'`, `export ... from 'x'` and a bare `import 'x'`. */
+  const specifiers = (code: string): string[] => [
+    ...[...code.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s*(['"])([^'"\n]+)\1/gm)].map((m) => m[2]),
+    ...[...code.matchAll(/^\s*import\s*(['"])([^'"\n]+)\1/gm)].map((m) => m[2]),
+  ];
+  /** Over `[name, source]` pairs, so the CONTROLs below plant their shapes as text: no fixture directory, and so
+   *  no new import line in this file. */
+  const ringViolations = (files: readonly (readonly [string, string])[]): string[] =>
+    files.flatMap(([name, text]) => {
+      const role: DocsRing = DOCS_RING_ROLES[name] ?? 'L3';
+      const code = stallCodeText(text);
+      const at = `${name} (${role})`;
+      const specs = specifiers(code);
+      const out: string[] = [];
+      if (role !== 'L4' && FASTIFY.test(code)) out.push(`${at} imports fastify`);
+      if (role !== 'L4' && TIMERS.test(code)) out.push(`${at} owns a timer`);
+      if (role === 'L1') {
+        for (const s of specs) if (!/^(?:\.\.\/)+shared\//.test(s)) out.push(`${at} imports ${s}, outside shared/`);
+        if (RUNTIME_LOAD.test(code)) out.push(`${at} loads a module at run time`);
+      }
+      if (role === 'L2') {
+        for (const l of code.split('\n')) {
+          if (/^\s*import\b/.test(l) && !/^\s*import\s+type\b/.test(l)) out.push(`${at} has a value import: ${l.trim()}`);
+        }
+        if (L2_RUNTIME_EXPORT.test(code)) out.push(`${at} exports a runtime value`);
+        if (RUNTIME_LOAD.test(code)) out.push(`${at} loads a module at run time`);
+      }
+      if (role === 'L3') {
+        if (REPLY.test(code)) out.push(`${at} names reply`);
+        for (const s of specs) if (!L3_IMPORTS.has(s)) out.push(`${at} imports ${s}, not on L3's list`);
+        if (RUNTIME_LOAD.test(code)) out.push(`${at} loads a module at run time`);
+      }
+      return out;
+    });
+  const docsNames = (): string[] => sources(docsDir).map((f) => path.relative(docsDir, f));
+  const onDisk = (): (readonly [string, string])[] =>
+    docsNames().map((n) => [n, readFileSync(path.join(docsDir, n), 'utf8')] as const);
+  /** One live file with one planted line above its own text: the live text is clean, so the answer is exactly what
+   *  the planted line breaks. */
+  const planted = (name: string, line: string): (readonly [string, string])[] =>
+    [[name, `${line}\n${readFileSync(path.join(docsDir, name), 'utf8')}`]];
+
+  it('covers the directory — every floor file is visited by the directory walk (never a hand list)', () => {
+    expect(existsSync(docsDir), 'server/src/docs is not on disk — was the directory moved?').toBe(true);
+    const names = docsNames();
+    for (const f of DOCS_RING_FLOOR) expect(names, `${f} is listed but not visited`).toContain(f);
+    expect(names.length).toBeGreaterThanOrEqual(DOCS_RING_FLOOR.length);
+  });
+
+  it('the live tree: no file under server/src/docs breaks its ring', () => {
+    expect(ringViolations(onDisk())).toEqual([]);
+  });
+
+  it('CONTROL: L1 (policy.ts) — fastify in each form, a node builtin, a server module, a timer', () => {
+    expect(ringViolations(planted('policy.ts', "import fastify from 'fastify';"))).toEqual([
+      'policy.ts (L1) imports fastify', 'policy.ts (L1) imports fastify, outside shared/',
+    ]);
+    expect(ringViolations(planted('policy.ts', "import 'fastify';"))).toEqual([
+      'policy.ts (L1) imports fastify', 'policy.ts (L1) imports fastify, outside shared/',
+    ]);
+    expect(ringViolations(planted('policy.ts', 'const f = await import("fastify");'))).toEqual([
+      'policy.ts (L1) imports fastify', 'policy.ts (L1) loads a module at run time',
+    ]);
+    expect(ringViolations(planted('policy.ts', "import { readFileSync } from 'node:fs';"))).toEqual([
+      'policy.ts (L1) imports node:fs, outside shared/',
+    ]);
+    expect(ringViolations(planted('policy.ts', "import type { CcdArgv } from '../ccdargv.js';"))).toEqual([
+      'policy.ts (L1) imports ../ccdargv.js, outside shared/',
+    ]);
+    expect(ringViolations(planted('policy.ts', 'const t = setTimeout(() => {}, 1);'))).toEqual([
+      'policy.ts (L1) owns a timer',
+    ]);
+  });
+
+  it('CONTROL: L2 (ports.ts) — a value import and each runtime export are caught; a type re-export is not', () => {
+    expect(ringViolations(planted('ports.ts', "import { DOCS_CAP } from '../ccdargv.js';"))).toEqual([
+      "ports.ts (L2) has a value import: import { DOCS_CAP } from '../ccdargv.js';",
+    ]);
+    expect(ringViolations(planted('ports.ts', 'export const X = 1;'))).toEqual(['ports.ts (L2) exports a runtime value']);
+    expect(ringViolations(planted('ports.ts', 'export function f(): void {}'))).toEqual(['ports.ts (L2) exports a runtime value']);
+    expect(ringViolations(planted('ports.ts', "export { DOCS_CAP } from '../ccdargv.js';"))).toEqual([
+      'ports.ts (L2) exports a runtime value',
+    ]);
+    expect(ringViolations(planted('ports.ts', "export type { DocsJob } from './policy.js';"))).toEqual([]);
+    expect(ringViolations(planted('ports.ts', 'const m = await import("node:fs");'))).toEqual([
+      'ports.ts (L2) loads a module at run time',
+    ]);
+  });
+
+  it('CONTROL: L3 (ccdsource.ts) — reply, a timer, a fastify type and an unlisted import are caught; prose is not', () => {
+    expect(ringViolations(planted('ccdsource.ts', 'reply.code(500);'))).toEqual(['ccdsource.ts (L3) names reply']);
+    expect(ringViolations(planted('ccdsource.ts', 'setTimeout(() => {}, 1);'))).toEqual(['ccdsource.ts (L3) owns a timer']);
+    expect(ringViolations(planted('ccdsource.ts', "import type { FastifyReply } from 'fastify';"))).toEqual([
+      'ccdsource.ts (L3) imports fastify', "ccdsource.ts (L3) imports fastify, not on L3's list",
+    ]);
+    expect(ringViolations(planted('ccdsource.ts', "import { readFileSync } from 'node:fs';"))).toEqual([
+      "ccdsource.ts (L3) imports node:fs, not on L3's list",
+    ]);
+    expect(ringViolations(planted('ccdsource.ts', 'const m = await import("node:fs");'))).toEqual([
+      'ccdsource.ts (L3) loads a module at run time',
+    ]);
+    expect(ringViolations(planted('ccdsource.ts', '// reply, setTimeout( and import fastify are named here in prose only'))).toEqual([]);
+  });
+
+  it('CONTROL: an L4 file may import fastify and own a timer; an unclassified file is held to L3', () => {
+    expect(ringViolations([
+      ['routes.ts', "import type { FastifyInstance } from 'fastify';\nexport const t = setTimeout(() => {}, 1);\n"],
+    ])).toEqual([]);
+    expect(ringViolations([['extra.ts', "import fastify from 'fastify';\n"]])).toEqual([
+      'extra.ts (L3) imports fastify', "extra.ts (L3) imports fastify, not on L3's list",
+    ]);
+    expect(ringViolations([['extra.ts', 'import fastifyStatic from "@fastify/static";\n']])).toEqual([
+      'extra.ts (L3) imports fastify', "extra.ts (L3) imports @fastify/static, not on L3's list",
+    ]);
+  });
+});
+
+// Docs W2, Task 8: the names W2 declares, each with ONE home. W3's routes and later waves import them; a second
+// declaration would be a second answer that nothing forces to agree. Two directions: a hand-kept table pins each
+// W2 name to its file, and a derived scan holds EVERY export under server/src/docs (W3's included, with no list to
+// maintain) to exactly one declaration across the four roots. The table is checked against the scan, so the scan
+// cannot go blind to a name the table knows. Plus two docs-only spellings: the qualified ref prefixes are derived
+// from L0 and never quoted under server/src/docs, and the adapter is the one caller of the docs builders (row 49's
+// exact `docsFetch(` count is W3's). APPENDED, for the citation audit's reason above.
+describe('docs W2 names are defined once (spec 2026-10-01 section 1, M7.10)', () => {
+  const docsDir = path.join(ccrcRoot, 'server/src/docs');
+  const POLICY = 'server/src/docs/policy.ts';
+  const PORTS = 'server/src/docs/ports.ts';
+  const SOURCE = 'server/src/docs/ccdsource.ts';
+  const HOMES: Readonly<Record<string, string>> = {
+    // policy.ts (L1): values, functions, types.
+    DOCS_FAILURE_HTTP: POLICY, DOCS_CAPS_UNKNOWN_RETRY_AFTER_S: POLICY, DOCS_REF_PREFIXES: POLICY,
+    DOCS_LANE_EXECS: POLICY, DOCS_LANE_BYTES: POLICY, DOCS_LANE_LARGE_RAW: POLICY, DOCS_LANE_QUEUE: POLICY,
+    DOCS_LANE_MAX_WAIT_MS: POLICY, LISTING_JOB: POLICY, DOCS_CACHE_IMMUTABLE: POLICY, DOCS_CACHE_NO_STORE: POLICY,
+    DOCS_JSON_CONTENT_TYPE: POLICY,
+    docsRetryAfterSeconds: POLICY, docsRefTarget: POLICY, fetchBranchFor: POLICY, refreshDue: POLICY,
+    parseDocsApiQuery: POLICY, parseDocsProjectParam: POLICY, parseDocsRefreshBody: POLICY, docsProvenance: POLICY,
+    laneAdmit: POLICY, showRawBound: POLICY, showWire: POLICY, docsShowPlan: POLICY, cacheControlFor: POLICY,
+    docsSendPolicy: POLICY,
+    DocsRefTarget: POLICY, DocsFetchPlan: POLICY, DocsApiRoute: POLICY, DocsApiRequest: POLICY,
+    DocsRefreshRequest: POLICY, DocsHeaderBag: POLICY, DocsProvenance: POLICY, DocsJob: POLICY, LaneLoad: POLICY,
+    DocsShowPlan: POLICY, DocsSendVerdict: POLICY,
+    // ports.ts (L2): types only.
+    DocsNodeId: PORTS, DocsSourceId: PORTS, DocsShowAsk: PORTS, DocsIndexRead: PORTS, DocsTreeRead: PORTS,
+    DocsShowRead: PORTS, DocsFetchRun: PORTS, DocsReader: PORTS, DocsFetcher: PORTS,
+    // ccdsource.ts (L3): the deps type and the two factories.
+    CcdDocsDeps: SOURCE, ccdDocsReader: SOURCE, ccdDocsFetcher: SOURCE,
+    // Outside server/src/docs: the cap token, and the single reader of killed/signal.
+    DOCS_CAP: 'server/src/ccdargv.ts', CcdEnding: 'server/src/lifecycle.ts', ccdEnding: 'server/src/lifecycle.ts',
+  };
+  /** A declaration of `name` in any of its shapes: a function (async or not), a `const|let|var|class|enum` binding,
+   *  a type alias by its `=`, an interface; `export`/`declare` optional. An import, a re-export or a call declares
+   *  nothing. */
+  const DEF = (name: string): RegExp => new RegExp(
+    `^\\s*(?:export\\s+)?(?:declare\\s+)?(?:(?:async\\s+)?function\\s+${name}\\b|(?:const|let|var|class|enum)\\s+${name}\\b|type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`,
+    'm');
+  /** Every name a file exports by declaration. */
+  const exportedNames = (text: string): string[] =>
+    [...text.matchAll(/^export\s+(?:declare\s+)?(?:async\s+)?(?:const|let|var|function|class|enum|interface|type)\s+([A-Za-z_$][\w$]*)/gm)]
+      .map((m) => m[1]);
+  const text = new Map<string, string>();
+  const src = (f: string): string => {
+    const hit = text.get(f);
+    if (hit !== undefined) return hit;
+    const t = readFileSync(f, 'utf8');
+    text.set(f, t);
+    return t;
+  };
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(src(f))).map(rel);
+  /** A qualified ref prefix inside a string literal of any quote, a template included. */
+  const QUOTED_PREFIX = /(['"`])refs\/(?:heads|remotes\/origin)\//;
+  const DOCS_CALL = /\bCCD_ARGV\.docs\w*\s*\(/;
+
+  it('CONTROL: DEF sees each declaration shape and an un-exported copy, and not an import, a re-export, a call or a longer name', () => {
+    for (const decl of [
+      'export const X = 1;', 'const X = 1;', 'export interface X {', 'export type X<T> = T;', 'type X = 1;',
+      'export async function X(): Promise<void> {', 'function X(): void {', 'export class X {',
+    ]) expect(DEF('X').test(decl), decl).toBe(true);
+    for (const miss of [
+      "import { X } from './policy.js';", "import {\n  type X,\n} from './policy.js';", 'export { X };',
+      'export const X_SEEN = 1;', 'const y = X(1);', 'export type XY = 1;',
+    ]) expect(DEF('X').test(miss), miss).toBe(false);
+  });
+
+  it('CONTROL: exportedNames reads every exported declaration and nothing else', () => {
+    expect(exportedNames(
+      'export const A = 1;\nexport function b(): void {}\nexport interface C {}\nexport type D = 1;\n'
+      + 'export async function e(): Promise<void> {}\nconst f = 1;\nexport { f };\n  export const g = 1;\n',
+    )).toEqual(['A', 'b', 'C', 'D', 'e']);
+  });
+
+  it.each(Object.entries(HOMES))('%s is declared exactly once, in %s', (name, home) => {
+    expect(holders(DEF(name))).toEqual([home]);
+  });
+
+  it('every export under server/src/docs is declared exactly once across the four roots, in its own file', () => {
+    const files = sources(docsDir);
+    expect(files.length).toBeGreaterThanOrEqual(3);
+    for (const f of files) {
+      for (const name of exportedNames(src(f))) expect(holders(DEF(name)), name).toEqual([rel(f)]);
+    }
+  });
+
+  it('the table is seen by the scan: every listed name under server/src/docs is an export of its home', () => {
+    for (const [name, home] of Object.entries(HOMES)) {
+      if (!home.startsWith('server/src/docs/')) continue;
+      expect(exportedNames(src(path.join(ccrcRoot, home))), `${name} in ${home}`).toContain(name);
+    }
+  });
+
+  it('CONTROL: QUOTED_PREFIX sees a quoted prefix in each quote, and not prose or the derived name', () => {
+    for (const hit of ["const l = 'refs/heads/' + b;", 'const o = `refs/remotes/origin/${b}`;', 'x === "refs/heads/main"']) {
+      expect(QUOTED_PREFIX.test(stallCodeText(hit)), hit).toBe(true);
+    }
+    for (const miss of [' * - `refs/heads/b`: skipped, local-ref', '// refs/remotes/origin/b', 'const [l, o] = DOCS_REF_PREFIXES;']) {
+      expect(QUOTED_PREFIX.test(stallCodeText(miss)), miss).toBe(false);
+    }
+  });
+
+  it("the qualified ref prefixes are quoted nowhere under server/src/docs (derived from L0's prefix body)", () => {
+    expect(sources(docsDir).filter((f) => QUOTED_PREFIX.test(stallCode(f))).map(rel)).toEqual([]);
+  });
+
+  it('CONTROL: DOCS_CALL sees a builder call, and not the builder table or a comment', () => {
+    expect(DOCS_CALL.test(stallCodeText('await deps.runCcd(CCD_ARGV.docsFetch(project, branch));'))).toBe(true);
+    expect(DOCS_CALL.test(stallCodeText("  docsFetch: (project: string, branch: string | null) =>"))).toBe(false);
+    expect(DOCS_CALL.test(stallCodeText('/** the ONE `CCD_ARGV.docsFetch(` in server/src */'))).toBe(false);
+  });
+
+  it('the docs builders have one caller across the four roots: the adapter', () => {
+    expect(ALL.filter((f) => DOCS_CALL.test(stallCode(f))).map(rel)).toEqual([SOURCE]);
+  });
 });

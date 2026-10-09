@@ -103,6 +103,15 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // TERMINAL DRAWER wave 2. The mode is part of the argv, not a parameter the
   // route may omit: `cmd_win_size` asserts exactly four tokens.
   winSize: ['demo-quiet-basin', 'smallest'],
+  // NATIVE DOCS READER wave 2. Read-only verbs, one grant each; the two
+  // `docs-show` builders share `['docs-show','--project']`. The `null` tails
+  // are the samples, so layer 2c pins the shortest argv of `docsTree` and
+  // `docsFetch`; their non-null tails are pinned by the case after it.
+  docsIndex: [],
+  docsTree: ['demo', null],
+  docsShowCommitted: ['demo', 'a'.repeat(40), 'refs/remotes/origin/main', 'specs', 'a.md', 2097152],
+  docsShowDraft: ['demo', 'main', 'b'.repeat(40), 'plans', 'b.md', 'c'.repeat(64), 2097152],
+  docsFetch: ['demo', null],
 };
 
 /**
@@ -348,6 +357,39 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.reclaimPause('off')])).toBe(true);
   });
 
+  // NATIVE DOCS READER wave 2 (spec 2026-10-01 section 2 (a), row 44). Four
+  // read-only verbs, each enrolled for its ARGUMENT SURFACE (`coord-pause`'s
+  // reason) and reached from session-gated routes that carry no box token. A
+  // bare grant is green in layer 2 and in layer 3's reachability check,
+  // because the bare verb is a genuine prefix of every argv the builders make,
+  // so it is refused here, cross-PACKAGE and object-reading, for the reasons
+  // the ws-reap assertion above states. ONE `docs-show` grant serves both of
+  // its builders; a second grant would be dead weight layer 3 cannot see.
+  it('docs verbs are grantable ONLY with their flag, one grant each, and both docs-show builders cross it', () => {
+    const GRANTS: readonly (readonly [verb: string, flag: string])[] = [
+      ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+    ];
+    for (const [verb, flag] of GRANTS) {
+      expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === verb), `exactly one ${verb} grant, on ${flag}`)
+        .toEqual([[verb, flag]]);
+      expect(isExecAllowed('ccd', [verb]), `bare ${verb}`).toBe(false);
+      expect(isExecAllowed('ccd', [verb, 'demo']), `${verb} with a positional`).toBe(false);
+    }
+    expect(isExecAllowed('ccd', ['docs-index', '--project', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-tree', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-show', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-fetch', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsIndex()])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsTree('demo', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsTree('demo', 'ws/a')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsShowCommitted('demo', 'a'.repeat(40), 'refs/remotes/origin/main',
+      'specs', 'a.md', 2097152)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsShowDraft('demo', 'main', 'b'.repeat(40), 'plans', 'b.md',
+      'c'.repeat(64), 2097152)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', 'ws/a')])).toBe(true);
+  });
+
   // The other half of the same decision, and the half a `not.toContain(
   // 'set-option')` check cannot carry: `tmux set-option` is NOT granted and
   // must never be — prefix matching leaves every later token unconstrained, so
@@ -544,11 +586,35 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     routeSet: ['route', '--session', 'demo-quiet-basin', '--set', 'class=opus', '--set', 'effort=high'],
     routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
     winSize: ['win-size', '--session', 'demo-quiet-basin', '--mode', 'smallest'],
+    // NATIVE DOCS READER wave 2: spec 2026-10-01 section 2 (a)'s verb table, token for token. The verb, then
+    // `--project` (or `--all`), then every flag pair in ccd's argv order; `--max-bytes` is the class cap,
+    // stringified. Committed show is 12 tokens after the verb, draft show 14.
+    docsIndex: ['docs-index', '--all'],
+    docsTree: ['docs-tree', '--project', 'demo'],
+    docsShowCommitted: ['docs-show', '--project', 'demo', '--commit', 'a'.repeat(40), '--ref', 'refs/remotes/origin/main',
+                        '--section', 'specs', '--path', 'a.md', '--max-bytes', '2097152'],
+    docsShowDraft: ['docs-show', '--project', 'demo', '--draft-branch', 'main', '--head', 'b'.repeat(40),
+                    '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'],
+    docsFetch: ['docs-fetch', '--project', 'demo'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
     const build = CCD_ARGV[key] as (...a: unknown[]) => readonly string[];
     expect(build(...(SAMPLES[key] as unknown[]))).toEqual(EXPECTED[key]);
+  });
+
+  // NATIVE DOCS READER wave 2. The samples above carry `null` tails, so the
+  // row above sees only the shortest argv of `docsTree` and `docsFetch`. This
+  // pins both arms of both builders: a non-null value adds exactly its one
+  // flag pair AFTER the project, and `null` adds nothing at all (never an
+  // empty `--ref ''`, which ccd would refuse as `bad-ref`).
+  it('docsTree and docsFetch add their optional flag pair only for a non-null value, after the project', () => {
+    expect(CCD_ARGV.docsTree('demo', null)).toEqual(['docs-tree', '--project', 'demo']);
+    expect(CCD_ARGV.docsTree('demo', 'ws/a')).toEqual(['docs-tree', '--project', 'demo', '--ref', 'ws/a']);
+    expect(CCD_ARGV.docsTree('demo', 'refs/remotes/origin/main'))
+      .toEqual(['docs-tree', '--project', 'demo', '--ref', 'refs/remotes/origin/main']);
+    expect(CCD_ARGV.docsFetch('demo', null)).toEqual(['docs-fetch', '--project', 'demo']);
+    expect(CCD_ARGV.docsFetch('demo', 'ws/a')).toEqual(['docs-fetch', '--project', 'demo', '--branch', 'ws/a']);
   });
 
   // CHILD-RECLAMATION WAVE 1. The exact-argv row above carries a child but no
