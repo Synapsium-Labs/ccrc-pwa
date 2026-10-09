@@ -2236,7 +2236,7 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
 - `retryable-collect-words-declared-with-the-verb`: `not-witnessed`, `registered` and `changed-recently` are declared
   in the commit that journals them at the verb, since the refusal scan holds every declared word set-equal to a
   literal journal site; the audit prints them on stdout only.
-- `act-cites-5.10`, `collect-cites-5.10`, `alias-cites-5.10` and `cite-5-10`: committed comments and test titles for the
+- `act-cites-5.10`, `collect-cites-5.10` and `alias-cites-5.10`: committed comments and test titles for the
   collector's mechanics cite the spec's §5.10, never the contract; §5.2 is cited only for the temp root and the
   witness, and §5.6 only for the shared tail, the breadcrumb and the witness drop.
 - `append-after-docs`: the collector's cap, its required-flag line, its grant and its bypass fixture append after
@@ -2247,7 +2247,7 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   building blocks began, not against main, which had moved.
 - `mutation-masked-halves-measured-by-supplement`: three act-pin rows predict two reds inside one case, and the first
   assertion masks the second, so each masked half was measured separately and the case was not softened.
-- `mutation-extra-rows-x1-x4`, `row-29-renames-at-every-site`, `row-15-slot-synthesizes-a-record`,
+- `mutation-extra-rows-x-series`, `row-29-renames-at-every-site`, `row-15-slot-synthesizes-a-record`,
   `proven-gap-slot-leaf-swap-added` and `record-lost-slot-standing-added`: the race suite adds four mutation rows for
   the guards its amended and added cases rest on; renames a slot consistently at all eight sites, since a rename at
   the namer alone fails the record writer first; builds the slot listing's population as a record synthesized from the
@@ -2262,9 +2262,10 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   behaviour.
 
 **Prose and the wave-6 plan.**
-- `wave6-plan-text-corrected-by-deviation-entry`: the merged wave-6 plan is not edited, and the three sentences review
-  346 found too wide are corrected in a deviation entry of this wave's plan, entered as `wave6-plan-prose-scoped`, and
-  in the committed ccd comments.
+- `wave6-plan-text-corrected-by-deviation-entry`, which Task 9's report calls `wave6-plan-prose-scoped`: one
+  departure under two names, so no number is spent twice. The merged wave-6 plan is not edited, and the three
+  sentences review 346 found too wide are corrected in a deviation entry of this wave's plan and in the committed ccd
+  comments.
 
 **Not edited.** `server/src/deadCoordinator.ts` is workspace lifecycle's and is unedited. The `collect` act's exclusion
 from its deliberate put-down set is pinned by a test only (`ws-collect-act.test.ts`), and the file's docstring edit

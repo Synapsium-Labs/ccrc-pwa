@@ -2,7 +2,7 @@
 
 **Status:** design approved by the operator 2026-09-22; written spec accepted the same day. Ticket CCR-15 ("Reclamation policy: the fleet can act on
 idle and finished workspaces"). Supersedes nothing; **narrows** two standing rulings and **satisfies** a
-third that has been open since 2026-08-11. Implementation rides six waves, agent-first.
+third that has been open since 2026-08-11. Implementation rides nine waves (§8), agent-first; wave 7 is the temp-root collector.
 
 This document is the design. The numbered deviations, the task breakdown and the mutation tables belong to
 the plans that follow it.
@@ -224,7 +224,7 @@ sees it, a row's purge leaves it standing, and a slug whose only trace is its wi
 `tmproots/` that is itself a link is never followed, by the writer, the reader, the remover or the collector. It
 dies only once its leaf is proven absent: by the removal helper (§5.6) after it removes the leaf, by the tail's own
 absence proof when the in-use probe answered in use or unmeasured and the helper was never asked (§5.6), or by the
-collector (§5.10), which drops it by compare-and-drop and only last. The collector also drops the witness of a leaf
+collector (§5.10), which drops it by compare-and-drop and only after the leaf is proven gone. The collector also drops the witness of a leaf
 that is already absent, but only when no quarantine record of that id stands, because a record is the proof that a
 leaf may be waiting in a quarantine slot. A leaf whose identity no longer matches its witness, which is what a
 storage migration does to every leaf, is never collected; it is the operator's.
@@ -323,7 +323,8 @@ under the id an earlier token named, and nothing else in that token would differ
 value in `$REG/<id>.generation` that is minted with the row, removed with it and rewritten by nothing else (`/clear`,
 a swap and a respawn leave it alone), is an input of the fresh reclaim token and of the resume token, and a token
 minted over one row can never be spent on a re-mint of the same id. `ws-audit --reclaim` prints it as the
-`generation` key: the string, or null where the first two rungs refused before it was read. It is read after those
+`generation` key: the string, or null where the first two rungs refused before it was read or where the read itself
+answered unmeasured. It is read after those
 two rungs, so their terminal words are unchanged, and it is read under the row's compaction lock:
 `_ws_reclaim_generation` takes the lock, reads through the one generation reader, releases the lock, and sets
 `RECLAIM_GENERATION`, or `RECLAIM_GENERATION_WHY` where it answers unmeasured. The order, reap lock and then
@@ -1067,7 +1068,7 @@ server reads as a failed audit and retries, and nothing is journaled. A witness 
 no quarantine record and no quarantine slot of the id, is collectable at once, under a token of its own: the verb
 then drops the witness and nothing else, and makes no quarantine, record or slot for a leaf that is not there. A
 witnessed id whose leaf is absent while any of its quarantine slots stands, with no record naming it, is refused
-`quarantine-kept` and its witness stays, so that a slot is never orphaned in silence.
+`quarantine-kept` and its witness stays, so that there is no orphaned slot, and a slot is never orphaned in silence.
 
 **The token** is `ws-audit --collect`'s consent, in the reclaim token's encoding, with `mode=collect` first so that
 it never equals a reclaim, an expiry or a resume token. It binds the id, the witness's device, inode, birth time,
@@ -1086,7 +1087,8 @@ ever, and every change that moves it stamps the change time too. A non-empty kno
 folded to 24 hours: the audit answers unmeasured, naming the knob, and prints no floor. A whole number of 10 or
 more digits is clamped to 999999999. The walk is GNU `find -P <leaf> -xdev -printf %C@` under `LC_ALL=C`: it never
 follows a link and never crosses a file system, and it writes nothing inside the leaf before the comparison, so no
-permission pass runs first. It is bounded by `WS_COLLECT_IDLE_SCAN_S`, 30 seconds, and a cap of 2,000,000 entries;
+permission pass runs first. Its one write is the stderr scratch file it makes under `$TMPDIR`; a `$TMPDIR` inside the
+leaf is written there, and that fails closed, because the leaf then reads busy. It is bounded by `WS_COLLECT_IDLE_SCAN_S`, 30 seconds, and a cap of 2,000,000 entries;
 the largest live leaf, 76,915 entries, walked in at most 4.8 seconds warm. A timeout, an unreadable entry, the cap
 and a walk that printed no change time each answer unmeasured, naming which, and the leaf is retried. With the
 in-use probe's 10 seconds and the checkout scan's 30, the audit spends at most 70 seconds plus the row pass, inside
@@ -1173,7 +1175,7 @@ step 5 and the rest; an `unmoved` one clears the empty slot and the record, keep
 `state-changed`, so that the leaf is audited afresh; a `removed` one finishes the order from the slot's `rmdir`. A
 slot that holds anything the collector did not put there, a slot leaf that is not the record's directory, several
 records for one id, and a directory that stands both in its slot and at the id are `quarantine-kept`: a forged slot
-or record fails one of these and is listed, never taken. A record whose original path is retaken answers
+or record fails one of these and is listed, never taken. A record whose leaf stands in its slot, and whose original path is retaken, answers
 `quarantine-kept` for as long as it is retaken, read off the disk, so it clears once the path is free again, and the
 next pass resumes from the record with every re-proof. The registry is asked only after the phase, because a retake
 usually brings a row whose retryable `registered` would otherwise hide it. A record that vanishes between the
@@ -1195,8 +1197,9 @@ the operator, told on every audit and never in silence; no session acts on one.
 original path. After the move, the removal helper and the question take the same additive alias argument, passed only
 by the collector: the leaf's physical pre-move spelling and the accepted list from the record. Under it a back-link
 that names the pre-move spelling counts as the leaf's own only when both hold: the same admin directory, with the
-same back-link value, was accepted by the pre-move question in this lock; and nothing stands at the pre-move spelling
-now, proven absent. Any other outside back-link refuses, as without an alias, because a recycled admin name otherwise
+same back-link value, was accepted by the pre-move question, in the lock that wrote the record, and is carried by the
+record (on a resume it reaches the removal under the resume token that binds that list); and nothing stands at the
+pre-move spelling now, proven absent. Any other outside back-link refuses, as without an alias, because a recycled admin name otherwise
 passes and deletes a moved foreign worktree's uncommitted work (measured). A linked worktree of a clone that is
 itself in the leaf names its git directory absolutely, by the pre-move spelling. It is read at the leaf's new place
 only while nothing stands again at that spelling, proven absent, and the inside-the-leaf rule then answers for it as
@@ -1212,7 +1215,7 @@ takes for an id; reads the moved copy; unlinks it only if it is, field for field
 on; and otherwise moves it back. The witness writer's dead temp files, `tmproots/.<id>.<pid>.<rand>.tmp`, are removed
 under the id's lock while the slug reads free: only a name that matches that shape exactly, with the id matched
 literally and two all-digit fields, and only when its modification time is at least an hour old. A temp file of an id
-with no witness is never visited.
+with neither a witness nor a quarantine record is never visited.
 
 **The unmeasured answers, Darwin included.** The collector is Linux-first. On Darwin the audit answers unmeasured
 before it reads anything, the verb never renames, and the idle walk's GNU `find` has no Darwin spelling; the same
@@ -1232,7 +1235,7 @@ cannot be minted. The audit exits 1 on each and journals nothing; the verb print
 - A new child on a recycled slug adopts an old leaf through `mkdir -p` in two cases: a leaf the tail deliberately kept,
   and a leaf the collector's own restore put back before that child's `mkdir -p`. The removal helper's checkout
   question still guards every later removal.
-- The witness writer's temp files of an id with no witness are never visited.
+- The witness writer's temp files of an id with neither a witness nor a quarantine record are never visited.
 - A rename's EBUSY on a mount point, and a same-file-system bind mount inside a leaf, cannot be measured without root
   on this fleet. Step 5's mountinfo check covers the collector; the tail's share is stated in §7.
 - The in-use probe does not count ccd's own process, the scan's chain, or any child of those. That is safe here
@@ -1455,13 +1458,13 @@ approved on a narrow one.
    - The test harness's git spawns keep the runner's own `HOME` git config.
    - A witness writer's interrupted temp file (`$REG/tmproots/.<id>.*.tmp`) is reaped by nothing but the collector,
      which removes a dead one of a witnessed id under that id's lock, while the slug reads free and only when it is
-     at least an hour old (§5.10). One of an id with no witness is never visited.
+     at least an hour old (§5.10). One of an id with neither a witness nor a quarantine record is never visited.
 
    Wave 7 carries these residuals as well, and amends the ones above.
    - The collector's own are in §5.10, "Its limits, stated": atime is not consulted; a nested mount's contents are
      not walked; a backwards clock step delays the floor; the operator's `cdk-out-sweep` restarts a CDK-using
      orphan's floor; a new child on a recycled slug can adopt a leaf the tail kept or the collector's restore put
-     back; a witness writer's temp files of an id with no witness are never visited; a rename's EBUSY on a mount
+     back; a witness writer's temp files of an id with neither a witness nor a quarantine record are never visited; a rename's EBUSY on a mount
      point and a same-file-system bind mount cannot be measured without root on this fleet; the in-use probe does
      not count ccd's own process or its children, which is safe because the verb runs as a ccd process of its own;
      a kill between the move and the re-proof, after a recycled spawn adopted the leaf, keeps that leaf in its slot
