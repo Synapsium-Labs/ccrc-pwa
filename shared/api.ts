@@ -8475,6 +8475,41 @@ export const LEDGER_TITLE_MAX_BYTES = 200;
 export const PANE_HISTORY_LINES = 2000;
 
 /**
+ * THE SIZE THE DRAWER PINS A SESSION'S TMUX WINDOW TO, and the size ccd spawns
+ * one at. One number, because two copies of it are two different answers to
+ * "how wide is this pane" and every reader downstream believes whichever it
+ * met first.
+ *
+ * WHY IT IS PINNED AT ALL (spec §5.1, F1/F14). tmux REFLOWS stored lines when a
+ * window's width changes, and the reflow is destructive at this box's
+ * `history-limit`: measured on a private socket, `resize-window -x 43` on a
+ * 220-column pane holding 1853 stored lines took `history_size` to 9460, and at
+ * `history-limit 2000` the next output shed ~600 lines that never came back.
+ * So the drawer resizes the window to THIS before attaching and back to THIS on
+ * close, and a narrow client never moves it.
+ *
+ * WHAT A CLIENT DOES WITH IT is the other half, and it is the PWA's: a client
+ * smaller than the window is not a smaller window, it is a VIEWPORT INTO one,
+ * and tmux pans that viewport to follow the cursor — so a line's beginning
+ * scrolls off the left while the reader is typing. `TerminalDrawer` answers by
+ * fitting its own grid to this width instead of to its own box.
+ *
+ * THIS IS TODAY'S ANSWER, NOT THE LAST ONE. The drawer program's wave 3 lets a
+ * phone-width drawer narrow the window deliberately, under a guard that only
+ * allows a width the pane's own history can absorb. When that lands the window
+ * stops being one constant and starts being a measurement, and the reader of
+ * this value becomes the reader of that measurement — which is why the PWA
+ * reads it through ONE function rather than inlining it.
+ *
+ * `ccd/ccd` spawns with the same pair and cannot import this file (bash), so it
+ * carries its own copy — the same shape `READER_MIN_COLS` already has. Holding
+ * the two equal is a separate, AGENT-FIRST change; this file is where the
+ * number is DECLARED, and `server/src/server.ts` no longer spells it.
+ */
+export const PINNED_WINDOW_COLS = 220;
+export const PINNED_WINDOW_ROWS = 50;
+
+/**
  * ONE MEASUREMENT OF A PANE, and its failures told apart.
  *
  * Read with a single `list-panes -t cc-<id> -F '#{pane_active} #{history_size}

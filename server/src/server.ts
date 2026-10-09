@@ -76,6 +76,7 @@ import {
 } from './auth/webauthn.js';
 import {
   ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES, PANE_HISTORY_LINES,
+  PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -1782,7 +1783,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // depending on, and the close handler's own 220x50 becomes a no-op rather
     // than the defect PR #96's handoff was built to cure. The deliberate
     // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
-    void deps.tmux.resizeWindow(id, 220, 50);
+    void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
@@ -1799,7 +1800,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       p.kill();
       // Restore the canonical size ccd spawned with — a phone-sized drawer must
       // not leave the session shrunken (wrapped panes break capture parsing).
-      void deps.tmux.resizeWindow(id, 220, 50);
+      void deps.tmux.resizeWindow(id, PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS);
     });
   });
 
