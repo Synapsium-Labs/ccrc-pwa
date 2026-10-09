@@ -237,7 +237,7 @@ describe.skipIf(!LINUX)('step 4 — ONE rename, proven by lstat, never by mv’s
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const doc = docOf(r.stdout);
     expect(doc['failed']).toBe('quarantine-kept');
-    expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: .*the move of demo-quiet-reef was not proven, and its slot could not be cleared/);
+    expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: .*the move of demo-quiet-reef was not proven, and its slot or its record could not be cleared/);
     expect(records(h)).toHaveLength(1);
     expect(inoAt(o.leaf), 'the leaf, where it was').toBe(o.ino);
     expect(journal()).toEqual([['intent', null], ['failed', 'quarantine-kept']]);

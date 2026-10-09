@@ -8016,7 +8016,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // wherever it is printed: the audit removes nothing, and the verb answers either word before it removes anything
   // further, whether the record it keeps is the operator's or a later pass's.
   'witness-mismatch':
-    'The temporary directory under this id is not the one ccrc recorded handing out — it was replaced or moved, or its record cannot be read or vouches for too little — so ccrc will never remove it on its own. Nothing was removed; it is listed for you to look at.',
+    'The temporary directory under this id is not the one ccrc recorded handing out — it was replaced or moved, or its record cannot be read or vouches for too little — so ccrc’s collector will not remove it. Nothing was removed; it is listed for you to look at.',
   'quarantine-kept':
     'ccrc set aside a temporary directory to remove and could not finish, so it keeps what stands of it, and any record of it, exactly as they are. Nothing further was removed. ccrc can finish on a later look only while they are as it left them; anything else is listed for you to look at.',
   // The temp-root collector's RETRYABLE words (spec §5.2, §5.10): printed by `ws-audit --collect`, journaled `refused`

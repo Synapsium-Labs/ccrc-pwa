@@ -2127,6 +2127,9 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
 - `verb-population-refuses-linked-tmproots`: the verb refuses a `tmproots/` that is itself a link as
   `probe-unmeasured`, before taking any lock, as the audit does, so neither takes a lock for a name it cannot place in
   the population.
+- `population-absence-is-measured`: both population checks ask the witness's absence through `_ws_reclaim_absent`, so a
+  `tmproots/` that cannot be searched is unmeasured (the audit's `witness`, the verb's `probe-unmeasured` before any
+  lock), never `not-witnessed`, whose sentence says ccrc never handed the id out.
 - `record-written-from-a-fresh-witness-read`: the writer cannot bind its witness fields to an id, so the verb reads
   the id's witness directly before the record write, and the record's read-back compares it with what the consent bound.
 - `spawn-at-consented-stops-at-the-record`: a recycled spawn between the consent and the record now stops the verb at
@@ -2219,6 +2222,9 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   `_ws_reclaim_log_of` is built on, through a new `_ws_reclaim_no_record`, rather than calling `_ws_reclaim_log_of`
   itself; the gone-arm walk moved into `_ws_reclaim_admin_entries` unchanged, so one matcher serves a standing tree and a
   gone one.
+- `rung8-reason-cut`: rung 8's no-record reason names an admin entry whose name a session chose, so both arms cut it
+  through `_ws_leaf_why_line` before it reaches the journal, and the reason for an entry that names the tree leads with
+  its conclusion ("git's worktree list omitted a record that exists"), so the cut keeps it.
 - `rk-tip-case-removes-the-tree`: the red-first case for an all-zero tombstone tip removes the tree first, because with
   the tree standing the branch-holder check stops the tail before the compare-and-swap and the fixture would pin nothing.
 - `generation-read-under-the-compaction-lock`: X1's generation read takes the row's compaction lock, as every other

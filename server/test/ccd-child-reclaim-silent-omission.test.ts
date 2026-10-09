@@ -214,6 +214,7 @@ describe('the tail’s compare-and-swap never takes the all-zero id as its old v
     const r = childReclaimVerb(h, resumeToken('children'));
     expect(h.git(c.main, 'rev-parse', '--verify', '--quiet', 'refs/heads/ws/nested'), 'the nested branch stands, unmoved').toBe(nestedTip);
     expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the child’s tree stands').toBe(true);
+    expect(fs.existsSync(adminOf(c.main, 'inner')), 'git’s admin record of the nested line stands').toBe(true);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const o = JSON.parse(r.stdout) as { failed: string; detail: string };
     expect(o.failed).toBe('branch-unmeasured');

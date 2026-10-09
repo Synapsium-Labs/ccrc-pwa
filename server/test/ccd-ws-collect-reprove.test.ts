@@ -359,6 +359,23 @@ describe.skipIf(!LINUX)('the restore — NOREPLACE, proven by lstat, or the reco
     expect(fs.readFileSync(path.join(quarantineOf(h), slots(h)[0]!, 'stray'), 'utf8')).toBe('s');
     expect(records(h)).toHaveLength(1);
   });
+
+  it('a slot leaf whose identity cannot be READ is left to the move, which refuses it: failed quarantine-kept, retried — never the terminal refusal', () => {
+    // From `moved` on, a birth time of anything at a `*/leaf` cannot be read: step 5's identity answers 2, the restore
+    // asks it again (2, neither "not it" nor "gone"), and the move's own identity pre-check refuses before any rename.
+    const o = makeOrphan(h);
+    const btimeFails = 'eval "$(declare -f _plat_btime | sed \'1s/^_plat_btime/_real_plat_btime/\')";'
+      + ' _plat_btime() { case "$1" in */leaf) return 1 ;; esac; _real_plat_btime "$@"; }';
+    const r = collectVerb(h, collectToken(h), { pre: gapAt('moved', btimeFails) });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed'], 'failed, so the lane retries it').toBe('quarantine-kept');
+    expect(doc['refused'], 'never the terminal refusal').toBeUndefined();
+    expect(inoAt(slotLeaf()), 'the leaf stays in its slot').toBe(o.ino);
+    expect(fs.existsSync(o.leaf), 'nothing went back to its path').toBe(false);
+    expect(records(h), 'the record stands').toHaveLength(1);
+    journaled('failed', 'quarantine-kept');
+  });
 });
 
 describe.skipIf(!LINUX)('the test holder is killed only while it is the holder', () => {

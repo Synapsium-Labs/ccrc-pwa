@@ -683,7 +683,10 @@ key rides a global that the document's printer reads, not an argument threaded t
 **Every reason is one capped line.** The permission pass's reason carries a name the session chose and a path, and a
 long or non-UTF-8 one, raw, grew at the journal's encoder until the refusal row lost its `detail`, `verb` and
 `dec.*`. It is cut by the same cutter as every kept reason above: printable ASCII, 300 bytes, the cut marked with a
-trailing "…". Its tokens are unchanged, and no token reads the reason.
+trailing "…". So is rung 8's reason for git's silence (§5.5), on both arms: it names an admin entry under
+`<common>/worktrees/`, which git names after the basename of a worktree a session chose, and it reaches the same
+journal through `ws-reclaim`'s and `ws-audit`'s `probe-unmeasured` rows. Its tokens are unchanged, and no token reads
+the reason.
 
 ### 5.7 When reclaim happens
 
@@ -1022,7 +1025,9 @@ server's registry read never see it and a record outlives the row it was never p
 exactly: its name less its two trailing all-digit dot-fields, never an `<id>.*` prefix, because ids admit dots and a
 nested project's id is not its parent's. An id outside the population answers `not-witnessed`, and neither the audit
 nor the verb takes a lock for a name outside it. A `tmproots/` that is itself a link puts no id in the population
-and is never followed; whether an id is in it is then unmeasured. Unwitnessed leaves are never touched: every leaf
+and is never followed; whether an id is in it is then unmeasured. "No witness" is a measurement, never a failed
+test: a witness whose absence cannot be proven (a `tmproots/` this process cannot search) is unmeasured too, at the
+audit and, before any lock, at the verb, never `not-witnessed`. Unwitnessed leaves are never touched: every leaf
 made before the witness shipped, and every row-less leaf that has no witness. They are the operator's, as
 are the kept clips leaves (§5.2), for which no clips witness is planned. **The collector never takes a
 non-directory.** The tail unlinks a link or file leaf (§5.2); the collector does not. A link, a file or any other
@@ -1068,7 +1073,7 @@ server reads as a failed audit and retries, and nothing is journaled. A witness 
 no quarantine record and no quarantine slot of the id, is collectable at once, under a token of its own: the verb
 then drops the witness and nothing else, and makes no quarantine, record or slot for a leaf that is not there. A
 witnessed id whose leaf is absent while any of its quarantine slots stands, with no record naming it, is refused
-`quarantine-kept` and its witness stays, so that there is no orphaned slot, and a slot is never orphaned in silence.
+`quarantine-kept` and its witness stays, so that the slot is never orphaned in silence.
 
 **The token** is `ws-audit --collect`'s consent, in the reclaim token's encoding, with `mode=collect` first so that
 it never equals a reclaim, an expiry or a resume token. It binds the id, the witness's device, inode, birth time,
@@ -1457,7 +1462,7 @@ approved on a narrow one.
      is `update-ref -d --no-deref`.
    - The test harness's git spawns keep the runner's own `HOME` git config.
    - A witness writer's interrupted temp file (`$REG/tmproots/.<id>.*.tmp`) is reaped by nothing but the collector,
-     which removes a dead one of a witnessed id under that id's lock, while the slug reads free and only when it is
+     which removes a dead one of an id with a witness or a quarantine record under that id's lock, while the slug reads free and only when it is
      at least an hour old (§5.10). One of an id with neither a witness nor a quarantine record is never visited.
 
    Wave 7 carries these residuals as well, and amends the ones above.

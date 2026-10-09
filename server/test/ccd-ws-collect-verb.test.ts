@@ -309,6 +309,24 @@ describe.skipIf(!LINUX)('the pause, the lock, and never a lock for a foreign nam
     expect(rows()).toEqual([['failed', 'probe-unmeasured']]);
   });
 
+  it.skipIf(ROOT)('a `tmproots/` that cannot be searched: failed probe-unmeasured BEFORE any lock — never not-witnessed, whose sentence would say ccrc never handed the id out', () => {
+    const o = makeOrphan(h);
+    const dir = path.dirname(witnessOf(h));
+    const mode = fs.statSync(dir).mode & 0o777;
+    fs.chmodSync(dir, 0o600);
+    let r: Run;
+    try { r = collectVerb(h, WRONG_TOKEN); } finally { fs.chmodSync(dir, mode); }
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toContain('no lock was taken');
+    expect(String(doc['detail'])).toContain('cannot be searched');
+    expect(fs.existsSync(path.join(regOf(h), `.reap-${COL_ID}.lock`)), 'the reap lock file').toBe(false);
+    expect(inoAt(o.leaf)).toBe(o.ino);
+    expect(fs.existsSync(witnessOf(h)), 'the witness stands').toBe(true);
+    expect(rows()).toEqual([['failed', 'probe-unmeasured']]);
+  });
+
   it('argv: four positionals only, no --defer-expired; a malformed or dot-leading id and a bad token die first, journaling nothing', () => {
     makeOrphan(h);
     for (const [args, err] of [

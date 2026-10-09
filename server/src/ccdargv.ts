@@ -456,7 +456,7 @@ export const CCD_ARGV = {
    *  `ws-collect-wiring.test.ts` pins that no server source composes it until then. */
   wsCollect: (token: string, id: string, dec: ActorFlags | null) =>
     argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),
-  wsAttic:  (id: string) => argv(['ws-attic', '--session', id]),
+  wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
    *  so in its own comment), so there is one reason on this verb, not two. The

@@ -529,7 +529,7 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
       intact(c);
     }, 90_000);
 
-    it(`${label}: the same row stops a RESUMED tail with \`worktree-remove-failed\` — the tree byte-identical, the breadcrumb kept`, () => {
+    it(`${label}: the same row stops a RESUMED tail with \`worktree-remove-failed\` or \`containment-refuted\` — the tree byte-identical, the breadcrumb kept`, () => {
       const c = makeChild(h);
       plantNested(c);
       interrupted(c, 'worktree');
@@ -586,7 +586,7 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
     intact(c);
   }, 90_000);
 
-  it('the same child stops a RESUMED tail with `worktree-remove-failed` — the tree byte-identical, the breadcrumb kept', () => {
+  it('the same child stops a RESUMED tail with `worktree-remove-failed` or `containment-refuted` — the tree byte-identical, the breadcrumb kept', () => {
     const c = makeChild(h);
     plantNested(c);
     interrupted(c, 'worktree');

@@ -223,6 +223,14 @@ describe('the read runs under the row\'s compaction lock, as every other generat
     expect(e.verdict).toBe('unmeasured');
     expect(e.detail).toContain('(lock-path-occupied)');
   }, 90_000);
+
+  it('a read that FAILED releases the lock too: an absent generation is rc 2, and the next acquire in the same shell takes it', () => {
+    makeChild(h);
+    fs.rmSync(genFile());
+    expect(h.sh(`_ws_reclaim_generation ${CHILD_ID}; printf '%s' "$?";`
+      + ` if _compact_lock_acquire ${CHILD_ID} 0; then printf ' released'; else printf ' held'; fi`), 'a fresh acquire in the same shell, no wait')
+      .toBe('2 released');
+  }, 90_000);
 });
 
 describe('the server reads the additive key absence-permits', () => {

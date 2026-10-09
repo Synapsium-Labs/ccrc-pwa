@@ -60,8 +60,8 @@ describe('INERT — no server source composes the collector', () => {
 
   it('the builders, the verb, its mode flag and its token stand only where they are declared', () => {
     expect(holders(/\bwsCollect(?:Audit)?\b/), 'a reference to either builder').toEqual(['ccdargv.ts']);
-    expect(holders(/['"]ws-collect['"]/), 'the verb as a literal: the builder, and the budget row').toEqual(['ccdargv.ts', 'remote/runner.ts']);
-    expect(holders(/['"]--collect['"]/), 'the audit mode flag').toEqual(['ccdargv.ts']);
-    expect(holders(/\bCOLLECT_CAP\b|['"]collect-v1['"]/), 'the capability token: declared, read by nothing').toEqual(['ccdargv.ts']);
+    expect(holders(/['"`]ws-collect['"`]/), 'the verb as a literal: the builder, and the budget row').toEqual(['ccdargv.ts', 'remote/runner.ts']);
+    expect(holders(/['"`]--collect['"`]/), 'the audit mode flag').toEqual(['ccdargv.ts']);
+    expect(holders(/\bCOLLECT_CAP\b|['"`]collect-v1['"`]/), 'the capability token: declared, read by nothing').toEqual(['ccdargv.ts']);
   });
 });

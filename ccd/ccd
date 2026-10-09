@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=cfe7a4291d2fab9642256f1ebf996b54b6ed7b618ab7ff1825fdab391555f92d
+# ccrc:generated 1 sha256=f54304939467a6df03fa4f87bf37ca0d98c98c0e4bb08fe3b9b74f5fa9b706c5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -26379,7 +26379,8 @@ _ws_reclaim_generation() {   # id -> rc 0 with RECLAIM_GENERATION = the row's ge
   # when it cannot mint), and a token bound to `generation=` would be one no
   # re-mint could invalidate.
   # UNDER THE ROW'S COMPACTION LOCK, as every other caller of the reader takes
-  # it (the spawn, its re-check, row creation, and the purge's stable lock):
+  # it (row creation's `_reg_generation_init`, the spawn and its re-check; the
+  # purge takes that lock too, but never calls the reader):
   # the reader's alias `link` is a write off the canonical name, and every such
   # write happens under a held lock (`session-hook.test.ts`'s canonical-write
   # census). The order reap lock -> compaction lock is the purge's own, which
@@ -27694,10 +27695,13 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   fi
   # A list that printed NO record is believed only once git's admin entries
   # are read (`_ws_reclaim_no_record`): an entry it could not read, or one that
-  # names this tree, is unmeasured and retried, never the terminal word.
+  # names this tree, is unmeasured and retried, never the terminal word. Its
+  # reason names an admin entry, which git names after a basename the session
+  # chose, so it is ONE CAPPED LINE (`_ws_leaf_why_line`, spec §5.6) before it
+  # reaches the journal, as the permission pass's reason is.
   if (( rc != 0 )); then
     _ws_reclaim_no_record "$mainreal" "$workdir" \
-      || { _ws_reclaim_unmeasured "$_WS_NOREC_WHY"; return 1; }
+      || { _ws_reclaim_unmeasured "$(_ws_leaf_why_line "$_WS_NOREC_WHY")"; return 1; }
     _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1
   fi
   # THE RECORD MUST NOT BE THE MAIN CHECKOUT'S. A row naming `$main` itself
@@ -27907,10 +27911,11 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
     && { _ws_reclaim_unmeasured "could not read $main's worktree list, so whether git still records $workdir was never asked"; return 1; }
   # "No record" is an INPUT here (`record=1`), and with it the pin keeps no
   # HEAD of git's record — so it is believed only once git's admin entries are
-  # read (`_ws_reclaim_no_record`), exactly as on the present arm.
+  # read (`_ws_reclaim_no_record`), exactly as on the present arm, its reason
+  # cut to one capped line there too.
   if (( rec == 1 )); then
     _ws_reclaim_no_record "$mainreal" "$workdir" \
-      || { _ws_reclaim_unmeasured "$_WS_NOREC_WHY"; return 1; }
+      || { _ws_reclaim_unmeasured "$(_ws_leaf_why_line "$_WS_NOREC_WHY")"; return 1; }
   fi
   # AN ALL-ZERO HEAD NAMES NO COMMIT THAT WAS READ (spec §5.5, rung 8's rule).
   # git lists the null id for a record in TWO shapes (measured, git 2.43): an
@@ -28802,7 +28807,7 @@ _ws_reclaim_no_record() {   # common workdir -> 0 when NO admin entry of the rep
     || { _WS_NOREC_WHY="$_WS_KEEP_WHY — git's worktree list leaves out a record it cannot read, so its silence about $w measured nothing"; return 2; }
   for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
     [[ "$e" == gitdir:* ]] || continue
-    _WS_NOREC_WHY="${e#gitdir:} names $w/.git, but git's worktree list printed no record of it — the list omitted a record that exists"
+    _WS_NOREC_WHY="git's worktree list omitted a record that exists: it printed no record of $w, but ${e#gitdir:} names $w/.git"
     return 1
   done
   return 0
@@ -32178,7 +32183,7 @@ _ws_expire_return_gap() { :; }
 # `slot.` prefix keeps it clear of any rule keyed on a leaf's own name, and the
 # leaf moves to `<slot>/leaf`. Its name pairs it with its record.
 #
-# LINUX ONLY. `_ws_collect_mv` holds the region's one GNU spelling, `mv -T -n
+# LINUX ONLY. `_ws_collect_mv` holds the region's one GNU rename spelling, `mv -T -n
 # --no-copy`: one renameat2(RENAME_NOREPLACE), never a copy. A box whose `mv` has
 # no `--no-copy`, and Darwin, answer unmeasured, and so does the idle walk's GNU
 # `find -printf` there. `macos-platform.test.ts` exempts exactly that function.
@@ -32730,7 +32735,7 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # A probe that cannot answer ends it at its rung as `unmeasured`, and names
 # itself in `collect.unmeasured`. A witness whose leaf is PROVEN absent, with
 # no record standing, is collectable at once with a token of its own: the verb
-# then drops the witness, and nothing else (spec §5.10, "no orphaned slot") —
+# then drops the witness, and nothing else (spec §5.10, "never orphaned in silence") —
 # unless a quarantine slot of the id stands, which with no record naming it is
 # the operator's (`quarantine-kept`), and the witness stays beside it.
 #
@@ -33093,7 +33098,7 @@ _ws_collect_audit() {   # id -> `ccd ws-audit --session <id> --collect`, whole: 
 }
 
 _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_reclaim_contained` — call that
-  local id="$1" w out rc=0 lfd inpop=0
+  local id="$1" w out rc=0 lfd inpop=0 wrc=0
   _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the audit record safely"
@@ -33107,7 +33112,15 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
     _ws_collect_unmeasured witness "$REG/tmproots is a link — ccd never follows it, so whether $id is witnessed was never asked"
     _ws_collect_audit_doc "$id"; return
   fi
-  [[ -e "$w" || -L "$w" ]] && inpop=1
+  # "NO WITNESS" IS A MEASUREMENT (spec §5.10, the population): `[[ -e ]]`
+  # reads a `tmproots/` it cannot search as no witness, and that would answer
+  # `not-witnessed` of an id ccd did hand out. Unmeasured, never not-witnessed.
+  _ws_reclaim_absent "$w"; wrc=$?
+  if (( wrc == 2 )); then
+    _ws_collect_unmeasured witness "${_WS_ABSENT_WHY:-whether $w stands could not be asked} — whether $id is witnessed was never asked"
+    _ws_collect_audit_doc "$id"; return
+  fi
+  (( wrc == 1 )) && inpop=1
   if (( ! inpop )); then
     out=$(_ws_collect_records_of "$id"); rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; _ws_collect_audit_doc "$id"; return; }
@@ -33449,7 +33462,8 @@ _ws_collect_reap_temps() {   # id -> the witness writer's DEAD temp files of thi
   # that shape — the id matched literally, then two all-digit fields; never an
   # `<id>.*` prefix, because ids admit dots and `.<id>.v2-x.1.2.tmp` is another
   # id's — and its mtime is at least an hour old (a live write takes
-  # milliseconds). A temp file of an id with no witness is never visited.
+  # milliseconds). A temp file of an id with neither a witness nor a quarantine
+  # record is never visited.
   local id="$1" dir="$REG/tmproots" f base rest m now re='^[0-9]+\.[0-9]+\.tmp$'
   _WS_COLLECT_TEMPS_REMOVED=0
   [[ -d "$dir" && ! -L "$dir" ]] || return 0
@@ -33715,7 +33729,7 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
            "$(_ws_leaf_why_line "nothing was moved, and the slot and the record were cleared: the move of $id into its slot was not proven ($why)")"
          return 1
        fi
-       _ws_collect_keep "$id" "$rec" "$lctx" "the move of $id was not proven, and its slot could not be cleared ($why)"
+       _ws_collect_keep "$id" "$rec" "$lctx" "the move of $id was not proven, and its slot or its record could not be cleared ($why)"
        return 1 ;;
     *) # UNMEASURED: neither path is provably the witnessed leaf, or the source
        # was not it before the rename (nothing renamed). Whatever reached the
@@ -33885,15 +33899,24 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   # (spec §5.2). A `tmproots/` that is itself a link is never followed, so it
   # puts no id in the population, and whether this one is in it was never
   # asked: unmeasured, before the lock, as `ws-audit --collect` answers it.
-  local wf rrc=0
+  local wf rrc=0 wrc=0
   if [[ -L "$REG/tmproots" ]]; then
     _ws_reclaim_fail "$id" "" probe-unmeasured \
       "no lock was taken, and nothing was moved or removed: $REG/tmproots is a link, which ccd never follows, so whether $id is witnessed was never asked"
     return 1
   fi
   wf=$(_ws_tmproot_witness_file "$id")
+  # NO WITNESS IS PROVEN ABSENT, never read off a failed test: a `tmproots/`
+  # this process cannot search reads `-e` false, and the sentence below would
+  # tell the journal ccrc never handed this id out. Unmeasured, before the lock.
+  _ws_reclaim_absent "$wf"; wrc=$?
+  if (( wrc == 2 )); then
+    _ws_reclaim_fail "$id" "" probe-unmeasured \
+      "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: whether a witness stands for $id could not be asked (${_WS_ABSENT_WHY:-$wf could not be looked at}), so whether the collector may lock $id was never asked")"
+    return 1
+  fi
   _ws_collect_records_of "$id" >/dev/null || rrc=$?
-  if [[ ! -e "$wf" && ! -L "$wf" ]] && (( rrc == 0 && ${#_WS_QRECS[@]} == 0 )); then
+  if (( wrc == 0 && rrc == 0 && ${#_WS_QRECS[@]} == 0 )); then
     _ws_collect_refused "$id" "" not-witnessed \
       "no lock was taken, and there is nothing to collect: no witness ($wf) and no quarantine record names $id" \
       "$lc_surface" "$lc_actor" "$lc_reason"
@@ -33903,7 +33926,7 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   # prove the id the collector's: unmeasured, BEFORE the lock, which is never
   # opened (and so never made) for a name that may be foreign. A witness that
   # stands puts the id in the population whatever the listing said.
-  if [[ ! -e "$wf" && ! -L "$wf" ]] && (( rrc != 0 )); then
+  if (( wrc == 0 && rrc != 0 )); then
     _ws_reclaim_fail "$id" "" probe-unmeasured \
       "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked")"
     return 1

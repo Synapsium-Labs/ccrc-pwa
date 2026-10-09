@@ -95,3 +95,42 @@ describe('the ladder’s refusal row keeps its verb and its decision (spec §5.9
     expect(h.reg(CHILD_ID, 'reaping'), 'a refusal starts nothing').toBeNull();
   }, 90_000);
 });
+
+describe('rung 8’s reason for git’s silence is one capped line too (spec §5.5, §5.6)', () => {
+  // `_ws_reclaim_no_record`'s reason names an admin entry under `<common>/worktrees/`, and git names that entry after
+  // the basename of a worktree a SESSION chose. Its gitdir unreadable, the entry holds the ladder unmeasured, and the
+  // live verb journals that reason as its failed probe-unmeasured row: raw, the encoder would drop `verb` and `dec.*`.
+  /** git's list prints no record, the shape an unreadable admin entry makes, stubbed at its one reader. */
+  const LIST_OMITS = '_ws_reclaim_record() { RECLAIM_REC_BRANCH=; RECLAIM_REC_HEAD=; RECLAIM_REC_MAIN=0; RECLAIM_REC_PRUNABLE=0; return 1; };';
+  it.each([
+    ['the present arm (the tree stands)', false],
+    ['the vanished arm (the tree is gone)', true],
+  ] as const)('%s: an admin entry named by the session, its gitdir unreadable — verb, dec and a cut detail survive', (_arm, gone) => {
+    const { main, wt } = makeChild(h);
+    if (gone) fs.rmSync(wt, { recursive: true, force: true });
+    const entry = Buffer.concat([Buffer.from(`${main}/.git/worktrees/`), NAME]);
+    fs.mkdirSync(entry);
+    const gitdir = Buffer.concat([entry, Buffer.from('/gitdir')]);
+    fs.writeFileSync(gitdir, `${h.home}/elsewhere/.git\n`);
+    fs.chmodSync(gitdir, 0o000);
+    try {
+      const r = childReclaimVerb(h, '0'.repeat(64), {
+        pre: LIST_OMITS, extra: "--surface agent --actor 'run:7 reclaim close' --reason why-cap",
+      });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const doc = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(doc.failed).toBe('probe-unmeasured');
+      const row = eventsOf(h.home, 'reclaim').filter((e) => e['outcome'] === 'failed').pop()!;
+      expect(row['refusal']).toBe('probe-unmeasured');
+      expect(row['truncated'], 'the row was never cut down to fit').toBeUndefined();
+      expect(row['verb']).toBe('ws-reclaim');
+      expect(decOf(row)['actor']).toBe('run:7 reclaim close');
+      expect(decOf(row)['reason']).toBe('why-cap');
+      expect(row['detail'], 'the journal and the document carry one detail').toBe(doc.detail);
+      expect(doc.detail, 'the reason the admin walk gave').toContain('/.git/worktrees/evil?');
+      expect(bytes(doc.detail), doc.detail).toBeLessThanOrEqual(303);
+      printableThenMark(doc.detail);
+    } finally { fs.chmodSync(gitdir, 0o644); }
+    expect(h.reg(CHILD_ID, 'reaping'), 'an unmeasured answer starts nothing').toBeNull();
+  }, 90_000);
+});

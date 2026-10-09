@@ -112,6 +112,24 @@ describe.skipIf(!LINUX)('the population: a witness or a record of the id, and a 
     expect(fs.existsSync(lockOf(h))).toBe(false);
   }, 60_000);
 
+  it.skipIf(process.getuid?.() === 0)('a witness behind a tmproots/ that cannot be searched is unmeasured `witness`, exit 1, no lock — never not-witnessed', () => {
+    // "No witness" is a measurement (spec §5.10): `-e` reads EACCES as ENOENT, which would answer `not-witnessed`
+    // of an id ccd did hand out.
+    makeOrphan(h);
+    const dir = path.join(regDir(h), 'tmproots');
+    const mode = fs.statSync(dir).mode & 0o777;
+    fs.chmodSync(dir, 0o600);
+    try {
+      const a = collectAudit(h);
+      expect(a.code, a.stdout).toBe(1);
+      expect(verdictOf(a)).toBe('unmeasured');
+      expect(collectOf(a)['unmeasured']).toBe('witness');
+      expect(String(a.doc!['detail'])).toContain('cannot be searched');
+      expect(fs.existsSync(lockOf(h))).toBe(false);
+    } finally { fs.chmodSync(dir, mode); }
+    expect(verdictOf(collectAudit(h)), 'the CONTROL: searchable, the same id is witnessed').not.toBe('not-witnessed');
+  }, 60_000);
+
   it('an id ccd never mints dies before anything is read: nothing on stdout, no lock', () => {
     for (const bad of ['.hidden', 'a/b', 'x y']) {
       const r = h.run(`cmd_ws_audit --session '${bad}' --collect`);
@@ -265,8 +283,11 @@ describe('the two TERMINAL words are declared, each with a sentence true under a
     expect(LC_REFUSAL_WORD[t]).toMatch(/listed for you/);
   });
 
-  it('witness-mismatch promises no later removal: ccrc never removes it on its own', () => {
-    expect(LC_REFUSAL_WORD['witness-mismatch']).toMatch(/on its own/);
+  it('witness-mismatch promises only what the collector does: it will not remove it — never that ccrc never will', () => {
+    // A recycled slug's child can take the leaf over (`_child_tmpdir`'s `mkdir -p`) and re-witness it, and that
+    // child's own reclaim removes it with no human involved (spec §5.10's limits), so "never on its own" is false.
+    expect(LC_REFUSAL_WORD['witness-mismatch']).toMatch(/collector will not remove it/);
+    expect(LC_REFUSAL_WORD['witness-mismatch']).not.toMatch(/on its own|never remove/);
   });
 
   it('quarantine-kept is true of BOTH its uses: the operator’s terminal refusal, and ws-collect’s `failed` whose record a later pass finishes from', () => {
