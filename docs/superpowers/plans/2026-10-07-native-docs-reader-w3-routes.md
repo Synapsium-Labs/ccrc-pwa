@@ -12313,6 +12313,146 @@ Two rows re-anchored at run time after the merge of `main` (#330, the box-token 
   "test/docs-lanes.test.ts"
  ],
  "red": "server docs-lanes: 2 failed | 39 passed (41) — a joiner whose signal aborts AFTER a fulfilled / a rejected flight settled leaves the flight's own signal unaborted"
+},
+{
+ "id": "W3-T4-M4",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "      if (laneOverflow('read', queue.length + 1)) return Promise.resolve(busy('read'));",
+ "new": "      if (laneOverflow('read', queue.length)) return Promise.resolve(busy('read'));",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 2 failed | 663 passed (665) — with 2 running and 32 queued, the next is docs-busy {lane:'read'} at once; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-T4-M8",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "fetchAdmit(running, runningKeys.has(queue[i].key))",
+ "new": "fetchAdmit(running, false)",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 5 failed | 660 passed (665) — the same key twice: the second waits behind the first though a global slot is free; a job waiting behind its own key never holds back another key: the later key starts on a free slot; 8 queued behind one running key with a global slot free: a job on an idle key starts at once; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a job waiting behind its key is docs-busy at 20000 ms and never runs when its key frees"
+},
+{
+ "id": "W3-T4-M9",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (running >= DOCS_FETCH_GLOBAL) return 'full';",
+ "new": "  if (running >= DOCS_FETCH_GLOBAL + 1) return 'full';",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 9 failed | 656 passed (665) — fetchAdmit: 2 running, key running=false is full (full wins over skip); fetchAdmit: 2 running, key running=true is full (full wins over skip); three keys: 2 run and the third waits for a global slot; with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a job waiting for a global slot is docs-busy at its wait, never runs, and frees its place; aborting a queued fetch answers abandoned and dequeues it, behind its key or the global bound; close answers every queued fetch busy, leaves no timer, and refuses a later run; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-T4-M10",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));\n",
+ "new": "",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 3 failed | 38 passed (41) — with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-T4-M31",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "        queue.push(w);\n        pump();\n        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));\n",
+ "new": "        queue.push(w);\n        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));\n        pump();\n",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 2 failed | 39 passed (41) — 8 queued behind one running key with a global slot free: a job on an idle key starts at once; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer"
+},
+{
+ "id": "W3-T4-M32",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));\n",
+ "new": "        if (laneOverflow('fetch', queue.length + 1)) leave(w, busy('fetch'));\n",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 4 failed | 661 passed (665) — with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}; 8 queued behind one running key with a global slot free: a job on an idle key starts at once; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-FR1-M10",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  return job.raw > DOCS_LANE_LARGE_RAW;",
+ "new": "  return job.raw >= DOCS_LANE_LARGE_RAW;",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 3 failed | 662 passed (665) — an answer of exactly 1 MiB beside a large one admits (over, not at); laneLarge: raw 1048576 is large=false (exactly at the bound is not large); a second large job waits; exactly DOCS_LANE_LARGE_RAW is not large"
+},
+{
+ "id": "W3-FR1-M11",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  return waiting > (lane === 'read' ? DOCS_LANE_QUEUE : DOCS_FETCH_QUEUE);",
+ "new": "  return waiting > (lane === 'read' ? DOCS_FETCH_QUEUE : DOCS_LANE_QUEUE);",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 7 failed | 658 passed (665) — laneOverflow: the read lane with 31 waiting overflows=false; laneOverflow: the read lane with 32 waiting overflows=false; laneOverflow: the fetch lane with 9 waiting overflows=true; with 2 running and 32 queued, the next is docs-busy {lane:'read'} at once; with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-FR1-M12",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (running >= DOCS_FETCH_GLOBAL) return 'full';\n  if (keyRunning) return 'skip';\n",
+ "new": "  if (keyRunning) return 'skip';\n  if (running >= DOCS_FETCH_GLOBAL) return 'full';\n",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 2 failed | 663 passed (665) — fetchAdmit: 2 running, key running=true is full (full wins over skip); fetchAdmit: 3 running, key running=true is full (full wins over skip)"
+},
+{
+ "id": "W3-FR1-M13",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "    if (laneLarge(job)) load.large += 1;\n",
+ "new": "",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 4 failed | 37 passed (41) — a second large job waits; exactly DOCS_LANE_LARGE_RAW is not large; a large head blocks a small job behind it that would admit on its own; a new job queues behind a waiting head even when the lane would admit it; abandoning a blocking head lets the job behind it start at once"
+},
+{
+ "id": "W3-FR1-M14",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "    if (laneLarge(job)) load.large -= 1;\n",
+ "new": "",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 2 failed | 39 passed (41) — a second large job waits; exactly DOCS_LANE_LARGE_RAW is not large; a large head blocks a small job behind it that would admit on its own"
+},
+{
+ "id": "W3-FR1-M15",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (laneLarge(job) && load.large > 0) return false;",
+ "new": "  if (job.raw >= DOCS_LANE_LARGE_RAW && load.large > 0) return false;",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 1 failed | 664 passed (665) — an answer of exactly 1 MiB beside a large one admits (over, not at)"
 }
 ]
 ```
