@@ -1156,6 +1156,10 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       at 06:45:52. The fleet box's agent restarted at 07:03 and the server at 07:05. No action was taken.
       - STATUS: fleet and server v0.0.133, newest v0.0.133, backups fleet 145M/server 613M, disk free fleet 216G/work
         volume 266G/server 33G, no anomalies.
+    - **2026-10-09 08:42 UTC: v0.0.134 auto-converged unattended.** It is workspace lifecycle's wave 5 (#335), published
+      at 08:24:16. No action was taken.
+      - STATUS: fleet and server v0.0.134, newest v0.0.134, backups fleet 146M/server 614M, disk free fleet 216G/work
+        volume 269G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
