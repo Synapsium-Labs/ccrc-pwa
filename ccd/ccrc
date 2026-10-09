@@ -1369,6 +1369,22 @@ BOX_INSTALLED_FILE="$HOME/.ccrc/installed"
 BOX_NODE_ID_FILE="$HOME/.ccrc/node-id"
 BOX_CAPS_FILE="$HOME/.ccrc/ccrc-caps"
 BOX_FLOOR_FILE="$HOME/.ccrc/floor"
+
+# ── THE BOX TOKEN'S TWO NODE-SCOPED, NON-SECRET FILES (design 2026-10-07 §4.5, §8)
+#   box-token-generation — the generation id the last `ccrc token sync` wrote
+#                          (NODE_FILES.tokenGeneration; the server reads it
+#                          over the agent's node-file grant);
+#   token-sync.json      — that run's report, which doctor reads.
+# Both are written by `ccd/ccrc-token-sync`, which spells its own copies (it
+# is a standalone file and sources nothing); uninstall removes them with the
+# node files. The box token's VALUE and STATE files — mail.token, its
+# pending and previous siblings, box-token.json, box-token-retired.json —
+# are not node files: they stay with mail.token, so a reinstall never finds
+# value files without their state, and only --purge takes them (with
+# ~/.ccrc whole). ~/.cc-secrets/ccrc-mail.token is never this verb's: that
+# directory also holds operator lane secrets.
+BOX_TOKEN_GENERATION_FILE="$HOME/.ccrc/box-token-generation"
+BOX_TOKEN_SYNC_REPORT="$HOME/.ccrc/token-sync.json"
 # The words, by wave (design 2026-09-20 §9). Each wave's spine ADDS its own,
 # so the file records what this install can do, never what a design intends:
 #   W1 — verify (`_upd_fetch` runs verify-provenance.mjs), node-id
@@ -23584,6 +23600,12 @@ _uninst_tree_bins() {
   rm -f -- "$BOX_PREVIOUS_FILE" "$BOX_INSTALL_STEP_FILE" "$BOX_UPDATE_JSON" "$BOX_UPDATE_LOCK" \
     "$BOX_INTENT_FILE" "$BOX_MIGRATION_FILE" \
     || _ccrc_die "removing the node's update state files failed"
+  # The box token's two node-scoped records go with them (design 2026-10-07
+  # §8): an uninstalled box confirms no generation and has no sync to report.
+  # The value and state files are NOT here, on purpose (see their
+  # declaration): they stay with mail.token.
+  rm -f -- "$BOX_TOKEN_GENERATION_FILE" "$BOX_TOKEN_SYNC_REPORT" \
+    || _ccrc_die "removing the box token's generation record and sync report failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself
@@ -23641,6 +23663,7 @@ _uninst_tree_bins() {
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
   echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an

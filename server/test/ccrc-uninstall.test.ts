@@ -2604,3 +2604,61 @@ describe('ccrc uninstall --purge and the history store (history spec §9.5, O42,
     expect(covering, 'a backup row copies the history store, or a directory holding it').toEqual([]);
   });
 });
+
+// ── the box token's files (box-token lifecycle wave 1, Task B3; spec 2026-10-07 §8) ──
+// Uninstall removes the two NODE-SCOPED, non-secret records `ccrc token sync`
+// writes, with the node files; the value and state files stay with mail.token
+// (a reinstall never finds value files without their state); `--purge` takes
+// `~/.ccrc` whole; and neither ever touches `~/.cc-secrets/ccrc-mail.token`,
+// because that directory also holds operator lane secrets. Every value below is
+// a fixture.
+describe('ccrc uninstall: the box token\'s files (box-token lifecycle wave 1, Task B3)', () => {
+  const GEN = '0123456789abcdef';
+  const V = (c: string): string => `${c.repeat(64)}\n`;
+  /** The files that must survive a plain uninstall, byte for byte, as name -> bytes. */
+  const KEPT: Record<string, string> = {
+    'mail.token': V('a'),
+    'mail-previous.token': V('b'),
+    [`mail-pending-${GEN}.token`]: V('c'),
+    'box-token.json': '{"v":1,"origin":"rotated"}\n',
+    'box-token-retired.json': '{"v":1,"retired":[]}\n',
+  };
+  const plantTokenFiles = (home: string, generationName: string): void => {
+    writeFileSync(join(home, '.ccrc', generationName), `${GEN}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.ccrc', 'token-sync.json'),
+      `{"v":1,"at":1,"result":"synced","generation":"${GEN}","transport":"https","proof":"proved"}\n`, { mode: 0o600 });
+    for (const [n, b] of Object.entries(KEPT)) writeFileSync(join(home, '.ccrc', n), b, { mode: 0o600 });
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'), `# fleet copy\n${V('d')}`, { mode: 0o600 });
+    writeFileSync(join(home, '.cc-secrets', 'lane.secret'), 'operator lane secret\n', { mode: 0o600 });
+  };
+
+  it('a plain uninstall removes box-token-generation and token-sync.json, and keeps every value and state file and ~/.cc-secrets', async () => {
+    const { NODE_FILES } = await import('../../shared/agent-protocol.js');
+    const home = mkTmp('ccrc-uninst-token-');
+    plantInstalledBox(home);
+    plantTokenFiles(home, NODE_FILES.tokenGeneration);
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc', NODE_FILES.tokenGeneration)), 'the generation record survived').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'token-sync.json')), 'the sync report survived').toBe(false);
+    for (const [n, b] of Object.entries(KEPT)) {
+      expect(readFileSync(join(home, '.ccrc', n), 'utf8'), `${n} was not kept byte for byte`).toBe(b);
+    }
+    expect(readFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'), 'utf8')).toBe(`# fleet copy\n${V('d')}`);
+    expect(readFileSync(join(home, '.cc-secrets', 'lane.secret'), 'utf8')).toBe('operator lane secret\n');
+    expect(r.stdout).toMatch(/^uninstall: tree: the box token's node records \(~\/\.ccrc\/box-token-generation, token-sync\.json\) removed; its value and state files stay with ~\/\.ccrc\/mail\.token, and ~\/\.cc-secrets\/ccrc-mail\.token is not touched$/m);
+  });
+
+  it('--purge takes ~/.ccrc whole, value and state files included, and still never touches ~/.cc-secrets', async () => {
+    const { NODE_FILES } = await import('../../shared/agent-protocol.js');
+    const home = mkTmp('ccrc-uninst-token-purge-');
+    plantInstalledBox(home);
+    plantTokenFiles(home, NODE_FILES.tokenGeneration);
+    const r = runVerb(home, 'uninstall', ['--purge']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+    expect(readFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'), 'utf8')).toBe(`# fleet copy\n${V('d')}`);
+    expect(readFileSync(join(home, '.cc-secrets', 'lane.secret'), 'utf8')).toBe('operator lane secret\n');
+  });
+});
