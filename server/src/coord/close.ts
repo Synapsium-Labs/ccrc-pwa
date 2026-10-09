@@ -20,7 +20,7 @@ import {
 import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
 import type { CcdPrLine } from '../prstate.js';
-import type { DeadCoordinatorStop } from '../deadCoordinator.js';
+import type { DeadCoordinatorStop, SweepFleetAct } from '../deadCoordinator.js';
 import {
   CHILD_RECLAIM_FEED_QUIET_NONE, childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing,
   type ChildReclaimDecision, type ChildReclaimMinting, type ChildReclaimNotWhy, type ChildReclaimRequest,
@@ -103,8 +103,10 @@ export type CloseOutcome =
   | { ok: false; kind: 'claimant-changed'; claimedBy: string | null }
   /** The sweep's in-arm re-measure stopped it (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the claimant
    *  is no longer crashed, or that cannot be told, or the operator raised `reclaim-paused` or disarmed the lane.
-   *  `released`: the stop came AFTER the fleet act, so the worker was released (or re-held) and the run stays open. */
-  | { ok: false; kind: 'sweep-stopped'; stop: DeadCoordinatorStop; released: boolean };
+   *  `fleetAct`: WHICH fleet act ran before the stop — `released` (nothing else claimed the workspace: it is unheld
+   *  until its coordinator re-holds it) or `re-held` (a surviving run's reason now holds it: it stays claimed) — and
+   *  `null` when the stop came before any fleet act. Two acts, two words: a boolean folded them (review 339, F3). */
+  | { ok: false; kind: 'sweep-stopped'; stop: DeadCoordinatorStop; fleetAct: SweepFleetAct | null };
 
 /** What the dead-coordinator lane hands `closeRun` with its word (`'sweep'`): the crashed id the compare-and-set
  *  checks, and its re-measure, which the abandon arm runs IMMEDIATELY BEFORE the fleet act and again AFTER it, before
@@ -293,7 +295,7 @@ export async function closeRun(
      *  the commit's transaction (`expectClaimedBy` below). */
     const sweepGate = async (g: SweepCloseGuard): Promise<Extract<CloseOutcome, { ok: false }> | null> => {
       const stop = await g.stillCrashed();
-      if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, released: false };
+      if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, fleetAct: null };
       const fresh = coord.run(id);
       if (!fresh.ok) return { ok: false, kind: 'hold-invalid', detail: fresh.detail };
       if (fresh.run === null) return { ok: false, kind: 'unknown-run' };
@@ -355,11 +357,12 @@ export async function closeRun(
       if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
       released = release;
       // AFTER the fleet act, before the commit: the claimant once more. A revive that landed during the release keeps
-      // its run open — its worker is released (or re-held) and unheld until its coordinator re-holds it, which is the
-      // residual a successor's race already has. What remains is the round trip of this last re-measure.
+      // its run open — a released worker is unheld until its coordinator re-holds it, and a re-held one stays claimed
+      // under the surviving run, which is the residual a successor's race already has. What remains is the round trip of
+      // this last re-measure.
       if (sweep !== undefined) {
         const stop = await sweep.stillCrashed();
-        if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, released: true };
+        if (stop !== null) return { ok: false, kind: 'sweep-stopped', stop, fleetAct: release ? 'released' : 're-held' };
       }
     } else if (sweep !== undefined) {
       const gate = await sweepGate(sweep);

@@ -118,7 +118,7 @@ import {
 } from './deadCoordinator.js';
 import {
   DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker,
-  recordDeadCoordinatorFeed,
+  recordDeadCoordinatorFeed, recordDeadCoordinatorThrew,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
@@ -3992,7 +3992,9 @@ export class FleetWatcher {
       if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt) learn.push(r.id);
       if (archivedExpiryDue(entry, now)) due.push(r.id);
     }
-    for (const id of [...this.archivedExpiryState.keys()]) if (!seen.has(id)) this.archivedExpiryState.delete(id);
+    // A row that left the population is forgotten — save one whose expiry COMPLETED and kept a leaf (wave 5): it is gone
+    // from the registry by definition, and its report is the only trace of what stays on disk until a restart.
+    for (const [id, e] of [...this.archivedExpiryState]) if (!seen.has(id) && e.report?.kind !== 'kept') this.archivedExpiryState.delete(id);
     // THREE — learn: one audit at a time, each on its session's queue. The slots go in `nextAskAt` order — a row never
     // asked (0) first, then the rows asked longest ago — never registry order, so rows that keep failing cannot take
     // every slot from a row behind them (review 313, parked item 1). The sort is stable: ties keep registry order.
@@ -4229,8 +4231,8 @@ export class FleetWatcher {
     const deps = { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, notifyLog: this.deps.notifyLog,
       // Each re-measure reads the clock as it measures (the watcher's own source, `Date.now`), never the pass's `now`.
       now: (): number => Date.now(),
-      journalTrust: async () => (await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg },
-        this.lifecycleHealth())).trust };
+      // WHOLE — the hold with the trust — so a mirror gone stale since the pass is a `hold` stop (review 339, F4).
+      journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()) };
     try {
       const out = await serial(coord, (abandon) => endDeadCoordinator({ ...deps, abandon }, pick.id, now));
       const e = this.deadCoordinatorState.get(pick.id) ?? deadCoordinatorEntry();
@@ -4254,8 +4256,11 @@ export class FleetWatcher {
       if (done !== null && done.programmes.length > 0) {
         recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, pick.since);
       }
+      // EVERY thrown act is recorded, whatever it had done (review 339, F13): one that released a worker and then threw,
+      // having closed nothing, is otherwise only an in-memory entry a restart loses.
+      recordDeadCoordinatorThrew({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, detail, pick.since);
       this.deadCoordinatorState.set(pick.id, deadCoordinatorThrew(e, detail, Date.now(), CHILD_RECLAIM_SWEEP_MS,
-        done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], stop: null } : undefined));
+        done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], reheld: [], stop: null } : undefined));
       return null;
     }
   }

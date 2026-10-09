@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ab04ef1b665ad2152558bcdb7fc68069a64bb0d88acaddf7aac3f7eb27e3667f
+# ccrc:generated 1 sha256=940c020832a67341c33409cebc95291f5b1c5e900d33b9eed79f33c56d3cfc3b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31002,7 +31002,7 @@ cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <
 
 _ws_expire_locked() {   # token id surface actor reason — everything the shared lock serialises, for an expiry
   local token="$1" id="$2" surface="$3" actor="$4" reason="$5"
-  local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children
+  local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children lbstate=""
   [[ "$surface" == none ]] || declared="$surface"
   _ws_expire_fork "$id"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
@@ -31033,6 +31033,7 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
     # `mode` is `expire`, its binding `archivedAt`), then the `expire:`
     # breadcrumb — every later step resumable, and described by a record that
     # outlives the row. A vanished worktree takes the RECLAIM region's own arm.
+    lbstate="$RECLAIM_BRANCHSTATE"   # the in-lock recompute's read, the one the token was checked against
     if [[ "$RECLAIM_WORKTREE" == absent ]]; then
       _ws_reclaim_pin_absent "$id" "$main" "$REAP_BRANCH" "$RECLAIM_HEAD" "$workdir" && pinned=1
       start=branch
@@ -31041,6 +31042,22 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
     fi
     if (( ! pinned )); then
       _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"
+      return 1
+    fi
+    # THE CONSENT BINDS THE BRANCH, as a reclaim's does (CCR-15 spec §5.5;
+    # workspace lifecycle wave 5). The token was checked against the in-lock
+    # recompute, and the pin read the branch again, itself. A branch deleted
+    # (or made) between the two reads would have the act go on over what the
+    # PIN read, not what the token consented to. So the two reads agree, or the
+    # act stops HERE — after the pin, which only kept, and BEFORE the tombstone
+    # and the breadcrumb, so nothing has started and there is nothing to resume.
+    # Every `failed` `state-changed` this verb prints is printed here, before
+    # the breadcrumb, and the server reads the word so: it starts over from a
+    # fresh audit (`archivedExpiry.ts`). A branch already absent when the token
+    # was minted reads absent twice and goes on, its work kept in the attic.
+    if [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]]; then
+      _ws_reclaim_fail "$id" "$lctx" state-changed \
+        "$REAP_BRANCH read $lbstate when the token was checked inside the lock, but $RECLAIM_BRANCHSTATE when the pin read it again — it changed in between, so nothing was destroyed"
       return 1
     fi
     clips=$(_ws_clip_manifest "$id") || clips=null
