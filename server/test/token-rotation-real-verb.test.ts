@@ -24,7 +24,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -77,6 +77,10 @@ interface Harness {
   probe: (file: string) => Promise<string>;
   /** release-lane only: the script path of every `bash` the fleet box's PATH started, in order. */
   bashScripts: () => string[];
+  /** In memory only, never printed: every value written to a pending file, in order. */
+  staged: string[];
+  /** release-lane only: the in-send presentations (after the verb exited, before the driver acts on its result). */
+  preSend: Array<{ answer: string; presented: 'old' | 'fresh'; promoted: boolean }>;
   releaseTree: string;
   tickUntil: (pred: () => boolean, max?: number) => Promise<void>;
   close: () => Promise<void>;
@@ -188,10 +192,26 @@ async function harness(o: Opts = {}): Promise<Harness> {
     nodeId: '0123abcd-0000-4000-8000-000000000002', nodeIdMeasured: true, label: 'server', role: 'server',
     reachable: true, os: 'linux', caps: CAPS, agentOps: null, updateState: 'idle', reportedPhase: null,
   };
+  const staged: string[] = [];
+  const realStore = fileTokenStore(tokenPaths(base.cfg.mailTokenPath, serverHome));
+  const store = { ...realStore, writeValue: (p: string, v: string) => {
+    if (path.basename(p).startsWith('mail-pending-')) staged.push(v);
+    return realStore.writeValue(p, v);
+  } };
+  const preSend: Harness['preSend'] = [];
+  let probeRef: (file: string) => Promise<string> = () => Promise.resolve('probe: not wired');
+  // A pass-through on the release lane (not a stub on the verb path): the real send runs the real verb; once it has
+  // exited, and before the driver acts on its result, the fleet file is presented to the server through the launcher.
+  const releaseLink = (real: TokenSyncLink): TokenSyncLink => ({ send: async (code) => {
+    const result = await real.send(code);
+    const presented = valueOf(fleetToken) === OLD ? 'old' : 'fresh';
+    preSend.push({ presented, promoted: driver.view().origin === 'rotated', answer: await probeRef(fleetToken) });
+    return result;
+  } });
   const driver = new BoxTokenDriver({
-    store: fileTokenStore(tokenPaths(base.cfg.mailTokenPath, serverHome)),
+    store,
     holder: boot.holder,
-    link: o.link ? o.link(realLink) : realLink,
+    link: o.link ? o.link(realLink) : o.launcher === 'release-lane' ? releaseLink(realLink) : realLink,
     generation: o.generation ? o.generation(realGen) : realGen,
     rows: { nodes: () => [serverRow, fleetRow()], linkUp: () => fleet.state.connected, lastReadyAt: () => null },
     env: { fleetMode: 'remote', role: 'server', roleSource: 'recorded', agentEnvMarksFleet: false },
@@ -218,8 +238,10 @@ async function harness(o: Opts = {}): Promise<Harness> {
     let out = '';
     child.stdout.on('data', (c: Buffer) => { out += c.toString('utf8'); });
     child.stdin.end();
+    child.on('error', (e: NodeJS.ErrnoException) => { resolve(`probe: could not start the launcher (${e.code ?? 'error'})`); });
     child.on('close', () => resolve(out.trim()));
   });
+  probeRef = probe;
   const tickUntil = async (pred: () => boolean, max = 8): Promise<void> => {
     for (let i = 0; i < max && !pred(); i++) await driver.tick();
     expect(pred(), `the driver never reached the state; view: ${JSON.stringify(driver.view())}`).toBe(true);
@@ -228,7 +250,7 @@ async function harness(o: Opts = {}): Promise<Harness> {
   const h: Harness = {
     serverHome, fleetHome, port, driver, holder: boot.holder,
     spawned: () => spawned, advance: (ms) => { offset += ms; }, warnings,
-    fleetToken, serverToken: base.cfg.mailTokenPath, probe, tickUntil, releaseTree,
+    fleetToken, serverToken: base.cfg.mailTokenPath, probe, tickUntil, releaseTree, staged, preSend,
     bashScripts: () => read(bashLog).split('\n').filter((l) => l !== ''),
     close: async () => {
       driver.stop();
@@ -393,13 +415,28 @@ describe('a release-lane fleet box (coordinator ledger ruling), with the real ve
     expect(valueOf(h.fleetToken)).toBe(fresh);
     expect(valueOf(h.serverToken)).toBe(fresh);
 
+    // The window between the verb's exit and the driver's promotion, presented through the launcher by the pass-through
+    // link: the fresh value is on the fleet box by then, and the server (still on OLD as current) accepts it as pending.
+    expect(h.preSend.length, 'the in-send presentation did not happen').toBe(1);
+    expect(h.preSend[0]).toEqual({ presented: 'fresh', promoted: false, answer: 'probe: 400 accepted' });
+
+    // Nothing printed a value, or its hash (as case 1 does).
+    const texts = [...h.warnings, JSON.stringify(h.driver.view()), read(join(h.serverHome, '.ccrc', 'box-token.json')),
+      read(join(h.fleetHome, '.ccrc', 'token-sync.json')), h.bashScripts().join('\n'), answers.join('\n')];
+    for (const v of [fresh, sha(fresh), OLD, sha(OLD)]) {
+      for (const t of texts) expect(t.includes(v), 'a value reached a log, the view, a report or a probe line').toBe(false);
+    }
+
     // The verb that ran was the release tree's copy: one agent spawn, every bash start the fleet box's PATH made was the
     // launcher, then the tree's ccrc (the shim's exec), and nothing named this checkout.
     expect(h.spawned()).toBe(1);
     const scripts = h.bashScripts();
-    expect(scripts.length).toBeGreaterThan(2 * answers.length);   // the verb's launch and every probe: two starts each
-    expect(scripts.filter((_, i) => i % 2 === 0).every((l) => l === launcher), 'each run starts at ~/.local/bin/ccrc').toBe(true);
-    expect(scripts.filter((_, i) => i % 2 === 1).every((l) => l === treeCcrc), 'and the shim execs the tree\'s ccrc').toBe(true);
+    // Order-free: the agent's verb spawn runs concurrently with the in-tick probes, so two starts may interleave.
+    const viaLauncher = scripts.filter((l) => l === launcher).length;
+    const viaTree = scripts.filter((l) => l === treeCcrc).length;
+    expect(viaLauncher + viaTree, 'every bash start is the launcher or the tree\'s ccrc').toBe(scripts.length);
+    expect(viaTree, 'each launcher run execs the tree\'s ccrc').toBe(viaLauncher);
+    expect(viaLauncher, 'the verb\'s launch and every probe').toBeGreaterThan(answers.length);
     expect(scripts.some((l) => l.startsWith(join(REPO, 'ccd') + path.sep))).toBe(false);   // (TMPDIR may sit inside the checkout, so REPO itself is no test)
     const report = JSON.parse(read(join(h.fleetHome, '.ccrc', 'token-sync.json'))) as Record<string, unknown>;
     expect(report).toMatchObject({ v: 1, result: 'synced', proof: 'proved' });
@@ -434,6 +471,14 @@ describe('mixed versions, with the real verb (spec §10.2)', () => {
     expect(read(h.serverToken)).toBe(serverBefore);
     expect(existsSync(join(h.fleetHome, '.ccrc', NODE_FILES.tokenGeneration))).toBe(false);
     expect(existsSync(join(h.fleetHome, '.ccrc', 'token-sync.json'))).toBe(false);
+    // What Part A does with the generation it staged for the lost send: it is DROPPED (the refusal is not a failure, the
+    // pending entry and its file go, and its sequence number is spent: nextSeq 3 after seq 2). The holder never accepts it.
+    const state = JSON.parse(read(join(h.serverHome, '.ccrc', 'box-token.json'))) as { pending: unknown[]; nextSeq: number; hold: string };
+    expect(state).toMatchObject({ pending: [], hold: 'verb-missing', nextSeq: 3 });
+    expect(readdirSync(join(h.serverHome, '.ccrc')).filter((f) => f.startsWith('mail-pending-'))).toEqual([]);
+    expect(h.staged.length, 'one generation was staged for the one send').toBe(1);
+    expect(h.holder.match(h.staged[0]!), 'the dropped generation is accepted on no slot').toBeNull();
+    expect(h.holder.match(OLD)).toBe('current');
     // The hold is re-probed on a fresh ready or hourly, not on the next tick.
     await h.driver.tick();
     expect(h.spawned()).toBe(1);

@@ -10042,6 +10042,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task B4: A rotation through the real verb
 
+(measured) First green run 2026-10-09: `4 passed (4)` in 7.48 s (the four cases below, after the first departure); the file as committed adds a release-lane case and runs `5 passed (5)` in about 9 s. Three departures from the text below, all Part A decisions: the verb's own proof in a pending slot counts as a presentation of the new current (D-4409 item 6), so grace ends on time instead of extending; `view()`'s presentation counters are the holder's live counts, not copied on the last tick; and mutation row 3 (the agent maps exit 0 to `spawn-failed`) does not stop the driver reaching `grace` (the generation read confirms the real sync), it reds on the view's `failures` and `lastSync`.
+
 (not prototyped: the file imports Part A's merged modules — `server/src/token/{boot,driver,link,files,policy,ports}.ts`, `Deps.tokenDriver` and `registerTokenRoutes` (A8), and `agent/src/tokensync.ts` (A2) — none of which exist at 282e79e44. The verb half it drives was prototyped in Task B1's real-curl case, which ran the real `ccd/ccrc-token-sync` and the real curl behind the loopback front against a listener on loopback: green, 2026-10-07)
 
 **Files:**
