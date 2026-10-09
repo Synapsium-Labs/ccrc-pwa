@@ -3868,15 +3868,30 @@ export function readEnvelope(o) {
 export const CURSOR_RESOURCES = Object.freeze(['grep', 'describe', 'expand']);
 const CURSOR_MAX = 2048;
 const CURSOR_TEXT_RE = /^[A-Za-z0-9._:-]{1,128}$/;
-function cursorValueOk(v, depth) {
-  if (v === null) return true;
-  if (typeof v === 'number') return Number.isSafeInteger(v);
-  if (typeof v === 'string') return CURSOR_TEXT_RE.test(v);
-  if (typeof v === 'object' && !Array.isArray(v) && depth < 1) return Object.values(v).every((x) => cursorValueOk(x, depth + 1));
-  return false;
+const CURSOR_FIELDS = Object.freeze({
+  grep: Object.freeze(['v', 'resource', 'q', 'pos']),
+  describe: Object.freeze(['v', 'resource', 'node', 'off']),
+  expand: Object.freeze(['v', 'resource', 't', 'i', 'o']),
+});
+
+function cursorIdOk(v) {
+  return typeof v === 'string' && CURSOR_TEXT_RE.test(v);
 }
+
+function cursorOffsetOk(v) {
+  return Number.isSafeInteger(v) && v >= 0;
+}
+
+/** Cursor fields are resource schemas, not an extensible object. This keeps
+ *  recalled text out of both values and object keys before it reaches next:. */
 function cursorShapeOk(c) {
-  return c !== null && typeof c === 'object' && !Array.isArray(c) && c.v === 1 && CURSOR_RESOURCES.includes(c.resource) && Object.entries(c).every(([k, x]) => k === 'v' || k === 'resource' || cursorValueOk(x, 0));
+  if (c === null || typeof c !== 'object' || Array.isArray(c) || c.v !== 1 || !CURSOR_RESOURCES.includes(c.resource)) return false;
+  const fields = CURSOR_FIELDS[c.resource];
+  const keys = Object.keys(c);
+  if (keys.length !== fields.length || !fields.every((field) => Object.hasOwn(c, field))) return false;
+  if (c.resource === 'grep') return cursorIdOk(c.q) && cursorOffsetOk(c.pos);
+  if (c.resource === 'describe') return cursorIdOk(c.node) && cursorOffsetOk(c.off);
+  return cursorIdOk(c.t) && cursorOffsetOk(c.i) && cursorOffsetOk(c.o);
 }
 // derived from lossless-claw src/cli/args.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
 export function encodeCursor(c) {

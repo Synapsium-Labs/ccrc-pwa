@@ -519,9 +519,13 @@ export interface ReadEnvelope {
 export function readEnvelope(o: ReadEnvelopeInput): ReadEnvelope;
 export type CursorResource = 'grep' | 'describe' | 'expand';
 export const CURSOR_RESOURCES: readonly CursorResource[];
-export interface Cursor { v: 1; resource: CursorResource; [k: string]: unknown }
+export type Cursor =
+  | { v: 1; resource: 'grep'; q: string; pos: number }
+  | { v: 1; resource: 'describe'; node: string; off: number }
+  | { v: 1; resource: 'expand'; t: string; i: number; o: number };
+export type CursorOf<R extends CursorResource> = Extract<Cursor, { resource: R }>;
 export function encodeCursor(c: Cursor): string;
-export function decodeCursor(s: string, resource: CursorResource): Cursor | null;
+export function decodeCursor<R extends CursorResource>(s: string, resource: R): CursorOf<R> | null;
 export function decideRelay(i: { status: number | null; signal: string | null; lastLine: string | null }):
   { exit: number; reason?: string };
 export function stripReadPrefix(text: string): string;

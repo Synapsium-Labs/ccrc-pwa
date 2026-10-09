@@ -3858,11 +3858,19 @@ describe('the read --json envelope: reason exactly where the exit carries one (s
 });
 
 describe('the cursor: opaque, versioned, ids only (spec 8.4)', () => {
-  it('round-trips, and refuses another resource, a tampered string or text', () => {
-    const c = { v: 1 as const, resource: 'grep' as const, q: 'a'.repeat(64), after: { pos: 12, entryId: 9001 } }; const s = libOut.encodeCursor(c);
+  it('round-trips its resource schema, and refuses another resource, a tampered string or text', () => {
+    const c = { v: 1 as const, resource: 'grep' as const, q: 'a'.repeat(64), pos: 12 }; const s = libOut.encodeCursor(c);
     expect(s).toMatch(/^[A-Za-z0-9_-]+$/); expect(libOut.decodeCursor(s, 'grep')).toEqual(c); expect(libOut.decodeCursor(s, 'expand')).toBeNull(); expect(libOut.decodeCursor(`${s}!`, 'grep')).toBeNull(); expect(libOut.decodeCursor('', 'grep')).toBeNull();
     expect(libOut.decodeCursor(Buffer.from('{"v":2,"resource":"grep"}').toString('base64url'), 'grep')).toBeNull(); expect(libOut.decodeCursor(Buffer.from('{"v":1,"resource":"grep","q":"some recalled text"}').toString('base64url'), 'grep')).toBeNull();
-    expect(() => libOut.encodeCursor({ v: 1, resource: 'grep', q: 'some recalled text' })).toThrow(TypeError); expect(() => libOut.encodeCursor({ v: 1, resource: 'grep', a: { b: { c: 1 } } })).toThrow(TypeError); expect(() => libOut.encodeCursor({ v: 1, resource: 'tree' as 'grep' })).toThrow(TypeError);
+    expect(() => libOut.encodeCursor({ v: 1, resource: 'grep', q: 'some recalled text', pos: 0 })).toThrow(TypeError); expect(() => libOut.encodeCursor({ v: 1, resource: 'grep', a: { b: { c: 1 } } } as never)).toThrow(TypeError); expect(() => libOut.encodeCursor({ v: 1, resource: 'tree' } as never)).toThrow(TypeError);
+  });
+  it('refuses unknown top-level and nested keys on encode and decode', () => {
+    const top = { v: 1, resource: 'grep', q: 'a'.repeat(20), pos: 0, 'some recalled text': 1 } as const;
+    const nested = { v: 1, resource: 'grep', q: 'a'.repeat(20), pos: 0, after: { 'some recalled text': 1 } } as const;
+    for (const c of [top, nested]) {
+      expect(() => libOut.encodeCursor(c as never), JSON.stringify(c)).toThrow(TypeError);
+      expect(libOut.decodeCursor(Buffer.from(JSON.stringify(c)).toString('base64url'), 'grep'), JSON.stringify(c)).toBeNull();
+    }
   });
 });
 
