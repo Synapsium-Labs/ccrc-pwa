@@ -1,9 +1,10 @@
 # Program: ccrc-history
 
-Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.2, operator-approved design;
-rulings Q1–Q14 of 2026-10-05; Q15–Q19 open)
-Plans: `docs/superpowers/plans/2026-10-05-ccrc-history-w1-capture.md` (waves 1 and 2: W1 Part A and W1-B1). The plans
-for W1-B2, B3 and B4 are written by the coordinator while earlier waves run.
+Spec: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.5; operator-approved design,
+rulings Q1–Q14 of 2026-10-05 and Q15–Q19 of 2026-10-07; rev 3.5 folds in the refresh reviews' rulings, below)
+Plans: `docs/superpowers/plans/2026-10-05-ccrc-history-w1-capture.md` (waves 1 and 2: W1 Part A and W1-B1, merged);
+`2026-10-06-ccrc-history-w1-b2-recall.md` (wave 3), `2026-10-07-ccrc-history-w1-b3-card-line.md` (wave 4) and
+`2026-10-07-ccrc-history-w1-b4-export.md` (wave 5), operator-approved 2026-10-07 and refreshed on B1's merged code.
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-ridge`   Workspace: **a fresh child per wave** (one PR per child)
 
 **What this program is.** ccrc keeps its own lossless, searchable copy of every Claude Code session transcript on
@@ -17,10 +18,10 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | W1 Part A: Node floor `>=22.16.0` in the three engines, node-floor assertion 4, the `node floor (22.16.0)` CI leg (plan Tasks 1–2) | engines + CI; full suite | #300 | **merged** 2026-10-06 16:53Z as `f7e51156f` (run 293, after review 298, fix round 1 and review 301) |
-| 2 | W1-B1 "capture": `lib.mjs`, `store.mjs`, `sweep.mjs`, the shim, the hook's spool line, journal + pre-migration snapshot + purge carve-out, `status`, install/uninstall/deploy, doctor `history`, lifecycle rows, `measure-history.py` (plan Tasks 3–36). Sessions see no change | fleet (shim + timer); full suite (ci.yml) | — | run 302 dispatched 2026-10-06 16:58Z to a fresh child |
-| 3 | W1-B2 "recall": read verbs, parser, native leaves, the skill, operator verbs (`prune`, `doctor --repair/--backup/--adopt/--restore/--rebuild/--migrate`, `reparse`), recovery step | fleet + skills | — | plan owed (coordinator) |
-| 4 | W1-B3 "card line": scope marker, `_hook_history_card`, the S6-R11 census re-measure | fleet (hook) | — | plan owed; after wave 3 |
-| 5 | W1-B4 "sole-copy export" (ruled Q6, e) | fleet | — | plan owed; after wave 3; **live on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19** |
+| 2 | W1-B1 "capture": `lib.mjs`, `store.mjs`, `sweep.mjs`, the shim, the hook's spool line, journal + pre-migration snapshot + purge carve-out, `status`, install/uninstall/deploy, doctor `history`, lifecycle rows, `measure-history.py` (plan Tasks 3–36). Sessions see no change | fleet (shim + timer); full suite (ci.yml) | #315 | **merged** 2026-10-09 02:12Z as `69ef7102b` at head `561609adc` (run 302, after reviews 316, 344, 351 and 353 and fix rounds 1–3) |
+| 3 | W1-B2 "recall": read verbs, parser, native leaves, the skill, operator verbs (`prune`, `doctor --repair/--backup/--adopt/--restore/--rebuild/--migrate`, `reparse`), recovery step | fleet + skills | — | run 354 open (planned); dispatched once this ledger's docs PR merges |
+| 4 | W1-B3 "card line": scope marker, `_hook_history_card`, the S6-R11 census re-measure | fleet (hook) | — | plan on `main` with this ledger; after wave 3 |
+| 5 | W1-B4 "sole-copy export" (ruled Q6, e) | fleet | — | plan on `main` with this ledger; after wave 3 (B3 first by default; B3's tick-order script is order-independent); **live on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19** |
 | 6 | W2: the headless seam, the replay driver, the quiz and the live A/B; the gate (ruled Q7, Q14) | fleet | — | after waves 3 and the backfill |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | only if the W2 gate passes |
 | 8 | W4: subagents and `touched` | fleet | — | only if the W2 gate passes, and never before wave 5 is live |
@@ -33,9 +34,10 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
   retained journal + purge keeps the store + restore/rebuild in W1, sole-copy export before retention bites, no
   scheduled full copies; Q7 cluster-bootstrap gate; Q8 recall on every provider and lane, surviving provider
   migration; Q9 archive-quoted gists; Q10–Q14 as recommended.
-- **Open operator questions Q15–Q19** (spec §15.3). Every wave follows the spec's stated default until answered:
-  Q15 the ruled node-shortest export reducer (planExport takes per-file pairs, so a yes swaps one reducer); Q16 no
-  `fork` spooling; Q17 the recommended purge wording (no behaviour change); Q18 is W2's; Q19 no hand-mapping mode.
+- **Operator rulings 2026-10-07** (spec rev 3.4): Q15 per-copy export due (B2 Task 35 makes it the default); Q16
+  `SessionStart(fork)` spools from W1-B2 (B2 Task 34); Q17 `--purge` keeps history with a warning, `--purge-history`
+  removes it; Q18 the smallest uptake that can pass the statistical gate (W2); Q19 no W1 hand-mapping mode; `prune
+  --apply` may run below the free-space floor.
 - **Coordinator rulings at plan review (2026-10-06):** R1 — `sweep.mjs` and `cli.mjs` end in their entry guard, with
   no top-level await, and every later block is inserted above it; R2 — redaction catches a `RangeError` from the
   shape regexes on a multi-MiB run and redacts the whole run (fail closed), pinned at 16 MiB; R3 — a `statfs` that
@@ -49,7 +51,13 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
   `main` defines it.
   - Run 293 (wave 1) held 4260 to 4265. It defined D-4260, D-4261 and D-4262 in the plan (on `main` with #300).
     4263, 4264 and 4265 were never used and stay unassigned.
-  - Run 302 (wave 2) holds the 20 numbers 4296 to 4315, listed one by one in its brief.
+  - Run 302 (wave 2) used 35 numbers, all defined in the wave-1 plan on `main` (#315): 4296–4315 (its brief's
+    block), 4336–4347 (an extension), 4418 and 4419 (fix round 1; 4418 is RF6's hook regular-file append), and 4550
+    (fix round 2, the USAGE_PROSE allowance). None was left unused.
+  - The B2, B3 and B4 plans' own departures were issued in one block on 2026-10-09 (D-4675 through D-4767: B2
+    4675–4735, B3 4736–4753, B4 4754–4767) and are defined in each plan's `## Deviations found`; B3 and B4 cite B2's
+    numbers for the slugs B2 defines first.
+  - Run 354 (wave 3) holds the 30 numbers 4587 to 4616, listed one by one in its brief.
 - **Wave 1 reviews.**
   - **Review 298** (at `4f2ba96e9`) raised F1 to F6. Rulings:
     - F1 strengthen the O18 pin (D-4261);
@@ -61,23 +69,45 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
     - F1 (a quoted `uses:` plus an expression `node-version:` still evades the pin) is the accepted stopping line for this regex guard: two deliberate evasions at once, while every ordinary spelling reds. No action.
     - F2: Part A's floor remedy in `ccrc-doctor-checks` and `install.sh` says a server below the floor "boots without ccrc history's search". History lives only on session-hosting boxes (Q3), and no server code uses FTS5. Carried into wave 2, which rewords both lines in place once the store exists.
     - The refuted finding (spec §9.9 "past 500 rows") needs no edit: §9.9 already names the forced `gc()` every 100 rows, and "past 500" is the row count.
+- **Wave 2 (B1) reviews**, each a held-out panel (three or more Opus · high lenses, three Sonnet · high refuters per
+  finding, majority deciding; no lens dead or unexamined in any):
+  - **Review 316** (at `6a6987532`): 42 findings, 10 critical (redaction, FTS candidate discovery, unbounded reads,
+    wedging inputs), 6 important, 26 minor; all accepted. Fix round 1 (RF1a–RF8, FU1–FU10) with departures
+    D-4343–D-4347, D-4418 and D-4419.
+  - **Review 344** (at `be9df58ba`): 42 of 42 closed; 9 minor confirmed, 3 refuted. Rulings (mail 4019): fix all
+    nine; D-4307's stopping line stands for B1 (its measured price, 31 of 32 characters, is carried into B2's
+    substring belt); `store-read-failed` ledgered under D-4313; the USAGE_PROSE allowance takes D-4550.
+  - **Review 351** (at `aa42a3972`): 9 of 9 closed, the main merge a pure keep-both; 4 minor confirmed, 3 refuted.
+    Ruling (mail 4043): close bare-name arithmetic in the S1 pins in B1 (CLOSED class), LIST four deliberate evasions.
+  - **Review 353** (at `561609adc`): 3 of 3 closed; 5 minor, all S1 static-pin precision with no live exposure.
+    Ruling: stop iterating the regex guard (the stopping-line rule); accept the worker's extensions and listed
+    evasions; carry the housekeeping into B2 Task 34. Merged.
+- **The B2–B4 refresh after B1 merged (2026-10-08/09).** The plans were re-anchored on B1's real code (2,253
+  anchors checked, 91 mismatches), then took the coordinator-owed amendments (the substring belt as B2 Tasks 7A/7B,
+  search reach, README residuals, the B1 worker's notes, B4's due-since fix) and four reviews: a 330-agent review of
+  the refresh (77 confirmed), a verification review (38), and a focused attack on the three redesigns (7). Their
+  rulings are spec rev 3.5's rules: the belt (layer 4 and glue windows, version-tagged generations, a witness that
+  records the belt due after a build without the belt ran, linear cost, unicode61's exact fold), windowed display
+  redaction (window plus margins read as one text, exact or fail-closed), journal redact pairs applied before a
+  restore links, the operator passes' belt rule, B3's scope marker on B1's regular-file rule, and recall-off parity
+  between the CLI and B3's hook. One coordinator confirmation the operator should see in the docs PR: the CLI and
+  its `--regex` child hold registered secret values in process memory (read from the frozen list and the declared
+  files named in meta `redact_sources`); nothing persists, journals or prints them.
 - **Routing (clause 13).** Wave 1 is a dependent chain that fits one context: Opus · high main loop, Sonnet · high
   implementers, Opus · high per-task reviewer, workflows off, `compact 40`. Wave 2 (34 tasks) outgrows one context:
   the bulk row — Opus · ultracode orchestrating, Sonnet · high workers (implementation never below Sonnet · high),
   workflows on. Wave 2 also carries `compact 40`: its tasks are a dependent chain (lib, then store, then sweep), so
-  later tasks should start lean even under an orchestrating main loop.
+  later tasks should start lean even under an orchestrating main loop. Wave 3 (38 tasks, B2) keeps wave 2's row:
+  wave 2's evidence (42 held-out findings at its first review, three fix rounds) argues for its whole-branch review
+  before wave-done, which the brief asks for, not for a different class.
 
 ## Carried constraints
 
-- **Order.** Part A merged first (#300). B1 has the 22.16 leg and the engines floor on its base.
-- **Peer overlap in wave 2.**
-  - Tasks 27 and 29 to 36 edit files that two open PRs in other programmes also edit:
-    - #299, session continuity W4;
-    - #248, landing order W3.
-    Their coordinator, quiet-river, was told so (mail 3725). Whichever lands second resolves the conflict.
-  - `session-hook.test.ts` (Task 29) was under claim 1049, child reclamation run 260, at dispatch. The worker
-    defers Task 29 while that claim is live.
-- **Before wave 2 converges anywhere:** on each session-hosting node that keeps its store on a volume, the operator
+- **Order.** Part A merged first (#300), then B1 (#315). B2 builds on B1's merged code; B3 and B4 build on B2.
+- **Peer overlap in wave 3.** At 2026-10-09 18:40Z child reclamation's run 347 claims `single-definition.test.ts`,
+  `CLAUDE.md` and `ccd/ccd`, which B2's later tasks also edit. The worker reads the claims before each first edit;
+  whichever PR lands second merges main and keeps both sides.
+- **Before B1 converges anywhere (still owed by the operator):** on each session-hosting node that keeps its store on a volume, the operator
   links `~/.ccrc/history/db` onto it (spec §9.3: a 0700 root and target) before that node converges, or doctor FAILs.
   After merge, the operator runs the shim's `--op import --apply` from a shell (B1 has no CLI `import`).
 - **Operator acts Part A names:** a read-only `node --version` on every node before Part A merges; optionally making
@@ -93,83 +123,66 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 
 ## Next-wave brief
 
-Wave 2 (W1-B1) is run 302, and its brief is below as dispatched (route: opus, ultracode, subagent sonnet, workflow on,
-compact 40). Wave 3's brief (W1-B2 "recall") is written here when its plan lands. The coordinator writes that plan
-against B1's real code while B1 runs.
+Wave 3 (W1-B2 "recall") is run 354, and its brief is below as it will be dispatched once this ledger's docs PR
+merges (route: opus, ultracode, subagent sonnet, workflow on, compact 40). Wave 2's brief is in this file's history.
 
 ```text
-Run 302 - programme ccrc-history, wave 2: W1-B1 "capture". Coordinator: ccrc-pwa-quiet-ridge.
+Run 354 - programme ccrc-history, wave 3: W1-B2 "recall". Coordinator: ccrc-pwa-quiet-ridge.
 
 Ledger: docs/superpowers/programs/ccrc-history.md (on main).
-Plan: docs/superpowers/plans/2026-10-05-ccrc-history-w1-capture.md. Read its header first (Goal, Global Constraints with rulings R1-R3, Review Focus, the file map), then Tasks 3-36 in order. Tasks 1-2 (Part A) are MERGED: PR #300, f7e51156f. Do not redo them.
-Spec: docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md (rev 3.2). The plan cites the sections each task needs. Q15-Q19 are open, and the spec's stated defaults are in effect.
+Plan: docs/superpowers/plans/2026-10-06-ccrc-history-w1-b2-recall.md. Read its header first: Goal, Global Constraints, Review Focus, the pin map, the file map. Then do Tasks 1-36 in order; there are 38 headings, because the lettered Tasks 7A and 7B come before Task 8.
+Spec: docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md (rev 3.5). The plan cites the sections each task needs.
+B1 is MERGED (PR #315, 69ef7102b). Its code on main is your base. Do not redo or rewrite it, except where a task edits it in place.
 
 Execution skill: superpowers:subagent-driven-development.
 Commit on this workspace's own branch. Do not create or switch to a separate feature branch.
 
-What the wave ships (one PR, "B1"):
-- ccd/history/{lib,store,sweep,cli}.mjs with their .d.mts files, the MIT sidecar and PROVENANCE;
-- the ccd-history-sweep shim and unit, and the ccrc dispatch line;
-- the hook's tail spool block;
-- install, uninstall and deploy wiring, with --purge keeping the store;
-- doctor's history check, the lifecycle rows, single-definition O13/O14, and deploy/measure-history.py;
-- the README and CLAUDE.md edits the plan names.
-Sessions see no change. The PR edits .github/ and package-adjacent files, so CI runs the full suite. That is intended.
+What the wave ships (one PR, "B2"):
+- the recall verbs (tree, grep, describe, expand), the parser and native leaves;
+- the substring belt (7A, 7B) and windowed display redaction;
+- the operator verbs (prune, reparse, doctor --repair/--backup/--adopt/--restore/--rebuild/--migrate) and the recovery step;
+- the ccrc-history skill and its installer, README's history section;
+- fork spooling (Q16) and the per-copy export due (Q15).
+Sessions gain the skill and the CLI verbs.
 
-Base: main at f7e51156f or later.
-- The plan's anchors were measured at d12b5aba0, and main has moved since. Re-anchor every Modify by its content; line numbers are hints.
-- The citation-corpus files are edited in place or end-appended exactly as the plan says, never by inserting lines mid-file: ccd/session-hook.sh, ccd/ccrc, deploy/deploy.sh, README.md, ccd/ccrc-doctor-checks, session-hook.test.ts and single-definition.test.ts.
+Base: main at 7c71244db or later.
+- The plan's anchors were measured on B1's merged code. Re-anchor every Modify by its content; line numbers are hints.
+- Edit citation-corpus files in place or end-append them exactly as the plan says.
 
-Order and peers (read GET /api/claims?project=ccrc-pwa before your first edit to any existing file):
-- Tasks 3-28 work in new files, except README's append after ## License and the license test (Task 4), and ccd/ccrc with ccrc-cli.test.ts (Task 27). Do them first.
-- Two open PRs in other programmes edit the files Tasks 27 and 29-36 touch:
-  - #299 (session continuity W4): ccd/ccrc, ccrc-doctor-checks, deploy.sh, gen-wrappers, shared/lifecycle.ts, and the doctor, install, uninstall, lifecycle and single-definition tests;
-  - #248 (landing order W3): ccrc-doctor-checks, session-hook.sh, the doctor and install tests.
-- Before Task 27, check whether they have merged. If one has, merge origin/main into your own workspace branch and re-anchor.
-- If they are still open, proceed. Whichever PR lands second resolves the conflict, and the end-appended and in-place shapes keep that small.
-- server/test/session-hook.test.ts (Task 29) is held by claim 1049, which belongs to run 260 (child reclamation W5, PR #290). Peer claims are advisory, but you never edit a contested path. If 1049 is live when you reach Task 29, do Tasks 30-36 first and come back. If Task 29 is the only work left and the claim is still live, mail me.
+Measuring:
+- Many reds and counts in the plan are marked "predicted": no B2 code existed when it was written. Run each step and record what it actually prints.
+- A red at a CONTROL is the fixture's to fix, never the guard's to weaken.
+- Every mutant must red when its guard is removed. If one cannot, that is a finding: report it.
+- Every vitest -t filter is a regex. Keep each one regex-safe, with each selecting at least one test.
 
-Coordinator ruling carried from review 301 (F2), and this wave's job:
-- Part A's floor remedy says that below the floor the server "boots without ccrc history's search". Two lines carry it:
-  - the node-floor FAIL remedy in ccd/ccrc-doctor-checks (_dr_fail node);
-  - the comment above `floor=` in install.sh.
-- That is not true. History lives on session-hosting boxes, never on a server box (Q3), and nothing on the server uses FTS5.
-- Once B1's store exists, reword both lines IN PLACE, keeping each file's line count (both are corpus files), to say what B1's code actually does when node:sqlite has no FTS5. Keep it short and accurate, and do not hard-code a version the line reads from package.json.
-- Leave README :171 and CLAUDE.md's floor bullet alone unless B1 makes them false.
-- Take a departure number for this edit.
-
-Network: Task 20 Step 13 and Task 36 download the official Node tarballs from nodejs.org, checksum-verified, into the scratch path each names, and remove them afterwards. That is sanctioned. No other network use.
+Peers: read GET /api/claims?project=ccrc-pwa before your first edit to any existing file. Child reclamation's run 347 currently claims single-definition.test.ts, CLAUDE.md and ccd/ccd. Never edit a contested path. Agree an in-place or end-append scope by the peer protocol, or do other tasks first and mail me if nothing else is left. Whichever PR lands second merges main and keeps both sides.
 
 Live safety (on top of your skill and CLAUDE.md):
-- Never run the shim, sweep.mjs, cli.mjs, the ccd-history-sweep unit or any `--op` against the live $HOME.
-- Never enable or start a timer on this box, never run ccrc update, deploy or rollout, and never create ~/.ccrc/history.
-- Fixture HOMEs only (historyHelpers.ts).
-- Clean up every fixture directory your runs create. ~/.cc-tmp already leaks ccrc fixtures; do not add to it.
+- Never run the shim, sweep.mjs, cli.mjs, any ccrc history verb, any --op or the ccd-history-sweep unit against the live $HOME.
+- Never create or touch ~/.ccrc/history. Never enable a timer. Never run ccrc update, deploy or rollout.
+- Fixture HOMEs only (historyHelpers.ts). Remove every fixture directory and every Python bytecode file your runs create.
+- Never kill processes by pattern (pkill -f, killall). Every session shares one UNIX user, so kill only PIDs or process groups you started.
 
 Suites:
-- Run as each step states: from inside server/, ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000.
+- From inside server/: ./node_modules/.bin/vitest run test/<file>.test.ts, in the foreground, with a Bash timeout of at least 600000.
 - Re-run the CLAUDE.md load flakes in isolation before calling a red real.
 - tmp-sweep's fail-closed environment case is red on this box at the base. It is not yours.
 
-Task 34: disk-hygiene W2 is NOT on main, so O30/O31 take the plan's not-on-base arm.
-
 Departures:
-- The plan defines its own (from D-4165).
-- For a departure you find while executing, take the next unused number from this run's block: 4296, 4297, 4298, 4299, 4300, 4301, 4302, 4303, 4304, 4305, 4306, 4307, 4308, 4309, 4310, 4311, 4312, 4313, 4314, 4315.
-- Define it in the plan's "## Deviations found" on your branch, in the same commit that first cites it. Format, with the em dash the scanner keys on: "- **D-<n>** — `<slug>` (Task N): <why>".
+- The plan defines its own: D-4675 through D-4735, already in its Deviations found. Cite them by number.
+- For a departure you find while executing, take the next unused number from this run's block: 4587, 4588, 4589, 4590, 4591, 4592, 4593, 4594, 4595, 4596, 4597, 4598, 4599, 4600, 4601, 4602, 4603, 4604, 4605, 4606, 4607, 4608, 4609, 4610, 4611, 4612, 4613, 4614, 4615, 4616.
+- Define it in the plan's "## Deviations found" in the same commit that first cites it, as "- **D-<n>** — `<slug>` (Task N): <why>".
 - Never call the allocator, and never write a range.
-- Run `deviation-refs` after `git fetch origin main` before each push.
-- Name every number you used in your wave-done.
+- Run deviation-refs after `git fetch origin main` before each push. Name every number you used in your wave-done.
 
-Not yours, and done by the operator or the coordinator after merge:
-- merging;
-- linking ~/.ccrc/history/db onto a volume;
-- the shim's --op import --apply;
-- every rollout.
+Not yours, and done by the operator or the coordinator after merge: merging, every rollout, the operator acts B1 still owes (linking ~/.ccrc/history/db, `--op import --apply`), and the B3/B4 waves.
 
-Wave-done: when PR B1 is open, its required checks are green (build-pwa, test (pwa), test (agent), test (server); test-macos and probe-macos are advisory by ruling), and your branch tip is the PR head. Your fingerprint is the workspace branch tip.
+Before wave-done:
+- Run a whole-branch review of your own: three Opus · high lenses (correctness, spec conformance, does-it-reproduce) with refuters. Fix what it confirms.
+- Then run the full local suite once.
+Wave-done when PR B2 is open, its required checks are green (build-pwa, test (pwa), test (agent), test (server); test-macos and probe-macos are advisory), and your branch tip is the PR head. Your fingerprint is the workspace branch tip.
 
-Routing (clause 13; routing matrix row "Bulk independent work ... a wave larger than one context": 34 tasks outgrow one context):
+Routing (clause 13; routing-matrix row "bulk work larger than one context", the same as wave 2):
 - main loop: Opus, ultracode, orchestrating;
 - implementer subagents: Sonnet at effort high (never below);
 - per-task reviewer: Opus at effort high;
