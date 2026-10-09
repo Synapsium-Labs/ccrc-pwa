@@ -966,9 +966,11 @@ that would move a node — Install, Roll back, Update, Update all — opens one 
 (below). A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
 address. A **Box token** card follows, read from the same answer's `boxToken` field: the current value's
 generation and age, the last rotation, the state (idle, rotating, grace, held with the server's reason,
-failed with its word), whether a rotation is owed and why, the fleet's confirmed generation, its transport
-(`http` said as unencrypted), the previous and retired values still presented, a boot recovery, an alert
-after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now** (`POST /api/token/rotate`, session-only). Settings then has
+failed with its word), whether a rotation is owed and why, whether the fleet confirmed the current
+generation, its transport (`http` said as unencrypted), the previous and retired values still presented, the
+proof that the retired value is refused, a boot recovery, a token-file finding from the last re-read, an
+alert after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now**
+(`POST /api/token/rotate`, session-only). Settings then has
 a further section, **Notifications**: the phone-push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
 as the fleet intent's `notify` through `POST /api/updates/intent`. In remote mode the foot of the fleet screen always

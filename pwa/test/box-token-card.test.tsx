@@ -130,6 +130,24 @@ describe('the card words (spec 4.7)', () => {
     expect(within(mint).getByRole('alert')).toHaveTextContent('The server could not mint a box token; every box-token call is refused until a mint succeeds.');
   });
 
+  it('banner and stall together raise exactly ONE alert, and the failure sentence wins', async () => {
+    const card = await mount(view(BT({ phase: 'failed', failures: 3, lastFailure: 'proof-failed', banner: true,
+      rotationOwed: true, owedWhy: 'adopted', stalled: { why: 'owed', since: Date.now() - 25 * 60 * MIN } })));
+    const alerts = within(card).getAllByRole('alert');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toHaveTextContent('Box-token rotation has failed 3 times in a row (last: proof-failed).');
+    expect(alerts[0]).not.toHaveTextContent('has been owed');
+  });
+
+  it('an owed-stall whose `since` is in the future or cannot be placed on a calendar never prints a made-up span', async () => {
+    const future = await mount(view(BT({ rotationOwed: true, owedWhy: 'adopted',
+      stalled: { why: 'owed', since: Date.now() + 60 * MIN } })));
+    expect(within(future).getByRole('alert')).toHaveTextContent('A box-token rotation has been owed for moments and has not completed.');
+    cleanup();
+    const unplaceable = await mount(view(BT({ rotationOwed: true, owedWhy: 'adopted', stalled: { why: 'owed', since: 1e20 } })));
+    expect(within(unplaceable).getByRole('alert').textContent).toBe('A box-token rotation has been owed and has not completed.');
+  });
+
   it('a file finding from the re-read is shown with its file and word', async () => {
     const card = await mount(view(BT({ fileProblem: { at: Date.now() - 5 * MIN, file: 'current', word: 'changed' } })));
     expect(within(card).getByText(/^server token file: current changed on re-read \(the last good value is kept\), /)).toBeInTheDocument();
@@ -166,8 +184,9 @@ describe('the card words (spec 4.7)', () => {
 
   it('survives asUpdatesView\'s rebuild: a dropped malformed node does not drop the box-token field', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const raw = { ...view(BT()), nodes: [node(), null] };
-    expect(asUpdatesView(raw)?.boxToken).toEqual(BT());
+    const bt = BT();   // built once: BT() reads Date.now(), so a second call can differ by a millisecond
+    const raw = { ...view(bt), nodes: [node(), null] };
+    expect(asUpdatesView(raw)?.boxToken).toEqual(bt);
   });
 
   it('the card puts no value, code or hash on the page: no 43- or 64-character secret shape anywhere', async () => {

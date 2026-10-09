@@ -686,7 +686,7 @@ const BOX_TOKEN_HOLD_TEXT: Record<TokenHold, (node: string | null) => string> = 
   'fleet-rows': () => 'not exactly one reachable fleet node',
   'node-id-unmeasured': (n) => `the node id of ${n ?? 'the fleet box'} is not measured`,
   'link-down': () => 'the agent link is down',
-  'pending-cap': () => 'two handed-out values still await confirmation',
+  'pending-cap': () => 'the handed-out values at the cap still await confirmation',
   'no-coord': () => 'no coordination database',
   'role-unrecorded': () => "this box's role is not recorded as both (CCRC_ROLE in ~/.ccrc/ccrc.env)",
   'mint-failed': () => 'the server could not mint a value',
@@ -782,7 +782,7 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
       : v.stalled?.why === 'mint-failed'
         ? 'The server could not mint a box token; every box-token call is refused until a mint succeeds.'
         : v.stalled?.why === 'owed'
-          ? `A box-token rotation has been owed for ${elapsedWords(now - v.stalled.since)} and has not completed${v.hold !== null ? ` (${boxTokenHoldText(v.hold, v.holdNode)})` : ''}.`
+          ? `A box-token rotation has been owed${isPlaceableInstant(v.stalled.since) ? ` for ${elapsedWords(now - v.stalled.since)}` : ''} and has not completed${v.hold !== null ? ` (${boxTokenHoldText(v.hold, v.holdNode)})` : ''}.`
           : null;
     body = (
       <>
