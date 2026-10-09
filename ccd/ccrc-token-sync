@@ -1,0 +1,416 @@
+#!/usr/bin/env bash
+set +x   # FIRST LINE OF CODE, and it is a SECRETS control: a claim code and a box token pass through this file.
+umask 077
+# ccrc-token-sync — the fleet box's half of the box-token lifecycle (design
+# 2026-10-07, §4.5 and §10.3). `ccd/ccrc` dispatches `ccrc token …` here,
+# to the copy beside itself, so the verb runs from the release tree and from
+# a deploy.sh-placed tree alike.
+#
+#   ccrc token sync --from agent
+#       The `token-sync` agent op's ONE spawn. The one-time claim code arrives
+#       on STDIN (one line, then EOF) — never argv, never the environment. The
+#       verb trades it at POST /api/token/claim for the new value, writes
+#       ~/.cc-secrets/ccrc-mail.token atomically, records the generation id in
+#       ~/.ccrc/box-token-generation, proves the file with one call to
+#       GET /api/ledger, and writes a non-secret report to
+#       ~/.ccrc/token-sync.json for doctor.
+#
+# OUTPUT CONTRACT (`sync`), read by the agent (agent/src/tokensync.ts):
+#   - success: exit 0, stdout exactly `synced <16 hex> <http|https>`
+#     (shared/agent-protocol.ts's TOKEN_SYNC_SYNCED_RE);
+#   - a refusal: exit `_ts_exit <word>`, stderr's FIRST line
+#     `ccrc: token sync: <word>: <sentence>` (TOKEN_SYNC_STDERR_PREFIX);
+#   - 2 a usage error; 1 an environment this verb cannot run in (no curl, no
+#     python3, no agent.env, no CCRC_SERVER_URL, no node id). Neither writes
+#     the report: neither has a word.
+# No sentence carries a value, a code, a hash of either, a URL or an absolute
+# home path: the agent relays the first stderr line to the server (at most 200
+# characters) and the server relays it to the console.
+#
+# SINGLE DEFINITION. bash cannot import shared/, so every word, shape and
+# path below that L0 also declares is spelled ONCE here, at file scope, and
+# server/test/ccrc-token-sync.test.ts's parity scan holds each to its L0
+# twin: the exit table (TOKEN_SYNC_EXIT), the stderr prefix, the code,
+# generation and value shapes, the claim path, the --from word, the fleet
+# file's fixed comment line, and the generation file's basename
+# (NODE_FILES.tokenGeneration).
+#
+# THE FIFTH HAND COPY of ccrc-api's URL and token handling (ccd-account-health,
+# ccrc-api, ccd-pool-sync, ccd-update-sync, this file), for the reason
+# ccd-update-sync gives where it calls itself the fourth: each is a standalone
+# executable, and a sourced helper would be a new file under the same "cannot
+# source a sibling" constraint. A fix to one copy's URL or token handling is
+# owed to all five. agent.env is GREPPED, never sourced (0600; it carries the
+# agent bearer). A token or a code reaches curl only on STDIN through `-K -`.
+#
+# TEMPS. Every temp this verb makes is named `.ccrc-token-sync.XXXXXX` and
+# lives in ~/.cc-secrets (0700: the claim answer, the new token file) or in
+# ~/.ccrc (the generation file and the report, both non-secret, renamed
+# within their own directory), never in /tmp, which is shared and reaped. A
+# run first removes that prefix in both directories: a run killed by the
+# agent's SIGKILL leaves its temps behind, and the agent's gate allows one
+# sync at a time, so no live run owns one. The EXIT trap removes this run's
+# own; TERM, INT and HUP exit through it.
+#
+# PORTABILITY (server/test/macos-platform.test.ts scans this file whole): no
+# bare `timeout` (curl's --max-time is the deadline), no `stat -c`, no
+# template-less `mktemp`, no `mv -T`, no GNU `date`. Renames are python3's
+# os.rename (one rename(2) on every POSIX platform). Bash has no portable
+# directory fsync and macOS's `sync` takes no operand, so the directory fsync
+# is python's, where os.open on a directory is allowed.
+set -uo pipefail
+export LC_ALL=C
+
+# ── the words L0 declares (the parity scan reads these lines) ─────────────
+TS_PREFIX='ccrc: token sync: '
+FROM_WORD='agent'
+CODE_RE='^[A-Za-z0-9_-]{43}$'
+GEN_RE='^[0-9a-f]{16}$'
+VALUE_RE='^[0-9a-f]{64}$'
+CLAIM_PATH='/api/token/claim'
+PROOF_PATH='/api/ledger'
+FLEET_COMMENT='# ccrc box token: written by ccrc and rotated by the server; do not edit or copy it'
+GEN_FILE="$HOME/.ccrc/box-token-generation"
+
+# The verb's refusal words and their exit codes (TOKEN_SYNC_EXIT). `busy` and
+# `spawn-failed` are the agent's words, never this file's.
+_ts_exit() {
+  case "$1" in
+    bad-code) echo 20 ;;
+    claim-refused) echo 21 ;;
+    code-used) echo 22 ;;
+    write-failed) echo 23 ;;
+    proof-failed) echo 24 ;;
+    proof-unmeasured) echo 25 ;;
+    stale-client) echo 26 ;;
+    *) echo 1 ;;
+  esac
+}
+
+# ── this box's files ──────────────────────────────────────────────────────
+CCRC_DIR="$HOME/.ccrc"
+SECRETS="$HOME/.cc-secrets"
+TOKEN_FILE="$SECRETS/ccrc-mail.token"
+AGENT_ENV="$CCRC_DIR/agent.env"
+NODE_ID_FILE="$CCRC_DIR/node-id"
+REPORT="$CCRC_DIR/token-sync.json"
+API_CLIENT="$HOME/.local/bin/ccrc-api"
+TMP_PREFIX='.ccrc-token-sync.'
+CLAIM_MAX_BYTES=4096
+CALL_MAX_TIME=15
+
+# What a refusal reports beside its word; each is set as soon as it is known.
+R_GEN=''        # the generation id the claim answered
+R_TRANSPORT=''  # http | https
+R_PROOF=''      # proved | proof-failed | proof-unmeasured
+
+# This run's temps, removed on every exit.
+T_RESP='' T_TOKEN='' T_GEN='' T_REPORT=''
+code='' tok=''
+_ts_cleanup() {
+  code=''; tok=''
+  local f
+  for f in "$T_RESP" "$T_TOKEN" "$T_GEN" "$T_REPORT"; do
+    [ -n "$f" ] && rm -f -- "$f"
+  done
+  return 0
+}
+trap '_ts_cleanup' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
+_ts_usage() {
+  cat <<'EOF'
+usage: ccrc token sync --from agent      (the claim code on stdin; run by ccrc-agent's token-sync op)
+EOF
+}
+_ts_usage_die() { echo "ccrc: token: $1" >&2; _ts_usage >&2; exit 2; }
+_ts_env_die() { echo "ccrc: token sync: $1" >&2; exit 1; }
+
+# `_ts_rename <tmp> <dest>` — one rename(2), never `mv`.
+_ts_rename() {
+  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2" 2>/dev/null
+}
+
+# `_ts_report <result>` — ~/.ccrc/token-sync.json, by temp and rename. Every
+# field is a word, an id or a number this file validated, so printf is exact.
+# A report that cannot be written is said on stderr AFTER the verb's own line
+# and never changes the exit code.
+_ts_report() {
+  local result="$1" at gen='null' transport='null' proof='null'
+  at="$(date +%s)"
+  [ -n "$R_GEN" ] && gen="\"$R_GEN\""
+  [ -n "$R_TRANSPORT" ] && transport="\"$R_TRANSPORT\""
+  [ -n "$R_PROOF" ] && proof="\"$R_PROOF\""
+  if [ -d "$CCRC_DIR" ] && T_REPORT="$(mktemp "$CCRC_DIR/${TMP_PREFIX}XXXXXX" 2>/dev/null)" \
+    && printf '{"v":1,"at":%s,"result":"%s","generation":%s,"transport":%s,"proof":%s}\n' \
+      "$at" "$result" "$gen" "$transport" "$proof" > "$T_REPORT" \
+    && _ts_rename "$T_REPORT" "$REPORT"; then
+    T_REPORT=''
+    return 0
+  fi
+  echo "ccrc: token sync: the report at ~/.ccrc/token-sync.json could not be written" >&2
+  return 0
+}
+
+# `_ts_refuse <word> <sentence>` — the one way a sync ends without syncing.
+_ts_refuse() {
+  local word="$1" sentence="$2" rc
+  rc="$(_ts_exit "$word")"
+  printf '%s%s: %s\n' "$TS_PREFIX" "$word" "$sentence" >&2
+  _ts_report "$word"
+  exit "$rc"
+}
+
+# `_ts_sweep` — a killed run's temps, in both directories.
+_ts_sweep() {
+  local d f had_nullglob=0 had_dotglob=0
+  shopt -q nullglob && had_nullglob=1
+  shopt -q dotglob && had_dotglob=1
+  shopt -s nullglob dotglob
+  for d in "$SECRETS" "$CCRC_DIR"; do
+    [ -d "$d" ] || continue
+    for f in "$d/$TMP_PREFIX"*; do
+      rm -f -- "$f"
+    done
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
+  [ "$had_dotglob" -eq 1 ] || shopt -u dotglob
+  return 0
+}
+
+# `_ts_client_ok` — rc 0 when ~/.local/bin/ccrc-api cannot leak a token on
+# argv: absent (or a link to nothing: nothing runs), or present in the wave-13
+# shape — the header sent through `-K -` and no `-H` naming the token header.
+# Judged by CONTENT, so a link into the release tree passes the same test as
+# a copy (grep follows the link). A file it cannot read is refused: an
+# unreadable client is not a measured one. A session whose PATH finds another
+# copy first is not seen (spec §4.5's recorded residual).
+_ts_client_ok() {
+  [ -e "$API_CLIENT" ] || return 0
+  [ -r "$API_CLIENT" ] || return 1
+  local rc
+  grep -qE -- "-H[[:space:]]+[\"']?x-ccrc-mail-token" "$API_CLIENT"; rc=$?
+  [ "$rc" -eq 1 ] || return 1          # 0: the argv header is there; 2: no verdict
+  grep -qE -- '(^|[[:space:]])-K[[:space:]]+-([[:space:]]|$)' "$API_CLIENT"; rc=$?
+  [ "$rc" -eq 0 ] || return 1          # 1: no `-K -`; 2: no verdict
+  return 0
+}
+
+# `_ts_server_url` — sets URL and R_TRANSPORT from agent.env, or exits 1.
+# ws: and wss: become http: and https:, exactly as ccrc-api does; a plain
+# http address goes ahead and is RECORDED, never refused (R2).
+URL=''
+_ts_server_url() {
+  [ -r "$AGENT_ENV" ] || _ts_env_die "cannot read ~/.ccrc/agent.env — nothing was claimed"
+  local u
+  u="$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$AGENT_ENV" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
+  [ -n "$u" ] || _ts_env_die "CCRC_SERVER_URL is not set in ~/.ccrc/agent.env — nothing was claimed"
+  _ts_set_url "$u" || _ts_env_die "CCRC_SERVER_URL in ~/.ccrc/agent.env is not an http, https, ws or wss address — nothing was claimed"
+}
+_ts_set_url() {
+  local u="$1"
+  u="${u/#ws:/http:}"; u="${u/#wss:/https:}"
+  case "$u" in
+    https://?*) R_TRANSPORT=https ;;
+    http://?*)  R_TRANSPORT=http ;;
+    *) return 1 ;;
+  esac
+  URL="${u%/}"
+}
+
+# `_ts_read_value <file>` — sets tok to the file's value line: the first line
+# that is neither blank nor a `#` comment, whitespace stripped — the rule
+# every reader of this file applies (coord/token.ts's extractToken).
+_ts_read_value() {
+  tok="$(grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null | head -n1 | tr -d '[:space:]')"
+}
+
+# The claim answer, checked and written in ONE python process, so the value
+# never enters this shell: argv is the answer file, the token file, the temp
+# beside it, the comment line, and the two shapes. One stdout line:
+#   ok <generation>        the token file was renamed into place
+#   bad <reason>           the answer is not exactly {ok:true,value,generation}
+#   fail <reason>          the write failed; the old file is byte-equal
+# Reasons name no path and no value.
+_TS_WRITE_PY='
+import errno, json, os, re, sys
+resp, dest, tmp, comment, value_re, gen_re, cap = sys.argv[1:8]
+cap = int(cap)
+def out(kind, why):
+    sys.stdout.write("%s %s\n" % (kind, why)); sys.exit(0)
+def eword(e):
+    return errno.errorcode.get(getattr(e, "errno", None) or 0, "error")
+try:
+    with open(resp, "rb") as f:
+        raw = f.read(cap + 1)
+except OSError as e:
+    out("bad", "the answer could not be read (%s)" % eword(e))
+if len(raw) > cap:
+    out("bad", "the answer is over %d bytes" % cap)
+try:
+    doc = json.loads(raw.decode("utf-8"))
+except Exception:
+    out("bad", "the answer is not JSON")
+if not isinstance(doc, dict) or set(doc.keys()) != {"ok", "value", "generation"} or doc.get("ok") is not True:
+    out("bad", "the answer is not exactly ok, value and generation")
+value, gen = doc["value"], doc["generation"]
+if not isinstance(value, str) or re.fullmatch(value_re, value) is None:
+    out("bad", "the value is not 64 lowercase hex")
+if not isinstance(gen, str) or re.fullmatch(gen_re, gen) is None:
+    out("bad", "the generation is not 16 lowercase hex")
+preamble = comment + "\n"
+try:
+    if os.path.lexists(dest):
+        if os.path.islink(dest) or not os.path.isfile(dest):
+            out("fail", "the token file is not a regular file")
+        with open(dest, "r", encoding="utf-8", errors="surrogateescape") as f:
+            lines = f.read().splitlines(True)
+        kept = [l for l in lines if re.match(r"^\s*(#|$)", l)]
+        preamble = "".join(l if l.endswith("\n") else l + "\n" for l in kept)
+except OSError as e:
+    out("fail", "the token file could not be read (%s)" % eword(e))
+try:
+    fd = os.open(tmp, os.O_WRONLY | os.O_TRUNC)
+    try:
+        data = (preamble + value + "\n").encode("utf-8", "surrogateescape")
+        n = 0
+        while n < len(data):
+            n += os.write(fd, data[n:])
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, dest)
+except OSError as e:
+    out("fail", "writing the token file failed (%s)" % eword(e))
+try:
+    dfd = os.open(os.path.dirname(dest), os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+except OSError:
+    pass
+out("ok", gen)
+'
+
+# The error word of a refusal answer, or nothing: `{"ok":false,"error":<w>}`.
+_TS_ERROR_PY='
+import json, re, sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        doc = json.loads(f.read(4097).decode("utf-8"))
+    w = doc.get("error") if isinstance(doc, dict) else None
+    if isinstance(w, str) and re.fullmatch(r"[a-z][a-z-]{0,31}", w):
+        sys.stdout.write(w)
+except Exception:
+    pass
+'
+
+cmd_sync() {
+  [ $# -gt 0 ] || _ts_usage_die "sync needs --from agent"
+  [ "$1" = --from ] || _ts_usage_die "unknown argument: $1"
+  [ $# -ge 2 ] || _ts_usage_die "--from needs a value"
+  [ "$2" = "$FROM_WORD" ] || _ts_usage_die "--from must be $FROM_WORD"
+  [ $# -eq 2 ] || _ts_usage_die "unknown argument: $3"
+
+  # The code: one line, then EOF. Never argv, never the environment.
+  local extra='' nid status rc verdict word
+  IFS= read -r code || :
+  if IFS= read -r extra || [ -n "$extra" ]; then
+    extra=''
+    _ts_refuse bad-code "stdin carried more than one line; nothing was claimed"
+  fi
+  [[ "$code" =~ $CODE_RE ]] || _ts_refuse bad-code "the code on stdin is not 43 base64url characters; nothing was claimed"
+
+  command -v curl >/dev/null 2>&1 || _ts_env_die "curl is not on PATH — nothing was claimed"
+  command -v python3 >/dev/null 2>&1 || _ts_env_die "python3 is not on PATH — nothing was claimed"
+
+  _ts_sweep
+  _ts_client_ok || _ts_refuse stale-client "~/.local/bin/ccrc-api sends the box token on its argv (an install before wave 13); replace it before a sync — nothing was claimed"
+  _ts_server_url
+
+  [ -e "$NODE_ID_FILE" ] || [ -L "$NODE_ID_FILE" ] || _ts_env_die "no node id at ~/.ccrc/node-id — run ccrc install; nothing was claimed"
+  [ -f "$NODE_ID_FILE" ] && [ -r "$NODE_ID_FILE" ] || _ts_env_die "~/.ccrc/node-id is not a readable file — nothing was claimed"
+  nid=''
+  IFS= read -r nid < "$NODE_ID_FILE" || :
+  [[ "$nid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+    || _ts_env_die "~/.ccrc/node-id is not a lowercase uuid — nothing was claimed"
+
+  # ~/.cc-secrets: created 0700 when absent; an existing one keeps its mode.
+  if [ ! -d "$SECRETS" ]; then
+    mkdir -p -m 0700 -- "$SECRETS" 2>/dev/null \
+      || _ts_refuse write-failed "~/.cc-secrets could not be created; nothing was claimed"
+  fi
+  T_RESP="$(mktemp "$SECRETS/${TMP_PREFIX}XXXXXX" 2>/dev/null)" \
+    || _ts_refuse write-failed "no temp file could be made in ~/.cc-secrets; nothing was claimed"
+  T_TOKEN="$(mktemp "$SECRETS/${TMP_PREFIX}XXXXXX" 2>/dev/null)" \
+    || _ts_refuse write-failed "no temp file could be made in ~/.cc-secrets; nothing was claimed"
+
+  # THE CLAIM. The body is a curl config line on stdin (`-K -`), so the code
+  # is on no argv; the answer goes to a 0600 temp, never to stdout.
+  status="$(printf 'data = "{\\"code\\":\\"%s\\",\\"nodeId\\":\\"%s\\"}"\n' "$code" "$nid" \
+    | curl -sS -K - -H 'content-type: application/json' -X POST -o "$T_RESP" -w '%{http_code}' \
+      --max-filesize "$CLAIM_MAX_BYTES" --max-time "$CALL_MAX_TIME" "$URL$CLAIM_PATH" 2>/dev/null)"; rc=$?
+  code=''
+  if [ "$rc" -ne 0 ] || [ -z "$status" ] || [ "$status" = 000 ]; then
+    _ts_refuse claim-refused "the claim door gave no answer (curl rc $rc)"
+  fi
+  if [ "$status" != 200 ]; then
+    word="$(python3 -c "$_TS_ERROR_PY" "$T_RESP" 2>/dev/null)" || word=''
+    [ "$status" = 410 ] && [ "$word" = code-used ] \
+      && _ts_refuse code-used "the claim door answered 410 code-used: someone claimed this code first"
+    _ts_refuse claim-refused "the claim door answered $status${word:+ $word}"
+  fi
+
+  verdict="$(python3 -c "$_TS_WRITE_PY" "$T_RESP" "$TOKEN_FILE" "$T_TOKEN" "$FLEET_COMMENT" \
+    "$VALUE_RE" "$GEN_RE" "$CLAIM_MAX_BYTES" 2>/dev/null)" || verdict='fail python3 did not finish'
+  rm -f -- "$T_RESP"; T_RESP=''
+  case "$verdict" in
+    'ok '*)
+      T_TOKEN=''
+      R_GEN="${verdict#ok }"
+      [[ "$R_GEN" =~ $GEN_RE ]] || { R_GEN=''; _ts_refuse write-failed "the writer answered no generation"; } ;;
+    'bad '*) _ts_refuse claim-refused "${verdict#bad }; nothing was written" ;;
+    'fail '*) _ts_refuse write-failed "${verdict#fail }; the old token file is unchanged" ;;
+    *) _ts_refuse write-failed "the writer gave no verdict; the old token file is unchanged" ;;
+  esac
+
+  # The generation record, after the token file.
+  T_GEN="$(mktemp "$CCRC_DIR/${TMP_PREFIX}XXXXXX" 2>/dev/null)" \
+    && printf '%s\n' "$R_GEN" > "$T_GEN" \
+    && _ts_rename "$T_GEN" "$GEN_FILE" \
+    || _ts_refuse write-failed "the token file was written, but ~/.ccrc/box-token-generation could not be"
+  T_GEN=''
+
+  # THE PROOF: the file as every reader reads it, presented once to a lane
+  # that always checks the token. 400 is proved (accepted, query missing);
+  # 401 is proof-failed; anything else is proof-unmeasured, never folded in.
+  _ts_read_value "$TOKEN_FILE"
+  [ -n "$tok" ] || _ts_refuse write-failed "the token file carries no value line after the write"
+  status="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
+    | curl -sS -K - -o /dev/null -w '%{http_code}' --max-time "$CALL_MAX_TIME" "$URL$PROOF_PATH" 2>/dev/null)"; rc=$?
+  tok=''
+  if [ "$rc" -eq 0 ] && [ "$status" = 400 ]; then
+    R_PROOF=proved
+  elif [ "$rc" -eq 0 ] && [ "$status" = 401 ]; then
+    R_PROOF=proof-failed
+    _ts_refuse proof-failed "the server refused the value it handed out (GET $PROOF_PATH answered 401)"
+  else
+    R_PROOF=proof-unmeasured
+    _ts_refuse proof-unmeasured "the proof call was not measured (GET $PROOF_PATH: ${status:-no status}, curl rc $rc)"
+  fi
+
+  _ts_report synced
+  printf 'synced %s %s\n' "$R_GEN" "$R_TRANSPORT"
+  exit 0
+}
+
+[ $# -gt 0 ] || _ts_usage_die "missing subverb"
+sub="$1"; shift
+case "$sub" in
+  sync)  cmd_sync "$@" ;;
+  -h|--help) _ts_usage; exit 0 ;;
+  *) _ts_usage_die "unknown subverb: $sub" ;;
+esac

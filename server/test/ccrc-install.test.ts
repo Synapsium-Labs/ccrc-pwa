@@ -6404,10 +6404,12 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
 
   // Each wave's spine ADDS its own words (design 2026-09-20 §9): W1's three,
   // W4's four — `detach` on Linux only (decision 17: `--detach` refuses on
-  // Darwin) — and W6's `versions`, so a Linux install writes eight words and
-  // a Darwin one seven. LITERALS, not a read of ccd/ccrc's arrays: a pin
+  // Darwin) — W6's `versions`, and the box-token lifecycle's `token-sync`
+  // (design 2026-10-07 §4.5; every os, because the op runs the verb in the
+  // foreground), so a Linux install writes nine words and a Darwin one eight.
+  // LITERALS, not a read of ccd/ccrc's arrays: a pin
   // derived from the list it pins could never red on the list being wrong.
-  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions'];
+  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions', 'token-sync'];
   const CAPS_LINUX = [...CAPS_ALL, 'detach'];
   const CAPS_HERE = process.platform === 'darwin' ? CAPS_ALL : CAPS_LINUX;
 
@@ -6436,7 +6438,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
   });
 
-  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, W6\'s versions, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
+  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, W6\'s versions, token-sync, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
     const home = freshBox('ccrc-install-caps-');
     gitInit(treeRoot(home));
     const r = runInstall(home);
@@ -6452,7 +6454,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(r.stdout.split('\n').filter((l) => l.startsWith('install: caps:')).join('\n')).not.toContain(home);
   });
 
-  it('ccrc-caps: eight words on Linux, seven on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
+  it('ccrc-caps: nine words on Linux, eight on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
     // A real install reaches only the host's own arm. The other is reached by
     // running the real `_inst_caps` and `_ccrc_cap_words` out of ccd/ccrc with
     // CCD_OS set — the extraction harness the `_inst_installed` cases below
@@ -6513,6 +6515,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       rollback: [/^cmd_rollback\(\) \{/m, /^\s*rollback\)\s+cmd_rollback "\$@" ;;$/m],
       // W6 Task 4: a kept version is a flip — restore arm 1 and rollback by flip.
       versions: [/^_upd_restore_arm1\(\) \{/m, /^_ver_flip_back\(\) \{/m],
+      // Box-token lifecycle wave 1: the verb ccrc-agent's token-sync op spawns, dispatched to its sibling body.
+      'token-sync': [/^cmd_token\(\) \{/m, /^\s*token\)\s+cmd_token "\$@" ;;$/m, /"\$CCRC_HERE\/ccrc-token-sync"/],
       detach: [/^_upd_detach\(\) \{/m, /^\s*--detach\) detach=1 ;;$/m],
     };
     const arr = (name: string): string[] => {
@@ -6530,6 +6534,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     // on Darwin (Task 3's `_upd_detach_os_check`): the two statements agree.
     expect(arr('CCRC_CAP_WORDS')).not.toContain('detach');
     expect(src).toMatch(/_ccrc_die "--detach is Linux-only \(decision 17\)"/);
+    // …and `token-sync`'s body ships beside ccd/ccrc, where `cmd_token` looks for it.
+    expect(statSync(join(REPO, 'ccd', 'ccrc-token-sync')).isFile(), 'ccd/ccrc-token-sync does not ship').toBe(true);
   });
 
   it('floor: written by the LAST step from the stamped tag; only ever raised (§18 "the floor never lowers")', () => {

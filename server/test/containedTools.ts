@@ -55,6 +55,12 @@ export function plantPoison(bin: string, name: string): void {
     + `echo "ccrc tests must never reach a real ${name}" >&2\nexit 97\n`, { mode: 0o755 });
 }
 
+/** The one `data` config line the front admits: ccd/ccrc-token-sync's claim body, as a sh-level ERE (grep -E). The
+ *  quotes inside the JSON are escaped as curl's config syntax needs (a backslash before
+ *  each), and every field is shaped, so the line names no file, no URL and no field beyond the two the claim door
+ *  reads. */
+export const CLAIM_DATA_LINE_ERE = String.raw`^data = "\{\\"code\\":\\"[A-Za-z0-9_-]{43}\\",\\"nodeId\\":\\"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\"\}"$`;
+
 /** A curl that runs `realCurl` ONLY for a call it can fully account for (wave 9 R10d, review fix). It PARSES argv:
  *
  *  - PASSES: the options ccrc's own curl calls use, measured in ccd/ccrc and ccd/ccrc-doctor-checks — the short flag
@@ -66,7 +72,10 @@ export function plantPoison(bin: string, name: string): void {
  *    its value; `-X` with a method of capital letters only; `-d` and `--data-binary` with a value that does not start
  *    with `@` (no file read); and `-K -` exactly, whose stdin config must be `header = "<name>: <value>"` lines only,
  *    each line starting `header = "`, the name `[A-Za-z0-9-]+`, the value holding no `"`, no `\` and no control
- *    character; an EMPTY config passes too (notify.sh sends one when it has no token). Any other key (`url`, `proxy`,
+ *    character; an EMPTY config passes too (notify.sh sends one when it has no token). Since the box-token lifecycle
+ *    (wave 1, Task B1) ONE more line shape passes: `ccrc token sync`'s claim body, `CLAIM_DATA_LINE_ERE` above — a
+ *    `data = "…"` line that is exactly `{"code":<43 base64url>,"nodeId":<lowercase uuid>}` with its quotes escaped,
+ *    so it names no file (no leading `@`), no URL and no other field. Any other key (`url`, `proxy`,
  *    `connect-to`, `resolve`, `output`, `config`, …), another spelling of the key, an `@file` header, a leading or
  *    interior blank line, a comment line, a second `-K -`, `-K <file>` and `--config` are refused. The config is read
  *    once with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs: so trailing blank lines pass, a
@@ -131,7 +140,7 @@ export function loopbackCurlFront(realCurl: string): string {
     // check that gave no verdict. Never fold grep's status through `!`: that would pass 2 and 127.
     'cfg_ok() {',
     '  [ -n "$cfg" ] || return 0',
-    '  printf \'%s\\n\' "$cfg" | grep -qvE \'^header = "[A-Za-z0-9-]+: [^"\\\\[:cntrl:]]*"$\'',
+    '  printf \'%s\\n\' "$cfg" | grep -qvE -e \'^header = "[A-Za-z0-9-]+: [^"\\\\[:cntrl:]]*"$\' -e \'' + CLAIM_DATA_LINE_ERE + '\'',
     '  [ $? -eq 1 ]',
     '}',
     'scan() {',

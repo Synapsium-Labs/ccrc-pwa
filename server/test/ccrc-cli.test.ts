@@ -219,7 +219,7 @@ describe('ccrc: dispatch and usage', () => {
     // `server/test/history-cli.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|restamp\|version\|watchdog\|history\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\}/);
     expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
@@ -232,6 +232,9 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
+    // `token` joined it in the box-token lifecycle's wave 1 (spec 2026-10-07 §4.5) — the fleet side of a
+    // rotation, which ccrc-agent's token-sync op spawns. `server/test/ccrc-token-sync.test.ts` owns what it does.
+    expect(r.stdout).toMatch(/^ {2}token {5}the box token's fleet side/m);
     // `restamp` joined it in landing-order wave 1 (spec 2026-09-23 §5.1) — the
     // regenerator worker clause 16 names for a `ccrc:generated` stamp.
     // `server/test/ccrc-restamp.test.ts` owns what it does.

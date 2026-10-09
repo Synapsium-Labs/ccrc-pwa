@@ -1377,9 +1377,12 @@ BOX_FLOOR_FILE="$HOME/.ccrc/floor"
 #        accepted), update-gate (`_upd_gate`, exit 4, `--no-gate`), rollback
 #        (`ccrc rollback`); and, Linux only, detach — below.
 #   W6 — versions (a kept version is a flip: `_upd_restore_arm1`, `_ver_flip_back`).
+#   box-token lifecycle wave 1 — token-sync (`cmd_token` and the
+#        `ccd/ccrc-token-sync` it runs: the verb ccrc-agent's `token-sync` op
+#        spawns). Every os: the op runs it in the foreground, never --detach.
 # ccrc-install.test.ts pins every word to the machinery it names, so a word
 # cannot ship ahead of its code.
-CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions)
+CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions token-sync)
 
 # The words only a LINUX install can do: detach (W4). `--detach` hands the run
 # to a transient unit (`_svc_run_detached`), and `_upd_detach_os_check`
@@ -2008,7 +2011,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|restamp|version|watchdog|history}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|token|restamp|version|watchdog|history}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2226,6 +2229,10 @@ already running).
             trusts the printed root once, and login is passphrase-only:
             passkeys need a domain), status (what is configured; the token
             is reported SET/NOT SET, never printed)
+  token     the box token's fleet side. "ccrc token sync --from agent" is
+            ccrc-agent's token-sync op: it trades a one-time code (on stdin)
+            for the new value, writes ~/.cc-secrets/ccrc-mail.token and
+            proves it with one call
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
             on ccd/ccd's line 2) after its body changed: the regenerator a
             merge needs there. A file with no marker is refused, never adopted$(_usage_history_paragraph)
@@ -5232,6 +5239,21 @@ cmd_adopt() {
   [[ -f "$adopt" ]] \
     || _ccrc_die "adopt's script is missing: $adopt — is this a complete ccrc install?"
   exec "$BASH" "$adopt" "$@"
+}
+
+# ── cmd_token — the box token's fleet side (design 2026-10-07 §4.5) ───────
+# The body is the standalone `ccd/ccrc-token-sync`, beside this file, exactly
+# as `cmd_adopt` reaches `ccrc-adopt` and for its reasons: `exec "$BASH"`, so
+# no PATH lookup and no dependence on the exec bit, and the sibling's own
+# usage, exit codes and stdout/stderr split arrive unaltered. That file owns
+# every argument; this function parses none. Kept out of this file because
+# `ccd/ccrc` is a hot file other runs edit, and the verb's whole contract
+# (the claim, the atomic write, the proof) is one reviewable unit there.
+cmd_token() {
+  local body="$CCRC_HERE/ccrc-token-sync"
+  [[ -f "$body" ]] \
+    || _ccrc_die "token's script is missing: $body — is this a complete ccrc install?"
+  exec "$BASH" "$body" "$@"
 }
 
 # ── cmd_passwd — THE ONE WRITER OF ~/.ccrc/auth.scrypt ────────────────────
@@ -23969,6 +23991,7 @@ case "$VERB" in
   logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   expose)  cmd_expose "$@" ;;
+  token)   cmd_token "$@" ;;
   restamp) cmd_restamp "$@" ;;
   watchdog) cmd_watchdog "$@" ;;
   history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;

@@ -24,6 +24,7 @@ import { harnessBin } from './ccdWsHelpers.js';
 import { CONTAINED_TOOLS, assertNoRealTool, loopbackCurlFront } from './containedTools.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { installVersionedTree, keepDigestEnv } from './installTreeFixture.js';
+import { TOKEN_CLAIM_PATH } from '../../shared/box-token.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (f: string): string => readFileSync(join(here, f), 'utf8');
@@ -247,6 +248,10 @@ describe('the loopback curl front parses argv — an option it does not allowlis
   // is the config changes one thing in an otherwise-valid line, so each row refuses for its own reason. The token is a
   // fixture: no row carries a real one.
   const HDR = 'header = "x-ccrc-mail-token: ' + 'z'.repeat(64) + '"\n';
+  // ccd/ccrc-token-sync's claim body as its printf writes it: fixture code and node id, never a real one.
+  const CLAIM_CODE = 'Qx9_-'.repeat(9).slice(0, 43);
+  const CLAIM_NODE = '0123abcd-0000-4000-8000-000000000001';
+  const CLAIM_LINE = `data = "{\\"code\\":\\"${CLAIM_CODE}\\",\\"nodeId\\":\\"${CLAIM_NODE}\\"}"\n`;
   const refusedCfg: Array<[string, string[], string]> = [
     ['-K <file> (only `-K -` is admitted)', ['-K', '/tmp/x', ok], HDR],
     ['--config - (only the short spelling the senders use)', ['--config', '-', ok], HDR],
@@ -281,6 +286,14 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     ['-X with a URL in its value', ['-X', 'GET http://127.0.0.1:7788/', ok], ''],
     ['-X lowercase', ['-X', 'post', ok], ''],
     ['-X empty', ['-X', '', ok], ''],
+    // The claim body (box-token lifecycle wave 1, Task B1): the ONE `data` line shape the front admits. Each row changes
+    // one thing in an otherwise-admitted line, so each refuses for its own reason.
+    ['a data line naming a file', ['-K', '-', ok], 'data = "@/etc/passwd"\n'],
+    ['a data-binary key carrying the claim body', ['-K', '-', ok], CLAIM_LINE.replace(/^data /, 'data-binary ')],
+    ['a claim body with a third field', ['-K', '-', ok], CLAIM_LINE.replace('\\"}"', '\\",\\"url\\":\\"x\\"}"')],
+    ['a claim code of 42 characters', ['-K', '-', ok], CLAIM_LINE.replace(CLAIM_CODE, CLAIM_CODE.slice(1))],
+    ['an uppercase node id', ['-K', '-', ok], CLAIM_LINE.replace(CLAIM_NODE, CLAIM_NODE.toUpperCase())],
+    ['an unescaped claim body', ['-K', '-', ok], CLAIM_LINE.replace(/\\"/g, '"')],
   ];
   for (const [what, args, input] of refusedCfg) {
     it(`refuses ${what}: exit 97, recorded by argv alone, and nothing reaches curl (wave 13, R16)`, () => {
@@ -303,6 +316,9 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     ['notify.sh\'s shape with no token: an empty config', ['-fsS', '-m', '5', '-X', 'POST', `${ok}api/notify`, '-K', '-',
       '-H', 'content-type: application/json', '-d', '{"message":"m"}'], ''],
     ['two header lines', ['-sS', '-K', '-', ok], `${HDR}header = "accept: application/json"\n`],
+    ['ccrc token sync\'s claim shape (`-K -` data line, the claim body)', ['-sS', '-K', '-', '-H', 'content-type: application/json',
+      '-X', 'POST', '-o', '/tmp/x', '-w', '%{http_code}', '--max-filesize', '4096', '--max-time', '15', `${ok}${TOKEN_CLAIM_PATH.slice(1)}`],
+      CLAIM_LINE],
   ];
   for (const [what, args, input] of passesCfg) {
     it(`passes ${what}, to the real curl with -q first, and hands it the config on stdin (wave 13, R16)`, () => {
