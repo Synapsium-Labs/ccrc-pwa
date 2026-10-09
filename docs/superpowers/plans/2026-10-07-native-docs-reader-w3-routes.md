@@ -12225,6 +12225,72 @@ Two rows re-anchored at run time after the merge of `main` (#330, the box-token 
   "test/box-token-census.test.ts"
  ],
  "red": "server box-token-census: 2 failed | 35 passed (37) — CLAUDE.md's box-token bullet is TRUE, not merely present; DOCS_DOORS joins neither the session-only coordination writes nor the box-token lanes (re-anchored after the merge of main, #330)"
+},
+{
+ "id": "W3-FR1-M1",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "const shape = docsAnswerShape('docs-show', got.answer);",
+ "new": "const shape = { ok: true } as ReturnType<typeof docsAnswerShape>;",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 126 passed (127) — FR1 review F1: a listed a.md whose show line carries a 500 000-deep unknown key: 502 schema on both reads"
+},
+{
+ "id": "W3-FR1-M2",
+ "pkg": "server",
+ "file": "server/src/docs/hooks.ts",
+ "old": "app.addHook('onRequest', async (req, reply) => {\n    const v = docsProvenance",
+ "new": "app.addHook('preHandler', async (req, reply) => {\n    const v = docsProvenance",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 2 failed | 62 passed (64) — FR1 review F2: a marker-less POST refresh with an invalid JSON body / a 2 MiB body answers 403 foreign-request, not 400"
+},
+{
+ "id": "W3-FR1-M3",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "        return sendFile(reply,\n          docsFileReply(pin, docsCacheHitAnswer(hit.answer, pin, listed.file.blob), hit.bytes, 'cache'));",
+ "new": "        if (pin.path.endsWith('.png')) {\n          return reply.code(200).type('image/png').header('cache-control', 'private, max-age=31536000, immutable')\n            .send(Buffer.from(hit.bytes.buffer, hit.bytes.byteOffset, hit.bytes.byteLength));\n        }\n        return sendFile(reply,\n          docsFileReply(pin, docsCacheHitAnswer(hit.answer, pin, listed.file.blob), hit.bytes, 'cache'));",
+ "tests": [
+  "test/docs-file-bytes.test.ts"
+ ],
+ "red": "server docs-file-bytes: 1 failed | 44 passed (45) — FR1 review F3: a .png holding SVG text answers 422 raster-mismatch on BOTH reads (the cache hit)"
+},
+{
+ "id": "W3-FR1-M4",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "docsFileReply(pin, docsCacheHitAnswer(",
+ "new": "docsFileReply({ ...pin, kind: 'draft' } as unknown as typeof pin, docsCacheHitAnswer(",
+ "tests": [
+  "test/docs-file-bytes.test.ts"
+ ],
+ "red": "server docs-file-bytes: 1 failed | 44 passed (45) — FR1 review F3: a true committed .png answers raw immutable on BOTH reads, the second with zero execs"
+},
+{
+ "id": "W3-FR1-M5",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "Number.isFinite(own(s, 'attemptAgeMs'))",
+ "new": "typeof own(s, 'attemptAgeMs') === 'number'",
+ "tests": [
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-policy: 2 failed | 606 passed (608) — FR1 review F4: stamp.attemptAgeMs Infinity / NaN is schema"
+},
+{
+ "id": "W3-FR1-M6",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "!isKeyText(own(e, 'path'))",
+ "new": "!isText(own(e, 'path'))",
+ "tests": [
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-policy: 2 failed | 606 passed (608) — FR1 review F4: an entry whose path is empty / holds a NUL is schema"
 }
 ]
 ```
