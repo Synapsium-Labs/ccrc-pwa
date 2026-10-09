@@ -1202,7 +1202,12 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
       head `b5aa09fb0`.
     - Run 345 closed `done` (`final`, `prPhase:'merged'`), released, and its child reclaim is queued. The evidence was
       copied first.
-  - **Deploy:** AGENT-FIRST through the updater; the operator applies it. Both lanes stay SHADOWED.
+  - **Deploy:** release v0.0.134 carries `6fc7ef115`. It goes AGENT-FIRST through the updater, and the operator
+    applies it. Both lanes stay SHADOWED.
+  - **CCR-15 told (mail 4102):** wave 5 landed first, so this is ORDER A of R81. CCR-15 wave 8's Task 1 moves the word
+    half to `shared/api.ts` as `leafKeptWord`, and `expireLeafKept` stays here and imports it. Run 347 is the second
+    lander on the two consented regions, so its merge of main absorbs `_ws_expire_locked`'s three hunks with the
+    restamp, and `ExpiryAttention.kind`'s `'kept'`.
   - **Before the operator arms either lane:**
     - The expiry lane still waits on wave 6's question (k), and on review 355's F1, now fixed (the tier's clock is
       verb-only).
@@ -1320,7 +1325,8 @@ bare. It waits on CCR-15 wave 7 (run 347, building) reaching `main`. Then its pl
 below and the carried items in the 10-09 entries. Wave 5 (run 345) merged as #335 (`6fc7ef115`, the 10-09 08:20
 entry). Its evidence and reviews 355–357 are in `.superpowers/sdd/coordinator-evidence/run345/`.
 - **Wave 5 deploys AGENT-FIRST through ccrc's updater** (the operator applies it from the console). Afterwards, check
-  that both boxes report the release that carries `6fc7ef115` or a later one.
+  that both boxes report v0.0.134 (the release that carries `6fc7ef115`) or later. v0.0.134 also carries wave 4, so
+  it covers the v0.0.123 check.
 - **Wave 4 deploys through ccrc's updater** (the operator applies it from the console). Afterwards, check that both
   boxes report v0.0.123 or later, and that the feed shows the dead-coordinator lane's shadow rows.
 - **The operator's questions before arming** are (b)–(d) in the 06:01 entry. (b), the confirm copy, is still open. On
