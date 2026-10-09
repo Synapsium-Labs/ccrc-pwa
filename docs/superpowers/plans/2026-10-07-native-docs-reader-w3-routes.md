@@ -12291,6 +12291,28 @@ Two rows re-anchored at run time after the merge of `main` (#330, the box-token 
   "test/docs-policy.test.ts"
  ],
  "red": "server docs-policy: 2 failed | 606 passed (608) — FR1 review F4: an entry whose path is empty / holds a NUL is schema"
+},
+{
+ "id": "W3-FR1-M7",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "function abandon(reply: FastifyReply): FastifyReply {\n  reply.hijack();\n  if (!reply.raw.destroyed) reply.raw.destroy();\n",
+ "new": "function abandon(reply: FastifyReply): FastifyReply {\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 127 passed (128) — a queued tree GET whose response closes unfinished is dequeued, its reply hijacked and its raw response destroyed, and no hook runs for it"
+},
+{
+ "id": "W3-FR1-M8",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "        for (const d of f.detach.splice(0)) d();\n",
+ "new": "",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 2 failed | 39 passed (41) — a joiner whose signal aborts AFTER a fulfilled / a rejected flight settled leaves the flight's own signal unaborted"
 }
 ]
 ```
