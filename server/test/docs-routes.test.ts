@@ -10,22 +10,34 @@
 // Fixtures carry placeholders only; the marker is L0's constant, never quoted here.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { DOCS_CAP } from '../src/ccdargv.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
-import { composeDocs } from '../src/docs/routes.js';
+import {
+  composeDocs, registerDocsReadRoutes, type DocsComposition, type DocsNodeLanes, type DocsNodes,
+} from '../src/docs/routes.js';
+import type { DocsReader } from '../src/docs/ports.js';
+import { buildServer, type Deps } from '../src/server.js';
+import { EXEMPT } from '../src/auth/gate.js';
+import { hashLine, type ScryptParams } from '../src/auth/secret.js';
+import type { ExecResult, Runner } from '../src/exec.js';
+import type { FleetState } from '../src/fleetstate.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
 import {
   DOCS_FETCH_GLOBAL, DOCS_FETCH_QUEUE, DOCS_INDEX_CACHE_MS, DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, DOCS_REF_PREFIXES,
   DOCS_REFUSAL_LOG_MS, LISTING_JOB, parseDocsApiQuery, refreshDue,
 } from '../src/docs/policy.js';
 import {
-  DOCS_RESPONSE_HEADERS, type DocsFailureBody, type DocsFailure, type DocsFetchOk,
+  DOCS_RESPONSE_HEADERS, docsApi, type DocPin, type DocsFailureBody, type DocsFailure, type DocsFetchOk,
 } from '../../shared/docs.js';
 import {
   FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, committedEntry, docsApp, faultRes, indexOk, line, nodeLanes,
-  okRes, scripted, showLine, treeOk, until,
+  okRes, scripted, sha256Hex, showLine, treeOk, until,
 } from './docsRouteHelpers.js';
 
 const apps: FastifyInstance[] = [];
@@ -1023,5 +1035,234 @@ describe('T7: the index micro-cache is dropped by a refresh, when its fetch sett
     expect((await refreshed).statusCode).toBe(200);
     expect((await projects()).json().cacheAgeMs).toBeNull();
     expect(verb(rec.calls, 'docs-index')).toHaveLength(3);
+  });
+});
+
+// ===== Task 9: the Docs API in the real server (section 2 (g)'s walls, section 2 (j) rows 49 and 50, M3.8; W3
+// refinements (d) and (i)) =====
+//
+// These cases boot the REAL server (`buildServer` over `testDeps`), not `docsApp`: the gate, the plugin and the
+// composition are the ones production registers. `testDeps` wraps the runner in `guardRunner`, so every docs argv
+// these cases make is also checked against the agent's real exec whitelist. The runner records `[cmd, ...args]` and
+// answers by ccd verb; `ccd()` is the recorded ccd argv, the spy section 2 (g)'s third wall names.
+
+/** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
+const REAL_PASSPHRASE = 'correct horse battery staple';
+const REAL_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
+/** The four docs routes as `METHOD path` keys (section 3.4). */
+const DOCS_KEYS = [
+  'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
+  'POST /api/docs/:project/refresh',
+] as const;
+/** The bytes every fixture show answers, and the two pins the corpus reads them through, as `docsApi` writes them. */
+const REAL_MD = new TextEncoder().encode('# a\n');
+const REAL_COMMITTED: DocPin = {
+  kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
+};
+const REAL_DRAFT: DocPin = {
+  kind: 'draft', branch: 'ws/a', head: FIXTURE_COMMIT, section: 'specs', path: 'a.md', fp: sha256Hex(REAL_MD),
+};
+
+/** A handshaken fleet state carrying the docs cap: a NEW object each call, so a case can swap one in. */
+function readyFleet(): FleetState {
+  return { connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP], rosterFp: null, build: null };
+}
+
+/** A measured, clean exit of the runner (`ExecResult`), so the adapter's check 1 reads both halves as measured. */
+function realOk(stdout: string): ExecResult {
+  return { code: 0, stdout, stderr: '', killed: false, signal: null };
+}
+
+/** The fixture fleet: ok answers for the four docs verbs (a show answers the pin its argv names); any other ccd argv
+ *  exits 1 with nothing on stdout. */
+function realAnswer(args: string[]): ExecResult {
+  if (args[0] === 'docs-index') return realOk(line(indexOk()));
+  if (args[0] === 'docs-tree') return realOk(line(treeOk()));
+  if (args[0] === 'docs-show') return realOk(showLine(args.includes('--commit') ? REAL_COMMITTED : REAL_DRAFT, REAL_MD));
+  if (args[0] === 'docs-fetch') return realOk(line(fetchOk()));
+  return { code: 1, stdout: '', stderr: 'usage', killed: false, signal: null };
+}
+
+/**
+ * The real server over a fixture HOME (never the live one): `testDeps` with a recording runner, `authEnabled` as
+ * asked (armed: a passphrase is written first, and `cookieSecure` is off for inject), and NO `fleetState` (testDeps
+ * builds none; each case sets the one it needs, AFTER `buildServer`, which is the point of the getter). Closed after
+ * the case with the module's other apps.
+ */
+async function realServer(o: { auth?: boolean } = {}): Promise<{
+  app: FastifyInstance; deps: Deps; ccd: () => string[][];
+}> {
+  const calls: string[][] = [];
+  const run: Runner = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    return realAnswer(args);
+  };
+  const home = mkTmp('ccrc-docs-w3-');
+  const base = testDeps(home, run);
+  if (o.auth) {
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(REAL_PASSPHRASE, REAL_FAST_PARAMS, 1)}\n`, { mode: 0o600 });
+  }
+  const deps: Deps = { ...base, cfg: { ...base.cfg, authEnabled: o.auth ?? false, cookieSecure: false } };
+  const app = await buildServer(deps);
+  await app.ready();
+  apps.push(app);
+  return { app, deps, ccd: () => calls.filter((c) => c[0] === deps.cfg.ccdBin).map((c) => c.slice(1)) };
+}
+
+/** A live session cookie for an armed `app`, minted through the real login route. */
+async function realLogin(app: FastifyInstance): Promise<string> {
+  const res = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: REAL_PASSPHRASE } });
+  expect(res.statusCode, res.body).toBe(204);
+  const set = res.headers['set-cookie'];
+  const first = Array.isArray(set) ? set[0] : String(set);
+  return first.slice(0, first.indexOf(';'));
+}
+
+/** One request per docs route, with no body and no header unless given: what a signed-out browser tab could send. */
+function eachDocsRoute(app: FastifyInstance, headers: Record<string, string> = {}) {
+  return [
+    app.inject({ method: 'GET', url: docsApi.projects(), headers }),
+    app.inject({ method: 'GET', url: docsApi.tree('demo', null), headers }),
+    app.inject({ method: 'GET', url: docsApi.file('demo', REAL_COMMITTED), headers }),
+    app.inject({ method: 'POST', url: docsApi.refresh('demo'), headers }),
+  ];
+}
+
+describe('T9: the real server — the composition reads deps.fleetState through a getter (refinement (i); W2 carry)', () => {
+  it('no fleet state: caps-unknown; a state SWAPPED in after buildServer is read; the same object mutated in place is read', async () => {
+    const { app, deps, ccd } = await realServer();
+    const tree = () => app.inject({ url: docsApi.tree('demo', null), headers: PWA_HEADERS });
+    const none = await tree();
+    expect(none.statusCode).toBe(503);
+    expect(none.headers['retry-after']).toBe('5');
+    expect(none.json()).toStrictEqual(word('caps-unknown'));
+    const state = readyFleet();
+    deps.fleetState = state;
+    const swapped = await tree();
+    expect(swapped.statusCode).toBe(200);
+    expect(swapped.json()).toEqual({ ok: true, tree: treeOk(), refreshDue: true });
+    state.ccdVerbs = null;
+    const mutated = await tree();
+    expect(mutated.statusCode).toBe(503);
+    expect(mutated.json()).toStrictEqual(word('caps-unknown'));
+    expect(ccd()).toEqual([['docs-tree', '--project', 'demo']]);
+  });
+});
+
+describe('T9: row 49 — GET never fetches, on the real server (section 2 (g), the third wall: the recorder)', () => {
+  const [LOCAL_PREFIX, ORIGIN_PREFIX] = DOCS_REF_PREFIXES;
+  /** Every GET shape: the index; the tree with no ref, a bare ref, an origin-qualified and a local-qualified one;
+   *  the file under a committed and a draft pin; and each route with a refused query. */
+  const GETS: readonly (readonly [string, number])[] = [
+    [docsApi.projects(), 200],
+    [docsApi.tree('demo', null), 200],
+    ['/api/docs/demo/tree?ref=main', 200],
+    [`/api/docs/demo/tree?ref=${enc(`${ORIGIN_PREFIX}main`)}`, 200],
+    [`/api/docs/demo/tree?ref=${enc(`${LOCAL_PREFIX}ws/a`)}`, 200],
+    [docsApi.file('demo', REAL_COMMITTED), 200],
+    [docsApi.file('demo', REAL_DRAFT), 200],
+    [`${docsApi.projects()}?x=1`, 400],
+    ['/api/docs/demo/tree?ref=a&ref=b', 400],
+    [`${docsApi.file('demo', REAL_COMMITTED)}&size=1`, 400],
+  ];
+
+  it('a spy across every GET never sees docs-fetch; CONTROL: one refresh POST records exactly one', async () => {
+    const { app, deps, ccd } = await realServer();
+    deps.fleetState = readyFleet();
+    for (const [url, status] of GETS) {
+      expect((await app.inject({ url, headers: PWA_HEADERS })).statusCode, url).toBe(status);
+    }
+    expect(verb(ccd(), 'docs-fetch'), 'a GET ran docs-fetch').toEqual([]);
+    expect([...new Set(ccd().map((argv) => argv[0]))].sort(), 'the spy saw the reads it guards')
+      .toEqual(['docs-index', 'docs-show', 'docs-tree']);
+    const posted = await app.inject({
+      method: 'POST', url: docsApi.refresh('demo'), headers: { ...PWA_HEADERS, 'content-type': 'application/json' },
+      payload: JSON.stringify({ ref: null, reason: 'manual' }),
+    });
+    expect(posted.statusCode).toBe(200);
+    expect(verb(ccd(), 'docs-fetch'), 'the spy cannot see a fetch').toEqual([['docs-fetch', '--project', 'demo']]);
+  });
+});
+
+describe('T9: row 50 — the refresh is gated (section 2 (j) row 50, section 3.4)', () => {
+  it('armed: no session 401; a foreign Origin 403; the session with no Origin 200; none of the four keys is EXEMPT', async () => {
+    const { app, deps, ccd } = await realServer({ auth: true });
+    deps.fleetState = readyFleet();
+    const post = (headers: Record<string, string>) => app.inject({
+      method: 'POST', url: docsApi.refresh('demo'),
+      headers: { ...PWA_HEADERS, 'content-type': 'application/json', ...headers },
+      payload: JSON.stringify({ ref: null, reason: 'manual' }),
+    });
+    const anonymous = await post({});
+    expect(anonymous.statusCode).toBe(401);
+    expect(anonymous.json()).toStrictEqual({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
+    const cookie = await realLogin(app);
+    const foreign = await post({ cookie, origin: 'https://other.example' });
+    expect(foreign.statusCode).toBe(403);
+    expect(foreign.json()).toStrictEqual({ ok: false, error: 'foreign-origin' });
+    expect(ccd(), 'a refused refresh made an exec').toEqual([]);
+    const allowed = await post({ cookie });
+    expect(allowed.statusCode).toBe(200);
+    expect(verb(ccd(), 'docs-fetch')).toEqual([['docs-fetch', '--project', 'demo']]);
+    for (const k of DOCS_KEYS) expect(EXEMPT.has(k), `${k} is EXEMPT`).toBe(false);
+  });
+});
+
+describe('T9: M3.8 — the gate before provenance, on the real server (spec F1)', () => {
+  it('armed, no cookie and no marker: each docs route answers the gate\'s 401 with its verdict, decorated, with zero execs', async () => {
+    const { app, deps, ccd } = await realServer({ auth: true });
+    deps.fleetState = readyFleet();
+    const answers = await Promise.all(eachDocsRoute(app));
+    expect(answers).toHaveLength(DOCS_KEYS.length);
+    for (const [i, res] of answers.entries()) {
+      expect(res.statusCode, DOCS_KEYS[i]).toBe(401);
+      expect(res.json(), DOCS_KEYS[i]).toStrictEqual({ ok: false, error: 'unauthenticated', verdict: 'no-session' });
+      expect(res.headers['content-type'], DOCS_KEYS[i]).toBe('application/json; charset=utf-8');
+      expect(res.headers['cache-control'], DOCS_KEYS[i]).toBe('no-store');
+      for (const name of DOCS_HEADER_NAMES) {
+        expect(res.headers[name], `${DOCS_KEYS[i]} ${name}`)
+          .toBe(DOCS_RESPONSE_HEADERS[name as keyof typeof DOCS_RESPONSE_HEADERS]);
+      }
+    }
+    expect(ccd()).toEqual([]);
+  });
+
+  it('refinement (d), measured on the real server: an over-long :project (414) and a malformed path escape (400) are the router\'s, before the gate, with no docs header and zero execs', async () => {
+    const { app, deps, ccd } = await realServer({ auth: true });
+    deps.fleetState = readyFleet();
+    for (const [url, status, code] of [
+      [`/api/docs/${'a'.repeat(101)}/tree`, 414, 'FST_ERR_MAX_PARAM_LENGTH'],
+      ['/api/docs/%ZZ/tree', 400, 'FST_ERR_BAD_URL'],
+    ] as const) {
+      const res = await app.inject({ url });
+      expect(res.statusCode, url).toBe(status);
+      expect(res.json().code, url).toBe(code);
+      expect(res.json().verdict, `${url}: the gate ran`).toBeUndefined();
+      for (const name of DOCS_HEADER_NAMES) expect(res.headers[name], `${url} ${name}`).toBeUndefined();
+    }
+    expect(ccd()).toEqual([]);
+  });
+});
+
+/** Equal types, in either direction (the standard deferred-conditional form). */
+type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Assert<T extends true> = T;
+/** Row 49's type wall (section 2 (g)'s wall 1), compiled by `typecheck-tests`: the read registration takes the app,
+ *  the readers and the lanes, and nothing that can fetch. A fetcher parameter added to it fails this alias. */
+type ReadRegistrationTakesNoFetcher = Assert<Equals<Parameters<typeof registerDocsReadRoutes>,
+  [FastifyInstance, DocsNodes<DocsReader>, DocsNodes<DocsNodeLanes>]>>;
+
+describe('T9: row 49 — the read registration\'s type has no fetcher (section 2 (g), wall 1; typecheck-tests)', () => {
+  it('its parameters are pinned, and a fetcher map cannot be passed as the readers', () => {
+    const pinned: ReadRegistrationTakesNoFetcher = true;
+    /** Never called: it exists for the compiler. Were a fetcher map assignable to a reader map, the directive would
+     *  be unused, and `typecheck-tests` would fail on it. */
+    const fetcherAsReader = (app: FastifyInstance, docs: DocsComposition): void => {
+      // @ts-expect-error -- a DocsFetcher map is not a DocsReader map: the read registration is never handed a fetcher
+      registerDocsReadRoutes(app, docs.fetchers, docs.lanes);
+    };
+    expect(pinned).toBe(true);
+    expect(fetcherAsReader).toBeTypeOf('function');
   });
 });

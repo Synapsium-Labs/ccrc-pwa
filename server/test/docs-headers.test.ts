@@ -9,15 +9,24 @@
 // The PWA's own headers are built from L0's constants, never the quoted marker; the response headers and the raster
 // magic are read from L0's tables, never typed here.
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { installDocsRequestPolicy, installDocsResponsePolicy, sendDocsFailure } from '../src/docs/hooks.js';
 import { DOCS_CACHE_IMMUTABLE, docsBusyBody } from '../src/docs/policy.js';
+import { buildServer, type Deps } from '../src/server.js';
+import { DOCS_CAP } from '../src/ccdargv.js';
+import { hashLine, type ScryptParams } from '../src/auth/secret.js';
+import type { ExecResult, Runner } from '../src/exec.js';
+import type { FleetState } from '../src/fleetstate.js';
 import {
-  DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, type DocsFailureBody,
+  DOCS_API_PREFIX, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, docsApi,
+  type DocPin, type DocsFailureBody,
 } from '../../shared/docs.js';
+import { FIXTURE_COMMIT, FIXTURE_SERVED, indexOk, line, showLine, treeOk } from './docsRouteHelpers.js';
+import { testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const HOOKS_SRC = readFileSync(
   path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/docs/hooks.ts'), 'utf8');
@@ -415,5 +424,219 @@ describe('W3 T3: hooks.ts spells none of the response-policy headers (it sets wh
       ...Object.entries(DOCS_RESPONSE_HEADERS).flat(), DOCS_REQUEST_HEADER,
     ].flatMap(quoted).filter((q) => HOOKS_SRC.includes(q));
     expect(spelled).toEqual([]);
+  });
+});
+
+// ===== Task 9: M5.4 over the REAL server's route table (design 2026-10-01 section 5.3, section 5.8) =====
+//
+// The docs routes are DERIVED from Fastify's own `printRoutes` of a server `buildServer` built (the walk is a copy
+// of `auth-gate.test.ts`'s `realRouteTable`: HEAD rows dropped, a line it cannot read recorded as `UNPARSED` so it
+// fails), filtered to `DOCS_API_PREFIX`, never hand-listed: a docs route registered outside the plugin joins the set
+// and fails for want of the headers. Each probe below runs over that derived set. `RECIPES` says only how to make
+// each route answer a 200 or a 4xx; a derived route without a recipe fails by name.
+
+/** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
+const M54_PASSPHRASE = 'correct horse battery staple';
+const M54_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
+/** The four docs routes as `METHOD path` keys (section 3.4): what the derived set must equal. */
+const M54_DOCS_KEYS = [
+  'GET /api/docs/:project/file', 'GET /api/docs/:project/tree', 'GET /api/docs/projects',
+  'POST /api/docs/:project/refresh',
+];
+/** The bytes the fixture show answers, and the committed pin the file route is read through. */
+const M54_MD = new TextEncoder().encode('# a\n');
+const M54_PIN: DocPin = {
+  kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
+};
+
+/** One request: its method, URL and, for the POST, a JSON body. */
+interface M54Req { method: 'GET' | 'POST'; url: string; payload?: string }
+/** How to make one docs route answer a 200 and a 4xx (a refused query or body), by its derived key. */
+const RECIPES: Readonly<Record<string, { ok: M54Req; refused: M54Req }>> = {
+  'GET /api/docs/projects': {
+    ok: { method: 'GET', url: docsApi.projects() },
+    refused: { method: 'GET', url: `${docsApi.projects()}?x=1` },
+  },
+  'GET /api/docs/:project/tree': {
+    ok: { method: 'GET', url: docsApi.tree('demo', null) },
+    refused: { method: 'GET', url: '/api/docs/demo/tree?ref=a&ref=b' },
+  },
+  'GET /api/docs/:project/file': {
+    ok: { method: 'GET', url: docsApi.file('demo', M54_PIN) },
+    refused: { method: 'GET', url: `${docsApi.file('demo', M54_PIN)}&branch=main` },
+  },
+  'POST /api/docs/:project/refresh': {
+    ok: { method: 'POST', url: docsApi.refresh('demo'), payload: JSON.stringify({ ref: null, reason: 'manual' }) },
+    refused: { method: 'POST', url: docsApi.refresh('demo'), payload: '{"ref":1,"reason":"auto"}' },
+  },
+};
+
+/** Every route Fastify itself says it has, as `METHOD path` (`auth-gate.test.ts`'s walk, copied). */
+function m54RouteTable(app: FastifyInstance): Set<string> {
+  const out = new Set<string>();
+  const stack: string[] = [];
+  let matched = 0;
+  for (const row of app.printRoutes({ commonPrefix: false }).split('\n')) {
+    const m = /^([│\s]*)[├└]──\s(\S*)\s\(([^)]+)\)\s*$/.exec(row);
+    if (row.trim() === '') continue;
+    if (!m) { out.add(`UNPARSED ${row}`); continue; }
+    matched++;
+    const depth = m[1].length / 4;
+    stack.length = depth;
+    stack[depth] = m[2];
+    const full = stack.slice(0, depth + 1).join('') || '/';
+    for (const method of m[3].split(',')) {
+      const v = method.trim();
+      if (v === 'HEAD') continue;
+      out.add(`${v} ${full === '*' ? '/*' : full}`);
+    }
+  }
+  if (matched === 0) out.add('UNPARSED the whole tree — printRoutes changed shape');
+  return out;
+}
+
+/** The derived docs routes, sorted: every row under `DOCS_API_PREFIX`, and every row the walk could not read. */
+function derivedDocsRoutes(app: FastifyInstance): string[] {
+  return [...m54RouteTable(app)].filter((k) => k.startsWith('UNPARSED')
+    || k.slice(k.indexOf(' ') + 1) === DOCS_API_PREFIX || k.slice(k.indexOf(' ') + 1).startsWith(`${DOCS_API_PREFIX}/`))
+    .sort();
+}
+
+/** A route key's path with `:project` filled in: the request a probe with no recipe sends. */
+function concreteUrl(key: string): string {
+  return key.slice(key.indexOf(' ') + 1).replace(':project', 'demo');
+}
+
+/** A measured runner exit (`ExecResult`), so the adapter's check 1 reads both halves as measured. */
+function m54Exit(code: number, stdout: string): ExecResult {
+  return { code, stdout, stderr: code === 0 ? '' : 'boom', killed: false, signal: null };
+}
+
+/**
+ * The real server over a fixture HOME (never the live one), its runner answering every docs verb ok (`fault`: every
+ * exec exits 1 with no output, ccd's `ccd-fault`), `authEnabled` as asked, and a handshaken fleet state carrying the
+ * docs cap, returned so a probe can mutate it in place.
+ */
+async function m54Server(o: { auth?: boolean; fault?: boolean } = {}): Promise<{ app: FastifyInstance; state: FleetState }> {
+  const run: Runner = async (_cmd, args) => {
+    if (o.fault) return m54Exit(1, '');
+    if (args[0] === 'docs-index') return m54Exit(0, line(indexOk()));
+    if (args[0] === 'docs-tree') return m54Exit(0, line(treeOk()));
+    if (args[0] === 'docs-show') return m54Exit(0, showLine(M54_PIN, M54_MD));
+    if (args[0] === 'docs-fetch') {
+      return m54Exit(0, line({
+        v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 6, branch: 'main', trackedRef: FIXTURE_SERVED,
+        before: FIXTURE_COMMIT, after: 'b'.repeat(40), moved: 'updated', stamp: 'written',
+      }));
+    }
+    return m54Exit(1, '');
+  };
+  const home = mkTmp('ccrc-docs-m54-');
+  const base = testDeps(home, run);
+  if (o.auth) {
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(M54_PASSPHRASE, M54_FAST_PARAMS, 1)}\n`, { mode: 0o600 });
+  }
+  const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP], rosterFp: null, build: null };
+  const deps: Deps = {
+    ...base, cfg: { ...base.cfg, authEnabled: o.auth ?? false, cookieSecure: false }, fleetState: state,
+  };
+  const app = await buildServer(deps);
+  await app.ready();
+  opened.push(app);
+  return { app, state };
+}
+
+/** Send `req` with `headers` (a JSON content type added when it has a body). */
+function sendM54(app: FastifyInstance, req: M54Req, headers: Record<string, string>) {
+  return app.inject({
+    method: req.method, url: req.url, payload: req.payload,
+    headers: req.payload === undefined ? headers : { ...headers, 'content-type': 'application/json' },
+  });
+}
+
+/** The recipe for a derived key; a route with none fails by name. */
+function recipeFor(key: string): { ok: M54Req; refused: M54Req } {
+  const r = RECIPES[key];
+  expect(r, `${key} is a docs route with no recipe here — was a route added outside this plan?`).toBeDefined();
+  return r;
+}
+
+/** The four headers with exact values, and `no-store` on every non-200. */
+function expectDecorated(key: string, res: { statusCode: number; headers: Record<string, unknown> }): void {
+  for (const [name, value] of Object.entries(DOCS_RESPONSE_HEADERS)) expect(res.headers[name], `${key} ${name}`).toBe(value);
+  if (res.statusCode !== 200) expect(res.headers['cache-control'], `${key} cache-control`).toBe('no-store');
+}
+
+describe('M5.4 — every docs route in the real server\'s table carries the four headers (section 5.3, section 5.8)', () => {
+  it('the derived set: the real table under /api/docs is exactly the four docs routes, and the walk read every row', async () => {
+    const { app } = await m54Server();
+    expect(derivedDocsRoutes(app)).toEqual(M54_DOCS_KEYS);
+  });
+
+  it('a 200: dark, the PWA headers, ok answers (the POST with its JSON body)', async () => {
+    const { app } = await m54Server();
+    for (const key of derivedDocsRoutes(app)) {
+      const res = await sendM54(app, recipeFor(key).ok, PWA);
+      expect(res.statusCode, key).toBe(200);
+      expectDecorated(key, res);
+    }
+  });
+
+  it('a 4xx: a refused query or body, before any exec', async () => {
+    const { app } = await m54Server();
+    for (const key of derivedDocsRoutes(app)) {
+      const res = await sendM54(app, recipeFor(key).refused, PWA);
+      expect(res.statusCode, key).toBe(400);
+      expectDecorated(key, res);
+    }
+  });
+
+  it('a 5xx: a read\'s ccd fault (502); the refresh\'s caps-unknown (503: a refusal before any exec keeps its status)', async () => {
+    const { app, state } = await m54Server({ fault: true });
+    for (const key of derivedDocsRoutes(app)) {
+      const req = recipeFor(key).ok;
+      state.ccdVerbs = req.method === 'POST' ? null : ['caps', DOCS_CAP];
+      const res = await sendM54(app, req, PWA);
+      expect(res.statusCode, key).toBe(req.method === 'POST' ? 503 : 502);
+      expectDecorated(key, res);
+    }
+  });
+
+  it('armed, no cookie: the gate\'s 401 with its verdict', async () => {
+    const { app } = await m54Server({ auth: true });
+    for (const key of derivedDocsRoutes(app)) {
+      const res = await sendM54(app, recipeFor(key).ok, PWA);
+      expect(res.statusCode, key).toBe(401);
+      expect(res.json().verdict, key).toBe('no-session');
+      expectDecorated(key, res);
+    }
+  });
+
+  it('armed, a session, a POST from a foreign Origin: the gate\'s 403', async () => {
+    const { app } = await m54Server({ auth: true });
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: M54_PASSPHRASE } });
+    expect(login.statusCode, login.body).toBe(204);
+    const set = login.headers['set-cookie'];
+    const first = Array.isArray(set) ? set[0] : String(set);
+    const cookie = first.slice(0, first.indexOf(';'));
+    const posts = derivedDocsRoutes(app).filter((k) => k.startsWith('POST '));
+    expect(posts.length, 'no docs POST in the derived set').toBeGreaterThan(0);
+    for (const key of posts) {
+      const res = await sendM54(app, recipeFor(key).ok, { ...PWA, cookie, origin: 'https://other.example' });
+      expect(res.statusCode, key).toBe(403);
+      expect(res.json(), key).toStrictEqual({ ok: false, error: 'foreign-origin' });
+      expectDecorated(key, res);
+    }
+  });
+
+  it('dark, no marker: the provenance 403 foreign-request — for every derived route, recipe or none', async () => {
+    const { app } = await m54Server();
+    for (const key of derivedDocsRoutes(app)) {
+      const res = await app.inject({ method: key.slice(0, key.indexOf(' ')) as 'GET' | 'POST', url: concreteUrl(key) });
+      expect(res.statusCode, key).toBe(403);
+      expect(res.json(), key).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
+      expectDecorated(key, res);
+    }
   });
 });
