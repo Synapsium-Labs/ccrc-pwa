@@ -6,15 +6,23 @@
 // micro-cache. Task 6 appends the route-level describe (section 2 row 52, M6.11).
 //
 // Every bound is read from L1 (`policy.ts`), never typed here. Fixtures carry placeholders only.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import type { CcdResult } from '../src/lifecycle.js';
 import { docsCaches, type DocsCachedShow } from '../src/docs/cache.js';
 import { docsFlights } from '../src/docs/lane.js';
 import {
-  DOCS_CACHE_BYTES, DOCS_DRAFT_SIZE_ENTRIES, DOCS_INDEX_CACHE_MS, DOCS_LISTING_MAP_ENTRIES, docsShowFlightKey,
-  docsTreeFlightKey,
+  DOCS_CACHE_BYTES, DOCS_DRAFT_SIZE_ENTRIES, DOCS_INDEX_CACHE_MS, DOCS_LANE_QUEUE, DOCS_LISTING_MAP_ENTRIES,
+  DOCS_LISTING_PROVENANCE_MS, docsShowFlightKey, docsTreeFlightKey,
 } from '../src/docs/policy.js';
-import type { DocPin, DocsEntry, DocsIndexOk, DocsShowOk, DocsTreeOk } from '../../shared/docs.js';
-import { blocker } from './docsRouteHelpers.js';
+import type { DocsComposition } from '../src/docs/routes.js';
+import {
+  DOCS_MAX_DOC_BYTES, type DocPin, type DocsEntry, type DocsIndexOk, type DocsShowOk, type DocsTreeOk,
+} from '../../shared/docs.js';
+import {
+  PWA_HEADERS, blocker, committedEntry, docsApp, draftEntry, line, nodeLanes, okRes, scripted, sha256Hex, showLine,
+  until,
+} from './docsRouteHelpers.js';
 
 const MIB = 1048576;
 const REPO = 'a'.repeat(32);
@@ -394,5 +402,200 @@ describe('docs caches — the index micro-cache (section 6.5)', () => {
     expect(index.get('n2', 1)?.index.projects[0].project).toBe('b');
     index.set('n1', indexOf('c'), 10);
     expect(index.get('n1', 10)).toEqual({ index: indexOf('c'), ageMs: 0 });
+  });
+});
+
+describe('docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l))', () => {
+  const apps: FastifyInstance[] = [];
+  afterEach(async () => {
+    for (const app of apps.splice(0)) await app.close();
+  });
+
+  const C2 = 'e'.repeat(40);
+  const TEXT = Buffer.from('# a\n', 'utf8');
+
+  /** A committed file GET of `path` at `commit`, served from `MAIN`. */
+  const committedUrl = (path: string, commit = COMMIT): string =>
+    `/api/docs/demo/file?commit=${commit}&servedRef=${encodeURIComponent(MAIN)}&section=specs&path=${encodeURIComponent(path)}`;
+
+  /** The pin a `docs-show` argv names, read back from its flags. */
+  function pinOf(argv: readonly string[]): DocPin {
+    const flag = (name: string): string => argv[argv.indexOf(name) + 1] ?? '';
+    return argv.includes('--commit')
+      ? { kind: 'committed', commit: flag('--commit'), servedRef: flag('--ref'), section: 'specs', path: flag('--path') }
+      : {
+        kind: 'draft', branch: flag('--draft-branch'), head: flag('--head'), section: 'specs', path: flag('--path'),
+        fp: flag('--fingerprint'),
+      };
+  }
+
+  /**
+   * One app over a scripted world: `docs-tree` answers `world.tree` (or waits on `held` while `world.holdTrees`);
+   * `docs-show` answers a valid show of the pin its argv names, with `world.bytes`' bytes for that path (default
+   * `TEXT`) under `world.blobs`' blob (default `BLOB`), or ccd's `absent-path` while `world.showFails`.
+   */
+  async function scene(): Promise<{
+    app: FastifyInstance; docs: DocsComposition; shows: () => number; clock: { ms: number };
+    world: { tree: DocsTreeOk; bytes: Map<string, Uint8Array>; blobs: Map<string, string>; showFails: boolean;
+      holdTrees: boolean };
+    held: ReturnType<typeof blocker<CcdResult>>;
+  }> {
+    const clock = { ms: 1000 };
+    const world = {
+      tree: treeOf(COMMIT, MAIN, [committedEntry('a.md', BLOB, TEXT.byteLength)]),
+      bytes: new Map<string, Uint8Array>(), blobs: new Map<string, string>(), showFails: false, holdTrees: false,
+    };
+    const held = blocker<CcdResult>();
+    const rec = scripted((argv) => {
+      if (argv[0] === 'docs-tree') return world.holdTrees ? held.exec() : okRes(line(world.tree));
+      if (world.showFails) return okRes(line({ v: 1, verb: 'docs-show', ok: false, elapsedMs: 1, failure: 'absent-path' }));
+      const pin = pinOf(argv);
+      return okRes(showLine(pin, world.bytes.get(pin.path) ?? TEXT, { blob: world.blobs.get(pin.path) ?? BLOB }));
+    });
+    const { app, docs } = await docsApp({ run: rec.run, nowMs: () => clock.ms });
+    apps.push(app);
+    return { app, docs, shows: () => rec.calls.filter((argv) => argv[0] === 'docs-show').length, clock, world, held };
+  }
+
+  const get = (app: FastifyInstance, url: string) => app.inject({ url, headers: PWA_HEADERS });
+
+  it('row 52: a second committed GET costs zero execs and is marked from: cache, onRef: contains, with no mode', async () => {
+    const { app, shows } = await scene();
+    expect((await get(app, '/api/docs/demo/tree')).statusCode).toBe(200);
+    const first = await get(app, committedUrl('a.md'));
+    expect(first.json()).toMatchObject({ ok: true, from: 'ccd', show: { mode: '100644' } });
+    expect(shows()).toBe(1);
+    const second = await get(app, committedUrl('a.md'));
+    expect(second.statusCode).toBe(200);
+    expect(shows()).toBe(1);
+    const hit = second.json();
+    expect(hit).toMatchObject({ ok: true, contentClass: 'markdown', from: 'cache' });
+    expect(hit.show).toMatchObject({ onRef: 'contains', elapsedMs: 0, commit: COMMIT, blob: BLOB, path: 'a.md' });
+    expect(Object.hasOwn(hit.show, 'mode')).toBe(false);
+    expect(hit.show.b64).toBe(first.json().show.b64);
+  });
+
+  it('row 52: the same blob under a new commit, and under a new path, costs zero execs and answers that commit and path', async () => {
+    const { app, shows, world } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    await get(app, committedUrl('a.md'));
+    expect(shows()).toBe(1);
+    world.tree = treeOf(C2, MAIN, [committedEntry('a.md', BLOB, TEXT.byteLength), committedEntry('b.md', BLOB, TEXT.byteLength)]);
+    await get(app, '/api/docs/demo/tree?ref=main');
+    const moved = await get(app, committedUrl('a.md', C2));
+    const renamed = await get(app, committedUrl('b.md', C2));
+    expect(shows()).toBe(1);
+    expect(moved.json()).toMatchObject({ from: 'cache', show: { commit: C2, path: 'a.md', blob: BLOB } });
+    expect(renamed.json()).toMatchObject({ from: 'cache', show: { commit: C2, path: 'b.md', blob: BLOB } });
+  });
+
+  it('row 52: a draft always execs', async () => {
+    const { app, shows, world } = await scene();
+    const fp = sha256Hex(TEXT);
+    world.tree = treeOf(COMMIT, MAIN, [draftEntry('d.md', fp, TEXT.byteLength)]);
+    await get(app, '/api/docs/demo/tree');
+    const url = `/api/docs/demo/file?branch=ws%2Fa&head=${COMMIT}&section=specs&path=d.md&fp=${fp}`;
+    for (let i = 0; i < 2; i += 1) expect((await get(app, url)).json()).toMatchObject({ ok: true, from: 'ccd' });
+    expect(shows()).toBe(2);
+  });
+
+  it('M6.11: a failure is never cached; the success after it is', async () => {
+    const { app, shows, world } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    world.showFails = true;
+    expect((await get(app, committedUrl('a.md'))).statusCode).toBe(404);
+    world.showFails = false;
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(2);
+  });
+
+  it('M6.11: a served ref recorded DOCS_LISTING_PROVENANCE_MS ago vouches for nothing: ccd again', async () => {
+    const { app, shows, clock } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    await get(app, committedUrl('a.md'));
+    clock.ms = 1000 + DOCS_LISTING_PROVENANCE_MS - 1;
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(1);
+    clock.ms = 1000 + DOCS_LISTING_PROVENANCE_MS;
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect(shows()).toBe(2);
+  });
+
+  it('M6.11: with no listing entry the answer is served but not cached; after the tree it fills, then hits', async () => {
+    const { app, shows } = await scene();
+    for (let i = 0; i < 2; i += 1) expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect(shows()).toBe(2);
+    await get(app, '/api/docs/demo/tree');
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect((await get(app, committedUrl('a.md'))).json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(3);
+  });
+
+  it('the listing\'s blob rides the ask: a show answering another blob is 502 malformed-answer {why: pin}, never cached', async () => {
+    const { app, shows, world } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    world.blobs.set('a.md', 'd'.repeat(40));
+    for (let i = 0; i < 2; i += 1) {
+      const res = await get(app, committedUrl('a.md'));
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'pin' });
+    }
+    expect(shows()).toBe(2);
+  });
+
+  it('refinement (l): a symlink entry sharing a cached file\'s blob never hits and never fills', async () => {
+    const { app, shows, world } = await scene();
+    world.tree = treeOf(COMMIT, MAIN, [
+      committedEntry('a.md', BLOB, TEXT.byteLength), committedEntry('link.md', BLOB, TEXT.byteLength, 'symlink'),
+    ]);
+    await get(app, '/api/docs/demo/tree');
+    await get(app, committedUrl('a.md'));
+    expect(shows()).toBe(1);
+    for (let i = 0; i < 2; i += 1) expect((await get(app, committedUrl('link.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect(shows()).toBe(3);
+  });
+
+  it('M6.11: the blob LRU evicts at DOCS_CACHE_BYTES, least recently used first', async () => {
+    const { app, docs, shows, world } = await scene();
+    const size = DOCS_MAX_DOC_BYTES;
+    const charge = size + Buffer.byteLength(Buffer.alloc(size).toString('base64'));
+    const fits = Math.floor(DOCS_CACHE_BYTES / charge);
+    const names = Array.from({ length: fits + 2 }, (_, i) => `f${i}.md`);
+    names.forEach((name, i) => {
+      world.bytes.set(name, Buffer.alloc(size, i + 1));
+      world.blobs.set(name, hex40(i + 1));
+    });
+    world.tree = treeOf(COMMIT, MAIN, names.map((name, i) => committedEntry(name, hex40(i + 1), size)));
+    await get(app, '/api/docs/demo/tree');
+    for (const name of names.slice(0, fits)) await get(app, committedUrl(name));
+    expect(shows()).toBe(fits);
+    expect(nodeLanes(docs).caches.blobs.size()).toBe(fits);
+    expect((await get(app, committedUrl('f0.md'))).json()).toMatchObject({ from: 'cache' });
+    expect((await get(app, committedUrl(names[fits]!))).json()).toMatchObject({ from: 'ccd' });
+    expect(nodeLanes(docs).caches.blobs.bytes()).toBeLessThanOrEqual(DOCS_CACHE_BYTES);
+    expect((await get(app, committedUrl('f1.md'))).json()).toMatchObject({ from: 'ccd' });
+    expect((await get(app, committedUrl('f0.md'))).json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(fits + 2);
+  });
+
+  it('refinement (k): a cache hit is served under a full read lane, before any flight or lane', async () => {
+    const { app, docs, shows, world, held } = await scene();
+    await get(app, '/api/docs/demo/tree');
+    await get(app, committedUrl('a.md'));
+    world.holdTrees = true;
+    const trees = ['x', 'y'].map((ref) => get(app, `/api/docs/demo/tree?ref=${ref}`));
+    await until(() => held.started() === 2, 'two held tree execs');
+    const lane = nodeLanes(docs).read;
+    const queued = Array.from({ length: DOCS_LANE_QUEUE }, (_, i) => get(app, committedUrl(`q${i}.md`)));
+    await until(() => lane.load().queued === DOCS_LANE_QUEUE, 'a full queue');
+    const hit = await get(app, committedUrl('a.md'));
+    expect(hit.statusCode).toBe(200);
+    expect(hit.json()).toMatchObject({ from: 'cache' });
+    expect(shows()).toBe(1);
+    await app.close();
+    held.release(0, okRes(line(world.tree)));
+    held.release(1, okRes(line(world.tree)));
+    await Promise.all([...trees, ...queued]);
   });
 });
