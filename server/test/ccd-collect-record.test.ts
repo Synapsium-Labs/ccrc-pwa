@@ -173,6 +173,18 @@ describe('_ws_collect_record_read: parsed, absent, malformed or unmeasured — f
     expect(why, 'the resolver’s reason is left for the caller').toContain('cannot be resolved');
   });
 
+  it.skipIf(ROOT_USER)('rc 3 when tmpquarantine/ cannot be SEARCHED — a record that stands is never read as absent', () => {
+    plant(GOOD());
+    qOf();
+    fs.chmodSync(qrecDir(), 0o600);
+    try {
+      const [got = '', why = ''] = h.sh(`_ws_collect_record_read '${recPath()}'; printf '[rc=%s] %s\\x1f%s' "$?" ${FIELDS} "$_WS_QPATH_WHY"`)
+        .split('\x1f');
+      expect(got, 'absence is measured: an unsearchable directory is unmeasured and retried, never absent').toBe(`[rc=3] ${EMPTY}`);
+      expect(why, 'the measurement’s reason is left for the caller').toContain('was never measured');
+    } finally { fs.chmodSync(qrecDir(), 0o700); }
+  });
+
   it.each([
     ['no trailing newline', (g: string) => g.slice(0, -1)],
     ['a second line', (g: string) => `${g}${g}`],
@@ -218,6 +230,17 @@ describe('_ws_collect_record_read: parsed, absent, malformed or unmeasured — f
     const w = write();
     expect(w.rc, w.why).toBe('0');
     expect(read(recPath())).toMatch(new RegExp(`^\\[rc=0\\] ${ID}\\|${slotOf().replace(/[.]/g, '\\.')}\\|\\d+\\|\\d+\\|[1-9]\\d*\\|7\\|\\d{13}\\|${TOKEN}\\|$`));
+  });
+});
+
+describe('_ws_collect_qpath: the physical ~/.cc-tmp, resolved and never made — and never the root', () => {
+  it('a ~/.cc-tmp that resolves to / answers 2, never `/.ccd-quarantine`', () => {
+    const tmp = path.join(h.home, '.cc-tmp');
+    fs.symlinkSync('/', tmp);
+    try {
+      expect(h.sh('_ws_collect_qpath; printf \'%s|%s|%s\' "$?" "$_WS_QPATH" "$_WS_QPATH_WHY"'))
+        .toBe(`2||${tmp} resolved to an unusable path`);
+    } finally { fs.unlinkSync(tmp); }
   });
 });
 
@@ -272,6 +295,18 @@ describe('_ws_collect_records_of: EXACT parse — a nested id is never matched',
       expect(h.sh(`_ws_collect_records_of ${ID} >/dev/null; printf '%s' "$_WS_QRECS_WHY"`)).toContain('could not list');
     } finally { fs.chmodSync(qrecDir(), 0o700); }
   });
+
+  it.skipIf(ROOT_USER)('under a $REG that cannot be SEARCHED, a record that stands is never "no record": 2, with the reason', () => {
+    plant('x\n', recPath());
+    const mode = fs.statSync(reg()).mode & 0o777;
+    fs.chmodSync(reg(), 0o600);
+    try {
+      const [rc = '', out = '', why = ''] = h.sh(`out=$(_ws_collect_records_of '${ID}'); rc=$?; _ws_collect_records_of '${ID}' >/dev/null;`
+        + ` printf '%s\\x1f%s\\x1f%s' "$rc" "$out" "$_WS_QRECS_WHY"`).split('\x1f');
+      expect({ rc, out }, 'the directory’s absence is measured, never a failed -e').toEqual({ rc: '2', out: '' });
+      expect(why).toContain('cannot be searched');
+    } finally { fs.chmodSync(reg(), mode); }
+  });
 });
 
 describe('_ws_collect_record_drop: the record goes, PROVEN — and nothing that is not one', () => {
@@ -301,6 +336,18 @@ describe('_ws_collect_record_drop: the record goes, PROVEN — and nothing that 
     fs.mkdirSync(path.join(recPath(), 'inside'), { recursive: true });
     expect(h.sh(`_ws_collect_record_drop '${recPath()}'; echo "[rc=$?]"`)).toBe('[rc=2]');
     expect(fs.existsSync(path.join(recPath(), 'inside'))).toBe(true);
+  });
+
+  it('a LINKED tmpquarantine/ is never followed: 2, and the record-named file it points at stands', () => {
+    const elsewhere = path.join(h.home, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const target = path.join(elsewhere, `${ID}.${NS}.${PID}`);
+    fs.writeFileSync(target, 'keep\n');
+    fs.symlinkSync(elsewhere, qrecDir());
+    const [rc = '', why = ''] = h.sh(`_ws_collect_record_drop '${recPath()}'; printf '%s\\x1f%s' "$?" "$_WS_QREC_WHY"`).split('\x1f');
+    expect(rc, why).toBe('2');
+    expect(why).toContain('is a link');
+    expect(fs.readFileSync(target, 'utf8'), 'the file behind the link').toBe('keep\n');
   });
 });
 

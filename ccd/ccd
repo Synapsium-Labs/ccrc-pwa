@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e46bc0af5f9144cc34dc24c593a2edbe6b768440a1f3af3e89f5eb1474c35bb7
+# ccrc:generated 1 sha256=485cd312f65cc9a814ee0131e58aab83b3ec243b0a2bb965932eb9ba06772fa0
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31623,8 +31623,9 @@ _ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by readi
 
 _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO
   #                               _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS)
-  #                               | 1 absent | 2 unreadable or malformed | 3 unmeasured: the physical
-  #                               ~/.cc-tmp cannot be resolved, so no slot is derived (_WS_QPATH_WHY)
+  #                               | 1 absent, PROVEN | 2 unreadable or malformed | 3 unmeasured (_WS_QPATH_WHY):
+  #                               whether the record stands could not be measured, or the physical
+  #                               ~/.cc-tmp cannot be resolved, so no slot is derived
   # FOUR ANSWERS, NEVER AN OVERLOADED 2. As the witness reader's, a link, a
   # directory, a dot-leading or unparseable NAME, a `checkouts=` list in no
   # spelling ccd writes and a `tmpquarantine/` that is itself a link all answer
@@ -31632,13 +31633,19 @@ _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT
   # judged first, and only a well-formed one asks for its slot: a physical
   # `~/.cc-tmp` that cannot be resolved says nothing against the record, only
   # that its slot cannot be derived now, so that is 3, unmeasured, and its
-  # caller retries. Every field is cleared first. The content's id must be the one its own
+  # caller retries. ABSENCE IS MEASURED, never a failed `-e`: 1 only when
+  # `_ws_reclaim_absent` proves nothing stands at the name, and its unmeasured
+  # answer (an unsearchable `tmpquarantine/`, where `-e` reads false over a
+  # record that stands) is 3, retried, its reason in `_WS_QPATH_WHY`, the one
+  # reason rc 3 carries. A record that stands as a file but will not OPEN is
+  # folded into 2 with the malformed ones: its caller keeps it, never retries
+  # it. Every field is cleared first. The content's id must be the one its own
   # name parses to (rc 2 otherwise, G5). The body names NO path: `_WS_QREC_SLOT`
   # is DERIVED, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`, through
   # `_ws_collect_qpath`, which makes nothing, so a record never names another
   # id's slot and a space in a path never splits one. `_WS_QREC_CHECKOUTS` stays in
   # `_ws_collect_enc`'s spelling, the form `_ws_leaf_checkouts`' alias compares.
-  local LC_ALL=C f="${1-}" name body line fd max
+  local LC_ALL=C f="${1-}" name body line fd max rc
   local -a m
   local re='^v=1 id=([A-Za-z0-9._-]+) dev=([0-9]+) ino=([0-9]+) btime=([1-9][0-9]*) run=([^ ]+) at=([0-9]{13}) token=([0-9a-f]{64}) checkouts=([^ ]*)$'
   _WS_QREC_ID=''; _WS_QREC_SLOT=''; _WS_QREC_DEV=''; _WS_QREC_INO=''; _WS_QREC_BTIME=''
@@ -31646,7 +31653,9 @@ _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT
   name="${f##*/}"
   [[ "$name" != .* ]] && _ws_collect_rec_id "$name" || return 2
   [[ ! -L "${f%/*}" ]] || return 2
-  [[ -e "$f" || -L "$f" ]] || return 1
+  _ws_reclaim_absent "$f"; rc=$?
+  (( rc != 0 )) || return 1
+  (( rc != 2 )) || { _WS_QPATH_WHY="whether the quarantine record $f stands was never measured ($_WS_ABSENT_WHY)"; return 3; }
   [[ -f "$f" && ! -L "$f" ]] || return 2
   max="$WS_COLLECT_RECORD_MAX"
   { exec {fd}<"$f"; } 2>/dev/null || return 2
