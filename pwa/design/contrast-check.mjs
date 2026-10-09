@@ -200,6 +200,13 @@ const pairs = (T, name) => [
   [`${name} limit ok / track (UI 3:1)`, T.lOk, T.track, 3],
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
+  // THE FOURTH BAND IS DELIBERATELY ABSENT FROM THIS CONTRACT. `off` measures
+  // 1.02-1.10 against the track in all twelve palettes — it is not a quiet
+  // fill, it is an invisible one. That is a PRESERVED defect, not an accepted
+  // floor: stating it here as a pair would red the gate for a pixel this
+  // branch is not allowed to change. It is pinned instead by
+  // `pwa/test/limit-off-band.test.ts`, which measures the same numbers and
+  // reds if they move in either direction.
   // The ask sheet's two accent-on-quiet-ground texts. Both are 11px
   // (--fs-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
   [`${name} ask header chip / accent-tint`, T.accent, T.accentTint, 4.5],

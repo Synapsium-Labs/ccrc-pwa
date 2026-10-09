@@ -271,8 +271,8 @@ export function leastLoaded(
  *  which is what `Bar` renders too — its fill is `width: 0%` there, because the
  *  0 it would draw is the inferred one. A confident bar and the word "reset"
  *  would contradict each other in the same row. */
-function Gauge({ label, value, rolledOver }: {
-  label: string; value: number | null; rolledOver: boolean;
+function Gauge({ label, value, rolledOver, off = false }: {
+  label: string; value: number | null; rolledOver: boolean; off?: boolean;
 }): ReactNode {
   const pct = rolledOver || value === null ? null : Math.min(100, Math.max(0, value));
   return (
@@ -280,7 +280,10 @@ function Gauge({ label, value, rolledOver }: {
       <span>{label}</span>
       <span className={LIMIT_TRACK}>
         {pct !== null && (
-          <span className={fillVariants({ band: limitBand(pct) })} style={{ width: `${pct}%` }} />
+          <span
+            className={fillVariants({ band: off ? 'off' : limitBand(pct) })}
+            style={{ width: `${pct}%` }}
+          />
         )}
       </span>
       <span className="acct-gauge-pct">
@@ -358,16 +361,18 @@ export function AccountRow({
       <span className="acct-gauges">
         {/* Above the gauges, not instead of them: the numbers are still true of
             the last moment anything ran there, and this is the sentence that
-            says why they stopped moving. `data-disabled` greys their fills for
-            the reason AccountsScreen greys its own — a frozen crit-red bar
-            reads as live pressure on a lane nothing is running on. */}
+            says why they stopped moving. The gauges take LimitBar's `off` band
+            for the reason AccountsScreen greys its own — a frozen crit-red bar
+            reads as live pressure on a lane nothing is running on. It was a
+            `[data-disabled]` rule in fleet.css reaching into `.limit-fill`;
+            the component owns its own appearance now. */}
         {off && <span className="acct-condemned">sign-in expired on the fleet host</span>}
         {facts === null ? (
           <span className="acct-unknown">limits unknown</span>
         ) : (
           <>
-            <Gauge label="5h" value={facts.five} rolledOver={facts.fiveRolledOver === true} />
-            <Gauge label="7d" value={facts.seven} rolledOver={facts.sevenRolledOver === true} />
+            <Gauge label="5h" value={facts.five} rolledOver={facts.fiveRolledOver === true} off={off} />
+            <Gauge label="7d" value={facts.seven} rolledOver={facts.sevenRolledOver === true} off={off} />
           </>
         )}
       </span>

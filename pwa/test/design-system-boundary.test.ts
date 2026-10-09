@@ -68,7 +68,7 @@ export const OWNED = [
   'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
   'dot--done', 'dot--cleanup', 'dot--dead',
   'limits', 'limit-track', 'limit-fill',                         // LimitBar / fillVariants / LIMIT_TRACK
-  'limit-fill--ok', 'limit-fill--warn', 'limit-fill--crit',
+  'limit-fill--ok', 'limit-fill--warn', 'limit-fill--crit', 'limit-fill--off',
   'skel',                                                        // Skeleton
   'sheet-panel', 'sheet-panel--full', 'sheet-scrim', 'sheet-grabber', // Sheet
   'toast', 'toast--error', 'toast-action',                       // ToastHost / toast()

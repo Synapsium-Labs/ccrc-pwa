@@ -536,7 +536,6 @@
    the lane to refresh its statusline, so a frozen crit-red bar keeps reading as
    live pressure on an account the same row calls expired. Scoped to `.acct-list`
    like every other picker-row rule in this block. */
-.acct-list .acct-row[data-disabled='true'] .limit-fill { background: var(--edge-subtle); }
 /* A picker with nothing to offer says which emptiness it is (SwapSheet's
    `pickerEmptiness`), rather than rendering a bare empty list under "Pick where
    it should live meanwhile". Same treatment as `.proj-none`, the sibling

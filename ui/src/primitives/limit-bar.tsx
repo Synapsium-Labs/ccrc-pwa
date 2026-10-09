@@ -32,6 +32,20 @@ export const fillVariants = cva(
         ok: 'limit-fill--ok bg-limit-ok',
         warn: 'limit-fill--warn bg-limit-warn',
         crit: 'limit-fill--crit bg-limit-critical',
+        /** NOT a fourth reading — a statement that the reading stopped.
+         *
+         *  A condemned lane keeps its last numbers, because they are still
+         *  true of the last moment anything ran there. What is no longer true
+         *  is the COLOUR: nothing runs there to refresh the statusline, so a
+         *  frozen crit-red bar reads as live pressure on a row the same line
+         *  calls expired. `limitBand` never returns this; the call site that
+         *  knows the lane is condemned passes it.
+         *
+         *  It lived in fleet.css as `.acct-list .acct-row[data-disabled='true']
+         *  .limit-fill`, the last entry in the appearance census — a background
+         *  set on this component from a sheet its own story never loads, which
+         *  is the definition of a drift that shows up in one theme only. */
+        off: 'limit-fill--off bg-edge-subtle',
       },
     },
     defaultVariants: { band: 'ok' },
