@@ -5609,6 +5609,16 @@ which resolves a global copy with no jsdom and reports "no tests" — and in the
 are load-sensitive, and a known handful flake under parallel load, so re-run one in isolation before
 calling it a break.
 
+Every server run keeps its temp writes under one directory of its own, `$TMPDIR/ccrc-testrun-XXXXXX/tmp`
+(`server/test/run-tmp.globalsetup.mjs`, vitest's `globalSetup`; #316): the workers, every fixture and every
+child they spawn inherit that `TMPDIR`. Three things remove it — the run's teardown; a SIGTERM, SIGINT or
+SIGHUP to vitest's main process (GNU `timeout`, Ctrl-C, a closed tmux pane) or a crash of it; and, for a run
+killed outright, the next run under the same `TMPDIR`, which removes a run directory whose owner socket
+refuses once it has been quiet for ten minutes (`CCRC_TEST_RUN_QUIET_S` overrides that, for tests only). A
+`TMPDIR` too long for a unix socket — a base over about 74 characters on macOS, 78 on Linux — or a sandbox
+that refuses one prints `ccrc-test: per-run temp dir refused (<code>)` and keeps the old behaviour, fixtures
+loose in `TMPDIR`; `run-tmp.test.ts` is red in such a run.
+
 Run the server against a fixture home with `CCRC_HOME=<tree> npm run dev` in `server/`; the tree needs
 `.ccrc/accounts.json` (copy `deploy/accounts.default.json` — the server refuses to boot without a
 roster). `CCRC_HOME` moves what the server reads, not what its children act on: in the default `local`
