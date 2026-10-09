@@ -47,6 +47,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 00:54 — why wave 7's question was invisible, measured by the stall-watch programme (calm-harbor's 4064; its
+  ledger R32).**
+  - **The cause.** A background subagent's tool events erased the ask. `ccd/session-hook.sh` writes `working` and
+    `ask: null` on every PreToolUse and PostToolUse, whoever sent it. Clear-summit asked 3.1 s before its Task 4
+    subagent's first tool call, and the server mints an ask row only from a pane tick that sees the menu.
+  - **The control case.** On the same version and mode, with no subagent running, the ask is recorded.
+  - **What stays this programme's.** Nothing in the code: the hook fix and the dialog-cap clock are other
+    programmes', and the operator is told. This programme's lesson: when a run stops committing, read the worker's
+    transcript tail. Mail to a parked worker also restarts the stall watch's dialog-cap clock, so this coordinator
+    sends clear-summit nothing more until its pane is answered.
+
 - **2026-10-08 23:29 — wave 7's Task 3 question, ruled: lock the generation read. The question reached nobody for two hours.**
   - **The question.** At 21:28 clear-summit asked, through AskUserQuestion, how to fix one thing. X1's generation
     read in `_ws_reclaim_generation` reads with no compaction lock held, and `session-hook.test.ts`'s lock census reds on
