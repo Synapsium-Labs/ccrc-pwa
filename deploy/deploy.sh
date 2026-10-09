@@ -737,6 +737,11 @@ if [ "$TARGET" = "agent" ]; then
   # and placed below the noise list for the same D-2600 reason the usage sweep
   # gives: `graph-noise-ship.test.ts` has no slack left beside ccd-graph-sweep.
   install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755
+  # The history sweep's shim (history spec 2026-10-05 §9.5), placed below the
+  # noise list for the tmp sweep's reason above. Unconditional, unlike
+  # `_inst_bins`' role-gated copy: this agent lane IS a session host, so the
+  # gate has nothing to exclude here D-4254.
+  install_atomic ccd/ccd-history-sweep .local/bin/ccd-history-sweep 755
   # The pane-scope sweep (session-continuity wave 4), beside the reaper and on
   # its terms; its stop is shadowed until ~/.cc-sessions/scope-sweep-live exists.
   install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755
@@ -835,6 +840,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.service ~/.config/systemd/user/ccd-history-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.timer ~/.config/systemd/user/ccd-history-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-codex-usage@.service ~/.config/systemd/user/ccrc-codex-usage@.service \
@@ -974,6 +981,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccrc-models.timer \
     && systemctl --user enable --now ccd-usage-sweep.timer \
     && systemctl --user enable --now ccd-tmp-sweep.timer \
+    && systemctl --user enable --now ccd-history-sweep.timer \
     && systemctl --user enable --now ccd-scope-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'

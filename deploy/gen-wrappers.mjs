@@ -208,7 +208,7 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  happening to stay unmarked, which is the day this entry starts mattering
  *  and the reason it was added ahead of that day. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-update-sync',
+  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-update-sync', 'ccd-history-sweep',
   // GPT-lane launcher and runtime builder, placed by _inst_bins since Plan 2b-2; ccgpt is not ours (D-3478).
   'ccrc-codex', 'ccgpt-runtime']);
 

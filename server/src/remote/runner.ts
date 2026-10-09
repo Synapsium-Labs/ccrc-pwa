@@ -120,6 +120,24 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // it, and a carry slower than 300 s is still killed mid-flight. Closing it
   // needs a ccd-side bound and is not this row's job.
   swap: 300_000,
+  // The four Docs verbs (spec 2026-10-01 section 2 (a), Budgets). ccd's python helper bounds each one itself: a
+  // whole-verb deadline (`HELPER_DEADLINE_S` in ccd/ccd: index 12 s, tree 12 s, show 7 s, fetch 45 s), at which it
+  // sends SIGTERM to every git process group it started and SIGKILL `KILL_GRACE_S` (2 s) later. Each budget below
+  // is strictly greater than that deadline + the 2 s grace + 5 s; `docs-budget.test.ts` reads both sides from
+  // source and holds the inequality, and docs-show's margin is the thinnest (exactly 1 s).
+  //
+  // Why the margin must stay positive: these budgets exist so the AGENT never kills ccd in normal operation. The
+  // agent's deadline (`runExec`'s `execFile` timeout) kills only its direct child, so a kill landing while the
+  // helper still waits on git would orphan git's process group (`git-remote-https`, ssh, `git-lfs`) rather than
+  // let the helper's own `killpg` reap it. The helper's deadline must always fire first. Without these rows a
+  // docs verb silently inherits the flat 90 s.
+  //
+  // The docs-index budget is also doctor's wait: ccd/ccrc-doctor-checks defaults `CCRC_DOCTOR_DOCS_TIMEOUT` to it
+  // in seconds, so doctor waits exactly as long as a Docs page would; `docs-budget.test.ts` holds the two equal.
+  'docs-index': 20_000,
+  'docs-tree': 20_000,
+  'docs-show': 15_000,
+  'docs-fetch': 60_000,
 };
 
 function timeoutMsFor(cmd: string, args: string[]): number {

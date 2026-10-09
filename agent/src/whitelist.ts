@@ -305,6 +305,19 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * ever grow, reached (wave 3) from a route the PWA will hit with no box token
  * of any kind.
  *
+ * The four docs verbs (native Docs reader, spec 2026-10-01 section 2 (a)) are
+ * the next family, enrolled for `coord-pause`'s reason rather than
+ * `ws-reap`'s. `docs-index`, `docs-tree` and `docs-show` read and write
+ * nothing; `docs-fetch` writes one remote-tracking ref and ccd's own fetch
+ * stamp. None takes a confirmation token, so the flag — `--all` for the
+ * index, `--project` for the other three — is each verb's whole argument
+ * surface. They are reached from session-gated routes (three GETs and one
+ * POST) that carry no box token of any kind, and a bare grant would admit
+ * every positional form a verb might grow while staying green in
+ * `whitelist-subset.test.ts`'s layers 2 and 3, because the bare verb is a
+ * genuine prefix of every argv the server builds. `g16`-`g19` are the other
+ * side.
+ *
  * Kept as data rather than a hardcoded `if` so the type below and the runtime
  * audit read the SAME source — the P2 failure mode (auditor and lookup asking
  * different questions) is the one to avoid while fixing P1.
@@ -314,6 +327,7 @@ export const REQUIRED_VERB_FLAG = {
   'project-pool': '--project', 'route': '--session',
   'win-size': '--session', 'ws-reclaim': '--expect',
   'reclaim-pause': '--state', 'ws-expire': '--expect',
+  'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -555,6 +569,20 @@ export const EXEC_WHITELIST = {
     // `win-size is grantable ONLY with --session` case, and why the enrolment
     // above exists: one of the two is in a different package from the other.
     ['win-size',   '--session'],
+    // NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): the four
+    // verbs `docs-v1` names, each ENROLLED in `REQUIRED_VERB_FLAG` above on the
+    // flag that is its whole argument surface (g16-g19 are the other side).
+    // Every token after the flag is unconstrained here; the exact argv is
+    // ccd's (a usage die on any other shape) and the server's layer-2c table.
+    // The fleet-wide listing: `--all` is its only argument.
+    ['docs-index', '--all'],
+    // One project's listing, at the origin default or at `--ref R`.
+    ['docs-tree',  '--project'],
+    // One file's bytes. ONE grant reaches BOTH argv shapes: committed (12
+    // tokens after the verb) and draft (14).
+    ['docs-show',  '--project'],
+    // The one docs verb that writes: a fetch of one branch from origin.
+    ['docs-fetch', '--project'],
   ],
 } as const satisfies ExecWhitelist;
 

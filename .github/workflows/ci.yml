@@ -726,6 +726,15 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/tests.txt" <<'EOF'
           test/node-floor.test.ts
+          test/history-lib.test.ts
+          test/history-store.test.ts
+          test/history-sweep.test.ts
+          test/history-drain.test.ts
+          test/history-ingest.test.ts
+          test/history-holds.test.ts
+          test/history-op.test.ts
+          test/history-cli.test.ts
+          test/measure-history.test.ts
           EOF
           CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts
 

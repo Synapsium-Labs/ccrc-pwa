@@ -94,8 +94,16 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * lifecycle wave 3b): the expiry executor composes it only behind
  * `capSupported(deps.fleetState, EXPIRE_CAP)`, asked again in the act's own
  * scope (`coord/expireArchived.ts`), and the same argument holds.
+ *
+ * The four Docs verbs (docs W2, spec 2026-10-01 section 2 (a)) argue it once more: a box that echoes `docs-v1`
+ * dispatches all four at their final arity, so the token is the gate, and `capSupported` refuses on no evidence where
+ * `verbSupported` would permit. Their two call-site functions (`docs/ccdsource.ts`'s `readDocs` and `fetchDocs`)
+ * carry the token check behind a `caps` arm of their own, which this scan does not read: `docs-source.test.ts` pins
+ * that arm by behaviour.
  */
-const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim', 'reclaim-pause', 'ws-expire']);
+const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
+  'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch',
+]);
 
 /**
  * Args that make each `CCD_ARGV` entry build without throwing, keyed by
@@ -395,8 +403,10 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // `capSupported(RECLAIM_CAP)` — CAP_GATED_VERBS above — because a verb
     // that never existed must REFUSE on no evidence, and `verbSupported`
     // permits on none. Named here so the site cannot vanish or lose its gate.
+    // The four Docs verbs (docs W2) join for `ws-reclaim`'s reason: each is gated by `capSupported(DOCS_CAP)` in
+    // CAP_GATED_VERBS above, and naming them here reds a vanished call site or a lost gate.
 const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool',
-  'ws-reclaim'];
+  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);

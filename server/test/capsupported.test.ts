@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
+  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, DOCS_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
   deviceActor, type ActorFlags,
 } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -144,6 +144,21 @@ describe('capSupported', () => {
     expect(capSupported(state([CHILD_ARGV_CAP]), CHILD_ARGV_CAP)).toBe(true);
     expect(verbSupported(state(null), ['ws-add'])).toBe(true);
     expect(verbSupported(state(['ws-add']), ['ws-add', '--no-rc', '--child', '7', 'demo'])).toBe(true);
+  });
+
+  it('spells the docs token exactly once in server/src, and reads it with the REFUSING default (docs W2)', () => {
+    // The other two spellings: ccd's own `echo docs-v1` and `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS, whose
+    // `toContain(DOCS_CAP)` holds all three equal. The scan proves it is reading files by finding the one.
+    expect(DOCS_CAP).toBe('docs-v1');
+    expect(literalSpellings(DOCS_CAP)).toBe(1);
+    // THE POLARITY: no evidence REFUSES, and a VERB's presence is not the TOKEN's presence. The docs adapter's gate
+    // adds its own `caps` arm in front of this (`docs-source.test.ts`), because `capSupported` alone would fold
+    // "nothing measured" into "too old".
+    expect(capSupported(state(null), DOCS_CAP)).toBe(false);
+    expect(capSupported(undefined, DOCS_CAP)).toBe(false);
+    expect(capSupported(state(['docs-tree']), DOCS_CAP)).toBe(false);
+    expect(capSupported(state([DOCS_CAP]), DOCS_CAP)).toBe(true);
+    expect(verbSupported(state(null), ['docs-tree'])).toBe(true);
   });
 });
 

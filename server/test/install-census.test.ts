@@ -1289,9 +1289,11 @@ function uninstWrappersCase(): Set<string> {
 }
 
 /** The body of the ONE `if [ "$INST_ROLE" != server ]; then … fi` block in
- *  `_inst_bins`, comments cut — the GPT lane's gate, which that function's own
- *  comment calls the only `!= server` gate in it. Nothing may nest inside it,
- *  so the first `fi` after it is its own. */
+ *  `_inst_bins`, comments cut — the GPT lane's gate, and that function's only
+ *  `if`-block role gate, which this reader requires. The history sweep's shim is
+ *  role-gated too, but by a one-line `[ "$INST_ROLE" = server ] ||` test this
+ *  reader never sees (history spec 2026-10-05 §9.5). Nothing may nest inside
+ *  it, so the first `fi` after it is its own. */
 function gptGateBlock(): string {
   const fn = '_inst_bins';
   const lines = fnBody(fn).split('\n');
