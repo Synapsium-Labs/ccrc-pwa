@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=897f1802b1eaff1d3fac3179c7e0dd17b7c0fb866c5edb3dca7b155db31719fd
+# ccrc:generated 1 sha256=464119d6879f72ad5fb0dbb429f5f5008176c13a9611bcb7e67f129848c7e695
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3134,10 +3134,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 195
-# invocations across 165 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 197
+# invocations across 167 non-comment lines.
 #
-# THE LAST MOVE WAS the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -3886,16 +3886,16 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44 and `choicekept` 45 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45 and the route read-back's `readbackseen` 46 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 45: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # The 46: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
+  # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
   # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
@@ -18962,7 +18962,7 @@ _route_retry_ok() {   # id -> 0 iff the applier may type this tick (controller r
   # silently — the note for this condition was already written by the attempt
   # that set the counter), and at the cap (say `apply-gave-up` once per floor
   # and type nothing until something clears the counter).
-  local id="$1" rec n ts now
+  local id="$1" rec n ts now said=""
   rec=$(_reg_get "$id" routetries 2>/dev/null)
   [[ -n "$rec" ]] || return 0
   n="${rec%% *}"; ts="${rec##* }"
@@ -18972,7 +18972,8 @@ _route_retry_ok() {   # id -> 0 iff the applier may type this tick (controller r
   # writable by any session on this box — attribution, not authentication). And
   # because neither guarded line can then fire, the third drops the unreadable
   # counter rather than wedging the applier on bytes it cannot read.
-  [[ "$n" =~ ^[0-9]+$ && "$n" -ge "$ROUTE_RETRY_MAX" ]] && { _route_note "$id" apply-gave-up "$(_route_pending_word "$id") after $n attempts"; return 1; }
+  [[ "${ROUTE_READBACK_SAID%% *}" == "$id" ]] && said="; transcript: ${ROUTE_READBACK_SAID#* }"   # the read-back's refusal word, this tick's and this id's only (`_route_readback`)
+  [[ "$n" =~ ^[0-9]+$ && "$n" -ge "$ROUTE_RETRY_MAX" ]] && { _route_note "$id" apply-gave-up "$(_route_pending_word "$id") after $n attempts$said"; return 1; }
   [[ "$n" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && $((now - ts)) -ge "$ROUTE_RETRY_BACKOFF" ]] && return 0
   [[ "$n" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ ]] || { _route_tries_clear "$id"; return 0; }
   return 1
@@ -19630,6 +19631,133 @@ _model_class_of() {   # /model value -> the record's class word | rc 1 outside t
   _model_family_class "$v"
 }
 
+_operator_choice_read() {   # transcript journal [tail-bytes] -> the transcript reader's lines; rc != 0 the reader failed (§5.7)
+  # ONE READER, TWO CALLERS: `_operator_choice_keep` (the operator's own
+  # choice, before a stop) and `_route_readback_transcript` (the read-back's
+  # second witness). The caller has already proved the file a readable regular
+  # file — never `grep` on a FIFO; a missing python3 fails the pipeline, which is
+  # this rc. Its lines, one per kind:
+  #   <model|effort> <value|?> <epoch> <bytes>   the newest acknowledged command no journal row explains, at or after the floor
+  #   drift-<model|effort> x <epoch> 0           a newer command of that kind with no acknowledgement this ccd recognises
+  #   ran-model <word|?> <epoch> <shown>         the model that same /model's OWN acknowledgement names (`Set model to Opus 5.5 …` -> `Opus`)
+  # `<word>` is the acknowledgement's model with its trailing parentheses
+  # (`(1M context)`, `(default)`) dropped, and a `<Family> <version>` display
+  # name cut to its family word; any other shape — opusplan's `Opus in plan
+  # mode, else Sonnet` — is `?`, never its first word. The keep reads no
+  # `ran-model` line. A read-back passes `0 since` as the journal, so no
+  # keystroke is excluded and no floor applies: what the pane runs does not
+  # depend on who typed it. `tail-bytes` reads only that many bytes from the
+  # END of the file (the read-back's bound); without it the whole file is
+  # grepped, as the keep always has.
+  #
+  # `strict` IS THE READ-BACK'S, and it exists because the two callers fail in
+  # opposite directions. The keep SKIPS a command row it cannot date or parse,
+  # which is safe for it — it writes nothing on what it did not read. The
+  # read-back ACTS ON A POSITIVE, so for it "the newest /model" must not quietly
+  # become "the newest the parser understood" (review finding 1): under
+  # `strict` a /model or /effort command row whose timestamp will not parse is
+  # `drift-<kind> x 0 0`, a command row whose content is an array of text blocks
+  # is read as its joined text, and a `/fast` row — which can change the running
+  # model with no /model row (2.1.292's `Fast mode ON · model set to …`, review
+  # finding 3) — is `drift-model`: nothing older is believed past it until a
+  # newer acknowledged /model. The keep's output is unchanged.
+  local f="$1" journal="$2" tail="${3:-}" strict="${4:-}"
+  local -a pats=(-e '<command-name>/model</command-name>' -e '<command-name>/effort</command-name>')
+  [[ "$strict" == strict ]] && pats+=(-e '<command-name>/fast</command-name>')
+  if [[ -n "$tail" ]]; then
+    tail -c "$tail" -- "$f" 2>/dev/null | { grep -F -A1 "${pats[@]}" || (( $? == 1 )); }
+  else
+    { grep -F -A1 "${pats[@]}" -- "$f" 2>/dev/null || (( $? == 1 )); }
+  fi | python3 -c '
+import json, re, sys
+from datetime import datetime
+window = int(sys.argv[2])
+strict = sys.argv[3] == "strict"
+journal = sys.argv[1].splitlines()
+floor = int(journal[0].split()[0])
+rows = []
+for l in journal[1:]:
+    p = l.split()
+    if len(p) == 3 and p[0].isdigit() and p[1] in ("model", "effort"):
+        rows.append((int(p[0]), p[1], p[2].lower()))
+ENV = re.compile(r"<command-(name|message|args)>([^<]*)</command-\1>")
+ACK = {"model": re.compile(r"Set model to (.+?)(?: and saved| for this session|$)"),
+       "effort": re.compile(r"Set effort level to ([A-Za-z]+)|(Ultracode) on\b")}
+CLEAN = re.compile(r"\x1b\[[0-9;]*m|`")
+SAFE = re.compile(r"[A-Za-z0-9._\[\]-]{1,64}")
+PAREN = re.compile(r"(?:\s*\([^()]*\))+$")
+FAMILY = re.compile(r"([A-Za-z]+) [0-9][0-9.]*")
+SHOWN = re.compile(r"[^A-Za-z0-9 ._()\[\]-]")
+def user(line):
+    try:
+        row = json.loads(line)
+    except ValueError:
+        return None, None
+    if not isinstance(row, dict) or row.get("type") != "user" or row.get("isSidechain") is True:
+        return None, None
+    msg = row.get("message")
+    text = msg.get("content") if isinstance(msg, dict) else None
+    if strict and isinstance(text, list) and text and all(isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str) for b in text):
+        text = "".join(b["text"] for b in text)
+    return (text, row) if isinstance(text, str) else (None, None)
+lines = sys.stdin.read().split("\n")
+newest = {}
+unack = {}
+ran = None
+KINDS = {"/model": "model", "/effort": "effort"}
+if strict:
+    KINDS["/fast"] = "fast"
+for i, line in enumerate(lines):
+    text, row = user(line)
+    if text is None or ENV.sub("", text).strip():
+        continue
+    tags = dict(ENV.findall(text))
+    kind = KINDS.get(tags.get("name", "").strip())
+    if kind is None:
+        continue
+    try:
+        at = int(datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp())
+    except (KeyError, AttributeError, TypeError, ValueError):
+        if strict:
+            unack["model" if kind == "fast" else kind] = 0
+        continue
+    if kind == "fast":
+        unack["model"] = at
+        continue
+    nxt = user(lines[i + 1])[0] if i + 1 < len(lines) else None
+    m = re.fullmatch(r"\s*<local-command-stdout>(.*)</local-command-stdout>\s*", nxt or "", re.S)
+    ack = ACK[kind].match(CLEAN.sub("", m.group(1)).strip() if m else "")
+    if at < floor:
+        continue
+    if not ack:
+        given = tags.get("args", "").strip().lower()
+        if not any(k == kind and (not given or v == given) and abs(t - at) <= window for t, k, v in rows):
+            unack[kind] = at
+        continue
+    named = (ack.group(1) or ack.group(2) or "").strip()
+    shown = named
+    if kind == "model" and named.endswith("(default)"):
+        named = "default"
+    val = tags.get("args", "").strip() or (named.split() or ["?"])[0]
+    if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows):
+        continue
+    newest[kind] = (val, at)
+    unack[kind] = None
+    if kind == "model":
+        bare = PAREN.sub("", shown).strip()
+        fam = FAMILY.fullmatch(bare)
+        word = fam.group(1) if fam else bare
+        ran = (word if SAFE.fullmatch(word) else "?", at, SHOWN.sub("", shown)[:64].strip() or "?")
+for kind, (val, at) in sorted(newest.items()):
+    print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))
+for kind, at in sorted(unack.items()):
+    if at is not None:
+        print("drift-" + kind, "x", at, 0)
+if ran is not None:
+    print("ran-model", *ran)
+' "$journal" "$TYPED_MATCH_WINDOW" "$strict" 2>/dev/null
+}
+
 _operator_choice_keep() {   # id — before a stop that a spawn follows, and at every spawn (`_spawn_start`, unless a stop's keep already read): the operator's own /model and /effort, written to the route record (§5.7). Always 0.
   local id="$1" f typed why="" out kind val at n field want fm shown drift=0
   local -a sets=() kinds=()
@@ -19646,71 +19774,7 @@ _operator_choice_keep() {   # id — before a stop that a spawn follows, and at 
   [[ -z "$why" ]] || { _operator_choice_say "$id" "unmeasured ($why)"; return 0; }
   [[ -f "$f" && -r "$f" ]] || { _operator_choice_say "$id" "unmeasured (its transcript is not a readable regular file)"; return 0; }
   command -v python3 >/dev/null 2>&1 || { _operator_choice_say "$id" "unmeasured (no python3)"; return 0; }
-  out=$({ grep -F -A1 -e '<command-name>/model</command-name>' -e '<command-name>/effort</command-name>' -- "$f" 2>/dev/null || (( $? == 1 )); } | python3 -c '
-import json, re, sys
-from datetime import datetime
-window = int(sys.argv[2])
-journal = sys.argv[1].splitlines()
-floor = int(journal[0].split()[0])
-rows = []
-for l in journal[1:]:
-    p = l.split()
-    if len(p) == 3 and p[0].isdigit() and p[1] in ("model", "effort"):
-        rows.append((int(p[0]), p[1], p[2].lower()))
-ENV = re.compile(r"<command-(name|message|args)>([^<]*)</command-\1>")
-ACK = {"model": re.compile(r"Set model to (.+?)(?: and saved| for this session|$)"),
-       "effort": re.compile(r"Set effort level to ([A-Za-z]+)|(Ultracode) on\b")}
-CLEAN = re.compile(r"\x1b\[[0-9;]*m|`")
-SAFE = re.compile(r"[A-Za-z0-9._\[\]-]{1,64}")
-def user(line):
-    try:
-        row = json.loads(line)
-    except ValueError:
-        return None, None
-    if not isinstance(row, dict) or row.get("type") != "user" or row.get("isSidechain") is True:
-        return None, None
-    msg = row.get("message")
-    text = msg.get("content") if isinstance(msg, dict) else None
-    return (text, row) if isinstance(text, str) else (None, None)
-lines = sys.stdin.read().split("\n")
-newest = {}
-unack = {}
-for i, line in enumerate(lines):
-    text, row = user(line)
-    if text is None or ENV.sub("", text).strip():
-        continue
-    tags = dict(ENV.findall(text))
-    kind = {"/model": "model", "/effort": "effort"}.get(tags.get("name", "").strip())
-    if kind is None:
-        continue
-    try:
-        at = int(datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp())
-    except (KeyError, AttributeError, TypeError, ValueError):
-        continue
-    nxt = user(lines[i + 1])[0] if i + 1 < len(lines) else None
-    m = re.fullmatch(r"\s*<local-command-stdout>(.*)</local-command-stdout>\s*", nxt or "", re.S)
-    ack = ACK[kind].match(CLEAN.sub("", m.group(1)).strip() if m else "")
-    if at < floor:
-        continue
-    if not ack:
-        given = tags.get("args", "").strip().lower()
-        if not any(k == kind and (not given or v == given) and abs(t - at) <= window for t, k, v in rows):
-            unack[kind] = at
-        continue
-    named = (ack.group(1) or ack.group(2) or "").strip()
-    if kind == "model" and named.endswith("(default)"):
-        named = "default"
-    val = tags.get("args", "").strip() or (named.split() or ["?"])[0]
-    if any(k == kind and v == val.lower() and abs(t - at) <= window for t, k, v in rows):
-        continue
-    newest[kind] = (val, at)
-    unack[kind] = None
-for kind, (val, at) in sorted(newest.items()):
-    print(kind, val if SAFE.fullmatch(val) else "?", at, len(val.encode()))
-for kind, at in sorted(unack.items()):
-    if at is not None:
-        print("drift-" + kind, "x", at, 0)
-' "$typed" "$TYPED_MATCH_WINDOW" 2>/dev/null) || { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }
+  out=$(_operator_choice_read "$f" "$typed") || { _operator_choice_say "$id" "unmeasured (the transcript reader failed)"; return 0; }
   while read -r kind val at n; do
     [[ "$at" =~ ^[0-9]+$ ]] || continue
     case "$kind" in
@@ -19820,7 +19884,18 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
 # The status-line hook's usage sidecar (`$REG/usage/<id>.json`, written on every
 # render — routing spec §6) names the model the pane is running, so the tick
 # asks it first.
+#
+# AN IDLE PANE RENDERS NOTHING, so the sidecar alone never fired on the very
+# session that motivated it (measured 2026-10-07: the operator's `/model opus`
+# acknowledged 2026-10-06 ~11:32, the pane idle since, its sidecar — model and
+# uuid right — 22 h old and correctly refused, `apply-gave-up` every 30 min on
+# the new build). So when the sidecar cannot answer, the SECOND witness is the
+# transcript's own acknowledgement (`_route_readback_transcript`), read by the
+# operator-choice reader (`_operator_choice_read`, §5.7) and only when the
+# transcript has changed since the last look.
 ROUTE_READBACK_FRESH=1800   # seconds a usage sidecar stays a reading of the live pane: `USAGE_FRESH_S` (server/src/usage.ts), past which the fleet row calls it stale — an agreement test reds on drift
+ROUTE_READBACK_SAID=""   # `<id> <word>`: this tick's transcript refusal, set by `_route_readback` and read by `_route_retry_ok`'s `apply-gave-up` note
+ROUTE_READBACK_TAIL=4194304   # bytes from the END of the transcript the read-back reads: the ack that matters is the one a pane went idle on, which sits at the end; a pane that worked on past it rendered, and the sidecar answered while that reading was fresh
 
 _route_effort_shown() {   # level -> the word the status line, and so the usage sidecar, shows for it
   # ONE SPELLING OF A MEASURED FACT (2.1.280): `ultracode` shows as `xhigh` —
@@ -19878,7 +19953,23 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   # from before it is the previous process's, and a stamp whose time cannot be
   # read leaves the reading unplaced; and a model whose family is not the
   # pending class. `default` never reads back: no model id is the lane's
-  # default, so that class waits for the picker's own acknowledgement.
+  # default, so that class waits for the picker's own acknowledgement — asked
+  # FIRST, for both witnesses.
+  #
+  # THE SIDECAR ANSWERS ONLY WHEN IT IS A FRESH READING OF THIS PANE AFTER THE
+  # STAMP NAMING A MODEL, and then its word is final against an OLDER
+  # acknowledgement: a pane rendering another class is not overruled by one. A
+  # NEWER one is another matter (review finding 2, #303's race): a `/model
+  # sonnet` acknowledged after the render, whose own render was missed (a
+  # status-line command that timed out on a loaded box), leaves a fresh reading
+  # of the class the pane LEFT. So a would-be positive — and only that, which
+  # is what keeps the read off the ordinary tick — asks the transcript first
+  # (`_route_readback_overruled`). Every other sidecar —
+  # absent, unreadable, malformed, stale, older than the stamp, another
+  # session's, no model — cannot answer, and the transcript is asked
+  # (`_route_readback_transcript`, whose header holds its rules). A STALE
+  # reading of this process is still a fact about the pane at its own time, so
+  # it is handed on: an acknowledgement it postdates must name its class.
   #
   # "OLDER THAN" IS HELD TO THE SECOND, NOT ACROSS IT (review finding 7): the
   # sidecar's `ts` is `date +%s` and the stamp a whole-second mtime, so a
@@ -19911,28 +20002,195 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   # `_route_tries_clear` gives (a further attempt means something again), and
   # the marker because `apply-gave-up` read as current is a lie.
   #
-  # ONE LINE in swap.log says what was recorded and on what reading. `--apply`
-  # never reaches this: the operator's verb types (`cmd_route`).
-  local id="$1" want cls rd ts model effort uuid now stamp got="" mine
+  # A CLEARED COUNTER RE-OPENS A PENDING EFFORT (review finding 9). The tries
+  # counted the CLASS's refusals, which also starved the effort arm; with the
+  # class resolved, an effort still pending is typed under a fresh budget, and
+  # an idle pane takes it THIS tick (`_route_apply_check` goes on: the pinned
+  # "TYPES the effort" case). So the line says the class took no keystroke,
+  # and names the field still pending, rather than "nothing typed".
+  #
+  # ONE LINE in swap.log says what was recorded and on what reading — the
+  # sidecar's, or the transcript acknowledgement's with its time and this
+  # process's. `--apply` never reaches this: the operator's verb types
+  # (`cmd_route`). A transcript REFUSAL is not a line of its own — the class
+  # is still pending, and the tick's own note says so — so its word is handed
+  # to that note (`ROUTE_READBACK_SAID`, `<id> <word>`, read by
+  # `_route_retry_ok`'s `apply-gave-up`, review finding 13): each word has its
+  # own remedy, and a give-up that never names it leaves the operator guessing.
+  local id="$1" want cls rd ts=- model=- effort=- uuid=- now stamp mine why="" lts=- lmodel=- ev rest=""
+  ROUTE_READBACK_SAID=""
   want=$(_route_wanted "$id"); cls="${want%% *}"
-  rd=$(_usage_sidecar_read "$id")
-  [[ "$rd" == "reading "* ]] || return 1
-  read -r _ ts model effort uuid <<< "$rd"
-  now=$(date +%s)
-  [[ "$ts" =~ ^[0-9]+$ && $((now - 10#$ts)) -le "$ROUTE_READBACK_FRESH" ]] || return 1
+  [[ -n "$cls" && "$cls" != default && "$cls" != "$(_route_applied_get "$id" class)" ]] || return 1
   stamp=$(_plat_mtime "$REG/$id.routeapplied" 2>/dev/null) || return 1
-  [[ "$stamp" =~ ^[0-9]+$ && 10#$ts -gt 10#$stamp ]] || return 1
+  [[ "$stamp" =~ ^[0-9]+$ ]] || return 1
   mine=$(_reg_get "$id" uuid 2>/dev/null)
-  [[ "$uuid" != - && -n "$mine" && "$uuid" == "$mine" ]] || return 1
-  if [[ -n "$cls" && "$cls" != "$(_route_applied_get "$id" class)" ]]; then
-    [[ "$model" != - && "$(_model_family_class "$model")" == "$cls" ]] || return 1
-    _route_applied_set "$id" class "$cls"; got="class=$cls"
+  [[ -n "$mine" ]] || return 1
+  rd=$(_usage_sidecar_read "$id"); now=$(date +%s)
+  [[ "$rd" == "reading "* ]] && read -r _ ts model effort uuid <<< "$rd"
+  if [[ "$ts" =~ ^[0-9]+$ && "$uuid" == "$mine" && "$model" != - ]] && (( 10#$ts > 10#$stamp )); then
+    if (( now - 10#$ts <= ROUTE_READBACK_FRESH )); then   # the sidecar answers
+      [[ "$(_model_family_class "$model")" == "$cls" ]] || return 1
+      _route_readback_overruled "$id" "$cls" "$ts" && return 1   # …unless the transcript holds a NEWER /model it never rendered
+      why="sidecar model $model, effort $effort, $((now - 10#$ts))s old"
+    else
+      lts="$ts"; lmodel="$model"   # a stale reading of this process: an older acknowledgement must agree with it
+    fi
   fi
-  [[ -n "$got" ]] || return 1
+  if [[ -z "$why" ]]; then
+    ev=$(_route_readback_transcript "$id" "$cls" "$stamp" "$lts" "$lmodel")
+    [[ "$ev" =~ ^matched\ ([0-9]+)\ ([0-9]+)\ (.+)$ ]] || { [[ "$ev" =~ ^[a-z-]{1,16}$ ]] && ROUTE_READBACK_SAID="$id $ev"; return 1; }
+    why="transcript ack \"Set model to ${BASH_REMATCH[3]}\" at $(printf '%(%F %T)T' "${BASH_REMATCH[1]}"), after spawn $(printf '%(%F %T)T' "${BASH_REMATCH[2]}")"
+  fi
+  _route_applied_set "$id" class "$cls"
   _route_tries_clear "$id"; _route_note_clear "$id"; rm -f -- "$REG/$id.routenote"
-  echo "$(date '+%F %T') route-readback $id: $got already running (sidecar model $model, effort $effort, $((now - 10#$ts))s old) — recorded applied, nothing typed" >> "$REG/swap.log"
-  _route_apply_pending "$id" && return 1
+  _route_apply_pending "$id" && rest="; $(_route_pending_word "$id") still pending, typed under its own budget"
+  echo "$(date '+%F %T') route-readback $id: class=$cls already running ($why) — recorded applied without a keystroke$rest" >> "$REG/swap.log"
+  [[ -n "$rest" ]] && return 1
   return 0
+}
+
+_route_readback_overruled() {   # id class sidecar-ts -> 0 iff the transcript holds a /model at or after the sidecar's reading that names another class, or that may have (unacked, `/fast`)
+  # THE FRESH SIDECAR'S ONE CHECK, read only on its would-be positive. "At or
+  # after", not "after": an acknowledgement of another class in the reading's
+  # own second cannot have preceded a render that still named the class, so the
+  # render came first. An undatable command (`strict`'s `x 0`) may be newer
+  # too. A transcript that cannot be named, found, read or parsed is NO
+  # counter-evidence, and the sidecar stands as it did before this check: its
+  # reading is the stronger witness, and this only ever takes a positive away.
+  # A refusal is not kept — the next tick asks again while the reading stays
+  # fresh, which bounds it at ROUTE_READBACK_FRESH; a transcript last written
+  # before the reading cannot hold a newer row, and is not read at all.
+  local id="$1" cls="$2" ts="$3" f m out kind word at shown
+  f=$(_transcript_path "$id") || return 1
+  [[ -f "$f" && -r "$f" ]] || return 1
+  m=$(_plat_mtime "$f" 2>/dev/null) && [[ "$m" =~ ^[0-9]+$ ]] && (( 10#$m >= 10#$ts )) || return 1
+  out=$(_operator_choice_read "$f" "0 since" "$ROUTE_READBACK_TAIL" strict) || return 1
+  while read -r kind word at shown; do
+    [[ "$at" =~ ^[0-9]+$ ]] || continue
+    case "$kind" in
+      drift-model) (( 10#$at == 0 || 10#$at >= 10#$ts )) && return 0 ;;
+      ran-model)   (( 10#$at >= 10#$ts )) && [[ "$(_model_class_of "$word")" != "$cls" ]] && return 0 ;;
+    esac
+  done <<< "$out"
+  return 1
+}
+
+_route_readback_transcript() {   # id class stamp later-ts later-model -> ONE line: a verdict word, of which only `matched <ack-epoch> <born> <shown>` counts. Always 0.
+  # THE TRANSCRIPT'S OWN ACKNOWLEDGEMENT, the read-back's second witness. An
+  # acknowledged `/model` — Claude Code's `Set model to <model> …` row after
+  # the command row — says what the process that wrote it switched to, so it
+  # is evidence of the pane's model when ALL of these hold:
+  #   1. it is the NEWEST /model command in the CURRENT transcript
+  #      (`_transcript_path`: the registry uuid's jsonl, as §5.7 locates it),
+  #      and it carries a recognised acknowledgement — a newer one with none
+  #      (refused, or a wording this ccd does not know) may have changed the
+  #      model or not, so nothing older is believed past it (`unacked`) — and
+  #      so may a newer `/fast`, or a command row the reader cannot date or
+  #      parse (the reader's `strict`, review findings 1 and 3);
+  #   2. it is later than THIS Claude Code process's start: `_pane_born`, the
+  #      tmux `session_created` D-3522 dates a process by, since ccd makes a
+  #      fresh tmux session per spawn. Not `.spawn`, which `_spawn_settle`
+  #      writes after the TUI is up, so a settle killed mid-way leaves the
+  #      PREVIOUS process's epoch standing — the direction that would believe
+  #      an old ack; not `.started`, a monotone `1`. A `--resume` restores
+  #      whatever model it restores (measured 2026-10-05: Fable back after an
+  #      Opus ack and an opus default), so an ack before it proves nothing;
+  #   3. it is later than the `routeapplied` stamp — strictly, as the sidecar
+  #      is held — the last time ccd composed, applied or read back the class;
+  #   4. the model ITS OWN acknowledgement names (`_operator_choice_read`'s
+  #      `ran-model` word: what actually ran, never the typed argument, which
+  #      may be `best` or an alias) is of the pending class;
+  #   5. no later sidecar reading of this process names another class.
+  # WHO TYPED IT DOES NOT MATTER: an operator's `/model` and ccd's own
+  # journalled one (a `.typed` row whose pane-side acknowledgement this ccd
+  # missed, `apply-unconfirmed`) are the same evidence of what the pane runs,
+  # so the reader is handed `0 since` — no floor, no keystroke rows. Effort
+  # never reads back here either: a `/model` acknowledgement can carry its own
+  # `with <level> effort`, and a default level follows a model change, so the
+  # newest `/effort` acknowledgement is not proof of the level running.
+  #
+  # TWO RESIDUAL RISKS, stated rather than closed (review findings 4 and 7):
+  #   - A `(default)` acknowledgement (`Opus 5.5 (default)`) names what the
+  #     picker's Default row resolved to AT THAT MOMENT. With the setting null,
+  #     Claude Code re-resolves the default per request (org, entitlement, tier,
+  #     served), and a change there writes no transcript row, so a class read
+  #     back from it is a claim about the ack's time. Only a later sidecar
+  #     reading (refusal 5) can catch the drift; refusing `(default)` outright,
+  #     as the `default` class is, is the stricter alternative, not taken.
+  #   - The ack is bounded in TIME, not tied to the process that wrote it:
+  #     rows carry no process identity, so any writer appending to the same
+  #     `<uuid>.jsonl` after `_pane_born` — the operator's own `claude --resume
+  #     <uuid>` elsewhere, an orphaned previous process — is believed.
+  #     Attribution, not authentication, as everywhere on this fleet; ccd's own
+  #     paths are sound, since it never respawns a pane inside a living tmux
+  #     session.
+  #
+  # NO OVERLOADED NULL. Each refusal is its own word, and none counts:
+  # `lane` (a non-Anthropic lane, whose acknowledgement can name no class),
+  # `unnamed` (no transcript address: the row lacks a config dir, workdir or
+  # uuid), `absent`, `unreadable` (not a regular readable file — never a grep
+  # on a FIFO — or a stat that failed), `unplaced` (tmux cannot say when this
+  # process started), `unmeasured` (no python3, or the reader failed), `none`
+  # (no acknowledged /model in the tail read), `unacked`, `before-spawn`,
+  # `before-stamp`, `other` (the acknowledgement names another class, or a
+  # model outside the vocabulary) and `superseded`.
+  #
+  # NEVER EVERY TICK. The read happens only when the sidecar cannot answer,
+  # only over the last ROUTE_READBACK_TAIL bytes, and only when the transcript
+  # has CHANGED: a conclusive refusal is kept in `$REG/<id>.readbackseen` as
+  # "<class> <mtime> <size> <later-ts> <later-model> <verdict> <path>" (purged
+  # with the row), and an unchanged file under the same pending class and the
+  # same handed-on reading answers that verdict without reading. Sound because
+  # every kept verdict is monotone in what is not in the key: the process start
+  # and the stamp only move later, which can only refuse more. The later
+  # sidecar reading IS in the key, because it moves refusal 5 BOTH ways — a
+  # later reading of another class adds it, and a still later reading of the
+  # class takes it away again (review findings 8 and 17); it changes at most
+  # once per render, so the key costs a re-read only then. The
+  # transient refusals — lane, unnamed, absent, unreadable, unplaced, unmeasured —
+  # are never kept, and `matched` records the class, after which nothing is
+  # pending to ask. WHAT AN UNCHANGED TICK STILL COSTS (review finding 10),
+  # measured with strace on a pending tick whose sidecar is stale and whose
+  # memo hits: 26 execs past the shell, against the base tick's 15 — the
+  # applied-class read, the stamp's stat and the uuid read (now ahead of the
+  # sidecar, since both witnesses need them), the lane gate's wrapper read,
+  # `_transcript_path`'s three registry reads and two `tr`, the mtime and size
+  # stats, and the memo read; no tmux and no python3. And a GROWING transcript
+  # misses the memo every tick (review finding 11): a busy pane whose sidecar
+  # cannot answer — a box whose status line finds neither `timeout` nor
+  # `gtimeout` writes none — pays `_pane_born` and one bounded read per tick.
+  local id="$1" cls="$2" stamp="$3" lts="${4:--}" lmodel="${5:--}" f m s key rec out kind word at shown ack="" said="" named="" drift=0 born v
+  _is_anthropic_backend "$(_reg_get "$id" wrapper)" || { echo lane; return 0; }   # a non-Anthropic lane's ack names no class (`gpt-5.6-*`): never `matched`, so never read — the keep skips it the same way (review finding 6)
+  f=$(_transcript_path "$id") || { echo unnamed; return 0; }
+  [[ -e "$f" || -L "$f" ]] || { echo absent; return 0; }
+  [[ -f "$f" && -r "$f" ]] || { echo unreadable; return 0; }
+  m=$(_plat_mtime "$f" 2>/dev/null); s=$(_plat_size "$f" 2>/dev/null)
+  [[ "$m" =~ ^[0-9]+$ && "$s" =~ ^[0-9]+$ ]] || { echo unreadable; return 0; }
+  key="$cls $m $s $lts $lmodel"
+  rec=$(_reg_get "$id" readbackseen)
+  if [[ "$rec" =~ ^([a-z]+\ [0-9]+\ [0-9]+\ (-|[0-9]+)\ [^\ ]+)\ (none|unacked|before-spawn|before-stamp|other|superseded)\ (/.+)$ \
+        && "${BASH_REMATCH[1]}" == "$key" && "${BASH_REMATCH[4]}" == "$f" ]]; then
+    echo "${BASH_REMATCH[3]}"; return 0   # unchanged since the last look: the same answer, nothing read
+  fi
+  born=$(_pane_born "$id")
+  [[ "$born" =~ ^[0-9]+$ ]] || { echo unplaced; return 0; }   # asked BEFORE the read: an unplaceable process is not worth one
+  out=$(_operator_choice_read "$f" "0 since" "$ROUTE_READBACK_TAIL" strict) || { echo unmeasured; return 0; }   # no python3 is a reader that failed: one word, one remedy
+  while read -r kind word at shown; do
+    case "$kind" in
+      ran-model)   [[ "$at" =~ ^[0-9]+$ ]] && { ack="$at"; said="$word"; named="$shown"; } ;;
+      drift-model) drift=1 ;;
+    esac
+  done <<< "$out"
+  if (( drift )); then v=unacked
+  elif [[ -z "$ack" ]]; then v=none
+  elif (( 10#$ack <= 10#$born )); then v=before-spawn
+  elif (( 10#$ack <= 10#$stamp )); then v=before-stamp
+  elif [[ "$(_model_class_of "$said")" != "$cls" ]]; then v=other
+  elif [[ "$lts" =~ ^[0-9]+$ ]] && (( 10#$lts >= 10#$ack )) && [[ "$(_model_family_class "$lmodel")" != "$cls" ]]; then v=superseded
+  else echo "matched $ack $born $named"; return 0
+  fi
+  _reg_set "$id" readbackseen "$key $v $f" 2>/dev/null || true
+  echo "$v"
 }
 
 _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick never fails the loop.
@@ -19946,7 +20204,9 @@ _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick
   #      values and type nothing (S4-R8): the record predates the applier and the
   #      pane is already running what its last settle composed.
   #   3. the read-back (`_route_readback`) — a pending class the pane's own
-  #      fresh usage sidecar says it already runs is recorded applied and its
+  #      fresh usage sidecar says it already runs (or, when the sidecar cannot
+  #      answer, its transcript's own acknowledged `/model` since this process
+  #      started) is recorded applied and its
   #      counters cleared, with no keystroke. BEFORE the bounded retry on
   #      purpose: a field that gave up is exactly the one a human then fixes by
   #      hand, and the gate below would otherwise say `apply-gave-up` about it

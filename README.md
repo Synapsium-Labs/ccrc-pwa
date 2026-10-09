@@ -2573,7 +2573,13 @@ is never answered, and that apply ends `apply-unconfirmed`. A switch counts only
 `(currently …)` plus ` (default)`. A class the pane already runs needs no keystroke: when the session's usage
 sidecar (below) is under 30 minutes old, was written after `routeapplied` was last stamped (a spawn, an apply, a
 read-back), belongs to the session's own `uuid`, and names a model of the pending class, the tick records the class
-applied, clears its retry count and refusal note, and writes one `route-readback` line to swap.log. An effort level
+applied, clears its retry count and refusal note, and writes one `route-readback` line to swap.log. When the sidecar
+cannot answer, an idle pane's case, the session's transcript is asked instead, and only when it has changed: its
+newest `/model`, acknowledged after both this pane's tmux session was created and the stamp, naming a model of the
+pending class that no later sidecar reading contradicts, is recorded the same way, and a fresh sidecar is overruled
+only by a newer `/model` there naming another class. A conclusive refusal is kept in `$REG/<id>.readbackseen`
+(purged with the row) so an unchanged transcript is not read again, and `apply-gave-up` names it (`; transcript:
+before-spawn`). Clearing the retry count re-opens an effort still pending, which the same tick may type. An effort level
 never reads back, since the status line shows a model's default level the same way as one that was set, and the
 tick types it. `default` never reads back either, since no model id names it. `haiku` takes no effort level, and
 the pair is refused whichever order it arrives in. A session
