@@ -47,6 +47,18 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 10:06 — wave 7 progress (clear-summit's 4107): Tasks 1 to 4 done, Task 5 in progress.**
+  - **Task 3** applied ruling 4060 (`e04bb4588`): the generation read is under the compaction lock, the two numerals
+    read eight, and `session-hook.test.ts` is untouched, 335 of 335 green.
+  - **Task 4** shipped in six parts, each with a reviewed fix round.
+  - **Departure slugs named so far, numbered at the fix round:** `move-asks-identity-before-the-rename` and
+    `malformed-floor-knob-is-unmeasured`, plus Task 3's two (`generation-read-under-the-compaction-lock`,
+    `acquire-site-prose-seven-to-eight`).
+  - **A residual on `main` until wave 7 merges.** A hand-edited tombstone carrying an all-zero tip makes the shared
+    tail delete the branch unconditionally; the worker measured this in a fixture HOME. Ruling R-k closes it in
+    this wave, on both arms. It needs a corrupt or hand-written tombstone, since ccd writes the tip from git.
+  - **Box load** is 60 to 105 on 16 cores, so the worker runs its suites one file at a time.
+
 - **2026-10-09 08:26 — workspace-lifecycle wave 5 is MERGED first (#335, `6fc7ef115`, v0.0.134; quiet-river's 4102): Order A.**
   - **Wave 8's Task 1 moves the word half.** Every line Step 4 (d) quotes stands exactly once on `main`
     (`archivedExpiry.ts:220-239` and `:742`, and the policy test's import). No other source line under `shared`,
