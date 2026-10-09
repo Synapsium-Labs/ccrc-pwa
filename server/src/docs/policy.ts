@@ -10,11 +10,12 @@
 // (q)), any grammar body, the redactor's rules, and the docs cap token.
 import {
   DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
-  DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS,
-  DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, isDocsBareRef, isDocsCommit, isDocsFingerprint, isDocsProject,
-  isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef,
-  type DocContentClass, type DocPin, type DocSectionSlug, type DocsFailure, type DocsFailureBody, type DocsRefSpec,
-  type DocsTreeOk,
+  DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_RASTER_EXT, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE,
+  DOCS_RESPONSE_HEADERS, DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRefText, isDocsBareRef, isDocsCommit,
+  isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef, sniffRaster,
+  type DocContentClass, type DocPin, type DocSectionSlug, type DocsEntry, type DocsFailure, type DocsFailureBody,
+  type DocsFetchOk, type DocsFileResponse, type DocsRefreshFetch, type DocsRefreshResponse, type DocsRefSpec,
+  type DocsShowOk, type DocsTreeOk, type DocsTreeResponse, type DocsVerb, type RasterMime, type RasterType,
 } from '../../../shared/docs.js';
 
 // ===== HTTP status and Retry-After (section 2 (i), section 3.7) =====
@@ -103,14 +104,15 @@ export const DOCS_CAPS_UNKNOWN_RETRY_AFTER_S = 5;
 /**
  * The `Retry-After` header a failure body gets, in whole seconds, or `null`: send NO header (one meaning).
  * - `caps-unknown`: `DOCS_CAPS_UNKNOWN_RETRY_AFTER_S`.
- * - `docs-busy`: its body's `retryAfterMs`, rounded UP to a whole second; `null` when the body carries none, so a
- *   wait is never guessed.
+ * - `docs-busy`: its body's `retryAfterMs`, rounded UP to a whole second, only when it is finite and above 0; `null`
+ *   otherwise (none, NaN, an infinity, 0 or below), so a wait is never guessed and never sent empty or negative.
  * - every other word: `null`. `fetch-too-soon`'s wait rides its body's `retryAfterMs` only (section 2 (i) names no
  *   header for it), and a `retryAfterMs` on any other word's body changes nothing here.
  */
 export function docsRetryAfterSeconds(body: DocsFailureBody): number | null {
   if (body.failure === 'caps-unknown') return DOCS_CAPS_UNKNOWN_RETRY_AFTER_S;
-  if (body.failure === 'docs-busy' && typeof body.retryAfterMs === 'number') return Math.ceil(body.retryAfterMs / 1000);
+  const ms = body.retryAfterMs;
+  if (body.failure === 'docs-busy' && ms !== undefined && Number.isFinite(ms) && ms > 0) return Math.ceil(ms / 1000);
   return null;
 }
 
@@ -429,7 +431,7 @@ export function laneAdmit(load: LaneLoad, job: DocsJob): boolean {
   if (load.execs === 0) return true;
   if (load.execs >= DOCS_LANE_EXECS) return false;
   if (load.bytes + job.wire > DOCS_LANE_BYTES) return false;
-  if (job.raw > DOCS_LANE_LARGE_RAW && load.large > 0) return false;
+  if (laneLarge(job) && load.large > 0) return false;
   return true;
 }
 
@@ -528,4 +530,622 @@ export function docsSendPolicy(statusCode: number, contentType: string, cacheCon
   const headers: Record<string, string> = { ...DOCS_RESPONSE_HEADERS };
   if (statusCode !== 200 || cacheControl === undefined) headers['cache-control'] = DOCS_CACHE_NO_STORE;
   return { kind: 'pass', headers };
+}
+
+// ===== W3: the fetch lane, the caches and the refusal log (section 6.4, section 6.5; refinement (b)) =====
+//
+// The lanes and caches themselves (`lane.ts`, `cache.ts`) are W3's L4; they apply these numbers and decide nothing.
+// Each numeric constant is its OWN integer literal, never an alias of a neighbour that holds the same number (W1's
+// rule for the caps, W2's for the read lane), with one stated exception: `DOCS_LISTING_PROVENANCE_MS` IS
+// `DOCS_STALE_MS` by the spec's definition (section 6.5), so it is derived, never typed twice.
+
+/** The one fleet node this build has (section 3.12): every docs key, flight and cache entry carries it, so a second
+ *  node arrives as a second value, never as a re-key. Not a wire field: the API has no `node` key. */
+export const DOCS_PRIMARY_NODE = 'primary';
+/** The read lane's `docs-busy` wait (section 6.3: 503, `Retry-After: 2`). */
+export const DOCS_READ_BUSY_RETRY_MS = 2000;
+/** The most fetches running at once across every (node, project) key (section 6.4). */
+export const DOCS_FETCH_GLOBAL = 2;
+/** The most accepted fetch jobs not yet started, behind their key or the global bound (section 6.4; refinement
+ *  (n)); the next is `docs-busy {lane:'fetch'}`. */
+export const DOCS_FETCH_QUEUE = 8;
+/** The longest an accepted fetch job waits to start, from acceptance (section 6.4). */
+export const DOCS_FETCH_MAX_WAIT_MS = 20000;
+/** The fetch lane's `docs-busy` wait (section 6.4: 503, `Retry-After: 5`). */
+export const DOCS_FETCH_BUSY_RETRY_MS = 5000;
+/** The committed blob cache's budget: 64 MiB of stored bytes (section 6.5). */
+export const DOCS_CACHE_BYTES = 67108864;
+/** The most FILE entries the listing map holds across every commit it keeps (section 6.5). */
+export const DOCS_LISTING_MAP_ENTRIES = 50000;
+/** How recently a listing's `servedRef` must have been recorded for a cache hit to vouch for it (section 6.5):
+ *  the stale threshold itself, derived. */
+export const DOCS_LISTING_PROVENANCE_MS = DOCS_STALE_MS;
+/** The per-node index micro-cache's lifetime (section 6.5); any refresh drops it. */
+export const DOCS_INDEX_CACHE_MS = 30000;
+/** The most entries the draft `fp -> size` map holds (section 6.5, section 3.12). */
+export const DOCS_DRAFT_SIZE_ENTRIES = 10000;
+/** The shortest gap between two log lines for the same refusal reason (section 3.8: "at most once a minute"). */
+export const DOCS_REFUSAL_LOG_MS = 60000;
+
+// ===== The bodies the HTTP layer sends before any exec (section 3.7, section 3.8; refinements (e), (h), (o)) =====
+
+/** A lane's name, as `docs-busy`'s `lane` field spells it: derived from L0's failure context, never re-listed. */
+export type DocsLaneName = NonNullable<DocsFailureBody['lane']>;
+
+/**
+ * `docs-busy` for a lane (section 6.3, section 6.4): `{lane, retryAfterMs}`, the wait being that lane's constant.
+ * The only producer of a `docs-busy` body, so `docsRetryAfterSeconds` always meets one of the two constants. A
+ * fresh object every call.
+ */
+export function docsBusyBody(lane: DocsLaneName): DocsFailureBody {
+  return {
+    ok: false, failure: 'docs-busy', lane,
+    retryAfterMs: lane === 'read' ? DOCS_READ_BUSY_RETRY_MS : DOCS_FETCH_BUSY_RETRY_MS,
+  };
+}
+
+/**
+ * The 403 body for a refused provenance verdict (section 3.7, section 3.8): `{why}`, plus `site` only when the
+ * verdict carries one (a `site` refusal). Never a `verdict` key, so it can never raise the PWA's login overlay.
+ */
+export function docsForeignRequestBody(v: Exclude<DocsProvenance, { ok: true }>): DocsFailureBody {
+  return v.site === undefined
+    ? { ok: false, failure: 'foreign-request', why: v.why }
+    : { ok: false, failure: 'foreign-request', why: v.why, site: v.site };
+}
+
+/** The error-code prefix of every request-body refusal the HTTP framework raises before a handler runs (invalid
+ *  or empty JSON, a body over its limit, an unparsed media type, a bad content length). */
+const BODY_ERROR_CODE_PREFIX = 'FST_ERR_CTP_';
+
+/** What the docs plugin's error handler does with an error: `body`, answer this `bad-query` body; `defect`,
+ *  re-throw to the framework's default handler as a fresh error carrying `DOCS_DEFECT_MESSAGE` (a defect stays a
+ *  default 500, and its body never carries the thrower's own message). */
+export type DocsBodyError = { kind: 'body'; body: DocsFailureBody } | { kind: 'defect' };
+
+/**
+ * Refinement (e): an error whose `code` is a string starting `FST_ERR_CTP_` is a refused request body, answered as
+ * `bad-query {why:'body'}` (status `DOCS_FAILURE_HTTP['bad-query']`); any other code, a missing one or a non-string
+ * one is a defect. Takes the code as `unknown` because an error's `code` is whatever the thrower set.
+ */
+export function docsBodyErrorVerdict(code: unknown): DocsBodyError {
+  return typeof code === 'string' && code.startsWith(BODY_ERROR_CODE_PREFIX)
+    ? { kind: 'body', body: badQuery('body') }
+    : { kind: 'defect' };
+}
+
+/** The message of the 500 a docs-route defect answers (refinement (e)): the plugin's error handler re-throws every
+ *  defect to the framework's default handler as a fresh error carrying this text, the original kept as its
+ *  `cause`, so the default body (`{statusCode, error, message}`) never carries a thrower's own message: no host
+ *  path, no stderr. */
+export const DOCS_DEFECT_MESSAGE = 'docs route defect';
+
+/**
+ * Whether a refusal log line is due (refinement (o)): `lastMs` is when this reason last logged, `undefined` when it
+ * never has (one meaning); due when it never has, or when at least `DOCS_REFUSAL_LOG_MS` has passed. The clock is
+ * the caller's (`nowMs`), so nothing here reads time.
+ */
+export function docsLogDue(lastMs: number | undefined, nowMs: number): boolean {
+  return lastMs === undefined || nowMs - lastMs >= DOCS_REFUSAL_LOG_MS;
+}
+
+// ===== The refresh's fetch half (section 3.4's refresh flow; refinement (m)) =====
+
+/** The words a refresh half can only meet BEFORE an exec: the adapter's gate (`caps-unknown`, `unsupported`) and
+ *  a lane's own refusal (`docs-busy`). The same gate would refuse the tree, so the request ends there. */
+const REFRESH_PRE_EXEC: ReadonlySet<DocsFailure> = new Set<DocsFailure>(['caps-unknown', 'unsupported', 'docs-busy']);
+
+/** The refresh's verdict on its fetch half: `refuse`, end the request with this body's own status (section 3.4: "a
+ *  refusal before any exec returns that word's own status"); `half`, carry this fetch half and run the tree. */
+export type DocsRefreshHalf = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'half'; fetch: DocsRefreshFetch };
+
+/**
+ * The fetch half of a refresh (refinement (m)), from the fetch port's answer or the fetch lane's refusal:
+ * - a pre-exec word (`REFRESH_PRE_EXEC`): `refuse`, carrying the body itself;
+ * - any other failure: a `failed` half carrying the body VERBATIM (the same object: `fetch-too-soon`'s
+ *   `retryAfterMs` rides it, and `ref-locked`'s `lockAgeMs` stays a number, `null` or absent as ccd said);
+ * - ok: a `ran` half carrying the answer.
+ * The skipped half (a local ref, no exec) is `DOCS_REFRESH_SKIPPED`; it never reaches this function.
+ */
+export function docsRefreshFetchHalf(run: { ok: true; answer: DocsFetchOk } | DocsFailureBody): DocsRefreshHalf {
+  if (run.ok) return { kind: 'half', fetch: { state: 'ran', answer: run.answer } };
+  if (REFRESH_PRE_EXEC.has(run.failure)) return { kind: 'refuse', body: run };
+  return { kind: 'half', fetch: { state: 'failed', failure: run } };
+}
+
+/** The fetch half of a refresh whose ref is local (`fetchBranchFor`'s `skipped`): no exec ran. Frozen, so no
+ *  caller can change every other caller's half. */
+export const DOCS_REFRESH_SKIPPED: Readonly<DocsRefreshFetch> = Object.freeze({ state: 'skipped', why: 'local-ref' });
+
+/** The refresh's answer once both halves are known: `refuse`, end the request with this body's own status and
+ *  `Retry-After`; `send`, the 200 `{ok: true, fetch, tree}`. */
+export type DocsRefreshAnswer = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'send'; body: DocsRefreshResponse };
+
+/**
+ * The refresh's answer (refinement (m); section 3.4: "a refusal before any exec returns that word's own status"). A
+ * SKIPPED fetch half (a local ref) ran no exec, so when the tree half was refused before any exec too (a
+ * `REFRESH_PRE_EXEC` word: the adapter's gate, or the read lane's own `docs-busy`) the request ran none at all:
+ * `refuse`, carrying the tree's body itself. Every other pair ran an exec or answered: `send`, the tree half a body
+ * in the 200 (a ran or failed fetch made an exec, so even a pre-exec tree word rides as the tree half).
+ */
+export function docsRefreshAnswer(fetch: DocsRefreshFetch, tree: DocsTreeResponse | DocsFailureBody):
+    DocsRefreshAnswer {
+  if (fetch.state === 'skipped' && !tree.ok && REFRESH_PRE_EXEC.has(tree.failure)) {
+    return { kind: 'refuse', body: tree };
+  }
+  return { kind: 'send', body: { ok: true, fetch, tree } };
+}
+
+// ===== Node-first keys (section 3.12, section 6.4, section 6.5; refinement (p)) =====
+//
+// Every key is its kind tag, then the node, then its fields, joined by NUL. No field can hold a NUL (the project,
+// ref, section and path grammars and the hex forms exclude it), so a key names one tuple: one flight map can hold
+// every kind, and no two tuples share a key. An absent field (the default view's ref, the default branch) is the
+// empty field, which no parsed value is.
+
+/** The field separator: NUL, written as an escape so the source holds no raw control character. */
+const KEY_SEP = '\u0000';
+const KEY_INDEX = 'index';
+const KEY_TREE = 'tree';
+const KEY_SHOW = 'show';
+const KEY_REFRESH = 'refresh';
+const KEY_PROJECT = 'project';
+const KEY_BLOB = 'blob';
+const KEY_LISTING = 'listing';
+const KEY_FP = 'fp';
+const KEY_NODE = 'node';
+
+function docsKey(kind: string, fields: readonly string[]): string {
+  return [kind, ...fields].join(KEY_SEP);
+}
+
+/** The index flight: one per node (`docs-index --all` names no project) and per node generation (`docsNodeKey`'s
+ *  counter, bumped when a refresh's fetch half settles), so a GET after a refresh never joins an index begun
+ *  before its fetch, as a refresh's tree never joins an older tree. */
+export function docsIndexFlightKey(node: string, gen: number): string {
+  return docsKey(KEY_INDEX, [node, String(gen)]);
+}
+
+/** A tree flight (section 6.4): the requested ref's text, the empty field for the default view (`null`), and the
+ *  project's generation, so a refresh's tree never joins a flight that started before its fetch. */
+export function docsTreeFlightKey(node: string, project: string, ref: DocsRefSpec | null, gen: number): string {
+  return docsKey(KEY_TREE, [node, project, ref === null ? '' : docsRefText(ref), String(gen)]);
+}
+
+/** A show flight (section 6.4): the pin's kind and every pin field in `docsApi`'s order, then `--max-bytes`. */
+export function docsShowFlightKey(node: string, project: string, pin: DocPin, maxBytes: number): string {
+  const fields = pin.kind === 'committed'
+    ? [pin.kind, pin.commit, pin.servedRef, pin.section, pin.path]
+    : [pin.kind, pin.branch, pin.head, pin.section, pin.path, pin.fp];
+  return docsKey(KEY_SHOW, [node, project, ...fields, String(maxBytes)]);
+}
+
+/** A refresh flight (section 6.4): the fetched branch, the empty field for the origin default (`null`). */
+export function docsRefreshFlightKey(node: string, project: string, branch: string | null): string {
+  return docsKey(KEY_REFRESH, [node, project, branch ?? '']);
+}
+
+/** One project on one node: the generation counter's key and the fetch lane's queue key. */
+export function docsProjectKey(node: string, project: string): string {
+  return docsKey(KEY_PROJECT, [node, project]);
+}
+
+/** A committed blob in the blob cache (section 6.5): node, repository key, blob. */
+export function docsBlobKey(node: string, repoKey: string, blob: string): string {
+  return docsKey(KEY_BLOB, [node, repoKey, blob]);
+}
+
+/** One commit's listing in the listing map (section 6.5). */
+export function docsListingKey(node: string, project: string, commit: string): string {
+  return docsKey(KEY_LISTING, [node, project, commit]);
+}
+
+/** A draft's size in the `fp -> size` map (section 3.12, section 6.5). */
+export function docsDraftSizeKey(node: string, fp: string): string {
+  return docsKey(KEY_FP, [node, fp]);
+}
+
+/** One node: the generation counter's key for that node's index (section 6.5: the index is dropped by any refresh;
+ *  the counter is how an index answer begun before a refresh's fetch is kept out of the micro-cache). */
+export function docsNodeKey(node: string): string {
+  return docsKey(KEY_NODE, [node]);
+}
+
+/** Whether an ok index answer may fill the node's micro-cache (section 6.5: the index is "dropped by any refresh";
+ *  refinement (p)): only while the node's generation (`docsNodeKey`'s counter) is still `genAtStart`, the one its
+ *  flight began at. An index begun before a refresh's fetch settled is served to the requests that joined it, and
+ *  never cached past that refresh. */
+export function docsIndexCacheable(genAtStart: number, genNow: number): boolean {
+  return genAtStart === genNow;
+}
+
+// ===== W3: the ok-answer shape guard (refinement (f); W2's review carry) =====
+//
+// The adapter checks an ok tree, index or fetch line's ENVELOPE only (`v`, `verb`, `ok`); a show line also passes
+// check 8. What the routes read of an ok answer must be there before they read it: `refreshDue` dereferences
+// `freshness` and `ref`, the caches key on `repo.key`, `ref.commit`, `ref.served` and each entry's facts, and every
+// answer is serialised into a reply, which recurses. So the routes apply `docsAnswerShape` to every ok answer before
+// `refreshDue`, a cache or the reply sees it.
+
+/** The deepest container an ok answer may hold, the answer itself at depth 0 (refinement (f)). The deepest
+ *  legitimate one sits at about depth 3 (a tree's `ref.tried[i]`, an entry's `committed`); a value nested past this
+ *  is not ccd's contract, and one nested hundreds of thousands deep inside the listing bound makes reply
+ *  serialisation throw a `RangeError`. */
+export const DOCS_ANSWER_MAX_DEPTH = 16;
+
+/** `malformed-answer {why:'schema'}`, a fresh body each call. */
+function schemaFault(): DocsFailureBody {
+  return { ok: false, failure: 'malformed-answer', why: 'schema' };
+}
+
+type AnswerRecord = Readonly<Record<string, unknown>>;
+
+/** A plain object: not `null`, not an array (a JSON object, as `JSON.parse` builds one). */
+function isRecord(v: unknown): v is AnswerRecord {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Whether no container in `answer` sits deeper than `DOCS_ANSWER_MAX_DEPTH`. ITERATIVE, over an explicit stack of
+ * `[value, depth]` pairs: a recursive walk would itself overflow on the input it exists to refuse. It descends into
+ * arrays and plain objects only, and answers at the first container past the bound, so it never goes deeper.
+ */
+function withinDepth(answer: unknown): boolean {
+  const stack: [value: unknown, depth: number][] = [[answer, 0]];
+  for (let top = stack.pop(); top !== undefined; top = stack.pop()) {
+    const [value, depth] = top;
+    if (typeof value !== 'object' || value === null) continue;
+    if (depth > DOCS_ANSWER_MAX_DEPTH) return false;
+    for (const child of Array.isArray(value) ? value : Object.values(value)) stack.push([child, depth + 1]);
+  }
+  return true;
+}
+
+/** Text a key is built from (refinement (p)): non-empty, and holding no NUL, the key separator. */
+function isKeyText(v: unknown): v is string {
+  return isText(v) && v.length > 0 && !v.includes(KEY_SEP);
+}
+
+/** A byte count: a non-negative safe integer. */
+function isByteCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
+/** A listing entry's committed kind, L0's own union (`DocsEntry`). */
+type ListedKind = NonNullable<DocsEntry['committed']>['kind'];
+
+/** Every committed kind, typed by the union: a kind added to `DocsEntry` does not compile here until it is placed. */
+const LISTED_KINDS: Readonly<Record<ListedKind, true>> = { file: true, exec: true, symlink: true, submodule: true };
+
+/** An entry's committed facts: `null`, or the kind, blob and size the listing map stores. */
+function committedFactsOk(c: unknown): boolean {
+  if (c === null) return true;
+  if (!isRecord(c)) return false;
+  const kind = own(c, 'kind');
+  const blob = own(c, 'blob');
+  const size = own(c, 'size');
+  if (!isText(kind) || !Object.hasOwn(LISTED_KINDS, kind)) return false;
+  return isText(blob) && isDocsCommit(blob) && (size === null || isByteCount(size));
+}
+
+/** An entry's draft facts: `null`, or the fingerprint and size the draft size map stores. */
+function draftFactsOk(d: unknown): boolean {
+  if (d === null) return true;
+  if (!isRecord(d)) return false;
+  const fp = own(d, 'fp');
+  const size = own(d, 'size');
+  return (fp === null || (isText(fp) && isDocsFingerprint(fp))) && (size === null || isByteCount(size));
+}
+
+/** One `entries[]` row: its section, its path (key text) and both fact slots, each present. */
+function entryOk(e: unknown): boolean {
+  if (!isRecord(e)) return false;
+  const section = own(e, 'section');
+  if (!isText(section) || !isDocsSection(section) || !isKeyText(own(e, 'path'))) return false;
+  return committedFactsOk(own(e, 'committed')) && draftFactsOk(own(e, 'draft'));
+}
+
+/** A fetch stamp: `null` (never fetched), or one whose `attemptAgeMs` is a finite number and whose `lastOutcome` is
+ *  text, the two fields `refreshDue` compares. */
+function stampOk(s: unknown): boolean {
+  if (s === null) return true;
+  return isRecord(s) && Number.isFinite(own(s, 'attemptAgeMs')) && isText(own(s, 'lastOutcome'));
+}
+
+/** `freshness`: an object whose `remote` is `origin` or `null` and whose stamp passes `stampOk`. */
+function freshnessOk(f: unknown): boolean {
+  if (!isRecord(f)) return false;
+  const remote = own(f, 'remote');
+  return (remote === 'origin' || remote === null) && stampOk(own(f, 'stamp'));
+}
+
+/** The tree fields W3 reads: `repo.key`; `ref.served`, `ref.commit` and `ref.requested`; `freshness`; every entry. */
+function treeShapeOk(t: AnswerRecord): boolean {
+  const repo = own(t, 'repo');
+  if (!isRecord(repo) || !isKeyText(own(repo, 'key'))) return false;
+  const ref = own(t, 'ref');
+  if (!isRecord(ref) || !isKeyText(own(ref, 'served'))) return false;
+  const commit = own(ref, 'commit');
+  if (!isText(commit) || !isDocsCommit(commit)) return false;
+  const requested = own(ref, 'requested');
+  if (requested !== null && !isText(requested)) return false;
+  if (!freshnessOk(own(t, 'freshness'))) return false;
+  const entries = own(t, 'entries');
+  return Array.isArray(entries) && entries.every(entryOk);
+}
+
+/** The index field W3 reads: `projects`, an array of plain objects. */
+function indexShapeOk(i: AnswerRecord): boolean {
+  const projects = own(i, 'projects');
+  return Array.isArray(projects) && projects.every(isRecord);
+}
+
+/**
+ * Whether an ok answer the adapter passed may be believed by the routes (refinement (f)), in order, the first fault
+ * winning, each `malformed-answer {why:'schema'}` (502), never a `TypeError` in `refreshDue` or a `RangeError` at
+ * serialisation:
+ * 1. the answer is a plain object;
+ * 2. no container in it sits deeper than `DOCS_ANSWER_MAX_DEPTH` (`withinDepth`, every verb);
+ * 3. `docs-tree`: `repo.key` and `ref.served` are key text, `ref.commit` is a commit, `ref.requested` is `null` or
+ *    text, `freshness.remote` is `origin` or `null`, `freshness.stamp` is `null` or carries a finite
+ *    `attemptAgeMs` and a text `lastOutcome`, and `entries` is an array whose every row has an L0 section, a key-text
+ *    path, a `committed` slot (`null`, or a listed kind, a commit-form blob and a byte count or `null`) and a
+ *    `draft` slot (`null`, or a fingerprint or `null` and a byte count or `null`);
+ * 4. `docs-index`: `projects` is an array of plain objects.
+ * `docs-show` (check 8 ran in the adapter) and `docs-fetch` stop after 2. Takes `unknown`: this is the check that
+ * makes the answer's static type true.
+ */
+export function docsAnswerShape(verb: DocsVerb, answer: unknown): { ok: true } | DocsFailureBody {
+  if (!isRecord(answer)) return schemaFault();
+  if (!withinDepth(answer)) return schemaFault();
+  if (verb === 'docs-tree' && !treeShapeOk(answer)) return schemaFault();
+  if (verb === 'docs-index' && !indexShapeOk(answer)) return schemaFault();
+  return { ok: true };
+}
+
+// ===== The show bound, the raster check and the file representation (section 3.6, section 5.2; refinement (g)) =====
+
+/**
+ * Decoded show bytes held to the bound the server declared (refinement (g); W2's review carry): more than `job.raw`
+ * (`showRawBound(maxBytes, knownSize)`, so at most the class cap) is `malformed-answer {why:'oversize'}`, check 9's
+ * word: the answer broke the bound the server sent. Never `too-large`, ccd's word for a file over the cap, whose
+ * `{size, cap}` the server would have to invent. `>`, never `>=`: exactly `raw` bytes is within the bound.
+ */
+export function docsShowBound(job: DocsJob, bytes: Uint8Array): { ok: true } | DocsFailureBody {
+  if (bytes.byteLength > job.raw) return { ok: false, failure: 'malformed-answer', why: 'oversize' };
+  return { ok: true };
+}
+
+/** `A-Z` to `a-z` by char code and nothing else: the rule `contentClass` applies (section 5.1, M5.3), so a KELVIN
+ *  SIGN never lowers to `k`. L0's own helper is module-private; this is its twin for one table lookup. */
+function lowerAscii(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    out += c >= 0x41 && c <= 0x5a ? String.fromCharCode(c + 0x20) : s.charAt(i);
+  }
+  return out;
+}
+
+type RasterExt = keyof typeof DOCS_RASTER_EXT;
+
+/** The raster type a RASTER-CLASS path declares: its final component's text after the last `.`, lowered ASCII-only,
+ *  looked up in `DOCS_RASTER_EXT`. An extension the table lacks means L0's two tables disagree (`contentClass` said
+ *  raster), a defect: it throws, never answers `null`, whose one meaning is "not raster". */
+function declaredRasterType(path: string): RasterType {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const ext = lowerAscii(name.slice(name.lastIndexOf('.') + 1));
+  if (!Object.hasOwn(DOCS_RASTER_EXT, ext)) {
+    throw new Error(`declaredRasterType: '${path}' is raster by contentClass, but no raster type has its extension`);
+  }
+  return DOCS_RASTER_EXT[ext as RasterExt];
+}
+
+/** The raster type `path` declares (section 5.2 step 5's `t`), or `null`, whose one meaning is "`contentClass(path)`
+ *  is not `raster`". */
+export function docsRasterType(path: string): RasterType | null {
+  return contentClass(path) === 'raster' ? declaredRasterType(path) : null;
+}
+
+/** Whether `bytes` are the raster type the path declared (section 5.2 step 5): L0's `sniffRaster` against the
+ *  declared type alone, never a second copy of its table and never "any raster type". */
+export function rasterVerdict(declared: RasterType, bytes: Uint8Array): 'match' | 'mismatch' {
+  return sniffRaster(declared, bytes);
+}
+
+/** UTF-8 as the decoder of a show's verified bytes: a leading byte-order mark is KEPT (it is one of the file's
+ *  bytes), and a malformed sequence would read as U+FFFD (the bytes came from a `text`, so none is). */
+const SHOW_UTF8 = new TextDecoder('utf-8', { ignoreBOM: true });
+
+/**
+ * The `show` a JSON file reply carries (W2's review: check 8 verifies the decoded bytes, not the answer it hands
+ * back): the answer's facts with its ONE content field rebuilt from the verified bytes and the other dropped. A
+ * `utf8` answer's `text` is the bytes decoded, so a lone surrogate (which encodes to U+FFFD's bytes) is served as
+ * U+FFFD; a `base64` answer's `b64` is the answer's, which check 8 proved is exactly the bytes' canonical base64.
+ * A stray `text` beside a `b64`, or a `b64` beside a `text`, never rides. A new object; the answer is never written.
+ */
+function servedShow(answer: DocsShowOk, bytes: Uint8Array): DocsShowOk {
+  const { text: _text, b64: _b64, ...facts } = answer;
+  return answer.encoding === 'utf8' ? { ...facts, text: SHOW_UTF8.decode(bytes) } : { ...facts, b64: answer.b64 };
+}
+
+/**
+ * What the file route answers for a show that passed the adapter and `docsShowBound` (section 3.6, section 5.2
+ * steps 5 and 6), decided here so the route decides nothing:
+ * - `json`: every class but `raster`, the `DocsFileResponse` (`show` is `servedShow`'s: the answer's facts and the
+ *   verified bytes, never the answer's own content field; `from` as given), sent as JSON with `no-store`;
+ * - `bytes`: a raster whose bytes are its declared type, sent as `mime` with `cacheControl` (`cacheControlFor`:
+ *   immutable for a committed pin, `no-store` for a draft) and these exact bytes;
+ * - `refuse`: a raster whose bytes are not, `raster-mismatch {declared, size}` (422) with no bytes; `size` is the
+ *   bytes' `byteLength` (equal to the answer's `size` after check 8).
+ * The representation is a function of `contentClass(pin.path)` alone: no request parameter reaches it.
+ */
+export type DocsFileReply =
+  | { kind: 'json'; body: DocsFileResponse }
+  | { kind: 'bytes'; mime: RasterMime; cacheControl: string; bytes: Uint8Array }
+  | { kind: 'refuse'; body: DocsFailureBody };
+
+export function docsFileReply(pin: DocPin, answer: DocsShowOk, bytes: Uint8Array, from: 'ccd' | 'cache'):
+    DocsFileReply {
+  const cls = contentClass(pin.path);
+  if (cls !== 'raster') {
+    return { kind: 'json', body: { ok: true, contentClass: cls, show: servedShow(answer, bytes), from } };
+  }
+  const declared = declaredRasterType(pin.path);
+  if (rasterVerdict(declared, bytes) === 'mismatch') {
+    return { kind: 'refuse', body: { ok: false, failure: 'raster-mismatch', declared, size: bytes.byteLength } };
+  }
+  return { kind: 'bytes', mime: DOCS_RASTER_TYPES[declared].mime, cacheControl: cacheControlFor(pin, cls), bytes };
+}
+
+// ===== The known size and the committed cache's verdicts (section 6.2, section 6.5; refinement (l)) =====
+
+/** What the listing map holds for one committed `section NUL path` (section 6.5): the blob, the listed size (`null`:
+ *  the tree carried none) and the committed kind. Task 5's `cache.ts` stores exactly this. */
+export type DocsListedFile = { blob: string; size: number | null; kind: ListedKind };
+
+/**
+ * The size the server holds for a show (section 6.2: from server facts only, never the request), for
+ * `docsShowPlan`'s `knownSize`. A committed pin reads its listing entry's size; a draft reads the `fp -> size` map's
+ * value (`draftSize`). `undefined` means "no size fact", one meaning: an unlisted entry and a listed `null` size are
+ * both no fact. A listed 0 is a fact, so `??`, never `||`. The other side's value is ignored.
+ */
+export function docsKnownSize(pin: DocPin, listed: DocsListedFile | undefined, draftSize: number | undefined):
+    number | undefined {
+  return pin.kind === 'committed' ? listed?.size ?? undefined : draftSize;
+}
+
+/** Whether the cache may serve a committed hit (section 6.5): `eligible`, or why not, in this order: no listing
+ *  entry (`unlisted`), a kind that is not file content (`kind`), a served ref not recorded recently (`provenance`). */
+export type DocsCacheVerdict = { eligible: true } | { eligible: false; why: 'unlisted' | 'kind' | 'provenance' };
+
+/** File content: the two committed kinds whose blob is the file's bytes. A symlink's blob is its target text and a
+ *  submodule's is a commit, so neither may hit or fill, even when it shares a blob with a file. */
+function cacheableKind(kind: ListedKind): boolean {
+  return kind === 'file' || kind === 'exec';
+}
+
+/**
+ * The committed hit verdict (section 6.5; refinement (l)): eligible iff the pin's listing entry exists, its kind is
+ * `file` or `exec`, and its `servedRef` was recorded `servedRefAgeMs` ago with `0 <= age < DOCS_LISTING_PROVENANCE_MS`.
+ * `servedRefAgeMs` is `undefined` when the listing never recorded that `servedRef`, one meaning; a negative age (a
+ * clock that went back) and `NaN` vouch for nothing. The clock is the caller's.
+ */
+export function docsCacheVerdict(listed: DocsListedFile | undefined, servedRefAgeMs: number | undefined):
+    DocsCacheVerdict {
+  if (listed === undefined) return { eligible: false, why: 'unlisted' };
+  if (!cacheableKind(listed.kind)) return { eligible: false, why: 'kind' };
+  if (servedRefAgeMs === undefined || !(servedRefAgeMs >= 0 && servedRefAgeMs < DOCS_LISTING_PROVENANCE_MS)) {
+    return { eligible: false, why: 'provenance' };
+  }
+  return { eligible: true };
+}
+
+/** Whether an ok show answer may FILL the blob cache (section 6.5): a committed pin whose listing entry exists and
+ *  is file content. A draft never fills, and with no listing entry the answer is served but not cached. */
+export function docsCacheFill(pin: DocPin, listed: DocsListedFile | undefined): boolean {
+  return pin.kind === 'committed' && listed !== undefined && cacheableKind(listed.kind);
+}
+
+/**
+ * A cache hit's `show` (refinement (l)): the STORED content (`size`, `sha256`, `encoding` and its one content field),
+ * the REQUEST's pin echoes (`source:'committed'`, `section`, `path`, `commit`), the listing's `blob`,
+ * `onRef:'contains'` (the listing vouched within `DOCS_LISTING_PROVENANCE_MS`) and `elapsedMs: 0`. No `mode`: it was
+ * not measured for this request, so it is absent, never copied. The same blob under a new commit or path answers that
+ * commit and path. A new object; the stored answer is never written.
+ */
+export function docsCacheHitAnswer(stored: DocsStoredShow, pin: Extract<DocPin, { kind: 'committed' }>, blob: string):
+    DocsShowOk {
+  const content = stored.encoding === 'base64' ? { b64: stored.b64 } : { text: stored.text };
+  return {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 0, source: 'committed', section: pin.section, path: pin.path,
+    size: stored.size, sha256: stored.sha256, encoding: stored.encoding, ...content,
+    commit: pin.commit, blob, onRef: 'contains',
+  };
+}
+
+// ===== Task 11 review 2-1: a response with no payload and no content type =====
+
+/**
+ * What the plugin's `onSend` hook applies (section 5.3), over `docsSendPolicy`. Fastify hands `onSend` a payload of
+ * `undefined` when the route or hook sent none (`reply.code(401).send()`, as the root gate answers a refused
+ * WebSocket upgrade) and sets no content-type then; a payload of any other value, `''` included, is a body and
+ * Fastify gives it a content-type of its own. `payloadAbsent` is exactly that `undefined` test, one meaning.
+ *
+ * A response with NO payload and NO content type (`''`) is not a type to refuse: it passes, decorated exactly like
+ * any passing response (the four `DOCS_RESPONSE_HEADERS`, `no-store` unless it is a 200 whose route set a
+ * cache-control), and sets no content-type, since it carries nothing to type. Every other response, a body with no
+ * content type (M5.5) and a payload-free one that DOES name a content type included, is `docsSendPolicy`'s verdict
+ * unchanged.
+ */
+export function docsHookVerdict(
+  payloadAbsent: boolean, statusCode: number, contentType: string, cacheControl: string | undefined,
+): DocsSendVerdict {
+  const typed = payloadAbsent && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;
+  return docsSendPolicy(statusCode, typed, cacheControl);
+}
+
+// ===== Task 11 review 3-1: a tree answer names the project the request named =====
+
+/**
+ * Whether an ok tree the adapter passed answers the project the request named: its `project` is, with `===` and no
+ * normalisation (no lowering, trimming or decoding), the `project` the route parsed from `:project`. The listing map
+ * files a tree under the answer's own `project`, so a tree naming another project would be filed under that one: its
+ * file reads would then be refused against a blob that is not theirs, or served another file's cached bytes. An
+ * echo that is not that exact text (another project, a different case, absent, not text) is
+ * `malformed-answer {why:'pin'}`, the word for an answer that does not echo its request. A fresh body each call.
+ * Runs after `docsAnswerShape` and before anything records or replies.
+ */
+export function docsTreeEcho(answer: DocsTreeOk, project: string): { ok: true } | DocsFailureBody {
+  if (answer.project === project) return { ok: true };
+  return { ok: false, failure: 'malformed-answer', why: 'pin' };
+}
+
+// ===== Task 11 review 3-2: the blob cache holds only the verified content =====
+
+/** What a blob cache entry keeps of a show answer (`docsCacheHitAnswer` reads exactly these): `size`, `sha256`,
+ *  `encoding` and the ONE content field the encoding names. Every other key ccd sent is not kept. */
+export type DocsStoredShow = Pick<DocsShowOk, 'size' | 'sha256' | 'encoding' | 'text' | 'b64'>;
+
+/**
+ * The show a committed fill stores (section 6.5): `servedShow`'s content (the field the `encoding` names, rebuilt from
+ * the verified bytes; the other content field never rides) under the three facts `docsCacheHitAnswer` reads, and no
+ * other key. A new object; the answer is never written. The blob cache charges the one content field held here.
+ */
+export function docsStoredShow(answer: DocsShowOk, bytes: Uint8Array): DocsStoredShow {
+  const { size, sha256, encoding, text, b64 } = servedShow(answer, bytes);
+  return encoding === 'base64' ? { size, sha256, encoding, b64 } : { size, sha256, encoding, text };
+}
+
+// ===== Review 361 F8: the lane verdicts live here (section 6.3, section 6.4) =====
+
+/**
+ * Whether `job` is a large answer (section 6.3): `raw` over `DOCS_LANE_LARGE_RAW`, so exactly at it is not large.
+ * THE one large-job predicate: `laneAdmit`'s fourth clause refuses a second large answer with it, and the read lane
+ * counts a started and a finished job in `LaneLoad.large` with it.
+ */
+export function laneLarge(job: DocsJob): boolean {
+  return job.raw > DOCS_LANE_LARGE_RAW;
+}
+
+/**
+ * Whether a lane's jobs that have not started, COUNTING the one just arriving, exceed that lane's queue bound
+ * (section 6.3, section 6.4): `DOCS_LANE_QUEUE` for the read lane, `DOCS_FETCH_QUEUE` for the fetch lane. Exactly at
+ * the bound is not over it. The read lane asks before it queues a job (`waiting` is its FIFO plus the new job); the
+ * fetch lane asks after it has queued and pumped (`waiting` is the FIFO).
+ */
+export function laneOverflow(lane: DocsLaneName, waiting: number): boolean {
+  return waiting > (lane === 'read' ? DOCS_LANE_QUEUE : DOCS_FETCH_QUEUE);
+}
+
+/**
+ * The fetch lane's admission for ONE queued job (section 6.4), in order: `running` fetches at `DOCS_FETCH_GLOBAL` is
+ * `'full'` (the pump stops, whatever the key); else a fetch already running under the job's key is `'skip'` (jobs
+ * under one key run one at a time: it stays queued and the pump considers the next); else `'start'`. A word for the
+ * lane's own bookkeeping, never a body.
+ */
+export function fetchAdmit(running: number, keyRunning: boolean): 'start' | 'skip' | 'full' {
+  if (running >= DOCS_FETCH_GLOBAL) return 'full';
+  if (keyRunning) return 'skip';
+  return 'start';
 }

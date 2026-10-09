@@ -5206,7 +5206,7 @@ describe('the docs ring — server/src/docs is classified by its imports (spec 2
   };
   /** The files W2 created. A FLOOR, not a count (the update ring's argument): a new file raises it, and a listed
    *  file that is gone reds instead of disarming the scan. */
-  const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts'];
+  const DOCS_RING_FLOOR: readonly string[] = ['policy.ts', 'ports.ts', 'ccdsource.ts', 'routes.ts', 'hooks.ts', 'lane.ts', 'cache.ts'];
   /** What L3 may import (the W2 plan's Global Constraints): its server neighbours, node's hash, its own ring's
    *  policy and ports, and L0. A type import is an import. */
   const L3_IMPORTS: ReadonlySet<string> = new Set([
@@ -5451,5 +5451,140 @@ describe('docs W2 names are defined once (spec 2026-10-01 section 1, M7.10)', ()
 
   it('the docs builders have one caller across the four roots: the adapter', () => {
     expect(ALL.filter((f) => DOCS_CALL.test(stallCode(f))).map(rel)).toEqual([SOURCE]);
+  });
+});
+
+// Docs W3, Task 9 (spec 2026-10-01 section 2 (g)'s walls, section 2 (j) row 49, section 3.13's new scans; W3
+// refinement (q)). GET never fetches, read as text: row 49's literal half (exactly one `CCD_ARGV.docsFetch(` across
+// the four roots, in the adapter), WIDENED for W2's review carry, which found that `DOCS_CALL` above cannot see an
+// optional-chain, a bracket or an aliased call. The identifier `docsFetch` is held to its two code lines (the builder
+// key and the one call), and every other `CCD_ARGV` in code must be a plain member access, so the builder table is
+// never indexed, destructured, aliased or passed. And the visible half of "L4 decides nothing": no failure word of
+// `shared/docs.ts`'s `DOCS_FAILURES` is quoted in the code of `routes.ts`, `hooks.ts`, `lane.ts` or `cache.ts`. The
+// words are read from that file's TEXT (and held equal to the module's keys by a dynamic import), so this append adds
+// no import above. `DOCS_RING_FLOOR` (edited in place, above) names those four files too, so a deleted L4 file reds
+// the floor. Every scan reads comment-stripped text (`stallCodeText`). APPENDED, for the citation audit's reason above.
+describe('docs W3 — GET never fetches, and the L4 files quote no failure word (spec 2026-10-01 §2 row 49, §3.13)', () => {
+  type Text = readonly [string, string];
+  const SOURCE = 'server/src/docs/ccdsource.ts';
+  const ARGV = 'server/src/ccdargv.ts';
+  const L4_FILES = ['routes.ts', 'hooks.ts', 'lane.ts', 'cache.ts'];
+  /** Every file of the four roots as `[repo-relative path, text]`, read once. */
+  const LIVE: readonly Text[] = ALL.map((f) => [rel(f), readFileSync(f, 'utf8')] as const);
+  /** The live corpus with `shape` planted after `name`'s own text (a copy: nothing is written). */
+  const plantedIn = (name: string, shape: string): Text[] =>
+    LIVE.map(([n, t]) => [n, n === name ? `${t}\n${shape}\n` : t] as const);
+
+  const LITERAL = 'CCD_ARGV.docsFetch(';
+  /** One entry per literal `CCD_ARGV.docsFetch(` in code, naming its file. */
+  const literalCalls = (files: readonly Text[]): string[] =>
+    files.flatMap(([n, t]) => new Array<string>(stallCodeText(t).split(LITERAL).length - 1).fill(n));
+  const DOCS_FETCH_ID = /\bdocsFetch\b/;
+  /** One entry per comment-stripped LINE that names the identifier `docsFetch`, naming its file. */
+  const docsFetchLines = (files: readonly Text[]): string[] =>
+    files.flatMap(([n, t]) => stallCodeText(t).split('\n').filter((l) => DOCS_FETCH_ID.test(l)).map(() => n));
+  /** A whole static import statement, single- or multi-line (lazy, and never across a `;`). */
+  const IMPORT_STATEMENT = /^\s*import\s[^;]*?\bfrom\s*(['"])[^'"\n]+\1\s*;?/gm;
+  /** `CCD_ARGV` NOT followed by a plain member access (`.name`, whitespace and newlines allowed around the dot). */
+  const ARGV_ESCAPE = /\bCCD_ARGV\b(?!\s*\.\s*[A-Za-z_$])/g;
+  const ARGV_DECLARATION = 'export const CCD_ARGV = {';
+  /** Every `CCD_ARGV` in code, imports removed, that is not a plain member access, as `file: line`; the table's one
+   *  declaration excepted. */
+  const argvEscapes = (files: readonly Text[]): string[] => files.flatMap(([n, t]) => {
+    const code = stallCodeText(t).replace(IMPORT_STATEMENT, '');
+    const out: string[] = [];
+    for (const m of code.matchAll(ARGV_ESCAPE)) {
+      const start = code.lastIndexOf('\n', m.index) + 1;
+      const end = code.indexOf('\n', m.index);
+      const at = code.slice(start, end === -1 ? code.length : end).trim();
+      if (n === ARGV && at === ARGV_DECLARATION) continue;
+      out.push(`${n}: ${at}`);
+    }
+    return out;
+  });
+
+  it('row 49, literal: exactly one `CCD_ARGV.docsFetch(` across the four roots, in the adapter', () => {
+    expect(literalCalls(LIVE)).toEqual([SOURCE]);
+  });
+
+  it('row 49, widened by identifier: `docsFetch` names two code lines, the builder key and the one call', () => {
+    expect(docsFetchLines(LIVE).sort()).toEqual([ARGV, SOURCE]);
+  });
+
+  it('row 49, widened by use: `CCD_ARGV` is only ever a plain member access, outside its one declaration', () => {
+    expect(argvEscapes(LIVE)).toEqual([]);
+    expect(LIVE.filter(([n]) => n === ARGV).flatMap(([, t]) => stallCodeText(t).split('\n'))
+      .filter((l) => l.trim() === ARGV_DECLARATION), 'the declaration the escape scan excepts moved').toHaveLength(1);
+  });
+
+  it('CONTROL: every call shape the literal scan misses is caught by one of the two widened scans; prose by neither', () => {
+    const base = {
+      literal: literalCalls(LIVE).length, lines: docsFetchLines(LIVE).length, escapes: argvEscapes(LIVE).length,
+    };
+    const SHAPES: readonly (readonly [string, boolean, boolean])[] = [
+      // [the planted text, seen by the identifier scan, seen by the escape scan]
+      ['const a = CCD_ARGV?.docsFetch(p, b);', true, true],
+      ["const a = CCD_ARGV['docsFetch'](p, b);", true, true],
+      ['const a = CCD_ARGV["docsFetch"](p, b);', true, true],
+      ['const { docsFetch } = CCD_ARGV;', true, true],
+      ['const A = CCD_ARGV; A.docsFetch(p, b);', true, true],
+      ['const a = CCD_ARGV\n  .docsFetch(p, b);', true, false],
+      ["const f = Reflect.get(CCD_ARGV, 'docsFetch');", true, true],
+    ];
+    for (const [shape, byId, byEscape] of SHAPES) {
+      const planted = plantedIn(SOURCE, shape);
+      expect(literalCalls(planted).length, `${shape}: the literal scan was expected to miss it`).toBe(base.literal);
+      expect(docsFetchLines(planted).length > base.lines, `${shape}: identifier scan`).toBe(byId);
+      expect(argvEscapes(planted).length > base.escapes, `${shape}: escape scan`).toBe(byEscape);
+      expect(byId || byEscape, shape).toBe(true);
+    }
+    for (const prose of ['// a CCD_ARGV?.docsFetch( or `const { docsFetch } = CCD_ARGV` in prose',
+      ' * CCD_ARGV[\'docsFetch\'] named in a docstring']) {
+      const planted = plantedIn(SOURCE, prose);
+      expect(docsFetchLines(planted).length, prose).toBe(base.lines);
+      expect(argvEscapes(planted).length, prose).toBe(base.escapes);
+    }
+    expect(literalCalls(plantedIn(SOURCE, 'void CCD_ARGV.docsFetch(p, b);')).length, 'the literal scan is blind')
+      .toBe(base.literal + 1);
+  });
+
+  /** `DOCS_FAILURES`' keys, read from `shared/docs.ts`'s TEXT: its `export const DOCS_FAILURES = {` block. */
+  const failureWords = (): string[] => {
+    const text = readFileSync(path.join(ccrcRoot, 'shared/docs.ts'), 'utf8');
+    const open = text.indexOf('export const DOCS_FAILURES = {');
+    const close = text.indexOf('} as const', open);
+    expect(open, 'the DOCS_FAILURES block moved').toBeGreaterThan(-1);
+    expect(close, 'the DOCS_FAILURES block has no end').toBeGreaterThan(open);
+    return [...text.slice(open, close).matchAll(/^\s*'([a-z][a-z-]*)':/gm)].map((m) => m[1]);
+  };
+  /** The words of `words` quoted as a whole literal (single, double or backtick) in `text`'s code. */
+  const quotedWords = (text: string, words: readonly string[]): string[] => {
+    const code = stallCodeText(text);
+    return words.filter((w) => new RegExp(`(['"\`])${w}\\1`).test(code));
+  };
+  const l4 = (): Text[] =>
+    L4_FILES.map((n) => [n, readFileSync(path.join(ccrcRoot, 'server/src/docs', n), 'utf8')] as const);
+
+  it('the failure words read from the text are exactly DOCS_FAILURES\' keys', async () => {
+    const { DOCS_FAILURES } = await import('../../shared/docs.js');
+    expect(failureWords()).toEqual(Object.keys(DOCS_FAILURES));
+  });
+
+  it('CONTROL: a quoted word is seen in each quote; a backticked word in a prose comment is not', () => {
+    const words = failureWords();
+    for (const hit of ["const w = 'docs-busy';", 'const w = "bad-query";', 'const w = `foreign-request`;']) {
+      expect(quotedWords(hit, words), hit).toHaveLength(1);
+    }
+    for (const miss of ['// the lane answers `docs-busy` past its wait', ' * a `bad-query {why}` refusal',
+      'const w = docsBusyBody(lane);']) {
+      expect(quotedWords(miss, words), miss).toEqual([]);
+    }
+  });
+
+  it('L4 decides nothing (the visible half): routes.ts, hooks.ts, lane.ts and cache.ts quote no failure word', () => {
+    const words = failureWords();
+    const files = l4();
+    expect(files.map(([n]) => n)).toEqual(L4_FILES);
+    expect(files.flatMap(([n, t]) => quotedWords(t, words).map((w) => `${n}: '${w}'`))).toEqual([]);
   });
 });
