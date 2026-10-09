@@ -328,6 +328,7 @@ export const REQUIRED_VERB_FLAG = {
   'win-size': '--session', 'ws-reclaim': '--expect',
   'reclaim-pause': '--state', 'ws-expire': '--expect',
   'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project',
+  'ws-collect': '--expect',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -583,6 +584,11 @@ export const EXEC_WHITELIST = {
     ['docs-show',  '--project'],
     // The one docs verb that writes: a fetch of one branch from origin.
     ['docs-fetch', '--project'],
+    // THE CHILD TEMP-ROOT COLLECTOR (child reclamation spec 2026-09-22 §5.10): the fourth destructive verb, and the third
+    // the SERVER sends with no human in the path — on a witnessed child temp root whose workspace is gone. Granted on its
+    // confirmation token for ws-reclaim's reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g20), and its audit rides
+    // `['ws-audit','--session']`. ccd recomputes the token and compares it inside the reap lock before anything moves.
+    ['ws-collect', '--expect'],
   ],
 } as const satisfies ExecWhitelist;
 

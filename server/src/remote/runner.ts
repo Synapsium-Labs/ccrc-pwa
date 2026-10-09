@@ -56,6 +56,10 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // Archived-workspace expiry (spec 2026-09-24 §5.3): ws-reclaim's machinery — the pin phase, the settle and the same
   // teardown — on an archived workspace, so it earns the same budget.
   'ws-expire': 240_000,
+  // The child temp-root collector (spec 2026-09-22 §5.10): a walk bounded at 30 s, a quarantine move, and the removal of
+  // a tree that can hold gigabytes, all under the reap lock. It earns ws-reclaim's budget, not the flat 90 s it would
+  // silently inherit without this row. Its audit is `ws-audit` and keeps that verb's row.
+  'ws-collect': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
   // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in
