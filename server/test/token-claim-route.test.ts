@@ -62,13 +62,47 @@ const fakeDriver = (): FakeDriver => {
 const claim = (app: FastifyInstance, body: unknown) =>
   app.inject({ method: 'POST', url: TOKEN_CLAIM_PATH, payload: body as Record<string, unknown> });
 
+/** Where an import statement may start (F4, review 352): the start of a line, or right after a `;` or a `}` on the same
+ *  line, with any whitespace and any leading block comment before the keyword. The scan is on STATEMENTS, not on lines:
+ *  an indented import, or a second import after a `;` on one line, is as valid TypeScript as a line-leading one, and a
+ *  spelling the scan misses is a spelling the allowlist never sees. */
+const STMT_START = String.raw`(?:^|[;}])\s*(?:\/\*.*?\*\/\s*)?`;
 /** The `import { ... } from '<spec>'` statements of a source, each with the names it takes (a `type` marker dropped).
- *  Either quote, and the closing `;` optional: a spelling the scan misses would be a spelling the allowlist never sees. */
+ *  Either quote, and the closing `;` optional. */
 const importsOf = (src: string): { spec: string; names: string[] }[] =>
-  [...src.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+(['"])([^'"]+)\2;?/gm)].map((m) => ({
+  [...src.matchAll(new RegExp(`${STMT_START}import\\s+(?:type\\s+)?\\{([^}]*)\\}\\s+from\\s+(['"])([^'"]+)\\2`, 'gm'))].map((m) => ({
     spec: m[3]!,
     names: m[1]!.split(',').map((n) => n.trim().replace(/^type\s+/, '')).filter((n) => n !== ''),
   }));
+/** How many import statements a source has, in any spelling (the completeness count `importsOf` is checked against). */
+const importCount = (src: string): number => [...src.matchAll(new RegExp(`${STMT_START}import\\b`, 'gm'))].length;
+/** A side-effect, namespace, default or dynamic import, or a `require`: outside the allowlist. */
+const outsideForms = (src: string): boolean => new RegExp(`${STMT_START}import\\s+(?!type\\s*\\{|\\{)|\\bimport\\s*\\(|\\brequire\\s*\\(`, 'm').test(src);
+
+/** F6's allowlist: each module the door may import, WITH the names it may take from it. `./files.js` exports every disk
+ *  writer, and `../coord/store.js` a database: a door that imports one of their writers could persist a code. */
+const DOOR_ALLOWED: Record<string, readonly string[]> = {
+  'node:crypto': ['createHash', 'randomBytes', 'timingSafeEqual'],
+  '../../../shared/agent-protocol.js': ['isClaimCode'],
+  '../../../shared/box-token.js': ['ClaimRefusal'],
+  '../coord/token.js': ['matchDigestSlots'],
+  '../coord/store.js': ['NODE_ID_RE'],
+  './policy.js': ['BURNED_CODES_KEPT', 'CLAIM_ALERT_EVERY_MS', 'MAX_PENDING', 'claimVerdict', 'codeExpiresAt', 'keepBurned',
+    'ClaimDoorState', 'ClaimMatch'],
+  './files.js': ['mintClaimCode'],   // a pure random-bytes mint: it writes nothing
+};
+/** Every way `src` departs from the allowlist, as sentences (empty: the source conforms). */
+const doorImportViolations = (src: string): string[] => {
+  const out: string[] = [];
+  const imports = importsOf(src);
+  if (imports.length !== importCount(src)) out.push(`the scan parsed ${imports.length} of ${importCount(src)} import statements`);
+  for (const { spec, names } of imports) {
+    if (!(spec in DOOR_ALLOWED)) { out.push(`imports ${spec}`); continue; }
+    for (const n of names) if (!DOOR_ALLOWED[spec]!.includes(n)) out.push(`takes ${n} from ${spec}`);
+  }
+  if (outsideForms(src)) out.push('a side-effect, namespace, default or dynamic import, or a require');
+  return out;
+};
 
 const JUNK = (i: number): string => `junk${String(i).padStart(39, '0')}`;   // 43 chars, a well-shaped miss
 
@@ -276,6 +310,23 @@ describe('POST /api/token/claim', () => {
     expect(res.headers['cache-control']).toBe('no-store');
   });
 
+  it('the line for a hand-out that cannot be recorded carries the outcome word and the node id, never a code or a value (F11, spec 7.1)', async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'warn').mockImplementation((...a) => { lines.push(a.join(' ')); });
+    const d = fakeDriver();
+    d.failCommit = true;
+    const code = d.door.issue(GEN, NODE, Date.now());
+    const a = await open(d);
+    expect((await claim(a, { code, nodeId: NODE })).statusCode).toBe(503);
+    const mine = lines.filter((l) => l.includes('could not be recorded'));
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toContain('unavailable');
+    expect(mine[0]).toContain(`node ${NODE}`);
+    expect(mine[0]).toContain(GEN);
+    expect(mine[0]).not.toContain(code);
+    expect(mine[0]).not.toContain(VALUE);
+  });
+
   it('with no driver it answers 404 no-claim — the same small body, never "no rotation exists"', async () => {
     const a = await open();
     const res = await claim(a, { code: JUNK(2), nodeId: NODE });
@@ -298,7 +349,7 @@ describe('ClaimDoor', () => {
     const code = d.issue(GEN, NODE, 1_000);
     const step = d.claimNow({ code, nodeId: NODE }, 1_001);
     expect(typeof (step as unknown as { then?: unknown }).then).toBe('undefined');
-    expect(step).toEqual({ status: 200, generation: GEN, value: VALUE });
+    expect(step).toEqual({ status: 200, generation: GEN, value: VALUE, nodeId: NODE });
   });
 
   it(`compares a FIXED ${MAX_PENDING} live + ${BURNED_CODES_KEPT} burned slots on every claim, live, burned or none`, () => {
@@ -403,6 +454,21 @@ describe('ClaimDoor', () => {
       expect(lines[0], 'the presenting node, which did pass the shape, is still named').toContain(`presented by node ${OTHER}`);
     });
 
+    it('no-claim (a live code naming a generation the server no longer holds) names the word, the generation and both nodes (F11)', () => {
+      const lines: string[] = [];
+      const d = new ClaimDoor({ valueOf: () => null, warn: (l) => lines.push(l) });
+      const code = d.issue(GEN, NODE, 1_000);
+      expect(d.claimNow({ code, nodeId: NODE }, 1_001)).toMatchObject({ status: 404, error: 'no-claim', generation: GEN });
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(LINE);
+      expect(lines[0]).toContain('no-claim');
+      expect(lines[0]).toContain(GEN);
+      expect(lines[0], 'the bound node').toContain(`bound to node ${NODE}`);
+      expect(lines[0], 'the presenting node').toContain(`presented by node ${NODE}`);
+      expect(lines[0]).not.toContain(code);
+      expect(lines[0]).not.toContain(VALUE);
+    });
+
     it('the replay line reads "presented again by node X"', () => {
       const { d, lines } = rig();
       const code = d.issue(GEN, NODE, 1_000);
@@ -438,30 +504,9 @@ describe('ClaimDoor', () => {
   });
 
   it('door.ts imports an ALLOWLIST of names, so no import can persist a code (F6)', () => {
-    // `./files.js` exports every disk writer, and `../coord/store.js` a database: a door that imports one of their
-    // writers could persist a code and the in-memory case above would stay green. So each module the door may import
-    // is named here WITH the names it may take from it; anything else is a red, with the module and the name.
-    const ALLOWED: Record<string, readonly string[]> = {
-      'node:crypto': ['createHash', 'randomBytes', 'timingSafeEqual'],
-      '../../../shared/agent-protocol.js': ['isClaimCode'],
-      '../../../shared/box-token.js': ['ClaimRefusal'],
-      '../coord/token.js': ['matchDigestSlots'],
-      '../coord/store.js': ['NODE_ID_RE'],
-      './policy.js': ['BURNED_CODES_KEPT', 'CLAIM_ALERT_EVERY_MS', 'MAX_PENDING', 'claimVerdict', 'codeExpiresAt', 'keepBurned',
-        'ClaimDoorState', 'ClaimMatch'],
-      './files.js': ['mintClaimCode'],   // a pure random-bytes mint: it writes nothing
-    };
     const src = readFileSync(path.join(here, '..', 'src', 'token', 'door.ts'), 'utf8');
-    const imports = importsOf(src);
-    expect(imports.length, 'the scan parsed every import statement of door.ts, in whatever spelling')
-      .toBe([...src.matchAll(/^import\b/gm)].length);
-    expect(imports.length).toBeGreaterThan(5);
-    for (const { spec, names } of imports) {
-      expect(Object.keys(ALLOWED), `door.ts imports ${spec}`).toContain(spec);
-      for (const n of names) expect(ALLOWED[spec], `door.ts takes ${n} from ${spec}`).toContain(n);
-    }
-    expect(src, 'a side-effect, namespace, default or dynamic import is outside the allowlist')
-      .not.toMatch(/^import\s+(?!type\s*\{|\{)|\bimport\s*\(|\brequire\s*\(/m);
+    expect(importsOf(src).length, 'the scan parsed the import statements of door.ts').toBeGreaterThan(5);
+    expect(doorImportViolations(src)).toEqual([]);
   });
 
   it('the import scan sees a writer in every spelling: single or double quotes, with or without the semicolon', () => {
@@ -474,6 +519,32 @@ describe('ClaimDoor', () => {
       const one = `import { mintClaimCode, writeValueFileAtomic } from ${q}./files.js${q}${semi}\n`;
       expect(importsOf(one), one).toEqual([{ spec: './files.js', names: ['mintClaimCode', 'writeValueFileAtomic'] }]);
     }
+  });
+
+  // F4 (review 352): the scan is statement-level. Each row plants a writer into the real door.ts in a spelling the
+  // line-leading scan could not see, and the allowlist must go red with the name and its module.
+  describe('the allowlist reds on a writer planted in a spelling that does not start a line (F4)', () => {
+    const real = readFileSync(path.join(here, '..', 'src', 'token', 'door.ts'), 'utf8');
+    it('the real door.ts conforms (the baseline the rows below depart from)', () => {
+      expect(doorImportViolations(real)).toEqual([]);
+    });
+    it.each([
+      ['an indented import', `${real}\n  import { writeState } from './files.js';\n`],
+      ['a tab-indented import', `${real}\n\timport { writeState } from './files.js';\n`],
+      ['a second import after a `;` on one line', real.replace("import { mintClaimCode } from './files.js';",
+        "import { mintClaimCode } from './files.js'; import { writeState } from './files.js';")],
+      ['an import after a `}` on one line', `${real}\nfunction f() {} import { writeState } from './files.js';\n`],
+      ['an import behind a block comment', `${real}\n/* x */ import { writeState } from './files.js';\n`],
+    ])('%s', (_name, planted) => {
+      expect(planted).not.toBe(real);
+      expect(doorImportViolations(planted)).toContain('takes writeState from ./files.js');
+    });
+    it.each([
+      ['an indented side-effect import', `${real}\n  import './files.js';\n`],
+      ['a same-line namespace import', `${real}\nconst a = 1; import * as f from './files.js';\n`],
+    ])('%s is outside the allowlist too', (_name, planted) => {
+      expect(doorImportViolations(planted).join('\n')).toMatch(/side-effect, namespace, default or dynamic/);
+    });
   });
 });
 

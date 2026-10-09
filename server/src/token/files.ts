@@ -149,8 +149,10 @@ function isBoxTokenState(v: unknown): v is BoxTokenState {
   return true;
 }
 
-/** A state that is valid in every respect except that `pending` is longer than the cap (D-4413, F4): checked by
- *  validating it with the list cut to the cap, so no other malformed content can be called over-cap. */
+/** A state whose `pending` list is longer than the cap and whose first `PENDING_HARD_CAP` entries (and everything else)
+ *  are valid (D-4413, F4). It validates the state with the list cut to the cap, so entries PAST the cap are never
+ *  validated: a junk entry beyond the cap reads over-cap, not plain unusable. That fails safe, because boot refuses both
+ *  and adopts neither; any malformed content within the cap, or outside `pending`, is not over-cap. */
 function overCap(v: unknown): boolean {
   return isObj(v) && Array.isArray(v.pending) && v.pending.length > PENDING_HARD_CAP
     && isBoxTokenState({ ...v, pending: v.pending.slice(0, PENDING_HARD_CAP) });

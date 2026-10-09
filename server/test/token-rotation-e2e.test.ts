@@ -1160,19 +1160,6 @@ describe('the pending cap has an exit (D-4413)', () => {
     } finally { await r.app.close(); }
   });
 
-  it('Rotate now answers joined to a second press while the first press\'s tick is still running', async () => {
-    const r = await rig({ handMade: 'e'.repeat(64) });
-    try {
-      const t = Date.now();
-      const first = await r.driver.rotateNow(t);
-      const second = await r.driver.rotateNow(t + 1);
-      expect(first).toMatchObject({ ok: true, outcome: 'started' });
-      expect(second).toMatchObject({ ok: true, outcome: 'joined' });
-      await r.driver.tick();
-      expect(r.agent.calls).toBe(1);
-    } finally { await r.app.close(); }
-  });
-
   it('Rotate now answers joined while a send is actually in flight, and starts nothing', async () => {
     let release: (v: SyncResult) => void = () => {};
     let entered: () => void = () => {};
@@ -1572,8 +1559,11 @@ describe('a later generation the fleet confirmed retires a previous value early 
       expect(await r.lane(L)).toBe(401);
       expect(await r.lane(L)).toBe(401);
       const after = r.printed.slice(lines).filter((l) => l.includes('the previous value was retired'));
-      expect(after, 'the same line the retire action logs').toHaveLength(1);
-      expect(after[0]).toContain('the previous value was retired and is refused');
+      // R0b (D-4411's wording, review 352): the early retirement says WHY it happened, a later confirmed generation, and not
+      // "grace ended", which was not what ended it. The rule is unchanged; only this line differs from the retire action's.
+      expect(after, 'one line for the early retirement').toHaveLength(1);
+      expect(after[0]).toBe('ccrc-server: box token: the fleet confirmed a later generation; the previous value was retired early and is refused');
+      expect(after[0]).not.toContain('grace ended');
       expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
       expect(r.driver.view()).toMatchObject({ retiredRefused: true });
       expect(existsSync(tokPaths(r).previous)).toBe(true);               // G1 is the previous now
@@ -1839,5 +1829,202 @@ describe('D-4414 F6: a failed foreign mint keeps its owed rotation', () => {
     expect(checkMailToken(b.boot.holder, H)).toBe('bad');
     expect(b.printed.some((l) => l.includes('rotation started') && l.includes('retired-written-back'))).toBe(true);
     expect(b.driver.view()).toMatchObject({ origin: 'rotated', rotationOwed: false, fleetConfirmed: 'own-write' });
+  });
+});
+
+// ── part B task R0b (review 352 F5, F7, F8, F9, F10, F11, F12): conformance to the rulings, the spec and the plan ──
+describe('R0b: Rotate now, the cap alert, the hand-out lines and the attribution pins (review 352)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  /** The claim route stamps a hand-out with `Date.now()`, so these tests drive the one clock the route and the driver share. */
+  function clock(): (ms: number) => void {
+    const base = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(base);
+    return (ms) => { vi.setSystemTime(base + ms); };
+  }
+
+  // F5: "joined" only while a send or a promotion is actually in flight (D-4413 as ruled).
+  it('F5: a stale press flag never answers joined: a press during a confirm wait, then a press during an unrelated tick, on a closed gate, answers held', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    try {
+      r.agent.mode = 'claim-only';
+      await r.driver.tick();                                           // G1 handed out, its result lost: a confirm wait
+      const t = Date.now();
+      expect(await r.driver.rotateNow(t)).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();                                           // the wait: the tick returns `none`, the press flag stays set
+      expect(r.agent.calls).toBe(1);
+      r.rows.linkUp = false;                                           // the gate closes
+      const unrelated = r.driver.tick();                               // an unrelated 60 s tick is running when the next press lands
+      const a = await r.driver.rotateNow(t + 120_000);
+      await unrelated;
+      expect(a, 'nothing is in flight: not joined').not.toMatchObject({ ok: true, outcome: 'joined' });
+      expect(a).toMatchObject({ ok: false, error: 'held', hold: 'link-down' });
+    } finally { await r.app.close(); }
+  });
+
+  it('F5: a second press while the first press\'s own tick is still before its send answers the rate limit, not joined', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    try {
+      const t = Date.now();
+      expect(await r.driver.rotateNow(t)).toMatchObject({ ok: true, outcome: 'started' });
+      expect(await r.driver.rotateNow(t + 1)).toMatchObject({ ok: false, error: 'rate-limited' });
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(1);
+    } finally { await r.app.close(); }
+  });
+
+  // F8: the recorded-promotion arm.
+  it('F8: a press against a recorded promotion that stalled between ticks answers joined and starts nothing', async () => {
+    let armed = true;
+    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st, writeValue: async (p, v) => {
+      if (armed && p === st.paths.previous) { armed = false; throw Object.assign(new Error('injected'), { code: 'EACCES' }); }
+      return st.writeValue(p, v);
+    } }) });
+    try {
+      await r.driver.tick();                                           // the op result confirms G1; step (b) fails after `promoting` is recorded
+      expect(r.printed.some((l) => l.includes('a driver tick failed'))).toBe(true);
+      expect((await onDisk(r)).promoting).not.toBeNull();
+      expect(r.driver.view().phase).toBe('promoting');
+      const calls = r.agent.calls;
+      expect(await r.driver.rotateNow(Date.now() + 120_000)).toMatchObject({ ok: true, outcome: 'joined' });
+      await r.driver.tick();                                           // the retry finishes the promotion; the press staged nothing
+      expect(r.agent.calls).toBe(calls);
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+    } finally { await r.app.close(); }
+  });
+
+  // F7: the third slot's presentation is attributed to the exit rotation's value.
+  it('F7: a presentation of the exit rotation\'s value in the THIRD pending slot counts for the new current (no extra grace, no extra rotation)', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    const at = clock();
+    try {
+      r.agent.mode = 'claim-only';
+      await r.driver.tick();                                           // G1 handed out, lost
+      at(CONFIRM_DEADLINE_MS + 1000);
+      await r.driver.tick();                                           // G2 handed out, lost
+      at(2 * CONFIRM_DEADLINE_MS + 2000);
+      r.agent.mode = 'lose-result';                                    // the exit rotation G3: the fleet writes and proves it, the result is lost
+      await r.driver.tick();
+      const pend = (await onDisk(r)).pending;
+      expect(pend).toHaveLength(3);
+      expect(r.agent.calls).toBe(3);
+      at(2 * CONFIRM_DEADLINE_MS + 4000);
+      await r.driver.tick();                                           // a generation read names G3: promoted
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+      const s = await onDisk(r);
+      expect(s.current.id).toBe(pend[2]!.id);
+      expect(s.previous, 'the fleet\'s own proof call against slot 2 counted as the new current presented').toMatchObject({ currentPresented: true });
+    } finally { await r.app.close(); }
+  });
+
+  // F9 (option b): D-4412's busy arm is dead in the driver, so it is removed; what the driver really does is pinned.
+  it('F9: a retired presentation made while a send is in flight is weighed on the next tick, not lost, and owes one rotation', async () => {
+    const L = 'e'.repeat(64);
+    let rr: Rig | null = null;
+    let during: (() => Promise<void>) | null = null;
+    let sends = 0;
+    const link: TokenSyncLink = { send: async (code) => {
+      sends++;
+      if (during !== null) { const f = during; during = null; await f(); return { kind: 'unsent' }; }
+      return (rr as Rig).agent.send(code);
+    } };
+    const r = await rig({ handMade: L, link });
+    rr = r;
+    try {
+      await r.driver.tick();
+      await r.lane(r.fleetValue() as string);
+      r.clock.offset = GRACE_MS + 1000;
+      await r.driver.tick();
+      expect(r.driver.view()).toMatchObject({ phase: 'idle', rotationOwed: false, retiredRefused: true });
+      const base = sends;
+      during = async () => { expect(await r.lane(L)).toBe(401); };       // the retired value is presented mid-send
+      expect(await r.driver.rotateNow(Date.now() + r.clock.offset)).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();
+      expect(sends).toBe(base + 1);
+      expect(r.driver.view().retiredPresented).toBe(1);
+      expect(r.driver.view().rotationOwed, 'not yet weighed: the weighing is the next tick\'s preamble').toBe(false);
+      await r.driver.tick();
+      expect(sends, 'weighed on the next tick: one rotation owed and run').toBe(base + 2);
+      expect(r.printed.some((l) => l.includes('retired-presented'))).toBe(true);
+    } finally { await r.app.close(); }
+  });
+
+  // F10: the hand-out line names the node even when the link drops while the record is being written.
+  it('F10: the hand-out line names the node the code was bound to even when the op ends before the record lands', async () => {
+    let rr: Rig | null = null;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((res) => { release = res; });
+    let entered: () => void = () => {};
+    const enteredP = new Promise<void>((res) => { entered = res; });
+    let claimed: Promise<unknown> | null = null;
+    let armed = true;
+    let ended: () => void = () => {};
+    const endedP = new Promise<void>((res) => { ended = res; });
+    const link: TokenSyncLink = { async send(code) {
+      claimed = Promise.resolve((rr as Rig).app.inject({ method: 'POST', url: '/api/token/claim', payload: { code, nodeId: NODE } }));
+      await enteredP;                                                  // the claim is burned and its record is in flight
+      ended();
+      return { kind: 'lost', why: 'disconnected' };                    // the link drops during that write: `send` ends, the binding is gone
+    } };
+    const r = await rig({ handMade: 'e'.repeat(64), link, wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (armed && s.pending.some((p) => p.handedOutAt !== null)) { armed = false; entered(); await gate; }
+      return st.writeState(s);
+    } }) });
+    rr = r;
+    try {
+      const tick = r.driver.tick();
+      await endedP;
+      await new Promise((res) => setTimeout(res, 25));                 // `send` has settled and its `finally` has run; the record is still unwritten
+      release();
+      await tick;
+      await claimed;
+      const lines = r.printed.filter((l) => l.includes('claim door handed-out'));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(new RegExp(`handed out to node ${NODE}$`));
+    } finally { release(); await r.app.close(); }
+  });
+
+  // F11: the hand-out-not-recorded lines carry the outcome word and the node id.
+  it('F11: a hand-out that cannot be recorded logs the outcome word and the node id, in the driver\'s line and the route\'s, never a code or a value', async () => {
+    let failNext = true;
+    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (failNext && s.pending.some((p) => p.handedOutAt !== null)) { failNext = false; throw enospc(); }
+      return st.writeState(s);
+    } }) });
+    try {
+      await r.driver.tick();
+      const lines = r.printed.filter((l) => l.includes('could not be recorded'));
+      expect(lines, 'the driver\'s line and the route\'s').toHaveLength(2);
+      for (const l of lines) {
+        expect(l).toContain('unavailable');
+        expect(l).toContain(`node ${NODE}`);
+      }
+      const secrets = [...r.agent.codes, 'e'.repeat(64)];
+      for (const l of r.printed) for (const x of secrets) expect(l.includes(x)).toBe(false);
+    } finally { await r.app.close(); }
+  });
+
+  // F12: the pending-cap alert says what is true where it prints. A tick can print it only with three values pending and all
+  // three past their deadline (with two handed out, an unexpired one is a rotation in flight and `nextAction` answers `none`
+  // before any hold), where no exit remains.
+  it('F12: the pending-cap alert, printed at the third slot, does not promise an exit that is spent', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    const at = clock();
+    try {
+      r.agent.mode = 'claim-only';
+      await r.driver.tick();
+      at(CONFIRM_DEADLINE_MS + 1000);
+      await r.driver.tick();                                           // G2 handed out
+      at(2 * CONFIRM_DEADLINE_MS + 2000);
+      await r.driver.tick();                                           // the exit: G3 handed out, three handed out
+      const alerts = (): string[] => r.printed.filter((l) => l.includes('handed-out values unaccounted for'));
+      expect(alerts(), 'nothing printed while the third value is inside its deadline').toHaveLength(0);
+      at(4 * CONFIRM_DEADLINE_MS);
+      await r.driver.tick();                                           // all three overdue and nothing can start
+      expect(r.driver.view()).toMatchObject({ hold: 'pending-cap' });
+      expect(alerts()).toHaveLength(1);
+      expect(alerts()[0], 'all three overdue: the line must not name a deadline as the way out').not.toContain('past their confirm deadline');
+      expect(alerts()[0]).toContain('until the fleet confirms one');
+    } finally { await r.app.close(); }
   });
 });

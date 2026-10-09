@@ -664,7 +664,7 @@ describe('D-4410: the retiring record (a digest in box-token.json until the appe
 describe('D-4412: a retired presentation owes one forward rotation, bounded', () => {
   const idle = (): BoxTokenState => ({ ...base(), origin: 'rotated' });
   const ask = (over: Partial<Parameters<typeof oweForRetiredPresentation>[0]> = {}) =>
-    oweForRetiredPresentation({ state: idle(), fresh: 1, busy: false, lastOwedAt: null, now: 10_000_000, ...over });
+    oweForRetiredPresentation({ state: idle(), fresh: 1, lastOwedAt: null, now: 10_000_000, ...over });
 
   it('a new retired presentation on an idle, nothing-owed state owes the word retired-presented', () => {
     expect(ask()).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
@@ -684,10 +684,6 @@ describe('D-4412: a retired presentation owes one forward rotation, bounded', ()
     ['a recorded promotion', (s: BoxTokenState) => ({ ...s, promoting: { id: '1'.repeat(16) } })],
   ])('nothing new is owed while a rotation is in flight: %s', (_n, mk) => {
     expect(ask({ state: mk(idle()) })).toBeNull();
-  });
-
-  it('nothing new is owed while a send or a promotion is running (the driver feeds it)', () => {
-    expect(ask({ busy: true })).toBeNull();
   });
 
   it('at most one per HOLD_REPROBE_MS: just inside the bound owes nothing, at it owes again', () => {

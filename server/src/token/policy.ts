@@ -148,12 +148,13 @@ export function foreignUnderUnusableRetired(i: { retiredUnusable: boolean; state
 // ── D-4412: a retired value presented on a box-token lane owes one forward rotation, bounded ────────────────
 /** `fresh` is the retired presentations the holder counted since the driver last asked. The state returned owes a
  *  rotation for the word `retired-presented`, or null when nothing new is owed: no new presentation; a rotation
- *  already owed, staged, handed out, promoting or running (`busy`); or one already owed for this word within
- *  `HOLD_REPROBE_MS`. The server cannot tell the fleet from the holder of the leaked value, so this bound is the
- *  protection: the gate, the one-rotation-at-a-time rule and the backoff then apply as to every rotation. */
-export function oweForRetiredPresentation(i: { state: BoxTokenState; fresh: number; busy: boolean; lastOwedAt: number | null; now: number }): BoxTokenState | null {
+ *  already owed, staged, handed out or promoting; or one already owed for this word within `HOLD_REPROBE_MS`. "Or
+ *  running" needs no input of its own: the driver asks only between ticks, and ticks are single-flight, so a send or
+ *  a promotion that runs has already left its mark in `pending` or `promoting` (review 352, F9). The server cannot tell
+ *  the fleet from the holder of the leaked value, so this bound is the protection: the gate, the one-rotation-at-a-time rule and the backoff then apply as to every rotation. */
+export function oweForRetiredPresentation(i: { state: BoxTokenState; fresh: number; lastOwedAt: number | null; now: number }): BoxTokenState | null {
   const s = i.state;
-  if (i.fresh <= 0 || i.busy || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
+  if (i.fresh <= 0 || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
   if (i.lastOwedAt !== null && i.now - i.lastOwedAt < HOLD_REPROBE_MS) return null;
   return owe(s, 'retired-presented');
 }

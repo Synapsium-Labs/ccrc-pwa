@@ -127,13 +127,14 @@ export class BoxTokenDriver implements TokenRouteDriver {
     return this.running;
   }
 
-  /** "Rotate now". `joined` only while a send or a promotion is actually in flight (D-4413): a send running, a promotion
-   *  running or recorded, or an unspent press whose tick is still running. A press during a confirm wait or an own-write
-   *  backoff is a new request (`started`); it may stage one more rotation once that wait ends. At the pending cap the
-   *  `pending-cap` hold answers first, before the rate limit; with nothing in flight that is the answer, not `joined`. */
+  /** "Rotate now". `joined` only while a send or a promotion is actually in flight (D-4413): a send running, or a promotion
+   *  running or recorded. A flag left set by an earlier press is not an in-flight rotation, so it never answers `joined`
+   *  (review 352, F5). A press during a confirm wait or an own-write backoff is a new request (`started`); it may stage
+   *  one more rotation once that wait ends. At the pending cap the `pending-cap` hold answers first, before the rate
+   *  limit; with nothing in flight that is the answer, not `joined`. */
   async rotateNow(now: number): Promise<RotateAnswer> {
     const s = this.state;
-    if (this.busy > 0 || s?.promoting != null || (this.rotateRequested && this.running !== null)) {
+    if (this.busy > 0 || s?.promoting != null) {
       return { ok: true, outcome: 'joined', view: this.view() };
     }
     const gate = this.gate(now);
@@ -157,21 +158,25 @@ export class BoxTokenDriver implements TokenRouteDriver {
       throw new Error('commitHandOut: the generation is not staged');
     }
     const next = handedOutState(s, generation, at);
+    // The node `send` bound this generation's code to, read BEFORE the await (review 352, F10): `send`'s `finally` deletes the
+    // binding once `link.send` settles, which a link drop or an op timeout can do while the record below is still being
+    // written. It is printed only once it passed NODE_ID_RE (the gate's `nodeIdMeasured` is a flag, not the shape).
+    const bound = this.boundNode.get(generation);
+    const to = bound !== undefined && NODE_ID_RE.test(bound) ? ` to node ${bound}` : '';
+    const seq = next.pending.find((p) => p.id === generation)?.seq;
     // In memory FIRST, in the same synchronous step as the check above, as `commit()` does (final review, D-4409 item 5):
     // a lost op result folded while the write below is in flight must see the value handed out and keep it. Assigning
     // this snapshot after the await would overwrite whatever that fold wrote, and drop a value the fleet is about to hold.
     this.state = next;
     try {
       await this.persist(next);
-      const g = next.pending.find((p) => p.id === generation);
-      // Spec 7.1: the outcome's word and its node id: the node `send` bound this generation's code to, and only once it
-      // passed NODE_ID_RE (the gate's `nodeIdMeasured` is a flag, not the shape).
-      const bound = this.boundNode.get(generation);
-      const to = bound !== undefined && NODE_ID_RE.test(bound) ? ` to node ${bound}` : '';
-      this.warn(`ccrc-server: box token: claim door handed-out: generation #${g?.seq} handed out${to}`);
+      // Spec 7.1: the outcome's word and its node id.
+      this.warn(`ccrc-server: box token: claim door handed-out: generation #${seq} handed out${to}`);
     } catch (e) {
       await this.discard([generation]);
-      this.warn(`ccrc-server: box token: the hand-out of a generation could not be recorded (${errno(e)}); it was discarded`);
+      // The same two facts for the outcome that did not land (review 352, F11): its word ('unavailable', the refusal the route
+      // answers) and the node id; never a code, a value or a digest.
+      this.warn(`ccrc-server: box token: claim door unavailable: the hand-out of generation #${seq}${to} could not be recorded (${errno(e)}); it was discarded`);
       throw e;
     }
   }
@@ -399,7 +404,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
       // and accepted until it is overdue and a later rotation drops it. That is safe under G3 (the value the fleet holds is
       // never dropped unconfirmed), at the cost of one extra rotation.
       if (early.kind === 'held') return;
-      this.logRetired('grace', early.refused);
+      this.logRetired('later-confirmed', early.refused);
     }
     await this.commit({ ...this.mustState(), promoting: { id } });                                   // (a)
     const renamed = (await store.readValue(store.paths.pending(id))).kind === 'absent';
@@ -458,11 +463,16 @@ export class BoxTokenDriver implements TokenRouteDriver {
     return true;
   }
 
-  /** The retirement line (spec §7.1): one wording for the `retire` action and for the early retirement at a promotion. */
-  private logRetired(why: 'grace' | 'hard-bound', refused: boolean): void {
+  /** The retirement line (spec §7.1). The `retire` action's two (a grace end, the hard bound) and the early retirement at a
+   *  promotion say different things, because a different thing ended the previous value: the early one names the later
+   *  generation the fleet confirmed, never "grace ended" (D-4411's wording, review 352). */
+  private logRetired(why: 'grace' | 'hard-bound' | 'later-confirmed', refused: boolean): void {
+    const and = refused ? ' and is refused' : '';
     this.warn(why === 'hard-bound'
       ? 'ccrc-server: box token: the previous value was retired at the hard bound, before the new value was presented'
-      : `ccrc-server: box token: grace ended; the previous value was retired${refused ? ' and is refused' : ''}`);
+      : why === 'later-confirmed'
+        ? `ccrc-server: box token: the fleet confirmed a later generation; the previous value was retired early${and}`
+        : `ccrc-server: box token: grace ended; the previous value was retired${and}`);
   }
 
   /** Retirement (D-4410): the digest is written to `box-token.json` (the `retiring` record) BEFORE the value leaves the
@@ -550,13 +560,17 @@ export class BoxTokenDriver implements TokenRouteDriver {
   }
 
   /** D-4412: a retired value presented on any box-token lane makes one forward rotation owed with its own word, within
-   *  the policy's bound. The holder counts the presentations; `oweForRetiredPresentation` decides; this only feeds it. */
+   *  the policy's bound. The holder counts the presentations; `oweForRetiredPresentation` decides; this only feeds it.
+   *  It runs only in `runTick`'s preamble, and ticks are single-flight, so no send or promotion is running when it does:
+   *  "nothing new is owed while one runs" holds by that ordering and needs no input of its own (review 352, F9). A
+   *  presentation made during a send is weighed on the next tick, and the state it finds then (a pending value, an owed
+   *  rotation) is what bounds it. */
   private async noteRetiredPresentations(now: number): Promise<void> {
     const total = this.deps.holder.counters().retired;
     const fresh = total - this.retiredSeen;
     this.retiredSeen = total;
     if (this.state === null || fresh <= 0) return;
-    const next = oweForRetiredPresentation({ state: this.state, fresh, busy: this.busy > 0, lastOwedAt: this.retiredOwedAt, now });
+    const next = oweForRetiredPresentation({ state: this.state, fresh, lastOwedAt: this.retiredOwedAt, now });
     if (next === null) return;
     this.retiredOwedAt = now;
     this.warn('ccrc-server: box token: a retired value was presented on a box-token lane; a forward rotation is owed (retired-presented)');
@@ -672,9 +686,11 @@ export class BoxTokenDriver implements TokenRouteDriver {
     const changed = s !== null && (s.hold !== (h?.hold ?? null) || s.holdNode !== (h?.node ?? null));
     if (s !== null) this.state = { ...s, hold: h?.hold ?? null, holdNode: h?.node ?? null };
     if (!same && h !== null) this.warn(`ccrc-server: box token: held: ${h.hold}${h.node !== null ? ` (${h.node})` : ''}`);
-    // Spec §5.1 "Pending values": reaching the cap takes repeated lost hand-outs, which is itself the alert.
+    // Spec §5.1 "Pending values": reaching the cap takes repeated lost hand-outs, which is itself the alert. A tick holds here only
+    // with three values pending and all three past their deadline (with fewer, an unexpired one is a rotation in flight and
+    // `nextAction` answers `none` before any hold), where D-4413's exit is spent: the line names no way out but a confirmation.
     if (!same && h?.hold === 'pending-cap') {
-      this.warn('ccrc-server: box token: handed-out values unaccounted for: the pending cap is reached, and no rotation starts until the fleet confirms one, or both are past their confirm deadline');
+      this.warn('ccrc-server: box token: handed-out values unaccounted for: the pending cap is reached with every slot in use and past its confirm deadline, and no rotation starts until the fleet confirms one');
     }
     if (changed) await this.commit(this.mustState());
   }
