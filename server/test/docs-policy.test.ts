@@ -778,3 +778,407 @@ describe("docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement
     expect(a.headers).not.toBe(DOCS_RESPONSE_HEADERS);
   });
 });
+
+// ===== W3 Task 1: the routes' L1, part 1 =====
+// The fetch-lane, cache, index and log constants (W3 refinement (b), section 6.4, section 6.5), the docs-busy,
+// foreign-request and body-error bodies (section 3.7, section 3.8; refinements (e), (h)), the refusal-log cadence
+// (refinement (o)), the refresh's fetch half (refinement (m)), the hardened Retry-After (W2's carry) and the
+// node-first keys (refinement (p), section 3.12; M3.13's L1 half). Every expected value below is written out from the
+// spec, never read back from `policy.ts`; a qualified ref is built from `DOCS_REF_PREFIXES`, never typed.
+//
+// Imports sit here for W2 Task 3's reason: no line above this block moves.
+import {
+  DOCS_CACHE_BYTES, DOCS_DEFECT_MESSAGE, DOCS_DRAFT_SIZE_ENTRIES, DOCS_FETCH_BUSY_RETRY_MS, DOCS_FETCH_GLOBAL,
+  DOCS_FETCH_MAX_WAIT_MS, DOCS_FETCH_QUEUE, DOCS_INDEX_CACHE_MS, DOCS_LISTING_MAP_ENTRIES, DOCS_LISTING_PROVENANCE_MS,
+  DOCS_PRIMARY_NODE, DOCS_READ_BUSY_RETRY_MS, DOCS_REFRESH_SKIPPED, DOCS_REFUSAL_LOG_MS, docsBlobKey,
+  docsBodyErrorVerdict, docsBusyBody, docsDraftSizeKey, docsForeignRequestBody, docsIndexCacheable, docsIndexFlightKey,
+  docsListingKey, docsLogDue, docsNodeKey, docsProjectKey, docsRefreshAnswer, docsRefreshFetchHalf,
+  docsRefreshFlightKey, docsShowFlightKey, docsTreeFlightKey,
+  type DocsBodyError, type DocsLaneName, type DocsProvenance, type DocsRefreshAnswer, type DocsRefreshHalf,
+} from '../src/docs/policy.js';
+import {
+  DOCS_STALE_MS, docsRefText, type DocsFetchOk, type DocsRefSpec, type DocsTreeResponse,
+} from '../../shared/docs.js';
+
+describe('W3 T1: the fetch-lane, cache, index and log constants (refinement (b), section 6.4, section 6.5)', () => {
+  const lines = T4_POLICY_SRC.split('\n');
+
+  it('each has the value the spec gives it', () => {
+    expect(DOCS_READ_BUSY_RETRY_MS).toBe(2000);
+    expect(DOCS_FETCH_GLOBAL).toBe(2);
+    expect(DOCS_FETCH_QUEUE).toBe(8);
+    expect(DOCS_FETCH_MAX_WAIT_MS).toBe(20000);
+    expect(DOCS_FETCH_BUSY_RETRY_MS).toBe(5000);
+    expect(DOCS_CACHE_BYTES).toBe(64 * 1024 * 1024);
+    expect(DOCS_LISTING_MAP_ENTRIES).toBe(50000);
+    expect(DOCS_INDEX_CACHE_MS).toBe(30000);
+    expect(DOCS_DRAFT_SIZE_ENTRIES).toBe(10000);
+    expect(DOCS_REFUSAL_LOG_MS).toBe(60000);
+  });
+
+  it('each numeric constant is its own integer literal, on exactly one line', () => {
+    for (const line of [
+      'export const DOCS_READ_BUSY_RETRY_MS = 2000;',
+      'export const DOCS_FETCH_GLOBAL = 2;',
+      'export const DOCS_FETCH_QUEUE = 8;',
+      'export const DOCS_FETCH_MAX_WAIT_MS = 20000;',
+      'export const DOCS_FETCH_BUSY_RETRY_MS = 5000;',
+      'export const DOCS_CACHE_BYTES = 67108864;',
+      'export const DOCS_LISTING_MAP_ENTRIES = 50000;',
+      'export const DOCS_INDEX_CACHE_MS = 30000;',
+      'export const DOCS_DRAFT_SIZE_ENTRIES = 10000;',
+      'export const DOCS_REFUSAL_LOG_MS = 60000;',
+    ]) expect(lines.filter((l) => l === line), line).toHaveLength(1);
+  });
+
+  it('DOCS_LISTING_PROVENANCE_MS is DOCS_STALE_MS by definition (section 6.5): derived, never a literal of its own', () => {
+    expect(DOCS_LISTING_PROVENANCE_MS).toBe(600000);
+    expect(DOCS_LISTING_PROVENANCE_MS).toBe(DOCS_STALE_MS);
+    expect(lines.filter((l) => l === 'export const DOCS_LISTING_PROVENANCE_MS = DOCS_STALE_MS;')).toHaveLength(1);
+  });
+
+  it('DOCS_PRIMARY_NODE is the one node value: a non-empty string with no NUL (section 3.12)', () => {
+    expect(typeof DOCS_PRIMARY_NODE).toBe('string');
+    expect(DOCS_PRIMARY_NODE.length).toBeGreaterThan(0);
+    expect(DOCS_PRIMARY_NODE.includes(String.fromCharCode(0))).toBe(false);
+    expect(lines.filter((l) => l === "export const DOCS_PRIMARY_NODE = 'primary';")).toHaveLength(1);
+  });
+});
+
+describe('W3 T1: docsBusyBody, the one docs-busy producer (section 6.3, section 6.4, section 3.7)', () => {
+  it.each([
+    ['read', { ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 2000 }, 2],
+    ['fetch', { ok: false, failure: 'docs-busy', lane: 'fetch', retryAfterMs: 5000 }, 5],
+  ] as const)('the %s lane answers %j, Retry-After %i s, status 503', (lane, want, seconds) => {
+    const name: DocsLaneName = lane;
+    expect(docsBusyBody(name)).toStrictEqual(want);
+    expect(docsRetryAfterSeconds(docsBusyBody(name))).toBe(seconds);
+    expect(DOCS_FAILURE_HTTP[docsBusyBody(name).failure]).toBe(503);
+  });
+
+  it("answers a fresh object each call, so no caller can change another caller's body", () => {
+    expect(docsBusyBody('read')).not.toBe(docsBusyBody('read'));
+  });
+});
+
+describe("W3 T1: docsRetryAfterSeconds is finite and positive or absent (refinement (h), W2's carry)", () => {
+  const busy = (retryAfterMs: number): DocsFailureBody =>
+    ({ ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs });
+
+  it.each([NaN, Infinity, -Infinity, -5000, -1, 0, -0])('docs-busy with retryAfterMs %s sends no header', (ms) => {
+    expect(docsRetryAfterSeconds(busy(ms))).toBeNull();
+  });
+
+  it.each([[0.5, 1], [1, 1], [999, 1], [1000, 1], [1001, 2], [2000, 2], [5000, 5]] as const)(
+    'docs-busy with retryAfterMs %s answers %i s, rounded up', (ms, seconds) => {
+      expect(docsRetryAfterSeconds(busy(ms))).toBe(seconds);
+    });
+
+  it('docs-busy with no retryAfterMs at all sends no header', () => {
+    expect(docsRetryAfterSeconds({ ok: false, failure: 'docs-busy', lane: 'fetch' })).toBeNull();
+  });
+
+  it('caps-unknown is 5 s whatever its body carries', () => {
+    for (const retryAfterMs of [NaN, -1, 0, 9000]) {
+      expect(docsRetryAfterSeconds({ ok: false, failure: 'caps-unknown', retryAfterMs }), String(retryAfterMs)).toBe(5);
+    }
+  });
+
+  it("fetch-too-soon's wait still rides its body only: no header", () => {
+    expect(docsRetryAfterSeconds({ ok: false, failure: 'fetch-too-soon', retryAfterMs: 9000 })).toBeNull();
+  });
+});
+
+describe('W3 T1: docsForeignRequestBody, the 403 for a refused provenance verdict (section 3.7, section 3.8)', () => {
+  type Refused = Exclude<DocsProvenance, { ok: true }>;
+  const ROWS: readonly (readonly [what: string, verdict: Refused, want: DocsFailureBody])[] = [
+    ['navigation', { ok: false, why: 'navigation' }, { ok: false, failure: 'foreign-request', why: 'navigation' }],
+    ['marker', { ok: false, why: 'marker' }, { ok: false, failure: 'foreign-request', why: 'marker' }],
+    ['site, cross-site', { ok: false, why: 'site', site: 'cross-site' },
+      { ok: false, failure: 'foreign-request', why: 'site', site: 'cross-site' }],
+    ['site, an empty value', { ok: false, why: 'site', site: '' },
+      { ok: false, failure: 'foreign-request', why: 'site', site: '' }],
+  ];
+
+  it.each(ROWS)('%s', (_what, verdict, want) => {
+    const body = docsForeignRequestBody(verdict);
+    expect(body).toStrictEqual(want);
+    expect(Object.hasOwn(body, 'site'), 'site rides only a verdict that carries one').toBe(Object.hasOwn(want, 'site'));
+    expect(Object.hasOwn(body, 'verdict'), 'never a verdict key: no login overlay').toBe(false);
+    expect(DOCS_FAILURE_HTTP[body.failure]).toBe(403);
+  });
+
+  it("carries docsProvenance's own refusals: a bare request is marker, a sibling is site", () => {
+    const marker = docsProvenance({});
+    const site = docsProvenance({ 'sec-fetch-site': 'same-site' });
+    if (marker.ok || site.ok) throw new Error('docsProvenance admitted a request with no marker');
+    expect(docsForeignRequestBody(marker)).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
+    expect(docsForeignRequestBody(site))
+      .toStrictEqual({ ok: false, failure: 'foreign-request', why: 'site', site: 'same-site' });
+  });
+});
+
+describe('W3 T1: docsBodyErrorVerdict, a refused request body (refinement (e))', () => {
+  const BODY: DocsBodyError = { kind: 'body', body: { ok: false, failure: 'bad-query', why: 'body' } };
+
+  it.each([
+    'FST_ERR_CTP_INVALID_JSON_BODY', 'FST_ERR_CTP_EMPTY_JSON_BODY', 'FST_ERR_CTP_BODY_TOO_LARGE',
+    'FST_ERR_CTP_INVALID_MEDIA_TYPE', 'FST_ERR_CTP_INVALID_CONTENT_LENGTH',
+  ])('%s is bad-query {why:body}, status 400', (code) => {
+    const v = docsBodyErrorVerdict(code);
+    expect(v).toStrictEqual(BODY);
+    if (v.kind !== 'body') throw new Error('not a body verdict');
+    expect(DOCS_FAILURE_HTTP[v.body.failure]).toBe(400);
+  });
+
+  it.each([
+    ['FST_ERR_BAD_URL'], ['FST_ERR_NOT_FOUND'], ['ERR_X'], [''], ['fst_err_ctp_invalid_json_body'],
+    ['X_FST_ERR_CTP_INVALID_JSON_BODY'], [undefined], [null], [42], [{ code: 'FST_ERR_CTP_BODY_TOO_LARGE' }],
+  ])('%j is a defect: re-thrown to the default handler', (code) => {
+    expect(docsBodyErrorVerdict(code)).toStrictEqual({ kind: 'defect' });
+  });
+
+  it('answers a fresh body each call', () => {
+    const a = docsBodyErrorVerdict('FST_ERR_CTP_BODY_TOO_LARGE');
+    const b = docsBodyErrorVerdict('FST_ERR_CTP_BODY_TOO_LARGE');
+    if (a.kind !== 'body' || b.kind !== 'body') throw new Error('not a body verdict');
+    expect(a.body).not.toBe(b.body);
+  });
+
+  it("a defect's 500 carries DOCS_DEFECT_MESSAGE, fixed text naming no path and no stderr", () => {
+    expect(DOCS_DEFECT_MESSAGE).toBe('docs route defect');
+  });
+});
+
+describe('W3 T1: docsLogDue, at most one refusal line a minute per reason (refinement (o), section 3.8)', () => {
+  it.each([
+    ['never logged, at time 0', undefined, 0, true],
+    ['never logged, later', undefined, 123456, true],
+    ['one ms short of a minute', 0, 59999, false],
+    ['exactly a minute', 0, 60000, true],
+    ['a minute after a later line', 1000, 61000, true],
+    ['one ms short after a later line', 1000, 60999, false],
+    ['the same instant', 5000, 5000, false],
+  ] as const)('%s', (_what, last, now, want) => {
+    expect(docsLogDue(last, now)).toBe(want);
+  });
+});
+
+describe("W3 T1: docsRefreshFetchHalf, the refresh's fetch half (refinement (m), section 3.4)", () => {
+  const fail = (failure: DocsFailure, extra: Partial<DocsFailureBody> = {}): DocsFailureBody =>
+    ({ ok: false, failure, ...extra });
+  const PRE_EXEC: readonly DocsFailure[] = ['caps-unknown', 'unsupported', 'docs-busy'];
+
+  it.each([
+    ['caps-unknown', fail('caps-unknown')],
+    ['unsupported', fail('unsupported')],
+    ['docs-busy', fail('docs-busy', { lane: 'fetch', retryAfterMs: 5000 })],
+  ] as const)('%s ends the request with its own status: refuse, carrying the body itself', (_word, body) => {
+    const half: DocsRefreshHalf = docsRefreshFetchHalf(body);
+    expect(half).toStrictEqual({ kind: 'refuse', body });
+    if (half.kind !== 'refuse') throw new Error('not a refusal');
+    expect(half.body).toBe(body);
+  });
+
+  it.each([
+    ['fetch-too-soon with its wait', fail('fetch-too-soon', { retryAfterMs: 9000 })],
+    ['remote-branch-absent', fail('remote-branch-absent', { branch: 'ws/a' })],
+    ['ref-locked, the lock already gone (null)', fail('ref-locked', { lockAgeMs: null })],
+    ['ref-locked, unmeasured (ABSENT)', fail('ref-locked')],
+    ['link-failed', fail('link-failed', { cause: 'closed' })],
+    ['not-granted', fail('not-granted')],
+    ['malformed-answer', fail('malformed-answer', { why: 'schema' })],
+  ] as const)('%s is a failed half carrying its body verbatim', (_what, body) => {
+    const half = docsRefreshFetchHalf(body);
+    expect(half).toStrictEqual({ kind: 'half', fetch: { state: 'failed', failure: body } });
+    if (half.kind !== 'half' || half.fetch.state !== 'failed') throw new Error('not a failed half');
+    expect(half.fetch.failure).toBe(body);
+  });
+
+  it('absent stays absent and null stays null: ref-locked\'s lockAgeMs as ccd said it', () => {
+    const absent = docsRefreshFetchHalf(fail('ref-locked'));
+    const gone = docsRefreshFetchHalf(fail('ref-locked', { lockAgeMs: null }));
+    if (absent.kind !== 'half' || absent.fetch.state !== 'failed') throw new Error('not a failed half');
+    if (gone.kind !== 'half' || gone.fetch.state !== 'failed') throw new Error('not a failed half');
+    expect(Object.hasOwn(absent.fetch.failure, 'lockAgeMs')).toBe(false);
+    expect(gone.fetch.failure.lockAgeMs).toBeNull();
+  });
+
+  it('every word but the three pre-exec ones is a failed half, never a refusal', () => {
+    for (const word of Object.keys(DOCS_FAILURES) as DocsFailure[]) {
+      expect(docsRefreshFetchHalf(fail(word)).kind, word).toBe(PRE_EXEC.includes(word) ? 'refuse' : 'half');
+    }
+  });
+
+  it('an ok run is a ran half carrying the answer itself', () => {
+    const answer: DocsFetchOk = {
+      v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 12, branch: 'main', trackedRef: DOCS_REF_PREFIXES[1] + 'main',
+      before: null, after: 'a'.repeat(40), moved: 'created', stamp: 'written',
+    };
+    const half = docsRefreshFetchHalf({ ok: true, answer });
+    expect(half).toStrictEqual({ kind: 'half', fetch: { state: 'ran', answer } });
+    if (half.kind !== 'half' || half.fetch.state !== 'ran') throw new Error('not a ran half');
+    expect(half.fetch.answer).toBe(answer);
+  });
+
+  it('DOCS_REFRESH_SKIPPED is the local-ref half, frozen', () => {
+    expect(DOCS_REFRESH_SKIPPED).toStrictEqual({ state: 'skipped', why: 'local-ref' });
+    expect(Object.isFrozen(DOCS_REFRESH_SKIPPED)).toBe(true);
+  });
+});
+
+describe("W3 T1: docsRefreshAnswer, a refresh that ran no exec at all (refinement (m), section 3.4)", () => {
+  const fail = (failure: DocsFailure, extra: Partial<DocsFailureBody> = {}): DocsFailureBody =>
+    ({ ok: false, failure, ...extra });
+  const TREE: DocsTreeResponse = { ok: true, tree: {} as DocsTreeOk, refreshDue: false };
+  const RAN = { state: 'ran', answer: {} as DocsFetchOk } as const;
+  const FAILED = { state: 'failed', failure: fail('fetch-too-soon', { retryAfterMs: 9000 }) } as const;
+  const PRE_EXEC: readonly DocsFailure[] = ['caps-unknown', 'unsupported', 'docs-busy'];
+
+  it.each([
+    ['caps-unknown', fail('caps-unknown')],
+    ['unsupported', fail('unsupported')],
+    ['docs-busy', fail('docs-busy', { lane: 'read', retryAfterMs: 2000 })],
+  ] as const)('a skipped fetch and a %s tree half: no exec ran, so refuse, carrying the body itself', (_word, body) => {
+    const out: DocsRefreshAnswer = docsRefreshAnswer(DOCS_REFRESH_SKIPPED, body);
+    expect(out).toStrictEqual({ kind: 'refuse', body });
+    if (out.kind !== 'refuse') throw new Error('not a refusal');
+    expect(out.body).toBe(body);
+  });
+
+  it.each([
+    ['an ok tree', TREE],
+    ['a tree that failed after its exec (unresolved-ref)', fail('unresolved-ref')],
+    ['not-granted (the agent refused an exec it was sent)', fail('not-granted')],
+  ] as const)('a skipped fetch and %s: send the 200 {ok, fetch: skipped, tree}', (_what, tree) => {
+    expect(docsRefreshAnswer(DOCS_REFRESH_SKIPPED, tree))
+      .toStrictEqual({ kind: 'send', body: { ok: true, fetch: { state: 'skipped', why: 'local-ref' }, tree } });
+  });
+
+  it.each([['a ran fetch', RAN], ['a failed fetch', FAILED]] as const)(
+    '%s made an exec: a pre-exec tree word rides the 200 as the tree half', (_what, fetch) => {
+      for (const word of PRE_EXEC) {
+        const tree = fail(word);
+        expect(docsRefreshAnswer(fetch, tree), word).toStrictEqual({ kind: 'send', body: { ok: true, fetch, tree } });
+      }
+    });
+
+  it('a skipped fetch: every word but the three pre-exec ones rides the 200, never a refusal', () => {
+    for (const word of Object.keys(DOCS_FAILURES) as DocsFailure[]) {
+      expect(docsRefreshAnswer(DOCS_REFRESH_SKIPPED, fail(word)).kind, word)
+        .toBe(PRE_EXEC.includes(word) ? 'refuse' : 'send');
+    }
+  });
+});
+
+describe("W3 T1: docsIndexCacheable, a micro-cache fill only at the flight's own generation (section 6.5)", () => {
+  it.each([
+    ['no refresh since the flight began', 0, 0, true],
+    ['no refresh since, at a later generation', 3, 3, true],
+    ['a refresh settled after the flight began', 0, 1, false],
+    ['three refreshes settled after it began', 2, 5, false],
+  ] as const)('%s', (_what, atStart, now, want) => {
+    expect(docsIndexCacheable(atStart, now)).toBe(want);
+  });
+});
+
+describe('W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half)', () => {
+  const NUL = String.fromCharCode(0);
+  const N = DOCS_PRIMARY_NODE;
+  const OTHER = 'other-node';
+  const BARE_A: DocsRefSpec = { kind: 'bare', name: 'a' };
+  const LOCAL_A: DocsRefSpec = { kind: 'qualified', ref: DOCS_REF_PREFIXES[0] + 'a' };
+  const MAIN: DocsRefSpec = { kind: 'bare', name: 'main' };
+  const REPO = 'r'.repeat(64);
+  const BLOB = 'b'.repeat(40);
+
+  it('every key is its kind tag, the node, then its fields, joined by NUL and nothing else', () => {
+    expect(docsIndexFlightKey('n', 0).split(NUL)).toEqual(['index', 'n', '0']);
+    expect(docsIndexFlightKey('n', 4).split(NUL)).toEqual(['index', 'n', '4']);
+    expect(docsNodeKey('n').split(NUL)).toEqual(['node', 'n']);
+    expect(docsTreeFlightKey('n', 'demo', null, 0).split(NUL)).toEqual(['tree', 'n', 'demo', '', '0']);
+    expect(docsTreeFlightKey('n', 'demo', LOCAL_A, 3).split(NUL))
+      .toEqual(['tree', 'n', 'demo', docsRefText(LOCAL_A), '3']);
+    expect(docsShowFlightKey('n', 'demo', COMMITTED_PIN, 2097152).split(NUL)).toEqual([
+      'show', 'n', 'demo', 'committed', T3_COMMIT, COMMITTED_PIN.servedRef, 'specs', 'a.md', '2097152',
+    ]);
+    expect(docsShowFlightKey('n', 'demo', DRAFT_PIN, 2097152).split(NUL)).toEqual([
+      'show', 'n', 'demo', 'draft', 'ws/a', T3_HEAD, 'plans', 'dir/b.md', T3_FP, '2097152',
+    ]);
+    expect(docsRefreshFlightKey('n', 'demo', null).split(NUL)).toEqual(['refresh', 'n', 'demo', '']);
+    expect(docsRefreshFlightKey('n', 'demo', 'main').split(NUL)).toEqual(['refresh', 'n', 'demo', 'main']);
+    expect(docsProjectKey('n', 'demo').split(NUL)).toEqual(['project', 'n', 'demo']);
+    expect(docsBlobKey('n', REPO, BLOB).split(NUL)).toEqual(['blob', 'n', REPO, BLOB]);
+    expect(docsListingKey('n', 'demo', T3_COMMIT).split(NUL)).toEqual(['listing', 'n', 'demo', T3_COMMIT]);
+    expect(docsDraftSizeKey('n', T3_FP).split(NUL)).toEqual(['fp', 'n', T3_FP]);
+  });
+
+  it.each([
+    ['index', (node: string) => docsIndexFlightKey(node, 0)],
+    ['node', (node: string) => docsNodeKey(node)],
+    ['tree', (node: string) => docsTreeFlightKey(node, 'demo', MAIN, 0)],
+    ['show', (node: string) => docsShowFlightKey(node, 'demo', COMMITTED_PIN, 2097152)],
+    ['refresh', (node: string) => docsRefreshFlightKey(node, 'demo', 'main')],
+    ['project', (node: string) => docsProjectKey(node, 'demo')],
+    ['blob', (node: string) => docsBlobKey(node, REPO, BLOB)],
+    ['listing', (node: string) => docsListingKey(node, 'demo', T3_COMMIT)],
+    ['fp', (node: string) => docsDraftSizeKey(node, T3_FP)],
+  ] as const)('the %s key changes when ONLY its node changes (M3.13: no entry is shared across nodes)', (_k, key) => {
+    expect(key(N)).not.toBe(key(OTHER));
+  });
+
+  it('a tree key tells the default view, a bare ref, a local ref and the generation apart', () => {
+    const keys = [
+      docsTreeFlightKey(N, 'demo', null, 0),
+      docsTreeFlightKey(N, 'demo', MAIN, 0),
+      docsTreeFlightKey(N, 'demo', BARE_A, 0),
+      docsTreeFlightKey(N, 'demo', LOCAL_A, 0),
+      docsTreeFlightKey(N, 'demo', null, 1),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('a generation bump alone makes a new tree flight (section 6.4: a refresh never joins an older tree)', () => {
+    expect(docsTreeFlightKey(N, 'demo', MAIN, 0)).not.toBe(docsTreeFlightKey(N, 'demo', MAIN, 1));
+  });
+
+  it('a node generation bump alone makes a new index flight (section 6.5: a GET after a refresh never joins an older index)', () => {
+    expect(docsIndexFlightKey(N, 0)).not.toBe(docsIndexFlightKey(N, 1));
+    expect(docsNodeKey(N)).not.toBe(docsProjectKey(N, ''));
+    expect(docsNodeKey(N)).not.toBe(docsIndexFlightKey(N, 0));
+  });
+
+  it('a show key tells a committed pin from a draft pin with the same section and path, and N apart', () => {
+    const committed: DocPin = { ...COMMITTED_PIN, section: 'plans', path: 'dir/b.md' };
+    expect(docsShowFlightKey(N, 'demo', committed, 2097152))
+      .not.toBe(docsShowFlightKey(N, 'demo', DRAFT_PIN, 2097152));
+    expect(docsShowFlightKey(N, 'demo', COMMITTED_PIN, 1)).not.toBe(docsShowFlightKey(N, 'demo', COMMITTED_PIN, 2));
+  });
+
+  it('a refresh key tells the default branch from a named one', () => {
+    expect(docsRefreshFlightKey(N, 'demo', null)).not.toBe(docsRefreshFlightKey(N, 'demo', 'main'));
+  });
+
+  it('no field can shift into its neighbour: adjacent fields split differently give different keys', () => {
+    const pairs: readonly (readonly [string, string])[] = [
+      [docsTreeFlightKey(N, 'ab', { kind: 'bare', name: 'c' }, 0),
+        docsTreeFlightKey(N, 'a', { kind: 'bare', name: 'bc' }, 0)],
+      [docsShowFlightKey(N, 'demo', { ...COMMITTED_PIN, path: 'a.md1' }, 2),
+        docsShowFlightKey(N, 'demo', { ...COMMITTED_PIN, path: 'a.md' }, 12)],
+      [docsRefreshFlightKey(N, 'ab', 'c'), docsRefreshFlightKey(N, 'a', 'bc')],
+      [docsProjectKey('n1', 'demo'), docsProjectKey('n', '1demo')],
+      [docsBlobKey(N, 'a', 'bc'), docsBlobKey(N, 'ab', 'c')],
+      [docsListingKey(N, 'ab', 'c'), docsListingKey(N, 'a', 'bc')],
+      [docsDraftSizeKey('na', 'b'), docsDraftSizeKey('n', 'ab')],
+    ];
+    for (const [a, b] of pairs) expect(a).not.toBe(b);
+  });
+
+  it('the kind tag alone tells two kinds over the same fields apart', () => {
+    const same = [
+      docsBlobKey(N, 'demo', 'c'), docsListingKey(N, 'demo', 'c'), docsRefreshFlightKey(N, 'demo', 'c'),
+    ];
+    expect(new Set(same).size).toBe(3);
+    expect(docsProjectKey(N, 'demo')).not.toBe(docsDraftSizeKey(N, 'demo'));
+  });
+});

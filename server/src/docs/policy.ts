@@ -11,10 +11,10 @@
 import {
   DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
   DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS,
-  DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, isDocsBareRef, isDocsCommit, isDocsFingerprint, isDocsProject,
-  isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef,
-  type DocContentClass, type DocPin, type DocSectionSlug, type DocsFailure, type DocsFailureBody, type DocsRefSpec,
-  type DocsTreeOk,
+  DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRefText, isDocsBareRef, isDocsCommit, isDocsFingerprint,
+  isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef,
+  type DocContentClass, type DocPin, type DocSectionSlug, type DocsFailure, type DocsFailureBody, type DocsFetchOk,
+  type DocsRefreshFetch, type DocsRefreshResponse, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
 } from '../../../shared/docs.js';
 
 // ===== HTTP status and Retry-After (section 2 (i), section 3.7) =====
@@ -103,14 +103,15 @@ export const DOCS_CAPS_UNKNOWN_RETRY_AFTER_S = 5;
 /**
  * The `Retry-After` header a failure body gets, in whole seconds, or `null`: send NO header (one meaning).
  * - `caps-unknown`: `DOCS_CAPS_UNKNOWN_RETRY_AFTER_S`.
- * - `docs-busy`: its body's `retryAfterMs`, rounded UP to a whole second; `null` when the body carries none, so a
- *   wait is never guessed.
+ * - `docs-busy`: its body's `retryAfterMs`, rounded UP to a whole second, only when it is finite and above 0; `null`
+ *   otherwise (none, NaN, an infinity, 0 or below), so a wait is never guessed and never sent empty or negative.
  * - every other word: `null`. `fetch-too-soon`'s wait rides its body's `retryAfterMs` only (section 2 (i) names no
  *   header for it), and a `retryAfterMs` on any other word's body changes nothing here.
  */
 export function docsRetryAfterSeconds(body: DocsFailureBody): number | null {
   if (body.failure === 'caps-unknown') return DOCS_CAPS_UNKNOWN_RETRY_AFTER_S;
-  if (body.failure === 'docs-busy' && typeof body.retryAfterMs === 'number') return Math.ceil(body.retryAfterMs / 1000);
+  const ms = body.retryAfterMs;
+  if (body.failure === 'docs-busy' && ms !== undefined && Number.isFinite(ms) && ms > 0) return Math.ceil(ms / 1000);
   return null;
 }
 
@@ -528,4 +529,231 @@ export function docsSendPolicy(statusCode: number, contentType: string, cacheCon
   const headers: Record<string, string> = { ...DOCS_RESPONSE_HEADERS };
   if (statusCode !== 200 || cacheControl === undefined) headers['cache-control'] = DOCS_CACHE_NO_STORE;
   return { kind: 'pass', headers };
+}
+
+// ===== W3: the fetch lane, the caches and the refusal log (section 6.4, section 6.5; refinement (b)) =====
+//
+// The lanes and caches themselves (`lane.ts`, `cache.ts`) are W3's L4; they apply these numbers and decide nothing.
+// Each numeric constant is its OWN integer literal, never an alias of a neighbour that holds the same number (W1's
+// rule for the caps, W2's for the read lane), with one stated exception: `DOCS_LISTING_PROVENANCE_MS` IS
+// `DOCS_STALE_MS` by the spec's definition (section 6.5), so it is derived, never typed twice.
+
+/** The one fleet node this build has (section 3.12): every docs key, flight and cache entry carries it, so a second
+ *  node arrives as a second value, never as a re-key. Not a wire field: the API has no `node` key. */
+export const DOCS_PRIMARY_NODE = 'primary';
+/** The read lane's `docs-busy` wait (section 6.3: 503, `Retry-After: 2`). */
+export const DOCS_READ_BUSY_RETRY_MS = 2000;
+/** The most fetches running at once across every (node, project) key (section 6.4). */
+export const DOCS_FETCH_GLOBAL = 2;
+/** The most accepted fetch jobs not yet started, behind their key or the global bound (section 6.4; refinement
+ *  (n)); the next is `docs-busy {lane:'fetch'}`. */
+export const DOCS_FETCH_QUEUE = 8;
+/** The longest an accepted fetch job waits to start, from acceptance (section 6.4). */
+export const DOCS_FETCH_MAX_WAIT_MS = 20000;
+/** The fetch lane's `docs-busy` wait (section 6.4: 503, `Retry-After: 5`). */
+export const DOCS_FETCH_BUSY_RETRY_MS = 5000;
+/** The committed blob cache's budget: 64 MiB of stored bytes (section 6.5). */
+export const DOCS_CACHE_BYTES = 67108864;
+/** The most FILE entries the listing map holds across every commit it keeps (section 6.5). */
+export const DOCS_LISTING_MAP_ENTRIES = 50000;
+/** How recently a listing's `servedRef` must have been recorded for a cache hit to vouch for it (section 6.5):
+ *  the stale threshold itself, derived. */
+export const DOCS_LISTING_PROVENANCE_MS = DOCS_STALE_MS;
+/** The per-node index micro-cache's lifetime (section 6.5); any refresh drops it. */
+export const DOCS_INDEX_CACHE_MS = 30000;
+/** The most entries the draft `fp -> size` map holds (section 6.5, section 3.12). */
+export const DOCS_DRAFT_SIZE_ENTRIES = 10000;
+/** The shortest gap between two log lines for the same refusal reason (section 3.8: "at most once a minute"). */
+export const DOCS_REFUSAL_LOG_MS = 60000;
+
+// ===== The bodies the HTTP layer sends before any exec (section 3.7, section 3.8; refinements (e), (h), (o)) =====
+
+/** A lane's name, as `docs-busy`'s `lane` field spells it: derived from L0's failure context, never re-listed. */
+export type DocsLaneName = NonNullable<DocsFailureBody['lane']>;
+
+/**
+ * `docs-busy` for a lane (section 6.3, section 6.4): `{lane, retryAfterMs}`, the wait being that lane's constant.
+ * The only producer of a `docs-busy` body, so `docsRetryAfterSeconds` always meets one of the two constants. A
+ * fresh object every call.
+ */
+export function docsBusyBody(lane: DocsLaneName): DocsFailureBody {
+  return {
+    ok: false, failure: 'docs-busy', lane,
+    retryAfterMs: lane === 'read' ? DOCS_READ_BUSY_RETRY_MS : DOCS_FETCH_BUSY_RETRY_MS,
+  };
+}
+
+/**
+ * The 403 body for a refused provenance verdict (section 3.7, section 3.8): `{why}`, plus `site` only when the
+ * verdict carries one (a `site` refusal). Never a `verdict` key, so it can never raise the PWA's login overlay.
+ */
+export function docsForeignRequestBody(v: Exclude<DocsProvenance, { ok: true }>): DocsFailureBody {
+  return v.site === undefined
+    ? { ok: false, failure: 'foreign-request', why: v.why }
+    : { ok: false, failure: 'foreign-request', why: v.why, site: v.site };
+}
+
+/** The error-code prefix of every request-body refusal the HTTP framework raises before a handler runs (invalid
+ *  or empty JSON, a body over its limit, an unparsed media type, a bad content length). */
+const BODY_ERROR_CODE_PREFIX = 'FST_ERR_CTP_';
+
+/** What the docs plugin's error handler does with an error: `body`, answer this `bad-query` body; `defect`,
+ *  re-throw to the framework's default handler as a fresh error carrying `DOCS_DEFECT_MESSAGE` (a defect stays a
+ *  default 500, and its body never carries the thrower's own message). */
+export type DocsBodyError = { kind: 'body'; body: DocsFailureBody } | { kind: 'defect' };
+
+/**
+ * Refinement (e): an error whose `code` is a string starting `FST_ERR_CTP_` is a refused request body, answered as
+ * `bad-query {why:'body'}` (status `DOCS_FAILURE_HTTP['bad-query']`); any other code, a missing one or a non-string
+ * one is a defect. Takes the code as `unknown` because an error's `code` is whatever the thrower set.
+ */
+export function docsBodyErrorVerdict(code: unknown): DocsBodyError {
+  return typeof code === 'string' && code.startsWith(BODY_ERROR_CODE_PREFIX)
+    ? { kind: 'body', body: badQuery('body') }
+    : { kind: 'defect' };
+}
+
+/** The message of the 500 a docs-route defect answers (refinement (e)): the plugin's error handler re-throws every
+ *  defect to the framework's default handler as a fresh error carrying this text, the original kept as its
+ *  `cause`, so the default body (`{statusCode, error, message}`) never carries a thrower's own message: no host
+ *  path, no stderr. */
+export const DOCS_DEFECT_MESSAGE = 'docs route defect';
+
+/**
+ * Whether a refusal log line is due (refinement (o)): `lastMs` is when this reason last logged, `undefined` when it
+ * never has (one meaning); due when it never has, or when at least `DOCS_REFUSAL_LOG_MS` has passed. The clock is
+ * the caller's (`nowMs`), so nothing here reads time.
+ */
+export function docsLogDue(lastMs: number | undefined, nowMs: number): boolean {
+  return lastMs === undefined || nowMs - lastMs >= DOCS_REFUSAL_LOG_MS;
+}
+
+// ===== The refresh's fetch half (section 3.4's refresh flow; refinement (m)) =====
+
+/** The words a refresh half can only meet BEFORE an exec: the adapter's gate (`caps-unknown`, `unsupported`) and
+ *  a lane's own refusal (`docs-busy`). The same gate would refuse the tree, so the request ends there. */
+const REFRESH_PRE_EXEC: ReadonlySet<DocsFailure> = new Set<DocsFailure>(['caps-unknown', 'unsupported', 'docs-busy']);
+
+/** The refresh's verdict on its fetch half: `refuse`, end the request with this body's own status (section 3.4: "a
+ *  refusal before any exec returns that word's own status"); `half`, carry this fetch half and run the tree. */
+export type DocsRefreshHalf = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'half'; fetch: DocsRefreshFetch };
+
+/**
+ * The fetch half of a refresh (refinement (m)), from the fetch port's answer or the fetch lane's refusal:
+ * - a pre-exec word (`REFRESH_PRE_EXEC`): `refuse`, carrying the body itself;
+ * - any other failure: a `failed` half carrying the body VERBATIM (the same object: `fetch-too-soon`'s
+ *   `retryAfterMs` rides it, and `ref-locked`'s `lockAgeMs` stays a number, `null` or absent as ccd said);
+ * - ok: a `ran` half carrying the answer.
+ * The skipped half (a local ref, no exec) is `DOCS_REFRESH_SKIPPED`; it never reaches this function.
+ */
+export function docsRefreshFetchHalf(run: { ok: true; answer: DocsFetchOk } | DocsFailureBody): DocsRefreshHalf {
+  if (run.ok) return { kind: 'half', fetch: { state: 'ran', answer: run.answer } };
+  if (REFRESH_PRE_EXEC.has(run.failure)) return { kind: 'refuse', body: run };
+  return { kind: 'half', fetch: { state: 'failed', failure: run } };
+}
+
+/** The fetch half of a refresh whose ref is local (`fetchBranchFor`'s `skipped`): no exec ran. Frozen, so no
+ *  caller can change every other caller's half. */
+export const DOCS_REFRESH_SKIPPED: Readonly<DocsRefreshFetch> = Object.freeze({ state: 'skipped', why: 'local-ref' });
+
+/** The refresh's answer once both halves are known: `refuse`, end the request with this body's own status and
+ *  `Retry-After`; `send`, the 200 `{ok: true, fetch, tree}`. */
+export type DocsRefreshAnswer = { kind: 'refuse'; body: DocsFailureBody } | { kind: 'send'; body: DocsRefreshResponse };
+
+/**
+ * The refresh's answer (refinement (m); section 3.4: "a refusal before any exec returns that word's own status"). A
+ * SKIPPED fetch half (a local ref) ran no exec, so when the tree half was refused before any exec too (a
+ * `REFRESH_PRE_EXEC` word: the adapter's gate, or the read lane's own `docs-busy`) the request ran none at all:
+ * `refuse`, carrying the tree's body itself. Every other pair ran an exec or answered: `send`, the tree half a body
+ * in the 200 (a ran or failed fetch made an exec, so even a pre-exec tree word rides as the tree half).
+ */
+export function docsRefreshAnswer(fetch: DocsRefreshFetch, tree: DocsTreeResponse | DocsFailureBody):
+    DocsRefreshAnswer {
+  if (fetch.state === 'skipped' && !tree.ok && REFRESH_PRE_EXEC.has(tree.failure)) {
+    return { kind: 'refuse', body: tree };
+  }
+  return { kind: 'send', body: { ok: true, fetch, tree } };
+}
+
+// ===== Node-first keys (section 3.12, section 6.4, section 6.5; refinement (p)) =====
+//
+// Every key is its kind tag, then the node, then its fields, joined by NUL. No field can hold a NUL (the project,
+// ref, section and path grammars and the hex forms exclude it), so a key names one tuple: one flight map can hold
+// every kind, and no two tuples share a key. An absent field (the default view's ref, the default branch) is the
+// empty field, which no parsed value is.
+
+/** The field separator: NUL, written as an escape so the source holds no raw control character. */
+const KEY_SEP = '\u0000';
+const KEY_INDEX = 'index';
+const KEY_TREE = 'tree';
+const KEY_SHOW = 'show';
+const KEY_REFRESH = 'refresh';
+const KEY_PROJECT = 'project';
+const KEY_BLOB = 'blob';
+const KEY_LISTING = 'listing';
+const KEY_FP = 'fp';
+const KEY_NODE = 'node';
+
+function docsKey(kind: string, fields: readonly string[]): string {
+  return [kind, ...fields].join(KEY_SEP);
+}
+
+/** The index flight: one per node (`docs-index --all` names no project) and per node generation (`docsNodeKey`'s
+ *  counter, bumped when a refresh's fetch half settles), so a GET after a refresh never joins an index begun
+ *  before its fetch, as a refresh's tree never joins an older tree. */
+export function docsIndexFlightKey(node: string, gen: number): string {
+  return docsKey(KEY_INDEX, [node, String(gen)]);
+}
+
+/** A tree flight (section 6.4): the requested ref's text, the empty field for the default view (`null`), and the
+ *  project's generation, so a refresh's tree never joins a flight that started before its fetch. */
+export function docsTreeFlightKey(node: string, project: string, ref: DocsRefSpec | null, gen: number): string {
+  return docsKey(KEY_TREE, [node, project, ref === null ? '' : docsRefText(ref), String(gen)]);
+}
+
+/** A show flight (section 6.4): the pin's kind and every pin field in `docsApi`'s order, then `--max-bytes`. */
+export function docsShowFlightKey(node: string, project: string, pin: DocPin, maxBytes: number): string {
+  const fields = pin.kind === 'committed'
+    ? [pin.kind, pin.commit, pin.servedRef, pin.section, pin.path]
+    : [pin.kind, pin.branch, pin.head, pin.section, pin.path, pin.fp];
+  return docsKey(KEY_SHOW, [node, project, ...fields, String(maxBytes)]);
+}
+
+/** A refresh flight (section 6.4): the fetched branch, the empty field for the origin default (`null`). */
+export function docsRefreshFlightKey(node: string, project: string, branch: string | null): string {
+  return docsKey(KEY_REFRESH, [node, project, branch ?? '']);
+}
+
+/** One project on one node: the generation counter's key and the fetch lane's queue key. */
+export function docsProjectKey(node: string, project: string): string {
+  return docsKey(KEY_PROJECT, [node, project]);
+}
+
+/** A committed blob in the blob cache (section 6.5): node, repository key, blob. */
+export function docsBlobKey(node: string, repoKey: string, blob: string): string {
+  return docsKey(KEY_BLOB, [node, repoKey, blob]);
+}
+
+/** One commit's listing in the listing map (section 6.5). */
+export function docsListingKey(node: string, project: string, commit: string): string {
+  return docsKey(KEY_LISTING, [node, project, commit]);
+}
+
+/** A draft's size in the `fp -> size` map (section 3.12, section 6.5). */
+export function docsDraftSizeKey(node: string, fp: string): string {
+  return docsKey(KEY_FP, [node, fp]);
+}
+
+/** One node: the generation counter's key for that node's index (section 6.5: the index is dropped by any refresh;
+ *  the counter is how an index answer begun before a refresh's fetch is kept out of the micro-cache). */
+export function docsNodeKey(node: string): string {
+  return docsKey(KEY_NODE, [node]);
+}
+
+/** Whether an ok index answer may fill the node's micro-cache (section 6.5: the index is "dropped by any refresh";
+ *  refinement (p)): only while the node's generation (`docsNodeKey`'s counter) is still `genAtStart`, the one its
+ *  flight began at. An index begun before a refresh's fetch settled is served to the requests that joined it, and
+ *  never cached past that refresh. */
+export function docsIndexCacheable(genAtStart: number, genNow: number): boolean {
+  return genAtStart === genNow;
 }
