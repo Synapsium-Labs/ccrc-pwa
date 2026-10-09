@@ -29,7 +29,11 @@ umask 077
 #     the report: neither has a word.
 # No sentence carries a value, a code, a hash of either, a URL or an absolute
 # home path: the agent relays the first stderr line to the server (at most 200
-# characters) and the server relays it to the console.
+# characters). The server reads that `detail` only to detect `verb-missing`
+# (policy.ts's isTokenVerbMissing) and then drops it; BoxTokenView has no
+# detail field, so the console never shows it. The rule stands all the same: a
+# stderr line is relayed over the agent link and may reach a log, so no secret
+# goes on it.
 #
 # SINGLE DEFINITION. bash cannot import shared/, so every word, shape and
 # path below that L0 also declares is spelled ONCE here, at file scope, and

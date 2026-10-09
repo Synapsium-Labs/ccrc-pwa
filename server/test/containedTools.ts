@@ -72,7 +72,9 @@ export const CLAIM_DATA_LINE_ERE = String.raw`^data = "\{\\"code\\":\\"[A-Za-z0-
  *    its value; `-X` with a method of capital letters only; `-d` and `--data-binary` with a value that does not start
  *    with `@` (no file read); and `-K -` exactly, whose stdin config must be `header = "<name>: <value>"` lines only,
  *    each line starting `header = "`, the name `[A-Za-z0-9-]+`, the value holding no `"`, no `\` and no control
- *    character; an EMPTY config passes too (notify.sh sends one when it has no token). Since the box-token lifecycle
+ *    character; an EMPTY config passes too. Nothing in-tree sends one now (notify.sh exits 0 before curl when it has no token, D-4393,
+ *    and ccrc-api, ccrc-token-sync and the sync scripts always send a header or a data line); the allowance is kept
+ *    because an empty config can name nothing, and a closed stdin reads as one. Since the box-token lifecycle
  *    (wave 1, Task B1) ONE more line shape passes: `ccrc token sync`'s claim body, `CLAIM_DATA_LINE_ERE` above — a
  *    `data = "…"` line that is exactly `{"code":<43 base64url>,"nodeId":<lowercase uuid>}` with its quotes escaped,
  *    so it names no file (no leading `@`), no URL and no other field. Any other key (`url`, `proxy`,
@@ -130,8 +132,8 @@ export function loopbackCurlFront(realCurl: string): string {
     // lines, anchored at the line start — no other key, no `@file`, no quote, backslash or control character in the
     // value. `cfg=$(cat)` strips every TRAILING newline first, so a trailing blank line passes and the real curl is
     // re-fed the NORMALISED text (one trailing newline); a leading or interior blank line is refused, and a config of
-    // only newlines reads as the empty config. An EMPTY config passes (notify.sh with no token sends one; it can name
-    // nothing), and a second `-K -` is refused. The config is never logged: a refusal records argv only.
+    // only newlines reads as the empty config. An EMPTY config passes (nothing in-tree sends one now: notify.sh exits before curl
+    // when it has no token; it is allowed because it can name nothing), and a second `-K -` is refused. The config is never logged: a refusal records argv only.
     // `cat`'s own status is deliberately not a verdict: what the check sees is exactly what is re-fed, so a read that
     // fails part-way checks and feeds the same prefix (a closed stdin is an empty config, and passes).
     'cfg=; have_cfg=',

@@ -313,7 +313,7 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     ['ccrc-api\'s GET shape', ['-sS', '-K', '-', '-m', '30', '-o', '/tmp/x', '-w', '%{http_code}', '-X', 'GET', `${ok}api/runs`], HDR],
     ['notify.sh\'s shape', ['-fsS', '-m', '5', '-X', 'POST', `${ok}api/notify`, '-K', '-', '-H', 'content-type: application/json',
       '-d', '{"message":"m"}'], HDR],
-    ['notify.sh\'s shape with no token: an empty config', ['-fsS', '-m', '5', '-X', 'POST', `${ok}api/notify`, '-K', '-',
+    ['an empty config (nothing in-tree sends one now; it names nothing, so it passes)', ['-fsS', '-m', '5', '-X', 'POST', `${ok}api/notify`, '-K', '-',
       '-H', 'content-type: application/json', '-d', '{"message":"m"}'], ''],
     ['two header lines', ['-sS', '-K', '-', ok], `${HDR}header = "accept: application/json"\n`],
     ['ccrc token sync\'s claim shape (`-K -` data line, the claim body)', ['-sS', '-K', '-', '-H', 'content-type: application/json',
@@ -334,7 +334,7 @@ describe('the loopback curl front parses argv — an option it does not allowlis
   // The front reads the config with `cfg=$(cat)`, which strips EVERY trailing newline before the check runs (wave 13 fix
   // round 1, review 294 F2). So trailing blank lines pass, and the real curl gets the NORMALISED text (one trailing
   // newline), not the caller's bytes. A leading or interior blank line is refused (the `a blank line inside the config`
-  // row above). An input of only `\n` reads as the empty config, which "passes notify.sh's shape with no token" already
+  // row above). An input of only `\n` reads as the empty config, which "passes an empty config" already
   // covers; it needs no row of its own.
   it('passes a config with trailing blank lines, handing the real curl the NORMALISED text: one trailing newline (wave 13 fix round 1, F2)', () => {
     const t = setup();

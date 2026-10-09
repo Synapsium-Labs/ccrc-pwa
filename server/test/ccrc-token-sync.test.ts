@@ -108,7 +108,9 @@ const proofAnswers = (home: string, status: number): void => {
 };
 
 /** The real `ccd/ccrc`, as the agent's spawn reaches it, under an explicit
- *  `umask 022` — so a 0600 file can only come from the verb's own `umask 077`. */
+ *  `umask 022`. The 0600 modes of the files the verb leaves come from `mktemp` (which creates 0600 whatever the umask),
+ *  so this run does NOT prove the verb's own `umask 077`; that guard is pinned by the static check in 'set +x first,
+ *  umask 077' below (the verb's second statement). */
 function runToken(home: string, args: string[], input: string, extra: NodeJS.ProcessEnv = {}): Run {
   const env = { ...ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }), ...extra };
   assertNoRealTool(env, home);
@@ -606,6 +608,122 @@ describe('ccrc token sync: the shell spellings agree with L0 (plan Global Constr
   it('the agent\'s frozen argv is the verb this file answers', () => {
     expect([...tokenSyncSpawnArgv()]).toEqual(['token', 'sync', '--from', assigned(verb(), 'FROM_WORD')]);
     expect(readFileSync(CCRC, 'utf8')).toMatch(/^\s+token\)\s+cmd_token "\$@" ;;$/m);
+  });
+});
+
+// ── F2: the fleet file's atomic, fsynced write is pinned by what the writer DOES ───────────────────────────────────
+// The spec names this file as the pin for the temp-then-rename write, the file fsync and the directory fsync. A text
+// scan of the verb cannot red when a call is removed from the python body, so this runs the verb's OWN writer body
+// (`_TS_WRITE_PY`, extracted verbatim) under `python3 -I` through a recording wrapper that logs every `os.open`,
+// builtin `open`, `os.fsync` and `os.rename`/`os.replace` the body makes, then judges the log: the destination is never
+// opened for writing, the temp beside it is written and fsynced BEFORE the rename onto the destination, and the
+// destination's own directory (not the cwd) is fsynced AFTER it. The wrapper replaces nothing in the body; `-I` is kept.
+describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynced and directory-fsynced (F2, spec §4.5)', () => {
+  const WRAPPER = [
+    'import builtins, json, os, sys',
+    'real_open, real_fsync, real_rename, real_replace = os.open, os.fsync, os.rename, os.replace',
+    'bopen = builtins.open',
+    'log, fds = [], {}',
+    'logf, bodyf = sys.argv[1], sys.argv[2]',
+    'with bopen(bodyf, "r") as f: body = f.read()',
+    'sys.argv = ["-c"] + sys.argv[3:]',
+    'def wr(flags): return bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_TRUNC | os.O_CREAT | os.O_APPEND))',
+    'def o(p, flags, *a, **k):',
+    '    fd = real_open(p, flags, *a, **k); fds[fd] = os.path.abspath(os.fspath(p))',
+    '    log.append({"k": "open", "p": fds[fd], "w": wr(flags)}); return fd',
+    'def bo(p, mode="r", *a, **k):',
+    '    if isinstance(p, (str, bytes, os.PathLike)):',
+    '        log.append({"k": "bopen", "p": os.path.abspath(os.fspath(p)), "w": any(c in mode for c in "wax+")})',
+    '    return bopen(p, mode, *a, **k)',
+    'def fs(fd):',
+    '    log.append({"k": "fsync", "p": fds.get(fd if isinstance(fd, int) else fd.fileno(), "?")}); return real_fsync(fd)',
+    'def rn(a, b, *x, **k):',
+    '    log.append({"k": "rename", "a": os.path.abspath(os.fspath(a)), "b": os.path.abspath(os.fspath(b))}); return real_rename(a, b, *x, **k)',
+    'def rp(a, b, *x, **k):',
+    '    log.append({"k": "rename", "a": os.path.abspath(os.fspath(a)), "b": os.path.abspath(os.fspath(b))}); return real_replace(a, b, *x, **k)',
+    'os.open, os.fsync, os.rename, os.replace, builtins.open = o, fs, rn, rp, bo',
+    'try:',
+    '    exec(compile(body, "<writer>", "exec"), {"__name__": "__main__"})',
+    'finally:',
+    '    with bopen(logf, "w") as f: json.dump(log, f)',
+    '',
+  ].join('\n');
+
+  /** The writer body, exactly as the shell single-quotes it. */
+  const writerBody = (): string => {
+    const m = /^_TS_WRITE_PY='\n([\s\S]*?)\n'$/m.exec(readFileSync(VERB, 'utf8'));
+    expect(m, 'ccd/ccrc-token-sync has no _TS_WRITE_PY=\'…\' block').not.toBeNull();
+    return m![1]!;
+  };
+
+  interface WriterLog { k: string; p?: string; a?: string; b?: string; w?: boolean }
+  /** Run a writer body on a fixture claim answer; return what it did and its verdict. */
+  function runWriter(body: string): { events: WriterLog[]; dest: string; tmp: string; stdout: string; stderr: string } {
+    const dir = mkTmp('tok-writer-');
+    const secrets = join(dir, 'secrets'); const cwd = join(dir, 'cwd');
+    mkdirSync(secrets, { mode: 0o700 }); mkdirSync(cwd);
+    const dest = join(secrets, 'ccrc-mail.token'); const tmp = join(secrets, '.ccrc-token-sync.AAAAAA');
+    writeFileSync(tmp, '', { mode: 0o600 });
+    writeFileSync(join(dir, 'answer.json'), JSON.stringify({ ok: true, value: VALUE, generation: GEN }));
+    writeFileSync(join(dir, 'wrapper.py'), WRAPPER); writeFileSync(join(dir, 'body.py'), body);
+    // cwd is NOT the destination's directory, so a directory fsync aimed at the cwd is distinguishable.
+    const r = spawnSync('python3', ['-I', join(dir, 'wrapper.py'), join(dir, 'log.json'), join(dir, 'body.py'),
+      join(dir, 'answer.json'), dest, tmp, FLEET_TOKEN_FILE_COMMENT, TOKEN_VALUE_RE.source, GENERATION_ID_RE.source, '4096'],
+    { encoding: 'utf8', cwd });
+    const events = JSON.parse(readFileSync(join(dir, 'log.json'), 'utf8')) as WriterLog[];
+    return { events, dest, tmp, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  }
+
+  /** Every way the log departs from: write+fsync the temp, rename it onto dest, fsync dest's directory. */
+  function violations(w: { events: WriterLog[]; dest: string; tmp: string }): string[] {
+    const { events: ev, dest, tmp } = w; const dir = path.dirname(dest); const bad: string[] = [];
+    if (path.dirname(tmp) !== dir) bad.push('fixture: the temp is not beside the destination');
+    if (ev.some((e) => (e.k === 'open' || e.k === 'bopen') && e.w && e.p === dest)) bad.push('the destination is opened for writing in place');
+    const opened = ev.findIndex((e) => e.k === 'open' && e.w && e.p === tmp);
+    if (opened < 0) bad.push('the temp beside the destination is never opened for writing');
+    const renamed = ev.findIndex((e) => e.k === 'rename' && e.a === tmp && e.b === dest);
+    if (renamed < 0) bad.push('the temp is never renamed onto the destination');
+    const fileSynced = ev.findIndex((e) => e.k === 'fsync' && e.p === tmp);
+    if (fileSynced < 0) bad.push('the temp file is never fsynced');
+    else if (renamed >= 0 && fileSynced > renamed) bad.push('the temp file is fsynced only after the rename');
+    const dirSynced = ev.findIndex((e) => e.k === 'fsync' && e.p === dir);
+    if (dirSynced < 0) bad.push('the destination\'s directory is never fsynced');
+    else if (renamed >= 0 && dirSynced < renamed) bad.push('the destination\'s directory is fsynced before the rename');
+    return bad;
+  }
+
+  it('the real writer body: temp opened and fsynced, renamed onto the destination, then the destination\'s directory fsynced', () => {
+    const w = runWriter(writerBody());
+    expect(w.stdout, w.stderr).toBe(`ok ${GEN}\n`);
+    expect(violations(w)).toEqual([]);
+    expect(readFileSync(w.dest, 'utf8')).toBe(`${FLEET_TOKEN_FILE_COMMENT}\n${VALUE}\n`);
+    // The verb hands this very body to the isolated interpreter (so the body judged is the body that runs).
+    expect(readFileSync(VERB, 'utf8')).toContain('python3 -I -c "$_TS_WRITE_PY" "$T_RESP" "$TOKEN_FILE" "$T_TOKEN"');
+  });
+
+  // CONTROL: the judge is not vacuous. Each row is a mutation of the real body that the review ran against the old pin
+  // (which stayed green under all four); each must still run to a verdict and be refused for ITS OWN reason.
+  const MUTATIONS: Array<[string, (b: string) => string, string]> = [
+    ['m1 open the destination in place', (b) => b.replace('os.open(tmp, os.O_WRONLY | os.O_TRUNC)',
+      'os.open(dest, os.O_WRONLY | os.O_TRUNC | os.O_CREAT, 0o600)'), 'the destination is opened for writing in place'],
+    ['m2 delete the file fsync', (b) => b.replace(/^ +os\.fsync\(fd\)\n/m, ''), 'the temp file is never fsynced'],
+    ['m3 delete the directory-fsync block', (b) => b.replace(/try:\n    dfd = [\s\S]*?\nexcept OSError:\n    pass\n/, ''),
+      'the destination\'s directory is never fsynced'],
+    ['m4 fsync the cwd, not the destination\'s directory', (b) => b.replace('os.open(os.path.dirname(dest), os.O_RDONLY)',
+      'os.open(os.getcwd(), os.O_RDONLY)'), 'the destination\'s directory is never fsynced'],
+  ];
+  for (const [name, mutate, reason] of MUTATIONS) {
+    it(`CONTROL: ${name} is refused`, () => {
+      const body = writerBody(); const mutated = mutate(body);
+      expect(mutated, `${name}: the mutation did not apply to the body`).not.toBe(body);
+      expect(violations(runWriter(mutated))).toContain(reason);
+    });
+  }
+  it('CONTROL: a rename that comes before the file fsync is refused', () => {
+    const body = writerBody();
+    const mutated = body.replace(/^ +os\.rename\(tmp, dest\)\n/m, '').replace(/^( +)os\.fsync\(fd\)\n/m, '$1os.rename(tmp, dest)\n$1os.fsync(fd)\n');
+    expect(mutated).not.toBe(body);
+    expect(violations(runWriter(mutated))).toContain('the temp file is fsynced only after the rename');
   });
 });
 
