@@ -1343,3 +1343,68 @@ describe('T11 review 3-1: a tree answer naming another project is refused, never
     expect(Buffer.from(x.show.b64 ?? Buffer.from(x.show.text).toString('base64'), 'base64').toString()).toBe('# x');
   });
 });
+
+describe('T11 review 1-3: a refused refresh settles nothing (refinement (m))', () => {
+  /** A projects GET: filled once, then a micro-cache hit unless a refresh dropped the cache or bumped the node. */
+  const projectsOf = (app: FastifyInstance) => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+
+  it('a caps-unknown 503 and an unsupported 501 refresh leave the index micro-cache standing: the next projects GET is a hit with one docs-index exec', async () => {
+    const rec = fleet();
+    const { app, state } = await open({ run: rec.run });
+    expect((await projectsOf(app)).json().cacheAgeMs).toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(1);
+    const ok = state.ccdVerbs;
+    state.ccdVerbs = null;
+    expect((await refresh(app, null)).statusCode).toBe(503);
+    state.ccdVerbs = ['caps'];
+    expect((await refresh(app, 'ws/a')).statusCode).toBe(501);
+    state.ccdVerbs = ok;
+    expect((await projectsOf(app)).json().cacheAgeMs).not.toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(1);
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([]);
+  });
+
+  it('a refresh the full fetch lane answers docs-busy 503 leaves the index micro-cache standing', async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec(), tree: (argv) => okRes(line(treeOk({ project: argv[2] }))) });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    expect((await projectsOf(app)).json().cacheAgeMs).toBeNull();
+    const running = ['a', 'b'].map((project) => refresh(app, null, 'auto', project));
+    await until(() => f.started() === DOCS_FETCH_GLOBAL, 'two fetches running');
+    const queued = Array.from({ length: DOCS_FETCH_QUEUE }, (_, i) => refresh(app, `ws/q${i}`));
+    await until(() => lane.load().queued === DOCS_FETCH_QUEUE, 'a full fetch queue');
+    const busy = await refresh(app, 'ws/next');
+    expect(busy.statusCode).toBe(503);
+    expect(busy.json()).toStrictEqual({ ok: false, failure: 'docs-busy', lane: 'fetch', retryAfterMs: 5000 });
+    expect((await projectsOf(app)).json().cacheAgeMs).not.toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(1);
+    await app.close();
+    await Promise.all(queued);
+    f.release(0, okRes(line(fetchOk())));
+    f.release(1, okRes(line(fetchOk())));
+    await Promise.all(running);
+  });
+
+  it('a refresh refused before any exec bumps no generation: a tree GET begun before it is still joined by the next one', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app, state } = await open({ run: rec.run });
+    const tree = () => app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    const before = tree();
+    await until(() => t.started() === 1, 'the tree GET in flight');
+    const ok = state.ccdVerbs;
+    state.ccdVerbs = null;
+    expect((await refresh(app, null)).statusCode).toBe(503);
+    state.ccdVerbs = ['caps'];
+    expect((await refresh(app, 'ws/a')).statusCode).toBe(501);
+    state.ccdVerbs = ok;
+    const after = tree();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(t.started()).toBe(1);
+    t.release(0, okRes(line(treeOk())));
+    expect((await Promise.all([before, after])).map((r) => r.statusCode)).toEqual([200, 200]);
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(1);
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([]);
+  });
+});
