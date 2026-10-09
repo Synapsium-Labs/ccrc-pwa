@@ -91,7 +91,7 @@ Only hooks inside the worker processes ever remove fixtures, and nothing that ou
 - **Teardown alone.** `globalSetup` teardown never runs on a signal. Under `timeout 4 vitest run`, 6 of 6 runs leaked.
 - **Teardown plus an `exit` hook.** 5 of 6 runs leaked. GNU `timeout` signals its child and then the child's process group. vitest's main process gets SIGTERM twice, and its `once` listener is gone by the second delivery, so the default action kills the process before the 1 ms exit timer fires.
 - **SIGHUP.** vitest installs no handler, so a SIGHUP kills main outright: 2 of 2 runs leaked.
-- **Persistent listeners in main.** 6 of 6 runs under `timeout` were clean, and so were 3 runs each of double SIGTERM, SIGTERM to main only, SIGINT to the group and SIGHUP to the group. The exit codes were 143, 129 and 130.
+- **Persistent listeners in main.** 6 of 6 runs under `timeout` were clean, and so were 3 runs each of double SIGTERM, SIGTERM to main only, SIGINT to the group and SIGHUP to the group. The exit codes were 143, 130 and 129.
 
 **Real baseline.** `timeout 25 vitest run test/ccrc-doctor.test.ts` under a scratch `TMPDIR` left behind (re-measured at Task 0):
 
@@ -113,7 +113,7 @@ Only hooks inside the worker processes ever remove fixtures, and nothing that ou
 3. Set `TMPDIR` and `CCRC_TEST_RUN_DIR`.
 4. Arm SIGTERM, SIGINT, SIGHUP and `exit`, persistently. Each one condemns the run dir, sets `exitCode ??= 128+n`, and calls `setTimeout(process.exit, 1)`.
 
-**Teardown:** disarm, restore `TMPDIR`, condemn, close the server, then reap `base` again.
+**Teardown:** disarm, restore `TMPDIR`, condemn, close the server, then reap `base` again. A condemn that answers `left:` warns and drops `owner.json`, so a run whose rename failed reads `unowned` and is collected once quiet; one that answers `gone` warns that another actor removed the live run (review fixes, below).
 
 **`condemn(dir)`:**
 
@@ -135,7 +135,7 @@ Only hooks inside the worker processes ever remove fixtures, and nothing that ou
 
 All of these were measured:
 
-- A SIGSTOPped owner still connects.
+- A SIGSTOPped owner still connects — while its listen queue has room. Past it, macOS answers ECONNREFUSED (`dead`) and Linux EAGAIN (`unmeasurable:EAGAIN`): the known limitation in `## Risk notes`, found in review.
 - A SIGKILLed owner whose forked IPC child is still alive gives ECONNREFUSED, because the workers do not inherit the listening fd.
 - On Linux a regular file gives ECONNREFUSED; on macOS it gives ENOTSOCK. Hence the `lstat` check comes first.
 - The `sun_path` limit is 104 bytes on macOS and 108 on Linux (each measured at the boundary). Beyond it Node 24+ fails `listen` and `connect` with EINVAL, but **Node 22 and Node 20 silently truncate** the path and bind or connect at the shorter name (measured on Linux, 22.23.3 and 20.20.2; found at Task 7, see D-4497's amendment). So the module checks the byte length itself before either call, and answers EINVAL on every Node.
@@ -147,7 +147,7 @@ All of these were measured:
 2. Each entry must `lstat` as a real directory owned by `uid`.
 3. Remove `.dead` dirs without probing.
 4. Condemn a `dead` or `unowned` dir only when it is **quiet**: `now − max(ctime(run), ctime(run/tmp)) ≥ quietS`, with `quietS` = 600 by default.
-5. Wrap each entry in `try`/`catch`, so the reaper never throws out of setup.
+5. Wrap each entry in `try`/`catch`, so the reaper never throws out of setup. An entry another actor removed between the listing and its `lstat` is `gone`, not an error (review fix).
 
 ctime is used because nothing can rewind it, and only top-level entries move it (both measured). The gate protects orphan workers, which outlive a killed main process and keep working; they were measured alive 12 s after main died.
 
@@ -180,6 +180,7 @@ All the tests are in `server/test/run-tmp.test.ts`, plus one case in `lifecycle.
 | T3 | `reapRuns` with injected `now` and `uid` | the reaper's rules |
 | T4 | bare `node` with the arm | the signal arm |
 | T5 | nested real vitest | the system end to end |
+| T6 (review) | `setup()` in a bare `node` child | teardown's warnings and its failed-rename path, the refusal env, the quiet-window parse |
 
 The plan below gives each case and the condition that makes it red. Several conditions cannot be produced on a test box, so the tests simulate them:
 
@@ -228,7 +229,7 @@ The plan below gives each case and the condition that makes it red. Several cond
 ### 6. Conventions
 
 - **Single definition.** Every name and number lives once, in the `.mjs`, and the tests import it. The `RUN_NAME_RE` regex is built from `RUN_PREFIX` and `DEAD_SUFFIX`.
-- **The one textual second copy** is the `LIFECYCLE` root string, which L0 cannot import. The new `lifecycle.test.ts` case pins it with `toContain(RUN_PREFIX)`.
+- **The one textual second copy** is the `LIFECYCLE` root string, which L0 cannot import. The new `lifecycle.test.ts` case pins it with `toContain(RUN_PREFIX)`. The row's collector names the quiet window as `RUN_QUIET_S` instead of copying its number, and the case pins that too (review fix; the README's "ten minutes" is reader prose and unpinned).
 - **D-N:** four numbers, below.
 - **Docs:** the README's `npm test` paragraph, `CLAUDE.md`'s fixture-HOMEs bullet, CONTRIBUTING's "Tests are hermetic", the `tmpHelpers.ts` header and the `vitest.config.ts` comment.
 
@@ -290,7 +291,7 @@ The plan below gives each case and the condition that makes it red. Several cond
 
 ## Review Focus
 
-1. **The reaper never deletes a live run.** A connecting socket is `live` whatever else is true. A verdict of `unmeasurable` is never acted on. Only `dead` or `unowned` that are also quiet are condemned (T2, T3).
+1. **The reaper never deletes a live run.** A connecting socket is `live` whatever else is true. A verdict of `unmeasurable` is never acted on. Only `dead` or `unowned` that are also quiet are condemned (T2, T3; T3m pins the filter). The one exception is the known limitation in `## Risk notes`: a whole run stopped for long enough on macOS.
 2. **The reaper cannot be steered out of its directory.** It checks the name regex, `lstat` (never `stat`), the uid, and that the entry is a direct child of `base`. A symlink named like a run, and its target, both survive (T3f).
 3. **The signal arm is persistent and always exits.** A second SIGTERM cannot kill main in the middle of an `rm`. The exit codes are 143, 130 and 129. After teardown it is disarmed (T4).
 4. **Refusal is loud and complete.** The run keeps the status quo `TMPDIR`, has no run-dir env, prints its stderr line, and T1 is red (T5f, T1).
@@ -307,6 +308,11 @@ The plan below gives each case and the condition that makes it red. Several cond
   - the `once` signal listeners.
 
   T1 and T5 go red on an upgrade that changes any of them.
+- **Known limitation: a long-paused run on macOS (found in review; D-4499's amendment).** A stopped owner never accepts, and each probe's connection stays in its listen queue after the prober hangs up. Measured with an owner listening on a unix socket and SIGSTOPped, probed by connect-then-destroy as `tryConnect` does:
+  - **macOS** (Node 26.5.0, `kern.ipc.somaxconn` 128): probes 1–128 connect; from 129 on, ECONNREFUSED, which `probeRun` reads as `dead` beside `owner.json`.
+  - **Linux** (Docker `node:22-bookworm`, Node 22.23.3; `somaxconn` 4096, Node's backlog 511): probes 1–512 connect; from 513 on, EAGAIN, which is `unmeasurable:EAGAIN` and never acted on. Safe.
+
+  Every run probes every run in its base twice (setup and teardown), so on macOS about 64 later runs under one `TMPDIR` while a whole run is stopped (Ctrl-Z, a debugger pause; a mutation sweep makes that many) read it `dead`. Nothing in a stopped run writes, so it is also quiet, and it is condemned. When it resumes its fixtures are gone; its teardown's `condemn` then answers `gone`, and teardown WARNS (T6a). Recorded, not fixed: a pid veto (keep a `dead` run whose `owner.json` host matches and whose pid is present) is not taken, because a pid answers differently per namespace and is reused, which is why liveness is a socket (D-4499).
 - **Latency.** The first run after a SIGKILL pays a synchronous `rm`, reported on stderr. An `rm` that cannot finish (EACCES) leaves `.dead` and warns every run. It never fails the run: a raw-`mkdtemp` test that leaves a 0500 dir must not turn a green suite red.
 
 ## Deviations found
@@ -332,7 +338,8 @@ Four numbers, issued by the allocator for this plan's four departures from #316'
     - It answers through any bind-mount spelling (measured in Docker).
     - The workers do not inherit it, so the main process's death is visible even while orphans run (measured).
     - `ccrc-run-` is already a `mkTmp` prefix (`run-signals.test.ts`).
-  - **Amendment (Task 4): the D-3533 pin is narrowed to what D-3533 rules.** `ccrc-uninstall.test.ts` pinned the gpt-lane fixture-ownership correction with `expect(config).not.toMatch(/globalSetup|laneReaper\.ts/)` against `server/vitest.config.ts`, so wiring this file reds it. What D-3533 withdrew is a LANE reaper with numeric-PID signal authority and next-run recovery of another run's processes; the spec's own line is "`server/vitest.config.ts`: no lane reaper `globalSetup`". This parent signals no process — its arm calls `process.exit` on itself, and its liveness is a socket, so the PID-reuse race D-3533 argues from does not arise. The pin now reads every `globalSetup` entry the config names and asserts none is the lane reaper and none carries signal authority (`process.kill`, an `eww` process scan); `laneReaper.ts` itself stays unnamed in the config.
+  - **Amendment (Task 4): the D-3533 pin is narrowed to what D-3533 rules.** `ccrc-uninstall.test.ts` pinned the gpt-lane fixture-ownership correction with `expect(config).not.toMatch(/globalSetup|laneReaper\.ts/)` against `server/vitest.config.ts`, so wiring this file reds it. What D-3533 withdrew is a LANE reaper with numeric-PID signal authority and next-run recovery of another run's processes; the spec's own line is "`server/vitest.config.ts`: no lane reaper `globalSetup`". This parent signals no process — its arm calls `process.exit` on itself, and its liveness is a socket, so the PID-reuse race D-3533 argues from does not arise. The pin now reads every `globalSetup` entry the config names and asserts none is the lane reaper and none carries signal authority (`process.kill`, an `eww` process scan); `laneReaper.ts` itself stays unnamed in the config. Review fix: when the config sets `globalSetup` at all, the pin also asserts that its parse found an entry, so a bare-string or double-quoted shape is red instead of checking nothing (U3).
+  - **Amendment (review, 2026-10-09): a long-paused owner is a known limitation, not `live`.** The draft measured "a SIGSTOPped owner still connects" with one probe. A stopped owner connects only while its listen queue has room: macOS refuses after 128 probes, so a whole run stopped long enough under a busy `TMPDIR` reads `dead` and is condemned; Linux answers EAGAIN after 512, `unmeasurable`, and is safe (`## Risk notes`). No pid veto is added, for the reason this entry gives for a socket; teardown warns when its own run was already gone, which is where the case surfaces.
 
 ## File structure
 
@@ -548,10 +555,22 @@ Four numbers, issued by the allocator for this plan's four departures from #316'
 | U2 | `run-tmp.globalsetup.mjs` | gains a `process.kill` | the narrowed D-3533 pin |
 | L1 | `shared/lifecycle.ts` | delete the row | the new `lifecycle.test.ts` case |
 | L2 | `shared/lifecycle.ts` | `root` without `ccrc-testrun-` | the same case |
+| M10 (review) | `openRun` | the listen-error handler is not removed once listening | T2l |
+| M11 (review) | `condemn` | no ENOENT check on a `.dead` name handed in as is | C4 |
+| R9 (review) | `reapRuns` | only `live` is left (`v === 'live'` in place of the dead-or-unowned filter) | T3m |
+| R10 (review) | `reapRuns` | quiet measured on `mtimeMs` in place of `ctimeMs` | T3o |
+| R11 (review) | `reapRuns` | an entry's `lstat` ENOENT is an error, not `gone` | T3n |
+| S7 (review) | teardown | no warning when its own `condemn` answers `gone` | T6a |
+| S8 (review) | teardown | `owner.json` not dropped after a failed rename | T6b |
+| S9 (review) | `setup` | an inherited `CCRC_TEST_RUN_REFUSED` not deleted on success | T6c |
+| S10 (review) | `parseQuiet` | no whole-number guard (`Number(raw)` for any set value) | T6d |
+| U3 (review) | `vitest.config.ts` | `globalSetup` as a bare string, or with double-quoted entries | the narrowed D-3533 pin |
+| L3 (review) | `shared/lifecycle.ts` | the collector carries `600 s` beside `RUN_QUIET_S` | the lifecycle case |
+| L4 (review) | `shared/lifecycle.ts` | the collector no longer names `RUN_QUIET_S` | the lifecycle case |
 
 ## Execution record (2026-10-08)
 
-Executed on `669b8305` (Tasks 0–4, 6 and 7; Task 5 dropped by ruling 4). `origin/main` moved to `b0647d85` during the gate; the branch merges onto it cleanly, and `deviation-refs.test.ts` and `dtbd.test.ts` are green against it.
+Executed on `669b8305` (Tasks 0–4, 6 and 7; Task 5 dropped by ruling 4). `origin/main` moved to `b0647d85` during the gate, and the branch merged onto that cleanly. It did not merge onto `6fc7ef11`, so it was rebased there on 2026-10-09 (see Review fixes, below).
 
 **Task 0.** `timeout 25 vitest run test/ccrc-doctor.test.ts` under a fresh `TMPDIR`: rc 124, 11 entries (10 `ccrc-*` fixture dirs and vitest's `<nanoid>`), 15 MB. Green baselines: `tmpfixtures` + `lifecycle` 62/62; the five citation cases 5 passed.
 
@@ -628,3 +647,37 @@ Executed on `669b8305` (Tasks 0–4, 6 and 7; Task 5 dropped by ruling 4). `orig
 - **Task 5:** vitest's own `TestProject.tmpDir` in the arm, 5.6 MB per killed run.
 - **Optional:** a run that finds itself inside another run (`CCRC_TEST_RUN_DIR` inherited, its base that run's `tmp/`) could use it silently instead of refusing. That would remove the four macOS lines above.
 - #172, the orphan processes.
+
+### Review fixes (2026-10-09)
+
+**Rebased onto `origin/main` `6fc7ef11`.** #315 had appended its `history-*` rows to `LIFECYCLE`, and its cases to `lifecycle.test.ts`, at the same end-of-list anchors as this branch. Both sides were kept: the history rows come first, then `server-test-run-dirs`; this branch's case sits inside the manifest describe, before main's `docs W2 — ccdEnding` describe. `lifecycle.test.ts` is 74/74 green after the rebase.
+
+**Fixed, each red-first or measured by mutation (macOS Node 26.5.0):**
+
+- **`openRun`'s listen-error handler outlived `listen` (should-fix).** It answers with a refusal, and a refusal removes the run, so an `accept` failure later in the run (EMFILE, ENFILE, ENOMEM, ENOBUFS) would have deleted a live run's whole `TMPDIR`. It is now named and removed first thing in the listen callback. T2l emits a post-listen error and asserts the run survives (M10).
+- **A long-paused owner (should-fix).** See the known limitation in `## Risk notes` and D-4499's amendment. The module header, its verdict table and T2b's comment now say "while its listen queue has room". Teardown warns when its own `condemn` answers `gone` (T6a, S7). No pid veto.
+- **The reaper's safety filter had no test (should-fix).** T3m: a live owner read through a spelling too long to connect (`unmeasurable:EINVAL`) and a socket replaced by a file (`unmeasurable:not-a-socket`) are both left, however quiet (R9).
+- **`CLAUDE.md:67` overclaimed (should-fix)**, and so did `tmpHelpers.ts` and `CONTRIBUTING.md`: none said a SIGKILLed run's parent waits for a later run under the same `TMPDIR`. Each now says so, with line counts kept; the five citation cases are green.
+- **A failed rename at teardown leaked silently.** The close unlinks `live.sock`, and owner.json with no socket is `unmeasurable:ENOENT`, which no reaper acts on. The reviewer's fix, skipping the close, does not hold. Node's own handle cleanup unlinks a listening unix socket when the process exits naturally (measured on Node 26 and Node 22; `process.exit` and SIGKILL leave it), and T6b stayed red with the close skipped. Teardown instead drops `owner.json` after a failed rename. The run then reads `unowned`, with its socket or without it, and is collected once quiet (T6b, S8).
+- **ENOENT is `gone`.** In `reapRuns`, an entry removed between the listing and its `lstat` is `gone`, not `error:ENOENT` (T3n, R11). `condemn` answers `gone` for a `.dead` name that is already absent (C4, M11). The "reaped N" line counts only `:removed` rows. That is a message only, and no test pins it.
+- **New tests for guards that had none:** the ctime quiet gate (T3o, R10), the success path's delete of an inherited `CCRC_TEST_RUN_REFUSED` (T6c, S9), and `parseQuiet`'s whole-number guard (T6d, S10). T6 runs `setup()` in a bare `node` child, not in a nested vitest.
+- **Nits:** the narrowed D-3533 pin now tells "no `globalSetup`" from "a `globalSetup` it cannot read" (U3). The lifecycle row names `RUN_QUIET_S` instead of copying 600 s (L3, L4). T2i compares against `RUN_SUN_PATH_MAX`. §2's exit codes are in order. `run-tmp.test.ts`'s header now says what is true about signalling: through the handle in `afterEach`, by group id for a detached group, and by pid only for a child a case has just seen running.
+
+**Measured rows** (each applied with `cp`/`cmp` around it, then restored):
+
+| Row | Red | Cases |
+|---|---|---|
+| M10 | 1/1, and red-first before the fix | T2l |
+| M11 | 1/1, and red-first | C4 |
+| R9 | 1/1 (T3m is green on the real code before and after; nothing pinned the filter) | T3m |
+| R10 | 1/1 | T3o |
+| R11 | 1/1, and red-first (`error:ENOENT`) | T3n |
+| S7 | 1/1, and red-first | T6a |
+| S8 | 1/1, and red-first (`unmeasurable:ENOENT`) | T6b |
+| S9 | 1/1 | T6c |
+| S10 | 1/1 | T6d |
+| U3 | bare string and double-quoted: old pin 0/1 each (a silent pass), new pin 1/1 each; the real config and a config with no `globalSetup` stay green | the narrowed pin, under the temporary `describeLinux` → `describe` switch (not committed) |
+| L3 | 1/1 | the lifecycle case |
+| L4 | 1/1 | the lifecycle case |
+
+**`run-tmp.test.ts` after the fixes:** 50 passed and 1 skipped on macOS Node 26.5.0 (the Linux bind-mount case). On Linux Node 22.23.3 (Docker `node:22-bookworm`, uid 1000, seccomp unconfined), `run-tmp`, `lifecycle` and `tmpfixtures` together pass 134 with 1 skipped (the macOS firmlink case), so the `unshare -Urm` bind-mount case ran.
