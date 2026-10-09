@@ -234,13 +234,23 @@ describe('the deploy ships the skill, agent-side — and PR I’s token lane is 
     expect(line).toContain('--delete');
   });
 
-  // The three below are assertions about PR I's work, deliberately. The skill
-  // is useless without the token, and a silently absent lane would surface as a
-  // coordinator that cannot authenticate — a long way from here. They check
-  // SHAPE and EXISTENCE only: no test in this repo reads a token, and a token
-  // in a fixture is a token in a CI log.
-  it('the agent arm ships the fleet host’s copy of the box token', () => {
-    expect(agentArm).toContain("ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token");
+  // The three below are assertions about PR I's token lane, deliberately. They
+  // check SHAPE and EXISTENCE only: no test in this repo reads a token, and a
+  // token in a fixture is a token in a CI log.
+  //
+  // Box-token lifecycle wave 1 (spec 4.9): deploy.sh no longer ships the token
+  // at all. The server mints its own at boot and hands the fleet box its copy
+  // over the agent link, so after the first rotation the gitignored
+  // `deploy/ccrc-mail.token` holds the retired value, and shipping it would put
+  // the leaked value back on both boxes. The pin that the agent arm ships it is
+  // flipped to ABSENCE, over the whole file: the function and both of its calls.
+  // The rsync excludes stay, so a stale source file left in a checkout never
+  // rides `deploy/` to either box.
+  it('deploy.sh ships no box token: no ship_secret function and no call, in either arm', () => {
+    expect(deploy, 'deploy.sh still ships the box token').not.toMatch(/\bship_secret\b/);
+    // The two rsync argument lines (one per arm), not the comment that explains them.
+    expect(deploy.match(/^\s+--exclude 'ccrc-mail\.token' \\$/gm) ?? [],
+      'an rsync lost its token exclude: a stale source file would ride deploy/ to the box').toHaveLength(2);
   });
 
   it('notify.sh presents it under the header the server actually checks', () => {

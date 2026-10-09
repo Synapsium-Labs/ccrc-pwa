@@ -690,7 +690,9 @@ describe('the both-role boot write: recorded role only (spec 4.10)', () => {
       expect(code).toBe(0);
       expect(existsSync(path.join(home, 'curl-poison'))).toBe(false);
       expect(seen).toEqual(accepted ? ['cc swap: x moved a -> b'] : []);
-      if (!accepted) expect(warn.mock.calls.flat().join(' ')).toMatch(/notify/);
+      // D-4393: with no fleet file notify.sh sends NOTHING, so no request reaches the server: it logs no refused
+      // notify (every refusal there warns), and the loopback front recorded no refusal either (checked above).
+      if (!accepted) expect(warn.mock.calls.flat().join(' ')).not.toMatch(/notify/);
     } finally { await app.close(); }
   });
 });

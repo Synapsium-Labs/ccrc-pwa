@@ -519,37 +519,35 @@ Claude Code session you start there, while the hook entries act only inside a `c
 `cc-<id>` tmux session and exit at once anywhere else.
 
 **What the install does not place.** Coordination — runs, mail, claims, asks, and a fleet box's pool
-and update pulls — needs three things the install leaves to you, once per box; without them the
-console still drives sessions, but the box-token routes answer `401` and the clients refuse before
-they call:
+and update pulls — needs two things the install leaves to you, once per box; without them the
+console still drives sessions, but the clients refuse before they call:
 
-- **The box token**, one shared secret: `~/.ccrc/mail.token` for the server (`CCRC_MAIL_TOKEN_PATH`
-  overrides) and the same value at `~/.cc-secrets/ccrc-mail.token` for the fleet side — both files
-  on a single box, one on each of two. Only `deploy.sh`'s secret lane ships it. What the server does
-  without it: "The mail bus and its token", under "Fleet coordination" below.
 - **`CCRC_SERVER_URL`** in `~/.ccrc/agent.env` — the server's address, which the skills' client,
   `ccd-pool-sync` and `ccd-update-sync` read and never guess. `ccrc install --role fleet` prompts
   for it; a single (`both`) box gets no `agent.env` at all.
 - **`~/.local/bin/ccrc-api`**, the closed client every skill calls instead of `curl` ("Programs,
   runs and mail"). `deploy.sh agent` installs it; `ccrc install` and `ccrc update` do not.
 
-The block below is the single-box form: it mints the token on this box and puts it at both paths. On
-two boxes mint the value once (`openssl rand -hex 32`) and place that same value at
-`~/.ccrc/mail.token` on the server box and at `~/.cc-secrets/ccrc-mail.token` on the fleet box;
-minted separately the two disagree and every box-token call answers `401` (`wrong box token`).
+**The box token needs nothing from you.** The server mints `~/.ccrc/mail.token` (mode `0600`;
+`CCRC_MAIL_TOKEN_PATH` moves it) at its first boot and rotates it. On two boxes it hands the fleet
+box its copy at `~/.cc-secrets/ccrc-mail.token` over the agent link (`ccrc token sync`, run by the
+agent); on a single box whose role is recorded as `CCRC_ROLE=both` in `~/.ccrc/ccrc.env` it writes
+that copy itself. Never mint, copy or edit either file by hand: a value found at boot is adopted
+once and retired by the first rotation. Check them with `ls -l`, never `cat`; `ccrc doctor`'s
+`box-token` check and the console's Settings card report both. What the server does when a mint
+fails: "The mail bus and its token", under "Fleet coordination" below.
+
+The block below is the single-box form of the two steps:
 
 ```bash
-( umask 077; mkdir -p ~/.cc-secrets
-  openssl rand -hex 32 > ~/.ccrc/mail.token            # never print it: ls -l, not cat
-  cp ~/.ccrc/mail.token ~/.cc-secrets/ccrc-mail.token  # two boxes: this value, at this path, on the fleet box
-  # single box only (a fleet box's install wrote its agent.env):
-  [ -e ~/.ccrc/agent.env ] || echo 'CCRC_SERVER_URL=http://127.0.0.1:7788' > ~/.ccrc/agent.env )
+# single box only (a fleet box's install wrote its agent.env):
+( umask 077; [ -e ~/.ccrc/agent.env ] || echo 'CCRC_SERVER_URL=http://127.0.0.1:7788' > ~/.ccrc/agent.env )
 ln -sfn ~/ccrc/ccd/ccrc-api ~/.local/bin/ccrc-api        # on the box the sessions run on; a link follows every update
-systemctl --user restart ccrc.service                     # the server reads the token once, at boot
 ```
 
-Creating `~/.cc-secrets` has one side effect on `ccrc doctor`: its `credentials` check SKIPs while
-that directory is absent, and once it exists FAILs for the seeded account — the roster marks it
+`~/.cc-secrets` has one side effect on `ccrc doctor`: its `credentials` check SKIPs while that
+directory is absent, and once it exists (the box token's first write creates it) FAILs for the
+seeded account — the roster marks it
 `"telemetry": "anthropic"`, so the health probe measures it — until its setup token is at
 `~/.cc-secrets/<id>-oauth.env` (`<id>` is `claude` in the seed): mode `0600`, one
 `export CLAUDE_CODE_OAUTH_TOKEN=…` line holding what `claude setup-token` prints. "Connecting an
@@ -771,8 +769,9 @@ server's exposed origin ("Exposure", above), or a private address once the serve
 (`ccrc.service` binds loopback by default, and doctor's `update-exposure` check then wants the session gate
 armed) — and a fresh agent token (`openssl rand -hex 32`). Then set `CCRC_AGENT_HOST` in the fleet box's
 `~/.ccrc/agent.env` and restart `ccrc-agent.service` ("Config", under "Remote fleet mode", below), and place
-the box token and `ccrc-api` by hand as "What the install does not place" (under "Install", above) shows — the
-token is the SAME value on both boxes. Finally set `CCRC_FLEET=remote`,
+`ccrc-api` by hand as "What the install does not place" (under "Install", above) shows; the box token
+needs no hand step, because the server hands the fleet box its copy over the agent link once the link is up.
+Finally set `CCRC_FLEET=remote`,
 `CCRC_AGENT_URL=ws://<fleet address>:7789/agent` and the same `CCRC_AGENT_TOKEN` in the server box's
 `~/.ccrc/ccrc.env`, restart `ccrc.service`, and check the link as "Verifying a remote-mode deploy" (below)
 shows.
@@ -3147,10 +3146,11 @@ tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
-`deploy/deploy.sh`'s agent arm installs it beside `ccd` and ships the token
-when `deploy/ccrc-mail.token` exists; `ccrc install` and `ccrc update` place
-neither. On a box placed by the release lane, neither is there until you place
-them ("What the install does not place", under Install).
+`deploy/deploy.sh`'s agent arm installs it beside `ccd`; `ccrc install` and
+`ccrc update` do not, so on a box placed by the release lane it is not there
+until you place it ("What the install does not place", under Install). The
+token it reads is the server's to place: minted at boot, handed to the fleet
+box over the agent link, never shipped by `deploy.sh`.
 
 **Three surfaces.** `/runs` is the board — runs grouped by program, with their
 own status words (a run is a lifecycle position, not an attention state, so it
@@ -4030,15 +4030,13 @@ and the token is a key of neither). It lives at
 `~/.cc-secrets/ccrc-mail.token` on the **fleet host** (read by
 `deploy/notify.sh`, and by `ccrc-api`, the client the coordinator, worker and
 reviewer skills call) and at `~/.ccrc/mail.token` on the **server**
-(`CCRC_MAIL_TOKEN_PATH` moves the file; it never carries the value); both are
-shipped from one locally-gitignored `deploy/ccrc-mail.token`
-(`openssl rand -hex 32` to mint it, or
-`cp deploy/ccrc-mail.token.example deploy/ccrc-mail.token && edit`) by
-`deploy/deploy.sh`'s secret-shipping lane. `ccrc install` and `ccrc update`
-write neither file: on a box placed by the release lane, place the secret by
-hand — the server path on the server box, the fleet path on the fleet host,
-both on a single box — mode `0600`, as "What the install does not place"
-(under "Install", above) shows, and check it with `ls -l`, never `cat`.
+(`CCRC_MAIL_TOKEN_PATH` moves the file; it never carries the value). The
+server mints its file at boot and rotates it, and writes the fleet copy too:
+over the agent link in remote fleet mode (`ccrc token sync`), itself on a
+single box recorded as `CCRC_ROLE=both`. Nothing ships it: `deploy/deploy.sh`
+no longer copies a gitignored `deploy/ccrc-mail.token` to either box, and
+`ccrc install` and `ccrc update` place neither file, as "What the install does
+not place" (under "Install", above) says. Check both with `ls -l`, never `cat`.
 **The run routes were
 unauthenticated for a stretch of this build's own history** — an earlier
 design note argued they were no worse than the pre-existing, also-open
@@ -4059,11 +4057,14 @@ request with no token, or with the WRONG token, is refused `401` and logged as
 such (`ccrc-server: /api/notify refused …`). And on a server that holds no token
 value, every token-gated lane above, `/api/notify` included, refuses every
 caller, and the server says so at boot.
-**Minting the token file matters as much as having one:**
-`deploy/ccrc-mail.token.example`'s own placeholder value line
-must actually be replaced — copying the example verbatim is refused loudly
-at server boot (`MailTokenPlaceholderUnedited`), not silently accepted,
-because that exact placeholder is committed to this public repo.
+**Minting the token file matters as much as having one,** which is why the
+server does it. A hand-made value it finds at boot is adopted once and retired
+by the first rotation, and a retired value written back (an older checkout's
+`deploy.sh` copying a stale `deploy/ccrc-mail.token`) is never adopted again.
+`deploy/ccrc-mail.token.example` stays only for its placeholder value line: a
+token file holding that line is refused loudly at server boot
+(`MailTokenPlaceholderUnedited`), not silently accepted, because that exact
+placeholder is committed to this public repo.
 
 **Programme mail at scale.** `toId: 'coordinator'` has a sibling: `toId: 'worker'`,
 resolved at send time to that run's own session. `worker` requires a `runId` —
@@ -5174,8 +5175,9 @@ you need to reason about one.*
   `systemd/` (every timer pair, and the session, slice and agent drop-ins);
   `ccrc.env.example` / `ccrc-agent.env.example` (env templates — copy to
   `ccrc.env` / `ccrc-agent.env`, gitignored, to supply real tokens),
-  `ccrc-mail.token.example` (the box token's placeholder, copied the same way
-  to `deploy/ccrc-mail.token`), `ccclip.env.example` (the Mac helper's config,
+  `ccrc-mail.token.example` (the box token's placeholder, which the server
+  refuses at boot by name; never copied, because the server mints the token),
+  `ccclip.env.example` (the Mac helper's config,
   below) and `accounts.default.json` (the seeded roster); the release scripts
   (`build-release.sh`, `release-main.sh`, `release-stable.sh`,
   `verify-provenance.mjs` with its `sigstore-trusted-root.jsonl`); the

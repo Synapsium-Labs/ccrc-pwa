@@ -391,28 +391,14 @@ env_drop_guard() {
   exit 1
 }
 
-# One local, gitignored token file -> BOTH boxes, so the two copies of the one
-# secret are equal by construction rather than by someone remembering. The
-# server reads its copy at boot (coord/token.ts); the fleet host's copy is what
-# notify.sh and every coordinator/worker session present.
-#
-# "Equal by construction" also needs both READERS to extract the same value
-# from the same bytes, not just receive the same bytes — coord/token.ts's
-# `readMailToken` and notify.sh's token line share one extraction rule (first
-# non-`#`, non-blank line; whitespace stripped everywhere in it) for exactly
-# this reason (fix-round finding 1: the two normalisers used to differ in
-# SCOPE, edges-only vs. everywhere, which the shipped .example's `#`-comment
-# preamble — interior whitespace throughout — would turn into two different
-# secrets from the one file this function ships unchanged).
-ship_secret() {
-  local local_file="deploy/$1" remote_dir="$2" remote_name="$3"
-  if [ -f "$local_file" ]; then
-    echo "shipping $local_file -> $BOX:$remote_dir/$remote_name"
-    "${SSH[@]}" "$BOX" "mkdir -p $remote_dir && chmod 700 $remote_dir"
-    "${SCP[@]}" "$local_file" "$BOX:$remote_dir/$remote_name"
-    "${SSH[@]}" "$BOX" "chmod 600 $remote_dir/$remote_name"
-  fi
-}
+# THE BOX TOKEN IS NOT SHIPPED (box-token lifecycle wave 1, spec 4.9). The
+# server mints `~/.ccrc/mail.token` at boot and rotates it, and hands the fleet
+# box its copy at `~/.cc-secrets/ccrc-mail.token` over the agent link (`ccrc
+# token sync`). A gitignored `deploy/ccrc-mail.token` left in a checkout holds
+# the hand-made value the first rotation retired: copying it to either box
+# would put that value back, which the server now refuses at boot by its
+# retired digest. Both rsyncs below still exclude the file, so it never rides
+# `deploy/` to a box either.
 
 # The roster a box that has none gets SEEDED with. `~/.ccrc/accounts.json` is
 # USER-OWNED config (stage-2a design §5): ccrc creates it once and never
@@ -588,14 +574,14 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
-  # `--exclude 'ccrc-mail.token'`: the token lives at `deploy/ccrc-mail.token`
-  # (gitignored) exactly when `ship_secret` below is about to fire, and this
-  # rsync ships the whole `deploy/` directory. `--exclude '*.env'` is here for
-  # the identical reason on `ship_env`'s secrets — without a matching
+  # `--exclude 'ccrc-mail.token'`: a checkout may still hold a gitignored
+  # `deploy/ccrc-mail.token` (the hand-made value, retired by the first
+  # rotation; "THE BOX TOKEN IS NOT SHIPPED", above), and this rsync ships the
+  # whole `deploy/` directory.
+  # `--exclude '*.env'` is here for `ship_env`'s secrets — without a matching
   # exclude, `-a` would carry the file over at whatever mode it has on THIS
-  # machine (0644 under a plain umask), a second, unmanaged copy sitting
-  # right next to the one `ship_secret` deliberately lands at 0600 under a
-  # 0700 directory three lines down, re-shipped on every `--delete` run.
+  # machine (0644 under a plain umask), a second, unmanaged copy beside the one
+  # `ship_env` lands, re-shipped on every `--delete` run.
   # `ccd` joins the source list here: AGENT_BUILD_CMD below `cp`s
   # `~/ccrc/ccd/claude-session@.service` into place, and until this line that
   # directory never reached the box at all — confirmed live, `ls ~/ccrc/` on
@@ -616,7 +602,6 @@ if [ "$TARGET" = "agent" ]; then
     --exclude 'ccrc-mail.token' \
     agent shared deploy ccd "$BOX":ccrc/
   ship_env ccrc-agent.env .ccrc/agent.env
-  ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token
   # THE ROSTER LANDS BEFORE ccd, and that ordering is the whole point of this
   # block. The ccd installed on the next line refuses to run AT ALL without
   # ~/.ccrc/accounts.sh (its own `|| die`, naming the remedy), so shipping ccd
@@ -1218,8 +1203,8 @@ else
     && { [ ! -f ~/.config/systemd/user/ccrc.service ] || cp -a ~/.config/systemd/user/ccrc.service ~/ccrc-backups/$TS/ccrc.service; } \
     && { [ ! -f ~/.ccrc/coord.db ] || node --no-warnings ~/ccrc-backups/backup-coord.mjs ~/.ccrc/coord.db ~/ccrc-backups/$TS/coord.db; }"
   # See the agent path's identical exclude, above, for why: this rsync also
-  # ships `deploy/` whole, and without the exclude the token rides along a
-  # second time, unhardened, next to `ship_secret`'s 0600 copy three lines down.
+  # ships `deploy/` whole, and without the exclude a stale, retired token left
+  # in the checkout would ride along to the box, unhardened.
   # `ccd` joins the SERVER lane's source list here, and it is not symmetry for
   # its own sake: `ccrc doctor` has to answer on this box too — it is how the
   # server reports its own fitness — and the ccrc launcher installed below runs
@@ -1231,7 +1216,6 @@ else
     --exclude 'ccrc-mail.token' \
     server shared deploy ccd "$BOX":ccrc/
   ship_env ccrc.env .ccrc/ccrc.env
-  ship_secret ccrc-mail.token '~/.ccrc' mail.token
   # Same ordering class as the agent lane's: after the roster (`ship_roster`,
   # above), after the rsync that lands the tree it launches, and before the
   # build/restart chain that can abort the deploy. The helper is not named in

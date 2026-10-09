@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token below.
+umask 077
 # ccd swap hook -> ccrc. $1 = human-readable message.
 #
 # The token authenticates THE BOX, which is the honest unit: every fleet session
@@ -7,10 +9,13 @@
 # about freshness rather than forgery-proofness). It closes the tailnet, not
 # the box.
 #
-# An ABSENT token still sends: the server tolerates it for one deploy
-# generation so a hook shipped before the token cannot go dark. Do not make
-# this hard-fail — that turns a rollout ordering detail into a silent loss of
-# every swap notice.
+# An ABSENT token sends NOTHING and exits 0 (D-4393), exactly as an absent
+# address does below. The server no longer accepts a tokenless `/api/notify`
+# (box-token lifecycle Part A removed the one-deploy `legacy` tolerance), so a
+# POST without the header is a guaranteed 401 that the curl's `|| true` would
+# swallow. Still never a hard failure: ccd runs this hook `>/dev/null 2>&1`, and
+# a nonzero exit would make an unprovisioned box look like a broken one. The
+# missing file is what `ccrc doctor`'s `box-token` check reports.
 #
 # THE EXTRACTION RULE BELOW MUST STAY IDENTICAL TO `coord/token.ts`'s
 # `readMailToken`/`extractToken`, WHICH READS THIS SAME COMMITTED FILE ON THE
@@ -89,11 +94,12 @@ esac
 # THE TOKEN RIDES CURL'S STDIN, NEVER ITS ARGV (R16): a `-H` value is readable
 # in every process listing on the box for the life of the call. `-K -` reads the
 # header from a config line on stdin, the spelling ccd-pool-sync and
-# ccd-update-sync ship. The header is still sent only for a non-empty token: an
-# absent one leaves the config empty, so the POST goes out without it (the
-# tolerance above). curl's stdin is always this pipe, never the stdin ccd hands
-# the hook.
-{ [ -n "$tok" ] && printf 'header = "x-ccrc-mail-token: %s"\n' "$tok"; } |
+# ccd-update-sync ship. No token, no POST (D-4393, the header note above): the
+# guard sits here, after the address, so the token-extraction lines above stay
+# one slice `coord-token.test.ts` can run on their own. curl's stdin is always
+# this pipe, never the stdin ccd hands the hook.
+[ -n "$tok" ] || exit 0
+printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" |
 curl -fsS -m 5 -X POST "$BASE/api/notify" -K - \
   -H 'content-type: application/json' \
   -d "$(jq -cn --arg m "$1" '{message:$m}')" >/dev/null 2>&1 || true
