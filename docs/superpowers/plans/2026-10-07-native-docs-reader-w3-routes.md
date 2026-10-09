@@ -11976,6 +11976,8 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 232 plus the ids Step 5 ad
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n> (fixed <a>, carried <b>, not a defect <c>, ruled departures <d>). Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).`, and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review/`. Task 12 Step 4's Notes cite the record's last line and its Carried list takes every CARRIED line. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
+Two rows re-anchored at run time after the merge of `main` (#330, the box-token lifecycle): W3-T8-M6 (gate.ts's numeral is 94 on the merged tree) and W3-T8-M12 (`SESSION_ONLY_ALL` gained `...TOKEN_DOORS`); same ids, the last occurrence wins.
+
 **Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Review 3-2 re-spelled the blob cache's charge line and routes.ts's fill line, so `W3-T5-M7`, `W3-T5-M18`, `W3-T5-M19` and `W3-T6-M27` are repeated below with the same ids and the new `old`, each measured red in a fresh copy of the fix commit.
 
 ```json
@@ -12201,6 +12203,28 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n
   "test/docs-routes.test.ts"
  ],
  "red": "server docs-routes: 1 failed | 125 passed (126) \u2014 file: a mixed pin"
+},
+{
+ "id": "W3-T8-M6",
+ "pkg": "server",
+ "file": "server/src/auth/gate.ts",
+ "old": " * THE GATE. One `onRequest` hook stands in front of all 94 routes, the static\n",
+ "new": " * THE GATE. One `onRequest` hook stands in front of all 86 routes, the static\n",
+ "tests": [
+  "test/auth-gate.test.ts"
+ ],
+ "red": "server auth-gate: 1 failed | 165 passed (166) — gate.ts's own docstring names the HTTP-route count it stands in front of (re-anchored after the merge of main, #330)"
+},
+{
+ "id": "W3-T8-M12",
+ "pkg": "server",
+ "file": "server/test/box-token-census.test.ts",
+ "old": "const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS, ...TOKEN_DOORS];\n",
+ "new": "const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS, ...TOKEN_DOORS, '/api/docs/:project/refresh'];\n",
+ "tests": [
+  "test/box-token-census.test.ts"
+ ],
+ "red": "server box-token-census: 2 failed | 35 passed (37) — CLAUDE.md's box-token bullet is TRUE, not merely present; DOCS_DOORS joins neither the session-only coordination writes nor the box-token lanes (re-anchored after the merge of main, #330)"
 }
 ]
 ```
