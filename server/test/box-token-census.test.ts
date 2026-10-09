@@ -978,7 +978,7 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
 
 // ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
 //
-// `server/src/docs/routes.ts` is the FOURTH file that registers routes. Its four are session-gated, NOT EXEMPT and
+// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its four are session-gated, NOT EXEMPT and
 // consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
 // one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
 // token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own

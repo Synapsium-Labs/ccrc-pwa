@@ -212,7 +212,7 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found all four files, and EXACTLY the route count the surface has', () => {
+  it('found all five files, and EXACTLY the route count the surface has', () => {
     // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
     // scanner that broke outright but not one that quietly stops matching SOME
     // registrations — a changed quote style in one file, a verb the regex does
