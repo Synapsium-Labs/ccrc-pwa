@@ -464,8 +464,8 @@ export class BoxTokenDriver implements TokenRouteDriver {
   }
 
   /** The retirement line (spec §7.1). The `retire` action's two (a grace end, the hard bound) and the early retirement at a
-   *  promotion say different things, because a different thing ended the previous value: the early one names the later
-   *  generation the fleet confirmed, never "grace ended" (D-4411's wording, review 352). */
+   *  promotion say different things, because a different thing ended the previous value: the early one says that the fleet
+   *  confirmed a later generation, never "grace ended" (D-4411's wording, review 352). */
   private logRetired(why: 'grace' | 'hard-bound' | 'later-confirmed', refused: boolean): void {
     const and = refused ? ' and is refused' : '';
     this.warn(why === 'hard-bound'

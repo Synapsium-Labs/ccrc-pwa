@@ -250,7 +250,8 @@ describe('box-token.json and box-token-retired.json', () => {
 
   // F13 (review 352): `overCap` validates the state with its list cut to the cap, so entries PAST the cap are never
   // validated. A list of cap-many valid entries plus a malformed one beyond it therefore reads over-cap, not plain
-  // unusable; both are refusals at boot, so this fails safe (refuse, never adopt). The docstrings say exactly this.
+  // unusable. That fails safe, because boot adopts neither: an over-cap state refuses boot, and any other unusable state takes
+  // D-4414's set-aside posture (a fresh current minted, a rotation owed). The docstrings say exactly this.
   it('entries past the cap are not validated: cap-many valid entries plus a junk one beyond them read over-cap (fails safe)', async () => {
     const { dir } = fixture();
     const p = path.join(dir, 'box-token.json');

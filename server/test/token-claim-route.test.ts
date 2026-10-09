@@ -63,9 +63,9 @@ const claim = (app: FastifyInstance, body: unknown) =>
   app.inject({ method: 'POST', url: TOKEN_CLAIM_PATH, payload: body as Record<string, unknown> });
 
 /** Where an import statement may start (F4, review 352): the start of a line, or right after a `;` or a `}` on the same
- *  line, with any whitespace and any leading block comment before the keyword. The scan is on STATEMENTS, not on lines:
- *  an indented import, or a second import after a `;` on one line, is as valid TypeScript as a line-leading one, and a
- *  spelling the scan misses is a spelling the allowlist never sees. */
+ *  line, with any whitespace and any leading block comment on that line before the keyword. It is a regex scan, not a parse. It
+ *  catches the line-leading, indented (spaces or tab), same-line-after-`;`, same-line-after-`}` and same-line-block-comment
+ *  spellings, each with a self-test row; a block comment that spans lines and ends on the import's line is not caught. */
 const STMT_START = String.raw`(?:^|[;}])\s*(?:\/\*.*?\*\/\s*)?`;
 /** The `import { ... } from '<spec>'` statements of a source, each with the names it takes (a `type` marker dropped).
  *  Either quote, and the closing `;` optional. */
