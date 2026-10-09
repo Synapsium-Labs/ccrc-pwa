@@ -90,7 +90,7 @@ B3 also carries the one README `:2900` re-anchor and the S6-R11 census re-measur
 - **S16**, and the marker halves of **S2**, **S3** and **S8**: Task 8.
 - **C18**, **C19** (with C68's card half, which B2 hands to B3), **C20**, **C21**, **C22** and **C37**, and the card halves of **S2**, **S3** and **S8**: Task 9. C37's end-to-end case consumes Task 8's marker.
 - **C38**: Task 10.
-- Every one of them is measured red with a mutant before it goes green (IV6): Task 8's thirteen mutants, Task 9's thirty-three and Task 10's five. Two kinds of case are not a mutant's: a CONTROL, and C37's `empty` marker row, which two guards refuse independently (the scope-word test and the ms digit test), so no single-guard mutant can red it. Task 9 names it as defence in depth rather than claim it measured.
+- Every one of them is measured red with a mutant before it goes green (IV6): Task 8's eighteen mutants, Task 9's thirty-three and Task 10's five. Three kinds of case are not a mutant's: a CONTROL; C37's `empty` marker row, which two guards refuse independently (the scope-word test and the ms digit test), so no single-guard mutant can red it, and Task 9 names it as defence in depth rather than claim it measured; and the `unset` row of Task 9's clock case, which the age test refuses with or without the clock grammar (an empty reading is `now` 0), so `T9-M12-clock-guard` reds only its `malformed` row.
 - Halves B1 left for B3: O17's B3 rows (`history-scope-markers`, `history-card-files`) in Task 12, and O14's hook half of `CARD_PREFIX` in Task 11.
 - Plan pins with no spec number:
   - the pure decisions: Tasks 1–3;
@@ -256,7 +256,7 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `ccd/history/lib.mjs` | modify | Appended at the end: the card vocabulary (`CARD_DIR`, `SCOPE_DIR`, `CARD_LINE_MAX`, `CARD_DESCRIBE_CMD`, `CARD_LINE_PATTERN`, `CARD_LINE_RE`, `PURGED_FILES_GRACE_MS`, `CARD_MEASURE_ROWS`, `CARD_MEASURE_MAX_WAIT_MS`, `CARD_ATTACHMENT_MAX_BYTES`, `SCOPE_MARKER_MAX_AGE_MS`, `CARD_CONSUMED_SCOPES`, `CARD_WITHDRAW_REASONS`); `cardDirOf`, `cardFileOf`, `scopeMarkerOf`; `cardLine`; `predictedSpanStart`, `planCardPrediction`, `decideCardFile`; `cardIdsIn`, `cardWindowComplete`, `decideCardDelivery`, `decidePurgedEntry`; `consumedBoundaryTs`, `decideConsumedScope` (ruling RC3); `decideCardWithdraw` (ruling RC2) | L1 | 1, 2, 3 |
 | `ccd/history/lib.d.mts` | modify | One hand-written declaration per new export, plus `CardBoundary`, `CardSlot`, `CardPredictionInputs`, `CardPrediction`, `CardBoundaryAt`, `CardConsumedScope`, `CardWithdrawReason` and `CardPassFacts`; reuses B1's `Presence` | types | 1, 2, 3 |
 | `ccd/history/derive.mjs` | modify | Behaviour-neutral extraction: `deriveEpochParents`' slot loop becomes the exported `epochCopySlots`; `holdingCopyOf` wraps the private `holdingCopy` | L4 | 4 |
-| `ccd/history/card.mjs` | create | `ensureHistoryDirs`; `consumeAndWriteCards` (predict, consume, write `card/<id>/<uuid>.txt` temp-then-rename 0600, one file per id, end-of-file-gated writes that the budget bounds, each consumption counted by its compaction's scope marker); `withdrawCards` (every prediction unlinked on a pass that runs no card step); `measureCardDelivery` (derivation step `card-measure`, version 1); `cardStep`; `collectPurgedHistoryFiles`. No entry guard | L4 | 5, 6, 7 |
+| `ccd/history/card.mjs` | create | `ensureHistoryDirs`; `consumeAndWriteCards` (predict, consume, write `card/<id>/<uuid>.txt` temp-then-rename 0600, one file per id, end-of-file-gated writes that the budget bounds, each consumption counted by its compaction's scope marker); `withdrawCards` (every prediction unlinked on a pass that runs no card step); `measureCardDelivery` (derivation step `card-measure`, version 1); `cardStep`; `collectPurgedHistoryFiles`. No entry guard. Spec §6.4 has no row for it, and its `sweep.mjs` row no `./card.mjs` import (⟦D:history-card-module⟧) | L4 | 5, 6, 7 |
 | `ccd/history/sweep.mjs` | modify | One import from `card.mjs`; `makeIngestCtx` hands `readRegPresence`; in `tick`, `cardStep` below `deriveNodes` with `withdrawCards` below it, `ensureHistoryDirs` below B1's spool-directory line (`if (dirKind(ctx.paths.spool) !== 'other') mkdirDurable(ctx.paths.spool);`), and the collector above `markScan`; `tick`'s doc comment gains a numbered item per new step (B1's F39 list); `withdrawCards` in `holdPass`, on `scheduledPass`'s `held` path and below its `planRun` line. All above the R1 guard | L4 | 5, 7 |
 | `ccd/session-hook.sh` | modify | Above `state="" ask_json=`: the four constants and `_hook_history_card`. In place: the compact guard's call and `:1515`'s reserve. Tail: the scope marker's early invalidation directly below `esac`, the reserve's reset and gated set, `unset CS_SCOPE`, the `history-scope` block; the turn-marker note and B1's spool-block sentence reworded | hook (bash) | 8, 9, 10 |
 | `README.md` | modify | Task 9: the quoted emitter call's `ccd/session-hook.sh:<n>` re-pointed by content, line-neutral. Task 14: an 8-line card-line paragraph in B2's history section, with no `file:N` token | docs (citation corpus) | 9, 14 |
@@ -1818,6 +1818,7 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
 - Pins: this task's plan pins (parity with derivation for the first compaction, the 8th leaf and the newest condensed fallback; a not-final slot names no parent; the fork skip, and a consumption just before one still counted; a spooled fork's epoch predicted from the parent's boundary its copy holds, its prediction replacing the parent's (ruled Q16); the end-of-file gate with a consumption off end-of-file; the file's text, mode, one-per-id and the symlink refusal; registry-named sessions only; a write failure counted, never fatal, and leaving no temp (a CONTROL on B1's `writeFileAtomic`, which removes its own temp on a failure before the rename); a failed cleanup counted apart from the write; the two directories made 0700 by a bound store's first tick and by nothing else; a consumption counted `main`, `other` or `unknown` by its compaction's marker, never through a link; every prediction withdrawn, never through a link, under a floor pause, on the recover arm, under a spent budget after the consume and delete ran, on a writer-token hold and on a refused store with no DB open).
 - Departures:
   - B1's D-4224 (`history-tick-order`) (the card step's place: after the leaves and parents, under their gate).
+  - ⟦D:history-card-module⟧ (NEW, review finding R77): spec §6.4 lists every history module with its ring and its imports, and has no `card.mjs` row; its `sweep.mjs` row admits lib, store, `derive.mjs`, `../compact-card.mjs` as `{ isBoundaryLine }` only, `node:fs` and `node:child_process`, and §9.2 and §9.4 name `sweep.mjs` as the card writer. This task creates `ccd/history/card.mjs`, an L4 module importing `node:fs`, `./lib.mjs`, `./store.mjs` and `./derive.mjs` only (never `node:sqlite`, `./sweep.mjs` or `./cli.mjs`, as its `RINGS` row pins), and `sweep.mjs` gains one import, `./card.mjs` (`{ cardStep, ensureHistoryDirs, withdrawCards }`, Steps 5 and 6). `card.mjs` keeps the card's measure, its writes and its collector out of a module that is already the writer's whole tick, as B2's `derive.mjs` keeps derivation out; every decision is still lib's.
   - ⟦D:history-card-dirs-made-by-sweep⟧ (NEW): the spec says the hook never makes `scope/`, which it writes, and never says who does; the sweep makes both directories at every bound store's tick, so the hook's marker and the render reserve arm within one tick of `ccrc update` and never on a box without history.
   - ⟦D:history-card-one-file-per-id⟧ (NEW): §9.4 bounds the row "≤512 B per session"; writing a new uuid's prediction removes the id's other `<uuid>.txt` (a `/clear`'d or forked session's), rather than leaving it until purge.
   - ⟦D:history-card-registry-names-the-session⟧ (NEW): a prediction is written only for the uuid `$REG/<id>.uuid` names. The periodic scan reads every known transcript to its end each 30 minutes, so end-of-file alone would write a file for every session the store ever saw; the hook serves only the pane's own uuid, which the registry names. A file the registry no longer names is still consumed and deleted.
@@ -3027,7 +3028,7 @@ git commit -m "feat(history): write and consume card/<id>/<uuid>.txt at end-of-f
 **Choices this task makes:**
 - **The delivery counters are keyed by the producer** (B1's D-4196 (`history-producer-backend`)): `card_served:<backend>` and `card_id_mismatch:<backend>`, where `<backend>` is the boundary's producer, the first real assistant row after its summary (`unknown` for a NULL or `<synthetic>` model), never the last row before it.
 - **Spooled forks (ruled Q16) change nothing in the measure.** A leaf is measured in its own boundary's holding copy: `holdingCopyOf` picks among the files of that boundary's transcript (`boundaries.transcript_pk`, the first claim). So a parent's leaf is read in the parent's copy, never in a fork's file that copied its boundary and the SessionStart attachment after it, and no attachment is counted for two leaves. A fork's own leaves are measured in the fork's copy, as any epoch's are. The measure reads no epoch cause and keys nothing by one, and a fork adds no counter, so this task gains no case.
-- **`attachmentOf` parses the decoded body with `JSON.parse`, not B1's `parseStoredJson` (accepted by the coordinator).** `parseStoredJson` carries the nesting bound of B1's D-4345 (`history-json-structure-bound`), but it lives in `sweep.mjs`, which `card.mjs` may not import, and B1's census scans `sweep.mjs` only. This fails closed: a body nested too deep for `JSON.parse` throws, `attachmentOf`'s catch returns `null`, and the measure reads no body for that row (no card id, so it counts nothing served). The body is already bounded by `CARD_ATTACHMENT_MAX_BYTES` (1 MiB, by its stored `raw_len`) before it is decoded.
+- **`attachmentOf` parses the decoded body with `JSON.parse`, not B1's `parseStoredJson` (accepted by the coordinator).** `parseStoredJson` carries the nesting bound of B1's D-4345 (`history-json-structure-bound`), but it lives in `sweep.mjs`, which `card.mjs` may not import, and B1's census scans `sweep.mjs` only. (The bound's predicate itself, `jsonWithinStructureBound`, is lib's and `card.mjs` could call it; it is not needed here, for the reason that follows.) Deep nesting is safe here, though not because `JSON.parse` refuses it: V8's `JSON.parse` is not recursive, and on Node 24.14.1 `JSON.parse('['.repeat(500000) + ']'.repeat(500000))`, which fits under the bound below, parses without throwing (measured). What keeps it safe is the walk: `cardIdsIn` walks the parsed value with an explicit stack, never recursion, so no nesting depth can overflow the call stack, and its work is linear in the parsed nodes. The body is bounded by `CARD_ATTACHMENT_MAX_BYTES` (1 MiB, by its stored `raw_len`) before it is decoded, which bounds those nodes. A body that is not JSON still throws in `JSON.parse`, and `attachmentOf`'s catch returns `null`: no card id, so it counts nothing served.
 
 - [ ] **Step 1: Add the attachment builder.** Append to the end of `server/test/historyFixtures.ts`:
 
@@ -3902,7 +3903,7 @@ git commit -m "feat(history): collect purged sessions' scope markers and card di
   - `CS_SCOPE`, a plain global with no initialiser. `_hook_compact_scope` empties it first, then answers `main`, `subagent` or `ambiguous` with rc 0, or rc 1 when nothing may be said. `_hook_compact_pre` overlays `ambiguous` on an overlap, and returns before scoping under compact-card-off (`[ -e "$COMPACT_CARD_OFF" ] && return 0`) or when its payload read fails;
   - `_hook_compact_scope <transcript_path> <trigger>` (`:950`) and `_hook_epoch_ms` (`:41`).
 - Consumes, from B1: the `# >>> history-spool` block (the epoch line S8 asks for), and `SPOOL_ID_MAX` (224) from `ccd/history/lib.mjs`, in the test only.
-- Consumes, from the test file's module scope: `runFull` (asserts exit 0 and returns stdout and stderr), `hookEnv(env)` (B1's one definition of every hook spawn's env, which `run`, `runFull` and the spool describe's `runSpoolBounded` share; a hand-built spawn takes `env: hookEnv(SCRUB)`), `home`, `HOOK`, `GENERATION`, `preCompact(tree, transcript, trigger)`, `plantSession({ sid, lines, parentAge, subagents })`, `setFile()`, `tl`, `LIVE` (5 s), `DEAD` (600 s), `itLinux` and `spawnSync`. `preCompact` hard-codes `session_id: 'sess-1'`, so the cases override it with a UUID.
+- Consumes, from the test file's module scope: `runFull` (asserts exit 0 and returns stdout and stderr), `hookEnv(env)` (B1's one definition of every hook spawn's env, which `run`, `runFull` and the spool describe's `runSpoolBounded` share; a hand-built spawn takes `env: hookEnv(SCRUB)`), `home`, `HOOK`, `GENERATION`, `preCompact(tree, transcript, trigger)`, `plantSession({ sid, lines, parentAge, subagents })`, `setFile()`, `tl`, `LIVE` (5 s), `DEAD` (600 s), `itLinux`, `spawnSync` and `execFileSync` (the FIFO case's `mkfifo`, as B1's spool FIFO row runs it). `preCompact` hard-codes `session_id: 'sess-1'`, so the cases override it with a UUID.
 - Consumes, from Task 1, in the test only: lib's `cardLine`, by dynamic import.
 - Produces:
   - the marker `~/.ccrc/history/scope/<id>`, one line `<scope> <psid> <ms>\n`. `scope` is `main`, `subagent` or `ambiguous`, `psid` a lowercase UUID, `ms` epoch milliseconds; 61 bytes at most. Every main-thread PreCompact first empties an existing marker (the line below `esac`, before any tail exit); the block then writes only a decided verdict. So an undecided verdict, or a run that exits before the block, leaves the marker empty, and no file is created where none was. Task 9's reader consumes it;
@@ -3915,14 +3916,16 @@ git commit -m "feat(history): collect purged sessions' scope markers and card di
 - ⟦D:history-card-main-scope-only⟧: the marker is what keeps the card line out of a subagent's context.
 - B1's D-4252 (`history-epoch-lines-survive-off`), marker half: `history-off` silences the marker, never the epoch lines.
 - ⟦D:history-scope-marker-cleared-on-undecided⟧ NEW, ruled RC1: accepted as implemented. §5.1 says a set-but-empty verdict writes nothing, and puts the write after `_hook_compact_pre`, which runs after the hookstate write's two `exit 0`s. Either leaves a fresh `main` marker from an earlier compaction of the same psid in place, and the next SessionStart(compact), which may be a subagent's, would serve the card line from it. So every main-thread PreCompact empties an existing marker directly below `esac`, before any tail exit, and only a decided verdict is written after the card's call. §5.1's spec text ("a hookstate write that fails → no marker") holds only with no earlier marker; this makes it hold always. An emptied marker also folds a later consumption as `card_consumed:unknown` (Task 5, ruling RC3), which stays in W1-e's denominator.
+- ⟦D:history-scope-marker-regular-file-only⟧ NEW, ruled R-B3-fifo (review finding R74): §5.1's scope-marker gates test only that `scope/` is a directory (`[ -d … scope ]`), and `-d` follows a link; spec rev 3.5 brought the spool's gate into line with B1's D-4418 (`history-spool-append-regular-file-only`) and S18 names that rule's CONTROL, but §5.1's marker gates were not. So the marker follows B1's D-4418 rule: `scope/` must be a real directory, not a symlink (RV9: only `db/` may link out of the history root), and the marker path must be absent or a regular non-link file, both tested with builtins directly before the redirection, on the block's write and on the early truncation alike. A FIFO planted at `scope/<id>` before the run would otherwise block the `>` open until Claude Code kills the hook (600 s), and a symlinked `scope/` would be written through.
 
 **Choices this task makes:**
 - **The id bound is a builtin test** (B1's D-4170 (`history-id-grammar`), applied as bash can): `_hook_history_scope` tests `(( ${#id} <= 224 ))`, B1's `SPOOL_ID_MAX`, before anything at `scope/<id>` is tested or opened (mutant `T8-M6-id-bound`); `.` and `..` are refused structurally (next item).
-- **`.` and `..` get no test of their own.** The hook's id grammar admits both. Under `scope/` they name directories: `scope/.` is `scope/` itself and `scope/..` is the history root. Neither the write nor the truncation can open a directory. A builtin test there could not be told apart from its absence by any input, and this repo does not ship a guard nothing can trip (`_hook_compact_mark_served`'s own comment says so). One case pins the structural fact instead: ids `.` and `..` leave `scope/` empty and touch nothing else. The 224-char bound does get a test, because a 225-char name is writable.
+- **`.` and `..` get no test of their own.** The hook's id grammar admits both. Under `scope/` they name directories: `scope/.` is `scope/` itself and `scope/..` is the history root. Neither the write nor the truncation can open a directory. A builtin test there could not be told apart from its absence by any input, and this repo does not ship a guard nothing can trip (`_hook_compact_mark_served`'s own comment says so). One case pins the structural fact instead: ids `.` and `..` leave `scope/` empty and touch nothing else. (The regular-file test above the write, "A regular file or nothing" below, now refuses a directory too, so the write is not even tried; the early truncation's `-f` already refused one. Neither is a test of the id.) The 224-char bound does get a test, because a 225-char name is writable.
 - **A lowercase-UUID psid is required.** The card file is `card/<id>/<uuid>.txt`, so a marker for any other psid could never be read.
-- **A symlink at the marker's path is left alone.** The write would follow it. The tests are builtin, and bash has no `O_NOFOLLOW` or `O_NONBLOCK` redirection, so a node swapped in after the test is opened: a link is followed, a FIFO blocks until Claude Code kills the hook (`install-session-hooks.sh` `HOOK_TIMEOUT_S`). That is the residue B1's spool block names in the same words (its "a regular file or nothing" comment); no case can measure the swap window, so none is added, and the block's comment names it.
+- **A regular file or nothing, in a real `scope/`** (⟦D:history-scope-marker-regular-file-only⟧, B1's D-4418 (`history-spool-append-regular-file-only`) rule, ruled R-B3-fifo). The block's gate adds `! -L` on `scope/` beside its `-d`, and the block tests `[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]]`, B1's spool test, on the line directly above its write, after the scope rule and the clock have run, so only builtins stand between the test and the `>`. That one test replaces the block's earlier `[[ ! -L "$f" ]]` line, so the symlink case and its mutant `T8-M8-symlink` measure the same line the FIFO case does (a second `! -L` higher up would leave each mutant a backstop and nothing to red); a symlink at the marker's path now costs the block its jq, scope and clock forks before the refusal, which PreCompact, off the hot path, can pay. The early truncation adds `! -L` on `scope/` beside its existing `-f` and `! -L` on the marker (`-f scope/<id>` already implies a directory or a link to one). So a symlink at the marker's path, dangling or not, a FIFO or any other node writes nothing, and a symlinked `scope/` is neither written nor truncated through. Cases pin a FIFO planted before the run (exit 0 within a 10 s deadline, the FIFO left a FIFO), a symlinked `scope/` (nothing written or truncated at its target) and a CONTROL (an existing regular marker is replaced by this run's verdict), each with a mutant (Step 6: `T8-M14` to `T8-M17`), and the source pin requires the type test directly above the write (`T8-M18`).
+- **What is left is the post-test swap.** Bash has no `O_NOFOLLOW` or `O_NONBLOCK` redirection, so a node swapped in AFTER the test is still opened: a link is followed, a FIFO blocks until Claude Code kills the hook (`install-session-hooks.sh` `HOOK_TIMEOUT_S`). That is the residue B1's spool block names in the same words (its "a regular file or nothing" comment), and only that residue: a node present when the test runs is refused, here as there. No case can measure the swap window, so none is added, and the block's comment names it.
 - **The unset arm parses the payload with one jq**, printing `.transcript_path` and `.trigger // "auto"` on two lines, as `_hook_compact_pre` reads them. A failed parse leaves the path empty, the scope rule answers rc 1, and the verdict is undecided.
-- **The invalidation runs first, directly below `esac`, and is builtin-only.** The tail can exit between `esac` and the marker block (the hookstate compose, the 64 KB cap, the hookstate write and `mv`), and a hook kill can land there too. Emptying the marker before any of them means each of those leaves an empty marker, never an older fresh `main` one. It runs under `history-off` too: emptying serves nothing and grows nothing, and the reader refuses under `history-off` anyway. It needs neither the id bound nor the psid test, because it only truncates a regular file that already exists.
+- **The invalidation runs first, directly below `esac`, and is builtin-only.** The tail can exit between `esac` and the marker block (the hookstate compose, the 64 KB cap, the hookstate write and `mv`), and a hook kill can land there too. Emptying the marker before any of them means each of those leaves an empty marker, never an older fresh `main` one. It runs under `history-off` too: emptying serves nothing and grows nothing, and the reader refuses under `history-off` anyway. It needs neither the id bound nor the psid test, because it only truncates a regular non-link file that already exists in a `scope/` that is not a symlink.
 - **A spooled SessionStart(fork) (ruled Q16) changes nothing here.** The marker is written and emptied on PreCompact only, and a SessionStart(fork) neither writes nor reads it (the reader runs on a compact SessionStart only, Task 9). A fork's own compactions write and empty `scope/<id>` as any main thread's do, keyed on its own psid, so a marker the parent left before a `/branch` names the parent's sid and cannot serve a fresh-sid fork. B2's one hook edit is `fork` added in place to the spool block's source whitelist, outside this block and below README's anchor, so no line this task anchors on or measures moves.
 
 - [ ] **Step 1: Read the base.** From the repository root:
@@ -4175,6 +4178,47 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(fs.lstatSync(marker()).isSymbolicLink()).toBe(true);
   });
 
+  // B1's F24 rows, for the marker (⟦D:history-scope-marker-regular-file-only⟧; B1's D-4418 rule, ruled R-B3-fifo). A
+  // FIFO already standing at scope/<id> passes a test that keeps only `! -L`, and the `>` open then blocks with no
+  // reader, so the run is bounded: a blocked hook is killed at the deadline, never left to hang the suite.
+  const runBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(SCRUB),
+  });
+
+  it('a FIFO where the marker goes writes no marker and never blocks: exit 0, silent, the FIFO left as it was', () => {
+    plantScope(); cardOff();
+    execFileSync('mkfifo', [marker()]);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const r = runBounded(pre(transcript));
+    expect(r.signal, 'the hook blocked opening the FIFO and was killed at the deadline').toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe('');
+    expect(fs.lstatSync(marker()).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('a symlinked scope/ is neither written nor truncated through', () => {
+    fs.mkdirSync(histDir(), { recursive: true, mode: 0o700 });
+    const elsewhere = path.join(home, 'elsewhere');
+    fs.mkdirSync(elsewhere, { mode: 0o700 });
+    fs.symlinkSync(elsewhere, scopeDir());
+    cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readdirSync(elsewhere), 'the block wrote a marker through a symlinked scope/').toEqual([]);
+    fs.writeFileSync(path.join(elsewhere, ID), 'keep\n');
+    expect(runFull(pre(transcript), SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(path.join(elsewhere, ID), 'utf8'), 'a file behind a symlinked scope/ was truncated or overwritten').toBe('keep\n');
+  });
+
+  it('CONTROL: an existing regular marker is replaced by this run\'s decided verdict', () => {
+    plantScope(); cardOff();
+    fs.writeFileSync(marker(), `subagent ${SID} ${Date.now() - 60_000}\n`);
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre(transcript), SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect([read().scope, read().sid]).toEqual(['main', SID]);
+  });
+
   it('the block sits after the card\'s call and before PostCompact\'s, and its gate forks nothing', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
     const open = src.indexOf('# >>> history-scope (spec 2026-10-05 §5.1)');
@@ -4204,6 +4248,17 @@ describe('history scope marker: PreCompact records whose context is compacting (
     expect(fnAt, 'no _hook_history_scope definition').toBeGreaterThan(-1);
     const fnCode = src.slice(fnAt, src.indexOf('\n}\n', fnAt)).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect(`${early[0]!}\n${gate!}\n${fnCode}`.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the marker lines (@P forks)').toBeNull();
+    // B1's D-4418 rule (⟦D:history-scope-marker-regular-file-only⟧): the type test is the line DIRECTLY above the write,
+    // so nothing but builtins runs between the test and the `>`; the gate and the early line refuse a symlinked scope/.
+    const fnLines = fnCode.split('\n');
+    const w = fnLines.findIndex((l) => l.includes('> "$f"; } 2>/dev/null'));
+    expect(w, 'no marker write').toBeGreaterThan(0);
+    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only')
+      .toBe('[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0');
+    // Either spelling of the directory: Task 9 re-points these lines to its HISTORY_SCOPE_DIR constant.
+    const notLinkedScope = /&& ! -L "(?:\$HOME\/\.ccrc\/history\/scope|\$HISTORY_SCOPE_DIR)" \]\]/;
+    expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
+    expect(early[0], 'the early line refuses a symlinked scope/').toMatch(notLinkedScope);
   });
 });
 ```
@@ -4214,13 +4269,14 @@ describe('history scope marker: PreCompact records whose context is compacting (
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'history scope marker')
 ```
 
-Expected on Linux as a non-root user: `8 failed | 10 passed` among the describe's 18 cases (root skips the two hookstate cases; Darwin has no strace case):
+Expected on Linux as a non-root user: `9 failed | 12 passed` among the describe's 21 cases (root skips the two hookstate cases; Darwin has no strace case):
 - `S16: under compact-card-off a manual compaction is scoped by the marker itself …`, `S16: the card's own verdict is reused …`, `S16: one live subagent beside a quiet parent …`, `S16: a CS_SCOPE exported into the pane …` and `the id bound is SPOOL_ID_MAX …` each fail with `ENOENT: no such file or directory, open '…/.ccrc/history/scope/demo-quiet-basin'` (or the 224-char id's name);
 - `an undecided verdict empties a fresh main marker …` fails with `the earlier main marker survived an undecided compaction: expected 'main 7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d…' to be ''`;
 - `a hookstate write that fails empties an older fresh main marker …` fails with `the older main marker survived a PreCompact that exited at its hookstate write: expected 'main 7d0c3f5e-…' to be ''`;
+- `CONTROL: an existing regular marker is replaced …` fails with `expected [ 'subagent', '7d0c3f5e-…' ] to deeply equal [ 'main', '7d0c3f5e-…' ]` (nothing replaces the planted marker yet);
 - `the block sits after the card's call …` fails with `no history-scope block: expected -1 to be greater than -1`.
 
-The ten that pass assert an absence the hook cannot yet violate: no scope directory, its fork count, scope rc 1, the failed hookstate write with no earlier marker, S2, S3, S8, ids `.` and `..`, a non-UUID psid, and a symlink. Step 6's mutants are what measure them, except `.` and `..`, which no guard serves (this task's first choice).
+The twelve that pass assert an absence the hook cannot yet violate: no scope directory, its fork count, scope rc 1, the failed hookstate write with no earlier marker, S2, S3, S8, ids `.` and `..`, a non-UUID psid, a symlink, a FIFO at the marker's path (nothing opens it yet), and a symlinked `scope/`. Step 6's mutants are what measure them, except `.` and `..`, which no guard serves (this task's second choice).
 
 - [ ] **Step 4: Insert the marker.** In `ccd/session-hook.sh`, directly below the line `esac` that closes `case "$event" in` (Step 1's awk names it), insert these eight lines. The capture arm's comment, which follows `esac` today, then follows them:
 
@@ -4230,9 +4286,9 @@ The ten that pass assert an absence the hook cannot yet violate: no scope direct
 # any exit below can run, and the `history-scope` block after the compaction
 # card's call writes only a decided verdict. So a hookstate write or a jq that
 # fails, or a verdict nobody reached, leaves an EMPTY marker, never an older
-# fresh `main` one a subagent's SessionStart(compact) could be served from
-# (⟦D:history-scope-marker-cleared-on-undecided⟧). Builtins only; no file is made.
-[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope/$id" ]] && { : > "$HOME/.ccrc/history/scope/$id"; } 2>/dev/null
+# fresh `main` one for a subagent (⟦D:history-scope-marker-cleared-on-undecided⟧).
+# Builtins only; no file is made; only a regular non-link file in a non-link scope/.
+[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope" ]] && { : > "$HOME/.ccrc/history/scope/$id"; } 2>/dev/null
 ```
 
 Then, directly above the line `if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi`, insert these five lines:
@@ -4277,14 +4333,22 @@ Directly below that same line, and above `if [[ "$event" == PostCompact ]]; then
 # earlier compaction of this psid wrote can never serve this one.
 #
 # GATES, builtins first and before any fork: PreCompact, the main thread
-# (`$paid`), the scope directory the sweep made (the hook never mkdirs), and
-# history-off absent. Then the id's bound (SPOOL_ID_MAX, as the spool block's;
+# (`$paid`), the scope directory the sweep made, a real directory and never a
+# symlink (the hook never mkdirs; only db/ may link out of the history root),
+# and history-off absent. Then the id's bound (SPOOL_ID_MAX, as the spool block's;
 # `.` and `..` need no test of their own, since under scope/ they name
-# directories, which no write can open), a lowercase-UUID psid (the card file
-# is keyed on it), and no symlink where the marker goes. The tests are builtin,
-# here and on the early line below the event `case`; a node swapped in after
-# the test is opened: a link is followed, a FIFO blocks until Claude Code kills
-# the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+# directories, which no write can open) and a lowercase-UUID psid (the card file
+# is keyed on it).
+#
+# A REGULAR FILE OR NOTHING, as the spool block's append (its D-4418 rule;
+# ⟦D:history-scope-marker-regular-file-only⟧): the line DIRECTLY above the write
+# refuses a symlink, dangling or not, a FIFO and any other node, so a FIFO that
+# stands at scope/<id> when the test runs never blocks the `>` open. The tests
+# are builtin, here and on the early line below the event `case`, and bash has
+# no O_NOFOLLOW or O_NONBLOCK redirection, so what is left is a node swapped in
+# AFTER the test: it is opened, a link followed, a FIFO blocking until Claude
+# Code kills the hook (install-session-hooks.sh HOOK_TIMEOUT_S).
+#
 # PreCompact is off the hot path, so past the gates this block may
 # fork (one jq on the unset arm, the scope rule's finds, the clock). Every
 # redirection is under `{ …; } 2>/dev/null`, so nothing reaches stdout or
@@ -4295,7 +4359,6 @@ _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; 
   local f="$HOME/.ccrc/history/scope/$id" scope="" ms="" tp="" trig=""
   (( ${#id} <= 224 )) || return 0
   [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0
-  [[ ! -L "$f" ]] || return 0
   if [[ -z "${CS_SCOPE+x}" ]]; then
     { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "auto" | tostring)' <<<"$payload" 2>/dev/null)
     _hook_compact_scope "$tp" "$trig" || true
@@ -4303,10 +4366,11 @@ _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; 
   scope="${CS_SCOPE-}"
   [[ -n "$scope" ]] || return 0
   ms=$(_hook_epoch_ms)
+  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0
   { printf '%s %s %s\n' "$scope" "$psid" "$ms" > "$f"; } 2>/dev/null
   return 0
 }
-if [[ "$event" == PreCompact && -z "$paid" ]] && [[ -d "$HOME/.ccrc/history/scope" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope || true; fi
+if [[ "$event" == PreCompact && -z "$paid" ]] && [[ -d "$HOME/.ccrc/history/scope" && ! -L "$HOME/.ccrc/history/scope" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope || true; fi
 # <<< history-scope
 ```
 
@@ -4329,7 +4393,7 @@ Expected: `hook-syntax-ok`, then `1`, then `3` (the early line, the block's `loc
 ```
 
 Expected:
-- the first run: all 18 cases green on Linux as a non-root user (16 under root; 17 on Darwin);
+- the first run: all 21 cases green on Linux as a non-root user (19 under root; 20 on Darwin);
 - the second: `6 passed`, the strace describe's five and the `:2721` argv case (` --max-chars 4000 --max-files 12 `). The strace multisets stay exact, `{ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 1 }` and the AMBIGUOUS run's `rm: 2` among them. The AMBIGUOUS window runs to the END of the trace, past this block. Its fixture has no `scope/` directory, so the early line's file test and the block's builtin gate both fail before any fork. (That run's psid is `sess-1`, so it could not see the gate's forks anyway; this describe's own strace case is the one that measures the `scope/` gate.)
 
 `session-hook.test.ts` is a known load-flake file. Re-run a red that is not one of these cases alone before calling it a break.
@@ -4410,13 +4474,13 @@ MUTANTS = [
     ('T8-M4-no-unset', H, T, 'exported into the pane', [
         ('unset CS_SCOPE\nif [[ "$event" == PreCompact  ]]', 'if [[ "$event" == PreCompact  ]]')]),
     ('T8-M5-no-early-invalidation', H, T, 'empties a fresh main marker|empties an older fresh main marker', [
-        (r'''[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope/$id" ]] && { : > "$HOME/.ccrc/history/scope/$id"; } 2>/dev/null''' + '\n', '')]),
+        (r'''[[ "$event" == PreCompact && -z "$paid" ]] && [[ -f "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope" ]] && { : > "$HOME/.ccrc/history/scope/$id"; } 2>/dev/null''' + '\n', '')]),
     ('T8-M6-id-bound', H, T, 'the id bound is SPOOL_ID_MAX: a 224-char id is marked', [
         ('  (( ${#id} <= 224 )) || return 0\n  [[ "$psid" =~ ^', '  [[ "$psid" =~ ^')]),
     ('T8-M7-psid-grammar', H, T, 'not a lowercase UUID writes no marker', [
-        ('  [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0\n  [[ ! -L "$f" ]]', '  [[ ! -L "$f" ]]')]),
+        ('  [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0\n  if [[ -z "${CS_SCOPE+x}" ]]; then', '  if [[ -z "${CS_SCOPE+x}" ]]; then')]),
     ('T8-M8-symlink', H, T, 'a symlink where the marker goes', [
-        (r'''  [[ ! -L "$f" ]] || return 0''', r'''  :''')]),
+        (r'''  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0''', r'''  [[ -f "$f" || ! -e "$f" ]] || return 0''')]),
     ('T8-M9-hookstate-not-fatal', H, T, 'hookstate write that fails leaves no marker', [
         (r'''{ printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; exit 0; }''', r'''{ printf '%s\n' "$out" > "$tmp"; } 2>/dev/null || rm -f "$tmp"'''),
         (r'''mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }''', r'''mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"''')]),
@@ -4425,14 +4489,26 @@ MUTANTS = [
     ('T8-M11-empty-scope-as-main', H, T, 'scope rc 1|empties a fresh main marker', [
         (r'''  scope="${CS_SCOPE-}"''', r'''  scope="${CS_SCOPE:-main}"''')]),
     ('T8-M12-no-scope-dir-gate', H, T, 'with no scope/ directory the gate forks nothing', [
-        (r''' && [[ -d "$HOME/.ccrc/history/scope" ]] && [[ ! -e''', r''' && [[ ! -e''')]),
+        (r''' && [[ -d "$HOME/.ccrc/history/scope" && ! -L "$HOME/.ccrc/history/scope" ]] && [[ ! -e''', r''' && [[ ! -e''')]),
     ('T8-M13-transformation', H, T, "the block sits after the card's call", [
         (r'''  scope="${CS_SCOPE-}"''', r'''  scope="${CS_SCOPE-}"; scope="${scope@P}"''')]),
+    # ⟦D:history-scope-marker-regular-file-only⟧ (B1's D-4418 rule, ruled R-B3-fifo):
+    ('T8-M14-fifo-only-not-link', H, T, 'a FIFO where the marker goes', [
+        (r'''  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0''', r'''  [[ ! -L "$f" ]] || return 0''')]),
+    ('T8-M15-scope-dir-link-gate', H, T, 'a symlinked scope/ is neither', [
+        (r'''[[ -d "$HOME/.ccrc/history/scope" && ! -L "$HOME/.ccrc/history/scope" ]]''', r'''[[ -d "$HOME/.ccrc/history/scope" ]]''')]),
+    ('T8-M16-early-scope-dir-link', H, T, 'a symlinked scope/ is neither', [
+        (r''' && ! -L "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope" ]] && { :''', r''' && ! -L "$HOME/.ccrc/history/scope/$id" ]] && { :''')]),
+    ('T8-M17-absent-only', H, T, 'CONTROL: an existing regular marker', [
+        (r'''  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0''', r'''  [[ ! -L "$f" && ! -e "$f" ]] || return 0''')]),
+    ('T8-M18-type-test-not-adjacent', H, T, "the block sits after the card's call", [
+        ('  ms=$(_hook_epoch_ms)\n  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0\n',
+         '  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0\n  ms=$(_hook_epoch_ms)\n')]),
 ]
 PYEOF
 ```
 
-Run them in the foreground, with a timeout of at least 2600000 ms (thirteen mutants, two vitest runs each):
+Run them in the foreground, with a timeout of at least 3600000 ms (eighteen mutants, two vitest runs each):
 
 ```bash
 SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b3/scratch"
@@ -4440,7 +4516,7 @@ python3 "$SCRATCH/mutate.py" "$SCRATCH/mutants-t8.py"; echo "rc=$?"
 git status --short
 ```
 
-Expected: thirteen `RED->GREEN` lines, then `rc=0`, then `git status` lists only `ccd/session-hook.sh` and `server/test/session-hook.test.ts` as modified. Each mutant and its red, as measured on a prototype of this exact text for T8-M1 to T8-M4 and T8-M6 to T8-M10; T8-M5's target line, T8-M11, T8-M12 and T8-M13 (the B1 re-check's `${…@…}` form) were added after the prototype, and their reds below are argued from the code, so a `NOT MEASURED` there is reported with the case's output:
+Expected: eighteen `RED->GREEN` lines, then `rc=0`, then `git status` lists only `ccd/session-hook.sh` and `server/test/session-hook.test.ts` as modified. Each mutant and its red, as measured on a prototype of this exact text for T8-M1 to T8-M4 and T8-M6 to T8-M10; T8-M5's target line, T8-M11, T8-M12 and T8-M13 (the B1 re-check's `${…@…}` form) were added after the prototype, and their reds below are argued from the code. T8-M14 to T8-M18 came with ruling R-B3-fifo, which also moved T8-M5's, T8-M7's, T8-M8's and T8-M12's anchors; their reds through vitest are predicted, not measured on the hook. What was measured is this step's own text: Step 4's three insertions, extracted from this plan with `_hook_compact_pre`, `_hook_compact_scope` and `_hook_epoch_ms` stubbed, every T8 anchor found exactly once in them, and T8-M8 and T8-M14 to T8-M18 applied and run under `timeout 3` against the cases' shapes. Unmutated: a FIFO at the marker's path returns at once and stays a FIFO; a symlinked `scope/` and a regular file behind it are left untouched; a regular marker is replaced by `main <psid> <ms>`; a link to a regular file is not followed. T8-M14 blocks on the FIFO (rc 124); T8-M15 writes `demo` behind the symlinked `scope/`; T8-M16 empties the file behind it; T8-M17 leaves the CONTROL's marker empty; T8-M8 writes through the link; T8-M18 changes no behaviour (its red is the source pin's). A `NOT MEASURED` on any of these is reported with the case's output:
 
 | Mutant | Guard removed | The case that goes red, and how |
 |---|---|---|
@@ -4451,12 +4527,17 @@ Expected: thirteen `RED->GREEN` lines, then `rc=0`, then `git status` lists only
 | T8-M5-no-early-invalidation | the early invalidation below `esac` | the undecided case (`the earlier main marker survived an undecided compaction`) and the failed-hookstate case with an earlier marker (`the older main marker survived a PreCompact that exited at its hookstate write`) |
 | T8-M6-id-bound | `(( ${#id} <= 224 ))` | the id-bound case: `expected true to be false` |
 | T8-M7-psid-grammar | the psid UUID test | the non-UUID case: `expected true to be false` |
-| T8-M8-symlink | `[[ ! -L "$f" ]]` | the symlink case: `expected 'main 7d0c…' to be 'keep\n'` |
+| T8-M8-symlink | the `! -L "$f"` half of the regular-file test above the write (the test keeps `-f "$f" \|\| ! -e "$f"`, which a link to a regular file passes) | the symlink case: `expected 'main 7d0c…' to be 'keep\n'` |
 | T8-M9-hookstate-not-fatal | the two `exit 0`s of a failed hookstate write | `a marker landed although the hookstate write failed` |
 | T8-M10-fork-before-gate | a fork added above the gate | the strace AMBIGUOUS run: `expected { '(subshell)': 2, … } to deeply equal { '(subshell)': 1, … }` |
 | T8-M11-empty-scope-as-main | an empty verdict read as `main` (`${CS_SCOPE:-main}`) | scope rc 1: `expected true to be false` (a `main` marker lands); the undecided case: `expected 'main …' to be ''` |
 | T8-M12-no-scope-dir-gate | `[[ -d … scope ]]` in the gate | the new strace case: `the block forked although scope/ is absent` (the block's jq, scope finds and clock run, and its write fails silently into the missing directory) |
 | T8-M13-transformation | none: it ADDS `; scope="${scope@P}"` to `_hook_history_scope`'s verdict line, a `${…@…}` transformation (`@P` runs prompt expansion, so command substitution) | the source pin: `a ${…@…} transformation in the marker lines (@P forks): expected '${scope@' to be null` |
+| T8-M14-fifo-only-not-link | the regular-file half of the test above the write: only `[[ ! -L "$f" ]]` is kept (spec S18's CONTROL shape for the spool, applied to the marker) | the FIFO case (predicted): the `>` open blocks with no reader, the 10 s deadline kills the hook, `the hook blocked opening the FIFO and was killed at the deadline: expected 'SIGKILL' to be null` |
+| T8-M15-scope-dir-link-gate | `! -L` on `scope/` in the block's gate | the symlinked-`scope/` case (predicted): `-d` follows the link, so the block writes `elsewhere/demo-quiet-basin`: `the block wrote a marker through a symlinked scope/: expected [ 'demo-quiet-basin' ] to deeply equal []` |
+| T8-M16-early-scope-dir-link | `! -L` on `scope/` in the early truncation | the symlinked-`scope/` case's second run (predicted): `-f` follows the directory link, so the early line empties the file behind it: `a file behind a symlinked scope/ was truncated or overwritten: expected '' to be 'keep\n'` |
+| T8-M17-absent-only | the test made absent-only (`[[ ! -L "$f" && ! -e "$f" ]]`), refusing the regular file the CONTROL needs written | the CONTROL (predicted): the early line empties the planted marker and the block refuses to write it, so `read()` finds no line: `one line: expected false to be true` |
+| T8-M18-type-test-not-adjacent | the test moved above the clock's `ms=$(_hook_epoch_ms)`, so a fork stands between the test and the `>` | the source pin (predicted): `the regular-file test sits directly above the write, builtins only: expected 'ms=$(_hook_epoch_ms)' to be '[[ ! -L "$f" && ( -f "$f" \|\| ! -e "$f" ) ]] \|\| return 0'` |
 
 A `NOT MEASURED` row means its case passed with the guard gone. The case is then wrong: fix the case, never the mutant. A run killed mid-mutant leaves `keep/<file with / as __>.orig`, and the runner refuses to start until it is restored with the loop its docstring gives (the same loop as `mutate.mjs`'s header). Never use `git stash`.
 
@@ -4535,8 +4616,10 @@ CS_SCOPE verdict when the card scoped, and runs the scope rule itself when
 it did not (compact-card-off). Directly below the event case, before any
 tail exit, a main-thread PreCompact empties the id's older marker, so an
 undecided verdict or a failed hookstate write leaves it empty. Gated with
-builtins on PreCompact, the main thread, the scope directory and
-history-off; CS_SCOPE is unset before the card's call. Tail only: the S6-R11
+builtins on PreCompact, the main thread, a scope directory that is no
+symlink and history-off; the marker is written or emptied only when it is
+a regular non-link file or absent, so a planted FIFO never blocks the hook.
+CS_SCOPE is unset before the card's call. Tail only: the S6-R11
 census does not move."
 ```
 
@@ -4590,7 +4673,7 @@ census does not move."
 **Choices this task makes:**
 - **No separate length test.** §8.6 says the read "refuses a value over 512 chars". The read takes at most `HISTORY_CARD_MAX + 1` chars, and the grammar admits no line over 145 chars, so a test of `${#v} <= 512` could never refuse what the grammar did not. It was measured: deleting it left every case green, while its sibling mutant (a permissive grammar) reds the over-512 case. C21's over-512 case stands and is measured through the grammar.
 - **`.` and `..` get no test**, for the reason in Task 8: `scope/.` and `scope/..` are directories, which `_ct_read` refuses as rc 2.
-- **No clock, no line.** Without a well-formed `EPOCHREALTIME` the marker's age cannot be measured without a fork, so nothing is served. A malformed value would otherwise abort `$(( ))` under `set -u`; its case pins both.
+- **No clock, no line.** Without a well-formed `EPOCHREALTIME` the marker's age cannot be measured without a fork, so nothing is served. A malformed value would otherwise abort `$(( ))` under `set -u`; its case pins both rows, but only the `malformed` row can red without the test (`T9-M12-clock-guard`): an unset clock reads as `now` 0, which is never fresh, so it serves nothing either way.
 - **The clock is read once.** Each expansion of `EPOCHREALTIME` reads the clock anew, so a reader that tests one expansion and slices another can take its seconds and its fraction from two readings (B1's spool block reads it once into `_hs_t` for this reason, and pins it). The reader reads it once into the local `t`, tests `t` with B1's grammar `^[1-9][0-9]{0,11}[.,][0-9]*$` (one clock grammar in the hook), and slices `t`. The case `EPOCHREALTIME is read once …`, modelled on B1's, moves the clock between the test and the slice with a `BASH_ENV` DEBUG trap (`set -T` carries it into the function), and the source pin counts one expansion. Neither was run on a prototype; a red at the fixture (a trap that does not reach the function) is the fixture's to fix, never the reader's.
 - **A future `<ms>` is not fresh.** The marker is written by the PreCompact that precedes this SessionStart, so its ms is never after now on one clock.
 - **A regular file only.** A FIFO at the card's path would block `read` with the serve lock held. `[[ -f ]]` refuses a FIFO that is there when the test runs, and a case runs the hook against one under a 20 s deadline. The test is builtin, and bash has no `O_NOFOLLOW` or `O_NONBLOCK` redirection, so a node swapped in after it is opened: a link is followed, a FIFO blocks until Claude Code kills the hook (`install-session-hooks.sh` `HOOK_TIMEOUT_S`). B1's spool block names the same residue in the same words, and the reader's header now does too; no case can measure the window, so none is added.
@@ -5070,7 +5153,7 @@ Expected on Linux: `25 failed | 38 passed` among the describe's 63 cases. On Dar
 - every case that expects the line fails with `expected null to be 'History: node L03a9c1… (this compacti…'`, or with the folded text, or with `the measured run served the line: expected false to be true`. These are the plain serve, the parent-less and 20-hex lines, C18's reserved card and both inclusive rows, the standing-cards case, C19, C21's two served rows, C22, C37's in-bound marker and its end-to-end case, the id bound, the seven parity rows whose CLI verdict is not `off`, and the three fold-under-a-locale rows;
 - `_hook_history_card is defined above the case …` fails with `no _hook_history_card definition: expected -1 to be greater than -1`.
 
-The 38 that pass assert that no line is served, which a hook without a reader cannot violate; the parity row `130 spaces followed by the resolved generation` (ruling RC4) and `EPOCHREALTIME is read once …` are among them. Step 7's mutants measure every one of them but two. The parity table's CONTROL is pure and guards nothing. C37's `empty` marker row is refused by two guards at once (the scope-word test and the ms digit test), so no single-guard mutant can red it: it is defence in depth, and it is named here rather than claimed measured.
+The 38 that pass assert that no line is served, which a hook without a reader cannot violate; the parity row `130 spaces followed by the resolved generation` (ruling RC4) and `EPOCHREALTIME is read once …` are among them. Step 7's mutants measure every one of them but three. The parity table's CONTROL is pure and guards nothing. C37's `empty` marker row is refused by two guards at once (the scope-word test and the ms digit test), so no single-guard mutant can red it: it is defence in depth, and it is named here rather than claimed measured. The `unset` row of `EPOCHREALTIME %s serves no line …` stays green under `T9-M12-clock-guard`, which reds only the `malformed` row: an empty reading makes `now` 0, which the age test refuses whether or not the clock grammar runs, so that row is an absence pin, named here rather than claimed measured.
 
 - [ ] **Step 4: Write the reader and its call.** In `ccd/session-hook.sh`, directly above the line that begins `state="" ask_json=`, insert these 105 lines and then one blank line. The existing blank line above stays where it is:
 
@@ -5200,10 +5283,10 @@ for old, new in [
     # Task 8's three lines that spell the scope directory, now the one constant above the case
     ('  local f="$HOME/.ccrc/history/scope/$id" scope="" ms="" tp="" trig=""\n',
      '  local f="$HISTORY_SCOPE_DIR/$id" scope="" ms="" tp="" trig=""\n'),
-    ('[[ -d "$HOME/.ccrc/history/scope" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope',
-     '[[ -d "$HISTORY_SCOPE_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope'),
-    ('[[ -f "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope/$id" ]] && { : > "$HOME/.ccrc/history/scope/$id"; } 2>/dev/null\n',
-     '[[ -f "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR/$id" ]] && { : > "$HISTORY_SCOPE_DIR/$id"; } 2>/dev/null\n'),
+    ('[[ -d "$HOME/.ccrc/history/scope" && ! -L "$HOME/.ccrc/history/scope" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope',
+     '[[ -d "$HISTORY_SCOPE_DIR" && ! -L "$HISTORY_SCOPE_DIR" ]] && [[ ! -e "$HOME/.ccrc/history-off" ]]; then _hook_history_scope'),
+    ('[[ -f "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope/$id" && ! -L "$HOME/.ccrc/history/scope" ]] && { : > "$HOME/.ccrc/history/scope/$id"; } 2>/dev/null\n',
+     '[[ -f "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR/$id" && ! -L "$HISTORY_SCOPE_DIR" ]] && { : > "$HISTORY_SCOPE_DIR/$id"; } 2>/dev/null\n'),
     # the turn-marker note's one sentence naming the exception (below the anchor: free to grow)
     (turn + '\n',
      turn + ' ONE SANCTIONED EXCEPTION since\n'
@@ -5261,7 +5344,7 @@ Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 106>`, where `
 ```
 
 Expected:
-- the first: all 63 cases of this describe and Task 8's 18 green, so `81 passed` on Linux as a non-root user. Task 8's `a hookstate write that fails empties an older fresh main marker …` now runs end to end: its SessionStart(compact) meets a real reader and an emptied marker, and serves no line;
+- the first: all 63 cases of this describe and Task 8's 21 green, so `84 passed` on Linux as a non-root user. Task 8's `a hookstate write that fails empties an older fresh main marker …` now runs end to end: its SessionStart(compact) meets a real reader and an emptied marker, and serves no line;
 - the second: green. It covers the strace pins, the `:2721` argv case, the two-clips case, the spill-budget case and the `served` scan (`raw union matches` 11).
 
 - [ ] **Step 7: Measure every guard red with a mutant.** Tasks 8 to 11 share the runner, which Task 8 Step 6 wrote. From the repository root:
@@ -5287,7 +5370,7 @@ MUTANTS = [
         (r'''  [[ -L "$off" ]] && return 0''', r'''  :''')]),
     ('T9-M6-recall-off-unreadable', H, T, 'recall-off parity: an unreadable recall-off file|recall-off parity: a directory at', [
         (r'''    [[ -f "$off" && -r "$off" ]] || return 0''', r'''    :''')]),
-    ('T9-M7-generation-symlink', H, T, 'recall-off parity: a symlinked .generation', [
+    ('T9-M7-generation-symlink', H, T, 'recall-off parity: a symlinked \\.generation', [
         (r'''  elif [[ ! -L "$REG/$id.generation" ]] && _ct_read''', r'''  elif _ct_read''')]),
     ('T9-M8-env-generation-first', H, T, 'recall-off parity: the env generation wins', [
         ('  if [[ "${CCRC_SESSION_GENERATION:-}" =~ $uuid_re ]]; then\n    gen="$CCRC_SESSION_GENERATION"\n  elif', '  if')]),
@@ -5371,7 +5454,7 @@ Run it in the foreground, with a timeout of at least 5280000 ms: 33 mutants, two
 | T9-M9-stale-marker | the age bound | C37: older than COMPACT_CARD_MAX_AGE |
 | T9-M10-future-marker | `now >= ms` | C37: in the future |
 | T9-M11-marker-prefix | `[[ "$CT_V" == "main $psid "* ]]` | C37: a bare ms |
-| T9-M12-clock-guard | the clock grammar test on `t` | EPOCHREALTIME malformed and unset: `exit 0 on every path: expected 1 to be +0` (`$(( ))` aborts on the empty reading, whose `s` is empty, and on the malformed one) |
+| T9-M12-clock-guard | the clock grammar test on `t` | the `malformed` row only: `exit 0 on every path: expected 1 to be +0` (`$(( s * 1000 + … ))` meets the unbound name `not` in `not-a-clock` under `set -u` and aborts). The `unset` row stays green under this mutant: an empty `t` gives `s=""` and `f="000"`, bash arithmetic reads the empty `s` as 0, so `now` is 0, the age test fails and nothing is served (measured on the reader's lines under `set -u`, bash 5.2: exit 0 for the empty reading, `not: unbound variable` and exit 1 for `not-a-clock`). The `unset` row is an absence pin, as the parity CONTROL is |
 | T9-M13-regular-file | `[[ -f "$f" ]]` | the FIFO: `the hook blocked on the FIFO: expected null to be +0` (it waits out the 20 s deadline) |
 | T9-M14-keep-the-LF | the one-LF strip | C21: a trailing LF |
 | T9-M15-strip-every-line | the strip made greedy | C21: two LFs, and an extra line |
@@ -5656,7 +5739,7 @@ Expected: `hook-syntax-ok`, then `5`: the `:1515` read, the reset, the set, and 
 ```
 
 Expected:
-- the first: green, `87 passed` on Linux as a non-root user (7 + 62 + 18);
+- the first: green, `90 passed` on Linux as a non-root user (7 + 62 + 21);
 - the second: green. It covers the `:2721` pin, which still reads ` --max-chars 4000 --max-files 12 ` because its fixture has no `card/`; the constants pin (`COMPACT_CARD_MAX_CHARS=4000` unchanged); the two clips; the spill budget; the strace multisets; and the PostToolUse p95 and SessionStart ratio cases. The reserve's builtin tests cost those runs nothing measurable. `session-hook.test.ts` is a known load-flake file: re-run a timing red alone before calling it a break.
 
 - [ ] **Step 6: Measure every guard red with a mutant.** From the repository root, with a timeout of at least 1800000 ms:
@@ -5910,7 +5993,7 @@ MUTANTS = [
     ('T11-M6-prefix-spelled-again', H, SD, F, [
         (r'''HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"''', 'HISTORY_CARD_HEAD=\'History: \'\n' + r'''HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"''')]),
 ]
-MUTANTS.append(('T11-M7-second-pattern', C, SD, 'CARD_LINE_PATTERN is declared in ccd/history/lib.mjs', [
+MUTANTS.append(('T11-M7-second-pattern', C, SD, 'CARD_LINE_PATTERN is declared in ccd/history/lib\\.mjs', [
     (None, "\nexport const CARD_LINE_PATTERN = '^History: ';\n")]))
 MUTANTS.append(('T11-M8-scope-age-drift', L, SD, F, [
     ('export const SCOPE_MARKER_MAX_AGE_MS = 1200 * 1000;', 'export const SCOPE_MARKER_MAX_AGE_MS = 1260 * 1000;')]))
@@ -6683,7 +6766,8 @@ The card-line PR of W1 Part B, on top of B1 ("capture") and B2 ("recall"):
 
 - a PreCompact scope marker, `~/.ccrc/history/scope/<id>` = `<scope> <psid> <ms>`, written in the hook's tail
   after `_hook_compact_pre` and emptied first, directly below the event `case`, so the line reaches only a
-  main-thread compaction;
+  main-thread compaction (a regular file or nothing, in a `scope/` that is no symlink, so a planted FIFO
+  never blocks the hook);
 - `_hook_history_card`, defined above the hook's event `case` (the one sanctioned insertion above README's hook
   anchor), builtin-only, folding one grammar-gated line into the compact subject when it fits:
   `History: node L… (this compaction)[ · parent N…] · ~/.local/bin/ccrc history describe L…`;
@@ -6706,7 +6790,8 @@ B3 follows B2; B3 and B4 merge in either order.
 
 S16, C18-C22, C37, C38; the marker and card halves of S2, S3 and S8, each measured red with a mutant (IV6);
 O17's B3 half; O14's hook half of `CARD_PREFIX` (the hook's grammar, cap and directory names bound to lib).
-Not a mutant's: C37's `empty` marker row, which two guards refuse at once (defence in depth), and the CONTROLs.
+Not a mutant's: C37's `empty` marker row, which two guards refuse at once (defence in depth), the clock case's
+`unset` row (an empty reading is never fresh, clock grammar or not), and the CONTROLs.
 
 ### Known W1-e distortions
 
@@ -6749,8 +6834,9 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
    `select tests` summary does not show a full run, dispatch one:
    `gh workflow run ci.yml --ref <this branch> -f mode=full`. `ccrc-install.test.ts` was not run on the
    worker's box (it exceeds the foreground bound), so the full run is its measurement.
-2. **Mint** the numbers for the departures this plan defines (the fourteen marked NEW, among them
-   `history-card-withdrawn-when-not-ticking`, and the five spec §16 slugs it defines first), and replace their
+2. **Mint** the numbers for the departures this plan defines (the sixteen marked NEW, among them
+   `history-card-withdrawn-when-not-ticking`, `history-scope-marker-regular-file-only` and `history-card-module`,
+   and the five spec §16 slugs it defines first), and replace their
    placeholders in the same commit. A slug B2 defined keeps the number it was issued there. B1's departures are
    already cited by their numbers (B1's D-NNNN) and are not in the list.
 3. **Rulings applied (RC1–RC4, and the operator's Q15–Q19), for the record.** Each is implemented as ruled; nothing
@@ -6845,6 +6931,7 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-card-consumed-counter⟧ (Tasks 2, 3, 5, 13): NEW departure (no spec §16 row), ruled RC3. The spec names only `card_served` and `card_id_mismatch`, and "with a caught-up indexer" cannot be measured without a record of the prediction. Each prediction a later boundary of the main transcript consumed, one deleted on a fork skip included, is counted `card_consumed:<scope>`: `main` when the scope marker its compaction's PreCompact left reads `main <uuid> <ms>` with the ms not after the consumed boundary's time and within `COMPACT_CARD_MAX_AGE` of it, `other` for `subagent` or `ambiguous` in that window, `unknown` otherwise (overwritten, emptied, unreadable). `card.mjs` reads `scope/<id>` read-only, never through a link; lib's `decideConsumedScope` folds it. W1-e's `served_share = served / (main + unknown)`, with `other` and `unknown` reported beside it.
 - ⟦D:history-card-measure-window⟧ (Tasks 3, 6): NEW departure (no spec §16 row), ruled RC1 (accepted). §8.6 reads delivery from "the post-boundary SessionStart attachment" and names no window. A leaf is decided within `CARD_MEASURE_ROWS` (40) rows after its boundary in its holding copy, or at the next boundary, or once that copy is read to its end `RAW_LEAF_GRACE_MS` past the boundary, or once the copy is no longer live, or `CARD_MEASURE_MAX_WAIT_MS` (24 h) after the leaf was derived. Leaves derived before the measure's first pass are never measured, so pre-B3 leaves never read as unserved. An attachment body over `CARD_ATTACHMENT_MAX_BYTES` (1 MiB, by its stored `raw_len`) counts as a window row and is skipped unread.
 - ⟦D:history-card-withdrawn-when-not-ticking⟧ (Tasks 3, 5, 12): NEW departure (no spec §16 row), ruled RC2. §8.6 deletes a prediction only when the boundary that consumed it is ingested, and says nothing of a pass that cannot ingest it, which would leave a stale line for the next compaction. So every scheduled pass that runs but does not run the card step over a caught-up ingest (a cap or floor pause, a per-chunk floor stop, an ingest an unreadable roster skipped, a budget already spent before the card step, the recover or migrate arm, a held, refused, unbound or unreachable store) withdraws every `card/<id>/<uuid>.txt`: lstat-checked, unlink only, never through a link, counted `card_withdrawn:<reason>`, or, on a hold with no DB open, printed on the pass's outcome line. lib's `decideCardWithdraw` decides; `card.mjs` and `sweep.mjs` measure and act. The budget bounds a write, never the consume/delete decision. A dead timer is a named residual.
+- ⟦D:history-card-module⟧ (Tasks 5, 6, 7): NEW departure (no spec §16 row), review finding R77. Spec §6.4 has no `card.mjs` row, its `sweep.mjs` row does not admit a `./card.mjs` import, and §9.2 and §9.4 name `sweep.mjs` as the card writer. B3 creates `ccd/history/card.mjs`, ring L4, importing `node:fs`, `./lib.mjs`, `./store.mjs` and `./derive.mjs` only (never `node:sqlite`, `./sweep.mjs` or `./cli.mjs`; its `RINGS` row in `history-lib.test.ts` pins that), holding `ensureHistoryDirs`, `consumeAndWriteCards`, `withdrawCards`, `measureCardDelivery`, `cardStep` and `collectPurgedHistoryFiles`; `sweep.mjs` imports `{ cardStep, ensureHistoryDirs, withdrawCards }` from it (and Task 7's collector). The sweep still runs every step, so §9.2's order and §9.4's writer hold through it; `history-card-files`' creator says so (⟦D:history-card-files-creator-through-card⟧).
 - ⟦D:history-card-dirs-made-by-sweep⟧ (Task 5): NEW departure (no spec §16 row), ruled RC1 (accepted). The spec says the hook never makes `scope/`, which it writes, and names no creator for it or for `card/`. So the sweep makes both (0700) at every bound store's tick: the marker and the reserve arm within one tick of an update, and never on a box without history.
 - ⟦D:history-card-one-file-per-id⟧ (Tasks 5, 12): NEW departure (no spec §16 row), ruled RC1 (accepted). §8.6 deletes a prediction only on consumption. Writing a new uuid's prediction also removes the id's other `<uuid>.txt` (a `/clear`ed or forked session's), so §9.4's "≤512 B per session" holds without waiting for the 7-day purge.
 - ⟦D:history-card-registry-names-the-session⟧ (Tasks 5, 7): NEW departure (no spec §16 row), ruled RC1 (accepted). A prediction is written only for the uuid `$REG/<id>.uuid` names. The 30-minute scan reads every known transcript to its end, so end-of-file alone would write a file for every session the store ever saw. A file the registry no longer names is still consumed and deleted.
@@ -6853,6 +6940,7 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-purged-files-aged-by-mtime⟧ (Task 7): NEW departure (no spec §16 row), ruled RC1 (accepted). §9.4 collects "the files of purged sessions after 7 days", but ccd's purge leaves no time the sweep can read. So the age is the entry's own newest write, once the registry no longer names the session, and a file last written long before the purge can go at the first scan after it.
 - ⟦D:history-scope-marker-after-card⟧ (Task 8): The PreCompact scope marker is written after `_hook_compact_pre`, outside the spool block, gated on `scope/`; it reuses a set `CS_SCOPE`, writes nothing on a set-but-empty one, and runs scope itself when the card did not (§5.1; rev 3.2 review, CT1, FE7). This plan defines it first. Its "writes nothing on a set-but-empty one" is refined by ⟦D:history-scope-marker-cleared-on-undecided⟧.
 - ⟦D:history-scope-marker-cleared-on-undecided⟧ (Task 8): NEW departure (no spec §16 row), ruled RC1 (accepted as implemented). Writing nothing on an undecided scope, or exiting at a failed hookstate write before the marker block (§5.1, §5.3), leaves a fresh `main` marker from an earlier compaction of the same psid, which would serve the card line to this compaction, possibly a subagent's. So every main-thread PreCompact empties an existing marker with a builtin truncation directly below the hook's event `case`, before any tail exit, and the block after the card's call writes only a decided verdict. Nothing is created where no marker was.
+- ⟦D:history-scope-marker-regular-file-only⟧ (Tasks 8, 9): NEW departure (no spec §16 row), ruled R-B3-fifo (review finding R74). §5.1's scope-marker gates test only `[ -d … scope ]`, which follows a link, and rev 3.5 brought only the spool's gate into line with B1's D-4418 (`history-spool-append-regular-file-only`). The marker follows that rule: the block's gate and the early truncation each refuse a symlinked `scope/` (`! -L` beside `-d`, and beside the truncation's `-f`), and the block writes only where `[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]]` holds, tested with builtins on the line directly above the `>`. A FIFO standing at `scope/<id>` when the test runs is refused, where it would otherwise block the `>` open until Claude Code kills the hook; a symlinked `scope/` is neither written nor truncated through (RV9: only `db/` may link out of the history root). What is left is the post-test swap, which bash cannot close (no `O_NOFOLLOW` or `O_NONBLOCK` redirection), the residue B1's spool block names. Task 9 only re-points the three lines to `HISTORY_SCOPE_DIR`.
 - ⟦D:history-card-main-scope-only⟧ (Tasks 8, 9): A PreCompact scope marker gates the card line to main compactions (§5.1, §8.6). This plan defines it first.
 - ⟦D:history-card-reader-above-the-arm⟧ (Task 9): `_hook_history_card` is defined above `:2771`; README's `:2900` re-anchored by content (§8.6). This plan defines it first. The insertion sits directly above the line that begins `state="" ask_json=`, and README's anchor is now the emitter call found by its text.
 - ⟦D:history-recall-off-generation⟧ (Task 9): `recall-off/<id>` holds the generation it was assigned to and is honoured only for that family (§9.7, §10.2; rev 3 review, Q7). B2-defined. The hook resolves the generation as B2's `resolveGeneration` does: the env value with the UUID grammar, else `$REG/<id>.generation` with it, else none.
@@ -6862,4 +6950,4 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-w1e-query-in-b3⟧ (Task 13): NEW departure (no spec §16 row), ruled RC1 (accepted). §10.5 does not list `deploy/measure-history.py` among B3's contents; W1-e's counters first exist in B3, so its named query ships beside them.
 - ⟦D:history-readme-card-paragraph⟧ (Task 14): NEW departure (no spec §16 row), ruled RC1 (accepted). §10.5 assigns B3 only README's `:2900` re-anchor. But B2's history section says nothing of the card line, and the reserve shortens every compaction card on a history box, so B3 adds one paragraph to that section. CLAUDE.md's README figure is re-measured in the commit that grows README.
 
-24 slugs in all: 14 NEW to this plan (`history-card-withdrawn-when-not-ticking` came with ruling RC2), and 10 spec §16 slugs. Of those 10, 5 are B2-defined (`history-fork-spooled` came with the operator's ruling Q16), and this plan defines 5 first. B1's departures D-4170 (`history-id-grammar`), D-4224 (`history-tick-order`), D-4196 (`history-producer-backend`), D-4252 (`history-epoch-lines-survive-off`) and D-4246 (`history-w1b-three-prs`) are cited by number in the tasks and not listed. The five this plan defines first: `history-card-fold-and-reserve`, `history-card-measured-from-transcript`, `history-scope-marker-after-card`, `history-card-main-scope-only` and `history-card-reader-above-the-arm`.
+26 slugs in all: 16 NEW to this plan (`history-card-withdrawn-when-not-ticking` came with ruling RC2, `history-scope-marker-regular-file-only` with ruling R-B3-fifo, and `history-card-module` with review finding R77), and 10 spec §16 slugs. Of those 10, 5 are B2-defined (`history-fork-spooled` came with the operator's ruling Q16), and this plan defines 5 first. B1's departures D-4170 (`history-id-grammar`), D-4224 (`history-tick-order`), D-4196 (`history-producer-backend`), D-4252 (`history-epoch-lines-survive-off`), D-4246 (`history-w1b-three-prs`) and D-4418 (`history-spool-append-regular-file-only`) are cited by number in the tasks and not listed. The five this plan defines first: `history-card-fold-and-reserve`, `history-card-measured-from-transcript`, `history-scope-marker-after-card`, `history-card-main-scope-only` and `history-card-reader-above-the-arm`.
