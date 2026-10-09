@@ -11976,7 +11976,7 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 232 plus the ids Step 5 ad
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n> (fixed <a>, carried <b>, not a defect <c>, ruled departures <d>). Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).`, and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review/`. Task 12 Step 4's Notes cite the record's last line and its Carried list takes every CARRIED line. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them.
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Review 3-2 re-spelled the blob cache's charge line and routes.ts's fill line, so `W3-T5-M7`, `W3-T5-M18`, `W3-T5-M19` and `W3-T6-M27` are repeated below with the same ids and the new `old`, each measured red in a fresh copy of the fix commit.
 
 ```json
 [
@@ -12003,6 +12003,61 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n
   "test/docs-routes.test.ts"
  ],
  "red": "server docs-policy + docs-routes: 14 failed | 707 passed (721) \u2014 another project: ok is demo only for exactly the requested project; a case-different project: ok is Demo only for exactly the requested project; a padded project: ok is a  only for exactly the requested project; an empty project: ok is  only for exactly the requested project; an absent project: ok is undefined only for exactly the requested project; null: ok is null only for exactly the requested project; an array holding the project: ok is a only for exactly the requested project; a number: ok is 1 only for exactly the requested project; GET /api/docs/a/tree answered with project demo: 502 malformed-answer {why: pin}, logged, nothing recorded under a or demo; a tree for a answered with an other project is refused the same way; a tree for a answered with an absent project is refused the same way; a tree for a answered with a non-string project is refused the same way; the refresh's tree half: a tree answered with another project is the tree half's failure, nothing recorded; review 1-1: a tree for b naming a never poisons a's listing, so no cache hit serves another file's bytes"
+},
+{
+ "id": "W3-T5-M7",
+ "pkg": "server",
+ "file": "server/src/docs/cache.ts",
+ "old": "    return value.bytes.byteLength + Buffer.byteLength((encoding === 'base64' ? b64 : text) ?? '');\n",
+ "new": "    return value.bytes.byteLength;\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 7 failed | 34 passed (41) \u2014 a value charged exactly the budget is stored and evicts everything else; the text counts toward the charge: bytes of budget - 4 and 5 bytes of text are never stored; a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length; a base64 answer is charged its decoded bytes plus its b64 text; M6.11: the blob LRU evicts at DOCS_CACHE_BYTES, least recently used first; a non-empty file with an unknown key: the charge is the bytes plus the one content field held; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
+},
+{
+ "id": "W3-T5-M18",
+ "pkg": "server",
+ "file": "server/src/docs/cache.ts",
+ "old": "    return value.bytes.byteLength + Buffer.byteLength((encoding === 'base64' ? b64 : text) ?? '');\n",
+ "new": "    return value.bytes.byteLength + ((encoding === 'base64' ? b64 : text) ?? '').length;\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 1 failed | 40 passed (41) \u2014 a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length"
+},
+{
+ "id": "W3-T5-M19",
+ "pkg": "server",
+ "file": "server/src/docs/cache.ts",
+ "old": "Buffer.byteLength((encoding === 'base64' ? b64 : text) ?? '')",
+ "new": "Buffer.byteLength(text ?? '')",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 3 failed | 38 passed (41) \u2014 a base64 answer is charged its decoded bytes plus its b64 text; M6.11: the blob LRU evicts at DOCS_CACHE_BYTES, least recently used first; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
+},
+{
+ "id": "W3-T6-M27",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    const answer = docsStoredShow(got.answer, got.bytes);\n    at.caches.blobs.set(node, listed.repoKey, listed.file.blob, { answer, bytes: got.bytes });\n",
+ "new": "    void listed;\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 10 failed | 31 passed (41) \u2014 row 52: a second committed GET costs zero execs and is marked from: cache, onRef: contains, with no mode; row 52: the same blob under a new commit, and under a new path, costs zero execs and answers that commit and path; M6.11: a failure is never cached; the success after it is; M6.11: a served ref recorded DOCS_LISTING_PROVENANCE_MS ago vouches for nothing: ccd again; M6.11: with no listing entry the answer is served but not cached; after the tree it fills, then hits; M6.11: the blob LRU evicts at DOCS_CACHE_BYTES, least recently used first; refinement (k): a cache hit is served under a full read lane, before any flight or lane; an empty file whose show answer carries a large unknown key: the entry holds no such key; a non-empty file with an unknown key: the charge is the bytes plus the one content field held; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
+},
+{
+ "id": "W3-T11-M3",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    const answer = docsStoredShow(got.answer, got.bytes);\n",
+ "new": "    const answer = got.answer;\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 3 failed | 38 passed (41) \u2014 an empty file whose show answer carries a large unknown key: the entry holds no such key; a non-empty file with an unknown key: the charge is the bytes plus the one content field held; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
 }
 ]
 ```
