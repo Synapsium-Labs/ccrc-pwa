@@ -46,6 +46,11 @@ afterEach(() => {
 /** The table the harness hands ccd (`CCD_MOUNTINFO`), for a case that writes its own. */
 const tablePath = (): string => path.join(h.home, FIXTURE_MOUNTINFO);
 
+/** Every word a case in this file saw ccd answer — a route's word, or a copy's
+ *  cause read off a verdict. R10c, at the foot, checks it against CARRY_CAUSES
+ *  in both directions, so it needs the whole file to have run. */
+const produced = new Set<string>();
+
 /** The words ccd's route may answer, read from the one place they are spelled
  *  (empty when ccd spells none, which the census cases then report). */
 const carryCauses = (): string[] => {
@@ -75,7 +80,7 @@ describe('_carry_link_route: the geometry', () => {
     h.sh(`_carry_link_route "${a}" "${b}"; printf '%s|%s|%s' "$CARRY_ROUTE" "$CARRY_A2" "$CARRY_B2"`, env);
   const word = (r: string): string => r.split('|')[0]!;
   const seen: string[] = [];
-  const routed = (r: string): string => { seen.push(word(r)); return r; };
+  const routed = (r: string): string => { seen.push(word(r)); produced.add(word(r)); return r; };
 
   it('R1 a read-write mount of the whole filesystem exposes both trees: via, with the exact alias paths', () => {
     table(COMMON());
@@ -123,6 +128,13 @@ describe('_carry_link_route: the geometry', () => {
     table();
     fs.writeFileSync(tablePath(),
       `${mountRow({ id: 40, majmin: FIXTURE_DEV, root: '/', target: path.join(h.home, 'elsewhere') })}\n`);
+    expect(word(routed(route()))).toBe('mounts-unreadable');
+  });
+
+  it('R7c a table that exists but cannot be read (a directory in its place): mounts-unreadable, never mounts-absent', () => {
+    table();
+    fs.rmSync(tablePath());
+    fs.mkdirSync(tablePath());
     expect(word(routed(route()))).toBe('mounts-unreadable');
   });
 
@@ -206,6 +218,7 @@ const verdict = (): string => {
   const rows = swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> ${side('.claude-d')} (`))
     .map((l) => l.replace(/^.* \(/, '('));
   expect(rows, swapLog()).toHaveLength(1);
+  for (const m of rows[0]!.matchAll(/copy: ([^ ]+) /g)) produced.add(m[1]!);
   return rows[0]!;
 };
 /** `(copy: <cause> <N> bytes)` -> [cause, N]; fails the case on any other shape. */
@@ -308,6 +321,47 @@ describe('the first carry: a failed cp -al routes before it copies (D-4500), and
     const [cause, n] = copied();
     expect(stderr()).toContain(`ccd: warn: sidecar ${UUID} carried to ${side('.claude-d')} as a COPY (${cause}, ${n} bytes)`);
   });
+
+  // THE BASH SIDE'S FALLBACKS: `_carry_link_route` keeps `route-error` unless
+  // the program answers in shape, and a copy that cannot be sized says `?`.
+  const withStub = (extra: string): { env: Record<string, string>; stub: string } => {
+    const r = rig();
+    return { ...r, stub: `${r.stub} ${extra}` };
+  };
+
+  it('C12 python3 missing: the route keeps its route-error default, and the copy is still sized', () => {
+    plantSource();
+    carry(withStub('command() { if [[ "$1" == -v && "$2" == python3 ]]; then return 1; fi; builtin command "$@"; };'));
+    expect(copied()[0]).toBe('route-error');
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+  });
+
+  it('C13 the route program dies before it answers: route-error', () => {
+    plantSource();
+    carry(withStub('_carry_py() { return 1; };'));
+    expect(copied()[0]).toBe('route-error');
+  });
+
+  it('C14 a tree _plat_bytes cannot size: (copy: <cause> ? bytes), never an empty or smaller number', () => {
+    plantSource();
+    const r = rig({ common: 'none' });
+    carry({ ...r, stub: `${r.stub} _plat_bytes() { return 1; };` });
+    expect(verdict()).toBe('(copy: exdev-no-root ? bytes)');
+  });
+
+  it('C15 an answer whose cause is not one lowercase word is route-error, never logged as given', () => {
+    plantSource();
+    carry(withStub("_carry_py() { printf 'none\\0BAD WORD)\\0\\0'; };"));
+    expect(copied()[0]).toBe('route-error');
+  });
+
+  it('C16 a via whose aliases are not directories is route-error, and nothing goes through them', () => {
+    plantSource();
+    carry(withStub(`_carry_py() { printf 'via\\0%s\\0%s\\0' "$HOME/no-such-a" "$HOME/no-such-b"; };`));
+    expect(copied()[0]).toBe('route-error');
+    expect(fs.existsSync(path.join(h.home, 'no-such-b'))).toBe(false);
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+  });
 });
 
 describe('the merge walk: an absent file that will not link routes on EXDEV (D-4500), and its copies are counted by cause (D-4501)', () => {
@@ -340,14 +394,20 @@ describe('the merge walk: an absent file that will not link routes on EXDEV (D-4
     expect(verdict()).toBe('(merged +1 ~0 !0, copy: link-failed 1 files 7 bytes)');
   });
 
-  it('M4 the diverged rows still name the ACCOUNT paths, never the aliases', () => {
+  it('M4 a diverged row written AFTER a link through the route still names the ACCOUNT paths, never the aliases', () => {
     plantReturn();
-    put(side('.claude', 'tool-results/x.json'), 'A LONGER SOURCE\n');
-    put(side('.claude-d', 'tool-results/x.json'), 'KEPT\n');
+    // Same size, different bytes: the dry pass cannot decide it, so its row is
+    // written by the compare in the action loop. Older than r.json, so that
+    // compare runs AFTER r.json's link through the alias (newest first) — the
+    // one point where an alias could leak into the paths that follow.
+    const X = 'tool-results/x.json';
+    const old = Date.now() / 1000 - 1000;
+    fs.utimesSync(put(side('.claude', X), 'AAAA\n'), old, old);
+    fs.utimesSync(put(side('.claude-d', X), 'BBBB\n'), old - 1000, old - 1000);
     carry(rig());
     expect(verdict()).toBe('(merged +1 ~0 !1, via-mount 1)');
-    expect(swapLog()).toContain(
-      `sidecar ${UUID} diverged ${side('.claude-d', 'tool-results/x.json')} longer ${side('.claude', 'tool-results/x.json')}`);
+    expect(swapLog()).toContain(`sidecar ${UUID} diverged ${side('.claude-d', X)} longer ${side('.claude', X)}`);
+    expect(swapLog(), 'an alias path leaked into swap.log').not.toContain(`${path.join(h.home, 'vol')}/`);
   });
 
   it('M5 a route that crashes inside the walk is contained: route-error, and the merge still lands', () => {
@@ -364,6 +424,35 @@ describe('the merge walk: an absent file that will not link routes on EXDEV (D-4
     put(side('.claude', 'tool-results/q.json'), 'Q\n');
     carry(rig({ common: 'none' }));
     expect(verdict()).toBe('(merged +2 ~0 !0, copy: exdev-no-root 2 files 9 bytes)');
+  });
+
+  it('M7 the link through a PROVED alias fails too: root-failed, and the walk keeps merging — every file lands', () => {
+    plantReturn();
+    put(side('.claude', 'tool-results/q.json'), 'Q\n');
+    const r = rig();
+    // Every os.link answers EXDEV: the direct link routes, the route proves the
+    // aliases, and the link through them is refused as well.
+    carry({ ...r, env: { ...r.env, FAKE_LINK_ERRNO: 'EXDEV' } });
+    expect(verdict()).toBe('(merged +2 ~0 !0, copy: root-failed 2 files 9 bytes)');
+    expect(fs.readFileSync(side('.claude-d', R_JSON), 'utf8')).toBe(BODY);
+    expect(fs.readFileSync(side('.claude-d', 'tool-results/q.json'), 'utf8')).toBe('Q\n');
+  });
+
+  it('M8 LAZY: a direct link that works is never routed, even over a routable table — (merged +1 ~0 !0)', () => {
+    plantReturn();
+    carry({ env: bindFixture(h.home) });
+    expect(verdict()).toBe('(merged +1 ~0 !0)');
+    expect(ino(side('.claude-d', R_JSON))).toBe(ino(side('.claude', R_JSON)));
+  });
+
+  it('M10 the row parse is anchored: diverged files named `via 9` and `copied link-failed 5 5` count nothing', () => {
+    plantReturn();
+    for (const name of ['via 9', 'copied link-failed 5 5']) {
+      put(side('.claude', `tool-results/${name}`), 'A LONGER SOURCE\n');
+      put(side('.claude-d', `tool-results/${name}`), 'KEPT\n');
+    }
+    carry(rig({ common: 'none' }));
+    expect(verdict()).toBe('(merged +1 ~0 !2, copy: exdev-no-root 1 files 7 bytes)');
   });
 });
 
@@ -410,5 +499,19 @@ describe('the real kernel (Linux, unprivileged user namespaces only)', () => {
     }
     const modes = swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> `)).map((l) => l.replace(/^.* \(/, '('));
     expect(modes).toEqual(['(link: via-mount)', '(merged +1 ~0 !0, via-mount 1)']);
+  });
+});
+
+// ── the vocabulary census ─────────────────────────────────────────────────────
+// Last in the file on purpose: R10c reads what every case above produced.
+describe('CARRY_CAUSES is closed, and every word in it is reachable', () => {
+  it('R10c every CARRY_CAUSES member was produced by a case in this file, and no case produced another word', () => {
+    const causes = carryCauses();
+    expect(causes.length, 'ccd spells CARRY_CAUSES').toBeGreaterThan(0);
+    for (const w of produced) expect(['via', ...causes], w).toContain(w);
+    // C8 is the only case that produces root-unreachable, and it cannot run as
+    // root (search permission does not bind root).
+    const cannotRunHere = process.getuid?.() === 0 ? ['root-unreachable'] : [];
+    expect(causes.filter((c) => !produced.has(c) && !cannotRunHere.includes(c)), 'a cause no case produces').toEqual([]);
   });
 });
