@@ -158,6 +158,31 @@ describe.skipIf(!LINUX)('unmeasured: exit 1, the probe named, no token, journale
     }
   }, 60_000);
 
+  // `collectable` MEANS a token: each of the three mints — the fresh present leaf's, the witness-only arm's and a
+  // resume's — answers unmeasured `token` when what it minted is not 64 lowercase hex.
+  const NOT_HEX = '_ws_reclaim_fingerprint() { echo nothex; };';
+  const expectNoToken = (a: ReturnType<typeof collectAudit>): void => {
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('token');
+    expect(a.doc!['token']).toBeUndefined();
+    expect(readJournal(h.home)).toEqual([]);
+  };
+  it('a token that could not be minted, fresh present leaf: unmeasured `token`, never collectable', () => {
+    makeOrphan(h);
+    expectNoToken(collectAudit(h, { pre: `${AGED} ${NOT_HEX}` }));
+  }, 60_000);
+  it('a token that could not be minted, witness whose leaf is proven gone: unmeasured `token`, never collectable', () => {
+    const { leaf } = makeOrphan(h);
+    fs.rmSync(leaf, { recursive: true });
+    expectNoToken(collectAudit(h, { pre: NOT_HEX }));
+  }, 60_000);
+  it('a token that could not be minted, a resume: unmeasured `token`, never collectable', () => {
+    const { leaf } = makeOrphan(h);
+    plantRecord(h, recName(), recordLine(recordFor(identityOf(leaf))));
+    expectNoToken(collectAudit(h, { pre: NOT_HEX }));
+  }, 60_000);
+
   it('a box whose mv has no --no-copy: unmeasured `mv`', () => {
     makeOrphan(h);
     const a = collectAudit(h, { pre: `${AGED} ${NO_MV}` });

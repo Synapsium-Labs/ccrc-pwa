@@ -126,6 +126,35 @@ describe.skipIf(!LINUX)('witness-mismatch: TERMINAL, journaled, offered to the o
   }, 60_000);
 });
 
+describe.skipIf(!LINUX)('a leaf that vanishes while its identity is read: a retry, never witness-mismatch (spec §5.10)', () => {
+  /** The identity check's rc 1 is also "nothing stands": this seam removes the leaf and answers 1, as a race would. */
+  const VANISH = '_ws_collect_ident() { rm -rf -- "$1"; return 1; };';
+
+  it('PROVEN gone after the directory test: unmeasured `leaf`, exit 1, no token, journaled nowhere', () => {
+    makeOrphan(h);
+    const a = collectAudit(h, { pre: `${AGED} ${VANISH}` });
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('leaf');
+    expect(String(a.doc!['detail'])).toContain('vanished while its identity was read');
+    expect(a.doc!['token']).toBeUndefined();
+    expect(readJournal(h.home)).toEqual([]);
+  }, 60_000);
+
+  it('an absence that cannot be measured after the identity answered 1: unmeasured `leaf`, never witness-mismatch', () => {
+    const { leaf } = makeOrphan(h);
+    const seam = '_ws_collect_ident() { : > "$HOME/ident-asked"; return 1; };'
+      + ' eval "_orig_absent() $(declare -f _ws_reclaim_absent | tail -n +2)";'
+      + ` _ws_reclaim_absent() { if [[ "$1" == '${leaf}' && -e "$HOME/ident-asked" ]]; then`
+      + ' _WS_ABSENT_WHY="stub: $1 could not be looked at"; return 2; fi; _orig_absent "$@"; };';
+    const a = collectAudit(h, { pre: `${AGED} ${seam}` });
+    expect(a.code, a.stderr).toBe(1);
+    expect(collectOf(a)['unmeasured']).toBe('leaf');
+    expect(String(a.doc!['detail'])).toContain('stub:');
+    expect(readJournal(h.home)).toEqual([]);
+  }, 60_000);
+});
+
 describe.skipIf(!LINUX)('a witness whose leaf is PROVEN gone: collectable at once, so the verb can drop the witness', () => {
   it('exists false, no walk, a token of its own, and the witness still standing', () => {
     const { leaf } = makeOrphan(h);

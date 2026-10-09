@@ -79,6 +79,20 @@ describe.skipIf(!LINUX)('the phases, read off the disk', () => {
     expect(new Set([fresh, unmoved, moved]).size).toBe(3);
   }, 90_000);
 
+  it('the resume token binds the record’s checkouts: a record that differs only there mints another token', () => {
+    // The verb hands `checkouts=` to the removal as the checkouts it accepts, so a changed list is another consent.
+    const { ident } = setup();
+    const rec = plantOwn(ident);
+    const plain = collectForkOf(h).token;
+    expect(plain).toMatch(/^[0-9a-f]{64}$/);
+    fs.writeFileSync(rec, recordLine({ ...recordFor(ident), checkouts: '/x/admin=/x/back' }));
+    const widened = collectForkOf(h).token;
+    expect(widened).toMatch(/^[0-9a-f]{64}$/);
+    expect(widened).not.toBe(plain);
+    fs.writeFileSync(rec, recordLine(recordFor(ident)));
+    expect(collectForkOf(h).token, 'the CONTROL: the same record mints the same token').toBe(plain);
+  }, 90_000);
+
   it('a path retaken since the move is quarantine-kept: TERMINAL, on every audit, asked before the row it brought', () => {
     const { ident } = setup();
     plantOwn(ident);
@@ -166,6 +180,18 @@ describe.skipIf(!LINUX)('quarantine-kept: TERMINAL and journaled — what the co
     expectKept(collectAudit(h), 'its record names');
   }, 60_000);
 
+  it('a slot leaf of another inode with NOTHING at the id: quarantine-kept by verdict, never a moved resume', () => {
+    // Nothing stands at the original path, so only the slot leaf's identity check stands between this and phase
+    // `moved` with a resume token over a directory the record does not name.
+    const { ident } = setup();
+    plantOwn(ident);
+    const slot = moveIntoSlot(h);
+    fs.renameSync(path.join(slot, 'leaf'), path.join(h.home, 'old-slot-leaf'));
+    fs.mkdirSync(path.join(slot, 'leaf'), { mode: 0o700 });
+    expect(fs.existsSync(leafOf(h)), 'the CONTROL: nothing stands at the id').toBe(false);
+    expectKept(collectAudit(h), 'its record names');
+  }, 60_000);
+
   it('a slot holding what the collector never put there: kept, and it stays', () => {
     const { ident } = setup();
     plantOwn(ident);
@@ -232,6 +258,36 @@ describe.skipIf(!LINUX)('a moved leaf is re-proven: registered, in use under eit
     plantOwn(ident);
     moveIntoSlot(h);
     expect(collectAudit(h, { pre: PAUSE }).doc).toMatchObject({ resume: 'moved', verdict: 'paused' });
+  }, 60_000);
+
+  it('a slot leaf that vanishes while its identity is read: unmeasured `slot`, never quarantine-kept', () => {
+    const { ident } = setup();
+    plantOwn(ident);
+    moveIntoSlot(h);
+    const seam = 'eval "_orig_ident() $(declare -f _ws_collect_ident | tail -n +2)";'
+      + ' _ws_collect_ident() { if [[ "$1" == */leaf ]]; then rm -rf -- "$1"; return 1; fi; _orig_ident "$@"; };';
+    const a = collectAudit(h, { pre: seam });
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('slot');
+    expect(String(a.doc!['detail'])).toContain('vanished while its identity was read');
+    expect(readJournal(h.home)).toEqual([]);
+  }, 60_000);
+
+  it('a slot leaf whose absence cannot be measured after its identity answered 1: unmeasured `slot`', () => {
+    const { ident } = setup();
+    plantOwn(ident);
+    moveIntoSlot(h);
+    const seam = 'eval "_orig_ident() $(declare -f _ws_collect_ident | tail -n +2)";'
+      + ' _ws_collect_ident() { if [[ "$1" == */leaf ]]; then : > "$HOME/ident-asked"; return 1; fi; _orig_ident "$@"; };'
+      + ' eval "_orig_absent() $(declare -f _ws_reclaim_absent | tail -n +2)";'
+      + ' _ws_reclaim_absent() { if [[ "$1" == */leaf && -e "$HOME/ident-asked" ]]; then'
+      + ' _WS_ABSENT_WHY="stub: $1 could not be looked at"; return 2; fi; _orig_absent "$@"; };';
+    const a = collectAudit(h, { pre: seam });
+    expect(a.code, a.stderr).toBe(1);
+    expect(collectOf(a)['unmeasured']).toBe('slot');
+    expect(String(a.doc!['detail'])).toContain('stub:');
+    expect(readJournal(h.home)).toEqual([]);
   }, 60_000);
 
   it('a quarantine directory that is a link is never followed: unmeasured `quarantine`, exit 1', () => {
