@@ -12069,6 +12069,28 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n
   "test/docs-routes.test.ts"
  ],
  "red": "server docs-routes: 3 failed | 121 passed (124) \u2014 a caps-unknown 503 and an unsupported 501 refresh leave the index micro-cache standing: the next projects GET is a hit with one docs-index exec; a refresh the full fetch lane answers docs-busy 503 leaves the index micro-cache standing; a refresh refused before any exec bumps no generation: a tree GET begun before it is still joined by the next one"
+},
+{
+ "id": "W3-T11-M5",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    const run = await at.flights.join(docsIndexFlightKey(node, gen), clientGone(reply),\n",
+ "new": "    const run = await at.flights.join(docsIndexFlightKey(node, gen), new AbortController().signal,\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 125 passed (126) \u2014 a projects GET whose client goes while it is queued is dequeued over a real socket, and its docs-index never runs"
+},
+{
+ "id": "W3-T11-M6",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "      (flight) => at.read.run(LISTING_JOB, flight,\n        async () => believeIndex(at, node, gen, await reader.index({ node }))));\n",
+ "new": "      async () => ({ kind: 'ran' as const,\n        value: await believeIndex(at, node, gen, await reader.index({ node })) }) as never);\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 2 failed | 124 passed (126) \u2014 a cold projects GET under two held reads queues (no third exec), and runs once a slot frees; a projects GET whose client goes while it is queued is dequeued over a real socket, and its docs-index never runs"
 }
 ]
 ```
