@@ -621,7 +621,7 @@ describe('ccrc token sync: the shell spellings agree with L0 (plan Global Constr
 describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynced and directory-fsynced (F2, spec §4.5)', () => {
   const WRAPPER = [
     'import builtins, json, os, sys',
-    'real_open, real_fsync, real_rename, real_replace = os.open, os.fsync, os.rename, os.replace',
+    'real_open, real_fsync, real_rename, real_replace, real_write = os.open, os.fsync, os.rename, os.replace, os.write',
     'bopen = builtins.open',
     'log, fds = [], {}',
     'logf, bodyf = sys.argv[1], sys.argv[2]',
@@ -637,11 +637,13 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
     '    return bopen(p, mode, *a, **k)',
     'def fs(fd):',
     '    log.append({"k": "fsync", "p": fds.get(fd if isinstance(fd, int) else fd.fileno(), "?")}); return real_fsync(fd)',
+    'def wt(fd, data):',
+    '    log.append({"k": "write", "p": fds.get(fd, "?")}); return real_write(fd, data)',
     'def rn(a, b, *x, **k):',
     '    log.append({"k": "rename", "a": os.path.abspath(os.fspath(a)), "b": os.path.abspath(os.fspath(b))}); return real_rename(a, b, *x, **k)',
     'def rp(a, b, *x, **k):',
     '    log.append({"k": "rename", "a": os.path.abspath(os.fspath(a)), "b": os.path.abspath(os.fspath(b))}); return real_replace(a, b, *x, **k)',
-    'os.open, os.fsync, os.rename, os.replace, builtins.open = o, fs, rn, rp, bo',
+    'os.open, os.fsync, os.write, os.rename, os.replace, builtins.open = o, fs, wt, rn, rp, bo',
     'try:',
     '    exec(compile(body, "<writer>", "exec"), {"__name__": "__main__"})',
     'finally:',
@@ -685,7 +687,12 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
     if (renamed < 0) bad.push('the temp is never renamed onto the destination');
     const fileSynced = ev.findIndex((e) => e.k === 'fsync' && e.p === tmp);
     if (fileSynced < 0) bad.push('the temp file is never fsynced');
-    else if (renamed >= 0 && fileSynced > renamed) bad.push('the temp file is fsynced only after the rename');
+    else {
+      if (renamed >= 0 && fileSynced > renamed) bad.push('the temp file is fsynced only after the rename');
+      const lastWrite = ev.reduce((n, e, i) => (e.k === 'write' && e.p === tmp ? i : n), -1);
+      if (lastWrite < 0) bad.push('the temp file is never written with os.write');
+      else if (lastWrite > fileSynced) bad.push('the temp file is written after its fsync');
+    }
     const dirSynced = ev.findIndex((e) => e.k === 'fsync' && e.p === dir);
     if (dirSynced < 0) bad.push('the destination\'s directory is never fsynced');
     else if (renamed >= 0 && dirSynced < renamed) bad.push('the destination\'s directory is fsynced before the rename');
@@ -719,6 +726,13 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
       expect(violations(runWriter(mutated))).toContain(reason);
     });
   }
+  it('CONTROL: an fsync moved above the write loop is refused (p3: data written after the fsync is never synced)', () => {
+    const body = writerBody();
+    const mutated = body.replace(/^ +os\.fsync\(fd\)\n/m, '').replace(/^( +)n = 0\n/m, '$1os.fsync(fd)\n$1n = 0\n');
+    expect(mutated).not.toBe(body);
+    expect(mutated.indexOf('os.fsync(fd)')).toBeLessThan(mutated.indexOf('os.write(fd'));
+    expect(violations(runWriter(mutated))).toContain('the temp file is written after its fsync');
+  });
   it('CONTROL: a rename that comes before the file fsync is refused', () => {
     const body = writerBody();
     const mutated = body.replace(/^ +os\.rename\(tmp, dest\)\n/m, '').replace(/^( +)os\.fsync\(fd\)\n/m, '$1os.rename(tmp, dest)\n$1os.fsync(fd)\n');
