@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6b917db38b824b623a31deff4b57f270308a170227c35831fecfda40fabccf57
+# ccrc:generated 1 sha256=9e1d1d3768aa3667d75f870194c7a2b1438a438d7876ff3593eb3c0fa296da7b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13160,8 +13160,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # verdict: no token, and the same token name the eval uses, so the sheet
   # reads the same sentence whichever read caught it.
   if [[ $mode == reclaim ]]; then
-    printf '"mode":"reclaim","childOf":%s,' \
-      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)"
+    printf '"mode":"reclaim","childOf":%s,"generation":%s,' \
+      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)"
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
@@ -25754,6 +25754,7 @@ _WS_RCL_ACT=reclaim
 _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the reclaim ladder's own
   _ws_reap_reset
   RECLAIM_CHILDOF=""        # the marker's run id, as READ — never inferred from anything else
+  RECLAIM_GENERATION=""     # the row's generation as READ (`_ws_reclaim_generation`) — a token input; '' = never read
   RECLAIM_DEFER=0           # 1 = --defer-expired: rungs 5 and 6 skipped, and a fingerprint input
   RECLAIM_WORKTREE=""       # `present`, or `absent` for a vanished worktree (`_ws_reclaim_eval_absent`)
   RECLAIM_HEAD=""           # the child's HEAD commit (differs from REAP_TIP on a detached HEAD); on the
@@ -25783,6 +25784,51 @@ _ws_reclaim_fingerprint() {   # key=value... -> the reclaim token. Every input i
   # reclaim token can never equal a reap token or a resume token over the same
   # facts: the first input is always `mode=…`.
   printf '%s\n' "$@" | _plat_sha256 | cut -d' ' -f1
+}
+
+_ws_reclaim_generation() {   # id -> rc 0 with RECLAIM_GENERATION = the row's generation
+  #                               (`$REG/<id>.generation`, spec §5.5); rc 2 with RECLAIM_GENERATION=''
+  #                               when it could not be read as one, and RECLAIM_GENERATION_WHY saying why:
+  #                               the row's compaction lock refused, absent, present and not the 36-byte
+  #                               grammar, or not readable through its alias
+  # THE ONE READER, `_reg_generation_read`: an owned hard-link alias on a held
+  # descriptor and a same-inode recheck, never `_reg_get` or a bare `cat`, which
+  # name the path twice. The generation is minted with the row (`cmd_ws_add`,
+  # before any row field) and removed last by `_reg_purge`; nothing else writes
+  # it — not `/clear`, which rewrites `uuid` (`_sync_uuid`), not a swap, not a
+  # respawn's re-init, which mints only into absence. So it is the one value
+  # that differs between a row and a re-mint of its id. ABSENT, INVALID AND
+  # UNREADABLE ARE ALL 2, never a value. The reader's rc 1 is wider than
+  # "invalid": a link or unreadable file, no `link`, an alias it cannot make
+  # (a registry it cannot write), or a file replaced mid-read is a read that
+  # did not run, and is retried. Absent and invalid are no state ccd's own
+  # writers leave on a child (`cmd_ws_add` dies before it writes `.child`
+  # when it cannot mint), and a token bound to `generation=` would be one no
+  # re-mint could invalidate.
+  # UNDER THE ROW'S COMPACTION LOCK, as every other caller of the reader takes
+  # it (the spawn, its re-check, row creation, and the purge's stable lock):
+  # the reader's alias `link` is a write off the canonical name, and every such
+  # write happens under a held lock (`session-hook.test.ts`'s canonical-write
+  # census). The order reap lock -> compaction lock is the purge's own, which
+  # the reclaim tail already takes, so it adds no new order. An acquire that
+  # fails is a read that did not run: rc 2 — unmeasured, no token, a retry —
+  # with the acquire's status and `COMPACT_LOCK_WHY` carried into the detail.
+  # Run in THIS shell, never `$( )`, so that reason reaches the caller.
+  local fd="" rc=0
+  RECLAIM_GENERATION=""; RECLAIM_GENERATION_WHY=""
+  _compact_lock_acquire "$1" "$COMPACT_LOCK_WAIT"; rc=$?
+  if (( rc != 0 )); then
+    RECLAIM_GENERATION_WHY="not read: the row's compaction lock was refused, _compact_lock_acquire rc $rc${COMPACT_LOCK_WHY:+ ($COMPACT_LOCK_WHY)} (1 = refused or contended, 2 = no flock mechanism)"
+    return 2
+  fi
+  fd="$COMPACT_LOCK_FD"
+  _reg_generation_read "$1"; rc=$?
+  _compact_lock_release "$fd"
+  if (( rc != 0 )); then
+    RECLAIM_GENERATION_WHY="absent; present but not one 36-byte lowercase UUID; or not readable through its owned alias: a link, a file it cannot read, no link command, a registry it cannot write, or a file replaced mid-read"
+    return 2
+  fi
+  RECLAIM_GENERATION="$REG_GENERATION"
 }
 
 _ws_reclaim_unmeasured() {   # detail -> rc 1 with REAP_VERDICT=unmeasured and REAP_DETAIL set
@@ -26925,7 +26971,13 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   [[ -z "$childof" || "$mark" == "$childof" ]] \
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
-  _WS_LADDER_BIND=("mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" "deferExpired=$RECLAIM_DEFER")
+  # …AND WHICH ROW IT IS (spec §5.5): the row's generation is a token input, so
+  # a token minted over this row is never spent on a re-mint of the same id,
+  # whatever else matches. Asked after rungs 1-2, so their terminal words are
+  # unchanged; unreadable, it mints no token (`_ws_reclaim_generation`).
+  _ws_reclaim_generation "$id" \
+    || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation ($RECLAIM_GENERATION_WHY) — which row a token would bind is unknown"; return 1; }
+  _WS_LADDER_BIND=("mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" "deferExpired=$RECLAIM_DEFER" "generation=$RECLAIM_GENERATION")
   _ws_reclaim_ladder "$id" "$defer"
 }
 
@@ -27341,8 +27393,9 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
 _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = the RESUME token, else REAP_VERDICT
   # A crash may not launder a refusal (spec §5.6): the resume re-asserts what
   # authorised the act — the marker and its --child-of, the pause, the hold —
-  # BEFORE anything else runs, and its token binds the phase and the recorded
-  # tip, so a stale resume token refuses `state-changed` like any other.
+  # BEFORE anything else runs, and its token binds the phase, the recorded tip
+  # and the row's generation, so a stale resume token refuses `state-changed`
+  # like any other — a re-mint of the id included.
   _ws_reclaim_reset
   local id="$1" defer="$2" childof="$3" phase="$4" mark tomb tombtip tombbranch
   RECLAIM_DEFER="$defer"
@@ -27353,6 +27406,8 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   [[ -z "$childof" || "$mark" == "$childof" ]] \
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
+  _ws_reclaim_generation "$id" \
+    || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation ($RECLAIM_GENERATION_WHY) — an interrupted reclaim does not finish on a row it cannot identify"; return 1; }
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   if [[ -e "$REG/$id.hold" ]]; then
@@ -27368,6 +27423,7 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
     || { _ws_reclaim_unmeasured "the tombstone at $tomb cannot be read, so which steps of the interrupted reclaim already ran is unknown"; return 1; }
   REAP_BRANCH="$tombbranch"; REAP_TIP="$tombtip"
   REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim-resume" "id=$id" "childOf=$mark" \
+    "generation=$RECLAIM_GENERATION" \
     "deferExpired=$defer" "phase=$phase" "branch=$tombbranch" "tip=$tombtip")
   REAP_VERDICT=reclaimable
   return 0
@@ -30498,11 +30554,22 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # `u+r` on a file, only where this uid owns the entry, never a group or other
 # bit — to the child's tree and its clips directory before reading them,
 # because a mode-000 directory answers `git status` clean. Nothing is
-# destroyed or created; a mode changes. The plain form does neither, byte for
+# destroyed or created (but for what the generation read below takes and
+# leaves); a mode changes. The plain form does neither, byte for
 # byte: `mode` is read at exactly two places, the eval call and the verdict
 # line, and both keep their old text on `reap`. It is the one exception
 # because every GIT read is contained (below): before that, `git status`
 # rewrote the child's index and ran the repository's hooks on every audit.
+#
+# AND THE ROW'S GENERATION (spec §5.5). The document carries `generation`,
+# the row's generation the ladder bound into the token, or null where rungs
+# 1-2 refused before reading it. Reading it creates and unlinks one transient
+# hard link, `$REG/.<id>.generation-read.*` (`_reg_generation_read`'s owned
+# alias), and leaves nothing behind. The read runs under the row's compaction
+# lock (`_ws_reclaim_generation`), whose acquire publishes
+# `$REG/.<id>.compactions.lock` where none stands yet (row creation already
+# published it for every child `ws-add` made) and unlinks its own transient
+# `lock-open` alias; a reclaim's purge takes that same lock.
 #
 # THE AUDIT READS THE LIVE CHILD CONTAINED. The child may be
 # ALIVE while the server audits it, and an uncontained `git status` of its

@@ -61,7 +61,7 @@ describe('ws-audit --reclaim', () => {
   it('prints mode, childOf and the SAME token the ladder mints', () => {
     makeChild(h);
     const a = audit('--reclaim');
-    expect(Object.keys(a)).toEqual([...PLAIN_KEYS.slice(0, -2), 'mode', 'childOf', 'verdict', 'detail', 'token']);
+    expect(Object.keys(a)).toEqual([...PLAIN_KEYS.slice(0, -2), 'mode', 'childOf', 'generation', 'verdict', 'detail', 'token']);
     expect(a['mode']).toBe('reclaim');
     expect(a['childOf']).toBe(CHILD_RUN);
     expect(a['verdict']).toBe('reclaimable');
