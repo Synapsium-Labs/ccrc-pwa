@@ -19,16 +19,16 @@ Sessions gain recall that works without the card (the card is B3). B2 leaves B4 
 **Architecture:** Everything is fleet-side: no wire, server, PWA, `ccd/ccd` or coord.db change. The one hook edit is Task 34's: `fork` joins the spool block's source whitelist in `ccd/session-hook.sh`, in place, and no hook line moves.
 
 *Rings, by imports:*
-- `ccd/history/lib.mjs` (L1, `node:crypto` only) gains every new decision: `decideScope`, identity/harness/generation/recall-off decisions, id resolution and display prefixes, pasted-line ids, the FTS sanitiser, the regex guards, sort/snippet/cap/envelope/escaping, explorers, the block parser and native gist, the span rule, fan-in and rollups, the read-verb and op-verb argument grammars, `decideOpDoor`, `decideBind`, `decideRelay`, `planReplay`/`replayStep`, recovery phases and cursor, the FK diff, FTS shadow health. Task 7A puts the substring belt in B1's redaction section: layer 4 inside `redactField` (B1's body moves unchanged into the module-private `redactLayered`), layer 1's glue windows, the belt state (meta `fts_belt`) and the belt generation's grammar, so every B1 and B2 caller of `redactField`, `redactForIndex` and `sidecarIndexText` gets it with no edit of its own. In place, B1's `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` admit `fork` (Task 34); `EPOCH_CAUSES` already holds it (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧), so it and the comment of B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ are left as they are. B1's export due rule gains `EXPORT_REDUCERS.perCopy` as its default and `dueTranscriptKeys` (Task 35).
+- `ccd/history/lib.mjs` (L1, `node:crypto` only) gains every new decision: `decideScope`, identity/harness/generation/recall-off decisions, id resolution and display prefixes, pasted-line ids, the FTS sanitiser, the regex guards, sort/snippet/cap/envelope/escaping, explorers, the block parser and native gist, the span rule, fan-in and rollups, the read-verb and op-verb argument grammars, `decideOpDoor`, `decideBind`, `decideRelay`, `planReplay`/`replayStep`, recovery phases and cursor, the FK diff, FTS shadow health. Task 7A puts the substring belt in B1's redaction section: layer 4 inside `redactField` (B1's body moves unchanged into the module-private `redactLayered`), layer 1's glue windows, the belt state (meta `fts_belt`) and the belt generation's grammar, so every B1 and B2 caller of `redactField`, `redactForIndex` and `sidecarIndexText` gets it with no edit of its own. In place, B1's `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` admit `fork` (Task 34); `EPOCH_CAUSES` already holds it (B1's D-4342 (`history-epoch-causes-widened-for-rollback`)), so it and the comment of B1's D-4342 (`history-epoch-causes-widened-for-rollback`) are left as they are. B1's export due rule gains `EXPORT_REDUCERS.perCopy` as its default and `dueTranscriptKeys` (Task 35).
 - `ccd/history/store.mjs` (L3, the sole `node:sqlite` importer) gains: the derivation step helpers (`getStep`/`setStep`), the lineage range CTE, the prune batches, the backup writer, the binding sequences (`adoptStore`, `stageRestore`/`commitRestore`/`abortRestore`, `createStore` with a bind option), integrity/FK/FTS measurement, and `blobPlainText`.
 - New L4 modules:
-  - `derive.mjs`: node derivation inside the tick (leaves, parents per holding copy and epoch, node indexes, `nodes_fts`, recorded parser crashes, reparse, late-pair gist re-derivation). It imports `../compact-card.mjs` and injects `HEADING_RE`, `fencedRanges` and `mineTokens` into lib. B1's ring case `only L4 imports ../compact-card.mjs, and at most isBoundaryLine` (`history-lib.test.ts`) allows only `{ isBoundaryLine }`, so Task 8 edits that case to accept exactly `{ HEADING_RE, fencedRanges, mineTokens }` for `derive.mjs` (the names in that order with no trailing comma: the case's reader collapses whitespace and nothing else) and `{ isBoundaryLine }` for every other module.
+  - `derive.mjs`: node derivation inside the tick (leaves, parents per holding copy and epoch, node indexes, `nodes_fts`, recorded parser crashes, reparse, late-pair gist re-derivation). It imports `../compact-card.mjs` and injects `HEADING_RE`, `fencedRanges` and `mineTokens` into lib. B1's ring case `only L4 imports ../compact-card.mjs, and at most isBoundaryLine` (`history-lib.test.ts`) allows only `{ isBoundaryLine }`, so Task 8 (Step 8A) replaces its per-import check with one per-module table, `CARD_FORMS` (`sweep.mjs`: `{ isBoundaryLine }`; `derive.mjs`: `{ HEADING_RE, fencedRanges, mineTokens }`, the names in that order with no trailing comma: the case's reader collapses whitespace and nothing else; a module with no row takes nothing), and renames the case `only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names`.
   - `recall.mjs`: the read-verb executors over a `ReadContext`.
   - `regex-worker.mjs`: the `--regex` child.
 - `sweep.mjs` (L4) gains:
   - Task 7B's belt in the tick: `secretsStep` builds the tick's belt and records meta `redact_sources`, and B1's `rederiveFts` opens a belt generation (` b`) and the `('nodes-belt', 1)` step when the belt falls due;
-  - the tick wiring: `deriveNodes` directly after B1's `deriveFts` (Task 8), and Task 29's `beltNodesStep` directly after B1's `await rederiveFts(db, ictx, ctx.budget, slice);`. B1 pins `tick`'s doc comment against its body (`history-sweep.test.ts`, `tick()'s docstring names its steps in the order the body runs them`, review 316 F39): every step the body calls with `db` is a numbered item there, in body order, so each task that adds a call adds its item and renumbers the tail in the same commit;
-  - the `recover` arm in `scheduledPass`, which measures `recovering`. The recovery step never runs inside `tick` (B1 has no slot for it): while a `('recover', <bind ms>)` step is registered, the arm runs `recoverPass` (Task 25) in place of `tick`, which repeats the prefix of B1's `tick` (the outbox, the ingest context, the secrets, the FTS probe and the re-index steps) and then runs the recovery step; the drain and the ingest do not run in that pass;
+  - the tick wiring: `deriveNodes` directly after B1's `deriveFts` (Task 8), and Task 29's `beltNodesStep` directly after B1's `await rederiveFts(db, ictx, ctx.budget, slice);`. B1 pins `tick`'s doc comment against its body (`history-sweep.test.ts`, `tick()'s docstring names its steps in the order the body runs them`, review 316 F39): every step the body calls with `db` is a numbered item there, in body order, so each task that adds a call adds its item and renumbers the tail in the same commit. B1 lists 16 items; Task 8 adds `deriveNodes` as item 14 (17 items), and Task 29 adds `beltNodesStep` as item 7 (18 items). No other B2 task adds a call to `tick`'s body. The list B2 merges with: 1 `flushOutbox`, 2 `makeIngestCtx`, 3 `secretsStep`, 4 `ftsPrepare`, 5 `reindexForValues`, 6 `rederiveFts`, 7 `beltNodesStep`, 8 `drainSpool`, 9 `confirmCandidates`, 10 `registryBackfill`, 11 `ingestTick`, 12 `backfillEpochFacts`, 13 `resetFtsPending`, 14 `deriveFts`, 15 `deriveNodes`, 16 `mergeSteps`, 17 `recordTick`, 18 `markScan`;
+  - the `recover` arm in `scheduledPass`, which measures `recovering`. The recovery step never runs inside `tick` (B1 has no slot for it): while a `('recover', <bind ms>)` step is registered, the arm runs `recoverPass` (Task 25) in place of `tick`, which repeats the prefix of B1's `tick` (`flushOutbox`, `makeIngestCtx`, `secretsStep`, `ftsPrepare`, then `reindexForValues` and `rederiveFts` sharing one `rederiveSlice` slice) and then runs the recovery step; the drain and the ingest do not run in that pass;
   - the recovery step and its replay applicators;
   - the restructure of B1's `opPass` (the `--op` pass's body, called through B1's exported `runOpPass` wrapper, which stays as it is with `opThrowResult`) into dispatch tables, with the binding verbs handed to `bindingPass` before `openStore`, and the authoritative `recovering` refusal measured before both (RB6, with RB12-RB14's exemptions);
   - the new `--op` verbs;
@@ -73,15 +73,15 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
 **Pins (spec §10.5, B2):** each pin is implemented by exactly one task:
 - DM5, DM6 → T5; DM7 → T21; DM9 → T9; DM14, DM15, DM22, DM27, DM49 → T20; DM21 → T21; DM25, DM36, DM37 → T8; DM26 → T9; DM44 → T17; DM48 → T34.
 - S11 and S14 in their fork-spooled form (B1 ships their fork-writes-no-line form) → T34; O38's due cases re-run under the per-copy default, and O58 → T35.
-- CLI halves: DM2b, DM29 → T16; DM17 → T17; DM18b → T10; DM28, DM30, DM32, DM46 → T12; DM31 → T18.
+- CLI halves: DM2b → T16; DM29 → T14 (both grep forms and the reach line), T16 (`expand` past both windows), T31 and T33 (`SEARCH_REACH` verbatim); DM17 → T17; DM18b → T10; DM28, DM30, DM32, DM46 → T12; DM31 → T18.
 - O12 → T20; O16 (skill half) → T32; O35, O36 (replay half) → T28; O44 (less its B4 segment case) → T25; O47 → T29; O59 → T7A (lib half), T7B (store half), T23 (repair row); O48 (replay-order half) → T25; O54 (relay half) → T19; O56 (planReplay half) → T7.
 - PX1, PX7, PX25 → T8; PX2–PX6, PX8, PX9 → T4.
 - C1, C2, C3, C4 (no-pane half), C36 (read-verb rows), C41, C48, C54, C56, C65, C66 (B2 half) → T10; C5, C24, C39, C40, C44, C46, C47b, C53, C68 (CLI half) → T11; C6 → T2; C7, C9, C26, C27 → T12; C8a, C8b → T14; C10, C11, C13, C29 → T16; C12, C15 → T13; C14, C47 → T15; C16 → T31; C17 → T36; C23 → T32; C25, C34 → T20; C32, C33, C49, C59, C60, C69 → T18; C35, C51, C52 → T22; C42 (CLI half), C63 → T19; C43, C45 → T17; C50 → T1; C55 → T26; C57 → T27; C58, C67 → T28; C61 → T23; C62 → T21; C64 (CLI door, and the direct door of B2's forms) → T30.
 - Not in B2, by the spec: C4's seam half, C30, C31, the recall-off VERB and the headless seam (W2; the CLI honours a hand-planted `recall-off/<id>` from B2); C18–C22, C37, C38 (B3); O39, O40, O43 and O44's segment case (B4). C59's 300-char steer-cap clause and C68's card half pass vacuously in B2; W3 and B3 own them.
 
 **Operator rulings (2026-10-07; spec §15.1 and §15.3, rev 3.4; binding).** Every question this plan once followed a default for is ruled, and so is the prune departure it raised:
-- **Q15 YES: the per-copy due rule** → **Task 35**. A row is due when, for every file holding a copy of it, that file's mtime plus its own home's retention, minus 30 days, has passed (a file gone from disk has passed; a row with no holding file on record is due at once); a blob is due when its rows are. `EXPORT_REDUCERS.perCopy` becomes the default wherever the due rule is computed: `planExport` (B1's signature), the census's due counts and W1-k dates, and so doctor's `export-due`, `export-overdue` and `retention-lowered` arms; B4's pass reads the same default (its ruling RD1). B1's per-row file set stays (⟦D:history-export-holding-files-by-transcript⟧). The `retention-lowered` WARN stays, as a reminder rather than a gate. `deploy/measure-history.py` computes no due date, so it needs no edit (Task 35 measures that).
-- **Q16 YES: SessionStart(fork) is spooled** → **Task 34**. `fork` joins the hook's source whitelist in place (no hook line moves, so no S6-R11 census change), `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` (B1's `EPOCH_CAUSES` already lists `fork`, B1's ⟦D:history-epoch-causes-widened-for-rollback⟧, so a rolled-back build reads a fork verdict as valid and only a spooled fork line is rejected); a fork confirms exactly as resume does, a fork whose sid is already an epoch confirms that epoch (as DM18c), a fresh sid chains a `fork` epoch, and the parent's copied rows follow the per-copy span rule. No migration (`epochs.cause` is TEXT with no CHECK). The rollback edge is named, and B1 has half-closed it: B1 merged with `fork` in `EPOCH_CAUSES` (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧, ⟦D:history-epoch-causes-widened-for-rollback⟧, Task 34's choices), so a build rolled back to B1 reads a `fork` journal record and a waiting `fork` candidate's verdict as valid; only a spooled `fork` line, outside its `SPOOL_SOURCES`, is rejected. B1 ships without a fork SPOOL source (⟦D:history-fork-not-spooled⟧); Task 34 reverses that (⟦D:history-fork-spooled⟧). Task 25's replay applies fork records unchanged, which Task 34's rebuild case pins.
+- **Q15 YES: the per-copy due rule** → **Task 35**. A row is due when, for every file holding a copy of it, that file's mtime plus its own home's retention, minus 30 days, has passed (a file gone from disk has passed; a row with no holding file on record is due at once); a blob is due when its rows are. `EXPORT_REDUCERS.perCopy` becomes the default wherever the due rule is computed: `planExport` (B1's signature), the census's due counts and W1-k dates, and so doctor's `export-due`, `export-overdue` and `retention-lowered` arms; B4's pass reads the same default (its ruling RD1). B1's per-row file set stays (B1's D-4248 (`history-export-holding-files-by-transcript`)). The `retention-lowered` WARN stays, as a reminder rather than a gate. `deploy/measure-history.py` computes no due date, so it needs no edit (Task 35 measures that).
+- **Q16 YES: SessionStart(fork) is spooled** → **Task 34**. `fork` joins the hook's source whitelist in place (no hook line moves, so no S6-R11 census change), `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` (B1's `EPOCH_CAUSES` already lists `fork`, B1's D-4342 (`history-epoch-causes-widened-for-rollback`), so a rolled-back build reads a fork verdict as valid and only a spooled fork line is rejected); a fork confirms exactly as resume does, a fork whose sid is already an epoch confirms that epoch (as DM18c), a fresh sid chains a `fork` epoch, and the parent's copied rows follow the per-copy span rule. No migration (`epochs.cause` is TEXT with no CHECK). The rollback edge is named, and B1 has half-closed it: B1 merged with `fork` in `EPOCH_CAUSES` (B1's D-4342 (`history-epoch-causes-widened-for-rollback`), B1's D-4342 (`history-epoch-causes-widened-for-rollback`), Task 34's choices), so a build rolled back to B1 reads a `fork` journal record and a waiting `fork` candidate's verdict as valid; only a spooled `fork` line, outside its `SPOOL_SOURCES`, is rejected. B1 ships without a fork SPOOL source (B1's D-4173 (`history-fork-not-spooled`)); Task 34 reverses that (⟦D:history-fork-spooled⟧). Task 25's replay applies fork records unchanged, which Task 34's rebuild case pins.
 - **Q17 as recommended**: B1's kept-line wording, the close line naming `--purge-history`, and the decommission runbook's confirmation. B2 makes no uninstall wording change beyond the skill tree and installer (Task 32).
 - **Q18 YES, a W2 matter**: before W2's window opens, the W2 open record carries the smallest passing point uptake computed from B1 and B3's data. No W1 task, and none here.
 - **Q19 NO, not in W1**: no hand-mapping mode. `import --session <id> --file <path> --apply` stays the one operator mapping (its CLI door is Task 19).
@@ -98,10 +98,14 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
   - `regex-worker.mjs` ends in a guard of the same form.
   - `derive.mjs` and `recall.mjs` have no guard.
 - **R2 (fail-closed redaction).** `redactField` catches only a RangeError, and then redacts the whole run.
-  - Callers run `redactField` on each RAW field before any cut, cap, snippet window, explorer cut, page or cursor boundary, escape or serialisation.
+  - Callers run `redactField` on each RAW field before any cut, cap, snippet window, explorer cut, page or cursor boundary, escape or serialisation; a read verb's field pass is `redactForDisplay` from Task 18 on (below).
   - Callers then run `redactFinal` on the final stdout, stderr or `--json` string.
   - Gists, topics and refs are taken from redacted text, then capped.
-  - `redactField` ends in the substring belt (§8.3 layer 4; Task 7A) and its layer 1 holds the glue windows, so every caller above gets both with no edit of its own. Its belt also reads each JSON-escape decode of the field, up to B1's `INDEX_UNESCAPE_PASSES` (8) levels, so no read verb's output and no node field shows a value the index masked behind an escape (B1's ⟦D:history-index-escape-readings-to-fixpoint⟧, and B1's run 302 note to B2 on display redaction). An index text goes through `entryIndexText` or `sidecarIndexText`, whose readings take the belt without JSON-decoded readings, because `redactForIndex` already redacts each decode level through it. A process that redacts holds a belt built from the values it loaded: the tick (Task 7B), the CLI (Task 10, from the frozen list and meta `redact_sources`), the `--regex` child (Task 14, the CLI's units on its stdin). A value is never persisted, journaled or printed.
+  - `redactField` ends in the substring belt (§8.3 layer 4; Task 7A) and its layer 1 holds the glue windows, so every caller above gets both with no edit of its own. Its belt also reads each JSON-escape decode of the field, up to B1's `INDEX_UNESCAPE_PASSES` (8) levels, for the units this process loaded. An index text goes through `entryIndexText` or `sidecarIndexText`, whose readings take the belt without JSON-decoded readings, because `redactForIndex` already redacts each decode level through it.
+  - Display and `nodes_fts` read the index's escape readings (spec §8.3 "Where it runs" and §6.2, rev 3.5; B1's D-4343 (`history-index-escape-readings-to-fixpoint`) and B1's run 302 notes to B2). A value held as a pair alone (a rotated value, a `sessions.json` hash) glued to a literal escape is separated only by those readings. So:
+    - from Task 18 on, a read verb's field redaction is lib's `redactForDisplay` (Task 7A): up to `DISPLAY_READINGS_MAX` (B1's entry window, `ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN`) it IS `redactForIndex`, past it `redactField` then each escape-glued span read through `redactForIndex`, so no output shows a value the index masked. It calls only `redactField` and `redactForIndex`, so it carries the belt;
+    - every `nodes_fts` row is lib's `nodeIndexTexts` (Task 7A): each column through `entryIndexText`, written by Task 8's `indexNode`, Task 9's `insertNodeFts` and Task 29's `redactNodeFields`. Stored node fields stay `redactField` output (Tasks 4, 8);
+    - `nodes_fts` is re-derived by one mechanism only, the belt's node step `('nodes-belt', 1)` (lib's `BELT_NODES_STEP`), which every generation that opens reopens (Task 7B) and Task 29's `beltNodesStep` runs. A process that redacts holds a belt built from the values it loaded: the tick (Task 7B), the CLI (Task 10, from the frozen list and meta `redact_sources`), the `--regex` child (Task 14, the CLI's units on its stdin). A value is never persisted, journaled or printed.
 - **R3.** A statfs that throws reads as low-disk. Only a probe that does not settle within its deadline (`STATFS_DEADLINE_MS` = 5000; `CLI_STAT_DEADLINE_MS` = 2000) is store-unreachable.
 - **Quoted reds are measured, not contractual text.** The contract is the named case going red for the stated reason, then green.
 - **Departures.** Write `⟦D:<slug>⟧` exactly, with the spec §16 slugs.
@@ -111,10 +115,14 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
   - `lib.mjs` imports `node:crypto` only. compact-card functions reach it as injected parameters.
   - `store.mjs` is the sole `node:sqlite` importer.
   - `sweep.mjs`, `cli.mjs`, `derive.mjs`, `recall.mjs` and `regex-worker.mjs` are L4. They deliver and never decide.
-  - Only L4 files import `../compact-card.mjs`. `derive.mjs` takes `{ HEADING_RE, fencedRanges, mineTokens }`; every other module takes at most `{ isBoundaryLine }`. Task 8 edits B1's case `only L4 imports ../compact-card.mjs, and at most isBoundaryLine` to say so: its per-import check becomes `expect(i, m).toBe(m === 'derive.mjs' ? '{ HEADING_RE, fencedRanges, mineTokens }' : '{ isBoundaryLine }');`, and its title ends `… and at most isBoundaryLine; only derive.mjs takes more`.
+  - Only L4 files import `../compact-card.mjs`: `sweep.mjs` takes `{ isBoundaryLine }`, `derive.mjs` takes `{ HEADING_RE, fencedRanges, mineTokens }`, and no other module takes anything. Task 8 (Step 8A) pins that with one per-module table, `CARD_FORMS`, in B1's case `only L4 imports ../compact-card.mjs, and at most isBoundaryLine`: the loop's `for (const i of imports) expect(i, m).toBe('{ isBoundaryLine }');` becomes `expect(imports, m).toEqual(CARD_FORMS[m] ?? []);`, and the case is renamed `only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names`.
   - No `ccd/history/*.mjs` other than `lib.mjs` declares an O14 vocabulary name (`EXIT`, `REASONS`, `REFUSALS`, …).
-  - B1's ring census in `server/test/history-lib.test.ts` (`const RINGS`, read by the case `every ccd/history/*.mjs has a ring`) names exactly B1's four modules, so creating a module reds it until the module has its row. The commit that creates each new module adds its row to `RINGS`: `'derive.mjs'` (Task 8), `'recall.mjs'` (Task 10) and `'regex-worker.mjs'` (Task 14), each `{ ring: 'L4', forbids: (s) => s === 'node:sqlite' }`. The other ring cases then read the new module too.
-  - New focused L4 modules (`derive.mjs`, `recall.mjs`, `regex-worker.mjs`) are imported by `sweep.mjs` or `cli.mjs` and never import them back, so there are no import cycles. The one exception: `cli.mjs` imports B1's exported `loadSecrets` from `sweep.mjs`, dynamically, inside `readContext` (Task 10) and `operatorMain` (Task 19). B1's case `each module imports nothing its ring forbids, and reaches no module by another door` refuses every `import(` (its `DOORS` list), so Task 10, the first dynamic site, edits that case in the same commit: its line `expect(otherDoors(src), m).toEqual([]);` becomes a check that every `import(` in a module takes a string-literal specifier, that the only one allowed is `'./sweep.mjs'` in `cli.mjs`, and that every other door is still refused (`otherDoors(src).filter((d) => d !== String(DOORS[1]))` is `[]`). The rule is per module and exact, as B1's `LAZY_IMPORTS` is per fixture; it counts no sites, so Task 19's sites need no further edit.
+  - B1's ring census in `server/test/history-lib.test.ts` (`const RINGS`, read by the case `every ccd/history/*.mjs has a ring`) names exactly B1's four modules, so creating a module reds it until the module has its row. The commit that creates each new module adds its row to `RINGS`, each ONE line beginning with four spaces and `'<name>.mjs': { ring: 'L4'`, chained one below the other: `'derive.mjs'` (Task 8 Step 8A, directly below B1's `'cli.mjs'` row), `'recall.mjs'` (Task 10, directly below `'derive.mjs'`) and `'regex-worker.mjs'` (Task 14, directly below `'recall.mjs'`). Each `forbids` follows the module's own imports: `node:sqlite` always (store.mjs is its sole importer), `./sweep.mjs` and `./cli.mjs` for all three (nothing they import comes from either), and `./recall.mjs` for `regex-worker.mjs` too (recall.mjs spawns it). The rows:
+    - `    'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },`
+    - `    'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },`
+    - `    'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },`
+    The other ring cases then read the new module too. B3's Task 5 anchors its `'card.mjs'` row directly below the line beginning `    'derive.mjs': { ring: 'L4'`, so that row stays one line with that prefix.
+  - New focused L4 modules (`derive.mjs`, `recall.mjs`, `regex-worker.mjs`) are imported by `sweep.mjs` or `cli.mjs` (`regex-worker.mjs` is never imported: recall.mjs spawns it by its path) and never import them back, so there are no import cycles. The one exception: `cli.mjs` imports B1's exported `loadSecrets` from `sweep.mjs` STATICALLY, once, in Task 10's W1-B2 import block (`import { loadSecrets } from './sweep.mjs';`); Task 10's `pairIndexOf` calls it, and Task 19's operator door reaches it only through `pairIndexOf` (and its fallback). sweep.mjs's top level holds only definitions and ends with its entry guard (`if (process.argv[1] && import.meta.url === …)`, the last statement; nothing awaits at top level), so importing it runs nothing; sweep.mjs imports nothing back from `cli.mjs`, so there is no cycle. `cli.mjs` holds no `import(` at all. B1's ring census then needs no edit for it: `cli.mjs`'s `RINGS` row forbids only `node:sqlite`, and the case `each module imports nothing its ring forbids, and reaches no module by another door` (its `DOORS` list refuses every `import(` in a shipped module) stays exactly as B1 wrote it.
 - **Launches.** Every launch of `ccd/history/*.mjs` is `node --no-warnings`. Node children run as `spawnSync`/`spawn(process.execPath, ['--no-warnings', …])`.
   - Never pass `{ env: process.env }`: omit `env` so the child inherits.
   - `process.env` may be read only for `HOME`, `TMUX_PANE`, `CLAUDECODE` and `CCRC_SESSION_GENERATION`. B2 reads no `CCRC_RECALL_*`.
@@ -185,11 +193,12 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
   - Their preconditions are lib's `decideBind` over measured facts, adopt's newer-schema refusal included (RB17): the L4 arms measure and relay, and decide nothing.
   - reparse is limited to `REPARSE_MAX_TARGETS` = 500 and refuses pruned spans.
 - **Recovery.**
-  - One step, `('recover', <bind ms>)`, serves both restore and rebuild. It runs only at the code's `user_version`, after the outbox, the migration verdict and the secrets, and never with the drain (⟦D:history-tick-order⟧). It is not a step of B1's `tick`: the scheduled pass's `recover` arm runs `recoverPass` (Task 25) instead of `tick`, which repeats the prefix of B1's `tick` (its doc comment's items for the outbox, the ingest context, the secrets, the FTS probe and the two re-index steps) and then runs the recovery step.
+  - One step, `('recover', <bind ms>)`, serves both restore and rebuild. It runs only at the code's `user_version`, after the outbox, the migration verdict and the secrets, and never with the drain (B1's D-4224 (`history-tick-order`)). It is not a step of B1's `tick`: the scheduled pass's `recover` arm runs `recoverPass` (Task 25) instead of `tick`, which repeats the prefix of B1's `tick`, items 1-6 of its doc comment, in B1's order and B1's forms: `flushOutbox(db, home, ids, nowMs)` (a `JournalError` counted `journal_write_failed`, as `tick` counts it), `makeIngestCtx`, `secretsStep` (its `pairIdx` on the ingest context, and its belt kept as `ctx.belt` for the recovery executors' `run.ectx.belt`), `ftsPrepare`, then `reindexForValues(db, ictx, values, fresh, budget, slice)` and `rederiveFts(db, ictx, budget, slice)` with ONE `rederiveSlice(budget)` slice shared between them. Then it runs the recovery step. The prefix stops there: `beltNodesStep`, which Task 29 adds to `tick` as item 7, is not in it.
+  - The two re-index steps run on every recover pass, whatever phase the step is at, including while its `reindex` phase (Task 29's `recoverReindex` over Task 23's `ftsRebuildJob`) is pending or part-done. Task 25's Choices give the reason: the rebuild deletes each blob's row before it writes it, it indexes with every pair stored at that call, an in-flight generation cannot clear the belt-due record it writes, and grep answers `fts-pending` while it is open. So nothing gates them.
   - While it runs, drain and ingest wait and cursors do not move, and every writing `--op` form is refused exit 2 `recovering` (RB6) except restore, rebuild, W2's recall-off (RB12), `--migrate` on a store not at the code's version (RB13) and `--adopt` on an unbound store (RB14); dry runs and read verbs still answer, read verbs with `lag=unmeasured`.
   - It works within the run budget (90 s and 512 MiB, never reset per file) and the free-space floor, checked before each chunk. The cursor advances in the same transaction as the records it applies.
   - It maintains meta `HEALTH_META.recoverUnmovedTicks`.
-  - Redact records come first. Only files with a `drained` record replay. A spool record of a file with no `drained` record is skipped, and counts `journal_spool_undrained_gone` only when its file is kept nowhere: not in `.draining/`, not in B1's `.draining/rejected/` (⟦D:history-permanent-failures-classified⟧) and not in any `.draining/planted/<area>/` (⟦D:history-planted-entries-never-wedge⟧). Replay never reads `$REG` and writes no journal record.
+  - Redact records come first. Only files with a `drained` record replay. A spool record of a file with no `drained` record is skipped, and counts `journal_spool_undrained_gone` only when its file is kept nowhere: not in `.draining/`, not in B1's `.draining/rejected/` (B1's D-4346 (`history-permanent-failures-classified`)) and not in any `.draining/planted/<area>/` (B1's D-4347 (`history-planted-entries-never-wedge`)). Replay never reads `$REG` and writes no journal record.
   - Unknown, malformed and newer records are skipped and counted (`journal_line_malformed`, `journal_record_unknown`).
   - The executor contract (Task 25): `RECOVER_EXECUTORS[phase](db, run, cursor)` answers `{ cursor, moved, phaseDone }`, or a Promise of it; `{ moved: false, phaseDone: false }` ends the step for this pass, as a throw does (counted `recover_chunk_failed`). Task 29's `recoverReindex(db, ctx, cur, budget)` reaches that contract through `recoverReindexChunk`, whose placeholder body (Task 25) Task 29 replaces with an adapter. A phase table gives B4 its segment-replay seam, between `apply` and `reindex`.
 - **Test isolation.**
@@ -211,7 +220,7 @@ B4 inserts its export phases into the phase table, between `apply` and `reindex`
 - **Citation corpus.**
   - `ccd/ccrc`: new lines go only below the `listener-answers-other-lane)` cut (`f7e51156f:11743`). Sites above it (`f7e51156f:6948`, `:8423`) are edited in place and add no line.
   - B2's one `ccd/session-hook.sh` edit is Task 34's: `fork` joins the spool block's source whitelist on the line that already spells `startup|resume|clear`, and three comment lines in the block's header are reworded, each replaced by exactly one line (B1's fix rounds rewrapped that header; at B1's tip the text the first draft anchored on four lines sits on three). No line is added or removed, so no line moves and the S6-R11 census is not re-run (spec §10.5); Task 34 measures that with `wc -l`, the diff's hunk headers and the census case.
-  - The edited block stays inside B1's S1 pins as B1's fix round 3 (review 351 F1) left them at B1's tip: every `(( ))` or `$(( ))` operand an integer literal or `${#name}`; no `-eq`, `-ne`, `-lt`, `-le`, `-gt` or `-ge` test; no `$[ ]`; only literal `${name:offset:length}` offsets and lengths; every subscript, and every compound-assignment key, an integer literal, `@` or `*`; no `let`, `declare`, `typeset`, `local` or `readonly`; none of the forms `forkForms`' header names as its stopping line (`${!x}`, `[[ -v $v ]]`, `printf -v "$v"`, `read -r "$v"`, a name split from its `[`); and no `$(`, backtick or `${…@…}`. No B2 task edits the S1 pin text in `session-hook.test.ts` (the S1 string case, `SUBSCRIPT_FORK`, `forkForms` and its header, its `ROWS` and `INERT` tables). No S1 pin reads the whitelist's own text, so adding `fork` there trips none. Task 34 Steps 2 and 6A measure both.
+  - The edited block stays inside B1's S1 pins as they are on `main` (B1's fix round 3, review 351 F1, merged in PR #315): every `(( ))` or `$(( ))` operand an integer literal or `${#name}`; no `-eq`, `-ne`, `-lt`, `-le`, `-gt` or `-ge` test, even on `${#name}` (ruling 4043); no `$[ ]`; only literal `${name:offset:length}` offsets and lengths; every subscript, and every compound-assignment key, an integer literal, `@` or `*`; no `let`, `declare`, `typeset`, `local` or `readonly` (the string pin refuses the words outright, since `let` and an integer attribute evaluate arithmetic); no `$(`, backtick, `sha`, `${…@…}` or external command; and none of the forms on `forkForms`' header's stopping line, which neither pin chases: `${!x}`; `[[ -v $v ]]`, `printf -v "$v"` or `read -r "$v"` with a dynamic name; a dynamic name with a variable subscript (`$x[v]`, `${x}[v]`); a name split from its `[` (`x"[v]"`, `x'[v]'`, `x\[v\]`, a line continuation); an assignment, `printf -v` or `read` into `RANDOM`, `SRANDOM`, `OPTIND` or `HISTCMD`; text on a `#`-led line inside a quoted string that spans lines; and, from Task 34 Step 2A (review 353 F1, ruled LISTED), a compound-assignment key that holds brackets of its own (`x=([y[0]]=1)`, `([${y[0]}]=1)`, `(["${y[0]}"]=1)`). Task 34 Step 2A is the one B2 edit of the S1 pin text in `session-hook.test.ts` (coordinator ruling on review 353 items F1, F2 and F5): it LISTS the bracketed key on the stopping line and corrects the two comments that claimed every key, turns the string pin's checks into labelled arms that `STRING_ROWS` runs over `ROWS` (two `ROWS` rows appended), and names the line's known fail-closed costs in the header. It keeps every `ROWS` and `INERT` row and every listed form verbatim. No S1 pin reads the whitelist's own text, so adding `fork` there trips none. Task 34 Steps 2, 2A and 6A measure all of it.
   - `deploy/deploy.sh`: edits go below its `:648` anchor.
   - `session-hook.test.ts` and `single-definition.test.ts` take only end-appended describes, or in-place edits of B1's own end-appended lines, and never an import line.
   - New README prose carries no `file.ext:N` citation.
@@ -254,16 +263,16 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 
 | Path | Action | Responsibility | Ring | Task(s) |
 |---|---|---|---|---|
-| `ccd/history/lib.mjs` | modify | B2's pure decisions and vocabularies, appended after B1's health block: scope, identity, harness, generation and recall-off decisions; id resolution and display prefixes; pasted-line ids; the FTS sanitiser, regex detector and guard, prefilter, sort, snippet, time bounds; envelope and escaping, cap, header and lag, the read `--json` envelope, cursor codec, relay; explorers, cost rows, the expand-body pick; `EXPAND_LABEL`, the block parser and statuses, native gist and topics, refs, directive flag, summary-row selection; the span rule, leaf-id fork rule, fan-in, rollups, readiness, `pickHoldingCopy`, `forkCounts`; the read-verb whitelist (`READ_OPTIONS`, `parseReadArgs`), grep and describe value grammars; op-verb grammar, operator door, `parseDuration`, backup and restore names, `decideBind` (adopt's newer-schema refusal included, RB17), `decideReparse`; recovery phases and cursor, journal-file order, `replayStep`/`planReplay`, unmoved-tick rule, FK diff, FTS shadow health; `selectColumns`, `VERB_TABLES`, `INDEXED_PROVENANCE`, `FTS_STEP`, `SCOPE_FAMILIES_JSON_MAX` (11), `paneReadWanted` (19), `FTS_REBUILD_STEP` (23). Edited in place: `REASON_ROWS` (`repair-refused`, `backup-refused`, `recovering`), `decideOpGate` (RB6's `recovering` row, with the module-private `recoveryExempt` for RB12-RB14), `PARSE_STATUS` (`parse-failed`), B1's `paneNameFor` caller moves to `paneReadWanted` (sweep), and Task 12's `decideGrepIndex` gains `rebuilding` (23); B1's `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` admit `fork`, and `EPOCH_CAUSES` (already holding `fork`, B1's ⟦D:history-epoch-causes-widened-for-rollback⟧) is left as it is, with the comment of B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ (34); B1's export block: `EXPORT_REDUCERS.perCopy` (the default), `shortestHome` answering a due time, `planExport`'s due test, `exportDates` over holders, `dueTranscriptKeys`, and `deriveHealth`'s `retention-lowered` detail (35) | L1 policy (`node:crypto` only) | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
-| `ccd/history/lib.d.mts` | modify | hand-written declarations for every B2 lib export, each declared once; `OpGateReason`, `decideOpGate`'s env, `PARSE_STATUS` and `decideGrepIndex`'s input edited in place; `SpoolSource` and `decideEpochLine`'s `line.src` gain `fork` (34; B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ already put it in `EpochCause`); `EXPORT_REDUCERS`, `ExportReducer`'s doc and `exportDates` in place, `dueTranscriptKeys` added (35) | types | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
+| `ccd/history/lib.mjs` | modify | B2's pure decisions and vocabularies, appended after B1's health block: scope, identity, harness, generation and recall-off decisions; id resolution and display prefixes; pasted-line ids; the FTS sanitiser, regex detector and guard, prefilter, sort, snippet, time bounds; envelope and escaping, cap, header and lag, the read `--json` envelope, cursor codec, relay; explorers, cost rows, the expand-body pick; `EXPAND_LABEL`, the block parser and statuses, native gist and topics, refs, directive flag, summary-row selection; the span rule, leaf-id fork rule, fan-in, rollups, readiness, `pickHoldingCopy`, `forkCounts`; the read-verb whitelist (`READ_OPTIONS`, `parseReadArgs`), grep and describe value grammars; op-verb grammar, operator door, `parseDuration`, backup and restore names, `decideBind` (adopt's newer-schema refusal included, RB17), `decideReparse`; recovery phases and cursor, journal-file order, `replayStep`/`planReplay`, unmoved-tick rule, FK diff, FTS shadow health; `selectColumns`, `VERB_TABLES`, `INDEXED_PROVENANCE`, `FTS_STEP`, `SCOPE_FAMILIES_JSON_MAX` (11), `paneReadWanted` (19), `FTS_REBUILD_STEP` (23). Edited in place: `REASON_ROWS` (`repair-refused`, `backup-refused`, `recovering`), `decideOpGate` (RB6's `recovering` row, with the module-private `recoveryExempt` for RB12-RB14), `PARSE_STATUS` (`parse-failed`), B1's `paneNameFor` caller moves to `paneReadWanted` (sweep), and Task 12's `decideGrepIndex` gains `rebuilding` (23); B1's `SPOOL_SOURCES`, `parseSpoolLine`'s `reg` rule and `decideEpochLine` admit `fork`, and `EPOCH_CAUSES` (already holding `fork`, B1's D-4342 (`history-epoch-causes-widened-for-rollback`)) is left as it is, with the comment of B1's D-4342 (`history-epoch-causes-widened-for-rollback`) (34); B1's export block: `EXPORT_REDUCERS.perCopy` (the default), `shortestHome` answering a due time, `planExport`'s due test, `exportDates` over holders, `dueTranscriptKeys`, and `deriveHealth`'s `retention-lowered` detail (35); the substring belt in B1's redaction section, and the index readings `DISPLAY_READINGS_MAX`, `redactForDisplay` (every read verb's field) and `nodeIndexTexts` (every `nodes_fts` row) (7A); `renderEntryText`'s field pass renamed `redactForDisplay` in place (18) | L1 policy (`node:crypto` only) | 1–7, 7A, 8, 10–12, 15–19, 23, 34, 35 |
+| `ccd/history/lib.d.mts` | modify | hand-written declarations for every B2 lib export, each declared once; `OpGateReason`, `decideOpGate`'s env, `PARSE_STATUS` and `decideGrepIndex`'s input edited in place; `SpoolSource` and `decideEpochLine`'s `line.src` gain `fork` (34; B1's D-4342 (`history-epoch-causes-widened-for-rollback`) already put it in `EpochCause`); `EXPORT_REDUCERS`, `ExportReducer`'s doc and `exportDates` in place, `dueTranscriptKeys` added (35) | types | 1–8, 10–12, 15–17, 19, 23, 34, 35 |
 | `ccd/history/store.mjs` | modify | `getStep`/`setStep`; the lineage range CTE (P7), `childrenOf`, `parentOf`; `blobPlainText`; prune candidates, batches and `incrementalVacuum`; `writeBackup`; `integrityCheck`, `foreignKeyRows`, `ftsMeasure`, `dropFtsTables`; `adoptStore`, `stageRestore`, `commitRestore`, `abortRestore`; `createStore(home, opts?)` with a bind option (additive); `recoverStepAt` (RB6's read-only probe of an open `recover` step); `storedVersionAt` (the stored `user_version`, read-only, for RB13 and RB17) | L3 adapter (`node:sqlite`, `node:fs`, `node:zlib`) | 8, 9, 12, 19, 20, 22–24 |
 | `ccd/history/store.d.mts` | modify | declarations for the new store exports, each declared once | types | 8, 9, 12, 19, 20, 22–24 |
-| `ccd/history/derive.mjs` | create | node derivation inside the tick: `nodeToolkit`; node indexes; `deriveLeaves` (holding copy, readiness, summary row, direction read back from the source line, receipt gate, native gist, topics and refs, leaf ids, counters, parser crashes recorded as `parse-failed` leaves or `leaf-crashed` markers); `deriveParents` (fan-in per holding copy and epoch); `indexNodesFts`; `refreshLeaf` (records a parser throw `parse-failed`), `rerollParents`, `reparseTargets`, `reparseLeaves`, `clearLeafCrashes`; `redactNodeFields`, `reparseFailClosed`, `rederiveGistsFor` | L4 delivery (imports lib, store, `../compact-card.mjs` as `{ HEADING_RE, fencedRanges, mineTokens }`, `node:fs`; its `RINGS` row in `history-lib.test.ts`, Task 8) | 8, 9, 21, 29 |
-| `ccd/history/sweep.mjs` | modify | tick wiring (`deriveNodes` after `deriveFts`, Task 29's `beltNodesStep` after `rederiveFts`, each a numbered item of `tick`'s doc comment); `scheduledPass` measures `recovering` and runs the recover arm (`recoverPass`, in place of `tick`); `recoveryStep`, `recoverPass`, `RECOVER_EXECUTORS` and the replay applicators; the restructure of B1's `opPass`, behind its unchanged `runOpPass` wrapper and `opThrowResult` (`OP_DRY_RUNS`, `OP_HANDLERS`, `bindingPass`, per-verb version guard); the RB6 `recovering` refusal in `opPass`, with RB13's and RB14's facts; `--op` prune, reparse, repair, backup, adopt, restore and rebuild; `mergeFamily` re-points nodes; recall-echo index predicate; `recall_off_stale` counted at drain; `reindexForValues` calls the gist re-derivation; `recordHeldMatches` takes fork lines, and three epoch doc comments name fork (34); the export census's header comment, `EXPORT_CANDIDATES_SQL`, `EXPORT_HOLDERS_SQL` and `exportCensus` (35) | L4 delivery | 7B, 8, 9, 11, 12, 19–23, 25–29, 34, 35 |
+| `ccd/history/derive.mjs` | create | node derivation inside the tick: `nodeToolkit`; node indexes; `deriveLeaves` (holding copy, readiness, summary row, direction read back from the source line, receipt gate, native gist, topics and refs, leaf ids, counters, parser crashes recorded as `parse-failed` leaves or `leaf-crashed` markers); `deriveParents` (fan-in per holding copy and epoch); `indexNodesFts`; `refreshLeaf` (records a parser throw `parse-failed`), `rerollParents`, `reparseTargets`, `reparseLeaves`, `clearLeafCrashes`; `redactNodeFields`, `reparseFailClosed`, `rederiveGistsFor` | L4 delivery (imports lib, store, `../compact-card.mjs` as `{ HEADING_RE, fencedRanges, mineTokens }`, `node:fs`; never `./sweep.mjs` or `./cli.mjs`; its `RINGS` row and `CARD_FORMS` row in `history-lib.test.ts`, Task 8) | 8, 9, 21, 29 |
+| `ccd/history/sweep.mjs` | modify | tick wiring (`deriveNodes` after `deriveFts`, Task 8; Task 29's `beltNodesStep` after `rederiveFts`; each a numbered item of `tick`'s doc comment, the tail renumbered, so B1's 16 items become 17, then 18); `scheduledPass` measures `recovering` and runs the recover arm (`recoverPass`, in place of `tick`); `recoveryStep`, `recoverPass`, `RECOVER_EXECUTORS` and the replay applicators; the restructure of B1's `opPass`, behind its unchanged `runOpPass` wrapper and `opThrowResult` (`OP_DRY_RUNS`, `OP_HANDLERS`, `bindingPass`, per-verb version guard); the RB6 `recovering` refusal in `opPass`, with RB13's and RB14's facts; `--op` prune, reparse, repair, backup, adopt, restore and rebuild; `mergeFamily` re-points nodes; recall-echo index predicate; `recall_off_stale` counted at drain; `reindexForValues` calls the gist re-derivation; `recordHeldMatches` takes fork lines, and three epoch doc comments name fork (34); the export census's header comment, `EXPORT_CANDIDATES_SQL`, `EXPORT_HOLDERS_SQL` and `exportCensus` (35) | L4 delivery | 7B, 8, 9, 11, 12, 19–23, 25–29, 34, 35 |
 | `ccd/session-hook.sh` | modify | in the `history-spool` block: `fork` in the SessionStart source whitelist, and three header comment lines reworded, each in place; no line added or removed (citation corpus, S6-R11 census unchanged) | bash hook | 34 |
-| `ccd/history/cli.mjs` | modify | verb dispatcher: `parseReadArgs` and help; `measureReach` (extracted from B1's status helpers); bounded tmux identity, harness check, recall-off honour and preflight; `readContext`; `READ_RUNNERS`, `emitResult`, `redactFinal`; the fenced `ev:"recall"` counter line; the operator door (`OP_OF_VERB`, `runOpVerb`, relay); bare `doctor` | L4 delivery | 10–12, 15, 16, 18, 19 (26–28, 30 check only) |
-| `ccd/history/recall.mjs` | create | the read-verb executors over a `ReadContext`: `runTree`, `grepVerb`/`runGrep`, `runRegex`, `describeVerb`/`runDescribe`, `expandVerb`/`runExpand`; version-aware selects; `pendingFor`; `indexGate` reads the open `FTS_REBUILD_STEP` row (23, in place) | L4 delivery (imports lib, store, `node:child_process`; its `RINGS` row in `history-lib.test.ts`, Task 10) | 10–18, 23 |
-| `ccd/history/regex-worker.mjs` | create | the `--regex` child: a JSON job on stdin; a read-only handle; in-scope blobs paged with `iterate()`, every statement held; unbrotli, plain text, `redactField`, the regex; JSON lines out; its own entry guard | L4 delivery (imports lib, store; its `RINGS` row in `history-lib.test.ts`, Task 14) | 14 |
+| `ccd/history/cli.mjs` | modify | verb dispatcher: `parseReadArgs` and help; `measureReach` (extracted from B1's status helpers); bounded tmux identity, harness check, recall-off honour and preflight; `readContext`; `READ_RUNNERS`, `emitResult`, `redactFinal`; the fenced `ev:"recall"` counter line; the operator door (`OP_OF_VERB`, `runOpVerb`, relay redacted by `relayIndexOf`); bare `doctor` | L4 delivery (B1's imports, plus Task 10's W1-B2 block: lib, `./recall.mjs`, `node:child_process`, and `./sweep.mjs` for `loadSecrets` only, statically; no `import(`) | 10–12, 15, 16, 18, 19 (26–28, 30 check only) |
+| `ccd/history/recall.mjs` | create | the read-verb executors over a `ReadContext`: `runTree`, `grepVerb`/`runGrep`, `runRegex`, `describeVerb`/`runDescribe`, `expandVerb`/`runExpand`; version-aware selects; `pendingFor`; `indexGate` reads the open `FTS_REBUILD_STEP` row (23, in place) | L4 delivery (imports lib, store, `node:child_process`, `node:path`, `node:url`; never `./sweep.mjs` or `./cli.mjs`; its `RINGS` row in `history-lib.test.ts`, Task 10) | 10–18, 23 |
+| `ccd/history/regex-worker.mjs` | create | the `--regex` child: a JSON job on stdin (pairs and belt units); a read-only handle; in-scope blobs paged with `iterate()`, every statement held; unbrotli, plain text, lib's `entryIndexText` (the index's own text and readings, the belt included), the regex; JSON lines out; its own entry guard | L4 delivery (imports lib, store, `node:fs`, `node:url`; never `./sweep.mjs`, `./cli.mjs` or `./recall.mjs`; its `RINGS` row in `history-lib.test.ts`, Task 14) | 14 |
 | `ccd/history/PROVENANCE` | modify | appended six-field entries, one per (ours, upstream) pair actually carried | legal | 1–4, 6, 7, 9, 20, 23, 31 |
 | `ccd/compact-card.mjs` | modify | two in-place `export ` keywords, on `HEADING_RE` (`:510`) and `fencedRanges` (`:522`), measured at `f7e51156f`; no line moves | L4 (unchanged) | 4 |
 | `ccd/compact-card.d.mts` | modify | declares `HEADING_RE` and `fencedRanges` | types | 4 |
@@ -277,8 +286,8 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `README.md` | modify | the history section after Memory guardrails (Linux); in-place prose repairs naming the fourth skill; the Third-party paragraph names `ccd/history-skill`; the timer-table and doctor-table rows | docs (citation corpus, repaired by content) | 31, 33 |
 | `CLAUDE.md` | modify | the `README.md (~N lines)` figure, re-measured | docs | 33 |
 | `.github/workflows/ci.yml` | modify | `node-floor` leg heredoc lines for history-parser, history-derive, history-recall, history-maint, history-recover and history-skill; the node-floor job's `timeout-minutes` (30 to 60) only when Task 36 Step 5's measured floor-leg Duration exceeds 15 minutes | CI | 4, 8, 10, 19, 25, 31, 36 |
-| `server/test/history-lib.test.ts` | modify | pure describes, one namespace import each (`libScope`, `libSearch`, `libOut`, `libOps`, `libReplay`, `libGrep`, `libDescribe`, `t19lib`, `libRebuild`, `libFork`, `libDue`, …); in place, B1's fork refusals flipped (34) and B1's due cases naming the node-shortest reducer, its `exportDates` and reducer-seam cases rewritten, one `deriveHealth` case added (35); the belt's O59 lib describe appended (7A); in place, B1's ring census: one `RINGS` row per new module, `'derive.mjs'` (8), `'recall.mjs'` (10) and `'regex-worker.mjs'` (14), each `{ ring: 'L4', forbids: (s) => s === 'node:sqlite' }`, the compact-card case's per-import check and title for `derive.mjs`'s `{ HEADING_RE, fencedRanges, mineTokens }` (8), and the door case's `otherDoors` line, allowing only `import('./sweep.mjs')` in `cli.mjs` (10) | test | 1–3, 6, 7, 7A, 8, 10, 12, 14, 15–17, 19, 23, 34, 35 |
-| `server/test/history-drain.test.ts` | modify | appended: the `fork` line and receipt-count helpers, DM48's drain cases (in-process) and its copied-rows case (the box as it runs) | test | 34 |
+| `server/test/history-lib.test.ts` | modify | pure describes, one namespace import each (`libScope`, `libSearch`, `libOut`, `libOps`, `libReplay`, `libGrep`, `libDescribe`, `t19lib`, `libRebuild`, `libFork`, `libDue`, …); in place, B1's fork refusals flipped (34) and B1's due cases naming the node-shortest reducer, its `exportDates` and reducer-seam cases rewritten, one `deriveHealth` case added (35); the belt's O59 lib describe and the index readings' describe (`redactForDisplay`, `nodeIndexTexts`) appended (7A); in place, B1's ring census: one one-line `RINGS` row per new module, `'derive.mjs'` (8), `'recall.mjs'` (10) and `'regex-worker.mjs'` (14), each L4 with the `forbids` Global Constraints "Rings" spells, and the compact-card case's per-import check replaced by the per-module table `CARD_FORMS` (`sweep.mjs`: `{ isBoundaryLine }`; `derive.mjs`: `{ HEADING_RE, fencedRanges, mineTokens }`), the case renamed `only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names` (8); the door case is NOT edited (cli.mjs imports `loadSecrets` statically, so no shipped module holds an `import(`) | test | 1–3, 6, 7, 7A, 8, 10, 12, 14, 15–17, 19, 23, 34, 35 |
+| `server/test/history-drain.test.ts` | modify | appended: the `fork` line and receipt-count helpers, DM48's drain cases (in-process) and its copied-rows case (the box as it runs); in place, the FR2c comment above `NODE_REFUSED` gains B1's D-4418 (`history-spool-append-regular-file-only`) thrown-arm exception, four lines for four (34 Step 2A) | test | 34 |
 | `server/test/history-op.test.ts` | modify | B1's O38 census describe replaced, its cases re-run under the per-copy default; an O58 census describe appended | test | 35 |
 | `server/test/history-parser.test.ts` | create | pure tests for the parser, spans and fan-in; runs on darwin | test | 4, 5, 8 |
 | `server/test/history-derive.test.ts` | create | node derivation through real sweep ticks; DM48's span case, a fresh-sid fork's leaf (34) | test | 8, 9, 34 |
@@ -298,9 +307,9 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `server/test/single-definition.test.ts` | modify | in place, in B1's end-appended describes: `PENDING_EMITTERS` drops recall; the O13 corpus gains the skill; O14 `VOCABS` gains B2's vocabularies (36); appended: the hook's SessionStart whitelist bound to `SPOOL_SOURCES` (34) | test (cited by line; end region only) | 11, 31, 34, 36 |
 | `server/test/license.test.ts` | modify | the sidecar sha and PATHSPEC pins cover every `LICENSE.lossless-claw`; the README substring list gains the skill sidecar | test | 31 |
 | `server/test/lifecycle.test.ts` | modify | `HISTORY_LANDED` becomes `['B1','B2']`; one `declares history-backups` case | test | 22 |
-| `server/test/session-hook.test.ts` | modify | in place, B1's end-appended S11 and S14 cases rewritten to their fork-spooled form (34), anchored by title, never by line: `S11: a SessionStart whose source is x"y, fork, or absent writes no line at all` and `S14: SessionStart(compact) and (fork) write no line; startup, resume and clear write one each, each carrying src`, both unchanged by B1's fix round 3, whose S1 pins sit beside them and are not edited; end-appended C17 describe (36); no import line | test (cited by line) | 34, 36 |
+| `server/test/session-hook.test.ts` | modify | in place, B1's end-appended S11 and S14 cases rewritten to their fork-spooled form (34), anchored by title, never by line: `S11: a SessionStart whose source is x"y, fork, or absent writes no line at all` and `S14: SessionStart(compact) and (fork) write no line; startup, resume and clear write one each, each carrying src`, both unchanged by B1's fix round 3; in place, B1's S1 pins beside them (34 Step 2A, review 353 F1, F2 and F5: the bracketed compound key LISTED and two comments corrected, the string pin's checks as labelled arms run over `ROWS` by an appended `STRING_ROWS` table, two `ROWS` rows appended, the stopping line's fail-closed costs named; every existing row and listed form kept); end-appended C17 describe (36); no import line | test (cited by line) | 34, 36 |
 | `server/test/installTreeFixture.ts` | modify | `TREE_FILES` gains `'ccd/history-skill'` and `'ccd/install-history-skill.sh'` | test helper | 32 |
-| `server/test/ccrc-account.test.ts` | modify | the history installer and skill in the planted-installer lists, installer calls (6), the real-provision loop, the provisioned arrays and the seedFull lists | test | 32 |
+| `server/test/ccrc-account.test.ts` | modify | the history installer and skill in the planted-installer lists, installer calls (6), the real-provision loop, the provisioned arrays and the seedFull lists (32); two stale `ccrc-doctor.test.ts:N` cites re-cited by content, in place (36) | test | 32, 36 |
 | `server/test/ccrc-install.test.ts` | modify | the history skill and installer in the artifact list, idempotence targets, the 'all skills' pairs, the staged-tree list, the inode-watch lists and the describe title | test | 32 |
 | `server/test/ccrc-uninstall.test.ts` | modify | plants the history skill tree and installer, and asserts their removal | test | 32 |
 | `server/test/ccrc-doctor.test.ts` | modify | `installCcrc` symlinks and `SHIPPED_SKILLS` gain the history skill; PASS/FAIL/remedy regexes gain `ccrc-history`; a new `ccrc-history` stale case | test | 32 |
@@ -308,15 +317,18 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
 | `server/test/ws-expire-prose.test.ts` | modify | the `SKILLS` scan gains `ccd/history-skill` | test | 31 |
 | `server/test/ccrc-api-closed.test.ts` | modify | the skill-dir scan gains `ccd/history-skill` | test | 31 |
 | `server/test/expiry-lane-prose.test.ts` | modify | the `expire-lane-live` skill scan gains `ccd/history-skill` | test | 31 |
+| `server/test/dead-coordinator-prose.test.ts` | modify | the skill scan gains `ccd/history-skill` (its `dead-coordinator-lane-live` case) | test | 31 |
 | `server/test/auth-passkey.test.ts` | modify | `THE SWEEP`'s skill corpora gain `history-skill` | test | 31 |
 
 Tasks 7A and 7B (the substring belt, spec rev 3.5) also modify `ccd/history/lib.mjs`, `ccd/history/lib.d.mts`, `ccd/history/sweep.mjs`, `server/test/history-lib.test.ts` and `server/test/history-ingest.test.ts` (B1's F2 case reshaped in place). Task 29 adds `beltNodesStep` to `derive.mjs` and its call to `sweep.mjs`'s `tick`. Tasks 10 and 14 carry the belt into `cli.mjs`, `recall.mjs` and `regex-worker.mjs`.
 
-**Additions beside the rows above, from B1's notes to B2 and from the belt (Tasks 18, 23, 25, 36).**
+**Additions beside the rows above, from B1's notes to B2 and from the belt (Tasks 7A, 8, 9, 18, 21, 23, 25, 29, 36).**
+- `ccd/history/lib.mjs` / `lib.d.mts` (7A): the belt (`BELT_VERSION`, `BELT_BITS`, `BELT_K_LADDER`, `BELT_GRAMS_MAX`, `BELT_META`, `BELT_NODES_STEP`, `REDACT_SOURCES_META`, `BELT_COUNTERS`, `beltWidth`, `beltUnits`, `makeBelt`, `beltMask`, `parseBeltState`, `formatBeltState`, `decideBelt`, `beltAfterGeneration`, `parseRedactSources`; in place `makePairIndex`, `makeProbeIndex`, the `RederiveState` grammar, `rederivePlan`, `redactField`), and the index readings: `DISPLAY_READINGS_MAX`, `redactForDisplay` (every read verb's field from Task 18 on) and `nodeIndexTexts` (every `nodes_fts` row: Task 8's `indexNode`, which takes the pair index as its last argument and Task 21's two calls pass, Task 9's `insertNodeFts`, Task 29's `redactNodeFields`).
+- `ccd/history/recall.mjs` and `renderEntryText` in `lib.mjs` (18): every `redactField` of a recalled field renamed `redactForDisplay`, in place.
 - `ccd/history/lib.mjs` / `lib.d.mts`: `COUNTER_STANDING`, `decideCounterResets` (23); in place, two comments on B1's `HEALTH_COUNTERS` and `spool-planted` remedy (23).
 - `ccd/history/store.mjs` / `store.d.mts`: `setCounter` (23).
 - `ccd/history/sweep.mjs`: `measureSpoolStanding`, `applyCounterResets`, `spoolCounterResets`, `reportCounterResets`, the rebuild's undecodable count and its counter write, and the rebuild recording the belt due (meta `fts_belt`) (23); `finishRecovery`'s spool re-measure, and `recoverPass` handing the pass's belt to the recovery executors (25).
-- Tests: `history-lib.test.ts` (23), `history-store.test.ts` (23), `history-maint.test.ts` (23), `history-ingest.test.ts` (23: the rebuild leaves the belt due), `history-recover.test.ts` (25), `history-recall.test.ts` (18: C69), `single-definition.test.ts` (36: O14's `VOCABS` gain the belt's shared words).
+- Tests: `history-lib.test.ts` (7A: the belt's describe and the index readings' describe; 23), `history-store.test.ts` (23), `history-maint.test.ts` (23), `history-ingest.test.ts` (23: the rebuild leaves the belt due), `history-recover.test.ts` (25; 29: the node step's two cases), `history-recall.test.ts` (18: the escape-readings describe and C69), `single-definition.test.ts` (36: O14's `VOCABS` gain the belt's shared words).
 
 ---
 
@@ -347,7 +359,7 @@ Tasks 7A and 7B (the substring belt, spec rev 3.5) also modify `ccd/history/lib.
   - Module-private, consumed by Task 2: `escapeRe(s)`, the one regex-escape helper of the B2 blocks.
 - Later consumers: Task 10 (`readContext`: identity, harness, generation, scope, recall-off), Tasks 11–16 (widened scopes, display prefixes, in-scope resolution, pasted lines), Task 6 (`reparse --node` checks its value with `HISTORY_NODE_ID_RE`, the one spelling of the full node-id grammar). Nothing here reads a file, a process or the environment: the CLI measures and passes in what it saw.
 
-**Spec:** §8.2 (identity from tmux with `-t`, `cc-` required; the generation; `--project`, `--workspace`, `--session`; every id resolved inside the scope), §6.1 (node ids, display prefixes), §6.9 (`decideScope` takes its scope source as data), §6.10 item 4 (the harness refusal), §8.4 describe and §11 P28 (pasted-line ids), §8.6 (the card line's grammar), §8.8 (the failure rows for identity, scope, harness, id and generation), §9.7 (`recall-off/<id>` names one family). It owns pin **C50**, and ships the pure halves of C3, C4, C5, C29, C39, C53, C54, C66 and C67, whose full pins are Tasks 10–16's. Departures it implements: ⟦D:history-identity-from-tmux⟧, ⟦D:history-id-grammar⟧, ⟦D:history-family-per-generation⟧, ⟦D:history-workspace-scope⟧, ⟦D:history-recall-all-lanes⟧, ⟦D:history-scope-on-every-verb⟧, ⟦D:history-harness-unsupported-refused⟧, ⟦D:history-recall-off-generation⟧, ⟦D:history-coverage-this-box⟧.
+**Spec:** §8.2 (identity from tmux with `-t`, `cc-` required; the generation; `--project`, `--workspace`, `--session`; every id resolved inside the scope), §6.1 (node ids, display prefixes), §6.9 (`decideScope` takes its scope source as data), §6.10 item 4 (the harness refusal), §8.4 describe and §11 P28 (pasted-line ids), §8.6 (the card line's grammar), §8.8 (the failure rows for identity, scope, harness, id and generation), §9.7 (`recall-off/<id>` names one family). It owns pin **C50**, and ships the pure halves of C3, C4, C5, C29, C39, C53, C54, C66 and C67, whose full pins are Tasks 10–16's. Departures it implements: ⟦D:history-identity-from-tmux⟧, B1's D-4170 (`history-id-grammar`), B1's D-4192 (`history-family-per-generation`), ⟦D:history-workspace-scope⟧, ⟦D:history-recall-all-lanes⟧, ⟦D:history-scope-on-every-verb⟧, ⟦D:history-harness-unsupported-refused⟧, ⟦D:history-recall-off-generation⟧, B1's D-4167 (`history-coverage-this-box`).
 
 Choices this task makes where the spec is silent or self-contradictory (each is listed in the plan's open issues):
 - `NODE_ID_DISPLAY_MIN` counts hex digits (ruled RB2: 6 hex digits after the `L` or `N`). §6.1 says "minimum 6" and §8.6's own example prints `L03a9c` (5 hex), but §8.6's grammar gate admits only `L[0-9a-f]{6,20}`, so a 6-char prefix would be refused by B3's card reader. A display prefix is therefore the letter plus at least 6 hex; the coordinator corrects the spec's 5-hex example separately.
@@ -700,7 +712,7 @@ function refuseScope(reason) {
  *  that did not settle or failed, or a name that is not `cc-<something>`
  *  answers `no-identity`; never "the most recent session". The stripped id
  *  then passes idOk before any path is formed from it, else `bad-id`
- *  (⟦D:history-id-grammar⟧). */
+ *  (D-4170). */
 export function decideIdentity({ pane, tmux }) {
   if (typeof pane !== 'string' || !PANE_RE.test(pane)) return refuseScope('no-identity');
   if (tmux === null || tmux.settled !== true || tmux.status !== 0 || typeof tmux.stdout !== 'string') {
@@ -712,7 +724,7 @@ export function decideIdentity({ pane, tmux }) {
   return idOk(id) ? { ok: true, id } : refuseScope('bad-id');
 }
 
-/** The family's generation (§8.2, ⟦D:history-family-per-generation⟧): the
+/** The family's generation (§8.2, D-4192): the
  *  session's `CCRC_SESSION_GENERATION` when it has the uuid grammar, else
  *  `$REG/<id>.generation` read-only when IT has the grammar, else the id's
  *  newest family (§8.8: an unreadable or malformed file falls back too,
@@ -743,7 +755,7 @@ export function decideHarness(p) {
 const presenceText = (p) => (p !== null && p.state === 'value' && p.value.trim() !== '' ? p.value.trim() : null);
 
 /** Every scope decision a read verb takes (§8.2), in one place:
- *  - the scope source is DATA (`SCOPE_SOURCES`, ⟦D:history-coverage-this-box⟧):
+ *  - the scope source is DATA (`SCOPE_SOURCES`, D-4167):
  *    a source outside it is refused `no-identity`, never defaulted to tmux.
  *    W1 holds `tmux` only; W2 adds `env` with the headless seam;
  *  - `--project` with `--workspace`, or either with `--session`, is
@@ -868,7 +880,7 @@ function validNodeId(id) {
 
 /** `~/.ccrc/history/recall-off/<id>` (§9.7). The id passes idOk BEFORE the
  *  path exists, so `../x` can never name a file outside the store
- *  (⟦D:history-id-grammar⟧, C66). */
+ *  (D-4170, C66). */
 export function recallOffPath(home, id) {
   if (!idOk(id)) throw new TypeError(`recallOffPath: not a session id: ${JSON.stringify(id)}`);
   return `${historyPaths(home).root}/${RECALL_OFF_DIR}/${id}`;
@@ -1165,7 +1177,7 @@ git commit -m "feat(history): lib identity, scope, harness, generation, recall-o
   - Module-private, consumed by Tasks 3 and 4: `cutBefore(s, n)`, the one surrogate-safe slice end of the B2 blocks.
 - Later consumers: Task 12 (grep's FTS path), Task 13 (snippets), Task 14 (`--regex` and its worker).
 
-**Spec:** §8.4 grep (each token quoted, a trailing `*` outside the quotes; regex syntax refused without querying; `--regex` refused as a discriminated result or run under a 5 s kill; hybrid over integer `ts_ms`; the top 2,000 in-scope matches), §11 V2, P1, P8, P9, P10 and refuted candidates 1 and 2, §12 (the sanitiser's 17 test cases re-derived, not copied). It owns pin **C6**, and ships C7's and C8a's pure halves. Departures: ⟦D:history-fts-indexes-redacted-text⟧ (the snippet and the regex run over redacted text; the caller hands it); ⟦D:history-grep-pages-end-at-rank-pool⟧ (named in `RANK_POOL`'s doc comment; Task 13 carries the paging).
+**Spec:** §8.4 grep (each token quoted, a trailing `*` outside the quotes; regex syntax refused without querying; `--regex` refused as a discriminated result or run under a 5 s kill; hybrid over integer `ts_ms`; the top 2,000 in-scope matches), §11 V2, P1, P8, P9, P10 and refuted candidates 1 and 2, §12 (the sanitiser's 17 test cases re-derived, not copied). It owns pin **C6**, and ships C7's and C8a's pure halves. Departures: B1's D-4243 (`history-fts-indexes-redacted-text`) (the snippet and the regex run over redacted text; the caller hands it); ⟦D:history-grep-pages-end-at-rank-pool⟧ (named in `RANK_POOL`'s doc comment; Task 13 carries the paging).
 
 Choices this task makes where the spec is silent (each is in the plan's open issues):
 - `regexPrefilter` names only a WHOLE-WORD literal, as an exact-token query. A prefix query can drop a true hit, because porter stems prefix queries (measured: `"runn"*` does not find `running`), and `\b` can sit beside a non-ASCII letter that FTS5 keeps in the token. Most patterns therefore get no prefilter and are scanned in full under Task 14's 5 s kill.
@@ -2120,7 +2132,7 @@ git commit -m "feat(history): lib search primitives: FTS sanitiser with prefix s
   - `costRow(chars: number, cap?: number): { chars: number; fits: 'in' | 'over' }`; `pickExpandBody(i: { primary: unknown; variants: readonly { body: unknown; cause: string }[] }): unknown`.
 - Later consumers: Tasks 10–19 (every read verb's rendering, the operator door's relay). These functions take fields ALREADY redacted by `redactField` on their full raw text; they cut, escape, count and serialise, and the CLI runs `redactFinal` over the whole rendered output last.
 
-**Spec:** §8.3 (header, envelope, cap with true counts, `--json`, reasons by exit), §8.4 (describe's cost lines, expand's explorers and cut, the operator verbs' relay of `{rc, reason}`), §6.1 (variants: expand shows the unsanitised body), §11 P11, P12, P13, P17, P30, refuted candidate 3. No pin is owned here: these are property tests for the primitives that C12, C15, C16, C44, C45, C59, DM2b and O54 (Tasks 11–19) pin through the verbs. Departures it implements: ⟦D:history-redaction-before-cut⟧, ⟦D:history-reasons-by-exit⟧, ⟦D:history-coverage-this-box⟧, ⟦D:history-exit-codes-4-and-9⟧, ⟦D:history-variant-cause⟧, ⟦D:history-apply-via-shim⟧, ⟦D:history-skill-literal-path⟧.
+**Spec:** §8.3 (header, envelope, cap with true counts, `--json`, reasons by exit), §8.4 (describe's cost lines, expand's explorers and cut, the operator verbs' relay of `{rc, reason}`), §6.1 (variants: expand shows the unsanitised body), §11 P11, P12, P13, P17, P30, refuted candidate 3. No pin is owned here: these are property tests for the primitives that C12, C15, C16, C44, C45, C59, DM2b and O54 (Tasks 11–19) pin through the verbs. Departures it implements: B1's D-4202 (`history-redaction-before-cut`), B1's D-4171 (`history-reasons-by-exit`), B1's D-4167 (`history-coverage-this-box`), B1's D-4169 (`history-exit-codes-4-and-9`), B1's D-4200 (`history-variant-cause`), B1's D-4221 (`history-apply-via-shim`), ⟦D:history-skill-literal-path⟧.
 
 Choices this task makes where the spec is silent (each is in the plan's open issues):
 - The header keeps `transcripts`/`families` plural whatever N is, so the line has one grammar, and prints `lag=<n>s` the way B1's `status` already does.
@@ -2433,7 +2445,7 @@ Expected (measured on the B1 base with Tasks 1-2 in place): `Tests  36 failed | 
 // expand, §11 P11, P12, P13, P17, P30). Task 2's module-private `cutBefore`
 // makes every cut here surrogate-safe. Every recalled field reaches these
 // ALREADY redacted: redactField ran on its full raw text where it left its
-// blob (§8.3, ⟦D:history-redaction-before-cut⟧). They cut, escape, count and
+// blob (§8.3, D-4202). They cut, escape, count and
 // serialise, in that order, and the CLI runs redactFinal over the whole
 // rendered output last.
 // ===========================================================================
@@ -2544,7 +2556,7 @@ export function nextLine(args) {
   return `next: ${HISTORY_CMD} ${quoted.join(' ')}`;
 }
 
-/** The header every read verb prints first (§8.3, ⟦D:history-coverage-this-box⟧):
+/** The header every read verb prints first (§8.3, D-4167):
  *  `scope=family(<id>, N transcripts)` or `scope=project|workspace(<p>, N families)`,
  *  then `coverage=this-box`, `indexed-through=<ISO>` and `lag=<s>s`, each
  *  `unmeasured` when no end-of-file tick backs it (never 0). The count words
@@ -2573,8 +2585,8 @@ export function scopeLag({ eofMs, nowMs, recovering }) {
   return { indexedThroughMs: oldest, lagS: Math.max(0, Math.floor((nowMs - oldest) / 1000)) };
 }
 
-/** A read verb's `--json` envelope (§8.3, §11 P11, ⟦D:history-reasons-by-exit⟧,
- *  ⟦D:history-exit-codes-4-and-9⟧): one object, top-level `store_id` and
+/** A read verb's `--json` envelope (§8.3, §11 P11, D-4171,
+ *  D-4169): one object, top-level `store_id` and
  *  `coverage`, every item stamped `trust:'untrusted'` (an item can never
  *  claim otherwise). A `reason` is present exactly when the exit is one
  *  REASONS maps to (2, 4, 5, 7), and it must be a word of THAT code; anything
@@ -2651,7 +2663,7 @@ export function decodeCursor(s, resource) {
 }
 
 /** The CLI's answer for a writing form it ran through the shim (§8.4, O54's
- *  relay half, ⟦D:history-apply-via-shim⟧): the shim's exit 75 (lock held) is
+ *  relay half, D-4221): the shim's exit 75 (lock held) is
  *  exit 4 `writer-busy`; otherwise the LAST stdout line must be exactly
  *  `{"rc":n}` or `{"rc":n,"reason":w}`, n an EXIT value equal to the process
  *  status, w present exactly when n carries reasons and of n's own code.
@@ -2842,7 +2854,7 @@ export function costRow(chars, cap = OUTPUT_CAP) {
 }
 
 /** Which body `expand` prints for an entry with variants (§6.1,
- *  ⟦D:history-variant-cause⟧, DM2b): when a variant marked `ccd-sanitize`
+ *  D-4200, DM2b): when a variant marked `ccd-sanitize`
  *  really has ccd's sanitiser shape against the primary (variantCauseOf
  *  re-checks it, so a mislabelled row changes nothing), the body WITHOUT the
  *  `...` fill, the one the session actually wrote; otherwise the primary. */
@@ -3199,10 +3211,10 @@ git commit -m "feat(history): lib output primitives: recall envelope, cap and co
   - In `historyFixtures.ts`: `FULL_SECTIONS`, `UP_TO_SECTIONS`, `interface SummaryTextOpts`, `summaryText(o?: SummaryTextOpts): string`, `steeredBlock(o: { kind?: 'leaf' | 'node'; id?: string; gist: string; expand?: string; refs?: string | null; extra?: string }): string`.
 - Later consumers: Task 5 (the span rule appends to `history-parser.test.ts`), Task 8 (`derive.mjs`: it builds the kit from `compact-card.mjs`'s two exports and calls every function here), Task 15 (`describe`'s producer and directive flag), Task 21 (reparse), Task 29 (late-pair gist re-derivation).
 
-**Spec:** §7.4 items 1–9 (source row, receipt gate, grammar, selection, status, caps, refs, native fallback, directive flag), §7.8, §6.2 (gists, topics and refs from redacted text), §8.3 (redaction before any cut), §11 V8 and P29. It owns pins **PX2, PX3, PX4, PX5, PX6, PX8, PX9**, and ships the pure halves of PX1, PX7 and PX25, whose counters (`anchor_is_boundary`, `summary_unclosed:<backend>`) are Task 8's. Departures it implements: ⟦D:history-spool-no-summary-hash⟧, ⟦D:history-native-gist-last-summary-open⟧, ⟦D:history-summary-anchor-is-boundary⟧, ⟦D:history-steer-receipt⟧, ⟦D:history-redaction-before-cut⟧, and ⟦D:history-native-gist-heading-indent-floor⟧ (NEW: §7.4 item 8 slices "with the card's heading rules", and `HEADING_RE` reads every indented numbered line as a heading, so a numbered list nested in Pending Tasks or Current Work would cut the gist short and shadow sections 2 and 3; this plan keeps only the matches at the smallest indentation as headings).
+**Spec:** §7.4 items 1–9 (source row, receipt gate, grammar, selection, status, caps, refs, native fallback, directive flag), §7.8, §6.2 (gists, topics and refs from redacted text), §8.3 (redaction before any cut), §11 V8 and P29. It owns pins **PX2, PX3, PX4, PX5, PX6, PX8, PX9**, and ships the pure halves of PX1, PX7 and PX25, whose counters (`anchor_is_boundary`, `summary_unclosed:<backend>`) are Task 8's. Departures it implements: B1's D-4177 (`history-spool-no-summary-hash`), ⟦D:history-native-gist-last-summary-open⟧, ⟦D:history-summary-anchor-is-boundary⟧, ⟦D:history-steer-receipt⟧, B1's D-4202 (`history-redaction-before-cut`), and ⟦D:history-native-gist-heading-indent-floor⟧ (NEW: §7.4 item 8 slices "with the card's heading rules", and `HEADING_RE` reads every indented numbered line as a heading, so a numbered list nested in Pending Tasks or Current Work would cut the gist short and shadow sections 2 and 3; this plan keeps only the matches at the smallest indentation as headings).
 
 Choices this task makes where the spec is silent (each is in the plan's open issues):
-- The compact-card `export` keywords land here, not in Task 8: this task's tests inject the card's REAL heading rules, never a copy. Task 8 then imports them, edits nothing in `compact-card.mjs`, and updates B1's ring census in `server/test/history-lib.test.ts`: `RINGS` gains `derive.mjs` (L4, forbidding `node:sqlite`, `./sweep.mjs` and `./cli.mjs`); Task 10 adds `recall.mjs` and Task 14 `regex-worker.mjs` the same way (each L4, forbidding `node:sqlite`) in the task that creates the file, since the census compares the directory with `RINGS` exactly; and the `only L4 imports ../compact-card.mjs, and at most isBoundaryLine` case's blanket `{ isBoundaryLine }` form becomes a per-module table (`sweep.mjs`: `{ isBoundaryLine }`; `derive.mjs`: `{ HEADING_RE, fencedRanges, mineTokens }`), so the pin still refuses any other importer and any wider import. Without that step `every ccd/history/*.mjs has a ring` and the form pin go red the moment `derive.mjs` lands.
+- The compact-card `export` keywords land here, not in Task 8: this task's tests inject the card's REAL heading rules, never a copy. Task 8 then imports them in `derive.mjs` and edits nothing in `compact-card.mjs`. Its Step 8A updates B1's ring census in `server/test/history-lib.test.ts` in the same commit: `RINGS` gains the one-line row `'derive.mjs'` (L4, forbidding `node:sqlite`, `./sweep.mjs` and `./cli.mjs`), and the `only L4 imports ../compact-card.mjs, and at most isBoundaryLine` case's blanket `{ isBoundaryLine }` check becomes the per-module table `CARD_FORMS` (`sweep.mjs`: `{ isBoundaryLine }`; `derive.mjs`: `{ HEADING_RE, fencedRanges, mineTokens }`; a module with no row takes nothing), the case renamed `only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names`, so the pin still refuses any other importer and any wider import. Without that step `every ccd/history/*.mjs has a ring` and the form pin go red the moment `derive.mjs` lands. Task 10 adds `recall.mjs`'s row and Task 14 `regex-worker.mjs`'s, each in the task that creates the file, with the `forbids` Global Constraints "Rings" spells; neither module imports the card, so `CARD_FORMS` keeps its two rows.
 - Every `<analysis>` left in a STORED summary counts as surviving: Claude Code drops the first closed one before it stores the row (the card's `normalizeSummary` mirrors that), so what remains is the second, or one never closed.
 - A key line is a lowercase `key:` at the start of a line, or `Expand for details about:`; another lowercase key starts a field that is ignored with its continuation lines, and a capitalised `Note: …` line continues the field above. The grammar needs one attribute after the tag name, so an id-less (generic) block carries one (`v="1"` in the fixtures); W3's generic template must print at least one.
 - The native gist is `<Title>: <text>` per section, the two joined by a newline, each section's whitespace collapsed; topics are the list items (`-`, `*`, `+`) of the LAST sections numbered 2 and 3, compared by their collapsed text.
@@ -3712,7 +3724,7 @@ Expected (measured): `Tests  66 failed (66)`. The failures are `AssertionError: 
 // as an injected kit: lib never imports compact-card.mjs (L1 imports
 // node:crypto only). Every gist, topic and ref is taken from REDACTED text
 // and capped after it, so no cut can leave a secret's unmatched prefix
-// (⟦D:history-redaction-before-cut⟧). Task 2's `cutBefore` keeps every cut
+// (D-4202). Task 2's `cutBefore` keeps every cut
 // surrogate-safe.
 // ===========================================================================
 
@@ -3908,7 +3920,7 @@ export function summaryParts(text) {
   };
 }
 
-/** The summary row of boundary N (§7.4 item 1, ⟦D:history-spool-no-summary-hash⟧):
+/** The summary row of boundary N (§7.4 item 1, D-4177):
  *  the row whose uuid is the boundary's `anchorUuid` (auto puts it 4 rows on,
  *  manual 1; never "the next row"). When the anchor is the boundary itself
  *  (partial compaction `from`, ⟦D:history-summary-anchor-is-boundary⟧), the
@@ -5438,11 +5450,11 @@ git commit -m "feat(history): lib span rule, leaf ids, readiness, fan-in and par
   - ⟦D:history-adopt-verb⟧
   - ⟦D:history-restore-verb⟧
   - ⟦D:history-rebuild-verb⟧
-  - ⟦D:history-store-wal-orphaned⟧
-  - ⟦D:history-store-recoverable⟧
+  - B1's D-4188 (`history-store-wal-orphaned`)
+  - B1's D-4185 (`history-store-recoverable`)
   - ⟦D:history-backup-preflight-and-rename⟧
-  - ⟦D:history-shim-role-gated⟧
-  - ⟦D:history-reasons-by-exit⟧
+  - B1's D-4183 (`history-shim-role-gated`)
+  - B1's D-4171 (`history-reasons-by-exit`)
   - ⟦D:history-reasons-repair-backup⟧ (NEW): §8.3 names no exit-2 word for `doctor --repair` refused on `integrity_check` or on a new foreign-key violation, nor for `doctor --backup` refused for room. Each is a refusal with nothing written, so each gets a word of its own at exit 2.
   - ⟦D:history-reparse-targets⟧ (NEW): §8.4 sets reparse's limit, not its target grammar. `--node <full id>` (a leaf, or a parent's leaves), `--session <id>` (that id's leaves) or neither (every leaf).
   - ⟦D:history-ops-refused-while-recovering⟧ (NEW; coordinator rulings RB6 and RB12-RB14, confirmed by RB16): §9.14 says drain and ingest wait and cursors do not move while a recovery step runs, but names no rule for the operator's own writing verbs. While a `('recover', ms)` step is registered, the writing `--op` forms (`import --apply`, `prune --apply`, `reparse --apply`, `doctor --repair|--backup|--adopt|--migrate`) are refused exit 2 `recovering`, decided in `decideOpGate`, authoritative in its sweep half. `restore` and `rebuild` replace the registered step and are never refused; W2's `recall-off` forms are exempt (RB12); `--migrate` is refused only while the stored `user_version` equals the code's (RB13); `--adopt` is exempt on an unbound store, `store.id` absent (RB14). Dry runs and read verbs still answer.
@@ -5907,7 +5919,7 @@ grep -c "return refuseGate('recovering');" ccd/history/lib.mjs                  
 grep -c '^function recoveryExempt(op, env) {$' ccd/history/lib.mjs                        # 1
 ```
 
-  The `EXIT.REFUSED` row now holds 33 words (B1's 30, which include `'roster-unreadable'` and `'uuid-claimed'` from B1's ⟦D:history-import-refusal-words⟧, plus these three), and `REFUSALS` derives all three new ones. B1's pins over `REASON_ROWS` are its code set (`[2, 4, 5, 7]`) and `REFUSALS`' derivation, and its `decideOpGate` cases build their `env` with no `recovering` key: none of them moves, and Step 8 runs them all. If B1's merged suite holds a pin that counts the row's words, update it in this commit, never by deleting it. `recoveryExempt` is module-private, like `refuseGate`: lib.d.mts declares neither.
+  The `EXIT.REFUSED` row now holds 33 words (B1's 30, which include `'roster-unreadable'` and `'uuid-claimed'` from B1's D-4313 (`history-import-refusal-words`), plus these three), and `REFUSALS` derives all three new ones. B1's pins over `REASON_ROWS` are its code set (`[2, 4, 5, 7]`) and `REFUSALS`' derivation, and its `decideOpGate` cases build their `env` with no `recovering` key: none of them moves, and Step 8 runs them all. If B1's merged suite holds a pin that counts the row's words, update it in this commit, never by deleting it. `recoveryExempt` is module-private, like `refuseGate`: lib.d.mts declares neither.
 
 - [ ] **Step 5: Implement the decisions.** Append to the end of `ccd/history/lib.mjs`:
 
@@ -6023,7 +6035,7 @@ const DOOR_UNMEASURED = Object.freeze(['store-unreachable', 'store-root-dangling
  *  - otherwise the table answers. Its 9 (no store.id and no DB: never installed) stays 9. Its unreachable,
  *    dangling and unmeasured words (5) stand: an input that could not be measured is never read as absent (IV5).
  *    Any other answer means a store exists, and a writing verb with no shim is 2 `writer-absent`, never 9 (a
- *    plain uninstall kept the data). ⟦D:history-shim-role-gated⟧ */
+ *    plain uninstall kept the data). D-4183 */
 export function decideOpDoor(f) {
   if (f.darwin || f.role === 'server') return { ok: false, exit: EXIT.NO_STORE };
   if (f.shim === 'present') return { ok: true };
@@ -6094,7 +6106,7 @@ const BIND_REFUSALS = Object.freeze({ adopt: 'adopt-refused', restore: 'restore-
  *    directory whose heads agree; else --store-id, which must name one of several. A --store-id disagreeing with
  *    store.id, naming no directory, or naming one whose heads name another store is refused, with the
  *    candidates named.
- *  ⟦D:history-store-wal-orphaned⟧ ⟦D:history-store-recoverable⟧ ⟦D:history-store-unbound-refused⟧ */
+ *  D-4188 D-4185 D-4186 */
 export function decideBind(kind, f) {
   if (!Object.hasOwn(BIND_REFUSALS, kind)) throw new TypeError(`decideBind: kind outside BIND_KINDS: ${String(kind)}`);
   const unmeasured = (detail) => ({ ok: false, rc: EXIT.DB, reason: 'store-unmeasured', detail });
@@ -6461,10 +6473,10 @@ git commit -m "feat(history): lib operator-verb decisions: argv, door, prune flo
 - Pins: **O56** (the `planReplay` half: the apply order O48 asserts, with its two CONTROLs). This task also ships O48's replay-order pure half (Task 25 owns its tick half) and C61's pure half (Task 23 owns the verb).
 - Departures:
   - ⟦D:history-recovery-replay⟧
-  - ⟦D:history-journal-drained-record⟧
-  - ⟦D:history-redaction-journaled⟧
-  - ⟦D:history-epoch-confirmation⟧
-  - ⟦D:history-doctor-state-words⟧
+  - B1's D-4230 (`history-journal-drained-record`)
+  - B1's D-4241 (`history-redaction-journaled`)
+  - B1's D-4190 (`history-epoch-confirmation`)
+  - B1's D-4251 (`history-doctor-state-words`)
   - ⟦D:history-b4-after-b2⟧
   - ⟦D:history-replay-skips-post-bind-ticks⟧ (NEW; defined with Task 25, which journals the tick record it skips): the upper tick bound is decided here, in `replayStep`, so the executor never decides it.
 - RB7 (repair's foreign-key check): `diffForeignKeys` is the pure diff. Task 23 takes the baseline ONCE, before the repair's first chunk, persists it with the resumable cursor, and runs the second `foreign_key_check` ONCE, at completion, never per chunk; a resumed repair diffs against the original baseline.
@@ -6823,8 +6835,8 @@ Expected: FAIL. The cases fail with `TypeError: parseRecoverCursor is not a func
 // planReplay is the same order over a whole journal in memory, which O56 pins;
 // Task 25's tests pin the executor's agreement with it over the cases they
 // name.
-// ⟦D:history-recovery-replay⟧ ⟦D:history-journal-drained-record⟧
-// ⟦D:history-redaction-journaled⟧ ⟦D:history-epoch-confirmation⟧
+// ⟦D:history-recovery-replay⟧ D-4230
+// D-4241 D-4190
 // ⟦D:history-replay-skips-post-bind-ticks⟧
 // ===========================================================================
 
@@ -7305,21 +7317,26 @@ git commit -m "feat(history): lib recovery decisions: cursor, journal order, pla
   - layer 1's `replace` in `redactLayers`;
   - `redactField`, whose body moves unchanged into the module-private `redactLayered`;
   - `redactForIndex`'s two `redactField` calls and `sidecarIndexText`'s raw-pass call, which become `redactIndexReading`.
-  Then APPEND the belt block at the end of the file, below Task 7's block.
-- Modify: `ccd/history/lib.d.mts`: four declarations edited in place, one block appended.
+  Then APPEND the belt block at the end of the file, below Task 7's block, and below it the index-readings block (`DISPLAY_READINGS_MAX`, `redactForDisplay`, `nodeIndexTexts`).
+- Modify: `ccd/history/lib.d.mts`: four declarations edited in place, two blocks appended.
 - Modify: `server/test/history-ingest.test.ts`, in place: B1's case `F2 (review 344): while a generation is open the phrase path searches only the values whose pairs its tick recorded, so a blob it cannot clean is not re-indexed on every tick`, its value, rows and one message only.
-- Test: `server/test/history-lib.test.ts`: append one describe. It uses B1's `libRedact` and `historyCrypto` namespace imports, `readFileSync`, `join` and `REPO`; no import line is added.
+- Test: `server/test/history-lib.test.ts`: append two describes (the belt's, then the index readings'). They use B1's `libRedact` and `historyCrypto` namespace imports, `readFileSync`, `join` and `REPO`; no import line is added.
 - Scratch, gitignored: `.superpowers/sdd/history-w1-b2/scratch/mutate.mjs` (Step 8 writes it again, byte for byte, so this task stands alone) and `mutants-task7a.json`.
 
 **Interfaces:**
 - Consumes:
   - B1 `lib.mjs`, same module: `secretUnits`, `secretPairs`, `sha256Hex`, `SECRET_SEGMENT_MIN`, `REDACTED_MARK`, `INDEX_UNESCAPE_PASSES`;
   - module-private `ANSI_ESCAPE_RE`, `SEQ_FILL_RE`, `ESCAPE_INTRODUCER_RE`, `JSON_ESCAPE_RE`, `JSON_ESCAPE_CHAR`, `isRunByte`, `redactRun`;
-  - B1's unedited callers: `entryIndexText`, `redactFinal`, `phraseValues`.
+  - B1's unedited callers: `entryIndexText`, `redactFinal`, `phraseValues`;
+  - for the index-readings block: `redactForIndex(text, idx)` (B1's D-4343 (`history-index-escape-readings-to-fixpoint`): every JSON-escape reading to a fixpoint or `INDEX_UNESCAPE_PASSES`; the latest reading that removed something, else the text as it came, redacted; at the bound, the escape-glued spans marked), `entryIndexText(text, idx)` (B1's D-4419 (`history-entry-index-text-windowed`): `redactForIndex` over a window, then the shared cut), `ENTRY_FTS_BYTES`, `ENTRY_REDACT_MARGIN`. Since Step 4 item 9, `redactForIndex` reads each level through `redactIndexReading`, so it carries the belt.
 - Produces, each a `lib.mjs` export declared once in `lib.d.mts`:
   - `BELT_VERSION = 1`, `BELT_BITS = 72`, `BELT_K_LADDER` (frozen `[12, 14, 16, 18, 21]`), `BELT_GRAMS_MAX = 65536`, `BELT_META = 'fts_belt'`, `BELT_NODES_STEP = 'nodes-belt'`, `REDACT_SOURCES_META = 'redact_sources'`, `BELT_COUNTERS` (frozen `{ overflow: 'redact_belt_overflow', generations: 'redact_belt_generations' }`);
   - `beltWidth(unit)`, `beltUnits(values)`, `makeBelt(units): Belt` (`texts` is what the regex child is handed), `beltMask(text, belt, decode, onHit?)`;
   - `parseBeltState`, `formatBeltState`, `decideBelt(state, live, mark): { due, next }`, `beltAfterGeneration(next)`, `parseRedactSources(text)`;
+  - the index readings (spec §8.3 "Where it runs" and §6.2 `nodes_fts`, rev 3.5: display and `nodes_fts` read the index's escape readings):
+    - `DISPLAY_READINGS_MAX` = `ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN`, in UTF-16 units;
+    - `redactForDisplay(text: string, idx: PairIndex): string`: up to `DISPLAY_READINGS_MAX` it IS `redactForIndex`; past it, `redactField` and then each escape-glued span read through `redactForIndex` alone. Both go through `redactIndexReading` or `redactField`, so it carries the belt;
+    - `nodeIndexTexts(fields: { gist: string | null; topics: readonly string[] | null; refs: readonly string[] }, idx: PairIndex): { gist: string; topics: string; refs: string }`: each column through `entryIndexText`, topics and refs then joined one per line;
   - in place:
     - `makePairIndex(pairs, belt = null)` answers `{ byLen, belt }`;
     - `makeProbeIndex(pairs, mark, { belt = null, beltAll = false } = {})` answers `{ byLen, probe, belt, beltAll }`;
@@ -7328,15 +7345,15 @@ git commit -m "feat(history): lib recovery decisions: cursor, journal order, pla
     - `redactField(text, idx)` is layer 4 over layers 1–3.
 - Later consumers:
   - Task 7B: the tick's belt, the belt state and the generation;
-  - Task 9 and Task 8: `insertNodeFts` and `indexNode` index `redactField` output, so they carry the belt with no edit;
+  - Task 8 (`indexNode`, its pair index as its last argument, which Task 21's two calls pass) and Task 9 (`insertNodeFts`): every `nodes_fts` row is `nodeIndexTexts`, so it carries the belt and the escape readings;
   - Task 10: the CLI's belt;
   - Task 14: the child's belt, from `Belt.texts`;
-  - Task 18: C69;
+  - Task 18: Step 2A's switch of every read verb's field to `redactForDisplay`, its escape-readings describe and C69;
   - Task 23: the due mark;
-  - Task 29: `BELT_NODES_STEP`;
+  - Task 29: `BELT_NODES_STEP`; `redactNodeFields` writes its `nodes_fts` row through `nodeIndexTexts`, and `beltNodesStep` rewrites a node whose row differs from it;
   - Task 36: O14's VOCABS.
 
-**Spec:** §8.3 layer 1's glue windows and layer 4, the layer-1 sentences on values in memory (rev 3.5); §6.2 "The belt". Pin: O59 (lib half). Rulings: coordinator 4019 and 4043; reviews 344 F9 and 351, whose measured shapes are this task's fixtures (fr2's "For the coordinator" items 1 and 2). B1's limits this closes, cited by slug: `history-redaction-csi-joined-belt` (the stopping line's price, 31 of 32) and `history-reindex-mark-by-rederivation` (a value glued by `_` or `-` stays a term); their entries are B1's and stand. Departures: none (rev 3.5 is the rule).
+**Spec:** §8.3 layer 1's glue windows and layer 4, the layer-1 sentences on values in memory (rev 3.5); §6.2 "The belt". Pin: O59 (lib half). Rulings: coordinator 4019 and 4043; reviews 344 F9 and 351, whose measured shapes are this task's fixtures (fr2's "For the coordinator" items 1 and 2). B1's limits this closes, cited by slug: `history-redaction-csi-joined-belt` (the stopping line's price, 31 of 32) and `history-reindex-mark-by-rederivation` (a value glued by `_` or `-` stays a term); their entries are B1's and stand. B1's notes to B2 (run 302, fix round 1 wave-done): the display redaction applies the index's escape readings, and `nodes_fts` holds no term `blobs_fts` masks; the index-readings block reuses B1's D-4343 (`history-index-escape-readings-to-fixpoint`) and B1's D-4419 (`history-entry-index-text-windowed`) unchanged. Departures: none (rev 3.5 is the rule, §8.3 "Where it runs" and §6.2 included).
 
 Choices this task makes (each listed in the PR body):
 - **K per unit, from its own folded alphabet:** 72 bits, at most the unit's length, rounded down to the ladder. Rounding down only masks more, and the ladder bounds a reading to five passes.
@@ -7347,7 +7364,10 @@ Choices this task makes (each listed in the PR body):
 - **`beltAll`:** a re-derivation probe counts every layer-4 and glue-window hit as owed. Both depend on loaded values and on code BELT_VERSION tags, which the owed-pair argument does not cover.
 - **B1's F2 case is reshaped, not flipped.** The glue windows now clean its `v_tail` rows, which would leave its phrase-path mutant nothing to find. Its value is printed with its own `-` as spaces, a shape no layer removes and a phrase still finds, so the pin keeps biting.
 - **Fixture values start `QP` and end in a digit.** A random first character flakes the exact-text case about 7% of the time, and porter stemming may rewrite a term that ends in a letter.
-- **No separate display or node-index reading.** The belt sits inside `redactField`, and a field reads every JSON-escape decode through it, so every read verb's field and every `nodes_fts` row (Task 8's `indexNode`, Task 9's `insertNodeFts`, both `redactField` output) masks a loaded value glued to a literal escape (B1's review 316 F2 shape) with no function of its own. What stays is spec rev 3.5's named residual: a hash-only unit glued by a letter or digit, which no MATCH answers but which can print at display.
+- **Display shows what the index holds.** The belt's decoded readings find only a unit this process loaded. A value known as a pair alone (a rotated value, a `sessions.json` hash) glued to a literal escape (B1's review 316 F2 shape, `\n<value>`) is separated only by the index's escape readings. So up to `DISPLAY_READINGS_MAX`, `redactForDisplay` IS `redactForIndex`: a field is shown as it came, redacted, unless a deeper JSON-escape reading removed something; then that reading is shown, decoded. A field whose escapes hide nothing is shown byte for byte as `redactField` shows it.
+- **Past the bound, span by span.** A longer field (expand reads a sidecar up to `SIDECAR_WHOLE_MAX`) is redacted once by `redactField`. Then each maximal span of `[A-Za-z0-9_.-]` characters and backslashes that holds a backslash and a run character is read through `redactForIndex` alone, and replaced by the mark when any of its readings removed something. The cost stays linear, and a long JSON text's ordinary escapes print as they are. Residual, past the bound only: a value that only the context layer sees after a decode, with no backslash touching it.
+- **`nodes_fts` takes each column through `entryIndexText`.** The gist, each topic and each ref value are read one by one, then topics and refs are joined one per line, as Tasks 8 and 9 index them. The stored fields keep the derivation's `redactField` (Tasks 4 and 8): the escape readings run where text leaves the store, as display or as an index term. So a `nodes_fts` row is a function of its node's stored fields and the pair index's answers alone, which is what lets Task 29's node step recompute and compare it.
+- What stays is spec rev 3.5's named residual: a hash-only unit glued by a letter or digit, which no MATCH answers (its term is the glued word) but which can print at display.
 
 - [ ] **Step 1: Write the failing tests.** Append to the end of `server/test/history-lib.test.ts`:
 
@@ -7538,15 +7558,73 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
     for (const bad of [undefined, 'x', '["rel/path"]', '{"a":1}']) expect(libRedact.parseRedactSources(bad)).toEqual([]);
   });
 });
+
+// ── W1-B2 Task 7A: the index's escape readings for display and nodes_fts (spec §8.3 "Where it runs", §6.2, rev 3.5;
+// B1's D-4343 and D-4419; B1's run 302 notes) ──
+describe('lib: nodeIndexTexts and redactForDisplay read every escape level the index reads (W1-B2 Task 7A)', () => {
+  /** A 40-character value built at runtime (no key-shaped literal in a public repo): one run, registered as a pair.
+   *  The index below holds its pair and no belt, as a rotated value or a sessions.json hash is held. */
+  const V = Array.from({ length: 40 }, (_, i) => 'abcdefghjkmnpqrstuvwxyz23456789'[(i * 7 + 3) % 31]).join('');
+  const idx = libRedact.makePairIndex(libRedact.secretPairs([V]).pairs);
+  /** What a tool printing JSON leaves in a row: a literal backslash and `n` glued onto the value (B1's review 316 F2). */
+  const glued = JSON.stringify({ text: `\n${V}` });
+  /** A backslash-u-005c chain: two decodes separate the value. */
+  const nested = `x \\u005cn${V} y`;
+
+  it('up to its bound redactForDisplay is redactForIndex: a value glued to a literal escape is masked where redactField leaves it', () => {
+    expect(libRedact.redactField(glued, idx), 'CONTROL: one reading leaves the glued value').toContain(V);
+    expect(libRedact.redactField(nested, idx), 'CONTROL: and the chained one').toContain(V);
+    for (const t of [glued, nested, `plain ${V} text`]) {
+      const shown = libRedact.redactForDisplay(t, idx);
+      expect(shown, t).not.toContain(V);
+      expect(shown, t).toContain(libRedact.REDACTED_MARK);
+      expect(shown, 'the text the index would hold').toBe(libRedact.redactForIndex(t, idx));
+    }
+  });
+
+  it('text whose escapes hide nothing is shown exactly as it came: a Windows path, LaTeX, a JSON line break', () => {
+    for (const t of ['C:\\new_folder\\table.txt', '\\begin{document} and \\n twice', '{"a":"b\\nc"}', 'no escapes at all']) {
+      expect(libRedact.redactForDisplay(t, idx), t).toBe(t);
+    }
+  });
+
+  it('past DISPLAY_READINGS_MAX each escape-glued span is masked only when its own readings remove something', () => {
+    expect(libRedact.DISPLAY_READINGS_MAX).toBe(libRedact.ENTRY_FTS_BYTES + libRedact.ENTRY_REDACT_MARGIN);
+    const big = `${'w '.repeat(libRedact.DISPLAY_READINGS_MAX / 2)}${glued} and \\nfoo and ${nested} end`;
+    expect(big.length, 'CONTROL: past the bound').toBeGreaterThan(libRedact.DISPLAY_READINGS_MAX);
+    expect(libRedact.redactField(big, idx), 'CONTROL: one reading leaves the glued values').toContain(V);
+    const shown = libRedact.redactForDisplay(big, idx);
+    expect(shown).not.toContain(V);
+    expect(shown, 'an escape that hides nothing prints as it came').toContain(' and \\nfoo and ');
+    expect(shown.endsWith(' end')).toBe(true);
+  });
+
+  it('nodeIndexTexts takes the gist, each topic and each ref value through entryIndexText, topics and refs one per line', () => {
+    const t = libRedact.nodeIndexTexts({ gist: `zqgist ${glued}`, topics: [`zqtopic ${nested}`, 'plain topic'], refs: ['src/a.ts', glued] }, idx);
+    for (const col of [t.gist, t.topics, t.refs]) expect(col).not.toContain(V);
+    expect(t.gist).toBe(libRedact.entryIndexText(`zqgist ${glued}`, idx));
+    expect(t.topics.split('\n').at(-1)).toBe('plain topic');
+    expect(t.refs.split('\n')[0]).toBe('src/a.ts');
+    expect(libRedact.nodeIndexTexts({ gist: null, topics: null, refs: [] }, idx)).toEqual({ gist: '', topics: '', refs: '' });
+  });
+
+  it('nodeIndexTexts depends on the pairs only through the index\'s answers: a probe index returns the same texts and counts the owed hit', () => {
+    const pairs = libRedact.secretPairs([V]).pairs.map((p, i) => ({ ...p, rid: i + 1 }));
+    const probe = libRedact.makeProbeIndex(pairs, 0);
+    const fields = { gist: `zqgist ${glued}`, topics: [], refs: [] };
+    expect(libRedact.nodeIndexTexts(fields, probe)).toEqual(libRedact.nodeIndexTexts(fields, idx));
+    expect(probe.probe.hits, 'the owed pair was asked and answered yes').toBeGreaterThan(0);
+  });
+});
 ```
 
 - [ ] **Step 2: Run them and see them fail.** In the foreground, with a timeout of at least 600000 ms:
 
 ```bash
-(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'substring belt')
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'substring belt|read every escape level')
 ```
 
-  - Expected red, measured against B1 at `aa42a3972` (B1's final tip `561609adc` leaves `lib.mjs`, `history-lib.test.ts` and `history-ingest.test.ts` as they were there): 20 of 21 fail and the CONTROL passes. The failures are:
+  - Expected red, measured against B1 at `aa42a3972` (B1's final tip `561609adc` leaves `lib.mjs`, `history-lib.test.ts` and `history-ingest.test.ts` as they were there): in the belt's describe 20 of 21 fail and the CONTROL passes. The failures are:
     - `TypeError: beltUnits is not a function` (every `beltIdx` case);
     - `TypeError: beltWidth is not a function`;
     - `TypeError: decideBelt is not a function`;
@@ -7554,6 +7632,7 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
     - the bound case: `expected '_a_a_a…' to be '[redacted]'`;
     - `expected undefined to deeply equal [ 12, 14, 16, 18, 21 ]`;
     - the generation case: `expected null to deeply equal { target: 7, cursor: +0, end: 9, …(1) }`.
+  - In the index readings' describe, all 5 fail (predicted, not measured): on `libRedact.redactForDisplay is not a function` or `libRedact.nodeIndexTexts is not a function`, or on `expected undefined to be 1114112` for `DISPLAY_READINGS_MAX`; the two `redactField` CONTROLs hold before the failing call.
 
 - [ ] **Step 3: Reshape B1's F2 (review 344) case.** The glue windows remove its `v_tail` shape, so its phrase-path mutant would have nothing left to find. In `server/test/history-ingest.test.ts`, in the case `F2 (review 344): while a generation is open the phrase path searches only the values whose pairs its tick recorded, so a blob it cannot clean is not re-indexed on every tick`, replace
 
@@ -8055,7 +8134,71 @@ export function parseRedactSources(text) {
 }
 ```
 
-  - Then `node --check ccd/history/lib.mjs`. The L1 pin `(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'lib.mjs is L1')` stays green: the block imports nothing.
+  - Then append the index-readings block at the end of `ccd/history/lib.mjs`, directly below the belt block:
+
+```js
+
+// ===========================================================================
+// The index's escape readings for display and nodes_fts (spec §8.3 "Where it runs", §6.2 `nodes_fts`, rev 3.5;
+// W1-B2 Task 7A; B1's D-4343 and D-4419,
+// and B1's run 302 notes to B2). The belt's decoded readings find only a unit this process loaded; a value held as a
+// pair alone (a rotated value, a sessions.json hash) glued to a literal escape is separated only by redactForIndex's
+// readings. So a read verb shows a field as the index holds it, and nodes_fts indexes what blobs_fts would.
+// ===========================================================================
+
+/** The longest field redactForDisplay reads through every escape reading, in UTF-16 units: the window an entry's index
+ *  text is redacted over (B1's D-4419). */
+export const DISPLAY_READINGS_MAX = ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN;
+
+/** A recalled field as a read verb shows it, so no output shows a value the index masked (§8.3's field pass, with the
+ *  escape readings B1 gave the index).
+ *  - Up to DISPLAY_READINGS_MAX it IS redactForIndex: the field as it came, redacted, unless a deeper JSON-escape
+ *    reading removed something; then that reading is shown, decoded. A field whose escapes hide nothing is shown
+ *    exactly as redactField shows it.
+ *  - Past it (expand reads a sidecar up to SIDECAR_WHOLE_MAX), the field is redacted once, and each maximal span of
+ *    `[A-Za-z0-9_.-]` characters and backslashes that holds a backslash and a run character (the spans B1's
+ *    exhaustion rule marks) is read through redactForIndex alone and replaced by the mark when any of its readings
+ *    removed something. The cost stays linear, and a long JSON text's ordinary escapes print as they are. Residual,
+ *    past the bound only: a value only the context layer sees after a decode, with no backslash touching it.
+ *  It calls nothing but redactField and redactForIndex (whose readings are redactIndexReading's, the belt included),
+ *  so it fails closed as they do (R2). */
+export function redactForDisplay(text, idx) {
+  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndex(text, idx);
+  const t = redactField(text, idx);
+  if (!t.includes('\\')) return t;
+  return t.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) && redactForIndex(span, idx) !== span ? REDACTED_MARK : span));
+}
+
+/** A nodes_fts row's three column texts (§6.2): the gist, each topic and each ref value through entryIndexText (B1's
+ *  escape readings and window, the belt included), topics and refs then joined one per line, as Tasks 8 and 9 index
+ *  them. Every nodes_fts writer calls it (Task 8's indexNode, Task 9's insertNodeFts, Task 29's redactNodeFields), so
+ *  a row is a function of its node's stored fields and the pair index's answers alone, which Task 29's node step
+ *  recomputes and compares. */
+export function nodeIndexTexts(fields, idx) {
+  const one = (s) => entryIndexText(String(s), idx);
+  return {
+    gist: fields.gist === null || fields.gist === undefined ? '' : one(fields.gist),
+    topics: (fields.topics ?? []).map(one).join('\n'),
+    refs: (fields.refs ?? []).map(one).join('\n'),
+  };
+}
+```
+
+  - Then `node --check ccd/history/lib.mjs`. The L1 pin `(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'lib.mjs is L1')` stays green: neither block imports anything.
+  - Check the lines Task 9 Step 12A and Task 18 Step 4 mutate, each exactly once in `ccd/history/lib.mjs`:
+
+```bash
+for l in '  return beltMask(redactLayered(text, idx), idx.belt, true, beltHit(idx));' \
+         '  return beltMask(redactLayered(text, idx), idx.belt, false, beltHit(idx));' \
+         'function redactIndexReading(text, idx) {' \
+         '  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndex(text, idx);' \
+         'export function nodeIndexTexts(fields, idx) {' \
+         '  const one = (s) => entryIndexText(String(s), idx);'; do
+  printf '%s  %s\n' "$(grep -cxF -- "$l" ccd/history/lib.mjs)" "$l"
+done
+```
+
+  - Expected: `1` beside each of the six lines.
 
 - [ ] **Step 6: Declare it in `ccd/history/lib.d.mts`.**
   - Replace
@@ -8123,7 +8266,15 @@ export function formatBeltState(s: BeltState): string;
 export function decideBelt(state: BeltState | null, live: readonly number[], mark: number): { due: boolean; next: BeltState };
 export function beltAfterGeneration(next: BeltState): BeltState;
 export function parseRedactSources(text: string | null | undefined): string[];
+
+// --- W1-B2 Task 7A: the index's escape readings for display and nodes_fts (spec §8.3, §6.2; rev 3.5)
+export const DISPLAY_READINGS_MAX: number;
+export function redactForDisplay(text: string, idx: PairIndex): string;
+export function nodeIndexTexts(fields: { gist: string | null; topics: readonly string[] | null; refs: readonly string[] }, idx: PairIndex):
+  { gist: string; topics: string; refs: string };
 ```
+
+  - Check: `for n in redactForDisplay nodeIndexTexts beltWidth makeBelt beltUnits parseRedactSources; do printf '%s %s\n' "$n" "$(grep -c "^export function $n(" ccd/history/lib.d.mts)"; done` prints `1` beside each name, and `grep -cE '^export const (DISPLAY_READINGS_MAX|REDACT_SOURCES_META|BELT_NODES_STEP):' ccd/history/lib.d.mts` prints `3`.
 
 - [ ] **Step 7: Run them and see them pass.** In the foreground, each with a timeout of at least 600000 ms:
 
@@ -8134,7 +8285,7 @@ export function parseRedactSources(text: string | null | undefined): string[];
 ```
 
   - Expected: green, and tsc prints nothing.
-  - Measured on the judge's prototype (B1's tip plus this task and Task 7B only, Node 24.14.1): history-lib 616 (B1's 595 and these 21); history-ingest 140 (B1's 136, F2 reshaped, and Task 7B's 4); the history test files typecheck clean. In the B2 tree history-lib also holds Tasks 1–7's cases, and Task 7B's 4 ingest cases arrive with Task 7B: what must hold is that every case is green.
+  - Measured on the judge's prototype (B1's tip plus the belt and Task 7B only, Node 24.14.1): history-lib 616 (B1's 595 and the belt's 21); history-ingest 140 (B1's 136, F2 reshaped, and Task 7B's 4); the history test files typecheck clean. The index readings' 5 cases (from B1's run 302 notes) were not part of that prototype, so history-lib here is 621 over B1's tip (predicted). In the B2 tree history-lib also holds Tasks 1–7's cases, and Task 7B's 4 ingest cases arrive with Task 7B: what must hold is that every case is green.
 
 - [ ] **Step 8: Write the mutation runner.** It is the same gitignored scratch tool as Task 5's, byte for byte, written again here so this task stands alone. From the repository root:
 
@@ -8240,7 +8391,15 @@ cat > .superpowers/sdd/history-w1-b2/scratch/mutants-task7a.json <<'MUT_EOF'
   { "name": "(n) a returning unit never makes the belt due", "file": "ccd/history/lib.mjs", "test": "test/history-lib.test.ts", "filter": "substring belt",
     "edits": [{ "anchor": "  return { due: state.v !== BELT_VERSION || live.some((r) => r <= mark && !covered.has(r)), next };", "replacement": "  return { due: state.v !== BELT_VERSION, next };" }] },
   { "name": "(o) F2: the phrase path searches every value while a generation is open", "file": "ccd/history/sweep.mjs", "test": "test/history-ingest.test.ts", "filter": "while a generation is open the phrase path",
-    "edits": [{ "anchor": "  const searched = phraseValues(mark, parseRederiveState(getMeta(db, REDERIVE_META)), values, fresh);", "replacement": "  const searched = values;" }] }
+    "edits": [{ "anchor": "  const searched = phraseValues(mark, parseRederiveState(getMeta(db, REDERIVE_META)), values, fresh);", "replacement": "  const searched = values;" }] },
+  { "name": "(p) redactForDisplay with one reading", "file": "ccd/history/lib.mjs", "test": "test/history-lib.test.ts", "filter": "is redactForIndex",
+    "edits": [{ "anchor": "  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndex(text, idx);", "replacement": "  if (text.length <= DISPLAY_READINGS_MAX) return redactField(text, idx);" }] },
+  { "name": "(q) past the bound, no span read", "file": "ccd/history/lib.mjs", "test": "test/history-lib.test.ts", "filter": "past DISPLAY_READINGS_MAX",
+    "edits": [{ "anchor": " && redactForIndex(span, idx) !== span ? REDACTED_MARK : span", "replacement": " && false ? REDACTED_MARK : span" }] },
+  { "name": "(r) past the bound, every escape-glued span masked", "file": "ccd/history/lib.mjs", "test": "test/history-lib.test.ts", "filter": "past DISPLAY_READINGS_MAX",
+    "edits": [{ "anchor": " && redactForIndex(span, idx) !== span ? REDACTED_MARK : span", "replacement": " ? REDACTED_MARK : span" }] },
+  { "name": "(s) nodeIndexTexts with one reading", "file": "ccd/history/lib.mjs", "test": "test/history-lib.test.ts", "filter": "nodeIndexTexts takes",
+    "edits": [{ "anchor": "  const one = (s) => entryIndexText(String(s), idx);", "replacement": "  const one = (s) => redactField(String(s), idx);" }] }
 ]
 MUT_EOF
 (cd server && node ../.superpowers/sdd/history-w1-b2/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b2/scratch/mutants-task7a.json)
@@ -8262,6 +8421,7 @@ MUT_EOF
     - (m) 1: `a combining mark after every tenth character`;
     - (n) 1: `decideBelt`;
     - (o) red: `expected [ 3, 4, 3, 3, +0 ] to deeply equal [ 3, 1, +0, +0, +0 ]`. The reshaped F2 still bites.
+    - (p)–(s) are predicted, not measured (the index-readings block was not on the prototype): (p) at `not.toContain(V)` (one reading leaves the glued value); (q) at `not.toContain(V)` past the bound; (r) at `an escape that hides nothing prints as it came` (`\nfoo` masked); (s) at `not.toContain(V)` on the gist column. Record the reds the run actually prints in the task report.
 
 - [ ] **Step 10: Confirm every file is restored, and commit.** First, in the foreground with a timeout of at least 600000 ms:
 
@@ -8274,7 +8434,7 @@ Expected: every test passes and the last line is `RESTORED`. On anything else, s
 ```bash
 git diff --stat
 git add ccd/history/lib.mjs ccd/history/lib.d.mts server/test/history-lib.test.ts server/test/history-ingest.test.ts
-git commit -m "feat(history): the substring belt — layer 4 of redactField, layer 1's glue windows, the belt state (W1-B2, spec §8.3 rev 3.5)"
+git commit -m "feat(history): the substring belt — layer 4 of redactField, layer 1's glue windows, the belt state; redactForDisplay and nodeIndexTexts read the index's escape readings (W1-B2, spec §8.3 rev 3.5)"
 ```
 
 ### Task 7B: sweep: the belt in the tick — the tick's belt and live units, meta `redact_sources`, the belt generation in `rederiveFts`, the node step opened (spec §6.2 "The belt", §8.3, rev 3.5; O59 store half)
@@ -8304,7 +8464,7 @@ git commit -m "feat(history): the substring belt — layer 4 of redactField, lay
     - writes `fts_belt` with every commit and `beltAfterGeneration` at completion;
     - drops ` b` at completion.
 
-**Spec:** §6.2 "The belt"; §8.3 layer 1 (`redact_sources`) and layer 4. Pin: O59 (store half). Departures: none.
+**Spec:** §6.2 "The belt"; §8.3 layer 1 (`redact_sources`) and layer 4. Pin: O59 (store half). Departures: ⟦D:history-loader-values-in-tick-memory⟧ (the tick builds its belt from the values its loader read, held in its own memory only).
 
 Choices this task makes:
 - **The mark still only rises.** A due belt opens a generation at the current mark, flagged ` b`, instead of lowering `fts_reindex_rid`. B1's history-reindex-mark-by-rederivation rule, "only a completed generation moves the mark", stands.
@@ -8714,10 +8874,10 @@ git commit -m "feat(history): the belt in the tick — live units, redact_source
   - one import line directly below `import { isBoundaryLine } from '../compact-card.mjs';`;
   - `makeIngestCtx`'s return object (B1 Tasks 19, 22, 23) gains three members;
   - one line in `tick` directly below the `deriveFts` line;
-  - `tick`'s doc comment: a new step 14, `deriveNodes`, and the three steps after it renumbered (B1's docstring pin, review 316 F39).
+  - `tick`'s doc comment: a new item 14, `deriveNodes`, and the three items after it renumbered 15 to 17 (B1's docstring pin, review 316 F39; Task 29 later inserts item 7 and moves this one to 15).
 - Create: `server/test/history-derive.test.ts` (spawns the sweep, so it skips on darwin).
 - Modify: `server/test/history-parser.test.ts`: one import line below the last top-of-file import, and one describe at the end (the five lib helpers, pure).
-- Modify: `server/test/history-lib.test.ts` (B1-created), in place, in B1's ring describe (`every ccd/history module and history test fixture keeps its ring`): `RINGS` gains `derive.mjs`, and the compact-card form case reads a per-module table (Step 8A). B1 pins every `ccd/history/*.mjs` to a ring and every compact-card import to `{ isBoundaryLine }`, so a new `derive.mjs` reds both cases until this edit.
+- Modify: `server/test/history-lib.test.ts` (B1-created), in place, in B1's ring describe (`every ccd/history module and history test fixture keeps its ring`): `RINGS` gains the one-line `derive.mjs` row, and the compact-card form case reads the per-module table `CARD_FORMS` and is renamed `only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names` (Step 8A). B1 pins every `ccd/history/*.mjs` to a ring and every compact-card import to `{ isBoundaryLine }`, so a new `derive.mjs` reds both cases until this edit.
 - Modify: `.github/workflows/ci.yml`: one heredoc line in the `node-floor` job's `Test` step.
 - Scratch, gitignored: `.superpowers/sdd/history-w1-b2/scratch/mutate.mjs` and `mutants-task8a.json`, `mutants-task8b.json`, `mutants-task8c.json`.
 
@@ -8737,7 +8897,7 @@ git commit -m "feat(history): the belt in the tick — live units, redact_source
     - `NODE_PARSER_VERSION`, `GIST_MAX`, `TOPICS_MAX`, `TOPIC_CHARS`, the type `Block`.
   - Task 5 (`lib.mjs`): `planSpans`, `decideLeafId`, `leafReady`, `eofAfterBoundary`.
   - B1 `lib.mjs`: `leafId`, `redactField`, `ftsTextOf`, `producerOfCopy`, `LINE_MAX`, `blobOverDecodeCap(rawLen)`, and `PARSE_STATUS` (edited in place).
-  - Tasks 7A and 7B: `redactField` carries layer 4 and layer 1's glue windows, and `ictx.pairIdx` (set by B1's `tick` from `secretsStep`) carries the tick's belt. Every field this task derives and every `nodes_fts` row `indexNode` writes is `redactField` output, so both carry the belt with no edit here.
+  - Tasks 7A and 7B: `redactField` carries layer 4 and layer 1's glue windows, and `ictx.pairIdx` (set by B1's `tick` from `secretsStep`) carries the tick's belt. Every field this task derives is `redactField` output, so it carries the belt with no edit here. Every `nodes_fts` row `indexNode` writes is Task 7A's `nodeIndexTexts(fields, idx)` of the derived fields (each column through B1's `entryIndexText`: the index's escape readings and the belt, spec §6.2), with `idx` the pair index the fields were derived with.
   - B1 `store.mjs`: `withTx`, `bump`, `unbrotli(z, maxLen)` (its bound is the blob's stored `raw_len`, mandatory: a missing one throws); `createStore`, `openWriter`, `closeWriter` (tests).
   - B1 `sweep.mjs`:
     - `tick` (the block between the `>>> history tick steps` markers);
@@ -8798,9 +8958,9 @@ git commit -m "feat(history): the belt in the tick — live units, redact_source
   - ⟦D:history-leaf-id-fork-qualified⟧
   - ⟦D:history-summary-anchor-is-boundary⟧
   - ⟦D:history-native-gist-last-summary-open⟧
-  - ⟦D:history-producer-backend⟧
+  - B1's D-4196 (`history-producer-backend`)
   - ⟦D:history-steer-receipt⟧
-  - ⟦D:history-tick-order⟧
+  - B1's D-4224 (`history-tick-order`)
   - ⟦D:history-node-indexes-by-derivation⟧ (NEW). v1 has no index on `nodes(boundary_entry_id)` (which "has this boundary a leaf" reads every tick) or `node_children(child_id)` (who is a node's parent). A schema migration would escalate to `snapshot-needs-op` on every real store (§6.11). So derivation creates them, IF NOT EXISTS, as it creates the FTS tables.
   - ⟦D:history-summary-direction-from-source-line⟧ (NEW). B1 stores a summary row's message only, not `summarizeMetadata`. The direction is read from the row's own line in its holding file:
     - through B1's admission (`O_NOFOLLOW`, realpath under a rostered `projects/` root);
@@ -9691,7 +9851,7 @@ import { closeSync, readSync } from 'node:fs';
 import { HEADING_RE, fencedRanges, mineTokens } from '../compact-card.mjs';
 import {
   LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, classifyRef, decideLeafId, directionOfSummaryRow,
-  directiveFlag, eofAfterBoundary, forkCounts, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics,
+  directiveFlag, eofAfterBoundary, forkCounts, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
   parseBlocks, pickHoldingCopy, pickReceipt, planSpans, producerOfCopy, redactField, selectBlock, summaryParts,
   summaryRowFor,
 } from './lib.mjs';
@@ -9963,9 +10123,11 @@ function minedRefs(s, kit, sources, pairIdx, budget) {
   return out;
 }
 
-/** A node's nodes_fts row, rowid = nodes.rowid (§6.2): its redacted gist, topics and refs. Deleted first, so a
- *  later backfill or re-derivation of the same node never duplicates it. */
-function indexNode(db, s, id, gist, topics, refs) {
+/** A node's nodes_fts row, rowid = nodes.rowid (§6.2): its gist, topics and ref values through lib's nodeIndexTexts with
+ *  `idx`, the pair index its fields were derived with (W1-B2 Task 7A: B1's escape readings and the belt, so nodes_fts
+ *  holds no term blobs_fts masks). Deleted first, so a later backfill or re-derivation of the same node never
+ *  duplicates it. */
+function indexNode(db, s, id, gist, topics, refs, idx) {
   let f = NODES_FTS_STMTS.get(db);
   if (f === undefined) {
     f = {
@@ -9976,7 +10138,8 @@ function indexNode(db, s, id, gist, topics, refs) {
   }
   const rowid = s.nodeRowid.get(id).r;
   f.del.run(rowid);
-  f.ins.run(rowid, gist ?? '', (topics ?? []).join('\n'), refs.map((r) => r.value).join('\n'));
+  const t = nodeIndexTexts({ gist, topics, refs: refs.map((r) => r.value) }, idx);
+  f.ins.run(rowid, t.gist, t.topics, t.refs);
 }
 
 /** One leaf's derived fields from its stored summary (§7.4): kind, status and its reason, gist, topics, refs, the
@@ -10101,7 +10264,7 @@ function deriveOne(db, ictx, kit, s, pass, b, budget) {
       NODE_PARSER_VERSION, ictx.nowMs);
     sources.forEach((r, ord) => { s.insSource.run(id, r.entry_id, ord); });
     for (const r of refs.refs) s.insRef.run(id, r.kind, r.value, r.origin);
-    if (ictx.fts === true) indexNode(db, s, id, gist, topics, refs.refs);
+    if (ictx.fts === true) indexNode(db, s, id, gist, topics, refs.refs, ictx.pairIdx);
     if (forked) bump(db, 'leaf_id_forked');
     if (leaf.headMissing) bump(db, 'head_missing');
     if (summary !== null && pick.anchorIsBoundary) bump(db, 'anchor_is_boundary');
@@ -10239,19 +10402,28 @@ export function deriveNodes(db, ictx, budget) {
      with
 
 ```ts
-  /** What each module may take from ../compact-card.mjs, exactly; a module not named here may take nothing. W1-B2 Task 8:
-   *  derive.mjs takes the card's heading rules and token miner and injects them into lib (§6.4). */
+  /** What each module may take from ../compact-card.mjs, exactly, one entry per import or export-from form; a module not named
+   *  here may take nothing. W1-B2 Task 8: derive.mjs takes the card's heading rules and token miner and injects them into lib (§6.4). */
   const CARD_FORMS: Record<string, readonly string[]> = {
     'sweep.mjs': ['{ isBoundaryLine }'],
     'derive.mjs': ['{ HEADING_RE, fencedRanges, mineTokens }'],
   };
 
-  it('only L4 imports ../compact-card.mjs, and only derive.mjs takes more than isBoundaryLine', () => {
+  it('only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names', () => {
 ```
 
-     and, in that case's loop, replace `      for (const i of imports) expect(i, m).toBe('{ isBoundaryLine }');` with `      expect(imports, m).toEqual(CARD_FORMS[m] ?? []);`. A module with no `CARD_FORMS` row that imports the card, and a wider or second import of a listed one, still red the case.
-  4. Check each anchor first: `grep -cF "    'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' }," server/test/history-lib.test.ts`, `grep -cF "it('only L4 imports ../compact-card.mjs, and at most isBoundaryLine'" server/test/history-lib.test.ts` and `grep -cF "for (const i of imports) expect(i, m).toBe('{ isBoundaryLine }');" server/test/history-lib.test.ts` each print `1` before the edit. After it, `grep -c "'derive.mjs': { ring: 'L4'" server/test/history-lib.test.ts` prints `1`.
-  5. See it green, with the same command as item 1. Expected: every case of the ring describe passes, `store.mjs is the sole node:sqlite importer` included (`derive.mjs` imports `node:fs`, never `node:sqlite`). Later tasks that create a `ccd/history/*.mjs` (`recall.mjs`, `regex-worker.mjs`) give it its `RINGS` row in the same commit, the same way.
+     and, in that case's loop, replace `      for (const i of imports) expect(i, m).toBe('{ isBoundaryLine }');` with `      expect(imports, m).toEqual(CARD_FORMS[m] ?? []);`. Keep the loop's other lines (the `L4` check, the `the import form was not read` check) and the `seen` count as B1 wrote them. A module with no `CARD_FORMS` row that imports the card, and a wider or second import of a listed one, still red the case.
+  4. Check each anchor first: `grep -cF "    'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' }," server/test/history-lib.test.ts`, `grep -cF "it('only L4 imports ../compact-card.mjs, and at most isBoundaryLine'" server/test/history-lib.test.ts` and `grep -cF "for (const i of imports) expect(i, m).toBe('{ isBoundaryLine }');" server/test/history-lib.test.ts` each print `1` before the edit. After it:
+
+```bash
+grep -c "^    'derive.mjs': { ring: 'L4'" server/test/history-lib.test.ts                                   # 1 (B3 Task 5 anchors below it)
+grep -c '^  const CARD_FORMS: Record<string, readonly string\[\]> = {$' server/test/history-lib.test.ts       # 1
+grep -cF "it('only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names'" server/test/history-lib.test.ts   # 1
+grep -cF "expect(imports, m).toEqual(CARD_FORMS[m] ?? []);" server/test/history-lib.test.ts                 # 1
+grep -c 'at most isBoundaryLine' server/test/history-lib.test.ts                                           # 0
+```
+
+  5. See it green, with the same command as item 1. Expected: every case of the ring describe passes, `store.mjs is the sole node:sqlite importer` included (`derive.mjs` imports `node:fs`, never `node:sqlite`). Later tasks that create a `ccd/history/*.mjs` give it its one-line `RINGS` row in the same commit, chained below this one: `recall.mjs` (Task 10) and `regex-worker.mjs` (Task 14).
 
 - [ ] **Step 9: Wire it into the sweep.** In `ccd/history/sweep.mjs`:
   1. Directly below the line `import { isBoundaryLine } from '../compact-card.mjs';`, add:
@@ -10272,7 +10444,7 @@ pairIdx: makePairIndex([]), fts: false, admitFile, budgetLeft, isBusy };
 ```js
   // Derive, nodes (W1-B2 Task 8): leaves from the boundaries stored so far, under the FTS backfill's gate, because a
   // node grows db/ (§9.3), and after it, so a new node's nodes_fts row is written in a tick whose tables exist.
-  // deriveNodes is synchronous, so it is not awaited. ⟦D:history-tick-order⟧
+  // deriveNodes is synchronous, so it is not awaited. D-4224
   if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);
 ```
 
@@ -10287,13 +10459,15 @@ pairIdx: makePairIndex([]), fts: false, admitFile, budgetLeft, isBusy };
      with
 
 ```
- * 14. `deriveNodes`: §9.2 step 6, the leaves from the boundaries stored so far (W1-B2 Task 8), held with the ingest and the FTS backfill (a node grows db/, §9.3) and run after the backfill, so a new node's nodes_fts row is written in a tick whose tables exist;
+ * 14. `deriveNodes`: the leaves from the boundaries stored so far (§9.2 step 6; W1-B2 Task 8), held with the ingest
+ *     and the FTS backfill (a node grows db/, §9.3) and run after the backfill, so a new node's nodes_fts row is
+ *     written in a tick whose tables exist;
  * 15. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
  * 16. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
  * 17. `markScan`: a due scan is marked done, unless the roster was unreadable.
 ```
 
-     Check each of B1's three lines first with `grep -cF` (it prints `1`). Task 9, which appends the parents and the nodes_fts backfill inside `deriveNodes`, keeps entry 14 as it is; a later task that adds a tick call with `db` adds its own entry.
+     Check each of B1's three lines first with `grep -cF` (it prints `1`), and that items 1 to 13 are B1's: `grep -cE '^ \* +[0-9]+\. `' ccd/history/sweep.mjs` prints `16` before the edit and `17` after it. Task 9, which appends the parents and the nodes_fts backfill inside `deriveNodes`, keeps item 14 as it is. The one later B2 task that adds a tick call with `db` is Task 29 (`beltNodesStep`, item 7, directly after `rederiveFts`; this item becomes 15 and the list 18 items); no other B2 task edits `tick`'s body.
   4. Check placement and syntax, from the repository root:
 
 ```bash
@@ -10301,13 +10475,15 @@ grep -c "^import { deriveNodes } from './derive.mjs';$" ccd/history/sweep.mjs   
 grep -c 'fts: false, admitFile, budgetLeft, isBusy };' ccd/history/sweep.mjs                    # 1
 grep -c 'deriveNodes(db, ictx, ctx.budget);' ccd/history/sweep.mjs                              # 1
 grep -c '^ \* 14\. `deriveNodes`:' ccd/history/sweep.mjs                                        # 1
+grep -c '^ \* 17\. `markScan`:' ccd/history/sweep.mjs                                           # 1
+grep -cE '^ \* +[0-9]+\. `' ccd/history/sweep.mjs                                               # 17 (tick's items; no other sweep.mjs comment numbers a backticked name)
 grep -c 'import.meta.url === pathToFileURL' ccd/history/sweep.mjs                               # 1
 sed -n "$(grep -n 'import.meta.url === pathToFileURL' ccd/history/sweep.mjs | cut -d: -f1),\$p" ccd/history/sweep.mjs
 node --check ccd/history/sweep.mjs && node --check ccd/history/derive.mjs
 (cd server && ./node_modules/.bin/vitest run test/history-sweep.test.ts -t "tick()'s docstring")
 ```
 
-Expected: the five counts are `1`, the `sed` prints only the entry guard down to its closing `}`, `node --check` prints nothing, and the three docstring cases pass (run it in the foreground with a timeout of at least 600000 ms). Without item 3a, `every step the body calls with db is listed` reds with `expected [ 'deriveNodes' ] to deeply equal []`.
+Expected: the counts are `1`, `1`, `1`, `1`, `1`, `17` and `1`, the `sed` prints only the entry guard down to its closing `}`, `node --check` prints nothing, and the three docstring cases pass (run it in the foreground with a timeout of at least 600000 ms). Without item 3a, `every step the body calls with db is listed` reds with `expected [ 'deriveNodes' ] to deeply equal []`.
 
 - [ ] **Step 10: Run the derivation tests and see them pass.** In the foreground, with a timeout of at least 600000 ms:
 
@@ -10444,7 +10620,7 @@ cat > .superpowers/sdd/history-w1-b2/scratch/mutants-task8b.json <<'EOF'
     "edits": [{ "anchor": "    if (touched.has(pk) || foldedOf(getStep(db, UNSPANNED_STEP, pk)).bytes !== bytes) recountTranscript(",
                 "replacement": "    if (touched.has(pk)) recountTranscript(" }] },
   { "name": "6.2: a leaf with no nodes_fts row", "file": "ccd/history/derive.mjs", "test": "test/history-derive.test.ts", "filter": "nodes_fts",
-    "edits": [{ "anchor": "    if (ictx.fts === true) indexNode(db, s, id, gist, topics, refs.refs);\n", "replacement": "" }] },
+    "edits": [{ "anchor": "    if (ictx.fts === true) indexNode(db, s, id, gist, topics, refs.refs, ictx.pairIdx);\n", "replacement": "" }] },
   { "name": "7.4 item 10: compliance by status only, no reason", "file": "ccd/history/derive.mjs", "test": "test/history-derive.test.ts", "filter": "compliance",
     "edits": [{ "anchor": "      if (reason !== null) bump(db, `leaf_reason:${reason}:${backend}`);\n", "replacement": "" }] },
   { "name": "7.4 item 5 (IN-6): a carried copy past the cap missed, gistSha over the uncut gist", "file": "ccd/history/lib.mjs", "test": "test/history-derive.test.ts", "filter": "carried",
@@ -10482,7 +10658,7 @@ cat > .superpowers/sdd/history-w1-b2/scratch/mutants-task8c.json <<'EOF'
     "edits": [{ "anchor": "(f.live && !best.live) || ", "replacement": "" }] },
   { "name": "6.1: rows counted unspanned before any copy holds a leaf", "file": "ccd/history/lib.mjs", "test": "test/history-parser.test.ts", "filter": "leaf helpers",
     "edits": [{ "anchor": "    unspanned: holdingCopies === 0 ? 0 : Math.max(0, unionSize - coveredSize),", "replacement": "    unspanned: Math.max(0, unionSize - coveredSize)," }] },
-  { "name": "6.4 (Step 8A): derive.mjs takes more of the card than its CARD_FORMS row", "file": "ccd/history/derive.mjs", "test": "test/history-lib.test.ts", "filter": "only derive.mjs takes more than isBoundaryLine",
+  { "name": "6.4 (Step 8A): derive.mjs takes more of the card than its CARD_FORMS row", "file": "ccd/history/derive.mjs", "test": "test/history-lib.test.ts", "filter": "only the forms CARD_FORMS names",
     "edits": [{ "anchor": "import { HEADING_RE, fencedRanges, mineTokens } from '../compact-card.mjs';",
                 "replacement": "import { HEADING_RE, fencedRanges, mineTokens, isBoundaryLine } from '../compact-card.mjs';" }] },
   { "name": "6.4 (Step 8A): derive.mjs imports the sweep back", "file": "ccd/history/derive.mjs", "test": "test/history-lib.test.ts", "filter": "imports nothing its ring forbids",
@@ -10502,7 +10678,7 @@ Expected for all three files: every row prints `red (…)` and then `green`, the
   - The receipt row's filter `steer receipt` selects `with no steer receipt a quoted <ccrc-leaf> block …`: the quoted block is parsed and the leaf turns `steered_leaf`.
   - The two RB5 rows on the marker and the leaf write red the first RB5 case: with no leaf write, `{ derived: 0, waiting: 0, failed: 2 }` comes back where `{ derived: 1, waiting: 0, failed: 1 }` is expected; with no marker, the second pass answers `failed: 1` and `parser_crash` reaches 3.
   - The DM36 recount row reds only the append case: no leaf is derived in that tick, so `rows_unspanned` stays at 20 where 23 is expected.
-  - The two Step 8A rows red B1's ring describe: the wider card import fails `only L4 imports ../compact-card.mjs, and only derive.mjs takes more than isBoundaryLine` (`derive.mjs`'s forms are not its `CARD_FORMS` row), and the sweep import fails `each module imports nothing its ring forbids` (`[ './sweep.mjs' ]` where `[]` is expected). Neither loads `derive.mjs`: the ring cases read source text only.
+  - The two Step 8A rows red B1's ring describe: the wider card import fails `only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names` (`derive.mjs`'s forms are not its `CARD_FORMS` row), and the sweep import fails `each module imports nothing its ring forbids` (`[ './sweep.mjs' ]` where `[]` is expected). Neither loads `derive.mjs`: the ring cases read source text only.
   - The docstring row reds `every step the body calls with db is listed` with `deriveNodes` unlisted.
   - If a file nears the timeout, split its JSON into smaller files; never raise the timeout above the cap.
 
@@ -10562,10 +10738,9 @@ git commit -m "feat(history): derive native and raw leaves in the tick, position
 - Sections: §6.3 (directional edge names, lineage `ON DELETE RESTRICT`, the range CTE, fan-in 8/4, never across a /clear epoch, final leaves only, deterministic parents), §6.1 (re-keying is a merge; node ids never change), §6.2 (`nodes_fts`, redacted text; "The belt"), §8.3 (layer 4, the belt every index text carries), §6.7 (DM9, DM26), §11 (P6/P7 and refuted candidate 4: the subtree CTE toward consumers is not ported), §12.
 - Pins: **DM9** and **DM26**.
 - Departures:
-  - ⟦D:history-rekey-merges⟧ (nodes follow the merged epochs).
+  - B1's D-4194 (`history-rekey-merges`) (nodes follow the merged epochs).
   - ⟦D:history-span-per-boundary-copy⟧ (extended to fan-in by the coordinator's ruling RB4: §6.3 groups per epoch only, and two forks of one transcript interleave in `boundaries.ord`, which is numbered per transcript in arrival order. So level 0 is split per holding copy, and a parent never takes leaves of two forks).
   - ⟦D:history-node-indexes-by-derivation⟧ (NEW, shared with Task 8: v1 has no index on `nodes(boundary_entry_id)` or `node_children(child_id)`, and adding one by migration would escalate real stores to `snapshot-needs-op`).
-  - ⟦D:history-nodes-fts-index-text-readings⟧ (NEW, Task 7A's; shared with Tasks 8 and 29: every nodes_fts writer, this task's `insertNodeFts` included, indexes `nodeIndexTexts`, B1's index-text rule for blobs_fts, so nodes_fts holds no term blobs_fts masks).
   - ⟦D:history-parents-cursor-by-rowid⟧ (NEW: §6.3 names no schedule for fan-in. A `('parents', NODE_PARSER_VERSION)` low-water mark over `nodes.rowid` revisits only epochs that gained a node, so a tick never re-walks every epoch of a large store).
 
 - [ ] **Step 1: Create the mutant applier (scratch, never committed).**
@@ -11065,7 +11240,7 @@ v9.describe('the nodes_fts backfill and a re-key that moves nodes (W1-B2 Task 9)
       // A one-case value: no belt gram seeds on it (§8.3 layer 4's seed rule), so only an escape reading separates it.
       const plain = 'fixtureonlylowercasevalueqwrt';
       // Leaf 2: the value whole, and the one-case value glued to a literal backslash-n, as a gist quoting JSON holds it
-      // (B1's escape readings, through nodeIndexTexts; ⟦D:history-nodes-fts-index-text-readings⟧).
+      // (B1's escape readings, through nodeIndexTexts; spec §6.2 `nodes_fts`, rev 3.5).
       fx.db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(`Leaf 2 did part 2 with ${secret} and {"t":"a\\n${plain}"}.`, fx.leafIds[1]!);
       // Leaf 1: the value glued to letters (§8.3 layer 4, Task 7A): one run no pair matches, which the belt masks.
       fx.db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(`Leaf 1 did part 1 with zq${secret}x.`, fx.leafIds[0]!);
@@ -11246,7 +11421,7 @@ function storedNode(db, id) {
 
 /** One nodes_fts row: the gist, the topics one per line and the ref values one per line, through lib's nodeIndexTexts
  *  with this tick's pairs (W1-B2 Task 7A: B1's entryIndexText on each column, so redactForIndex's escape readings and
- *  the belt, §8.3 layer 4; ⟦D:history-nodes-fts-index-text-readings⟧). It is the one index-text rule B1 applies to
+ *  the belt, §8.3 layer 4; spec §6.2 `nodes_fts`, rev 3.5). It is the one index-text rule B1 applies to
  *  blobs_fts, and Task 8's indexNode writes through it too. The parts are taken from redacted text already (§6.2);
  *  this pass also catches a pair learned since. */
 function insertNodeFts(db, ictx, rowid, gist, topics, refs) {
@@ -11505,7 +11680,7 @@ node .superpowers/sdd/history-w1-b2/mut-after.mjs ccd/history/lib.mjs 'function 
 (cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts -t 'indexNodesFts indexes each node once')
 mv .superpowers/sdd/history-w1-b2/scratch/lib.mjs.orig ccd/history/lib.mjs
 
-# (f) a nodes_fts column redacted as a display field, without the escape readings
+# (f) a nodes_fts column redacted by redactField alone, without the index's escape readings
 node .superpowers/sdd/history-w1-b2/mut-after.mjs ccd/history/lib.mjs 'export function nodeIndexTexts(fields, idx) {' \
   'const one = (s) => entryIndexText(String(s), idx);' 'const one = (s) => redactField(String(s), idx);'
 (cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts -t 'indexNodesFts indexes each node once')
@@ -11572,7 +11747,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - append the CLI runner and the pane fixtures at the end.
 - Create: `server/test/history-recall.test.ts`.
 - Modify: `server/test/history-cli.test.ts`. Replace the one case `'every other verb is bad-args in W1-B1, with a usage line, and --json carries the reason'` in place.
-- Modify: `server/test/history-lib.test.ts`. In B1's ring describe, add one row to the `RINGS` literal in place (`'recall.mjs'`), so B1's `every ccd/history/*.mjs has a ring` stays green once recall.mjs exists. Task 8 added `'derive.mjs'`'s row when it created derive.mjs; if that row is missing, add it here too.
+- Modify: `server/test/history-lib.test.ts`. In B1's ring describe, add one one-line row to the `RINGS` literal in place (`'recall.mjs'`, directly below Task 8's `'derive.mjs'` row; Step 6), so B1's `every ccd/history/*.mjs has a ring` stays green once recall.mjs exists. `CARD_FORMS` is not edited (recall.mjs imports nothing from the card), nor is the door case. Task 8 Step 8A added `'derive.mjs'`'s row; if it is missing, Task 8 is incomplete: stop and report it.
 - Modify: `.github/workflows/ci.yml`. Add one line in the node-floor leg's heredoc.
 
 **Interfaces:**
@@ -11584,8 +11759,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - B1 lib: `decideCliStore`, `historyPaths`, `CLI_STAT_DEADLINE_MS`, `TMUX_DEADLINE_MS`, `SCHEMA_ADDED`, `SCOPE_SOURCES`, `REASONS`, `EXIT`, `UUID_RE`, `idOk`, `makePairIndex`, `redactField`, `redactFinal`; `decideStatusRead({ userVersion, journalMode, recordedMigration })` (the store-not-wal refusal) and `decideStatusReadFailure({ storeWord, sqliteError })` (a failed read: `{exit: 5, reason}` or null for a defect), both already imported by B1's cli.mjs.
   - B1 store: `openReader`, `userVersion`, `measureStoreFacts`, `StoreError`, all already bound by B1's cli.mjs `./store.mjs` import.
   - B1 cli (private): `unmeasuredFacts`, `presence`, `settleWithin`, `readRole`, `readTrimmed`, `emptyEnvelope`, `decided`, `boxFacts`, `freeSpace`, `snapshotBytes`, `readStore`, `readStoreAnswered` (readStore with a failed read made ONE exit-5 envelope; `statusEnvelope` calls it, never bare `readStore`), `journalFacts`, `render`, `statusWithHealth`, `formatHealth`, `EXIT_MEANING`.
-  - B1 sweep: `loadSecrets(home, secretFiles)`, imported STATICALLY in the W1-B2 import block (B1's ring census forbids `import(` in a shipped module); `pairIndexOf` calls it, and Task 19's `operatorMain` uses the same binding.
-  - Task 7A (lib): `makeBelt`, `beltUnits`, `REDACT_SOURCES_META`, `parseRedactSources`, and `makePairIndex(pairs, belt)`. The CLI builds its own belt from the values `loadSecrets` reads now: the frozen list plus the declared paths the last tick recorded in meta `redact_sources`. Every `redactField` and `redactFinal` below then carries it. C69 (Task 18) pins it; its mutant (g) is this function's.
+  - B1 sweep: `loadSecrets(home, secretFiles)`, imported STATICALLY, once, in the W1-B2 import block (B1's ring census forbids `import(` in a shipped module, and sweep.mjs's top level is definitions ending in its entry guard, so the import runs nothing); `pairIndexOf(db, home)` calls that module binding (it takes no loader parameter), and Task 19's `relayIndexOf` reaches it through `pairIndexOf`.
+  - Task 7A (lib): `makeBelt`, `beltUnits`, `REDACT_SOURCES_META`, `parseRedactSources`, and `makePairIndex(pairs, belt)`. The CLI builds its own belt from the values `loadSecrets` reads now: the frozen list plus the declared paths the last tick recorded in meta `redact_sources`. Every `redactField` and `redactFinal` below then carries it, and so does Task 19's operator relay. C69 (Task 18) pins it; its mutant (l) is this function's.
   - B1 helpers: `makeHistoryBox`, `runSweep`, `plantSession`, `plantTranscript`, `spoolLine`, `openStoreRO`, `counters`, `preloadOptions`, `PRELOADS`, `CLI`, `REPO`, and the module-private `childEnv`, `timed`, `SPAWN_TIMEOUT_MS`.
 - Produces:
   - lib.mjs:
@@ -11624,11 +11799,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - **C66**'s B2 half: `--session ..` and `recall-off ../x --clear`;
   - **DM18b**'s CLI half.
 - Departures:
-  - ⟦D:history-identity-from-tmux⟧ ⟦D:history-shim-role-gated⟧ ⟦D:history-store-unreachable⟧ ⟦D:history-harness-unsupported-refused⟧ ⟦D:history-id-grammar⟧ ⟦D:history-family-per-generation⟧ ⟦D:history-rekey-merges⟧ ⟦D:history-box-verbs-identity-free⟧ ⟦D:history-redaction-from-roster⟧ ⟦D:history-cli-reads-store-version⟧ ⟦D:history-coverage-this-box⟧.
+  - ⟦D:history-identity-from-tmux⟧ B1's D-4183 (`history-shim-role-gated`) B1's D-4187 (`history-store-unreachable`) ⟦D:history-harness-unsupported-refused⟧ B1's D-4170 (`history-id-grammar`) B1's D-4192 (`history-family-per-generation`) B1's D-4194 (`history-rekey-merges`) B1's D-4249 (`history-box-verbs-identity-free`) B1's D-4205 (`history-redaction-from-roster`) B1's D-4212 (`history-cli-reads-store-version`) B1's D-4167 (`history-coverage-this-box`).
   - ⟦D:history-recall-off-preflight-b2⟧ (NEW: C66 and C67 pin `recall-off` refusals while the writing verb ships in W2, so B2 answers the verb's refusals and nothing else).
   - ⟦D:history-read-args-terminator⟧ (NEW: §8.2 builds the whitelist from one list but names no way to search a word that starts with `--`; `--` ends the options).
-  - B1's ⟦D:history-import-refusal-words⟧, its `store-read-failed` word (review 316 F11): a read verb answers a failed read of an admitted store exactly as `status` does, ONE exit-5 answer decided by `decideStatusReadFailure`, SQLite's message on stderr, and any other throw a defect (exit 1).
-  - ⟦D:history-loader-values-in-tick-memory⟧ (Task 18's; widened by spec rev 3.5, for the coordinator to confirm): the CLI holds the loaded values in memory, inside its belt (`pairIndexOf`), and nowhere else.
+  - B1's D-4313 (`history-import-refusal-words`), its `store-read-failed` word (review 316 F11): a read verb answers a failed read of an admitted store exactly as `status` does, ONE exit-5 answer decided by `decideStatusReadFailure`, SQLite's message on stderr, and any other throw a defect (exit 1).
+  - ⟦D:history-loader-values-in-tick-memory⟧ (Task 18's; widened by spec rev 3.5 to the CLI and the `--regex` child, confirmed by the coordinator): the CLI holds the loaded values in memory, inside its belt (`pairIndexOf`), and nowhere else. It reads only the frozen list plus the declared secret files that meta `redact_sources` names by path.
 
 - [ ] **Step 1: (Re)create the mutant applier (scratch, gitignored, never committed).** It is the same script Task 9 Step 1 wrote; writing it again is harmless and makes this task self-contained. From the repository root:
 
@@ -12664,13 +12839,20 @@ export function runTree(rc, a) {
 }
 ```
 
-Then give recall.mjs its ring. B1 pins one ring per module: `server/test/history-lib.test.ts`'s ring describe holds `const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {` with one row per `ccd/history/*.mjs`, and its case `every ccd/history/*.mjs has a ring` compares the directory's `.mjs` names with the literal's keys, so it is red from the moment recall.mjs exists. Inside that literal, directly after B1's row `    'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },` (and after Task 8's `'derive.mjs'` row, when Task 8 put it there), add:
+Then give recall.mjs its ring. B1 pins one ring per module: `server/test/history-lib.test.ts`'s ring describe holds `const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => boolean }> = {` with one row per `ccd/history/*.mjs`, and its case `every ccd/history/*.mjs has a ring` compares the directory's `.mjs` names with the literal's keys, so it is red from the moment recall.mjs exists. See that red first, in the foreground with a timeout of at least 600000 ms:
+
+```bash
+grep -c "^    'derive.mjs': { ring: 'L4'" server/test/history-lib.test.ts    # 1 (Task 8 Step 8A's row)
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'has a ring')
+```
+
+Expected: `1`, then one failure, `every ccd/history/*.mjs has a ring`, whose received list holds `recall.mjs` and whose expected list does not (measured, not contractual). A `0` from the grep means Task 8 did not land its Step 8A: stop and report it rather than add Task 8's row here. Then, inside that literal, directly below Task 8's row (the one line beginning `    'derive.mjs': { ring: 'L4'`), add this one line:
 
 ```ts
     'recall.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
 ```
 
-recall.mjs reaches SQLite only through store.mjs's handle, which cli.mjs passes it, and it imports neither the sweep nor its own caller. If `grep -c "'derive.mjs': { ring:" server/test/history-lib.test.ts` prints `0` (Task 8 did not add its row), add `    'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },` beside it, and make B1's compact-card case accept derive.mjs's import form the way Task 8's plan text says. Check: `grep -c "'recall.mjs': { ring: 'L4'" server/test/history-lib.test.ts` prints `1`.
+recall.mjs reaches SQLite only through store.mjs's handle, which cli.mjs passes it, and it imports neither the sweep nor its own caller (its imports, across Tasks 10 to 18, are `./lib.mjs`, `./store.mjs`, `node:child_process`, `node:path` and `node:url`). It imports nothing from `../compact-card.mjs`, so `CARD_FORMS` gains no row. Check: `grep -c "^    'recall.mjs': { ring: 'L4'" server/test/history-lib.test.ts` prints `1`, and the same vitest command passes every case.
 
 - [ ] **Step 7: Implement cli.mjs: imports, EXIT_MEANING, measureReach, the dispatcher.**
 
@@ -12859,8 +13041,9 @@ function refusalStoreId(reach, P) {
  *  last tick is redacted too. The belt (W1-B2 Task 7A): the units of the frozen list's and the declared secretsFiles'
  *  values read now; the declared paths are those the last tick recorded in meta redact_sources (Task 7B), because this
  *  process sources no bash. The values live only in this process's memory, inside the belt (and, for --regex, the
- *  child's stdin, Task 14): never printed, persisted or journaled. */
-function pairIndexOf(db, home, loadSecrets) {
+ *  child's stdin, Task 14): never printed, persisted or journaled. loadSecrets is the W1-B2 block's static import
+ *  (never an import(): B1's ring census refuses one in a shipped module); Task 19's operator relay reuses this index. */
+function pairIndexOf(db, home) {
   const recorded = db.prepare('SELECT len, sha256 FROM redact_hashes').all()
     .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') }));
   const sources = db.prepare('SELECT v FROM meta WHERE k = ?').get(REDACT_SOURCES_META);
@@ -12962,7 +13145,7 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
         sessionPks: families.map((f) => f.sessionPk), transcriptPks, families,
       },
       scopeArgs: scopeArgsOf(o),
-      pairIdx: pairIndexOf(db, home, loadSecrets),
+      pairIdx: pairIndexOf(db, home),
     };
     handed = true;
     return rc;
@@ -13297,8 +13480,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - **C68**'s CLI half. Its card half is B3's.
   - Not a spec pin: §8.3's 20,000-char cap holds for a widened scope's `--json` (the `wide scope` case).
 - Departures:
-  - B1's ⟦D:history-spool-append-regular-file-only⟧: the CLI's counter-line append follows the hook's rule, a regular file or nothing at `spool/<id>.jsonl`, opened non-blocking (the FIFO case).
-  - ⟦D:history-cli-counts-via-spool⟧ ⟦D:history-box-verbs-no-counter-line⟧ ⟦D:history-spool-line-fenced⟧ ⟦D:history-workspace-scope⟧ ⟦D:history-epoch-cwd-real⟧ ⟦D:history-recall-all-lanes⟧ ⟦D:history-recall-off-generation⟧ ⟦D:history-coverage-this-box⟧.
+  - B1's D-4418 (`history-spool-append-regular-file-only`): the CLI's counter-line append follows the hook's rule, a regular file or nothing at `spool/<id>.jsonl`, opened non-blocking (the FIFO case).
+  - B1's D-4228 (`history-cli-counts-via-spool`) B1's D-4250 (`history-box-verbs-no-counter-line`) B1's D-4176 (`history-spool-line-fenced`) ⟦D:history-workspace-scope⟧ B1's D-4191 (`history-epoch-cwd-real`) ⟦D:history-recall-all-lanes⟧ ⟦D:history-recall-off-generation⟧ B1's D-4167 (`history-coverage-this-box`).
   - ⟦D:history-recall-off-stale-counted-at-drain⟧ (NEW: the CLI writes no counter and `SPOOL_KEYS.recall` has no field for staleness, so the drain counts it when it reads the line. It is a drain-time observation of a live file and is not journaled, so a replay never recounts it: `applyEventLine` skips the check when its event context says `replay: true`, which Task 25's recovery sets. O35's counter comparison therefore excludes `recall_off_stale`, a marked departure from O35's "the counters folded from spool lines" wording).
 
 - [ ] **Step 1: (Re)create the mutant applier (scratch, gitignored, never committed).** It is the same script Task 9 Step 1 wrote; writing it again is harmless and makes this task self-contained. From the repository root:
@@ -13837,7 +14020,7 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
         sessionPks: families.map((f) => f.sessionPk), transcriptPks, families,
       },
       scopeArgs: scopeArgsOf(o),
-      pairIdx: pairIndexOf(db, home, loadSecrets),
+      pairIdx: pairIndexOf(db, home),
     };
     handed = true;
     return rc;
@@ -14136,7 +14319,7 @@ No `.github/workflows/ci.yml` edit: this task creates no new `history-*.test.ts`
   - Task 9 (store): `lineageEntries(db, nodeId): { entryId, ord, nodeId }[]`.
   - Task 10: lib `selectColumns(version, table, cols, schema?)` and `READ_OPTIONS`; recall.mjs `ReadContext` and `VerbResult`; cli.mjs's verb table, `readContext(home, verb, opts)` and the renderer that prints a `VerbResult`; historyHelpers `runCli`, `withPane`, `seedFamily`.
   - Task 11: the header line, printed by the CLI above a read verb's blocks.
-  - B1 lib: `EXIT`, `REASONS`, `PROVENANCE`, `SEARCHABLE_PROVENANCE`, `redactField`, `ftsTextOf`, `sidecarIndexText(bytes, idx)` (redacts its window, then cuts; B1's ⟦D:history-sidecar-redact-before-cut⟧), `SIDECAR_WHOLE_MAX`, `blobOverDecodeCap(rawLen)` (B1's history-permanent-failures-classified: a body whose raw_len is past BLOB_DECODE_MAX is never decompressed), `jsonWithinStructureBound(bytes)` (B1's history-json-structure-bound: the gate before any parse of stored bytes), `ENTRY_FTS_BYTES` and `SIDECAR_FTS_BYTES` (B1's history-entry-index-text-windowed and history-sidecar-redact-before-cut), `makePairIndex`, `historyPaths`, `SCHEMA_ADDED`.
+  - B1 lib: `EXIT`, `REASONS`, `PROVENANCE`, `SEARCHABLE_PROVENANCE`, `redactField`, `ftsTextOf`, `sidecarIndexText(bytes, idx)` (redacts its window, then cuts; B1's D-4312 (`history-sidecar-redact-before-cut`)), `SIDECAR_WHOLE_MAX`, `blobOverDecodeCap(rawLen)` (B1's history-permanent-failures-classified: a body whose raw_len is past BLOB_DECODE_MAX is never decompressed), `jsonWithinStructureBound(bytes)` (B1's history-json-structure-bound: the gate before any parse of stored bytes), `ENTRY_FTS_BYTES` and `SIDECAR_FTS_BYTES` (B1's history-entry-index-text-windowed and history-sidecar-redact-before-cut), `makePairIndex`, `historyPaths`, `SCHEMA_ADDED`.
   - B1 store: `probeFts5`, `unbrotli(z, maxLen)` (`maxLen` is the blob's stored raw_len and is REQUIRED: a call without it throws a TypeError, and a blob that decodes past it throws a RangeError; B1's final review 316 FPM10), `openReader`, `userVersion`, `getMeta`, `setMeta`.
   - B1 sweep (Task 23): `prepareLines`, `ftsStmts`, `deriveFts`, `ftsPrepare` (and its file-private `derivStmts`) and the module const `FTS_STEP`. B1's `ftsTextOfBlob` is exported and async, takes `(z, isSidecar, pairIdx, rawLen)` and answers `{ text, decoded, undecodable }` (plus `overCap: true` for a body past BLOB_DECODE_MAX); this task leaves it as it is.
   - B1 helpers: `makeHistoryBox`, `runSweep`, `plantSession`, `plantTranscript`, `spoolLine`, `openStoreRO`, `PRELOADS` (`statfs`, `faults`), and the preload word `HISTORY_TEST_FTS_PROBE=absent|throw` (B1 Task 23's block in `preload-faults.mjs`).
@@ -14150,7 +14333,7 @@ No `.github/workflows/ci.yml` edit: this task creates no new `history-*.test.ts`
     - `export interface GrepArgs { words: string[]; regex: string | null; role: string | null; tool: string | null; sinceMs: number | null; beforeMs: number | null; node: string | null; sort: 'recency' | 'relevance' | 'hybrid'; limit: number; cursor: string | null; includeRecall: boolean; json: boolean }`
     - `export function parseGrepArgs(argv: readonly string[], nowMs: number): { ok: true; args: GrepArgs } | { ok: false; reason: 'bad-args' }`
     - `export function reachSize(n: number): string`: a byte count in whole MiB, else whole KiB, else bytes
-    - `export const SEARCH_REACH: string`: how far grep reaches, built from B1's `ENTRY_FTS_BYTES` and `SIDECAR_FTS_BYTES` (⟦D:history-search-reach-stated⟧). Grep's exit 3 prints it as its hint; the skill and README quote it verbatim.
+    - `export const SEARCH_REACH: string`: how far grep reaches, built from B1's `ENTRY_FTS_BYTES` and `SIDECAR_FTS_BYTES` (spec §6.2 "Recall search states its reach", §8.4, rev 3.5). Grep's exit 3 prints it as its hint; the skill and README quote it verbatim.
   - store.mjs: `export function blobPlainText(z: Uint8Array, isSidecar: boolean, idx: PairIndex | null, rawLen: number): string`. A sidecar's text comes back redacted with `idx` before its cut, through lib's `sidecarIndexText`; a body's comes back unredacted, for the caller's redaction (`redactField` until Task 18's `redactForDisplay`; the regex child's `entryIndexText`, Task 14); a sidecar whose `rawLen` passes `SIDECAR_WHOLE_MAX` is not decompressed and gives `''`. Every decode is bounded by `rawLen` (B1's `unbrotli(z, maxLen)`), a body whose `rawLen` is past BLOB_DECODE_MAX is not decompressed and gives `''` (B1's `blobOverDecodeCap`), a body is parsed only within B1's structure bound (`jsonWithinStructureBound`), and a blob that does not decode or parse gives `''`, never a throw. Every caller selects `raw_len` with `z`.
   - recall.mjs:
     - `export function runGrep(rc: ReadContext, a: GrepArgs, deps?: { cap?: number; budgetMs?: number; spawn?: typeof spawnSync }): VerbResult`. Task 12 uses no dep; Task 13 reads `cap`, Task 14 reads `budgetMs` and `spawn`.
@@ -14164,11 +14347,11 @@ No `.github/workflows/ci.yml` edit: this task creates no new `history-*.test.ts`
 - Sections: §8.4 grep; §6.2 (FTS indexing, provenance); §9.1 (the probe on both handles; "The reader also checks that `blobs_fts` exists; if not, grep exits 7 `fts-pending`"); §8.8's FTS rows; §8.3 (exit 7 is grep only).
 - Pins: C7, C9, C26, C27; the CLI halves of DM28, DM30, DM32 and DM46.
 - Departures:
-  - ⟦D:history-fts-probe-read-only⟧ ⟦D:history-fts-body-plain-text⟧ ⟦D:history-recall-echo-by-structure⟧ ⟦D:history-scope-on-every-verb⟧ ⟦D:history-clear-epoch-confirmed⟧
+  - B1's D-4214 (`history-fts-probe-read-only`) B1's D-4195 (`history-fts-body-plain-text`) B1's D-4197 (`history-recall-echo-by-structure`) ⟦D:history-scope-on-every-verb⟧ B1's D-4189 (`history-clear-epoch-confirmed`)
   - ⟦D:history-recall-echo-indexed⟧ (NEW). §6.2 indexes a blob that a *searchable* row references, and §8.4 says recall echoes are found with `--include-recall`. Both hold only if the echo's blob is in the index while default search filters it out at query time. So the sweep indexes `INDEXED_PROVENANCE`, and `--include-recall` is a query filter. B1's DM28 store-half case changes from `echo: 0` to `echo: 1` in the same commit, and gains an assertion that the row stays classed `recall-echo`. A store whose ('fts', 1) backfill completed under B1 is re-opened once, from cursor `'0'`, by the first B2 tick (meta `fts_provenance` records the set a backfill ran under), so the echoes B1 ingested are indexed too.
   - ⟦D:history-read-skips-oversize-sidecar⟧ (NEW). §8.4 has grep's snippet and the regex child read a sidecar's 512 KB index window. The read verbs take it synchronously from `blobPlainText`, which decompresses a blob whole (B1's bounded `unbrotliPrefix` is async), so a sidecar whose `raw_len` passes `SIDECAR_WHOLE_MAX` (64 MiB, the largest measured; B1 captures up to `SIDECAR_MAX_BYTES`) is not decompressed by a read verb: its grep hit shows an empty snippet and `--regex` does not scan it, while plain grep still finds it through the index the sweep built. Expand holds the same bound (Task 16).
   - ⟦D:history-grep-pending-until-backfilled⟧ (NEW). §9.1 checks only that `blobs_fts` exists. This gate also answers 7 `fts-pending` while derivation `('fts', 1)` has not completed. A re-opened backfill (B1's `resetFtsPending` after a tick that could not index) leaves text unindexed, so a 3 then would claim "not found here" for text the store holds. That is the overloaded value §8.3 forbids. The gate reads `derivation_state`, never `meta.fts`, which a sweep whose probe failed may have written. Task 12 reads the backfill's own row; Task 23 adds the open `doctor --repair` rebuild row (`FTS_REBUILD_STEP`), which keeps grep at 7 while a resumable rebuild refills the recreated tables and ('fts', 1) stays complete (IN-2).
-  - ⟦D:history-search-reach-stated⟧ (NEW). B1's `history-entry-index-text-windowed` cuts every entry's index text to its first ENTRY_FTS_BYTES (1 MiB), and `history-sidecar-redact-before-cut` cuts every sidecar's to its first SIDECAR_FTS_BYTES (512 KiB). §6.2 cuts only sidecars, and §8.4 names no reach. So grep's exit 3, in both forms, carries one `hint:` line, lib's `SEARCH_REACH`, built from those two constants. Without it, exit 3 would read as "not found on this box" for text the store holds past the window, which is the overloaded value §8.3 forbids. The skill (Task 31) and README (Task 33) quote the same sentence verbatim, once each.
+- Not a departure since spec rev 3.5: grep's reach. B1's `history-entry-index-text-windowed` cuts every entry's index text to its first ENTRY_FTS_BYTES (1 MiB), and `history-sidecar-redact-before-cut` cuts every sidecar's to its first SIDECAR_FTS_BYTES (512 KiB). §6.2 now states both windows, and its "Recall search states its reach" and §8.4 make grep's exit 3, in both forms, carry one `hint:` line, lib's `SEARCH_REACH`, built from those two constants. Without it, exit 3 would read as "not found on this box" for text the store holds past the window, which is the overloaded value §8.3 forbids. The skill (Task 31) and README (Task 33) quote the same sentence verbatim, once each.
 
 **Choices** (also in open_issues):
 - A hit is one in-scope **referrer** of a matching blob:
@@ -14288,10 +14471,10 @@ export function reachSize(n) {
 }
 
 /** How far grep reaches. Grep's exit 3 prints these words on its hint line (recall.mjs `grepNotFound`), and the skill
- *  (section 9) and README's history section quote them verbatim (⟦D:history-search-reach-stated⟧). The index holds at
+ *  (section 9) and README's history section quote them verbatim (spec §6.2 and §8.4, rev 3.5). The index holds at
  *  most an entry's first ENTRY_FTS_BYTES and a sidecar's first SIDECAR_FTS_BYTES of redacted text (B1's
  *  history-entry-index-text-windowed and history-sidecar-redact-before-cut), and --regex scans that same text (Task 14,
- *  ⟦D:history-regex-scans-the-index-text⟧), so no grep form finds a word past it. The sentence is built from the two
+ *  spec §8.4), so no grep form finds a word past it. The sentence is built from the two
  *  constants, so changing a window changes it, and the skill's and README's pins go red until their text follows.
  *  "At most": the cut can fall short of the window (cutIndexText's margin and trailing-run rules), and a read verb
  *  never decompresses a sidecar past SIDECAR_WHOLE_MAX (⟦D:history-read-skips-oversize-sidecar⟧). */
@@ -14573,7 +14756,7 @@ describe('grep, the FTS path: index gate, provenance, filters and everyday words
     expect(none.json?.coverage).toBe('this-box');
   }, 60_000);
 
-  it("exit 3 states grep's reach on its one hint line, in lib's SEARCH_REACH words; a hit prints no reach line (⟦D:history-search-reach-stated⟧)", async () => {
+  it("exit 3 states grep's reach on its one hint line, in lib's SEARCH_REACH words; a hit prints no reach line (spec §8.4, rev 3.5)", async () => {
     const lib = await import('../../ccd/history/lib.mjs');
     const none = grep(['zqnowhereword']);
     expect(none.code, none.stderr).toBe(3);
@@ -14951,12 +15134,12 @@ In `ccd/history/store.mjs`, add `SIDECAR_WHOLE_MAX`, `blobOverDecodeCap`, `ftsTe
  *  the text the FTS index is made from (§6.2 "FTS indexing"), by lib's two rules:
  *  - a sidecar's is lib's sidecarIndexText over its decoded body with the pair index `idx`: the first
  *    SIDECAR_FTS_BYTES + SIDECAR_REDACT_MARGIN bytes redacted raw, unescaped and redacted again, and only THEN cut to
- *    SIDECAR_FTS_BYTES (B1's ⟦D:history-sidecar-redact-before-cut⟧, history-sidecar-redact-before-cut), so a secret straddling the cut leaves no
+ *    SIDECAR_FTS_BYTES (B1's D-4312, history-sidecar-redact-before-cut), so a secret straddling the cut leaves no
  *    prefix. It comes back already redacted;
  *  - a body's is its extracted text (text blocks, tool_use input string leaves, tool_result text; never the JSON),
  *    UNREDACTED and uncut: the caller redacts it before any cut (history-redaction-before-cut): the shown fields through
  *    redactField (Task 18 makes that redactForDisplay), and the regex child through lib's entryIndexText, which is
- *    exactly the index text B1's indexBlob writes (Task 14, ⟦D:history-regex-scans-the-index-text⟧).
+ *    exactly the index text B1's indexBlob writes (Task 14, spec §8.4, rev 3.5).
  *  B1's body rules hold here too. A body whose `rawLen` is past BLOB_DECODE_MAX is never decompressed (B1's
  *  blobOverDecodeCap, history-permanent-failures-classified: a raw-only line-too-long blob has no ceiling), and a body
  *  is parsed only within B1's structure bound (jsonWithinStructureBound, history-json-structure-bound: a raw-only blob
@@ -14986,7 +15169,7 @@ Append to `ccd/history/store.d.mts`, and add `PairIndex` to its existing `import
 export function blobPlainText(z: Uint8Array, isSidecar: boolean, idx: PairIndex | null, rawLen: number): string;
 ```
 
-In `ccd/history/sweep.mjs`, make these edits in place. Every anchor is B1 Task 23 text, found by content. B1's `ftsTextOfBlob` (exported, async, `(z, isSidecar, pairIdx, rawLen)`, answering `{ text, decoded, undecodable }` plus `overCap: true` for a body past BLOB_DECODE_MAX, reading a sidecar through `unbrotliPrefix`) is NOT edited: B1's `deriveFts` and `reindexForValues` read its `.text`, and B1's `T23-a` cases in history-ingest.test.ts (B1's ⟦D:history-sidecar-redact-before-cut⟧) pin its bound and its shape.
+In `ccd/history/sweep.mjs`, make these edits in place. Every anchor is B1 Task 23 text, found by content. B1's `ftsTextOfBlob` (exported, async, `(z, isSidecar, pairIdx, rawLen)`, answering `{ text, decoded, undecodable }` plus `overCap: true` for a body past BLOB_DECODE_MAX, reading a sidecar through `unbrotliPrefix`) is NOT edited: B1's `deriveFts` and `reindexForValues` read its `.text`, and B1's `T23-a` cases in history-ingest.test.ts (B1's D-4312 (`history-sidecar-redact-before-cut`)) pin its bound and its shape.
 1. **The imports.** Add `INDEXED_PROVENANCE` and `FTS_STEP` to the `from './lib.mjs'` import clause. Nothing joins the `from './store.mjs'` clause: the sweep does not call `blobPlainText`, and B1 already imports `getMeta` and `setMeta`.
 2. **`FTS_STEP`.** In the FTS block, delete the line `const FTS_STEP = 'fts';`. The imported one replaces it, so every use of `FTS_STEP` in sweep.mjs is unchanged.
 3. **`prepareLines`.** B1's provenance gate is one line, `const indexable`, which `ftsOverCap` and `ftsText` both read (B1's index text comes from the canonical `JSON.parse(json)`, behind B1's history-permanent-failures-classified over-cap gate); there is no `body` variable there, and both of those lines stay exactly as they are. Two edits, each found by content (here, as in the B1 file, the placeholder stands for B1's issued number, which the file spells `D-` and digits):
@@ -14997,7 +15180,7 @@ In `ccd/history/sweep.mjs`, make these edits in place. Every anchor is B1 Task 2
          // reads: history-recall-echo-indexed) and only when this tick may index (§6.2). A recall echo is
      ```
 
-     so the next line, `    // classified by the paired tool_use in provenanceOf, never by its text (⟦D:history-recall-echo-by-structure⟧, history-recall-echo-by-structure).`, still finishes the sentence, and the nine comment lines after it (canonical JSON, makeProbeIndex's soundness premise, the over-cap gate and `ftsOverCap`) are unchanged;
+     so the next line, `    // classified by the paired tool_use in provenanceOf, never by its text (D-4197, history-recall-echo-by-structure).`, still finishes the sentence, and the nine comment lines after it (canonical JSON, makeProbeIndex's soundness premise, the over-cap gate and `ftsOverCap`) are unchanged;
    - the single line `    const indexable = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance);` becomes
 
      ```js
@@ -15156,7 +15339,7 @@ function notFound() {
 }
 
 /** grep's exit 3, both forms (§8.3): notFound plus the one line that says how far grep reaches, lib's SEARCH_REACH
- *  (B1's history-entry-index-text-windowed and history-sidecar-redact-before-cut; ⟦D:history-search-reach-stated⟧).
+ *  (B1's history-entry-index-text-windowed and history-sidecar-redact-before-cut; spec §8.4, rev 3.5).
  *  Only grep prints it: describe, expand and tree search nothing, and their exit 3 means an id is not in scope. */
 function grepNotFound() {
   return { ...notFound(), hint: SEARCH_REACH };
@@ -15373,7 +15556,7 @@ console.log(at.length === 1 && below.length === 1 && below[0] === "}" && tla.len
   - Expected:
     - All green, Task 10's and Task 11's cases included.
     - The four new describes pass: 11 cases, then 2 (the index gate), then 2 (the echo writers), then 3 (C27 and DM46's two halves).
-    - In history-ingest.test.ts, the edited DM28 case and the B1-backfilled-store case pass, and B1's `T23-a` cases over `ftsTextOfBlob` (B1's ⟦D:history-sidecar-redact-before-cut⟧) are unchanged and green.
+    - In history-ingest.test.ts, the edited DM28 case and the B1-backfilled-store case pass, and B1's `T23-a` cases over `ftsTextOfBlob` (B1's D-4312 (`history-sidecar-redact-before-cut`)) are unchanged and green.
     - tsc is clean.
     - `grep -c 'SELECT \*' ccd/history/recall.mjs` prints `0`.
 
@@ -15480,7 +15663,7 @@ git commit -m "feat(history): grep's FTS path — index gate, regex syntax refus
   - PROVENANCE entries for P9, P12 and P30 are Tasks 2 and 3's; this task copies no further upstream code.
 - Pins: C12, C15.
 - Departures:
-  - ⟦D:history-redaction-before-cut⟧ ⟦D:history-coverage-this-box⟧
+  - B1's D-4202 (`history-redaction-before-cut`) B1's D-4167 (`history-coverage-this-box`)
   - ⟦D:history-grep-pages-end-at-rank-pool⟧ (NEW). §8.4 gives the 2,000 pool to `hybrid` only. Every grep sort ranks and pages the top RANK_POOL in-scope matches, so each call sorts a bounded set. The true N stays in `shown K of N`; past the pool, the last page carries a `hint:` naming `--since` and `--before` instead of a `next:` line.
 
 **Choices** (also in open_issues):
@@ -15960,6 +16143,7 @@ git commit -m "feat(history): grep output grouped under covering leaves with a l
   - Append the regex block of Step 3 at the END of the file.
   - Replace the first line of `runGrep`'s body (the `--regex` placeholder Task 12 wrote) in place.
   - Merge new names into the import lines, and add `import { spawnSync } from 'node:child_process';` and `import { fileURLToPath } from 'node:url';` if recall.mjs lacks them.
+- Modify: `server/test/history-lib.test.ts` (B1-created), in place, one line in B1's ring describe: `RINGS` gains the one-line `'regex-worker.mjs'` row directly below Task 10's `'recall.mjs'` row (Step 3A). B1's `every ccd/history/*.mjs has a ring` compares the directory with `RINGS` exactly, so the new child reds it until the row lands. `CARD_FORMS` is not edited: the child imports nothing from `../compact-card.mjs`.
 - Test: `server/test/history-recall.test.ts`. Append one describe.
 - `ccd/history/PROVENANCE` is NOT edited. The regex child's scan loop is written fresh against ccrc's schema: it steps the in-scope blobs in blob_id order through one held `iterate()` over a scope union, and keeps upstream `searchRegex`'s limit-and-first-match shape in no line. The P10 guard's entry is Task 2's.
 
@@ -15969,7 +16153,7 @@ git commit -m "feat(history): grep output grouped under covering leaves with a l
   - Tasks 12 and 13 (recall.mjs): `runGrep`, `refusal`, `notFound`, `grepNotFound`, `grepKey`, `cursorPos`, `STALE_CURSOR`, `indexGate`, `nodeEntries`, `grepParams`, `rankedAndCounted` (it binds only the parameters a statement holds, so `:blobs` replaces `:q`), `renderHits`. Task 12 (lib): `SEARCH_REACH` (the reach describe reads it).
   - Task 12: store `blobPlainText(z, isSidecar, idx, rawLen)` (a sidecar's text redacted with `idx` before its cut; a body's unredacted and uncut; `''` for a sidecar whose `rawLen` passes `SIDECAR_WHOLE_MAX`, a body past BLOB_DECODE_MAX, or a blob that does not decode or parse); in history-recall.test.ts, `GRX`, `GrepMod`, `GrepDeps`, `CliRun`.
   - B1 lib: `makePairIndex(pairs, belt)` (Task 7A's form), `entryIndexText(text, idx)` (B1's history-entry-index-text-windowed: the one function that makes every index text, at most ENTRY_FTS_BYTES after `redactForIndex`), `redactField(text, idx)`, `historyPaths`, `EXIT`, `ENTRY_FTS_BYTES`, `ENTRY_REDACT_MARGIN`. B1 store: `openReader(dbPath)`.
-  - Task 7A (lib): `makeBelt(units)`, and the parent's `rc.pairIdx.belt.texts`. The job carries those units so the child masks exactly what the parent's output would.
+  - Task 7A (lib): `makeBelt(units)`, and the parent's `rc.pairIdx.belt.texts`. The job carries those units so the child masks exactly what the parent's output would. C69 (Task 18) pins it; its mutant (k) is `scanRegexJob`'s `  const idx = makePairIndex(job.pairs, makeBelt(job.belt ?? []));`, so keep that line, and the one `entryIndexText(blobPlainText(` call with no `redactField(` in the file, as written (Task 18 Step 2A counts both).
   - The type `PairIndex` is lib.d.mts's `{ readonly byLen: ReadonlyMap<number, { has(sha256: string): boolean }> }`; recall.mjs's `pairsOf` iterates the values, which holds for `makePairIndex`'s Sets only (`rc.pairIdx` is always one), never a `makeProbeIndex` result, whose values are bare `{ has }` objects.
 - Produces:
   - `regex-worker.mjs`:
@@ -15984,13 +16168,14 @@ git commit -m "feat(history): grep output grouped under covering leaves with a l
 **Spec:**
 - Sections: §8.4 `--regex`; §9.1 (statements held through `iterate()`, CT9); §11 P10 and refuted candidate 1 (`(.*a){8}$` passes upstream's guard); §6.2 (a secret known when indexed is "never a term, a prefix hit or a regex match").
 - Pins: C8a, C8b.
-- Departures: ⟦D:history-fts-indexes-redacted-text⟧ ⟦D:history-test-seams-not-env⟧ ⟦D:history-search-reach-stated⟧. The 50 ms budget and the spawn spy are in-process `deps`, never an env word.
-  - ⟦D:history-regex-scans-the-index-text⟧ (NEW). §8.4 runs the child "over redacted text" and names no window. B1's history-entry-index-text-windowed cuts every entry's index text to its first ENTRY_FTS_BYTES, so the child matches lib's `entryIndexText` over `blobPlainText`'s text: the index text itself. As a result, no grep form reaches past the window that grep's exit 3 states; the literal prefilter and the scan read the same text; a secret that only `redactForIndex`'s deeper readings catch is never a regex match (RV4); and one 16 MB line's redaction no longer uses up the 5 s budget.
+- Departures: B1's D-4243 (`history-fts-indexes-redacted-text`) B1's D-4247 (`history-test-seams-not-env`). The 50 ms budget and the spawn spy are in-process `deps`, never an env word.
+  - ⟦D:history-loader-values-in-tick-memory⟧ (Task 18's): the child receives the CLI's belt units on its stdin, never through argv, the environment or a file, and holds them in its own memory only.
+- Not a departure since spec rev 3.5: what the child scans. §8.4 has it scan "the same windowed, redacted index text that plain grep searches (`entryIndexText` over the blob's plain text, §6.2)", and §6.2's "Recall search states its reach" makes grep's exit 3, in both forms, carry lib's `SEARCH_REACH`. So the child matches lib's `entryIndexText` over `blobPlainText`'s text: the index text itself. No grep form reaches past the window that grep's exit 3 states; the literal prefilter and the scan read the same text; a secret that only `redactForIndex`'s deeper readings catch is never a regex match (RV4); and one 16 MB line's redaction no longer uses up the 5 s budget.
 
 **Choices** (also in open_issues):
 - **`--regex` passes the same index gate as plain grep.** Exit 7 means one thing for every grep form, and the prefilter needs the index.
 - **One match per blob.** The child reports each blob's first match, cut to 200 characters; it seeds the hit's snippet window.
-- **The child matches the text plain grep indexes** (⟦D:history-regex-scans-the-index-text⟧). It runs lib's `entryIndexText` over `blobPlainText`'s text, exactly as B1's `indexBlob` builds an index text. For a message, that is its first ENTRY_FTS_BYTES (1 MiB) after `redactForIndex` (B1's history-entry-index-text-windowed). For a sidecar, it is its first SIDECAR_FTS_BYTES (512 KiB, DM29), which `blobPlainText` redacts before its cut. Both grep forms therefore reach one window, which grep's exit 3 states (⟦D:history-search-reach-stated⟧). A sidecar past `SIDECAR_WHOLE_MAX` is not decompressed and not scanned (⟦D:history-read-skips-oversize-sidecar⟧), and neither is a body past BLOB_DECODE_MAX (B1's history-permanent-failures-classified), which B1 indexes as no row either.
+- **The child matches the text plain grep indexes** (spec §8.4, rev 3.5). It runs lib's `entryIndexText` over `blobPlainText`'s text, exactly as B1's `indexBlob` builds an index text. For a message, that is its first ENTRY_FTS_BYTES (1 MiB) after `redactForIndex` (B1's history-entry-index-text-windowed). For a sidecar, it is its first SIDECAR_FTS_BYTES (512 KiB, DM29), which `blobPlainText` redacts before its cut. Both grep forms therefore reach one window, which grep's exit 3 states (spec §6.2 "Recall search states its reach"). A sidecar past `SIDECAR_WHOLE_MAX` is not decompressed and not scanned (⟦D:history-read-skips-oversize-sidecar⟧), and neither is a body past BLOB_DECODE_MAX (B1's history-permanent-failures-classified), which B1 indexes as no row either.
 - **Regex hits are newest first.** They have no rank.
 - **The child scans the in-scope blobs by provenance.** The parent then applies `--role`, `--tool`, `--since`, `--before` and `--node` to the referrers.
 - **The pattern takes no flags.** It is case-sensitive, as JavaScript's default is.
@@ -16092,7 +16277,7 @@ describe('grep --regex: refused unspawned, killed at its budget, matched over re
   }, 60_000);
 });
 
-describe("grep's reach is the index window for both forms, and its exit 3 says so (W1-B2 task 14; ⟦D:history-regex-scans-the-index-text⟧, ⟦D:history-search-reach-stated⟧)", () => {
+describe("grep's reach is the index window for both forms, and its exit 3 says so (W1-B2 task 14; spec §6.2 and §8.4, rev 3.5)", () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
   const T = 0x42;
   const FRONT = 'zqreachfront';
@@ -16179,7 +16364,7 @@ Create `ccd/history/regex-worker.mjs`:
 //    over blobPlainText's text, exactly as B1's indexBlob builds an index text (B1's history-entry-index-text-windowed).
 //    For a body, that is its first ENTRY_FTS_BYTES (1 MiB) after redactForIndex; for a sidecar, its first
 //    SIDECAR_FTS_BYTES (512 KiB, DM29), redacted inside blobPlainText before that cut (B1's sidecarIndexText)
-//    (⟦D:history-regex-scans-the-index-text⟧). A sidecar whose raw_len passes SIDECAR_WHOLE_MAX is not decompressed,
+//    (spec §8.4, rev 3.5). A sidecar whose raw_len passes SIDECAR_WHOLE_MAX is not decompressed,
 //    so it is not scanned (⟦D:history-read-skips-oversize-sidecar⟧), nor is a body past BLOB_DECODE_MAX (B1's
 //    history-permanent-failures-classified);
 //  - prints one JSON line per matching blob, {blob_id, match}, then {done, scanned, matched}.
@@ -16389,9 +16574,35 @@ console.log(at.length === 1 && below.length === 1 && below[0] === "}" && tla.len
 
 Expect no `node --check` output, `:0` twice, no `process.env` line, and `guard last, no top-level await`.
 
+- [ ] **Step 3A: Give `regex-worker.mjs` its ring in B1's census.** B1's `server/test/history-lib.test.ts` pins every `ccd/history/*.mjs` to an entry of `RINGS`, so the child Step 3 wrote reds `every ccd/history/*.mjs has a ring`.
+  1. See the red, in the foreground with a timeout of at least 600000 ms:
+
+```bash
+grep -c "^    'recall.mjs': { ring: 'L4'" server/test/history-lib.test.ts    # 1 (Task 10's row)
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'has a ring')
+```
+
+     Expected: `1`, then one failure, `every ccd/history/*.mjs has a ring`, whose received list holds `regex-worker.mjs` and whose expected list does not (measured, not contractual). A `0` from the grep means Task 10's row is missing: stop and report it.
+  2. In `RINGS`, directly below Task 10's row (the one line beginning `    'recall.mjs': { ring: 'L4'`), add this one line:
+
+```ts
+    'regex-worker.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s === './recall.mjs' },
+```
+
+     The child imports `node:fs`, `node:url`, `./lib.mjs` and `./store.mjs` (Step 3's import block), so it reaches SQLite only through store.mjs's `openReader`. recall.mjs spawns it by `WORKER_PATH`, never imports it, and the child imports neither its parent nor the sweep nor the CLI: a child that loaded either would run their module graph in a process that holds the job's secret units.
+  3. Check and see it green, in the foreground with a timeout of at least 600000 ms:
+
+```bash
+grep -c "^    'regex-worker.mjs': { ring: 'L4'" server/test/history-lib.test.ts    # 1
+(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'keeps its ring')
+```
+
+     Expected: `1`, then every case of B1's ring describe passes: the census, `each module imports nothing its ring forbids, and reaches no module by another door` (the child's `import.meta.url` is not an `import(`), `store.mjs is the sole node:sqlite importer` and Task 8's `only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names`.
+
 - [ ] **Step 4: Run them and see them pass.**
   - Commands, in the foreground with a timeout of at least 600000 ms:
     - `(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts)`
+    - `(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'keeps its ring')`. Step 3A's row keeps B1's ring census green with the child in the directory.
     - `(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'ccrc history')`. B1's O14 and env-allow-list describes scan every `ccd/history/*.mjs`, the new child included.
     - `(cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)`
   - Expected: green. The new describes pass: 5 cases (the C8b case takes about 3 s), then 3 (the reach). tsc is clean. Re-measure the 20,000-blob figure in **Choices** ("0.85 s for 20,000 blobs of 20 KB") with `entryIndexText` in the loop, and record the new number there if it moved by more than 20%.
@@ -16439,7 +16650,7 @@ Expect no `node --check` output, `:0` twice, no `process.env` line, and `guard l
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-git add ccd/history/regex-worker.mjs ccd/history/recall.mjs server/test/history-recall.test.ts
+git add ccd/history/regex-worker.mjs ccd/history/recall.mjs server/test/history-recall.test.ts server/test/history-lib.test.ts
 git commit -m "feat(history): grep --regex — refused unspawned, a paged child over redacted text, killed at its budget as regex-timeout (W1-B2 task 14)"
 ```
 
@@ -16495,7 +16706,7 @@ git commit -m "feat(history): grep --regex — refused unspawned, a paged child 
   - §11 P13 (a cost row per child or source, in characters, against the output cap) and P28 (pasted-line ids).
   - The P13 and P28 PROVENANCE entries are Tasks 3 and 1's; this task copies no further upstream code.
 - Pins: C14, C47. It also exercises C29's `describe` and `grep --node` rows; that pin is Task 16's.
-- Departures: ⟦D:history-row-model⟧ ⟦D:history-producer-backend⟧ ⟦D:history-scope-on-every-verb⟧ ⟦D:history-workspace-scope⟧ ⟦D:history-redaction-before-cut⟧.
+- Departures: B1's D-4198 (`history-row-model`) B1's D-4196 (`history-producer-backend`) ⟦D:history-scope-on-every-verb⟧ ⟦D:history-workspace-scope⟧ B1's D-4202 (`history-redaction-before-cut`).
 
 **Choices** (also in open_issues):
 - **`chars=` per item.**
@@ -17294,7 +17505,7 @@ git commit -m "feat(history): describe — one node resolved in scope from an id
 - Pins: C10, C11, C13, C29, DM2b (CLI half), DM29 (CLI half).
 - Review focus 3 is owned here: multi-MiB items, a sidecar near SIDECAR_WHOLE_MAX, timing, RSS, and a secret straddling a page.
 - Departures:
-  - ⟦D:history-sidecars-ingested⟧, ⟦D:history-variant-cause⟧, ⟦D:history-redaction-before-cut⟧, ⟦D:history-scope-on-every-verb⟧.
+  - B1's D-4240 (`history-sidecars-ingested`), B1's D-4200 (`history-variant-cause`), B1's D-4202 (`history-redaction-before-cut`), ⟦D:history-scope-on-every-verb⟧.
   - ⟦D:history-expand-message-id⟧ (NEW): a cut tool output needs a way to read the rest. A message uuid therefore expands that one row whole, with its sidecars, paged by cursor. DM29's text past the FTS window is read this way.
 
 Choices this task makes (each listed in the PR's open questions):
@@ -18034,6 +18245,34 @@ describe.skipIf(process.platform === 'darwin')('expand (Task 16): pages, cursors
     expect(hugeHuman.stdout, 'nothing of the body is printed').not.toContain('zqhead29');
   });
 
+  it('DM29: a message past its 1 MiB index window and its redaction margin is not found by grep past the window, and expand pages reach its tail', () => {
+    const LID = 'claude-a-x16long';
+    const LT = 'a1600009';
+    const LU = t16uuid(LT, 0);
+    const l = (i: number): string => t16uuid(LT, i);
+    const lbox = t16help.makeHistoryBox('ccrc-hist-x16long-');
+    const lcli = (args: string[]) => t16help.runCli(lbox, args, { env: t16help.withPane(lbox, LID) });
+    // As Task 14's reach describe builds it: the head inside the window, the tail after 1,190,000 bytes of plain words.
+    const LONG = `zqlonghead29 ${'plain words here '.repeat(70_000)}zqlongtail29 end`;
+    expect(Buffer.byteLength(LONG.slice(0, LONG.indexOf('zqlongtail29')), 'utf8'), 'CONTROL: the tail sits past the window and its margin')
+      .toBeGreaterThan(t16lib.ENTRY_FTS_BYTES + t16lib.ENTRY_REDACT_MARGIN);
+    t16seed(lbox, { id: LID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000001c016', uuid: LU, rows: [
+      t16fx.userRow({ uuid: l(1), ts: t16ts(1), sessionId: LU, text: LONG }),
+    ] });
+    expect(lcli(['grep', 'zqlonghead29']).code, 'CONTROL: inside the window').toBe(0);
+    expect(lcli(['grep', 'zqlongtail29']).code, 'past the window: no index term').toBe(3);
+    // A cursor is ids and offsets only: one aimed near the end reads the tail without 60 page calls.
+    let cursor: string | null = t16lib.encodeCursor({ v: 1, resource: 'expand', t: l(1), i: 0, o: LONG.length - 40_000 });
+    const tail: string[] = [];
+    for (let pages = 0; cursor !== null && pages < 10; pages += 1) {
+      const r = lcli(['expand', l(1), '--cursor', cursor, '--json']);
+      expect(r.code, r.stderr).toBe(0);
+      for (const it of t16items(r)) if (it.kind === 'entry' && it.uuid === l(1)) tail.push(it.text);
+      cursor = t16cursor(String(r.json?.['next'] ?? ''));
+    }
+    expect(tail.join(''), 'the stored row holds the tail, and expand reads it').toContain('zqlongtail29');
+  }, 300_000);
+
   it("a message body past B1's BLOB_DECODE_MAX prints the too-large line and is not decompressed; a blob that does not decode prints its own line, never a throw or a pruned one", () => {
     const CID = 'claude-a-x16cap';
     const CT = 'a1600008';
@@ -18768,7 +19007,7 @@ git commit -m "feat(history): expand — real text in order, cut and outlined, p
   - §8.3 ("Every envelope carries top-level `store_id` and `coverage`"; full node ids in `--json`).
 - Pins: DM44, DM17 (CLI half), C43, C45.
 - Departures:
-  - ⟦D:history-cli-reads-store-version⟧, ⟦D:history-newer-schema-readable⟧, ⟦D:history-coverage-this-box⟧.
+  - B1's D-4212 (`history-cli-reads-store-version`), B1's D-4216 (`history-newer-schema-readable`), B1's D-4167 (`history-coverage-this-box`).
   - ⟦D:history-schema-additive-measured⟧ (NEW): §6.11 asks for "a test over SCHEMA_ADDED" that refuses a drop or a rename. SCHEMA_ADDED's shape can only add, so the check compares it with what the migrations actually build (B1's `schemaOf` after each one), as well as with its own shape.
 
 Choices this task makes:
@@ -19314,7 +19553,7 @@ git commit -m "feat(history): version-aware read verbs — migration-pending, th
 **Interfaces:**
 - Consumes:
   - B1 lib: `redactField`, `redactFinal`, `REDACTED_MARK`, `SECRET_SOURCES`, `historyPaths`.
-  - Task 7A (lib): `redactForDisplay(text, idx)` (B1's escape readings for a shown field, ⟦D:history-display-escape-readings⟧) and `DISPLAY_READINGS_MAX`; the belt: `beltWidth(unit)` (C69's measure), `redactField`'s layer 4 with its decoded readings and `redactIndexReading`'s without them (mutants (i) and (j)); Tasks 8 and 9's nodes_fts writers through `nodeIndexTexts` (pinned here by the nodes_fts case and mutants (g) and (h)).
+  - Task 7A (lib): `redactForDisplay(text, idx)` (B1's escape readings for a shown field; spec §8.3 "Where it runs", rev 3.5) and `DISPLAY_READINGS_MAX`; the belt: `beltWidth(unit)` (C69's measure), `redactField`'s layer 4 with its decoded readings and `redactIndexReading`'s without them (mutants (i) and (j)); Tasks 8 and 9's nodes_fts writers through `nodeIndexTexts` (pinned here by the nodes_fts case and mutants (g) and (h)).
   - Task 7B (sweep): the tick's belt from `loadSecrets`' values, and meta `redact_sources` (the declared paths the shim passed, paths only).
   - Task 10 (cli): the CLI's pair index with its own belt, built from the frozen list plus meta `redact_sources` (`loadSecrets(home, parseRedactSources(sources?.v))`, mutant (l)). Task 14: the job's `belt` units handed to the `--regex` child on its stdin (`makePairIndex(job.pairs, makeBelt(job.belt ?? []))`, mutant (k)), and the child's fixed-words error for a malformed job.
   - B1 sweep: `loadSecrets(home, secretFiles)` (in-process, for the loader clause of C32), and `secretsStep`'s `loadSecrets(ctx.home, secretFiles)` line (C49's mutant).
@@ -19328,11 +19567,12 @@ git commit -m "feat(history): version-aware read verbs — migration-pending, th
 - Sections: §8.3 "Redaction" (four layers since spec rev 3.5, layer 1 with its glue windows and layer 4 the substring belt; "on each field, before any cut or escape"; the second belt); §9.8; §6.2 (the index sees redacted text; "The belt"); §8.4 `--regex` (over redacted text).
 - Pins: C32, C33, C49, C59, C60, C69, DM31 (CLI half).
 - Departures:
-  - ⟦D:history-redaction-before-cut⟧, ⟦D:history-redaction-by-value⟧, ⟦D:history-redaction-from-roster⟧, ⟦D:history-redaction-agent-env⟧, ⟦D:history-secret-value-grammar⟧, ⟦D:history-fts-indexes-redacted-text⟧.
-  - ⟦D:history-display-escape-readings⟧ (NEW, Task 7A's slug: every recalled field is shown through `redactForDisplay`, the index's escape readings, so no output shows a value the index masked) and ⟦D:history-nodes-fts-index-text-readings⟧ (NEW, Task 7A's slug: every nodes_fts row through `nodeIndexTexts`). Both reuse B1's ⟦D:history-index-escape-readings-to-fixpoint⟧ unchanged.
-  - ⟦D:history-loader-values-in-tick-memory⟧ (NEW; confirmed by coordinator ruling RB16 for the tick and the CLI's pairs; widened by spec rev 3.5, for the coordinator to confirm). C32 says "the loader returns only `{len, sha}`", but B1's `loadSecrets` also returns the loaded values. Two things need them: the tick's re-index of already-indexed text, and §8.3 layer 4, which cannot find a substring from a pair.
+  - B1's D-4202 (`history-redaction-before-cut`), B1's D-4203 (`history-redaction-by-value`), B1's D-4205 (`history-redaction-from-roster`), B1's D-4201 (`history-redaction-agent-env`), B1's D-4206 (`history-secret-value-grammar`), B1's D-4243 (`history-fts-indexes-redacted-text`).
+  - Not a departure: every recalled field shown through `redactForDisplay` (the index's escape readings), and every nodes_fts row through `nodeIndexTexts`, are spec rev 3.5's rule (§8.3 "Where it runs", §6.2 `nodes_fts`). Both reuse B1's D-4343 (`history-index-escape-readings-to-fixpoint`) unchanged.
+  - ⟦D:history-loader-values-in-tick-memory⟧ (NEW; confirmed by coordinator ruling RB16 for the tick and the CLI's pairs; widened by spec rev 3.5 to the CLI's values and the `--regex` child, which the coordinator confirmed). C32 says "the loader returns only `{len, sha}`", but B1's `loadSecrets` also returns the loaded values. Two things need them: the tick's re-index of already-indexed text, and §8.3 layer 4, which cannot find a substring from a pair.
     - They are held only in the memory of the processes that redact: the tick; the CLI, inside its belt, read from the frozen list and the declared paths in meta `redact_sources`; and the `--regex` child, on its stdin.
     - Nothing persisted, journaled or printed carries a value: meta `fts_belt` holds rowids, and `redact_sources` holds paths.
+    - All three run as the same UNIX user, which can already read the files the values come from.
     - The C32 loader case and Task 7B's O59 case pin that, and no B2 task changes B1's loader.
 
 Choices this task makes:
@@ -19715,7 +19955,7 @@ describe.skipIf(process.platform === 'darwin')('C60: what a value is (Task 18)',
   });
 });
 
-describe.skipIf(process.platform === 'darwin')('the index\'s escape readings at display: no output shows a value the index masked (Task 18; B1\'s ⟦D:history-index-escape-readings-to-fixpoint⟧, ⟦D:history-display-escape-readings⟧)', () => {
+describe.skipIf(process.platform === 'darwin')('the index\'s escape readings at display: no output shows a value the index masked (Task 18; B1\'s D-4343; spec §8.3)', () => {
   const ID = 'claude-a-x18esc';
   const T = 'a1800006';
   const U = t18uuid(T, 0);
@@ -19903,11 +20143,11 @@ Run, in the foreground with a timeout of at least 600000:
 
 Expected:
 - The C32, C33, DM31, C59, C49, C60 and C69 describes green when Tasks 7A, 7B, 10 and 14 carry the belt and Tasks 10–16 kept §8.3's order.
-- The escape-readings describe red until Step 2A, at its first case's `t18leaks(texts, V)` or `t18leaks(texts, W)`: every display site still on `redactField`'s one reading (describe's and tree's gists at least; grep's snippet, expand and `--regex` too unless Tasks 12 and 16 already read them through `entryIndexText` or `redactForIndex`) prints the pair-only value glued to the literal `\n`, which that one reading cannot separate and the belt does not hold. Its second case (nodes_fts) is green already, because Tasks 8 and 9 write through `nodeIndexTexts`; it stays as their regression pin, measured red by mutants (g) and (h).
+- The escape-readings describe red until Step 2A, at its first case's `t18leaks(texts, V)` or `t18leaks(texts, W)`: every display site still on `redactField`'s one reading (describe's and tree's gists at least; grep's snippet and expand too unless Tasks 12 and 16 already read them through `entryIndexText` or `redactForIndex`) prints the pair-only value glued to the literal `\n`, which that one reading cannot separate and the belt does not hold. The `--regex` run (`#8`) reds or stays green exactly with grep's snippet (`#0`), never by the worker: the child only matches, and since Task 14 it matches `entryIndexText`'s text, which already reads the escapes, so its own reading is never what prints. Its match (`zqescrow`) only seeds the window, and the line it prints is Task 13's `hitSnippet` in the parent, the grep row of Step 3's table, which Step 2A renames. Its second case (nodes_fts) is green already, because Tasks 8 and 9 write through `nodeIndexTexts`; it stays as their regression pin, measured red by mutants (g) and (h).
 
 These cases pin a property, not a new guard. A red case names its verb, its form and the secret, for example `C59 ... nl: expected [ '#3: 1f9a…' ] to deeply equal []`. Read the index (`#3`) against the `runs` order in the case to find the output, then fix it at Step 3's site. The reds that prove the pins can fail are measured in Step 4.
 
-- [ ] **Step 2A: Show every recalled field through `redactForDisplay` (Task 7A; ⟦D:history-display-escape-readings⟧).** From the repository root:
+- [ ] **Step 2A: Show every recalled field through `redactForDisplay` (Task 7A; spec §8.3 "Where it runs").** From the repository root:
 
 ```bash
 grep -cE '\bredact(Field|ForIndex)\b' ccd/history/recall.mjs                       # above 0
@@ -19933,7 +20173,7 @@ Each site's input must already be `redactForDisplay`'s output (the `--regex` chi
 |---|---|---|---|
 | grep (13) | the hit's text | `snippetWindow`, then the single-line cut to `SNIPPET_MAX` | `redactForDisplay` on `blobPlainText` of the WHOLE body |
 | grep (12, 13) | the query echoed in `next:` and in a `hint:` | `nextLine(args)`, `regexSyntaxHint` | `redactForDisplay` on each argument |
-| grep `--regex` (14) | the text the worker matches | the regex match itself | `entryIndexText` inside `regex-worker.mjs`, per blob: the index's own text and readings, with the parent's belt units from the job |
+| grep `--regex` (14) | the text the worker matches | the regex match itself | `entryIndexText` inside `regex-worker.mjs`, per blob: the index's own text and readings, with the parent's belt units from the job. The worker prints nothing of it but the match, which seeds the parent's snippet; the printed snippet is the grep (13) row's |
 | describe (15) | gist, topics, refs, files | the envelope | `redactForDisplay` on each stored field (gists are derived redacted, Task 8; the late-pair re-derivation is Task 29's) |
 | describe (15) | the summary's 4k excerpt, and each `--full` page | `DESCRIBE_EXCERPT`, the page boundary | `redactForDisplay` on the WHOLE summary text |
 | tree (10) | each gist | the envelope | `redactForDisplay` on the stored gist |
@@ -20064,7 +20304,7 @@ index terms and the --regex child."
   - Task 6 (lib): `parseOpVerbArgs(op, args)`, `decideOpDoor(f: CliStoreFacts)` (fed Task 10's module-private `cliFactsOf(reach)`), and RB6's row in `decideOpGate`: `env.recovering === true` refuses a writing form with `{ ok: false, rc: 2, reason: 'recovering' }` (`recovering` is in `REASON_ROWS`' exit-2 row, so `decideRelay` relays it) unless its `recoveryExempt` exempts it: `restore`, `rebuild`, W2's `recall-off` forms (RB12), `migrate` while `env.storedVersion` is a value other than `env.codeVersion` (RB13), and `adopt` while `env.storeId` is `absent` (RB14). A fact this task does not pass never exempts.
   - Task 1 (lib): the module-private `PANE_RE` (`^%[0-9]+$`), which `paneReadWanted` reads in the same module.
   - Task 3 (lib): `decideRelay({status, signal, lastLine})`, `readEnvelope(o)`.
-  - B1 lib: `formOf`, `decideOpGate`, `WRITING_FORMS`, `BIND_KINDS`, `EXIT`, `REASONS`, `UUID_RE`, `SCHEMA_VERSION`, `historyPaths`, `makePairIndex`, `redactFinal`, `STATFS_DEADLINE_MS`.
+  - B1 lib: `formOf`, `decideOpGate`, `WRITING_FORMS`, `BIND_KINDS`, `EXIT`, `REASONS`, `UUID_RE`, `SCHEMA_VERSION`, `historyPaths`, `decideCliStore`, `makePairIndex`, `redactFinal`, `STATFS_DEADLINE_MS`.
   - B1 store: `openReader(dbPath)`, `userVersion(db)` and the module-private `dbFileState(dbPath)`, which `recoverStepAt` and `storedVersionAt` call in the same module; `measureStoreFacts(home, role)`, which the sweep half reads; `removeEntry(path)`, which B1's `opPass` finally already calls on the op marker.
   - B1 sweep:
     - `importDryRun`, `importApply`, `migrateOp`, `paneNameFor`, `writeOpMarker`, `runJournalHalf`, `flushFirst`, `flushOutbox`, `openStore`;
@@ -20072,12 +20312,13 @@ index terms and the --regex child."
     - inside `opPass`, kept as B1 wrote them: `result`, the `released(rc, reason, db = null, ids = idsFromFiles(P), counted = false)` closure (the half at release before every answer once the lock-take half has run, B1's RF5a F19 rule), `outcome(rc, reason, counted = false)`, the `deps.openStore` seam (an in-process dependency, B1's history-test-seams-not-env), and the nested `async function opBody(db, ids)`;
     - `idsFromFiles`, `readRole`, `probePath`, `statfsWithDeadline`, `passCtx`, `clearDoneMarkers`, `JournalError`, `bump`, `closeWriter`, `loadSecrets`.
   - B1 cli: `statusWithHealth`, `formatHealth`, the private `readTrimmed(p)`, and the namespace imports `healthLib` (lib.mjs) and `healthFs` (node:fs) from Task 28.
-  - Task 10 (cli): `measureReach(home)`, `tmuxSession(pane)`, `main` (which routes an unknown verb to `unknownVerb`), and `USAGE`. Task 10 imports `loadSecrets` STATICALLY (`import { loadSecrets } from './sweep.mjs';` in cli.mjs's import block; sweep.mjs's entry guard keys on `process.argv[1]`, so importing it runs nothing), and `operatorMain` uses that same binding: this task adds no import of sweep.mjs. B1's ring pin in `history-lib.test.ts` ('each module imports nothing its ring forbids, and reaches no module by another door') flags any `import(` in a shipped history module, so a dynamic import here would red it; cli.mjs's RINGS row forbids only `node:sqlite`, so the static import passes.
+  - Task 10 (cli): `measureReach(home)`, `tmuxSession(pane)`, `main` (which routes an unknown verb to `unknownVerb`), and `USAGE`; the module-private `cliFactsOf(reach)` and `pairIndexOf(db, home)` (the read verbs' belt-carrying index: the recorded `redact_hashes` pairs, the frozen list's and meta `redact_sources`' declared files' pairs read now, and their belt); and the W1-B2 import block's bindings `makePairIndex`, `makeBelt`, `beltUnits`, `redactFinal` and `loadSecrets`. Task 10 imports `loadSecrets` STATICALLY (`import { loadSecrets } from './sweep.mjs';` in cli.mjs's import block; sweep.mjs's top level is definitions ending in its entry guard, which keys on `process.argv[1]`, so importing it runs nothing). This task adds no import of sweep.mjs and no `import(`: `relayIndexOf` reaches `loadSecrets` through `pairIndexOf`, and its fallback calls the same module binding. B1's ring pin in `history-lib.test.ts` ('each module imports nothing its ring forbids, and reaches no module by another door') flags any `import(` in a shipped history module, so a dynamic import here would red it; cli.mjs's RINGS row forbids only `node:sqlite`, so the static import passes and this task edits no ring case.
   - B1 test helpers: `makeHistoryBox`, `runSweep`, `runShim`, `plantSession`, `plantTranscript`, `openStoreRO`, `PASS_DRIVER`, `SHIM`.
   - Task 10 test helper: `runCli`.
 - Produces, in cli.mjs:
   - `export const OP_OF_VERB: Readonly<Record<string, string>>`: a CLI verb or doctor flag → its `--op` verb.
-  - `export async function runOpVerb(home: string, verb: string, rest: readonly string[], emit: (line: string) => void): Promise<{ exit: number; reason?: string }>`.
+  - `export async function runOpVerb(home: string, verb: string, rest: readonly string[], emit: (line: string) => void): Promise<{ exit: number; reason?: string }>`. `emit` gets each relayed line already through `redactFinal` with `relayIndexOf`'s index.
+  - module-private `relayIndexOf(home, P, reach)`: Task 10's `pairIndexOf` on a read-only handle closed before the shim starts, opened only where `decideCliStore(cliFactsOf(reach)).read`; where the store cannot be read, the files read now (`loadSecrets(home, [])`) with their belt. Never `makePairIndex(loadSecrets(home, []).pairs)` alone, which carries neither the recorded pairs nor a belt.
   - `export async function operatorMain(home: string, argv: readonly string[]): Promise<number>`: main's arm for every operator verb and for bare `doctor`.
 - Produces, in lib.mjs (declared once in lib.d.mts):
   - `export function paneReadWanted(form: string | null, pane: string | null): boolean`: whether an `--op` form's gate needs the pane's tmux session name. Only an irreversible `WRITING_FORMS` form needs it, and only from a pane id of `PANE_RE`'s grammar. B1's `paneNameFor` (sweep) and this task's `opPaneName` (cli) both ask it before their bounded tmux read, so the rule is decided once.
@@ -20101,21 +20342,22 @@ index terms and the --regex child."
   - §9.11 O54.
 - Pins: O54 (relay half), C42 (CLI half), C63; RB6's measurement in both halves (the full form table is Task 25's pin, the gate row Task 6's); RB13's two arms through the doors (the facts measured in each half; adopt's RB14 arms are Task 26's).
 - Departures:
-  - ⟦D:history-apply-via-shim⟧, ⟦D:history-op-gate-in-sweep⟧, ⟦D:history-exit-codes-4-and-9⟧, ⟦D:history-shim-role-gated⟧, ⟦D:history-migrate-verb⟧, ⟦D:history-box-verbs-identity-free⟧.
+  - B1's D-4221 (`history-apply-via-shim`), B1's D-4181 (`history-op-gate-in-sweep`), B1's D-4169 (`history-exit-codes-4-and-9`), B1's D-4183 (`history-shim-role-gated`), B1's D-4180 (`history-migrate-verb`), B1's D-4249 (`history-box-verbs-identity-free`).
   - ⟦D:history-bare-doctor-is-status-health⟧ (NEW): §8.4 lists the bare `doctor` form without saying what it does. It prints the status health lines, read-only, because those lines are what doctor's `history` check relays.
   - ⟦D:history-ops-refused-while-recovering⟧ (NEW; RB6 with RB12-RB14, confirmed by RB16; defined in Task 6, whose `decideOpGate` row decides it): this task measures a registered recovery step, and the facts RB13 and RB14 read, read-only in both halves, and places the sweep's authoritative refusal before the binding branch and `openStore`.
 
 Choices this task makes:
 - **Under `--json`, stdout carries only the envelope.** The sweep's relayed lines (an import's `mapped`/`unmapped` listing, a migration's line) go to stderr, through `redactFinal`.
+- **A relayed line is redacted with the read verbs' index** (coordinator ruling, theme T2). `runOpVerb` builds it once the gate has passed and before the shim starts (`relayIndexOf`: Task 10's `pairIndexOf`, the recorded pairs plus the frozen list and meta `redact_sources`' files read now, with their belt), so a refused form reads no secret file, and the handle it read through is closed before the op runs. Where the store cannot be read (an unsettled stat, no DB before a rebuild or a restore, a StoreError or SQLite error on the open or a select), the index is the files read now with their belt.
 - **The relay is a streaming one.** Each stdout line is printed as soon as the next one arrives. The last line is held back: when it is the sweep's `{"rc"…}`, it goes to `decideRelay`; anything else is printed, and the relay answers exit 1.
 - **The `--op` pass is split into tables.**
   - `OP_DRY_RUNS` answers a null form (no `--apply`).
   - `OP_HANDLERS` runs a writing verb on the store `openStore` opened.
-  - `BINDING_PASSES` is the place adopt, restore and rebuild run, BEFORE `openStore`. It is empty here, so they answer `bad-args`. Task 26 replaces the table and its branch with one call to `bindingPass(home, P, op, args, deps, out)`, which Tasks 26–28 fill.
+  - `BINDING_PASSES` is the place adopt, restore and rebuild run, BEFORE `openStore`. It is empty here, so they answer `bad-args`. Task 26 replaces the table and its branch with one call to `bindingPass(home, P, op, args, deps, out)`, which Tasks 26–28 fill. That call keeps this branch's `released` answer, with the writer ids re-read from the files after the bind and a journal failure the arm already counted passed as `counted` (Task 26's Choices).
   - A verb in `OP_VERBS` with no entry for its path answers `bad-args`. `migration-pending` now guards `OP_NEEDS_CODE_VERSION` (import, prune, reparse, repair), not import alone.
 - **B1's merged `--op` behaviours survive the split** (B1's code differs from B1's plan text here; read at the base). The split is four in-place edits (Step 4(e)), not a rewrite, and the edited `opPass` keeps:
   - the relative `--file` resolved ONCE against the operator's cwd, before admission, binding and journaling (B1 Task 26F item 2). Lib's `parseOpVerbArgs` cannot resolve a path, and it freezes its args, so `opPass` copies them with the resolved `file`; its `idOk` `bad-id` and `<uuid>.jsonl` checks are B1's own, moved into lib;
-  - `--roster-unreadable` refused exit 2 `roster-unreadable` twice (B1's ⟦D:history-import-refusal-words⟧, slug `history-import-refusal-words`): an import dry run before `OP_DRY_RUNS`' dispatch, and an import `--apply` after the `ids === null` check and before `writeOpMarker`, bumping `roster_unreadable`. Both are guarded on `import`, so prune's and reparse's dry runs, which need no roster, still answer;
+  - `--roster-unreadable` refused exit 2 `roster-unreadable` twice (B1's D-4313 (`history-import-refusal-words`), slug `history-import-refusal-words`): an import dry run before `OP_DRY_RUNS`' dispatch, and an import `--apply` after the `ids === null` check and before `writeOpMarker`, bumping `roster_unreadable`. Both are guarded on `import`, so prune's and reparse's dry runs, which need no roster, still answer;
   - every non-`JournalError` throw answered through `opThrowResult`, around `openStore` (`(rc, reason) => released(rc, reason)`) and inside `opBody` (`(rc, reason) => outcome(rc, reason)`): one `{"rc":…}` line, a `StoreError` word mapped to its exit (B1 Task 26F item 5);
   - `migrate` meeting `schema-newer` answered `migrate-refused`;
   - the half at release before EVERY answer once the lock-take half has run, refusals included, through B1's `released` closure: a failed half is said and counted once and replaces only an rc 0, so a refusal keeps its word. This task's new answers after that point (RB6's refusal, the binding branch, an unknown handler) answer through `released` too;
@@ -20775,7 +21017,7 @@ B1's `role` read and its `server` refusal, which follow, stay.
 
 ```js
   if (form === null && parsed.op === 'import' && parsed.rosterUnreadable) {
-    // B1's ⟦D:history-import-refusal-words⟧ (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or
+    // B1's D-4313 (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or
     // admit; reading it as an empty roster answered "nothing to import" and exit 0. A dry run writes nothing at all
     // (§8.4), so it cannot count the condition; --apply does (below). Import only: prune's and reparse's dry runs
     // need no roster.
@@ -20973,7 +21215,32 @@ function opRelay(P, op, opArgs, emit) {
   });
 }
 
-/** One operator verb through the door. `emit` gets each line the sweep printed before its result. */
+/** The relay's redaction index (§8.3, layers 1 and 4): Task 10's pairIndexOf, the read verbs' own index, so a relayed
+ *  sweep line is redacted as a recalled field is: the pairs the sweep recorded in redact_hashes, the frozen list's and
+ *  the declared secretsFiles' pairs read now (the paths from meta redact_sources), and the belt of those values. It
+ *  reads the store only where a read verb would (decideCliStore's `read`, so behind measureReach's settled stat), on
+ *  a read-only handle closed before it returns, so the shim's op never runs beside this process's reader. Where the
+ *  store cannot be read (no settled stat, no DB yet before a rebuild or a restore, or an open or a select that failed
+ *  as a StoreError or SQLite's own error), the index is the files read now with their belt, never no index; any
+ *  other throw is a defect and propagates (exit 1). */
+function relayIndexOf(home, P, reach) {
+  if (decideCliStore(cliFactsOf(reach)).read) {
+    let db = null;
+    try {
+      db = openReader(P.dbFile);
+      return pairIndexOf(db, home);
+    } catch (e) {
+      if (!(e instanceof StoreError) && !(e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR')) throw e;
+    } finally {
+      if (db !== null) db.close();
+    }
+  }
+  const files = loadSecrets(home, []);
+  return makePairIndex(files.pairs, makeBelt(beltUnits(files.values)));
+}
+
+/** One operator verb through the door. `emit` gets each line the sweep printed before its result, already through
+ *  redactFinal with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
 export async function runOpVerb(home, verb, rest, emit) {
   const P = healthLib.historyPaths(home);
   const map = opFormOf(verb, rest);
@@ -20996,12 +21263,13 @@ export async function runOpVerb(home, verb, rest, emit) {
   const gate = healthLib.decideOpGate(form, { claudecode: (process.env.CLAUDECODE ?? '') !== '', historyOff: healthFs.existsSync(P.off), recovering, ...recovery },
     isattyOp(0), opPaneName(form));
   if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
-  return opRelay(P, map.op, map.opArgs, emit);
+  const idx = relayIndexOf(home, P, reach);
+  return opRelay(P, map.op, map.opArgs, (line) => emit(redactFinal(line, idx)));
 }
 
 /** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
- *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line passes
- *  redactFinal. */
+ *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
+ *  already through redactFinal (runOpVerb's relayIndexOf). */
 export async function operatorMain(home, argv) {
   const json = argv.includes('--json');
   const rest = argv.filter((a) => a !== '--json');
@@ -21012,10 +21280,8 @@ export async function operatorMain(home, argv) {
     return env.exit;
   }
   const P = healthLib.historyPaths(home);
-  // loadSecrets is Task 10's static import from sweep.mjs (B1's ring pin refuses a dynamic import in a history module).
-  const idx = healthLib.makePairIndex(loadSecrets(home, []).pairs);
   const emit = (line) => {
-    const text = `${healthLib.redactFinal(line, idx)}\n`;
+    const text = `${line}\n`;
     if (json) process.stderr.write(text);
     else process.stdout.write(text);
   };
@@ -21053,6 +21319,7 @@ In Task 10's `USAGE` array, add this element after the `'  box verbs: status [--
 Check:
 - B1's private `readTrimmed` and Task 10's `cliFactsOf` are in cli.mjs: `grep -nE '^function (readTrimmed|cliFactsOf)\(' ccd/history/cli.mjs`. Expected: 2 lines. If Task 10's extraction renamed either, use its name.
 - `measureReach` and `tmuxSession` are exported: `grep -nE '^export (async )?function (measureReach|tmuxSession)\(' ccd/history/cli.mjs`. Expected: 2 lines.
+- The relay reaches `loadSecrets` through Task 10's static binding only: `(cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'reaches no module by another door')` passes, B1's case unedited (its code-line scan refuses any `import(` in cli.mjs; a JSDoc `{import('…')}` type on a ` * ` comment line is not code to it); `grep -c "^import { loadSecrets } from './sweep.mjs';$" ccd/history/cli.mjs` prints `1`; `grep -c 'return pairIndexOf(db, home);' ccd/history/cli.mjs` prints `1` (relayIndexOf's); `grep -c 'makePairIndex(loadSecrets(' ccd/history/cli.mjs` prints `0`.
 - The entry-guard placement checks from Step 4, run on `ccd/history/cli.mjs`.
 
 - [ ] **Step 6: Run the tests and see them pass.**
@@ -21165,7 +21432,7 @@ The commit touches `.github/`, so the PR's CI selects the full suite. The PR bod
   - sweep.mjs: `pruneDryRunOp(home, P, args, out, nowMs): { rc: number; reason?: string }`, `pruneApplyOp(db, ctx, args): { rc: number; reason?: string }`, and the file-local `dryRunReader(home, P, out)` (Task 21 reuses it); `OP_VERBS` gains `'prune'`.
   - history-maint.test.ts (module level, every name prefixed `maint`/`MAINT_` so nothing collides with Task 19's block): `MAINT_ID`, `MAINT_U1`, `MAINT_QUOKKA`, `MAINT_DAY`, `maintIso`, `maintResult`, `maintJson`, `maintSnapshot`, `maintQ`, `maintMatch`, `maintMeta`, `maintNames`, `maintTombstones`, `maintBound`, `maintRecovering`, `maintPty`. Tasks 21–23 use them.
 
-**Spec:** §6.6 (prune: dry run by default, the 30-day floor, bounded `BEGIN IMMEDIATE` batches, every-referrer age, NULL time never old, structure blobs never pruned, FTS rows deleted, `PRAGMA incremental_vacuum(N)`, never by a source file's absence, never the journal or the export, the dry run's export count), §8.4 (operator verbs through the shim, the speed bumps), §9.3 ("prune frees space"), §9.14 (a registered recovery step), §11 P15. Pins: DM14, DM15, DM22, DM27, O12, C25, C34; DM49 (spec rev 3.4: prune below the free-space floor; it is RB3's two halves, reachability only and the WAL truncated per batch, pinned by Step 1's `walSizes` and Step 6's `RB3: below the free-space floor …` case, with Step 5's mutant (f) and Step 10's RB3 mutant as its two CONTROLs); RB6's prune row. Departures: ⟦D:history-prune-referrers⟧, ⟦D:history-apply-via-shim⟧, ⟦D:history-free-space-floor⟧, ⟦D:history-prune-not-floor-gated⟧ (RULED by the operator on 2026-10-07, spec rev 3.4, no longer provisional; first raised by this plan as coordinator ruling RB3: §9.3 said `prune --apply` "runs the same preflight", but a store below the floor is exactly the one prune exists to shrink, so the pass probes reachability only, never refuses for room, and truncates the WAL after each batch; §9.3 is amended to say so, §6.6 and DM49 pin it), ⟦D:history-prune-needs-a-referrer⟧ (NEW: "every referrer is older than the cutoff" is vacuously true for a blob nothing names; a blob with no `entries`, `entry_variants` or `sidecars` referrer is never pruned), ⟦D:history-ops-refused-while-recovering⟧ (NEW, RB6; defined by Task 6; Task 19 places the refusal).
+**Spec:** §6.6 (prune: dry run by default, the 30-day floor, bounded `BEGIN IMMEDIATE` batches, every-referrer age, NULL time never old, structure blobs never pruned, FTS rows deleted, `PRAGMA incremental_vacuum(N)`, never by a source file's absence, never the journal or the export, the dry run's export count), §8.4 (operator verbs through the shim, the speed bumps), §9.3 ("prune frees space"), §9.14 (a registered recovery step), §11 P15. Pins: DM14, DM15, DM22, DM27, O12, C25, C34; DM49 (spec rev 3.4: prune below the free-space floor; it is RB3's two halves, reachability only and the WAL truncated per batch, pinned by Step 1's `walSizes` and Step 6's `RB3: below the free-space floor …` case, with Step 5's mutant (f) and Step 10's RB3 mutant as its two CONTROLs); RB6's prune row. Departures: ⟦D:history-prune-referrers⟧, B1's D-4221 (`history-apply-via-shim`), B1's D-4179 (`history-free-space-floor`), ⟦D:history-prune-not-floor-gated⟧ (RULED by the operator on 2026-10-07, spec rev 3.4, no longer provisional; first raised by this plan as coordinator ruling RB3: §9.3 said `prune --apply` "runs the same preflight", but a store below the floor is exactly the one prune exists to shrink, so the pass probes reachability only, never refuses for room, and truncates the WAL after each batch; §9.3 is amended to say so, §6.6 and DM49 pin it), ⟦D:history-prune-needs-a-referrer⟧ (NEW: "every referrer is older than the cutoff" is vacuously true for a blob nothing names; a blob with no `entries`, `entry_variants` or `sidecars` referrer is never pruned), ⟦D:history-ops-refused-while-recovering⟧ (NEW, RB6; defined by Task 6; Task 19 places the refusal).
 
 Choices this task makes (each is in the PR body's open issues):
 - **Reachability, not room** (RB3; ruled by the operator on 2026-10-07, DM49). The `--op` pass's own statfs probe (Task 19's runOpPass, under `STATFS_DEADLINE_MS`) is prune's whole preflight: unsettled answers 5 `store-unreachable`; low disk never refuses. Step 6's below-the-floor case pins both halves.
@@ -23028,7 +23295,7 @@ and lands B2 in the O17 table. Pins C35, C51, C52 and RB6's backup row."
   - Task 8 (store.mjs): `setStep(db, step, version, cursor, completedMs?)`.
   - Task 9 (derive.mjs): `indexNodesFts(db, ictx, budget): number` — indexes nodes past its `('nodes-fts', 1)` cursor (the last indexed `nodes.rowid`, as a decimal string) into `nodes_fts`, within the budget, answering how many it indexed, 0 when none is left; and `NODES_FTS_STEP` = `'nodes-fts'`, that step's one spelling (not in the skeleton's Task 9 produces list; listed in this part's interface changes).
   - Task 19 (sweep.mjs): `OP_VERBS`, `OP_HANDLERS` and its hook shape; `OP_NEEDS_CODE_VERSION` holding `'repair'` (a store at another version answers 5 `migration-pending` before this runs).
-  - B1 sweep.mjs: `ftsPrepare`, `deriveFts`, `indexBlob(db, blobId, text, pairIdx, overCap = false)` (redacts `text`, a string, through entryIndexText; `overCap` true inserts no row and only marks the blob indexed), `mergeSteps`, `secretsStep`, `makeIngestCtx`, `newBudget`, `budgetLeft`, `runJournalHalf`, `JournalError`, the file-private `ftsStmts` (`del`), `derivStmts` (`sel`, `pending`, `blobZ`: `SELECT z, raw_len`), `MERGE_STEP` and `FTS_GROUP_CHARS` (4 MiB), and the EXPORTED, ASYNC `ftsTextOfBlob(z, isSidecar, pairIdx, rawLen): Promise<{ text: string | null; decoded: number; undecodable: boolean; overCap?: true }>` (`text` is null when `undecodable`; an over-cap body answers `text: ''` with `overCap: true`; `rawLen` is the blob's stored raw_len, required for any non-sidecar blob, since B1's `blobOverDecodeCap(undefined)` is true) (all B1 Task 23; B1's ⟦D:history-sidecar-redact-before-cut⟧ made it async and bounded a sidecar's read through `unbrotliPrefix`; B1's ⟦D:history-permanent-failures-classified⟧ added `rawLen`, `undecodable` and `overCap`). For the counter re-measure: `counterOf(db, name)` (exported), the file-private `dirKind(p)` (`dir` / `absent` / `other`, by lstat, never followed) and `spoolUnusable(home)`, and the module-level `REJECTED_DIR` (`'rejected'`) and `PLANTED_DIR` (`'planted'`) (B1's ⟦D:history-planted-entries-never-wedge⟧). B1 store.mjs: `createFtsTables`, `withTx`, `setMeta`, `bump`. B1 lib.mjs: `HEALTH_COUNTERS`, `drainingNameParts`.
+  - B1 sweep.mjs: `ftsPrepare`, `deriveFts`, `indexBlob(db, blobId, text, pairIdx, overCap = false)` (redacts `text`, a string, through entryIndexText; `overCap` true inserts no row and only marks the blob indexed), `mergeSteps`, `secretsStep`, `makeIngestCtx`, `newBudget`, `budgetLeft`, `runJournalHalf`, `JournalError`, the file-private `ftsStmts` (`del`), `derivStmts` (`sel`, `pending`, `blobZ`: `SELECT z, raw_len`), `MERGE_STEP` and `FTS_GROUP_CHARS` (4 MiB), and the EXPORTED, ASYNC `ftsTextOfBlob(z, isSidecar, pairIdx, rawLen): Promise<{ text: string | null; decoded: number; undecodable: boolean; overCap?: true }>` (`text` is null when `undecodable`; an over-cap body answers `text: ''` with `overCap: true`; `rawLen` is the blob's stored raw_len, required for any non-sidecar blob, since B1's `blobOverDecodeCap(undefined)` is true) (all B1 Task 23; B1's D-4312 (`history-sidecar-redact-before-cut`) made it async and bounded a sidecar's read through `unbrotliPrefix`; B1's D-4346 (`history-permanent-failures-classified`) added `rawLen`, `undecodable` and `overCap`). For the counter re-measure: `counterOf(db, name)` (exported), the file-private `dirKind(p)` (`dir` / `absent` / `other`, by lstat, never followed) and `spoolUnusable(home)`, and the module-level `REJECTED_DIR` (`'rejected'`) and `PLANTED_DIR` (`'planted'`) (B1's D-4347 (`history-planted-entries-never-wedge`)). B1 store.mjs: `createFtsTables`, `withTx`, `setMeta`, `bump`. B1 lib.mjs: `HEALTH_COUNTERS`, `drainingNameParts`.
   - Task 7A (lib) / Task 7B (sweep.mjs's import): `BELT_META` (`'fts_belt'`) and `formatBeltState({ v, rids, gen })`, already in sweep.mjs's `./lib.mjs` import since Task 7B; the pass's pair index carries its belt as `pairIdx.belt` (secretsStep).
   - Task 10 (helpers): `runCli`, `withPane`, `seedFamily`. Task 20's `maint*` helpers, `maintRecovering` included. B1 preloads: `HISTORY_TEST_KILL_SQL`. RB6's `recovering` refusal (Task 20's Consumes).
 - Produces:
@@ -23044,7 +23311,7 @@ and lands B2 in the O17 table. Pins C35, C51, C52 and RB6's backup row."
   - store.mjs: `setCounter(db, name, n): void` (inside the caller's transaction; 0 deletes the row).
   - sweep.mjs: `measureSpoolStanding(home): Record<string, number | null>` (the four spool counters' standing counts, null = unmeasured) and `applyCounterResets(db, standing): { standing; before; writes }` (inside the caller's transaction), both exported for Task 25's `finishRecovery`; `ftsRebuildJob`'s answer gains `counters` (that result, for `blob_undecodable`) when `done`, and its state cursor gains `undecodable`. Task 29 reads `done` and `refused` only, unchanged.
 
-**Spec:** §8.4 "`doctor --repair`" (integrity_check; a foreign_key_check baseline diff that refuses on NEW violations, P21; the FTS self-heal as a resumable job), §6.2 (indexed text is redacted plain text; merge steps purge deleted bytes), §9.1 (grep's exit 7 while the index is not ready), §9.14 (a registered recovery step), §11 P21 P24, B1 Task 23's two named residuals (a blob before the backfill cursor; a session token indexed before its record). Pins: C61; review focus 5's repair race; RB6's repair row; RB7; O59's repair rows (spec rev 3.5 §9.11: the rebuild indexes through the belt and leaves it due). Departures: ⟦D:history-redaction-reindex-merge⟧, ⟦D:history-fts-tables-by-derivation⟧, ⟦D:history-reasons-repair-backup⟧ (NEW, Task 6's slug: `repair-refused`), ⟦D:history-repair-rebuilds-fts-whole⟧ (NEW: an index that holds a term indexed before its redaction pair was learned cannot be cleaned row by row — a `sessions.json` pair has no value to phrase-search — so the self-heal always drops and rebuilds both tables, healthy or not, and reports which ones P24's checks found damaged), ⟦D:history-grep-pending-until-backfilled⟧ (Task 12's slug, widened here: grep also answers 7 `fts-pending` while an `(FTS_REBUILD_STEP, *)` row is open), ⟦D:history-ops-refused-while-recovering⟧ (NEW, RB6; defined by Task 6; Task 19 places the refusal), ⟦D:history-counter-resets-after-cure⟧ (NEW: B1's five health counters are re-measured and reset only once what they count is cured: by a completed whole FTS rebuild for `blob_undecodable`, and by `doctor --repair` and the recovery step's close for the four spool counters; spec §9.6's WARNs read the counters, so without it a cured condition WARNed forever and a recovered store forgot one that still stands). B1's ⟦D:history-permanent-failures-classified⟧ and ⟦D:history-planted-entries-never-wedge⟧ define what the counters count. The belt (spec rev 3.5 §8.3 layer 4, §6.2 "The belt"; pin O59) is not a departure: the rebuild indexes through the pass's belt (B1's `indexBlob` reaches it through `entryIndexText`) and records the belt due.
+**Spec:** §8.4 "`doctor --repair`" (integrity_check; a foreign_key_check baseline diff that refuses on NEW violations, P21; the FTS self-heal as a resumable job), §6.2 (indexed text is redacted plain text; merge steps purge deleted bytes), §9.1 (grep's exit 7 while the index is not ready), §9.14 (a registered recovery step), §11 P21 P24, B1 Task 23's two named residuals (a blob before the backfill cursor; a session token indexed before its record). Pins: C61; review focus 5's repair race; RB6's repair row; RB7; O59's repair rows (spec rev 3.5 §9.11: the rebuild indexes through the belt and leaves it due). Departures: B1's D-4245 (`history-redaction-reindex-merge`), B1's D-4215 (`history-fts-tables-by-derivation`), ⟦D:history-reasons-repair-backup⟧ (NEW, Task 6's slug: `repair-refused`), ⟦D:history-repair-rebuilds-fts-whole⟧ (NEW: an index that holds a term indexed before its redaction pair was learned cannot be cleaned row by row — a `sessions.json` pair has no value to phrase-search — so the self-heal always drops and rebuilds both tables, healthy or not, and reports which ones P24's checks found damaged), ⟦D:history-grep-pending-until-backfilled⟧ (Task 12's slug, widened here: grep also answers 7 `fts-pending` while an `(FTS_REBUILD_STEP, *)` row is open), ⟦D:history-ops-refused-while-recovering⟧ (NEW, RB6; defined by Task 6; Task 19 places the refusal), ⟦D:history-counter-resets-after-cure⟧ (NEW: B1's five health counters are re-measured and reset only once what they count is cured: by a completed whole FTS rebuild for `blob_undecodable`, and by `doctor --repair` and the recovery step's close for the four spool counters; spec §9.6's WARNs read the counters, so without it a cured condition WARNed forever and a recovered store forgot one that still stands). B1's D-4346 (`history-permanent-failures-classified`) and B1's D-4347 (`history-planted-entries-never-wedge`) define what the counters count. The belt (spec rev 3.5 §8.3 layer 4, §6.2 "The belt"; pin O59) is not a departure: the rebuild indexes through the pass's belt (B1's `indexBlob` reaches it through `entryIndexText`) and records the belt due.
 
 Choices this task makes (each is in the PR body's open issues):
 - **`foreign_key_check` twice per job (RB7):** once as the baseline, before the first chunk, saved in the step's cursor JSON so a resumed repair diffs against the original; and once at completion, in the completion's own transaction, so a new violation rolls the completion back. Never per chunk: a whole-store check per 2048-blob chunk would make the repair's cost grow with the store's square. The writer runs with foreign keys ON, so inside a chunk a new violation can only come deferred, and a deferred one fails that chunk's COMMIT (errcode 787, `FOREIGN KEY constraint failed`); withTx rolls it back and the job answers `refused` (`at: 'chunk'`) rather than an internal error.
@@ -23281,7 +23548,7 @@ export function decideCounterResets(counters, standing) {
 
 Two comments of B1's lib.mjs change in place, by content (⟦D:…⟧ below stands for B1's issued number, spelled in the file as `D-` and digits):
 - in `HEALTH_COUNTERS`' doc comment, replace the line `` *  `drain_rejected`, `spool_displaced`, `spool_blocked` and `spool_unreadable` are never reset in B1 (B2's repair owns resets). */`` with `` *  `drain_rejected`, `spool_displaced`, `spool_blocked` and `spool_unreadable` are never reset by the pass that counts them: W1-B2's re-measure resets or raises them (decideCounterResets, ⟦D:history-counter-resets-after-cure⟧). */``;
-- in `HEALTH_REMEDIES`, replace the comment line `  // ⟦D:history-planted-entries-never-wedge⟧ (history-planted-entries-never-wedge). Never reset in B1, like drain-rejected and blob-undecodable: B2's repair owns resets.` with `  // ⟦D:history-planted-entries-never-wedge⟧ (history-planted-entries-never-wedge). Re-measured by doctor --repair and a recovery's close, like drain-rejected and blob-undecodable (W1-B2, ⟦D:history-counter-resets-after-cure⟧).`
+- in `HEALTH_REMEDIES`, replace the comment line `  // D-4347 (history-planted-entries-never-wedge). Never reset in B1, like drain-rejected and blob-undecodable: B2's repair owns resets.` with `  // D-4347 (history-planted-entries-never-wedge). Re-measured by doctor --repair and a recovery's close, like drain-rejected and blob-undecodable (W1-B2, ⟦D:history-counter-resets-after-cure⟧).`
 
 Each replaced line occurs once; `grep -c "B2's repair owns resets" ccd/history/lib.mjs` prints `0` after the edits.
 
@@ -23642,7 +23909,7 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
       db.prepare('UPDATE blobs SET z = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(Buffer.from('not a brotli stream'), MAINT_QUOKKA);
       db.prepare("INSERT INTO counters (name, n) VALUES ('spool_blocked', 5) ON CONFLICT (name) DO UPDATE SET n = excluded.n").run();
     });
-    // A link at .draining is never listed through (B1's ⟦D:history-planted-entries-never-wedge⟧), so the spool is unmeasured.
+    // A link at .draining is never listed through (B1's D-4347), so the spool is unmeasured.
     const P = historyPaths(box.home);
     fs.mkdirSync(P.spool, { recursive: true, mode: 0o700 });
     fs.rmSync(P.draining, { recursive: true, force: true });
@@ -23806,8 +24073,8 @@ function isForeignKeyCommitFailure(e) {
 }
 
 /** B1's four spool counters' standing conditions (⟦D:history-counter-resets-after-cure⟧), by lstat, readdir and access(2),
- *  never through a link and never opening a file (B1's ⟦D:history-planted-entries-never-wedge⟧ rules):
- *  - drain_rejected: the entries in .draining/rejected/ (B1's ⟦D:history-permanent-failures-classified⟧);
+ *  never through a link and never opening a file (B1's D-4347 rules):
+ *  - drain_rejected: the entries in .draining/rejected/ (B1's D-4346);
  *  - spool_displaced: the regular files with a draining name in any .draining/planted/<area>/;
  *  - spool_blocked: the draining files whose .obs or .obs.tmp name holds a directory;
  *  - spool_unreadable: the other draining files this user cannot read, or whose regular .obs it cannot.
@@ -23914,11 +24181,11 @@ export function openFtsRebuild(db) {
  *    `refused: { at: 'completion', rows }`.
  *  Each blob's index text is B1's ftsTextOfBlob (async: a sidecar's window is read through unbrotliPrefix, and
  *  redacted before its cut), so a chunk's texts are computed BEFORE its transaction opens, as B1's deriveFts does:
- *  an await inside withTx's callback would let the COMMIT run first. As in B1's backfill (B1's ⟦D:history-sidecar-redact-before-cut⟧), the pick
+ *  an await inside withTx's callback would let the COMMIT run first. As in B1's backfill (B1's D-4312), the pick
  *  selects ids and compressed sizes only, each `z` is fetched one at a time and charged to the budget by its
  *  compressed size, and a chunk stops taking blobs once its text reaches B1's FTS_GROUP_CHARS, so a chunk never
  *  holds a batch's bodies or 2048 sidecar windows. Each `ftsTextOfBlob` call passes the blob's stored raw_len (B1's
- *  ⟦D:history-permanent-failures-classified⟧): a body that does not decode keeps no row and is counted in the state's
+ *  D-4346): a body that does not decode keeps no row and is counted in the state's
  *  `undecodable`, and an over-cap body is marked indexed with no row (B1's indexBlob `overCap`).
  *  The first chunk also records meta fts_belt due (§6.2 "The belt"), since the rebuilt rows carry only the belt of the
  *  units loaded now.
@@ -23956,7 +24223,7 @@ export async function ftsRebuildJob(db, ictx, i) {
         // The texts first, outside any transaction (B1's ftsTextOfBlob is async); one z at a time.
         const texts = [];
         let chars = 0;
-        let bad = 0;   // blobs of this chunk whose stored bytes do not decode (B1's ⟦D:history-permanent-failures-classified⟧)
+        let bad = 0;   // blobs of this chunk whose stored bytes do not decode (B1's D-4346)
         for (const b of batch) {
           const zr = derivStmts(db).blobZ.get(b.blob_id);   // B1's blobZ reads z and raw_len
           const t = zr === undefined || zr.z === null ? null : await ftsTextOfBlob(zr.z, b.is_sidecar === 1, ictx.pairIdx, zr.raw_len);
@@ -24204,10 +24471,10 @@ pass's belt and leaves the belt due for the next tick (O59)."
 - Pins: none land here. Tasks 26–28 pin these sequences through the verbs (C55, C57, C58). The cases below are the in-process and kill-seam checks of each order those pins depend on.
 - Departures:
   - ⟦D:history-binding-facts-before-link⟧
-  - ⟦D:history-restore-wal-mode⟧
-  - ⟦D:history-store-pending-marker⟧
-  - ⟦D:history-store-writer-file⟧
-  - ⟦D:history-journal-writer-token⟧
+  - B1's D-4218 (`history-restore-wal-mode`)
+  - B1's D-4184 (`history-store-pending-marker`)
+  - B1's D-4220 (`history-store-writer-file`)
+  - B1's D-4226 (`history-journal-writer-token`)
   - ⟦D:history-adopt-verb⟧
   - ⟦D:history-restore-verb⟧
   - ⟦D:history-rebuild-verb⟧
@@ -24659,12 +24926,12 @@ On the first-install path `store.id` is absent, so `viaPending` is true. B1's se
 // The rule all three share (rev 3.2 review, DI3; ⟦D:history-binding-facts-before-link⟧): every DB-side fact of a
 // binding is committed INSIDE the database before any binding file names it. The facts are:
 //   - `bound:<ms>` = the verb, so a later merger can see that the store moved;
-//   - a new writer token as meta.writer, the mirror of store.writer (⟦D:history-journal-writer-token⟧,
-//     ⟦D:history-store-writer-file⟧);
+//   - a new writer token as meta.writer, the mirror of store.writer (D-4226,
+//     D-4220);
 //   - for a restore or a rebuild, the ('recover', <ms>) derivation step the following ticks run (§9.14);
 //   - the `bind` verdict in journal_outbox, which the first pass to open the store flushes into
 //     journal/<store_id>/ under the new token.
-// So a kill leaves one of two states (⟦D:history-store-pending-marker⟧):
+// So a kill leaves one of two states (D-4184):
 //   - an unbound store, which a second run binds;
 //   - a store whose binding and recovery are already inside it, which the pending-marker path finishes (§6.2).
 // It never leaves a bound store under a departed box's token, and never a restore whose replay is skipped.
@@ -24779,7 +25046,7 @@ export function stageRestore(home, name) {
   return { tempPath, ...measureStaged(tempPath), sizeBytes };
 }
 
-/** `doctor --restore`, second half, once decideBind admitted the staged copy (⟦D:history-restore-wal-mode⟧,
+/** `doctor --restore`, second half, once decideBind admitted the staged copy (D-4218,
  *  ⟦D:history-binding-facts-before-link⟧). In order:
  *  1. on the COPY: `PRAGMA journal_mode=WAL`, because a VACUUM INTO output is a rollback-journal database (M,
  *     22.16.0);
@@ -25051,10 +25318,11 @@ kill seam."
   - B1 `store.mjs`: `withTx`, `bump`, `getMeta`, `setMeta`, `openWriter`, `closeWriter`.
   - B1 `sweep.mjs`, all in the same file:
     - `scheduledPass`, `passCtx`, `fixModes`, `counterOf`, `isBusy`, `JournalError`, `countOutside`, `runJournalHalf`;
-    - `makeIngestCtx`, `floorProbeFor(dir, statfs?)`, `secretsStep` (answers `{ pairIdx, newValues, values }`; no `complete`), `ftsPrepare`, `recordTick`, `newBudget(now, limits)`, `budgetLeft`;
+    - `flushOutbox(db, home, ids, nowMs)` (it throws `JournalError` when the journal cannot be written), `makeIngestCtx`, `floorProbeFor(dir, statfs?)`, `secretsStep` (answers `{ pairIdx, newValues, values }`; no `complete`), `ftsPrepare`, `recordTick`, `newBudget(now, limits)`, `budgetLeft`;
     - `reindexForValues(db, ctx, values, fresh, budget, slice = rederiveSlice(budget))` (async; `fresh` is secretsStep's `newValues`, `budget` is required), the exported async `rederiveFts(db, ctx, budget, slice)` and the file-private `rederiveSlice(budget)`: B1's tick shares one slice between the phrase path and the hash re-derivation (review 344 F2), and this task's recover arm calls the three the same way;
+    - B1's `tick` doc comment, items 1-6 (`flushOutbox`, `makeIngestCtx`, `secretsStep`, `ftsPrepare`, `reindexForValues`, `rederiveFts`): `recoverPass` repeats them in that order and in those forms (the header's Recovery constraint);
     - `ensureFamily`, `chainEpoch`, `mergeFamily` (B2 Task 9 extends it), `applyEventLine`, `INSERT_CANDIDATE`, `DELETE_CANDIDATE`.
-    - `REJECTED_DIR` (`'rejected'`) and `PLANTED_DIR` (`'planted'`), the module-level names of B1's `.draining/rejected/` and `.draining/planted/` (⟦D:history-permanent-failures-classified⟧, ⟦D:history-planted-entries-never-wedge⟧), read by `undrainedFileKept`; same-file consts, so Step 6 imports nothing for them.
+    - `REJECTED_DIR` (`'rejected'`) and `PLANTED_DIR` (`'planted'`), the module-level names of B1's `.draining/rejected/` and `.draining/planted/` (B1's D-4346 (`history-permanent-failures-classified`), B1's D-4347 (`history-planted-entries-never-wedge`)), read by `undrainedFileKept`; same-file consts, so Step 6 imports nothing for them.
   - Task 23 (`sweep.mjs`): `applyCounterResets(db, standing)` and `measureSpoolStanding(home)` (⟦D:history-counter-resets-after-cure⟧), which `finishRecovery` calls inside the step's closing transaction.
   - Task 7B (`sweep.mjs`): secretsStep's pair index carries the pass's substring belt as `pairIdx.belt` (spec rev 3.5 §8.3 layer 4); `recoverPass` hands it to the executors as `run.ectx.belt`, which Task 29's reindex phase reads.
   - B1 test side:
@@ -25083,7 +25351,7 @@ kill seam."
     - `recover_drained (file TEXT PRIMARY KEY)`.
   - New counters: `recover_chunk_failed`, `journal_spool_undrained_gone`, `journal_head_mismatch`. `replayStep` names `journal_line_malformed` and `journal_record_unknown`; this task bumps them.
   - `scheduledPass` passes `recovering: isRecovering(db)`, and gains a `run.arm === 'recover'` branch.
-  - `passCtx` builds its budget from `deps.budget`, an in-process `{ maxMs?, maxBytes?, chunkBytes? }` (⟦D:history-test-seams-not-env⟧).
+  - `passCtx` builds its budget from `deps.budget`, an in-process `{ maxMs?, maxBytes?, chunkBytes? }` (B1's D-4247 (`history-test-seams-not-env`)).
 - Produces (test side):
   - `historyHelpers.ts`:
     - `export interface DriverDeps { budgetMs?: number; budgetBytes?: number; chunkBytes?: number }`, merged into B1's interface;
@@ -25114,24 +25382,41 @@ kill seam."
   - ⟦D:history-recovery-replay⟧
   - ⟦D:history-ops-refused-while-recovering⟧ (Task 6's NEW slug; this task pins it)
   - ⟦D:history-recall-off-stale-counted-at-drain⟧ (at the drain only: replay never counts it)
-  - ⟦D:history-tick-order⟧
-  - ⟦D:history-journal-drained-record⟧
-  - ⟦D:history-redaction-journaled⟧
-  - ⟦D:history-epoch-confirmation⟧
-  - ⟦D:history-genless-line-joins-registry-generation⟧
-  - ⟦D:history-rekey-merges⟧
-  - ⟦D:history-doctor-state-words⟧
-  - ⟦D:history-free-space-floor⟧
+  - B1's D-4224 (`history-tick-order`)
+  - B1's D-4230 (`history-journal-drained-record`)
+  - B1's D-4241 (`history-redaction-journaled`)
+  - B1's D-4190 (`history-epoch-confirmation`)
+  - B1's D-4193 (`history-genless-line-joins-registry-generation`)
+  - B1's D-4194 (`history-rekey-merges`)
+  - B1's D-4251 (`history-doctor-state-words`)
+  - B1's D-4179 (`history-free-space-floor`)
   - ⟦D:history-b4-after-b2⟧
-  - ⟦D:history-test-seams-not-env⟧
-  - ⟦D:history-permanent-failures-classified⟧ (B1's `.draining/rejected/`: a set-aside file is kept, never counted gone)
-  - ⟦D:history-planted-entries-never-wedge⟧ (B1's `.draining/planted/<area>/`: a displaced file is kept, never counted gone)
+  - B1's D-4247 (`history-test-seams-not-env`)
+  - B1's D-4346 (`history-permanent-failures-classified`) (B1's `.draining/rejected/`, where B1 sets aside a file whose rows the store refused)
+  - B1's D-4347 (`history-planted-entries-never-wedge`) (B1's `.draining/planted/<area>/`, where B1 displaces a file whose sidecar name a directory occupies)
   - ⟦D:history-counter-resets-after-cure⟧ (Task 23's slug: the step's close re-measures the four spool counters)
   - NEW:
+    - ⟦D:history-replay-keeps-set-aside-files⟧: §9.14 skips a spool record with no `drained` record and counts `journal_spool_undrained_gone` when its file is left nowhere, but names no rule for the two places B1 sets a journaled file aside. Replay skips a set-aside file's lines too and counts it kept, never gone, because its bytes are still on disk (`undrainedFileKept`).
     - ⟦D:history-recovery-scratch-tables⟧: the index pass's results must survive the several passes a large replay spans, and schema v1 has no table for them.
     - ⟦D:history-replay-receipt-sha-from-record⟧: the journal keeps a spool line's parsed object, not its bytes. Replay hashes the object's re-serialisation, which equals the bytes every in-tree writer produces, and never counts a replayed duplicate as a `receipt_collision`.
     - ⟦D:history-replay-skips-post-bind-ticks⟧: a recovery pass journals its own `tick` record after the bind. Replaying it would insert its `ticks` row a second time.
     - ⟦D:history-recovery-chunk-failure-counted⟧: §9.14 names the stall but not its cause's counter. `recover_chunk_failed` is that counter, with one stderr line per failed chunk.
+
+Choices this task makes:
+- **The recover arm runs B1's tick prefix, all of it.** `recoverPass` runs items 1-6 of B1's `tick` doc comment, in B1's order and B1's forms:
+  - `flushOutbox(db, ctx.home, ctx.ids, ctx.now())`, inside its own `try`, with a `JournalError` counted `journal_write_failed` as `tick` counts it. B1's `scheduledPass` has already flushed once before `planRun` (`flushFirst`), as it does before `tick`, so this flush usually finds nothing;
+  - `makeIngestCtx`, then `secretsStep`, whose `pairIdx` goes on the ingest context and whose belt is kept as `ctx.belt`, which `recoveryStep` hands to the executors as `run.ectx.belt` (Task 29);
+  - `ftsPrepare`;
+  - `reindexForValues(db, ictx, secrets.values, secrets.newValues, ctx.budget, slice)`, then `rederiveFts(db, ictx, ctx.budget, slice)`, sharing one `rederiveSlice(ctx.budget)` slice (review 344 F2).
+  The prefix stops there. `beltNodesStep`, which Task 29 adds to `tick` as item 7, is left out. When a replay learned a pair, the reindex phase's `recoverNodesBatch` rewrites every node with the full pair index and the belt. A `('nodes-belt', 1)` step that a generation reopened stays open, and the first tick after the step completes runs it. Output stays masked meanwhile (§6.2 states the window).
+- **Ruling: the two re-index steps run while the step's `reindex` phase is pending or part-done; nothing gates them.** That phase is Task 29's `recoverReindex` over Task 23's `ftsRebuildJob`. Each way the two steps could harm that rebuild was checked against the code:
+  - **Doubled rows.** `blobs_fts` is contentless with `contentless_delete=1` (B1's `store.mjs`), and FTS5 merges a second insert of one rowid instead of refusing it (measured, Task 23). The rebuild's blobs chunk deletes each blob's row before it inserts it (`f.del.run(last);` above `indexBlob`, Task 23 Step 8). So a row the two steps wrote for a blob the rebuild has not reached yet is replaced, never doubled. Both B1 steps also delete before they insert, so a row the rebuild already wrote is replaced the same way. `rederiveFts` writes no `nodes_fts` row. `reindexForValues` does from Task 29 on, through `rederiveGistsFor`, but each of its writers (`refreshLeaf`, `redactNodeFields`) deletes a node's row before inserting one. The rebuild's nodes phase (`indexNodesFts`) skips any node that already has a row. So no node row is doubled either.
+  - **Dropped rows.** The rebuild drops and recreates both tables in its first chunk's transaction. It runs only inside `recoveryStep`, after both steps have returned in that pass (`doctor --repair`, its other caller, is refused `recovering` by RB6). What the steps wrote before that chunk is dropped, and the rebuild then re-indexes every blob from 0. What they write in later passes lands in the new tables and is replaced as above.
+  - **The mark.** Only `rederiveFts` moves `fts_reindex_rid`, and only to its generation's target, which is at most the highest `redact_hashes` rowid when the generation opened. Each rebuild call indexes with `recoverPairIdx`, which holds every `redact_hashes` row at that call (Task 29), and pairs are only ever added. So every row the rebuild writes after the mark moves carries every pair up to the mark. A blob the rebuild has not reached has either no row in the new tables, or a row one of the two steps wrote with this pass's full pair index. Task 29's `recoverReindex` moves neither `fts_reindex_rid` nor `fts_rederive`.
+  - **The belt-due record.** The rebuild's first chunk writes meta `fts_belt` `{ v: 0, rids: [], gen: null }`. An open belt generation reads that record through `decideBelt`, which keeps `gen: null`. `beltAfterGeneration` of a `gen: null` state keeps `v: 0` (Task 7A). So the generation in flight completes still due, and a new one opens on the next call. Within one pass, both steps finish before the recovery step starts, so a stale belt state never overwrites the record that pass writes. `secretsStep` runs first in every pass, so a unit that stops being live leaves `rids` before the rebuild writes rows without its belt, as it does in `tick`.
+  - **Counters.** Each step bumps `blob_undecodable` only when it removed a row. The rebuild writes no row for an undecodable blob, so nothing is counted twice. The rebuild's completion writes the count it measured, through `applyCounterResets`.
+  - **Reads.** grep answers exit 7 `fts-pending` while any `FTS_REBUILD_STEP` row is open (Task 23's `indexGate` term), so no reader sees a half-rebuilt index.
+  Gating the two steps would delay a re-index owed by a pair learned during the recovery. It would also leave `fts_rederive` and the belt-due record idle until the step completes. Task 29's restore case and its M1 and M4 predictions assume the steps run. No case pins this choice, because it adds no guard. The guard the ruling rests on is Task 23's delete-before-insert line.
 
 - [ ] **Step 1: Give the tests their seams and helpers.**
 
@@ -25679,8 +25964,8 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
       journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
     // Four journaled spool files with no `drained` record: GONE has left .draining/, HELD is still there (the live
     // drain decides it after the step), and B1 set REJECTED aside into .draining/rejected/ (the store refused its rows,
-    // ⟦D:history-permanent-failures-classified⟧) and DISPLACED into .draining/planted/<area>/ (a directory stood at its
-    // sidecar name, ⟦D:history-planted-entries-never-wedge⟧). Only GONE is gone.
+    // D-4346) and DISPLACED into .draining/planted/<area>/ (a directory stood at its
+    // sidecar name, D-4347). Only GONE is gone.
     const GONE = `${ID}.${t0 + 5}.4242.jsonl`;
     const HELD = `${ID}.${t0 + 6}.4242.jsonl`;
     const REJECTED = `${ID}.${t0 + 7}.4242.jsonl`;
@@ -25887,7 +26172,7 @@ Then confirm the CI pin is green: `(cd server && ./node_modules/.bin/vitest run 
 //   2. the migration verdict;
 //   3. the secrets;
 //   4. this step, within the run budget;
-//   5. the journal half (⟦D:history-tick-order⟧).
+//   5. the journal half (D-4224).
 // The drain and the ingest wait, and no ingest cursor moves, so replayed epochs keep their order before new ones.
 // Every writing --op form but restore and rebuild is refused `recovering` meanwhile, by lib's decideOpGate as Task
 // 19's runOpPass measures it (RB6; ⟦D:history-ops-refused-while-recovering⟧), so no operator verb moves a cursor
@@ -25897,16 +26182,16 @@ Then confirm the CI pin is green: `(cd server && ./node_modules/.bin/vitest run 
 //
 // The step walks the phases lib's RECOVER_PHASES names, each run by RECOVER_EXECUTORS:
 //   index    Reads every journal file of this store, in lib orderJournalFiles' order. Each `redact` record goes
-//            into redact_hashes, before any blob is replayed or indexed (⟦D:history-redaction-journaled⟧). Each
+//            into redact_hashes, before any blob is replayed or indexed (D-4241). Each
 //            drain-time verdict goes into a scratch table by event_key, and each `drained` record by file
 //            (⟦D:history-recovery-scratch-tables⟧).
 //   apply    Reads the same records again through lib replayStep (⟦D:history-recovery-replay⟧):
 //            - a receipt is applied with its drain-time verdicts, at the spool record's own position;
 //            - a verdict with no event_key is applied at its own position;
-//            - a spool record of a file with no `drained` record is skipped (⟦D:history-journal-drained-record⟧),
+//            - a spool record of a file with no `drained` record is skipped (D-4230),
 //              and counted journal_spool_undrained_gone only when B1 keeps its file nowhere: not in .draining/,
-//              .draining/rejected/ (⟦D:history-permanent-failures-classified⟧) or .draining/planted/<area>/
-//              (⟦D:history-planted-entries-never-wedge⟧).
+//              .draining/rejected/ (D-4346) or .draining/planted/<area>/
+//              (D-4347); a set-aside file is kept (⟦D:history-replay-keeps-set-aside-files⟧).
 //            It never reads $REG and writes no journal record.
 //   reindex  W1-B2 Task 29's FTS re-derivation, for pairs the index pass added. A no-op until then.
 // W1-B4 inserts its export phases between apply and reindex, in RECOVER_PHASES and here (⟦D:history-b4-after-b2⟧).
@@ -26210,7 +26495,7 @@ function replayObservation(verdicts) {
 /** One verdict, applied by an idempotent upsert on its natural key (§9.14), so a record the restored backup already
  *  holds changes nothing.
  *  - A re-key is a merge, which a replayed `family(X, '')` lands in (ensureFamily follows merged_into;
- *    ⟦D:history-rekey-merges⟧).
+ *    D-4194).
  *  - Counters fold only where the record proves the event happened, and only once:
  *    - a join's counters only for an epoch line's own verdicts, which apply once, with the line's fresh receipt;
  *    - a re-key only when it merged;
@@ -26262,7 +26547,7 @@ function replayVerdict(db, v, countJoins) {
   }
 }
 
-/** A SessionStart line, replayed at its own position (§9.14; ⟦D:history-epoch-confirmation⟧).
+/** A SessionStart line, replayed at its own position (§9.14; D-4190).
  *  - With drain-time verdicts: each is applied in journal order. A clear that was chained but not confirmed
  *    re-enters epoch_candidates as the drain left it, aged by its journal time, so the live tick goes on deciding
  *    it within the same 7 days.
@@ -26315,9 +26600,10 @@ function replayReceipt(db, run, a) {
 /** Whether a journaled spool file with no `drained` record is still kept. In `.draining/` it was held, or drained by the
  *  lost store before its verdicts were flushed, and the live drain decides it after the step. B1 also sets a journaled
  *  file aside with no `drained` record, its bytes kept and its lines in no store: into `.draining/rejected/<name>` when
- *  the store refused its rows (⟦D:history-permanent-failures-classified⟧), and into `.draining/planted/<area>/<name>` when
- *  a directory at its sidecar or sidecar-temp name displaced it (⟦D:history-planted-entries-never-wedge⟧). Replay skips all three, as
- *  the lost store held none of a set-aside file's lines; only a file kept in none of them is gone. */
+ *  the store refused its rows (D-4346), and into `.draining/planted/<area>/<name>` when
+ *  a directory at its sidecar or sidecar-temp name displaced it (D-4347). Replay skips all three, as
+ *  the lost store held none of a set-aside file's lines; only a file kept in none of them is gone
+ *  (⟦D:history-replay-keeps-set-aside-files⟧). */
 function undrainedFileKept(draining, name) {
   if (existsSync(`${draining}/${name}`)) return true;
   if (existsSync(`${draining}/${REJECTED_DIR}/${name}`)) return true;
@@ -26500,9 +26786,12 @@ export async function recoveryStep(db, ctx, executors = RECOVER_EXECUTORS) {
 }
 
 /** A scheduled pass on planRun's `recover` arm (§9.2 "While a recovery step is registered"). It runs:
- *  1. the tick's prefix: the secrets with their redact records (and the pass's belt, kept on ctx for the step's
- *     executors), the FTS probe, and any re-index a learned pair owes (B1's phrase path and hash re-derivation, sharing
- *     one slice of the run budget, as B1's tick runs them);
+ *  1. B1's tick prefix, items 1-6 of tick's doc comment, in that order: flushOutbox (a JournalError counted
+ *     journal_write_failed, as tick counts it), makeIngestCtx, secretsStep with its redact records (and the pass's
+ *     belt, kept on ctx for the step's executors), ftsPrepare, then reindexForValues and rederiveFts sharing one
+ *     rederiveSlice of the run budget. They run whatever phase the step is at, the reindex phase's open index rebuild
+ *     included: that rebuild deletes each blob's row before writing it, and an open generation cannot clear the
+ *     belt-due record it writes (W1-B2 Task 25's ruling). tick's beltNodesStep is not part of this prefix;
  *  2. the step within the run budget. Below the free-space floor the step does not start, and
  *     capture_paused_low_disk +1;
  *  3. meta recover_unmoved_ticks (lib nextUnmovedTicks: reset by a move, kept by a hold, else one more);
@@ -26513,13 +26802,24 @@ export async function recoveryStep(db, ctx, executors = RECOVER_EXECUTORS) {
 export async function recoverPass(db, ctx, failedAtStart) {
   let busy = false;
   try {
+    // B1's tick item 1: the outbox first, outside the run budget. With no writer token the rows wait in the DB.
+    if (ctx.ids !== null) {
+      try {
+        flushOutbox(db, ctx.home, ctx.ids, ctx.now());
+      } catch (e) {
+        if (!(e instanceof JournalError)) throw e;
+        countOutside(db, 'journal_write_failed');
+      }
+    }
     const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
     const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
     ictx.pairIdx = secrets.pairIdx;
     ctx.belt = secrets.pairIdx.belt;   // §8.3 layer 4: recoveryStep hands it to its executors as run.ectx.belt (Task 29)
     ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
     // B1's tick re-indexes within one slice shared by the phrase path and the hash re-derivation (review 344 F2); the
-    // recover arm does the same, under any pause. Both are async; un-awaited, the pass would close the writer under them.
+    // recover arm does the same, under any pause and whatever phase the step is at (Task 25's ruling: the reindex
+    // phase's rebuild deletes each blob's row before it writes one). Both are async; un-awaited, the pass would close
+    // the writer under them.
     const slice = rederiveSlice(ctx.budget);
     await reindexForValues(db, ictx, secrets.values, secrets.newValues, ctx.budget, slice);
     await rederiveFts(db, ictx, ctx.budget, slice);
@@ -26574,7 +26874,7 @@ In the same function, insert this block directly above the line `    if (run.arm
 
 ```js
     if (run.arm === 'recover') {
-      // W1-B2 Task 25 (§9.2 "While a recovery step is registered"; ⟦D:history-tick-order⟧): a restore or a rebuild
+      // W1-B2 Task 25 (§9.2 "While a recovery step is registered"; D-4224): a restore or a rebuild
       // registered a recovery step, and the store is at this build's version (planRun decided the migration first).
       // This pass runs the secrets and the step, then the journal half; the drain and the ingest wait.
       setMeta(db, 'migration', migration);
@@ -26944,8 +27244,11 @@ git add ccd/history/sweep.mjs server/test/history-recover.test.ts server/test/hi
 git commit -m "feat(history): the recovery step and journal replay
 
 A store holding a ('recover', <bind ms>) step at this build's version runs
-it on planRun's recover arm: secrets, then the step within the run budget,
-then the journal half. Drain and ingest wait and no cursor moves. The index
+it on planRun's recover arm: B1's tick prefix (the outbox, the ingest
+context, the secrets, the FTS probe, then the phrase re-index and the
+hash re-derivation in one shared slice, whatever phase the step is at),
+then the step within the run budget, then the journal half. Drain and
+ingest wait and no cursor moves. The index
 pass applies redact records first and indexes drain-time verdicts and
 drained files in scratch tables. The apply pass replays receipts with their
 verdicts at the spool record's position through lib replayStep, never
@@ -26966,13 +27269,14 @@ the pass hands its substring belt to the executors as run.ectx.belt."
 - Modify: `ccd/history/sweep.mjs` (B1-created; Tasks 19 and 25 extend it):
   - its import statements gain the names Step 5's script prints;
   - insert one section after Task 25's recovery section and above the `/**` that opens `What one tick of a bound, open store carries` (immediately before `tick`'s two docblocks, never between them and `tick`);
-  - in `opPass` (Task 19's rewrite of B1's module-private pass body; B1's exported `runOpPass` wrapper is not touched), add one branch;
+  - in `opPass` (B1's module-private pass body, which Task 19 edited in place at four sites; B1's exported `runOpPass` wrapper is not touched), replace Task 19's binding branch;
   - in `const OP_VERBS = new Set([…]);`, add one member.
 - Check, and modify only if the entry is missing: `ccd/history/cli.mjs`'s `OP_OF_VERB` literal (Task 19). Task 19 already maps `doctor --adopt` to the `adopt` op.
 - Test: `server/test/history-recover.test.ts` (Task 25 created it):
   - add two import statements directly below its top import block;
   - append one describe at the end of the file.
 - Test: `server/test/history-maint.test.ts` (Task 19 created it): one line of Task 19's case `a verb's arguments are lib's one grammar; a verb this build does not run is bad-args` is re-pointed, because `adopt` is now a verb this build runs.
+- Test: `server/test/history-op.test.ts` (B1-created): append one describe at the end of the file (Task 35 later appends its own after it). No import line: it uses the file's module scope only.
 
 **Interfaces:**
 - Consumes:
@@ -26980,7 +27284,8 @@ the pass hands its substring belt to the executors as run.ectx.belt."
   - Task 24 (`store.mjs`): `adoptStore(home, { nowMs }): { storeId: string; writer: string }`.
   - Task 19 (`store.mjs`): `storedVersionAt(dbFile): Presence<number>`, history.db's own user_version on a read-only handle.
   - Task 19 (`sweep.mjs`, `opPass`, reached through B1's `runOpPass` wrapper):
-    - its locals `home`, `P`, `deps`, `out`, `parsed`, `args` (the op's parsed `OpArgs`) and `result(rc, reason)`;
+    - its locals `home`, `P`, `deps`, `out`, `parsed`, `args` (the op's parsed `OpArgs`), and B1's `released(rc, reason, db = null, ids = idsFromFiles(P), counted = false)` closure (the journal half at release, then `result`; RF5a F19), which Task 19's binding branch already answers through;
+    - B1's `idsFromFiles(P)`, which reads `store.id` and `store.writer` from the files each time it is called;
     - `const BINDING_OPS = new Set(BIND_KINDS)`;
     - `OP_VERBS`;
     - the gate it already ran: decideOpGate, which lets `adopt` through under history-off but needs a TTY and no cc- pane, and, measured with `recoverStepAt` before the binding branch, refuses it `recovering` while a recovery step is registered on a bound store, and lets it through when `store.id` is absent (RB14; the `storeId` fact both halves measure). Restore and rebuild are never refused (RB6);
@@ -26990,11 +27295,12 @@ the pass hands its substring belt to the executors as run.ectx.belt."
   - B1 `store.mjs`: `measureStoreFacts`, `removeStaleTemps`, `closeWriter`, `bump`, `StoreError`, `MIGRATIONS`.
   - B1 `lib.mjs`: `EXIT`, `REASONS`, `historyPaths`.
   - Task 25's test file: its module scope (`ID`, `SLUG`, `WORK`, `MIN`, `u`, `pass`, `rows`, `countOf`, `metaOf`, `registerRecovery`, `ccrcSnapshot`, `onPty`, `cliOnPty`, `shimOnPty`, `lastRc`, `lastEnvelope`), `journalDirOf`, and `makeHistoryBox`, `runSweep`, `runDriver`, `plantSession`, `plantTranscript`, `journalRecords`, `preloadOptions`, `PRELOADS`, `CLI`, `userRow`, `historyPaths`, `DatabaseSync`.
+  - B1's `history-op.test.ts`, module scope: `boundBox`, `driverPty` (the run-pass driver on a pty, for an irreversible form's TTY gate), `lastResult`, `paths`, `names`, `draining`, `recs`, `counter`, `startup`, `plantSession`, `ID`, `G1`, `U1`, `fs`, `path`, and `DriverDeps`' `afterFirstStatfs` and `throwTimesAfterFirstStatfs` seams (B1's RF5a F19 and FU4 M26 cases use both).
 - Produces (`ccd/history/sweep.mjs`):
-  - `export async function bindingPass(home: string, P: HistoryPaths, op: string, args: OpArgs, deps: SweepDeps, out: (line: string) => void): Promise<{ rc: number; reason?: string }>`. It dispatches `adopt` to `adoptArm`. Tasks 27 and 28 put their own dispatch lines (`restore`, `rebuild`) first in its body. Any other op answers `{ rc: 2, reason: 'bad-args' }`.
-  - `export async function adoptArm(home, P, args, deps, out): Promise<{ rc: number; reason?: string }>`.
-  - Module-private `bindFactsOf(home, role, deps, extra = {}): BindFacts` and `finishBind(home, P, role, deps, out, now): { rc: number; reason?: string }`. `bindFactsOf` measures `storedVersion` with Task 19's `storedVersionAt`, after `measureStoreFacts` (whose `-wal`/`-shm` reads must come before any read-only open). `finishBind` opens the store, flushes the bind record and runs the release journal half. Tasks 27 and 28 reuse both.
-  - `opPass` calls `bindingPass` for every `BINDING_OPS` member, under the lock, after the gate, and BEFORE `openStore`.
+  - `export async function bindingPass(home: string, P: HistoryPaths, op: string, args: OpArgs, deps: SweepDeps, out: (line: string) => void): Promise<{ rc: number; reason?: string; counted?: boolean }>`. It dispatches `adopt` to `adoptArm`. Tasks 27 and 28 put their own dispatch lines (`restore`, `rebuild`) first in its body. Any other op answers `{ rc: 2, reason: 'bad-args' }`. `counted: true` means the answer is itself a journal failure the arm already said and counted, as B1's `outcome(…, counted)` means it.
+  - `export async function adoptArm(home, P, args, deps, out): Promise<{ rc: number; reason?: string; counted?: boolean }>`.
+  - Module-private `bindFactsOf(home, role, deps, extra = {}): BindFacts` and `finishBind(home, P, role, deps, out, now): { rc: number; reason?: string; counted?: boolean }`. `bindFactsOf` measures `storedVersion` with Task 19's `storedVersionAt`, after `measureStoreFacts` (whose `-wal`/`-shm` reads must come before any read-only open). `finishBind` opens the store, flushes the bind record and runs the journal half on the open store, so a failed append is counted there and answered `counted: true`. Tasks 27 and 28 reuse both.
+  - `opPass` calls `bindingPass` for every `BINDING_OPS` member, under the lock, after the gate, and BEFORE `openStore`, and answers its outcome through B1's `released`, with the writer ids re-read from the files at release (Choices).
   - `OP_VERBS` gains `'adopt'`.
   - Output lines, before the last `{"rc":…}` line:
     - `history-sweep: <reason>: <detail>` on a refusal;
@@ -27011,12 +27317,18 @@ the pass hands its substring belt to the executors as run.ectx.belt."
 - Departures:
   - ⟦D:history-adopt-verb⟧
   - ⟦D:history-ops-refused-while-recovering⟧ (Task 6's NEW slug, confirmed by RB16; adopt is refused while a recovery step is registered on a bound store, and exempt on an unbound one, RB14)
-  - ⟦D:history-store-unbound-refused⟧
-  - ⟦D:history-journal-writer-token⟧
+  - B1's D-4186 (`history-store-unbound-refused`)
+  - B1's D-4226 (`history-journal-writer-token`)
   - ⟦D:history-binding-facts-before-link⟧
-  - ⟦D:history-store-writer-file⟧
-  - ⟦D:history-op-gate-in-sweep⟧
-  - ⟦D:history-apply-via-shim⟧
+  - B1's D-4220 (`history-store-writer-file`)
+  - B1's D-4181 (`history-op-gate-in-sweep`)
+  - B1's D-4221 (`history-apply-via-shim`)
+
+Choices this task makes:
+- **A binding pass answers through B1's `released`, not a bare `result`.** B1's rule (RF5a F19; §9.2 "An --op pass runs the journal half too") is that once the lock-take journal half has run, the half at release runs before EVERY answer, refusals included, so a hook line that lands mid-pass is renamed, observed and journaled by this pass rather than left in `spool/`. A binding pass is such an answer: an `adopt-refused`, a `store-unmeasured`, a StoreError word and a success all come after the lock-take half. Task 19 already answers its binding branch, its RB6 refusal and its unknown-handler refusal through `released`; this task keeps that for `bindingPass`'s outcome. Measured by the first case of Step 1B (a refused adopt with a mid-pass line) and Step 7's `released`-to-`result` mutant.
+- **The ids the half reads are the files' at release, so a binding that changed them is honoured.** adopt, restore and rebuild write a NEW `store.writer` (and restore or rebuild may write a different `store.id`), so the lock-take half's ids are stale by the time the pass answers. B1's `released` takes `ids = idsFromFiles(P)` as a default parameter, which JavaScript evaluates at each call, after the binding; the branch passes `idsFromFiles(P)` explicitly so the re-read is visible. The half then journals under the binding the pass leaves (the new one after a success, the old one after a refusal, or none, which only observes, when a half-written binding reads unmeasured), which is the binding `finishBind`'s own half already used and the next pass's lock-take half will use. `db` is `null`: `finishBind` closed the writer, so a failure at release is said, never counted twice.
+- **A journal failure `finishBind` already said and counted is not said again.** `finishBind` runs the half on the open store so a failed append is counted (`journal_write_failed`, §9.10 "Journal append"), and answers `{ rc: 1, counted: true }`; the branch hands `b.counted === true` to `released`'s `counted`, exactly as B1's `opBody` hands `v.counted`. Measured by Step 1B's second case (a persistent append failure: one `journal-unwritable` line, one count) and Step 7's mutant.
+- **The op marker is removed by B1's type-aware `removeEntry(P.op)` in `adoptArm`'s `finally`, never `rmSync(P.op, { force: true })`** (B1's history-planted-entries-never-wedge; the same choice Tasks 27 and 28 make). In `adoptArm` the marker write precedes the `try`, so a directory planted at `op` fails `writeOpMarker` first and the `finally` meets only the marker this pass wrote; the difference is not reachable as behaviour, so the guard is the source pin in Step 1B (no `rmSync(` call anywhere in sweep.mjs, which B1 never imports there, and `removeEntry(P.op)` in `adoptArm`'s `finally`) and Step 7's mutant.
 
 - [ ] **Step 1: Write the failing tests.** In `server/test/history-recover.test.ts`, add these two statements directly below the file's top import block, after the last `import … from …;` line at the top. Task 25 already imports from both modules; a second import of a module is legal ES, and both names are new:
 
@@ -27181,10 +27493,62 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
 
 `countOf(box, "derivation_state WHERE step = 'recover'")` uses Task 25's helper, whose SQL is `SELECT count(*) AS n FROM ${table}`. A table name followed by a WHERE clause is still one statement, and every value in it is a fixed fixture string.
 
+- [ ] **Step 1B: Write the failing release-half cases.** Append to the END of `server/test/history-op.test.ts` (B1's file; Task 35 appends its own describe after this one later). It uses the file's module scope only (`boundBox`, `driverPty`, `lastResult`, `paths`, `names`, `draining`, `recs`, `counter`, `startup`, `plantSession`, `ID`, `G1`, `U1`, `fs`, `path`), so it adds no import line:
+
+```ts
+
+// ── W1-B2 Task 26: a binding pass answers through the half at release (RF5a F19) ───────────────────────────────
+describe('W1-B2 Task 26: the binding branch answers through B1\'s released (RF5a F19), and the op marker leaves by removeEntry', () => {
+  /** A hook's line landing in spool/ once the pass has taken its lock-take half and made its first probe (B1's `mid`). */
+  const mid = [{ rel: '.ccrc/history/spool/claude-a-demo.jsonl', text: '\n' + JSON.stringify(startup(U1, { reg: U1 })) + '\n' }];
+  const spooled = (box: HistoryBox): string[] => names(paths(box).spool).filter((n) => n.endsWith('.jsonl'));
+
+  it('a refused adopt (store.id already names this store) still renames, observes and journals a line spooled during the pass', async () => {
+    const box = boundBox('ccrc-hist-t26-rel-a-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    // adopt is irreversible, so its gate needs a TTY: the driver runs on a pty, as B1's operator-form rows do.
+    const op = await driverPty(box, { afterFirstStatfs: mid }, ['--op', 'adopt']);
+    expect(lastResult(op.out), op.out).toEqual({ rc: 2, reason: 'adopt-refused' });
+    expect(spooled(box), 'the release half renamed it').toEqual([]);
+    const held = draining(box);
+    expect(held, 'and holds it in .draining/').toHaveLength(1);
+    expect(names(paths(box).draining), 'observed: its .obs beside it').toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
+    expect(recs(box).filter((r) => r.k === 'spool'), 'journaled under the binding the pass left').toHaveLength(1);
+  }, 60_000);
+
+  it('a bind whose journal appends all fail says journal-unwritable once and counts it once: finishBind said it, the release half does not repeat it', async () => {
+    const box = boundBox('ccrc-hist-t26-rel-b-');
+    fs.rmSync(paths(box).storeId);
+    fs.rmSync(path.join(paths(box).root, 'store.writer'));
+    const before = counter(box, 'journal_write_failed');
+    // Every open under journal/ fails once the first probe has answered: the bind record's flush (finishBind's), then
+    // the release half's append of the mid-pass line. appendJournal makes any such throw a JournalError.
+    const op = await driverPty(box, { afterFirstStatfs: mid, throwTimesAfterFirstStatfs: { fn: 'openSync', needle: '/journal/', code: 'ENOSPC', times: 1000 } },
+      ['--op', 'adopt']);
+    const out = op.out.replace(/\r/g, '');
+    expect(lastResult(out), out).toEqual({ rc: 1 });
+    expect(out.match(/^history-sweep: journal-unwritable$/gm) ?? [], out).toHaveLength(1);
+    expect(counter(box, 'journal_write_failed') - before, 'counted once, on the open store').toBe(1);
+    expect(spooled(box), 'the release half still ran').toEqual([]);
+  }, 60_000);
+
+  it('sweep.mjs calls no rmSync, and adoptArm removes its op marker with removeEntry (B1\'s history-planted-entries-never-wedge)', () => {
+    const src = fs.readFileSync(new URL('../../ccd/history/sweep.mjs', import.meta.url), 'utf8');
+    expect(src.match(/\brmSync\(/g) ?? [], 'rmSync(…, { force: true }) throws EISDIR on a directory planted at a name').toEqual([]);
+    const arm = src.slice(src.indexOf('export async function adoptArm('), src.indexOf('export async function bindingPass('));
+    expect(arm, 'CONTROL: adoptArm precedes bindingPass').not.toBe('');
+    expect(arm).toMatch(/\} finally \{\n(?:\s*\/\/.*\n)*\s*removeEntry\(P\.op\);\n/);
+  });
+});
+```
+
+`HistoryBox` is the type B1's file already imports from historyHelpers.js.
+
 - [ ] **Step 2: Run them and see them fail.**
 
 ```bash
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'C55')
+(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'W1-B2 Task 26')
 ```
 
 Expected: the two adopt cases are red. Before this task, `adopt` is not in `OP_VERBS`, so the direct door answers `{"rc":2,"reason":"bad-args"}` and the CLI relays exit 2. They fail at `expect(r.code, r.out).toBe(0)`, with `expected 2 to be +0`.
@@ -27192,6 +27556,8 @@ Expected: the two adopt cases are red. Before this task, `adopt` is not in `OP_V
 The refusal case is red at its `lastRc` assertion: `expected { rc: 2, reason: 'bad-args' } to deeply equal { rc: 2, reason: 'adopt-refused' }`. The CLAUDECODE case is green at the CLI door already, because the CLI runs its gate before it spawns. At the direct door it is red: B1's `runOpPass` checks `OP_VERBS` before its gate, so an op it does not know answers `bad-args` first.
 
 The newer-schema case is red the same way, at its `lastRc` (`bad-args` where `adopt-refused` was expected). The RB14 case's refused arm is green at the CLI door already, because Task 19's CLI half refuses `recovering` before it spawns; at the direct door it is red, `expected { rc: 2, reason: 'bad-args' } to deeply equal { rc: 2, reason: 'recovering' }`, for the same `OP_VERBS` reason.
+
+In `history-op.test.ts`, Step 1B's first two cases are red at their `lastResult` line for the same reason: `expected { rc: 2, reason: 'bad-args' } to deeply equal { rc: 2, reason: 'adopt-refused' }`, then `… to deeply equal { rc: 1 }` (the unknown op is refused before the lock-take half and the probe, so no line is even spooled). The source pin is red at its CONTROL, `expected '' not to be ''`: neither `adoptArm` nor `bindingPass` exists yet, so the slice is empty.
 
 Quoted reds are measured, not contractual.
 
@@ -27202,7 +27568,7 @@ Quoted reds are measured, not contractual.
 // They run as --op passes under the shim's lock, and BEFORE openStore, which refuses exactly the states they exist to
 // repair (store-unbound, store-missing, store-recoverable). By then runOpPass has already run:
 //   - decideOpGate: CLAUDECODE, a TTY, not a cc- pane. The three binding forms alone pass under history-off
-//     (⟦D:history-op-gate-in-sweep⟧);
+//     (D-4181);
 //   - the role check;
 //   - the lock-take journal half and the statfs probe;
 //   - decideOpGate again with a registered recovery step measured (recoverStepAt): adopt is refused `recovering` on a
@@ -27215,7 +27581,7 @@ Quoted reds are measured, not contractual.
 //   3. writes the op marker and runs store.mjs's sequence (L3). Every DB-side binding fact is committed before a
 //      binding file names the store (⟦D:history-binding-facts-before-link⟧);
 //   4. finishBind: opens the store as any pass does, then flushes its outbox, so the `bind` record lands in
-//      journal/<store_id>/<YYYY-MM>.<new writer>.jsonl (⟦D:history-journal-writer-token⟧). Then the release
+//      journal/<store_id>/<YYYY-MM>.<new writer>.jsonl (D-4226). Then the release
 //      journal half. An exit 0 therefore means the bind is in the fsynced journal (§8.4 "Every writing form
 //      flushes its outbox before it exits 0").
 
@@ -27244,7 +27610,9 @@ function bindFactsOf(home, role, deps, extra = {}) {
  *  answers it; the bind waits in the outbox for a pass that opens the store. A newer schema never gets here:
  *  decideBind refuses it before any write, adopt's newer store from bindFactsOf's storedVersion (RB17) and restore's
  *  newer backup from the staged copy, and rebuild creates at this build's version. A journal that cannot be appended is exit 1, as runOpPass answers it; the bind row stays in the
- *  outbox, and the next pass flushes it. */
+ *  outbox, and the next pass flushes it. That answer carries `counted: true`: the failure is said and counted here, on
+ *  the open store, so opPass's `released` (which runs the half at release once more, with the writer closed) does not
+ *  say it twice, as B1's opBody hands its own `counted` to it. */
 function finishBind(home, P, role, deps, out, now) {
   const opened = openStore(home, P, role, deps);
   if ('word' in opened) {
@@ -27264,14 +27632,14 @@ function finishBind(home, P, role, deps, out, now) {
     if (!(e instanceof JournalError)) throw e;
     bump(db, 'journal_write_failed');
     out('history-sweep: journal-unwritable');
-    return { rc: EXIT.INTERNAL };
+    return { rc: EXIT.INTERNAL, counted: true };
   } finally {
     closeWriter(db);
   }
 }
 
 /** `doctor --adopt` (§8.4; ⟦D:history-adopt-verb⟧): bind a store that is present without store.id to this box.
- *  It is the only binding of an unbound store; the sweep never adopts (⟦D:history-store-unbound-refused⟧).
+ *  It is the only binding of an unbound store; the sweep never adopts (D-4186).
  *  decideBind refuses (rc 2 adopt-refused) when:
  *  - store.id is present, whether equal (nothing to adopt) or not (two stores claim this box);
  *  - a pending marker names the DB's own id (the next tick finishes that creation);
@@ -27281,7 +27649,7 @@ function finishBind(home, P, role, deps, out, now) {
  *    bindFactsOf's storedVersion; this arm only measures and relays.
  *  It refuses with rc 5 store-unmeasured when a binding input, the user_version included, cannot be read.
  *  On success, store.mjs's adoptStore commits `bound:<ms>` = adopt, a new writer token and the `bind` row, then
- *  writes store.writer, then store.id (⟦D:history-store-writer-file⟧). Adopt registers no recovery step: the store
+ *  writes store.writer, then store.id (D-4220). Adopt registers no recovery step: the store
  *  is whole, it only moved (RC16). The carry line repeats §8.4's remedy, because the journal and the export are
  *  keyed by the store's id, not by this box; adopt prints it itself (RB11), and HEALTH_REMEDIES is unchanged. */
 export async function adoptArm(home, P, args, deps, out) {
@@ -27323,25 +27691,29 @@ export async function bindingPass(home, P, op, args, deps, out) {
 
 - [ ] **Step 4: Call it from `opPass`, and admit the verb.**
 - In `const OP_VERBS = new Set([…]);`, add the member `'adopt'` as the set's last member.
-- In `opPass` (Task 19's body; B1's exported `runOpPass` wrapper only calls it and is not edited), the binding verbs run before `openStore`. Task 19 left a branch for them, directly above `  const handler = OP_HANDLERS[parsed.op];`, after the lock-take journal half, the statfs check that answers `store-unreachable` and RB6's `recoverStepAt(P.dbFile) === 'open'` re-run of the gate:
+- In `opPass` (B1's body, edited in place by Task 19; B1's exported `runOpPass` wrapper only calls it and is not edited), the binding verbs run before `openStore`. Task 19 left a branch for them, directly above `  const handler = OP_HANDLERS[parsed.op];`, after the lock-take journal half, the statfs check that answers `store-unreachable` and RB6's `recoverStepAt(P.dbFile) === 'open'` re-run of the gate. Like every answer after the lock-take half, it answers through B1's `released`:
 
 ```js
   if (BINDING_OPS.has(parsed.op)) {
     const bind = BINDING_PASSES[parsed.op];
-    if (bind === undefined) return result(EXIT.REFUSED, 'bad-args');
+    if (bind === undefined) return released(EXIT.REFUSED, 'bad-args');
     const r = await bind({ home, P, parsed, args, deps, out, now, free, role });
-    return result(r.rc, r.reason);
+    return released(r.rc, r.reason);
   }
 ```
 
-  Replace that whole branch with the block below. Then delete Task 19's `BINDING_PASSES` declaration together with its doc comment (`bindingPass` is the binding hook from here on), and in the doc comment above `const OP_VERBS`, change `an entry in OP_HANDLERS or BINDING_PASSES` to `an entry in OP_HANDLERS, or an arm in bindingPass`. Check: `grep -c 'BINDING_PASSES' ccd/history/sweep.mjs` prints `0`.
+  Replace that whole branch with the block below (it keeps `released`; Choices say why, and why the ids are re-read). Then delete Task 19's `BINDING_PASSES` declaration together with its doc comment (`bindingPass` is the binding hook from here on), and in the doc comment above `const OP_VERBS`, change `an entry in OP_HANDLERS or BINDING_PASSES` to `an entry in OP_HANDLERS, or an arm in bindingPass`. Check: `grep -c 'BINDING_PASSES' ccd/history/sweep.mjs` prints `0`.
 
 ```js
   // W1-B2 Task 26: the binding verbs (adopt; restore and rebuild from Tasks 27 and 28) run here, under the lock and
-  // after the gate, and never reach openStore, which refuses the very states they repair (§8.4).
+  // after the gate, and never reach openStore, which refuses the very states they repair (§8.4). Their outcome, a
+  // refusal included, answers through B1's `released` like every answer after the lock-take half (RF5a F19). The ids
+  // are read from the files NOW: a bind writes a new store.writer (restore and rebuild may write another store.id), so
+  // the half journals under the binding this pass leaves. `db` is null (finishBind closed the writer), and a journal
+  // failure finishBind already said and counted is `counted`, so it is not said twice.
   if (BINDING_OPS.has(parsed.op)) {
     const b = await bindingPass(home, P, parsed.op, args, deps, out);
-    return result(b.rc, b.reason);
+    return released(b.rc, b.reason, null, idsFromFiles(P), b.counted === true);
   }
 ```
 
@@ -27406,8 +27778,8 @@ The `sed` prints exactly the guard, from its `if (process.argv[1] …` line to i
 ```
 
 Expected:
-- `history-recover.test.ts`: 16 passed (Task 25's 10 and these 6).
-- B1's `history-op.test.ts` and Task 19's `history-maint.test.ts` are green. Task 19's one direct-door line that named `adopt` was re-pointed in Step 4; no other direct-door case names a binding verb, and the gate's order is unchanged.
+- `history-recover.test.ts`: 17 passed (Task 25's 11 and these 6).
+- B1's `history-op.test.ts`, with Step 1B's three cases, and Task 19's `history-maint.test.ts` are green. Task 19's one direct-door line that named `adopt` was re-pointed in Step 4; no other direct-door case names a binding verb, and the gate's order is unchanged. B1's `RF5a F19` describe is green unchanged: its rows run `import` and `migrate`, whose answers this task does not touch.
 - tsc prints nothing.
 
 - [ ] **Step 7: Measure every new guard red, then green.** Run from the repository root; each block restores `sweep.mjs` with `cp`.
@@ -27422,12 +27794,56 @@ cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"
 python3 - <<'EOF'
 p = 'ccd/history/sweep.mjs'
 s = open(p).read()
-a = "    const b = await bindingPass(home, P, parsed.op, args, deps, out);\n    return result(b.rc, b.reason);\n"
+a = "    const b = await bindingPass(home, P, parsed.op, args, deps, out);\n    return released(b.rc, b.reason, null, idsFromFiles(P), b.counted === true);\n"
 assert s.count(a) == 1, 'mutation anchor not found once'
 open(p, 'w').write(s.replace(a, "    void bindingPass;\n", 1))
 EOF
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'DB present, store.id absent')
 #   RED: expected 2 to be +0
+cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
+
+# RF5a F19: the binding outcome answers through the half at release (a bare result: a refused adopt leaves the
+# mid-pass line in spool/)
+cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"
+python3 - <<'EOF'
+p = 'ccd/history/sweep.mjs'
+s = open(p).read()
+a = "    return released(b.rc, b.reason, null, idsFromFiles(P), b.counted === true);\n"
+assert s.count(a) == 1, 'mutation anchor not found once'
+open(p, 'w').write(s.replace(a, "    return result(b.rc, b.reason);\n", 1))
+EOF
+(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'a refused adopt')
+#   RED: expected [ 'claude-a-demo.jsonl' ] to deeply equal []   (the release half renamed it)
+cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
+
+# A journal failure finishBind already said and counted is not said again at release (counted dropped)
+cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"
+python3 - <<'EOF'
+p = 'ccd/history/sweep.mjs'
+s = open(p).read()
+a = "idsFromFiles(P), b.counted === true);\n"
+assert s.count(a) == 1, 'mutation anchor not found once'
+open(p, 'w').write(s.replace(a, "idsFromFiles(P), false);\n", 1))
+EOF
+(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'says journal-unwritable once')
+#   RED: expected [ …(2) ] to have a length of 1 but got 2
+cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
+
+# B1's history-planted-entries-never-wedge: the op marker leaves by removeEntry (rmSync with force put back, with its
+# import, as the arm first had it)
+cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"
+python3 - <<'EOF'
+import re
+p = 'ccd/history/sweep.mjs'
+s = open(p).read()
+a = "on a directory planted at `op`.\n    removeEntry(P.op);\n"
+assert s.count(a) == 1, 'mutation anchor not found once'
+s = s.replace(a, "on a directory planted at `op`.\n    rmSync(P.op, { force: true });\n", 1)
+s = re.sub(r'^import ', "import { rmSync } from 'node:fs';\nimport ", s, count=1, flags=re.M)
+open(p, 'w').write(s)
+EOF
+(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'calls no rmSync')
+#   RED: expected [ 'rmSync(' ] to deeply equal []
 cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
 
 # G9 (RB17): adopt never writes into a store newer than this build. The decider is lib's decideBind, so the mutant is
@@ -27540,12 +27956,12 @@ EOF
 cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs
 ```
 
-Each anchor is unique in `sweep.mjs` (or `lib.mjs`, or `cli.mjs`) at this task's end; Tasks 27 and 28 reuse `finishBind` rather than copy its flush. Then run `(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts)`, which must be green, and `git diff --stat ccd/history/lib.mjs ccd/history/cli.mjs`, which must print nothing.
+Each anchor is unique in `sweep.mjs` (or `lib.mjs`, or `cli.mjs`) at this task's end; Tasks 27 and 28 reuse `finishBind` rather than copy its flush. Then run `(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts)` and `(cd server && ./node_modules/.bin/vitest run test/history-op.test.ts -t 'W1-B2 Task 26')`, which must be green, and `git diff --stat ccd/history/lib.mjs ccd/history/cli.mjs`, which must print nothing.
 
 - [ ] **Step 8: Commit.**
 
 ```bash
-git add ccd/history/sweep.mjs server/test/history-recover.test.ts server/test/history-maint.test.ts
+git add ccd/history/sweep.mjs server/test/history-recover.test.ts server/test/history-maint.test.ts server/test/history-op.test.ts
 git status --short ccd/history/cli.mjs   # stage it too only if Step 4 had to add the '--adopt' entry
 git commit -m "feat(history): doctor --adopt binds an unbound store under a new writer
 
@@ -27583,7 +27999,7 @@ it bind an unbound one (RB14)."
     - `stageRestore(home: string, name: string): StagedRestore`, where `StagedRestore` is `{ tempPath; storeId: Presence<string>; userVersion: number | null; integrityOk: boolean; sizeBytes }`;
     - `commitRestore(home, staged, { nowMs }): { storeId: string; writer: string }`;
     - `abortRestore(staged): void`.
-  - Task 26 (`sweep.mjs`): `bindingPass(home, P, op, args, deps, out): Promise<{ rc: number; reason?: string }>`, which Task 19's `runOpPass` calls for `BINDING_OPS` before `openStore`. Its `args` is the parsed `OpArgs` (Task 6); for restore that is `{ op: 'restore'; name: string }`.
+  - Task 26 (`sweep.mjs`): `bindingPass(home, P, op, args, deps, out): Promise<{ rc: number; reason?: string; counted?: boolean }>`, which `opPass` (B1's, behind its `runOpPass` wrapper) calls for `BINDING_OPS` before `openStore`, answering its outcome through B1's `released` (`counted` is `finishBind`'s: a journal failure already said and counted). Its `args` is the parsed `OpArgs` (Task 6); for restore that is `{ op: 'restore'; name: string }`.
   - Task 25: the recovery step, which runs on the ticks after a restore, and the faults-preload knob `HISTORY_TEST_THROW_SQL=<substring>`.
   - Task 22: `--op backup`, which writes `db/backups/<YYYYMMDDTHHMMSSZ>.db`.
   - Task 10 (`historyHelpers.ts`): `runCli(box, args, opts?): SpawnResult & { json: Record<string, unknown> | null }`.
@@ -27596,7 +28012,7 @@ it bind an unbound one (RB14)."
     - The faults preload's `HISTORY_TEST_KILL=<fn>:<substring>:<nth>[:before|:after]` (B1 Task 12).
 - Produces (`sweep.mjs`):
   - Nothing new for the binding close: `restoreArm` calls Task 26's `bindFactsOf(home, role, deps, extra)` (with `extra` carrying the backup's facts) and `finishBind(home, P, role, deps, out, now)`, as Task 28's `rebuildArm` does.
-  - `export async function restoreArm(home: string, P: HistoryPaths, args: { name: string }, deps: SweepDeps, out: (line: string) => void): Promise<{ rc: number; reason?: string }>`.
+  - `export async function restoreArm(home: string, P: HistoryPaths, args: { name: string }, deps: SweepDeps, out: (line: string) => void): Promise<{ rc: number; reason?: string; counted?: boolean }>` (`counted` only ever from `finishBind`).
   - `OP_VERBS` gains `'restore'`.
   - Refusal stdout lines: `history-sweep: restore-refused: <detail>`, or `history-sweep: <reason>: <detail>` relayed from `decideBind`, or `history-sweep: restore stopped: <message>` when `commitRestore` throws a `StoreError` (its word and exit, as `adoptArm` answers one). Each comes before the last line, which is the `{"rc":…}` result.
 - Produces (`history-recover.test.ts`, module scope):
@@ -27615,14 +28031,14 @@ it bind an unbound one (RB14)."
 - Pin: **C57** (whole).
 - Departures:
   - ⟦D:history-restore-verb⟧
-  - ⟦D:history-restore-wal-mode⟧
+  - B1's D-4218 (`history-restore-wal-mode`)
   - ⟦D:history-binding-facts-before-link⟧
-  - ⟦D:history-store-wal-orphaned⟧
-  - ⟦D:history-store-recoverable⟧
+  - B1's D-4188 (`history-store-wal-orphaned`)
+  - B1's D-4185 (`history-store-recoverable`)
   - ⟦D:history-backup-preflight-and-rename⟧ (`planCopy` is the one copy preflight)
   - ⟦D:history-recovery-replay⟧
-  - ⟦D:history-pre-migration-snapshot⟧
-  - ⟦D:history-tick-order⟧ (migration before recovery)
+  - B1's D-4182 (`history-pre-migration-snapshot`)
+  - B1's D-4224 (`history-tick-order`) (migration before recovery)
   - ⟦D:history-ops-refused-while-recovering⟧ (restore's exemption): while a `('recover', <ms>)` step is registered, `--restore` passes `decideOpGate` (Task 6's row exempts it, RB6) and meets its own preconditions. The step lives in the DB that restore refuses to overwrite, so restore replaces it only once the operator has moved that DB aside, and the restored copy then carries the step `commitRestore` registers. No case here repeats that: Task 30's C64 case `a registered recovery step, on a real terminal` pins both doors (restore answers its own `restore-refused`, never `recovering`), and Task 6's lib mutant that drops restore and rebuild from the exemption is its red.
 
 - [ ] **Step 1: Append the shared `rr` helpers to `server/test/history-recover.test.ts`.**
@@ -28364,7 +28780,7 @@ git commit -m "feat(history): doctor --restore: staged copy judged twice, bound 
     - The faults preload's `HISTORY_TEST_KILL`.
 - Produces (`sweep.mjs`):
   - `export function journalStoreDirs(home: string): { storeId: string; headsAgree: boolean }[]`. It lists every uuid-named directory under `journal/`. `headsAgree` holds when the directory has at least one month file (Task 25's `JOURNAL_NAME_RE`) and every month file's head record (Task 25's `journalEnds`) names the directory.
-  - `export async function rebuildArm(home: string, P: HistoryPaths, args: { storeId: string | null }, deps: SweepDeps, out: (line: string) => void): Promise<{ rc: number; reason?: string }>`.
+  - `export async function rebuildArm(home: string, P: HistoryPaths, args: { storeId: string | null }, deps: SweepDeps, out: (line: string) => void): Promise<{ rc: number; reason?: string; counted?: boolean }>` (`counted` only ever from `finishBind`).
   - `OP_VERBS` gains `'rebuild'`.
   - A refused rebuild prints `history-sweep: <reason>: <detail>` and, when any journal directory exists, `history-sweep: journal store directories: <id>, <id>, …`.
 - Produces (`history-recover.test.ts`): `rrPlantJournalDir`, `rrLeafIds`, `rrState` (with the type `RrState`), `rrJournalKinds`.
@@ -28378,16 +28794,16 @@ git commit -m "feat(history): doctor --restore: staged copy judged twice, bound 
 - O35's CONTROLs are measured in Step 8.
 - Departures:
   - ⟦D:history-rebuild-verb⟧
-  - ⟦D:history-store-recoverable⟧
+  - B1's D-4185 (`history-store-recoverable`)
   - ⟦D:history-recovery-replay⟧
-  - ⟦D:history-journal-drained-record⟧
-  - ⟦D:history-store-pending-marker⟧
+  - B1's D-4230 (`history-journal-drained-record`)
+  - B1's D-4184 (`history-store-pending-marker`)
   - ⟦D:history-binding-facts-before-link⟧
-  - ⟦D:history-journal-writer-token⟧
-  - ⟦D:history-spool-journal-retained⟧
-  - ⟦D:history-rekey-merges⟧
-  - ⟦D:history-genless-line-joins-registry-generation⟧
-  - ⟦D:history-redaction-journaled⟧
+  - B1's D-4226 (`history-journal-writer-token`)
+  - B1's D-4227 (`history-spool-journal-retained`)
+  - B1's D-4194 (`history-rekey-merges`)
+  - B1's D-4193 (`history-genless-line-joins-registry-generation`)
+  - B1's D-4241 (`history-redaction-journaled`)
   - ⟦D:history-recall-off-generation⟧
   - ⟦D:history-harness-unsupported-refused⟧ (its `harness-unreadable` arm)
   - ⟦D:history-recall-off-preflight-b2⟧ (NEW, Task 10's)
@@ -28946,8 +29362,8 @@ git commit -m "feat(history): doctor --rebuild from store.id, agreeing journal h
 **Files:**
 - Modify: `ccd/history/derive.mjs` (B2 Task 8 created it; Tasks 9 and 21 extend it; it has no entry guard). Append one block holding `redactNodeFields`, `reparseFailClosed` and `rederiveGistsFor` at the end of the file (Step 4), then a second holding `BELT_NODE_BATCH` and `beltNodesStep` below it (Step 4A, spec rev 3.5's §6.2 "The belt").
 - Modify: `ccd/history/sweep.mjs`:
-  - In `reindexForValues` (B1's, at its tip `export async function reindexForValues(db, ctx, values, fresh, budget, slice = rederiveSlice(budget))`; B1's ⟦D:history-reindex-mark-by-rederivation⟧ removed its `complete` parameter, and it never moves the mark), add one call directly below its line `  for (const v of owed) for (const unit of secretUnits(v)) for (const r of f.match.all(ftsPhrase(unit))) ids.add(Number(r.rowid));` (B1's ⟦D:history-reindex-by-units-and-complete-loads⟧ searches by unit) and above its line `  if (ids.size === 0) return 0;`.
-  - In `tick`, add one call directly below B1's line `  await rederiveFts(db, ictx, ctx.budget, slice);` (Step 4A), and merge `beltNodesStep` into the `./derive.mjs` import.
+  - In `reindexForValues` (B1's, at its tip `export async function reindexForValues(db, ctx, values, fresh, budget, slice = rederiveSlice(budget))`; B1's D-4344 (`history-reindex-mark-by-rederivation`) removed its `complete` parameter, and it never moves the mark), add one call directly below its line `  for (const v of owed) for (const unit of secretUnits(v)) for (const r of f.match.all(ftsPhrase(unit))) ids.add(Number(r.rowid));` (B1's D-4311 (`history-reindex-by-units-and-complete-loads`) searches by unit) and above its line `  if (ids.size === 0) return 0;`.
+  - In `tick`, add one call directly below B1's line `  await rederiveFts(db, ictx, ctx.budget, slice);` (Step 4A), and merge `beltNodesStep` into the `./derive.mjs` import. In `tick`'s doc comment, the new item 7 `beltNodesStep`, every item from B1's `drainSpool` down renumbered (Task 8's `deriveNodes` 14 → 15, `markScan` 17 → 18), and `drainSpool`'s `step 8's` becomes `step 9's` (B1's F39 pin, Step 4A).
   - Insert one block holding `RECOVER_NODE_BATCH`, `RECOVER_NODES_CURSOR_RE`, `RECOVER_REBUILT_STEP`, `recoverPairIdx`, `openRecoverVersion`, `recoverNodesBatch` and `recoverReindex`, directly above the entry guard and below Task 28's block.
   - Replace the body of Task 25's placeholder executor `recoverReindexChunk` so it adapts `recoverReindex` to Task 25's executor contract. The `RECOVER_EXECUTORS` literal itself is unchanged.
   - Add any missing import names (Step 5).
@@ -28970,26 +29386,26 @@ git commit -m "feat(history): doctor --rebuild from store.id, agreeing journal h
   - Task 8 (`store.mjs`): `getStep(db, step, version): { cursor: string | null; completedMs: number | null } | null` and `setStep(db, step, version, cursor, completedMs?)`.
   - B1:
     - `sweep.mjs` at B1's tip:
-      - `export async function reindexForValues(db, ctx, values, fresh, budget, slice = rederiveSlice(budget))`: the same-tick phrase fast path. It searches each value by UNIT, `secretUnits(v)` (B1's ⟦D:history-reindex-by-units-and-complete-loads⟧); while a generation is open it searches only `fresh`, the values whose pairs this tick recorded (lib's `phraseValues`); every blob it reads is charged to `slice` and `budget` (review 344 F2). It answers the re-indexed blob count and moves no mark. Its early returns are `if (ctx.fts !== true) return 0;` and `if (top <= mark) return 0;`, so this task's call runs only on a tick where some value is owed. Its one caller is `tick` (`const slice = rederiveSlice(ctx.budget);` then `await reindexForValues(db, ictx, secrets.values, secrets.newValues, ctx.budget, slice);`).
-      - `export async function rederiveFts(db, ctx, budget, slice)`: the hash re-derivation generation (meta `fts_rederive`, `<target> <cursor> <end>`), which alone moves the mark `fts_reindex_rid`, when its blob walk completes (B1's ⟦D:history-reindex-mark-by-rederivation⟧). Since Task 7B it also opens the belt's ` b` generations and restarts `('nodes-belt', 1)` whenever a generation opens; `tick` calls it right after `reindexForValues`, in the same slice.
+      - `export async function reindexForValues(db, ctx, values, fresh, budget, slice = rederiveSlice(budget))`: the same-tick phrase fast path. It searches each value by UNIT, `secretUnits(v)` (B1's D-4311 (`history-reindex-by-units-and-complete-loads`)); while a generation is open it searches only `fresh`, the values whose pairs this tick recorded (lib's `phraseValues`); every blob it reads is charged to `slice` and `budget` (review 344 F2). It answers the re-indexed blob count and moves no mark. Its early returns are `if (ctx.fts !== true) return 0;` and `if (top <= mark) return 0;`, so this task's call runs only on a pass where some value is owed. Its two callers are `tick` and Task 25's `recoverPass`, each with `const slice = rederiveSlice(ctx.budget);` then `await reindexForValues(db, ictx, secrets.values, secrets.newValues, ctx.budget, slice);`. `recoverPass` calls it on every recover pass, including while this task's reindex phase is pending or its rebuild is part-done (Task 25's ruling).
+      - `export async function rederiveFts(db, ctx, budget, slice)`: the hash re-derivation generation (meta `fts_rederive`, `<target> <cursor> <end>`), which alone moves the mark `fts_reindex_rid`, when its blob walk completes (B1's D-4344 (`history-reindex-mark-by-rederivation`)). Since Task 7B it also opens the belt's ` b` generations and restarts `('nodes-belt', 1)` whenever a generation opens; `tick` and Task 25's `recoverPass` each call it right after `reindexForValues`, in the same slice. `recoverPass` does not run `beltNodesStep`, so a node step that a generation reopened during a recovery waits for the first tick after the step completes.
       - `makeIngestCtx(home, homes, nowMs, ids, floorProbe?)`, `budgetLeft(budget)`.
-    - `lib.mjs`: `secretUnits(value)` (B1's ⟦D:history-reindex-by-units-and-complete-loads⟧: the value itself when it is one `[A-Za-z0-9_-]+` run, else each run of 12 or more characters), which `rederiveGistsFor` searches by, as `reindexForValues` does.
+    - `lib.mjs`: `secretUnits(value)` (B1's D-4311 (`history-reindex-by-units-and-complete-loads`): the value itself when it is one `[A-Za-z0-9_-]+` run, else each run of 12 or more characters), which `rederiveGistsFor` searches by, as `reindexForValues` does.
     - `lib.mjs`: `makePairIndex`, `redactField`, `ftsPhrase`, `REDACTED_MARK`.
     - `store.mjs`: `withTx`, `bump`.
-  - Task 7A (`lib.mjs`, spec rev 3.5): `makePairIndex(pairs, belt = null)`; `redactField(text, idx)`, which is layer 4 (the substring belt) over B1's layers 1-3 whenever `idx.belt` is set, so every node field this task rewrites through it carries the belt with no further edit; `BELT_NODES_STEP` (`'nodes-belt'`).
+  - Task 7A (`lib.mjs`, spec rev 3.5): `makePairIndex(pairs, belt = null)`; `redactField(text, idx)`, which is layer 4 (the substring belt) over B1's layers 1-3 whenever `idx.belt` is set, so every node field this task rewrites through it carries the belt with no further edit; `nodeIndexTexts(fields, idx)`, the one `nodes_fts` text rule (each column through B1's `entryIndexText`: the index's escape readings and the belt), which every `nodes_fts` row this task writes goes through and which `beltNodesStep` compares a node's row against; `BELT_NODES_STEP` (`'nodes-belt'`).
   - Task 7B (`sweep.mjs`): the tick's `secrets.pairIdx` is `{ byLen, belt, beltLive }`, and `rederiveFts` restarts `('nodes-belt', 1)` whenever a generation opens.
   - Task 9 (`derive.mjs`): the module-private `parentsBudgetLeft(budget)`.
   - Task 27 and 28's `rr*` test helpers; Task 25's faults-preload knob `HISTORY_TEST_THROW_SQL=<substring>`.
 - Produces:
   - `derive.mjs`:
-    - `export function redactNodeFields(db, ictx, nodeIds: readonly string[]): number`. It rewrites each node's stored gist, each of its topics (then serialises the list) and its refs through `redactField` with `ictx.pairIdx`, and replaces its `nodes_fts` row when `ictx.fts`, topics joined by `\n` as Tasks 8 and 9 index them. This is the fail-closed path for a node whose summary cannot be read again.
+    - `export function redactNodeFields(db, ictx, nodeIds: readonly string[]): number`. It rewrites each node's stored gist, each of its topics (then serialises the list) and its refs through `redactField` with `ictx.pairIdx`, and replaces its `nodes_fts` row when `ictx.fts` with Task 7A's `nodeIndexTexts` of the rewritten fields, as Tasks 8 and 9 index them. This is the fail-closed path for a node whose summary cannot be read again.
     - `export function reparseFailClosed(db, ictx, nodeIds: readonly string[]): number`. `refreshLeaf` per leaf, then one `rerollParents` when any changed (an `'updated'` or a `'failed'` answer: Task 21's refreshLeaf records a parser throw inside `leafFields` itself, writing the leaf `parse-failed`). A throw that escapes `refreshLeaf` (not busy) is counted `parser_crash` and skipped, and the caller's `redactNodeFields` rewrites it; nothing retries either on a later pass. Answers how many leaves changed.
     - `export function rederiveGistsFor(db, ictx, values: readonly string[], budget: object, slice: object): number`: the same-tick fast path over nodes. It moves no mark, and it runs only while `slice` and `budget` last (B1's review 344 F2 rule for a fast path).
-    - `export function beltNodesStep(db, ictx, budget): boolean` (§6.2 "The belt"). It runs while lib's `BELT_NODES_STEP` `('nodes-belt', 1)` is open; Task 7B's `rederiveFts` restarts it whenever a generation opens. It reads every node in rowid order and rewrites, through `redactNodeFields`, each one whose gist, topics or refs `redactField` would change. Its cursor is the last `nodes.rowid` read, committed after each batch (⟦D:history-reindex-subcursor-idempotent⟧). It answers whether the step is complete or was never opened. The tick calls it right after B1's `rederiveFts`, in the same slice.
+    - `export function beltNodesStep(db, ictx, budget): boolean` (§6.2 "The belt"). It runs while lib's `BELT_NODES_STEP` `('nodes-belt', 1)` is open; Task 7B's `rederiveFts` restarts it whenever a generation opens. It reads every node in rowid order and rewrites, through `redactNodeFields`, each one whose gist, topics or refs `redactField` would change, or whose `nodes_fts` row differs from `nodeIndexTexts` of its stored fields (a value the index's escape readings now mask, which `redactField` leaves in the stored field). It is the one mechanism that re-derives `nodes_fts` after a pair is learned or a belt falls due. Its cursor is the last `nodes.rowid` read, committed after each batch (⟦D:history-reindex-subcursor-idempotent⟧). It answers whether the step is complete or was never opened. The tick calls it right after B1's `rederiveFts`, in the same slice.
   - `sweep.mjs`:
     - `export async function recoverReindex(db, ctx, cur, budget): Promise<{ cur; done: boolean; moved: boolean }>` (async: it awaits Task 23's `ftsRebuildJob`). It answers `moved: false` with `done: false` only when the run budget was spent before it did any work;
     - module-private `RECOVER_NODE_BATCH = 64`, `RECOVER_NODES_CURSOR_RE`, `RECOVER_REBUILT_STEP = 'recover-merge'`, `recoverPairIdx(db, belt)`, `openRecoverVersion(db)`, `recoverNodesBatch(db, rctx, version)`;
-    - in `tick`, one `beltNodesStep(db, ictx, slice);` call directly below B1's `await rederiveFts(db, ictx, ctx.budget, slice);`;
+    - in `tick`, one `beltNodesStep(db, ictx, slice);` call directly below B1's `await rederiveFts(db, ictx, ctx.budget, slice);`, listed as item 7 of `tick`'s doc comment, which then holds 18 items;
     - two derivation rows per recovery: `('recover-nodes', <recover version>)`, with cursor `leaves:<rowid>` or `condensed:<rowid>`, and `('recover-merge', <recover version>)`, completed once the FTS rebuild (its merge steps included) completed for this step. Status never reads either.
     - Before its rebuild starts, any OTHER open `('fts-rebuild', v)` row (a repair the restored file carried) is deleted, so `ftsRebuildJob` starts this step's own rebuild from blob 0 rather than resume a job whose earlier blobs were indexed without the replayed pairs.
   - Test helpers: `rrFtsBytes`, `rrBlobsHold`, `rrMatches`, `rrGists`.
@@ -28998,14 +29414,14 @@ git commit -m "feat(history): doctor --rebuild from store.id, agreeing journal h
 - §9.14 "Redaction first": a restore whose journal adds a pair the backup lacked re-runs the FTS derivation over the restored blobs.
 - §6.2 "A pair learned after its text was indexed": quoted-phrase MATCH, delete and re-insert, re-derive the leaf gists, merge steps.
 - §8.3: output redaction needs only the pair.
-- §6.2 "The belt" and §8.3 layer 4 (spec rev 3.5): the belt's node step, which Task 7B's generations restart, re-redacts every node's stored fields, so a letter-glued value no phrase finds leaves `nodes` and `nodes_fts` too. One case of its own (Step 2A); not a departure, rev 3.5 is the rule.
+- §6.2 "The belt" and §8.3 layer 4 (spec rev 3.5): the belt's node step, which Task 7B's generations restart, re-redacts every node's stored fields and re-derives its `nodes_fts` row through `nodeIndexTexts`, so a letter-glued value no phrase finds leaves `nodes` and `nodes_fts`, and a pair-only value glued to a literal escape leaves `nodes_fts`. Two cases of its own (Step 2A); not a departure, rev 3.5 is the rule. The mark `fts_reindex_rid` moves when a generation's blob walk completes, while the node step may still run (§6.2 states that window; output stays masked meanwhile, because `redactForDisplay` carries the belt and the escape readings).
 - Pin: **O47** (whole: the rebuild case, the restore case, the late case and both CONTROLs). Two cases beyond the spec's: a restored file that carries a repair's open rebuild (the supersede), and a late pair whose leaf re-derivation throws (the coordinator's ruling RB5).
 - Departures:
-  - B1's ⟦D:history-reindex-mark-by-rederivation⟧ (consumed): only `rederiveFts` moves the mark; this task's `rederiveGistsFor` is a fast path beside B1's phrase search and moves none.
-  - ⟦D:history-redaction-journaled⟧
-  - ⟦D:history-redaction-reindex-merge⟧
+  - B1's D-4344 (`history-reindex-mark-by-rederivation`) (consumed): only `rederiveFts` moves the mark; this task's `rederiveGistsFor` is a fast path beside B1's phrase search and moves none.
+  - B1's D-4241 (`history-redaction-journaled`)
+  - B1's D-4245 (`history-redaction-reindex-merge`)
   - ⟦D:history-recovery-replay⟧
-  - ⟦D:history-fts-indexes-redacted-text⟧
+  - B1's D-4243 (`history-fts-indexes-redacted-text`)
   - ⟦D:history-redaction-fail-closed-node-rewrite⟧ (NEW). A leaf whose summary is pruned, a raw leaf, and a condensed node cannot be re-derived from text. Their stored fields are rewritten through `redactField` instead, so no stored gist keeps a learned value. A leaf whose re-derivation throws is rewritten the same way and counted `parser_crash`, never retried by the next pass (the coordinator's ruling RB5, applied to re-derivation).
   - ⟦D:history-reindex-subcursor-idempotent⟧ (NEW). The reindex phase's own cursors (`recover-nodes`, `recover-merge`, and the rebuild's), and the belt's node step's (`nodes-belt`), commit after each batch's own transactions, not inside them, because `refreshLeaf`, `redactNodeFields` and `ftsRebuildJob` each open their own. §9.14's same-transaction cursor holds for the replay phases; a kill here re-runs at most one batch of idempotent re-derivation.
 
@@ -29218,10 +29634,40 @@ describe('§6.2 "The belt": a generation that opens re-redacts every node\'s sto
     expect(rrGists(box)[0]).toContain(rrLib.REDACTED_MARK);
     expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'and its nodes_fts row').toBe(0);
   }, 180_000);
+
+  it('a nodes_fts row holding a pair-only value glued to a literal escape is re-derived through nodeIndexTexts by the node step (spec §6.2 nodes_fts)', () => {
+    const box = rrH.makeHistoryBox('ccrc-hist-beltesc-', { role: 'fleet' });
+    const v = rrRandomBytes(16).toString('hex');
+    const file = rrPath.join(box.home, '.cc-secrets', 'esc.env');
+    rrFs.mkdirSync(rrPath.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    rrFs.writeFileSync(file, `ZQ_ESC=${v}\n`, { mode: 0o600 });
+    rrH.plantSession(box, RR_ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    rrH.plantTranscript(box, 'claude-a', RR_SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Rotating the fixture credential before the release.'));
+    rrH.spoolLine(box, RR_ID, rrStart(RR_ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM redact_hashes WHERE len = ?', v.length)[0]!.n,
+      'CONTROL: a tick recorded the value\'s pair').toBeGreaterThan(0);
+    // The value leaves its file: its pair stays (redact_hashes only grows), but no belt holds it any longer, so only the
+    // index's escape readings separate it from the literal `\n` glued onto it. redactField's one reading sees the run
+    // `n<value>`, which no pair matches, so the stored gist below is one redactField leaves as it is.
+    rrFs.writeFileSync(file, `ZQ_ESC_OTHER=${rrRandomBytes(16).toString('hex')}\n`, { mode: 0o600 });
+    const gist = `Printed {"t":"a\\n${v}"} before the release.`;
+    const db = new RrDb(rrRoot(box).dbFile);
+    try {
+      const n = db.prepare("SELECT rowid AS rid, node_id FROM nodes WHERE kind <> 'condensed'").get() as { rid: number; node_id: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(gist, n.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(n.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(n.rid, gist, '', '');
+      db.prepare("DELETE FROM meta WHERE k = 'fts_belt'").run();
+    } finally { db.close(); }
+    expect(rrMatches(box, 'nodes_fts', `"n${v}"`), 'CONTROL: the planted row holds the glued term').toBe(1);
+    rrTickUntil(box, () => rrStepDone(box, 'nodes-belt', 1) && rrMatches(box, 'nodes_fts', `"n${v}"`) === 0);
+    expect(rrMatches(box, 'nodes_fts', '"printed"'), 'the row was re-derived, not dropped').toBe(1);
+  }, 180_000);
 });
 ```
 
-  - `RrDb` and `rrRoot` are Task 27's `rr` helpers; the write handle is closed before the next pass opens the store.
+  - `RrDb` and `rrRoot` are Task 27's `rr` helpers; the write handle is closed before the next pass opens the store. `rrQ`, `rrStepDone` and `rrRandomBytes` are Task 27's too, and `rrLeafIds` is Task 28's.
 
 - [ ] **Step 3: Run it and see it fail.**
 
@@ -29237,7 +29683,7 @@ describe('§6.2 "The belt": a generation that opens re-redacts every node\'s sto
     - The late case is red at `rrMatches(box, 'nodes_fts', …)` (`expected 1 to be +0`): B1's phrase path and its generation re-index blobs only, and nothing rewrites the node yet.
     - The carried-rebuild case is red at `the carried job is gone, and no rebuild is left open` (`expected [ { version: 1 } ] to deeply equal []`): the placeholder never supersedes the carried row. If B1's re-derivation has not cleared the term by then, it is red earlier, at `no term after the step`.
     - The late-throw case is red at `the throw is counted once` (`expected 0 to be 1`): with no re-derivation, nothing reads the leaf.
-    - The node-step case is red at `rrTickUntil: not done after 8 passes`: Task 7B's belt generation restarts `('nodes-belt', 1)`, and nothing runs it yet.
+    - Both node-step cases are red at `rrTickUntil: not done after 8 passes`: Task 7B's belt generation restarts `('nodes-belt', 1)`, and nothing runs it yet.
   - These quoted reds are not contractual.
 
 - [ ] **Step 4: Write the node re-derivation.** Append to `ccd/history/derive.mjs`:
@@ -29252,9 +29698,10 @@ describe('§6.2 "The belt": a generation that opens re-redacts every node\'s sto
  *  Topics are redacted ONE BY ONE and only then serialised (R2: redactField on each raw field before any
  *  serialisation; in the column's JSON text a control character inside a value would be escaped and no longer match
  *  its pair). The column is read through topicsOfColumn (Task 9), so JSON and one-per-line columns both read; the
- *  nodes_fts row holds the topics joined by \n, as every other writer of it does (Tasks 8 and 9). redactField is
- *  layer 4 over layers 1-3 whenever ictx.pairIdx carries a belt (Task 7A, spec rev 3.5 §8.3), so a value glued to
- *  letters is masked here too; this is also the writer the belt's node step (beltNodesStep) uses.
+ *  nodes_fts row is lib's nodeIndexTexts of the rewritten fields (Task 7A: each column through entryIndexText, so the
+ *  index's escape readings; topics and refs one per line), as every other writer of it does (Tasks 8 and 9).
+ *  redactField is layer 4 over layers 1-3 whenever ictx.pairIdx carries a belt (Task 7A, spec rev 3.5 §8.3), so a
+ *  value glued to letters is masked here too; this is also the writer the belt's node step (beltNodesStep) uses.
  *  ⟦D:history-redaction-fail-closed-node-rewrite⟧ */
 export function redactNodeFields(db, ictx, nodeIds) {
   if (nodeIds.length === 0) return 0;
@@ -29280,7 +29727,8 @@ export function redactNodeFields(db, ictx, nodeIds) {
       for (const r of refs) putRef.run(id, r.kind, r.value, r.origin);
       if (fts) {
         ftsDel.run(row.rid);
-        ftsIns.run(row.rid, gist ?? '', (list ?? []).join('\n'), refs.map((r) => r.value).join('\n'));
+        const t = nodeIndexTexts({ gist, topics: list ?? [], refs: refs.map((r) => r.value) }, ictx.pairIdx);
+        ftsIns.run(row.rid, t.gist, t.topics, t.refs);
       }
       n += 1;
     }
@@ -29321,12 +29769,12 @@ export function reparseFailClosed(db, ictx, nodeIds) {
  *  - They are found by a QUOTED-PHRASE match on nodes_fts (ftsPhrase), which FTS5 tokenises as the index did. A bare
  *    MATCH of a value holding '-' is a syntax error ("no such column", measured on 22.16.0).
  *  - Each value is searched by UNIT (lib's secretUnits: the value when it is one run, else each of its 12+-char
- *    runs), as B1's reindexForValues searches blobs_fts (B1's ⟦D:history-reindex-by-units-and-complete-loads⟧): redaction matches by unit, so a node holding
+ *    runs), as B1's reindexForValues searches blobs_fts (B1's D-4311): redaction matches by unit, so a node holding
  *    only one segment of a multi-run value is found too.
  *  - A leaf whose summary is still stored is re-derived (reparseFailClosed: same id, parents re-rolled, a throw
  *    counted and skipped). Every node found, re-derived or not, is then rewritten through redactNodeFields.
  *  - It is the same-tick fast path over nodes, as B1's phrase search is over blobs (B1's
- *    ⟦D:history-reindex-mark-by-rederivation⟧): it moves no mark, and it runs only while `slice` and `budget` last
+ *    D-4344): it moves no mark, and it runs only while `slice` and `budget` last
  *    (B1's review 344 F2 rule: a fast path never runs unbudgeted ahead of the step that ends the generation). It
  *    runs on every tick where a value is owed, until B1's rederiveFts opens a generation (then only the values its
  *    tick recorded are searched) or completes one (the mark then covers the pair). What it misses or leaves (a value
@@ -29364,7 +29812,7 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
 }
 ```
 
-  - `derive.mjs` imports: add `redactField`, `ftsPhrase` and `secretUnits` to its `./lib.mjs` import, and `withTx` and `bump` to its `./store.mjs` import, each only if missing (Task 8's `deriveLeaves` already uses both). `refreshLeaf` (Task 21), `rerollParents`, `topicsOfColumn` and `parentsBudgetLeft` (Task 9) are this module's own.
+  - `derive.mjs` imports: add `redactField`, `ftsPhrase`, `secretUnits` and `nodeIndexTexts` to its `./lib.mjs` import, and `withTx` and `bump` to its `./store.mjs` import, each only if missing (Task 8's `deriveLeaves` already uses `redactField`, `withTx` and `bump`, and Task 8's `indexNode` already imports `nodeIndexTexts`). `refreshLeaf` (Task 21), `rerollParents`, `topicsOfColumn` and `parentsBudgetLeft` (Task 9) are this module's own.
   - `rederiveGistsFor` charges nothing itself: its one budget check comes first, and `refreshLeaf` and `redactNodeFields` read no blob bytes the slice counts. The count it re-derives in one call is bounded by the nodes a phrase of an owed value matches.
 
 - [ ] **Step 4A: The belt's node step, and its call in the tick.**
@@ -29379,15 +29827,28 @@ const BELT_NODE_BATCH = 64;
 /** §6.2 "The belt": while ('nodes-belt', 1) is open (Task 7B's rederiveFts restarts it whenever a re-derivation
  *  generation opens: a pair learned, a unit back, a belt version changed), every node is read in rowid order and each
  *  whose stored gist, topics or refs the current redaction (the belt included) would change is rewritten through
- *  redactNodeFields, its nodes_fts row with it. rederiveGistsFor's phrase search cannot find a letter-glued value; this
- *  step needs no search. The cursor is the last nodes.rowid read, committed after each batch
+ *  redactNodeFields, its nodes_fts row with it. So is each node whose nodes_fts row differs from lib's nodeIndexTexts
+ *  of its stored fields (Task 7A; spec §6.2 `nodes_fts`): a pair-only value glued to a literal escape is masked by the
+ *  index's escape readings and not by redactField, so its stored field stays and only its row is stale. A node with
+ *  no row yet is Task 9's backfill's, and refs are compared as sets (node_refs has no stored order). This is the one
+ *  mechanism that re-derives nodes_fts. rederiveGistsFor's phrase search cannot find a letter-glued or escape-glued
+ *  value; this step needs no search. The cursor is the last nodes.rowid read, committed after each batch
  *  (⟦D:history-reindex-subcursor-idempotent⟧). Answers whether the step is complete (or was never opened). */
 export function beltNodesStep(db, ictx, budget) {
   const step = getStep(db, BELT_NODES_STEP, 1);
   if (step === null || step.completedMs !== null) return true;
   const sel = db.prepare('SELECT rowid AS rid, node_id, gist, topics FROM nodes WHERE rowid > ? ORDER BY rowid LIMIT ?');
   const refsOf = db.prepare('SELECT value FROM node_refs WHERE node_id = ?');
+  const ftsRow = ictx.fts === true ? db.prepare('SELECT gist, topics, refs FROM nodes_fts WHERE rowid = ?') : null;
   const changes = (s) => s !== null && s !== undefined && redactField(s, ictx.pairIdx) !== s;
+  const asSet = (s) => String(s ?? '').split('\n').sort().join('\n');
+  const stale = (n, refs) => {
+    if (ftsRow === null) return false;
+    const row = ftsRow.get(n.rid);
+    if (row === undefined) return false;
+    const t = nodeIndexTexts({ gist: n.gist, topics: topicsOfColumn(n.topics), refs }, ictx.pairIdx);
+    return row.gist !== t.gist || row.topics !== t.topics || asSet(row.refs) !== asSet(t.refs);
+  };
   let after = Number(step.cursor ?? 0);
   while (ictx.budgetLeft(budget)) {
     const batch = sel.all(after, BELT_NODE_BATCH);
@@ -29395,8 +29856,10 @@ export function beltNodesStep(db, ictx, budget) {
       withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), ictx.nowMs); });
       return true;
     }
-    const dirty = batch.filter((n) => changes(n.gist) || topicsOfColumn(n.topics).some(changes)
-      || refsOf.all(n.node_id).some((r) => changes(r.value))).map((n) => n.node_id);
+    const dirty = batch.filter((n) => {
+      const refs = refsOf.all(n.node_id).map((r) => r.value);
+      return changes(n.gist) || topicsOfColumn(n.topics).some(changes) || refs.some(changes) || stale(n, refs);
+    }).map((n) => n.node_id);
     if (dirty.length > 0) redactNodeFields(db, ictx, dirty);
     after = Number(batch[batch.length - 1].rid);
     withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), null); });
@@ -29405,7 +29868,8 @@ export function beltNodesStep(db, ictx, budget) {
 }
 ```
 
-  - `derive.mjs` imports: add `BELT_NODES_STEP` and `redactField` to its `./lib.mjs` import, and `getStep`, `setStep` and `withTx` to its `./store.mjs` import, each only if missing. `topicsOfColumn` (Task 9) and `redactNodeFields` (Step 4) are this module's own; `ictx.budgetLeft` is Task 8's.
+  - `derive.mjs` imports: add `BELT_NODES_STEP`, `redactField` and `nodeIndexTexts` to its `./lib.mjs` import, and `getStep`, `setStep` and `withTx` to its `./store.mjs` import, each only if missing. `topicsOfColumn` (Task 9) and `redactNodeFields` (Step 4) are this module's own; `ictx.budgetLeft` and `ictx.fts` are Task 8's (`makeIngestCtx`'s object, `fts` set by B1's `tick`).
+  - Check: `grep -cF '      return changes(n.gist) || topicsOfColumn(n.topics).some(changes) || refs.some(changes) || stale(n, refs);' ccd/history/derive.mjs` prints `1` (Step 7A's M9 anchor), and `grep -cF 'const t = nodeIndexTexts({ gist, topics: list ?? [], refs: refs.map((r) => r.value) }, ictx.pairIdx);' ccd/history/derive.mjs` prints `1` (M10's).
   - In `ccd/history/sweep.mjs`, add `beltNodesStep` to the `./derive.mjs` import. In `tick`, directly below B1's line `  await rederiveFts(db, ictx, ctx.budget, slice);`, add:
 
 ```js
@@ -29422,6 +29886,11 @@ import re
 p = 'ccd/history/sweep.mjs'; s = open(p).read()
 head = 'export async function tick(db, ctx) {'
 at = s.index(head); start = s.rindex('/**', 0, at); doc = s[start:at]
+item = re.compile(r'^ \*\s+\d+\.\s+`([A-Za-z]\w*)`', re.M)
+TAIL = ['drainSpool', 'confirmCandidates', 'registryBackfill', 'ingestTick', 'backfillEpochFacts', 'resetFtsPending',
+        'deriveFts', 'deriveNodes', 'mergeSteps', 'recordTick', 'markScan']
+HEAD = ['flushOutbox', 'makeIngestCtx', 'secretsStep', 'ftsPrepare', 'reindexForValues', 'rederiveFts']
+assert item.findall(doc) == HEAD + TAIL, ('not the 17 items Task 8 left', item.findall(doc))
 assert doc.count(' *  6. `rederiveFts`:') == 1 and doc.count('`beltNodesStep`') == 0, 'anchor'
 def renum(m):
     n = int(m.group(2))
@@ -29434,13 +29903,20 @@ assert doc.count(nxt) == 1, 'drainSpool entry'
 entry = (' *  7. `beltNodesStep`: §6.2 "The belt": while (\'nodes-belt\', 1) is open, every node\'s stored fields re-redacted\n'
          ' *     in the slice steps 5 and 6 share; it writes only the nodes the redaction changes (W1-B2 Task 29);\n')
 doc = doc.replace(nxt, entry + nxt, 1)
+assert item.findall(doc) == HEAD + ['beltNodesStep'] + TAIL, ('renumbered list', item.findall(doc))
+nums = [int(n) for n in re.findall(r'^ \*\s+(\d+)\.\s+`', doc, re.M)]
+assert nums == list(range(1, 19)), ('numbering', nums)
 open(p, 'w').write(s[:start] + doc + s[at:])
+print(f'tick doc comment: {len(nums)} steps')
 EOF
 ```
+
+  Expected: `tick doc comment: 18 steps`. An assertion error names what differs from the 17 items Task 8 left (B1's 16 plus `deriveNodes` at 14): stop and report it rather than renumber by hand.
 
   - Check:
     - `grep -c '^  beltNodesStep(db, ictx, slice);$' ccd/history/sweep.mjs` prints `1`;
     - `grep -c '^ \*  7\. `beltNodesStep`:' ccd/history/sweep.mjs` prints `1`;
+    - `grep -c '^ \* 15\. `deriveNodes`:' ccd/history/sweep.mjs`, `grep -c '^ \* 18\. `markScan`:' ccd/history/sweep.mjs` and `grep -cE '^ \* +[0-9]+\. `deriveNodes`' ccd/history/sweep.mjs` (B3 Task 5 Step 1's anchor) each print `1`, and `grep -cE '^ \* +[0-9]+\. `' ccd/history/sweep.mjs` prints `18`;
     - `grep -c '^export function beltNodesStep(' ccd/history/derive.mjs` prints `1`;
     - `node --check` on both files prints nothing;
     - `(cd server && ./node_modules/.bin/vitest run test/history-sweep.test.ts -t "tick()'s docstring")`, in the foreground with a timeout of at least 600000 ms: the three docstring cases pass. Without the doc entry, `every step the body calls with db is listed` reds with `expected [ 'beltNodesStep' ] to deeply equal []`.
@@ -29641,7 +30117,7 @@ console.log(at.length === 1 && below.length === 1 && below[0] === "}" && tla.len
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a generation that opens re-redacts')
 ```
 
-  - Expected: 5 passed, then 1 passed.
+  - Expected: 5 passed, then 2 passed.
 
 - [ ] **Step 7: Mutation pins, each measured red, then restored.** Run every block from the repository root, and never use `git stash`. The expected reds below are predicted, not measured: B1's `rederiveFts` re-derives every blob once a pair lies above the mark, so a mutant whose only witness would be a blob-only assertion can stay green; each mutant therefore names the node or step assertion that isolates it. Record what each run shows.
 
@@ -29737,11 +30213,29 @@ sed -i '/^    if (dirty.length > 0) redactNodeFields(db, ictx, dirty);$/d' ccd/h
 grep -c 'redactNodeFields(db, ictx, dirty);' ccd/history/derive.mjs    # expect 0
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a generation that opens re-redacts')
 cp "$SCRATCH/derive.mjs.orig" ccd/history/derive.mjs
+# M9 — the node step never compares a node's nodes_fts row with nodeIndexTexts of its stored fields.
+sed -i 's/^      return changes(n.gist) || topicsOfColumn(n.topics).some(changes) || refs.some(changes) || stale(n, refs);$/      return changes(n.gist) || topicsOfColumn(n.topics).some(changes) || refs.some(changes);/' ccd/history/derive.mjs
+grep -c '|| stale(n, refs);' ccd/history/derive.mjs                     # expect 0
+(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a generation that opens re-redacts')
+cp "$SCRATCH/derive.mjs.orig" ccd/history/derive.mjs
+# M10 — redactNodeFields writes its nodes_fts row without the index's escape readings.
+python3 - <<'EOF'
+p = 'ccd/history/derive.mjs'
+a = '        const t = nodeIndexTexts({ gist, topics: list ?? [], refs: refs.map((r) => r.value) }, ictx.pairIdx);\n'
+b = "        const t = { gist: gist ?? '', topics: (list ?? []).join('\\n'), refs: refs.map((r) => r.value).join('\\n') };\n"
+s = open(p).read()
+assert s.count(a) == 1, (p, s.count(a))
+open(p, 'w').write(s.replace(a, b, 1))
+EOF
+(cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a generation that opens re-redacts')
+cp "$SCRATCH/derive.mjs.orig" ccd/history/derive.mjs
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts -t 'a generation that opens re-redacts')
 ```
 
-  - M7 expected (predicted): red, `rrTickUntil: not done after 8 passes` (the step never completes).
-  - M8 expected (predicted): red, `rrTickUntil: not done after 8 passes` (the gist keeps `zq<v>x`).
+  - M7 expected (predicted): red, `rrTickUntil: not done after 8 passes` (the step never completes), in both cases.
+  - M8 expected (predicted): red, `rrTickUntil: not done after 8 passes` (the gist keeps `zq<v>x`; the escape case's row keeps `n<v>`).
+  - M9 expected (predicted): the letter-glued case stays green (its stored gist is dirty by `redactField`); the escape case is red, `rrTickUntil: not done after 8 passes`: `redactField` leaves the stored gist as it is, so no node is dirty and the row keeps `n<v>`.
+  - M10 expected (predicted): the escape case is red, `rrTickUntil: not done after 8 passes`: the node is found stale and rewritten, but its row is written from the stored fields as they are, so it keeps `n<v>` on every pass. The letter-glued case stays green (`redactField` masked the stored gist before the row was written).
   - After the restores the describe is green.
 
 - [ ] **Step 8: Typecheck and the neighbouring suites.**
@@ -29751,9 +30245,10 @@ cp "$SCRATCH/derive.mjs.orig" ccd/history/derive.mjs
 (cd server && ./node_modules/.bin/vitest run test/history-recover.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/history-ingest.test.ts -t 'FTS index')
 (cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts test/history-maint.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/history-sweep.test.ts -t "tick()'s docstring")
 ```
 
-  - Expected: tsc clean. Every case is green, including B1's late-pair and re-derivation cases in `history-ingest.test.ts`: they now also run `rederiveGistsFor` and `beltNodesStep`, and both touch no node there (those fixtures hold none), so B1's `rederiveFts` still answers as before. The `('nodes-belt', 1)` row a generation opens is Task 7B's; here `beltNodesStep` only completes it at cursor 0. If a B1 case pins the exact derivation rows a tick leaves and reds on that row's `completed_ms`, update it in place, by content, to expect it, and name the case in the PR body.
+  - Expected: tsc clean. Every case is green, including B1's three F39 docstring cases over Step 4A's 18 items, and B1's late-pair and re-derivation cases in `history-ingest.test.ts`: they now also run `rederiveGistsFor` and `beltNodesStep`, and both touch no node there (those fixtures hold none), so B1's `rederiveFts` still answers as before. The `('nodes-belt', 1)` row a generation opens is Task 7B's; here `beltNodesStep` only completes it at cursor 0. If a B1 case pins the exact derivation rows a tick leaves and reds on that row's `completed_ms`, update it in place, by content, to expect it, and name the case in the PR body.
 
 - [ ] **Step 9: Commit.**
 
@@ -29768,7 +30263,7 @@ git commit -m "feat(history): redaction through recovery: reindex phase over nod
 - Test: `server/test/history-maint.test.ts` (Task 19 created it; Tasks 20-23 appended to it).
   - Append one import block after the file's last import statement.
   - Append the `gt` helpers and the describe `'C64: every writing form, both doors (W1-B2 Task 30)'` at the end of the file.
-- Modify only if a row of the table is red for a gate reason: `ccd/history/cli.mjs` (`runOpVerb`, Task 19) and `ccd/history/sweep.mjs` (`opPass`, Task 19's body behind B1's `runOpPass` wrapper). Step 4 says what the fix may be.
+- Modify only if a row of the table is red for a gate reason: `ccd/history/cli.mjs` (`runOpVerb`, Task 19) and `ccd/history/sweep.mjs` (`opPass`, B1's body as Task 19 edited it in place, behind B1's `runOpPass` wrapper). Step 4 says what the fix may be.
 
 **Interfaces:**
 - Consumes:
@@ -29793,9 +30288,9 @@ git commit -m "feat(history): redaction through recovery: reindex phase over nod
 - §10.1: the TTY gate has no seam, so these cases run under node-pty.
 - Pin: **C64** (the CLI door for every form, and the direct door for B2's forms), with a row per form for the `recovering` refusal. The two `recall-off` forms are W2's verb (C66 and C67 cover their B2 preflight), so their rows join this table in W2.
 - Departures:
-  - ⟦D:history-op-gate-in-sweep⟧
-  - ⟦D:history-apply-via-shim⟧
-  - ⟦D:history-migrate-verb⟧ (migrate needs no TTY)
+  - B1's D-4181 (`history-op-gate-in-sweep`)
+  - B1's D-4221 (`history-apply-via-shim`)
+  - B1's D-4180 (`history-migrate-verb`) (migrate needs no TTY)
   - ⟦D:history-ops-refused-while-recovering⟧ (NEW, Task 6's slug, confirmed by RB16; this task's table pins it at both doors)
 
 - [ ] **Step 1: Append the `gt` imports and helpers to `server/test/history-maint.test.ts`.**
@@ -30220,15 +30715,14 @@ git commit -m "test(history): C64, every writing form through the CLI and the di
   - the test file `server/test/history-skill.test.ts`.
 
 **Spec:**
-- §8.5 (the skill, its body §1-§10, the literal path, the exit table pinned against `EXIT`), §12 (the sidecar in every directory holding copied material, PROVENANCE, the rationale comment, the license pins), §11 V7, §9.11 O13 (skill lines join the corpus), §6.9's skill sentence. Pin: **C16**.
+- §8.5 (the skill, its body §1-§10, the literal path, the exit table pinned against `EXIT`), §12 (the sidecar in every directory holding copied material, PROVENANCE, the rationale comment, the license pins), §11 V7, §9.11 O13 (skill lines join the corpus), §6.9's skill sentence, §8.4's reach (rev 3.5: the §9 reach bullet quotes lib's `SEARCH_REACH` verbatim, once). Pin: **C16**.
 - §12's rev 3.3 exception (coordinator ruling RB15): `server/test/history-skill.test.ts` may quote the shipped skill sentences verbatim as pins. Its header names `ccd/history-skill/LICENSE.lossless-claw` and the V7 PROVENANCE entry and never carries the rationale-comment phrase, and no sidecar is added under `server/test/`, so `license.test.ts`'s directory-and-sidecar bijection stays exact. Step 1's new license case pins all three.
 - C23's text half is the verbatim pins here. Its install and doctor halves are Task 32's.
 - Departures:
   - ⟦D:history-skill-literal-path⟧
   - ⟦D:history-workspace-scope⟧ (the §5 sentence)
-  - ⟦D:history-coverage-this-box⟧ (the §9 sentence)
-  - ⟦D:history-search-reach-stated⟧ (the §9 reach bullet: lib's `SEARCH_REACH` verbatim, once)
-  - ⟦D:history-reasons-by-exit⟧
+  - B1's D-4167 (`history-coverage-this-box`) (the §9 sentence)
+  - B1's D-4171 (`history-reasons-by-exit`)
   - ⟦D:history-license-sidecars-generalised⟧ (NEW). B1's sha256 and PATHSPEC cases read the one path `ccd/history/LICENSE.lossless-claw`. The skill brings the second sidecar §12 names, so both cases walk every sidecar under `ccd/`. The walk stays under `ccd/`: `server/test/` holds none, by §12's rev 3.3 exception, which a case of its own pins.
   - ⟦D:history-skill-joins-skill-scans⟧ (NEW). §8.5 names none of these scans. The five standing skill-corpus scans, which forbid `ws-expire`, forbid running `curl` in a code block, forbid naming `expire-lane-live`, forbid naming `dead-coordinator-lane-live`, and require every `/api/` path a skill names to be reachable, list the three skill directories by hand, so the fourth directory is added to all five.
 
@@ -30383,7 +30877,7 @@ const CONTRACT = [
   "The subagent's own calls are bounded by the same 20,000-character cap as yours.",
   // §8, adapted from upstream line 392.
   "Keep node ids, message uuids and store ids out of what you write for people, unless someone asks for sources or ids.",
-  // §9: the coverage sentence spec §6.9 adds (⟦D:history-coverage-this-box⟧), and the macOS line (spec §9.5).
+  // §9: the coverage sentence spec §6.9 adds (D-4167), and the macOS line (spec §9.5).
   "History covers sessions on this box. The same project's sessions on another box are not searched. Exit 3 means not found here.",
   "macOS session hosts have no recall in waves 1-4",
   // §10.
@@ -30432,7 +30926,7 @@ describe('the history skill: its text (spec §8.5; the text half of C23)', () =>
     expect(skill).not.toMatch(/\bcurl\b/);
   });
 
-  it("states grep's reach exactly once, in lib's SEARCH_REACH words, so a changed window reds until this text follows (⟦D:history-search-reach-stated⟧)", () => {
+  it("states grep's reach exactly once, in lib's SEARCH_REACH words, so a changed window reds until this text follows (spec §8.4, rev 3.5)", () => {
     expect(flat.split(SEARCH_REACH).length - 1).toBe(1);
   });
 
@@ -30445,7 +30939,7 @@ describe('the history skill: its text (spec §8.5; the text half of C23)', () =>
   });
 });
 
-describe("C16: exit codes and reasons are defined once, and the skill's table is EXIT (⟦D:history-reasons-by-exit⟧)", () => {
+describe("C16: exit codes and reasons are defined once, and the skill's table is EXIT (D-4171)", () => {
   it('EXIT holds exactly the codes 0..9', () => {
     expect(Object.values(EXIT).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
@@ -31708,18 +32202,17 @@ git commit -m "feat(history): install the ccrc-history skill into every rostered
 - Produces: the subsection headed `### Session history: lossless recall` (the full heading is the first line of Step 2's block), inside `## Fleet coordination` and above the internals fold.
 
 **Spec:**
-- §10.5 "Edited files" assigns B2 the README history section ("with the verbs and the skill") and CLAUDE.md's re-measured README figure. §9.5 (macOS answers 9). §6.9 (coverage).
+- §10.5 "Edited files" assigns B2 the README history section ("with the verbs and the skill") and CLAUDE.md's re-measured README figure. §9.5 (macOS answers 9). §6.9 (coverage). §8.4's reach (rev 3.5: the section quotes lib's `SEARCH_REACH` once).
 - Departures:
   - ⟦D:history-readme-tables-name-the-sweep⟧ (NEW). §10.5 assigns README's edits by PR and names neither table. B1 ships the `ccd-history-sweep.timer` and doctor's `history` check without a row in README's timer table, doctor table or server-role SKIP list; it names the timer only in one sentence after the timer table ("outside the table", B1's final review FR3). So B2 adds the two rows and the one word with its section, and moves that sentence's clause into the timer row, keeping its warning that the store holds what a session printed, secrets included.
   - ⟦D:history-skill-literal-path⟧ (the section spells the literal path).
-  - ⟦D:history-coverage-this-box⟧.
+  - B1's D-4167 (`history-coverage-this-box`).
   - B2 adds no CLAUDE.md SAFETY line. B1 Task 36's bullet already names `ccrc history … --apply` and the binding forms.
-  - ⟦D:history-search-reach-stated⟧ (the section quotes lib's `SEARCH_REACH` once).
   - B1's history-spool-append-regular-file-only is carried into README, as the coordinator ruled in B1's fix round 2 (claim 1110). This is not a new departure: README states B1's. The hook section states three things: the spool append's builtin regular-file test; the one blocking open left, a FIFO swapped in after that test, which is bounded by the managed entries' `timeout`; and that every managed entry except `SessionEnd`'s carries `HOOK_TIMEOUT_S`. The history section's status sentence names the refused node in the wording B1's fix round 2 gave status: "a FIFO, a link, a directory or any other non-regular node".
 
 - [ ] **Step 1: Measure the base.** Run `wc -l < README.md` and note the count as `B`. Run `sed -n 10p CLAUDE.md` and note the `N` in `` `README.md` (~N lines) ``. Both are measured here, at the B2 base, and never copied from this plan: at B1's final tip (`561609adc`) they were `B = 5878` and `N = 5800` (B1's commit already moved CLAUDE.md's figure from `~5700` to `~5800`), and main moves on after it.
 
-- [ ] **Step 1A: Write the failing README pins** (⟦D:history-search-reach-stated⟧; B1's history-spool-append-regular-file-only).
+- [ ] **Step 1A: Write the failing README pins** (spec §8.4's reach, rev 3.5; B1's history-spool-append-regular-file-only).
   - Append to the END of `server/test/history-skill.test.ts` (Task 31 created it and imports `readFileSync`, `path` and lib's `SEARCH_REACH`, and declares `root`):
 
 ```ts
@@ -32051,17 +32544,21 @@ If `CLAUDE.md` did not change in Step 5, `git add` stages nothing for it.
 
 **Files:**
 - Modify: `ccd/session-hook.sh` (citation corpus; B1 added the block). Inside the `# >>> history-spool (spec 2026-10-05 §5.1)` block, ONE code line and THREE comment lines, each replaced in place by exactly one line (B1's fix rounds rewrapped the block's header: at B1's tip `561609adc` the text the first draft anchored on four lines sits on three, `:3041`, `:3042` and `:3044`, and the code line is `:3060`). No line is added or removed, so no line below moves and the S6-R11 census is not re-run (spec §10.5's citation-corpus row). Step 6 measures both, and Step 6A measures that the edited block stays inside B1's S1 pins (review 351's classification, as B1's fix round 3 closed it).
-- Modify: `ccd/history/lib.mjs` (B1-created), in place by content: the `SPOOL_SOURCES` declaration and the doc line above it (the two-line comment of B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ and its `EPOCH_CAUSES` declaration, which already holds `fork`, sit directly below and are not touched); the comment above `SPOOL_KEYS`; one doc phrase and one line of `parseSpoolLine`; one doc line and one line of `decideEpochLine`.
-- Modify: `ccd/history/lib.d.mts` (B1-created), in place: `SpoolSource` and `decideEpochLine`'s `line.src` (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ already put `fork` in `EpochCause`).
+- Modify: `ccd/history/lib.mjs` (B1-created), in place by content: the `SPOOL_SOURCES` declaration and the doc line above it (the two-line comment of B1's D-4342 (`history-epoch-causes-widened-for-rollback`) and its `EPOCH_CAUSES` declaration, which already holds `fork`, sit directly below and are not touched); the comment above `SPOOL_KEYS`; one doc phrase and one line of `parseSpoolLine`; one doc line and one line of `decideEpochLine`.
+- Modify: `ccd/history/lib.d.mts` (B1-created), in place: `SpoolSource` and `decideEpochLine`'s `line.src` (B1's D-4342 (`history-epoch-causes-widened-for-rollback`) already put `fork` in `EpochCause`).
 - Modify: `ccd/history/sweep.mjs` (B1-created), in place by content: `recordHeldMatches`' source filter and its doc line; one doc line each of `applyEpochLine`, `confirmCandidates` and `registryBackfill`. No function is added.
 - Modify: `server/test/history-lib.test.ts` (B1-created): four in-place edits of B1's cases (one of them adds two table rows), one import line, one appended describe.
 - Modify: `server/test/session-hook.test.ts` (citation corpus): B1's end-appended cases S11 (`x"y, fork, or absent`) and S14 (`compact) and (fork) write no line`), each rewritten in place inside B1's spool describe. No import line, and nothing above B1's history describe moves.
-- `server/test/session-hook.test.ts`'s S1 pins are NOT edited: B1's string pin (`'S1: the block is builtins only …'`, with the `SUBSCRIPT_FORK` pattern above it) and its syntax pin (`forkForms`, whose header lists the evasions fix round 3 leaves on the stopping line, among them `${!x}`, `[[ -v $v ]]`, `printf -v "$v"` and `read -r "$v"`; `ROWS`; `INERT`). Step 2 measures the S1 region byte for byte before and after its edits. A later revision of this task that must touch that region keeps every row and every listed form verbatim and only appends.
+- Modify: `server/test/session-hook.test.ts`'s S1 pins, in place, in Step 2A only (coordinator ruling: B1 merged with review 353's items F1, F2 and F5 left for B2). These are B1's string pin (`'S1: the block is builtins only …'`, with the `SUBSCRIPT_FORK` pattern above it) and its syntax pin (`forkForms`, whose header lists the evasions fix round 3 leaves on the stopping line; `ROWS`; `INERT`). Step 2 measures the S1 region byte for byte across its own S11 and S14 edits, before Step 2A edits it. Step 2A then does four things:
+  - It LISTS a compound-assignment key that holds its own brackets on the stopping line, and corrects every comment that claimed every key (F1). Review 353 named two: the string case's FR3a comment and `forkForms`' header. The `SUBSCRIPT_FORK` doc comment and `forkForms`' inline FR3c note say the same, so they are corrected too.
+  - It turns the string pin's eleven checks into labelled arms, `S1_STRING_ARMS`, which the string case runs on the block. An appended `STRING_ROWS` table runs them over `ROWS`, so every arm has a planted row that reds when the arm is deleted (F2). This adds two `ROWS` rows at the end of the table, for the `sha` arm and the integer-attribute arm.
+  - It names the stopping line's known fail-closed costs in `forkForms`' header (F5).
+  - It keeps every existing `ROWS` and `INERT` row, and every form the header lists, verbatim.
 - Modify: `server/test/single-definition.test.ts` (citation corpus): one describe appended at the very end.
-- Modify: `server/test/history-drain.test.ts` (B1-created): two helpers and two describes appended at the end.
+- Modify: `server/test/history-drain.test.ts` (B1-created): two helpers and two describes appended at the end. Also, in Step 2A, B1's FR2c comment above `NODE_REFUSED` gains B1's D-4418 (`history-spool-append-regular-file-only`) thrown-arm exception, replaced in place four lines for four (review 353's residue item).
 - Modify: `server/test/history-recover.test.ts` (Task 25 created it): one describe appended at the end, after Task 29's.
 - Modify: `server/test/history-derive.test.ts` (Task 8 created it; Task 9 appended to it): one describe appended at the end, after every describe earlier tasks put there.
-- Scratch, gitignored, never committed: `.superpowers/sdd/history-w1-b2/scratch/mutants-task34.json`, `hook-lines.before`, `s1region.cjs`, `s1-region.before`, `s1-region.after` and `task34-added.txt`, all in that directory.
+- Scratch, gitignored, never committed: `.superpowers/sdd/history-w1-b2/scratch/mutants-task34.json`, `mutants-task34-s1-before.json`, `mutants-task34-s1.json`, `hook-lines.before`, `s1region.cjs`, `s1-region.before`, `s1-region.after` and `task34-added.txt`, all in that directory.
 
 **Interfaces:**
 - Consumes:
@@ -32073,25 +32570,30 @@ If `CLAUDE.md` did not change in Step 5, `git add` stages nothing for it.
   - Task 8 (`derive.mjs`): a boundary's leaf takes its epoch from the boundary's own transcript (`b.cc_uuid`) and its span from the copy that holds it, through `copyRows`, which marks a row as a boundary by joining `boundaries` on its entry whatever transcript first claimed it. So a fork's copy of the parent's boundary starts the fork's next span, and that leaf's id hashes the fork's sid. Step 3's span case pins that path across two transcripts.
   - Task 25 (`sweep.mjs`): `replayVerdict` applies an `epoch-confirmed` record with the cause it carries, and `replayEpochLine` asks `decideEpochLine` about a line with no verdict. Neither enumerates a source or a cause, so a fork record replays with no edit to Task 25's code; Step 3's rebuild case pins that.
   - Task 10 (`recall.mjs`): `runTree` prints `epoch <seq> <cause> …` from the stored cause, so a fork epoch reads `epoch 2 fork …`. No read verb filters a cause, and no B2 code outside Task 25's two applicators reads a spool source (measured on this plan's code: no `cause ===`, `cause IN`, `SPOOL_SOURCES` or `src ===` test beyond them).
-- Produces: no new export. `SPOOL_SOURCES` becomes `['startup', 'resume', 'clear', 'fork']`; `EPOCH_CAUSES` stays B1's `['startup', 'resume', 'clear', 'import', 'fork']` (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧); `parseSpoolLine` accepts a fork line with or without `reg`; `decideEpochLine` answers a fork line as it answers a resume line.
+- Produces: no new export. `SPOOL_SOURCES` becomes `['startup', 'resume', 'clear', 'fork']`; `EPOCH_CAUSES` stays B1's `['startup', 'resume', 'clear', 'import', 'fork']` (B1's D-4342 (`history-epoch-causes-widened-for-rollback`)); `parseSpoolLine` accepts a fork line with or without `reg`; `decideEpochLine` answers a fork line as it answers a resume line.
 
 **Spec:** §5.1 ("Events"; `src`; `reg` "from W1-B2 on SessionStart(fork) lines too"), §6.1 ("`cause='fork'` lines confirm exactly as resume lines do", "A fork whose sid is already an epoch", "A fresh sid", "The parent's copied rows", "No migration", "The rollback edge", "Backfill"), §6.10's fork row, §9.2 and §9.14 (the drain, the held-file re-read and replay treat a fork line as a resume line), §10.5 (B2's fork bullet; the citation-corpus row), §14 risk 24, §15.1 and §15.3 Q16. Pins: **DM48**; **S11** and **S14** in their fork-spooled form, with S14's CONTROL (a hook whitelist or a `SPOOL_SOURCES` without `fork` goes red).
 - Departures:
   - ⟦D:history-fork-spooled⟧ (spec §16 row since rev 3.4; this plan defines it first): SessionStart(fork) writes a spool line from W1-B2 and confirms as a resume line does.
-  - ⟦D:history-fork-not-spooled⟧ (B1-defined): reversed here, except that every SessionStart line still carries `src`.
-  - ⟦D:history-spool-start-not-compact⟧ and ⟦D:history-spool-line-carries-registry-uuid⟧ (B1-defined; rev 3.4 amends each to name fork).
-  - ⟦D:history-epoch-confirmation⟧ (B1-defined): fork epochs chain only once their own `reg`, the observation, a held match or a later tick names the sid.
-  - ⟦D:history-epoch-lines-survive-off⟧ and ⟦D:history-spool-no-summary-hash⟧ (B1-defined): named only because the comment lines this task rewords carry them.
+  - B1's D-4173 (`history-fork-not-spooled`): reversed here, except that every SessionStart line still carries `src`.
+  - B1's D-4253 (`history-spool-start-not-compact`) and B1's D-4175 (`history-spool-line-carries-registry-uuid`) (rev 3.4 amends each to name fork).
+  - B1's D-4190 (`history-epoch-confirmation`): fork epochs chain only once their own `reg`, the observation, a held match or a later tick names the sid.
+  - B1's D-4252 (`history-epoch-lines-survive-off`) and B1's D-4177 (`history-spool-no-summary-hash`): named only because the comment lines this task rewords carry them.
 
 Choices this task makes (each is in the PR body's choices):
 - **The resume path, not a new arm.** `decideEpochLine` admits `fork` beside `startup` and `resume`. B1's `applyEpochLine`, `chainEpoch` and `confirmCandidates` read the cause from the line, so they need no code change. A fork whose sid the family already holds (Claude Code's same-id arm, or a sid a registry scan chained first as `import`) is confirmed by `chainEpoch`'s existing-uuid arm: no second epoch, and the first cause stands (§6.1, "the first claim stands").
 - **One filter in the sweep.** `recordHeldMatches` is the only B1 code that lists the confirmable sources itself; it gains `fork` in place.
-- **The rollback edge is named, not tested.** A B1 build is not in this tree. It had three parts on a B1 whose `EPOCH_CAUSES` lacked `fork`, as B1's plan text shipped it; B1's MERGED code holds `fork` there (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧, the ruling below), so on the real base only the spooled-line part remains:
+- **The rollback edge is named, not tested.** A B1 build is not in this tree. It had three parts on a B1 whose `EPOCH_CAUSES` lacked `fork`, as B1's plan text shipped it; B1's MERGED code holds `fork` there (B1's D-4342 (`history-epoch-causes-widened-for-rollback`), the ruling below), so on the real base only the spooled-line part remains:
   - **Journaled fork verdicts.** A build rolled back to B1 validates journal verdicts with its own `oneOf(EPOCH_CAUSES)`, so it reads a journaled fork verdict as `malformed`: skipped, counted `journal_line_malformed` (doctor WARN `journal-record-skipped`), never applied. Moving forward again replays the record.
   - **Spooled fork lines.** Its drain rejects a spooled fork line still in `spool/` (`spool_line_rejected`), and that fork falls back to B1's registry backfill.
   - **A waiting fork candidate stalls the pass.** A fork line that no evidence confirmed at the drain is stored as an `epoch_candidates` row with cause `fork` (B1's `applyEpochLine`, unchanged), and the row survives the rollback. Once `.uuid` names its sid within the 7-day window, B1's `confirmCandidates` takes the startup and resume path and builds an `epoch-confirmed` verdict carrying `cause: 'fork'`. B1's `journalRecord` reads every record it writes back through `oneOf(EPOCH_CAUSES)` and throws a `TypeError` on it. `verdictTx` catches only `JournalError`, so the transaction rolls back, the candidate stays, and the pass exits 1 at every tick before registry backfill and ingest; doctor FAILs `tick-stale`. It ends when the node moves forward again (B2's first tick confirms the candidate), when the candidate passes its 7 days (the drop verdict carries no cause), or when `.uuid` moves to another sid. Capture is delayed, not lost: the transcripts stay on disk and ingest catches up. The stall lasts at most 7 days from the line's journaling. The update watchdog rolls back with no operator, so no runbook step can prevent it. Measured by the review on B1's own `sweep.mjs` and `store.mjs` in a scratch HOME: three ticks, three throws, the candidate kept.
-  - **Ruled (coordinator, 2026-10-07): B1 widens `EPOCH_CAUSES` alone to hold `fork` before it merges**, leaving its `SPOOL_SOURCES` and the hook without it, so B1 still spools no fork (B1's departure slug `history-epoch-causes-widened-for-rollback`, issued as B1's ⟦D:history-epoch-causes-widened-for-rollback⟧; B1's lib.mjs carries it as a two-line comment between `SPOOL_SOURCES` and `EPOCH_CAUSES`). On the merged base, therefore, only the spooled-line part of the edge remains, and any Step 1 or Step 3 expectation that reds only because `EPOCH_CAUSES` lacks `fork` is already green: record it as "already green on the B1 base" in the task's report rather than forcing a red, and keep every other red. A rolled-back build reads fork verdicts as valid and confirms a fork candidate cleanly. Step 5(a) therefore anchors on `SPOOL_SOURCES` and its doc line alone and leaves B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ comment and `EPOCH_CAUSES` line byte-for-byte: B2 has nothing to change there. The `SPOOL_SOURCES` doc comment, the PR body and spec §6.1 name the edge as it stands on the merged base, with B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ widening that closed its other two parts. No migration exists to test: `epochs.cause` is TEXT with no CHECK in schema v1.
+  - **Ruled (coordinator, 2026-10-07): B1 widens `EPOCH_CAUSES` alone to hold `fork` before it merges**, leaving its `SPOOL_SOURCES` and the hook without it, so B1 still spools no fork (B1's departure slug `history-epoch-causes-widened-for-rollback`, issued as B1's D-4342 (`history-epoch-causes-widened-for-rollback`); B1's lib.mjs carries it as a two-line comment between `SPOOL_SOURCES` and `EPOCH_CAUSES`). On the merged base, therefore, only the spooled-line part of the edge remains, and any Step 1 or Step 3 expectation that reds only because `EPOCH_CAUSES` lacks `fork` is already green: record it as "already green on the B1 base" in the task's report rather than forcing a red, and keep every other red. A rolled-back build reads fork verdicts as valid and confirms a fork candidate cleanly. Step 5(a) therefore anchors on `SPOOL_SOURCES` and its doc line alone and leaves B1's D-4342 (`history-epoch-causes-widened-for-rollback`) comment and `EPOCH_CAUSES` line byte-for-byte: B2 has nothing to change there. The `SPOOL_SOURCES` doc comment, the PR body and spec §6.1 name the edge as it stands on the merged base, with B1's D-4342 (`history-epoch-causes-widened-for-rollback`) widening that closed its other two parts. No migration exists to test: `epochs.cause` is TEXT with no CHECK in schema v1.
 - **The hook's comments are reworded in place.** Beside the new whitelist, a comment saying fork writes nothing would be false. Each reworded line stays one line, so nothing moves.
+- **B1's S1 pins are strengthened before the block is touched (Step 2A, coordinator ruling on review 353).** The ruling put review 353's carried items into this task, the one B2 task that edits the spool block, ahead of that edit, so the stronger pin stands first:
+  - A compound-assignment key that holds its own brackets is LISTED on the stopping line, not closed. Review 353 classed it as a deliberate spelling (F1).
+  - The string pin's checks become labelled arms with a planted row each, not hand measurement (F2).
+  - The fail-closed costs are named in the header, not narrowed away (F5).
+  - None of this is a spec departure: the pins are test text, and spec §10.5 S1 is unchanged.
 
 - [ ] **Step 1: Write the failing pure tests.** In `server/test/history-lib.test.ts`:
 
@@ -32195,9 +32697,9 @@ Run, in the foreground with a timeout of at least 600000 ms:
 (cd server && ./node_modules/.bin/vitest run test/history-lib.test.ts -t 'fork|SPOOL_SOURCES|accepts|refuses|spool set')
 ```
 
-Expected: red. The subset case fails `expected [ 'startup', 'resume', 'clear' ] to deeply equal [ …, 'fork' ]`. Of the two new `accepts` rows, the one with `reg` fails on `{ ok: false, why: 'keys' }` (B1 refuses `reg` off a startup or resume line before it checks a value), and the one without fails on `{ ok: false, why: 'value' }`. The appended describe fails every case: its first at `expect([...libFork.SPOOL_SOURCES]).toContain('fork')`, the `parseSpoolLine` case on B1's refusals, the `decideEpochLine` case on B1's `TypeError` for a fork line, and the journal case at its fork SPOOL record (B1's grammar rejects `src: 'fork'`, so the record reads `malformed`). The rewritten `refuses` rows and the `compact` throw case are green already. Already green on the B1 base, and recorded so in the task report rather than forced red: every assertion that reads `EPOCH_CAUSES` alone, because B1 merged with `fork` in it (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧). That is the first case's `expect([...libFork.EPOCH_CAUSES]).toContain('fork')` and the journal case's fork `epoch-confirmed` verdict (B1's `journalRecord` accepts it); each of those two cases still reds at its `SPOOL_SOURCES` or spool-record assertion. These reds were read off B1's code; record the reds the run actually prints in the task report.
+Expected: red. The subset case fails `expected [ 'startup', 'resume', 'clear' ] to deeply equal [ …, 'fork' ]`. Of the two new `accepts` rows, the one with `reg` fails on `{ ok: false, why: 'keys' }` (B1 refuses `reg` off a startup or resume line before it checks a value), and the one without fails on `{ ok: false, why: 'value' }`. The appended describe fails every case: its first at `expect([...libFork.SPOOL_SOURCES]).toContain('fork')`, the `parseSpoolLine` case on B1's refusals, the `decideEpochLine` case on B1's `TypeError` for a fork line, and the journal case at its fork SPOOL record (B1's grammar rejects `src: 'fork'`, so the record reads `malformed`). The rewritten `refuses` rows and the `compact` throw case are green already. Already green on the B1 base, and recorded so in the task report rather than forced red: every assertion that reads `EPOCH_CAUSES` alone, because B1 merged with `fork` in it (B1's D-4342 (`history-epoch-causes-widened-for-rollback`)). That is the first case's `expect([...libFork.EPOCH_CAUSES]).toContain('fork')` and the journal case's fork `epoch-confirmed` verdict (B1's `journalRecord` accepts it); each of those two cases still reds at its `SPOOL_SOURCES` or spool-record assertion. These reds were read off B1's code; record the reds the run actually prints in the task report.
 
-- [ ] **Step 2: Rewrite B1's S11 and S14 hook cases.** Before editing, save B1's S1 pin region. B1's fix round 3 (on B1's tip `561609adc`) rewrote inside it: the `SUBSCRIPT_FORK` pattern declared just above the string pin, the string pin's arithmetic, substring and subscript rules, and `forkForms`, its header listing the evasions on the stopping line, `ROWS` and `INERT`. From the repository root:
+- [ ] **Step 2: Rewrite B1's S11 and S14 hook cases.** Before editing, save B1's S1 pin region. B1's fix round 3 (on B1's tip `561609adc`, merged as PR #315) rewrote inside it: the `SUBSCRIPT_FORK` pattern declared just above the string pin, and the string pin's rules. Those rules are: every `(( ))` operand an integer literal or `${#name}`; no `-eq` family; literal substring offsets and lengths; literal, `@` or `*` subscripts and compound keys; no `$[`; no `let`, `declare`, `typeset`, `local` or `readonly`; and, kept from earlier rounds, no `$(`, backtick, `sha`, `${…@…}` or external command. The round also rewrote `forkForms`, with the same arithmetic rules, its header listing the evasions on the stopping line, `ROWS` and `INERT`. This step leaves all of it byte for byte; Step 2A then edits it on purpose. From the repository root:
 
 ```bash
 SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b2/scratch"; mkdir -p "$SCRATCH"
@@ -32279,6 +32781,429 @@ node "$SCRATCH/s1region.cjs" > "$SCRATCH/s1-region.after" && cmp "$SCRATCH/s1-re
 ```
 
 Expected: `S1 PIN TEXT UNCHANGED`. The S11 and S14 cases sit outside both slices (B1 puts them after the S2 case and before the syntax pin).
+
+- [ ] **Step 2A: Strengthen B1's S1 pins before the spool block is edited (coordinator ruling: review 353's F1, F2 and F5, and its residue item, carried from B1).** B1 merged with these left for B2, and this is the B2 task that edits the hook's spool block, so the stronger pin stands before Step 6 touches the block. The step has four parts:
+  1. **F1, LISTED.** `SUBSCRIPT_FORK`'s compound-key arm stops at a key's first `]`. A key that holds its own brackets, such as `x=([y[0]]=1)`, `x=([${y[0]}]=1)` or `x=(["${y[0]}"]=1)`, therefore matches nothing, although bash forks there when `y[0]` holds `a[$(…)]`. The ruling LISTS it on `forkForms`' stopping line. The comments that claim every key is read are corrected: the string case's FR3a comment ("a compound-assignment key is an integer literal") and `forkForms`' header, which review 353 named, plus the same claim in `SUBSCRIPT_FORK`'s doc and `forkForms`' inline FR3c note.
+  2. **F2.** The string pin's eleven checks become `S1_STRING_ARMS`, one labelled function per arm, and the string case runs every arm on the block. `STRING_ROWS` runs the arms over `ROWS`: a planted form for each arm, which reds when that arm is deleted. `ROWS` gains two rows at its end, one for the `sha` arm and one for the integer-attribute arm, which no existing row plants.
+  3. **F5.** `forkForms`' header names the stopping line's known fail-closed costs: inert spellings that both pins reject. They are a bracket class after a letter in `[[ … =~ … ]]` or in a case pattern, an empty substring offset `${x::3}`, and (by ruling 4043) the `-eq` family even on `${#name}`.
+  4. **Residue.** `history-drain.test.ts`'s FR2c comment gains B1's D-4418 (`history-spool-append-regular-file-only`) thrown-arm exception: a drain whose loop throws leaves that drain's count out.
+
+Every edit is in place, by content, with the Edit tool, and each old text below matches exactly once. In the `history-drain.test.ts` edit, ⟦D:…⟧ stands for B1's issued number, spelled in the file as `D-` and digits. Nothing above B1's history describe moves. No citation in the tree reaches a line inside it, and none reaches `history-drain.test.ts` (measured on `main` at 5a6e5d3d7: `git grep -nE 'session-hook\.test\.ts:1[0-9]{4}|history-drain\.test\.ts:[0-9]' origin/main -- server agent ccd deploy` prints nothing). Every existing `ROWS` and `INERT` row, and every form the header already lists, stays verbatim.
+
+(a) **Measure the hole first.** Review 353 F2: delete one of the string pin's checks, and nothing reds. From the repository root:
+
+```bash
+SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b2/scratch"; mkdir -p "$SCRATCH"
+test -f "$SCRATCH/mutate.mjs" || echo 'NO RUNNER: write .superpowers/sdd/history-w1-b2/scratch/mutate.mjs from Task 1 Step 1, byte for byte'
+cat > "$SCRATCH/mutants-task34-s1-before.json" <<'EOF'
+[
+  { "name": "BEFORE: the string pin's sha expect deleted", "file": "server/test/session-hook.test.ts",
+    "test": "test/session-hook.test.ts", "filter": "S1:|S1 \\(",
+    "edits": [{ "anchor": "    expect(code).not.toContain('sha');\n", "replacement": "" }] },
+  { "name": "BEFORE: the string pin's $[ expect deleted", "file": "server/test/session-hook.test.ts",
+    "test": "test/session-hook.test.ts", "filter": "S1:|S1 \\(",
+    "edits": [{ "anchor": "    expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');\n", "replacement": "" }] }
+]
+EOF
+(cd server && node ../.superpowers/sdd/history-w1-b2/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b2/scratch/mutants-task34-s1-before.json); echo "exit $?"
+node -e '
+const s = require("fs").readFileSync("server/test/session-hook.test.ts", "utf8");
+const re = eval(/^  const SUBSCRIPT_FORK = (\/.*\/);$/m.exec(s)[1]);
+for (const k of ["_hs_x=([_hs_y[0]]=1)", "_hs_x=([${_hs_y[0]}]=1)", "_hs_x=([\"${_hs_y[0]}\"]=1)", "_hs_x=([_hs_g]=1)"])
+  console.log(k, "->", JSON.stringify(re.exec(k)?.[0] ?? null));
+'
+```
+
+Run it in the foreground with a timeout of at least 600000 ms. The filter `S1:|S1 \(` runs the string case, the syntax case and every `ROWS` and `INERT` row. It leaves out S11 and S14, which Step 2 made red until Step 6.
+
+Expected, measured on `main` at 5a6e5d3d7:
+- Both mutants print `STAYED GREEN`, then `green`. The runner's last line is `2 guard(s) not measured` and the exit is `1`. That is the hole this step closes, so this red is the step's red-first measurement. It is not a failure of the step.
+- The three bracketed keys print `-> null`, and the control `_hs_x=([_hs_g]=1)` prints `-> "([_hs_g]="`. That is F1's miss: the string pin does not read those keys at all, and `forkForms` names them only as `subshell` (measured by planting each in a scratch copy of the hook: the string case stays green, and the syntax case reds `expected [ 'subshell' ] to deeply equal []`).
+
+(b) **The S1 edits in `server/test/session-hook.test.ts`**, inside B1's describe `'history spool: the hook enqueues one fenced, text-free line (spec §5.1)'`.
+
+(b1) `SUBSCRIPT_FORK`'s doc, the string pin's arms and their helpers. Replace
+
+```ts
+  /** FR3c/FR3d (review 351 F1): a subscript that is not an integer literal, `@` or `*`, on a `name[…]` or as a
+   *  compound-assignment key. Both S1 pins read it: the string case on the block's text, forkForms on its whole source. */
+  const SUBSCRIPT_FORK = /(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/;
+```
+
+with
+
+```ts
+  /** FR3c/FR3d (review 351 F1): a subscript that is not an integer literal, `@` or `*`, on a `name[…]` or as a
+   *  compound-assignment key. Both S1 pins read it: the string pin's subscript arm on the block's text, forkForms on its
+   *  whole source. Its key arm reads a key only to the key's first `]`, so a key that holds brackets of its own
+   *  (`x=([y[0]]=1)`) is not read: it is on the stopping line in forkForms' header (review 353 F1). */
+  const SUBSCRIPT_FORK = /(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/;
+  /** The commands the S1 string pin refuses by name: each runs a program, so it forks on the hot path. */
+  const S1_EXTERNAL = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+  /** The spool block's code as both S1 pins read it: every `#`-led line dropped. */
+  const s1Code = (block: string): string => block.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  /** FR4 (review 353 F2): the S1 string pin, one labelled arm per form it refuses. Each arm answers the first text it
+   *  refuses, or null. The string case runs every arm on the block; STRING_ROWS (below INERT) plants a ROWS form for each
+   *  arm and expects that arm to name it, so an arm deleted here reds its planted rows.
+   *  FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of
+   *  `(( ))` is an integer literal or `${#name}`; a substring offset or length is an integer literal; a subscript is an
+   *  integer literal, `@` or `*`, and so is a compound-assignment key that holds no bracket of its own; no `-eq` family,
+   *  no `$[`, no `let` and no integer attribute. The S1 stopping line (the forms neither pin chases) and its known
+   *  fail-closed costs are in forkForms' header. */
+  const S1_STRING_ARMS: ReadonlyArray<readonly [string, (code: string) => string | null]> = [
+    ['a command substitution in the spool block', (code) => (code.includes('$(') ? '$(' : null)],
+    ['a backtick in the spool block', (code) => (code.includes('`') ? '`' : null)],
+    ['a sha program in the spool block', (code) => (code.includes('sha') ? 'sha' : null)],
+    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
+    ['a ${…@…} transformation in the spool block (@P forks)', (code) => code.match(/\$\{[^}]*@/)?.[0] ?? null],
+    ['a (( )) operand that is not an integer literal or ${#name} (review 351 F1)', (code) => [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
+      .map((x) => x[1]!)
+      .find((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0'))) ?? null],
+    ['an arithmetic test operator (review 351 F1)', (code) => code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null],
+    ['a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
+      (code) => code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null],
+    ['a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
+      (code) => code.match(SUBSCRIPT_FORK)?.[0] ?? null],
+    ['a $[ ] arithmetic expansion in the spool block (review 351 F1)', (code) => (code.includes('$[') ? '$[' : null)],
+    ['let and an integer attribute evaluate arithmetic (review 351 F1)',
+      (code) => code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null],
+    ['an external command in the spool block forks on the hot path', (code) => code.match(S1_EXTERNAL)?.[0] ?? null],
+  ];
+```
+
+Each arm keeps the regex and the label its `expect` carried on `main`; the three checks that had no label (`$(`, the backtick and `sha`) gain one.
+
+(b2) The string case's checks become one loop over the arms. In `it('S1: the block is builtins only — …', …)`, replace everything from its `const code =` line to the case's closing `});`:
+
+```ts
+    const code = src.slice(start, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$_hs"`);
+    expect(code).not.toContain('$(');
+    expect(code).not.toContain('`');
+    expect(code).not.toContain('sha');
+    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
+    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the spool block (@P forks)').toBeNull();
+    // FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of `(( ))` is an
+    // integer literal or `${#name}`; a substring offset or length, a subscript, or a compound-assignment key is an integer literal (a
+    // subscript may also be `@` or `*`); any `$[` is named. The S1 stopping line (the forms neither pin chases) is in forkForms'
+    // header.
+    const arith = [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
+      .map((x) => x[1]!)
+      .filter((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0')));
+    expect(arith, 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)').toEqual([]);
+    expect(code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null, 'an arithmetic test operator (review 351 F1)').toBeNull();
+    expect(
+      code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null,
+      'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
+    ).toBeNull();
+    expect(
+      code.match(SUBSCRIPT_FORK)?.[0] ?? null,
+      'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
+    ).toBeNull();
+    expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');
+    expect(code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null, 'let and an integer attribute evaluate arithmetic (review 351 F1)').toBeNull();
+    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+    expect(code.match(external)?.[0] ?? null, 'an external command in the spool block forks on the hot path').toBeNull();
+  });
+```
+
+with
+
+```ts
+    const code = s1Code(src.slice(start, end));
+    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$_hs"`);
+    // FR4 (review 353 F2): every arm of the string pin, each under its own label. STRING_ROWS plants a form for each arm.
+    for (const [arm, check] of S1_STRING_ARMS) expect(check(code), arm).toBeNull();
+  });
+```
+
+The case's title and its marker, uniqueness and position checks above `const code =` are not touched.
+
+(b3) `forkForms`' header: the bracketed key on the stopping line, and the line's known fail-closed costs. Replace the whole doc comment above `const forkForms =`:
+
+```ts
+  /** Every form in `code` that makes bash fork or run a program: command or process substitution, a backtick,
+   *  a `${…@…}` parameter transformation (FR2a, review 344 F1: `@P` runs prompt expansion, and so command substitution),
+   *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`; and
+   *  (FR3a, review 351 F1) an arithmetic operand bash may evaluate from a variable's text: an operand of `(( ))` or
+   *  `$(( ))` that is not an integer literal or `${#name}`; any `$[ ]`; a `${name:offset:length}` whose offset or length
+   *  is not an integer literal; a subscript that is not an integer literal, `@` or `*`, on a `name[…]` anywhere (a
+   *  `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a key
+   *  in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge` operators of `[[ ]]`. An indexed array's
+   *  subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an associative one is not, but the scan
+   *  cannot tell them apart and names both.
+   *  Not chased (the S1 stopping line, review 351 F1), each a deliberate spelling the spool block does not use: ${!x}
+   *  indirection; [[ -v $v ]], and printf -v "$v" or read -r "$v", with a dynamic name, which forks when the name holds
+   *  a[$(…)]; a dynamic name with a variable subscript there ($x[v], ${x}[v]), which forks through its subscript
+   *  whatever the name holds; a name split from its `[` by a quote, a backslash or a line continuation (x"[v]", x'[v]',
+   *  x\[v\], x\<newline>[v]), which bash joins before the subscript is read; an assignment, printf -v or read into
+   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); and text on a `#`-led line inside a quoted string
+   *  that spans lines, which the comment filter drops before either pin reads it.
+   *  [] = builtins only. Conservative by construction, outside the stopping line above: what it cannot classify is
+   *  reported, never passed. */
+```
+
+with
+
+```ts
+  /** Every form in `code` that makes bash fork or run a program: command or process substitution, a backtick,
+   *  a `${…@…}` parameter transformation (FR2a, review 344 F1: `@P` runs prompt expansion, and so command substitution),
+   *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`; and
+   *  (FR3a, review 351 F1) an arithmetic operand bash may evaluate from a variable's text: an operand of `(( ))` or
+   *  `$(( ))` that is not an integer literal or `${#name}`; any `$[ ]`; a `${name:offset:length}` whose offset or length
+   *  is not an integer literal; a subscript that is not an integer literal, `@` or `*`, on a `name[…]` anywhere (a
+   *  `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a key
+   *  that holds no bracket of its own in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge`
+   *  operators of `[[ ]]`. An indexed array's subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an
+   *  associative one is not, but the scan cannot tell them apart and names both.
+   *  Not chased (the S1 stopping line, review 351 F1), each a deliberate spelling the spool block does not use: ${!x}
+   *  indirection; [[ -v $v ]], and printf -v "$v" or read -r "$v", with a dynamic name, which forks when the name holds
+   *  a[$(…)]; a dynamic name with a variable subscript there ($x[v], ${x}[v]), which forks through its subscript
+   *  whatever the name holds; a name split from its `[` by a quote, a backslash or a line continuation (x"[v]", x'[v]',
+   *  x\[v\], x\<newline>[v]), which bash joins before the subscript is read; an assignment, printf -v or read into
+   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); text on a `#`-led line inside a quoted string
+   *  that spans lines, which the comment filter drops before either pin reads it; and (review 353 F1) a
+   *  compound-assignment key that holds brackets of its own (x=([y[0]]=1), x=([${y[0]}]=1), x=(["${y[0]}"]=1)), which
+   *  the key arm reads only to its first `]` and which forks when y[0] holds a[$(…)]. forkForms names those three only
+   *  by accident, as a subshell (step 4 reads the `(` of any `name=(`), and the string pin not at all.
+   *  Known fail-closed costs of the line (review 353 F5): both pins name some spellings that fork nothing, under a label
+   *  that misleads. A bracket class after a letter, in `[[ … =~ … ]]` or in a case pattern (^cc[a-z]+$, a[bc])), is named
+   *  "subscript"; an empty substring offset (${x::3}) is named "substring offset"; and, by ruling (4043), the -eq family
+   *  is named "arithmetic test operator" even on ${#name} ([[ ${#x} -le 224 ]]: write (( ${#x} <= 224 )) instead).
+   *  [] = builtins only. Conservative by construction, outside the stopping line above: what it cannot classify is
+   *  reported, never passed. */
+```
+
+(b4) `forkForms`' inline FR3c note, just above `if (SUBSCRIPT_FORK.test(src)) found.push('subscript');`. Replace
+
+```ts
+    // FR3c (review 351 F1): a subscript that is not an integer literal, `@` or `*` — on a `name[…]` anywhere (a `${…}`, an
+    // assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a compound-assignment key
+    // (`x=([v]=1)`, FR3d) — is named on the whole source, before step 1 masks quoted text: an indexed array evaluates it as
+    // arithmetic (an associative one does not, and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an
+    // expansion or an assignment is `$x` and literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name
+    // with a subscript, which is on the stopping line, as is a name split from its `[` (forkForms' header).
+```
+
+with
+
+```ts
+    // FR3c (review 351 F1): a subscript that is not an integer literal, `@` or `*` — on a `name[…]` anywhere (a `${…}`, an
+    // assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a compound-assignment key
+    // that holds no bracket of its own (`x=([v]=1)`, FR3d; one that does is on the stopping line, review 353 F1) — is named on
+    // the whole source, before step 1 masks quoted text: an indexed array evaluates it as arithmetic (an associative one does not,
+    // and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an expansion or an assignment is `$x` and
+    // literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name with a subscript, which is on the
+    // stopping line, as is a name split from its `[` (forkForms' header).
+```
+
+(b5) Two rows at the end of `ROWS`, after its last row. Replace
+
+```ts
+    ['an appended compound assignment with a spaced variable key', T, "_hs+='}'; _hs_x+=( [_hs_g]=1 )", 'subscript'],
+  ];
+```
+
+with
+
+```ts
+    ['an appended compound assignment with a spaced variable key', T, "_hs+='}'; _hs_x+=( [_hs_g]=1 )", 'subscript'],
+    // FR4 (review 353 F2): a form for the string pin's sha arm and one for its integer-attribute arm, which STRING_ROWS plants.
+    ['a sha program', T, "_hs+='}'; sha256sum x", 'command sha256sum'],
+    ['an integer attribute', T, "_hs+='}'; local -i _hs_x=_hs_g", 'command local'],
+  ];
+```
+
+(b6) `STRING_ROWS`, its planted-row cases and the coverage case, directly after the `it.each(INERT)` case and before `it('F37: …')`. Replace
+
+```ts
+  it.each(INERT)('S1 (syntax, B3M16): %s planted in the spool block is inert and is not named', (_label, anchor, replacement) => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
+    expect(block).toContain(anchor);
+    expect(forkForms(block.replace(anchor, replacement), allowed)).toEqual([]);
+  });
+```
+
+with
+
+```ts
+  it.each(INERT)('S1 (syntax, B3M16): %s planted in the spool block is inert and is not named', (_label, anchor, replacement) => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
+    expect(block).toContain(anchor);
+    expect(forkForms(block.replace(anchor, replacement), allowed)).toEqual([]);
+  });
+
+  // ── review 353 F2: the S1 string pin over ROWS — each of its arms has a planted form it must name ──
+  /** FR4: a ROWS label and the string-pin arm that must name that form planted in the block. A ROWS form missing here is
+   *  one no string arm reads (a subshell, a pipeline, a background job, a coproc, a here-string, a process substitution,
+   *  a command word its external list does not hold), or one it reads only by accident: forkForms alone names those. */
+  const ARITH = 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)';
+  const SUBSTRING = 'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)';
+  const SUBSCRIPT = 'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)';
+  const STRING_ROWS: Array<[string, string]> = [
+    ['a command substitution', 'a command substitution in the spool block'],
+    ['a substitution inside ${}', 'a command substitution in the spool block'],
+    ['a substitution in single quotes inside ${} inside double quotes', 'a command substitution in the spool block'],
+    ['a subshell inside $( (', 'a command substitution in the spool block'],
+    ['a substitution spelled $((', 'a command substitution in the spool block'],
+    ['a substitution spelled $(( inside double quotes', 'a command substitution in the spool block'],
+    ['a backtick', 'a backtick in the spool block'],
+    ['a backtick in single quotes inside ${} inside double quotes', 'a backtick in the spool block'],
+    ['a sha program', 'a sha program in the spool block'],
+    ['an @P transformation inside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation outside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation nested in a ${} default word', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation in single quotes inside ${} inside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation of a subscripted name', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @Q transformation', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['bare-name arithmetic', ARITH],
+    ['a bare name beside ${#name} in the bound', ARITH],
+    ['a ++ on a name (the old INERT row: it forks when the name holds a subscript)', ARITH],
+    ['a $name operand in $(( ))', ARITH],
+    ['a bare name in $(( )) inside double quotes', ARITH],
+    ['a bare name in $(( )) inside [[ ]]', ARITH],
+    ['an -eq test', 'an arithmetic test operator (review 351 F1)'],
+    ['a -gt test on a quoted operand', 'an arithmetic test operator (review 351 F1)'],
+    ['a variable substring offset', SUBSTRING],
+    ['a variable substring offset inside double quotes', SUBSTRING],
+    ['a variable substring length', SUBSTRING],
+    ['a $ special parameter with a variable substring offset', SUBSTRING],
+    ['a ? special parameter with a variable substring offset', SUBSTRING],
+    ['a - special parameter with a variable substring offset', SUBSTRING],
+    ['a variable subscript', SUBSCRIPT],
+    ['a $name subscript', SUBSCRIPT],
+    ['an indexed assignment with a variable subscript', SUBSCRIPT],
+    ['read into a variable subscript', SUBSCRIPT],
+    ['printf -v into a variable subscript', SUBSCRIPT],
+    ['printf -v into a single-quoted variable subscript', SUBSCRIPT],
+    ['a [[ -v ]] test of a variable subscript', SUBSCRIPT],
+    ['a [[ -v ]] test of a double-quoted variable subscript', SUBSCRIPT],
+    ['a compound array assignment with a variable key', SUBSCRIPT],
+    ['an appended compound assignment with a spaced variable key', SUBSCRIPT],
+    ['a $[ ] arithmetic expansion', 'a $[ ] arithmetic expansion in the spool block (review 351 F1)'],
+    ['a $[ ] arithmetic expansion inside double quotes', 'a $[ ] arithmetic expansion in the spool block (review 351 F1)'],
+    ['a let', 'let and an integer attribute evaluate arithmetic (review 351 F1)'],
+    ['an integer attribute', 'let and an integer attribute evaluate arithmetic (review 351 F1)'],
+    ['an external program', 'an external command in the spool block forks on the hot path'],
+    ['a program as an if condition', 'an external command in the spool block forks on the hot path'],
+    ['a program in a case arm on the case line', 'an external command in the spool block forks on the hot path'],
+  ];
+
+  it.each(STRING_ROWS)('S1 (string, review 353 F2): %s planted in the spool block is caught by the string pin: %s', (label, arm) => {
+    const row = ROWS.find((r) => r[0] === label);
+    expect(row, `no ROWS row is labelled ${label}`).toBeDefined();
+    const [, anchor, replacement] = row!;
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    expect(block).toContain(anchor);
+    const code = s1Code(block.replace(anchor, replacement));
+    expect(S1_STRING_ARMS.filter(([, check]) => check(code) !== null).map(([name]) => name)).toContain(arm);
+  });
+
+  it('S1 (string, review 353 F2): every arm has a planted row, so each arm is caught by the string pin rows', () => {
+    const arms = S1_STRING_ARMS.map(([name]) => name);
+    expect(new Set(arms).size, 'two string-pin arms share a label').toBe(arms.length);
+    expect([...new Set(STRING_ROWS.map(([, arm]) => arm))].sort(), 'an arm with no planted row, or a row naming no arm').toEqual([...arms].sort());
+  });
+```
+
+`STRING_ROWS` maps 46 of the 61 `ROWS` forms (measured on `main`'s hook block). It leaves out 15:
+- 13 forms no string arm reads: a subshell, a pipeline, a background job, the two process substitutions and the one inside `[[ ]]`, a coproc, a trailing `&`, a here-string, a path-spelled program, a variable command word, a program as an elif condition, and the subshell spelled `((`.
+- The `(( … ))` that is two subshells, which the string pin names only by accident, through its arithmetic and external arms.
+- `an indexed assignment with a variable subscript, as a subscript`, which plants the same text as the mapped `an indexed assignment with a variable subscript`.
+
+(c) **The residue comment in `server/test/history-drain.test.ts`**, above `const NODE_REFUSED =`. It is replaced four lines for four, so no line below it moves. Replace
+
+```ts
+    // FR2c (review 344 F3; D-4418 (history-spool-append-regular-file-only)): a node the hook refuses at spool/<id>.jsonl (a FIFO,
+    // a link, dangling or not, a directory) silences that id's spool lines until the operator removes it. renameSpoolFiles never
+    // reads or moves one; a drain counts it non_regular once per drain that meets it, as D-4347's planted entries are, and each
+    // half names it on stderr, so the sweep's log and status say what to remove.
+```
+
+with
+
+```ts
+    // FR2c (review 344 F3; D-4418 (history-spool-append-regular-file-only)): a node the hook refuses at spool/<id>.jsonl (a FIFO,
+    // a link, dangling or not, a directory) silences that id's spool lines until the operator removes it. renameSpoolFiles never
+    // reads or moves one; a drain counts it non_regular once, as D-4347's planted entries are, unless its loop throws (that drain's
+    // count is left out, D-4418), and each half names it on stderr, so the sweep's log and status say what to remove.
+```
+
+This is what `drainSpool`'s docstring and its inline comment above `countOutside(db, 'non_regular', renamed.refused)` say on `main`: the journal half names the node, and that drain does not count it.
+
+(d) **Green.** From the repository root, in the foreground, each with a timeout of at least 600000 ms:
+
+```bash
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'S1:|S1 \(')
+(cd server && ./node_modules/.bin/vitest run test/history-drain.test.ts -t 'FR2c|FR2e')
+git diff --numstat -- server/test/history-drain.test.ts
+```
+
+Expected:
+- `127 passed`. On `main` the same filter runs 78: the string case, the syntax case, 59 `ROWS` and 17 `INERT`. This step adds 2 `ROWS`, 46 `STRING_ROWS` and the coverage case.
+- `6 passed`: the four FR2c rows and the FR2e case are unchanged, plus the hold case.
+- `4	4	server/test/history-drain.test.ts`.
+
+Step 8 runs the typecheck. Step 1's history-lib cases are red until Step 5, so `tsc` is not a gate here.
+
+(e) **Every arm measured red, then green.** From the repository root:
+
+```bash
+cat > .superpowers/sdd/history-w1-b2/scratch/mutants-task34-s1.json <<'EOF'
+[
+ { "name": "string arm deleted: a command substitution in the spool block", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a command substitution in the spool block', (code) => (code.includes('$(') ? '$(' : null)],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: a backtick in the spool block", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a backtick in the spool block', (code) => (code.includes('`') ? '`' : null)],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: a sha program in the spool block", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a sha program in the spool block', (code) => (code.includes('sha') ? 'sha' : null)],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: a ${…@…} transformation in the spool block (@P forks)", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a ${…@…} transformation in the spool block (@P forks)', (code) => code.match(/\\$\\{[^}]*@/)?.[0] ?? null],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: a (( )) operand that is not an integer literal or ${#name} (review 351 F1)", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a (( )) operand that is not an integer literal or ${#name} (review 351 F1)', (code) => [...code.matchAll(/\\(\\(([\\s\\S]*?)\\)\\)/g)]\n      .map((x) => x[1]!)\n      .find((x) => /[^\\s0-9+\\-*/%<>=!&|^~?:,()]/.test(x.replace(/\\$\\{#[A-Za-z_][A-Za-z0-9_]*\\}/g, '0'))) ?? null],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: an arithmetic test operator (review 351 F1)", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['an arithmetic test operator (review 351 F1)', (code) => code.match(/(?<![\\w-])-(?:eq|ne|lt|le|gt|ge)(?![\\w-])/)?.[0] ?? null],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: a ${name:offset:length} whose offset or length is not a literal (review 351 F1)", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',\n      (code) => code.match(/\\$\\{[!#]?(?:[A-Za-z_]\\w*|\\d+|[@*#?$!-])(?:\\[[^\\]\\n]*\\])?:(?![-=?+])(?!\\s*-?\\d+(?::\\s*-?\\d+)?\\})/)?.[0] ?? null],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',\n      (code) => code.match(SUBSCRIPT_FORK)?.[0] ?? null],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: a $[ ] arithmetic expansion in the spool block (review 351 F1)", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a $[ ] arithmetic expansion in the spool block (review 351 F1)', (code) => (code.includes('$[') ? '$[' : null)],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: let and an integer attribute evaluate arithmetic (review 351 F1)", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['let and an integer attribute evaluate arithmetic (review 351 F1)',\n      (code) => code.match(/(?<![\\w-])(?:let|declare|typeset|local|readonly)(?![\\w-])/)?.[0] ?? null],\n", "replacement": "" } ] },
+ { "name": "string arm deleted: an external command in the spool block forks on the hot path", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['an external command in the spool block forks on the hot path', (code) => code.match(S1_EXTERNAL)?.[0] ?? null],\n", "replacement": "" } ] },
+ { "name": "a string arm with no planted row", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "every arm has a planted row", "edits": [
+   { "anchor": "  const S1_STRING_ARMS: ReadonlyArray<readonly [string, (code: string) => string | null]> = [\n", "replacement": "  const S1_STRING_ARMS: ReadonlyArray<readonly [string, (code: string) => string | null]> = [\n    ['an arm no row plants', () => null],\n" } ] },
+ { "name": "the planted row of the sha arm removed", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "every arm has a planted row", "edits": [
+   { "anchor": "    ['a sha program', 'a sha program in the spool block'],\n", "replacement": "" } ] },
+ { "name": "a planted row whose ROWS row is gone", "file": "server/test/session-hook.test.ts", "test": "test/session-hook.test.ts", "filter": "caught by the string pin", "edits": [
+   { "anchor": "    ['a sha program', T, \"_hs+='}'; sha256sum x\", 'command sha256sum'],\n", "replacement": "" } ] },
+ { "name": "the string case runs its arms on the block: a sha program planted in the hook", "file": "ccd/session-hook.sh", "test": "test/session-hook.test.ts", "filter": "S1: the block is builtins only", "edits": [
+   { "anchor": "    _hs+='}'\n", "replacement": "    _hs+='}'; sha256sum x\n" } ] },
+ { "name": "fail-closed cost, both pins: an -le test on ${#name} (by ruling)", "file": "ccd/session-hook.sh", "test": "test/session-hook.test.ts", "filter": "S1: the block is builtins only|hold no fork form", "edits": [
+   { "anchor": "    _hs+='}'\n", "replacement": "    _hs+='}'; [[ ${#_hs} -le 224 ]] && true\n" } ] },
+ { "name": "fail-closed cost, both pins: an empty substring offset", "file": "ccd/session-hook.sh", "test": "test/session-hook.test.ts", "filter": "S1: the block is builtins only|hold no fork form", "edits": [
+   { "anchor": "    _hs+='}'\n", "replacement": "    _hs+='}'; _hs_x=${_hs::3}\n" } ] },
+ { "name": "fail-closed cost, both pins: a bracket class after a letter in =~", "file": "ccd/session-hook.sh", "test": "test/session-hook.test.ts", "filter": "S1: the block is builtins only|hold no fork form", "edits": [
+   { "anchor": "    _hs+='}'\n", "replacement": "    _hs+='}'; [[ $_hs_g =~ ^cc[a-z]+$ ]] && true\n" } ] },
+ { "name": "fail-closed cost, both pins: a bracket class after a letter in a case pattern", "file": "ccd/session-hook.sh", "test": "test/session-hook.test.ts", "filter": "S1: the block is builtins only|hold no fork form", "edits": [
+   { "anchor": "    _hs+='}'\n", "replacement": "    _hs+='}'; case $_hs_g in a[bc]) true ;; esac\n" } ] }
+]
+EOF
+(cd server && node ../.superpowers/sdd/history-w1-b2/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b2/scratch/mutants-task34-s1.json)
+```
+
+Run it in the foreground with a timeout of at least 600000 ms. Expected: every row prints `red (…)` and then `green`; the last line is `every guard measured red, then green`; the exit is 0. The reds, measured on `main` at 5a6e5d3d7 with this step's edits:
+- Each deleted arm reds its own `STRING_ROWS` rows and the coverage case: `$(` 7 failed; backtick 3; `sha` 2; `${…@…}` 7; the `(( ))` operand 7; the `-eq` family 3; the substring 7; the subscript 11; `$[` 3; `let` and the integer attribute 3; external 4.
+- An arm with no planted row, and the `sha` arm's row removed, each red the coverage case (1 failed): `an arm with no planted row, or a row naming no arm`.
+- A planted row whose `ROWS` row is gone reds that row (1 failed): `no ROWS row is labelled a sha program`.
+- `sha256sum` planted in the hook reds the string case (1 failed) at `a sha program in the spool block`. The string case runs every arm on the real block.
+- Each of the four fail-closed costs reds both pins (2 failed). The string case reds at `an arithmetic test operator`, `a ${name:offset:length} …` or `a subscript …`. The syntax case names `arithmetic test operator`, `substring offset` or `subscript`. These reds are the costs the header now names; the step measures them so that the header's claim holds, and does not close them.
+
+Record the reds the run actually prints in the task's report. Step 11 commits this step's two files with the rest of the task.
 
 - [ ] **Step 3: Write the failing drain, box and rebuild cases.** Append at the end of `server/test/history-drain.test.ts`:
 
@@ -32529,7 +33454,7 @@ Run, in the foreground:
 (cd server && ./node_modules/.bin/vitest run test/history-derive.test.ts -t 'DM48')
 ```
 
-Expected: red. Every DM48 drain case fails. lib refuses each fork line (`keys`: every one here carries `reg`, which B1 refuses off a startup or resume line), so the drain counts `spool_line_rejected`. Most cases then find no fork epoch or candidate (`expected [] to deeply equal [ { seq: 1, … cause: 'fork' … } ]`). The same-id and scan-first cases end in the same state whether the fork line was confirmed in place or dropped, so they go red only at their `spool_line_rejected` assertion (`expected 1 to be 0`). The held case fails at `heldMatches`, because no fork line passes the grammar, and the box case fails with one epoch. The rebuild case throws `rrTickUntil: not done after 8 passes`. The derive span case fails at its fork-epoch CONTROL (`expected [] to deeply equal [ 'fork' ]`). Every one of these reds comes from B1's spool grammar (`SPOOL_SOURCES` and the `reg` rule), none from `EPOCH_CAUSES`, which B1 merged with `fork` in it (B1's ⟦D:history-epoch-causes-widened-for-rollback⟧), so none of them is already green on the B1 base. These reds were read off B1's code; record the reds the run actually prints in the task report.
+Expected: red. Every DM48 drain case fails. lib refuses each fork line (`keys`: every one here carries `reg`, which B1 refuses off a startup or resume line), so the drain counts `spool_line_rejected`. Most cases then find no fork epoch or candidate (`expected [] to deeply equal [ { seq: 1, … cause: 'fork' … } ]`). The same-id and scan-first cases end in the same state whether the fork line was confirmed in place or dropped, so they go red only at their `spool_line_rejected` assertion (`expected 1 to be 0`). The held case fails at `heldMatches`, because no fork line passes the grammar, and the box case fails with one epoch. The rebuild case throws `rrTickUntil: not done after 8 passes`. The derive span case fails at its fork-epoch CONTROL (`expected [] to deeply equal [ 'fork' ]`). Every one of these reds comes from B1's spool grammar (`SPOOL_SOURCES` and the `reg` rule), none from `EPOCH_CAUSES`, which B1 merged with `fork` in it (B1's D-4342 (`history-epoch-causes-widened-for-rollback`)), so none of them is already green on the B1 base. These reds were read off B1's code; record the reds the run actually prints in the task report.
 
 - [ ] **Step 4: Write the failing whitelist binding.** Append at the very end of `server/test/single-definition.test.ts`:
 
@@ -32558,17 +33483,17 @@ Run `(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts
 
 - [ ] **Step 5: Admit `fork` in lib.** In `ccd/history/lib.mjs`, by content. Below, ⟦D:…⟧ stands for the number B1 issued for that slug, which the file spells `D-` and digits; ⟦D:history-fork-spooled⟧ is this plan's own, as minted.
 
-(a) `SPOOL_SOURCES` alone, anchored on its own two lines. B1's merged lib.mjs does NOT hold `SPOOL_SOURCES` and `EPOCH_CAUSES` on adjacent lines: B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ put a two-line comment between them, and its `EPOCH_CAUSES` already lists `fork`. The block there reads, at B1's tip:
+(a) `SPOOL_SOURCES` alone, anchored on its own two lines. B1's merged lib.mjs does NOT hold `SPOOL_SOURCES` and `EPOCH_CAUSES` on adjacent lines: B1's D-4342 (`history-epoch-causes-widened-for-rollback`) put a two-line comment between them, and its `EPOCH_CAUSES` already lists `fork`. The block there reads, at B1's tip:
 
 ```js
 /** The SessionStart sources that spool (ruled Q2; fork is outside, Q16). */
 export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);
-/** ⟦D:history-epoch-causes-widened-for-rollback⟧ (history-epoch-causes-widened-for-rollback): 'fork' is vocabulary only. B1 still spools no fork (⟦D:history-fork-not-spooled⟧);
+/** D-4342 (history-epoch-causes-widened-for-rollback): 'fork' is vocabulary only. B1 still spools no fork (D-4173);
  *  W1-B2 does (Q16), and a box rolled back from B2 can hold a fork candidate whose verdict this build must read back. */
 export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
 ```
 
-(As everywhere in this step, ⟦D:…⟧ stands for the number B1 issued for that slug, spelled in the file as `D-` and digits.) B2 needs no change to `EPOCH_CAUSES`, so the two-line comment of B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ (B1's citation, kept as history) and its declaration stay byte-for-byte as they are. Replace ONLY the first two lines,
+(As everywhere in this step, ⟦D:…⟧ stands for the number B1 issued for that slug, spelled in the file as `D-` and digits.) B2 needs no change to `EPOCH_CAUSES`, so the two-line comment of B1's D-4342 (`history-epoch-causes-widened-for-rollback`) (B1's citation, kept as history) and its declaration stay byte-for-byte as they are. Replace ONLY the first two lines,
 
 ```js
 /** The SessionStart sources that spool (ruled Q2; fork is outside, Q16). */
@@ -32579,8 +33504,8 @@ with
 
 ```js
 /** The SessionStart sources that spool (ruled Q2), and `fork` from W1-B2 (ruled Q16, ⟦D:history-fork-spooled⟧,
- *  reversing ⟦D:history-fork-not-spooled⟧). A fork epoch needs no migration: `epochs.cause` is TEXT with no CHECK
- *  in schema v1, and EPOCH_CAUSES (below) has held `fork` since W1-B1 (⟦D:history-epoch-causes-widened-for-rollback⟧).
+ *  reversing D-4173). A fork epoch needs no migration: `epochs.cause` is TEXT with no CHECK
+ *  in schema v1, and EPOCH_CAUSES (below) has held `fork` since W1-B1 (D-4342).
  *  THE ROLLBACK EDGE (§6.1): a W1-B1 build's drain rejects a spooled fork line (spool_line_rejected), and that fork
  *  falls back to its registry backfill. Because W1-B1 merged with `fork` in EPOCH_CAUSES, a rolled-back build reads a
  *  fork epoch's journal record and a waiting fork candidate's verdict as valid; only this spool-line part remains. */
@@ -32592,17 +33517,17 @@ Check that `EPOCH_CAUSES` and its comment were not touched: `grep -c "^export co
 (b) In the comment block above `const keySet = (required, optional) =>`, replace the three lines
 
 ```js
-// ⟦D:history-spool-line-carries-registry-uuid⟧: `reg` rides startup and resume
-// lines only. ⟦D:history-fork-not-spooled⟧: `src` is one of SPOOL_SOURCES, so a
-// `fork` source is a value rejection. ⟦D:history-spool-no-summary-hash⟧: no key carries summary text or a
+// D-4175: `reg` rides startup and resume
+// lines only. D-4173: `src` is one of SPOOL_SOURCES, so a
+// `fork` source is a value rejection. D-4177: no key carries summary text or a
 ```
 
 with
 
 ```js
-// ⟦D:history-spool-line-carries-registry-uuid⟧: `reg` rides startup, resume
-// and fork lines only (fork from W1-B2, ⟦D:history-fork-spooled⟧, which reverses ⟦D:history-fork-not-spooled⟧'s
-// value rejection); `src` is one of SPOOL_SOURCES. ⟦D:history-spool-no-summary-hash⟧: no key carries summary text or a
+// D-4175: `reg` rides startup, resume
+// and fork lines only (fork from W1-B2, ⟦D:history-fork-spooled⟧, which reverses D-4173's
+// value rejection); `src` is one of SPOOL_SOURCES. D-4177: no key carries summary text or a
 ```
 
 (c) In `parseSpoolLine`'s doc comment, replace the words `` `reg` off a startup/resume line `` with `` `reg` off a startup, resume or fork line ``. In its body, replace
@@ -32641,7 +33566,7 @@ with
   if (line.src !== 'startup' && line.src !== 'resume' && line.src !== 'fork') {
 ```
 
-(e) In `ccd/history/lib.d.mts`, two edits: replace `export type SpoolSource = 'startup' | 'resume' | 'clear';` with `export type SpoolSource = 'startup' | 'resume' | 'clear' | 'fork';`, and in `decideEpochLine`'s declaration replace `line: { src: 'startup' | 'resume' | 'clear'; sid: string; reg?: string }` with `line: { src: SpoolSource; sid: string; reg?: string }`. `EpochCause` is not edited: B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ already made it `export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';` (check: `grep -c "^export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';$" ccd/history/lib.d.mts` prints `1`).
+(e) In `ccd/history/lib.d.mts`, two edits: replace `export type SpoolSource = 'startup' | 'resume' | 'clear';` with `export type SpoolSource = 'startup' | 'resume' | 'clear' | 'fork';`, and in `decideEpochLine`'s declaration replace `line: { src: 'startup' | 'resume' | 'clear'; sid: string; reg?: string }` with `line: { src: SpoolSource; sid: string; reg?: string }`. `EpochCause` is not edited: B1's D-4342 (`history-epoch-causes-widened-for-rollback`) already made it `export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';` (check: `grep -c "^export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';$" ccd/history/lib.d.mts` prints `1`).
 
 Check that each anchor matched once and nothing else names the three sources as a closed list:
 
@@ -32681,15 +33606,15 @@ A fork line takes `reg` with no further edit: the block's `if [[ "$src" != clear
 (b) Two consecutive comment lines in the block's header (B1's tip `561609adc`: `ccd/session-hook.sh:3041-3042`, below `# The off-switch silences Stop and PostCompact and never the SessionStart epoch`; anchored by content). Replace
 
 ```bash
-# lines ⟦D:history-epoch-lines-survive-off⟧. Only startup, resume and clear are spooled ⟦D:history-spool-start-not-compact⟧: compact exited
-# in its arm, and fork and any other source write nothing ⟦D:history-fork-not-spooled⟧. A SessionStart
+# lines D-4252. Only startup, resume and clear are spooled D-4253: compact exited
+# in its arm, and fork and any other source write nothing D-4173. A SessionStart
 ```
 
 with
 
 ```bash
-# lines ⟦D:history-epoch-lines-survive-off⟧. Only startup, resume, clear and fork are spooled ⟦D:history-spool-start-not-compact⟧ ⟦D:history-fork-spooled⟧: compact
-# exited in its arm, and any other source writes nothing (fork did in W1-B1, ⟦D:history-fork-not-spooled⟧). A SessionStart
+# lines D-4252. Only startup, resume, clear and fork are spooled D-4253 ⟦D:history-fork-spooled⟧: compact
+# exited in its arm, and any other source writes nothing (fork did in W1-B1, D-4173). A SessionStart
 ```
 
 (c) One comment line, two lines below the last of those two (`:3044` at B1's tip; the line between them, `# line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires, so without a`, is not touched). Replace
@@ -32704,7 +33629,7 @@ with
 # lowercase-UUID sid none is written at all. A startup, resume or fork line carries
 ```
 
-The line after it, `` # `reg`, this hook's own read of `.uuid` ⟦D:history-spool-line-carries-registry-uuid⟧. No summary hash rides it ⟦D:history-spool-no-summary-hash⟧. ``, continues the sentence unchanged.
+The line after it, `` # `reg`, this hook's own read of `.uuid` B1's D-4175 (`history-spool-line-carries-registry-uuid`). No summary hash rides it B1's D-4177 (`history-spool-no-summary-hash`). ``, continues the sentence unchanged.
 
 Then measure, from the repository root. The block declares `SCRATCH` again: each Bash call starts a new shell, so the first block's variable is gone.
 
@@ -32720,19 +33645,36 @@ bash -n ccd/session-hook.sh && echo SYNTAX-OK
 
 Expected: `SAME-LINE-COUNT`; `NO LINE MOVED` (every hunk replaces N lines at line L with N lines at line L); `4	4	ccd/session-hook.sh`; `SYNTAX-OK`; green. The census is unchanged. Step 6A measures the S1 pins on the edited block.
 
-- [ ] **Step 6A: Keep the spool block inside B1's S1 pins (review 351's classification, as B1's fix round 3 closed it).** Task 34 adds one word to a `case` pattern and no command, operand, test or expansion. At B1's tip `561609adc`, `forkForms` blanks a case pattern (`startup|resume|clear|fork)` after `in`) before it looks for a pipeline, and neither pin's external-command list holds `fork`, so the word is inert. Measure that, and run every S1 pin on the edited block. From the repository root:
+- [ ] **Step 6A: Keep the spool block inside B1's S1 pins (review 351's classification, as B1's fix round 3 closed it, with Step 2A's strengthening).** Task 34 adds one word to a `case` pattern and no command, operand, test or expansion. On `main`, `forkForms` blanks a case pattern (`startup|resume|clear|fork)` after `in`) before it looks for a pipeline, and neither pin's external-command list holds `fork`, so the word is inert. The pins as they stand after Step 2A refuse these forms:
+- every `(( ))` or `$(( ))` operand that is not an integer literal or `${#name}`;
+- the `-eq` family, even on `${#name}`;
+- `$[ ]`;
+- a substring offset or length that is not a literal;
+- a subscript or compound key that is not a literal, `@` or `*`;
+- `let`, `declare`, `typeset`, `local` and `readonly`;
+- `$(`, a backtick, `sha`, `${…@…}` and every external command.
+
+The stopping line lists, unchased: `${!x}`; a dynamic name to `[[ -v ]]`, `printf -v` or `read`; a dynamic name with a variable subscript; a name split from its `[`; bash's integer variables; a `#`-led line inside a multi-line string; and a compound key that holds its own brackets.
+
+Measure the edited line against all of those, and run every S1 pin on the edited block. From the repository root:
 
 ```bash
 SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b2/scratch"
 # Every code line Task 34 added to the hook (comments excluded), against each form S1 closes or lists: arithmetic
-# (( )) over a name, the -eq family, ${!x}, [[ -v ]], printf -v, read into a dynamic name, a non-literal ${name:…}
-# offset, $( ), a backtick and ${…@…}.
+# (( )), the -eq family, $[ ], ${!x}, [[ -v ]], printf -v, read into a dynamic name, a non-literal or empty ${name:…}
+# offset, a name[ subscript, a compound key, let and the integer-attribute words, bash's integer variables, sha,
+# $( ), a backtick and ${…@…}. Conservative: it may name a literal form, never miss a listed one.
 git diff -U0 -- ccd/session-hook.sh | grep -E '^\+[^+]' | grep -vE '^\+\s*#' > "$SCRATCH/task34-added.txt"; cat "$SCRATCH/task34-added.txt"
-grep -nE '\(\(|-(eq|ne|lt|le|gt|ge)([^a-z]|$)|\$\{!|\[\[ +-v |printf +-v|read( +-[A-Za-z]+)* +"?\$|\$\{[A-Za-z_][A-Za-z0-9_]*:[^-=?+0-9]|\$\(|`|\$\{[^}]*@' "$SCRATCH/task34-added.txt" && echo 'AN S1 FORM WAS ADDED' || echo 'S1 FORMS ADDED: none'
+grep -nE '\(\(|-(eq|ne|lt|le|gt|ge)([^a-z]|$)|\$\[|\$\{!|\[\[ +-v |printf +-v|read( +-[A-Za-z]+)* +"?\$|\$\{[^}]*:[^-=?+0-9]|\$\{[^}]*::|[A-Za-z_][A-Za-z0-9_]*\[|\(\[|[ (]\[[^] []|(^|[^A-Za-z0-9_-])(let|declare|typeset|local|readonly|RANDOM|SRANDOM|OPTIND|HISTCMD)([^A-Za-z0-9_-]|$)|sha|\$\(|`|\$\{[^}]*@' "$SCRATCH/task34-added.txt" && echo 'AN S1 FORM WAS ADDED' || echo 'S1 FORMS ADDED: none'
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'S1')
 ```
 
-Expected: the one code line of Step 6 (a); `S1 FORMS ADDED: none`; green (the filter also runs S11, S14 and S17, which share the prefix, and every `ROWS` and `INERT` row). Any other output is a stop: the rule is the global "Citation corpus" bullet's (literal or `${#name}` arithmetic only, no `-eq` family, literal offsets, none of the listed forms). Step 9's two S1 rows measure that the arm this task edits is inside the block the pins scan.
+Expected:
+- The one code line of Step 6 (a).
+- `S1 FORMS ADDED: none`. The screen was measured at plan time on that exact line, and it names each of `(( x ))`, `[[ $x -eq 1 ]]`, `$[ x ]`, `${!x}`, `[[ -v x ]]`, `printf -v x`, `read -r "$v"`, `${x:y}`, `${x::3}`, `a[v]=1`, `x=([v]=1)`, `x+=( [v]=1 )`, `let x`, `local -i x`, `OPTIND=$v`, `sha256sum`, `$(x)`, a backtick, `${x@P}` and `x=([y[0]]=1)`.
+- Green. The filter also runs S11, S14 and S17, which share the prefix, every `ROWS` and `INERT` row, and Step 2A's `STRING_ROWS` and coverage case.
+
+Any other output is a stop: the rule is the global "Citation corpus" bullet's. Step 9's two S1 rows measure that the arm this task edits is inside the block the pins scan.
 
 - [ ] **Step 7: Take fork lines in the held-file re-read, and name fork in the sweep's epoch comments.** In `ccd/history/sweep.mjs`, by content:
   - In `recordHeldMatches`, replace `    .filter((v) => v.rec.ev === 'SessionStart' && (v.rec.src === 'startup' || v.rec.src === 'resume')` with `    .filter((v) => v.rec.ev === 'SessionStart' && (v.rec.src === 'startup' || v.rec.src === 'resume' || v.rec.src === 'fork')`, and in its doc line replace `for its startup and resume lines whose sid` with `for its startup, resume and fork lines whose sid`.
@@ -32753,7 +33695,7 @@ Expected: the one code line of Step 6 (a); `S1 FORMS ADDED: none`; green (the fi
 (cd server && node node_modules/typescript/bin/tsc -p test/tsconfig.tests.json --noEmit)
 ```
 
-Expected: every run green; `tsc` prints nothing. B1's DM18c, DM19, DM19b and DM46 cases in `history-drain` are unchanged and green; so is B1's O14 describe, whose `EPOCH_CAUSES` row checks one declaration, of five members since B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ and not edited here.
+Expected: every run green; `tsc` prints nothing. B1's DM18c, DM19, DM19b and DM46 cases in `history-drain` are unchanged and green; so is B1's O14 describe, whose `EPOCH_CAUSES` row checks one declaration, of five members since B1's D-4342 (`history-epoch-causes-widened-for-rollback`) and not edited here.
 
 - [ ] **Step 9: Mutations.** Measure each guard red, then green, with the mutation runner Task 1 Step 1 writes (if `.superpowers/sdd/history-w1-b2/scratch/mutate.mjs` is gone, write it again from Task 1 Step 1, byte for byte). From the repository root:
 
@@ -32812,7 +33754,7 @@ Run it in the foreground with a timeout of at least 600000 ms. Expected: every r
 - the two S14 CONTROLs: S14's fourth line reads no `fork` (`[ 4, undefined ]`), or there is no fourth line;
 - the binding: `expected [ 'clear', 'resume', 'startup' ] to deeply equal [ 'clear', 'fork', 'resume', 'startup' ]`;
 - S11's `reg` row: the fork line with `reg` parses as `keys`, so `a!.rec` is null;
-- `EPOCH_CAUSES` without fork: the fork `epoch-confirmed` verdict parses as `malformed` (the rollback edge B1's ⟦D:history-epoch-causes-widened-for-rollback⟧ closed, measured on this build; the mutant's anchor is B1's own unchanged line);
+- `EPOCH_CAUSES` without fork: the fork `epoch-confirmed` verdict parses as `malformed` (the rollback edge B1's D-4342 (`history-epoch-causes-widened-for-rollback`) closed, measured on this build; the mutant's anchor is B1's own unchanged line);
 - `decideEpochLine` refusing fork: the drain throws its `TypeError`, and every DM48 case reds;
 - the first DM48 CONTROL: the foreign-sid case finds an epoch where it expects a `fork` candidate;
 - the second DM48 CONTROL: the second epoch's INSERT meets `UNIQUE (session_pk, cc_session_uuid)` (extended code 2067), the schema's own refusal of a second epoch. B1's `decideDrainFailure` answers `'reject'` for it (B1's history-permanent-failures-classified), so the drain does not throw: it prints `history-sweep: drain-rejected: <name>: …`, rolls the file's transaction back, moves the file to `.draining/rejected/` (`setAsideRejected`) and counts `drain_rejected`. The same-id case reds at `drain_rejected` (`expected 1 to be 0`); past it, `receiptCount` is 0, not 2, and `epochsOf` is `[]`, its startup line rolled back with the fork line. The scan-first case reds at `drain_rejected` (`expected 1 to be 0`); past it, `receiptCount` is 0, not 1, and its `import` epoch is unchanged;
@@ -32848,7 +33790,13 @@ The hook's source whitelist gains fork in place (no hook line moves); SPOOL_SOUR
 parseSpoolLine's reg rule and decideEpochLine admit it (EPOCH_CAUSES has held it since
 W1-B1), and the held-file re-read takes it. A fork whose sid is already an epoch confirms that epoch; a fresh
 sid chains a fork epoch; replay applies fork records unchanged.
-Pins DM48, and S11 and S14 in their fork-spooled form."
+Pins DM48, and S11 and S14 in their fork-spooled form.
+
+Before the block is edited, B1's S1 pins are strengthened (review 353, carried from B1):
+the string pin's checks become labelled arms with a planted ROWS form each; a
+compound key that holds its own brackets is listed on the stopping line, with the
+line's fail-closed costs named; and the drain's FR2c comment states the thrown-arm
+exception."
 ```
 
 ### Task 35: The per-copy due rule is the default (ruled Q15): `EXPORT_REDUCERS.perCopy`, the default of `planExport` and `exportDates`; the census's prefilter and W1-k dates by it; doctor's `retention-lowered` a reminder; O38's census cases re-run, and O58
@@ -32881,9 +33829,9 @@ Pins DM48, and S11 and S14 in their fork-spooled form."
 **Spec:** §9.15 ("The horizon, per source harness"; "What is due": its inputs, the per-row file set, a file's due date, a row is due, a blob is due, the row clock as history; "The gap guard, and the dates"; "If B4 slips": the census records the first due date by the rule in force), §9.6 (`export-due`, `export-overdue`, `retention-lowered`), §10.5 (B2's per-copy bullet), §15.1 and §15.3 Q15. Pins: **O58**; **O38**'s census cases re-run under the per-copy default.
 - Departures:
   - ⟦D:history-export-due-per-copy⟧ (spec §16 row since rev 3.4; this plan defines it first).
-  - ⟦D:history-export-row-age-early⟧ (B1-defined): the row clock, now `shortestHome`'s alone and no longer the default.
-  - ⟦D:history-export-holding-files-by-transcript⟧ (B1-defined): stays the per-row file set, as the ruling keeps it.
-  - ⟦D:history-export-due-escalates⟧ (B1-defined): `export-overdue` stays on the file clock, unchanged.
+  - B1's D-4208 (`history-export-row-age-early`): the row clock, now `shortestHome`'s alone and no longer the default.
+  - B1's D-4248 (`history-export-holding-files-by-transcript`): stays the per-row file set, as the ruling keeps it.
+  - B1's D-4207 (`history-export-due-escalates`): `export-overdue` stays on the file clock, unchanged.
 
 Choices this task makes (each is in the PR body's choices):
 - **A reducer answers a due time.** The per-copy rule reads each holding file's own clock, so no single retention against one row clock can express it. The type and `planExport`'s signature stay B1's (§15.3 Q15: "no signature change"). B1's seam case, whose `ownCopies` reducer returned days, is rewritten.
@@ -32894,7 +33842,7 @@ Choices this task makes (each is in the PR body's choices):
 - **`retention-lowered` is a reminder.** It keeps its word, class and remedy. Its detail now says when that home's own rows fall due, instead of claiming a node-wide horizon. `export-due`'s detail is unchanged, because B4 Task 9 anchors on it.
 - **B1's pure due cases keep pinning B1's reducer, by name** (`reducer: SH`): the node-shortest rule stays exported as history, and here and in B4 it is a CONTROL. The census cases (O38's B1 half, in history-op) are re-run under the per-copy default with new expectations.
 - **O38's fixtures keep each file's mtime at or after its rows' times**, as Claude Code writes them. A case that needs an aged file plants a transcript of its own whose row is older than its file.
-- **A named residual: the swap prefix** (⟦D:history-export-holding-files-by-transcript⟧, which the ruling keeps). A row's holding files are its transcript's, so a file of the transcript that holds none of the row's copies still counts. The common case is a swap: ccd copies `<uuid>.jsonl` into the target home and the session continues there, so the source copy is a frozen prefix. Rows written after the swap are held only by the target copy, yet they wait for the frozen copy too. Figures, from Step 1's residual case: a swap 45 days ago froze a 180-day home's copy, last written 46 days ago; the 30-day target copy, last written 35 days ago, is gone; its rows are 38 days old. Their text is store-only, yet they are due only 104 days from now, so neither `export-due` nor `export-overdue` counts them meanwhile. B1's node-shortest reducer counted them due. The exposure is bounded by the retention difference between the homes, at most 150 days, and is a store-loss window only: nothing is lost unless the store is. Step 1's residual case pins today's answer so that a per-row file set has a red test to flip. This plan does not change the set: the operator's Q15 ruling keeps it, and B4's ruling RD1 keeps one clock with the census.
+- **A named residual: the swap prefix** (B1's D-4248 (`history-export-holding-files-by-transcript`), which the ruling keeps). A row's holding files are its transcript's, so a file of the transcript that holds none of the row's copies still counts. The common case is a swap: ccd copies `<uuid>.jsonl` into the target home and the session continues there, so the source copy is a frozen prefix. Rows written after the swap are held only by the target copy, yet they wait for the frozen copy too. Figures, from Step 1's residual case: a swap 45 days ago froze a 180-day home's copy, last written 46 days ago; the 30-day target copy, last written 35 days ago, is gone; its rows are 38 days old. Their text is store-only, yet they are due only 104 days from now, so neither `export-due` nor `export-overdue` counts them meanwhile. B1's node-shortest reducer counted them due. The exposure is bounded by the retention difference between the homes, at most 150 days, and is a store-loss window only: nothing is lost unless the store is. Step 1's residual case pins today's answer so that a per-row file set has a red test to flip. This plan does not change the set: the operator's Q15 ruling keeps it, and B4's ruling RD1 keeps one clock with the census.
 
 - [ ] **Step 1: Write the failing pure tests.** In `server/test/history-lib.test.ts`:
 
@@ -33030,7 +33978,7 @@ describe('O58: the per-copy due rule is the default (W1-B2 Task 35; spec 9.15, r
     expect(due(withB, onlyA)).toBe(false);
     expect(libDue.retentionLowered(withB)).toEqual({ home: B, days: 30, othersMin: 180 });
   });
-  // A NAMED RESIDUAL, not a guard (⟦D:history-export-holding-files-by-transcript⟧, kept by the Q15 ruling): this case
+  // A NAMED RESIDUAL, not a guard (D-4248, kept by the Q15 ruling): this case
   // pins today's answer so that a per-row file set, if one is ever ruled, has a red test to flip.
   it('the swap prefix: rows written after a swap, held only by a 30-day target copy that is gone, wait for the frozen 180-day source copy, which holds none of them', () => {
     // The swap 45 days ago froze A's copy, last written 46 days ago; B's copy, last written 35 days ago, is gone;
@@ -33347,7 +34295,7 @@ export function exportHorizonDays(retentionDays) {
   return Math.max(0, retentionDays - EXPORT_MARGIN_DAYS);
 }
 
-/** The row clock (§9.15, history since W1-B2; ⟦D:history-export-row-age-early⟧): the row's `ts_ms`, or, when that
+/** The row clock (§9.15, history since W1-B2; D-4208): the row's `ts_ms`, or, when that
  *  is NULL, the mtime of the newest file holding it — deliberately the opposite of prune, where NULL is "never old":
  *  here "never" would never copy it. A row with no time and no holding file has no clock at all, `-Infinity`: the
  *  export errs early, never late (plan-chosen). `shortestHome` alone reads it. */
@@ -33365,7 +34313,7 @@ function fileDueMs(f, homeRetentionDays) {
 
 /** `EXPORT_REDUCERS.perCopy` (§9.15 "A row is due"; ⟦D:history-export-due-per-copy⟧, ruled Q15): a row is due when
  *  every one of its holding files has passed its due date. Its holding files are B1's per-row set, its
- *  transcript's (⟦D:history-export-holding-files-by-transcript⟧), which the ruling keeps. */
+ *  transcript's (D-4248), which the ruling keeps. */
 function perCopyDueMs(c, homeRetentionDays) {
   let at = Number.NEGATIVE_INFINITY;   // no holding file on disk or on record: nothing holds the row back
   for (const f of c.files) {
@@ -33380,7 +34328,7 @@ function perCopyDueMs(c, homeRetentionDays) {
  *  is due and every holding file of every referrer is gone from disk or past its own deletion date by the file clock
  *  (its mtime plus its home's retention). A blob with no referrer is neither. `horizonDays` stays the shortest
  *  home's horizon, which `status` prints and the default rule no longer reads.
- *  ⟦D:history-export-due-escalates⟧ */
+ *  D-4207 */
 export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }) {
   const due = [];
   const overdue = [];
@@ -33444,7 +34392,7 @@ export function exportDates({ homeRetentionDays, holders, files, reducer = EXPOR
 
 /** The census's candidate prefilter (§9.15; ⟦D:history-export-due-per-copy⟧): the keys of the transcripts whose
  *  rows can be due now. A row's holding files are its transcript's
- *  (⟦D:history-export-holding-files-by-transcript⟧), and the per-copy rule never reads a row's own time, so every row
+ *  (D-4248), and the per-copy rule never reads a row's own time, so every row
  *  of one transcript falls due at one instant, its transcript's; a blob none of whose referrers sits in a due
  *  transcript cannot be due. Exact for any reducer that reads no row time; planExport still decides each blob. */
 export function dueTranscriptKeys({ nowMs, homeRetentionDays, transcripts, reducer = EXPORT_REDUCERS.perCopy }) {
@@ -33539,7 +34487,7 @@ with
  *  transcript the default rule makes due now (the JSON array of lib's dueTranscriptKeys, bound once per clause).
  *  A blob is due only when EVERY referrer is, which planExport decides; this is only the prefilter, and it is exact
  *  for the per-copy rule (⟦D:history-export-due-per-copy⟧), under which every row of one transcript falls due at one
- *  instant: its holding files are its transcript's (⟦D:history-export-holding-files-by-transcript⟧) and the rule
+ *  instant: its holding files are its transcript's (D-4248) and the rule
  *  reads no row time. B1's row-clock cutoff would hide a young row whose every file is gone, which the rule counts
  *  as passed. The partial index blobs_unexported serves the outer scan; each `IN (SELECT value FROM json_each(?))`
  *  is uncorrelated, so SQLite evaluates it once per statement. */
@@ -33739,6 +34687,7 @@ Pins O58, and O38's census cases re-run under the per-copy default."
 **Files:**
 - Modify: `server/test/session-hook.test.ts`. Append one describe at the very END of the file, after B1's end-appended spool cases. It is a citation-corpus file, so no import line is added. The module-scope helpers `run`, `pre`, `gatedTree`, `oneLine` and `readState` are already in scope.
 - Modify: `server/test/single-definition.test.ts`. In place, in B1's end-appended O14 describe `'ccrc history: every vocabulary is declared once, in lib.mjs, and bound to its uses (spec 2026-10-05 §9.11 O14)'`, extend its `VOCABS` array.
+- Modify: `server/test/ccrc-account.test.ts`. Two comment lines, each replaced in place by one line (Step 4A): the stale `ccrc-doctor.test.ts:884` and `ccrc-doctor.test.ts:195-203` cites become content cites.
 - Modify, only when Step 5's measurement calls for it: `.github/workflows/ci.yml`, the `node-floor` job's `timeout-minutes`, in place.
 - Create (gitignored scratch, not committed): `.superpowers/sdd/history-w1-b2/pr-body.md`.
 - Test: `server/test/session-hook.test.ts`, `server/test/single-definition.test.ts`, `server/test/ci-pipeline.test.ts`, plus every suite listed in Step 5.
@@ -33752,7 +34701,7 @@ Pins O58, and O38's census cases re-run under the per-copy default."
 
 **Spec:**
 - §8.1 (the search gate anchors on the command word), §8.9 C17, §9.11 O14, §10.5 (B2's PR records W1-f), §10.6, §10.7 (W1-f, W1-h, W1-l). Pin: **C17**.
-- Departures: ⟦D:history-w1b-three-prs⟧ (B2 follows B1; B3 and B4 follow B2).
+- Departures: B1's D-4246 (`history-w1b-three-prs`) (B2 follows B1; B3 and B4 follow B2).
 
 - [ ] **Step 1: Append the C17 describe.** At the very end of `server/test/session-hook.test.ts`, after its last line, add one blank line and exactly:
 
@@ -33888,6 +34837,69 @@ git diff --quiet -- .github/workflows/ci.yml && echo restored
 
   - Expected: red, `the 22.16.0 leg does not run exactly the history test files — add the new one to its list`, with `history-recall.test.ts` missing from the listed side. The last line prints `restored`.
 
+- [ ] **Step 4A: Re-cite `ccrc-account.test.ts`'s two stale `ccrc-doctor.test.ts` line cites by content (carried from B1).** Two doc comments in `server/test/ccrc-account.test.ts` cite helpers in `ccrc-doctor.test.ts` by line. One is the `run` helper's doc (`:209` on `main`), citing `` `runDoctor`'s shape (`ccrc-doctor.test.ts:884`) ``. The other is `plantTmux`'s doc (`:5092` on `main`), citing `` stubTmux's rule, ccrc-doctor.test.ts:195-203 ``. B1's history-CLI link block (`ccrc-doctor.test.ts:110-115`) moved every line below it by five, so the coordinator's note reads them as `:889` and `:200` now. Measured on `main` at 5a6e5d3d7, neither number names its helper, before B1's shift or after it:
+- `:884` is a line of the hostname stub, and `:889` is `writeSessions`' doc.
+- `:195-203` and `:200` are `unstub`'s and `unstubManager`'s docs.
+- `function stubTmux(` is at `:283` and `function runDoctor(` at `:1028`.
+
+Task 32 edits `ccrc-doctor.test.ts` above both helpers (`installCcrc`), so any new number would go stale again. Cite each by its helper's name instead. Each line is replaced by one line, so nothing in `ccrc-account.test.ts` moves.
+
+First measure what the cites point at. From the repository root:
+
+```bash
+node -e '
+const fs = require("fs");
+const acct = fs.readFileSync("server/test/ccrc-account.test.ts", "utf8").split("\n");
+const doc = fs.readFileSync("server/test/ccrc-doctor.test.ts", "utf8").split("\n");
+acct.forEach((l, i) => { for (const m of l.matchAll(/ccrc-doctor\.test\.ts:(\d+)(?:-(\d+))?/g)) {
+  const a = +m[1], b = +(m[2] ?? m[1]);
+  console.log(`ccrc-account.test.ts:${i + 1} cites :${m[1]}${m[2] ? "-" + m[2] : ""} ->`, JSON.stringify(doc.slice(a - 1, b).join(" | ").slice(0, 120)));
+} });
+for (const f of ["runDoctor", "stubTmux"]) console.log(f, doc.flatMap((l, i) => (l.startsWith(`function ${f}(`) ? [i + 1] : [])));
+'
+```
+
+Expected: two `cites` lines, and neither cited text is `function runDoctor(` or `function stubTmux(`. That is the stale state this step fixes. Then `runDoctor [ <n> ]` and `stubTmux [ <n> ]`, one definition each.
+
+Then, in `server/test/ccrc-account.test.ts`, by content, with the Edit tool. Replace
+
+```ts
+ *  (`ccrc-doctor.test.ts:884`). */
+```
+
+with
+
+```ts
+ *  (`ccrc-doctor.test.ts`'s `runDoctor`). */
+```
+
+and replace
+
+```ts
+ *  ccrc-doctor.test.ts:195-203). */
+```
+
+with
+
+```ts
+ *  `ccrc-doctor.test.ts`'s `stubTmux`). */
+```
+
+Both claims hold by content on `main`:
+- `runDoctor` spreads `extraEnv` after `doctorEnv(home)`, which is the shape `run`'s doc describes.
+- `stubTmux`'s doc says that any other argv is a loud failure (exit 90), so that "a doctor that started DRIVING tmux rather than asking its versions could not pass unnoticed". That is the rule `plantTmux` follows.
+
+Measure:
+
+```bash
+grep -cE 'ccrc-doctor\.test\.ts:[0-9]' server/test/ccrc-account.test.ts
+grep -cF "(\`ccrc-doctor.test.ts\`'s \`runDoctor\`). */" server/test/ccrc-account.test.ts
+grep -cF "\`ccrc-doctor.test.ts\`'s \`stubTmux\`). */" server/test/ccrc-account.test.ts
+git diff --numstat -- server/test/ccrc-account.test.ts
+```
+
+Expected: `0`, `1`, `1`, and `2	2	server/test/ccrc-account.test.ts`. Step 5 runs `ccrc-account.test.ts` with the rest.
+
 - [ ] **Step 5: Measure every B2 suite, in the foreground.** Run each line on its own, with a timeout of at least 600000 ms. Re-run a red file in isolation before calling it a break, because CLAUDE.md names the load flakes.
 
 ```bash
@@ -33902,7 +34914,7 @@ git diff --quiet -- .github/workflows/ci.yml && echo restored
 (cd server && ./node_modules/.bin/vitest run test/ccrc-doctor.test.ts test/ccrc-uninstall.test.ts test/ccrc-account.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/ccrc-install.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts)
-(cd server && ./node_modules/.bin/vitest run test/ws-expire-prose.test.ts test/ccrc-api-closed.test.ts test/expiry-lane-prose.test.ts test/auth-passkey.test.ts test/pools-prose.test.ts test/oss-metadata.test.ts test/topology-clean.test.ts test/readme-roster-mirror.test.ts test/readme-holds.test.ts test/crossrepo-prose.test.ts test/child-reclaim-prose.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts test/worker-skill.test.ts test/reviewer-skill.test.ts test/compact-card.test.ts test/compact-card-ship.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ws-expire-prose.test.ts test/ccrc-api-closed.test.ts test/expiry-lane-prose.test.ts test/dead-coordinator-prose.test.ts test/auth-passkey.test.ts test/pools-prose.test.ts test/oss-metadata.test.ts test/topology-clean.test.ts test/readme-roster-mirror.test.ts test/readme-holds.test.ts test/crossrepo-prose.test.ts test/child-reclaim-prose.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts test/worker-skill.test.ts test/reviewer-skill.test.ts test/compact-card.test.ts test/compact-card-ship.test.ts)
 (cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts test/install-worker-skill.test.ts test/install-reviewer-skill.test.ts test/install-coordinator-skill.test.ts)
 (cd agent && ./node_modules/.bin/vitest run test/deploy-verify.test.ts)
 ```
@@ -33938,7 +34950,7 @@ git fetch origin main
 
 Expected: green. The suite compares this branch's deviation entries with `origin/main`'s, so a red here means a deviation number defined in two plans. Report it to the coordinator. Never renumber it yourself: numbers are issued by the coordinator, never chosen.
 
-- [ ] **Step 7: Confirm the tree holds only this PR's work.** Run `git status --short`. It lists nothing but this task's two test files, plus `.github/workflows/ci.yml` when Step 5 raised the floor leg's deadline, which Step 9 commits. Every scratch file sits under the ignored `.superpowers/`. No step of this plan reads or writes a live `~/.ccrc`: every test ran in a `mkTmp` HOME, and every history verb ran against a fixture store.
+- [ ] **Step 7: Confirm the tree holds only this PR's work.** Run `git status --short`. It lists nothing but this task's three test files (`session-hook.test.ts`, `single-definition.test.ts` and Step 4A's `ccrc-account.test.ts`), plus `.github/workflows/ci.yml` when Step 5 raised the floor leg's deadline, which Step 9 commits. Every scratch file sits under the ignored `.superpowers/`. No step of this plan reads or writes a live `~/.ccrc`: every test ran in a `mkTmp` HOME, and every history verb ran against a fixture store.
 
 - [ ] **Step 8: Write the PR body.** Write `.superpowers/sdd/history-w1-b2/pr-body.md` with exactly the following. Then replace its three parenthesised lines: the one under `### Departures` with the plan's `## Deviations found` list (its numbers as the coordinator minted them, one per line); the one under `### Choices the tasks made` with every task's "Choices this task makes" bullets, one line each, its task number first; and the one under `### Tests run` with Step 5's summary lines as printed, followed by the figures Task 16 Step 11 records (the scale cases' `r.ms` and the RSS the preload printed) and any case Task 20 Step 7 found green before its code. Use the file as the body of the wave's PR, opened the way the brief says.
 
@@ -33962,7 +34974,7 @@ The recall half of W1 Part B, on top of B1 ("capture"):
   that B4's segment replay slots into;
 - the fork spooling (ruled Q16): SessionStart(fork) writes a spool line (`fork` joins the hook's source whitelist
   in place; no hook line moves), and a fork line confirms as a resume line does, at the drain, at a later tick,
-  through a held match and in replay; this reverses B1's `history-fork-not-spooled`;
+  through a held match and in replay; this reverses B1's D-4173 (`history-fork-not-spooled`);
 - the per-copy export due rule as the default (ruled Q15): `EXPORT_REDUCERS.perCopy`, read by the census's due
   counts and W1-k dates and so by doctor's `export-due`, `export-overdue` and `retention-lowered` arms, the last
   now a reminder; a reducer answers a due time, and `planExport`'s signature is B1's;
@@ -34008,7 +35020,7 @@ C64's CLI door and the direct door of B2's forms, C65-C69; O59 (the belt, rev 3.
    O35's columns, or each difference must be named.
 5. **The rollback edge, before any rollback of a node to a B1 release.** From this PR on, a node journals
    `fork` epochs, spools `fork` lines and may hold a `fork` candidate in `epoch_candidates`. B1 merged with `fork`
-   in `EPOCH_CAUSES` alone (B1's departure `history-epoch-causes-widened-for-rollback`; its spool set and hook stay
+   in `EPOCH_CAUSES` alone (B1's D-4342 (`history-epoch-causes-widened-for-rollback`); its spool set and hook stay
    without it), so a rollback to a B1 release has only the spool-line part below; the other two parts held only on
    a B1 whose `EPOCH_CAUSES` lacked `fork`, as B1's plan text first shipped it (spec §6.1, "The rollback edge";
    no migration is involved):
@@ -34028,7 +35040,7 @@ C64's CLI door and the direct door of B2's forms, C65-C69; O59 (the belt, rev 3.
 
 - **Q15 yes**: the per-copy due rule is the default for the census and doctor (Task 35); B4's pass reads the
   same default.
-- **Q16 yes**: SessionStart(fork) is spooled (Task 34), reversing B1's `history-fork-not-spooled`.
+- **Q16 yes**: SessionStart(fork) is spooled (Task 34), reversing B1's D-4173 (`history-fork-not-spooled`).
 - **Q17 as recommended**: B1's kept-line wording and close line; this PR changes no uninstall wording beyond the
   skill tree and installer.
 - **Q18 yes, a W2 matter**: the W2 open record carries the smallest passing point uptake; no W1 task.
@@ -34044,7 +35056,7 @@ RB1-RB11 are recorded in the programme ledger. RB12-RB17, ruled on this plan, la
 - **RB13.** `doctor --migrate` is refused `recovering` only while the stored `user_version` equals the code's, so a restored older backup never deadlocks on its own recovery step (Tasks 6, 19).
 - **RB14.** `doctor --adopt` is exempt from `recovering` on an unbound store (`store.id` absent) and still refused on a bound one (Tasks 6, 19, 26).
 - **RB15.** Spec §12 rev 3.3: `history-skill.test.ts` pins the skill sentences verbatim; its header names the skill's `LICENSE.lossless-claw` and V7 without the rationale phrase, and `server/test/` has no sidecar (Task 31).
-- **RB16.** `history-ops-refused-while-recovering` and `history-loader-values-in-tick-memory` are confirmed departures; `history-prune-not-floor-gated` was left to the operator, who confirmed it on 2026-10-07 (above).
+- **RB16.** `history-ops-refused-while-recovering` and `history-loader-values-in-tick-memory` are confirmed departures; `history-prune-not-floor-gated` was left to the operator, who confirmed it on 2026-10-07 (above). The coordinator later confirmed `history-loader-values-in-tick-memory`'s widening by spec rev 3.5 to the CLI and the `--regex` child: values live only in process memory, the CLI reads only the frozen list plus the declared secret files that meta `redact_sources` names by path, the child receives units on stdin, nothing persisted, journaled or printed carries a value, and every process runs as the one UNIX user that can already read those files (Tasks 7B, 10, 14, 18).
 - **RB17.** Adopt's newer-schema refusal is decided by lib's `decideBind` (L1) over the stored version; `adoptArm` (L4) only measures and relays it (Tasks 6, 26).
 
 A W3 note, not a ruling: `history-summary-size-counters-from-store` leaves §7.4 item 10's with/without-steering
@@ -34057,7 +35069,7 @@ epoch, `-Infinity` when nothing holds it back), the default is `perCopy`, and `e
 
 ### Residuals, named
 
-- **The swap prefix** (Task 35; `history-export-holding-files-by-transcript`, which the Q15 ruling keeps as the
+- **The swap prefix** (Task 35; B1's D-4248 (`history-export-holding-files-by-transcript`), which the Q15 ruling keeps as the
   per-row file set). A row's holding files are its transcript's, so a swap's frozen source copy, which holds none
   of the rows written after the swap, still holds them back. Example: a swap 45 days ago froze a 180-day home's
   copy, last written 46 days ago; the 30-day target copy, last written 35 days ago, is gone; its rows are 38 days
@@ -34067,20 +35079,27 @@ epoch, `-Infinity` when nothing holds it back), the default is `perCopy`, and `e
   pins today's answer. Closing it needs a per-row file set from `memberships`, one scan per census as B4 already
   makes per segment; the ruling and RD1's one clock leave it as is.
 - **The rollback stall** (Task 34): step 5 above.
-- **Display past the entry window** (Task 7A, `history-display-escape-readings`). A field longer than
+- **Display past the entry window** (Task 7A; spec §8.3 "Where it runs"). A field longer than
   `DISPLAY_READINGS_MAX` (an expand sidecar) is read span by span: a value only the context layer sees after a
   JSON decode, with no backslash touching it, can print. Within the window, display shows exactly what the index
   holds.
-- **A pruned leaf's cut gist** (Task 29, `history-rederive-generation-covers-nodes`). A leaf whose summary was
-  pruned keeps any prefix of a later-learned value its capped gist ends with; no derivation can run again, and no
-  pair matches a prefix. A leaf whose summary is stored is re-derived by the node phase.
+- **A hash-only unit glued by a letter or digit** (Task 7A; spec §6.2 "What the belt cannot see"). A rotated value or
+  a `sessions.json` hash has no grams, so glued to a letter or digit it stays in a field and can print at display;
+  its index term is the glued word, so no `MATCH` on the value answers it. Glued by `_`, `-` or a literal escape, it
+  is masked (the glue windows, and the index's escape readings that `redactForDisplay` and `nodeIndexTexts` read).
+- **A cut gist** (Task 29). A leaf's capped gist that ends in a prefix of a later-learned value keeps that prefix
+  unless it is a belt-width stretch of a unit the tick loaded (the node step then masks it) or the phrase path
+  (`rederiveGistsFor`) re-derives the leaf from its stored summary; no pair matches a prefix, and a leaf whose
+  summary was pruned cannot be re-derived.
 - **Counter remedies** (Task 23, `history-counter-resets-after-cure`). B1's `blob-undecodable`, `drain-rejected`
   and `spool-planted` remedies are not reworded with the other "arrive with W1-B2" texts (Task 30's open issue).
   `doctor --repair` and a recovery's close now re-measure and reset those counts, and the repair prints one line per
   counter, but the remedy texts do not yet say that a repair clears a cured count. The remedy rewrite should add it.
-- **Node phase latency** (Task 29). On a large store the node phase starts only after the blob phase has
-  re-derived every indexed blob, one tick's slice at a time. Until then, a value no phrase can find (a hash-only
-  pair, a value glued inside one term or cut to a prefix) still answers a `nodes_fts` MATCH. A value a phrase
+- **The node step behind the mark** (Tasks 7B, 29; spec §6.2 "The belt"). The mark `fts_reindex_rid` moves when a
+  generation's blob walk completes, while the `('nodes-belt', 1)` step it reopened may still run: each tick it takes
+  what the slice leaves after `rederiveFts`. Until that step completes, `nodes_fts` can hold a term for a value at or
+  below the mark (a letter-glued value, or a pair-only value glued to a literal escape). Output stays masked
+  meanwhile, because `redactField` and `redactForDisplay` carry the belt and the escape readings. A value a phrase
   finds leaves `nodes_fts` in the tick that learns it (`rederiveGistsFor`).
 
 ### Choices the tasks made where the spec and the rulings are silent
@@ -34100,9 +35119,12 @@ epoch, `-Infinity` when nothing holds it back), the default is `perCopy`, and `e
 - [ ] **Step 9: Commit.**
 
 ```bash
-git add server/test/session-hook.test.ts server/test/single-definition.test.ts
+git add server/test/session-hook.test.ts server/test/single-definition.test.ts server/test/ccrc-account.test.ts
 git diff --quiet -- .github/workflows/ci.yml || git add .github/workflows/ci.yml   # only when Step 5 raised the floor leg's deadline
-git commit -m "test(history): C17, the recall CLI is not search-gated; O14 binds B2's shared vocabularies"
+git commit -m "test(history): C17, the recall CLI is not search-gated; O14 binds B2's shared vocabularies
+
+ccrc-account.test.ts re-cites runDoctor and stubTmux by name: its two ccrc-doctor.test.ts
+line cites had gone stale (carried from B1)."
 ```
 
 The PR body file stays under `.superpowers/` (gitignored) and is not committed.
@@ -34113,26 +35135,16 @@ The PR body file stays under `.superpowers/` (gitignored) and is not committed.
 
 Every departure this plan takes from the spec is listed once below, in the order its first task meets it, with the task(s) that carry it. The text is the spec's §16 departure, except for the NEW departures, which no §16 row covers; each of those is marked "NEW departure (no spec §16 row)" with its one-line why.
 
-**No number is written here.** Each entry carries its slug as the placeholder `⟦D:<slug>⟧`, exactly as the tasks and source comments do. The numbers are minted by the allocator (`POST /api/ledger/deviations`) when the plan is committed, and the placeholders are replaced in the same commit. A slug the B1 plan already defined (marked "B1-defined") keeps B1's issued number and is not minted again; only the rest take new numbers. A departure found while executing the wave takes a number from the wave's run block, named in its brief, and is appended below.
+**No number is written here.** Each entry carries its slug as the placeholder `⟦D:<slug>⟧`, exactly as the tasks and source comments do. The numbers are minted by the allocator (`POST /api/ledger/deviations`) when the plan is committed, and the placeholders are replaced in the same commit. A departure B1 defined is not listed here: B1 is merged, so the tasks cite it by its issued number as "B1's D-NNNN (`<slug>`)", defined in `docs/superpowers/plans/2026-10-05-ccrc-history-w1-capture.md`'s `## Deviations found`, and it is never minted again. A departure found while executing the wave takes a number from the wave's run block, named in its brief, and is appended below.
 
 - ⟦D:history-identity-from-tmux⟧ (Tasks 1, 10): The CLI derives the id from tmux like `ccrc-api`, requiring `cc-`; no spawn env (G10).
-- ⟦D:history-id-grammar⟧ (Tasks 1, 10): One `idOk` predicate (ccd's session-id grammar minus `.` and `..`, bounded) runs before any id becomes a path; `bad-id` (§8.2; rev 3.2 review, SE15). B1-defined.
-- ⟦D:history-family-per-generation⟧ (Tasks 1, 10): A family is (ccrc id, generation) (§6.1). B1-defined.
 - ⟦D:history-workspace-scope⟧ (Tasks 1, 11, 15, 31): An opt-in `--workspace` scope over families whose epoch launch directory matches this workdir, in this project; no automatic linking; the skill's §5 gains one sentence (§8.2, §6.10, §8.5 skill sentence; Q8; opt-in ruled Q12).
 - ⟦D:history-recall-all-lanes⟧ (Tasks 1, 11, 32): `--project` recall is allowed on every lane and provider; the egress is accepted (§8.2, §9.8; ruled Q8).
 - ⟦D:history-scope-on-every-verb⟧ (Tasks 1, 12, 15, 16): Id-addressed verbs refuse out-of-scope ids (§8.2).
 - ⟦D:history-harness-unsupported-refused⟧ (Tasks 1, 10, 28): A session whose registry names a harness with no `HARNESS_TABLE` row is refused exit 2 `harness-unsupported`, never exit 6 (§6.10, §8.2; rev 3 review, Q8, #274, #278).
 - ⟦D:history-recall-off-generation⟧ (Tasks 1, 11, 28): `recall-off/<id>` holds the generation it was assigned to and is honoured only for that family (§9.7, §10.2; rev 3 review, Q7).
-- ⟦D:history-coverage-this-box⟧ (Tasks 1, 3, 10, 11, 13, 17, 31, 33): Every read verb's header and `--json` carry `coverage=this-box` and `store_id`; `--json` carries full node ids; `decideScope` takes its scope source as data; the skill's §9 gains one sentence (§6.9, §8.3, §8.5 skill sentence; ruled Q3). B1-defined.
-- ⟦D:history-fts-indexes-redacted-text⟧ (Tasks 2, 14, 18, 29): The index and the regex child see redacted text; blobs stay verbatim (§6.2). B1-defined.
 - ⟦D:history-grep-pages-end-at-rank-pool⟧ (Tasks 2, 13): NEW departure (no spec §16 row). §8.4 gives the 2,000-match pool to hybrid only, but every grep sort ranks and pages the top `RANK_POOL` in-scope matches, so each call sorts a bounded set; the true N stays in `shown K of N`, and past the pool the last page carries a hint naming `--since`/`--before` instead of a `next:` line.
-- ⟦D:history-redaction-before-cut⟧ (Tasks 3, 4, 13, 15, 16, 18): `redactField` runs on each raw field before any cut, escape or serialisation, splitting runs at ANSI CSI; the final string gets a second, JSON-safe pass (§8.3; rev 3.2 review, SE1). B1-defined.
-- ⟦D:history-reasons-by-exit⟧ (Tasks 3, 6, 31): `REASONS` maps every reason word to its one exit code and `REFUSALS` is derived from it; every `--json` exit 2, 4, 5 or 7 carries a `reason` (§8.3; rev 3.2 review, IV13). B1-defined.
-- ⟦D:history-exit-codes-4-and-9⟧ (Tasks 3, 19): Exit 4 `writer-busy` and exit 9 no store on this box, additive (§8.3). B1-defined.
-- ⟦D:history-variant-cause⟧ (Tasks 3, 16): `entry_variants.cause` records ccd's sanitiser as the cause of a variant (§6.1, §6.2; Q8). B1-defined.
-- ⟦D:history-apply-via-shim⟧ (Tasks 3, 19, 20, 26, 30): Every writing verb runs through the shim, the only lock taker, spawned and relayed since rev 3.2 (§8.4). B1-defined.
 - ⟦D:history-skill-literal-path⟧ (Tasks 3, 31, 33): The skill and card use the literal `$HOME/.local/bin/ccrc`; no installer substitution, no `ccrc-history` binary (G2).
-- ⟦D:history-spool-no-summary-hash⟧ (Tasks 4, 34): The summary is reached via `anchorUuid`, and spool lines carry no hash (G3). B1-defined.
 - ⟦D:history-native-gist-last-summary-open⟧ (Tasks 4, 8): The native gist is sliced from the last occurrence of each heading after the last `<summary>` open (§7.4; Q8).
 - ⟦D:history-summary-anchor-is-boundary⟧ (Tasks 4, 8): When `anchorUuid` is the boundary's own uuid (partial `from`), the summary is the next `isCompactSummary` row; native-gist headings follow `summarizeMetadata.direction` (§7.4; rev 3.2 review, CT5).
 - ⟦D:history-steer-receipt⟧ (Tasks 4, 8): The hook appends `ev:"steer"` after a print; blocks are parsed only with one (§7.2, §7.4).
@@ -34145,106 +35157,46 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-adopt-verb⟧ (Tasks 6, 24, 26): `ccrc history doctor --adopt`, operator-only through the shim, binds a store present without `store.id` and keeps its `store_id`; it replaces the hand edit (§8.4; rev 3 review, Q3, #270).
 - ⟦D:history-restore-verb⟧ (Tasks 6, 24, 27): `ccrc history doctor --restore <name under db/backups/>`, operator-only through the shim and allowed under `history-off`, behind `planCopy` and an integrity check, never over a present DB or a leftover WAL; it links the copy in, binds it by `--adopt`'s path and registers the recovery step (§8.4; ruled Q6, W1-B2).
 - ⟦D:history-rebuild-verb⟧ (Tasks 6, 24, 28): `ccrc history doctor --rebuild [--store-id <uuid>]`, operator-only through the shim and allowed under `history-off`, is the journal's reader: it creates a lost DB under the `store_id` of `store.id`, of the one journal directory, or of `--store-id` among several, and registers the recovery step; a verb, not an `import` mode (§8.4; rev 3.1, ruled Q6).
-- ⟦D:history-store-wal-orphaned⟧ (Tasks 6, 27): Creation, restore and rebuild refuse while a `history.db-wal` or `-shm` is left without `history.db`, because SQLite would replay it into the new file; remedies move the three files together (§6.9, §8.4; rev 3.1 review, RC1). B1-defined.
-- ⟦D:history-store-recoverable⟧ (Tasks 6, 27, 28): A first install refuses `store-recoverable` while `journal/` holds a store directory or `db/backups/` a `*.db`, so the timer never mints a store before `--restore` or `--rebuild` can run; the three binding verbs run under `history-off` (§6.9, §8.4; rev 3.1 review, BK7, RC2). B1-defined.
 - ⟦D:history-backup-preflight-and-rename⟧ (Tasks 6, 22, 27): `doctor --backup` writes temp then renames, and its preflight counts the copy's size; since rev 3.1 that preflight is `planCopy`, shared with the pre-migration snapshot, `--restore` and the export (§8.4, §6.11).
-- ⟦D:history-shim-role-gated⟧ (Tasks 6, 10, 19): The shim is placed only where the role is not `server`, behind a one-line `||` role test in the non-Darwin arm since rev 3.2 (never a second `if` gate), departing from the every-role placement of the other sweep binaries; the CLI's no-store answer follows one decision table over (Darwin, role, shim, `store.id`, DB); the sweep never creates a store on a server-role box (§6.9, §8.3, §9.5; rev 3 review, Q3). B1-defined.
 - ⟦D:history-reasons-repair-backup⟧ (Tasks 6, 22, 23): NEW departure (no spec §16 row). §8.3 names no reason word for a repair refused on a failed `integrity_check` or new foreign-key violations, nor for a backup refused for room: exit-2 `repair-refused` and `backup-refused` join `REASON_ROWS`.
 - ⟦D:history-reparse-targets⟧ (Tasks 6, 21): NEW departure (no spec §16 row). §8.4 sets reparse's limit but not its target grammar: `--node <id>`, `--session <id>`, or every leaf, refused whole above `REPARSE_MAX_TARGETS` = 500.
 - ⟦D:history-ops-refused-while-recovering⟧ (Tasks 6, 19, 20, 21, 22, 23, 25, 26, 27, 28, 30): NEW departure (no spec §16 row). §9.14 stops drain, ingest and cursors while a recovery step replays the journal but names no rule for the operator's writing verbs, any of which would race the replay; while a `('recover', <ms>)` step is registered, every writing `--op` form is refused exit 2 `recovering` by `decideOpGate` (Task 6), measured read-only in both halves by Task 19 with the sweep's half authoritative, before the binding branch and `openStore`, except `restore` and `rebuild` (which replace the step), W2's `recall-off` forms (RB12), `doctor --migrate` while the stored `user_version` is not the code's (RB13) and `doctor --adopt` on an unbound store, `store.id` absent (RB14); an unmeasured fact never exempts; dry runs and read verbs still answer (coordinator rulings RB6 and RB12-RB14; confirmed, RB16).
-- ⟦D:history-store-unbound-refused⟧ (Tasks 6, 26): A DB present without `store.id` (and without a matching pending marker) is refused `store-unbound`, never adopted by the sweep; `store_id` is a uuid of its own, never node-id (§5.3, §6.9; ruled Q3). B1-defined.
 - ⟦D:history-recovery-replay⟧ (Tasks 7, 25, 27, 28, 29): Restore and rebuild share one resumable derivation step, under the free-space floor, that replays redaction pairs first, then the journal (drain-time verdicts at their lines' positions, never a `$REG` read; unknown records skipped and counted), then the export (every segment's blobs before any rows), while drain and ingest wait; replay writes no journal records (§9.14; rev 3.1, ruled Q6).
-- ⟦D:history-journal-drained-record⟧ (Tasks 7, 25, 28): Every drain journals a `drained` record; replay applies a file's `spool` records only when it exists, and a held file is decided live from its sidecar (§9.2, §9.14; rev 3.2 review, DI2). B1-defined.
-- ⟦D:history-redaction-journaled⟧ (Tasks 7, 25, 28, 29): Each learned (len, sha256) redaction pair is journaled as a `redact` record and replayed before any blob in a recovery; a restore that gains a pair re-runs the FTS derivation (§9.14; rev 3.1 review, BK6). B1-defined.
-- ⟦D:history-epoch-confirmation⟧ (Tasks 7, 25, 34): Startup/resume epochs, and from W1-B2 fork epochs (ruled Q16), chain only once their own `reg` or the registry names the sid (§6.1). B1-defined.
-- ⟦D:history-doctor-state-words⟧ (Tasks 7, 25): Doctor answers `off`, `recovering`, `op-running`, `catching-up` and `lag-unmeasured` as WARNs before the freshness FAILs, and FAILs `recovery-stalled`; an `op` marker names a running `--op` pass (§9.6; rev 3.2 review, FE3). B1-defined.
 - ⟦D:history-b4-after-b2⟧ (Tasks 7, 25): W1-B4 merges after B2, and is live before the earliest measured due date, at the latest 2026-12-19 (§9.15, §10.5; rev 3.2 review, FE15).
 - ⟦D:history-replay-skips-post-bind-ticks⟧ (Tasks 7, 25): NEW departure (no spec §16 row). A recovery pass journals its own `tick` record after the bind, so replay inserts a journal tick record only when it is newer than the store's last tick before the bind and older than the step's version; the upper bound is lib `replayStep`'s `ReplayState.ticksBefore` (the step's bind ms), so the executor decides no tick bound.
-- ⟦D:history-display-escape-readings⟧ (Tasks 7A, 18, 29): NEW departure (no spec §16 row). Every read verb shows a recalled field through lib's `redactForDisplay`: up to `DISPLAY_READINGS_MAX` (B1's entry window) it is B1's `redactForIndex`, so a field is shown as the index holds it, decoded one level deeper only when a deeper JSON-escape reading removed something; past it, the field is redacted once and each escape-glued span is masked when its own readings remove something. Task 29's fail-closed rewrite of stored node fields uses it too. §8.3 names three layers on each field and does not name the escape readings B1 gave the index (B1's ⟦D:history-index-escape-readings-to-fixpoint⟧); without them, grep's snippet, expand, describe, tree and `--regex` showed a value glued to a literal `\n` that the index had masked (B1's notes to B2, run 302). Residual: past the bound, a value only the context layer sees after a decode, with no backslash touching it.
-- ⟦D:history-nodes-fts-index-text-readings⟧ (Tasks 7A, 8, 9, 18, 29): NEW departure (no spec §16 row). Every `nodes_fts` row is lib's `nodeIndexTexts`: the gist, each topic and each ref value through B1's `entryIndexText` (its escape readings, B1's ⟦D:history-index-escape-readings-to-fixpoint⟧, and its window, B1's ⟦D:history-entry-index-text-windowed⟧), topics and refs joined one per line, not the stored fields as derived (§6.2 "redacted gists, topics and refs"). A gist taken from a summary that quotes JSON keeps a value glued to an escape letter, which `redactField` leaves and `blobs_fts` masks, and Task 29's node phase needs each row to be a function of the stored fields and the pair answers alone.
-- ⟦D:history-producer-backend⟧ (Tasks 8, 15): `BACKENDS` gains `unknown` for NULL and `<synthetic>` models; a boundary's producer is the first real assistant row after its summary, never the last row before it (§6.2; rev 3 review, Q8). B1-defined.
-- ⟦D:history-tick-order⟧ (Tasks 8, 25, 27): A tick runs the outbox, the migration verdict, the secrets, a recovery step (only at the code's version), then drain and ingest (§9.2, §6.11; rev 3.2 review, DI6). B1-defined.
 - ⟦D:history-node-indexes-by-derivation⟧ (Tasks 8, 9): NEW departure (no spec §16 row). Schema v1 has no index on `nodes(boundary_entry_id)` or `node_children(child_id)`; the node derivation step creates them, as the FTS tables are created, since a v2 migration would escalate to `snapshot-needs-op` on real stores.
 - ⟦D:history-summary-direction-from-source-line⟧ (Task 8): NEW departure (no spec §16 row). B1 stores no row-level metadata, so `summarizeMetadata.direction` is read back from the holding file's line at its membership byte offset (through `admitFile`), with the text-pair rule as the fallback when the file is gone or changed.
 - ⟦D:history-native-refs-no-prlink⟧ (Task 8): NEW departure (no spec §16 row). B1 drops uuid-less pr-link rows before the store, so W1 native leaves carry no meta-origin refs.
 - ⟦D:history-parser-crash-recorded⟧ (Tasks 8, 21): NEW departure (no spec §16 row). §9.2's `parser_crash` hold-and-retry would re-parse a poison boundary every tick; a node-parser throw writes its leaf `parse-failed` (a new `PARSE_STATUS` word), or a `('leaf-crashed', <boundary entry_id>)` marker when no leaf can be written, counted once and retried only by `reparse` (coordinator ruling RB5).
 - ⟦D:history-summary-size-counters-from-store⟧ (Task 8): NEW departure (no spec §16 row). §7.4 item 10's block chars, and summary chars and duration with versus without steering, are read from stored columns (the summary blob's `raw_len`, `boundaries.duration_ms`, `steer_receipts`) when W3 compares the arms; W1 folds no such counter, because every W1 leaf is the without arm.
-- ⟦D:history-rekey-merges⟧ (Tasks 9, 10, 25, 28): Re-keying merges a `''` family into (id, G), keeping `merged_into`, so a replay of the older verdicts is idempotent; an unreadable generation is `family_gen_unreadable` (§6.1; rev 3.2 review, DI4, IV5). B1-defined.
 - ⟦D:history-parents-cursor-by-rowid⟧ (Task 9): NEW departure (no spec §16 row). §6.3 names no schedule for fan-in; a `('parents', NODE_PARSER_VERSION)` low-water mark over `nodes.rowid` revisits only epochs that gained a node, so a tick never re-walks every epoch of a large store.
-- ⟦D:history-store-unreachable⟧ (Task 10): Free space is probed asynchronously with a deadline before the DB is opened; the CLI stats with a deadline and answers exit 5 `store-unreachable`; a wall-clock kill is a carrier requirement (§5.1, §8.1, §9.3; rev 3 review, #270). B1-defined.
-- ⟦D:history-box-verbs-identity-free⟧ (Tasks 10, 19): `status` and operator verbs need no pane (§8.2). B1-defined.
-- ⟦D:history-redaction-from-roster⟧ (Tasks 10, 18): The value layer also reads every account's declared `exec.secretsFile` from the roster at runtime, every exec kind included (§8.3; rev 3 review, Q8). B1-defined.
-- ⟦D:history-cli-reads-store-version⟧ (Tasks 10, 17): Migrations are additive only; the CLI reads `user_version` first and builds its queries for that version from `SCHEMA_ADDED`, a missing column read as NULL and a verb that needs a newer table answering exit 5 `migration-pending` (§6.2, §6.11; rev 3.1 review, BK13, RC13). B1-defined.
 - ⟦D:history-recall-off-preflight-b2⟧ (Tasks 10, 28): NEW departure (no spec §16 row). C66 and C67 name recall-off refusals while the recall-off verb ships in W2: B2's CLI runs the two pre-write refusals (`bad-id`, `generation-unreadable`) and answers any other recall-off form exit 2 `bad-args` naming W2, writing and spawning nothing.
 - ⟦D:history-read-args-terminator⟧ (Task 10): NEW departure (no spec §16 row). §8.2 builds the whitelist from one list but names no way to search a word that starts with `--`; a bare `--` ends the options.
-- ⟦D:history-cli-counts-via-spool⟧ (Task 11): CLI counters are spool lines folded by the sweep (G5). B1-defined.
-- ⟦D:history-box-verbs-no-counter-line⟧ (Task 11): Only read verbs write the CLI's counter line; box verbs, which have no id, write none (§8.1; rev 3.2 review, CT14, DI15). B1-defined.
-- ⟦D:history-spool-line-fenced⟧ (Task 11): Hook and CLI spool lines are written `\n<json>\n`, and empty lines take no ordinal, so a short write never fuses with the next line (§5.1; rev 3.2 review, DI10). B1-defined.
-- ⟦D:history-epoch-cwd-real⟧ (Task 11): `epochs.cwd` stays verbatim and `cwd_real` holds its realpath, NULL when it no longer resolves; `--workspace` matches on either (§6.2, §8.2; rev 3 review, Q8). B1-defined.
 - ⟦D:history-recall-off-stale-counted-at-drain⟧ (Tasks 11, 25): NEW departure (no spec §16 row). The CLI cannot write a counter and `SPOOL_KEYS.recall` has no field for staleness, so the drain counts `recall_off_stale` when `recall-off/<id>` names another generation than the recall line's family. It is a drain-time observation of a live file and is not journaled: `applyEventLine` skips it when the event context carries `replay: true` (set by Task 25's recovery), so a restore or rebuild never re-decides it from today's `recall-off/<id>` (§9.14), and O35's comparison, which reads no counter, never meets it.
-- ⟦D:history-fts-probe-read-only⟧ (Task 12): The FTS5 probe is a `pragma_module_list` read on both handles (§9.1). B1-defined.
-- ⟦D:history-fts-body-plain-text⟧ (Task 12): The FTS body is extracted plain text (§6.2). B1-defined.
-- ⟦D:history-recall-echo-by-structure⟧ (Task 12): Recall echoes are classified by the paired `tool_use`, never by text (§6.2). B1-defined.
-- ⟦D:history-clear-epoch-confirmed⟧ (Task 12): A clear epoch is chained at drain unconfirmed and enters scope only when `.uuid` or its first row's `cwd` against the observed `.workdir` confirms it (§6.1; rev 3.2 review, SE5). B1-defined.
 - ⟦D:history-recall-echo-indexed⟧ (Task 12): NEW departure (no spec §16 row). B1 indexes only the searchable provenances, so `--include-recall` could never match an echo; recall-echo blobs are indexed too and filtered out of default grep at query time. A store whose backfill completed under B1 is re-opened once, from cursor 0 (meta `fts_provenance`), so B1's echoes are indexed too.
 - ⟦D:history-read-skips-oversize-sidecar⟧ (Tasks 12, 14): NEW departure (no spec §16 row). The read verbs take a sidecar's 512 KB window synchronously (`blobPlainText`, which decompresses whole; B1's bounded `unbrotliPrefix` is async), so a sidecar whose `raw_len` passes `SIDECAR_WHOLE_MAX` is not decompressed by a read verb: its grep hit shows no snippet and `--regex` does not scan it, while plain grep still finds it through the sweep's index (§8.4, DM29).
-- ⟦D:history-sidecar-redact-before-cut⟧ (Tasks 12, 14, 23): A sidecar's index text is its first SIDECAR_FTS_BYTES after redacting a 64 KiB-larger window decoded from a bounded prefix of its blob, with a trailing partial run dropped, and the FTS backfill fetches and charges blobs one at a time (§8.3). B1-defined; B2's `blobPlainText` reads a sidecar through the same `sidecarIndexText`, and Task 23's rebuild fetches each `z` one at a time as B1's backfill does.
-- ⟦D:history-reindex-by-units-and-complete-loads⟧ (Tasks 25, 29): The late-pair re-index searches each unit a value registers (the whole run, or each 12+-char segment) as its own phrase, and its durable mark advances only on a tick whose secret load read every source. B1-defined; Task 25's recovery pass passes `complete` as B1's tick does, and Task 29's gist re-derivation searches by the same units.
-- ⟦D:history-import-refusal-words⟧ (Task 19): `--op import` answers exit 2 `roster-unreadable` when the shim passed `--roster-unreadable` (counted by `--apply`, before any listing or admission; the dry run refuses with no count) and `uuid-claimed` for an operator mapping of a uuid another family holds (§8.4). B1-defined; Task 19's rewritten `opPass` keeps both roster refusals, guarded on `import`.
 - ⟦D:history-grep-pending-until-backfilled⟧ (Tasks 12, 23): NEW departure (no spec §16 row). §9.1 checks only that `blobs_fts` exists; grep also answers 7 `fts-pending` while derivation `('fts', 1)` has not completed, and while a `doctor --repair` rebuild (`FTS_REBUILD_STEP`) is open, so a re-opened backfill or a rebuild never answers a false exit 3 for text the store holds.
-- ⟦D:history-search-reach-stated⟧ (Tasks 12, 13, 14, 31, 33): NEW departure (no spec §16 row). Grep's exit 3, in both forms, carries one `hint:` line: lib's `SEARCH_REACH`, built from `ENTRY_FTS_BYTES` and `SIDECAR_FTS_BYTES`. The skill's §9 and README's history section quote it verbatim, once each, and each copy is pinned against the constant. Why: B1's history-entry-index-text-windowed leaves text past an entry's first 1 MiB unsearchable, while §6.2 cut only sidecars, so a bare exit 3 would read as "not on this box" for text the store holds (the overloaded value §8.3 forbids).
-- ⟦D:history-test-seams-not-env⟧ (Tasks 14, 25): Test seams are in-process or a test-only preload; every `process.env` read in `ccd/history/*.mjs` is in one frozen allow-list; the TTY gate is driven by a real pty (§10.1; rev 3.2 review, FE5, SE13). B1-defined.
-- ⟦D:history-regex-scans-the-index-text⟧ (Task 14): NEW departure (no spec §16 row). The `--regex` child matches lib's `entryIndexText` over `blobPlainText`'s text, which is the index text, instead of `redactField` over a whole body (§8.4 says only "over redacted text"). Why: with B1's history-entry-index-text-windowed, a whole-body scan reaches past the window that grep's exit 3 states, reads text the prefilter never indexed, redacts it more shallowly than the index does (a secret only `redactForIndex`'s deeper readings catch would be a regex match), and can spend the 5 s budget redacting one 16 MB line.
-- ⟦D:history-row-model⟧ (Task 15): `entries.model` keeps an assistant row's `message.model`; the backend is derived at read time (§6.2; Q8). B1-defined.
-- ⟦D:history-sidecars-ingested⟧ (Task 16): `tool-results/*` are captured as part of "every message" (§6.2). B1-defined.
 - ⟦D:history-expand-message-id⟧ (Task 16): NEW departure (no spec §16 row). A tool output cut at 2,000 chars needs a way to read the rest: `expand` accepts a message uuid and pages that one message whole.
-- ⟦D:history-newer-schema-readable⟧ (Task 17): The writer refuses a newer store and the CLI reads it (G9). B1-defined.
 - ⟦D:history-schema-additive-measured⟧ (Task 17): NEW departure (no spec §16 row). §6.11 asks for a test over `SCHEMA_ADDED` that refuses a drop or a rename, but `SCHEMA_ADDED`'s shape can only add; the check also compares it with what the migrations actually build (B1's `schemaOf` after each one).
-- ⟦D:history-redaction-by-value⟧ (Task 18): ccrc's own secrets are redacted by (length, sha256) of their values (§8.3). B1-defined.
-- ⟦D:history-redaction-agent-env⟧ (Task 18): The value layer's frozen list reads `~/.ccrc/agent.env` like `ccrc.env`, and loads `sessions.json`'s `idHash` values as (43, sha256) pairs (§8.3; rev 3.2 review, CT2, SE3). B1-defined.
-- ⟦D:history-secret-value-grammar⟧ (Task 18): `extractSecretValues` reads values only, by file kind; values outside `[A-Za-z0-9_-]` register their 12+-char segments; an unreadable source WARNs (§8.3; rev 3.2 review, SE2, FE21). B1-defined.
-- ⟦D:history-loader-values-in-tick-memory⟧ (Tasks 7B, 10, 14, 18): NEW departure (no spec §16 row). C32 says the loader returns only {len, sha}, but B1's `loadSecrets` also returns the loaded values; the tick's re-index of already-indexed text needs them, and so does §8.3 layer 4 (spec rev 3.5). They live only in the memory of the processes that redact: the tick; the CLI, inside its belt, read from the frozen list and meta `redact_sources`' paths; and the `--regex` child, from the CLI's stdin. Nothing persisted, journaled or printed carries a value (`fts_belt` holds rowids, and `redact_sources` holds paths), and the C32 loader case and Task 7B's O59 case pin that. Coordinator ruling RB16 confirmed it for the tick and the CLI's pairs; widening it to the CLI's values and the child is rev 3.5's, for the coordinator to confirm.
-- ⟦D:history-op-gate-in-sweep⟧ (Tasks 19, 26, 30): `decideOpGate` runs in the CLI and again in the sweep's `--op` dispatch; the CLI spawns the shim and relays `{rc, reason}`; the shim passes `--roster-unreadable` (§5.1, §8.4; rev 3.2 review, SE6, FE4). B1-defined.
-- ⟦D:history-migrate-verb⟧ (Tasks 19, 30): `planMigration` takes the carrier's kill bound (`CARRIER_KILL_S`, pinned equal to the unit's `TimeoutStartSec`), the last measured copy rate and the interrupted-attempt count, and answers `snapshot-needs-op` for a copy a scheduled pass cannot finish; `ccrc history doctor --migrate` runs it as an `--op` pass with no wall-clock kill (§6.11; rev 3.1 review, BK1). B1-defined.
+- ⟦D:history-loader-values-in-tick-memory⟧ (Tasks 7B, 10, 14, 18): NEW departure (no spec §16 row). C32 says the loader returns only {len, sha}, but B1's `loadSecrets` also returns the loaded values; the tick's re-index of already-indexed text needs them, and so does §8.3 layer 4 (spec rev 3.5). They live only in the memory of the processes that redact: the tick, from its loader; the CLI, inside its belt, which reads only the frozen list plus the declared secret files that meta `redact_sources` names (paths only); and the `--regex` child, which receives the CLI's units on its stdin. Nothing persisted, journaled or printed carries a value (`fts_belt` holds rowids, and `redact_sources` holds paths), and the C32 loader case and Task 7B's O59 case pin that. Every one of these processes runs as the same UNIX user, which can already read those files. Coordinator ruling RB16 confirmed it for the tick and the CLI's pairs, and the coordinator confirmed rev 3.5's widening to the CLI's values and the child.
 - ⟦D:history-bare-doctor-is-status-health⟧ (Task 19): NEW departure (no spec §16 row). §8.4 lists a bare `doctor` form without saying what it does; it prints `status`'s health lines, read-only.
 - ⟦D:history-prune-referrers⟧ (Task 20): Prune ages every referrer and never prunes summaries or kept lists (§6.6).
-- ⟦D:history-free-space-floor⟧ (Tasks 20, 25): The writer pauses below a free-space floor (§9.3). B1-defined.
 - ⟦D:history-prune-not-floor-gated⟧ (Task 20): `prune --apply` is gated on reachability only: its `--op` pass's bounded `statfs` probe answers exit 5 `store-unreachable` when it does not settle, low disk never refuses it, and it truncates the WAL after each batch, against §9.3's former "runs the same preflight" (§6.6, §9.3; DM49). RULED by the operator on 2026-10-07 (spec rev 3.4), no longer provisional; this plan first raised it, under coordinator ruling RB3, as a departure of its own, and rev 3.4 gave it its spec §16 row.
 - ⟦D:history-prune-needs-a-referrer⟧ (Task 20): NEW departure (no spec §16 row). "Every referrer is older than the cutoff" is vacuously true for a blob nothing names; a blob with no `entries`, `entry_variants` or `sidecars` referrer is never pruned.
 - ⟦D:history-backup-link-not-rename⟧ (Task 22): NEW departure (no spec §16 row). The backup temp is published with `link()` and then unlinked, not `rename()`, so a second backup in the same second, or an operator file of that name, is refused `backup-refused` rather than clobbered; a partial copy still never carries a backup's name.
-- ⟦D:history-redaction-reindex-merge⟧ (Tasks 23, 29): Each newly learned pair commits with its `redact` outbox row before any FTS insert, re-indexes its blobs found by quoted phrase, and bounded FTS5 `merge` steps purge the index bytes (§6.2, §9.2; rev 3.2 review, DI8, SE4). B1-defined.
-- ⟦D:history-fts-tables-by-derivation⟧ (Task 23): The FTS tables are created by a derivation step, not schema v1 (§6.2). B1-defined.
 - ⟦D:history-repair-rebuilds-fts-whole⟧ (Task 23): NEW departure (no spec §16 row). `doctor --repair` always drops and rebuilds both FTS tables, healthy or not, since that is the only way to purge an early-indexed token's bytes; P24's per-table checks are reported, not used to skip.
-- ⟦D:history-counter-resets-after-cure⟧ (Tasks 23, 25): NEW departure (no spec §16 row). B1's five health counters (`blob_undecodable`, `drain_rejected`, `spool_displaced`, `spool_blocked`, `spool_unreadable`), which B1 never resets, are re-measured: `blob_undecodable` by a completed whole FTS rebuild (`doctor --repair`, a recovery's reindex), and the four spool counters by `doctor --repair` and the recovery step's close. lib's `decideCounterResets` decides: unmeasured writes nothing; a standing count of 0 resets the counter; an item counter (`blob_undecodable`, `drain_rejected`, `spool_displaced`) is raised to a larger standing count (a restored or rebuilt store lost it) and otherwise kept; a pass counter (`spool_blocked`, `spool_unreadable`) is kept while anything stands. §9.6's WARNs read the counters, so a cured condition WARNed for ever, and a recovered store forgot a set-aside that still stands (B1's notes to B2: "B2's repair owns resets"; B1's ⟦D:history-permanent-failures-classified⟧, ⟦D:history-planted-entries-never-wedge⟧).
+- ⟦D:history-counter-resets-after-cure⟧ (Tasks 23, 25): NEW departure (no spec §16 row). B1's five health counters (`blob_undecodable`, `drain_rejected`, `spool_displaced`, `spool_blocked`, `spool_unreadable`), which B1 never resets, are re-measured: `blob_undecodable` by a completed whole FTS rebuild (`doctor --repair`, a recovery's reindex), and the four spool counters by `doctor --repair` and the recovery step's close. lib's `decideCounterResets` decides: unmeasured writes nothing; a standing count of 0 resets the counter; an item counter (`blob_undecodable`, `drain_rejected`, `spool_displaced`) is raised to a larger standing count (a restored or rebuilt store lost it) and otherwise kept; a pass counter (`spool_blocked`, `spool_unreadable`) is kept while anything stands. §9.6's WARNs read the counters, so a cured condition WARNed for ever, and a recovered store forgot a set-aside that still stands (B1's notes to B2: "B2's repair owns resets"; B1's D-4346 (`history-permanent-failures-classified`), B1's D-4347 (`history-planted-entries-never-wedge`)).
 - ⟦D:history-binding-facts-before-link⟧ (Tasks 24, 26, 27, 28): Restore and rebuild write the binding, the writer token and the recovery step into the database before it becomes `history.db`; adopt commits before writing `store.id` (§6.2, §8.4; rev 3.2 review, DI3).
-- ⟦D:history-restore-wal-mode⟧ (Tasks 24, 27): Restore sets WAL on its copy before `link()`, and the writer asserts WAL at every open, refusing `store-not-wal` (§6.2, §8.4; rev 3.2 review, CT3). B1-defined.
-- ⟦D:history-store-pending-marker⟧ (Tasks 24, 28): First creation writes `store.id.pending` before the link, and an open that finds it equal to `meta.store_id` finishes the creation instead of refusing (§6.2; rev 3 review). B1-defined.
-- ⟦D:history-store-writer-file⟧ (Tasks 24, 26): The writer token lives in `~/.ccrc/history/store.writer`, with `meta.writer` its mirror, so the journal half can name its file with no DB open (§9.14; rev 3.2 review, DI5). B1-defined.
-- ⟦D:history-journal-writer-token⟧ (Tasks 24, 26, 28): Every binding mints a writer token in `meta.writer`, carried in every journal and segment name, so files from two boxes that ran one store never collide; segments take one number space per store and each mark names its segment, cleared when the segment is missing after a bind (§9.14, §9.15; rev 3.1 review, BK8, BK21). B1-defined.
 - ⟦D:history-recovery-scratch-tables⟧ (Task 25): NEW departure (no spec §16 row). The replay's first-pass verdict and drained-file index must survive the several passes a large replay spans, and schema v1 has no table for it; the step creates its own scratch tables and drops them at completion.
-- ⟦D:history-genless-line-joins-registry-generation⟧ (Tasks 25, 28): A gen-less line of any kind (a startup or resume line at confirmation, a clear line at drain) joins the registry's generation, and a `''` family is re-keyed when its row gains one (§6.1; Q8). B1-defined.
 - ⟦D:history-replay-receipt-sha-from-record⟧ (Task 25): NEW departure (no spec §16 row). The journal keeps a spool line's parsed object, not its bytes; replay hashes the object's compact re-serialisation (equal to every in-tree writer's bytes) and never counts a replayed duplicate as a `receipt_collision`.
 - ⟦D:history-recovery-chunk-failure-counted⟧ (Task 25): NEW departure (no spec §16 row). §9.14 names the stall but not its cause's counter: `recover_chunk_failed`, with one stderr line per failed chunk.
-- ⟦D:history-permanent-failures-classified⟧ (Task 25): A drain transaction the store refuses for the file's own rows sets the already-journaled file aside into `.draining/rejected/`, its lines in the journal with no `drained` record; replay skips them and counts the file kept, never `journal_spool_undrained_gone` (§9.2, §9.14). B1-defined.
-- ⟦D:history-planted-entries-never-wedge⟧ (Task 25): A drain moves a live spool file whose sidecar or sidecar-temp name a directory occupies into that drain's `.draining/planted/<tickMs>.<pid>/`, even one a hold pass already journaled, its lines in the journal with no `drained` record; replay skips them and counts the file kept, never `journal_spool_undrained_gone` (§9.2, §9.10, §9.14). B1-defined.
-- ⟦D:history-pre-migration-snapshot⟧ (Task 27): The writer copies the store to `db/backups/pre-v<N>.db` (temp then rename, newest kept, an attempt marker while one runs) before every schema migration, and refuses the migration, pausing capture, when `planCopy` finds no room; the verdict is `lib.mjs`'s `planMigration`, and `store.mjs` only executes it (§6.11; ruled Q6, W1-B1). B1-defined.
-- ⟦D:history-spool-journal-retained⟧ (Task 28): Drained spool lines, the verdicts taken from registry state or an operator's argument, learned redaction pairs and tick records are kept in an append-only journal, `journal/<store_id>/<YYYY-MM>.<writer>.jsonl` on the home filesystem; a drained file's lines and its verdicts are both fsynced there before it is unlinked (§9.2, §9.14; ruled Q6, W1-B1). B1-defined.
+- ⟦D:history-replay-keeps-set-aside-files⟧ (Task 25): NEW departure (no spec §16 row). §9.14 skips a spool record whose file has no `drained` record and counts `journal_spool_undrained_gone` when no file is left, but names no rule for a journaled file B1 set aside: into `.draining/rejected/` when the store refused the file's own rows (B1's D-4346 (`history-permanent-failures-classified`)), or into a drain's `.draining/planted/<tickMs>.<pid>/` when a directory occupied its sidecar or sidecar-temp name, even after a hold pass journaled it (B1's D-4347 (`history-planted-entries-never-wedge`)). Either way its lines are in the journal with no `drained` record and its bytes are still on disk, so replay skips them and counts the file kept, never `journal_spool_undrained_gone` (§9.2, §9.10, §9.14).
 - ⟦D:history-redaction-fail-closed-node-rewrite⟧ (Task 29): NEW departure (no spec §16 row). A leaf whose summary is pruned, a raw leaf and a condensed node cannot be re-derived from text, so when a pair is learned their stored gist, topics and refs are rewritten through `redactField` instead. A leaf whose re-derivation throws is rewritten the same way and counted `parser_crash`, never retried by the next pass (coordinator ruling RB5).
-- ⟦D:history-reindex-subcursor-idempotent⟧ (Task 29): NEW departure (no spec §16 row). The recovery step's reindex phase re-derives node fields through `refreshLeaf`, `redactNodeFields` and `ftsRebuildJob`, which each commit their own transactions, so its sub-cursors commit after each batch, not inside it; a kill re-runs at most one batch of idempotent re-derivation, and §9.14's same-transaction cursor still holds for the replay phases.
-- ⟦D:history-rederive-generation-covers-nodes⟧ (Task 29): NEW departure (no spec §16 row). B1's re-derivation generation (B1's ⟦D:history-reindex-mark-by-rederivation⟧) gains a node phase after its blob phase: meta `fts_rederive_nodes` (`<target> <cursor> <end>` over `nodes.rowid`) walks every node through B1's probe index, asking its stored fields (through `nodeIndexTexts`) and, for a leaf whose summary is stored, its derivation run dry; an owed node is re-derived or rewritten fail-closed, and the mark `fts_reindex_rid` moves only once both phases complete. `rederiveGistsFor`'s phrase lookup stays as the same-tick fast path, budgeted as B1's is (review 344 F2), and moves no mark. A hash-only pair (`sessions.json`), a value glued inside one index term, or a value a capped gist cut to a prefix cannot be found by a phrase, so before this the mark passed nodes that still answered a MATCH (§6.2 "A pair learned after its text was indexed"; B1's notes to B2: the re-derivation must extend to `nodes_fts`). Residual: a leaf whose summary was pruned keeps a prefix its capped gist was cut to.
+- ⟦D:history-reindex-subcursor-idempotent⟧ (Task 29): NEW departure (no spec §16 row). The recovery step's reindex phase re-derives node fields through `refreshLeaf`, `redactNodeFields` and `ftsRebuildJob`, which each commit their own transactions, so its sub-cursors commit after each batch, not inside it, and so does the belt's node step's cursor (`nodes-belt`, Task 29's `beltNodesStep` over `redactNodeFields`); a kill re-runs at most one batch of idempotent re-derivation, and §9.14's same-transaction cursor still holds for the replay phases.
 - ⟦D:history-license-sidecars-generalised⟧ (Task 31): NEW departure (no spec §16 row). B1's license pins hard-code `ccd/history`'s sidecar; they now cover every `LICENSE.lossless-claw` under `ccd/`, as §12 asks once the skill directory carries one; `server/test/` holds none, since §12's rev 3.3 exception (RB15) makes `history-skill.test.ts`'s verbatim pins no copy, and a case pins that.
-- ⟦D:history-skill-joins-skill-scans⟧ (Task 31): NEW departure (no spec §16 row). §8.5 names none of the four standing skill-corpus scans (no `ws-expire`, no raw HTTP, no `expire-lane-live`, every named `/api/` path reachable); all four list the skill directories by hand, so the fourth directory is added to each.
+- ⟦D:history-skill-joins-skill-scans⟧ (Task 31): NEW departure (no spec §16 row). §8.5 names none of the five standing skill-corpus scans (no `ws-expire`, no raw HTTP, no `expire-lane-live`, no `dead-coordinator-lane-live` (`server/test/dead-coordinator-prose.test.ts`), every named `/api/` path reachable); all five list the skill directories by hand, so the fourth directory, `ccd/history-skill`, is added to each.
 - ⟦D:history-readme-tables-name-the-sweep⟧ (Task 33): NEW departure (no spec §16 row). §10.5 assigns README's edits by PR and names neither table; B1 ships the sweep timer and doctor's `history` check without rows, so B2 adds the timer-table row, the doctor-table row and the server-role SKIP word.
-- ⟦D:history-fork-spooled⟧ (Task 34): SessionStart(fork) writes a spool line from W1-B2: `fork` joins the hook's source whitelist in place (no hook line moves, no S6-R11 census change) and `SPOOL_SOURCES` (B1's `EPOCH_CAUSES` already holds it, `history-epoch-causes-widened-for-rollback`); the line carries `src` and `reg` and confirms exactly as resume does; a fork whose sid is already an epoch confirms that epoch, a fresh sid chains a `fork` epoch, and copied rows follow the per-copy span rule; no migration, and a build rolled back to B1 rejects a spooled `fork` line, while B1's widened `EPOCH_CAUSES` lets it read `fork` journal records and confirm a waiting fork candidate (§5.1, §6.1, §9.14, §14 risk 24; DM48; ruled Q16, rev 3.4; reverses `history-fork-not-spooled`).
-- ⟦D:history-epoch-causes-widened-for-rollback⟧ (Tasks 34, 36): W1-B1 merged with `fork` in `EPOCH_CAUSES` (and `EpochCause`) alone, vocabulary only, so a build rolled back from W1-B2 reads a fork verdict and a fork candidate back; only a spooled fork line remains outside it (§6.1 "The rollback edge"; coordinator ruling 2026-10-07). B1-defined; Task 34 leaves its comment and declaration as they are.
-- ⟦D:history-fork-not-spooled⟧ (Task 34): SessionStart(fork) writes no spool line, within Q2's ruled set; a fork's uuid enters by registry backfill; every SessionStart line carries `src` (§5.1; rev 3.2 review, CT7; Q16). B1-defined; reversed by Task 34 (ruled Q16), except that every SessionStart line still carries `src`.
-- ⟦D:history-spool-start-not-compact⟧ (Task 34): Spool on SessionStart(startup|resume|clear), not compact (G6; ruled Q2); from W1-B2 on SessionStart(fork) too (ruled Q16, `history-fork-spooled`). B1-defined.
-- ⟦D:history-spool-line-carries-registry-uuid⟧ (Task 34): SessionStart(startup|resume) lines, and from W1-B2 SessionStart(fork) lines (ruled Q16), carry `reg`, the hook's builtin read of `.uuid`, and confirm when it equals their sid (§5.1, §6.1; rev 3.2 review, CT6). B1-defined.
-- ⟦D:history-epoch-lines-survive-off⟧ (Task 34): `history-off` silences Stop/PostCompact lines, the card, the scope marker and the steer, but not epoch lines (G15). B1-defined; Task 34 names it only in the hook comment it rewords.
-- ⟦D:history-export-due-per-copy⟧ (Task 35): The default due rule reads each row's own copies: a row is due when every one of its holding files (B1's per-row set, its transcript's files, `history-export-holding-files-by-transcript`) has passed its mtime plus its own home's retention minus 30 days, and a blob when its rows are; one reducer, `EXPORT_REDUCERS.perCopy`, made the default in W1-B2 for the census, doctor's `export-due`, `export-overdue` and `retention-lowered` arms and B4's pass, with no signature change; the node-shortest reducer is history and `retention-lowered` a reminder (§9.6, §9.15; O58; ruled Q15, rev 3.4).
-- ⟦D:history-export-row-age-early⟧ (Task 35): The export ages a row by its `ts_ms`, or by its newest holding file's mtime when that is NULL, never "never old" as prune does (§9.15; rev 3.1). B1-defined; since Task 35 the row clock is the node-shortest reducer's alone and no longer the default (ruled Q15).
-- ⟦D:history-export-holding-files-by-transcript⟧ (Task 35): The export census takes a referrer's holding files to be its transcript's `ingest_files` rows and their `file_paths`, not the row's own copies through `memberships` (§9.15; Q15), because v1 has no index led by `memberships.entry_id`. B1-defined; the Q15 ruling keeps it as the per-row file set.
-- ⟦D:history-export-due-escalates⟧ (Task 35): Beyond the ruled `export-due` WARN, doctor FAILs `export-overdue` on measured source loss (every holding file gone, or past its mtime plus its home's retention) (§9.6, §9.15). B1-defined; unchanged by the per-copy default.
-- ⟦D:history-w1b-three-prs⟧ (Task 36): W1 part B ships as capture, recall and card-line PRs, in that order, and since rev 3.1 the sole-copy export as a fourth, B4, after B2 since rev 3.2, in either order with B3 (§10.5; ruled Q6). B1-defined.
+- ⟦D:history-fork-spooled⟧ (Task 34): SessionStart(fork) writes a spool line from W1-B2: `fork` joins the hook's source whitelist in place (no hook line moves, no S6-R11 census change) and `SPOOL_SOURCES` (B1's `EPOCH_CAUSES` already holds it, B1's D-4342 (`history-epoch-causes-widened-for-rollback`)); the line carries `src` and `reg` and confirms exactly as resume does; a fork whose sid is already an epoch confirms that epoch, a fresh sid chains a `fork` epoch, and copied rows follow the per-copy span rule; no migration, and a build rolled back to B1 rejects a spooled `fork` line, while B1's widened `EPOCH_CAUSES` lets it read `fork` journal records and confirm a waiting fork candidate (§5.1, §6.1, §9.14, §14 risk 24; DM48; ruled Q16, rev 3.4; reverses B1's D-4173 (`history-fork-not-spooled`), except that every SessionStart line still carries `src`).
+- ⟦D:history-export-due-per-copy⟧ (Task 35): The default due rule reads each row's own copies: a row is due when every one of its holding files (B1's per-row set, its transcript's files, B1's D-4248 (`history-export-holding-files-by-transcript`), which the Q15 ruling keeps) has passed its mtime plus its own home's retention minus 30 days, and a blob when its rows are; one reducer, `EXPORT_REDUCERS.perCopy`, made the default in W1-B2 for the census, doctor's `export-due`, `export-overdue` and `retention-lowered` arms and B4's pass, with no signature change; the node-shortest reducer, with B1's D-4208 (`history-export-row-age-early`) row clock, is history and `retention-lowered` a reminder (§9.6, §9.15; O58; ruled Q15, rev 3.4).
 
-131 slugs in all: 41 NEW, 66 B1-defined, 24 spec §16 slugs this plan defines first (`history-prune-not-floor-gated` moved from NEW to the last group when rev 3.4 gave it a §16 row).
+61 slugs in all: 37 NEW and 24 spec §16 slugs this plan defines first (`history-prune-not-floor-gated` moved from NEW to the second group when rev 3.4 gave it a §16 row). B1's departures are cited by number in the tasks and not listed. Retired, because spec rev 3.5 states each as its rule: `history-display-escape-readings`, `history-nodes-fts-index-text-readings` and `history-rederive-generation-covers-nodes` (display and `nodes_fts` read the index's escape readings, and every generation reopens the node step), `history-search-reach-stated` (§6.2 "Recall search states its reach", §8.4) and `history-regex-scans-the-index-text` (§8.4: the `--regex` child scans the windowed index text). `history-replay-keeps-set-aside-files` is NEW in this refresh: B2's replay keeping the files B1 sets aside, which §9.14 does not cover.
