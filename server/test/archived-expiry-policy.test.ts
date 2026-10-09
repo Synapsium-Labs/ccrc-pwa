@@ -694,6 +694,81 @@ describe('the lane’s memory of one row', () => {
     expect(x.nextAskAt, 'still asked again').toBeLessThan(Number.POSITIVE_INFINITY);
   });
 
+  // The verb run's CARRY and RESETS are pinned apart from the shared run's (review 356, F1 and F2): the tier's clock is the
+  // verb's alone, so each site that carries or resets it needs its own red case.
+  const TIER_ANSWERS: ReadonlyArray<readonly [string, Parameters<typeof archivedExpiryNextEntry>[1]]> = [
+    ['a deferral', { kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' }],
+    ['a shadow audit', { kind: 'would-expire', sensitive: 0 }],
+    ['an in-use', { kind: 'refused', token: 'in-use', detail: 'a process works in it', inUse: [] }],
+    ['an older ccd’s silence', { kind: 'no-evidence' }],
+    ['a hold the act met', { kind: 'refused', token: 'held', detail: 'on hold', inUse: [] }],
+    ['ccd’s not-yet', { kind: 'refused', token: 'not-expired', detail: 'young', inUse: [] }],
+  ];
+
+  it('a STANDING entry keeps the verb’s run through every answer that ends no attempt: one later verb failure is attempt n + 1, the first failure’s instant standing (review 356, F1)', () => {
+    const { x: standing, t } = aDayOf(verbFailed);
+    const attempts = (standing.report as { attempts?: number }).attempts!;
+    expect(attempts, 'a standing entry').toBeGreaterThan(1);
+    for (const [what, o] of TIER_ANSWERS) {
+      const between = archivedExpiryNextEntry(standing, o, t, PASS)!;
+      const x = archivedExpiryNextEntry(between, verbFailed, t + PASS, PASS)!;
+      expect(x.report, `${what}, then one verb failure: the same first instant, one more attempt`)
+        .toEqual({ kind: 'failing', at: NOW, detail: verbFailed.detail, attempts: attempts + 1 });
+      expect(x.nextAskAt, `${what}: still the four-hour cadence`).toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
+    }
+  });
+
+  // Probe B's shape: two verb failures, then X, then ONE verb failure two days later. Left standing, the first two would
+  // make that one failure the tier's at once, with a two-day-old `at` and an inflated `attempts`; the reset makes it the
+  // first of a new run.
+  const TWO_DAYS = 2 * EXPIRE_FAILURE_GIVE_UP_MS;
+  const twoVerbFailures = (): ArchivedExpiryEntry => {
+    const first = archivedExpiryNextEntry(e(), verbFailed, NOW, PASS)!;
+    return archivedExpiryNextEntry(first, verbFailed, NOW + PASS, PASS)!;
+  };
+  const oneLater = (x: ArchivedExpiryEntry): ArchivedExpiryEntry => archivedExpiryNextEntry(x, verbFailed, NOW + TWO_DAYS, PASS)!;
+  const startsAfresh = (x: ArchivedExpiryEntry, what: string): void => {
+    expect((x.report as { attempts?: number } | null)?.attempts, `${what}: one failure after the reset is no tier`).toBeUndefined();
+    expect(x, what).toMatchObject({ verbFailures: 1, verbFailingSince: NOW + TWO_DAYS, failures: 1, failingSince: NOW + TWO_DAYS });
+    expect(x.nextAskAt - (NOW + TWO_DAYS), `${what}: the ladder, never the four-hour cadence`).toBeLessThanOrEqual(EXPIRE_FAILURE_CEILING_MS);
+  };
+
+  it('control: the same two verb failures and ONE more two days later DO reach the tier — so the reset cases below bite (review 356, F2)', () => {
+    expect(oneLater(twoVerbFailures()).report).toEqual({ kind: 'failing', at: NOW, detail: verbFailed.detail, attempts: 3 });
+  });
+
+  it('the STEADY reset: a restart, or any answer that ends the run, resets the verb’s run with the shared one (review 356, F2)', () => {
+    const steadies: ReadonlyArray<readonly [string, Parameters<typeof archivedExpiryNextEntry>[1]]> = [
+      ['a restart', { kind: 'restart', detail: 'state-changed: moved' }],
+      ['a retryable not-expired refusal', { kind: 'refused', token: 'not-expired', detail: 'young', inUse: [] }],
+      ['a deferral', { kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' }],
+      ['a shadow audit', { kind: 'would-expire', sensitive: 0 }],
+      ['an older ccd’s silence', { kind: 'no-evidence' }],
+      ['a hold the act met', { kind: 'refused', token: 'held', detail: 'on hold', inUse: [] }],
+    ];
+    for (const [what, o] of steadies) {
+      const between = archivedExpiryNextEntry(twoVerbFailures(), o, NOW + 2 * PASS, PASS)!;
+      expect(between, `${what} resets both runs`).toMatchObject({ failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null });
+      startsAfresh(oneLater(between), `${what}, then one verb failure two days later`);
+    }
+  });
+
+  it('the IN-USE reset: an in-use answer resets the verb’s run with the shared one (review 356, F2)', () => {
+    const between = archivedExpiryNextEntry(twoVerbFailures(), { kind: 'refused', token: 'in-use', detail: 'a process works in it', inUse: [] },
+      NOW + 2 * PASS, PASS)!;
+    expect(between).toMatchObject({ failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null });
+    startsAfresh(oneLater(between), 'an in-use, then one verb failure two days later');
+  });
+
+  it('the LEARN arms reset the verb’s run too: a learned instant, ccd saying none, and an older ccd’s absent key (review 356, F2)', () => {
+    for (const [what, doc] of [['a learned instant', learnedDoc(1_789_604_800)], ['ccd saying none', learnedDoc(null)],
+      ['an older ccd’s absent key', learnedDoc(undefined)]] as const) {
+      const between = archivedExpiryLearned(twoVerbFailures(), doc, NOW + 2 * PASS, PASS);
+      expect(between, `${what} resets both runs`).toMatchObject({ failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null });
+      startsAfresh(oneLater(between), `${what}, then one verb failure two days later`);
+    }
+  });
+
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
     // `ExpireVerbRead.failed.resumable` is carried through the outcome, never narrowed: a wrong-row `expired`, a word
     // this build does not know, or `probe-unmeasured` is not something waiting cures — no hour of retries first.

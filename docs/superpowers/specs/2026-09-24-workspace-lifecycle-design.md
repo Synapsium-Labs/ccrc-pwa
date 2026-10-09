@@ -484,7 +484,8 @@ each item is a departure named there).
 - **As wave 5 closes the lane's follow-ups** (each a departure named in the wave-5 plan,
   `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`).
   - **The consent binds the branch.** Inside its lock `ws-expire` reads the branch three ways at the recompute and
-    again at the pin; if the two reads differ (a branch made in between, or, with HEAD detached, one deleted) it stops
+    again at the pin; if the two reads differ (a branch made in between, or, with HEAD not symbolic to `ws/<slug>`
+    (detached, on another branch, or with the worktree gone), one deleted) it stops
     there, `failed` `state-changed`, after the pin, which only keeps, and before the tombstone and the breadcrumb.
     With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as
     `pin-failed`, which is resumable. A branch already absent when the token was minted reads absent twice and expires
