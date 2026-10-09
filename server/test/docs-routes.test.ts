@@ -1408,3 +1408,62 @@ describe('T11 review 1-3: a refused refresh settles nothing (refinement (m))', (
     expect(verb(rec.calls, 'docs-fetch')).toEqual([]);
   });
 });
+
+describe('T11 review 4-3: the projects route rides the read lane and leaves with its client', () => {
+  /** Two tree GETs held in the read lane's two exec slots; any docs-index the runner is asked for is recorded and answered. */
+  async function twoReadsHeld(): Promise<{
+    app: FastifyInstance; lane: DocsNodeLanes['read']; rec: ReturnType<typeof scripted>;
+    release: () => void; held: Promise<unknown>[];
+  }> {
+    const b = blocker<CcdResult>();
+    const rec = scripted((argv) => (argv[0] === 'docs-index' ? okRes(line(indexOk())) : b.exec()));
+    const { app, docs } = await open({ run: rec.run });
+    const held = ['a', 'b'].map((ref) => app.inject({ url: `/api/docs/demo/tree?ref=${ref}`, headers: PWA_HEADERS }));
+    await until(() => rec.calls.length === 2, 'two tree execs');
+    const release = (): void => {
+      b.release(0, faultRes());
+      b.release(1, faultRes());
+    };
+    return { app, lane: nodeLanes(docs).read, rec, release, held };
+  }
+
+  it('a cold projects GET under two held reads queues (no third exec), and runs once a slot frees', async () => {
+    const { app, lane, rec, release, held } = await twoReadsHeld();
+    try {
+      const projects = app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+      await until(() => lane.load().queued === 1, 'the projects read queued', 2000);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(verb(rec.calls, 'docs-index')).toEqual([]);
+      expect(rec.calls).toHaveLength(2);
+      release();
+      await Promise.all(held);
+      const res = await projects;
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, cacheAgeMs: null });
+      expect(verb(rec.calls, 'docs-index')).toHaveLength(1);
+      expect(lane.load().queued).toBe(0);
+    } finally {
+      release();
+    }
+  });
+
+  it('a projects GET whose client goes while it is queued is dequeued over a real socket, and its docs-index never runs', async () => {
+    const { app, lane, rec, release, held } = await twoReadsHeld();
+    try {
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const { port } = app.server.address() as AddressInfo;
+      const req = http.get({ host: '127.0.0.1', port, path: '/api/docs/projects', headers: PWA_HEADERS });
+      req.on('error', () => undefined);
+      await until(() => lane.load().queued === 1, 'the socket\'s projects read queued', 2000);
+      req.destroy();
+      await until(() => lane.load().queued === 0, 'the projects read dequeued', 2000);
+      release();
+      await Promise.all(held);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(rec.calls).toHaveLength(2);
+      expect(verb(rec.calls, 'docs-index')).toEqual([]);
+    } finally {
+      release();
+    }
+  });
+});
