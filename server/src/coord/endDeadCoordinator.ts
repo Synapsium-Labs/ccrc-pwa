@@ -10,7 +10,7 @@ import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../../shared/api.js';
 import {
   DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
-  deadCoordinatorJournal,
+  deadCoordinatorJournal, deadCoordinatorThrewFeedRow,
   type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorJournal,
   type DeadCoordinatorJournalTrust, type DeadCoordinatorProgramme, type DeadCoordinatorStop,
 } from '../deadCoordinator.js';
@@ -40,14 +40,16 @@ import {
  */
 
 /** The executor's ports (L2, declared by this consumer). `abandon` is the ONLY way it ends a run. `journalTrust` is the
- *  lane's own reading of the lifecycle mirror's health, gaps and ccd's write failures, asked fresh at each re-measure. */
+ *  lane's own reading of the lifecycle mirror's health, gaps and ccd's write failures, asked fresh at each re-measure —
+ *  WHOLE, `hold` with `trust`, so a mirror that turned `unknown` or `stale` since the pass stops the act as a `hold`
+ *  (the anchor stands) and is never read as an untrusted journal (`remeasured`, which deletes it; review 339, F4). */
 export interface EndDeadCoordinatorDeps {
   coord: CoordStore;
   io: FleetIO;
   cfg: CcrcConfig;
   tmux: ReclaimDeps['tmux'];
   notifyLog?: NotifyLog;
-  journalTrust: () => Promise<DeadCoordinatorJournalTrust>;
+  journalTrust: () => Promise<{ readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust }>;
   abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>;
   /** The lane's clock, read at the moment each re-measure measures. A re-measure NEVER takes the pass's instant: a
    *  supervisor heartbeat stamped after that instant would read "from the future", not fresh, and a RESTARTING
@@ -122,8 +124,12 @@ export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Pr
   if (names === null) return { kind: 'switch', why: `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out` };
   if (names.includes(RECLAIM_PAUSE_MARKER)) return { kind: 'switch', why: `${RECLAIM_PAUSE_MARKER} was raised during the act` };
   if (!deadCoordinatorLaneArmed(names)) return { kind: 'switch', why: 'the lane was disarmed during the act' };
+  // The journal's own trust FIRST, and whole: a mirror gone `unknown` or `stale` since the pass stops the act as the
+  // pass's own hold does — nothing learned, the anchor standing (review 339, F4).
+  const journal = await deps.journalTrust();
+  if (journal.hold !== null) return { kind: 'hold', why: `${journal.hold} — the act waits, and its hour stands` };
   const m = await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.now());
-  const c = deadCoordinatorCrash(m, deadCoordinatorJournalOf(deps.coord, id, await deps.journalTrust()));
+  const c = deadCoordinatorCrash(m, deadCoordinatorJournalOf(deps.coord, id, journal.trust));
   switch (c.kind) {
     case 'crashed': return null;
     case 'alive': return { kind: 'remeasured', why: `re-measured alive: ${c.why}` };
@@ -161,23 +167,30 @@ export async function endDeadCoordinator(
   // 4 — each run: the abandon, with the compare-and-set and the re-measure inside the arm.
   const ended: { id: number; program: string }[] = [];
   const released: { id: number; program: string }[] = [];
+  const reheld: { id: number; program: string }[] = [];
   const stuck: { runId: number; why: string }[] = [];
   let stoppedBy: DeadCoordinatorStop | null = null;
   // What the act has done so far, as its outcome — also what a THROWN act hands back (`DeadCoordinatorActThrew`).
+  // The run whose abandon is in flight — what a throw names, since the arm answered nothing about it.
+  let current: number | null = null;
   const outcome = (failed?: string): Extract<DeadCoordinatorActOutcome, { kind: 'ended' }> => {
     const closed = new Set(ended.map((r) => r.id));
     return { kind: 'ended', programmes: byProgramme(ended), open: byProgramme(runs.filter((r) => !closed.has(r.id))),
       stuck, stoppedBy, ...(released.length === 0 ? {} : { released: byProgramme(released) }),
-      ...(failed === undefined ? {} : { failed }) };
+      ...(reheld.length === 0 ? {} : { reheld: byProgramme(reheld) }),
+      ...(failed === undefined ? {} : { failed, ...(current === null ? {} : { failedRun: current }) }) };
   };
   try {
     for (const run of runs) {
+      current = run.id;
       const out = await deps.abandon(run.id, claimantId, () => stillCrashed(deps, claimantId));
       if (out.ok) { ended.push(run); continue; }
       if (out.kind === 'sweep-stopped') {
-        // The stop came after the fleet act: the worker is released (or re-held) and its run stays open. A TYPED fact, so
-        // the lane records it whether or not the act closed anything (`released` on the outcome).
-        if (out.released) released.push(run);
+        // The stop came after the fleet act: the worker is released, or re-held under a surviving run, and its run stays
+        // open. A TYPED fact, carried as the act that ran, so the lane records it whether or not the act closed anything
+        // (`released` or `reheld` on the outcome) and words each as what it is (review 339, F3).
+        if (out.fleetAct === 'released') released.push(run);
+        else if (out.fleetAct === 're-held') reheld.push(run);
         stoppedBy = out.stop;
         break;
       }
@@ -189,6 +202,7 @@ export async function endDeadCoordinator(
       const why = closeRefusalOf(run.id, out);
       stuck.push({ runId: run.id, why: why.detail === undefined ? why.kind : `${why.kind}: ${why.detail}` });
     }
+    current = null;
   } catch (err) {
     // The runs that closed before the throw ARE closed: the lane records them, so the error carries them.
     throw new DeadCoordinatorActThrew(err, outcome(err instanceof Error ? err.message : String(err)));
@@ -237,6 +251,14 @@ export function recordDeadCoordinatorFeed(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, claimantId: string, o: DeadCoordinatorActOutcome, since: number,
 ): void {
   recordRows(deps, claimantId, deadCoordinatorFeedRows(claimantId, o, since), o.kind);
+}
+
+/** The feed row for an act that THREW — every one, whatever it had done (review 339, F13). */
+export function recordDeadCoordinatorThrew(
+  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, claimantId: string,
+  done: Extract<DeadCoordinatorActOutcome, { kind: 'ended' }> | null, error: string, since: number,
+): void {
+  recordRows(deps, claimantId, [deadCoordinatorThrewFeedRow(claimantId, done, error, since)], 'act failed');
 }
 
 /** The breaker's feed row, under its first claimant — written by the lane when the trip begins or names a new set. */

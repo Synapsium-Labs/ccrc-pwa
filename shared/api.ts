@@ -3865,7 +3865,7 @@ export type ChildReclaimAttention =
  *  rebuilds it on the passes that follow rather than reading it back. */
 export interface ExpiryAttention {
   readonly sessionId: string;
-  readonly kind: 'would-expire' | 'held' | 'in-use' | 'refused' | 'failing' | 'no-evidence';
+  readonly kind: 'would-expire' | 'held' | 'in-use' | 'refused' | 'failing' | 'no-evidence' | 'kept';
   readonly sentence: string;
   readonly archivedAt: number;
   readonly expiresAt: number | null;

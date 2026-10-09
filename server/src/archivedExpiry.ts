@@ -94,6 +94,20 @@ export const EXPIRE_SHADOW_REAUDIT_MS = 15 * 60_000;
  *  `min(this, passMs × 2^k)`, and a run of failures that has lasted this long is reported (and still retried). */
 export const EXPIRE_FAILURE_CEILING_MS = 60 * 60_000;
 
+/** THE LANE'S ANSWER TO A REPEATING RESUMABLE FAILURE (the coordinator's ruling, wave 5, revised): a run of `failed`
+ *  (resumable) or `lock-unopenable` answers from the `ws-expire` VERB that has lasted this long — never the act's own
+ *  audit's (`audit-failed`: no verb ran, so nothing can have stopped part-way) — moves the row to the PERSISTENT TIER
+ *  (`EXPIRE_PERSISTENT_RETRY_MS`): its report becomes a STANDING attention entry, and the lane asks again every four
+ *  hours, never stopping — never +∞, because an expiry that failed after its breadcrumb leaves a part-cleaned
+ *  workspace that only a completed attempt finishes once the operator fixes the cause. A completed attempt finishes
+ *  the row, and a new `archivedAt` starts a fresh entry. In memory, as all of the lane's memory: a restart re-learns.
+ *  The learning audit's own ladder is not this one: it composes nothing destructive, and keeps its backoff. */
+export const EXPIRE_FAILURE_GIVE_UP_MS = 24 * 60 * 60_000;
+
+/** THE PERSISTENT TIER's cadence: a row past `EXPIRE_FAILURE_GIVE_UP_MS` of resumable failures is asked again this
+ *  long after each attempt, for as long as its failures last (wave 5, the coordinator's revised ruling). */
+export const EXPIRE_PERSISTENT_RETRY_MS = 4 * 60 * 60_000;
+
 /** How many audits the lane runs in one pass to LEARN rows' expiry instants. The first armed pass faces every
  *  archived row at once; this spreads that over passes instead of asking the box for thirty audits in a minute. */
 export const EXPIRE_AUDITS_PER_PASS = 3;
@@ -196,15 +210,82 @@ function lockUnopenable(err: string): string | null {
   return lines.slice(0, -1).every((l) => bashLine.test(l)) ? last.slice('ccd: '.length) : null;
 }
 
+/** One leaf the shared tail removes last (the clips directory, the per-session temp root), as the `expired` document
+ *  reports it (`clipsKept`, `tmpRootKept`; CCR-15's 4462): ccd's word for a leaf it KEPT — `refused` (its removal
+ *  helper refused it), `unmeasured` (whether it could be removed could not be measured) or `in-use` (a process still
+ *  used it after the bounded wait) — or `null` when nothing was kept. A key that is ABSENT is an older ccd's document,
+ *  which says nothing either way: `unreported`, never folded into `null` (that would read "removed"). A value this
+ *  build does not know is a kept leaf, `unmeasured` — ccd prints only its three words, and any other value means a
+ *  leaf stood. Named keys only, so a newer ccd's other keys change nothing here (agent-first stays safe). */
+export type ExpireLeafKept = KeptLeafWord | null | 'unreported';
+const KEPT_LEAF_WORDS = ['refused', 'unmeasured', 'in-use'] as const;
+/** ccd's three words for a leaf it kept. */
+export type KeptLeafWord = typeof KEPT_LEAF_WORDS[number];
+
+/** THE WORD HALF: the ONE word reader of `clipsKept`/`tmpRootKept`. ccd's three words map to themselves; any other
+ *  value is `unmeasured` — a leaf stood. `null` and an absent key are the carrier's to tell, never this reader's: the
+ *  caller asks them first (`expireLeafKept`, the done document's carrier). CCR-15 wave 8's mirror carrier (a word,
+ *  `unreported` or `truncated`) imports this, or moves it to a neutral L1 home — a move, never a second copy. */
+export function keptLeafWord(v: unknown): KeptLeafWord {
+  return typeof v === 'string' && (KEPT_LEAF_WORDS as readonly string[]).includes(v) ? v as KeptLeafWord : 'unmeasured';
+}
+
+/** THE ONE READER of a kept-leaf key on the `expired` document — the done document's CARRIER composed with
+ *  `keptLeafWord`, the one word reader of `clipsKept`/`tmpRootKept`: `null` → `null` (removed), ABSENT → `unreported`
+ *  (an older ccd), and any other value → its word. */
+export function expireLeafKept(doc: Record<string, unknown>, key: 'clipsKept' | 'tmpRootKept'): ExpireLeafKept {
+  if (!Object.prototype.hasOwnProperty.call(doc, key)) return 'unreported';
+  const v = doc[key];
+  return v === null ? null : keptLeafWord(v);
+}
+
+/** What an expiry kept of its two leaves. */
+export interface ExpireKept { readonly clips: ExpireLeafKept; readonly tmpRoot: ExpireLeafKept }
+
+/** Did it keep anything — a word on either leaf? `unreported` is not a kept leaf: an older ccd said nothing, and a
+ *  rollout skew must not raise an alarm on every expiry (it is recorded in the feed row only). */
+export const expireKeptAny = (k: ExpireKept): boolean =>
+  (k.clips !== null && k.clips !== 'unreported') || (k.tmpRoot !== null && k.tmpRoot !== 'unreported');
+
+/** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
+ *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Each is
+ *  READ its own way (`parseExpireResult`):
+ *   - `probe-unmeasured`: `_ws_expire_locked`'s unmeasured verdict, printed at its verdict point, before any intent —
+ *     on EVERY arm. Read FINAL: reported at once and not asked again for this archive (review 313's parked item 4).
+ *     On a fresh expiry nothing stands. On a RESUMED one an earlier attempt's breadcrumb stands and its tree may be
+ *     part-deleted (`_ws_expire_resume_eval`'s unmeasured exits: a tombstone it cannot read, or a tmux probe that did
+ *     not answer), and the word reads final there too. That is main's reading, kept in this wave: the fix is this
+ *     programme's wave 6, once CCR-15 wave 7 is on main — `_ws_expire_locked` sets wave 7's `crumb` on its resumed
+ *     arm, and a failed document with `crumb: true` reads resumable — and until then it is an ARMING BLOCKER for the
+ *     expiry lane;
+ *   - `state-changed`: the consent binding — the in-lock recompute and the pin read the branch differently — printed
+ *     on the FRESH arm only, after the pin (which only keeps) and before the tombstone and the breadcrumb (workspace
+ *     lifecycle wave 5). Read `restart`: the reclaim side's "not resumable", which means START OVER, never final —
+ *     the lane forgets what it learned of the row and audits it afresh (the coordinator's ruling on the wave-5 plan's
+ *     question (h)). Also a REFUSAL word (`EXPIRE_TOKEN_KIND`, retried), which is a different document:
+ *     `{"refused":…}` at exit 0.
+ *  MEASURED, not assumed: `archived-expiry-policy.test.ts` places every occurrence of either word in ccd/ccd, by its
+ *  function and its shape, and holds the expiry's `failed` `state-changed` on its fresh arm, before the breadcrumb.
+ *  `pin-failed` and `tombstone-unwritable` are NOT here: the shared tail prints each after the breadcrumb (eight and
+ *  five producers), so the word alone cannot say nothing started — they stay resumable until that `crumb` field. */
+export const EXPIRE_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const;
+
+/** Is this `{"failed":…}` word one printed before this attempt's tombstone and breadcrumb (`EXPIRE_PRE_CRUMB_FAILED`)? */
+export const isExpirePreCrumbFailed = (word: string): boolean => (EXPIRE_PRE_CRUMB_FAILED as readonly string[]).includes(word);
+
 /** `ccd ws-expire …`'s answer (wave 3's plan, "Wave 3b inherits", the verb). Three documents — `expired` and
  *  `refused` at exit 0, `failed` at exit 1 (the breadcrumb is kept and the next attempt resumes it) — and three
  *  conditions that are no document: the two BOX words, and a COMPOSITION error. Anything else with an empty stdout is
  *  a call cut short: `failed`, resumable. */
 export type ExpireVerbRead =
   | { readonly kind: 'expired'; readonly archivedAt: number | null; readonly wip: string | null | 'unreadable';
-      readonly secretsDropped: number | 'unreadable' }
+      readonly secretsDropped: number | 'unreadable'; readonly kept: ExpireKept }
   | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string }
   | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  /** A `failed` document the lane must START OVER from (wave 5, the coordinator's ruling on question (h)): ccd printed
+   *  it before anything started, and what it consented to has changed, so neither a retry of this attempt nor a final
+   *  report is the truth — a fresh audit of what stands is (`state-changed`, `EXPIRE_PRE_CRUMB_FAILED`). */
+  | { readonly kind: 'restart'; readonly detail: string }
   | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
   | { readonly kind: 'composition'; readonly detail: string };
 
@@ -219,7 +300,8 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
       const wip = v.wip === null ? null : typeof v.wip === 'string' && WIP_SHAPE.test(v.wip) ? v.wip : 'unreadable';
       const secretsDropped = typeof v.secretsDropped === 'number' && Number.isSafeInteger(v.secretsDropped)
         && v.secretsDropped >= 0 ? v.secretsDropped : 'unreadable';
-      return { kind: 'expired', archivedAt: epochOrNull(v.archivedAt), wip, secretsDropped };
+      return { kind: 'expired', archivedAt: epochOrNull(v.archivedAt), wip, secretsDropped,
+        kept: { clips: expireLeafKept(v, 'clipsKept'), tmpRoot: expireLeafKept(v, 'tmpRootKept') } };
     }
     if (typeof v.refused === 'string') {
       const detail = typeof v.detail === 'string' ? v.detail : '';
@@ -228,7 +310,10 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
     }
     if (typeof v.failed === 'string') {
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      return { kind: 'failed', resumable: v.failed !== 'probe-unmeasured', detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
+      const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
+      if (!isExpirePreCrumbFailed(v.failed)) return { kind: 'failed', resumable: true, detail: said };
+      // Printed before this attempt's tombstone and breadcrumb: `state-changed` starts over, `probe-unmeasured` is final.
+      return v.failed === 'state-changed' ? { kind: 'restart', detail: said } : { kind: 'failed', resumable: false, detail: said };
     }
   }
   const err = stderr.trim();
@@ -337,6 +422,11 @@ export interface ArchivedExpiryEntry {
   /** Consecutive `failed` answers, and since when (ms). */
   readonly failures: number;
   readonly failingSince: number | null;
+  /** The VERB's run inside it (review 355, F1): consecutive `failed` (resumable) or `box` answers — never the act's own
+   *  audit's (`audit-failed`) — and since when (ms). Only this run is the persistent tier's clock and its attempts; it is
+   *  reset wherever `failures` is. */
+  readonly verbFailures: number;
+  readonly verbFailingSince: number | null;
   /** What the attention list says about this row, or null. */
   readonly report: ExpiryReport | null;
 }
@@ -349,12 +439,19 @@ export type ExpiryReport =
   | { readonly kind: 'refused'; readonly at: number; readonly token: ExpireToken; readonly detail: string }
   /** `final`: the row is not asked again for this archive — a composition error, or a failure the box said will not
    *  resume — so its sentence never promises a retry. Absent on a failure that is still being retried. */
-  | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true }
-  | { readonly kind: 'no-evidence'; readonly at: number };
+  | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true;
+      /** Set only on the PERSISTENT TIER — a row past `EXPIRE_FAILURE_GIVE_UP_MS` of resumable failures, asked every
+       *  `EXPIRE_PERSISTENT_RETRY_MS` — whose report is a STANDING entry: how many attempts failed (`at` is the first
+       *  failure, `detail` the last), counted on the verb's run alone (review 355, F1). Never with `final`: the row is still asked. */
+      readonly attempts?: number }
+  | { readonly kind: 'no-evidence'; readonly at: number }
+  /** The expiry COMPLETED and kept a leaf (wave 5, the kept-leaf reader): the row is gone, so this report outlives it in
+   *  the lane's memory — until a restart, which forgets it; the feed row is the durable record. */
+  | { readonly kind: 'kept'; readonly at: number; readonly clips: ExpireLeafKept; readonly tmpRoot: ExpireLeafKept };
 
 export const archivedExpiryEntry = (archivedAt: number): ArchivedExpiryEntry => ({
   archivedAt, expiresAt: null, nextAskAt: 0, eligibleSince: null, lastOutcome: null, inUseRun: 0, inUse: [],
-  failures: 0, failingSince: null, report: null,
+  failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null, report: null,
 });
 
 /** The entry for this pass: the previous one while its archive is still the row's, else a fresh one. */
@@ -375,8 +472,8 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
   if (read.kind === 'document' && read.archivedAt === null && read.verdict.kind === 'refused'
     && EXPIRE_TOKEN_KIND[read.verdict.token] === 'gone') return { ...entry, nextAskAt: nowMs + passMs };
   if (read.kind === 'document' && read.expiresAt.kind === 'absent') {
-    return { ...entry, failures: 0, failingSince: null, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
-      report: { kind: 'no-evidence', at: nowMs } };
+    return { ...entry, failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null,
+      nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS, report: { kind: 'no-evidence', at: nowMs } };
   }
   if (read.kind === 'unreadable' || read.archivedAt === null) {
     const why = read.kind === 'unreadable' ? read.detail : `ws-audit --expire read no archive (${read.verdict.kind === 'refused'
@@ -387,7 +484,8 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
       report: { kind: 'failing', at: failingSince, detail: `its expiry could not be learned — ${why}` } };
   }
   if (read.archivedAt !== entry.archivedAt) return { ...entry, nextAskAt: nowMs + passMs };
-  const learned = { failures: 0, failingSince: null, report: entry.report?.kind === 'failing' ? null : entry.report };
+  const learned = { failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null,
+    report: entry.report?.kind === 'failing' ? null : entry.report };
   if (read.expiresAt.kind !== 'at') {
     return { ...entry, ...learned, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
       report: read.expiresAt.kind === 'absent' ? { kind: 'no-evidence', at: nowMs } : learned.report };
@@ -400,7 +498,26 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
  *  terminal-refusal, non-resumable-failure and composition arms): the report is the row's only trace on the attention
  *  list, so a hold must not take its place — nothing would ever put it back. */
 export const expiryReportIsFinal = (r: ExpiryReport | null): boolean =>
-  r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal'));
+  r !== null && ((r.kind === 'failing' && r.final === true) || (r.kind === 'refused' && EXPIRE_TOKEN_KIND[r.token] === 'terminal')
+    || r.kind === 'kept');
+
+/** A STANDING report — one a hold must not take the place of: a FINAL one (`expiryReportIsFinal`), or the PERSISTENT
+ *  tier's (a `failing` report with `attempts`: the row is still asked, every `EXPIRE_PERSISTENT_RETRY_MS`, and the
+ *  report is its record of a day of failures that may have left the workspace part-cleaned). A hold that replaced it
+ *  would be cleared by the release, and the record with it (wave 5). */
+export const expiryReportStands = (r: ExpiryReport | null): boolean =>
+  expiryReportIsFinal(r) || (r !== null && r.kind === 'failing' && r.attempts !== undefined);
+
+/** What a STANDING report keeps through an answer that ends no attempt — a deferral, a shadow audit, a refusal the box
+ *  retries (a hold the ACT met among them), an in-use, ccd's "not yet", an older ccd's silence: the report and its run
+ *  of failures, so the next failure is the persistent tier's at once, and the record of a workspace that may be
+ *  part-cleaned is never replaced by a sentence about this one answer — a shadow's "nothing was deleted" least of all.
+ *  Nothing for any other report. Only an attempt that completes, one that finds none had begun (`restart`: the fresh
+ *  arm runs only while no breadcrumb stands), a final verdict or a new archive ends a standing report (wave 5). */
+const standingThrough = (entry: ArchivedExpiryEntry): Partial<Pick<ArchivedExpiryEntry,
+  'report' | 'failures' | 'failingSince' | 'verbFailures' | 'verbFailingSince'>> =>
+  expiryReportStands(entry.report) ? { report: entry.report, failures: entry.failures, failingSince: entry.failingSince,
+    verbFailures: entry.verbFailures, verbFailingSince: entry.verbFailingSince } : {};
 
 /** One pass's verdict, folded into memory. THE TWICE-OBSERVED RULE (spec §5.3: "all of the above held on the
  *  previous pass too"): an eligible verdict seeds `eligibleSince` on its first pass and makes the row DUE only on a
@@ -420,8 +537,9 @@ export function archivedExpirySighted(
 ): ArchivedExpiryEntry {
   const eligibleSince = v.eligible ? (entry.eligibleSince ?? nowMs) : null;
   if (!v.eligible && v.why === 'held' && held !== null) {
-    // A row the lane has stopped asking keeps its own report — listed with its reason while held and after the hold goes.
-    if (expiryReportIsFinal(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };
+    // A STANDING report — a row the lane has stopped asking, or one on the persistent tier — keeps its own report and its
+    // wait, listed while held and after the hold goes.
+    if (expiryReportStands(entry.report)) return eligibleSince === entry.eligibleSince ? entry : { ...entry, eligibleSince };
     const at = entry.report?.kind === 'held' ? entry.report.at : nowMs;
     // A hold that REPLACES a would-expire, in-use or retryable failing report ends it as an ineligible sighting does, so
     // it resets `nextAskAt` the same way: the release clears the hold's own report, and left at the replaced report's
@@ -449,7 +567,8 @@ export type ArchivedExpiryDeferWhy = 'unsupported' | 'paused-at-server' | Archiv
 
 /** The one executor's answer, as the lane folds it into memory. */
 export type ArchivedExpiryOutcome =
-  | { readonly kind: 'expired' }
+  /** `kept`: what the tail kept of its two leaves, CARRIED from the document (wave 5). */
+  | { readonly kind: 'expired'; readonly kept: ExpireKept }
   | { readonly kind: 'would-expire'; readonly sensitive: number }
   | { readonly kind: 'deferred'; readonly why: ArchivedExpiryDeferWhy; readonly detail: string }
   | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string; readonly inUse: readonly ExpireInUse[];
@@ -461,13 +580,20 @@ export type ArchivedExpiryOutcome =
    *  parked item 4): `false` — a wrong-row `expired`, a refusal word this build does not know, `probe-unmeasured` — is
    *  not something waiting cures, so the row is reported and not asked again for this archive. */
   | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
+  /** The act's OWN AUDIT (`ws-audit --expire`) could not be read, so no verb ran (final review I1): retried on the failure
+   *  backoff and reported past its ceiling, as before wave 5, and NEVER a `failed` — only the verb's failure can have
+   *  stopped part-way, so only it may move a row onto the persistent tier. Two conditions, two values at this seam. */
+  | { readonly kind: 'audit-failed'; readonly detail: string }
+  /** ccd stopped before anything started because what the expiry consented to changed (`ExpireVerbRead.restart`):
+   *  the lane forgets what it learned of the row and audits it afresh (wave 5). */
+  | { readonly kind: 'restart'; readonly detail: string }
   | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
   | { readonly kind: 'composition'; readonly detail: string }
   | { readonly kind: 'no-evidence' };
 
 const EXPIRY_OUTCOME_KINDS: Readonly<Record<ArchivedExpiryOutcome['kind'], true>> = {
-  expired: true, 'would-expire': true, deferred: true, refused: true, gone: true, failed: true, box: true,
-  composition: true, 'no-evidence': true,
+  expired: true, 'would-expire': true, deferred: true, refused: true, gone: true, failed: true, 'audit-failed': true,
+  restart: true, box: true, composition: true, 'no-evidence': true,
 };
 const EXPIRY_DEFER_WHYS: Readonly<Record<ArchivedExpiryDeferWhy, true>> = {
   unsupported: true, 'paused-at-server': true, 'store-unreadable': true, 'open-run': true, coordinating: true,
@@ -502,20 +628,31 @@ export function archivedExpiryNextEntry(
   entry: ArchivedExpiryEntry, o: ArchivedExpiryOutcome, nowMs: number, passMs: number,
 ): ArchivedExpiryEntry | null {
   const base = { ...entry, lastOutcome: archivedExpiryOutcomeKey(o) };
-  const steady = { inUseRun: 0, inUse: [] as readonly ExpireInUse[], failures: 0, failingSince: null };
+  const steady = { inUseRun: 0, inUse: [] as readonly ExpireInUse[], failures: 0, failingSince: null, verbFailures: 0,
+    verbFailingSince: null };
   switch (o.kind) {
-    case 'expired': case 'gone': return null;
+    case 'expired':
+      // A completed expiry that KEPT a leaf is reported (wave 5): the row is gone, but what stays on disk is listed,
+      // and never asked about again. An older ccd's silence (`unreported`) is the feed row's to say, not a report.
+      return expireKeptAny(o.kept) ? { ...base, ...steady, eligibleSince: null, nextAskAt: Number.POSITIVE_INFINITY,
+        report: { kind: 'kept', at: nowMs, clips: o.kept.clips, tmpRoot: o.kept.tmpRoot } } : null;
+    case 'gone': return null;
+    // A STANDING report — the persistent tier's (wave 5) — and its run of failures stand through every arm from here to
+    // `refused`'s last that ends no attempt (`standingThrough`); a standing row keeps its learned instant too, so it
+    // never goes back to learning, whose success would clear it.
     case 'would-expire':
       return { ...base, ...steady, nextAskAt: nowMs + EXPIRE_SHADOW_REAUDIT_MS,
-        report: { kind: 'would-expire', at: entry.report?.kind === 'would-expire' ? entry.report.at : nowMs, sensitive: o.sensitive } };
+        report: { kind: 'would-expire', at: entry.report?.kind === 'would-expire' ? entry.report.at : nowMs, sensitive: o.sensitive },
+        ...standingThrough(entry) };
     case 'no-evidence':
-      return { ...base, ...steady, expiresAt: null, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS, report: { kind: 'no-evidence', at: nowMs } };
+      return { ...base, ...steady, expiresAt: expiryReportStands(entry.report) ? entry.expiresAt : null,
+        nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS, report: { kind: 'no-evidence', at: nowMs }, ...standingThrough(entry) };
     case 'deferred':
       // A pause or a missing verb the EXECUTOR saw (its own registry listing, its own caps read) is one the tick's
       // listing may never have shown — a switch raised and lowered inside one cadence window — so the sighting from
       // before it is forgotten here too: a lowered switch needs two FRESH passes, whoever saw it.
       return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null,
-        ...(o.why === 'paused-at-server' || o.why === 'unsupported' ? { eligibleSince: null } : {}) };
+        ...(o.why === 'paused-at-server' || o.why === 'unsupported' ? { eligibleSince: null } : {}), ...standingThrough(entry) };
     case 'refused': {
       const kind = EXPIRE_TOKEN_KIND[o.token];
       if (kind === 'gone') return null;
@@ -526,20 +663,22 @@ export function archivedExpiryNextEntry(
       if (o.token === 'not-expired') {
         // ccd says the instant has not come — the lane's learned one is stale (the threshold was raised, or the two
         // clocks disagree). Learn the audit's instant, and start the twice-observed rule again from it: never
-        // re-asked every pass on the old one. No instant given: unknown, so the next pass learns it.
-        return { ...base, ...steady, expiresAt: o.auditExpiresAt ?? null, eligibleSince: null, nextAskAt: nowMs + passMs,
-          report: null };
+        // re-asked every pass on the old one. No instant given: unknown, so the next pass learns it — save on a standing
+        // row, which keeps the instant it learned, so the act's own audit gives the new one (wave 5).
+        return { ...base, ...steady, expiresAt: o.auditExpiresAt ?? (expiryReportStands(entry.report) ? entry.expiresAt : null),
+          eligibleSince: null, nextAskAt: nowMs + passMs, report: null, ...standingThrough(entry) };
       }
       if (o.token === 'in-use') {
         const passes = entry.inUseRun + 1;
-        return { ...base, failures: 0, failingSince: null, inUseRun: passes, inUse: o.inUse, nextAskAt: nowMs + passMs,
+        return { ...base, failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null, inUseRun: passes, inUse: o.inUse,
+          nextAskAt: nowMs + passMs,
           report: passes >= EXPIRE_IN_USE_ATTENTION_PASSES
             ? { kind: 'in-use', at: entry.report?.kind === 'in-use' ? entry.report.at : nowMs, inUse: o.inUse, passes }
-            : null };
+            : null, ...standingThrough(entry) };
       }
-      return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null };
+      return { ...base, ...steady, nextAskAt: nowMs + passMs, report: null, ...standingThrough(entry) };
     }
-    case 'failed': case 'box': {
+    case 'failed': case 'box': case 'audit-failed': {
       if (o.kind === 'failed' && !o.resumable) {
         // The box said this will not resume: reported AT ONCE and never asked again for this archive — never an hour
         // of retries before anyone hears of it (review 313, parked item 4).
@@ -550,11 +689,32 @@ export function archivedExpiryNextEntry(
       // a failure like `lock-unopenable`, backed off and reported past the ceiling.
       const failures = entry.failures + 1;
       const failingSince = entry.failingSince ?? nowMs;
-      return { ...base, inUseRun: 0, inUse: [], failures, failingSince,
+      // Only a failure of the VERB — `failed`, or a box word, which only the verb meets — can have stopped part-way, so
+      // only it moves a row onto the tier, and only ITS run is the tier's clock (review 355, F1): the act's own audit
+      // (`audit-failed`) shares the ladder and the hour-ceiling report below, never the day or the attempts (final review I1).
+      const verb = o.kind === 'audit-failed' ? { verbFailures: entry.verbFailures, verbFailingSince: entry.verbFailingSince }
+        : { verbFailures: entry.verbFailures + 1, verbFailingSince: entry.verbFailingSince ?? nowMs };
+      if (o.kind !== 'audit-failed' && verb.verbFailingSince !== null && nowMs - verb.verbFailingSince >= EXPIRE_FAILURE_GIVE_UP_MS) {
+        // A DAY of failures the box called resumable (the coordinator's revised ruling, wave 5): the PERSISTENT TIER. The
+        // report is a standing entry — the first failure, the attempts, the last detail, never a destructive verb — and
+        // the lane asks again every `EXPIRE_PERSISTENT_RETRY_MS`, never stopping: each later failure updates the entry.
+        return { ...base, inUseRun: 0, inUse: [], failures, failingSince, ...verb, nextAskAt: nowMs + EXPIRE_PERSISTENT_RETRY_MS,
+          report: { kind: 'failing', at: verb.verbFailingSince, detail: o.detail, attempts: verb.verbFailures } };
+      }
+      // An audit failure ends no attempt, so under a STANDING entry (one the verb's failures entered) it keeps that entry
+      // and its run (`standingThrough`), as every other answer that ends none does.
+      return { ...base, inUseRun: 0, inUse: [], failures, failingSince, ...verb,
         nextAskAt: nowMs + archivedExpiryBackoffMs(failures, passMs),
         report: nowMs - failingSince >= EXPIRE_FAILURE_CEILING_MS || o.kind === 'box'
-          ? { kind: 'failing', at: failingSince, detail: o.detail } : null };
+          ? { kind: 'failing', at: failingSince, detail: o.detail } : null,
+        ...(o.kind === 'audit-failed' ? standingThrough(entry) : {}) };
     }
+    case 'restart':
+      // START OVER (wave 5, question (h) ruled): ccd stopped before anything started because what the expiry consented
+      // to changed. The instant learned and the sightings are forgotten — the row goes back to learning, on the
+      // learning audit's own cadence and backoff, and is asked again only once seen eligible twice past its instant,
+      // with a token a fresh audit minted over what stands. No report: nothing was deleted (the feed row says so).
+      return { ...base, ...steady, expiresAt: null, eligibleSince: null, nextAskAt: nowMs + passMs, report: null };
     case 'composition':
       return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
         report: { kind: 'failing', at: nowMs, detail: `the server composed a call ccd rejected: ${o.detail}`, final: true } };
@@ -564,6 +724,7 @@ export function archivedExpiryNextEntry(
 // ── the attention list ───────────────────────────────────────────────────────
 
 const iso = (epochS: number): string => new Date(epochS * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+const isoMs = (ms: number): string => iso(Math.floor(ms / 1000));
 
 /** WHAT A PROCESS IS, before anything suggests ending it (the coordinator's ruling (G)): the fleet's own tmux server
  *  is a `tmux: server` too, and ending THAT ends every session on the box. So the sentence names the pid AND its
@@ -575,6 +736,22 @@ export function expiryInUseSentence(inUse: readonly ExpireInUse[], passes: numbe
   return `kept: ${who} has its working directory in this archived workspace, and has kept it from being cleaned up `
     + `for ${passes} passes. Find out what it is before ending it — the fleet’s own tmux server is also a “tmux: server”, `
     + 'and ending that ends every session. Nothing is deleted while it stands.';
+}
+
+/** Why ccd kept a leaf, in words — the done document's word, never more (the reason itself is in the journal row). */
+const LEAF_KEPT_WHY: Readonly<Record<KeptLeafWord, string>> = {
+  refused: 'ccd’s removal helper refused it',
+  unmeasured: 'whether it could be removed could not be measured',
+  'in-use': 'a process still used it after the bounded wait',
+};
+
+/** The leaves an expiry kept, in words — `[]` when it kept none. `unreported` is not one (see `expireKeptAny`). */
+export function expireKeptParts(k: Pick<ExpireKept, 'clips' | 'tmpRoot'>): string[] {
+  const parts: string[] = [];
+  for (const [what, w] of [['its clips directory', k.clips], ['its temp root', k.tmpRoot]] as const) {
+    if (w !== null && w !== 'unreported') parts.push(`${what} (${w}: ${LEAF_KEPT_WHY[w]})`);
+  }
+  return parts;
 }
 
 /** The words for one report. */
@@ -592,11 +769,22 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
     case 'in-use': return expiryInUseSentence(r.inUse, r.passes);
     case 'refused': return `not cleaned up: ccd refused (${r.token}) — ${r.detail === '' ? 'no detail' : r.detail}`;
     case 'failing':
+      if (r.attempts !== undefined) {
+        return `cleanup has failed for a day in ways the box said it could resume: the first at ${isoMs(r.at)}, `
+          + `${r.attempts} ${r.attempts === 1 ? 'attempt' : 'attempts'}, the last: ${r.detail}. It may have stopped part-way — the box `
+          + 'does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane asks again '
+          + `every ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours and keeps this entry until an attempt completes, finds `
+          + 'that none had begun or stops for good, or the workspace is archived again.';
+      }
       return r.final === true ? `cleanup stopped: ${r.detail}. It is not asked again for this archive.`
         : `cleanup keeps failing: ${r.detail}. It is retried, backing off in between.`;
     case 'no-evidence':
       return 'not cleaned up: the fleet box’s ccd does not say when this archive expires (an older build), so the '
         + 'server composes nothing for it until the box is updated.';
+    case 'kept':
+      return `cleaned up, but ccd kept ${expireKeptParts(r).join(' and ')}. The worktree, the branch and the registry row are `
+        + 'gone and its commits are in the attic; what was kept stays on disk, and the lane deletes nothing more of it. '
+        + 'Find out what holds it before removing it by hand.';
   }
 }
 
