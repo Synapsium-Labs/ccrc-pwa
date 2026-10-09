@@ -3507,8 +3507,17 @@ export function regexPrefilter(pattern) {
     if (c === '|') return null;
     if (c === '\\') {
       const n = pattern[i + 1] ?? '';
-      atoms.push(/[stnr]/.test(n) || /[!-/:-@[-`{-~]/.test(n) ? { t: 'sep' } : { t: 'other' });
-      i += 2;
+      // A named backreference is one regex atom, not the literal group name.
+      // Treating `<name>` as word characters would prefilter away its matches.
+      if (n === 'k' && pattern[i + 2] === '<') {
+        const close = pattern.indexOf('>', i + 3);
+        if (close === -1) return null;
+        atoms.push({ t: 'other' });
+        i = close + 1;
+      } else {
+        atoms.push(/[stnr]/.test(n) || /[!-/:-@[-`{-~]/.test(n) ? { t: 'sep' } : { t: 'other' });
+        i += 2;
+      }
     } else if (c === '[') {
       i += 1;
       while (i < pattern.length && pattern[i] !== ']') i += pattern[i] === '\\' ? 2 : 1;
@@ -3588,8 +3597,93 @@ export function ftsOrderBy(sort, tsExpr) {
   }
 }
 
-/** Word endings tried when a stemmed match leaves a literal term unfound. */
-const SNIPPET_STEM_SUFFIXES = Object.freeze(['ing', 'ed', 'es', 's']);
+/** FTS5's Porter stemmer, reproduced for snippet candidate selection. The FTS
+ *  tokenizer applies unicode61 first; this function receives its lowercased
+ *  ASCII word portion, so non-ASCII words conservatively remain literal. */
+function porterStem(word) {
+  if (!/^[a-z]{3,}$/.test(word)) return word;
+  let stem = word;
+  const isVowel = (i) => 'aeiou'.includes(stem[i]) || (stem[i] === 'y' && i > 0 && !isVowel(i - 1));
+  const measure = (end = stem.length) => {
+    let pairs = 0;
+    let priorVowel = false;
+    for (let i = 0; i < end; i += 1) {
+      const currentVowel = isVowel(i);
+      if (priorVowel && !currentVowel) pairs += 1;
+      priorVowel = currentVowel;
+    }
+    return pairs;
+  };
+  const hasVowel = (end) => {
+    for (let i = 0; i < end; i += 1) if (isVowel(i)) return true;
+    return false;
+  };
+  const cvc = (end) => end >= 3 && !isVowel(end - 3) && isVowel(end - 2) && !isVowel(end - 1) && !'wxy'.includes(stem[end - 1]);
+  const ends = (suffix) => stem.endsWith(suffix);
+  const replace = (suffix, replacement) => { stem = `${stem.slice(0, -suffix.length)}${replacement}`; };
+
+  if (ends('sses')) replace('sses', 'ss');
+  else if (ends('ies')) replace('ies', 'i');
+  else if (!ends('ss') && ends('s')) replace('s', '');
+
+  if (ends('eed')) {
+    if (measure(stem.length - 3) > 0) replace('eed', 'ee');
+  } else {
+    const suffix = ends('ed') ? 'ed' : ends('ing') ? 'ing' : null;
+    if (suffix !== null && hasVowel(stem.length - suffix.length)) {
+      stem = stem.slice(0, -suffix.length);
+      if (ends('at')) replace('at', 'ate');
+      else if (ends('bl')) replace('bl', 'ble');
+      else if (ends('iz')) replace('iz', 'ize');
+      else if (stem.length >= 2 && stem.at(-1) === stem.at(-2) && !isVowel(stem.length - 1) && !'lsz'.includes(stem.at(-1))) stem = stem.slice(0, -1);
+      else if (measure() === 1 && cvc(stem.length)) stem += 'e';
+    }
+  }
+  if (ends('y') && hasVowel(stem.length - 1)) replace('y', 'i');
+
+  const step2 = {
+    a: [['ational', 'ate'], ['tional', 'tion']],
+    c: [['enci', 'ence'], ['anci', 'ance']], e: [['izer', 'ize']], g: [['logi', 'log']],
+    l: [['bli', 'ble'], ['alli', 'al'], ['entli', 'ent'], ['eli', 'e'], ['ousli', 'ous']],
+    o: [['ization', 'ize'], ['ation', 'ate'], ['ator', 'ate']],
+    s: [['alism', 'al'], ['iveness', 'ive'], ['fulness', 'ful'], ['ousness', 'ous']],
+    t: [['aliti', 'al'], ['iviti', 'ive'], ['biliti', 'ble']],
+  };
+  const step3 = {
+    a: [['ical', 'ic']], s: [['ness', '']], t: [['icate', 'ic'], ['iciti', 'ic']],
+    u: [['ful', '']], v: [['ative', '']], z: [['alize', 'al']],
+  };
+  for (const table of [step2, step3]) {
+    const rules = table[stem.at(-2)];
+    if (rules === undefined) continue;
+    for (const [suffix, replacement] of rules) {
+      if (!ends(suffix)) continue;
+      if (measure(stem.length - suffix.length) > 0) replace(suffix, replacement);
+      break;
+    }
+  }
+  for (const suffix of ['al', 'ance', 'ence', 'er', 'ic', 'able', 'ible', 'ant', 'ement', 'ment', 'ent', 'ion', 'ou', 'ism', 'ate', 'iti', 'ous', 'ive', 'ize']) {
+    if (!ends(suffix)) continue;
+    const end = stem.length - suffix.length;
+    if (measure(end) > 1 && (suffix !== 'ion' || stem[end - 1] === 's' || stem[end - 1] === 't')) stem = stem.slice(0, end);
+    break;
+  }
+  if (ends('e')) {
+    const end = stem.length - 1;
+    if (measure(end) > 1 || (measure(end) === 1 && !cvc(end))) stem = stem.slice(0, end);
+  } else if (ends('ll') && measure(stem.length - 1) > 1) {
+    stem = stem.slice(0, -1);
+  }
+  return stem;
+}
+
+/** Unicode61 token candidates with their original code-unit spans. */
+function unicode61Words(text) {
+  const words = [];
+  const word = /[\p{L}\p{N}_]+/gu;
+  for (let m = word.exec(text); m !== null; m = word.exec(text)) words.push({ text: m[0], at: m.index, end: m.index + m[0].length });
+  return words;
+}
 
 /** A slice end that never splits a surrogate pair. */
 function cutBefore(s, n) {
@@ -3608,23 +3702,45 @@ function cutBefore(s, n) {
  *  hit plus ENTRY_REDACT_MARGIN on each side, redacted and cut back to the
  *  window, never the whole body (Task 12's displaySnippet, which hitSnippet
  *  calls; snippetWindow's search is Task 12's snippetSpan; spec §8.3 and
- *  §8.4, the plan's Global Constraints R2). FTS5 matched through porter stems and prefixes, so each
- *  term is also tried without a common ending (`runs` finds `running` by
- *  `run`). The search is case-insensitive in place: no lowercased copy whose
- *  indices could drift from the text's. */
+ *  §8.4, the plan's Global Constraints R2). Each unicode61 candidate is
+ *  compared using the same Porter stem FTS5 uses. A trailing `*` is the plain
+ *  query prefix marker and matches the candidate's pre-stem lowercased text.
+ *  The search preserves candidate spans, so case folding never drifts the
+ *  displayed window's indices. */
 export function snippetWindow(text, terms) {
   const content = String(text);
   let at = -1;
   let len = 0;
+  const candidates = unicode61Words(content);
   for (const term of terms) {
-    const needles = [term];
-    for (const s of SNIPPET_STEM_SUFFIXES) if (term.endsWith(s) && term.length - s.length >= 3) needles.push(term.slice(0, -s.length));
-    for (const needle of needles) {
-      if (needle === '') continue;
-      const idx = new RegExp(escapeRe(needle), 'i').exec(content)?.index ?? -1;
-      if (idx !== -1 && (at === -1 || idx < at || (idx === at && needle.length > len))) {
-        at = idx;
-        len = needle.length;
+    const prefix = String(term).endsWith('*');
+    const needle = String(term).replace(/\*+$/, '').toLowerCase();
+    if (needle === '') continue;
+    const stem = porterStem(needle);
+    for (const candidate of candidates) {
+      const lowered = candidate.text.toLowerCase();
+      let matchAt = -1;
+      let matchLen = 0;
+      if (prefix) {
+        matchAt = lowered.indexOf(needle);
+        if (matchAt !== -1) matchLen = needle.length;
+      } else if (porterStem(lowered) === stem) {
+        matchAt = 0;
+        matchLen = candidate.text.length;
+      } else {
+        // FTS5 matches a porter stem even when an adjacent redacted or joined
+        // token makes the text candidate wider; locate the matching subword.
+        const embedded = new RegExp(escapeRe(needle), 'i').exec(candidate.text);
+        if (embedded !== null && porterStem(embedded[0].toLowerCase()) === stem) {
+          matchAt = embedded.index;
+          matchLen = embedded[0].length;
+        }
+      }
+      if (matchAt === -1) continue;
+      const candidateAt = candidate.at + matchAt;
+      if (at === -1 || candidateAt < at || (candidateAt === at && matchLen > len)) {
+        at = candidateAt;
+        len = matchLen;
       }
     }
   }

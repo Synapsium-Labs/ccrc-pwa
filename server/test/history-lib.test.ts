@@ -3645,6 +3645,16 @@ describe('regexPrefilter: only a whole-word literal, so the FTS prefilter never 
     expect(new RegExp('^runn').test('running fast')).toBe(true);
     expect(matchIds(db, '"runn"*'), 'why a prefix never prefilters: porter stems it out of reach').toEqual([]);
   });
+  it('treats a named backreference as a non-literal atom, so its group name cannot drop a real hit', () => {
+    const docs: ReadonlyArray<readonly [number, string]> = [[1, 'bazbaz '], [2, 'unrelated']];
+    const pattern = String.raw`(?<foobar>baz)\k<foobar> `;
+    const truth = docs.filter(([, body]) => new RegExp(pattern).test(body)).map(([id]) => id);
+    const pre = libSearch.regexPrefilter(pattern);
+
+    expect(pre).toBeNull();
+    const found = pre === null ? docs.map(([id]) => id) : matchIds(ftsCorpus(docs), pre);
+    for (const id of truth) expect(found, `${pattern}: the prefilter dropped doc ${id}`).toContain(id);
+  });
 });
 
 describe('ftsOrderBy: hybrid over integer ts_ms, NULL last (spec 8.4; P8)', () => {
@@ -3697,6 +3707,17 @@ describe('queryTerms and snippetWindow: the earliest hit, stems included, from r
   it('a stemmed or prefix hit is found by the word without its ending', () => {
     expect(libSearch.snippetWindow(`${'x'.repeat(100)} running fast`, ['runs'])).toBe(`...${'x'.repeat(23)} running fast`);
     expect(libSearch.snippetWindow(`${'z'.repeat(100)} the sweeps ran`, ['sweeping'])).toContain('sweeps');
+  });
+  it('locates asymmetric Porter matches and a prefix at the matching candidate, not the unrelated head', () => {
+    const studying = `${'a'.repeat(100)} studies are archived`;
+    const relate = `${'b'.repeat(100)} relational data follows`;
+    const db = ftsCorpus([[1, studying], [2, relate]]);
+
+    expect(matchIds(db, '"studying"'), 'real porter FTS: studying matches studies').toContain(1);
+    expect(libSearch.snippetWindow(studying, ['studying'])).toContain('studies');
+    expect(matchIds(db, '"relate"'), 'real porter FTS: relate matches relational').toContain(2);
+    expect(libSearch.snippetWindow(relate, ['relate'])).toContain('relational');
+    expect(libSearch.snippetWindow(`${'c'.repeat(100)} studies are archived`, ['stud*'])).toContain('studies');
   });
   it('no hit gives the first 80 characters', () => {
     expect(libSearch.snippetWindow(`${'a'.repeat(100)}`, ['zzz'])).toBe(`${'a'.repeat(77)}...`);
