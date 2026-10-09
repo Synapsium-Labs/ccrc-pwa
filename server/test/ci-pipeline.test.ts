@@ -145,9 +145,61 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       expect(s.length, `${id} parsed no steps`).toBeGreaterThan(0);
       for (const st of s) {
         // `if:` either on the step's own dash line or as its first-level key.
-        expect(st, `${id}: a step runs even on a refresh:\n${st}`).toMatch(/^(?: {6}- | {8})if: env\.CCRC_LEG == 'run'$/m);
+        //
+        // A FURTHER `&&` IS ALLOWED, and nothing else is. A conjunct can only
+        // narrow — `env.CCRC_LEG == 'run' && matrix.package == 'pwa'` still
+        // skips on a refresh, which is the whole claim — so refusing it was
+        // the regex being stricter than the rule it enforces. The three
+        // @ccrc/ui steps on the pwa leg are exactly that shape, and this test
+        // was red from the moment they landed. An `||` is NOT allowed: it
+        // widens, and a step gated `|| true` would run on a refresh.
+        expect(st, `${id}: a step runs even on a refresh:\n${st}`)
+          .toMatch(/^(?: {6}- | {8})if: env\.CCRC_LEG == 'run'(?: && [^|\n]+)?$/m);
       }
     }
+  });
+
+  // WHEREVER pwa IS INSTALLED, ui MUST BE TOO (PR #346's red run).
+  //
+  // pwa consumes @ccrc/ui as SOURCE — `exports['.']` points at
+  // `src/index.ts` — so anything that typechecks or bundles pwa reads
+  // `../ui/src/**`. A bare specifier there is resolved from the IMPORTING
+  // file's directory: Node and vite walk up from `ui/src/primitives/`, reach
+  // `ui/`, and never look inside `pwa/node_modules`. No `ui/node_modules`,
+  // no `react`, no `class-variance-authority` — reported as a type error or
+  // an unresolvable import, never as the missing install it is.
+  //
+  // THREE PLACES needed it and only one had it, which is the shape of bug a
+  // census catches and a comment does not. A developer box hides it
+  // completely: `ui/node_modules` is already there.
+  it('every CI install of pwa is accompanied by an install of ui', () => {
+    const installsPwa = (b: string): boolean =>
+      /^ {6,8}working-directory: pwa$/m.test(b) && /npm ci/.test(b);
+    const installsUi = (b: string): boolean =>
+      /^ {6,8}working-directory: ui$/m.test(b) && /npm ci/.test(b);
+
+    const missing: string[] = [];
+    for (const [id, body] of jobs(read(CI))) {
+      if (installsPwa(body) && !installsUi(body)) missing.push(`ci.yml ${id}`);
+    }
+    const deps = read(DEPS);
+    if (installsPwa(deps) && !installsUi(deps)) missing.push('server-deps');
+
+    expect(missing, 'pwa reads ui SOURCE — install ui in the same job, before anything typechecks or bundles pwa')
+      .toEqual([]);
+  });
+
+  // The other half: in the `test` job the ORDER matters, not just the
+  // presence. Installing ui after the suite has already run is what PR #346
+  // actually did, and it fails exactly as if the step were absent.
+  it('installs ui BEFORE the pwa suite runs, not after it', () => {
+    const b = jobs(read(CI)).get('test') ?? '';
+    const ui = b.indexOf('working-directory: ui');
+    const test = b.indexOf('./node_modules/.bin/vitest run');
+    expect(ui, 'the test job installs ui').toBeGreaterThan(-1);
+    expect(test, 'the test job runs vitest').toBeGreaterThan(-1);
+    expect(ui, 'ui is installed after the suite — every pwa file fails at import')
+      .toBeLessThan(test);
   });
 
   it('test (server) is a summary that fails closed: always() over select, the shards and the typecheck', () => {

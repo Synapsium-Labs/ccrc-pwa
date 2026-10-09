@@ -690,15 +690,7 @@ describe('Build 7 nouns', () => {
     // call shape rather than its line: this sentence used to say "line 167",
     // and the very commit that wrote that number had already pushed the guard
     // off it.
-    //
-    // The PATH is the same class of brittleness one level up, and it bit:
-    // MailStrip moved into @ccrc/ui with the composite migration and this read
-    // threw ENOENT. A path is not a line number, though — the file has one
-    // home and naming it is the point — so it is corrected rather than made
-    // clever, and the throw was the guard working: a moved file must not
-    // silently stop being checked.
-    const strip = readFileSync(
-      path.join(ccrcRoot, 'ui/src/components/mail-strip.tsx'), 'utf8');
+    const strip = readFileSync(path.join(ccrcRoot, 'ui/src/components/mail-strip.tsx'), 'utf8');
     expect(strip).toMatch(
       /if \(\(TERMINAL_DELIVERY_STATES as readonly string\[\]\)\.includes\(item\.state\)\) return null;/);
   });

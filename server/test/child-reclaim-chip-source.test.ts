@@ -227,7 +227,12 @@ describe('codeOnly — one string-aware pass', () => {
 
   // The measured victims: each file's code line the two-pass strip lost.
   it.each([
-    ['pwa/src/session/AttachButton.tsx', "import { useRef } from 'react';"],
+    // Moved to @ccrc/ui with the component (`pwa/src/session/AttachButton.tsx`
+    // no longer exists). The fixture's POINT survives the move intact: line 2
+    // is still `// hidden <input type="file" accept="image/*" multiple>`, a
+    // `/*` opened inside a `//` comment, which is precisely what a naive
+    // two-pass strip swallows the rest of the file on.
+    ['ui/src/components/attach-button.tsx', "import { useRef } from 'react';"],
     ['pwa/src/lib/push.ts', 'function urlBase64ToUint8Array(base64: string): Uint8Array {'],
     ['pwa/src/fleet/AccountsStrip.tsx', 'let placeholder: string | null = null;'],
   ])('%s keeps its code past a `/*` in a `//` comment', (f, line) => {
