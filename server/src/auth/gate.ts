@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 92 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 94 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -64,7 +64,7 @@ import type { SessionStore } from './sessions.js';
  * used to pick the handler. Set membership on the ROUTER's own answer cannot
  * disagree with the handler that is about to run.
  *
- * THE SIX REASONS, and there are only six:
+ * THE SEVEN REASONS, and there are only seven:
  *
  *  1. `/health` — the liveness probe. `deploy/deploy.sh`'s final gate reads the
  *     shipped sha out of it to decide whether a deploy succeeded, from a shell
@@ -90,18 +90,17 @@ import type { SessionStore } from './sessions.js';
  *     cookieless from the fleet host — and, for the newest members, why
  *     `ccd-pool-sync.timer` can pull the account-pool projection cookieless too, and
  *     why a fleet node's timer will pull its own update projection the same way.
- *     And `/api/notify` still passes `'legacy'` (no token
- *     presented) and `'unconfigured'` (this box was never given one) THROUGH, by
- *     the operator's one-deploy-generation rollout ruling — `/api/pools/epoch` and
- *     `/api/updates/intent/:nodeId` do NOT carry this tolerance; each 401s on neither
- *     credential. So `/api/notify`
- *     stays the one exempt route that a caller with no credential at all can still
- *     reach on a box mid-rollout. That tolerance has a scheduled removal —
- *     `coord/token.ts:207`, "REMOVE `/api/notify`'S `'legacy'` TOLERANCE ONE
- *     DEPLOY AFTER THIS SHIPS" — and this exemption inherits its lifetime: the
- *     day the tolerance goes, this entry is a plain box-token lane like the
- *     rest. Session-gating it instead is not the fix, because the caller
- *     genuinely has no cookie; the fix is the removal already scheduled.
+ *     `/api/notify` is now a plain box-token lane like the rest. It used to pass
+ *     `'legacy'` (no token presented) and `'unconfigured'` (this box was never
+ *     given one) THROUGH, by the operator's rollout ruling, and this exemption
+ *     was said to inherit that tolerance's lifetime. The box-token lifecycle
+ *     removed both arms (spec 4.3): the server mints its own token at boot, and
+ *     the route refuses every verdict but `'ok'`. A boot whose mint failed still
+ *     leaves a box "never given one": it is unconfigured until the driver's retry
+ *     mints, and the route refuses that state too. No exempt route in this
+ *     reason can be reached by a caller with no credential at all. The entry
+ *     stays because its caller still has no cookie; session-gating it was never
+ *     the fix.
  *
  *     ORDER-PINNED PARAGRAPH. `box-token-census.test.ts` reads the number words
  *     above IN SEQUENCE — the box-token lane count first, the total second — so
@@ -161,7 +160,20 @@ import type { SessionStore } from './sessions.js';
  *     The handler requires a live session OR a valid box token, so the
  *     confidentiality the method-keyed table bought is unchanged.
  *
+ *  7. `POST /api/token/claim` — a door that authenticates by a single-use code it
+ *     issued itself (box-token lifecycle, spec 4.6). The fleet box's
+ *     `ccrc token sync` trades a code the server sent it over the agent link for
+ *     the next box-token value; it has no cookie jar, and it must not present the
+ *     box token either, because the value being replaced may be the leaked one.
+ *     The credential is the code: 32 random bytes, only their sha256 held, in
+ *     memory, single use, a short TTL, bound to the measured fleet node id, the
+ *     live-code compare running before any budget (`token/door.ts`). Being exempt
+ *     it also skips the origin check, which is right for a machine caller.
+ *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
+ *  - `POST /api/token/rotate` — the console's "Rotate now". Session-only, like
+ *    every update write (decision 15's reasoning): a holder of the box token must
+ *    not be able to drive a rotation, and the operator is the one with a session.
  *  - `POST /api/auth/logout` — see 3 above.
  *  - `POST /api/auth/passkey/register/start` and `…/register/finish` — ENROLLING
  *    A KEY REQUIRES ALREADY BEING IN. This is the single most load-bearing
@@ -201,8 +213,8 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'gated one fails every deploy the moment the flag is armed'],
 
   ['POST /api/notify',
-    'ccd notify.sh on the fleet host — checks the box token but still tolerates `legacy`/`unconfigured` ' +
-    'for one deploy generation (coord/token.ts:207 schedules the removal); it has no cookie jar either way'],
+    'ccd notify.sh on the fleet host — box-token gated like the mail ingress, every verdict but `ok` ' +
+    'refused (the rollout tolerance for an absent or unconfigured token is gone); it has no cookie jar'],
   ['POST /api/mail',
     'the mail ingress — box-token gated and every refusal recorded (coord/routes.ts check 1)'],
   ['POST /api/mail/:id/ack',
@@ -326,6 +338,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['GET /api/ledger',
     "the allocation record and a project's floor, read cookieless from the fleet host — " +
     'box-token gated (requireMailToken), the GET /api/mail convention: no attribution to check'],
+
+  ['POST /api/token/claim',
+    'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +
+    'sent over the agent link for the next box-token value, with no cookie jar and deliberately ' +
+    'without the box token (token/door.ts: sha256 only, single use, TTL, node-bound, compare before budget)'],
 
   ['POST /api/auth/login',
     'the door — a gate that gated its own login route would be a box nobody can enter'],
