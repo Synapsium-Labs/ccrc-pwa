@@ -17,7 +17,7 @@ spec's after wave 1.
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
 | 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGED** `f82cb9fbc` (PR #330, 2026-10-09 06:44:52 UTC; run 320 done, child reclaim queued; released as v0.0.133 at 06:45:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `d9adc2c5a` onto `main` at `d33a566bb` (`4512d88d`). That tip is `fa384df19`, which review 352 read, plus a clean merge of `main`. Every Linux leg was green. Was: **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
-| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | — | **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
+| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; D-4414 and D-4551 defined. Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
@@ -306,6 +306,96 @@ spec's after wave 1.
   - **No 401:** the box-token lanes still answer 200 (`GET /api/ledger`, mail list). The agent restarted cleanly at
     07:03, and the server logged no notify refusal. `/api/notify`'s answers themselves were not measured.
   - So part A rotates nothing live. The leaked value stays valid until part B's merge arms the first rotation.
+- **2026-10-09 12:00 UTC: run 350's wave-done (mail 4115), re-measured; the bar committed before its review.**
+  - **Evidence:** the wave-done and the worker's SDD directory are copied under `.superpowers/btl-w2-evidence/`.
+  - **The claim, re-measured:**
+    - PR #341 is open against `main`, not draft, and mergeable. Its head equals the fingerprint and the pushed tip,
+      `569bb148c`.
+    - It has 22 commits, each with the noreply identity; three merge `main`. `main` (`1fb98effd`) is an ancestor of
+      the tip, and `merge-tree` is clean.
+    - It changes 44 files: every Part B File Structure path, R0's admitted part A files and the plan. Two more are
+      pins its own changes moved, which the plan's lists missed:
+      - `server/test/peers-claims-l0.test.ts`: `shared/api.ts`'s type-only imports, three to four, from the consented
+        import;
+      - `server/test/session-hook.test.ts`: the citation census, where `deploy.sh` goes from 4 to 3 because B7's
+        deletion moved lines.
+    - The only live claims on its paths are the run's own. The open PRs that share files are #322, #325, #189, #107
+      and older ones; none is in review.
+    - CI: PR run 37923766740 is green on every Linux leg, with macOS still running. No full run had been made, so the
+      coordinator started `workflow_dispatch` full run 37927184994 at 11:59.
+  - **What the worker reports:**
+    - R0 and B1 to B7 each passed an Opus per-task review. Then a three-reviewer whole-branch review found no
+      critical or important finding, and one fix wave followed.
+    - **The live-effect pin** is `token-rotation-real-verb.test.ts`, "release-lane fleet box, remote server: from an
+      adopted hand-made token through the first rotation, no fleet lane answers 401". It runs the real agent op,
+      verb, claim door and curl, and probes before, during and after each tick, through promotion, grace and
+      retirement. At the end the old value answers `401 refused`.
+    - **Its stated gaps:** it boots from no state file rather than one part A wrote; its gate rows are literals; and
+      its transport is http.
+    - **The rollout note:** under auto's fleet-first order, the fleet's new cap opens the gate. So the FIRST live
+      rotation may be driven by the server's previous build, v0.0.133, which lacks R0. The happy path is the same.
+  - **Rulings:**
+    - D-4551, the worker's own (doctor gains `retire-overdue:<min>` and `retiring-unlanded:<min>`, SKIP in wave 1 and
+      FAIL when armed), is **confirmed**. It keeps Review Focus 4: no PASS while a retirement is stuck.
+    - **Item 1, accepted as D-4414's stated cost:** an unusable `box-token.json` forces a mint, and a remote fleet is
+      refused until a code resync. Part B gives the fleet the verb, so the resync is automatic. A fleet with no verb
+      is the double-fault case.
+    - **Items 2 to 8 are residue.** Each goes to row 2a's brief, or to wave 2 when its file is under another claim:
+      - 2: `cmd_token`'s missing-script word;
+      - 3: `/api/notify`'s wrong-token log advice in `server.ts`, under claim 1124;
+      - 4: `agent/test/deploy-verify.test.ts`'s `ship_secret` prose;
+      - 5: notify.sh posting the placeholder;
+      - 6: the README's `node-id-unmeasured` remedy, and the stall clock restarting with the process;
+      - 7: deploy.sh never rewriting `ccrc-caps`, and `ccrc-api` placed only by deploy.sh (with CUM wave 16);
+      - 8: no doctor word for a set-aside state file, the dangling `agent.env` symlink, and an absent `mail.token`
+        with an unusable state.
+    - **Departures accepted:**
+      - B6 kept to the consent's letter;
+      - B7 added a README sentence;
+      - the fix wave edited R0-admitted `boot.ts` strings;
+      - the two pins above, admitted as re-measurements of B6 and B7's own changes, if the review confirms that each
+        edit is only that.
+  - **Bar for the merge.** This merge arms the first live rotation with no human act. The held-out review (clause 14)
+    must find NO confirmed finding of these classes:
+    1. **The first live rotation (G3):** on the live topology, a reachable state in which a fleet lane answers 401,
+       during the rollout or after it. That topology is a remote server, a release-lane fleet box, an adopted
+       hand-made token, notify.sh, and `ccrc-api`'s reads of the fleet file. It includes the mixed-version path: the
+       fleet on this build while the server still runs v0.0.133 drives the rotation, then the server restarts into
+       this build at the hand-out, the promotion or grace.
+    2. **The leak's retirement:** once the first rotation completes, the leaked value is not refused within the
+       plan's bound, or a retired value can come back: adopted, accepted, or handed out again. D-4414's four sequences
+       are included.
+    3. **Secrets:** a token value, a claim code or a sha256 of either appears in any of these places:
+       - the verb's stdout, stderr or argv, the environment, or `token-sync.json`;
+       - a doctor line, the console card or `GET /api/updates`;
+       - a log, a non-token file, or test output.
+
+       A token file that is not 0600 from birth also meets this class.
+    4. **The shell verb:**
+       - curl given a value other than on stdin through `-K -`;
+       - a token-handling shell file that does not start `set +x`, then `umask 077`;
+       - a non-atomic fleet-file write, or a lost comment preamble;
+       - the generation file recorded before the value file is in place;
+       - a shell spelling the parity scan does not hold to L0.
+    5. **Doctor:** a stuck state that prints PASS, D-4551's words included; the arms on (`_BT_ARMS_ON` other than 0);
+       or a SKIP that moves doctor's exit code or summary.
+    6. **The console:** the card says a false thing in a reachable state; Rotate now is sent twice for one press; or
+       the card throws or misrenders on an absent or malformed `boxToken`, which is what an older server sends.
+    7. **deploy.sh and notify.sh:** deploy.sh still ships a token, or its rsync excludes changed; notify.sh puts a
+       value on argv, or POSTs with no value (the placeholder is residue 5).
+    8. **Uninstall:** it removes a value, state or fleet token file, or it leaves the two non-secret files.
+    9. **R0:** an item not closed by a pin that reds on revert.
+    10. A ring broken by imports, an overloaded null at a seam the plan names, a non-additive wire change, or a second
+        definition of an L0 word.
+    11. A new pin that cannot red when its guard is mutated.
+    12. **Scope:** an edit outside Part B's File Structure, R0's admitted files, the plan's Deviations found and the two
+        admitted pins; or outside the consented `shared/api.ts` scope.
+    13. **Deviation numbers:** anything defined beyond D-4388 to D-4414 and D-4551; or 4415 to 4417, or 4552 to 4570,
+        written with the prefix.
+
+    Also, every Linux leg of full run 37927184994 must be green.
+  - **The rounds:** one bar-class finding gets one fix round, then a scoped review. After that review, a bar-class
+    finding stops the merge and goes to the operator. Coverage and prose findings become residue for row 2a.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
