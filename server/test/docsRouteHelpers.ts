@@ -3,10 +3,12 @@
 // over W2's real adapter and `docsApp()`; Task 10 adds `echoPty()` and `passThroughLane()`.
 import { createHash } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
+import type { PtyProcess, PtySpawn } from '../../agent/src/pty.js';
 import { DOCS_CAP, type CcdArgv } from '../src/ccdargv.js';
 import type { CcdResult, CcdRunner } from '../src/lifecycle.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from '../src/docs/hooks.js';
-import type { DocsReadLane } from '../src/docs/lane.js';
+import type { DocsLaneRun, DocsReadLane } from '../src/docs/lane.js';
+import type { DocsJob } from '../src/docs/policy.js';
 import {
   composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute, type DocsComposition, type DocsNodeLanes,
 } from '../src/docs/routes.js';
@@ -185,4 +187,54 @@ export async function docsApp(o: {
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
   });
   return { app, state, docs };
+}
+
+// ===== Task 10: the latency test's echo pty and its control lane (section 6.8; refinement (s)) =====
+
+/**
+ * An agent-side pty (`AgentOpts.spawnPty`) that echoes: every `write` is emitted back to its data listeners, as the
+ * same string, on the next turn of the event loop (`setImmediate`), so an echo's round trip is the link's and the
+ * event loop's, never a terminal's. `kill` silences it and emits no exit; `resize` is a no-op. No node-pty, no tmux.
+ */
+export function echoPty(): PtySpawn {
+  return () => {
+    const data = new Set<(d: string) => void>();
+    const exit = new Set<() => void>();
+    const proc: PtyProcess = {
+      onData: (listener) => {
+        data.add(listener);
+        return { dispose: () => { data.delete(listener); } };
+      },
+      onExit: (listener) => {
+        exit.add(listener);
+        return { dispose: () => { exit.delete(listener); } };
+      },
+      write: (d) => {
+        setImmediate(() => {
+          for (const listener of data) listener(d);
+        });
+      },
+      resize: () => undefined,
+      kill: () => {
+        data.clear();
+        exit.clear();
+      },
+    };
+    return proc;
+  };
+}
+
+/**
+ * The latency test's CONTROL lane (section 6.8, M6.12's mutation; refinement (s)): a `DocsReadLane` that runs every
+ * job at once, with no FIFO, no budget and no refusal, so every show's answer is on the link together. Passed to
+ * `composeDocs` as its `readLane` option; nothing else differs between the control and the real run.
+ */
+export function passThroughLane(): DocsReadLane {
+  return {
+    async run<T>(_job: DocsJob, _signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
+      return { kind: 'ran', value: await exec() };
+    },
+    load: () => ({ execs: 0, bytes: 0, large: 0, queued: 0 }),
+    close: () => undefined,
+  };
 }
