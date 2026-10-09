@@ -16,7 +16,7 @@ spec's after wave 1.
 
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
-| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
+| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGED** `f82cb9fbc` (PR #330, 2026-10-09 06:44:52 UTC; run 320 done, child reclaim queued; released as v0.0.133 at 06:45:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `d9adc2c5a` onto `main` at `d33a566bb` (`4512d88d`). That tip is `fa384df19`, which review 352 read, plus a clean merge of `main`. Every Linux leg was green. Was: **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | — | **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
@@ -248,6 +248,25 @@ spec's after wave 1.
       extra term is that the second PR re-derives every route and census count by measurement.
     - So mail 4085 corrected 4084's step 3: a count numeral re-derived after the merge needs no stop. Any other
       test edit still does.
+- **2026-10-09 06:44 UTC: part A merged as `f82cb9fbc` (#330); run 320 closed `done`.**
+  - **The merge-only step (mail 4086), re-measured:**
+    - The tip `d9adc2c5a` has parents `fa384df19` and `d33a566bb`. Its tree equals `git merge-tree` of those two, so
+      the push is a pure merge.
+    - The PR's diff against `main` is still Part A's 43 paths plus the plan.
+    - On the merged tree, the shared pins grew only by `main`'s new cases. whitelist-subset is 108 and
+      single-definition 523. No numeral part A asserts moved: routes 90, `ROUTES` 93, exempt 33, and census 29 green.
+    - PR run 37893912731: every Linux leg was green. The macOS legs were still running, and they gate nothing.
+  - **The merge:** `gh pr merge 330 --squash --admin --match-head-commit d9adc2c5a`, with no branch deletion. The merged
+    tree `4512d88d` equals the tip's tree and `merge-tree`'s.
+  - **The close:** `final:true`, because run 350 was opened with no session id. The answer was `released:true` and
+    `childReclaim:queued`, and the closed row reads `done` at `d9adc2c5a`. The worker's evidence and SDD directory are
+    copied under `.superpowers/btl-w1-evidence/`.
+  - **Live effect, expected by the plan and to be measured read-only once both boxes run v0.0.133:**
+    - boot adopts the hand-made token and owes the first rotation;
+    - the driver holds `verb-missing`;
+    - `/api/notify` fails shut, which the fleet's `notify.sh` survives because it presents the token;
+    - no fleet lane answers 401.
+  - **Numbers:** 4414 to 4417, the fix round's unspent reserve, return to the coordinator, so 4414 to 4417 are free.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
