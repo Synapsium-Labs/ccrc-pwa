@@ -3486,10 +3486,10 @@ its command and its path. The lane never kills: find out what the process is fir
 also a `tmux: server`. A workspace held past its seven days is listed, never touched. A cleanup that completed but kept
 the workspace's clips or temp root (ccd's removal refused it, could not measure it, or a process still used it) is
 listed, saying what was kept and why, until the server restarts; a fleet box whose ccd predates that report says so in
-the feed row only. A cleanup the box keeps failing in a way it says it can resume is retried, backing off, for a day;
-then it is listed, with the first failure, the attempts and the last error, and asked again every four hours, never
-stopping. The entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt
-completes, finds that none had begun or stops for good, or the workspace is archived again.
+the feed row only. A cleanup the box keeps failing in a way it says it can resume is listed after an hour (a box answer at
+once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last
+error, asked again every four hours, never stopping. The entry stays through a hold, a shadow audit or any other answer that
+ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again.
 
 **A coordinator that crashed is ended after an hour** (workspace lifecycle spec §5.4). A coordinator whose pane is
 gone with nothing bringing it back (`orphan`, `never-started`), or whose registry row is gone, with no deliberate act

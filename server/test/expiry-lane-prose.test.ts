@@ -29,8 +29,9 @@ describe('README: what happens to an archived workspace now', () => {
     const para = readme.slice(at, at + 4200);
     expect(para).toContain('is listed, saying what was kept and why, until the server restarts');
     expect(para).toContain('a fleet box whose ccd predates that report says so in the feed row only');
-    expect(para).toContain('is retried, backing off, for a day;');
-    expect(para).toContain('and asked again every four hours, never stopping.');
+    // Listed from the ladder's hour (a box answer at once); the day is when it STANDS (review 355, F6).
+    expect(para).toContain('is listed after an hour (a box answer at once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last error, asked again every four hours, never stopping.');
+    expect(para).not.toContain('is retried, backing off, for a day;');
     expect(para).toContain('The entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again');
     expect(para).not.toContain('stops asking for that archive');
   });
@@ -102,7 +103,11 @@ describe('the specs', () => {
       '**A day of resumable failures slows the asking.**', 'A branch already absent when the token was minted reads absent twice and expires with its work in the attic',
       'An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing',
       'mints a fresh token over what stands', 'The lane asks again every four hours, never stopping',
-      'No answer that ends no attempt replaces the entry or resets its run', 'finds that none had begun']) expect(s).toContain(item);
-    for (const gone of ['is final.**', 'stops the asking.**', 'The lane does not ask again until the archive changes']) expect(s).not.toContain(gone);
+      'No answer that ends no attempt replaces the entry or resets its run', 'finds that none had begun',
+      // The attached shape is the pin's to refuse (review 355, F2), and the tier's clock is the verb's alone (F3).
+      'With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as `pin-failed`, which is resumable',
+      "A failure of the act's own audit never reaches the persistent tier, only the verb's does"]) expect(s).toContain(item);
+    for (const gone of ['is final.**', 'stops the asking.**', 'The lane does not ask again until the archive changes',
+      '(a branch deleted, or made, in between)']) expect(s).not.toContain(gone);
   });
 });
