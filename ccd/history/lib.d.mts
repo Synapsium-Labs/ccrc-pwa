@@ -480,3 +480,53 @@ export const HYBRID_AGE_DECAY: 0.001;
 export function ftsOrderBy(sort: string, tsExpr: string): string;
 export function snippetWindow(text: string, terms: readonly string[]): string;
 export function parseTimeBound(s: string, nowMs: number): number | null;
+
+// --- W1-B2 Task 3: output primitives (spec §8.3, §8.4, §11 P11, P12, P13, P17, P30)
+export const OUTPUT_CAP: 20000;
+export const EXPLORE_CUT: 2000;
+export const DESCRIBE_EXCERPT: 4000;
+export const DELEGATE_FACTOR: 3;
+export const SNIPPET_MAX: 200;
+export const EXPLORE_JSON_MAX: number;
+export const HISTORY_CMD: '"$HOME/.local/bin/ccrc" history';
+export const SHIM_LOCK_HELD: 75;
+export const RECALL_SRCS: readonly string[];
+export function escapeXmlAttr(value: string): string;
+export function escapeXmlText(value: string): string;
+export interface RecallField { src: string; id: string; ts: number | null; role: string | null; text: string }
+export function recallEnvelope(f: RecallField): string;
+export function snippetLine(text: string, max?: number): string;
+export function capOutput(blocks: readonly string[], reserve: number, cap?: number): { kept: string[]; shown: number };
+export function shownLine(shown: number, total: number): string;
+export function nextLine(args: readonly string[]): string;
+export interface HeaderFacts {
+  kind: ScopeKind; id: string; project: string | null; families: number; transcripts: number;
+  indexedThroughMs: number | null; lagS: number | null;
+}
+export function headerLine(h: HeaderFacts): string;
+export function scopeLag(i: { eofMs: readonly (number | null)[]; nowMs: number; recovering: boolean }):
+  { indexedThroughMs: number | null; lagS: number | null };
+export interface ReadEnvelopeInput {
+  exit: number; reason?: string; storeId: string | null; scope: Record<string, unknown> | null;
+  header: { indexedThroughMs: number | null; lagS: number | null } | null;
+  items: readonly Record<string, unknown>[]; shown: number; total: number; next: string | null;
+}
+export interface ReadEnvelope {
+  v: 1; exit: number; reason?: string; store_id: string | null; coverage: string; scope: Record<string, unknown> | null;
+  indexed_through_ms: number | null; lag_s: number | null; items: Record<string, unknown>[];
+  shown: number; total: number; next: string | null;
+}
+export function readEnvelope(o: ReadEnvelopeInput): ReadEnvelope;
+export type CursorResource = 'grep' | 'describe' | 'expand';
+export const CURSOR_RESOURCES: readonly CursorResource[];
+export interface Cursor { v: 1; resource: CursorResource; [k: string]: unknown }
+export function encodeCursor(c: Cursor): string;
+export function decodeCursor(s: string, resource: CursorResource): Cursor | null;
+export function decideRelay(i: { status: number | null; signal: string | null; lastLine: string | null }):
+  { exit: number; reason?: string };
+export function stripReadPrefix(text: string): string;
+export type ExploreKind = 'json' | 'csv' | 'tsv' | 'code';
+export function exploreKindOf(path: string | null): ExploreKind | null;
+export function explore(text: string, kind: ExploreKind, fileName?: string): string;
+export function costRow(chars: number, cap?: number): { chars: number; fits: 'in' | 'over' };
+export function pickExpandBody(i: { primary: unknown; variants: readonly { body: unknown; cause: string }[] }): unknown;

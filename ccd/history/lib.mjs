@@ -3771,3 +3771,226 @@ export function parseTimeBound(s, nowMs) {
   const ms = Date.parse(t);
   return Number.isFinite(ms) ? ms : null;
 }
+
+
+// ===========================================================================
+// W1-B2 recall, Task 3: output primitives (spec §8.3, §8.4 describe and
+// expand, §11 P11, P12, P13, P17, P30). Task 2's module-private `cutBefore`
+// makes every cut here surrogate-safe. Recalled fields reach these already
+// redacted; these primitives then cut, escape, count and serialise.
+// ===========================================================================
+export const OUTPUT_CAP = 20000;
+export const EXPLORE_CUT = 2000;
+export const DESCRIBE_EXCERPT = 4000;
+export const DELEGATE_FACTOR = 3;
+export const SNIPPET_MAX = 200;
+export const EXPLORE_JSON_MAX = 4 * 1024 * 1024;
+export const HISTORY_CMD = '"$HOME/.local/bin/ccrc" history';
+export const SHIM_LOCK_HELD = 75;
+export const RECALL_SRCS = Object.freeze([...new Set([...PROVENANCE, 'node', 'summary', 'sidecar', 'unknown'])]);
+
+const REASON_EXITS = new Set(Object.values(REASONS));
+
+// derived from lossless-claw src/assembler.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+export function escapeXmlAttr(value) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+export function escapeXmlText(value) {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+export function recallEnvelope({ src, id, ts, role, text }) {
+  const word = RECALL_SRCS.includes(src) ? src : 'unknown';
+  const when = typeof ts === 'number' && Number.isFinite(ts) && Math.abs(ts) <= 8.64e15 ? new Date(ts).toISOString() : '';
+  return `<ccrc-recall src="${escapeXmlAttr(word)}" id="${escapeXmlAttr(String(id))}" ts="${escapeXmlAttr(when)}" role="${escapeXmlAttr(role ?? '')}" trust="untrusted">${escapeXmlText(String(text))}</ccrc-recall>`;
+}
+
+// derived from lossless-claw src/tools/lcm-grep-tool.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+export function snippetLine(text, max = SNIPPET_MAX) {
+  const single = String(text).replace(/\n/g, ' ').trim();
+  return single.length <= max ? single : `${single.slice(0, cutBefore(single, max - 3))}...`;
+}
+
+export function capOutput(blocks, reserve, cap = OUTPUT_CAP) {
+  const budget = cap - reserve;
+  const kept = [];
+  let used = 0;
+  for (const block of blocks) {
+    const cost = block.length + 1;
+    if (used + cost > budget) break;
+    kept.push(block);
+    used += cost;
+  }
+  return { kept, shown: kept.length };
+}
+
+export function shownLine(shown, total) {
+  if (!Number.isSafeInteger(shown) || !Number.isSafeInteger(total) || shown < 0 || shown > total) throw new TypeError(`shownLine: shown ${String(shown)} of ${String(total)} is not a count`);
+  return `shown ${shown} of ${total}`;
+}
+
+const SHELL_SAFE_RE = /^[A-Za-z0-9_./:=@%+,-]+$/;
+export function nextLine(args) {
+  const quoted = args.map((a) => (SHELL_SAFE_RE.test(a) ? a : `'${String(a).replace(/'/g, "'\\''")}'`));
+  return `next: ${HISTORY_CMD} ${quoted.join(' ')}`;
+}
+
+export function headerLine(h) {
+  if (!SCOPE_KINDS.includes(h.kind)) throw new TypeError(`headerLine: kind outside SCOPE_KINDS: ${String(h.kind)}`);
+  const scope = h.kind === 'family' ? `family(${h.id}, ${h.transcripts} transcripts)` : `${h.kind}(${h.project}, ${h.families} families)`;
+  const through = h.indexedThroughMs === null ? 'unmeasured' : new Date(h.indexedThroughMs).toISOString();
+  const lag = h.lagS === null ? 'unmeasured' : `${h.lagS}s`;
+  return `scope=${scope} coverage=${COVERAGE[0]} indexed-through=${through} lag=${lag}`;
+}
+
+export function scopeLag({ eofMs, nowMs, recovering }) {
+  if (recovering || eofMs.length === 0) return { indexedThroughMs: null, lagS: null };
+  let oldest = Infinity;
+  for (const e of eofMs) {
+    if (typeof e !== 'number' || !Number.isFinite(e)) return { indexedThroughMs: null, lagS: null };
+    if (e < oldest) oldest = e;
+  }
+  return { indexedThroughMs: oldest, lagS: Math.max(0, Math.floor((nowMs - oldest) / 1000)) };
+}
+
+export function readEnvelope(o) {
+  if (!Object.values(EXIT).includes(o.exit)) throw new TypeError(`readEnvelope: ${String(o.exit)} is not an EXIT value`);
+  if (REASON_EXITS.has(o.exit)) {
+    if (typeof o.reason !== 'string' || !Object.hasOwn(REASONS, o.reason) || REASONS[o.reason] !== o.exit) throw new TypeError(`readEnvelope: exit ${o.exit} needs a reason word of its own code, got ${String(o.reason)}`);
+  } else if (o.reason !== undefined) {
+    throw new TypeError(`readEnvelope: exit ${o.exit} carries no reason, got ${String(o.reason)}`);
+  }
+  if (!Number.isSafeInteger(o.shown) || !Number.isSafeInteger(o.total) || o.shown < 0 || o.shown > o.total) throw new TypeError(`readEnvelope: shown ${String(o.shown)} of ${String(o.total)} is not a count`);
+  return { v: 1, exit: o.exit, ...(o.reason === undefined ? {} : { reason: o.reason }), store_id: o.storeId, coverage: COVERAGE[0], scope: o.scope, indexed_through_ms: o.header === null ? null : o.header.indexedThroughMs, lag_s: o.header === null ? null : o.header.lagS, items: o.items.map((item) => ({ ...item, trust: 'untrusted' })), shown: o.shown, total: o.total, next: o.next };
+}
+
+export const CURSOR_RESOURCES = Object.freeze(['grep', 'describe', 'expand']);
+const CURSOR_MAX = 2048;
+const CURSOR_TEXT_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+function cursorValueOk(v, depth) {
+  if (v === null) return true;
+  if (typeof v === 'number') return Number.isSafeInteger(v);
+  if (typeof v === 'string') return CURSOR_TEXT_RE.test(v);
+  if (typeof v === 'object' && !Array.isArray(v) && depth < 1) return Object.values(v).every((x) => cursorValueOk(x, depth + 1));
+  return false;
+}
+function cursorShapeOk(c) {
+  return c !== null && typeof c === 'object' && !Array.isArray(c) && c.v === 1 && CURSOR_RESOURCES.includes(c.resource) && Object.entries(c).every(([k, x]) => k === 'v' || k === 'resource' || cursorValueOk(x, 0));
+}
+// derived from lossless-claw src/cli/args.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+export function encodeCursor(c) {
+  if (!cursorShapeOk(c)) throw new TypeError('encodeCursor: a cursor holds v: 1, a CURSOR_RESOURCES word, and ids or integers only');
+  const s = Buffer.from(JSON.stringify(c), 'utf8').toString('base64url');
+  if (s.length > CURSOR_MAX) throw new TypeError(`encodeCursor: ${s.length} characters, over ${CURSOR_MAX}`);
+  return s;
+}
+export function decodeCursor(s, resource) {
+  if (typeof s !== 'string' || s.length === 0 || s.length > CURSOR_MAX || !/^[A-Za-z0-9_-]+$/.test(s)) return null;
+  let c;
+  try { c = JSON.parse(Buffer.from(s, 'base64url').toString('utf8')); } catch { return null; }
+  return cursorShapeOk(c) && c.resource === resource ? c : null;
+}
+
+export function decideRelay({ status, signal, lastLine }) {
+  const internal = { exit: EXIT.INTERNAL };
+  if (signal !== null) return internal;
+  if (status === SHIM_LOCK_HELD) return { exit: EXIT.WRITER_BUSY, reason: 'writer-busy' };
+  if (typeof lastLine !== 'string') return internal;
+  let r;
+  try { r = JSON.parse(lastLine); } catch { return internal; }
+  if (r === null || typeof r !== 'object' || Array.isArray(r)) return internal;
+  const keys = Object.keys(r).sort().join(',');
+  if (keys !== 'rc' && keys !== 'rc,reason') return internal;
+  if (!Object.values(EXIT).includes(r.rc) || r.rc !== status) return internal;
+  if (REASON_EXITS.has(r.rc)) return typeof r.reason === 'string' && Object.hasOwn(REASONS, r.reason) && REASONS[r.reason] === r.rc ? { exit: r.rc, reason: r.reason } : internal;
+  return r.reason === undefined ? { exit: r.rc } : internal;
+}
+
+// derived from lossless-claw src/large-files.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const EXPLORE_CODE_EXTENSIONS = new Set(['c', 'cc', 'cpp', 'cs', 'go', 'h', 'hpp', 'java', 'js', 'jsx', 'kt', 'm', 'php', 'py', 'rb', 'rs', 'scala', 'sh', 'sql', 'swift', 'ts', 'tsx']);
+const READ_PREFIX_RE = /^\s*(\d+)(?:→|\t)/;
+export function stripReadPrefix(text) {
+  const lines = String(text).split('\n');
+  let prev = null;
+  let k = 0;
+  for (; k < lines.length; k += 1) {
+    const m = READ_PREFIX_RE.exec(lines[k]);
+    if (m === null || (prev !== null && Number(m[1]) !== prev + 1)) break;
+    prev = Number(m[1]);
+    lines[k] = lines[k].slice(m[0].length);
+  }
+  return k === 0 ? String(text) : lines.join('\n');
+}
+function fileNameExtension(fileName) {
+  if (typeof fileName !== 'string' || fileName === '') return undefined;
+  const base = fileName.trim().split(/[\\/]/).pop() ?? '';
+  const idx = base.lastIndexOf('.');
+  if (idx <= 0 || idx === base.length - 1) return undefined;
+  const ext = base.slice(idx + 1).toLowerCase();
+  return /^[a-z0-9]{1,10}$/.test(ext) ? ext : undefined;
+}
+export function exploreKindOf(path) {
+  const ext = fileNameExtension(path);
+  if (ext === 'json' || ext === 'csv' || ext === 'tsv') return ext;
+  return ext !== undefined && EXPLORE_CODE_EXTENSIONS.has(ext) ? 'code' : null;
+}
+function normalizeTextForLine(text, maxLen) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  return compact.length <= maxLen ? compact : `${compact.slice(0, cutBefore(compact, maxLen))}...`;
+}
+function uniqueOrdered(values) {
+  const seen = new Set(); const out = [];
+  for (const value of values) if (!seen.has(value)) { seen.add(value); out.push(value); }
+  return out;
+}
+function exploreJson(content) {
+  const parsed = JSON.parse(content);
+  const describe = (value, depth = 0) => {
+    if (depth >= 2) return '...';
+    if (Array.isArray(value)) { const sample = value.slice(0, 3).map((item) => describe(item, depth + 1)); return `array(len=${value.length}${sample.length > 0 ? `, sample=[${sample.join(', ')}]` : ''})`; }
+    if (!value || typeof value !== 'object') return typeof value;
+    const keys = Object.keys(value); const preview = keys.slice(0, 10).join(', ');
+    return `object(keys=${keys.length}${preview ? `: ${preview}` : ''})`;
+  };
+  return ['Structured summary (JSON):', `Top-level type: ${Array.isArray(parsed) ? 'array' : typeof parsed}.`, `Shape: ${describe(parsed)}.`].join('\n');
+}
+function parseDelimitedLine(line, delimiter) { return line.split(delimiter).map((item) => item.trim()).filter((item) => item.length > 0); }
+function exploreDelimited(content, delimiter, kind) {
+  const lines = content.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.length === 0) return `Structured summary (${kind}): no rows found.`;
+  const headers = parseDelimitedLine(lines[0], delimiter); const rowCount = Math.max(0, lines.length - 1); const firstData = lines[1] ? normalizeTextForLine(lines[1], 180) : '(no data rows)';
+  return [`Structured summary (${kind}):`, `Rows: ${rowCount.toLocaleString('en-US')}.`, `Columns (${headers.length}): ${headers.join(', ') || '(none detected)'}.`, `First row sample: ${firstData}.`].join('\n');
+}
+function exploreCode(content, fileName) {
+  const lines = content.split(/\r?\n/);
+  const imports = uniqueOrdered(lines.filter((line) => /^\s*(import\s+|from\s+\S+\s+import\s+|const\s+\w+\s*=\s*require\()/.test(line)).map((line) => normalizeTextForLine(line, 180)).slice(0, 12));
+  const signatures = uniqueOrdered(lines.map((line) => line.trim()).filter((line) => /^(export\s+)?(async\s+)?(function|class|interface|type|const\s+\w+\s*=\s*\(|def\s+\w+\(|struct\s+\w+)/.test(line)).map((line) => normalizeTextForLine(line, 200)).slice(0, 24));
+  return [`Code exploration summary${fileName ? ` (${fileName})` : ''}:`, `Lines: ${lines.length.toLocaleString('en-US')}.`, `Imports/dependencies (${imports.length}): ${imports.join(' | ') || 'none detected'}.`, `Top-level definitions (${signatures.length}): ${signatures.join(' | ') || 'none detected'}.`].join('\n');
+}
+function exploreCounts(content) { return ['Structured summary:', `Characters: ${content.length.toLocaleString('en-US')}.`, `Lines: ${content.split(/\r?\n/).length.toLocaleString('en-US')}.`].join('\n'); }
+export function explore(text, kind, fileName) {
+  const content = stripReadPrefix(String(text));
+  switch (kind) {
+    case 'json': if (content.length > EXPLORE_JSON_MAX) return exploreCounts(content); try { return exploreJson(content); } catch { return 'Structured summary (JSON): failed to parse as valid JSON.'; }
+    case 'csv': return exploreDelimited(content, ',', 'CSV');
+    case 'tsv': return exploreDelimited(content, '\t', 'TSV');
+    case 'code': return exploreCode(content, fileName);
+    default: throw new TypeError(`explore: kind outside json, csv, tsv and code: ${String(kind)}`);
+  }
+}
+export function costRow(chars, cap = OUTPUT_CAP) { return { chars, fits: chars <= cap ? 'in' : 'over' }; }
+export function pickExpandBody({ primary, variants }) {
+  for (const v of variants) {
+    if (v.cause !== 'ccd-sanitize' || variantCauseOf(primary, v.body) !== 'ccd-sanitize') continue;
+    return sanitizedSideOf(primary, v.body) === 'a' ? v.body : primary;
+  }
+  return primary;
+}
+function sanitizedSideOf(a, b) {
+  for (let i = 0; i < a.length; i += 1) {
+    if (canonicalJson(a[i]) === canonicalJson(b[i])) continue;
+    return a[i] !== null && typeof a[i] === 'object' && a[i].text === '...' ? 'a' : 'b';
+  }
+  return 'b';
+}

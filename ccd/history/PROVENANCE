@@ -67,12 +67,12 @@ commit: e05d8d3
 upstream-sha256: bf4846a6a062ad5ca24b883bb42bc8d697ac068042b0ca37e02e69c727d289db
 changed: JavaScript as queryTerms and snippetWindow (upstream lines 1, 11, 19-22 and 58-84); the term normaliser, the window constants and the earliest-hit rule are kept; each term is also tried without a common ending, the search is case-insensitive in place instead of on a lowercased copy whose indices can drift, no cut splits a surrogate pair, and the CJK and LIKE paths are not ported
 
-item: regex-syntax-in-FTS detector and message (V2)
+item: regex-syntax-in-FTS detector and message (V2); output cap and snippet line (P12)
 ours: ccd/history/lib.mjs
 upstream: src/tools/lcm-grep-tool.ts
 commit: e05d8d3
 upstream-sha256: cbebf5cfd2fb025aa609192b7527680d66b4313e65dc5723979a8a09eea19ede
-changed: JavaScript without the TypeScript annotations; the detector (upstream lines 97-154) is kept line for line as regexSyntaxIn; the message becomes the hint line of plain grep's exit 2, which names --regex
+changed: JavaScript without the TypeScript annotations; the detector (upstream lines 97-154) is kept line for line as regexSyntaxIn; the message becomes the hint line of plain grep's exit 2, which names --regex; P12: truncateSnippet (upstream lines 89-95) becomes snippetLine, and the running-total cap loop (lines 275-294) becomes capOutput at 20,000 characters with no truncation marker, the first block that does not fit ending the list and the caller printing a true in-scope count
 
 item: safe regex guard (P10)
 ours: ccd/history/lib.mjs
@@ -87,3 +87,25 @@ upstream: src/store/full-text-sort.ts
 commit: e05d8d3
 upstream-sha256: 094bd7e91965bcf0479c4fccd73ac0324f9b875421dee590d0ca783d0594a64f
 changed: JavaScript as ftsOrderBy; the three-way switch and the 0.001-per-hour decay are kept; the age is hours from an integer ts_ms and a bound :now_ms parameter instead of julianday over a string (julianday of an integer is NULL), a NULL time counts as oldest, a future time ages 0, an unknown sort throws instead of defaulting to recency, and the column expression must be a name
+
+
+item: XML escaping for the untrusted recall envelope (P30)
+ours: ccd/history/lib.mjs
+upstream: src/assembler.ts
+commit: e05d8d3
+upstream-sha256: b52def52635efbd61a28f16e9cc2d79977754e370443d2a5cc2c8e4cf98ca671
+changed: JavaScript; escapeXmlAttribute and escapeXmlText (upstream lines 1120-1133) are kept verbatim as escapeXmlAttr and escapeXmlText; the ccrc-recall envelope and its attributes are ccrc's, and the escape runs on every recalled field after redaction and any cut
+
+item: opaque versioned cursor (P11)
+ours: ccd/history/lib.mjs
+upstream: src/cli/args.ts
+commit: e05d8d3
+upstream-sha256: 49d39b05ac4b890cf2deddc07d4290550682bd2fe716bbd42df1a3781e3af53d
+changed: JavaScript as encodeCursor and decodeCursor (upstream lines 442-464); base64url JSON holding v 1 and a resource is kept; the fields are ids and integers (one nested level) instead of a timestamp and an id, text is refused on encode and on decode, the length is bounded, and a bad cursor answers null for the caller's exit 2 instead of throwing
+
+item: large-output explorers (P17)
+ours: ccd/history/lib.mjs
+upstream: src/large-files.ts
+commit: e05d8d3
+upstream-sha256: 7353ad233195e64c034c4f77ccadad5664a30434289e59658bac35a33849c069
+changed: JavaScript; the code-extension set, the file-name extension reader, normalizeTextForLine, uniqueOrdered and the JSON, delimited and code explorers are kept; the Read line-number prefix is stripped first, the kind comes from the paired tool_use path instead of a MIME type, JSON past a size bound gets counts, and the YAML, XML, text and model-summary paths are not ported
