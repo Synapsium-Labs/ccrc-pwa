@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=132d0e6616f4ee6cb1e95a6f48568ea14f2f001c531a2fdd07793d1c0493599a
+# ccrc:generated 1 sha256=8cae7ddad07ccdc923cd160d01b60b63b41fd597162e774d0ec39158b4903be9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32038,7 +32038,13 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
   # row, standing or placed by either of its gone-row arms, compared literally
   # and resolved — equal, inside, or spelled through it. That helper skips the
   # id's own row; this asks it first, by its `.workdir` alone: a temp root whose
-  # id has a row is never collected. It also compares the id's clips leaf, as
+  # id has a row is never collected. That absence is MEASURED
+  # (`_ws_reclaim_absent`), never an `-e` test, which reads EACCES as absence: a
+  # `.workdir` under a `$REG` that can be read but not searched answers 2. The
+  # id's own row standing is DELIBERATELY the same refusal as another row's
+  # (rc 1): a backstop behind `_ws_collect_registered`, which every caller asks
+  # first. A lone dangling own `.workdir` link, which that check reads as free,
+  # is an operator's attention item. It also compares the id's clips leaf, as
   # it does for a reclaim: a row there refuses too, and a clips leaf whose
   # absence cannot be proven answers 2 — both fail closed. Its git reads of
   # other rows' repositories run contained, so a caller asks this only under
@@ -32047,17 +32053,22 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
   local id="${1-}" leaf="${2-}" rc
   _WS_COLLECT_ROWS_WHY=''
   _ws_tmproot_id_ok "$id" || { _WS_COLLECT_ROWS_WHY="'$id' is not an id a witness is named for"; return 2; }
-  if [[ -e "$REG/$id.workdir" || -L "$REG/$id.workdir" ]]; then
+  _ws_reclaim_absent "$REG/$id.workdir"; rc=$?
+  if (( rc == 1 )); then
     _WS_COLLECT_ROWS_WHY="$id's own registry row stands ($REG/$id.workdir) — a temp root whose id has a row is never collected"
     return 1
+  fi
+  if (( rc != 0 )); then
+    _WS_COLLECT_ROWS_WHY="whether $id's own registry row stands could not be measured (${_WS_ABSENT_WHY:-its absence was not proven})"
+    return 2
   fi
   _ws_reclaim_workdir_shared "$id" "$leaf"; rc=$?
   if (( rc == 0 )); then
     [[ -n "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
-    _WS_COLLECT_ROWS_WHY="registry row(s) lie at, inside or through $leaf — at: ${_WS_SHARED_ROWS:-none}; inside: ${_WS_NESTED_ROWS:-none}; through: ${_WS_THROUGH_ROWS:-none}"
+    _WS_COLLECT_ROWS_WHY="registry row(s) lie at, inside or through $leaf, or $id's clips leaf $HOME/.cc-clips/$id (a row there is listed as inside) — at: ${_WS_SHARED_ROWS:-none}; inside: ${_WS_NESTED_ROWS:-none}; through: ${_WS_THROUGH_ROWS:-none}"
     return 1
   fi
-  _WS_COLLECT_ROWS_WHY="${_WS_SHARED_WHY:-the registry could not be compared with $leaf}"
+  _WS_COLLECT_ROWS_WHY="asked with $leaf as the workdir: ${_WS_SHARED_WHY:-the registry could not be compared with it}"
   return 2
 }
 # ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──

@@ -126,13 +126,14 @@ describe('_ws_collect_rows_clear — a row at, inside or through the leaf refuse
 });
 
 describe('_ws_collect_rows_clear — the id’s clips leaf is compared too, as for a reclaim: both answers fail closed', () => {
-  it('a row inside `~/.cc-clips/<id>` refuses: rc 1', () => {
+  it('a row inside `~/.cc-clips/<id>` refuses: rc 1, and the why names the clips leaf beside the leaf', () => {
     fs.mkdirSync(leaf(), { recursive: true });
     fs.mkdirSync(path.join(h.home, '.cc-clips', ID, 'sub'), { recursive: true });
     row(OTHER, path.join(h.home, '.cc-clips', ID, 'sub'));
     const a = clear();
     expect(a.rc, a.why).toBe('1');
     expect(a.why).toContain(`inside: ${OTHER}`);
+    expect(a.why, 'an operator is told where to look').toContain(path.join(h.home, '.cc-clips', ID));
   });
 
   it.skipIf(ROOT_USER)('a clips leaf whose absence cannot be proven is unmeasured: rc 2, never "no row"', () => {
@@ -157,10 +158,17 @@ describe('_ws_collect_rows_clear — clear: rc 0', () => {
     expect(a.rc, a.why).toBe('0');
   });
 
-  it('after the move, with nothing at or under the pre-move spelling: 0', () => {
+  it('after the move, with nothing at or under the pre-move spelling and a row standing elsewhere: 0', () => {
+    // The standing row is what makes this a liveness pin: the absent leaf
+    // still resolves (`absent-suffix`), so other rows are compared against it
+    // and placed outside. A leaf that could not be resolved would make every
+    // such row unplaceable (2), and no ask after the move would ever clear.
     fs.mkdirSync(leaf(), { recursive: true });
+    fs.mkdirSync(path.join(h.home, 'worktrees', 'demo2', 'calm-cove'), { recursive: true });
+    row(OTHER, path.join(h.home, 'worktrees', 'demo2', 'calm-cove'));
     fs.renameSync(leaf(), path.join(h.home, 'moved'));
-    expect(clear().rc).toBe('0');
+    const a = clear();
+    expect(a.rc, a.why).toBe('0');
   });
 
   it('a GONE row elsewhere that git’s own record places (the git-record placement) is placed, outside: 0', () => {
@@ -183,6 +191,8 @@ describe('_ws_collect_rows_clear — unmeasured: rc 2, never "no row"', () => {
     const a = clear();
     expect(a.rc, a.why).toBe('2');
     expect(a.why).toContain(OTHER);
+    expect(a.why, 'the reclaim helper’s why says which workdir it was asked with')
+      .toContain(`asked with ${leaf()} as the workdir: `);
   });
 
   it('a row that cannot be placed at all (a relative workdir) is unmeasured', () => {
@@ -198,6 +208,19 @@ describe('_ws_collect_rows_clear — unmeasured: rc 2, never "no row"', () => {
     const a = clear();
     expect(a.rc, a.why).toBe('2');
     expect(a.why).toContain('could not list');
+  });
+
+  it.skipIf(ROOT_USER)('the id’s OWN row behind a registry that can be read but not searched is unmeasured: 2, never 0', () => {
+    // Mode 0400: `find` still lists the names, but `-e` reads EACCES as
+    // absence, and the reclaim helper skips the id's own row, so a probe by
+    // `-e` answered 0 over a standing own row. Absence is measured instead.
+    fs.mkdirSync(leaf(), { recursive: true });
+    row(ID, path.join(h.home, 'worktrees', 'demo', 'quiet-mesa'));
+    chmodFor(path.join(h.home, '.cc-sessions'), 0o400);
+    const a = clear();
+    expect(a.rc, a.why).toBe('2');
+    expect(a.why).toContain(`whether ${ID}'s own registry row stands could not be measured`);
+    expect(a.why).toContain('cannot be searched');
   });
 
   it('a refusal OUTRANKS an unmeasured row, whatever order the registry lists them in', () => {
