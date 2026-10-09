@@ -11980,6 +11980,8 @@ Two rows re-anchored at run time after the merge of `main` (#330, the box-token 
 
 **Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Review 3-2 re-spelled the blob cache's charge line and routes.ts's fill line, so `W3-T5-M7`, `W3-T5-M18`, `W3-T5-M19` and `W3-T6-M27` are repeated below with the same ids and the new `old`, each measured red in a fresh copy of the fix commit.
 
+Fix round 1 (review 361, coordinator mail 4110) appends its rows to this block as `W3-FR1-M<k>` (M1-M8 pin guards the review found unrowed, M9 the blob cache's own copy of the bytes, M10-M15 the lane verdicts that moved to L1), and repeats `W3-T4-M4`, `W3-T4-M8`, `W3-T4-M9`, `W3-T4-M10`, `W3-T4-M31` and `W3-T4-M32` with the same ids and the new `old`, because that move re-spelled their anchors; each was measured red in a fresh copy of its fix commit.
+
 ```json
 [
 {
