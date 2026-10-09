@@ -21,8 +21,10 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
 | 1 | 1 | `FleetSession.releasedFrom`; the `Released (N)` fold grouped by programme; "Archive all" (plain archives, children skipped); `deploy/measure-workspace-lifecycle.py` | server + pwa | — | #229 | merged 2026-10-02 (`a7b9831c`); run 220 closed; deploy measure-only |
 | 2 | 2 | one "Archive"; the busy confirm; the coordinator ask (end programme or cancel); the Archived fold takes stopped main checkouts; "Restore" | server + pwa | wave 1; child-reclamation wave 3 merged | #233 | merged 2026-10-03 (`fe7b9775`); run 236 closed; deploy measure-only |
 | 3 | 3, the verb | `ws-audit --expire` and `ws-expire` (ladder, pin phase, tail, `expire:` breadcrumb and ws-reap's resume arm, spawn-path refusals, the `expire` journal act); the server's argv builder and `expire-v1` token, uncalled; wave 2's residue; wave 1's instrument items | **AGENT-FIRST** | child-reclamation waves 3–4 merged and deployed; the archive→return delay measured (done: not held) | #286 | merged 2026-10-06 (`77c11245`) after review 288; run 245 closed; deploy AGENT-FIRST via ccrc's updater; plan #252 (`b5593725`); block 3886–3895 + 3958–3965 |
-| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | run 290 open (planned; the run's wave 4 of 5), block 4114–4125; plan #308 (`67657ef2`); DISPATCHED 2026-10-06 22:27 to `ccrc-pwa-calm-basin`; FIRST commit: review 288's residue; the lane ships SHADOWED |
-| 4 | 4 | the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server | waves 2–3; child-reclamation waves 3–4 | — | to plan (the run's wave 5 of 5) |
+| 3b | 3, the lane | `archivedExpiryVerdict` and the expiry population in the reclaim sweep; `reclaim-paused` becomes the one cleanup switch; coordinator clause 3, README and wave-lifecycle §6; the 409 detail, the 404 fold, FM7 | server + pwa | wave 3 merged and deployed; PRECONDITION: the 3893 return-verb race closed before go-live | — | #312 | merged 2026-10-07 (`9b074208`) after review 313, no fix round; run 290 closed; block 4114–4125; plan #308 (`67657ef2`); deployed (both boxes on v0.0.119, 10-07); the lane ships SHADOWED, and arming is the operator's, after wave 4's arming blockers |
+| 4 | 4 | FIRST: review 313's residue and the lane's arming blockers; then the dead-coordinator lane: crash-only, 1 hour, no successor, circuit breaker | server (+ pwa for the residue) | waves 2–3; child-reclamation waves 3–4 | — | run 314 open (planned; the run's wave 5 of 5), blocks 4348–4363 and 4430–4433; plan #323 (`8c446eab`); DISPATCHED 2026-10-07 22:28 → `ccrc-pwa-swift-cove`; wave-done 10-08 04:3x, PR #328 @ `701839b52`; review run 339 (`ccrc-pwa-keen-summit`), no fix round; **merged 2026-10-08 (`669b8305`)**, prerelease v0.0.123; run 314 closed; deploy via ccrc's updater; the lane ships SHADOWED |
+| 5 | 3–4, follow-ups | FIRST: review 339's residue and the dead-coordinator lane's arming blockers; then the expiry lane's follow-ups: the kept-leaf reader, the `state-changed` reading, the answer to a repeating resumable failure, the in-lock window close | server (+ **AGENT-FIRST** if the window close lands in ccd) | wave 4; CCR-15 wave 6 (#326) merged | #335 | merged 2026-10-09 08:23 (`6fc7ef115`) after review 355 and fix rounds 1–2 (reviews 356, 357); run 345 closed; block 4480–4495 (4480–4494 used, 4495 unused); deploy AGENT-FIRST via the updater |
+| 6 | 3–4, follow-ups | `ws-expire` sets `crumb` on its resumed arm (question (k), an expiry-lane arming blocker); `containment-refuted` gets attention at once; a restart count; a symbolic-HEAD control case and its ccd comment; `stillCrashed` re-reads the mirror's health and gap list after the claimant's measure | **AGENT-FIRST** (ccd) | wave 5; CCR-15 wave 7 (run 347) merged | — | run 358 open (planned; the run's wave 7 of 7), block 4617–4632; plan not yet drafted |
 
 ## Decisions & deviations
 
@@ -614,6 +616,609 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   present; route Opus · high, Sonnet subagents, workflow off, compact 40; twelve items, one per plan task).
   - **The workspace branch** is at origin/main `67657ef2`, with nothing ahead, and it contains #308.
   - **The caps at dispatch:** 23 of 24 daily and 6 of 7 concurrent.
+- **2026-10-07 05:02 — wave 3b done: PR #312 at `3990aaad`** (wave-done 3794, `ccrc-pwa-calm-basin`; 17 own commits plus two
+  merges of main, afbb7767d (#299) and 359f76030 (#248, #310); each merge conflicted only on ccd/ccd's stamp line).
+  - **Re-measured:** the branch tip, the PR head and the handoff commit agree at `3990aaad`, and #312 is open and
+    MERGEABLE. Run 290 advanced dispatched → working → awaiting-review.
+  - **The worker reports `suite: red`, `failure: unclear`.** The only reds are the two known ones (tmp-sweep "FAILS
+    CLOSED", session-hook "skips a scratch slug" under a non-/tmp TMPDIR), each red again in isolation and neither
+    this wave's. Everything else passed: 528 server files, agent 465, pwa 1670 and 1647, pwa tsc.
+  - **Deviations:** 4114–4125, all defined, with a continuation line on 4124 (the idle re-read).
+  - **Five named departures:**
+    - T6's extra test;
+    - T9's idle re-read at the act;
+    - T11's "once the lane is armed" wording;
+    - the final review's eligibleSince reset (a pause only the executor saw forgets the sighting);
+    - single-definition's adjacency after absorbing #299.
+  - **Four items the worker parked, for review and then a ruling before arming:**
+    - learn starvation: an unreadable learn audit is retried every pass with no backoff, and learn slots go in
+      registry order. The final review grades it fix-before-arming;
+    - the archive-confirm copy, which is unconditional while the lane is shadowed;
+    - clause 3's missing "no child marker";
+    - the dropped `resumable`.
+  - **Review run 313 is dispatched** to `ccrc-pwa-brisk-basin` (the held-out panel; route Opus · high, Sonnet
+    subagents, workflow on). The brief's suite list is `.superpowers/sdd/coordinator-evidence/run290/review-suites.md`,
+    and the worker's two artifacts are copied beside it.
+  - **Child reclamation's coordinator (calm-mesa) was told in mail 3796** that #312 edits CCR-15's §5.8 and the
+    wave-3 qualification (ruling (F)). It landed after the push, not before it, but before any merge.
+- **2026-10-07 06:01 — wave 3b ACCEPTED and MERGED: #312 → `9b074208` (06:00:41), with no fix round.**
+  - **Review 313** (`ccrc-pwa-brisk-basin`, workflow wf_53450d64-096, 36 agents, no lens unverified) read
+    `3990aaad`. Its report is copied to `.superpowers/sdd/coordinator-evidence/run290/review-313-3990aaad.md`.
+    - Deletion safety holds on every path. Each `ws-expire` passes `capSupported` twice, the cleanup switch twice, a
+      store re-read, presence, a same-archive audit with its own token and a known instant, the live file read
+      nearest the argv, and ccd's in-lock re-proof.
+    - 3893 is closed on start, enable, ensure and swap, and ws-restore's lock spans its unarchive.
+    - Seven confirmed findings, all minor, and three refuted. All 37 mutation rows were red, and every suite in the
+      brief was green.
+  - **Why no fix round:** while shadowed, the lane composes nothing. What is left is the shadow record's fidelity
+    and wording that must be settled before arming. This is review 288's precedent: wave 3 was accepted while its
+    verb was inert, and its residue became 3b's first commit.
+  - **The merge:**
+    - #312's PR CI ran on a merge ref that already held #309, the only main commit since the branch's last merge.
+      Every required leg was green; only the macOS legs were red, and they gate nothing.
+    - `git merge-tree` was clean. It landed with `--squash --admin --match-head-commit 3990aaad`, because the
+      queue is off since Task 7's rollback.
+    - Run 290 went merging → closed final with `prPhase: merged`; its child reclaim is queued.
+    - The worker was told in 3799.
+    - Child reclamation's coordinator found no conflict in substance with run 291 (3797). Its merge-tree against
+      `ws/amber-river` conflicts only on the ccd/ccd stamp and README's `shared/api.ts` anchors, both second-lander
+      work.
+  - **RULED — wave 4's FIRST commit is review 313's residue and the arming blockers:**
+    - **Parked item 1 (ARMING BLOCKER):** a learn audit that is unreadable, or answers `archivedAt: null` (a ws-reap
+      breadcrumb's `reap-in-progress`), backs off and is reported on the expiry attention list. Learn slots go in
+      `nextAskAt` order, not registry order.
+    - **Parked item 4 (ARMING BLOCKER):** `ExpireVerbRead.failed.resumable` is carried through the outcome type
+      rather than narrowed. A wrong-row `expired`, an unknown refusal word or `probe-unmeasured` reports and stops
+      at once, never after the one-hour ceiling.
+    - **F1 (ARMING BLOCKER, the shadow record is the operator's arming evidence):** an ineligible sighting clears a
+      `would-expire` or `in-use` report as well as a `held` one, so the attention list follows the row.
+    - **F2:** the executor checks `audit.archivedAt` against the queued archive before classifying a refusal.
+    - **F3:** the `held` sentence says "past its expiry (due <instant>)" and never types seven days.
+    - **F4:** `wsExpire`'s doc comment drops "Composed by nothing in this build".
+    - **F5, ruled:** the final review's eligibleSince reset gets a continuation line in the 3b plan's Deviations
+      found, under 4117, as 4124's fix-round change did. Naming it in a brief is not the plan's record.
+    - **F6, ruled:** amend spec §6 item 6 and §5.3's "hosts a second population" sentence to the sibling pass
+      (4118) now, in the residue commit. Do not carry it further.
+    - **F7, O1, O2:** correct the 3b plan's recorded rows: T7.2 now reds 1 of 23, because the executor-side reset
+      also forgets the sighting, and T3.5 reds 4. Make 4124's main line true on its own.
+    - **Parked item 3:** coordinator clause 3 gains "when it carries no child marker", with its verbatim pin.
+  - **For the operator, before arming** (touching `$REG/expire-lane-live` by hand is the operator's act alone):
+    - (a) wave 4's first commit merged and deployed: the three blockers above;
+    - (b) the archive-confirm copy (parked item 2): both confirms say "after that it is cleaned up", which is false
+      while shadowed, under `reclaim-paused`, and on a box without `expire-v1`. It errs safe, because it overstates
+      a deletion. The coordinator's recommendation: hedge it in wave 4's residue commit to a sentence true before
+      and after arming, as the docs already are. The text is the operator's (plan Open question 1);
+    - (c) the first armed pass faces the backlog (20–22 of 30 archived rows past seven days, at one expiry a pass),
+      or raise `WS_EXPIRE_AFTER_S` first;
+    - (d) whether to end brisk-mesa's leaked test tmux server first.
+  - **Run 314 is open** (planned; the run's wave 5 of 5), with block 4348–4363 (sixteen numbers: the residue's
+    behaviour changes plus the dead-coordinator lane).
+- **2026-10-07 06:05 — wave 4 planning started** (workflow wf_07ea3938-e5a: an Opus drafter, four Opus lenses for spec, act
+  safety, replay and test honesty, an Opus reviser and a Sonnet replay verifier). The plan goes to
+  `docs/superpowers/plans/2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md` on branch
+  `docs/workspace-lifecycle-wave4-plan`. The coordinator's rulings for it:
+  - **(A) The first commits** are review 313's residue and the expiry lane's three arming blockers, as the 06:01 entry
+    rules them. The archive-confirm copy (parked item 2) is one separate task the brief can strike, because it is the
+    operator's text.
+  - **(B) The lane ships SHADOWED.**
+    - Until `$REG/dead-coordinator-lane-live` exists, the lane measures, keeps its anchor, trips its breaker, and
+      records "would end programme X". It never calls the abandon arm.
+    - The file has no writer in the tree, pinned beside `expire-lane-live`.
+    - `reclaim-paused` stops the lane entirely.
+    - The skill files state the arming condition in words.
+    - The reason: once armed, the lane ends other coordinators' programmes and gets their workers' workspaces
+      reclaimed, losing a turn mid-flight. This is the precedent of the scope sweep and the expiry lane.
+  - **(C)–(H) are spec §5.4 as written:**
+    - the verdict is widened in one place;
+    - a crash and only a crash, with one journal reader, where an unreadable journal is unmeasured;
+    - the durable hour, its anchor only ever raised, measured on two passes;
+    - the circuit breaker, evaluated in shadow too. Its clear is the smallest act the box-token census allows, and
+      a new door is an open question;
+    - no successor: the act runs on the coordination serialiser, compare-and-set on `claimedBy`, with a forced
+      revive test;
+    - `causedBy: 'sweep'`, additive.
+  - **(E) The migration:** the plan measures what a rolled-back older server does on meeting the new `user_version`,
+    and chooses a shape that keeps a rollback bootable.
+  - **(H) Landing:** a `sweep` close reads as an operator abandon, with a test. Landing-order's ledger now carries
+    that constraint; spec §6 said it already did, and it did not.
+  - **(I) Relations:** the stall watch's coordinator-deaf arm notifies, and this lane acts. Neither double-reports
+    one dead coordinator as two incidents. It is a sibling pass on the child lane's tick.
+  - **(J) Overlaps:** child reclamation wave 6 (run 291), ccrc-history (run 302; claims 1065, 1066 and 1068) and
+    centralised update W15 (run 300). There is a re-measure-at-dispatch note, and ccd/ccd is shared by region.
+  - **Departure: the plan is Markdown, not HTML.** That is the operator's standing preference since 2026-10-06, but
+    this repo's `deviation-refs` guard and the ledger floor seed (`server/src/coord/ledgerseed.ts`) read only `.md`
+    plans. An HTML plan's D-numbers would be invisible to both.
+- **2026-10-07 19:26 — wave 4 plan drafted, reviewed and revised; re-basing onto #320.** Workflow wf_07ea3938-e5a returned
+  plan commit `3f581396` on `docs/workspace-lifecycle-wave4-plan` (6422 lines, 14 tasks, 134 replay blocks, 120 mutation
+  rows, 20 departure slugs). The four lenses:
+  - **Act safety** found one critical gap and four important ones, each measured on the drafted policy file:
+    - the journal clause trusted a mirror it cannot trust (unavailable, gapped, or a failed ccd append);
+    - the breaker forgot its cluster after one unmeasurable read;
+    - a revive seen by the executor reset nothing;
+    - the compare-and-set cannot see a same-id revive, and the forced-interleaving test raced a writer the serialiser
+      already excludes;
+    - in shadow only the longest-dead claimant was ever listed.
+  - **Spec** found the breaker's fleet-wide arm narrowed, §9's stage-4 measurement row missing, `resume.md` false once
+    the lane is armed (ruling B's "in words"), and ruling (I)'s coordinator-deaf relation unanalysed.
+  - **Test honesty** found the shadow-time pause, the unreadable journal at the lane and the executor, and the landing
+    pin vacuous.
+  - **Replay** reproduced every count.
+  The reviser applied all 22 findings. It rejected two only in their exact form, each replaced by a stronger measured
+  guard (the failed-append rule became durable, by the errors file's mtime against the last successful spawn).
+  - **The verifier:** clean on its base `282e79e44` (134 of 134 anchors, every count, 35 of 35 rows red, 0 new
+    D-tokens, 0 docserver URLs). NOT clean on main `7f7bf4afc`: #320 (stall-watch-settings wave 1) took
+    `user_version` 16 → 17, and 6 anchors miss. Workflow wf_25f19b4a-cf7 re-bases it: migration to slot 18, Task 6's
+    mail-routes block re-anchored, #320's effects re-checked, then a fresh replay.
+  - **A second block, 4430–4433,** is issued to run 314 for the four slugs past 4348–4363. The brief names all twenty;
+    the plan stays slugs-only.
+  - **Rulings on the reviser's open questions:**
+    - A one-tap breaker-clear door is not this wave. The breaker clears through the existing doors; a new
+      session-gated door is a later candidate.
+    - The recommended arming order: the expiry lane first, once wave 4's blockers are deployed and its shadow list
+      read; then the dead-coordinator lane, after its own shadow list and any breaker trip are worked through. Arming
+      stays the operator's.
+    - Task 5, the confirm copy, stays and is droppable; the operator may strike it before merge.
+    - The journal-gap trade is accepted: a coordinator whose last successful spawn is not newer than a recorded gap
+      stays listed as unmeasured, never ended, until it spawns again. Ageing a gap out is carried, for a decision on
+      shadow evidence.
+  - **The ops notice (mail 3889, acked).** On 10-07 the operator expired 15 archived workspaces by hand (8 ccrc-pwa,
+    7 expoAI-assistant; `CCD_EXPIRE_BY_HAND=1`, actor operator; 0 refused; residueBytes 0 and secretsDropped 0
+    throughout; one wip commit, expoAI-assistant-still-river). The server composed none; these are the first live
+    `ws-expire` runs, and the arming evidence for 3b. They also cut most of pre-arming item (c), the backlog.
+    `ccrc-pwa-brisk-mesa` was skipped: a stray 09-14 `tmux -S /tmp/tmuxtest_verify` server holds it. The operator ends
+    that server and re-runs, which is pre-arming item (d).
+  - **Carried (a candidate, not this programme's wave):** run 245's 9.7 GiB TMPDIR leak came from mkTmp fixtures
+    cleaned only in `afterAll`, so a killed vitest run leaks them all. Cleanup on exit or SIGTERM in the test helpers
+    would stop a repeat.
+- **2026-10-07 21:21 — wave 4 plan MERGED: #323 → `8c446eab` (21:20:21), re-based on #320.** Workflow wf_25f19b4a-cf7:
+  - **The re-base:** Opus, on `7f7bf4afc`. The migration moved to slot 18, and the coord-db describe now finds its slot
+    by DDL, as #320's does. Task 6's union is mail-routes' fifteenth. Pre-flight finding 9 was rewritten: the stall
+    watch's push gate is now one resolution, `resolveStallWatch`, files under Follow, a Settings level otherwise.
+    coordinator-skill is 161.
+  - **The replay:** Sonnet. 134 of 134 anchors match once; every count and both reds agree; 21 rows red; the guards
+    green; 0 new D-tokens, 0 docserver URLs, 0 D-TBD sentences.
+  - **CI:** #323 green, including all four server shards and `test (server)`.
+  - **Run 314's dispatch REFUSED `cap-daily`** (24 of 24, fleet-wide). The brief names 4348–4363 then 4430–4433 against
+    the plan's slug order, with the live claims of run 322 and run 302 and the 409 rule. A retry re-measures the oldest
+    in-window dispatch before each try (first age-out 22:20:17, run 307) and stops on any other answer.
+  - **Wave 3b is deployed.** Both boxes report v0.0.119 (`7f7bf4afc`, which contains #312): the fleet box by
+    `ccrc version`, the server by `/health`. The lane runs shadowed. Its feed holds "archived workspace would be
+    cleaned up" rows for 18 distinct workspaces since 10-07 10:19, re-recorded after each server restart, as its
+    in-memory list is designed to be. No `ws-expire` was composed.
+- **2026-10-07 22:28 — run 314 DISPATCHED → `ccrc-pwa-swift-cove`.** The brief was queued; the workspace was
+  freshly spawned; the worker skill was present. The retry lost the 22:20 age-out to another coordinator and took the
+  22:27:47 one. Route: Opus · high, workflow off, compact 40, Sonnet implementers, an Opus act-safety reviewer per task.
+  14 items.
+- **2026-10-08 00:49 — run 314 asks about a claim it does not hold; ruled (b) with a merge gate; one number issued.**
+  swift-cove (mail 3948, progress: Tasks 1–12 committed locally, each with an Opus per-task review) asked whether it may
+  append two describes at the end of `server/test/single-definition.test.ts` — Task 3's type-no-period pin and Task 13's
+  dead-coordinator no-writer pin — while run 302's claim 1094 holds that file (its mail 3942 to soft-delta sat
+  undelivered behind a busy gate). Ruled (mail 3949): not without the holder's consent, which is run 302's to give,
+  not this programme's; the plan's overlap text (ruling J) settles how the appends merge, not whether a live claim may
+  be crossed. The pins stay staged and land, appended and adjacent, as their own commit once claim 1094 is released or
+  lapses or consent is forwarded; if they are still out when the rest is done, the PR and the wave-done say so, the
+  review goes ahead, and the merge waits for that commit and a scoped re-review of it. No relocation to another file.
+  Consent asked of run 302's coordinator `ccrc-pwa-quiet-ridge` (mail 3950). The worker's new departure — a hold no
+  longer overwrites a final or terminal expiry report (a Task 2 review fix) — was issued 4454 by the allocator.
+- **2026-10-08 00:50 — consent given; the merge gate is lifted.** `ccrc-pwa-quiet-ridge` answered (mail 3951): run 314 may
+  append both describes at the end of `single-definition.test.ts` under claim 1094, on two conditions — no existing
+  line changes, and the second lander merges `origin/main` (never a rebase) keeping both sides. Measured on their side:
+  at `ws/soft-delta` `ebef2fbfe` run 302's only change to the file is itself a 298-line end-of-file append. Forwarded
+  to swift-cove (mail 3953); the "pins owed" path and the merge hold of mail 3949 no longer apply; 4454 stands.
+- **2026-10-08 01:39 — wave 6's effect on `ws-expire`, measured; item 8 re-ruled; one new arming blocker.** calm-mesa's
+  mail 3956 answered the carried question ("widened") and named two more `ws-expire` effects of wave 6. A read-only
+  workflow measured all three (3 Opus finders, a Sonnet refuter each; every serious claim upheld, two line numbers
+  corrected). Re-ruled under Carried constraints: the widening is kept in the attic (not a blocker); `_ws_expire_cwd_users`'
+  newline fail-open is an arming blocker; the kept-leaf silence is a follow-up. Findings for wave 6's own fix round went
+  to calm-mesa as mail 3961: `_ws_path_users` unfixed at the tip, a new wrong-target site in `_ws_leaf_remove`, a
+  new-word skew loop, a never-terminal tail retry. Its answer on the shared helper is pending.
+- **2026-10-08 01:44 — calm-mesa answered 3961 (mail 3963).** Wave 6's fix round takes all three newline sites through one helper
+  (4458), our function included on our consent. It adds `clipsKept`/`tmpRootKept` to the done document (4462). It mints
+  no new word. The sweep under Carried constraints is updated, and the next wave owns the kept-leaf reader.
+- **2026-10-08 04:37 — run 314 wave-done, re-measured, and at `awaiting-review`; review run 339 opened.** swift-cove's mail 3974:
+  Tasks 1–14 done, PR #328, tip `701839b52`, 29 own commits, 0 behind `main`, no merges. Re-measured: the remote branch,
+  the workspace HEAD and the PR head all agree; the tree is clean; CI is green on every gating leg (5 server shards,
+  `test (server)`, agent, pwa, build-pwa, node floor, typecheck), with the macOS legs red (advisory). Advanced `working` →
+  `awaiting-review` on that fingerprint. The worker's evidence is copied to `coordinator-evidence/run314/`.
+  - **The worker's report.** Local suite red only on the three known environment and load reds. One Opus review per
+    task under the act-safety lens; two whole-branch Opus reviews; one fix wave; a scoped re-review. Eight review fixes
+    beyond the plan's text, each pinned. The two single-definition pins landed in `f367a4a9c` under 1094's consent.
+    Task 5 is `1b9b4cb5c`. Some subagent commits carry a Sonnet trailer, not a finding.
+  - **Three items it asks to be decided:** the breaker trips after any lane gap of over ten minutes; the mirror reads
+    ok despite a failed generation read; the residual same-id revive. The reviewer classifies them, and this
+    programme rules on the report.
+  - **Review run 339** (kind review, reviews 314) has its brief and five items. Its dispatch was refused `cap-daily`
+    (24/24), and a retry waits for the 05:02:17 age-out. The brief names the held-out panel (`review-panel.md`), the
+    act-safety questions, the Task 5 revert measurement and sixteen-plus mutation rows.
+  - Claim 1097 was released for CCR-15's spec edits (calm-mesa's 3973; answered by 3976, copied to amber-river by 3977).
+- **2026-10-08 08:06 — ws-expire's parser misreads a pre-breadcrumb `state-changed` as resumable (CCR-15 mail 3984).**
+  calm-mesa reports the twin of review 335's F3, which run 291's fix round fixed on the reclaim side as 4457.
+  `parseExpireResult` (`server/src/archivedExpiry.ts:231`) reads every `failed` word except `probe-unmeasured` as
+  resumable. ccd prints `state-changed` (the consent binding changed) before the tombstone and the breadcrumb, so
+  nothing has started, yet the lane backs off and retries it, and reports it only past the one-hour ceiling.
+  Measured: the line is unchanged at run 314's tip `701839b52`, so wave 4 neither introduced it nor is held by it.
+  The lane is shadowed, so nothing acts on it today.
+  - **Ruled: an arming blocker, carried to wave 5.** It is parked item 4's class: a failure that will not resume
+    reports and stops at once. Wave 5's plan measures whether any ws-expire producer prints `state-changed` after
+    the breadcrumb. If none does, the parser reads it as not resumable, as 4457 does, red-first. If one does, the
+    reader waits for CCR-15 wave 7's additive `crumb` field. `pin-failed` and `tombstone-unwritable` stay resumable,
+    because each has producers after the breadcrumb.
+  - The 05:02:17 age-out went to another programme's dispatch (refused `cap-daily` again at 05:02:36). The retry
+    sleeps to the next age-out, 08:47:34. Calm-harbor's run 340 and calm-mesa's run 341 also wait on the cap.
+- **2026-10-08 10:39 — review run 339 dispatched** to `ccrc-pwa-keen-summit` (brief queued, skill present, no resume).
+  The retry lost the 08:47, 09:58 and 10:34 age-outs to other programmes' dispatches before taking the 10:39 slot.
+  Run 314 stays at `awaiting-review` on `701839b52` until the review-done arrives.
+- **2026-10-08 12:02 — review 339 ruled; wave 4 MERGED (#328 → `669b8305`); run 345 opened for wave 5.** keen-summit's
+  review-done 4002 at `701839b52`, the tip unchanged. The held-out panel ran as written: three Opus lenses, a Sonnet
+  refute pass per finding, 45 agents, none lost. 13 findings, one important. 35 mutation rows, 34 red, 1 survivor
+  (F1). Every finding is safe while both lanes are shadowed, so wave 4 merges with no fix round. Its residue is wave
+  5's first commit, as review 313's was wave 4's. The report is `coordinator-evidence/run314/review-339-701839b5.md`.
+  Run 339 closed `done`, run 345 opened (planned, block 4480–4495), and run 314 closed merged and final. The worker's
+  child workspace is queued for reclaim. The PR body was corrected first: it claimed every review fix had a red, and
+  F1 is the exception.
+  - **Arming blockers for the dead-coordinator lane, fixed in wave 5's first commit:**
+    - **F1 (important):** the lane's wiring of the executor's fresh clock (`watch.ts:4202`) survives mutation. Add a
+      lane case where a heartbeat lands between the pass's measure and the act, plus its mutation row.
+    - **F2:** in shadow, a crash, revive and second crash writes no second feed row. A sighting that ends the episode
+      clears `lastOutcome`. The shadow record is the operator's arming evidence, as review 313's F1 was.
+    - **F3:** `sweep-stopped.released` folds a release and a re-hold into one boolean. Carry which act ran and word
+      each (an overloaded value at a seam).
+    - **F13:** an act that throws after a fleet act, having closed nothing, writes no feed row. Every thrown act
+      writes one, naming what is known.
+    - **The worker's open item 2:** the mirror reads `ok` after an unreadable generation. A persistent failure must
+      be measured and reported.
+  - **F4, ruled: the stop keeps its anchor.** A mirror that turns `stale`/`unknown` between the pass and the act stops
+    the act like the switch does. The anchor and the run of passes are kept, because the adapter's own contract says
+    "a slow mirror never deletes an anchor". The port carries `.hold` as well as `.trust`. This fails safe today, so
+    it is not a blocker.
+  - **F5, ruled: both texts are true; the spec gains the missing sentence.** The programme row reads `abandoned`, and
+    nothing resets it (§5.4's "permanently"). A coordinator revived under the crashed id can still open a new run
+    under its fenced slug (resume.md), and that run's programme row still reads `abandoned`. Wave 5 amends §5.4's
+    bullet to say both, and its plan measures what the board and `toId:'coordinator'` mail do in that state. Whether
+    a new run should reset the row is a new decision: operator question (f).
+  - **F6, ruled: re-word 4348's entry** to state the qualified rule (an older ccd's audit with no `expiresAt` reads
+    `no-evidence`). This follows the 2026-10-07 ruling that the arm implements the spec's own design.
+  - **The plan corrections, in the same commit:** F7 (4454's "none minted" tail), F8 ("twenty" → twenty-one), F10
+    and F11 (stale counts), and F12 (write T6.30–T6.33 and the review-fix rows into the plan). F9 sits in a commit
+    message that the squash dropped, so nothing is owed.
+  - **The worker's open items 1 and 3 are accepted** and go to the operator with the arming question. Item 1 (A-I3):
+    a lane gap over ten minutes re-anchors every crashed coordinator together. The breaker then holds, and no shadow
+    row is written, until all but one are revived, reclaimed or abandoned. Item 3 (ruling (G)): a same-id revive
+    inside the act's last re-measure window, sub-second to one agent round trip, can still lose its runs.
+  - **Measured by the reviewer:** Task 5 reverts in one plan hunk with every suite green, so the operator's (b)
+    stays cheap either way. Migration 18 rolls back: the base build opens a version-18 `coord.db` and reads it. The
+    expiry residue's blockers (T1–T3, 4454, the older-ccd arm) each go red when mutated.
+- **2026-10-08 13:12 — #326 merged (`b0647d850`, CCR-15 mail 4011); wave 5's plan is being drafted.** What lands for
+  this programme: `_ws_dir_physical` at `_ws_expire_cwd_users`' parent (4458), so that arming blocker clears; check the
+  merged lines before arming. The `clipsKept`/`tmpRootKept` keys (4462) are on the tail's done document for both verbs.
+  F1's leaf rules reach ws-expire.
+  - **The cross-side record (review 346's safety lens, class c), ruled: no code change.** The dead-coordinator journal
+    clause counts any non-refused `reclaim` row as deliberate. A child's pre-start `reclaim` `failed`
+    `probe-unmeasured` row therefore reads deliberate, and the lane abstains. Abstention ends nothing, so this fails
+    safe. Wave 5 states it in §5.4 as an accepted abstention, reachable only by a marked child that becomes a claimant
+    or heir before any successful reclaim.
+  - **Ruled: the lane's answer to a repeating resumable failure.** After 24 hours of continuous resumable failure on
+    one archive, the report becomes final, and the lane stops asking for that archive until the archive changes. The
+    entry names the first failure, the attempts and the last detail; it never suggests a destructive verb. A restart
+    re-learns, because the lane's memory is in-memory. CCR-15 wave 7's shared terminal word maps to not-resumable when
+    it arrives.
+  - **The kept-leaf reader's lean:** a kept word raises an attention entry. An absent key (an older ccd) reads
+    unmeasured and is recorded in the feed row only, so the rollout skew does not alarm on every expiry.
+  - **The plan:** workflow wf_36dce1c9-36e. An Opus drafter prototypes on `origin/main`, with four Opus lenses (spec,
+    act safety, replay, test honesty), an Opus reviser and a Sonnet replay verifier. The plan is
+    `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md` on branch
+    `docs/workspace-lifecycle-wave5-plan`. B4, the in-lock window close, edits ccd, so the wave is AGENT-FIRST.
+- **2026-10-08 20:00 — wave 5's plan is drafted and verified. CCR-15's overlap questions are answered (mail 4036). The
+  expiry lane never strands a row.**
+  - **The plan:** workflow wf_36dce1c9-36e, seven agents over 6.7 h. The draft is `30fae386e`. Four Opus lenses (spec,
+    act safety, replay, test honesty) reviewed it, and the revision `30b841c01` applies every finding and rejects
+    none. The Sonnet replay verifier says PASS:
+    - all 119 anchors matched on `origin/main` `226bb881c` (docs-only drift);
+    - every count agreed, and 20 of 20 mutation rows went red;
+    - there is no new D-number and no docserver URL.
+    It has 13 tasks and 14 departure slugs against the 16 numbers.
+  - **Correction to the 12:02 entry (F5): "nothing resets it" is measured false.** In a fixture store, the next close of the
+    programme's last open run rewrites the row to `done` or `abandoned`. Question (f)'s framing in the Next-wave brief now
+    says so.
+  - **Restated: review 339's accepted item 3 window.** Wave 5's Task 6 reads the journal's trust before the claimant's
+    measure, so the claimant's tmux measure is now the last awaited step before the commit. The window narrows; it
+    never widens.
+  - **CCR-15 mails 4014 and 4033, answered in 4036.** Wave 7 is ruled as CCR-15's contract §14 (R65–R72), and its wave 8
+    (run 348) is in pre-flight. CCR-15's R69 asks this lane to adopt wave 8's persistent tier or to state the stranding.
+    - **One word reader, two carriers.**
+      - Wave 5 exports `keptLeafWord`: ccd's three words, with any other value read as `unmeasured`.
+      - CCR-15 wave 8's mirror carrier (word | unreported | truncated) imports it.
+      - Wave 5's done-document carrier keeps null (removed) apart from absence (`unreported`). The done document prints
+        null, so folding the two would narrow a distinction the adapter received.
+    - **Ruled, revising the 13:12 ruling: the expiry lane never strands a row in-process.** After B3's day of
+      resumable failures, the row moves to a persistent tier: one ask every 4 h, never stopping. The attention entry
+      stands until an attempt completes or the archive changes. A row parked at +∞ behind an expire breadcrumb would
+      need a server restart once the cause was fixed, and the operator prefers tolerance to freezing. Today's parser
+      reads `containment-refuted` as resumable (CCR-15 wave 7 pins that), so the word reaches the tier after a day.
+      Attention at once for it (CCR-15's `stuck` class) is wave 6's.
+    - **Ruled, so operator question (h) is withdrawn: a failed `state-changed` audits afresh,** which is the reclaim
+      side's meaning of "not resumable", rather than reading final. Its one expiry producer (B4) prints before the
+      breadcrumb, so nothing was deleted. The entry forgets its token, and a later audit mints a fresh one.
+    - **Routed to wave 6, question (k): the resumed arm's `probe-unmeasured`.** On a resumed expiry it prints after a
+      standing breadcrumb and reads final, which is `main`'s reading. Wave 6 sets CCR-15 wave 7's `crumb` on
+      ws-expire's resumed arm and reads `crumb:true` as resumable. Until then it is an arming blocker for the expiry
+      lane.
+    - Rung 8's change and the reason cap need nothing here.
+    - Order in `server/src/watch.ts`: wave 5 expects to land first, and the second lander merges main (CCR-15's R56).
+  - **The revision:** workflow wf_f00582c4-463, with an Opus reviser, an Opus act-safety lens on the delta, an Opus
+    fixer if the lens finds anything blocking, and a Sonnet replay verifier. It applies these rulings to the plan
+    branch. Then come the plan PR and run 345's dispatch.
+  - **The plan's operator questions continue the ledger's letters:**
+    - (g) F4's two halves: the plan keeps the run of passes, where the switch resets it;
+    - (i) kept entries live until a server restart;
+    - (j) B4 refuses a branch made inside the lock as well as one deleted.
+    (h) is ruled and (k) is routed.
+- **2026-10-08 21:55 — wave 5's plan is revised for the 20:00 rulings, verified again, and in plan PR #333.**
+  - **The revision:** workflow wf_f00582c4-463, four agents over 1.9 h.
+    - The reviser's `0459dcb73` applies R1–R5: the 4 h persistent tier, the `restart` reading, `keptLeafWord`,
+      (k) routed to wave 6, and the prose. There are still 14 slugs, two of them renamed.
+    - The Opus act-safety lens on that change found it act-safe on the destructive path. Every re-ask runs a fresh
+      audit and spends that audit's token, the lane still composes at most one act per pass, and no sentence names a
+      destructive verb. It found one important problem: the would-expire, retry-refusal and in-use arms dropped the
+      standing entry and reset its run. The shadow arm replaced the entry with "nothing was deleted", said of a
+      workspace that may be part-cleaned.
+    - The fixer's `c8861bfc8` adds `standingThrough(entry)`, spread last in every arm that ends no attempt: deferred,
+      would-expire, retry refusals, in-use, not-expired and no-evidence. These are rows T10.7–T10.14.
+    - The Sonnet verifier says PASS on `origin/main` `21683c0d8`:
+      - all 132 anchors matched exactly once;
+      - every suite count agreed;
+      - every mutation row went red at its own stage;
+      - the stamp is `940c0208…fc3b`;
+      - server and PWA `tsc` exit 0;
+      - there is no D-number and no docserver URL.
+  - **Correction to the 20:00 entry: the lane holds no token.** Every act audits first and spends that audit's token,
+    so "the entry forgets its token" is implemented as forgetting the learned instant and sightings: the row returns
+    to learning. An old server's retry is already a fresh audit.
+  - **Ruled, on the fixer's two open questions:**
+    - The standing sentence reads "…keeps this entry until an attempt completes, finds that none had begun or stops
+      for good, or the workspace is archived again." Accepted: the 20:00 wording was false for `restart` and for
+      final verdicts.
+    - An in-use refusal under a standing entry stays in its feed row (ccd's detail names the processes). There is
+      no new report field; the standing entry keeps the row's one report slot.
+  - **The lens's two minor findings are stated in the plan (`f8ec01cc4`) and carried to wave 6:**
+    - A `restart` is uncounted. A `state-changed` that recurs (only a racing actor can cause one) composes again
+      about every three passes, writes its feed row once, and is never listed: invisibility, not deletion.
+    - Task 11's measurement uses a detached HEAD. With HEAD symbolic to `ws/<slug>`, a branch deleted in the window
+      ends at the pin as `pin-failed` (resumable), never as `restart`.
+  - **CCR-15 mail 4040 agrees.** Its wave 8 Task 1 MOVES `keptLeafWord` to L0 (`shared/api.ts`) as `leafKeptWord`
+    once wave 5 lands. Answered in 4045: consent to L0. The word half reads null as `unmeasured`; null → null is the
+    done-document carrier's arm. The plan's test now pins that.
+- **2026-10-08 22:10 — wave 5's plan merged (#333 → `b2b438d0b`), and run 345 is dispatched.**
+  - #333's gating legs all passed, both macOS legs included, at head `f8ec01cc4`. It merged at 22:09 with
+    `--admin --match-head-commit`.
+  - **Run 345 dispatched at 22:10** to `ccrc-pwa-keen-hollow`, on the first try (`skillState: present`). It has 13 items,
+    one per task.
+    - Routing is the worker row: Opus · high main loop, workflow off, compact 40; Sonnet · high implementers; an
+      Opus · high per-task reviewer holding the act-safety lens; Haiku scouts. Nothing in wave 4's evidence moves it.
+    - Numbers 4480–4493 go to the plan's fourteen slugs in order. 4494 and 4495 are held and reported unused.
+  - **Claims live at dispatch, named in the brief:**
+    - run 347 (`ccd/ccd`, `shared/api.ts`; claim 1113), which Tasks 11 and 9 need;
+    - run 320 (`README.md` 1115, `server/src/coord/routes.ts` 1116), which Tasks 7, 12 and 3 need;
+    - run 302 (`server/test/session-hook.test.ts` 1117), which the worker only runs.
+    The worker claims per task and asks a holder for a region split on a 409. Wave 5's ccd region is
+    `_ws_expire_locked` alone, and its `shared/api.ts` edit is one line in `ExpiryAttention.kind`.
+  - **Rulings carried in the brief:**
+    - `keptLeafWord`'s shape is a cross-programme contract (4040/4045).
+    - The standing-entry sentence and the in-use reading are as ruled at 21:55.
+    - The two lens minors stay stated, not fixed.
+  - **CCR-15 mail 4047 (its contract R81) agrees on the word half.** `leafKeptWord` answers only the three words, and
+    null is `unmeasured`; null and absence belong to each carrier. In Order A, wave 5 lands first and CCR-15 wave 8's
+    Task 1 moves the function. In Order B, wave 8 lands first, and wave 5's merge of main makes the same edits,
+    importing `leafKeptWord` from `shared/api.ts`. CCR-15 asked for Order B as the second-lander rule. Run 345 had
+    already been dispatched, so it reached the worker as a brief addendum (mail 4050); CCR-15 was told in 4051.
+  - **CCR-15 mail 4052 consents to wave 5's two regions inside claim 1113 (its R56):** `_ws_expire_locked` in
+    `ccd/ccd`, and `ExpiryAttention.kind`'s one line in `shared/api.ts`. Run 345 needs no claim on either file. Wave 7
+    edits neither region: in `ccd/ccd` it edits the shared tail, `crumb` and ws-collect, and in `shared/api.ts` it edits
+    `LcRefusalToken`, `LC_REFUSAL_WORD` and `LifecycleAct`. Whichever of runs 345 and 347 lands second merges main.
+    The consent was relayed to keen-hollow as addendum 2 (mail 4058). Run 320's README and `routes.ts` claims still
+    follow the brief's rule for a refused claim.
+- **2026-10-08 23:40 — run 345 progress (keen-hollow's mail 4061; not a wave-done). Task 6's review F1 is ruled (mail
+  4062).**
+  - **Where the run stands:** Tasks 1–12 are committed on `ws/keen-hollow` at `4d6dae2c0`.
+    - Each task's Opus review approved it with no Critical finding.
+    - Every red, green and mutation-row count matched the plan's.
+    - The `ccd/ccd` stamp is the plan's own.
+    - The worker checked that every edit inside claims it does not hold stayed within the consented regions:
+      bright-mesa's 4056 (`routes.ts`, README) and CCR-15's 4052 (via 4058).
+    - Addendum 4050 (Order B) did not fire: `origin/main` carries no `leafKeptWord`. So Task 13 skips its merge step,
+      as worker clause 16 requires.
+    - Task 13 is running: the full verification, the whole-branch Opus review and Task 12's review. Then the PR and the
+      wave-done.
+  - **Correction to the 20:00 entry's restated item 3 ("narrows; it never widens"): that holds for one window
+    only.** Task 6 reads the journal's trust (the mirror's gap list and its last write-error instant) BEFORE the
+    claimant's measure.
+    - The revive window narrows to that measure's own round trip.
+    - The journal window is no longer narrow: a gap recorded during the measure's round trip is missed, and the
+      journal clause then fails open.
+  - **Ruled: keep the plan's order.** A missed revive closes a live coordinator's runs, and the claimant's measure
+    (tmux and the heartbeat) is the direct evidence of life. A gap recorded in that one round trip fails open only if
+    it also hides a deliberate act by the same claimant.
+    - The worker restates the departure `a-stale-mirror-at-the-act-is-a-hold` (4485) in the plan to name both windows,
+      in a docs-only commit if verification is already past.
+    - No code changes in wave 5.
+    - Wave 6 re-reads the gap list after the claimant's measure. `lifecycleGapGens` is synchronous, so the re-read
+      does not reopen the revive window; only the write-error stat stays early.
+    - Both windows go into the dead-coordinator lane's arming notes.
+- **2026-10-09 02:30 — run 345 wave-done, re-measured, and at `awaiting-review`. Review run 355 is opened.**
+  - **keen-hollow's wave-done 4069 (`a0afd7e42`, PR #335) said `suite: green`.** The full run at `4d6dae2c0`
+    (Tasks 1–12):
+    - server: 26300 passed, 2 failed (the brief's two known environmental reds), 93 skipped;
+    - PWA: 1762 + 1693; agent: 465; both `tsc` rc 0; every guard rc 0.
+    - Two later commits were re-run per file: `bf3fd1e7c` (the whole-branch review's I1 fix) and `a0afd7e42` (4485
+      restated per 4062). 4485 now names both windows.
+    - Every consent was used inside its region, measured from the diff: 4052 (`_ws_expire_locked` with the line-2
+      restamp `940c0208…fc3b`, and `ExpiryAttention.kind`'s line) and 4056 (`routes.ts`' `sweep-stopped` 409 body,
+      README's lifecycle sentences). Addendum 4050 (Order B) was not triggered: `origin/main` has no
+      `leafKeptWord`.
+  - **I1 became a new departure.** An unreadable ACT audit read `{failed, resumable}`, the same value as a verb failure
+    after the breadcrumb. So a day of them in shadow put the row on the persistent tier with a false "may have
+    stopped part-way" sentence, which `standingThrough` then kept. The worker fixed it rather than deferring it:
+    `audit-failed` is now its own outcome, and only a verb failure or `box` enters the tier. It is internal only, and
+    a scoped Opus re-review found it clean.
+    - The worker wrote it as a `D-TBD` placeholder, which `dtbd.test.ts` reds.
+    - I issued **4494** from this run's block (mail 4070), and told the worker not to merge `origin/main`. Main moved
+      by #315 (run 302, `69ef7102b`), whose only file in common with the branch is README.md; `merge-tree` is clean,
+      and the PR's CI runs on the merge ref.
+    - Wave-done 4071 (`d16ae1abc`, one docs-only commit): dtbd 1, deviation-refs 31 and topology-clean 55, all
+      rc 0.
+  - **Re-measured:** `ws/keen-hollow` and PR #335's head are both `d16ae1abc`, OPEN and MERGEABLE. Of 15 commits, none
+    is a merge. The delta from `a0afd7e42` is the plan's one line. Advanced `working` → `awaiting-review` with that
+    fingerprint.
+  - **Review run 355** (`kind:'review'`, reviews 345, opened with the programme's own title). Its brief names the
+    held-out panel, the plan's Review Focus, the act-safety harms, the kept-word contract with CCR-15 (R81), 4494,
+    Task 6's two windows, the `ccd/ccd` region and both skew orders, sixteen-plus mutation rows, and the worker's
+    residuals for classification. The worker's evidence is copied to
+    `.superpowers/sdd/coordinator-evidence/run345/`.
+  - **The worker's residuals,** for wave 6 or the arming notes (none bears on act safety, by the worker's reading;
+    the panel classifies them):
+    - "asks again every 4 hours" is an upper bound, and a `flock-unavailable` answer halts every act for the process;
+    - disarming over a standing row writes "nothing was deleted" into its shadow feed row;
+    - a permanently unreadable generation pins the mirror `stale` with no diagnostic (fails shut; it goes into the
+      dead-coordinator arming notes);
+    - Task 8's census bounds the producer at the breadcrumb, not at `_ws_tombstone`;
+    - audit and verb failures share one failure count;
+    - no lane case covers a hold at the re-measure after the fleet act;
+    - kept entries are unbounded until a restart (question (i)).
+- **2026-10-09 07:00 — review 355 accepted and ruled (warm-river's mail 4092). Run 345 is back at `working`, and
+  fix round 1 is sent (mail 4093).**
+  - **The review:** report `.superpowers/sdd/coordinator-evidence/run345/review-355-d16ae1ab.md`, at `d16ae1abc`.
+    - The held-out panel ran in full. The reproduce lens's first run died part-way; it was counted unverified and
+      re-run.
+    - 7 findings were confirmed, 1 refuted, and none left unexamined.
+    - No act-safety defect: no workspace is deleted and no live or restarting coordinator's run is ended, on any
+      path. No live marker is written.
+    - 23 mutation rows, every one red. The suites are green apart from the known reds, and CI ran 572 files green on
+      the merge ref (it carries #315).
+    - All of Task 6's questions are answered: only the claimant's measure lies between the last await and the commit.
+    - Review run 355 closed `done` with the reviewer's own `{reviewedTip, report}`.
+  - **Rulings:**
+    - **F1 (important; fix now).** 4494 kept `audit-failed` off the tier only at the gate: the shared
+      `failures`/`failingSince` run still fed it. LIVE, a day of act-audit failures followed by ONE verb failure entered
+      the tier at once, with a false first instant and a false attempt count.
+      - The tier now counts verb failures only (`failed` resumable, or a box word), on its own run: start instant and
+        count. The tier gate and the standing report's `at` and `attempts` read that run.
+      - The ladder and the hour-ceiling report keep the shared run. This is what the `EXPIRE_FAILURE_GIVE_UP_MS`
+        docstring and 4491 already say.
+      - Red first, with one mutation row. 4494's text is extended, and no number is added.
+    - **F3 (fix now):** §5.3 gains 4494's sentence.
+    - **F2 (words; fix now):** §5.3 names the attached-HEAD shape, where a deleted branch is refused earlier at the pin
+      as `pin-failed`. No `ccd/ccd` edit this round, so no restamp and no citation tax. The ccd comment's clause goes to
+      wave 6, with the symbolic-HEAD control case.
+    - **F4 (fix now):** the plan's counts become fifteen departures and one number unused.
+    - **F6 (fix now):** README's sentence says the row is listed after an hour (a box answer at once), and becomes a
+      standing entry after a day.
+    - **F7 (ruled yes):** 4485's text names the mirror's health snapshot as the journal window's third early read.
+      Text only now. Wave 6 re-reads both the health state and the gap list after the claimant's measure (both are
+      synchronous). The arming notes carry all three.
+    - **F5 (record only):** "guards.sh" and "ten guards" cannot be reproduced. The fix round names every guard file and
+      its count.
+  - **Next:** the fix round's wave-done, then a NEW scoped review run (review runs are never reused), then the merge.
+- **2026-10-09 07:15 — fix round 1 is done (keen-hollow's wave-done 4094 at `cbce7085b`), re-measured, and at
+  `awaiting-review`. Scoped review run 356 is dispatched to `ccrc-pwa-amber-basin`.**
+  - **The round's two commits:**
+    - `98bcee9a4` (F1): `verbFailures` and `verbFailingSince` are set only by a resumable `failed` or a box answer, and
+      `audit-failed` carries them unchanged. They reset at every place the shared run resets. The tier gate and the
+      standing report's `at` and `attempts` read them; the ladder and the hour ceiling keep the shared run. Shadow
+      behaviour is unchanged. The policy test went red first (2 failed of 63) and is green at 63, and the mutation row
+      reds 2 of 63. 4494's text says the tier's clock is verb-only.
+    - `cbce7085b` (docs): §5.3 for F2 and F3 (F3 is pinned in `expiry-lane-prose`), the plan's counts (F4), README
+      (F6), and 4485's health snapshot (F7).
+  - **What the round left alone:** `ccd/ccd`, `shared/api.ts`, the wire and the routes. No new number; 4495 is
+    unused.
+  - **Every verify file is named, as F5 asked, and each exited 0.**
+  - **The worker's scoped Opus re-review carries three minors:**
+    - (1) no test pins a verb, then audit, then verb interleaving: the tier's day spans the audit failures, while
+      `attempts` counts verbs only. Review 356 classifies it.
+    - (2) `98bcee9a4`'s commit body overstates where its counts were measured.
+    - (3) Three README lines are 122–125 characters long.
+  - **Re-measured:** the branch and PR #335's head are both `cbce7085b`, OPEN and MERGEABLE, with no merges. The round
+    is 6 files, +89/−36.
+    - Main moved again, by #330 (run 320, which touches README and `routes.ts`), #319 and #336. `merge-tree` is clean,
+      and CI runs on the merge ref.
+    - Advanced `awaiting-review`.
+  - **Review run 356 is opened** with the programme's own title. Its brief (5.1 KB) names the held-out panel, F1's
+    reset-site census, the interleaving question, each word, and the scope check.
+- **2026-10-09 07:50 — review 356 accepted and ruled (amber-basin's mail 4097). Run 345 is back at `working`,
+  and fix round 2 is sent (mail 4098).**
+  - **The review:** report `.superpowers/sdd/coordinator-evidence/run345/review-356-cbce7085.md`, at `cbce7085b`.
+    - The held-out panel ran with 39 agents: none errored, no lens was unverified, and nothing was left unexamined.
+    - No act-safety defect and no scope breach. The round touches only the tier's clock and report, which feed neither
+      eligibility, the token nor the argv. Shadow never starts the verb run.
+    - All 13 suites and both `tsc` runs are green, matching the worker's counts. The F1 row and the audit-carry, `at`
+      and `attempts` rows red.
+    - The worker's interleaving minor (verb, then audit, then verb) is TRUE AS WRITTEN.
+    - Review run 356 closed `done`.
+  - **Rulings: all three findings are fixed in this round, with tests and words only.** The project's mutation-table rule
+    makes a new guard ship with a test that reds when it is deleted, and the verb run's carry and resets are this
+    wave's new guards. The code at the tip is correct.
+    - **F1:** `standingThrough`'s carry of the verb run has no red guard (M7 stays green). Unguarded, a standing entry
+      could fall back to the hour-ceiling report after an answer that ends no attempt. The fix is one policy case: a
+      standing entry, then each ends-nothing answer, then one verb failure. Expect the same `at` and `attempts` + 1,
+      red against M7.
+    - **F2:** none of the verb run's reset sites has a red guard (M3–M6 stay green). The fix is red cases for the
+      `steady` and in-use resets, in Probe B's shape. Each learn arm gets a case through `archivedExpiryLearned`, or a
+      stated reason it cannot be reached.
+    - **F3 (words):** §5.3's parenthetical becomes "with HEAD not symbolic to `ws/<slug>` (detached, on another
+      branch, or with the worktree gone), one deleted". It understated the shapes, on the safe side.
+    - The worker mails before making any source change. No `ccd/ccd`, `shared/api.ts`, wire or route change, and no new
+      number.
+  - **Next:** the wave-done, a NEW scoped review run, then the merge.
+- **2026-10-09 08:00 — fix round 2 is done (keen-hollow's wave-done 4099, at `b5aa09fb0`), re-measured, and at
+  `awaiting-review`. Scoped review run 357 is dispatched to `ccrc-pwa-soft-ridge`.**
+  - **One commit, tests and words only.** `archived-expiry-policy.test.ts` gains five cases (63 → 68), and §5.3 gets
+    F3's parenthetical. No source change was needed.
+    - F1's standing-carry case reds against M7.
+    - The `steady` reset reds against M3, and the in-use reset against M4.
+    - The learn arms are reached through `archivedExpiryLearned` and the existing `learnedDoc` helper, so no new
+      fixture was needed. They red against M5 and M6.
+    - A control case shows the reset cases bite.
+    - Every red is 1 failed of 68, and every case is green at 68 once restored. The worker's scoped re-review
+      reproduced all five reds.
+  - **Verified, every file named:** all nine files and server `tsc` exited 0.
+  - **Re-measured:** the branch and the PR's head are both `b5aa09fb0`, OPEN and MERGEABLE. There are no merges, and the
+    round is 2 files, +77/−1. `merge-tree` against main `f82cb9fbc` is clean. Advanced to `awaiting-review`.
+  - **Review run 357:** its brief (4.8 KB) names the held-out panel, each case against its own mutation, the
+    wrong-reason check, F3 against `ccd/ccd`'s pin, and a scope check: tests and words only.
+- **2026-10-09 08:20 — review 357 is clean. Wave 5 MERGED (#335 → `6fc7ef115`), run 345 is closed, and run 358 is
+  opened for wave 6.**
+  - **Review 357** (soft-ridge's mail 4101, at `b5aa09fb0`) found nothing at any lens: 0 confirmed, 1 refuted 3–0, none
+    unexamined, none unverified (the correctness lens was re-run after an empty first return).
+    - M3–M7 each red exactly their own new case, and each restores to 68 of 68.
+    - Every answer in each loop bites on its own, and the control case shows the resets bite.
+    - F3's parenthetical is true against `ccd/ccd`.
+    - The scope was the test file and the spec only.
+    - Review run 357 closed `done`.
+  - **Run 358 opened first** (planned, the run's wave 7 of 7, without a `sessionId`: keen-hollow is a spent child). Its
+    block 4617–4632 was minted at run-open. Wave 6 waits on CCR-15 wave 7 (run 347, still building).
+  - **The merge:**
+    - Run 345 advanced to `merging` at the re-measured tip `b5aa09fb0`.
+    - `main` has no merge queue, and `gh pr checks 335 --required` exited 0 (the macOS legs are advisory).
+    - Merged with `gh pr merge 335 --squash --admin --match-head-commit b5aa09fb0`: MERGED at 08:23Z as `6fc7ef115`,
+      head `b5aa09fb0`.
+    - Run 345 closed `done` (`final`, `prPhase:'merged'`), released, and its child reclaim is queued. The evidence was
+      copied first.
+  - **Deploy:** release v0.0.134 carries `6fc7ef115`. It goes AGENT-FIRST through the updater, and the operator
+    applies it. Both lanes stay SHADOWED.
+  - **CCR-15 told (mail 4102):** wave 5 landed first, so this is ORDER A of R81. CCR-15 wave 8's Task 1 moves the word
+    half to `shared/api.ts` as `leafKeptWord`, and `expireLeafKept` stays here and imports it. Run 347 is the second
+    lander on the two consented regions, so its merge of main absorbs `_ws_expire_locked`'s three hunks with the
+    restamp, and `ExpiryAttention.kind`'s `'kept'`.
+  - **Before the operator arms either lane:**
+    - The expiry lane still waits on wave 6's question (k), and on review 355's F1, now fixed (the tier's clock is
+      verb-only).
+    - The dead-coordinator lane's notes gain Task 6's three early reads (the mirror's health state, its gap list, and
+      the last write-error instant). Wave 6 re-reads the first two.
+    - A permanently unreadable generation pins the mirror `stale`, with no diagnostic. It fails shut.
+  - **Carried to wave 6:**
+    - from review 355: F2's ccd comment, with the symbolic-HEAD control case, and F7's health re-read;
+    - from the worker's residuals: the 4-hour upper bound and `flock-unavailable`'s halt; the shadow "nothing was
+      deleted" over a standing row; Task 8's census bound at `_ws_tombstone`; a lane case for a hold at the post-act
+      re-measure.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -644,32 +1249,118 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - Released/Archived fold disjointness rests on `released.ts` alone, and `inReleasedFold` could add
     `!inArchivedFold` (FM7).
   Wave 3 rewrites the archive's end of life, so its plan takes these up or rules them out.
+- **`ws-expire` has no recompute-to-pin branch-state check** (CCR-15's coordinator, mail 3939, 10-07, item 8 of
+  wave 6's X2 list). `_ws_expire_locked` recomputes the fingerprint inside the lock (`_ws_expire_fork`), then pins
+  without re-reading the branch. **Re-ruled 2026-10-08 01:39** on wave 6's reviewer's "widened" (mail 3956), measured read-only at
+  `8c0f2cd94` against `origin/main` (wf_00681611-998):
+  - **The window widens in the deleted direction only, and more broadly than the reviewer said.** At wave 6's tip, an
+    expiry now completes where `main` stopped at `pin-failed` in three cases: a branch deleted inside the in-lock window,
+    a branch ALREADY ABSENT at mint, and a branch deleted between the fresh pin and the settle. The pin reads the branch
+    three ways and treats a proven-absent one as nothing to pin. A HEAD still symbolic to the deleted branch fails the
+    pin, as before.
+  - **The work is kept in refs, not reflogs.** Commits, the WIP commit, and every commit the worktree's reflogs name
+    are pinned under `refs/ccrc/attic/<id>/*` in the main repo. git gc never prunes those, and only the terminal-only
+    `ccd ws-attic --drop` removes them. In the widened cases, ignored and secret-shaped files go with the tree, as the
+    standing expiry policy (and the token's digests) says. `main` kept them only because its pin failed.
+  - **Ruled: not an arming blocker.** Closing the in-lock window (refuse `state-changed` on present→absent between the
+    fork and the pin's branch read) stays a follow-up after #326, reusing wave 6's three-way read. The operator gets
+    both behaviour facts with the arming question.
+- **ARMING BLOCKER for the expiry lane: `_ws_expire_cwd_users` fails open on a newline-ended path** (CCR-15 mail 3956
+  item 2, confirmed 2026-10-08 01:39). It resolves the worktree's parent with a bare `$(cd … && pwd -P)`, and command substitution
+  strips trailing newlines. A parent whose physical path ends in a newline then matches no `/proc` cwd, and a process
+  inside the tree reads as nobody. This is the expiry's only cwd-in-use guard, and its body is 3b's. Exposure on the
+  fleet box today is nil, measured. Wave 6 carries two twins: `_ws_path_users`, still unfixed at `8c0f2cd94` despite the
+  review's word, and `_ws_leaf_remove`'s root, a new site that can remove the wrong target. Both went to calm-mesa (mail
+  3961) with one question: does wave 6's fix round apply one shared sentinel helper at all three sites (this programme
+  consents to that one change to the body), or does lifecycle take its own after #326?
+  - **Answered 2026-10-08 01:44 (mail 3963): wave 6 takes all three** through one helper on `_ws_reclaim_resolve`'s sentinel
+    idiom, refusing a newline-bearing physical path as unmeasured. In `_ws_expire_cwd_users` only the parent's
+    resolution changes, landing on its existing `_ws_reclaim_unmeasured` arm, red-first, one case per site. CCR-15
+    defines it as 4458, naming the three sites and this programme's consent. **The blocker clears when #326 merges
+    with it**; check the merged lines before arming.
+- **ARMING BLOCKER for the expiry lane: a pre-breadcrumb `state-changed` reads resumable** (CCR-15 mail 3984, ruled
+  2026-10-08 08:06). `parseExpireResult` at `archivedExpiry.ts:231` treats every `failed` word but `probe-unmeasured`
+  as resumable, so an act that never started is retried and reported only after the hour. Wave 5 measures the
+  `state-changed` producers. If all print before the breadcrumb, the parser reads the word as not resumable, as
+  CCR-15's 4457 does on the reclaim side; otherwise it waits for CCR-15 wave 7's `crumb` field.
+  - **Measured by wave 5's plan (2026-10-08 20:00):** `main` has no expiry producer. B4's new refusal is the only one,
+    on the fresh arm and before the breadcrumb, and a census of every occurrence in ccd/ccd holds that. **Ruled: it
+    audits afresh** (the 20:00 entry). Wave 5 closes this blocker.
+- **ARMING BLOCKER for the expiry lane: a resumed expiry's `probe-unmeasured` reads final** (wave 5's safety lens,
+  question (k); routed 2026-10-08 20:00). `_ws_expire_locked` prints it at its verdict point on every arm. On a resumed
+  expiry it therefore follows a standing breadcrumb, and the tree may be part-deleted, yet the parser stops the lane
+  for that archive until a restart. Wave 6 sets CCR-15 wave 7's `crumb` on ws-expire's resumed arm and reads
+  `crumb:true` as resumable.
+- **ARMING BLOCKERS for the dead-coordinator lane (review 339, ruled 2026-10-08 12:02):** F1, the lane's wiring of the
+  fresh clock, has no red. F2: a repeated crash writes no second shadow row. F3: release and re-hold share one
+  boolean. F13: a thrown act with nothing closed writes no feed row. The worker's open item 2: the mirror reads `ok`
+  after an unreadable generation. Wave 5's first commit takes all five; check the merged lines before arming.
+- **Carried (a follow-up, not a blocker): a kept leaf is silent.** When ccd's shared tail keeps clips or the temp
+  root, `ws-expire` still prints `expired`. The server records "cleaned up" and raises no attention entry. The keep
+  lives only in the journal row's `detail`, which no PWA surface renders. CCR-15 is asked for additive
+  `clipsKept`/`tmpRootKept` keys on the done document. The server reads them into an attention entry in this
+  programme's next wave. Also on the CCR-15 side: if F1 mints a new nested word, `ExpireToken` gains it in the same PR,
+  or it reuses `containment-unproven`. Otherwise the audit reads `unreadable` and re-audits every pass through the
+  rollout skew. And the tail's moved-tree arm retries hourly forever, never terminal.
+  - **Answered 2026-10-08 01:44 (mail 3963).** The done document gains `clipsKept` and `tmpRootKept` (CCR-15's 4462, in wave 6's
+    fix round), each the kept word (`refused`/`unmeasured`/`in-use`) or null. An older ccd omits both, so absence
+    reads as unmeasured. `parseExpireResult` reads named keys only, so agent-first stays safe. **The reader and its
+    attention entry are this programme's next wave.** No new word: rows in a leaf refuse `containment-unproven`
+    (4455), which `ExpireToken` already holds as terminal. The never-terminal tail retry stays as written (fail-closed).
+    The expiry lane's answer to a repeating resumable failure is this programme's. A shared terminal word is raised at
+    CCR-15 wave 7's pre-flight, beside its carried "persistent per-child failures that retry for ever".
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`, `~/.cc-limits`
   or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec whitelist; never print
   secret contents.
 
 ## Next-wave brief
 
-Waves 1 and 2 are merged (#229 `a7b9831c`, #233 `fe7b9775`). Wave 1's measurement on the server box is recorded
-above: `released_top_level` 0 and `released_wire_only` 0, and the archive→return delay does not hold stage 3. After
-wave 2's deploy converges, check that `/health` reports the merge's tag and that doctor shows 0 FAIL lines.
+Waves 1, 2, 3, 3b, 4 and 5 are merged: #229 `a7b9831c`, #233 `fe7b9775`, #286 `77c11245`, #312 `9b074208`, #328
+`669b8305` and #335 `6fc7ef115`. Both lanes ship SHADOWED. The expiry lane records "would expire" and composes no `ws-expire` until the
+operator creates `$REG/expire-lane-live` by hand. The dead-coordinator lane records "would end" and closes nothing until
+the operator creates `$REG/dead-coordinator-lane-live` by hand.
 
-Wave 3 (the `ws-expire` verb, AGENT-FIRST) is open as run 245 (planned), with deviation numbers 3886 to 3895,
-written bare. Wave 3b (the lane) is planned after it merges.
-- **Dispatched 2026-10-05 12:41** to `ccrc-pwa-bright-canyon` (plan #252; numbers 3886–3895 and 3958–3965).
-  Wave 3b (the lane) is planned after it merges.
-- **Its plan's FIRST commit is wave 2's residue** from review 244 (`~/.cc-clips/ccrc-pwa-still-canyon/review-244-53f31389.md`):
-  - F1: `stopVerdict` reads `status` only when it is a string, and its docstring and the 3881 entry name the
-    parsed-value limit (a non-compact file diverges from ccd's grep);
-  - F2: 3881 states the main-checkout consequence of reading the config dir first, with a pin;
-  - F3: the present-but-malformed live file is named as a stricter arm in the spec, in 3881 and in the docstring.
-- **It also takes up**, or rules out, the follow-ups listed under Carried constraints:
-  - the three instrument items;
-  - the 409 detail;
-  - `already archived`;
-  - the 404 fold;
-  - fold disjointness.
-- **The operator's questions** from wave 2's plan stay open:
-  1. whether the PR sheet's "Archive now" opens ArchiveSheet;
-  2. whether the remote-mode worktree check stays deferred to `ccd`;
-  3. whether L5's "Its workers will be cleaned up" stands until wave 3.
+**Wave 6 is run 358**, opened 2026-10-09 08:20 (planned; the run's wave 7 of 7), with numbers 4617–4632, written
+bare. It waits on CCR-15 wave 7 (run 347, building) reaching `main`. Then its plan is drafted from the wave 6 bullet
+below and the carried items in the 10-09 entries. Wave 5 (run 345) merged as #335 (`6fc7ef115`, the 10-09 08:20
+entry). Its evidence and reviews 355–357 are in `.superpowers/sdd/coordinator-evidence/run345/`.
+- **Wave 5 deploys AGENT-FIRST through ccrc's updater** (the operator applies it from the console). Afterwards, check
+  that both boxes report v0.0.134 (the release that carries `6fc7ef115`) or later. v0.0.134 also carries wave 4, so
+  it covers the v0.0.123 check.
+- **Wave 4 deploys through ccrc's updater** (the operator applies it from the console). Afterwards, check that both
+  boxes report v0.0.123 or later, and that the feed shows the dead-coordinator lane's shadow rows.
+- **The operator's questions before arming** are (b)–(d) in the 06:01 entry. (b), the confirm copy, is still open. On
+  10-07 the operator expired 15 archived workspaces by hand, which cuts most of (c), the backlog. (d) is in hand: the
+  operator ends brisk-mesa's stray tmux server (see the entry after 06:05).
+- **Arming the expiry lane also waits on** a check of `_ws_expire_cwd_users`' merged newline fix (4458, in #326,
+  merged 13:07), on wave 5's `state-changed` reading (Carried constraints, 08:06), and on wave 6's reading of a
+  resumed expiry's `probe-unmeasured` (question (k), Carried constraints). Wave 4 closed
+  its own blockers, and review 339 found each one red when mutated. Once #326 lands, the operator
+  should also know two facts. An archived workspace whose branch is already gone now expires, with its work kept in
+  the attic, where `main` stops at `pin-failed`. In that case, ignored and secret-shaped files go with the tree.
+- **Arming the dead-coordinator lane waits on** wave 5's first commit (Carried constraints, 12:02) and, in the
+  recommended order, on the expiry lane being armed first. The operator should know the worker's open items 1 and 3
+  (the 12:02 entry): a lane gap over ten minutes trips the breaker for every crashed coordinator at once, and a
+  same-id revive in the act's last instant can still lose its runs.
+  From wave 5's Task 6 (the 23:40 entry), the operator should also know which window narrows. The revive window
+  narrows to the claimant measure's round trip. In exchange, three things read before the measure can change during
+  that round trip unseen: the mirror's health state, its gap list, and the last write-error instant. Wave 6 re-reads the
+  first two.
+- **Operator question (f), from review 339's F5:** when a coordinator revived under a crashed id opens a new run
+  under its abandoned programme, should the programme row return to active? Today it stays `abandoned` until the next
+  close of the programme's last open run rewrites it (measured in a fixture store). Meanwhile, `toId:'coordinator'` mail
+  without a `runId` is refused while nothing else is active, and is delivered to ANOTHER programme's coordinator when
+  exactly one other programme is active. Mail with a `runId` reaches the revived coordinator.
+- **The plan's other operator questions:** (g) F4's two halves; (i) the life of a kept-leaf entry; (j) B4's two
+  directions. (h) is ruled (the 20:00 entry).
+- **After wave 5 — wave 6, once CCR-15 wave 7 is on `main`:** ws-expire sets `crumb` on its resumed arm, and the
+  parser reads `crumb:true` as resumable (question (k), an arming blocker for the expiry lane). `containment-refuted`
+  gets attention at once (CCR-15's `stuck` class). Also from wave 5's act-safety lens (the 21:55 entry): a count
+  for a `restart` that recurs, so it climbs the failure ladder; and a control case with HEAD symbolic to `ws/<slug>`,
+  pinning that a branch deleted in the window ends at the pin as `pin-failed`. From Task 6's review F1 (the 23:40
+  entry) and review 355's F7 (the 10-09 07:00 entry): `stillCrashed` re-reads the mirror's health state and its gap list
+  after the claimant's measure. Both reads are synchronous, so the revive window stays closed. From review 355's F2:
+  `_ws_expire_locked`'s consent-branch comment names the attached-HEAD shape, where a deleted branch is refused at the pin as
+  `pin-failed`.
+- **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
+  L5's sentence.
