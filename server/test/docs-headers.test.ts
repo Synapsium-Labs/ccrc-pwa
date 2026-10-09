@@ -695,3 +695,115 @@ describe('T11 review 2-1: a bodiless gate refusal on a docs route keeps its stat
     expect(res.json()).toStrictEqual({ ok: false, failure: 'response-type-refused' });
   });
 });
+
+// ===== Task 11 review 2-2: a WebSocket upgrade to a docs route escapes onSend only after the gate and provenance =====
+// `@fastify/websocket`, registered at the root, wraps every route's handler: an upgrade that passes the gate and the
+// docs provenance hijacks the reply and is answered `101` before the plugin's `onSend`, so the 101 carries none of
+// the four headers. The departure is safe because the gate and provenance run first (a browser cannot set the marker
+// on an upgrade), and the hijacked socket runs no docs exec. Real listening servers, a real `ws` client, and a
+// recording runner (every docs verb is an exec, so an empty record is "no lane, cache or flight was reached").
+
+/** The origin an armed fixture accepts (the gate's own default for a loopback server). */
+const WS_ORIGIN = 'http://localhost:7788';
+
+/**
+ * The real server on loopback over a fixture HOME, its runner RECORDING every call (each answers ok), `auth` armed or
+ * dark; armed, a session cookie is returned too.
+ */
+async function listeningRecording(auth: boolean):
+    Promise<{ app: FastifyInstance; execs: string[][]; cookie: string }> {
+  const execs: string[][] = [];
+  const run: Runner = async (_cmd, args) => {
+    execs.push([...args]);
+    if (args[0] === 'docs-index') return m54Exit(0, line(indexOk()));
+    if (args[0] === 'docs-tree') return m54Exit(0, line(treeOk()));
+    if (args[0] === 'docs-show') return m54Exit(0, showLine(M54_PIN, M54_MD));
+    return m54Exit(1, '');
+  };
+  const home = mkTmp('ccrc-docs-ws-');
+  const base = testDeps(home, run);
+  if (auth) {
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
+      `${await hashLine(M54_PASSPHRASE, M54_FAST_PARAMS, 1)}\n`, { mode: 0o600 });
+  }
+  const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP], rosterFp: null, build: null };
+  const deps: Deps = { ...base, cfg: { ...base.cfg, authEnabled: auth, cookieSecure: false }, fleetState: state };
+  const app = await buildServer(deps);
+  await app.ready();
+  opened.push(app);
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  let cookie = '';
+  if (auth) {
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: M54_PASSPHRASE } });
+    expect(login.statusCode, login.body).toBe(204);
+    const set = login.headers['set-cookie'];
+    const first = Array.isArray(set) ? set[0] : String(set);
+    cookie = first.slice(0, first.indexOf(';'));
+  }
+  return { app, execs, cookie };
+}
+
+/** What an upgrade that was ACCEPTED saw: its 101 headers, every message before the close, and the close itself. */
+interface Accepted { status: number; headers: Record<string, unknown>; messages: string[]; closed: boolean }
+
+/** Upgrade `url` with `headers`; resolve once the accepted socket has closed (the server closes it at once). */
+function upgradeAccepted(app: FastifyInstance, url: string, headers: Record<string, string>): Promise<Accepted> {
+  const port = (app.server.address() as AddressInfo).port;
+  return new Promise((resolve, reject) => {
+    const c = new WebSocket(`ws://127.0.0.1:${port}${url}`, { headers });
+    const seen: Accepted = { status: 0, headers: {}, messages: [], closed: false };
+    c.on('upgrade', (res) => { seen.status = res.statusCode ?? 0; seen.headers = res.headers; });
+    c.on('message', (d) => { seen.messages.push(String(d)); });
+    c.on('unexpected-response', () => { c.terminate(); reject(new Error('the upgrade was refused')); });
+    c.on('error', () => { /* an abrupt close after the 101 is the expected end */ });
+    c.on('close', () => { seen.closed = true; resolve(seen); });
+  });
+}
+
+describe('T11 review 2-2: a WebSocket upgrade to a docs route escapes onSend only after the gate and provenance, with zero execs', () => {
+  it('(a) dark: a browser-shaped upgrade (same origin, no marker) is refused 403 foreign-request {why:marker}, decorated, no exec', async () => {
+    const { app, execs } = await listeningRecording(false);
+    const res = await upgradeRefusal(app, '/api/docs/projects',
+      { origin: WS_ORIGIN, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'websocket' });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.body)).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
+    expectDecorated('ws marker', { statusCode: 403, headers: res.headers });
+    expect(execs).toStrictEqual([]);
+  });
+
+  it('(a) armed, with a session: the same browser-shaped upgrade is refused by provenance, decorated, no exec', async () => {
+    const { app, execs, cookie } = await listeningRecording(true);
+    const res = await upgradeRefusal(app, '/api/docs/projects',
+      { origin: WS_ORIGIN, cookie, 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'websocket' });
+    expect(res.status).toBe(403);
+    expect(JSON.parse(res.body)).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
+    expectDecorated('ws marker armed', { statusCode: 403, headers: res.headers });
+    expect(execs).toStrictEqual([]);
+  });
+
+  it('(b) armed, no session: the gate refuses the upgrade 401 before provenance, and the refusal carries the four headers', async () => {
+    const { app, execs } = await listeningRecording(true);
+    const res = await upgradeRefusal(app, '/api/docs/projects', { ...PWA, origin: WS_ORIGIN });
+    expect(res.status).toBe(401);
+    expectDecorated('ws gate 401', { statusCode: 401, headers: res.headers });
+    expect(execs).toStrictEqual([]);
+  });
+
+  it('(c) an upgrade that passes the gate and provenance gets 101 and runs ZERO docs execs: no body, the socket closed', async () => {
+    for (const auth of [false, true]) {
+      const { app, execs, cookie } = await listeningRecording(auth);
+      const headers: Record<string, string> = { ...PWA, origin: WS_ORIGIN, ...(auth ? { cookie } : {}) };
+      for (const url of ['/api/docs/projects', '/api/docs/demo/tree']) {
+        const seen = await upgradeAccepted(app, url, headers);
+        expect(seen.status, `${url} armed=${auth}`).toBe(101);
+        expect(seen.messages, `${url} armed=${auth}: no docs body`).toStrictEqual([]);
+        expect(seen.closed, `${url} armed=${auth}`).toBe(true);
+      }
+      expect(execs, `armed=${auth}: an upgrade reaches no exec, lane, cache or flight`).toStrictEqual([]);
+      // The same server still answers a plain GET as before: the closed upgrade left no lane slot held.
+      const plain = await app.inject({ method: 'GET', url: '/api/docs/projects', headers: auth ? { ...PWA, cookie } : PWA });
+      expect(plain.statusCode).toBe(200);
+      expect(execs.map((e) => e[0])).toStrictEqual(['docs-index']);
+    }
+  });
+});
