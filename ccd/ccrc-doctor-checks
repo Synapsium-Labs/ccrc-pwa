@@ -7391,7 +7391,7 @@ _check_history() {
 # NEVER A VALUE, A CODE OR A HASH OF EITHER. The token files are read in THIS process, line by line, by the
 # extraction rule every reader shares (`extractToken`: the first line that is neither blank nor a `#` comment,
 # all whitespace removed), only to learn whether a value line exists; the value is never echoed, passed to a
-# child, hashed or kept. The two JSON files hold no secret and are read by `python3 -c`, whose output is
+# child, hashed or kept. The two JSON files hold no secret and are read by `python3 -I -c` (isolated: no cwd or environment on its path), whose output is
 # words and numbers this function validates again before any of it reaches a line.
 #
 # WAVE 1 PRINTS PASS OR SKIP ONLY (D-4391; the operator's ruling of 2026-10-07, 15:30). Every state that will
@@ -7405,8 +7405,13 @@ _check_history() {
 # THE WORDS ARE L0's, pinned by `doctor-box-token.test.ts`: `_BT_HOLDS` is `TOKEN_HOLDS`, `_BT_OWED` is
 # `OWED_REASONS`, `_BT_ORIGINS` is `TOKEN_ORIGINS` (`shared/box-token.ts`); `_BT_SYNC_ERRORS` is
 # `TOKEN_SYNC_OP_ERRORS` and `_BT_TRANSPORTS` is `TOKEN_TRANSPORTS` (`shared/agent-protocol.ts`); `_BT_FAIL_AT`
-# is `FAILURES_FOR_BANNER` (`server/src/token/policy.ts`). `_BT_LOST_WORDS` are the rest of
-# `BoxTokenView.lastFailure`'s vocabulary, which has no L0 list of its own.
+# is `FAILURES_FOR_BANNER`, `_BT_PENDING_CAP` is `PENDING_HARD_CAP` and `_BT_TICK_MS` is `DRIVER_TICK_MS`
+# (`server/src/token/policy.ts`). `_BT_LOST_WORDS` are the rest of `BoxTokenView.lastFailure`'s vocabulary, which
+# has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS` (pinned by a text scan of that file) plus
+# `mint-failed`, the doctor's own extra (the console view's word for a failed mint; the state record never holds it).
+# D-4551's two words are doctor-local, like `pending-overdue`: `retire-overdue:<min>` (a previous value more than
+# one driver tick past its `hardUntil`) and `retiring-unlanded:<min>` (the oldest `retiring` digest older than two
+# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`.
 #
 # `set +x` is the function's first statement, not the file's: this file is sourced into `ccrc`, and doctor runs
 # each check in its own `$( … )`, so it cannot leak; it writes nothing, so it sets no umask (a file-level
@@ -7418,16 +7423,20 @@ _BT_ORIGINS=(adopted minted rotated)
 _BT_SYNC_ERRORS=(bad-code busy spawn-failed claim-refused code-used write-failed proof-failed proof-unmeasured stale-client)
 _BT_TRANSPORTS=(http https)
 _BT_FILE_PROBLEMS=(missing unusable placeholder unreadable changed retired)
-_BT_LOST_WORDS=(disconnected mint-failed timeout)
+_BT_LOST_WORDS=(timeout disconnected aborted mint-failed)
 _BT_FAIL_AT=3
+_BT_PENDING_CAP=3
+_BT_TICK_MS=60000
 _BT_SKIP_TAIL='; reported as SKIP until the FAIL and WARN arms ship'
 
 # The server's state record, read strictly: any field missing or of the wrong kind is `unreadable`, never a
 # default. Prints `absent`, `unreadable`, or `ok` then `<key> <value>` lines and `finding <word> [<n>] [<node>]`.
-# argv: path, origins, holds, owed reasons, last-failure words, transports, file-problem words (each space-joined). Times are ms.
-# The shape is `isBoxTokenState`'s (server/src/token/files.ts) as of D-4413/D-4414: up to PENDING_HARD_CAP (3)
-# pending entries, a `recovering` key, `fileProblem` and `retiring` optional (`retiring` is a list of digests
-# awaiting their append; it is not read here and never printed).
+# argv: path, origins, holds, owed reasons, last-failure words, transports, file-problem words (each space-joined),
+# the pending cap, the driver tick in ms. Times are ms.
+# The shape is `isBoxTokenState`'s (server/src/token/files.ts) as of D-4413/D-4414: up to PENDING_HARD_CAP
+# pending entries (argv, `_BT_PENDING_CAP`), a `recovering` key, `fileProblem` and `retiring` optional (`retiring`
+# is a list of {sha256, at} awaiting their append: only the oldest `at` is read, no digest is kept or printed).
+# `v` must be the integer 1 (not `true`). D-4551: two doctor-local findings, `retire-overdue` and `retiring-unlanded`.
 _BT_PY_STATE='
 import json, os, re, stat, sys, time
 def say(*a):
@@ -7437,8 +7446,10 @@ def bad():
     sys.exit(0)
 p = sys.argv[1]
 origins, holds, owed, fails, transports, fileprobs = (set(a.split()) for a in sys.argv[2:8])
+cap, tick = int(sys.argv[8]), int(sys.argv[9])
 now = int(time.time() * 1000)
 H16 = re.compile(r"[0-9a-f]{16}\Z")
+H64 = re.compile(r"[0-9a-f]{64}\Z")
 NODE = re.compile(r"[A-Za-z0-9._:-]{1,64}\Z")
 try:
     st = os.lstat(p)
@@ -7462,10 +7473,11 @@ def opt(v, f): return v is None or f(v)
 try:
     c = s["current"]; ls = s["lastSync"]; br = s["lastBootRecovery"]; pv = s["previous"]; k = s["counters"]
     fp = s.get("fileProblem")   # optional: absent in a state written before the re-read existed
-    ok = (d(s) and s["v"] == 1 and s["origin"] in origins and type(s["rotationOwed"]) is bool
+    rt = s.get("retiring")      # optional (D-4410): a list of {sha256, at}
+    ok = (d(s) and type(s["v"]) is int and s["v"] == 1 and s["origin"] in origins and type(s["rotationOwed"]) is bool
         and opt(s["owedWhy"], lambda w: w in owed) and (not s["rotationOwed"] or s["owedWhy"] in owed)
         and d(c) and n(c["seq"]) and n(c["since"]) and opt(c["id"], hid)
-        and type(s["pending"]) is list and len(s["pending"]) <= 3
+        and type(s["pending"]) is list and len(s["pending"]) <= cap
         and all(d(g) and hid(g["id"]) and n(g["seq"]) and on(g["handedOutAt"]) and on(g["confirmBy"]) for g in s["pending"])
         and opt(pv, lambda x: d(x) and n(x["graceUntil"]) and n(x["hardUntil"]))
         and opt(s["promoting"], d) and opt(s["recovering"], d) and n(s["nextSeq"]) and opt(s["fleetConfirmed"], hid)
@@ -7475,7 +7487,8 @@ try:
         and d(k) and n(k["previousPresented"]) and n(k["retiredPresented"])
         and on(s["mintFailedAt"]) and opt(br, lambda x: d(x) and n(x["at"]))
         and on(s["retiredRefusedAt"])
-        and opt(fp, lambda x: d(x) and n(x["at"]) and x["file"] in ("current", "pending", "previous") and x["word"] in fileprobs))
+        and opt(fp, lambda x: d(x) and n(x["at"]) and x["file"] in ("current", "pending", "previous") and x["word"] in fileprobs)
+        and opt(rt, lambda x: type(x) is list and all(d(e) and type(e["sha256"]) is str and H64.match(e["sha256"]) is not None and n(e["at"]) for e in x)))
 except (KeyError, TypeError, IndexError, AttributeError):
     ok = False
 if not ok:
@@ -7487,10 +7500,18 @@ say("since", age(c["since"]))
 lr = s["lastRotationAt"]
 say("rotated", "never" if lr is None else age(lr))
 say("rotating", 1 if (s["pending"] or s["promoting"] is not None) else 0)
-say("grace", 0 if pv is None else 1)
+say("grace", 1 if (pv is not None and now <= pv["hardUntil"]) else 0)
 say("refused", 0 if s["retiredRefusedAt"] is None else 1)
 if s["mintFailedAt"] is not None:
     say("finding", "mint-failed", age(s["mintFailedAt"]))
+# D-4551: a previous value past its hard bound (plus one driver tick) is still here, and a retired digest whose
+# append has not landed (older than two ticks) is the only copy of that record. Minutes, floored.
+if pv is not None and now > pv["hardUntil"] + tick:
+    say("finding", "retire-overdue", (now - pv["hardUntil"]) // 60000)
+if rt:
+    oldest = min(e["at"] for e in rt)
+    if now - oldest > 2 * tick:
+        say("finding", "retiring-unlanded", (now - oldest) // 60000)
 if s["hold"] is not None and not (s["hold"] == "mint-failed" and s["mintFailedAt"] is not None):
     hn = s["holdNode"]
     say("finding", "held:" + s["hold"], 0, hn if hn is not None and NODE.match(hn) else "-")
@@ -7657,6 +7678,12 @@ _bt_find() {
     server:recovered)
       say="the server recovered its token from a sibling file at boot ($(_bt_age "$a") ago), and no rotation has followed"
       fix="$card" ;;
+    server:retire-overdue:*) cls=FAIL
+      say="the previous value is $a min past its hard bound and still stands, so a retired value is still accepted"
+      fix="the driver retires it on its next tick; if it stays, read the server's log (an unreadable previous-value file beside box-token.json holds the retirement) and repair that file's mode, then it retires itself" ;;
+    server:retiring-unlanded:*) cls=FAIL
+      say="a retired value's digest has waited $a min to be appended to box-token-retired.json, and box-token.json is its only durable copy"
+      fix="look at box-token-retired.json beside box-token.json without printing it (ls -l); the driver retries the append each tick, and an unusable file there is set aside at the next restart" ;;
     server:retired-presented) cls=FAIL
       say="a retired value was presented $a time(s) since the server started"
       fix="something still holds a retired value: read the server's log for the lane that presented it, then resync that box ($card)" ;;
@@ -7698,8 +7725,9 @@ _bt_server_arm() {   # <token path> <state path>
     *) _bt_find server token-unusable "$tok" "$BT_TF" ;;
   esac
   if ! command -v python3 >/dev/null 2>&1; then _bt_find server state-unreadable "$state" no-python; return 0; fi
-  out="$(python3 -c "$_BT_PY_STATE" "$state" "${_BT_ORIGINS[*]}" "${_BT_HOLDS[*]}" "${_BT_OWED[*]}" \
-    "${_BT_SYNC_ERRORS[*]} ${_BT_LOST_WORDS[*]}" "${_BT_TRANSPORTS[*]}" "${_BT_FILE_PROBLEMS[*]}" 2>/dev/null)" || out=""
+  out="$(python3 -I -c "$_BT_PY_STATE" "$state" "${_BT_ORIGINS[*]}" "${_BT_HOLDS[*]}" "${_BT_OWED[*]}" \
+    "${_BT_SYNC_ERRORS[*]} ${_BT_LOST_WORDS[*]}" "${_BT_TRANSPORTS[*]}" "${_BT_FILE_PROBLEMS[*]}" \
+    "$_BT_PENDING_CAP" "$_BT_TICK_MS" 2>/dev/null)" || out=""
   case "${out%%$'\n'*}" in
     absent) _bt_find server state-absent "$state"; return 0 ;;
     ok) ;;
@@ -7717,6 +7745,7 @@ _bt_server_arm() {   # <token path> <state path>
       finding)
         case "$w" in
           mint-failed|pending-overdue|proof-unmeasured|recovered|retired-presented) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
+          retire-overdue|retiring-unlanded) _bt_num "$n" && _bt_find server "$w:$n" "$n" || bad=1 ;;
           fleet-behind|fleet-unconfirmed) _bt_find server "$w" ;;
           file:*) if _bt_member "${w#file:}" "${_BT_FILE_PROBLEMS[@]}" && _bt_num "$n" && [[ "$node" =~ ^(current|pending|previous)$ ]]; then
                     _bt_find server "$w" "$n" "$node"; else bad=1; fi ;;
@@ -7753,7 +7782,7 @@ _bt_fleet_arm() {   # <own-write: 0|1>
     *) _bt_find fleet fleet-token-unusable "$ff" "$BT_TF" ;;
   esac
   if ! command -v python3 >/dev/null 2>&1; then _bt_find fleet sync-unreadable "$rep" no-python; return 0; fi
-  out="$(python3 -c "$_BT_PY_FLEET" "$gen" "$rep" "$own" "${_BT_SYNC_ERRORS[*]}" "${_BT_TRANSPORTS[*]}" 2>/dev/null)" || out=""
+  out="$(python3 -I -c "$_BT_PY_FLEET" "$gen" "$rep" "$own" "${_BT_SYNC_ERRORS[*]}" "${_BT_TRANSPORTS[*]}" 2>/dev/null)" || out=""
   [ -n "$out" ] || bad=1
   while IFS=' ' read -r kw w n x; do
     case "$kw" in
@@ -7793,7 +7822,7 @@ _bt_agent_env_marks_fleet() {
   { [ -f "$p" ] && [ -r "$p" ]; } || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     t="${line#"${line%%[![:space:]]*}"}"; line=""
-    case "$t" in CCRC_AGENT_TOKEN=*|export[[:space:]]*CCRC_AGENT_TOKEN=*) hit=0; t=""; break ;; esac
+    if [[ "$t" =~ ^(export[[:space:]]+)?CCRC_AGENT_TOKEN= ]]; then hit=0; t=""; break; fi
     t=""
   done < "$p" 2>/dev/null || hit=0
   line=""; t=""

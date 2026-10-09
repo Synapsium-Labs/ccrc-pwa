@@ -19,14 +19,14 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { TOKEN_HOLDS, OWED_REASONS, TOKEN_ORIGINS } from '../../shared/box-token.js';
 import { NODE_FILES, TOKEN_SYNC_OP_ERRORS, TOKEN_TRANSPORTS } from '../../shared/agent-protocol.js';
 import { TOKEN_FILE_PROBLEMS } from '../../shared/box-token.js';
-import { FAILURES_FOR_BANNER, type BoxTokenState } from '../src/token/policy.js';
+import { DRIVER_TICK_MS, FAILURES_FOR_BANNER, PENDING_HARD_CAP, type BoxTokenState } from '../src/token/policy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -208,7 +208,7 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
 
 // ── every armed-later state: SKIP now, FAIL or WARN once armed ─────────────
 
-interface Row { word: string; arm: 'server' | 'fleet'; armedClass: 'FAIL' | 'WARN'; plant: (b: Box) => void }
+interface Row { label?: string; word: string; arm: 'server' | 'fleet'; armedClass: 'FAIL' | 'WARN'; plant: (b: Box) => void }
 const now = (): number => Date.now();
 const ROWS: Row[] = [
   { arm: 'server', word: 'token-absent', armedClass: 'FAIL', plant: (b) => rmSync(dot(b, 'mail.token')) },
@@ -216,6 +216,10 @@ const ROWS: Row[] = [
   { arm: 'server', word: 'token-unusable', armedClass: 'FAIL', plant: (b) => writeFileSync(dot(b, 'mail.token'), '# no value line\n\n', { mode: 0o600 }) },
   { arm: 'server', word: 'state-absent', armedClass: 'WARN', plant: (b) => rmSync(dot(b, 'box-token.json')) },
   { arm: 'server', word: 'state-unreadable', armedClass: 'FAIL', plant: (b) => plantState(b, '{"v":1,') },
+  // Fix round 1 (minor 4): `v` must be the integer 1, and a `retiring` entry must be {sha256: 64 hex, at: number}.
+  { arm: 'server', word: 'state-unreadable', label: 'state-unreadable (v is true)', armedClass: 'FAIL', plant: (b) => plantState(b, JSON.stringify({ ...healthyState(), v: true })) },
+  { arm: 'server', word: 'state-unreadable', label: 'state-unreadable (a malformed retiring entry)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.retiring = [{ sha256: 'zz', at: now() }]; }) },
   { arm: 'server', word: 'mint-failed', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.mintFailedAt = now(); s.hold = 'mint-failed'; }) },
   { arm: 'server', word: 'held:update-in-flight', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.hold = 'update-in-flight'; s.holdNode = 'node-fleet-1'; }) },
   { arm: 'server', word: 'held:verb-missing', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.hold = 'verb-missing'; }) },
@@ -233,6 +237,11 @@ const ROWS: Row[] = [
   // D-4412 (Part A, merged after the brief): a retired value presented owes one bounded forward rotation.
   { arm: 'server', word: 'rotation-owed:retired-presented', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.rotationOwed = true; s.owedWhy = 'retired-presented'; }) },
   { arm: 'server', word: 'proof-unmeasured', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.lastSync = { at: now() - MIN, word: 'proof-unmeasured', transport: 'https' }; }) },
+  // D-4551 (fix round 1): the two stalled retirements merged Part A can reach. Minutes are floored, so 30 and 45 exactly.
+  { arm: 'server', word: 'retire-overdue:30', armedClass: 'FAIL', plant: (b) => editState(b, (s) => {
+    s.previous = { id: ID_OLD, seq: 1, graceUntil: now() - 90 * MIN, hardUntil: now() - 30 * MIN, currentPresented: false, write: { dev: 1, ino: 4, writtenAtMs: now() - 90 * MIN } };
+  }) },
+  { arm: 'server', word: 'retiring-unlanded:45', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.retiring = [{ sha256: 'ab'.repeat(32), at: now() - 45 * MIN }]; }) },
   { arm: 'server', word: 'recovered', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.lastBootRecovery = { at: now() - MIN, source: 'previous' }; }) },
   { arm: 'server', word: 'retired-presented', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.counters.retiredPresented = 2; }) },
   { arm: 'server', word: 'fleet-behind', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.fleetConfirmed = ID_OLD; }) },
@@ -254,7 +263,7 @@ const ROWS: Row[] = [
 
 describe('doctor box-token: every armed-later state is SKIP with its reason word, never PASS (D-4391)', () => {
   for (const row of ROWS) {
-    it(`${row.arm}: ${row.word}`, () => {
+    it(`${row.arm}: ${row.label ?? row.word}`, () => {
       const b = box({ role: row.arm });
       row.plant(b);
       const r = runCheck(b);
@@ -273,7 +282,7 @@ describe('doctor box-token: every armed-later state is SKIP with its reason word
 
 describe('doctor box-token: the FAIL and WARN arms are compiled in (the constant flipped in a copy)', () => {
   for (const row of ROWS) {
-    it(`${row.arm}: ${row.word} -> ${row.armedClass}`, () => {
+    it(`${row.arm}: ${row.label ?? row.word} -> ${row.armedClass}`, () => {
       const b = box({ role: row.arm });
       row.plant(b);
       const r = runCheck(b, armed());
@@ -338,21 +347,107 @@ describe('doctor box-token: the state shape is the merged one', () => {
     const b = box({ role: 'server' });
     editState(b, (s) => {
       const t = now() - 20 * MIN;
-      s.pending = [1, 2, 3].map((i) => ({ id: `${i}`.repeat(16), seq: 2 + i, stagedAt: t, handedOutAt: t, confirmBy: t + 5 * MIN, write: { dev: 1, ino: 10 + i, writtenAtMs: t } }));
-      s.retiring = [{ sha256: 'ab'.repeat(32), at: t }];
+      s.pending = Array.from({ length: PENDING_HARD_CAP }, (_, k) => k + 1).map((i) => ({ id: `${i}`.repeat(16), seq: 2 + i, stagedAt: t, handedOutAt: t, confirmBy: t + 5 * MIN, write: { dev: 1, ino: 10 + i, writtenAtMs: t } }));
+      s.retiring = [{ sha256: 'ab'.repeat(32), at: now() }];   // fresh: the append is about to land
     });
     const r = runCheck(b);
     expect(r.stdout).toMatch(/^SKIP box-token: server: pending-overdue — /);
     expect(r.stdout).not.toContain('state-unreadable');
   });
 
-  it('four pending entries are refused as the server refuses them', () => {
+  it('one more than PENDING_HARD_CAP pending entries are refused as the server refuses them', () => {
     const b = box({ role: 'server' });
     editState(b, (s) => {
       const t = now() - 20 * MIN;
-      s.pending = [1, 2, 3, 4].map((i) => ({ id: `${i}`.repeat(16), seq: 2 + i, stagedAt: t, handedOutAt: t, confirmBy: t + 5 * MIN, write: { dev: 1, ino: 10 + i, writtenAtMs: t } }));
+      s.pending = Array.from({ length: PENDING_HARD_CAP + 1 }, (_, k) => k + 1).map((i) => ({ id: `${i}`.repeat(16), seq: 2 + i, stagedAt: t, handedOutAt: t, confirmBy: t + 5 * MIN, write: { dev: 1, ino: 10 + i, writtenAtMs: t } }));
     });
     expect(runCheck(b).stdout).toMatch(/^SKIP box-token: server: state-unreadable — /);
+  });
+});
+
+describe('doctor box-token: a retirement in grace is not a retirement past its hard bound (D-4551)', () => {
+  const prev = (graceUntil: number, hardUntil: number): BoxTokenState['previous'] =>
+    ({ id: ID_OLD, seq: 1, graceUntil, hardUntil, currentPresented: false, write: { dev: 1, ino: 4, writtenAtMs: now() - 90 * MIN } });
+
+  it('a previous value inside its hard bound still says "in grace" on the PASS line', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { s.previous = prev(now() + 2 * MIN, now() + 20 * MIN); });
+    expect(runCheck(b).stdout).toBe(`PASS box-token: ${SERVER_PASS}, the previous value in grace\n`);
+  });
+
+  it('a previous value past hardUntil but inside one driver tick of slack prints neither "in grace" nor a finding', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { s.previous = prev(now() - 20 * MIN, now() - Math.floor(DRIVER_TICK_MS / 2)); });
+    const out = runCheck(b).stdout;
+    expect(out).not.toContain('in grace');
+    expect(out).not.toContain('retire-overdue');
+  });
+
+  it('a retiring digest younger than two ticks is the append about to land: no finding, and no "retired value refused" lie either', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { s.retiring = [{ sha256: 'cd'.repeat(32), at: now() - DRIVER_TICK_MS }]; });
+    expect(runCheck(b).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
+  });
+
+  it('retire-overdue wins over a PASS tail and is never "in grace": the SKIP line names it and has no PASS part', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { s.previous = prev(now() - 90 * MIN, now() - 30 * MIN); });
+    const out = runCheck(b).stdout;
+    expect(out).not.toContain('in grace');
+    expect(out).not.toContain('retired value refused');
+  });
+});
+
+describe('doctor box-token: where the files are, and what marks a fleet box (D-4399)', () => {
+  it('CCRC_MAIL_TOKEN_PATH places mail.token and box-token.json beside a non-default path', () => {
+    const b = box({ role: 'server' });
+    const alt = join(b.home, 'alt-dir');
+    mkdirSync(alt, { recursive: true });
+    renameSync(dot(b, 'mail.token'), join(alt, 'custom.token'));
+    renameSync(dot(b, 'box-token.json'), join(alt, 'box-token.json'));
+    writeFileSync(dot(b, 'ccrc.env'), `CCRC_ROLE=server\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${join(alt, 'custom.token')}\n`, { mode: 0o600 });
+    expect(runCheck(b).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
+    // The same override with the files left at the default place: both are absent where the check looks.
+    const c = box({ role: 'server' });
+    writeFileSync(dot(c, 'ccrc.env'), `CCRC_ROLE=server\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${join(c.home, 'elsewhere', 'custom.token')}\n`, { mode: 0o600 });
+    const out = runCheck(c).stdout;
+    expect(out).toContain('server: token-absent — ');
+    expect(out).toContain('server: state-absent — ');
+  });
+
+  const bothLocal = (): Box => { const b = box({ role: 'both' }); rmSync(dot(b, 'token-sync.json')); return b; };
+  it('an `export CCRC_AGENT_TOKEN=` line marks a fleet box: the sync report is read, so its absence is never-synced', () => {
+    const b = bothLocal();
+    writeFileSync(dot(b, 'agent.env'), `export ${['CCRC', 'AGENT', 'TOKEN'].join('_')}=${randomBytes(8).toString('hex')}\n`, { mode: 0o600 });
+    const out = runCheck(b).stdout;
+    expect(out).toContain('fleet: never-synced — ');
+  });
+  it('a key that only ends in CCRC_AGENT_TOKEN, or a value that names it, does not mark a fleet box', () => {
+    const b = bothLocal();
+    writeFileSync(dot(b, 'agent.env'), 'XCCRC_AGENT_TOKEN=x\nCCRC_SERVER_URL=ws://127.0.0.1:7788 # CCRC_AGENT_TOKEN=y\n', { mode: 0o600 });
+    expect(runCheck(b).stdout).toContain("written by this box's server");
+  });
+  it('an agent.env that cannot be read as a regular file marks a fleet box (unknown is the safe answer)', () => {
+    const b = bothLocal();
+    mkdirSync(dot(b, 'agent.env'));   // present, not a regular file
+    expect(runCheck(b).stdout).toContain('fleet: never-synced — ');
+    if (process.getuid && process.getuid() !== 0) {
+      const c = bothLocal();
+      writeFileSync(dot(c, 'agent.env'), 'CCRC_SERVER_URL=ws://127.0.0.1:7788\n', { mode: 0o000 });
+      expect(runCheck(c).stdout).toContain('fleet: never-synced — ');
+    }
+  });
+});
+
+describe('doctor box-token: every python this check runs is isolated (security)', () => {
+  it('each `python3 … -c` in the box-token block is `python3 -I -c`, and there are at least two', () => {
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    const block = src.slice(src.indexOf('# ── box-token: the box token'));
+    expect(block.length).toBeGreaterThan(1000);
+    const code = block.split('\n').filter((l) => !/^\s*#/.test(l));
+    const calls = code.filter((l) => /python3\s+-/.test(l));
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const l of calls) expect(l, 'python3 without -I').toMatch(/python3 -I -c "\$_BT_PY_/);
   });
 });
 
@@ -371,6 +466,19 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     expect(arr('_BT_SYNC_ERRORS')).toEqual([...TOKEN_SYNC_OP_ERRORS]);
     expect(arr('_BT_TRANSPORTS')).toEqual([...TOKEN_TRANSPORTS]);
     expect(arr('_BT_FILE_PROBLEMS')).toEqual([...TOKEN_FILE_PROBLEMS]);
+  });
+  it('the failure words are link.ts\'s LOST_WORDS (read from its text) plus the doctor\'s own `mint-failed`', () => {
+    const link = readFileSync(join(REPO, 'server', 'src', 'token', 'link.ts'), 'utf8');
+    const m = /const LOST_WORDS = \[([^\]]*)\] as const;/.exec(link);
+    expect(m, 'link.ts no longer declares LOST_WORDS in this shape: re-point the pin').not.toBeNull();
+    const theirs = [...m![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
+    expect(theirs.length).toBeGreaterThan(0);
+    // The one extra is last, and is the only word the shell has that link.ts has not.
+    expect(arr('_BT_LOST_WORDS')).toEqual([...theirs, 'mint-failed']);
+  });
+  it('the pending cap and the driver tick are the policy\'s', () => {
+    expect(arr('_BT_PENDING_CAP')).toEqual([String(PENDING_HARD_CAP)]);
+    expect(arr('_BT_TICK_MS')).toEqual([String(DRIVER_TICK_MS)]);
   });
   it('the failure count that turns failed:* FAIL is the banner threshold', () => {
     expect(arr('_BT_FAIL_AT')).toEqual([String(FAILURES_FOR_BANNER)]);
