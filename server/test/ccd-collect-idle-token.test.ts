@@ -6,7 +6,8 @@
 // read — a user can set it into the future, and every change that moves it
 // stamps ctime anyway. A timeout, an unreadable entry, the entry cap, or any
 // other failure is UNMEASURED, said in its own word. The floor is
-// max(24 h, WS_COLLECT_IDLE_FLOOR_S): the knob only raises it. The one
+// max(24 h, WS_COLLECT_IDLE_FLOOR_S): the knob only raises it, and a set knob
+// that is not a whole number is unmeasured, never folded to 24 h. The one
 // test-only seam that lowers it is redefining `_ws_collect_floor_s` in the
 // sourced harness (ruling G4), pinned below; the other cases name the instant
 // instead, through the collector's clock seam `_ws_collect_now_ns`, as
@@ -43,6 +44,8 @@ const ID = 'demo-quiet-mesa';
 const ROOT_USER = process.getuid?.() === 0;
 const LINUX = process.platform === 'linux';
 const DAY_NS = 86_400n * 1_000_000_000n;
+/** The real GNU find a pass-through shim execs: named absolutely, never resolved through a PATH the shim heads. */
+const GNU_FIND = '/usr/bin/find';
 const leaf = (id: string = ID): string => path.join(h.home, '.cc-tmp', id);
 
 interface Walk { rc: string; newest: string; count: string; why: string; detail: string; walked: string }
@@ -172,6 +175,47 @@ describe.skipIf(!LINUX)('_ws_collect_idle — the newest CTIME over the whole le
     expect(walk(path.join(h.home, 'nothing'), first))
       .toMatchObject({ rc: '2', why: 'walk-failed', newest: '', count: '', walked: '' });
   });
+
+  it('a leaf spelt ending in `/`, `/.` or `/..` is never walked: a link so spelt names its target', () => {
+    fs.mkdirSync(path.join(h.home, 'target', 'a', 'b'), { recursive: true });
+    fs.mkdirSync(path.dirname(leaf()), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'target'), leaf());
+    for (const tail of ['/', '/.', '/..']) {
+      const w = walk(`${leaf()}${tail}`);
+      expect(w, `the spelling ${tail}`).toMatchObject({ rc: '2', why: 'walk-failed', newest: '', count: '' });
+      expect(w.detail).toContain('which names what a link before it points at');
+    }
+  });
+
+  it('a TMPDIR inside the leaf is counted, never hidden: the walk’s own scratch file makes the leaf busy (fail-closed)', () => {
+    plant();
+    const before = measured(leaf());
+    const w = walk(leaf(), `export TMPDIR='${leaf()}';`);
+    expect(w.rc, w.detail).toBe('0');
+    expect(w.count, 'the scratch file, made in the leaf before find started, was walked').toBe(String(before.count + 1));
+    expect(BigInt(w.newest) > before.newest, 'never an older newest than the real one').toBe(true);
+    expect(h.sh(`_ws_collect_now_ns() { echo ${before.newest + DAY_NS}; }; _ws_collect_floor_held ${w.newest}; echo $?`),
+      'a day past the tree as it stood before the walk, the walk’s own answer is not yet idle').toBe('1');
+  });
+
+  it('a find that writes to stderr and still answers 0 is `walk-failed`: its stderr is never ignored', () => {
+    plant();
+    expect(fs.existsSync(GNU_FIND), 'the CONTROL: the GNU find the shim execs').toBe(true);
+    const shim = path.join(h.home, 'shim');
+    fs.mkdirSync(shim);
+    fs.writeFileSync(path.join(shim, 'find'), `#!/bin/sh\necho "find: a warning, and no error" >&2\nexec '${GNU_FIND}' "$@"\n`,
+      { mode: 0o755 });
+    const w = walk(leaf(), `PATH="${shim}:$PATH"; hash -r;`);
+    expect(w).toMatchObject({ rc: '2', why: 'walk-failed', newest: '', count: '' });
+    expect(w.detail).toContain('find exit 0: find: a warning, and no error');
+  });
+
+  it('a scratch file that cannot be made is `walk-failed`, and the detail names the scratch file', () => {
+    plant();
+    const w = walk(leaf(), `exec 2>/dev/null; export TMPDIR='${path.join(h.home, 'no-such-dir')}';`);
+    expect(w).toMatchObject({ rc: '2', why: 'walk-failed', newest: '', count: '' });
+    expect(w.detail).toContain('could not make a scratch file to walk');
+  });
 });
 
 describe('_ws_collect_idle on Darwin', () => {
@@ -198,15 +242,38 @@ describe('_ws_collect_floor_s / _ws_collect_floor_held — max(24 h, the knob); 
     expect(held(NEWEST - 1n, FLOOR0), 'a clock behind the newest change is still not idle').toBe('1');
   });
 
-  it('the knob RAISES it; a lower, empty or malformed value leaves it at 24 h', () => {
+  it('the knob RAISES it; unset, empty or a whole number at or below 24 h leaves it at 24 h; ten digits or more clamp', () => {
     expect(h.sh('WS_COLLECT_IDLE_FLOOR_S=90000; _ws_collect_floor_s')).toBe('90000');
     expect(held(NEWEST + DAY_NS, 'WS_COLLECT_IDLE_FLOOR_S=90000;')).toBe('1');
     expect(held(NEWEST + 90_000n * 1_000_000_000n, 'WS_COLLECT_IDLE_FLOOR_S=90000;')).toBe('0');
-    // '90000+1' is an expression, not a whole number: the grammar refuses it before any arithmetic reads it.
-    for (const v of ['3600', '0', '', 'x', '-90000', '86400s', '90000+1']) {
+    expect(h.sh('unset WS_COLLECT_IDLE_FLOOR_S; _ws_collect_floor_s'), 'unset').toBe('86400');
+    for (const v of ['3600', '0', '', '86400']) {
       expect(h.sh(`WS_COLLECT_IDLE_FLOOR_S='${v}'; _ws_collect_floor_s`), `knob ${JSON.stringify(v)}`).toBe('86400');
     }
     expect(held(NEWEST + DAY_NS - 1n, 'WS_COLLECT_IDLE_FLOOR_S=3600;'), 'a lower knob never lowers it').toBe('1');
+    // Ten digits or more: the raise is honoured, clamped so the arithmetic never wraps.
+    const MAX_NS = 999_999_999n * 1_000_000_000n;
+    expect(h.sh('WS_COLLECT_IDLE_FLOOR_S=9999999999; _ws_collect_floor_s')).toBe('999999999');
+    expect(held(NEWEST + MAX_NS - 1n, 'WS_COLLECT_IDLE_FLOOR_S=9999999999;')).toBe('1');
+    expect(held(NEWEST + MAX_NS, 'WS_COLLECT_IDLE_FLOOR_S=9999999999;')).toBe('0');
+  });
+
+  it('a set knob that is not a whole number is UNMEASURED: nothing printed, rc 2, the knob named, and the floor not held (2)', () => {
+    // '90000+1' is an expression, not a whole number: the grammar refuses it before any arithmetic reads it.
+    for (const v of ['172800s', '48h', '172800 ', ' 172800', 'x', '-90000', '86400s', '90000+1']) {
+      const [rc = '', out = '', why = ''] = h.sh(`WS_COLLECT_IDLE_FLOOR_S='${v}'; out=$(_ws_collect_floor_s); rc=$?;`
+        + ` _ws_collect_floor_s >/dev/null; printf '%s\\x1f%s\\x1f%s' "$rc" "$out" "$_WS_FLOOR_WHY"`).split('\x1f');
+      expect({ rc, out }, `knob ${JSON.stringify(v)}`).toEqual({ rc: '2', out: '' });
+      expect(why, `knob ${JSON.stringify(v)}`).toContain('WS_COLLECT_IDLE_FLOOR_S');
+      expect(held(NEWEST + 1000n * DAY_NS, `WS_COLLECT_IDLE_FLOOR_S='${v}';`), `knob ${JSON.stringify(v)}`).toBe('2');
+    }
+  });
+
+  it('a floor that does not print a whole number is unmeasured: 2, never a floor of 0 (the G4 seam)', () => {
+    expect(held(NEWEST + 1n, '_ws_collect_floor_s() { echo; };'), 'an empty print').toBe('2');
+    expect(held(NEWEST + 1n, '_ws_collect_floor_s() { echo 1d; };'), 'not a number').toBe('2');
+    expect(held(NEWEST + 1n, '_ws_collect_floor_s() { echo 0; return 2; };'), 'a print beside rc 2').toBe('2');
+    expect(held(NEWEST + 1n, '_ws_collect_floor_s() { echo 0; };'), 'the CONTROL: a floor of 0, printed, is held').toBe('0');
   });
 
   it('a newest change AHEAD of the clock (a clock stepped back) is not idle: 1', () => {

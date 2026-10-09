@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7fd551bf2569fe265242610b45b91a4cc2b25c596bf091b206b519829e4be633
+# ccrc:generated 1 sha256=6adf0b73562ba629adb1e40ce49c9d2ce69e517a90f9625706296ea1881643cb
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31857,10 +31857,15 @@ _ws_collect_idle() {   # leaf -> 0 with _WS_IDLE_NEWEST_NS = the newest CTIME un
   # CTIME ONLY (spec §5.10). mtime is user-settable — a future one would hold a
   # leaf for ever — and every change that moves it stamps ctime too: a write, a
   # create, a delete, a rename, a chmod, a utimensat. The walk is GNU `find -P
-  # <leaf> -xdev`: it never follows a link (a link's own ctime is read) and
-  # never crosses a file system. It writes nothing inside the leaf: no pass
+  # <leaf> -xdev`: it never follows a link (a link's own ctime is read), and a
+  # leaf spelt ending in `/`, `/.` or `/..` — which names what a link before it
+  # points at — is refused unwalked. It never crosses a file system. No pass
   # before it makes anything readable, so an unreadable entry is unmeasured,
-  # said in its own word, and never normalised here. Bounded by
+  # said in its own word, and never normalised here. It writes nothing inside
+  # the leaf UNLESS `$TMPDIR` is at or under it: its one write is the stderr
+  # scratch file `_plat_mktemp` makes in `$TMPDIR` before `find` starts, so the
+  # walk then counts that file with a ctime of now and the leaf reads busy —
+  # fail-closed, never a false idle. Bounded by
   # `WS_COLLECT_IDLE_SCAN_S` and `WS_COLLECT_IDLE_CAP`. The newest value is
   # kept as two exact integers, seconds then nanoseconds, never one float.
   local LC_ALL=C leaf="${1-}" errf res tail err frc arc
@@ -31868,6 +31873,9 @@ _ws_collect_idle() {   # leaf -> 0 with _WS_IDLE_NEWEST_NS = the newest CTIME un
   if [[ "$CCD_OS" == darwin ]]; then
     _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="the idle walk is GNU find's, and this box is Darwin"; return 2
   fi
+  case "$leaf" in */|*/.|*/..)
+    _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="$leaf ends in '/', '/.' or '/..', which names what a link before it points at, so it was not walked"; return 2 ;;
+  esac
   [[ -d "$leaf" && ! -L "$leaf" ]] \
     || { _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="$leaf is not a real directory, so it was not walked"; return 2; }
   errf=$(_plat_mktemp) || { _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="could not make a scratch file to walk $leaf"; return 2; }
@@ -31903,20 +31911,35 @@ _ws_collect_idle() {   # leaf -> 0 with _WS_IDLE_NEWEST_NS = the newest CTIME un
   return 0
 }
 
-_ws_collect_floor_s() {   # -> the idle floor, whole seconds: 86400 (24 h, spec §5.10), or WS_COLLECT_IDLE_FLOOR_S when it
-  #                          is a whole number ABOVE that. The knob only RAISES the floor. This is the floor's ONE
-  #                          definition (ruling G4): the only test-only seam that lowers it is a sourced harness
-  #                          redefining this function (`_ws_collect_floor_s() { echo 0; };`), never the knob
+_WS_FLOOR_WHY=''
+_ws_collect_floor_s() {   # -> rc 0 and the idle floor on stdout, whole seconds: 86400 (24 h, spec §5.10) when
+  #                          WS_COLLECT_IDLE_FLOOR_S is unset, empty, or a whole number at or below that; the knob when
+  #                          it is a whole number ABOVE that; 999999999 when it is a whole number of ten digits or more
+  #                          (the raise is honoured, clamped so the arithmetic never wraps). rc 2, NOTHING printed and
+  #                          _WS_FLOOR_WHY naming the knob, when the knob is set, non-empty and not a whole number
+  #                          (`172800s`, `48h`, `172800 `): a raise asked for unreadably is unmeasured, never folded to
+  #                          24 h. The knob only RAISES the floor. This is the floor's ONE definition (ruling G4): the
+  #                          only test-only seam that lowers it is a sourced harness redefining this function
+  #                          (`_ws_collect_floor_s() { echo 0; };`), never the knob
   local b=86400 o="${WS_COLLECT_IDLE_FLOOR_S-}"
-  if [[ "$o" =~ ^[0-9]{1,9}$ ]] && (( 10#$o > b )); then b=$(( 10#$o )); fi
+  _WS_FLOOR_WHY=''
+  if [[ -n "$o" ]]; then
+    [[ "$o" =~ ^[0-9]+$ ]] \
+      || { _WS_FLOOR_WHY="WS_COLLECT_IDLE_FLOOR_S is set and is not a whole number of seconds, so the raised floor it asks for was never read"; return 2; }
+    if (( ${#o} > 9 )); then b=999999999
+    elif (( 10#$o > b )); then b=$(( 10#$o )); fi
+  fi
   printf '%s' "$b"
 }
 _ws_collect_floor_held() {   # newest-ns -> 0 when the clock is at least the floor past it; 1 when not yet (a clock
-  #                              stepped backwards only delays it); 2 when the input or the clock cannot be read
+  #                              stepped backwards only delays it); 2 when the input, the clock or the floor cannot be
+  #                              read. The floor is `_ws_collect_floor_s`'s print, taken only when it answered 0 with a
+  #                              whole number of at most nine digits: an empty print is never a floor of 0. A caller
+  #                              asks `_ws_collect_floor_s` itself for _WS_FLOOR_WHY
   local nw="${1-}" now fl
   [[ "$nw" =~ ^[0-9]{1,19}$ ]] || return 2
   now=$(_ws_collect_now_ns) && [[ "$now" =~ ^[1-9][0-9]{9,18}$ ]] || return 2
-  fl=$(_ws_collect_floor_s)
+  fl=$(_ws_collect_floor_s) && [[ "$fl" =~ ^[0-9]{1,9}$ ]] || return 2
   (( 10#$now - 10#$nw >= fl * 1000000000 )) || return 1
   return 0
 }
