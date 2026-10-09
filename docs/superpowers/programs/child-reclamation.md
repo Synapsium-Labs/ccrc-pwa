@@ -47,6 +47,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 07:43 — consent to box-token-lifecycle part B inside claim 1125 (bright-river's 4087, answered in 4088).**
+  - **What run 350's Task B6 may do.** It may add one import line from `./box-token.js` beside `shared/api.ts`'s
+    sibling imports, and one optional `boxToken?: BoxTokenView` field in `UpdatesView`. Both are disjoint from wave 7's
+    `LcRefusalToken`, `LC_REFUSAL_WORD` and `LifecycleAct` edits.
+  - **R56 binds both runs.** The import line shifts every README `shared/api.ts` anchor by one, so whichever PR lands
+    second re-points README by content and re-runs the citation cases. Wave 8 measures README from README itself
+    after merging main.
+  - **Clear-summit is told (4089).**
+  - **Wave 7's progress since it resumed:** Task 3's generation binding (`e04bb4588`), and the collector's
+    quarantine record and slot (`3ad370b55`, `f38d58063`).
+
 - **2026-10-09 06:42 — wave 7 resumed.** Clear-summit's pane was answered around 06:2x, nine hours after it asked. It acked
   ruling 4060 and re-took its lapsed claims as 1125 and 1126, with no conflict. It answered keen-hollow's claim note
   from the consent in 4052. Its Task 3 implementer is applying the lock-the-read ruling, and Task 4's first part
