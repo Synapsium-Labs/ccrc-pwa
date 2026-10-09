@@ -152,26 +152,39 @@ describe('after the move: the alias lets the leaf’s OWN worktree go, and only 
     expect(remove(`'${slot()}' leaf '${devino(moved())}'`).rc).toBe('1');
     expect(fs.existsSync(path.join(moved(), 'wt', '.git'))).toBe(true);
   }, 60_000);
+
+  it('_ws_leaf_remove with the alias but NO expected dev:ino is unmeasured: 2 — the identity check is never skipped, nothing removed', () => {
+    ownWorktree();
+    const pre = ask(L());
+    expect(pre.rc, pre.why).toBe('0');
+    const alias = path.join(fs.realpathSync(root()), ID);
+    moveToSlot();
+    const r = remove(`'${slot()}' leaf '' '${alias}' '${pre.accepted}'`);
+    expect(r.rc, r.why).toBe('2');
+    expect(r.why).toContain('no expected dev:ino');
+    expect(fs.existsSync(path.join(moved(), 'wt', '.git')), 'nothing was removed').toBe(true);
+  }, 60_000);
 });
 
 describe('condition (1): only what the PRE-MOVE ask accepted — the measured moved-tree, recycled-admin break', () => {
-  /** Another session's worktree, with uncommitted work, moved into the orphan leaf at L/still-harbor. */
-  const foreignInLeaf = (): { admin: string } => {
+  /** Another session's worktree, with uncommitted work, moved into the orphan leaf at L/<at>
+   *  (L/still-harbor unless a case names another place). Its admin name is `still-harbor` wherever it lands. */
+  const foreignInLeaf = (at = 'still-harbor'): { admin: string } => {
     const xorig = path.join(h.home, 'worktrees', 'demo2', 'still-harbor');
     fs.mkdirSync(path.dirname(xorig), { recursive: true });
     h.git(repo(), 'worktree', 'add', '-q', '-b', 'ws/still-harbor', xorig);
     fs.writeFileSync(path.join(xorig, 'precious.txt'), 'uncommitted work of another session\n');
     const admin = adminOf(xorig);
     fs.mkdirSync(L(), { recursive: true });
-    fs.renameSync(xorig, path.join(L(), 'still-harbor'));
+    fs.renameSync(xorig, path.join(L(), at));
     return { admin };
   };
   /** The break, step by step: the pre-move ask refuses the foreign tree (nothing is accepted); the
    *  leaf moves; `git worktree prune` drops its admin name; a recycled slug's child re-creates that
    *  name AT the pre-move spelling; and that child's own temp root is later removed, leaving the
    *  re-created admin directory back-linking to a spelling where nothing stands. */
-  const theBreak = (): { admin: string; alias: string; accepted: string } => {
-    const { admin } = foreignInLeaf();
+  const theBreak = (at = 'still-harbor'): { admin: string; alias: string; accepted: string } => {
+    const { admin } = foreignInLeaf(at);
     const pre = ask(L());
     expect(pre.rc, 'the CONTROL: the pre-move ask refuses the foreign tree').toBe('1');
     const alias = path.join(fs.realpathSync(root()), ID);
@@ -200,6 +213,24 @@ describe('condition (1): only what the PRE-MOVE ask accepted — the measured mo
     const accepted = `${enc(admin)}=${enc(path.join(h.home, 'worktrees', 'demo2', 'still-harbor', '.git'))}`;
     const a = ask(moved(), { path: alias, accepted });
     expect(a.rc, a.why).toBe('1');
+  }, 60_000);
+
+  it('the very back-link value accepted for ANOTHER admin directory refuses: the admin is the other half of (1)', () => {
+    const { alias } = theBreak();
+    const accepted = `${enc(path.join(repo(), '.git', 'worktrees', 'another'))}=${enc(`${alias}/still-harbor/.git`)}`;
+    const a = ask(moved(), { path: alias, accepted });
+    expect(a.rc, a.why).toBe('1');
+    expect(fs.readFileSync(path.join(moved(), 'still-harbor', 'precious.txt'), 'utf8')).toContain('uncommitted');
+  }, 60_000);
+
+  it('the accepted pair, back-linking ANOTHER place in the leaf, refuses the tree at this one: the back-link must name the tree’s own pre-move spelling', () => {
+    const { admin, alias } = theBreak('other');
+    const named = fs.readFileSync(path.join(moved(), 'other', '.git'), 'utf8').trim().replace(/^gitdir: /, '');
+    expect(fs.realpathSync(named), 'the CONTROL: the tree at other names the accepted admin directory').toBe(admin);
+    const accepted = `${enc(admin)}=${enc(`${alias}/still-harbor/.git`)}`;
+    const a = ask(moved(), { path: alias, accepted });
+    expect(a.rc, a.why).toBe('1');
+    expect(a.why).toContain('a checkout git records elsewhere');
   }, 60_000);
 });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8cae7ddad07ccdc923cd160d01b60b63b41fd597162e774d0ec39158b4903be9
+# ccrc:generated 1 sha256=261dea1d709c2c236106ad6ad65e2b9cc64622f52cf5980cc03a9c22d88052f5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29586,12 +29586,16 @@ _ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, o
   #   collector alone, with the witness's dev:ino, for a leaf in a quarantine
   #   slot (`<slot>/leaf`), and handed to the checkout question unchanged
   #   (`_ws_leaf_checkouts` says what they admit). Every other caller passes
-  #   neither, and is answered exactly as before.
+  #   neither, and is answered exactly as before. An alias handed WITHOUT that
+  #   dev:ino is unmeasured (2) before anything is looked at: the alias speaks
+  #   only for the one recorded leaf, so the identity check is never skipped.
   local root="$1" id="$2" want="${3-}" alias="${4-}" accepted="${5-}" rroot leaf me owner lreal have ldev rdev err rc
   _WS_LEAF_WHY=''
   if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$id" == . || "$id" == .. ]]; then
     _WS_LEAF_WHY="'$id' is not a session id ccd mints, so nothing under $root was touched"; return 1
   fi
+  [[ -z "$alias" || -n "$want" ]] \
+    || { _WS_LEAF_WHY="the leaf's pre-move spelling was handed with no expected dev:ino — the alias speaks only for the recorded leaf, so nothing under $root was touched"; return 2; }
   _ws_reclaim_absent "$root"; rc=$?
   (( rc != 0 )) || return 0
   (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — whether $id stands under it was never asked"; return 2; }
