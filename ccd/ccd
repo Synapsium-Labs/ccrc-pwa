@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=18757d4ca843caaa97706950643c8e5898c34d88b7d46220e56a4ad86596a412
+# ccrc:generated 1 sha256=897f1802b1eaff1d3fac3179c7e0dd17b7c0fb866c5edb3dca7b155db31719fd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6884,9 +6884,9 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   echo "$best"
 }
 
-# CCD_DISK_FLOOR_GB is the one environment override ccd honours, because unlike
-# PROJECTS_ROOT/WORKTREES_ROOT it can only make ccd REFUSE to act — it can never
-# aim a destructive command at a different tree.
+# CCD_DISK_FLOOR_GB is an environment override ccd honours because, unlike PROJECTS_ROOT/WORKTREES_ROOT,
+# it can only make ccd REFUSE to act — never aim a destructive command at another tree. That is the rule
+# every override meets, not a count (CCD_RECLAIM_RESIDUE_ROOT only measures; CCD_MOUNTINFO's links are inode-proved).
 CCD_DISK_FLOOR_GB="${CCD_DISK_FLOOR_GB:-10}"
 
 _ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
@@ -23099,22 +23099,29 @@ _carry_link_route() {   # a b -> the CALLER's local CARRY_ROUTE (via | a CARRY_C
   # THE INODE PROOF IS THE SAFETY PROPERTY. A candidate alias is used only
   # when its (st_dev, st_ino) equals the original's, for BOTH trees — so a
   # stale table, an overmount, a forged `CCD_MOUNTINFO` or a decoy directory of
-  # the right shape can cost a COPY, never a write anywhere else (measured: a
-  # forged table aimed at a decoy left the decoy untouched). A mount stacked
-  # over an alias path skips that candidate, and a mount INSIDE either tree or
-  # under either alias rules it out (`root-mismatch`): the alias would show
-  # different content beneath that point (measured: a bind mount inside a
-  # source sidecar was carried correctly only because the route refused).
+  # the right shape can cost a COPY, never a link into any other tree
+  # (measured: a forged table aimed at a decoy left the decoy untouched). The
+  # proof covers the two ROOTS. Beneath them, a mount INSIDE either tree or
+  # under either alias rules the alias out (`root-mismatch`): the alias would
+  # show different content beneath that point (measured: a bind mount inside a
+  # source sidecar was carried correctly only because the route refused). That
+  # check reads the table, so the right CONTENT rests on the table listing
+  # every mount — which the kernel's own always does; a hand-made table that
+  # left one out could link the file such a mount hides. A mount stacked over
+  # an alias path skips that candidate. A read-only DESTINATION mount is
+  # `link-failed`: link(2) refuses there with EROFS before it compares mounts,
+  # and no route may get around it. (A read-only SOURCE mount is not checked:
+  # the link writes only the destination's directory, but the source inode
+  # gains a writable name — a known limitation, no such mount on the fleet.)
   # The residue is TOCTOU: a mount operation between the proof and the link
   # could still redirect it. Only root can make one, the window is a
   # few syscalls wide, and nothing here defends against root.
   #
   # `CCD_MOUNTINFO` IS A HARNESS SEAM, like `CCD_RECLAIM_RESIDUE_ROOT`: the test
   # suite points it at a fixture table so the CI host's own never decides a
-  # verdict. It meets the reason `CCD_DISK_FLOOR_GB`'s comment gives for an
-  # override (the "one environment override" sentence, stale in its count): it
-  # cannot aim a write at a different tree, because whatever table it names,
-  # the inode proof decides. There is deliberately NO `CCD_LINK_ROOT` knob to
+  # verdict. It meets the rule `CCD_DISK_FLOOR_GB`'s comment states for an
+  # override: it cannot aim a link at a different tree, because whatever table
+  # it names, the inode proof decides. There is deliberately NO `CCD_LINK_ROOT` knob to
   # name the common mount by hand: whoever triggers a swap — a shell, the
   # tick, the PWA — must not decide link versus copy; the kernel's table does.
   #
@@ -23122,11 +23129,16 @@ _carry_link_route() {   # a b -> the CALLER's local CARRY_ROUTE (via | a CARRY_C
   # alias paths, or `exdev-other-fs` (two filesystems), `exdev-no-root` (no
   # read-write mount of the filesystem exposes both), `root-unreachable` (the
   # alias could not be stat'ed), `root-mismatch` (the alias is another
-  # directory, or a mount sits inside a tree), `mounts-absent` /
-  # `mounts-unreadable`, `link-failed` (one mount holds both: the link failed
-  # for another reason, EMLINK, ENOSPC, EPERM), and `route-error` — this
-  # function's default, kept when python3 is missing or the program crashed or
-  # answered anything outside that shape. The CALLER sets `root-failed` when a
+  # directory, or a mount sits inside a tree), `mounts-absent` (no table: macOS,
+  # or no /proc) / `mounts-unreadable` (a table that could not be read, with no
+  # line that parses, or with no mount holding a tree), `link-failed` (one
+  # mount holds both, or the destination's is read-only: the link failed for
+  # another reason, EMLINK, ENOSPC, EPERM, EROFS), and `route-error` — this
+  # function's default, kept when python3 is missing (nothing on stderr), the
+  # program crashed (its exception on stderr, `ccd: carry route failed:` when
+  # the route itself raised) or answered outside that shape — a `via` whose
+  # alias is not a directory, a cause that is not one lowercase word (nothing
+  # on stderr). The CALLER sets `root-failed` when a
   # link through a proved alias still fails. The variables are the caller's
   # locals, `CARRY_SLOT_FD`'s idiom.
   CARRY_ROUTE=route-error CARRY_A2="" CARRY_B2=""
@@ -23163,7 +23175,8 @@ _carry_py() {   # walk src dst budget | route a b — the carry's ONE embedded p
   #   any other file whose bytes differ (a tool result is written once)  !D
   #   a destination entry of another type where the source has a file    !D
   # Every !D prints `diverged <kept path> longer <longer copy's path>` for
-  # stage 3's manifest to name; the summary row is `merged <N> <R> <D> <K>`,
+  # stage 3's manifest to name (a newline in a path written `\n`, so a row is
+  # one line); the summary row is `merged <N> <R> <D> <K>`,
   # always LAST. Before it (D-4500, D-4501): `via <V>`, the absent files linked
   # through the route, and one `copied <cause> <F> <B>` per cause, sorted —
   # files and bytes an absent file was copied for, `<cause>` a CARRY_CAUSES word.
@@ -23212,10 +23225,17 @@ _carry_py() {   # walk src dst budget | route a b — the carry's ONE embedded p
 import errno, os, re, stat, sys, shutil, tempfile
 
 # ── THE LINK ROUTE (`_carry_link_route`'s header above has the reasoning) ──
-# Every word the route, and a copy after it, may name. Spelled ONCE, here: the
-# bash side sets only its `route-error` default and `root-failed`, and
-# `ccd-carry-link-route.test.ts`'s census pins both against this tuple.
+# Every word the route, and a copy after it, may name. Spelled ONCE in this
+# program, here: every answer below names a constant unpacked from the tuple,
+# never a string of its own, so a misspelt name is a NameError the suite sees,
+# not a new word in swap.log. The bash side spells two of them, its
+# `route-error` default and `root-failed`. `ccd-carry-link-route.test.ts`'s
+# census pins all of it: no cause literal in this program outside the tuple
+# (R10d), every bash `CARRY_ROUTE=` word in it (R10b), and every member
+# produced by some case of that file (R10c).
 CARRY_CAUSES = ('exdev-other-fs', 'exdev-no-root', 'root-unreachable', 'root-mismatch', 'root-failed', 'mounts-absent', 'mounts-unreadable', 'link-failed', 'route-error')
+(EXDEV_OTHER_FS, EXDEV_NO_ROOT, ROOT_UNREACHABLE, ROOT_MISMATCH, ROOT_FAILED,
+ MOUNTS_ABSENT, MOUNTS_UNREADABLE, LINK_FAILED, ROUTE_ERROR) = CARRY_CAUSES
 
 def unesc(b):
     """A mountinfo path field: the kernel writes space, tab, newline and backslash as \\NNN octal."""
@@ -23227,16 +23247,16 @@ def mounts():
         with open(os.environ.get('CCD_MOUNTINFO') or '/proc/self/mountinfo', 'rb') as fh:
             raw = fh.read()
     except FileNotFoundError:
-        return 'mounts-absent'
+        return MOUNTS_ABSENT
     except OSError:
-        return 'mounts-unreadable'
+        return MOUNTS_UNREADABLE
     rows = []
     for line in raw.split(b'\n'):
         f = line.split(b' ')
         if len(f) < 10 or b'-' not in f[6:]:
             continue
         rows.append((f[2], unesc(f[3]), unesc(f[4]), b'rw' in f[5].split(b',')))
-    return rows or 'mounts-unreadable'
+    return rows or MOUNTS_UNREADABLE
 
 def under(p, anc):
     """p is anc or below it, at a COMPONENT boundary: /home/.claude is not under /home/.cl."""
@@ -23247,6 +23267,10 @@ def rel_of(p, anc):
 
 def join(base, r):
     return os.path.join(base, r) if r else base
+
+def inside(rows, paths):
+    """A mount sits strictly BELOW one of paths: an alias of that tree would not show what is beneath it."""
+    return any(r[2] != p and under(r[2], p) for r in rows for p in paths)
 
 def holder(rows, p):
     """The mount p resolves through: the longest target above it, the LATER of two equal ones (the one on top)."""
@@ -23260,18 +23284,25 @@ def route(a, b):
     """('via', a2, b2): a2 and b2 ARE a and b (proved by inode), under one read-write mount. Else ('none', cause)."""
     sa, sb = os.stat(a), os.stat(b)
     if sa.st_dev != sb.st_dev:
-        return ('none', 'exdev-other-fs')
+        return ('none', EXDEV_OTHER_FS)
     rows = mounts()
     if isinstance(rows, str):
         return ('none', rows)
     ra, rb = os.path.realpath(a), os.path.realpath(b)
     ma, mb = holder(rows, ra), holder(rows, rb)
     if ma is None or mb is None:
-        return ('none', 'mounts-unreadable')
+        return ('none', MOUNTS_UNREADABLE)
+    if not mb[3]:
+        # The DESTINATION's own mount is read-only: link(2) answers EROFS there
+        # before it compares mounts, so the failure was never EXDEV, and a
+        # read-only mount is not something a route may get around.
+        return ('none', LINK_FAILED)
     if ma is mb:
-        return ('none', 'link-failed')
+        # One mount holds both, so the refusal came from something else — or
+        # from a mount INSIDE a tree, which only that word names.
+        return ('none', ROOT_MISMATCH if inside(rows, (ra, rb)) else LINK_FAILED)
     if ma[0] != mb[0]:
-        return ('none', 'exdev-other-fs')
+        return ('none', EXDEV_OTHER_FS)
     va, vb = join(ma[1], rel_of(ra, ma[2])), join(mb[1], rel_of(rb, mb[2]))
     cands = sorted((c for c in rows if c[0] == ma[0] and c[3] and under(va, c[1]) and under(vb, c[1])),
                    key=lambda c: (-len(c[1]), c[2]))
@@ -23280,21 +23311,21 @@ def route(a, b):
         a2, b2 = join(c[2], rel_of(va, c[1])), join(c[2], rel_of(vb, c[1]))
         if holder(rows, a2) is not c or holder(rows, b2) is not c:
             continue                    # another mount is stacked over an alias path
-        if any(r[2] != p and under(r[2], p) for r in rows for p in (ra, rb, a2, b2)):
-            seen.add('root-mismatch')   # a mount INSIDE a tree: the alias would not show the same tree
+        if inside(rows, (ra, rb, a2, b2)):
+            seen.add(ROOT_MISMATCH)     # a mount INSIDE a tree: the alias would not show the same tree
             continue
         try:
             ia, ib = os.stat(a2), os.stat(b2)
         except OSError:
-            seen.add('root-unreachable')
+            seen.add(ROOT_UNREACHABLE)
             continue
         if (ia.st_dev, ia.st_ino) == (sa.st_dev, sa.st_ino) and (ib.st_dev, ib.st_ino) == (sb.st_dev, sb.st_ino):
             return ('via', a2, b2)
-        seen.add('root-mismatch')
-    for cause in ('root-mismatch', 'root-unreachable'):
+        seen.add(ROOT_MISMATCH)
+    for cause in (ROOT_MISMATCH, ROOT_UNREACHABLE):
         if cause in seen:
             return ('none', cause)
-    return ('none', 'exdev-no-root')
+    return ('none', EXDEV_NO_ROOT)
 
 def safe_route(a, b):
     """The route never takes the carry down with it: any exception is `route-error`, its cause on stderr."""
@@ -23302,7 +23333,7 @@ def safe_route(a, b):
         return route(a, b)
     except Exception as e:
         print(f'ccd: carry route failed: {e!r}', file=sys.stderr)
-        return ('none', 'route-error')
+        return ('none', ROUTE_ERROR)
 
 if sys.argv[1] == 'route':
     # Three NUL-terminated BYTE fields — a mount point may hold a newline (\\012),
@@ -23468,7 +23499,7 @@ for key, cost, kind, rel, s, d in go:
         try:
             os.link(sp, dp)
         except OSError as e:
-            cause = 'link-failed'
+            cause = LINK_FAILED
             if e.errno == errno.EXDEV:
                 if not memo:
                     memo.append(safe_route(src, dst))
@@ -23479,7 +23510,7 @@ for key, cost, kind, rel, s, d in go:
                         cause = None
                         via += 1
                     except OSError:
-                        cause = 'root-failed'
+                        cause = ROOT_FAILED
                 else:
                     cause = r[1]
         if cause:
@@ -23518,8 +23549,14 @@ for key, cost, kind, rel, s, d in go:
         elif not prefix_equal(sp, dp, s.st_size):
             diverged.append((dp, dp))
 
+def row_path(p):
+    """A path as a row prints it. A newline would end the row early and start a
+    forged one (a file named `x<newline>via 9`), so it is written `\\n`: every
+    row is one line, and only this program writes a `via`/`copied`/`merged` row."""
+    return p.replace('\n', '\\n')
+
 for kept, longer in diverged:
-    print(f'diverged {kept} longer {longer}')
+    print(f'diverged {row_path(kept)} longer {row_path(longer)}')
 if via:
     print(f'via {via}')
 for cause in sorted(copied):
@@ -23644,7 +23681,10 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
       # The walk's links through the route and its copies by cause (D-4500,
       # D-4501), each row read by an ANCHORED pattern and appended to the one
       # verdict: `, via-mount V`, then `, copy: <cause> <F> files <B> bytes` per
-      # cause. Any copy also says so on stderr.
+      # cause. Any copy also says so on stderr. No file name can forge one of
+      # these rows: the walk writes a newline in a `diverged` path as `\n`, so
+      # every row is one line it printed whole, and the anchors keep a path
+      # that merely holds `via 9` from matching.
       vsuf=""; csuf=""
       for line in "${rows[@]}"; do
         if [[ "$line" =~ ^via\ ([0-9]+)$ ]]; then

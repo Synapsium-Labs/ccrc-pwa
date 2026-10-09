@@ -118,6 +118,14 @@ describe('_carry_link_route: the geometry', () => {
     expect(word(routed(route()))).toBe('link-failed');
   });
 
+  it('R6b one mount holds both, and a mount sits INSIDE a tree: root-mismatch — only that mount can have refused the link', () => {
+    fs.mkdirSync(path.join(A(), 'inner'), { recursive: true });
+    fs.mkdirSync(B(), { recursive: true });
+    fs.writeFileSync(tablePath(), [mountRow({ id: 20, parent: 1, majmin: '8:1', root: '/', target: '/' }),
+      mountRow({ id: 41, majmin: '8:1', root: '/elsewhere', target: path.join(A(), 'inner') }), ''].join('\n'));
+    expect(word(routed(route()))).toBe('root-mismatch');
+  });
+
   it('R7 a table with no line that parses: mounts-unreadable', () => {
     table();
     fs.writeFileSync(tablePath(), 'garbage\nmore garbage\n');
@@ -161,6 +169,11 @@ describe('_carry_link_route: the geometry', () => {
     expect(word(routed(route()))).toBe('exdev-other-fs');
   });
 
+  it('R11 the destination root\'s own mount is read-only: link-failed — link(2) refused with EROFS, and no route gets around it', () => {
+    table(COMMON(), mountRow({ id: 42, majmin: FIXTURE_DEV, root: '/home/.claude-d', target: path.join(h.home, '.claude-d'), opts: 'ro' }));
+    expect(word(routed(route()))).toBe('link-failed');
+  });
+
   it('R10 every word the cases above answered is one of ccd\'s CARRY_CAUSES (or via)', () => {
     expect(seen.length, 'the cases above ran first, in this file').toBeGreaterThanOrEqual(9);
     const causes = carryCauses();
@@ -169,8 +182,9 @@ describe('_carry_link_route: the geometry', () => {
   });
 
   it('R10b census: every cause word the bash side spells is one of CARRY_CAUSES', () => {
-    // `CARRY_CAUSES` is spelled once, in the carry's Python; the bash side may
-    // set only words from it (its `route-error` default, `root-failed`).
+    // `CARRY_CAUSES` is spelled once in the carry's Python (R10d pins that its
+    // program names them only through the tuple); the bash side may set only
+    // words from it (its `route-error` default, `root-failed`).
     const words = [...fs.readFileSync(CCD, 'utf8').matchAll(/\bCARRY_ROUTE=([a-z][a-z-]*)/g)].map((m) => m[1]!);
     expect(words.length, 'the bash side sets at least its default').toBeGreaterThanOrEqual(1);
     const causes = carryCauses();
@@ -445,6 +459,17 @@ describe('the merge walk: an absent file that will not link routes on EXDEV (D-4
     expect(ino(side('.claude-d', R_JSON))).toBe(ino(side('.claude', R_JSON)));
   });
 
+  it('M9 a file name cannot forge a row: a newline in a diverged path is written \\n, and adds no via-mount', () => {
+    plantReturn();
+    const NAME = 'tool-results/x\nvia 9';
+    put(side('.claude', NAME), 'A LONGER SOURCE\n');
+    put(side('.claude-d', NAME), 'KEPT\n');
+    carry(rig({ common: 'none' }));
+    expect(verdict()).toBe('(merged +1 ~0 !1, copy: exdev-no-root 1 files 7 bytes)');
+    const esc = NAME.replace('\n', '\\n');
+    expect(swapLog()).toContain(`sidecar ${UUID} diverged ${side('.claude-d', esc)} longer ${side('.claude', esc)}\n`);
+  });
+
   it('M10 the row parse is anchored: diverged files named `via 9` and `copied link-failed 5 5` count nothing', () => {
     plantReturn();
     for (const name of ['via 9', 'copied link-failed 5 5']) {
@@ -504,7 +529,7 @@ describe('the real kernel (Linux, unprivileged user namespaces only)', () => {
 
 // ── the vocabulary census ─────────────────────────────────────────────────────
 // Last in the file on purpose: R10c reads what every case above produced.
-describe('CARRY_CAUSES is closed, and every word in it is reachable', () => {
+describe('CARRY_CAUSES is closed, spelled once, and every word in it is reachable', () => {
   it('R10c every CARRY_CAUSES member was produced by a case in this file, and no case produced another word', () => {
     const causes = carryCauses();
     expect(causes.length, 'ccd spells CARRY_CAUSES').toBeGreaterThan(0);
@@ -513,5 +538,22 @@ describe('CARRY_CAUSES is closed, and every word in it is reachable', () => {
     // root (search permission does not bind root).
     const cannotRunHere = process.getuid?.() === 0 ? ['root-unreachable'] : [];
     expect(causes.filter((c) => !produced.has(c) && !cannotRunHere.includes(c)), 'a cause no case produces').toEqual([]);
+  });
+
+  it('R10d the carry program names a cause only through the tuple: no cause-shaped literal outside the CARRY_CAUSES line', () => {
+    const src = fs.readFileSync(CCD, 'utf8');
+    const fn = src.indexOf('\n_carry_py() {');
+    const open = src.indexOf("3<<'PY'\n", fn);
+    const end = src.indexOf('\nPY\n', open);
+    expect(fn > 0 && open > fn && end > open, 'found _carry_py\'s program').toBe(true);
+    const prog = src.slice(open, end);
+    // The walk's action kinds are the program's only other hyphenated words,
+    // read from its own `queue(…, '<kind>', …)` calls rather than listed here.
+    const kinds = new Set([...prog.matchAll(/queue\([^,]+, '([a-z-]+)'/g)].map((m) => m[1]!));
+    expect(kinds.size, 'the walk queues its action kinds by name').toBeGreaterThan(0);
+    const strays = prog.split('\n').filter((l) => !l.startsWith('CARRY_CAUSES = ('))
+      .flatMap((l) => [...l.matchAll(/['"]([a-z]+(?:-[a-z]+)+)['"]/g)].map((m) => m[1]!))
+      .filter((w) => !kinds.has(w));
+    expect(strays).toEqual([]);
   });
 });
