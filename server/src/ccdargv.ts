@@ -874,6 +874,16 @@ export const EXPIRE_CAP = 'expire-v1';
  *  alone folds the first into the second, and the two have different remedies. */
 export const DOCS_CAP = 'docs-v1';
 
+/** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
+ *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
+ *  are the other two spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the verb it gates deletes a directory, and a destructive verb sent
+ *  to a box with no evidence it exists is the failure the capability reader was built to prevent. Nothing reads it in
+ *  this build — the collector's lane does, before its first audit (`ws-collect-wiring.test.ts` pins that). */
+export const COLLECT_CAP = 'collect-v1';
+
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
  * in the same `ccd caps` list `verbSupported` reads, naming a FLAG on an

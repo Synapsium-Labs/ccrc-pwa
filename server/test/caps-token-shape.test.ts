@@ -33,7 +33,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
-import { EXPIRE_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
+import { COLLECT_CAP, EXPIRE_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { CCD } from './ccdWsHelpers.js';
 
 /** The literal tokens `cmd_caps` prints unconditionally, read from ccd itself.
@@ -73,6 +73,8 @@ describe('every ccd caps token survives parseCcdCaps', () => {
     expect(toks).toContain(RECLAIM_PAUSE_CAP);
     expect(toks).toContain(EXPIRE_CAP);
     expect(toks).toContain('ws-expire');
+    expect(toks).toContain(COLLECT_CAP);
+    expect(toks).toContain('ws-collect');
   });
 
   it('keeps EVERY token ccd advertises — none is silently dropped by the filter', () => {
