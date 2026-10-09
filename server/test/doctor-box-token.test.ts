@@ -491,10 +491,11 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     expect(at, 'the box-token block marker moved: re-point the pin').toBeGreaterThanOrEqual(0);
     return src.slice(at);
   };
-  /** Every `[0-9a-f]{n}` spelling in the block's code lines, less the 64-wide digest shape (a different thing). */
+  /** Every hex-class spelling (`[0-9a-f]{n}`, `[a-f0-9]{n}`, `[0-9a-fA-F]{n}`, `[[:xdigit:]]{n}`...) in the block's code
+   *  lines, less the 64-wide digest shape (a different thing); a 4th spelling in another class reds (review of fix 1). */
   const genShapes = (src: string): string[] =>
     checkBlock(src).split('\n').filter((l) => !/^\s*#/.test(l))
-      .flatMap((l) => [...l.matchAll(/\[0-9a-f\]\{\d+(?:,\d*)?\}/g)].map((m) => m[0]))
+      .flatMap((l) => [...l.matchAll(/\[(?:\[:xdigit:\]|[0-9a-fA-F-]*[aA]-[fF][0-9a-fA-F-]*)\]\{\d+(?:,\d*)?\}/g)].map((m) => m[0]))
       .filter((w) => w !== '[0-9a-f]{64}');
   const proofTuple = (src: string): unknown[] | null => {
     const hits = [...checkBlock(src).matchAll(/\bpf in \(([^)]*)\)/g)];
@@ -523,6 +524,10 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     expect(genShapes(src.replace('[0-9a-f]{16}', '[0-9a-f]{15}'))).not.toEqual(want);
     expect(genShapes(src.replace(/\[0-9a-f\]\{16\}(?![\s\S]*\[0-9a-f\]\{16\})/, '[0-9a-f]{15}'))).not.toEqual(want);
     expect(genShapes(`${src}\n    x = re.compile(r"[0-9a-f]{16}")\n`)).not.toEqual(want);
+    expect(genShapes(`${src}\n    x = re.compile(r"[a-f0-9]{16}\\Z")\n`)).not.toEqual(want);
+    expect(genShapes(`${src}\n    x = re.compile(r"[0-9a-fA-F]{16}")\n`)).not.toEqual(want);
+    expect(genShapes(`${src}\n    x = re.compile(r"[[:xdigit:]]{16}")\n`)).not.toEqual(want);
+    expect(genShapes(`${src}\n    x = re.compile(r"[0-9]{2}")\n`), 'a digit-only class is not a hex shape').toEqual(want);
     expect(proofTuple(src.replace(', "proof-unmeasured")', ')'))).not.toEqual([null, 'proved', ...l0Proof()]);
     expect(proofTuple(src.replace('"proved"', '"proven"'))).not.toEqual([null, 'proved', ...l0Proof()]);
     expect(proofTuple(src.replace('(None, ', '('))).not.toEqual([null, 'proved', ...l0Proof()]);
