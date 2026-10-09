@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=261dea1d709c2c236106ad6ad65e2b9cc64622f52cf5980cc03a9c22d88052f5
+# ccrc:generated 1 sha256=93980edfa94c5679476cf4fb88eb8f82239460cb7c66094fd04f3e65249bc5b2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12812,10 +12812,10 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # `--reclaim` is the one exception to that: see "WS-AUDIT --RECLAIM" in the RECLAIM region.
   local mode=reap defer=0
   [[ ( $# -eq 2 || $# -eq 3 || $# -eq 4 ) && $1 == --session ]] \
-    || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]"
-  if (( $# >= 3 )); then [[ $3 != --expire || $# -ne 3 ]] || { _ws_expire_audit "$2"; return; }   # "WS-AUDIT --EXPIRE", EXPIRE region
+    || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"
+  if (( $# >= 3 )); then [[ $3 != --expire || $# -ne 3 ]] || { _ws_expire_audit "$2"; return; }; [[ $3 != --collect || $# -ne 3 ]] || { _ws_collect_audit "$2"; return; }   # "WS-AUDIT --EXPIRE" and "WS-AUDIT --COLLECT", in their regions
     [[ $3 == --reclaim && ( $# -eq 3 || $4 == --defer-expired ) ]] \
-      || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]"
+      || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"
     [[ $_WS_AUDIT_INNER == 1 ]] || { _ws_reclaim_audit_contained "$@"; return; }; mode=reclaim   # see "THE AUDIT READS THE LIVE CHILD CONTAINED" (RECLAIM region)
     (( $# == 4 )) && defer=1
   fi
@@ -32075,6 +32075,438 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
   _WS_COLLECT_ROWS_WHY="asked with $leaf as the workdir: ${_WS_SHARED_WHY:-the registry could not be compared with it}"
   return 2
 }
+
+# ── ws-audit --collect: the collector's audit (temp-root collector, spec §5.10) ───────── WS-AUDIT-COLLECT ──
+# `cmd_ws_audit` sits above the frozen citation corpus's anchors, so its one
+# line for this mode is a hand-off on its existing `if` line, beside the
+# expiry's, and the mode is answered here, whole.
+#
+# THE POPULATION, decided BEFORE any lock: an id with a witness standing at
+# `$REG/tmproots/<id>` (never read through a `tmproots/` that is itself a
+# link), or with at least one quarantine record of it under
+# `$REG/tmpquarantine/`, found by `_ws_collect_records_of`'s exact parse and
+# never by an `<id>.*` prefix (ids admit dots). Anything else answers
+# `not-witnessed` and takes NO lock: the audit never makes `.reap-<name>.lock`
+# for a name ccd never handed a temp root.
+#
+# THE LOCK. Inside the population the audit takes `$REG/.reap-<id>.lock`,
+# `-n` — the lock every verb that removes anything of the id takes. It writes
+# nothing that lock serialises; it holds it so the registry listing control
+# below has a name it KNOWS stands, its own lock file. Held by another process:
+# the retryable `in-progress`, nothing journaled.
+#
+# THE ONE EVALUATION, `_ws_collect_fork`, which `ws-collect` runs again inside
+# its own lock and compares the token against. A standing record makes it a
+# RESUME (`_ws_collect_resume_eval`), whatever the witness now says: the
+# record is the resume's authority, and a resume never walks the tree or asks
+# the floor. Otherwise the fresh rungs (`_ws_collect_eval`), in this order, the
+# first that does not pass ending it:
+#   registered — `$REG/<id>.child` or `$REG/<id>.uuid` by DIRECT lookup (the
+#     read `_child_tmpdir` makes, which needs no listing), each absence
+#     MEASURED by `_ws_reclaim_absent` — never an `-e` test, which reads EACCES
+#     as absence — then `_ws_slug_free`, believed only when a WILDCARD listing
+#     of `$REG` shows the lock this process holds: a `$REG` that can be searched but not listed makes every
+#     glob come back empty, and `_ws_slug_free` then answers free over a
+#     standing row (measured);
+#   witness-mismatch (TERMINAL) — the witness unreadable, without a birth
+#     time, or not the real directory at the id by dev, ino and birth time;
+#   changed-recently — the newest CTIME over every entry under the leaf, the leaf
+#     included, younger than the floor (Task 4's `_ws_collect_floor_held`
+#     against `_ws_collect_floor_s`); mtime is never read. A knob the floor
+#     cannot read is unmeasured `floor`, and the document then names no floor
+#     and no instant;
+#   in-use — `_ws_path_users` (cwd, open file, TMPDIR);
+#   containment-unproven (TERMINAL) — `_ws_leaf_checkouts` on the leaf's own
+#     path, then `_ws_collect_rows_clear` (a registry row at, inside or
+#     through the leaf);
+#   paused — read here, inside the lock, as the verb reads it. Last, because a
+#     pause stops the act and not the measurement: a paused fleet still learns
+#     its terminal refusals.
+# A probe that cannot answer ends it at its rung as `unmeasured`, and names
+# itself in `collect.unmeasured`. A witness whose leaf is PROVEN absent, with
+# no record standing, is collectable at once with a token of its own: the verb
+# then drops the witness, and nothing else (spec §5.10, "no orphaned slot").
+#
+# THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
+# `collectable` MEANS a token, spelled through `_json_str` as the other audits'
+# success words are. Every word here is set through `_ws_collect_refuse`,
+# never the reap ladder's refusal helper, and no line of this block is written
+# in a shape the refusal harvests read (`ccd-collect-audit.test.ts` pins it).
+# `unmeasured` prints the document with that word and EXITS 1 — the server
+# reads any audit exit 1 as `failed` and retries — and is journaled nowhere.
+# A TERMINAL word (`witness-mismatch`, `quarantine-kept`,
+# `containment-unproven`) is journaled, act `collect`, verb `ws-audit`, its
+# detail cut by `_ws_leaf_why_line`; nothing else the audit answers is.
+#
+# LINUX ONLY. On Darwin the audit answers unmeasured (`platform`) before it
+# reads anything, and so does a box whose `mv` has no `--no-copy` (`mv`): the
+# verb's move is one `renameat2(RENAME_NOREPLACE)` or nothing.
+#
+# BOUNDED, AND NOT ALWAYS INSIDE THE RUNNER'S ROW. The fresh rungs can spend,
+# in sequence, the idle walk's `WS_COLLECT_IDLE_SCAN_S` (30 s), the in-use
+# probe's `WS_PATH_USERS_SCAN_S` (10 s) and the checkout scan's
+# `REAP_SCAN_SECONDS` (30 s), and each `_plat_timeout` adds its TERM-to-KILL
+# grace (`CCD_TIMEOUT_KILL_AFTER`, 3 s by default, at most 8 s): about 79 s
+# by default and 94 s at the widest grace, before the row pass, which no bound
+# of its own caps — against ws-audit's 90 s runner row. A runner that kills the
+# audit gets no document, which the server reads as a failed audit and
+# retries: it fails closed. A budget keyed on the mode is wave 9's.
+_WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
+_WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
+_WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
+_WS_COLLECT_RECORDS=()
+
+_ws_collect_reset() {   # -> every answer the collector's evaluation sets, cleared: no earlier read is ever printed
+  REAP_VERDICT=''; REAP_DETAIL=''; REAP_TOKEN=''
+  _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
+  _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
+  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
+  _WS_COLLECT_RECORDS=()
+  _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
+}
+_ws_collect_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }   # word detail -> rc 1: the collector's answer, set
+_ws_collect_unmeasured() { REAP_VERDICT=unmeasured; _WS_COLLECT_PROBE="$1"; REAP_DETAIL="$2"; return 1; }   # probe detail -> rc 1
+
+# THE FLOOR AND THE IDENTITY ARE TASK 4'S, never redefined here: bash keeps
+# the LAST definition of a name, so a second one in this block would replace
+# Task 4's for every caller. `_ws_collect_floor_s` is the one definition of the
+# floor (the knob only raises it), `_ws_collect_floor_held` the one judgment of
+# it, and `_ws_collect_ident <path> <dev:ino> <btime>` the one identity check,
+# the one `_ws_collect_move` proves a move with.
+
+_ws_collect_floor_read() {   # -> 0 with _WS_COLLECT_FLOOR = the idle floor, whole seconds; 2 with _WS_COLLECT_FLOOR
+  #                              '' and _WS_FLOOR_WHY when the floor could not be read
+  # `_ws_collect_floor_s` is asked IN THIS SHELL first, its print discarded, so
+  # its `_WS_FLOOR_WHY` reaches the caller (a `$( )` would keep it in a
+  # subshell); then once more for the print itself. An empty print is never a
+  # floor of 0, and no instant is computed from one.
+  local f
+  _WS_COLLECT_FLOOR=''
+  _ws_collect_floor_s >/dev/null || return 2
+  f=$(_ws_collect_floor_s) && [[ "$f" =~ ^[0-9]{1,9}$ ]] \
+    || { _WS_FLOOR_WHY="${_WS_FLOOR_WHY:-the idle floor printed no whole number of seconds}"; return 2; }
+  _WS_COLLECT_FLOOR="$f"
+}
+
+_ws_collect_paused() {   # -> 0 when reclamation is not paused; rc 1 with `paused` set when it is
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
+    || { _ws_collect_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing is collected while it stands"; return 1; }
+}
+
+_ws_collect_registered() {   # id -> 0 when no registry row stands for id; 1 when one does; 2 when that could not be
+  #                               told — each with _WS_COLLECT_REG_WHY. The CALLER HOLDS `$REG/.reap-<id>.lock`.
+  local id="$1" f rc
+  local -a ctl=()
+  _WS_COLLECT_REG_WHY=''
+  for f in child uuid; do
+    _ws_reclaim_absent "$REG/$id.$f"; rc=$?
+    if (( rc == 1 )); then
+      _WS_COLLECT_REG_WHY="$REG/$id.$f stands — a workspace is registered as $id, so the temp root at its id is that workspace's"
+      return 1
+    fi
+    (( rc == 0 )) \
+      || { _WS_COLLECT_REG_WHY="whether $REG/$id.$f stands could not be measured (${_WS_ABSENT_WHY:-its absence was not proven})"; return 2; }
+  done
+  # THE LISTING CONTROL: the glob is a wildcard, so it is answered by READING
+  # `$REG`, and the one name it must find is the lock this process holds open.
+  ctl=("$REG/.reap-$id".lo[c]k)
+  [[ ${#ctl[@]} -eq 1 && "${ctl[0]}" == "$REG/.reap-$id.lock" ]] \
+    || { _WS_COLLECT_REG_WHY="a wildcard listing of $REG does not show the lock this process holds there, so $REG cannot be listed and no other row of $id could be seen"; return 2; }
+  [[ "$id" == *-* ]] \
+    || { _WS_COLLECT_REG_WHY="$id names no project and slug, so whether its slug is free cannot be asked"; return 2; }
+  _ws_slug_free "${id%-*}" "${id##*-}" && return 0
+  _WS_COLLECT_REG_WHY="the registry still holds $(_ws_slug_residue "${id%-*}" "${id##*-}") — a row of $id, or what one left behind"
+  return 1
+}
+
+_ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP_TOKEN), a word, or `unmeasured`
+  #                        (_WS_COLLECT_PROBE). The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
+  local id="$1" leaf="$HOME/.cc-tmp/$1" rc floor why=walk-failed
+  _ws_collect_registered "$id"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
+  _ws_tmproot_witness_read "$id"; rc=$?
+  (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
+  (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
+  [[ "$_WS_WIT_BTIME" != - ]] \
+    || { _ws_collect_refuse witness-mismatch "the witness of $id records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
+  _ws_reclaim_absent "$leaf"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
+  if (( rc == 0 )); then
+    # A WITNESS WITH NO LEAF (and the fork found no record of the id): nothing
+    # to walk, probe or remove; the verb drops the witness, compared first.
+    _WS_COLLECT_LEAF=absent
+    _ws_collect_paused || return 1
+    REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-absent "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" \
+      "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT")
+    [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+      || { REAP_TOKEN=''; _ws_collect_unmeasured token "the collection token of $id could not be minted"; return 1; }
+    REAP_VERDICT=collectable
+    return 0
+  fi
+  _WS_COLLECT_LEAF=present
+  [[ -d "$leaf" && ! -L "$leaf" ]] \
+    || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory its witness names; it is offered to the operator"; return 1; }
+  _ws_collect_ident "$leaf" "$_WS_WIT_DEV:$_WS_WIT_INO" "$_WS_WIT_BTIME"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured identity "the device, inode or birth time of $leaf could not be read"; return 1; }
+  (( rc == 0 )) \
+    || { _ws_collect_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME its witness names — it is offered to the operator, never taken"; return 1; }
+  _ws_collect_idle "$leaf"; rc=$?
+  if (( rc != 0 )) || [[ ! "${_WS_IDLE_NEWEST_NS-}" =~ ^[0-9]{1,19}$ || ! "${_WS_IDLE_COUNT-}" =~ ^[0-9]{1,9}$ ]]; then
+    if (( rc != 0 )); then case "${_WS_IDLE_WHY-}" in timeout|unreadable|cap) why="$_WS_IDLE_WHY" ;; esac; fi
+    _ws_collect_unmeasured "idle:$why" "the walk of $leaf for its newest change did not finish ($why), so how long it has been idle is unknown"
+    return 1
+  fi
+  _WS_COLLECT_NEWEST_NS="$_WS_IDLE_NEWEST_NS"; _WS_COLLECT_ENTRIES="$_WS_IDLE_COUNT"
+  _ws_collect_floor_read \
+    || { _ws_collect_unmeasured floor "${_WS_FLOOR_WHY:-the idle floor could not be read}, so how long $leaf must stay idle is unknown"; return 1; }
+  floor="$_WS_COLLECT_FLOOR"
+  _WS_COLLECT_IDLE_AT=$(( (10#$_WS_COLLECT_NEWEST_NS + floor * 1000000000 + 999999999) / 1000000000 ))
+  _ws_collect_floor_held "$_WS_COLLECT_NEWEST_NS"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured clock "this box's clock could not be read, so how long $leaf has been idle is unknown"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse changed-recently "the newest change under $leaf is less than ${floor}s old — it is collectable from epoch $_WS_COLLECT_IDLE_AT, if nothing changes it first"; return 1; }
+  _ws_path_users "$leaf"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $leaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+  _ws_leaf_checkouts "$leaf"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
+  _ws_collect_rows_clear "$id" "$leaf"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+  _ws_collect_paused || return 1
+  REAP_TOKEN=$(_ws_collect_token "$id") && [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+    || { REAP_TOKEN=''; _ws_collect_unmeasured token "the collection token of $id could not be minted"; return 1; }
+  REAP_VERDICT=collectable
+}
+
+_ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collectable` with REAP_TOKEN and
+  #                                _WS_COLLECT_PHASE (`unmoved`, `moved` or `removed`), a word, or `unmeasured`.
+  #                                The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only, and never the tree's walk.
+  # THE PHASE IS READ OFF THE DISK, never off the journal: `moved` — the
+  # record's directory stands in its slot (`<slot>/leaf`, the record's dev, ino
+  # and birth time) and NOTHING stands at the id; `unmoved` — it stands at the
+  # id and the slot holds nothing; `removed` — it stands at neither (the slot's
+  # leaf was removed, or the restore and a later tail took it). The slot is
+  # never read from the record: Task 4's reader DERIVES it from the record's
+  # name, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<record name>` (the record
+  # body carries no path), and the slot may hold `leaf` and nothing else.
+  # Anything the collector did not leave there is `quarantine-kept`: the record
+  # and the slot stay for the operator, as they stand. So is a slot leaf with
+  # ANYTHING at the id: the original path was retaken, the leaf can never go
+  # back, and every audit answers it, TERMINAL — read off the disk, so it
+  # clears once the path is free again. The registry is asked only after the
+  # phase, because a retake usually brings a row, whose retryable `registered`
+  # would otherwise hide it on every pass. A `moved` resume re-proves,
+  # read-only, what the verb proves after a move: nobody uses either spelling,
+  # and no registry row lies at, inside or through the PRE-MOVE spelling.
+  # THE RECORD READER ANSWERS FOUR WAYS (ruling R-a): 0 parsed; 1 absent,
+  # PROVEN (it vanished between the listing and the read: unmeasured
+  # `records`); 2 malformed, the TERMINAL `quarantine-kept`; 3 unmeasured —
+  # the physical `~/.cc-tmp` cannot be resolved, so the slot was never derived,
+  # or whether the record stands was never measured: unmeasured `quarantine`,
+  # journaled nowhere and asked again by the next pass — a bind mount not up
+  # yet is no fault of the record's, and keeping it would journal a retryable
+  # fact on every audit.
+  local id="$1" rec name q='' slot sleaf orig="$HOME/.cc-tmp/$1" rc sstate=absent ostate=other phase ents
+  shift
+  (( $# == 1 )) \
+    || { _ws_collect_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
+  rec="$1"; name="${rec##*/}"; _WS_COLLECT_RECORD="$rec"
+  _ws_collect_record_read "$rec"; rc=$?
+  (( rc != 1 )) || { _ws_collect_unmeasured records "the quarantine record $rec vanished while it was read"; return 1; }
+  (( rc != 3 )) || { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-the physical ~/.cc-tmp could not be resolved} — the slot of $rec was never derived, or whether it stands was never measured; the record stays as it is, and the next pass asks again"; return 1; }
+  (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
+  [[ "${_WS_QREC_ID-}" == "$id" ]] \
+    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
+  [[ "${_WS_QREC_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
+    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec records no birth time, so device and inode alone would vouch for what it names — it is kept for the operator"; return 1; }
+  _ws_reclaim_absent "$HOME/.cc-tmp"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured quarantine "$_WS_ABSENT_WHY"; return 1; }
+  if (( rc != 0 )); then
+    _ws_collect_qpath || { _ws_collect_unmeasured quarantine "$_WS_QPATH_WHY"; return 1; }
+    q="$_WS_QPATH"
+    if [[ -L "$q" ]] || { [[ -e "$q" ]] && { [[ ! -d "$q" ]] || [[ ! -O "$q" ]]; }; }; then
+      _ws_collect_unmeasured quarantine "$q is a link, not a directory, or not this uid's — ccd never reads a slot through it"
+      return 1
+    fi
+  fi
+  slot="$_WS_QREC_SLOT"; sleaf="$slot/leaf"; _WS_COLLECT_SLOT="$slot"
+  if [[ -L "$slot" ]] || { [[ -e "$slot" ]] && [[ ! -d "$slot" ]]; }; then
+    _ws_collect_refuse quarantine-kept "the slot $slot is a link or not a directory — the collector never made it so; it is kept for the operator"
+    return 1
+  elif [[ -d "$slot" ]]; then
+    ents=$(LC_ALL=C find -P "$slot" -mindepth 1 -maxdepth 1 -printf '%f/' 2>/dev/null) \
+      || { _ws_collect_unmeasured slot "the slot $slot could not be listed"; return 1; }
+    [[ -z "$ents" || "$ents" == leaf/ ]] \
+      || { _ws_collect_refuse quarantine-kept "the slot $slot holds what the collector never put there — it is kept for the operator"; return 1; }
+    if [[ -L "$sleaf" ]] || { [[ -e "$sleaf" ]] && [[ ! -d "$sleaf" ]]; }; then
+      _ws_collect_refuse quarantine-kept "$sleaf is a link or not a directory — a slot leaf that is not the one moved there is kept for the operator"
+      return 1
+    elif [[ -d "$sleaf" ]]; then
+      _ws_collect_ident "$sleaf" "$_WS_QREC_DEV:$_WS_QREC_INO" "$_WS_QREC_BTIME"; rc=$?
+      (( rc != 2 )) || { _ws_collect_unmeasured identity "the device, inode or birth time of $sleaf could not be read"; return 1; }
+      (( rc == 0 )) \
+        || { _ws_collect_refuse quarantine-kept "$sleaf is $(_plat_devino "$sleaf" 2>/dev/null) born $(_plat_btime "$sleaf" 2>/dev/null), not the $_WS_QREC_DEV:$_WS_QREC_INO born $_WS_QREC_BTIME its record names — it is kept for the operator"; return 1; }
+      sstate=leaf
+    fi
+  else
+    _ws_reclaim_absent "$slot"; rc=$?
+    (( rc == 0 )) || { _ws_collect_unmeasured slot "${_WS_ABSENT_WHY:-$slot stands but is neither a link, a file nor a directory}"; return 1; }
+  fi
+  _ws_collect_ident "$orig" "$_WS_QREC_DEV:$_WS_QREC_INO" "$_WS_QREC_BTIME"; rc=$?
+  case "$rc" in
+    0) ostate=match ;;
+    1) _ws_reclaim_absent "$orig"; rc=$?
+       (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
+       (( rc != 0 )) || ostate=absent ;;
+    *) _ws_collect_unmeasured identity "the device, inode or birth time of $orig could not be read"; return 1 ;;
+  esac
+  case "$sstate:$ostate" in
+    leaf:match)  _ws_collect_refuse quarantine-kept "the directory record $rec names stands both in $slot and at $orig — one of them is not what the collector moved; both are kept for the operator"; return 1 ;;
+    leaf:absent) phase=moved ;;
+    leaf:*)      _ws_collect_refuse quarantine-kept "something stands at $orig, the path the leaf in $slot was moved from — the original path was retaken, so the leaf cannot go back; the record, the slot and its leaf are kept for the operator"; return 1 ;;
+    absent:match) phase=unmoved ;;
+    *)          phase=removed ;;
+  esac
+  _WS_COLLECT_PHASE="$phase"
+  # THE REGISTRY, asked only now: a retaken original path is TERMINAL above,
+  # and a retake usually brings a row whose retryable `registered` would hide it.
+  _ws_collect_registered "$id"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
+  if [[ "$phase" == moved ]]; then
+    _ws_path_users "$sleaf"; rc=$?
+    (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
+    (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $sleaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+    _ws_path_users "$orig"; rc=$?
+    (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
+    (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $orig, the spelling $sleaf had before its move (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+    _ws_collect_rows_clear "$id" "$orig"; rc=$?
+    (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+    (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+  fi
+  _ws_collect_paused || return 1
+  REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-resume "id=$id" "record=$name" "phase=$phase" "slot=$slot" \
+    "dev=$_WS_QREC_DEV" "ino=$_WS_QREC_INO" "btime=$_WS_QREC_BTIME" "run=${_WS_QREC_RUN-}" "at=${_WS_QREC_AT-}" \
+    "pre=${_WS_QREC_TOKEN-}")
+  [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+    || { REAP_TOKEN=''; _ws_collect_unmeasured token "the resume token of $id could not be minted"; return 1; }
+  REAP_VERDICT=collectable
+}
+
+_ws_collect_fork() {   # id -> THE ONE EVALUATION `ws-audit --collect` and `ws-collect` share: a standing record
+  #                        RESUMES, else the fresh rungs. The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
+  local id="$1" out rc
+  local -a recs=()
+  _ws_collect_reset
+  out=$(_ws_collect_records_of "$id"); rc=$?
+  (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; return 1; }
+  [[ -z "$out" ]] || mapfile -t recs <<< "$out"
+  _WS_COLLECT_RECORDS=(${recs[@]+"${recs[@]}"})
+  if (( ${#recs[@]} )); then
+    _ws_tmproot_witness_read "$id" || :   # the document reports it; a resume never asks it
+    _ws_collect_resume_eval "$id" "${recs[@]}"
+  else
+    _ws_collect_eval "$id"
+  fi
+}
+
+_ws_collect_audit() {   # id -> `ccd ws-audit --session <id> --collect`, whole: ONE JSON document on stdout; exit 1 on
+  #                         `unmeasured` (the server retries), else 0. Contained: the row rule's placement may ask git.
+  _ws_reclaim_contained _ws_collect_audit_contained "$@"
+}
+
+_ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_reclaim_contained` — call that
+  local id="$1" w out rc=0 lfd inpop=0
+  _ws_tmproot_id_ok "$id" || die "bad session id"
+  _json_str probe >/dev/null 2>&1 \
+    || die "python3 unavailable — cannot quote the audit record safely"
+  _ws_collect_reset
+  if [[ "$CCD_OS" == darwin ]]; then
+    _ws_collect_unmeasured platform "the temp-root collector runs on Linux only — on this box it measures nothing and takes nothing"
+    _ws_collect_audit_doc "$id"; return
+  fi
+  w=$(_ws_tmproot_witness_file "$id")
+  if [[ -L "$REG/tmproots" ]]; then
+    _ws_collect_unmeasured witness "$REG/tmproots is a link — ccd never follows it, so whether $id is witnessed was never asked"
+    _ws_collect_audit_doc "$id"; return
+  fi
+  [[ -e "$w" || -L "$w" ]] && inpop=1
+  if (( ! inpop )); then
+    out=$(_ws_collect_records_of "$id"); rc=$?
+    (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; _ws_collect_audit_doc "$id"; return; }
+    [[ -z "$out" ]] || inpop=1
+  fi
+  if (( ! inpop )); then
+    _ws_collect_refuse not-witnessed "no witness stands for $id and no quarantine record names it — ccd never handed out a temp root under this id that is still to be collected" || :
+    _ws_collect_audit_doc "$id"; return
+  fi
+  _ws_collect_mv_ok || {
+    _ws_collect_unmeasured mv "this box's mv has no --no-copy, so the collector's move could only ever be a copy — it measures nothing and takes nothing"
+    _ws_collect_audit_doc "$id"; return; }
+  command -v flock >/dev/null 2>&1 || {
+    _ws_collect_unmeasured flock "flock (util-linux) is unavailable, so the reap lock of $id cannot be taken"
+    _ws_collect_audit_doc "$id"; return; }
+  exec {lfd}>>"$REG/.reap-$id.lock" || {
+    _ws_collect_unmeasured lock "cannot open the reap lock at $REG/.reap-$id.lock"
+    _ws_collect_audit_doc "$id"; return; }
+  if ! flock -n "$lfd"; then
+    exec {lfd}>&-
+    _ws_collect_refuse in-progress "another ccd process holds the reap lock of $id — a reap, reclaim, expiry, restore or collection of it is running" || :
+    _ws_collect_audit_doc "$id"; return
+  fi
+  _ws_collect_fork "$id" || :
+  _ws_collect_audit_doc "$id"; rc=$?
+  exec {lfd}>&-
+  return "$rc"
+}
+
+_ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line of a TERMINAL word; rc 1 on
+  #                             `unmeasured`, else 0
+  local id="$1" leaf="$HOME/.cc-tmp/$1" exists=false wit=null recs='[' r first=1 newest=null entries=null
+  local idleat=null probe=null floor=null cut
+  [[ -n "$REAP_VERDICT" ]] \
+    || _ws_collect_unmeasured eval "the evaluation of $id answered nothing" || :
+  [[ -d "$leaf" && ! -L "$leaf" ]] && exists=true
+  if [[ -n "$_WS_WIT_DEV" ]]; then
+    wit=$(printf '{"dev":%s,"ino":%s,"btime":%s,"run":%s,"at":%s}' "$(_json_str "$_WS_WIT_DEV")" \
+      "$(_json_str "$_WS_WIT_INO")" "$(_json_str "$_WS_WIT_BTIME")" "$(_json_str "$_WS_WIT_RUN")" "$(_json_str "$_WS_WIT_AT")")
+  fi
+  for r in ${_WS_COLLECT_RECORDS[@]+"${_WS_COLLECT_RECORDS[@]}"}; do
+    (( first )) || recs+=','; first=0; recs+="$(_json_str "${r##*/}")"
+  done
+  recs+=']'
+  [[ -z "$_WS_COLLECT_NEWEST_NS" ]] || newest=$(_json_str "$_WS_COLLECT_NEWEST_NS")
+  [[ -z "$_WS_COLLECT_ENTRIES" ]] || entries="$_WS_COLLECT_ENTRIES"
+  [[ -z "$_WS_COLLECT_IDLE_AT" ]] || idleat="$_WS_COLLECT_IDLE_AT"
+  [[ -z "$_WS_COLLECT_PROBE" ]] || probe=$(_json_str "$_WS_COLLECT_PROBE")
+  # THE FLOOR AS IT READS NOW, or null when it cannot be read: never an empty field.
+  if _ws_collect_floor_read; then floor="$_WS_COLLECT_FLOOR"; fi
+  printf '{"session":%s,"mode":"collect","exists":%s,"collect":{"leaf":%s,"witness":%s,"records":%s,"newestCtimeNs":%s,"entries":%s,"floorS":%s,"idleAt":%s,"unmeasured":%s},' \
+    "$(_json_str "$id")" "$exists" "$(_json_str "$leaf")" "$wit" "$recs" "$newest" "$entries" \
+    "$floor" "$idleat" "$probe"
+  [[ -z "$_WS_COLLECT_PHASE" ]] || printf '"resume":%s,' "$(_json_str "$_WS_COLLECT_PHASE")"
+  if [[ "$REAP_VERDICT" == collectable ]]; then
+    printf '"verdict":%s,"detail":"","token":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_TOKEN")"
+    return 0
+  fi
+  printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
+  if [[ "$REAP_VERDICT" == unmeasured ]]; then
+    echo "ccd: ws-audit --collect measured nothing ($_WS_COLLECT_PROBE): $REAP_DETAIL — retry" >&2
+    return 1
+  fi
+  # A TERMINAL word is journaled, and only a terminal one: wave 9's lane audits
+  # every pass, and a retryable word a pass would bury the journal.
+  cut=$(_ws_leaf_why_line "$REAP_DETAIL")
+  case "$REAP_VERDICT" in
+    witness-mismatch)     _lc_emit collect refused "$id" "" verb ws-audit refusal witness-mismatch detail "$cut" ;;
+    quarantine-kept)      _lc_emit collect refused "$id" "" verb ws-audit refusal quarantine-kept detail "$cut" ;;
+    containment-unproven) _lc_emit collect refused "$id" "" verb ws-audit refusal containment-unproven detail "$cut" ;;
+  esac
+  return 0
+}
+# ── end ws-audit --collect ──────────────────────────────────────────────── WS-AUDIT-COLLECT-CLOSE ──
 # ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──

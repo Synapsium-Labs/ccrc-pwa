@@ -159,6 +159,17 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
     expect([...code.matchAll(/_lc_emit expire refused "\$id" "" verb ws-expire /g)]).toHaveLength(2);
   });
 
+  it('holds the collector audit’s emits at exactly three in the COLLECT region — one per TERMINAL word, verb ws-audit (child reclamation, wave 7)', () => {
+    // `ws-audit --collect` journals its three TERMINAL words only (spec §5.10), each at its own literal site in
+    // `_ws_collect_audit_doc`. A fourth `verb ws-audit` emit is a retryable word journaled, which would bury the
+    // journal on every pass of wave 9's lane. `ws-collect`'s own emits (Task 6) carry verb ws-collect and are not
+    // counted here. Comment lines are not code.
+    const region = src.slice(src.indexOf('COLLECT-BEGIN'), src.indexOf('COLLECT-END'));
+    expect(region.length, 'the COLLECT region could not be sliced').toBeGreaterThan(50000);
+    const code = region.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect([...code.matchAll(/_lc_emit collect refused "\$id" "" verb ws-audit /g)]).toHaveLength(3);
+  });
+
   it('_ws_expire_locked contains NO die — past the lock, a failure is _lc_fail and JSON', () => {
     const from = src.indexOf('_ws_expire_locked() {');
     const body = from > -1 ? src.slice(from, src.indexOf('\n}\n', from)) : '';

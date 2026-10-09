@@ -7883,7 +7883,9 @@ export type LcRefusalToken =
   | 'probe-unmeasured'        // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
   | 'token-malformed'         // ws-reclaim (spec §5.9): `--expect` is not 64 lowercase hex — journaled `refused` before the lock, once the session id is valid
   | 'run-id-malformed'        // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
-  | 'containment-refuted';    // ws-reclaim or ws-expire (spec §5.6): the tail's removal-time re-ask PROVED the tree at the workdir is not only the child's own, so it stopped before deleting anything further — journaled `failed`, never `refused`
+  | 'containment-refuted'     // ws-reclaim or ws-expire (spec §5.6): the tail's removal-time re-ask PROVED the tree at the workdir is not only the child's own, so it stopped before deleting anything further — journaled `failed`, never `refused`
+  | 'witness-mismatch'        // ws-audit --collect and ws-collect (spec §5.10): the temp root at the id is not the real directory its witness names by dev, ino and birth time, or the witness cannot be read or has no birth time — TERMINAL, journaled `refused`: offered to the operator, never taken
+  | 'quarantine-kept';        // ws-audit --collect and ws-collect (spec §5.10): a quarantine record, or its slot, is not as the collector left it — TERMINAL, journaled `refused`: kept as it stands, for the operator
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7999,6 +8001,13 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // is true under any server. It never says whether, or when, ccrc retries.
   'containment-refuted':
     'ccrc found that what it would remove is not only this workspace’s own tree — another session’s tree or registry row lies at, inside or through it, or the recorded path is not this workspace’s worktree — so it stopped. The session was stopped and nothing further was deleted. A retry finds the same thing until that other tree or row is moved or removed.',
+  // The temp-root collector (spec §5.10). Both TERMINAL, journaled `refused` by `ws-audit --collect` and, from its
+  // own commit on, by `ws-collect`. Each says only what is true wherever it is printed: the audit removes nothing,
+  // and the verb answers either word before it removes anything further.
+  'witness-mismatch':
+    'The temporary directory under this id is not the one ccrc recorded handing out — it was replaced or moved, or its record cannot be read or vouches for too little — so ccrc will never remove it on its own. Nothing was removed; it is listed for you to look at.',
+  'quarantine-kept':
+    'A temporary directory ccrc set aside to remove, or the record of it, is not as ccrc left it, so ccrc keeps both exactly as they stand and will not finish removing it on its own. Nothing further was removed; it is listed for you to look at.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

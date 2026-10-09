@@ -214,7 +214,7 @@ describe('ws-audit --reclaim', () => {
       ['--defer-expired', '--reclaim']]) {
       const r = runCcd('ws-audit', '--session', CHILD_ID, ...argv);
       expect(r.code, argv.join(' ')).toBe(1);
-      expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]');
+      expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]');
     }
   });
 

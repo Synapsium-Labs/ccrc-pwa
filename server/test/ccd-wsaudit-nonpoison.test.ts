@@ -120,6 +120,8 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     expect.soft(reclaimRegion(full).length, 'the region was found — an empty cut proves nothing').toBeGreaterThan(5000);
     expect.soft(markedBlock(full, 'MIRROR-BEGIN', 'MIRROR-END'), 'the mirror block was found, and holds ws-reap’s breadcrumb word')
       .toContain('"refused":"reclaim-in-progress"');
+    expect.soft(markedBlock(full, 'COLLECT-BEGIN', 'COLLECT-END'), 'the COLLECT region was found, and holds the collector’s audit')
+      .toContain('_ws_collect_audit_contained() {');
   });
 });
 
@@ -142,12 +144,14 @@ function markedBlock(text: string, begin: string, end: string): string {
 
 /** `text` with that region — and ws-reap's mirror block below it, which holds
  *  ws-reap's refusal of a reclaim breadcrumb (child reclamation wave 3, Task 4),
- *  and the EXPIRE region, `ws-expire`'s own words (workspace lifecycle wave 3)
- *  — cut out. A function DECLARATION, so it is hoisted and `src` can use it on
+ *  and the EXPIRE region, `ws-expire`'s own words (workspace lifecycle wave 3),
+ *  and Task 4's COLLECT region, the temp-root collector's own words (child
+ *  reclamation wave 7) — cut out. A function DECLARATION, so it is hoisted and `src` can use it on
  *  its own line without moving the lines the corpus cites. */
 function withoutReclaim(text: string): string {
   let out = text;
-  for (const block of [reclaimRegion(text), markedBlock(text, 'MIRROR-BEGIN', 'MIRROR-END'), markedBlock(text, 'EXPIRE-BEGIN', 'EXPIRE-END')]) {
+  for (const block of [reclaimRegion(text), markedBlock(text, 'MIRROR-BEGIN', 'MIRROR-END'), markedBlock(text, 'EXPIRE-BEGIN', 'EXPIRE-END'),
+    markedBlock(text, 'COLLECT-BEGIN', 'COLLECT-END')]) {
     if (block !== '') out = out.replace(block, '');
   }
   return out;

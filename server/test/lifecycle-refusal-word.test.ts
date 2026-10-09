@@ -26,6 +26,7 @@ const ALL_TOKENS: Record<LcRefusalToken, true> = {
   'purge-refused': true, 'purge-incomplete': true, 'purge-mechanism-absent': true,
   'pin-failed': true, 'unit-still-active': true, 'branch-unmeasured': true, 'probe-unmeasured': true,
   'token-malformed': true, 'run-id-malformed': true, 'containment-refuted': true,
+  'witness-mismatch': true, 'quarantine-kept': true,
 };
 const TOKENS = Object.keys(ALL_TOKENS) as LcRefusalToken[];
 
@@ -33,7 +34,7 @@ describe('the journal-only refusal vocabulary', () => {
   it.each(TOKENS)('isLcRefusalToken(%s)', (t) => { expect(isLcRefusalToken(t)).toBe(true); });
 
   it('covers the whole union and derives its list from the map', () => {
-    expect(TOKENS.length).toBe(19);
+    expect(TOKENS.length).toBe(21);
     expect([...LC_REFUSAL_TOKENS].sort()).toEqual([...TOKENS].sort());
   });
 
