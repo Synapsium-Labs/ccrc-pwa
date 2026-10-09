@@ -18,7 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -763,5 +763,19 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
     // Exact after the list: nothing appended, nothing commented out.
     expect(lines.slice(end + 1)).toEqual([
       'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts', '']);
+  });
+});
+
+describe('the node-floor leg runs every history test file on the floor interpreter (spec 2026-10-05 §9.9)', () => {
+  // The 22.16.0 leg exists because history needs FTS5 and a GC-safe `.iterate()` that 22.15 lacks; a history
+  // test that never runs on the floor proves nothing about it. So the leg's list is DERIVED from the directory:
+  // a new `history-*.test.ts` without its line here reds, and so does a line naming a file that is gone.
+  it('its Test step lists node-floor.test.ts, every history-*.test.ts and measure-history.test.ts, and nothing else', () => {
+    const script = runScript(step(job('node-floor'), 'Test'));
+    const listed = [...script.matchAll(/\btest\/([\w.-]+\.test\.ts)\b/g)].map((m) => m[1]!).sort();
+    const history = readdirSync(join(REPO, 'server', 'test')).filter((f) => /^history-[\w.-]+\.test\.ts$/.test(f));
+    expect(history.length, 'no history-*.test.ts file exists — the derivation saw nothing').toBeGreaterThan(2);
+    expect(listed, 'the 22.16.0 leg does not run exactly the history test files — add the new one to its list')
+      .toEqual(['measure-history.test.ts', 'node-floor.test.ts', ...history].sort());
   });
 });

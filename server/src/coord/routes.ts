@@ -251,7 +251,7 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     // Reached only through the sweep's handle, never from a route: no route passes a sweep guard. Mapped so the
     // switch stays total.
     case 'claimant-changed': return reply.code(409).send({ ok: false, error: 'claimant-changed', claimedBy: r.claimedBy });
-    case 'sweep-stopped': return reply.code(409).send({ ok: false, error: 'sweep-stopped', stop: r.stop, released: r.released });
+    case 'sweep-stopped': return reply.code(409).send({ ok: false, error: 'sweep-stopped', stop: r.stop, fleetAct: r.fleetAct });
     default: {
       const _exhaustive: never = r;
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
@@ -577,10 +577,10 @@ export function registerCoordRoutes(
    * neither tolerance applies.
    */
   const requireMailToken = (req: FastifyRequest, reply: FastifyReply, route: string): boolean => {
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], route);
     if (verdict === 'ok') return true;
     const detail = verdict === 'legacy'
-      ? `no box token presented — ${route} grants no legacy tolerance (that is /api/notify only)`
+      ? `no box token presented — ${route} grants no legacy tolerance`
       : verdict === 'unconfigured'
         ? `no box token is configured on this server — ${route} fails shut on an unconfigured token, ` +
           'it does not fail open'
@@ -696,13 +696,17 @@ export function registerCoordRoutes(
     //
     // `'unconfigured'` (Task 7 fix-round finding 3 / D-39): a server whose
     // token file was never minted must not run this route open, the way
-    // `/api/notify` is still entitled to — `/api/mail` has no pre-existing
-    // deployed caller a strict gate could strand, the identical argument
+    // `/api/notify` was entitled to until the box-token lifecycle —
+    // `/api/mail` has no pre-existing deployed caller a strict gate could strand, the identical argument
     // that already ruled out a `'legacy'` tolerance here.
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    //
+    // HISTORY since the box-token lifecycle (spec 4.3): `/api/notify` lost both
+    // tolerances too and now refuses the same three verdicts; the contrast above
+    // records why this route never had either.
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
-        ? 'no box token presented — /api/mail grants no legacy tolerance (that is /api/notify only)'
+        ? 'no box token presented — /api/mail grants no legacy tolerance'
         : verdict === 'unconfigured'
           ? 'no box token is configured on this server — /api/mail fails shut on an unconfigured ' +
             'token, it does not fail open (fix-round finding 3)'
@@ -1021,10 +1025,10 @@ export function registerCoordRoutes(
     // Same gate, same reasoning: see the ingress route above (fix-round
     // finding 3/5) — `/api/mail/:id/ack` has no legacy caller either, and
     // (fix-round finding 3 / D-39) no unconfigured-token pass-through either.
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail/:id/ack');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
-        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance (that is /api/notify only)'
+        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance'
         : verdict === 'unconfigured'
           ? 'no box token is configured on this server — /api/mail/:id/ack fails shut on an ' +
             'unconfigured token, it does not fail open (fix-round finding 3)'
@@ -2839,7 +2843,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2875,7 +2879,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/signals');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false, error: 'unauthenticated', verdict: session.verdict,
@@ -2924,7 +2928,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/items');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2981,7 +2985,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/feed');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3042,7 +3046,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/lifecycle');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3117,7 +3121,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/peers');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3467,7 +3471,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/claims');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -4006,7 +4010,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/asks');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
