@@ -17,7 +17,7 @@ spec's after wave 1.
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
 | 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGED** `f82cb9fbc` (PR #330, 2026-10-09 06:44:52 UTC; run 320 done, child reclaim queued; released as v0.0.133 at 06:45:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `d9adc2c5a` onto `main` at `d33a566bb` (`4512d88d`). That tip is `fa384df19`, which review 352 read, plus a clean merge of `main`. Every Linux leg was green. Was: **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
-| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; D-4414 and D-4551 defined. Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
+| 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; numbers 4414 and 4551 defined, bare until #341 merges. Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
@@ -335,9 +335,9 @@ spec's after wave 1.
     - **The rollout note:** under auto's fleet-first order, the fleet's new cap opens the gate. So the FIRST live
       rotation may be driven by the server's previous build, v0.0.133, which lacks R0. The happy path is the same.
   - **Rulings:**
-    - D-4551, the worker's own (doctor gains `retire-overdue:<min>` and `retiring-unlanded:<min>`, SKIP in wave 1 and
+    - Number 4551, the worker's own (doctor gains `retire-overdue:<min>` and `retiring-unlanded:<min>`, SKIP in wave 1 and
       FAIL when armed), is **confirmed**. It keeps Review Focus 4: no PASS while a retirement is stuck.
-    - **Item 1, accepted as D-4414's stated cost:** an unusable `box-token.json` forces a mint, and a remote fleet is
+    - **Item 1, accepted as number 4414's stated cost:** an unusable `box-token.json` forces a mint, and a remote fleet is
       refused until a code resync. Part B gives the fleet the verb, so the resync is automatic. A fleet with no verb
       is the double-fault case.
     - **Items 2 to 8 are residue.** Each goes to row 2a's brief, or to wave 2 when its file is under another claim:
@@ -363,7 +363,7 @@ spec's after wave 1.
        fleet on this build while the server still runs v0.0.133 drives the rotation, then the server restarts into
        this build at the hand-out, the promotion or grace.
     2. **The leak's retirement:** once the first rotation completes, the leaked value is not refused within the
-       plan's bound, or a retired value can come back: adopted, accepted, or handed out again. D-4414's four sequences
+       plan's bound, or a retired value can come back: adopted, accepted, or handed out again. number 4414's four sequences
        are included.
     3. **Secrets:** a token value, a claim code or a sha256 of either appears in any of these places:
        - the verb's stdout, stderr or argv, the environment, or `token-sync.json`;
@@ -377,7 +377,7 @@ spec's after wave 1.
        - a non-atomic fleet-file write, or a lost comment preamble;
        - the generation file recorded before the value file is in place;
        - a shell spelling the parity scan does not hold to L0.
-    5. **Doctor:** a stuck state that prints PASS, D-4551's words included; the arms on (`_BT_ARMS_ON` other than 0);
+    5. **Doctor:** a stuck state that prints PASS, number 4551's words included; the arms on (`_BT_ARMS_ON` other than 0);
        or a SKIP that moves doctor's exit code or summary.
     6. **The console:** the card says a false thing in a reachable state; Rotate now is sent twice for one press; or
        the card throws or misrenders on an absent or malformed `boxToken`, which is what an older server sends.
@@ -390,7 +390,7 @@ spec's after wave 1.
     11. A new pin that cannot red when its guard is mutated.
     12. **Scope:** an edit outside Part B's File Structure, R0's admitted files, the plan's Deviations found and the two
         admitted pins; or outside the consented `shared/api.ts` scope.
-    13. **Deviation numbers:** anything defined beyond D-4388 to D-4414 and D-4551; or 4415 to 4417, or 4552 to 4570,
+    13. **Deviation numbers:** anything defined beyond D-4388 to D-4413 and numbers 4414 and 4551; or 4415 to 4417, or 4552 to 4570,
         written with the prefix.
 
     Also, every Linux leg of full run 37927184994 must be green.
