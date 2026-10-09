@@ -331,7 +331,21 @@ export default async function setup() {
     if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;
     delete process.env[RUN_DIR_ENV];
     const r = condemn(opened.run);
-    if (r.startsWith('left:')) warn(`could not remove ${opened.run} (${r}); the next run under ${base} retries`);
+    if (r.startsWith('left:')) {
+      warn(`could not remove ${opened.run} (${r}); the next run under ${base} retries`);
+      // A failed RENAME leaves the run under its own name, and its socket goes regardless: the close below
+      // unlinks `live.sock`, and so does Node's own handle cleanup when the process exits naturally (measured
+      // on Node 22 and 26; `process.exit` and SIGKILL leave it). owner.json with no socket is
+      // `unmeasurable:ENOENT`, which no reaper acts on, so the retry promised above would never come. Without
+      // owner.json the run reads `unowned`, socket or none, and a later run collects it once quiet (T6b). After
+      // a failed `rm` the run is already `.dead` and this path is absent, which `force` makes a no-op.
+      try { rmSync(path.join(opened.run, RUN_OWNER), { force: true }); } catch (e) {
+        warn(`could not drop ${RUN_OWNER} from ${opened.run} (${e.code ?? 'rm'}); no later run will collect it`);
+      }
+    }
+    // `gone` is never a race this run lost: nothing but this teardown and its own arm (disarmed above) condemns
+    // a run whose owner answers, so another actor removed this one while it was live (KNOWN LIMITATION, T6a).
+    if (r === 'gone') warn(`${opened.run} was already gone at teardown: another actor removed this run while it was live`);
     opened.server.close();
     await reapAndReport(base, quietS);
   };

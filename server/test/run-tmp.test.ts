@@ -18,9 +18,13 @@
 //   - The wiring (T1): THIS run is inside its own run directory, whose owner answers.
 //   - End to end (T5): a real nested vitest under the `globalSetup` DERIVED from `vitest.config.ts`, killed every
 //     way a run is killed, and refused under a TMPDIR too long for a socket.
+//   - `setup()` and its teardown (T6), in a bare `node` child: a run removed under it says so, a run whose rename
+//     failed is left collectible, an inherited refusal is dropped, and a malformed quiet window keeps the default.
 //
-// Every owner is a child this file spawned, and only those are ever signalled — through the handle Node keeps for
-// it, which is inert once the child has exited, so a reused pid is never hit. Socket bases live under a
+// Every process signalled is one this file started. `afterEach` signals a straggler only through the handle Node
+// keeps for it, which is inert once the child has exited, so a reused pid is never hit — or, for a detached
+// group, by the group id its leader was given. A case signals by pid only a child it has just seen running (it
+// printed its line, or T2d's grandchild measured alive a line earlier). Socket bases live under a
 // short `/tmp/ccrc-rt-XXXXXX` — a `mkTmp` path is too long for `sun_path` on macOS (104 bytes), the same reason
 // `delegation-rig.test.ts` uses a short `/tmp` base — and each is removed after its test.
 import { describe, it, expect, afterEach } from 'vitest';
@@ -821,4 +825,82 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect(n.output()).toContain('ccrc-test: per-run temp dir refused (EINVAL)');
     expect(runsIn(longBase)).toEqual([]);
   }, 120_000);
+});
+
+describe('setup() and its teardown, in a bare node child (T6)', () => {
+  // The `globalSetup` contract without vitest: the child calls the default export under `TMPDIR=base`, does what
+  // the case says between setup and teardown, runs the teardown, and prints what setup handed its workers.
+  type Between = 'nothing' | 'vanish' | 'block-rename';
+  interface Seen { run?: string; refused?: string; stderr: string }
+
+  async function setupChild(base: string, between: Between, extra: { [k: string]: string } = {}): Promise<Seen> {
+    const src = [
+      `import setup, { DEAD_SUFFIX, RUN_DIR_ENV, RUN_REFUSED_ENV } from ${JSON.stringify(MOD_URL)};`,
+      "import { mkdirSync, rmSync } from 'node:fs';",
+      "import path from 'node:path';",
+      'const teardown = await setup();',
+      'const run = process.env[RUN_DIR_ENV];',
+      'const refused = process.env[RUN_REFUSED_ENV];',
+      // Another actor removes this run while it is live (a reaper that read it as dead).
+      between === 'vanish' ? 'rmSync(run, { recursive: true, force: true });' : '',
+      // A non-empty `<run>.dead` makes teardown's rename fail (ENOTEMPTY or EEXIST), so the run keeps its name.
+      between === 'block-rename' ? "mkdirSync(path.join(run + DEAD_SUFFIX, 'x'), { recursive: true });" : '',
+      'await teardown();',
+      'console.log(JSON.stringify({ run, refused }));',
+    ].join('\n');
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const k of [RUN_DIR_ENV, RUN_REFUSED_ENV, RUN_QUIET_ENV]) delete env[k];
+    Object.assign(env, { TMPDIR: base }, extra);
+    const c = spawn(process.execPath, ['--input-type=module', '-e', src], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    spawned.push(c);
+    let out = '';
+    let stderr = '';
+    c.stdout!.setEncoding('utf8').on('data', (d: string) => { out += d; });
+    c.stderr!.setEncoding('utf8').on('data', (d: string) => { stderr += d; });
+    const exit = await new Promise<Exit>((r) => c.once('close', (code, signal) => r({ code, signal })));
+    expect(exit, stderr).toEqual({ code: 0, signal: null });
+    return { ...(JSON.parse(out.trim().split('\n').pop()!) as { run?: string; refused?: string }), stderr };
+  }
+
+  it('T6a: a run whose directory another actor removed says so at teardown', async () => {
+    // The reaper's known limitation (the module header): on macOS a paused owner reads `dead` once its listen
+    // queue is full, so a later run can condemn a live, paused one. Its own teardown is the one place that learns.
+    const base = socketBase();
+    const seen = await setupChild(base, 'vanish');
+    expect(seen.run).toBeTruthy();
+    expect(seen.stderr).toContain(`ccrc-test: ${seen.run} was already gone at teardown`);
+  });
+
+  it('T6b: a teardown whose rename fails leaves a run a later one collects, as its warning says', async () => {
+    // The socket goes whatever teardown does (its close, or Node's handle cleanup at exit), and owner.json with no
+    // socket is `unmeasurable:ENOENT`, which no reaper acts on and no report names: the run would leak for good
+    // while its warning said "the next run retries". Teardown drops owner.json instead, so the run is `unowned`.
+    const base = socketBase();
+    const seen = await setupChild(base, 'block-rename');
+    expect(seen.stderr).toMatch(new RegExp(`ccrc-test: could not remove ${seen.run} \\(left:E[A-Z]+\\)`));
+    expect(existsSync(seen.run!), 'the rename was not blocked, so this case proves nothing').toBe(true);
+    expect(await probeRun(seen.run!)).toBe('unowned');
+    const r = await reapRuns(base, { now: Date.now() + (RUN_QUIET_S + 1) * 1000 });
+    expect(r.removed).toEqual([[path.basename(seen.run!), 'unowned:removed']]);
+  });
+
+  it('T6c: a run that inherits a refusal but opens its own parent drops it — and a clean run prints nothing', async () => {
+    // Inherited, CCRC_TEST_RUN_REFUSED would reach every worker and turn T1 red with a false EINVAL.
+    const base = socketBase();
+    const seen = await setupChild(base, 'nothing', { [RUN_REFUSED_ENV]: 'EINVAL' });
+    expect(seen.refused, 'an inherited refusal survived a run that opened its own parent').toBeUndefined();
+    expect(seen.run).toBeTruthy();
+    expect(existsSync(seen.run!)).toBe(false);
+    expect(seen.stderr).not.toContain('ccrc-test:');
+  });
+
+  it('T6d: a quiet window that is not a whole number of seconds warns and keeps the default — a fresh dead run survives', async () => {
+    // `Number('10m')` is NaN, and `now - quietSince < NaN` is never true: the gate would silently turn off.
+    const base = socketBase();
+    const o = await startOwner(base);
+    await killOwner(o);
+    const seen = await setupChild(base, 'nothing', { [RUN_QUIET_ENV]: '10m' });
+    expect(seen.stderr).toContain(`${RUN_QUIET_ENV}="10m" is not a whole number of seconds; using ${RUN_QUIET_S}`);
+    expect(existsSync(o.run), 'a fresh dead run was reaped: the quiet gate was off').toBe(true);
+  });
 });
