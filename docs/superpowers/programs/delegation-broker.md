@@ -22,8 +22,8 @@ never links work by a name, a path, a time or a working directory.
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
-| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **accepted at exact tip, not merged**: review 334 independently accepted `e183237e59f481ac85730bc06ca5cef29dea1d15`; run 306 remains `awaiting-review` and PR #321 remains open until wave 3 is approved and opened |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | — | plan and O1–O5 implementation decisions operator-approved 2026-10-09 after focused independent plan review; block 4633–4664 issued bare; open as `wave:3`, `waveOf:7` before run 306 closes |
+| 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **accepted at exact tip, waiting to land**: review 334 independently accepted `e183237e59f481ac85730bc06ca5cef29dea1d15`; run 306 advanced to `merging` on that exact fingerprint after run 360 opened. PR #321 remains open because GitHub reports `REVIEW_REQUIRED`; all four required checks are green, the head is unchanged and no bypass is authorized |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | — | run 360 open at `planned` as `wave:3`, `waveOf:7`, with no inherited worker; plan and O1–O5 implementation decisions operator-approved 2026-10-09 after focused independent plan review; block 4633–4664 issued bare; dispatch waits for #321 and this approved plan to land on `main` |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA | server + pwa | 3 | — | to plan |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
@@ -877,7 +877,15 @@ exact-head CI run 37688188835 success; the full-suite red remains explicitly unw
 - The allocator issued the contiguous 32-number wave-3 block on 2026-10-09: 4633, 4634, 4635, 4636, 4637, 4638,
   4639, 4640, 4641, 4642, 4643, 4644, 4645, 4646, 4647, 4648, 4649, 4650, 4651, 4652, 4653, 4654, 4655,
   4656, 4657, 4658, 4659, 4660, 4661, 4662, 4663 and 4664. They remain bare until the worker defines an actual
-  departure; unused numbers are recorded as unused. Open a fresh run as `wave:3`, `waveOf:7`, with no inherited
-  worker `sessionId`, before closing run 306. Then advance run 306 to `merging`, remeasure PR #321's exact head and
-  required CI, enqueue it through `gh pr merge <n> --match-head-commit <handoffCommit>`, verify the accepted tip landed,
-  close run 306 `final:true`, and dispatch the fresh wave-3 worker from merged `main`.
+  departure; unused numbers are recorded as unused.
+- Run 360 opened on 2026-10-09 as `wave:3`, `waveOf:7`, state `planned`, with no inherited worker `sessionId`, while
+  run 306 remained open. Run 306 then advanced from `awaiting-review` to `merging` on the independently accepted
+  fingerprint: branch tip and handoff commit both `e183237e59f481ac85730bc06ca5cef29dea1d15`, PR #321 open.
+- The immediate pre-landing read found that exact PR head unchanged and all four required contexts green (`build-pwa`,
+  `test (agent)`, `test (pwa)`, `test (server)`). The first exact-head `gh pr merge` attempt changed nothing because
+  this installed gh requires an explicit method outside interactive mode. A fresh rules read then found no
+  `merge_queue` rule on `main`, and GitHub reported `REVIEW_REQUIRED`, so no guessed method and no forbidden
+  `--admin` or `--squash` bypass followed. Run 306 remains at `merging` until the approval gate is satisfied.
+- Once #321 lands at that exact head, verify the accepted tip in `main`, close run 306 `final:true`, land this approved
+  plan and programme ledger through their own PR, then dispatch run 360's fresh worker from merged `main`. The worker
+  must never depend on this unmerged coordinator worktree for its plan.
