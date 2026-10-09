@@ -65,7 +65,8 @@ describe.skipIf(!LINUX || !NO_COPY)('a recycled spawn that ADOPTS the old leaf b
         expect(d['refused'], r.stdout).toBe('registered');
         expect(gapsOf(h), 'refused inside step 1').toEqual(['locked']);
       } else if (point === 'consented') {
-        // AMENDED (Task 6's `record-written-from-a-fresh-witness-read`): the spawn's `_child_tmpdir` rewrote the witness
+        // AMENDED, ruled `spawn-at-consented-stops-at-the-record` (it follows from Task 6's
+        // `record-written-from-a-fresh-witness-read`): the spawn's `_child_tmpdir` rewrote the witness
         // for its own run, and the verb re-reads the witness directly before it writes the record, then reads the record
         // back against what the consent bound. The run differs, so the record is dropped before any slot is made:
         // `failed probe-unmeasured`, a retry, and nothing was moved. The next audit then sees the row.

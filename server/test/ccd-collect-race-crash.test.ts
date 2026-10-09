@@ -5,6 +5,7 @@
 // quiescence: the job is finished, and nothing but the record's own inode was removed. Then the witness is rewritten,
 // dropped and deleted under a standing record: the record is found whatever the witness says. And the record itself is
 // lost out of band while its slot stands: the slot is the operator's, listed on every audit, never dropped in silence.
+// Last, one stated residual is pinned as it stands: a crash at `moved` after a recycled spawn adopted the leaf.
 // FIXTURE HOME ONLY (`collectRaceFixture.ts`). Linux only (`/proc/<pid>/stat`), and only where `mv --no-copy` exists.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -13,8 +14,8 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import {
   COL_ID, DEAD_RUN, G2_RUN, LINUX, NO_COPY, POINTS, TOKEN, collectAudit, collectVerb, crashAt, crashedAt, custodyHolds,
-  devinoOf, docOf, g2Departs, g2Row, g2Spawn, lastVerdict, orphanLeaf, quarantineOf, recordDirOf, recordsOf, settle,
-  shownRounds, slotsOf, tokenOf, verdictOf, witnessField, witnessOf, type Orphan,
+  devinoOf, docOf, g2Departs, g2Row, g2Spawn, gapErrorsOf, lastVerdict, orphanLeaf, quarantineOf, recordDirOf,
+  recordsOf, settle, shownRounds, slotsOf, tokenOf, verdictOf, witnessField, witnessOf, type Orphan,
 } from './collectRaceFixture.js';
 
 let h: PrHarness;
@@ -160,5 +161,51 @@ describe.skipIf(!LINUX || !NO_COPY)('the RECORD lost out of band while its slot 
     expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness stays beside it, unchanged').toBe(witness);
     expect(eventsOf(h.home, 'collect').filter((e) => e['outcome'] === 'refused' && e['refusal'] === 'quarantine-kept'
       && e['verb'] === 'ws-audit').length, 'listed: journaled at every audit').toBeGreaterThanOrEqual(2);
+  }, 240_000);
+});
+
+describe.skipIf(!LINUX || !NO_COPY)('a stated residual: a crash at `moved` after a recycled spawn ADOPTED the leaf', () => {
+  // `crash-at-moved-after-a-spawn-keeps-the-leaf-in-its-slot` (ruled at the Task 8 review, M7: an accepted residual,
+  // pinned here as it stands, ccd unchanged). Without a crash, step 5 sees the spawn's `.child` and moves the adopted
+  // leaf back. A SIGKILL at `moved` leaves the record, and its resume reads phase `moved` off the disk, then asks the
+  // registry: `registered`, no token, nothing moved. So the live child's adopted leaf — its scratch in it — waits in
+  // the slot for the child's whole life, and is collected from the record once the child's row is gone. Never lost
+  // while the child holds the slug; never handed back to it either.
+  it('crash-at-moved-after-a-spawn-keeps-the-leaf-in-its-slot: `registered` with no token while the child lives — the adopted leaf stays in its slot, by inode — then collected once its row is gone', () => {
+    const o = orphanLeaf(h);
+    const r = collectVerb(h, tokenOf(h), COL_ID, crashAt('moved', { slotted: `${g2Row()} && ${g2Spawn()}` }));
+    expect(gapErrorsOf(h), 'the CONTROL: the spawn ran').toEqual([]);
+    expect(crashedAt(h), 'the CONTROL: the kill fired at `moved`').toBe('moved');
+    expect(fs.readFileSync(path.join(h.home, 'g2-dir'), 'utf8'), 'the CONTROL: `mkdir -p` ADOPTED the old leaf').toBe(o.leaf);
+    expect(docOf(r.stdout)['collected'], 'a killed verb reports nothing').toBeUndefined();
+    const [rec] = recordsOf(h);
+    const [slot] = slotsOf(h);
+    expect(rec, 'the CONTROL: the record stands').toBeDefined();
+    expect(slot, 'the CONTROL: and its slot').toBeDefined();
+    const kept = path.join(quarantineOf(h), slot!, 'leaf');
+    expect(devinoOf(kept), 'the adopted leaf is in the slot, the same inode').toBe(o.devino);
+    expect(devinoOf(o.leaf), 'nothing stands at the id').toBeNull();
+    expect(witnessField(h, 'run'), 'the witness is the new child\'s').toBe(G2_RUN);
+    for (let n = 0; n < 2; n += 1) {
+      const d = docOf(collectAudit(h).stdout);
+      expect(d['resume'], `audit ${n + 1} reads the phase off the disk: ${JSON.stringify(d)}`).toBe('moved');
+      expect(d['verdict'], 'while the child holds the slug').toBe('registered');
+      expect(d['token'], 'no token').toBeUndefined();
+    }
+    expect(devinoOf(kept), 'the adopted leaf stays in its slot').toBe(o.devino);
+    expect(fs.readFileSync(path.join(kept, 'g2.txt'), 'utf8'), 'with the child\'s scratch in it').toBe('g2 scratch\n');
+    expect(fs.readFileSync(path.join(kept, 'scratch', 'a.txt'), 'utf8'), 'and the old scratch').toBe('old work\n');
+    expect(devinoOf(o.leaf), 'nothing was handed back to the id').toBeNull();
+    expect(recordsOf(h)).toEqual([rec]);
+    // The child leaves as its own reclaim leaves it: its tail finds no leaf at the id and drops the witness, and its
+    // row goes. The record then resumes, and the verb collects what the slot holds.
+    g2Departs(h);
+    const rounds = settle(h);
+    expect(verdictOf(rounds[0]), shownRounds(rounds)).toBe('collectable');
+    expect(rounds[0]?.answer?.['collected'], shownRounds(rounds)).toBe(COL_ID);
+    expect(lastVerdict(rounds), shownRounds(rounds)).toBe('not-witnessed');
+    expect(devinoOf(kept), 'collected from the record').toBeNull();
+    expect(slotsOf(h)).toEqual([]);
+    expect(recordsOf(h)).toEqual([]);
   }, 240_000);
 });

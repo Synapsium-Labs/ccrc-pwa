@@ -66,6 +66,7 @@ describe.skipIf(!LINUX || !NO_COPY)('the checkout question across the move', () 
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(docOf(r.stdout)['collected'], r.stdout).toBeUndefined();
     expect(docOf(r.stdout)['refused'], r.stdout).toBe('quarantine-kept');
+    expect(devinoOf(keptLeaf()), 'the leaf kept in its slot is the witnessed one, by inode').toBe(o.devino);
     expect(fs.readFileSync(path.join(keptLeaf(), 'still-harbor', 'precious.txt'), 'utf8'),
       'the session\'s uncommitted work survives').toBe('uncommitted work of another session\n');
   }, 240_000);
@@ -84,6 +85,7 @@ describe.skipIf(!LINUX || !NO_COPY)('the checkout question across the move', () 
       'the CONTROL: the same admin directory and back-link the pre-move ask accepted').toBe(`${o.leaf}/wt/.git`);
     expect(fs.existsSync(path.join(o.leaf, 'wt', '.git')), 'the CONTROL: the recycled tree stands at the pre-move spelling').toBe(true);
     expect(docOf(r.stdout)['refused'], r.stdout).toBe('quarantine-kept');
+    expect(devinoOf(keptLeaf()), 'the leaf kept in its slot is the witnessed one, by inode').toBe(o.devino);
     expect(fs.readFileSync(path.join(keptLeaf(), 'wt', 'g1.txt'), 'utf8'), 'the kept tree is whole').toBe('the dead child\'s own scratch\n');
     expect(fs.existsSync(path.join(o.leaf, 'wt', '.git')), 'and the recycled tree is untouched').toBe(true);
   }, 240_000);

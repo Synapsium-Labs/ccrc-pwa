@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=dd8d9cc197bb98972c0caa37c12afcbd74b469b83417daaef52135dd70ae613b
+# ccrc:generated 1 sha256=95dc246f5ff867446946124338602c7fc483c010893b9c6bd0b09da46f0b3661
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -33088,17 +33088,42 @@ _ws_collect_keep() {   # id rec lctx why -> journals and prints the failure that
 }
 
 _ws_collect_putback() {   # id slot rec orig lctx why surface actor reason -> 0 when the slot's leaf is back at orig,
-  #                            PROVEN, and the slot and the record are cleared; 2 when orig was taken again since the
-  #                            move (`refused quarantine-kept` printed: TERMINAL while it stays taken); 1 otherwise,
-  #                            KEPT (`failed quarantine-kept` printed)
+  #                            PROVEN, and the slot and the record are cleared; 2 when the slot's leaf is PROVEN not
+  #                            the record's directory, or orig was taken again since the move (`refused
+  #                            quarantine-kept` printed: TERMINAL, the second while it stays taken); 1 otherwise: the
+  #                            slot's leaf PROVEN gone (`failed probe-unmeasured`, the record and the slot standing),
+  #                            or KEPT (`failed quarantine-kept` printed)
   # THE RESTORE is Task 4's `_ws_collect_move` reversed, with the RECORD's
   # identity, never whatever happens to stand in the slot: one NOREPLACE
   # rename, proven by lstat (the original path is that directory again, and
   # nothing stands at the slot's leaf). NOREPLACE: a path retaken since the
   # move is never clobbered, and that record is the operator's while it stays
   # retaken (ruling T8 OPEN4); once the path is free, the next pass resumes it.
-  local id="$1" slot="$2" rec="$3" orig="$4" lctx="$5" why="$6" mrc arc=0
+  # WHAT STANDS IN THE SLOT IS ASKED FIRST (spec §5.10). Something other than
+  # the record's directory there — a link, a file, another directory — reached
+  # it after the move, and is never moved back to the id's path: it is the
+  # operator's, TERMINAL, as at step 5's own identity proof (ruling T8 OPEN5),
+  # whichever step found the doubt. A slot leaf PROVEN gone has nothing to move
+  # back: a retry, the word step 5 answers for the same vanish. An identity
+  # that cannot be read is left to the move, which refuses it and keeps.
+  local id="$1" slot="$2" rec="$3" orig="$4" lctx="$5" why="$6" mrc arc=0 irc
   _ws_collect_gap restoring "$id" "$slot"
+  _ws_collect_ident "$slot/leaf" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; irc=$?
+  if (( irc == 1 )); then
+    _ws_reclaim_absent "$slot/leaf"; arc=$?
+    if (( arc == 1 )); then
+      _ws_collect_refused "$id" "$lctx" quarantine-kept \
+        "kept in its slot with the quarantine record ${rec##*/}, listed for the operator, and nothing was moved back or removed: the slot's leaf is not the witnessed directory ${_WS_QREC_DEV-}:${_WS_QREC_INO-} born ${_WS_QREC_BTIME-}, so it never goes back to $orig, after: $why" \
+        "$7" "$8" "$9"
+      return 2
+    fi
+    if (( arc == 0 )); then
+      _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
+        "$(_ws_leaf_why_line "the record and its slot stand, and nothing was moved back or removed: the witnessed leaf vanished from its slot before it could go back to $orig, after: $why")"
+      return 1
+    fi
+    arc=0
+  fi
   _ws_collect_move "$slot/leaf" "$orig" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; mrc=$?
   if (( mrc == 0 )); then
     _ws_collect_unwind "$slot" "$rec" && return 0

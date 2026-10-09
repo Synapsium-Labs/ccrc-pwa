@@ -37,14 +37,15 @@ describe.skipIf(!LINUX)('step 6 — the ONE removal helper, with the witness’s
     ['a symbolic link', 'mv "$3/leaf" "$HOME/real"; ln -s "$HOME/real" "$3/leaf"'],
     ['a regular file', 'mv "$3/leaf" "$HOME/real"; printf data > "$3/leaf"'],
   ] as const) {
-    it(`${what} swapped into the slot after the last proof is NEVER unlinked: the helper refuses it under the alias — KEPT, failed quarantine-kept`, () => {
+    it(`${what} swapped into the slot after the last proof is NEVER unlinked: the helper refuses it under the alias — KEPT, refused quarantine-kept (TERMINAL, ruling T8 OPEN5)`, () => {
       // `_ws_leaf_remove` unlinks a link or file leaf for its tail callers; under the collector's alias it refuses one
-      // (rc 1, untouched): the collector's leaf is the recorded directory and nothing else. The move back then refuses
-      // at its own identity check, so what stands in the slot stays there with its record.
+      // (rc 1, untouched): the collector's leaf is the recorded directory and nothing else. The move back then asks
+      // what stands in the slot FIRST (Task 8 fix round 1, I1): not the witnessed leaf, so it stays there with its
+      // record, the operator's, TERMINAL at exit 0 — the word step 5's own identity proof answers one gap earlier.
       const o = makeOrphan(h);
       const r = collectVerb(h, collectToken(h), { pre: gapAt('proven', swap) });
-      expect(r.code, r.stdout + r.stderr).toBe(1);
-      expect(docOf(r.stdout)['failed']).toBe('quarantine-kept');
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(docOf(r.stdout)['refused']).toBe('quarantine-kept');
       const sleaf = path.join(quarantineOf(h), slots(h)[0]!, 'leaf');
       expect(() => fs.lstatSync(sleaf), `${what} still stands in the slot`).not.toThrow();
       expect(fs.lstatSync(sleaf).isDirectory()).toBe(false);

@@ -13,7 +13,7 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import {
   COL_ID, G2_RUN, LINUX, NO_COPY, ROOT_USER, collectVerb, crashAt, crashedAt, devinoOf, docOf, gapAt, gapErrorsOf,
-  lastVerdict, orphanLeaf, quarantineOf, recordsOf, regOf, settle, shownRounds, slotsOf, tmpRootOf, tokenOf, witnessOf,
+  gapsOf, lastVerdict, orphanLeaf, quarantineOf, recordsOf, regOf, settle, shownRounds, slotsOf, tmpRootOf, tokenOf, witnessOf,
 } from './collectRaceFixture.js';
 
 let h: PrHarness;
@@ -91,7 +91,9 @@ describe.skipIf(!LINUX || !NO_COPY || ROOT_USER)('a registry that can be SEARCHE
     const r = collectVerb(h, tokenOf(h), COL_ID,
       `${ROWS_CLEAR} ${gapAt({ moved: `: > "$REG/${COL_ID}.hold" && chmod 0300 "$REG"` })}`);
     fs.chmodSync(regOf(h), 0o700);
-    expect(gapErrorsOf(h), 'the CONTROL: the row landed').toEqual([]);
+    expect(gapsOf(h), 'the CONTROL: the seam fired at `moved`').toContain('moved');
+    expect(gapErrorsOf(h), 'the CONTROL: the injection ran').toEqual([]);
+    expect(fs.existsSync(path.join(regOf(h), `${COL_ID}.hold`)), 'the CONTROL: the row landed').toBe(true);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     expect(docOf(r.stdout)['failed'], r.stdout).toBe('probe-unmeasured');
     expect(devinoOf(o.leaf), 'restored at the id').toBe(o.devino);

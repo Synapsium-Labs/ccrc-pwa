@@ -127,19 +127,19 @@ const linesOf = (p: string): string[] => (fs.existsSync(p) ? fs.readFileSync(p, 
 /** `_ws_collect_gap`, redefined: every point the verb passes is appended to `$HOME/gaps`, and a point named in `acts`
  *  runs its snippet in a SUBSHELL — nothing it sets leaks into the verb's own variables — and a snippet that fails is
  *  recorded in `$HOME/gap-errors`, so a case can prove its injection ran. */
-export const gapAt = (acts: Partial<Record<Point, string>>): string => {
-  const arms = Object.entries(acts)
-    .map(([p, s]) => `${p}) ( ${s} ) || echo "${p}" >> "$HOME/gap-errors" ;;`).join(' ');
-  return `_ws_collect_gap() { echo "$1" >> "$HOME/gaps"; case "$1" in ${arms} esac; };`;
-};
+const armsOf = (acts: Partial<Record<Point, string>>): string => Object.entries(acts)
+  .map(([p, s]) => `${p}) ( ${s} ) || echo "${p}" >> "$HOME/gap-errors" ;;`).join(' ');
+export const gapAt = (acts: Partial<Record<Point, string>>): string =>
+  `_ws_collect_gap() { echo "$1" >> "$HOME/gaps"; case "$1" in ${armsOf(acts)} esac; };`;
 export const gapsOf = (h: PrHarness): string[] => linesOf(path.join(h.home, 'gaps'));
 export const gapErrorsOf = (h: PrHarness): string[] => linesOf(path.join(h.home, 'gap-errors'));
 
 /** `_ws_collect_gap`, redefined to DIE at `point`: SIGKILL to every shell from this one up to the top `bash -c`,
  *  ancestors first and itself last, so no shell between them returns into the verb and carries on. A kill, not an exit:
- *  no trap runs, nothing is cleaned up. `$HOME/crashed-at` says it fired. Linux (`/proc/<pid>/stat`). */
-export const crashAt = (point: Point): string =>
-  `_ws_collect_gap() { echo "$1" >> "$HOME/gaps"; [[ "$1" == ${point} ]] || return 0;`
+ *  no trap runs, nothing is cleaned up. `$HOME/crashed-at` says it fired. Linux (`/proc/<pid>/stat`). `acts` run at
+ *  EARLIER points exactly as `gapAt`'s do, so a race and a crash can meet in one run. */
+export const crashAt = (point: Point, acts: Partial<Record<Point, string>> = {}): string =>
+  `_ws_collect_gap() { echo "$1" >> "$HOME/gaps"; case "$1" in ${armsOf(acts)} esac; [[ "$1" == ${point} ]] || return 0;`
   + ' printf \'%s\' "$1" > "$HOME/crashed-at"; local p=$BASHPID pp; local -a chain=();'
   + ' while [[ "$p" != "$$" ]]; do chain=("$p" ${chain[@]+"${chain[@]}"});'
   + ' read -r _ _ _ pp _ < "/proc/$p/stat" || break; p=$pp; done;'

@@ -8,8 +8,10 @@
 //   - INSIDE the move, after that identity ask and before the rename: what reaches the slot is not the witnessed leaf,
 //     so it is KEPT there with its record, listed, never moved back and never unlinked;
 //   - into the slot after step 5's last proof (the `proven` gap): the removal refuses a link or file under the
-//     collector's alias, so it is never unlinked, and the record and the slot are kept.
-// Nothing that is not the witnessed directory is ever unlinked, on that pass or any later one.
+//     collector's alias, so it is never unlinked, and the move back asks what stands in the slot first: not the
+//     witnessed leaf, so it is KEPT there with its record, TERMINAL, as at the step-5 proof (ruling T8 OPEN5).
+// Nothing that is not the witnessed directory is ever unlinked, on that pass or any later one. Each swapped object is
+// followed by its `dev:ino` and its content: a file's bytes, a link's target.
 // FIXTURE HOME ONLY (`collectRaceFixture.ts`). Linux only, and only where `mv --no-copy` exists (spec §5.10).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -17,9 +19,9 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import {
-  COL_ID, LINUX, NO_COPY, collectAudit, collectVerb, crashAt, crashedAt, devinoOf, docOf, gapAt, gapErrorsOf, gapsOf,
-  lastVerdict, orphanLeaf, quarantineOf, recordDirOf, recordsOf, settle, shownRounds, slotsOf, tokenOf, verdictOf,
-  witnessOf, type Orphan,
+  COL_ID, G2_RUN, LINUX, NO_COPY, collectAudit, collectVerb, crashAt, crashedAt, devinoOf, docOf, gapAt, gapErrorsOf,
+  gapsOf, lastVerdict, orphanLeaf, quarantineOf, recordDirOf, recordsOf, regOf, settle, shownRounds, slotsOf, tokenOf,
+  verdictOf, witnessOf, type Orphan,
 } from './collectRaceFixture.js';
 
 let h: PrHarness;
@@ -114,33 +116,39 @@ const plantPrecious = (): void => {
 const preciousWhole = (): void => {
   expect(fs.readFileSync(path.join(precious(), 'keep.txt'), 'utf8'), 'a link\'s target is never followed').toBe('precious\n');
 };
-/** What a swap leaves at `$1`: a regular FILE, or a LINK to the precious directory. Its own inode is written to
- *  `$HOME/swapped-ino` by the swap that places it. */
+type Kind = 'file' | 'link' | 'dir';
+/** What a swap leaves at `$1`: a regular FILE holding `swapped in`, a LINK to the precious directory, or ANOTHER
+ *  DIRECTORY holding `in.txt`. Its own `dev:ino` is written to `$HOME/swapped-devino` by the swap that places it. */
 const SWAPS = [
-  ['a regular FILE', 'printf \'swapped in\\n\' > "$1"'],
-  ['a LINK to a directory', 'ln -s -- "$HOME/precious" "$1"'],
+  ['a regular FILE', 'file', 'printf \'swapped in\\n\' > "$1"'],
+  ['a LINK to a directory', 'link', 'ln -s -- "$HOME/precious" "$1"'],
+  ['ANOTHER DIRECTORY', 'dir', 'mkdir -m 0700 -- "$1" && printf \'swapped in\\n\' > "$1/in.txt"'],
 ] as const;
-/** The inode the swap planted, or '' when no swap ran. */
-const swappedIno = (): string => {
-  try { return fs.readFileSync(path.join(h.home, 'swapped-ino'), 'utf8').trim(); } catch { return ''; }
+/** The `dev:ino` the swap planted, or '' when no swap ran. */
+const swappedDevino = (): string => {
+  try { return fs.readFileSync(path.join(h.home, 'swapped-devino'), 'utf8').trim(); } catch { return ''; }
 };
-/** Where the swapped-in entry stands now — at the id, or as a slot's leaf — by its own inode. */
+/** Where the swapped-in entry stands now — at the id, or as a slot's leaf — by its own `dev:ino`. */
 const swappedWhere = (o: Orphan): string[] => {
-  const ino = swappedIno();
-  return [o.leaf, ...slotsOf(h).map((s) => path.join(quarantineOf(h), s, 'leaf'))].filter((p) => {
-    try { return String(fs.lstatSync(p, { bigint: true }).ino) === ino; } catch { return false; }
-  });
+  const di = swappedDevino();
+  return [o.leaf, ...slotsOf(h).map((s) => path.join(quarantineOf(h), s, 'leaf'))].filter((p) => devinoOf(p) === di);
+};
+/** The swapped-in entry at `p` is whole: a file's bytes, a link's target (never followed), a directory's file. */
+const swappedWhole = (p: string, kind: Kind): void => {
+  if (kind === 'file') expect(fs.readFileSync(p, 'utf8'), `the swapped-in file at ${p}, kept whole`).toBe('swapped in\n');
+  else if (kind === 'link') expect(fs.readlinkSync(p), `the swapped-in link at ${p}, its target unchanged`).toBe(precious());
+  else expect(fs.readFileSync(path.join(p, 'in.txt'), 'utf8'), `the swapped-in directory at ${p}, kept whole`).toBe('swapped in\n');
 };
 /** A bash function `_race_swap <path>`: the witnessed directory at `<path>` moved aside to `$HOME/aside`, `put` leaves
- *  something else at `<path>`, and that thing's OWN inode lands in `$HOME/swapped-ino`. */
+ *  something else at `<path>`, and that thing's OWN `dev:ino` lands in `$HOME/swapped-devino`. */
 const swapFn = (put: string): string => `_race_swap() { mv -T -- "$1" "$HOME/aside" && { ${put}; }`
-  + ' && stat -c %i -- "$1" > "$HOME/swapped-ino"; };';
+  + ' && stat -c %d:%i -- "$1" > "$HOME/swapped-devino"; };';
 const aside = (): string => path.join(h.home, 'aside');
 
-describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped in at the id between step 2\'s lstat and the move: never renamed, never unlinked', () => {
+describe.skipIf(!LINUX || !NO_COPY)('a file, a link or another directory swapped in at the id around the move: never unlinked, never moved back, never taken', () => {
   it.each(SWAPS)(
     '%s at `slotted`: the move asks the source\'s identity first and renames NOTHING — `failed probe-unmeasured`; the swapped object stands at the id, the slot and the record are cleared',
-    (_what, put) => {
+    (_what, kind, put) => {
       // AMENDED (Task 4's `move-asks-identity-before-the-rename`, ruled at the 4B re-review): the draft had the swap
       // reach the slot and be kept there. The move now proves its source is the witnessed directory before it renames,
       // so a swap at `slotted` is refused before any rename: the empty slot is cleared, the record dropped, and the
@@ -149,13 +157,14 @@ describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped in at the id betwe
       const o = orphanLeaf(h);
       const r = collectVerb(h, tokenOf(h), COL_ID, `${swapFn(put)} ${gapAt({ slotted: `_race_swap "$HOME/.cc-tmp/${COL_ID}"` })}`);
       expect(gapErrorsOf(h), 'the CONTROL: the swap ran').toEqual([]);
-      expect(swappedIno(), 'the CONTROL: it planted something').not.toBe('');
+      expect(swappedDevino(), 'the CONTROL: it planted something').toMatch(/^[0-9]+:[0-9]+$/);
       const d = docOf(r.stdout);
       expect(d['collected'], `nothing that is not the witnessed directory is taken: ${r.stdout}`).toBeUndefined();
       expect(r.code, r.stdout + r.stderr).toBe(1);
       expect(d['failed'], r.stdout).toBe('probe-unmeasured');
       expect(gapsOf(h), 'the move was never proven').not.toContain('moved');
-      expect(swappedWhere(o), 'the swapped-in entry stands AT THE ID, by its own inode').toEqual([o.leaf]);
+      expect(swappedWhere(o), 'the swapped-in entry stands AT THE ID, by its own dev:ino').toEqual([o.leaf]);
+      swappedWhole(o.leaf, kind);
       expect(slotsOf(h), 'the empty slot is cleared').toEqual([]);
       expect(recordsOf(h), 'and the record').toEqual([]);
       expect(devinoOf(aside()), 'the moved-aside leaf is untouched').toBe(o.devino);
@@ -165,6 +174,7 @@ describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped in at the id betwe
       const rounds = settle(h);
       expect(rounds.map((x) => verdictOf(x)), shownRounds(rounds)).toEqual(['witness-mismatch']);
       expect(swappedWhere(o), 'and no later audit or verb unlinks it').toEqual([o.leaf]);
+      swappedWhole(o.leaf, kind);
       expect(devinoOf(aside())).toBe(o.devino);
       preciousWhole();
       expect(listedAtAudit('witness-mismatch'), 'listed: journaled at the audit').toBeGreaterThanOrEqual(1);
@@ -174,7 +184,7 @@ describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped in at the id betwe
 
   it.each(SWAPS)(
     '%s swapped in INSIDE the move — after its identity ask, before its rename: it REACHES THE SLOT and is KEPT there with its record, `quarantine-kept` now and on every later audit; never unlinked',
-    (_what, put) => {
+    (_what, kind, put) => {
       // Ruling T8 OPEN5's "something reached a slot" arm, which only a race INSIDE `_ws_collect_move` can reach now.
       // The shim is `_ws_collect_mv`, the ONE rename: on the forward move (its destination a slot's leaf) it swaps the
       // source, then runs the real `mv -T -n --no-copy`, which carries the swapped object into the slot.
@@ -183,7 +193,7 @@ describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped in at the id betwe
       const race = `${swapFn(put)} _ws_collect_mv() { if [[ "$2" == "$HOME/.cc-tmp/.ccd-quarantine/slot."*/leaf ]]; then`
         + ' _race_swap "$1" || return 99; fi; mv -T -n --no-copy -- "$1" "$2"; };';
       const r = collectVerb(h, tokenOf(h), COL_ID, `${race} ${gapAt({})}`);
-      expect(swappedIno(), 'the CONTROL: the swap ran inside the move').not.toBe('');
+      expect(swappedDevino(), 'the CONTROL: the swap ran inside the move').toMatch(/^[0-9]+:[0-9]+$/);
       const d = docOf(r.stdout);
       expect(d['collected'], `nothing that is not the witnessed directory is taken: ${r.stdout}`).toBeUndefined();
       expect(r.code, r.stdout + r.stderr).toBe(0);
@@ -194,7 +204,8 @@ describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped in at the id betwe
       const [slot] = slotsOf(h);
       expect(slot, 'one slot is kept').toBeDefined();
       const sleaf = path.join(quarantineOf(h), slot!, 'leaf');
-      expect(swappedWhere(o), 'the swapped-in entry IS the slot\'s leaf, by its own inode').toEqual([sleaf]);
+      expect(swappedWhere(o), 'the swapped-in entry IS the slot\'s leaf, by its own dev:ino').toEqual([sleaf]);
+      swappedWhole(sleaf, kind);
       expect(recordsOf(h), 'with its record').toEqual([slot!.slice('slot.'.length)]);
       expect(devinoOf(o.leaf), 'nothing was moved back to the id').toBeNull();
       expect(devinoOf(aside()), 'the moved-aside leaf is untouched').toBe(o.devino);
@@ -202,6 +213,7 @@ describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped in at the id betwe
       const rounds = settle(h);
       expect(rounds.map((x) => verdictOf(x)), 'every later audit lists it and takes nothing').toEqual(['quarantine-kept']);
       expect(swappedWhere(o), 'and no later audit or verb unlinks it').toEqual([sleaf]);
+      swappedWhole(sleaf, kind);
       expect(recordsOf(h)).toEqual([slot!.slice('slot.'.length)]);
       preciousWhole();
       expect(keptListed(), 'listed: journaled at the audit').toBeGreaterThanOrEqual(1);
@@ -210,28 +222,32 @@ describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped in at the id betwe
   );
 });
 
-describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped into the SLOT after step 5\'s last proof: the removal refuses it under the alias', () => {
+describe.skipIf(!LINUX || !NO_COPY)('a file, a link or another directory swapped into the SLOT after step 5\'s last proof: the removal refuses it, the move back asks first', () => {
   it.each(SWAPS)(
-    '%s at `proven`: never unlinked — `failed quarantine-kept`; the record and the slot are KEPT, and every later audit lists it',
-    (_what, put) => {
+    '%s at `proven`: never unlinked, never moved back — `refused quarantine-kept` at exit 0, TERMINAL; the record and the slot are KEPT, and every later audit lists it',
+    (_what, kind, put) => {
       // Task 6's `alias-refuses-a-non-directory-leaf`: `_ws_leaf_remove` unlinks a link or file leaf for the tail's
       // callers, but under the collector's alias its leaf is the recorded directory and nothing else, so it refuses
-      // (rc 1, untouched). The move back then refuses at its own identity check, so what stands in the slot stays there
-      // with its record, for the operator.
+      // (rc 1, untouched); another directory fails its dev:ino check (rc 1, untouched). Ruled at the Task 8 review
+      // (I1, ruling T8 OPEN5): the move back asks what stands in the slot
+      // FIRST, and something that is not the witnessed leaf is the operator's, TERMINAL — the word step 5's own
+      // identity proof answers for the same swap one gap earlier.
       plantPrecious();
       const o = orphanLeaf(h);
       const r = collectVerb(h, tokenOf(h), COL_ID, `${swapFn(put)} ${gapAt({ proven: '_race_swap "$3/leaf"' })}`);
       expect(gapErrorsOf(h), 'the CONTROL: the swap ran').toEqual([]);
-      expect(swappedIno(), 'the CONTROL: it planted something').not.toBe('');
+      expect(swappedDevino(), 'the CONTROL: it planted something').toMatch(/^[0-9]+:[0-9]+$/);
       const d = docOf(r.stdout);
       expect(d['collected'], `nothing that is not the witnessed directory is taken: ${r.stdout}`).toBeUndefined();
-      expect(r.code, r.stdout + r.stderr).toBe(1);
-      expect(d['failed'], r.stdout).toBe('quarantine-kept');
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(d['refused'], r.stdout).toBe('quarantine-kept');
+      expect(String(d['detail']), 'the kept clause leads, then why').toMatch(/^kept in its slot with the quarantine record \S+, listed for the operator, and nothing was moved back or removed: the slot's leaf is not the witnessed directory /);
       expect(gapsOf(h), 'step 6 removed nothing').not.toContain('removed');
       const [slot] = slotsOf(h);
       expect(slot, 'one slot is kept').toBeDefined();
       const sleaf = path.join(quarantineOf(h), slot!, 'leaf');
-      expect(swappedWhere(o), 'the swapped-in entry still IS the slot\'s leaf, by its own inode').toEqual([sleaf]);
+      expect(swappedWhere(o), 'the swapped-in entry still IS the slot\'s leaf, by its own dev:ino').toEqual([sleaf]);
+      swappedWhole(sleaf, kind);
       expect(recordsOf(h), 'with its record').toEqual([slot!.slice('slot.'.length)]);
       expect(devinoOf(o.leaf), 'nothing was moved back to the id').toBeNull();
       expect(devinoOf(aside()), 'the witnessed leaf, where the swap put it, is untouched').toBe(o.devino);
@@ -240,10 +256,43 @@ describe.skipIf(!LINUX || !NO_COPY)('a file or a link swapped into the SLOT afte
       const rounds = settle(h);
       expect(rounds.map((x) => verdictOf(x)), shownRounds(rounds)).toEqual(['quarantine-kept']);
       expect(swappedWhere(o), 'and no later audit or verb unlinks it').toEqual([sleaf]);
+      swappedWhole(sleaf, kind);
       expect(recordsOf(h)).toEqual([slot!.slice('slot.'.length)]);
       preciousWhole();
       expect(keptListed(), 'listed: journaled at the audit').toBeGreaterThanOrEqual(1);
     },
     240_000,
   );
+});
+
+describe.skipIf(!LINUX || !NO_COPY)('the slot\'s leaf GONE before the move back: a retry, never a terminal word', () => {
+  it('step 5 doubts (a `.child` lands at `moved`), and the slot\'s leaf is taken away at `restoring`: `failed probe-unmeasured` — the record and its empty slot stand, the next pass finishes from them, and what was taken is never touched', () => {
+    // Ruled at the Task 8 review (I1): a slot leaf PROVEN gone has nothing to move back — the retry step 5 answers for
+    // the same vanish (`vanished-slot-leaf-is-a-retry`), never the operator's terminal word.
+    const o = orphanLeaf(h);
+    const seam = '_ws_collect_gap() { echo "$1" >> "$HOME/gaps"; case "$1" in'
+      + ` moved) _reg_set "$2" child ${G2_RUN} ;; restoring) mv -T -- "$3/leaf" "$HOME/gone" ;; esac; };`;
+    const r = collectVerb(h, tokenOf(h), COL_ID, seam);
+    expect(gapsOf(h), 'the CONTROL: step 5 doubted, and the move back began').toContain('restoring');
+    expect(devinoOf(path.join(h.home, 'gone')), 'the CONTROL: the witnessed leaf was taken away').toBe(o.devino);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const d = docOf(r.stdout);
+    expect(d['failed'], r.stdout).toBe('probe-unmeasured');
+    expect(String(d['detail'])).toMatch(/^the record and its slot stand, and nothing was moved back or removed: the witnessed leaf vanished from its slot /);
+    const [slot] = slotsOf(h);
+    expect(slot, 'the slot stands').toBeDefined();
+    expect(fs.readdirSync(path.join(quarantineOf(h), slot!)), 'empty').toEqual([]);
+    expect(recordsOf(h), 'named by its record').toEqual([slot!.slice('slot.'.length)]);
+    expect(devinoOf(o.leaf), 'nothing at the id').toBeNull();
+    // While the row stands the record is not resumed; once it is gone the next pass finishes the order from it.
+    const held = docOf(collectAudit(h).stdout);
+    expect([held['resume'], held['verdict'], held['token']], JSON.stringify(held)).toEqual(['removed', 'registered', undefined]);
+    fs.rmSync(path.join(regOf(h), `${COL_ID}.child`));
+    const rounds = settle(h);
+    expect(lastVerdict(rounds), shownRounds(rounds)).toBe('not-witnessed');
+    expect(slotsOf(h)).toEqual([]);
+    expect(recordsOf(h)).toEqual([]);
+    expect(devinoOf(path.join(h.home, 'gone')), 'what was taken away is never touched').toBe(o.devino);
+    expect(fs.readFileSync(path.join(h.home, 'gone', 'scratch', 'a.txt'), 'utf8')).toBe('old work\n');
+  }, 240_000);
 });
