@@ -12124,6 +12124,83 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n
   "test/docs-headers.test.ts"
  ],
  "red": "server docs-headers: 1 failed | 61 passed (62) \u2014 (c) an upgrade that passes the gate and provenance gets 101 and runs ZERO docs execs: no body, the socket closed (the mutation adds a docs-index exec to the read plugin's onRequest for an upgrade: no W3 handler runs on an upgrade, so a plugin hook is the closest W3-file mutation that makes an upgrade exec)"
+},
+{
+ "id": "W3-T11-M10",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "  return at.flights.join(docsTreeFlightKey(src.node, src.project, ref, gen), signal,\n",
+ "new": "  return ((_key: string, s: AbortSignal, start: (f: AbortSignal) => Promise<DocsLaneRun<DocsTreeRead>>) => start(s))(docsTreeFlightKey(src.node, src.project, ref, gen), signal,\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 4 failed | 122 passed (126) \u2014 row 51: two concurrent refreshes of one (project, branch) make exactly ONE docs-fetch and share one tree; both 200 with the same halves; M6.9: two concurrent tree GETs for one (project, ref): one exec, two equal answers; M6.9: a refresh's tree half is a SECOND docs-tree, never the tree GET in flight before its fetch; a tree GET after the bump joins the refresh's tree; a refresh refused before any exec bumps no generation: a tree GET begun before it is still joined by the next one"
+},
+{
+ "id": "W3-T11-M11",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    const run = await at.flights.join(docsShowFlightKey(node, src.project, pin, plan.maxBytes), clientGone(reply),\n",
+ "new": "    const run = await ((_key: string, s: AbortSignal, start: (f: AbortSignal) => Promise<unknown>) => start(s) as never)(docsShowFlightKey(node, src.project, pin, plan.maxBytes), clientGone(reply),\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 125 passed (126) \u2014 M6.9: two concurrent file GETs for one pin: one docs-show exec"
+},
+{
+ "id": "W3-T11-M12",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    (flight) => at.read.run(LISTING_JOB, flight, async () => believeTree(at, src, await reader.tree(src, ref))));\n",
+ "new": "    (_flight) => (async (_job: unknown, _s: AbortSignal, exec: () => Promise<DocsTreeRead>) => ({ kind: 'ran' as const, value: await exec() }))(LISTING_JOB, _flight, async () => believeTree(at, src, await reader.tree(src, ref))));\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 8 failed | 118 passed (126) \u2014 the 33rd queued read answers docs-busy 503 Retry-After 2 with zero extra execs; a non-docs route is unaffected; closing answers every queued read busy; a read queued for DOCS_LANE_MAX_WAIT_MS answers docs-busy, and its show never runs; refinement (j): a client that goes while its read is queued is dequeued over a real socket, and its show never runs; refinement (j): a client that went before the handler ran starts no exec; a tree half the full read lane refuses rides the 200 as its body, docs-busy {lane: read}, with no Retry-After header; row 51: at most 2 reads in flight under refresh load: the tree halves ride the read lane; a cold projects GET under two held reads queues (no third exec), and runs once a slot frees; a projects GET whose client goes while it is queued is dequeued over a real socket, and its docs-index never runs"
+},
+{
+ "id": "W3-T11-M13",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (!DOCS_ALLOWED_CONTENT_TYPES.includes(contentType)) {\n",
+ "new": "  if (!DOCS_ALLOWED_CONTENT_TYPES.includes(contentType) && !contentType.startsWith('image/')) {\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 3 failed | 59 passed (62) \u2014 M5.5 svg (image/svg+xml) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 png-spaced (image/png ; x) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 bmp (image/bmp) is refused: 500 response-type-refused, JSON, no-store, logged once"
+},
+{
+ "id": "W3-T11-M14",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (statusCode !== 200 || cacheControl === undefined) headers['cache-control'] = DOCS_CACHE_NO_STORE;\n",
+ "new": "  if (cacheControl === undefined) headers['cache-control'] = DOCS_CACHE_NO_STORE;\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 1 failed | 61 passed (62) \u2014 json-404-immutable: a non-200 is always no-store"
+},
+{
+ "id": "W3-T11-M15",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  return pin.kind === 'committed' && cls === 'raster' ? DOCS_CACHE_IMMUTABLE : DOCS_CACHE_NO_STORE;\n",
+ "new": "  return cls === 'raster' ? DOCS_CACHE_IMMUTABLE : DOCS_CACHE_NO_STORE;\n",
+ "tests": [
+  "test/docs-file-bytes.test.ts"
+ ],
+ "red": "server docs-file-bytes: 1 failed | 42 passed (43) \u2014 a draft raster 200, a committed JSON 200 and a draft JSON 200 are no-store"
+},
+{
+ "id": "W3-T11-M16",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  const committed = sameKeys(pinKeys, COMMITTED_PIN_KEYS);\n",
+ "new": "  const committed = COMMITTED_PIN_KEYS.every((k) => pinKeys.includes(k));\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 125 passed (126) \u2014 file: a mixed pin"
 }
 ]
 ```
