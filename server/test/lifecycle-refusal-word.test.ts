@@ -122,6 +122,13 @@ describe('ws-reclaim’s failure words claim only what is true at EVERY site tha
     expect(LC_REFUSAL_WORD['branch-unmeasured']).not.toMatch(/\bgone\b|was kept|was deleted/);
   });
 
+  // Wave 7 (spec §5.6): the same word is printed when the branch READS as present but the tombstone's tip, or a nested
+  // checkout's recorded head, is the all-zero id (git's `update-ref -d` reads that as no compare at all). The sentence
+  // names the record that cannot be compared against, so it is true of those two arms as well as the unread branch.
+  it('branch-unmeasured also names a record that cannot be compared against, for the two all-zero arms', () => {
+    expect(LC_REFUSAL_WORD['branch-unmeasured']).toMatch(/record it keeps of the branch cannot be compared against/);
+  });
+
   // Three reap words that ws-reclaim's tail also emits, each widened to be
   // true of every site: a removal refused because a tree (or a checkout inside
   // it) could not be PROVEN the workspace's own, not only because git refused;

@@ -2105,6 +2105,171 @@ closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave7-prefligh
     Wave 8 and workspace-lifecycle wave 5 both edit `server/src/watch.ts`, and their order is agreed with quiet-river
     before either dispatches.
 
+### §14 as built (wave 7, run 347)
+
+Where wave 7's code and its draft rulings narrowed or spelled out the rulings above (R65, R66, R67, R68, R69, R70,
+R71 and R72), they now read as follows. This note amends; it edits no earlier text. It names each departure by slug
+and carries no number: the coordinator assigns this wave's numbers. The spec text every committed comment of this
+wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5.6, §7 and §8.
+
+**R66 (population, record, order).**
+- `move-proof-requires-the-source-gone`: the proof of a move requires that nothing stands at the source path as well
+  as the identity at the destination, so the restore's "nothing stands at the slot's leaf" half lives inside the one
+  move function and is pinned there.
+- `collect-audit-lock-held-answers-in-progress`: the audit's own non-blocking lock meets one fact the fixed
+  vocabulary had no word for, so it answers ws-reap's and ws-expire's existing `in-progress`, retryable and unjournaled.
+- `witness-without-leaf-collectable-at-the-audit`: a witness whose leaf is proven absent, with no record and no slot
+  of the id, is `collectable` at the audit under a token of its own (`mode=collect-absent`), so the verb has a consent
+  to spend on the drop that "no orphaned slot" allows.
+- `witness-only-refuses-a-standing-slot`: a witnessed id whose leaf is absent is refused `quarantine-kept`, terminal,
+  while any of its slots stands with no record naming it, and its witness stays; this closes the orphaned-slot shape
+  for a record lost out of band.
+- `verb-population-refuses-linked-tmproots`: the verb refuses a `tmproots/` that is itself a link as
+  `probe-unmeasured`, before taking any lock, as the audit does, so neither takes a lock for a name it cannot place in
+  the population.
+- `record-written-from-a-fresh-witness-read`: the writer cannot bind its witness fields to an id, so the verb reads
+  the id's witness directly before the record write, and the record's read-back compares it with what the consent bound.
+- `spawn-at-consented-stops-at-the-record`: a recycled spawn between the consent and the record now stops the verb at
+  that read-back as `probe-unmeasured`, before anything moves, where it used to be `registered` after the move; both
+  are retryable and the earlier stop is safer. The race suite's report called it `consented-stops-at-the-witness-re-read`.
+- `crash-at-moved-after-a-spawn-keeps-the-leaf-in-its-slot`: a stated residual. A recycled spawn can adopt the leaf
+  between the record and the move; if ccd is killed between the move and the re-proof, the next audit reads the phase
+  `moved` and refuses `registered` with no token, so the live child's adopted scratch stays in the slot for the
+  child's life. Nothing durable is lost, and once the child's row is gone the record resumes and the leaf is collected
+  with no idle floor.
+- `refusal-detail-one-string`: the verb's refusal prints the same cut detail it journals, so the document and the
+  journal row never disagree.
+- `leaf-why-cut-at-the-sink`: the removal's reason is handed raw to its sinks, which cut it, where an earlier cut at
+  the source made each cut unpinnable.
+- `records-listed-in-the-verbs-shell`: the verb's population check lists records in the current shell, so the
+  listing's reason reaches the detail.
+- `keep-says-nothing-further`: a kept record's sentence says "nothing further was removed", because after a rm that
+  failed part way "nothing was removed" would be false.
+- `rows-clear-also-asks-the-clips-leaf`: the collector's registry-row rule also compares the id's clips leaf, so a row
+  there refuses, and a clips leaf whose absence cannot be proven is unmeasured.
+- `rows-clear-own-row-refuses`: the rule asks the id's own row first, by its `.workdir`, and refuses when it stands,
+  as a backstop behind the registry check that every caller asks first.
+
+**R67 (the recycled-slug proof).**
+- `scan-pins-in-task-8`: the three scan pins, one temp-directory composer, one `.child` writer and the marker read
+  placed before the `mkdir`, landed in the race suite, each measured red under mutation, not in the entry task.
+- `move-asks-identity-before-the-rename`: the move asks the source's identity before it renames, so anything swapped in
+  at the id after step 2 is refused before it reaches a slot, as `probe-unmeasured` with the empty slot cleared.
+- `slotted-swap-refused-before-rename` and `slotted-swap-never-reaches-a-slot`: the race suite's and the verb
+  suite's cases for a file, link or directory swapped in at the original path between the slot and the move now expect
+  that refusal and an untouched object, not a kept slot.
+- `reached-the-slot-driven-inside-the-move`: the "reached the slot" arm, which keeps what is there and moves nothing
+  back, is driven by a shim that swaps the source and then runs the real rename, since only a swap inside the move
+  reaches it now.
+- `ident-refuses-dot-final-components`: the identity check refuses a path ending in `/`, `/.` or `/..`, all of which
+  follow a link before them, so "an lstat, never followed" is true by mechanism.
+- `vanished-slot-leaf-is-a-retry`: a slot leaf proven gone is a retry, `probe-unmeasured` at the verb and unmeasured
+  `slot` at the audit, with the record and slot standing, never the terminal `quarantine-kept`.
+- `alias-refuses-a-non-directory-leaf`: with an alias passed, the removal helper refuses a link or file leaf and
+  leaves it standing, so the collector never unlinks one; every other caller is unchanged.
+- `alias-extra-pins`: two cases beyond the alias's drafted ones pin the leaf-itself-a-linked-worktree arm and the
+  newline-in-the-pre-move-spelling half of the alias check.
+- `accepted-on-physical-arm-unreachable`: the accepted-pair record on the physical-spelling arm cannot be reached
+  through the question, so its deletion has no red; the line stays so the list is complete if the arm ever becomes
+  reachable.
+- `real-holder-double-forked`: the in-use probe never counts a child of ccd's own process, so the only real-process
+  pin double-forks its holder; the verb must stay a ccd process of its own, never run inside a long-lived session's
+  process.
+- `physical-twin-pinned-by-a-real-process`: the probe's physical-twin spelling is pinned by a real process, and the
+  re-proof loop is unchanged.
+- `checkout-cases-stub-the-evaluation`: the verb suite's step 3a cases stub the evaluation, because the real one asks
+  the stubbed question inside the lock and would answer at the verdict point.
+
+**R68 (the candidate rules).**
+- `idle-walk-bound-30s`: R68's 60 s idle-walk bound became 30 s, so the audit fits `ws-audit`'s 90 s runner row:
+  30 s for the walk, 10 s for the in-use probe and 30 s for the checkout scan make 70 s, plus the row pass.
+- `g9-kill-grace-residual`: each bounded probe adds its TERM-to-KILL grace, so the worst case is about 79 s, and 94 s
+  at the widest grace, against the 90 s row; a runner that kills the audit gets no document, which fails closed.
+- `malformed-floor-knob-is-unmeasured`: a non-empty floor knob that is not a whole number answers unmeasured, naming
+  the knob, and the document prints no floor (`floorS` null) and no instant; a whole number of 10 or more digits
+  clamps to 999999999. A raise asked for unreadably is never folded to the 24 hour minimum.
+- `resume-token-binds-checkouts`: the resume token also binds the record's `checkouts=` list, which the removal is
+  handed as the checkouts it accepts, so a record whose list changed is another consent.
+- `registry-direct-lookups-measured`: the collector's `.child` and `.uuid` lookups are measured by the absence proof,
+  not an `-e` test, so a registry that can be searched but not read is unmeasured and never folded into free.
+- `rows-cases-ask-contained` and `rows-extra-pins`: the row rule is asked under the reclaim's git containment in every
+  case, and three cases beyond the drafted ones pin the dangling own-row disjunct, a row inside the clips leaf, and an
+  unsearchable clips directory.
+- `idle-token-extra-pins`: five pins beyond the drafted ones cover a walk with no device, inode, epoch time or newest
+  change time, a floor knob of `90000+1`, and a failed walk leaving no earlier walk's values standing.
+- `idle-scratch-file-in-tmpdir`: the walk's stderr scratch file lives in `$TMPDIR`, so a `$TMPDIR` inside the walked
+  leaf makes the leaf read busy; that fails closed, is stated in the walk's comment and is pinned.
+- `idle-stderr-arm-unpinned`, `idle-mktemp-arm-unpinned`, `idle-empty-walk-arm-defence` and
+  `idle-awk-rc-arm-defence`: the first two arms were unpinned and were pinned in the fix round; the last two are
+  defence in depth behind other arms and have no red of their own.
+- `four-more-guards-without-a-red`: four fail-closed lines in the slot maker, the identity check and the quarantine
+  maker change only a reason when deleted; two of them are pinned by a reason-only case, and the others are redundant
+  by construction.
+- `nonpoison-collect-cut-stays-green`: removing the collector's region from the non-poison suite's cut list leaves it
+  green, because the region spells no harvested shape; it is prophylactic, and the audit suite's source pin is what
+  catches a harvested shape there.
+
+**R69 and R70 (the tail's corrections).**
+- `crumb-rides-a-global-not-an-argument`: R70's optional crumb argument became a global that the failed document's
+  printer reads, `ws-reclaim` assigning it and the shared tail setting `true`, so every failure printer reads one value.
+- `crumb-unsaid-over-an-unreadable-breadcrumb`: a breadcrumb that stands but cannot be read leaves `crumb` unsaid,
+  since whether an act started is not known; the key is also absent from `ws-expire`'s pre-breadcrumb documents and
+  from every `ws-collect` document.
+- `rung8-asks-the-admin-walk-not-log-of`: rung 8 and the vanished arm ask the admin-entry walk that
+  `_ws_reclaim_log_of` is built on, through a new `_ws_reclaim_no_record`, rather than calling `_ws_reclaim_log_of`
+  itself; the gone-arm walk moved into `_ws_reclaim_admin_entries` unchanged, so one matcher serves a standing tree and a
+  gone one.
+- `rk-tip-case-removes-the-tree`: the red-first case for an all-zero tombstone tip removes the tree first, because with
+  the tree standing the branch-holder check stops the tail before the compare-and-swap and the fixture would pin nothing.
+- `generation-read-under-the-compaction-lock`: X1's generation read takes the row's compaction lock, as every other
+  caller of the reader does, because the reader's alias is a write the canonical-write census counts; an acquire that
+  fails is unmeasured, and the reader runs in the caller's shell so its reason reaches the detail.
+- `generation-read-unlocked-census` and `acquire-census-prose-outside-boundary`: the escalation that led to that
+  ruling, an unlocked read being a new unlocked caller in the census and the locked read needing two prose numerals
+  outside the boundary.
+- `acquire-site-prose-seven-to-eight`: the compaction-card spec's and the session hook's acquire-site counts each read
+  eight where they read seven, because the census counts those sentences.
+
+**Declarations and citations.**
+- `collect-act-declared-before-its-first-emitter`: the `collect` act is declared in the first part of the collector's
+  building-blocks task, so it is in the tree before anything journals it.
+- `retryable-collect-words-declared-with-the-verb`: `not-witnessed`, `registered` and `changed-recently` are declared
+  in the commit that journals them at the verb, since the refusal scan holds every declared word set-equal to a
+  literal journal site; the audit prints them on stdout only.
+- `act-cites-5.10`, `collect-cites-5.10`, `alias-cites-5.10` and `cite-5-10`: committed comments and test titles for the
+  collector's mechanics cite the spec's §5.10, never the contract; §5.2 is cited only for the temp root and the
+  witness, and §5.6 only for the shared tail, the breadcrumb and the witness drop.
+- `append-after-docs`: the collector's cap, its required-flag line, its grant and its bypass fixture append after
+  the docs wave's last entries, which landed first.
+- `entry-usage-regex-stale`: the audit's widened usage line made nine malformed-audit rows of the entry suite red, and
+  the suite's usage pattern was updated in the same part.
+- `step7-diff-base-e04bb4588`: the checkout-alias task's diff check was taken against the last commit before the
+  building blocks began, not against main, which had moved.
+- `mutation-masked-halves-measured-by-supplement`: three act-pin rows predict two reds inside one case, and the first
+  assertion masks the second, so each masked half was measured separately and the case was not softened.
+- `mutation-extra-rows-x1-x4`, `row-29-renames-at-every-site`, `row-15-slot-synthesizes-a-record`,
+  `proven-gap-slot-leaf-swap-added` and `record-lost-slot-standing-added`: the race suite adds four mutation rows for
+  the guards its amended and added cases rest on; renames a slot consistently at all eight sites, since a rename at
+  the namer alone fails the record writer first; builds the slot listing's population as a record synthesized from the
+  slot leaf's identity; adds the swapped-in slot leaf case for the non-directory refusal; and adds the lost-record case
+  that no drafted case reached.
+- `writer-link-check-pinned-by-reason`: deleting both of the record writer's link checks stayed green, because the
+  read-back's own check hid the write, so one assertion on the reason gives the first check its own red.
+- `scannedtext-doc-names-the-rename-cut`: the macOS-platform test's text reader keeps its doc comment, extended by the
+  rename cut, where the drafted replacement would have moved the comment onto the wrong constant.
+- `lifecycle-count-red-shape` and `commit-subject-style`: a predicted act-count red measured as a set-equality diff,
+  and the first commit's subject follows the drafted `fix(ccd): …` style, not the worker example; neither changes
+  behaviour.
+
+**Prose and the wave-6 plan.**
+- `wave6-plan-text-corrected-by-deviation-entry`: the merged wave-6 plan is not edited, and the three sentences review
+  346 found too wide are corrected in a deviation entry of this wave's plan, entered as `wave6-plan-prose-scoped`, and
+  in the committed ccd comments.
+
+**Not edited.** `server/src/deadCoordinator.ts` is workspace lifecycle's and is unedited. The `collect` act's exclusion
+from its deliberate put-down set is pinned by a test only (`ws-collect-act.test.ts`), and the file's docstring edit
+the first draft proposed was dropped.
+
 ## 15. Rulings, 2026-10-08 (wave 8's pre-flight) — binding; they AMEND sections 1–14
 
 Wave 8 (run 348) is reclaim's SERVER half (R65). It is server code and shared L0 only: no ccd, agent or PWA edit. Its

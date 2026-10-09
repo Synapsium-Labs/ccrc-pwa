@@ -7879,7 +7879,7 @@ export type LcRefusalToken =
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
   | 'unit-still-active'       // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
-  | 'branch-unmeasured'       // ws-reclaim or ws-expire (spec §5.5): the tail's step 5 could not read whether the child's branch still exists, so it stopped before removing anything further — journaled `failed`, never `refused`
+  | 'branch-unmeasured'       // ws-reclaim or ws-expire (spec §5.5, §5.6): the tail's step 5 could not read whether the child's branch still exists, or a recorded tip or head it would compare the branch against is the all-zero id (git reads that as an unconditional delete), so it stopped before the branch's compare-and-swap and removed nothing further — journaled `failed`, never `refused`
   | 'probe-unmeasured'        // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
   | 'token-malformed'         // ws-reclaim (spec §5.9): `--expect` is not 64 lowercase hex — journaled `refused` before the lock, once the session id is valid
   | 'run-id-malformed'        // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
@@ -7971,9 +7971,13 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // started. By step 5 the unit is stopped, the pane is gone and the tree was
   // removed (or never stood, on the vanished arm), so the sentence promises
   // nothing intact, only that nothing FURTHER went. The breadcrumb stays at the
-  // branch, and the retry resumes there.
+  // branch, and the retry resumes there. Wave 7 (spec §5.6) adds two arms that
+  // print it with the branch READ as present: the tombstone's recorded tip, or a
+  // nested checkout's recorded head, is the all-zero id, which `update-ref -d`
+  // reads as no compare at all. Both stop before the branch's compare-and-swap,
+  // so the sentence names the record that cannot be compared against too.
   'branch-unmeasured':
-    'ccrc could not read whether the branch still exists, so it stopped before removing anything further; it tries again.',
+    'ccrc could not read whether the branch still exists, or the record it keeps of the branch cannot be compared against, so it stopped before removing anything further; it tries again.',
   // Child reclamation, wave 6 (spec §5.9). A probe the reclaim ladder needs
   // could not run, or its answer could not be read. That happens at audit time
   // (`verb ws-audit`) or in ws-reclaim's locked recomputation
