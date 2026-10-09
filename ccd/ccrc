@@ -2232,7 +2232,9 @@ already running).
   token     the box token's fleet side. "ccrc token sync --from agent" is
             ccrc-agent's token-sync op: it trades a one-time code (on stdin)
             for the new value, writes ~/.cc-secrets/ccrc-mail.token and
-            proves it with one call
+            proves it with one call. "ccrc token probe --file <path>
+            [--url <base>]" presents a file's value once and prints only the
+            HTTP status and accepted, refused or unmeasured
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
             on ccd/ccd's line 2) after its body changed: the regenerator a
             merge needs there. A file with no marker is refused, never adopted$(_usage_history_paragraph)

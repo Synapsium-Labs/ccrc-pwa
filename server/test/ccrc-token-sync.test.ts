@@ -33,7 +33,7 @@ import {
   TOKEN_TRANSPORTS, tokenSyncSpawnArgv,
 } from '../../shared/agent-protocol.js';
 import {
-  FLEET_TOKEN_FILE_COMMENT, GENERATION_ID_RE, TOKEN_CLAIM_PATH, TOKEN_VALUE_RE,
+  CLAIM_REFUSALS, FLEET_TOKEN_FILE_COMMENT, GENERATION_ID_RE, TOKEN_CLAIM_PATH, TOKEN_VALUE_RE,
 } from '../../shared/box-token.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -143,6 +143,12 @@ function expectRefusal(r: Run, word: keyof typeof TOKEN_SYNC_EXIT): void {
 function expectNoSecret(home: string, r: Run): void {
   const texts: Array<[string, string]> = [['stdout', r.stdout], ['stderr', r.stderr],
     ['token-sync.json', read(join(home, '.ccrc', 'token-sync.json'))]];
+  // Every regular file the verb may have left in ~/.ccrc (the report, the generation record, a stray temp) is
+  // readable by a doctor, a backup and a person: none may hold a secret.
+  for (const name of existsSync(join(home, '.ccrc')) ? readdirSync(join(home, '.ccrc')) : []) {
+    const f = join(home, '.ccrc', name);
+    if (lstatSync(f).isFile()) texts.push([`~/.ccrc/${name}`, read(f)]);
+  }
   for (let n = 1; n <= calls(home); n++) {
     texts.push([`curl.${n}.argv`, read(join(home, `curl.${n}.argv`))], [`curl.${n}.env`, read(join(home, `curl.${n}.env`))]);
   }
@@ -243,6 +249,7 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
       expect(calls(home), JSON.stringify(input)).toBe(0);
       expect(reportOf(home)!['result']).toBe('bad-code');
       expect(read(tokenFile(home))).toBe(`${PREAMBLE}${OLD}\n`);
+      expectNoSecret(home, r);
     }
   });
 
@@ -260,6 +267,7 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
     expectRefusal(r, 'stale-client');
     expect(calls(home)).toBe(0);
     expect(reportOf(home)!['result']).toBe('stale-client');
+    expectNoSecret(home, r);
   });
 
   it('stale-client passes: no client, the shipped wave-13 client, and a link to it', () => {
@@ -276,10 +284,12 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
   it('code-used: a 410 code-used claim answer; the old file is byte-equal and no generation is recorded', () => {
     const home = box('tok-sync-used-');
     claimAnswers(home, 410, '{"ok":false,"error":"code-used"}');
-    expectRefusal(sync(home), 'code-used');
+    const r = sync(home);
+    expectRefusal(r, 'code-used');
     expect(read(tokenFile(home))).toBe(`${PREAMBLE}${OLD}\n`);
     expect(existsSync(genFile(home))).toBe(false);
     expect(calls(home)).toBe(1);
+    expectNoSecret(home, r);
   });
 
   it('claim-refused: every other non-200 (410 code-expired, 403, 404, 429, 503) and a claim with no answer', () => {
@@ -292,10 +302,13 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
       expectRefusal(r, 'claim-refused');
       expect(r.stderr).toContain(`answered ${status} ${word}`);
       expect(read(tokenFile(home))).toBe(`${PREAMBLE}${OLD}\n`);
+      expectNoSecret(home, r);
     }
     const home = box('tok-sync-norc-');
     writeFileSync(join(home, 'fixture-claim-rc'), '7\n');
-    expectRefusal(sync(home), 'claim-refused');
+    const norc = sync(home);
+    expectRefusal(norc, 'claim-refused');
+    expectNoSecret(home, norc);
   });
 
   it('claim-refused: a 200 whose answer is not exactly {ok, 64-hex value, 16-hex generation} writes nothing', () => {
@@ -315,6 +328,8 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
       expect(read(tokenFile(home)), body).toBe(`${PREAMBLE}${OLD}\n`);
       expect(existsSync(genFile(home))).toBe(false);
       expect(temps(home)).toEqual([]);
+      // The refused answer carried a value (or a near-miss of one): none of it is echoed.
+      expectNoSecret(home, r);
     }
   });
 
@@ -329,6 +344,19 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
     expect(read(elsewhere)).toBe(`${OLD}\n`);
     expect(existsSync(genFile(home))).toBe(false);
     expect(temps(home)).toEqual([]);
+    expectNoSecret(home, r);
+  });
+
+  it('write-failed: the token file written but the generation record not — its own sentence, the new value kept, no secret printed', () => {
+    const home = box('tok-sync-genfail-');
+    mkdirSync(genFile(home));   // a directory where the record belongs: the rename refuses
+    const r = sync(home);
+    expectRefusal(r, 'write-failed');
+    expect(r.stderr.split('\n')[0]).toContain('the token file was written, but ~/.ccrc/box-token-generation could not be');
+    expect(read(tokenFile(home))).toBe(`${PREAMBLE}${VALUE}\n`);
+    expect(calls(home)).toBe(1);
+    expect(temps(home)).toEqual([]);
+    expectNoSecret(home, r);
   });
 
   it('write-failed: a ~/.cc-secrets the verb cannot write refuses before the claim — nothing is claimed', () => {
@@ -338,6 +366,7 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
       const r = sync(home);
       expectRefusal(r, 'write-failed');
       expect(calls(home)).toBe(0);
+      expectNoSecret(home, r);
     } finally {
       chmodSync(join(home, '.cc-secrets'), 0o700);
     }
@@ -382,6 +411,33 @@ describe('ccrc token sync: set +x first, umask 077, and the environment exits', 
     const lines = readFileSync(VERB, 'utf8').split('\n').filter((l) => l.trim() !== '' && !l.trimStart().startsWith('#'));
     expect(lines[0]).toMatch(/^set \+x\b/);
     expect(lines[1]).toBe('umask 077');
+  });
+
+  // Review of B1: an inherited allexport (SHELLOPTS=allexport, or `set -a` in the caller) turns every plain
+  // assignment into an export, so `code` and `tok` reached curl's ENVIRONMENT. The option is cleared in the
+  // same first statement as xtrace, before any assignment.
+  it('an inherited allexport (SHELLOPTS=allexport) puts neither the code nor the value in curl\'s environment', () => {
+    const home = box('tok-sync-allexport-');
+    const r = sync(home, `${CODE}\n`, { SHELLOPTS: 'allexport' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(calls(home)).toBe(2);
+    // The hunt is not vacuous: the value really was sent, on stdin.
+    expect(callStdin(home, 2)).toContain(VALUE);
+    expectNoSecret(home, r);
+    for (const n of [1, 2]) expect(read(join(home, `curl.${n}.env`)), `curl.${n}.env`).not.toMatch(/^(code|tok)=/m);
+  });
+
+  it('a code or tok already EXPORTED by the caller does not carry the secret into curl\'s environment either', () => {
+    const home = box('tok-sync-preexport-');
+    const r = sync(home, `${CODE}\n`, { code: 'inherited', tok: 'inherited' });
+    expect(r.code, r.stderr).toBe(0);
+    expectNoSecret(home, r);
+    for (const n of [1, 2]) expect(read(join(home, `curl.${n}.env`)), `curl.${n}.env`).not.toMatch(/^(code|tok)=/m);
+  });
+
+  it('the first statement clears xtrace AND allexport', () => {
+    const lines = readFileSync(VERB, 'utf8').split('\n').filter((l) => l.trim() !== '' && !l.trimStart().startsWith('#'));
+    expect(lines[0]).toMatch(/^set \+x \+a\b/);
   });
 
   it('exit 1 with no report: no agent.env, no CCRC_SERVER_URL, a non-http address, no node id', () => {
@@ -518,8 +574,139 @@ describe('ccrc token sync: the shell spellings agree with L0 (plan Global Constr
     expect(`^synced (${gen}) (${[...TOKEN_TRANSPORTS].join('|')})$`).toBe(TOKEN_SYNC_SYNCED_RE.source);
   });
 
+  it('the claim door\'s refusal word is spelled once, at file scope, and is a CLAIM_REFUSALS word', () => {
+    const src = verb();
+    const spelled = assigned(src, 'CLAIM_USED');
+    expect([...CLAIM_REFUSALS]).toContain(spelled);
+    expect(spelled).toBe('code-used');
+    // Beyond that one assignment, the literal survives only as the verb's OWN word (the exit table's key and the
+    // `_ts_refuse` call that names it); the comparison with the door's answer and the sentence use the variable.
+    const code = src.split('\n').filter((l) => !l.trimStart().startsWith('#'));
+    const stray = code.filter((l) => l.includes('code-used'))
+      .filter((l) => !/^CLAIM_USED=/.test(l) && !/^\s+code-used\) echo 22 ;;$/.test(l) && !/^\s*&& _ts_refuse code-used "/.test(l));
+    expect(stray).toEqual([]);
+    expect(code.some((l) => l.includes('"$word" = "$CLAIM_USED"')), 'the door\'s answer is compared with $CLAIM_USED').toBe(true);
+  });
+
+  it('every stderr prefix is "$TS_PREFIX" — the sync prefix is spelled once, at file scope', () => {
+    const code = verb().split('\n').filter((l) => !l.trimStart().startsWith('#'));
+    const literal = code.filter((l) => l.includes(TOKEN_SYNC_STDERR_PREFIX) && !/^TS_PREFIX=/.test(l));
+    expect(literal).toEqual([]);
+    expect(code.filter((l) => l.includes('$TS_PREFIX')).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('every python3 runs isolated (-I): no cwd or user site on sys.path, no PYTHON* variable read', () => {
+    const code = verb().split('\n').filter((l) => !l.trimStart().startsWith('#'));
+    expect(code.filter((l) => /\bpython3 -c\b/.test(l))).toEqual([]);
+    expect(code.filter((l) => /\bpython3 -I -c\b/.test(l)).length).toBe(3);
+    // And no spelling that takes another route to the interpreter (a bare `python3 "$x"`, `python3 -m`, `python3 -`).
+    expect(code.filter((l) => /\bpython3 (?!-I -c\b)(?!>\/dev\/null)(?![a-z])/.test(l) && !/command -v python3|^\s*\[?.*"python3 /.test(l))).toEqual([]);
+  });
+
   it('the agent\'s frozen argv is the verb this file answers', () => {
     expect([...tokenSyncSpawnArgv()]).toEqual(['token', 'sync', '--from', assigned(verb(), 'FROM_WORD')]);
     expect(readFileSync(CCRC, 'utf8')).toMatch(/^\s+token\)\s+cmd_token "\$@" ;;$/m);
+  });
+});
+
+describe('ccrc token probe --file <path> [--url <base>] (spec §10.3)', () => {
+  /** A probe box: the recorder answers the proof call only. */
+  const probeBox = (prefix: string, status: number): { home: string; file: string } => {
+    const home = box(prefix);
+    proofAnswers(home, status);
+    const file = join(home, 'probe-me.token');
+    writeFileSync(file, `${PREAMBLE}${VALUE}\n`, { mode: 0o600 });
+    return { home, file };
+  };
+  const probe = (home: string, args: string[], extra: NodeJS.ProcessEnv = {}): Run => runToken(home, ['probe', ...args], '', extra);
+
+  for (const [status, word, rc] of [[400, 'accepted', 0], [401, 'refused', 0], [501, 'unmeasured', 1], [503, 'unmeasured', 1]] as const) {
+    it(`${status}: prints exactly "probe: ${status} ${word}" and exits ${rc}`, () => {
+      const { home, file } = probeBox(`tok-probe-${status}-`, status);
+      const r = probe(home, ['--file', file]);
+      expect(r.code, r.stderr).toBe(rc);
+      expect(r.stdout).toBe(`probe: ${status} ${word}\n`);
+      expect(calls(home)).toBe(1);
+      expect(callArgv(home, 1).at(-1)).toBe('https://example.invalid/api/ledger');
+      expect(callArgv(home, 1).join(' ')).toMatch(/-K - /);
+      expect(callStdin(home, 1)).toBe(`header = "x-ccrc-mail-token: ${VALUE}"\n`);
+      // A probe measures; it writes no report and leaves no temp.
+      expect(reportOf(home)).toBeNull();
+      expect(temps(home)).toEqual([]);
+    });
+  }
+
+  it('no answer at all is "probe: 000 unmeasured", exit 1', () => {
+    const { home, file } = probeBox('tok-probe-norc-', 400);
+    writeFileSync(join(home, 'fixture-proof-rc'), '7\n');
+    const r = probe(home, ['--file', file]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe('probe: 000 unmeasured\n');
+    expectNoSecret(home, r);
+  });
+
+  it('--url overrides agent.env, and a ws:// base is rewritten as the verb rewrites it', () => {
+    const { home, file } = probeBox('tok-probe-url-', 401);
+    const r = probe(home, ['--file', file, '--url', 'ws://127.0.0.1:7788/']);
+    expect(r.stdout).toBe('probe: 401 refused\n');
+    expect(callArgv(home, 1).at(-1)).toBe('http://127.0.0.1:7788/api/ledger');
+  });
+
+  it('never prints the value or its sha256 — not on stdout, stderr, curl\'s argv or its environment', () => {
+    for (const status of [400, 401, 501]) {
+      const { home, file } = probeBox(`tok-probe-secret-${status}-`, status);
+      const r = probe(home, ['--file', file]);
+      expectNoSecret(home, r);
+      // And the hunt is not vacuous: the value really was sent, on stdin.
+      expect(callStdin(home, 1)).toContain(VALUE);
+    }
+  });
+
+  it('an inherited xtrace or allexport leaves the value out of stderr and out of curl\'s environment', () => {
+    for (const opt of ['xtrace', 'allexport']) {
+      const { home, file } = probeBox(`tok-probe-${opt}-`, 400);
+      const r = probe(home, ['--file', file], { SHELLOPTS: opt });
+      expect(r.code, r.stderr).toBe(0);
+      if (opt === 'xtrace') expect(r.stderr, 'xtrace reached the run at all').toMatch(/^\+/m);
+      expect(callStdin(home, 1)).toContain(VALUE);
+      expectNoSecret(home, r);
+      expect(read(join(home, 'curl.1.env')), opt).not.toMatch(/^(code|tok)=/m);
+    }
+  });
+
+  it('a file with no value line, or that cannot be read, exits 1 with no call and prints nothing secret; a missing --file is usage, exit 2', () => {
+    const { home, file } = probeBox('tok-probe-empty-', 400);
+    writeFileSync(file, '# only a comment\n\n');
+    let r = probe(home, ['--file', file]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe('');
+    expectNoSecret(home, r);
+    r = probe(home, ['--file', join(home, 'absent.token')]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe('');
+    expectNoSecret(home, r);
+    expect(calls(home)).toBe(0);
+    expect(probe(home, []).code).toBe(2);
+    expect(probe(home, ['--file']).code).toBe(2);
+    expect(probe(home, ['--file', file, '--url']).code).toBe(2);
+    expect(probe(home, ['--file', file, 'extra']).code).toBe(2);
+    expect(calls(home)).toBe(0);
+  });
+
+  it('no base: --url absent and no CCRC_SERVER_URL is exit 1 with no call; a non-http --url is exit 1', () => {
+    const { home, file } = probeBox('tok-probe-nobase-', 400);
+    writeFileSync(join(home, '.ccrc', 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
+    let r = probe(home, ['--file', file]);
+    expect(r.code).toBe(1);
+    r = probe(home, ['--file', file, '--url', 'ftp://example.invalid']);
+    expect(r.code).toBe(1);
+    expect(calls(home)).toBe(0);
+  });
+
+  it('the usage names probe, and the help text of ccrc token lists it', () => {
+    const { home } = probeBox('tok-probe-usage-', 400);
+    const r = runToken(home, ['--help'], '');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('ccrc token probe --file <path> [--url <base>]');
   });
 });

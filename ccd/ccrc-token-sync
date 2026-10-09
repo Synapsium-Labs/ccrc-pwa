@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set +x   # FIRST LINE OF CODE, and it is a SECRETS control: a claim code and a box token pass through this file.
+set +x +a   # FIRST LINE OF CODE, and it is a SECRETS control: a claim code and a box token pass through this file. +x: an inherited xtrace would print them; +a: an inherited allexport (SHELLOPTS, or a caller's `set -a`) would export `code` and `tok` into curl's environment.
 umask 077
 # ccrc-token-sync — the fleet box's half of the box-token lifecycle (design
 # 2026-10-07, §4.5 and §10.3). `ccd/ccrc` dispatches `ccrc token …` here,
@@ -14,6 +14,10 @@ umask 077
 #       ~/.ccrc/box-token-generation, proves the file with one call to
 #       GET /api/ledger, and writes a non-secret report to
 #       ~/.ccrc/token-sync.json for doctor.
+#
+#   ccrc token probe --file <path> [--url <base>]
+#       Presents the value line of <path> to GET <base>/api/ledger and prints
+#       `probe: <status> <accepted|refused|unmeasured>`. Never prints the value.
 #
 # OUTPUT CONTRACT (`sync`), read by the agent (agent/src/tokensync.ts):
 #   - success: exit 0, stdout exactly `synced <16 hex> <http|https>`
@@ -32,8 +36,10 @@ umask 077
 # server/test/ccrc-token-sync.test.ts's parity scan holds each to its L0
 # twin: the exit table (TOKEN_SYNC_EXIT), the stderr prefix, the code,
 # generation and value shapes, the claim path, the --from word, the fleet
-# file's fixed comment line, and the generation file's basename
-# (NODE_FILES.tokenGeneration).
+# file's fixed comment line, the generation file's basename
+# (NODE_FILES.tokenGeneration), and the claim door's `code-used` answer
+# (CLAIM_REFUSALS). Every python3 below runs `-I` (isolated: no cwd or user
+# site on sys.path, no PYTHON* variable read), and the scan holds that too.
 #
 # THE FIFTH HAND COPY of ccrc-api's URL and token handling (ccd-account-health,
 # ccrc-api, ccd-pool-sync, ccd-update-sync, this file), for the reason
@@ -68,6 +74,8 @@ CODE_RE='^[A-Za-z0-9_-]{43}$'
 GEN_RE='^[0-9a-f]{16}$'
 VALUE_RE='^[0-9a-f]{64}$'
 CLAIM_PATH='/api/token/claim'
+# The claim door's 410 answer for a burned code (CLAIM_REFUSALS), not the verb's own word.
+CLAIM_USED='code-used'
 PROOF_PATH='/api/ledger'
 FLEET_COMMENT='# ccrc box token: written by ccrc and rotated by the server; do not edit or copy it'
 GEN_FILE="$HOME/.ccrc/box-token-generation"
@@ -95,6 +103,7 @@ AGENT_ENV="$CCRC_DIR/agent.env"
 NODE_ID_FILE="$CCRC_DIR/node-id"
 REPORT="$CCRC_DIR/token-sync.json"
 API_CLIENT="$HOME/.local/bin/ccrc-api"
+TP_PREFIX='ccrc: token probe: '
 TMP_PREFIX='.ccrc-token-sync.'
 CLAIM_MAX_BYTES=4096
 CALL_MAX_TIME=15
@@ -106,6 +115,9 @@ R_PROOF=''      # proved | proof-failed | proof-unmeasured
 
 # This run's temps, removed on every exit.
 T_RESP='' T_TOKEN='' T_GEN='' T_REPORT=''
+# `unset` first: a name the caller already EXPORTED keeps that attribute through
+# an assignment, and the value would ride into curl's environment.
+unset code tok
 code='' tok=''
 _ts_cleanup() {
   code=''; tok=''
@@ -123,14 +135,16 @@ trap 'exit 129' HUP
 _ts_usage() {
   cat <<'EOF'
 usage: ccrc token sync --from agent      (the claim code on stdin; run by ccrc-agent's token-sync op)
+       ccrc token probe --file <path> [--url <base>]
 EOF
 }
 _ts_usage_die() { echo "ccrc: token: $1" >&2; _ts_usage >&2; exit 2; }
-_ts_env_die() { echo "ccrc: token sync: $1" >&2; exit 1; }
+_ts_env_die() { printf '%s%s\n' "$TS_PREFIX" "$1" >&2; exit 1; }
+_ts_probe_die() { printf '%s%s\n' "$TP_PREFIX" "$1" >&2; exit 1; }
 
 # `_ts_rename <tmp> <dest>` — one rename(2), never `mv`.
 _ts_rename() {
-  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2" 2>/dev/null
+  python3 -I -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$1" "$2" 2>/dev/null
 }
 
 # `_ts_report <result>` — ~/.ccrc/token-sync.json, by temp and rename. Every
@@ -150,7 +164,7 @@ _ts_report() {
     T_REPORT=''
     return 0
   fi
-  echo "ccrc: token sync: the report at ~/.ccrc/token-sync.json could not be written" >&2
+  printf '%sthe report at ~/.ccrc/token-sync.json could not be written\n' "$TS_PREFIX" >&2
   return 0
 }
 
@@ -358,13 +372,13 @@ cmd_sync() {
     _ts_refuse claim-refused "the claim door gave no answer (curl rc $rc)"
   fi
   if [ "$status" != 200 ]; then
-    word="$(python3 -c "$_TS_ERROR_PY" "$T_RESP" 2>/dev/null)" || word=''
-    [ "$status" = 410 ] && [ "$word" = code-used ] \
-      && _ts_refuse code-used "the claim door answered 410 code-used: someone claimed this code first"
+    word="$(python3 -I -c "$_TS_ERROR_PY" "$T_RESP" 2>/dev/null)" || word=''
+    [ "$status" = 410 ] && [ "$word" = "$CLAIM_USED" ] \
+      && _ts_refuse code-used "the claim door answered 410 $CLAIM_USED: someone claimed this code first"
     _ts_refuse claim-refused "the claim door answered $status${word:+ $word}"
   fi
 
-  verdict="$(python3 -c "$_TS_WRITE_PY" "$T_RESP" "$TOKEN_FILE" "$T_TOKEN" "$FLEET_COMMENT" \
+  verdict="$(python3 -I -c "$_TS_WRITE_PY" "$T_RESP" "$TOKEN_FILE" "$T_TOKEN" "$FLEET_COMMENT" \
     "$VALUE_RE" "$GEN_RE" "$CLAIM_MAX_BYTES" 2>/dev/null)" || verdict='fail python3 did not finish'
   rm -f -- "$T_RESP"; T_RESP=''
   case "$verdict" in
@@ -407,10 +421,45 @@ cmd_sync() {
   exit 0
 }
 
+cmd_probe() {
+  local file='' base='' status rc word
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --file) [ $# -ge 2 ] || _ts_usage_die "--file needs a path"; file="$2"; shift 2 ;;
+      --url)  [ $# -ge 2 ] || _ts_usage_die "--url needs a base address"; base="$2"; shift 2 ;;
+      *) _ts_usage_die "unknown argument: $1" ;;
+    esac
+  done
+  [ -n "$file" ] || _ts_usage_die "probe needs --file <path>"
+  command -v curl >/dev/null 2>&1 || _ts_probe_die "curl is not on PATH"
+  if [ -n "$base" ]; then
+    _ts_set_url "$base" || _ts_probe_die "--url is not an http, https, ws or wss address"
+  else
+    [ -r "$AGENT_ENV" ] || _ts_probe_die "no --url, and ~/.ccrc/agent.env cannot be read"
+    base="$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$AGENT_ENV" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')"
+    _ts_set_url "$base" || _ts_probe_die "no --url, and no usable CCRC_SERVER_URL in ~/.ccrc/agent.env"
+  fi
+  [ -f "$file" ] && [ -r "$file" ] || _ts_probe_die "the file cannot be read"
+  _ts_read_value "$file"
+  [ -n "$tok" ] || _ts_probe_die "the file carries no value line"
+  status="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
+    | curl -sS -K - -o /dev/null -w '%{http_code}' --max-time "$CALL_MAX_TIME" "$URL$PROOF_PATH" 2>/dev/null)"; rc=$?
+  tok=''
+  [ "$rc" -eq 0 ] && [[ "$status" =~ ^[0-9]{3}$ ]] || status=000
+  case "$status" in
+    400) word=accepted ;;
+    401) word=refused ;;
+    *)   word=unmeasured ;;
+  esac
+  printf 'probe: %s %s\n' "$status" "$word"
+  [ "$word" != unmeasured ]
+}
+
 [ $# -gt 0 ] || _ts_usage_die "missing subverb"
 sub="$1"; shift
 case "$sub" in
   sync)  cmd_sync "$@" ;;
+  probe) cmd_probe "$@" ;;
   -h|--help) _ts_usage; exit 0 ;;
   *) _ts_usage_die "unknown subverb: $sub" ;;
 esac
