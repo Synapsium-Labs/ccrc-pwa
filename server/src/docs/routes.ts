@@ -12,7 +12,9 @@
 // and every failure body it receives is sent as it came, never rebuilt. A log line is `console.warn('ccrc-server:
 // ...')`: the server runs `Fastify({ logger: false })`, so the request logger is a silent no-op.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import type { DocPin, DocsProjectsResponse, DocsRefSpec, DocsTreeOk, DocsTreeResponse } from '../../../shared/docs.js';
+import type {
+  DocPin, DocsFailureBody, DocsProjectsResponse, DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
+} from '../../../shared/docs.js';
 import { docsCaches, type DocsCaches } from './cache.js';
 import { ccdDocsFetcher, ccdDocsReader, type CcdDocsDeps } from './ccdsource.js';
 import { sendDocsFailure } from './hooks.js';
@@ -21,12 +23,16 @@ import {
   type DocsLaneRun, type DocsReadLane,
 } from './lane.js';
 import {
-  DOCS_PRIMARY_NODE, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer, docsCacheVerdict, docsFileReply,
-  docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsNodeKey, docsProjectKey, docsShowBound, docsShowFlightKey,
-  docsShowPlan, docsTreeFlightKey, parseDocsApiQuery, parseDocsProjectParam, refreshDue, type DocsApiRequest,
-  type DocsFileReply, type DocsJob, type DocsListedFile,
+  DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
+  docsCacheVerdict, docsFileReply, docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsLogDue, docsNodeKey,
+  docsProjectKey, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
+  docsShowPlan, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam, parseDocsRefreshBody,
+  refreshDue, type DocsApiRequest, type DocsFileReply, type DocsJob, type DocsListedFile, type DocsRefreshHalf,
+  type DocsRefreshRequest,
 } from './policy.js';
-import type { DocsFetcher, DocsIndexRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead } from './ports.js';
+import type {
+  DocsFetchRun, DocsFetcher, DocsIndexRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead,
+} from './ports.js';
 
 /** One value per fleet node (section 3.12). `primary` is the node every request reads: the API carries no node key,
  *  so a route reads `byNode.get(primary)`. A second node arrives as a second entry, never as a re-key. */
@@ -280,5 +286,119 @@ export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<
     if (run.kind !== 'ran') return notRan(reply, run);
     if (!run.value.ok) return sendDocsFailure(reply, run.value);
     return sendFile(reply, docsFileReply(pin, run.value.answer, run.value.bytes, 'ccd'));
+  });
+}
+
+// ===== Task 7: the refresh (section 3.4's refresh flow, section 6.4; refinement (m)) =====
+
+/** What one refresh flight's fetch half came to: L1's verdict over the fetch (`refuse`, or a `half` to carry), or
+ *  `abandoned`: every requester left before the fetch started, so no fetch ran and nothing settled. */
+type RefreshFetchOutcome = DocsRefreshHalf | { kind: 'abandoned' };
+
+/** An ok fetch the adapter passed, believed only after `docsAnswerShape` (refinement (f); W2's carry names the fetch
+ *  answer too): one nested past the bound would throw at reply serialisation. A failure is handed back as it came. */
+function believeFetch(got: DocsFetchRun): DocsFetchRun {
+  if (!got.ok) return got;
+  const shape = docsAnswerShape('docs-fetch', got.answer);
+  if (!shape.ok) {
+    console.warn('ccrc-server: docs fetch answer failed its shape check');
+    return shape;
+  }
+  return got;
+}
+
+/** A refresh's fetch half has settled, ran, failed or skipped (refinement (m)): bump the project's generation, so
+ *  the tree read that follows starts a NEW flight and never joins one begun before the fetch (section 3.4, section
+ *  6.4); bump the node's generation, so no index begun before the fetch is joined or cached after it; and drop the
+ *  node's index micro-cache (section 6.5). */
+function fetchSettled(at: DocsNodeLanes, src: DocsSourceId): void {
+  at.gens.bump(docsProjectKey(src.node, src.project));
+  at.gens.bump(docsNodeKey(src.node));
+  at.caches.index.drop(src.node);
+}
+
+/**
+ * One refresh flight's fetch half (section 6.4: a refresh joins by (node, project, branch)): book the project's
+ * fetch-lane key, believe the answer, and take L1's verdict (`docsRefreshFetchHalf`) over the answer or over the
+ * lane's own `docs-busy` body. A half that settled is marked HERE, inside the flight, once per fetch and before any
+ * joiner reads its tree, so every joiner of one fetch reads the same new generation. A refusal settles nothing.
+ */
+async function fetchHalf(fetcher: DocsFetcher, at: DocsNodeLanes, src: DocsSourceId, branch: string | null,
+  flight: AbortSignal): Promise<RefreshFetchOutcome> {
+  const run = await at.fetch.run(docsProjectKey(src.node, src.project), flight,
+    async () => believeFetch(await fetcher.fetch(src, branch)));
+  if (run.kind === 'abandoned') return run;
+  const half = docsRefreshFetchHalf(run.kind === 'busy' ? run.body : run.value);
+  if (half.kind === 'half') fetchSettled(at, src);
+  return half;
+}
+
+/** The tree half of a refresh's 200 (section 3.5's `DocsRefreshResponse.tree`): a believed tree's response, or the
+ *  failure body as it came, the read lane's own `docs-busy` included (a body here, never a status). */
+function treeHalf(run: Exclude<DocsLaneRun<DocsTreeRead>, { kind: 'abandoned' }>): DocsTreeResponse | DocsFailureBody {
+  if (run.kind === 'busy') return run.body;
+  return run.value.ok ? treeResponse(run.value.answer) : run.value;
+}
+
+/**
+ * The refresh (section 3.4's refresh flow; refinement (m)): the ONLY docs registration that receives a fetcher
+ * (section 2 (g)'s wall 1). In order:
+ * 1. `:project` and the body through L1's parsers (`parseDocsProjectParam`, `parseDocsRefreshBody`): a refusal is
+ *    sent with its own status before any exec. A `text/plain` body reaches the handler as a string and is refused
+ *    here; a body Fastify itself refuses is answered by the plugin's error handler (Task 3).
+ * 2. `fetchBranchFor(ref)`: `skipped` (a local ref) settles at once with no exec; `fetch` joins the refresh flight
+ *    of (node, project, branch), whose starter books the fetch lane (`fetchHalf`). A refusal before any exec (the
+ *    gate's `caps-unknown` or `unsupported`, the fetch lane's `docs-busy`) is the whole answer, with its own status
+ *    and `Retry-After`; `abandoned` ends the request unanswered.
+ * 3. A failed half logs `ccrc-server: docs <reason> refresh of <project> failed: <word>` when `docsLogDue` says so
+ *    for that word; `reason` changes nothing else.
+ * 4. The tree half: `readTree` at the generation the settle bumped, so it never joins a flight begun before the
+ *    fetch; the index micro-cache is dropped again once it completes.
+ * 5. L1's `docsRefreshAnswer` over the two halves: a skipped fetch whose tree half was refused before any exec is
+ *    the whole answer, with that word's own status and `Retry-After` (no exec ran at all); otherwise 200 `{ok: true,
+ *    fetch, tree}`: each half carries its own word, and a failed fetch never replaces the listing.
+ */
+export function registerDocsRefreshRoute(app: FastifyInstance, readers: DocsNodes<DocsReader>,
+  fetchers: DocsNodes<DocsFetcher>, lanes: DocsNodes<DocsNodeLanes>): void {
+  const node = readers.primary;
+  const reader = forNode(readers, node, 'reader');
+  const fetcher = forNode(fetchers, node, 'fetcher');
+  const at = forNode(lanes, node, 'lanes');
+  const lastLogged = new Map<string, number>();
+
+  const logFailed = (reason: DocsRefreshRequest['reason'], project: string, failure: DocsFailureBody): void => {
+    const now = at.nowMs();
+    if (!docsLogDue(lastLogged.get(failure.failure), now)) return;
+    lastLogged.set(failure.failure, now);
+    console.warn(`ccrc-server: docs ${reason} refresh of ${project} failed: ${failure.failure}`);
+  };
+
+  app.post('/api/docs/:project/refresh', async (req, reply) => {
+    const p = parseDocsProjectParam((req.params as DocsParams).project);
+    if (!p.ok) return sendDocsFailure(reply, p);
+    const body = parseDocsRefreshBody(req.body);
+    if (!body.ok) return sendDocsFailure(reply, body);
+    const { ref, reason } = body.req;
+    const src: DocsSourceId = { node, project: p.project };
+    const gone = clientGone(reply);
+    const plan = fetchBranchFor(ref);
+    let fetch: DocsRefreshFetch;
+    if (plan.kind === 'skipped') {
+      fetchSettled(at, src);
+      fetch = DOCS_REFRESH_SKIPPED;
+    } else {
+      const fetched = await at.flights.join(docsRefreshFlightKey(node, src.project, plan.branch), gone,
+        (flight) => fetchHalf(fetcher, at, src, plan.branch, flight));
+      if (fetched.kind === 'abandoned') return abandon(reply);
+      if (fetched.kind === 'refuse') return sendDocsFailure(reply, fetched.body);
+      fetch = fetched.fetch;
+    }
+    if (fetch.state === 'failed') logFailed(reason, src.project, fetch.failure);
+    const tree = await readTree(reader, at, src, ref, gone);
+    at.caches.index.drop(node);
+    if (tree.kind === 'abandoned') return abandon(reply);
+    const answer = docsRefreshAnswer(fetch, treeHalf(tree));
+    if (answer.kind === 'refuse') return sendDocsFailure(reply, answer.body);
+    return reply.send(answer.body);
   });
 }

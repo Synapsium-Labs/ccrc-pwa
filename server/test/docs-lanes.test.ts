@@ -712,3 +712,25 @@ describe('W3 T4: the generation counter (section 6.4)', () => {
     expect(gens.current('demo')).toBe(2);
   });
 });
+
+describe('W3 T7: the fetch lane and the read lane are separate (section 6.4: fetch answers take no read-lane slot)', () => {
+  it('a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound', async () => {
+    const read = readLane();
+    const fetch = fetchLane();
+    const br = blocker<string>();
+    const bf = blocker<string>();
+    for (let i = 0; i < DOCS_LANE_EXECS + DOCS_LANE_QUEUE; i += 1) void read.run(SMALL, live(), br.exec);
+    expect(read.load()).toStrictEqual({ execs: DOCS_LANE_EXECS, bytes: DOCS_LANE_EXECS * SMALL.wire, large: 0, queued: DOCS_LANE_QUEUE });
+    expect(await read.run(SMALL, live(), br.exec)).toStrictEqual({ kind: 'busy', body: docsBusyBody('read') });
+    void fetch.run('k0', live(), bf.exec);
+    expect(bf.started()).toBe(1);
+    for (let i = 1; i < DOCS_FETCH_GLOBAL + DOCS_FETCH_QUEUE; i += 1) void fetch.run(`k${i % DOCS_FETCH_GLOBAL}`, live(), bf.exec);
+    expect(fetch.load()).toStrictEqual({ running: DOCS_FETCH_GLOBAL, queued: DOCS_FETCH_QUEUE });
+    expect(await fetch.run('k-next', live(), bf.exec)).toStrictEqual({ kind: 'busy', body: docsBusyBody('fetch') });
+    br.release(0, 'r0');
+    await flush();
+    expect(br.started()).toBe(DOCS_LANE_EXECS + 1);
+    expect(read.load().queued).toBe(DOCS_LANE_QUEUE - 1);
+    expect(bf.started()).toBe(DOCS_FETCH_GLOBAL);
+  });
+});

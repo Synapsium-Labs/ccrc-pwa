@@ -14,14 +14,18 @@ import type { AddressInfo } from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { DOCS_CAP } from '../src/ccdargv.js';
 import type { CcdResult } from '../src/lifecycle.js';
+import { UNMEASURED } from '../src/exec.js';
 import { composeDocs } from '../src/docs/routes.js';
 import {
-  DOCS_INDEX_CACHE_MS, DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, LISTING_JOB, parseDocsApiQuery, refreshDue,
+  DOCS_FETCH_GLOBAL, DOCS_FETCH_QUEUE, DOCS_INDEX_CACHE_MS, DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, DOCS_REF_PREFIXES,
+  DOCS_REFUSAL_LOG_MS, LISTING_JOB, parseDocsApiQuery, refreshDue,
 } from '../src/docs/policy.js';
-import { DOCS_RESPONSE_HEADERS, type DocsFailureBody, type DocsFailure } from '../../shared/docs.js';
 import {
-  FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, docsApp, faultRes, indexOk, line, nodeLanes, okRes, scripted,
-  treeOk, until,
+  DOCS_RESPONSE_HEADERS, type DocsFailureBody, type DocsFailure, type DocsFetchOk,
+} from '../../shared/docs.js';
+import {
+  FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, committedEntry, docsApp, faultRes, indexOk, line, nodeLanes,
+  okRes, scripted, showLine, treeOk, until,
 } from './docsRouteHelpers.js';
 
 const apps: FastifyInstance[] = [];
@@ -447,5 +451,577 @@ describe('M6.2 at the routes — the read lane: two in flight, a strict queue, i
     await until(() => seen.some((s) => s.startsWith('response close')), 'the response closed');
     expect(seen).toContain('response close, finished true');
     expect(rec.calls).toHaveLength(1);
+  });
+});
+
+// ===== Task 7: the refresh route (section 3.4's refresh flow, section 6.4; row 51, M6.9, M6.10) =====
+
+/** A complete ok `docs-fetch` answer line's object (`DocsFetchOk`): the default branch moved; `over` replaces any
+ *  field. The adapter checks a fetch line's envelope only, so the route answers exactly this object. */
+function fetchOk(over: Partial<DocsFetchOk> = {}): DocsFetchOk {
+  return {
+    v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 6, branch: 'main', trackedRef: FIXTURE_SERVED,
+    before: FIXTURE_COMMIT, after: 'b'.repeat(40), moved: 'updated', stamp: 'written', ...over,
+  };
+}
+
+/** A ccd failure line of `verb` carrying `ctx` (its `failure` word and context keys). */
+function failLine(verb: string, ctx: Record<string, unknown>): CcdResult {
+  return okRes(line({ v: 1, verb, ok: false, elapsedMs: 4, ...ctx }));
+}
+
+type Answer = (argv: string[]) => CcdResult | Promise<CcdResult>;
+
+/** The refresh URL of `demo`, for the real-socket case. */
+const REFRESH_PATH = '/api/docs/demo/refresh';
+
+/** A recording runner that answers `docs-fetch` with `fetch`, `docs-tree` with `tree` and `docs-index` with `index`
+ *  (defaults: an ok fetch, the fixture tree, the fixture index); any other verb is a ccd fault. */
+function fleet(o: { fetch?: Answer; tree?: Answer; index?: Answer } = {}): ReturnType<typeof scripted> {
+  return scripted((argv) => {
+    if (argv[0] === 'docs-fetch') return (o.fetch ?? (() => okRes(line(fetchOk()))))(argv);
+    if (argv[0] === 'docs-tree') return (o.tree ?? (() => okRes(line(treeOk()))))(argv);
+    if (argv[0] === 'docs-index') return (o.index ?? (() => okRes(line(indexOk()))))(argv);
+    return faultRes();
+  });
+}
+
+/** The argv a runner recorded for one verb. */
+function verb(calls: string[][], name: string): string[][] {
+  return calls.filter((argv) => argv[0] === name);
+}
+
+/** A refresh POST of `payload` (sent as written) with content type `type`, with the PWA's request headers. */
+function postRaw(app: FastifyInstance, payload: string, type = 'application/json', project = 'demo') {
+  return app.inject({
+    method: 'POST', url: REFRESH_PATH.replace('/demo/', `/${project}/`), headers: { ...PWA_HEADERS, 'content-type': type },
+    payload,
+  });
+}
+
+/** A refresh POST of `{ref, reason}` as JSON. */
+function refresh(app: FastifyInstance, ref: string | null, reason: 'auto' | 'manual' = 'auto', project = 'demo') {
+  return postRaw(app, JSON.stringify({ ref, reason }), 'application/json', project);
+}
+
+describe('T7: a refresh body or :project that fails its parser is refused before any exec (section 3.4; refinement (e))', () => {
+  const REFUSED: readonly (readonly [string, string, string, DocsFailureBody])[] = [
+    ['a text/plain body', 'text/plain', 'hello', badQuery('body')],
+    ['invalid JSON', 'application/json', '{"ref":', badQuery('body')],
+    ['an empty JSON body', 'application/json', '', badQuery('body')],
+    ['a JSON array [1]', 'application/json', '[1]', badQuery('body')],
+    ['a JSON null', 'application/json', 'null', badQuery('body')],
+    ['a JSON string', 'application/json', '"main"', badQuery('body')],
+    ['reason missing', 'application/json', '{"ref":null}', badQuery('body', 'reason')],
+    ['ref missing', 'application/json', '{"reason":"auto"}', badQuery('body', 'ref')],
+    ['ref a number', 'application/json', '{"ref":1,"reason":"auto"}', badQuery('body', 'ref')],
+    ['reason neither auto nor manual', 'application/json', '{"ref":null,"reason":"later"}', badQuery('body', 'reason')],
+    ['an unknown key x', 'application/json', '{"ref":null,"reason":"auto","x":1}', badQuery('unknown', 'x')],
+    ['a ref in neither grammar', 'application/json', '{"ref":"a..b","reason":"auto"}', word('bad-ref')],
+    ['a body of 1 MiB + 1', 'application/json', `{"ref":"${'x'.repeat(1048577)}","reason":"auto"}`, badQuery('body')],
+    ['a form-encoded body', 'application/x-www-form-urlencoded', 'ref=main&reason=auto', badQuery('body')],
+  ];
+
+  it.each(REFUSED)('%s', async (_label, type, payload, body) => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const res = await postRaw(app, payload, type);
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toStrictEqual(body);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(rec.calls).toEqual([]);
+  });
+
+  it(':project -x with a valid body: bad-project, zero execs', async () => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null, 'auto', '-x');
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toStrictEqual(word('bad-project'));
+    expect(rec.calls).toEqual([]);
+  });
+});
+
+describe('T7: fetchBranchFor maps the request onto one docs-fetch, then a docs-tree of the requested ref (section 3.4)', () => {
+  it('ref null: one docs-fetch with no --branch, then one docs-tree with no --ref; 200 {ok, fetch: ran, tree}', async () => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'ran', answer: fetchOk() }, tree: { ok: true, tree: treeOk(), refreshDue: true },
+    });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(rec.calls).toEqual([['docs-fetch', '--project', 'demo'], ['docs-tree', '--project', 'demo']]);
+  });
+
+  it.each([
+    ['bare ws/a', 'ws/a'],
+    ['origin-qualified ws/a', `${DOCS_REF_PREFIXES[1]}ws/a`],
+  ])('%s: docs-fetch --branch ws/a, then docs-tree --ref as requested', async (_label, ref) => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, ref);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().fetch).toStrictEqual({ state: 'ran', answer: fetchOk() });
+    expect(rec.calls).toEqual([
+      ['docs-fetch', '--project', 'demo', '--branch', 'ws/a'], ['docs-tree', '--project', 'demo', '--ref', ref],
+    ]);
+  });
+
+  it('local-qualified ws/a: ZERO docs-fetch, fetch {state: skipped, why: local-ref}, and the tree still runs: 200', async () => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const ref = `${DOCS_REF_PREFIXES[0]}ws/a`;
+    const res = await refresh(app, ref, 'manual');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'skipped', why: 'local-ref' }, tree: { ok: true, tree: treeOk(), refreshDue: true },
+    });
+    expect(rec.calls).toEqual([['docs-tree', '--project', 'demo', '--ref', ref]]);
+  });
+});
+
+describe('T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m))', () => {
+  const FAILED_FETCH: readonly (readonly [string, Record<string, unknown>])[] = [
+    ['fetch-too-soon {retryAfterMs: 9000}', { failure: 'fetch-too-soon', retryAfterMs: 9000 }],
+    ['remote-branch-absent', { failure: 'remote-branch-absent' }],
+    ['ref-locked with lockAgeMs ABSENT', { failure: 'ref-locked' }],
+  ];
+
+  it.each(FAILED_FETCH)('a failed fetch (%s): 200, fetch {state: failed, failure: the body verbatim}, no Retry-After, and the tree half still answers', async (_label, ctx) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = fleet({ fetch: () => failLine('docs-fetch', ctx) });
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'failed', failure: { ok: false, ...ctx } }, tree: { ok: true, tree: treeOk(), refreshDue: true },
+    });
+    expect(Object.hasOwn(res.json().fetch.failure, 'lockAgeMs')).toBe(false);
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(1);
+  });
+
+  it('a failed tree half (unresolved-ref): 200 with tree: its body verbatim, and the fetch half ran', async () => {
+    const ctx = { failure: 'unresolved-ref', ref: 'ws/x', tried: [{ ref: 'refs/remotes/origin/ws/x', result: 'absent' }] };
+    const rec = fleet({ tree: () => failLine('docs-tree', ctx) });
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, 'ws/x');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({ ok: true, fetch: { state: 'ran', answer: fetchOk() }, tree: { ok: false, ...ctx } });
+  });
+
+  it('a fetch answer nested past DOCS_ANSWER_MAX_DEPTH: the fetch half is failed malformed-answer {why: schema}, never a 500, and the tree half answers', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const text = `${JSON.stringify(fetchOk()).slice(0, -1)},"deep":${'['.repeat(500000)}${']'.repeat(500000)}}\n`;
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(LISTING_JOB.wire);
+    const rec = fleet({ fetch: () => okRes(text) });
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'failed', failure: { ok: false, failure: 'malformed-answer', why: 'schema' } },
+      tree: { ok: true, tree: treeOk(), refreshDue: true },
+    });
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs fetch answer failed its shape check');
+  });
+
+  it('caps-unknown (ccdVerbs null): 503 Retry-After 5, the WHOLE body caps-unknown, zero execs; unsupported: 501, no Retry-After, zero execs', async () => {
+    const rec = fleet();
+    const { app, state } = await open({ run: rec.run, verbs: null });
+    const unknown = await refresh(app, null);
+    expect(unknown.statusCode).toBe(503);
+    expect(unknown.headers['retry-after']).toBe('5');
+    expect(unknown.json()).toStrictEqual(word('caps-unknown'));
+    state.ccdVerbs = ['caps'];
+    const unsupported = await refresh(app, 'ws/a');
+    expect(unsupported.statusCode).toBe(501);
+    expect(unsupported.headers['retry-after']).toBeUndefined();
+    expect(unsupported.json()).toStrictEqual(word('unsupported'));
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('a local ref (no fetch exec) whose tree half the gate refuses: the WHOLE answer is that word, 503 Retry-After 5 or 501, zero execs', async () => {
+    const rec = fleet();
+    const { app, state } = await open({ run: rec.run, verbs: null });
+    const ref = `${DOCS_REF_PREFIXES[0]}ws/a`;
+    const unknown = await refresh(app, ref);
+    expect(unknown.statusCode).toBe(503);
+    expect(unknown.headers['retry-after']).toBe('5');
+    expect(unknown.json()).toStrictEqual(word('caps-unknown'));
+    state.ccdVerbs = ['caps'];
+    const unsupported = await refresh(app, ref, 'manual');
+    expect(unsupported.statusCode).toBe(501);
+    expect(unsupported.headers['retry-after']).toBeUndefined();
+    expect(unsupported.json()).toStrictEqual(word('unsupported'));
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('a tree half the full read lane refuses rides the 200 as its body, docs-busy {lane: read}, with no Retry-After header', async () => {
+    const b = blocker<CcdResult>();
+    const rec = fleet({ tree: () => b.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).read;
+    const held = ['a', 'b'].map((ref) => app.inject({ url: `/api/docs/demo/tree?ref=${ref}`, headers: PWA_HEADERS }));
+    await until(() => b.started() === 2, 'two tree execs');
+    const queued = Array.from({ length: DOCS_LANE_QUEUE },
+      (_, i) => app.inject({ url: committedAt(`f${i}.md`), headers: PWA_HEADERS }));
+    await until(() => lane.load().queued === DOCS_LANE_QUEUE, 'a full queue');
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'ran', answer: fetchOk() },
+      tree: { ok: false, failure: 'docs-busy', lane: 'read', retryAfterMs: 2000 },
+    });
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(2);
+    await app.close();
+    await Promise.all(queued);
+    b.release(0, faultRes());
+    b.release(1, faultRes());
+    await Promise.all(held);
+  });
+
+  it('a failed refresh logs one line per word a minute, naming its reason; reason changes nothing else in the response', async () => {
+    let now = 1000;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = fleet({ fetch: () => failLine('docs-fetch', { failure: 'fetch-too-soon', retryAfterMs: 9000 }) });
+    const { app } = await open({ run: rec.run, nowMs: () => now });
+    const logged = (): unknown[] => warn.mock.calls.map((c) => c[0]).filter((m) => String(m).includes('refresh of'));
+    const auto = await refresh(app, null, 'auto');
+    expect(logged()).toEqual(['ccrc-server: docs auto refresh of demo failed: fetch-too-soon']);
+    now += DOCS_REFUSAL_LOG_MS - 1;
+    const manual = await refresh(app, null, 'manual');
+    expect(logged()).toHaveLength(1);
+    expect(manual.statusCode).toBe(auto.statusCode);
+    expect(manual.json()).toStrictEqual(auto.json());
+    now += 1;
+    await refresh(app, null, 'manual');
+    expect(logged()).toEqual([
+      'ccrc-server: docs auto refresh of demo failed: fetch-too-soon',
+      'ccrc-server: docs manual refresh of demo failed: fetch-too-soon',
+    ]);
+  });
+});
+
+describe('T7: row 51 and M6.9 — single-flight, and a refresh\'s tree never joins a flight begun before its fetch', () => {
+  it('row 51: two concurrent refreshes of one (project, branch) make exactly ONE docs-fetch and share one tree; both 200 with the same halves', async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const two = [refresh(app, 'ws/a', 'auto'), refresh(app, 'ws/a', 'manual')];
+    await until(() => f.started() === 1, 'one fetch exec');
+    await until(() => nodeLanes(docs).flights.size() === 1, 'one refresh flight');
+    f.release(0, okRes(line(fetchOk({ branch: 'ws/a' }))));
+    const [a, b] = await Promise.all(two);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect(a.json()).toStrictEqual(b.json());
+    expect(a.json().fetch).toStrictEqual({ state: 'ran', answer: fetchOk({ branch: 'ws/a' }) });
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([['docs-fetch', '--project', 'demo', '--branch', 'ws/a']]);
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(1);
+  });
+
+  it('row 51: at most 2 reads in flight under refresh load: the tree halves ride the read lane', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).read;
+    const three = ['demo', 'a', 'b'].map((project) => refresh(app, null, 'auto', project));
+    await until(() => lane.load().queued === 1, 'the third tree half queued');
+    expect(lane.load().execs).toBe(2);
+    expect(verb(rec.calls, 'docs-fetch')).toHaveLength(3);
+    expect(t.started()).toBe(2);
+    t.release(0, okRes(line(treeOk())));
+    await until(() => t.started() === 3, 'the third tree half started');
+    t.release(1, okRes(line(treeOk())));
+    t.release(2, okRes(line(treeOk())));
+    expect((await Promise.all(three)).map((r) => r.statusCode)).toEqual([200, 200, 200]);
+  });
+
+  it('M6.9: two concurrent tree GETs for one (project, ref): one exec, two equal answers', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app } = await open({ run: rec.run });
+    const two = [0, 1].map(() => app.inject({ url: '/api/docs/demo/tree?ref=ws%2Fa', headers: PWA_HEADERS }));
+    await until(() => t.started() === 1, 'one tree exec');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    t.release(0, okRes(line(treeOk())));
+    const [a, b] = await Promise.all(two);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    expect(a.json()).toStrictEqual(b.json());
+    expect(rec.calls).toEqual([['docs-tree', '--project', 'demo', '--ref', 'ws/a']]);
+  });
+
+  it('M6.9: two concurrent file GETs for one pin: one docs-show exec', async () => {
+    const s = blocker<CcdResult>();
+    const rec = scripted(() => s.exec());
+    const { app } = await open({ run: rec.run });
+    const two = [0, 1].map(() => app.inject({ url: fileUrl(COMMITTED_Q), headers: PWA_HEADERS }));
+    await until(() => s.started() === 1, 'one show exec');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    s.release(0, faultRes('boom'));
+    expect((await Promise.all(two)).map((r) => r.statusCode)).toEqual([502, 502]);
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('M6.9: a refresh\'s tree half is a SECOND docs-tree, never the tree GET in flight before its fetch; a tree GET after the bump joins the refresh\'s tree', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app } = await open({ run: rec.run });
+    const before = app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    await until(() => t.started() === 1, 'the tree GET in flight');
+    const refreshed = refresh(app, null);
+    await until(() => t.started() === 2, 'the refresh\'s own tree exec');
+    const after = app.inject({ url: '/api/docs/demo/tree', headers: PWA_HEADERS });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(t.started()).toBe(2);
+    t.release(1, okRes(line(treeOk({ elapsedMs: 2 }))));
+    t.release(0, okRes(line(treeOk({ elapsedMs: 1 }))));
+    const [b, r, a] = await Promise.all([before, refreshed, after]);
+    expect(b.json().tree.elapsedMs).toBe(1);
+    expect(r.json().tree.tree.elapsedMs).toBe(2);
+    expect(a.json().tree.elapsedMs).toBe(2);
+    expect(rec.calls).toEqual([
+      ['docs-tree', '--project', 'demo'], ['docs-fetch', '--project', 'demo'], ['docs-tree', '--project', 'demo'],
+    ]);
+  });
+  it('M6.9: a skipped fetch (a local ref) bumps the generation too: its tree half is a second docs-tree, never the GET in flight', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app } = await open({ run: rec.run });
+    const ref = `${DOCS_REF_PREFIXES[0]}ws/a`;
+    const before = app.inject({ url: `/api/docs/demo/tree?ref=${enc(ref)}`, headers: PWA_HEADERS });
+    await until(() => t.started() === 1, 'the tree GET in flight');
+    const refreshed = refresh(app, ref);
+    await until(() => t.started() === 2, 'the refresh\'s own tree exec');
+    t.release(0, okRes(line(treeOk())));
+    t.release(1, okRes(line(treeOk())));
+    const [b, r] = await Promise.all([before, refreshed]);
+    expect([b.statusCode, r.statusCode]).toEqual([200, 200]);
+    expect(r.json().fetch).toStrictEqual({ state: 'skipped', why: 'local-ref' });
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([]);
+    expect(verb(rec.calls, 'docs-tree')).toHaveLength(2);
+  });
+});
+
+describe('T7: M6.10 — the fetch lane at the route: serial per project, 2 globally, 8 queued, then docs-busy {lane: fetch}', () => {
+  it('two refreshes of one project on different branches fetch one after the other', async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    const two = [refresh(app, null), refresh(app, 'ws/a')];
+    await until(() => lane.load().queued === 1, 'the second fetch queued behind its project');
+    expect(lane.load().running).toBe(1);
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([['docs-fetch', '--project', 'demo']]);
+    f.release(0, okRes(line(fetchOk())));
+    await until(() => f.started() === 2, 'the second fetch started');
+    expect(verb(rec.calls, 'docs-fetch')[1]).toEqual(['docs-fetch', '--project', 'demo', '--branch', 'ws/a']);
+    f.release(1, okRes(line(fetchOk({ branch: 'ws/a' }))));
+    expect((await Promise.all(two)).map((r) => r.statusCode)).toEqual([200, 200]);
+  });
+
+  it(`three projects: ${DOCS_FETCH_GLOBAL} fetch at once and the third waits for a global slot`, async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    const three = ['demo', 'a', 'b'].map((project) => refresh(app, null, 'auto', project));
+    await until(() => lane.load().queued === 1, 'the third fetch queued');
+    expect(lane.load().running).toBe(DOCS_FETCH_GLOBAL);
+    expect(f.started()).toBe(DOCS_FETCH_GLOBAL);
+    f.release(0, okRes(line(fetchOk())));
+    await until(() => f.started() === 3, 'the third fetch started');
+    f.release(1, okRes(line(fetchOk())));
+    f.release(2, okRes(line(fetchOk())));
+    expect((await Promise.all(three)).map((r) => r.statusCode)).toEqual([200, 200, 200]);
+  });
+
+  it(`${DOCS_FETCH_GLOBAL} running and ${DOCS_FETCH_QUEUE} queued: the next refresh is 503 docs-busy {lane: fetch} Retry-After 5 with no new exec, and a read is still served`, async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    const running = ['demo', 'a'].map((project) => refresh(app, null, 'auto', project));
+    await until(() => f.started() === DOCS_FETCH_GLOBAL, 'two fetches running');
+    const queued = Array.from({ length: DOCS_FETCH_QUEUE }, (_, i) => refresh(app, `ws/q${i}`));
+    await until(() => lane.load().queued === DOCS_FETCH_QUEUE, 'a full fetch queue');
+    const busy = await refresh(app, 'ws/next');
+    expect(busy.statusCode).toBe(503);
+    expect(busy.headers['retry-after']).toBe('5');
+    expect(busy.json()).toStrictEqual({ ok: false, failure: 'docs-busy', lane: 'fetch', retryAfterMs: 5000 });
+    expect(verb(rec.calls, 'docs-fetch')).toHaveLength(DOCS_FETCH_GLOBAL);
+    const read = await app.inject({ url: '/api/docs/b/tree', headers: PWA_HEADERS });
+    expect(read.statusCode).toBe(200);
+    expect(verb(rec.calls, 'docs-tree')).toEqual([['docs-tree', '--project', 'b']]);
+    await app.close();
+    expect((await Promise.all(queued)).map((r) => r.statusCode)).toEqual(Array(DOCS_FETCH_QUEUE).fill(503));
+    f.release(0, okRes(line(fetchOk())));
+    f.release(1, okRes(line(fetchOk())));
+    await Promise.all(running);
+    expect(verb(rec.calls, 'docs-fetch')).toHaveLength(DOCS_FETCH_GLOBAL);
+  });
+
+  it('refinement (j): a refresh whose client goes while its fetch is queued is dequeued over a real socket and never fetches', async () => {
+    const f = blocker<CcdResult>();
+    const rec = fleet({ fetch: () => f.exec() });
+    const { app, docs } = await open({ run: rec.run });
+    const lane = nodeLanes(docs).fetch;
+    const first = refresh(app, null);
+    await until(() => f.started() === 1, 'the first fetch running');
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const req = http.request({
+      host: '127.0.0.1', port, method: 'POST', path: REFRESH_PATH,
+      headers: { ...PWA_HEADERS, 'content-type': 'application/json' },
+    });
+    req.on('error', () => undefined);
+    req.end(JSON.stringify({ ref: 'ws/a', reason: 'auto' }));
+    await until(() => lane.load().queued === 1, 'the socket\'s fetch queued');
+    req.destroy();
+    await until(() => lane.load().queued === 0, 'the fetch dequeued');
+    f.release(0, okRes(line(fetchOk())));
+    expect((await first).statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(verb(rec.calls, 'docs-fetch')).toEqual([['docs-fetch', '--project', 'demo']]);
+  });
+});
+
+describe('T7: a project named like an Object.prototype key is an ordinary project to every map (W2 review: L0 admits __proto__)', () => {
+  it.each(['__proto__', 'constructor'])('%s: its tree, a committed file from ccd then from the cache, and a refresh', async (project) => {
+    const blob = 'b'.repeat(40);
+    const bytes = Buffer.from('# a', 'utf8');
+    const pin = {
+      kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
+    } as const;
+    const rec = scripted((argv) => {
+      if (argv[0] === 'docs-tree') {
+        return okRes(line(treeOk({ project, entries: [committedEntry('a.md', blob, bytes.byteLength)] })));
+      }
+      if (argv[0] === 'docs-show') return okRes(showLine(pin, bytes, { blob }));
+      if (argv[0] === 'docs-fetch') return okRes(line(fetchOk()));
+      return faultRes();
+    });
+    const { app } = await open({ run: rec.run });
+    const file = `/api/docs/${project}/file?${COMMITTED_Q}`;
+    expect((await app.inject({ url: `/api/docs/${project}/tree`, headers: PWA_HEADERS })).statusCode).toBe(200);
+    expect((await app.inject({ url: file, headers: PWA_HEADERS })).json()).toMatchObject({ ok: true, from: 'ccd' });
+    expect((await app.inject({ url: file, headers: PWA_HEADERS })).json()).toMatchObject({ ok: true, from: 'cache' });
+    const res = await refresh(app, null, 'auto', project);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, fetch: { state: 'ran' }, tree: { ok: true } });
+    expect(rec.calls.map((argv) => argv.slice(0, 3))).toEqual([
+      ['docs-tree', '--project', project], ['docs-show', '--project', project], ['docs-fetch', '--project', project],
+      ['docs-tree', '--project', project],
+    ]);
+    expect(Object.keys(Object.prototype)).toEqual([]);
+  });
+});
+
+describe("T7: an agent that grants no docs verb: every route carries the adapter's not-granted (W2 review: its gate row ran on tree only)", () => {
+  /** The agent's refusal of an argv its whitelist lacks, as the link carries it (both halves unmeasured): the word
+   *  `docs-source.test.ts`'s `agentRefusalWord()` reads from `agent/src/server.ts`. */
+  const refusal = (): CcdResult =>
+    ({ ok: false, stdout: '', stderr: 'forbidden', killed: UNMEASURED, signal: UNMEASURED });
+
+  it.each([
+    ['projects', '/api/docs/projects'],
+    ['tree', '/api/docs/demo/tree'],
+    ['a committed file', fileUrl(COMMITTED_Q)],
+    ['a draft file', fileUrl(DRAFT_Q)],
+  ])('%s: 501 not-granted, the body verbatim, no Retry-After, after exactly one exec', async (_what, url) => {
+    const rec = scripted(() => refusal());
+    const { app } = await open({ run: rec.run });
+    const res = await app.inject({ url, headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toStrictEqual(word('not-granted'));
+    expect(res.headers['retry-after']).toBeUndefined();
+    expect(rec.calls).toHaveLength(1);
+  });
+
+  it('the refresh: the agent refused an exec it was sent, not a pre-exec word, so both halves carry it in the 200', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const rec = scripted(() => refusal());
+    const { app } = await open({ run: rec.run });
+    const res = await refresh(app, null);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toStrictEqual({
+      ok: true, fetch: { state: 'failed', failure: word('not-granted') }, tree: word('not-granted'),
+    });
+    expect(rec.calls.map((argv) => argv[0])).toEqual(['docs-fetch', 'docs-tree']);
+  });
+});
+
+describe('T7: an index flight begun before a refresh\'s fetch neither answers a later GET nor fills the micro-cache (section 6.5: "dropped by any refresh")', () => {
+  it('a projects GET issued after the refresh never joins the index flight begun before its fetch: a second docs-index', async () => {
+    const ix = blocker<CcdResult>();
+    const rec = fleet({ index: () => ix.exec() });
+    const { app } = await open({ run: rec.run });
+    const projects = () => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    const before = projects();
+    await until(() => ix.started() === 1, 'the index flight in flight');
+    expect((await refresh(app, null)).statusCode).toBe(200);
+    const after = projects();
+    await until(() => ix.started() === 2, 'a second docs-index for the GET issued after the refresh', 2000);
+    ix.release(1, okRes(line(indexOk({ unlisted: 2 }))));
+    ix.release(0, okRes(line(indexOk({ unlisted: 1 }))));
+    expect((await before).json().index.unlisted).toBe(1);
+    expect((await after).json()).toMatchObject({ cacheAgeMs: null, index: { unlisted: 2 } });
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(2);
+  });
+
+  it('an index answered after the refresh settled is served to its own GET but never cached: the next GET execs again', async () => {
+    const ix = blocker<CcdResult>();
+    const rec = fleet({ index: () => ix.exec() });
+    const { app } = await open({ run: rec.run });
+    const projects = () => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    const before = projects();
+    await until(() => ix.started() === 1, 'the index flight in flight');
+    expect((await refresh(app, null)).statusCode).toBe(200);
+    ix.release(0, okRes(line(indexOk({ unlisted: 1 }))));
+    expect((await before).json()).toMatchObject({ cacheAgeMs: null, index: { unlisted: 1 } });
+    const next = projects();
+    await until(() => ix.started() === 2, 'the next GET execs: the pre-fetch index was not cached', 2000);
+    ix.release(1, okRes(line(indexOk({ unlisted: 2 }))));
+    expect((await next).json()).toMatchObject({ cacheAgeMs: null, index: { unlisted: 2 } });
+    const cached = (await projects()).json();
+    expect(cached.cacheAgeMs).not.toBeNull();
+    expect(cached.index.unlisted).toBe(2);
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(2);
+  });
+});
+
+describe('T7: the index micro-cache is dropped by a refresh, when its fetch settles and again when it completes (section 6.4; refinement (m))', () => {
+  it('projects GET (exec), projects GET (0 execs), refresh, projects GET (exec again)', async () => {
+    const rec = fleet();
+    const { app } = await open({ run: rec.run });
+    const projects = () => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    expect((await projects()).json().cacheAgeMs).toBeNull();
+    expect((await projects()).json().cacheAgeMs).not.toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(1);
+    expect((await refresh(app, null)).statusCode).toBe(200);
+    expect((await projects()).json().cacheAgeMs).toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(2);
+  });
+
+  it('dropped when the fetch settles (an index GET during the tree half execs) and again when the refresh completes', async () => {
+    const t = blocker<CcdResult>();
+    const rec = fleet({ tree: () => t.exec() });
+    const { app } = await open({ run: rec.run });
+    const projects = () => app.inject({ url: '/api/docs/projects', headers: PWA_HEADERS });
+    await projects();
+    const refreshed = refresh(app, null);
+    await until(() => t.started() === 1, 'the tree half in flight');
+    expect((await projects()).json().cacheAgeMs).toBeNull();
+    expect((await projects()).json().cacheAgeMs).not.toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(2);
+    t.release(0, okRes(line(treeOk())));
+    expect((await refreshed).statusCode).toBe(200);
+    expect((await projects()).json().cacheAgeMs).toBeNull();
+    expect(verb(rec.calls, 'docs-index')).toHaveLength(3);
   });
 });

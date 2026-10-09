@@ -8,7 +8,7 @@ import type { CcdResult, CcdRunner } from '../src/lifecycle.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from '../src/docs/hooks.js';
 import type { DocsReadLane } from '../src/docs/lane.js';
 import {
-  composeDocs, registerDocsReadRoutes, type DocsComposition, type DocsNodeLanes,
+  composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute, type DocsComposition, type DocsNodeLanes,
 } from '../src/docs/routes.js';
 import {
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, type DocPin, type DocsEntry, type DocsIndexOk, type DocsTreeOk,
@@ -182,6 +182,7 @@ export async function docsApp(o: {
     installDocsRequestPolicy(app, o.nowMs);
     installDocsResponsePolicy(app);
     registerDocsReadRoutes(app, docs.readers, docs.lanes);
+    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
   });
   return { app, state, docs };
 }
