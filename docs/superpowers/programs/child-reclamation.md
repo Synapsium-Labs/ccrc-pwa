@@ -47,6 +47,12 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-09 06:42 — wave 7 resumed.** Clear-summit's pane was answered around 06:2x, nine hours after it asked. It acked
+  ruling 4060 and re-took its lapsed claims as 1125 and 1126, with no conflict. It answered keen-hollow's claim note
+  from the consent in 4052. Its Task 3 implementer is applying the lock-the-read ruling, and Task 4's first part
+  reviewed clean. Two pushes reached the operator meanwhile (about 00:00 and 02:38), and this coordinator sent the
+  worker no mail after 4060.
+
 - **2026-10-09 00:54 — why wave 7's question was invisible, measured by the stall-watch programme (calm-harbor's 4064; its
   ledger R32).**
   - **The cause.** A background subagent's tool events erased the ask. `ccd/session-hook.sh` writes `working` and
