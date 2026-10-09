@@ -226,9 +226,10 @@ These are the inputs most likely to break the plan's synthetic fixtures. Each on
      - **Task 6**: the first sweep case, whose served line is planted after `STANDING` (mutant `W1-e: the served line read only at a line start`);
      - **Task 9**: `with standing cards present the compact positional still begins with the line`.
    - B2's CLI pasted-line path is unchanged; the PR body's distortions list notes it (Task 14).
-4. **recall-off parity between the hook and the CLI.** The rows: `recall-off/<id>` unreadable (mode 000), a directory or a symlink; content with a trailing LF or surrounding spaces; 130 spaces followed by the resolved generation; `CCRC_SESSION_GENERATION` malformed while `$REG/<id>.generation` holds the assigned UUID; `.generation` unreadable or symlinked; and, under coordinator ruling R-recalloff-parity, neither readable: an invalid env generation with an unreadable or absent `.generation` while `recall-off/<id>` holds the id's newest family's G (the CLI exits 8), an empty recall-off file against a legacy or a G newest family, no generation recorded at all, and a linked or malformed record.
+4. **recall-off parity between the hook and the CLI.** The rows: `recall-off/<id>` unreadable (mode 000), a directory or a symlink; content with a trailing LF or surrounding spaces; 130 spaces followed by the resolved generation; `CCRC_SESSION_GENERATION` malformed while `$REG/<id>.generation` holds the assigned UUID; `.generation` unreadable or symlinked; and, under coordinator ruling R-recalloff-parity, neither readable: an invalid env generation with an unreadable or absent `.generation` while `recall-off/<id>` holds the id's newest family's G (the CLI exits 8), an empty recall-off file against a legacy or a G newest family, no generation recorded at all, and a linked or malformed record; and, under coordinator ruling R-recalloff-trim (the final check's R1), a no-break space (U+00A0) or a byte-order mark (U+FEFF) before the resolved generation G.
    - Expected: for every row the hook serves the line if and only if the CLI recalls (`decideRecallOff` answers `none` or `stale`) over the generation the CLI resolves: the env's, else the registry's (lib `resolveGeneration`), else, under `'newest'`, the id's newest family's (`''` for a legacy family or none), never `resolveGeneration(…).value ?? ''`. The hook cannot read the store, so under `'newest'` it reads the record the sweep writes beside the prediction, `card/<id>/<psid>.gen` (Task 5, by the CLI's rule; Task 2's `decideCardGenFile`), and with no usable record a recall-off file that exists withholds the line (fail closed). The hook reads `recall-off/<id>` with one bounded builtin read of `CCRC_ID_MAX` (128) characters, `_ct_read`'s width, and a read that fills that window is OFF before it is trimmed or compared (ruling RC4: fail closed). `.generation` and the record are read through `_ct_read` (rc 0 read, 1 absent, 2 unmeasurable), never through a link.
-   - Owning tasks: **Task 9**, `C19/C68 (card half), recall-off parity: %s` (27 rows, each expectation computed by B2's own `decideRecallOff` and `resolveGeneration` and, under `'newest'`, the fixture's record standing for the store's newest family) with `CONTROL: the parity table reaches every answer, so it cannot pass by serving always or never`; mutants `T9-M5` to `T9-M8`, `T9-M26-recall-off-equality`, `T9-M30-recall-off-window` and `T9-M34` to `T9-M38`. **Task 5**, `the generation record: …`, which measures the sweep's record against B2's `familiesOf` (the CLI's own newest-family read) and holds a prediction whose record cannot be written; **Task 2**, `decideCardGenFile`'s table (a stale record never stands beside a prediction).
+   - The one deliberate asymmetry (coordinator ruling R-recalloff-trim): the hook trims `recall-off/<id>` of ASCII whitespace only (space, tab, LF, VT, FF, CR, in every locale), where B2's `presenceOf` and `decideRecallOff` trim with JS `String.prototype.trim`, which also strips U+00A0, U+FEFF and the Unicode spaces. So a value that, after the hook's trim, holds any character outside the generation grammar (empty, or `[0-9a-f-]`) withholds the line, whatever the CLI answers. It is in the safe direction: the hook withholds where the CLI may recall (a no-break space before another generation), and never serves where the CLI answers exit 8 (a no-break space before this one).
+   - Owning tasks: **Task 9**, `C19/C68 (card half), recall-off parity: %s` (29 rows, each expectation computed by B2's own `decideRecallOff` and `resolveGeneration` and, under `'newest'`, the fixture's record standing for the store's newest family) with `CONTROL: the parity table reaches every answer, so it cannot pass by serving always or never`; mutants `T9-M5` to `T9-M8`, `T9-M26-recall-off-equality`, `T9-M30-recall-off-window`, `T9-M34` to `T9-M38` and `T9-M39-recall-off-grammar`. **Task 5**, `the generation record: …`, which measures the sweep's record against B2's `familiesOf` (the CLI's own newest-family read) and holds a prediction whose record cannot be written, and `a record that cannot be written beside a kept prediction …` (coordinator ruling R-recalloff-keep, the final check's R2), which removes the kept prediction too; **Task 2**, `decideCardGenFile`'s table (a stale record never stands beside a prediction).
    - Ruled RC4: the CLI keeps 4,096 bytes where the hook reads 128 characters, so a file a hand edit pads past character 128 is OFF in the hook. With this generation after the padding the CLI answers exit 8 too (the new parity row). With anything else after the padding (another generation, or text where no generation resolves) the hook withholds a line the CLI's stale answer would not: the side the ruling accepts.
 5. **Prediction parity with derivation.** The cases: the first compaction of an epoch (span start = the holding copy's first stored row under B2's `copyRows` filter); later compactions (`head_uuid ?? uuid` of the copy's previous boundary); several live copies of one transcript after a swap carry; a leaf not yet final in the run; the 8th leaf of a run in one holding copy; a plain id already bound to another boundary (two copies of one transcript compacted after one head, §6.1's fork); a spooled SessionStart(fork) under a fresh sid, whose copy holds the parent's copied rows and boundary (ruled Q16).
    - Expected: after the compaction lands and `derive.mjs` mints its leaf, the derived leaf id starts with the printed `L` prefix. For the 8th leaf, the derived depth-1 parent starts with the printed `N` prefix: the slot list comes from `derive.mjs`'s exported reader, and the span formula from `planSpans` itself. A fork-qualified next leaf writes no file (`card_skipped:fork-qualified`). A fork skip still carries the plain id the next leaf would have had, so a prediction consumed just before a fork skip is still counted `card_consumed:<scope>`. A spooled fork's next span starts at the head of the last boundary its copy holds, the parent's copied one included, exactly where derivation starts it, and its prediction replaces the parent's.
@@ -1867,7 +1868,7 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
   - Test helpers: B1 `historyHelpers.ts` `makeHistoryBox(prefix, { role? })`, `runSweep(box, args?, { env? })`, `runDriver(box, deps)` (B2 Task 25's `budgetBytes` among its deps), `plantSession`, `plantTranscript`, `spoolLine`, `openStoreRO`, `counters`, `skipOnDarwin`, `type HistoryBox`; the statfs preload's `HISTORY_TEST_STATFS=<bavail>:<size>` (every spawn carries the preload); B1 lib `floorThreshold(fsSizeBytes)` and `historyPaths(home).writer` and `.storeId`; B2 `recoverRow(box)`; B1/B2 `historyFixtures.ts` `compactionSequence`, `userRow`, `type Row`.
 - Produces:
   - `card.mjs`: `export function ensureHistoryDirs(db: DatabaseSync, home: string): { scope: 'made' | 'present' | 'refused'; card: 'made' | 'present' | 'refused' }`; `export function consumeAndWriteCards(db, ictx, budget): { written: number; consumed: number; deleted: number }`; `export function cardStep(db, ictx, budget): { measure: object | null; cards: object | null }` (Task 6 fills `measure`); `export function withdrawCards(db: DatabaseSync | null, home: string, pass: CardPassFacts, out: (line: string) => void): number`.
-  - Counters: `card_written`, `card_consumed:<main|other|unknown>` (W1-e's denominator by scope, ruling RC3), `card_withdrawn:<reason>` (a `CARD_WITHDRAW_REASONS` word, ruling RC2), `card_skipped:<reason>` (a write due at end-of-file that the prediction refused; `fork-qualified` in practice), `card_dir_refused`, `card_write_failed`, `card_cleanup_failed` (the id's other predictions could not all be removed after a write that landed), `history_dir_refused:<scope|card>`. A hold with no DB open prints `history-sweep: card_withdrawn:<reason> <n>` instead, after its own word.
+  - Counters: `card_written`, `card_consumed:<main|other|unknown>` (W1-e's denominator by scope, ruling RC3), `card_withdrawn:<reason>` (a `CARD_WITHDRAW_REASONS` word, ruling RC2), `card_skipped:<reason>` (a write due at end-of-file that the prediction refused; `fork-qualified` in practice), `card_dir_refused`, `card_write_failed`, `card_unrecorded_removed` (a prediction on disk removed because its generation record was due and could not be written or removed; coordinator ruling R-recalloff-keep), `card_cleanup_failed` (the id's other predictions could not all be removed after a write that landed), `history_dir_refused:<scope|card>`. A hold with no DB open prints `history-sweep: card_withdrawn:<reason> <n>` instead, after its own word.
   - `sweep.mjs`: `import { cardStep, ensureHistoryDirs, withdrawCards } from './card.mjs';`; `makeIngestCtx`'s object gains `readRegPresence`; in `tick`, `if (ctx.ingest && !(ing !== null && ing.paused)) cardStep(db, ictx, ctx.budget);` with `withdrawCards(db, ctx.home, cardPass, ctx.out);` below it, and `ensureHistoryDirs(db, ctx.home);`; `tick`'s doc comment items `cardStep`, `withdrawCards` and `ensureHistoryDirs`; `withdrawCards` in `holdPass`, on the writer-token hold and for every `planRun` arm that is not `run`.
   - `history-lib.test.ts`: the `RINGS` row `'card.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },`.
   - `history-card.test.ts` module scope: `CARD_SLUG`, `CARD_GEN`, `T0C`, `FS_C`, `FLOOR_C`, `sidC`, `SeqC`, `cutBefore`, `firstUuidC`, `plantC`, `passC`, `settleC`, `pokeC`, `appendRows`, `cardPath`, `cardOf`, `qC`, `leavesC`, `childrenC`, `familyC`, `consumedC`, `expectedCard`, `printed` (Tasks 6 and 7 reuse them).
@@ -1878,7 +1879,7 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
 - §6.4's `card.mjs` row (W1-B3): this task creates `ccd/history/card.mjs`, an L4 module importing `node:fs`, `./lib.mjs`, `./store.mjs` and `./derive.mjs` only (never `node:sqlite`, `./sweep.mjs` or `./cli.mjs`, as its `RINGS` row pins), and `sweep.mjs` gains one import, `./card.mjs`, which §6.4's `sweep.mjs` row admits as `{ cardStep, collectPurgedHistoryFiles, ensureHistoryDirs, withdrawCards }` (this task imports `{ cardStep, ensureHistoryDirs, withdrawCards }`, Steps 5 and 6; Task 7 adds the collector). `card.mjs` keeps the card's measure, its writes and its collector out of a module that is already the writer's whole tick, as B2's `derive.mjs` keeps derivation out; every decision is still lib's, and the sweep still runs every step, so §9.2's order and §9.4's writer hold through it.
 - §8.6 Timing: the file is written only when the transcript's cursor is at end-of-file, and deleted when the indexer ingests the boundary that consumed it; §9.2 step 6 (derive; measure delivery; then write `card/` files temp-then-rename; under the tick's budget, never on the recover arm, which never ticks); §5.1 S4 (the hook never makes a directory); §5.2; §9.6 (card files 0600, history directories 0700); §9.4 `history-card-files`; §5.1 (the scope marker the consumption's scope is read from); §9.3 and §9.14 (the pauses and holds a withdrawal follows).
 - Rulings: RC2 (fail closed: every pass that runs no card step withdraws every prediction; the budget bounds a write, never the consume/delete decision) and RC3 (each consumption counted by the scope marker its compaction left).
-- Pins: this task's plan pins (parity with derivation for the first compaction, the 8th leaf and the newest condensed fallback; a not-final slot names no parent; the fork skip, and a consumption just before one still counted; a spooled fork's epoch predicted from the parent's boundary its copy holds, its prediction replacing the parent's (ruled Q16); the end-of-file gate with a consumption off end-of-file; the file's text, mode, one-per-id and the symlink refusal; registry-named sessions only; a write failure counted, never fatal, and leaving no temp (a CONTROL on B1's `writeFileAtomic`, which removes its own temp on a failure before the rename); a failed cleanup counted apart from the write; the two directories made 0700 by a bound store's first tick and by nothing else; a consumption counted `main`, `other` or `unknown` by its compaction's marker, never through a link; every prediction withdrawn, never through a link, under a floor pause, on the recover arm, under a spent budget after the consume and delete ran, on a writer-token hold and on a refused store with no DB open).
+- Pins: this task's plan pins (parity with derivation for the first compaction, the 8th leaf and the newest condensed fallback; a not-final slot names no parent; the fork skip, and a consumption just before one still counted; a spooled fork's epoch predicted from the parent's boundary its copy holds, its prediction replacing the parent's (ruled Q16); the end-of-file gate with a consumption off end-of-file; the file's text, mode, one-per-id and the symlink refusal; registry-named sessions only; a write failure counted, never fatal, and leaving no temp (a CONTROL on B1's `writeFileAtomic`, which removes its own temp on a failure before the rename); a failed cleanup counted apart from the write; a generation record that was due and could not be written or removed takes the kept prediction with it, at end-of-file and off it (coordinator ruling R-recalloff-keep); the two directories made 0700 by a bound store's first tick and by nothing else; a consumption counted `main`, `other` or `unknown` by its compaction's marker, never through a link; every prediction withdrawn, never through a link, under a floor pause, on the recover arm, under a spent budget after the consume and delete ran, on a writer-token hold and on a refused store with no DB open).
 - Departures:
   - B1's D-4224 (`history-tick-order`) (the card step's place: after the leaves and parents, under their gate).
   - ⟦D:history-card-dirs-made-by-sweep⟧ (NEW): the spec says the hook never makes `scope/`, which it writes, and never says who does; the sweep makes both directories at every bound store's tick, so the hook's marker and the render reserve arm within one tick of `ccrc update` and never on a box without history.
@@ -1889,6 +1890,7 @@ git commit -m "refactor(history): export derive.mjs's holding copy and per-copy 
   - ⟦D:history-card-withdrawn-when-not-ticking⟧ (NEW, ruled RC2): a scheduled pass that runs but does not run the card step over a caught-up ingest withdraws every `card/<id>/<uuid>.txt`, counted `card_withdrawn:<reason>` (lib `decideCardWithdraw` decides; this task measures and unlinks). In `consumeAndWriteCards` the budget is checked only before a write.
   - ⟦D:history-fork-spooled⟧ (B2-defined, ruled Q16): consumed by the spooled-fork case only. No B3 code reads an epoch's cause.
 - Coordinator ruling R-recalloff-parity (spec §9.7, §8.2, C68): the sweep, which can read the store, records beside each prediction the generation the CLI resolves for the id when neither the env nor the registry names one, by the CLI's own rule, so the hook can agree with the CLI there. The record is the ruling's own mechanism, not a departure; spec §8.6, §9.4's `history-card-files` row and §9.7 carry it once the coordinator folds the ruling into the spec.
+- Coordinator ruling R-recalloff-keep (the final check's R2; spec §8.6's "It never leaves a stale record beside a standing prediction"): when the record was due (`write` or `delete`) and that act fails, `oneCard`'s catch unlinks `<uuid>.txt` too, counted `card_unrecorded_removed`. The ruling names the `keep` arm; this task applies it to the `write` arm over an existing prediction as well, the same hazard (Step 5's notes).
 
 **Choices this task makes:**
 - **The record's query is spelled here, and pinned against the CLI's.** `card.mjs` may not import `recall.mjs` (§6.4's `card.mjs` row: lib, store, `derive.mjs`, `node:fs`), so `cardStmts`' `newestFamily` spells B2's `NEWEST_FAMILY_SQL` order (`merged_into IS NULL`, `first_seen_ms DESC, session_pk DESC`). The case `the generation record: …` compares the record with B2's exported `familiesOf` over the same store at three states (the planted family, a newer family, a legacy newest family), so a drift between the two spellings reds a case rather than splitting the eval's arms. A restore or rebuild that swaps the store between ticks leaves the record as stale as the prediction beside it until the next card step; both are rewritten there.
@@ -2354,6 +2356,52 @@ describe('the sweep writes and consumes card/<id>/<uuid>.txt at end-of-file (spe
     expect(cardOf(box, ID, U), 'no prediction beside a record that could not be written').toBeNull();
   }, 240_000);
 
+  // R-recalloff-keep (the final check's R2): a record that is due beside a prediction that STANDS (kept, its line
+  // unchanged) and cannot be acted on takes the prediction with it. A directory at the record's name is unreadable,
+  // so the record is due: rewritten at end-of-file (writeFileAtomic's rename refuses a directory) and removed off it
+  // (unlink refuses a directory), and both fail, while the prediction's own unlink succeeds: the ENOSPC shape, where
+  // a write fails and an unlink does not. Root meets the same two refusals, so the case runs as root too. Off
+  // end-of-file is a torn last line, as in the end-of-file gate case: the pass reads to it and stops short.
+  it('a record that cannot be written or removed beside a kept prediction removes the prediction too, counted card_unrecorded_removed, at end-of-file and off it', () => {
+    const box = makeHistoryBox('ccrc-hist-card-genkeep-');
+    const [ID, U] = ['card-genkeep', sidC(0xf20)];
+    const p = plantC(box, ID, U, compactionSequence({ n: 1, trigger: 'manual', seed: 0xf20, sessionId: U, startMs: T0C }).rows);
+    settleC(box);
+    pokeC(box, ID);
+    const genPath = path.join(box.root, 'card', ID, `${U}.gen`);
+    const line = cardOf(box, ID, U);
+    expect(line, 'CONTROL: a prediction stands').not.toBeNull();
+    expect(fs.readFileSync(genPath, 'utf8'), 'CONTROL: its record stands').toBe(`${CARD_GEN}\n`);
+    const removed = (): number => counters(box)['card_unrecorded_removed'] ?? 0;
+    const failed = (): number => counters(box)['card_write_failed'] ?? 0;
+    const blockRecord = (): void => { fs.rmSync(genPath, { recursive: true, force: true }); fs.mkdirSync(genPath); };
+    // At end-of-file: the prediction is kept, and its record is due for a rewrite that fails.
+    blockRecord();
+    let [r0, f0] = [removed(), failed()];
+    pokeC(box, ID);
+    expect(failed(), 'at end-of-file: the record write failed').toBe(f0 + 1);
+    expect(cardOf(box, ID, U), 'at end-of-file: no prediction left beside the record').toBeNull();
+    expect(removed(), 'at end-of-file: counted').toBe(r0 + 1);
+    // CONTROL: the record unblocked, the same pass shape writes both back, and nothing is removed.
+    fs.rmSync(genPath, { recursive: true });
+    [r0, f0] = [removed(), failed()];
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'CONTROL: the prediction is written back').toBe(line);
+    expect(fs.readFileSync(genPath, 'utf8'), 'CONTROL: and its record').toBe(`${CARD_GEN}\n`);
+    expect([removed(), failed()], 'CONTROL: nothing failed, nothing removed').toEqual([r0, f0]);
+    // Off end-of-file (a torn last line): CONTROL first, a healthy record keeps both.
+    fs.appendFileSync(p, JSON.stringify(userRow({ uuid: sidC(0xbf20), ts: new Date(T0C + 3_600_000).toISOString(), sessionId: U, text: 'still being written' })));
+    pokeC(box, ID);
+    expect(cardOf(box, ID, U), 'CONTROL: off end-of-file a recorded prediction is kept').toBe(line);
+    // Then the record is due for a removal that fails.
+    blockRecord();
+    [r0, f0] = [removed(), failed()];
+    pokeC(box, ID);
+    expect(failed(), 'off end-of-file: the record removal failed').toBe(f0 + 1);
+    expect(cardOf(box, ID, U), 'off end-of-file: no prediction left beside the record').toBeNull();
+    expect(removed(), 'off end-of-file: counted').toBe(r0 + 1);
+  }, 240_000);
+
   it('scope/ and card/ are made 0700 by a bound store\'s first tick, and by nothing else: not on a server-role box, not under history-off, not when the store is refused', () => {
     const box = makeHistoryBox('ccrc-hist-card-dirs-');
     passC(box);
@@ -2537,7 +2585,7 @@ Notes:
 (cd server && ./node_modules/.bin/vitest run test/history-card.test.ts -t 'writes and consumes')
 ```
 
-Expected: 18 failed (17 as root, where the write-failure case is skipped). The generation-record case fails at `CONTROL: a prediction stands` (`expected null not to be null`). The prediction cases fail at their first `cardOf(…)` with `expected null to be 'History: node L…'` (no tick writes a card yet), the fork-consumed case among them (`the first prediction, before any boundary`) and the spooled-fork case (`CONTROL: the parent's prediction`); the fork case at `card_skipped:fork-qualified` (`expected undefined to be greater than or equal to 1`); the end-of-file and registry cases at their first written card; the file case at `expect(cardOf(box, ID, U1)).not.toBeNull()`; the dirs case with `ENOENT … scope` from `fs.statSync`; the write-failure and temp cases at `card_write_failed` (`expected undefined to be greater than or equal to 1`: the case makes `card/` itself, so its own mkdir cannot fail first); the recovery, floor, budget, hold and scope cases at their first CONTROL that a prediction exists (`expected null not to be null`).
+Expected: 19 failed (18 as root, where the write-failure case is skipped). The generation-record case and the kept-prediction record case (`a record that cannot be written or removed beside a kept prediction …`, coordinator ruling R-recalloff-keep) fail at `CONTROL: a prediction stands` (`expected null not to be null`). The prediction cases fail at their first `cardOf(…)` with `expected null to be 'History: node L…'` (no tick writes a card yet), the fork-consumed case among them (`the first prediction, before any boundary`) and the spooled-fork case (`CONTROL: the parent's prediction`); the fork case at `card_skipped:fork-qualified` (`expected undefined to be greater than or equal to 1`); the end-of-file and registry cases at their first written card; the file case at `expect(cardOf(box, ID, U1)).not.toBeNull()`; the dirs case with `ENOENT … scope` from `fs.statSync`; the write-failure and temp cases at `card_write_failed` (`expected undefined to be greater than or equal to 1`: the case makes `card/` itself, so its own mkdir cannot fail first); the recovery, floor, budget, hold and scope cases at their first CONTROL that a prediction exists (`expected null not to be null`).
 
 The fork-consumed and temp cases were written for this plan and not run on a prototype, unlike the others, and so were the floor, budget, hold and scope cases that rulings RC2 and RC3 added. If one of them reds after Step 6 at one of its CONTROL lines or at a fixture step, the fixture missed its shape (the copies' order, a directory where the fixture expects a file, a step before the ingest that spent the one byte of budget, a hold word the merged B1 spells otherwise): fix the fixture, never the rule, and say so in the task report. The spooled-fork case, which ruling Q16 added, was not run on a prototype either, and it also needs B2 Task 34, the fork spooling. A red at its epoch CONTROL means B2 merged that task otherwise (another cause word, or a fork confirmed by another route): read B2's merged `decideEpochLine` and its DM48 case, fit the fixture to them, and report it.
 
@@ -2560,8 +2608,9 @@ The fork-consumed and temp cases were written for this plan and not run on a pro
 // id when neither the env nor the registry names one (its newest family's, '' for a legacy family or none) and one
 // LF, which the hook compares recall-off/<id> with then, because the hook cannot read the store (coordinator ruling
 // R-recalloff-parity; lib decideCardGenFile); and the scope/ directory the hook writes its markers into, because the
-// hook never makes a directory (S4). What it removes: a consumed prediction, and every prediction on a pass that runs no card
-// step (withdrawCards; ruling RC2, fail closed), each an unlink that never goes through a link. What it only reads:
+// hook never makes a directory (S4). What it removes: a consumed prediction, every prediction on a pass that runs no card
+// step (withdrawCards; ruling RC2, fail closed), and a prediction whose record was due and could not be written or
+// removed (coordinator ruling R-recalloff-keep), each an unlink that never goes through a link. What it only reads:
 // scope/<id>, to count each consumption by its compaction's scope (ruling RC3). Nothing here journals: a prediction is
 // derived again at the next end-of-file after any rebuild. A write that fails is counted and never ends the tick.
 import {
@@ -2790,7 +2839,10 @@ function consumedScopeOf(s, home, id, uuid, current, copy, ccrcId) {
  *  its compaction's marker gives it (ruling RC3). ⟦D:history-card-consumed-counter⟧
  *  The generation record beside a standing prediction is acted on FIRST, as lib decideCardGenFile says, so a
  *  prediction never lands beside a missing or stale record: a record that cannot be written holds the prediction's
- *  write too, counted card_write_failed (coordinator ruling R-recalloff-parity). */
+ *  write too, counted card_write_failed (coordinator ruling R-recalloff-parity). A record that was due (written or
+ *  removed) and could not be acted on, beside a prediction already on disk, takes that prediction with it, counted
+ *  card_unrecorded_removed (coordinator ruling R-recalloff-keep): an unlink succeeds where a write meets ENOSPC or
+ *  EDQUOT, so no prediction stands beside a stale record until its boundary consumes it. */
 function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
   const { copy, ccrcId, prediction } = predict(db, s, id, uuid);
   const atEof = registered && copy !== null && copy.eof_ms !== null && Number(copy.eof_ms) === ictx.nowMs;
@@ -2810,10 +2862,12 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
   const g = decideCardGenFile({
     current: dirKind === 'absent' ? { state: 'absent' } : readCard(genFile), generation: gen, card: d.act, mayWrite,
   });
+  let recorded = g !== 'write' && g !== 'delete';
   try {
     if (dirKind === 'absent' && d.act === 'write') mkdirSync(dir, { mode: 0o700 });
     if (g === 'write') writeFileAtomic(genFile, `${gen}\n`, 0o600);
     if (g === 'delete') unlinkSync(genFile);
+    recorded = true;
     if (d.act === 'write') {
       writeFileAtomic(file, `${prediction.line}\n`, 0o600);
     } else if (d.act === 'delete') {
@@ -2823,6 +2877,15 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
     // writeFileAtomic removes its own `<file>.tmp.<pid>` on any failure before the rename, so nothing is left here to
     // unlink; a temp a KILLED writer left is removeOtherCards' (its `.tmp.<pid>` arm) at the id's next write.
     bump(db, 'card_write_failed');
+    // The record was due and is not acted on: the prediction on disk, if one stands (a kept one, or the one a write
+    // was to replace), goes too, so the hook never compares recall-off with a stale record (R-recalloff-keep). An
+    // absent prediction fails this unlink with ENOENT and is not counted.
+    if (!recorded) {
+      try {
+        unlinkSync(file);
+        bump(db, 'card_unrecorded_removed');
+      } catch { /* none stands, or it cannot be removed either: the next tick decides both again */ }
+    }
     return;
   }
   if (d.act === 'write') {
@@ -2904,7 +2967,8 @@ export function withdrawCards(db, home, pass, out) {
 Notes:
 - `cardIdsIn`, `cardWindowComplete`, `decideCardDelivery`, `decidePurgedEntry`, `eofAfterBoundary`, `producerOf`, `CARD_MEASURE_ROWS`, `CARD_ATTACHMENT_MAX_BYTES`, `getStep`, `setStep`, `unbrotli`, `withTx`, `holdingCopyOf` and `rmdirSync` are imported here once and first used by Tasks 6 and 7, which append to this file; an unused import is harmless in an ES module.
 - `card.mjs` reads no `process.env` (B1's allow-list pin over `ccd/history/*.mjs` holds), declares none of the O14 vocabularies, spells no `/history-off` (history-off reaches it as `ictx.historyOff()`), never spells `.ccrc/history/db`, and has no `SELECT *`.
-- The temp name `<file>.tmp.<pid>` is B1's `writeFileAtomic`'s own (`const tmp = `${path}.tmp.${process.pid}`;` in `store.mjs`), and so is its cleanup: `writeFileAtomic` removes any entry at that name first, and in its `finally` removes the temp on every failure before the rename (its doc comment: "a failure before the rename removes the temp"). So `oneCard`'s catch only counts `card_write_failed`; a second unlink there would be a guard nothing can trip. A temp that a KILLED writer left, which no `finally` reaches, is matched by `removeOtherCards`' `\.tmp\.[0-9]+` arm and unlinked at the id's next write. Step 1 measures the name.
+- The temp name `<file>.tmp.<pid>` is B1's `writeFileAtomic`'s own (`const tmp = `${path}.tmp.${process.pid}`;` in `store.mjs`), and so is its cleanup: `writeFileAtomic` removes any entry at that name first, and in its `finally` removes the temp on every failure before the rename (its doc comment: "a failure before the rename removes the temp"). So `oneCard`'s catch unlinks no temp: a second unlink of it there would be a guard nothing can trip. The one unlink the catch does make is the prediction's own, when its record was due and failed (coordinator ruling R-recalloff-keep, the next note). A temp that a KILLED writer left, which no `finally` reaches, is matched by `removeOtherCards`' `\.tmp\.[0-9]+` arm and unlinked at the id's next write. Step 1 measures the name.
+- A record that was due and failed takes the prediction on disk with it (coordinator ruling R-recalloff-keep, the final check's R2). `decideCardGenFile` answers `write` or `delete` only while a prediction stands (`decideCardFile`'s `keep` or `write`), so `recorded` is false exactly when that record act, or the `mkdir` before it, threw. The prediction a `keep` leaves, or the older one a `write` was to replace, would otherwise stand beside a stale record, against Task 2's contract (a stale record never stands beside a prediction), and the hook would compare `recall-off/<id>` with the old generation on every tick until the boundary consumed it. The finding's trigger is ENOSPC on the home volume, where the floor probe measures `db/` and §9.3 lets `db/` live on another volume; an unlink succeeds under ENOSPC and EDQUOT. The ruling names the `keep` arm; the `write` arm over an existing file is the same hazard (the gen-record case's newer family, had its record write failed, leaves the older line beside the older record), so this one test covers both. An absent prediction fails the unlink with ENOENT, uncounted, which is why no `current.state` test precedes it: such a test would change no outcome. The case `a record that cannot be written or removed beside a kept prediction …` measures both of the record's acts, and the mutant `R-recalloff-keep: a kept prediction left beside a failed record` reds it.
 - A busy store throws out of `bump` or `writeFileAtomic`'s neighbours exactly as it does out of `deriveNodes`: the sweep is the only writer under its lock, so busy is a test's injection, and the pass handles it where it handles derivation's. A tick that meets the lock returns before the card step and before its withdrawal; that residual is named in the PR body (Task 14).
 - Ruling RC2 says "lstat-checked" for the withdrawal, and ruling RC3 "lstat-typed, never following a link" for the scope read. The withdrawal lstats the two directories a link could be walked through, `card/` and each `card/<id>`, and only unlinks the names under them: an unlink removes a link itself and refuses a directory, so a per-name lstat could change no answer, and this plan does not spell a guard nothing can trip. Both directory checks have mutants (Step 8: `RC2: a withdrawal through a linked card/` and `… through a linked card/<id>`). The scope read uses `readCard`, whose `O_NOFOLLOW | O_NONBLOCK` open refuses a link and whose `fstat` refuses anything but a regular file: the type an lstat gives, without the race between an lstat and a later open. One guard, not two, so its mutant reds (Step 8, `RC3: a scope marker read through a link`).
 - A withdrawal's outcome line on a hold with no DB open is `history-sweep: card_withdrawn:<reason> <n>`, printed only when something was withdrawn, after the hold's own word (and `journal-unwritable`, when that line is printed). The shim reads no stdout, and no B1 or B2 case plants a card file before a hold, so no existing outcome assertion meets the line.
@@ -3094,7 +3158,7 @@ cat > .superpowers/sdd/history-w1-b3/scratch/mutants-task5.json <<'EOF'
   { "name": "8.6 parent rule: the run's slot list never read", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "8th leaf",
     "edits": [{ "anchor": "  const slots = copy === undefined ? [] : (epochCopySlots(db, ep.session_pk, ep.seq).get(copy.file_id) ?? [])", "replacement": "  const slots = copy === undefined ? [] : ([])" }] },
   { "name": "a failed card write ends the tick", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "cannot write",
-    "edits": [{ "anchor": "    bump(db, 'card_write_failed');\n    return;\n", "replacement": "    throw new Error('mutant: a failed card write ends the tick');\n" }] },
+    "edits": [{ "anchor": "    bump(db, 'card_write_failed');\n", "replacement": "    throw new Error('mutant: a failed card write ends the tick');\n" }] },
   { "name": "RC2: the tick withdraws nothing", "file": "ccd/history/sweep.mjs", "test": "test/history-card.test.ts", "filter": "floor pause withdraws",
     "edits": [{ "anchor": "  withdrawCards(db, ctx.home, cardPass, ctx.out);\n", "replacement": "" }] },
   { "name": "RC2: a withdrawal through a linked card/<id>", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "floor pause withdraws",
@@ -3128,7 +3192,9 @@ cat > .superpowers/sdd/history-w1-b3/scratch/mutants-task5.json <<'EOF'
   { "name": "R-recalloff-parity: the prediction written before its record", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "the generation record",
     "edits": [{ "anchor": "    if (g === 'write') writeFileAtomic(genFile, `${gen}\\n`, 0o600);\n", "replacement": "" },
               { "anchor": "      writeFileAtomic(file, `${prediction.line}\\n`, 0o600);\n",
-                "replacement": "      writeFileAtomic(file, `${prediction.line}\\n`, 0o600);\n      if (g === 'write') writeFileAtomic(genFile, `${gen}\\n`, 0o600);\n" }] }
+                "replacement": "      writeFileAtomic(file, `${prediction.line}\\n`, 0o600);\n      if (g === 'write') writeFileAtomic(genFile, `${gen}\\n`, 0o600);\n" }] },
+  { "name": "R-recalloff-keep: a kept prediction left beside a failed record", "file": "ccd/history/card.mjs", "test": "test/history-card.test.ts", "filter": "beside a kept prediction",
+    "edits": [{ "anchor": "    if (!recorded) {\n", "replacement": "    if (false) {\n" }] }
 ]
 EOF
 (cd server && node ../.superpowers/sdd/history-w1-b3/scratch/mutate.mjs ../.superpowers/sdd/history-w1-b3/scratch/mutants-task5.json)
@@ -3146,6 +3212,8 @@ Expected: every row `red (…)` then `green`; the last line `every guard measure
   - The three scope rows red the scope case's counters map: a bare `card_consumed: 3`; the link's `main` counted twice and no `unknown`; and every consumption `unknown`.
   - The decision table behind every withdrawal and scope is Task 3's, with its own mutants; these rows measure that `card.mjs` and `sweep.mjs` act on it at each place a pass ends.
   - The three R-recalloff-parity rows (predicted: the case was not run on a prototype). The oldest-family row keeps `CARD_GEN` in the record after the newer family lands: `the record follows the newest family` reds (`expected '…c0\n' to be '…f11\n'`). The no-record row reds at the first record read (`ENOENT … .gen`). The record-after row writes the prediction, then fails on the record directory: `no prediction beside a record that could not be written` reds (`expected 'History: node L…' to be null`). The record's table (when to keep, write or remove it) is Task 2's, with its own mutants.
+  - The R-recalloff-keep row never unlinks the kept prediction: the case reds at `at end-of-file: no prediction left beside the record` (`expected 'History: node L…' to be null`). Measured on an extract of `oneCard`'s act block (Task 2's `decideCardGenFile`, B1's `writeFileAtomic` from origin/main, a directory at the record's name): before the ruling and under this mutant the prediction stands at end-of-file (`keep`/`write`) and off it (`keep`/`delete`), counted only `card_write_failed`; with the ruling it is gone in both, counted `card_unrecorded_removed`, and with a healthy record (`keep`/`keep`) nothing moves. The case itself was not run on a prototype (no B2 tree): a red at one of its CONTROL lines is the fixture's to fix (the torn line, the poke), never the rule.
+  - The `a failed card write ends the tick` row's anchor is the `card_write_failed` bump alone, because the catch now continues past it (the R-recalloff-keep unlink) before its `return`: the thrown error still ends the tick there.
 
 - [ ] **Step 9: Confirm the restore, then commit.** In the foreground with a timeout of at least 600000 ms:
 
@@ -4788,7 +4856,7 @@ census does not move."
 
 **Files:**
 - Modify: `ccd/session-hook.sh`:
-  - Insert the reader block directly above the line that begins `state="" ask_json=`. That line is `:2770` at f7e51156f, where it ends `hts="" msid=""`; origin/main 9a255a746 appends ` sessend=""`, so anchor on the prefix. The two lines above it are `[[ -n "$event" ]] || exit 0` and a blank line, and the blank line stays. The block is 116 lines followed by one new blank line, 117 lines in all (95 before ruling RC4 widened its recall-off read by six lines; 101 before the re-check against B1's final code read the clock once, one line, and named the swap residue and the one-read rule in the header, four lines; 106 before ruling R-recalloff-parity added the generation record's read, six code lines, and its header sentence, five). It is the ONE insertion above README's anchor this PR makes. Nothing in the spec or the plan cites a hook line between the highest corpus anchor (`:2472`) and this one.
+  - Insert the reader block directly above the line that begins `state="" ask_json=`. That line is `:2770` at f7e51156f, where it ends `hts="" msid=""`; origin/main 9a255a746 appends ` sessend=""`, so anchor on the prefix. The two lines above it are `[[ -n "$event" ]] || exit 0` and a blank line, and the blank line stays. The block is 122 lines followed by one new blank line, 123 lines in all (95 before ruling RC4 widened its recall-off read by six lines; 101 before the re-check against B1's final code read the clock once, one line, and named the swap residue and the one-read rule in the header, four lines; 106 before ruling R-recalloff-parity added the generation record's read, six code lines, and its header sentence, five; 117 before coordinator ruling R-recalloff-trim added the recall-off grammar test, one code line, and its header sentence, five, and made the trim ASCII-only in place). It is the ONE insertion above README's anchor this PR makes. Nothing in the spec or the plan cites a hook line between the highest corpus anchor (`:2472`) and this one.
   - In place, line-neutral: `    [[ "$src" == compact ]] && { _hook_compact_card || true; }` (`:2893` at f7e51156f and at origin/main) becomes `    [[ "$src" == compact ]] && { _hook_compact_card || true; _hook_history_card || true; }`.
   - In place, in Task 8's lines in the tail: the three lines that spell `"$HOME/.ccrc/history/scope"` (the block's `local f=…` and its gate, and the early invalidation below `esac`) spell `"$HISTORY_SCOPE_DIR"` instead.
   - The turn-marker note's last line is extended and gains five lines after it. That line is the only one matching `^# that line \(marker-logic-in-the-tail \(D-[0-9]+\)\)\.$` (`:2945` at f7e51156f, `:2946` at origin/main); this plan quotes it as a pattern because it writes no deviation number. The note's existing text, its deviation number included, stays verbatim.
@@ -4802,7 +4870,7 @@ census does not move."
 **Interfaces:**
 - Consumes, from the hook:
   - `_ct_read <path>`: rc 0 read, rc 1 absent, rc 2 unmeasurable (not a readable regular file). It sets `CT_V` to at most `CCRC_ID_MAX` (128) chars, trimmed both ends, with no fork. The reader uses it for `$REG/<id>.generation`, the sweep's generation record `card/<id>/<psid>.gen` (Task 5; coordinator ruling R-recalloff-parity) and the scope marker;
-  - `CCRC_ID_MAX` (128, `:2677` at f7e51156f): the recall-off read's window. Ruling RC4 needs the read's untrimmed width, which `_ct_read` trims away, so the reader reads `recall-off/<id>` itself, with `_ct_read`'s bound, its type tests and its trim;
+  - `CCRC_ID_MAX` (128, `:2677` at f7e51156f): the recall-off read's window. Ruling RC4 needs the read's untrimmed width, which `_ct_read` trims away, so the reader reads `recall-off/<id>` itself, with `_ct_read`'s bound and its type tests, and a trim of ASCII whitespace only, in every locale (coordinator ruling R-recalloff-trim; `_ct_read`'s `[[:space:]]` takes the Unicode spaces too in a UTF-8 locale);
   - `CARD_COMPACT`, which `_hook_compact_card` resets to "" and sets only when it serves the compact card;
   - `COMPACT_CARD_MAX_CHARS` (4000), `COMPACT_CARD_MAX_AGE` (1200 s), `REG`, `id`, `psid`, `paid`, `HOME`, `CCRC_SESSION_GENERATION` and `EPOCHREALTIME`;
   - `_hook_compact_mark_served`, which returns 0 at once when `COMPACT_SERVE_NONCE` is empty;
@@ -4842,6 +4910,7 @@ census does not move."
   - with THIS generation after the padding, both withhold: the CLI reads the generation and answers OFF, exit 8 (the parity row `130 spaces followed by the resolved generation G`, mutant `T9-M30-recall-off-window`);
   - with anything else after the padding, the hook withholds where the CLI reads the text as stale: the side that withholds a line, which the ruling accepts.
   - Only a hand edit makes such a file: the W2 verb writes 37 bytes.
+- **The one deliberate asymmetry: a recall-off value outside the generation grammar withholds (coordinator ruling R-recalloff-trim, the final check's R1).** B2's `presenceOf` decodes UTF-8 and trims with JS `String.prototype.trim`, and `decideRecallOff` trims again; that trim also strips U+00A0, U+FEFF, U+202F, U+2007 and, which bash's `[[:space:]]` takes only in a UTF-8 locale, U+3000 and U+2000 to U+200A. A builtin trim cannot match it in every locale, so the hook trims ASCII whitespace only (space, tab, LF, VT, FF, CR, spelled as one `$'…'` local, so the trim is the same under `LC_ALL=C`, a UTF-8 locale and `--posix`), and then withholds the line when the value holds any character outside the generation grammar (empty, or `[0-9a-f-]`, tested by a bracket with no range, so no locale's collation widens it). A no-break space or a byte-order mark before this generation then withholds, where the CLI exits 8: the parity rows `a no-break space …` and `a byte-order mark …`, mutant `T9-M39-recall-off-grammar`. The same character before ANOTHER generation withholds too, where the CLI reads stale and recalls: the side that withholds a line, which the ruling accepts. A value inside the grammar is compared exactly as before, so no other parity row moves. Builtins only: a glob test, no fork.
   - `.generation` is ccd's own 36-byte file and keeps `_ct_read`, because RC4 rules the recall-off read. A `.generation` that a hand edit pads past char 128 still reads as no generation here, where the CLI reads the generation. That is named for the coordinator in the PR body, with no B3 change.
 - **With neither the env nor the registry resolving a generation, the sweep's record stands in for the store (coordinator ruling R-recalloff-parity).** B2's CLI then compares `recall-off/<id>` with the id's newest family's generation (`''` for a legacy family or none), which only the store knows, and this hook runs builtins only and reads no store. So it reads `card/<id>/<psid>.gen`, which Task 5 writes beside the prediction by the CLI's own rule, before the prediction and never left stale (Task 2's `decideCardGenFile`). The record is read only then (`via` empty), through `_ct_read`, never through a link (`[[ -L ]]` first, as for `.generation`), and only when it is empty or has the UUID grammar; anything else, or no record at all, withholds the line whenever a recall-off file exists (fail closed). An absent or unreadable recall-off file answers as it does for the CLI, whatever the generation. The record is per prediction, so it is read for the same `<id>/<psid>` pair the card is: beside a recall-off file, a prediction with no record never serves to a session whose generation the hook cannot otherwise resolve. The env or registry generation, when either resolves, always wins over the record, as it does in the CLI (mutant `T9-M35-record-over-env`).
 - **The C18 cases pin a locale.** `${#…}` and the emitter's `${2:0:N}` count in the hook's locale unit: bytes under C, chars under a UTF-8 locale. The line is 109 bytes and 103 chars. The fold's room test is in the emitter's own unit, so it is right in both. The cases plant an ASCII compact card, whose width is the same everywhere, run under `LC_ALL=C` (and `C.UTF-8` on Linux), and measure the line in that unit.
@@ -5175,8 +5244,15 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   // store's newest family. With no usable record the CLI's answer is the store's, which the hook cannot know:
   // a recall-off file that exists then withholds the line (fail closed), and an absent or unreadable one
   // answers as it does for the CLI whatever the generation.
+  // The one deliberate asymmetry (coordinator ruling R-recalloff-trim): the hook trims ASCII whitespace only, where
+  // B2's presenceOf decodes UTF-8 and trims with String.prototype.trim, which also strips U+00A0 and U+FEFF. So a
+  // value that holds a character outside the generation grammar after the hook's trim withholds the line: the
+  // `G-nbsp` and `G-bom` rows read OFF in the CLI (exit 8) and withhold here. The characters are built from their
+  // code points, never written as escapes or as themselves, so no write can turn them into something else.
+  const NBSP_G = `${String.fromCharCode(0xa0)}${GENERATION}\n`;
+  const BOM_G = `${String.fromCharCode(0xfeff)}${GENERATION}\n`;
   type Reg = 'G' | 'G2' | 'absent' | 'unreadable' | 'symlink-G';
-  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G';
+  type Off = 'absent' | 'G' | 'G-padded' | 'G-wide' | 'G-nbsp' | 'G-bom' | 'G2' | 'empty' | 'unreadable' | 'dir' | 'symlink-G';
   type Rec = 'G' | 'G2' | 'legacy' | 'absent' | 'junk' | 'symlink-G';
   /** B1's Presence, as a type-only import expression: this file gains no import line (the census cites it by line). */
   type Pres = import('../../ccd/history/lib.mjs').Presence<string>;
@@ -5186,6 +5262,9 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     ['recall-off names it inside whitespace', GENERATION, 'G', 'G-padded', 'G'],
     // Ruling RC4: 130 spaces push the generation past the hook's CCRC_ID_MAX-char read, inside the CLI's 4,096 bytes.
     ['130 spaces followed by the resolved generation G', GENERATION, 'G', 'G-wide', 'G'],
+    // Ruling R-recalloff-trim: the CLI's trim strips each, so it reads G and exits 8; the hook withholds.
+    ['a no-break space before the resolved generation G', GENERATION, 'G', 'G-nbsp', 'G'],
+    ['a byte-order mark before the resolved generation G', GENERATION, 'G', 'G-bom', 'G'],
     ['recall-off names another generation (stale)', GENERATION, 'G', 'G2', 'G'],
     ['an empty recall-off file beside a generation', GENERATION, 'G', 'empty', 'G'],
     ['an unreadable recall-off file', GENERATION, 'G', 'unreadable', 'G'],
@@ -5227,6 +5306,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     if (offKind === 'G') fs.writeFileSync(off, `${GENERATION}\n`);
     if (offKind === 'G-padded') fs.writeFileSync(off, `  ${GENERATION}  \n\n`);
     if (offKind === 'G-wide') fs.writeFileSync(off, `${' '.repeat(130)}${GENERATION}\n`);
+    if (offKind === 'G-nbsp') fs.writeFileSync(off, NBSP_G);
+    if (offKind === 'G-bom') fs.writeFileSync(off, BOM_G);
     if (offKind === 'G2') fs.writeFileSync(off, `${G2}\n`);
     if (offKind === 'empty') fs.writeFileSync(off, '');
     if (offKind === 'unreadable') { fs.writeFileSync(off, `${G2}\n`); fs.chmodSync(off, 0o000); }
@@ -5258,7 +5339,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
       : regKind === 'G2' ? { state: 'value', value: G2 }
         : regKind === 'absent' ? { state: 'absent' } : { state: 'unreadable' };
     const file: Pres = offKind === 'absent' ? { state: 'absent' }
-      : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' ? { state: 'value', value: GENERATION }
+      : offKind === 'G' || offKind === 'G-padded' || offKind === 'G-wide' || offKind === 'G-nbsp' || offKind === 'G-bom'
+        ? { state: 'value', value: GENERATION }
         : offKind === 'G2' ? { state: 'value', value: G2 }
           : offKind === 'empty' ? { state: 'value', value: '' } : { state: 'unreadable' };
     const generation = cliGeneration(envGen, regGen, recKind);
@@ -5272,6 +5354,8 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
   it('CONTROL: the parity table reaches every answer, so it cannot pass by serving always or never', () => {
     const verdicts = PARITY.map(([, env, r, o, k]) => cliVerdict(env, r, o, k));
     expect(new Set(verdicts)).toEqual(new Set(['none', 'stale', 'off', 'unknown']));
+    // The two R-recalloff-trim rows' CLI reading: presenceOf's String.prototype.trim over the planted text.
+    expect([NBSP_G, BOM_G].map((t) => t.trim()), 'the CLI reads both as the generation').toEqual([GENERATION, GENERATION]);
   });
 
   it.each(parityRows)('C19/C68 (card half), recall-off parity: %s', (_what, envGen, regKind, offKind, recKind) => {
@@ -5358,13 +5442,13 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
 (cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'history card line')
 ```
 
-Expected on Linux: `29 failed | 44 passed` among the describe's 73 cases (27 of them parity rows: ruling R-recalloff-parity grew the table from 17 rows, four serving and six withholding). On Darwin the two `C.UTF-8` rows and the strace case are absent, and under root the three unreadable-file parity rows are skipped. The 29 are every case that expects the line, plus the source pin and the runtime fork pin:
+Expected on Linux: `29 failed | 46 passed` among the describe's 75 cases (29 of them parity rows: ruling R-recalloff-parity grew the table from 17 rows to 27, four serving and six withholding, and ruling R-recalloff-trim by two withholding). On Darwin the two `C.UTF-8` rows and the strace case are absent, and under root the three unreadable-file parity rows are skipped. The 29 are every case that expects the line, plus the source pin and the runtime fork pin:
 - every case that expects the line fails with `expected null to be 'History: node L03a9c1… (this compacti…'`, or with the folded text, or with `the measured run served the line: expected false to be true`. These are the plain serve, the parent-less and 20-hex lines, C18's reserved card and both inclusive rows, the standing-cards case, C19, C21's two served rows, C22, C37's in-bound marker and its end-to-end case, the id bound, the eleven parity rows whose CLI verdict is `none` or `stale`, and the three fold-under-a-locale rows;
 - `_hook_history_card is defined above the case …` fails with `no _hook_history_card definition: expected -1 to be greater than -1`.
 
-The 44 that pass assert that no line is served, which a hook without a reader cannot violate; the parity row `130 spaces followed by the resolved generation` (ruling RC4), the two `R-recalloff: …` rows and `EPOCHREALTIME is read once …` are among them. Against the reader as it stood before ruling R-recalloff-parity (no record read; `gen` stays empty when neither the env nor the registry resolves one), eight of the new rows red, measured on an extract of the reader (`_ct_read` from origin/main and the reader block, driven over the 27 rows' fixtures, as a non-root user): the two `R-recalloff: …` rows, `no env or registry generation and recall-off names the recorded newest family`, `an unreadable .generation is no generation, the record decides`, `nothing recorded withholds …`, `a symlinked record …` and `a malformed record …` serve where the CLI exits 8 or its answer is unknown, and `the newest family recorded G and an empty recall-off file reads stale` withholds where the CLI recalls. The reader below passes all 27 on the same extract. Step 7's mutants measure every one of them but three. The parity table's CONTROL is pure and guards nothing. C37's `empty` marker row is refused by two guards at once (the scope-word test and the ms digit test), so no single-guard mutant can red it: it is defence in depth, and it is named here rather than claimed measured. The `unset` row of `EPOCHREALTIME %s serves no line …` stays green under `T9-M12-clock-guard`, which reds only the `malformed` row: an empty reading makes `now` 0, which the age test refuses whether or not the clock grammar runs, so that row is an absence pin, named here rather than claimed measured.
+The 46 that pass assert that no line is served, which a hook without a reader cannot violate; the parity row `130 spaces followed by the resolved generation` (ruling RC4), the two `R-recalloff: …` rows, the two R-recalloff-trim rows (`a no-break space …` and `a byte-order mark …`) and `EPOCHREALTIME is read once …` are among them. The two R-recalloff-trim rows were measured on an extract of the reader block below (`_ct_read` from origin/main, the env generation G, `.generation` G, the record G, a fresh `main` marker and a prediction), under `LC_ALL=C` and `LC_ALL=C.UTF-8`, each plain and under `bash --posix` with `POSIXLY_CORRECT=1`: the block withholds both in all four, the block without its grammar test (`T9-M39-recall-off-grammar`) serves both in all four, and the same extract's controls (recall-off absent, empty or `G2`: served; `G` or `G-padded`: withheld) agree with the CLI either way. Against the reader as it stood before ruling R-recalloff-parity (no record read; `gen` stays empty when neither the env nor the registry resolves one), eight of the new rows red, measured on an extract of the reader (`_ct_read` from origin/main and the reader block, driven over the 27 rows' fixtures, as a non-root user): the two `R-recalloff: …` rows, `no env or registry generation and recall-off names the recorded newest family`, `an unreadable .generation is no generation, the record decides`, `nothing recorded withholds …`, `a symlinked record …` and `a malformed record …` serve where the CLI exits 8 or its answer is unknown, and `the newest family recorded G and an empty recall-off file reads stale` withholds where the CLI recalls. The reader below passed all 27 on the same extract before ruling R-recalloff-trim made its trim ASCII-only and added the grammar test; no recall-off text among those 27 holds anything but ASCII whitespace and the grammar's characters, so neither change can move one of them, and the R-recalloff-trim extract above re-ran the shapes among them that reach the trim (`G`, `G-padded`, `G2`, `empty`). Step 7's mutants measure every one of them but three. The parity table's CONTROL is pure and guards nothing. C37's `empty` marker row is refused by two guards at once (the scope-word test and the ms digit test), so no single-guard mutant can red it: it is defence in depth, and it is named here rather than claimed measured. The `unset` row of `EPOCHREALTIME %s serves no line …` stays green under `T9-M12-clock-guard`, which reds only the `malformed` row: an empty reading makes `now` 0, which the age test refuses whether or not the clock grammar runs, so that row is an absence pin, named here rather than claimed measured.
 
-- [ ] **Step 4: Write the reader and its call.** In `ccd/session-hook.sh`, directly above the line that begins `state="" ask_json=`, insert these 116 lines and then one blank line. The existing blank line above stays where it is:
+- [ ] **Step 4: Write the reader and its call.** In `ccd/session-hook.sh`, directly above the line that begins `state="" ask_json=`, insert these 122 lines and then one blank line. The existing blank line above stays where it is:
 
 ```bash
 # ── THE HISTORY CARD LINE (ccrc history spec 2026-10-05 §8.6, W1-B3) ─────
@@ -5411,7 +5495,12 @@ The 44 that pass assert that no line is served, which a hook without a reader ca
 #      chars where the CLI's is 4,096 bytes, so a read that FILLS the window is
 #      OFF before it is trimmed: a hand edit that pads the file past it withholds
 #      the line, never serves one the CLI answers exit 8 for (W2's verb writes
-#      37 bytes);
+#      37 bytes). The ONE deliberate asymmetry (coordinator ruling
+#      R-recalloff-trim): this trim takes ASCII whitespace only, in every
+#      locale, where the CLI's JS trim also strips U+00A0, U+FEFF and the
+#      Unicode spaces, so a value that still holds a character outside the
+#      generation grammar (empty, or [0-9a-f-]) withholds the line: it may
+#      withhold where the CLI recalls, never serve where the CLI exits 8;
 #   5. the PreCompact scope marker reads `main <psid> <ms>`, the ms no older than
 #      COMPACT_CARD_MAX_AGE and not in the future (⟦D:history-card-main-scope-only⟧);
 #   6. one bounded read of the card file, a regular file only (a FIFO would
@@ -5441,7 +5530,7 @@ HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"
 HISTORY_CARD_DIR="$HOME/.ccrc/history/card"
 _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; builtins only
   local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n'
+  local off="$HOME/.ccrc/history/recall-off/$id" gen="" via="" o="" ms="" now="" t="" s="" f="" v="" nl=$'\n' ws=$' \t\n\v\f\r'
   [[ -z "$paid" ]] || return 0
   [[ -e "$HOME/.ccrc/history-off" ]] && return 0
   (( ${#id} <= 224 )) || return 0
@@ -5456,7 +5545,8 @@ _hook_history_card() {   # folds the history line into CARD_COMPACT; silent; bui
     [[ -f "$off" && -r "$off" ]] || return 0
     IFS= read -r -N "$CCRC_ID_MAX" o 2>/dev/null < "$off"
     (( ${#o} < CCRC_ID_MAX )) || return 0
-    o="${o#"${o%%[![:space:]]*}"}"; o="${o%"${o##*[![:space:]]}"}"
+    o="${o#"${o%%[!$ws]*}"}"; o="${o%"${o##*[!$ws]}"}"
+    [[ "$o" == *[!0123456789abcdef-]* ]] && return 0
     if [[ -z "$via" ]]; then
       [[ -L "$HISTORY_CARD_DIR/$id/$psid.gen" ]] && return 0
       _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0
@@ -5531,7 +5621,7 @@ awk '/^# ── THE HISTORY CARD LINE/{s=NR} /^state="" ask_json=/{print NR-s}' 
 grep -cF '$HOME/.ccrc/history/scope' ccd/session-hook.sh
 ```
 
-Expected: `in-place edits applied`, `hook-syntax-ok`, `1` (the grammar holds a literal `…`, not an escape), `117`, and `1`: the one constant, `HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"`, is now the only line that spells it.
+Expected: `in-place edits applied`, `hook-syntax-ok`, `1` (the grammar holds a literal `…`, not an escape), `123`, and `1`: the one constant, `HISTORY_SCOPE_DIR="$HOME/.ccrc/history/scope"`, is now the only line that spells it.
 
 - [ ] **Step 5: Re-point README's anchor by content.** README is repaired, never counted. Do it before Step 8 measures: with README stale, the census reads `ccd/session-hook.sh` 22 and `total` 198 (README's stale `:2900` counts as a failing reference into the hook), and the README case reds with `a README anchor stopped naming what its own sentence quotes: expected [ 'ccd/session-hook.sh:2900' ] to deeply equal []`. Both were measured. The hook has a second, comment-line mention of the call (`:2053` at f7e51156f), so the lookup skips comment lines. From the repository root:
 
@@ -5554,7 +5644,7 @@ PYEOF
 git diff --stat README.md
 ```
 
-Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 117>`, where `<old>` is the number README carried at this task's base. Then `1 file changed, 1 insertion(+), 1 deletion(-)`: README keeps its length, so `CLAUDE.md`'s README figure does not move.
+Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 123>`, where `<old>` is the number README carried at this task's base. Then `1 file changed, 1 insertion(+), 1 deletion(-)`: README keeps its length, so `CLAUDE.md`'s README figure does not move.
 
 - [ ] **Step 6: Run the cases and see them pass.** In the foreground:
 
@@ -5564,7 +5654,7 @@ Expected: one line, `README: ccd/session-hook.sh:<old> -> :<old + 117>`, where `
 ```
 
 Expected:
-- the first: all 63 cases of this describe and Task 8's 21 green, so `84 passed` on Linux as a non-root user. Task 8's `a hookstate write that fails empties an older fresh main marker …` now runs end to end: its SessionStart(compact) meets a real reader and an emptied marker, and serves no line;
+- the first: all 75 cases of this describe (Step 3's count) and Task 8's 21 green, so `96 passed` on Linux as a non-root user. Task 8's `a hookstate write that fails empties an older fresh main marker …` now runs end to end: its SessionStart(compact) meets a real reader and an emptied marker, and serves no line;
 - the second: green. It covers the strace pins, the `:2721` argv case, the two-clips case, the spill-budget case and the `served` scan (`raw union matches` 11).
 
 - [ ] **Step 7: Measure every guard red with a mutant.** Tasks 8 to 11 share the runner, which Task 8 Step 6 wrote. From the repository root:
@@ -5666,13 +5756,16 @@ MUTANTS = [
         ('      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen" || return 0\n', '      _ct_read "$HISTORY_CARD_DIR/$id/$psid.gen"\n')]),
     ('T9-M38-record-grammar', H, T, 'recall-off parity: a malformed record is no record', [
         ('      [[ -z "$CT_V" || "$CT_V" =~ $uuid_re ]] || return 0\n', '')]),
+    # Ruling R-recalloff-trim: a value that holds a character outside the generation grammar after the ASCII trim.
+    ('T9-M39-recall-off-grammar', H, T, 'recall-off parity: a (no-break space|byte-order mark) before', [
+        ('    [[ "$o" == *[!0123456789abcdef-]* ]] && return 0\n', '')]),
 ]
 PYEOF
 python3 "$SCRATCH/mutate.py" "$SCRATCH/mutants-t9.py"; echo "rc=$?"
 git status --short
 ```
 
-Run it in the foreground, with a timeout of at least 6080000 ms: 38 mutants, two runs each. Expected: 38 `RED->GREEN` lines, `rc=0`, and only this task's three files modified. Each mutant's red, as measured on a prototype of this exact text for T9-M1 to T9-M24; T9-M25 to T9-M29 were added after the prototype, and their reds were measured on an extract of the reader against the same marker and parity rows. Ruling RC4 then replaced the recall-off read's three `_ct_read` lines with the bounded read, so T9-M6's and T9-M26's anchors are the new read's lines and T9-M30 is new: those three reds are argued from the code, not measured on the prototype. T9-M31 came with ruling Q16, and its red is argued the same way: the SessionStart arm treats `fork` as it treats `startup`, which T9-M23 measured. T9-M32 and T9-M33 came with the re-check against B1's final code (its `${…@…}` form and its read-once clock), and T9-M12's anchor moved to the read-once test: those three reds are argued from the code too (a `NOT MEASURED` among these seven is reported with the case's output). T9-M34 to T9-M38 came with ruling R-recalloff-parity, which also moved T9-M8's anchor (the env branch now sets `via`) and T9-M26's filter (the renamed `newest` rows). Those seven, and T9-M7 over its re-planted row, were measured on an extract of the reader (`_ct_read` from origin/main and this block, driven over the 27 parity rows' fixtures as a non-root user, outside vitest): each reds every row its filter names (T9-M26 and T9-M34 also red rows outside their filters, which other mutants own), and the unmutated block agrees with every row; T9-M5, T9-M6 and T9-M30 were re-measured on the same extract too:
+Run it in the foreground, with a timeout of at least 6240000 ms: 39 mutants, two runs each. Expected: 39 `RED->GREEN` lines, `rc=0`, and only this task's three files modified. Each mutant's red, as measured on a prototype of this exact text for T9-M1 to T9-M24; T9-M25 to T9-M29 were added after the prototype, and their reds were measured on an extract of the reader against the same marker and parity rows. Ruling RC4 then replaced the recall-off read's three `_ct_read` lines with the bounded read, so T9-M6's and T9-M26's anchors are the new read's lines and T9-M30 is new: those three reds are argued from the code, not measured on the prototype. T9-M31 came with ruling Q16, and its red is argued the same way: the SessionStart arm treats `fork` as it treats `startup`, which T9-M23 measured. T9-M32 and T9-M33 came with the re-check against B1's final code (its `${…@…}` form and its read-once clock), and T9-M12's anchor moved to the read-once test: those three reds are argued from the code too (a `NOT MEASURED` among these seven is reported with the case's output). T9-M34 to T9-M38 came with ruling R-recalloff-parity, which also moved T9-M8's anchor (the env branch now sets `via`) and T9-M26's filter (the renamed `newest` rows). Those seven, and T9-M7 over its re-planted row, were measured on an extract of the reader (`_ct_read` from origin/main and this block, driven over the 27 parity rows' fixtures as a non-root user, outside vitest): each reds every row its filter names (T9-M26 and T9-M34 also red rows outside their filters, which other mutants own), and the unmutated block agrees with every row; T9-M5, T9-M6 and T9-M30 were re-measured on the same extract too:
 
 | Mutant | Guard removed or inverted | The case that goes red |
 |---|---|---|
@@ -5714,6 +5807,7 @@ Run it in the foreground, with a timeout of at least 6080000 ms: 38 mutants, two
 | T9-M36-record-symlink | `[[ -L … .gen ]]` | parity: `a symlinked record is no record` (`the CLI reads unknown`) |
 | T9-M37-no-record-falls-through | the `return 0` on the record's `_ct_read` failing: an absent record read as `''` | parity: `nothing recorded withholds …` (`the CLI reads unknown`) |
 | T9-M38-record-grammar | the record's grammar test (empty or a UUID) | parity: `a malformed record is no record` (`the CLI reads unknown`) |
+| T9-M39-recall-off-grammar | the recall-off grammar test after the ASCII trim (coordinator ruling R-recalloff-trim) | parity: `a no-break space before the resolved generation G` and `a byte-order mark before the resolved generation G` (`the CLI reads off: expected 'History: node …' to be null`). Measured on an extract of the reader under `LC_ALL=C` and `C.UTF-8`, plain and `--posix`: the unmutated block withholds both, this mutant serves both |
 
 A `NOT MEASURED` row means its case is wrong: fix the case, never the mutant. Never use `git stash`.
 
@@ -5727,7 +5821,7 @@ SCRATCH="$(git rev-parse --show-toplevel)/.superpowers/sdd/history-w1-b3/scratch
 bash "$SCRATCH/cite-run.sh" ccd/session-hook.sh,README.md
 ```
 
-`--files` must name the hook. With the default, only `ccd/ccd` and README are swapped, the edited hook stays in the base leg, and `base` reads red. The census was measured on a prototype that carried this block before ruling RC4, 95 lines in all, over origin/main plus B1's spool block. RC4 grew the block to 101 lines in all, the re-check against B1's final code (the one clock read, the swap residue named) to 106, and ruling R-recalloff-parity (the generation record's read and its header sentence) to 117, every added line inside it. The census keys do not depend on the block's length, because no spec or plan anchor lies between the highest corpus anchor (`:2472`) and the insertion. Only README's re-pointed number moves with the length, by Step 5's content lookup. So the expectation below stands for the 117-line block, and this run is its measurement:
+`--files` must name the hook. With the default, only `ccd/ccd` and README are swapped, the edited hook stays in the base leg, and `base` reads red. The census was measured on a prototype that carried this block before ruling RC4, 95 lines in all, over origin/main plus B1's spool block. RC4 grew the block to 101 lines in all, the re-check against B1's final code (the one clock read, the swap residue named) to 106, ruling R-recalloff-parity (the generation record's read and its header sentence) to 117, and ruling R-recalloff-trim (the recall-off grammar test and its header sentence) to 123, every added line inside it. The census keys do not depend on the block's length, because no spec or plan anchor lies between the highest corpus anchor (`:2472`) and the insertion. Only README's re-pointed number moves with the length, by Step 5's content lookup. So the expectation below stands for the 123-line block, and this run is its measurement:
 - `files swapped to HEAD: ccd/session-hook.sh, README.md`, and last `keep-cite: the tree matches its copies; copies removed`;
 - every `byFile[…]` line `stated N  base N  tree N` with no `<-- MOVED or unstated`, `total` likewise, at the values B3's base carries. Trust the printed `stated` at this base; this plan quotes no number, because B1's, B2's and other programmes' merges can move them;
 - `ENTERED []` / `LEFT    []` for the composition, the row array and the site array.
@@ -5748,7 +5842,7 @@ para = (
     f"      // {n} -> {n} at ccrc history W1-B3 (Task 9), measured {date} by `cite-remeasure.py` with\n"
     f"      // `--files ccd/session-hook.sh,README.md` against `{base}`: stated = base = tree for every key,\n"
     "      // `ENTERED []`, `LEFT []`, and the row and site arrays unmoved. The hook gained one block ABOVE\n"
-    "      // README's anchor (`_hook_history_card` and its four constants, 117 lines with their blank line,\n"
+    "      // README's anchor (`_hook_history_card` and its four constants, 123 lines with their blank line,\n"
     "      // defined above the event `case` because the SessionStart arm calls it before the tail runs), and\n"
     "      // every spec and plan anchor into the hook sits above that block (the highest is `:2472`), so none\n"
     "      // moved. README's own anchor moved with the block, and README is repaired, never counted: its quoted\n"
@@ -5977,7 +6071,7 @@ Expected: `hook-syntax-ok`, then `5`: the `:1515` read, the reset, the set, and 
 ```
 
 Expected:
-- the first: green, `90 passed` on Linux as a non-root user (7 + 62 + 21);
+- the first: green, `103 passed` on Linux as a non-root user (7 + 75 + 21: Task 9's describe holds 75 cases, its 29 parity rows among them);
 - the second: green. It covers the `:2721` pin, which still reads ` --max-chars 4000 --max-files 12 ` because its fixture has no `card/`; the constants pin (`COMPACT_CARD_MAX_CHARS=4000` unchanged); the two clips; the spill budget; the strace multisets; and the PostToolUse p95 and SessionStart ratio cases. The reserve's builtin tests cost those runs nothing measurable. `session-hook.test.ts` is a known load-flake file: re-run a timing red alone before calling it a break.
 
 - [ ] **Step 6: Measure every guard red with a mutant.** From the repository root, with a timeout of at least 1800000 ms:
@@ -7114,6 +7208,14 @@ Read W1-e (step 7 below) with these in hand. None is fixed in this PR.
      and the empty-file rows against a legacy and a G newest family. A store swapped between ticks (a restore or a
      rebuild) leaves the record as stale as the prediction beside it until the next card step; a pass that runs no
      card step (the recover arm, for one) withdraws that prediction, and with it the record's only reader.
+   - R-recalloff-trim (the final check's R1): the hook trims `recall-off/<id>` of ASCII whitespace only, where the
+     CLI's JS trim also strips U+00A0, U+FEFF and the Unicode spaces, and withholds the line when the trimmed value
+     holds any character outside the generation grammar (empty, or `[0-9a-f-]`). The one deliberate asymmetry, in the
+     safe direction: it may withhold where the CLI recalls, never serve where the CLI exits 8. Parity rows: a
+     no-break space and a byte-order mark before the resolved generation G (no line; the CLI exits 8).
+   - R-recalloff-keep (the final check's R2): a generation record that was due (written or removed) and could not
+     be acted on, beside a prediction that stands, removes that prediction too, counted `card_unrecorded_removed`,
+     so no prediction is left beside a stale record until the boundary consumes it.
    - The operator's rev 3.4 rulings (2026-10-07), for the record. Q15, Q17, Q18 (a W2 matter), Q19 and prune at
      low disk change nothing in B3. Q16 (SessionStart(fork) spooled from B2, `history-fork-spooled`) changes no B3
      code: the card reads no epoch cause, so a fork's confirmed epoch is predicted for as any other is. B3 pins it
@@ -7193,7 +7295,7 @@ Every departure this plan takes from the spec is listed once below, in the order
 - ⟦D:history-card-main-scope-only⟧ (Tasks 8, 9): A PreCompact scope marker gates the card line to main compactions (§5.1, §8.6). This plan defines it first.
 - ⟦D:history-card-reader-above-the-arm⟧ (Task 9): `_hook_history_card` is defined above `:2771`; README's `:2900` re-anchored by content (§8.6). This plan defines it first. The insertion sits directly above the line that begins `state="" ask_json=`, and README's anchor is now the emitter call found by its text.
 - ⟦D:history-recall-off-generation⟧ (Task 9): `recall-off/<id>` holds the generation it was assigned to and is honoured only for that family (§9.7, §10.2; rev 3 review, Q7). B2-defined. The hook resolves the generation as B2's CLI does (coordinator ruling R-recalloff-parity): the env value with the UUID grammar, else `$REG/<id>.generation` with it (B2's `resolveGeneration`), else the id's newest family's generation, `''` for a legacy family or none, which the hook reads from the record the sweep writes beside the prediction (`card/<id>/<psid>.gen`, Tasks 2 and 5) because it cannot read the store; with no usable record, a recall-off file that exists withholds the line (fail closed). Tasks 5 and 9 carry the record (Task 2 decides it); the record is the ruling's mechanism, not a new departure.
-- ⟦D:history-card-recall-off-unreadable-off⟧ (Task 9): NEW departure (no spec §16 row), ruled RC4. §8.6 honours recall-off "only when its content equals" the generation, but B2's `decideRecallOff` answers an unreadable, symlinked or non-file `recall-off/<id>` `off`. The hook follows the CLI, so one family is never put in two eval arms. The hook reads `CCRC_ID_MAX` (128) characters of the file where the CLI reads 4,096 bytes, so a read that fills that window is OFF too, the side that withholds the line: a hand-padded file never serves where the CLI answers exit 8 (the parity row "130 spaces followed by the resolved generation G"). With anything else after the padding, such a file withholds a line the CLI's stale answer would not, which the ruling accepts.
+- ⟦D:history-card-recall-off-unreadable-off⟧ (Task 9): NEW departure (no spec §16 row), ruled RC4. §8.6 honours recall-off "only when its content equals" the generation, but B2's `decideRecallOff` answers an unreadable, symlinked or non-file `recall-off/<id>` `off`. The hook follows the CLI, so one family is never put in two eval arms. The hook reads `CCRC_ID_MAX` (128) characters of the file where the CLI reads 4,096 bytes, so a read that fills that window is OFF too, the side that withholds the line: a hand-padded file never serves where the CLI answers exit 8 (the parity row "130 spaces followed by the resolved generation G"). With anything else after the padding, such a file withholds a line the CLI's stale answer would not, which the ruling accepts. Coordinator ruling R-recalloff-trim adds the one deliberate trim asymmetry on the same side: the hook trims ASCII whitespace only, where the CLI's JS trim also strips U+00A0, U+FEFF and the Unicode spaces, so a value that holds a character outside the generation grammar after the hook's trim withholds the line (the parity rows "a no-break space …" and "a byte-order mark before the resolved generation G").
 - ⟦D:history-hook-card-names-once⟧ (Tasks 9, 11): NEW departure (no spec §16 row), ruled RC1 (accepted). ⟦D:history-card-fold-and-reserve⟧ says "no new card constant beyond the reserve". The hook gains one number, `HISTORY_CARD_MAX`, from which the reserve and the read size derive, plus one spelling each of the grammar and the two directories. None is a budget; each is declared once and bound to lib by Task 11.
 - ⟦D:history-card-files-creator-through-card⟧ (Task 12): NEW departure (no spec §16 row), ruled RC1 (accepted). §9.4 writes the `history-card-files` row's creator as `sweep.mjs`; the row spells `ccd/history/sweep.mjs (through card.mjs)`, after B1's `history-store` row (`(through store.mjs)`, §9.4's own wording there), so a reader looking for the writer finds the module that writes the file.
 - ⟦D:history-w1e-query-in-b3⟧ (Task 13): NEW departure (no spec §16 row), ruled RC1 (accepted). §10.5 does not list `deploy/measure-history.py` among B3's contents; W1-e's counters first exist in B3, so its named query ships beside them.
