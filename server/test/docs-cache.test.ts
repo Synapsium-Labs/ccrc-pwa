@@ -319,6 +319,16 @@ describe('docs caches — the listing map (section 6.5; refinement (l))', () => 
     expect(listing.servedRefAgeMs('n1', 'demo', COMMIT, WS, 5000)).toBeUndefined();
     expect(listing.servedRefAgeMs('n1', 'demo', hex40(1), MAIN, 5000)).toBeUndefined();
   });
+
+  it('a commit with no committed rows is charged at least one: DOCS_LISTING_MAP_ENTRIES + 1 of them evict the oldest', () => {
+    const { listing } = docsCaches();
+    for (let i = 0; i <= DOCS_LISTING_MAP_ENTRIES; i += 1) listing.record('n1', treeOf(hex40(i), MAIN, []), i);
+    expect(listing.commits()).toBe(DOCS_LISTING_MAP_ENTRIES);
+    expect(listing.entries()).toBeLessThanOrEqual(DOCS_LISTING_MAP_ENTRIES);
+    expect(listing.servedRefAgeMs('n1', 'demo', hex40(0), MAIN, 0)).toBeUndefined();
+    expect(listing.servedRefAgeMs('n1', 'demo', hex40(1), MAIN, 1)).toBe(0);
+    expect(listing.servedRefAgeMs('n1', 'demo', hex40(DOCS_LISTING_MAP_ENTRIES), MAIN, DOCS_LISTING_MAP_ENTRIES)).toBe(0);
+  });
 });
 
 describe('docs caches — the draft size map (section 6.5, section 3.12)', () => {

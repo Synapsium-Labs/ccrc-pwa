@@ -35,8 +35,8 @@ export interface DocsBlobCache {
  * The listing map (section 6.5): `(node, project, commit) -> {repoKey, files, refsAt}`, fed from every ok tree answer
  * the routes forward, AFTER `docsAnswerShape` passed it. `lookup` answers `undefined` for one meaning: no listing
  * entry for that (node, project, commit, section, path). `servedRefAgeMs` answers `undefined` for one meaning: that
- * `servedRef` was never recorded for that commit. `entries()` is the summed committed-entry count the bound applies
- * to; `commits()` the number of commits held.
+ * `servedRef` was never recorded for that commit. `entries()` is the summed charge the bound applies to (each
+ * commit's committed-entry count, at least one); `commits()` the number of commits held.
  */
 export interface DocsListingMap {
   record(node: string, tree: DocsTreeOk, nowMs: number): void;
@@ -122,7 +122,8 @@ function docsBlobCache(): DocsBlobCache {
   };
 }
 
-/** One commit's listing: its repository key, its committed facts by section then path, how many it holds, and when
+/** One commit's listing: its repository key, its committed facts by section then path, what it is charged toward the
+ *  bound (its committed entries, and at least one), and when
  *  each served ref was last recorded at this commit. Nested maps, so this file builds no key of its own. */
 interface ListedCommit {
   repoKey: string;
@@ -164,7 +165,11 @@ function docsListingMap(): DocsListingMap {
   return {
     record(node, tree, nowMs) {
       const key = docsListingKey(node, tree.project, tree.ref.commit);
-      const { files, count } = listedFiles(tree);
+      const listed = listedFiles(tree);
+      const files = listed.files;
+      // Every recorded commit is charged at least one toward the bound, so a tree with no committed rows (a
+      // doc-less project) is still evictable and the map cannot grow without limit.
+      const count = Math.max(1, listed.count);
       const known = commits.get(key);
       const refsAt = known === undefined ? new Map<string, number>() : known.refsAt;
       if (known !== undefined) {
