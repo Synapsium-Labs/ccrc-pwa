@@ -3680,7 +3680,7 @@ function porterStem(word) {
 /** Unicode61 token candidates with their original code-unit spans. */
 function unicode61Words(text) {
   const words = [];
-  const word = /[\p{L}\p{N}_]+/gu;
+  const word = /[\p{L}\p{N}]+/gu;
   for (let m = word.exec(text); m !== null; m = word.exec(text)) words.push({ text: m[0], at: m.index, end: m.index + m[0].length });
   return words;
 }
@@ -3712,34 +3712,32 @@ export function snippetWindow(text, terms) {
   let at = -1;
   let len = 0;
   const candidates = unicode61Words(content);
+  const phraseTokens = (term) => unicode61Words(String(term).replace(/\*+$/, '')).map(({ text }) => text.toLowerCase());
+  // A phrase needs adjacent matching tokens; a single matching word is not its hit.
   for (const term of terms) {
-    const prefix = String(term).endsWith('*');
-    const needle = String(term).replace(/\*+$/, '').toLowerCase();
-    if (needle === '') continue;
-    const stem = porterStem(needle);
-    for (const candidate of candidates) {
-      const lowered = candidate.text.toLowerCase();
-      let matchAt = -1;
-      let matchLen = 0;
-      if (prefix) {
-        matchAt = lowered.indexOf(needle);
-        if (matchAt !== -1) matchLen = needle.length;
-      } else if (porterStem(lowered) === stem) {
-        matchAt = 0;
-        matchLen = candidate.text.length;
-      } else {
-        // FTS5 matches a porter stem even when an adjacent redacted or joined
-        // token makes the text candidate wider; locate the matching subword.
-        const embedded = new RegExp(escapeRe(needle), 'i').exec(candidate.text);
-        if (embedded !== null && porterStem(embedded[0].toLowerCase()) === stem) {
-          matchAt = embedded.index;
-          matchLen = embedded[0].length;
+    const raw = String(term);
+    const prefix = raw.endsWith('*');
+    const needles = phraseTokens(raw);
+    if (needles.length === 0) continue;
+    for (let index = 0; index < candidates.length; index += 1) {
+      const first = candidates[index];
+      const lowered = first.text.toLowerCase();
+      const firstMatches = prefix
+        ? lowered.startsWith(needles[0])
+        : porterStem(lowered) === porterStem(needles[0]);
+      if (!firstMatches || index + needles.length > candidates.length) continue;
+      let matches = true;
+      for (let offset = 1; offset < needles.length; offset += 1) {
+        if (porterStem(candidates[index + offset].text.toLowerCase()) !== porterStem(needles[offset])) {
+          matches = false;
+          break;
         }
       }
-      if (matchAt === -1) continue;
-      const candidateAt = candidate.at + matchAt;
-      if (at === -1 || candidateAt < at || (candidateAt === at && matchLen > len)) {
-        at = candidateAt;
+      if (!matches) continue;
+      const matchAt = first.at;
+      const matchLen = candidates[index + needles.length - 1].end - matchAt;
+      if (at === -1 || matchAt < at || (matchAt === at && matchLen > len)) {
+        at = matchAt;
         len = matchLen;
       }
     }

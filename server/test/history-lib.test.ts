@@ -3699,14 +3699,33 @@ describe('queryTerms and snippetWindow: the earliest hit, stems included, from r
     expect(libSearch.queryTerms(`"Error handling" --force a0860d1f* D-${12} force`)).toEqual(['error handling', 'force', 'a0860d1f', 'd-12']);
     expect(libSearch.queryTerms('   ')).toEqual([]);
   });
-  it('the window holds 24 characters before and 40 after the earliest hit, with ... at a cut end', () => {
-    const text = `${'x'.repeat(100)}Needle${'y'.repeat(100)}`;
-    expect(libSearch.snippetWindow(text, ['needle'])).toBe(`...${'x'.repeat(24)}Needle${'y'.repeat(40)}...`);
+  it('the window holds 24 characters before and 40 after the earliest token hit, with ... at a cut end', () => {
+    const text = `${'x'.repeat(100)} Needle ${'y'.repeat(100)}`;
+    expect(libSearch.snippetWindow(text, ['needle'])).toBe(`...${'x'.repeat(23)} Needle ${'y'.repeat(39)}...`);
     expect(libSearch.snippetWindow('short Needle here', ['needle'])).toBe('short Needle here');
   });
   it('a stemmed or prefix hit is found by the word without its ending', () => {
     expect(libSearch.snippetWindow(`${'x'.repeat(100)} running fast`, ['runs'])).toBe(`...${'x'.repeat(23)} running fast`);
     expect(libSearch.snippetWindow(`${'z'.repeat(100)} the sweeps ran`, ['sweeping'])).toContain('sweeps');
+  });
+  it('localizes real FTS hits at a whole candidate, never an earlier containing token', () => {
+    const text = `${'a'.repeat(100)} concatenate ${'b'.repeat(100)} cat finishes`;
+    const db = ftsCorpus([[1, text]]);
+
+    expect(matchIds(db, '"cat"'), 'real porter FTS: the later standalone cat matches').toContain(1);
+    const snippet = libSearch.snippetWindow(text, ['cat']);
+    expect(snippet).toContain('cat finishes');
+    expect(snippet).not.toContain('concatenate');
+  });
+  it('localizes a real FTS phrase at its far-offset candidate sequence', () => {
+    const text = `${'a'.repeat(100)} errors unrelated ${'b'.repeat(100)} errors handled cleanly`;
+    const query = 'error handling';
+    const db = ftsCorpus([[1, text]]);
+
+    expect(matchIds(db, `"${query}"`), 'real porter FTS: error handling matches errors handled').toContain(1);
+    const snippet = libSearch.snippetWindow(text, libSearch.queryTerms(`"${query}"`));
+    expect(snippet).toContain('errors handled');
+    expect(snippet).not.toContain('errors unrelated');
   });
   it('locates asymmetric Porter matches and a prefix at the matching candidate, not the unrelated head', () => {
     const studying = `${'a'.repeat(100)} studies are archived`;
