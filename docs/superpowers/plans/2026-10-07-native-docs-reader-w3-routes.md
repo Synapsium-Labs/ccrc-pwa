@@ -14189,7 +14189,7 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 
 ## Wave 3 results
 
-Measured 2026-10-09 09:21 UTC on the tree at `8fff7c916195` (base `5a6e5d3d7ef5`, 27 W3 commits on the first-parent line). Every number below was printed by a Task 12 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+Measured 2026-10-09 13:27 UTC on the tree at `e3bd8859ef41` (base `5a6e5d3d7ef5`, 39 W3 commits on the first-parent line). Every number below was printed by a Task 12 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
 
 Deviation numbers spent (issued block 4464-4479): D-4464, D-4465, D-4466, D-4467, D-4468, D-4469, D-4470, D-4471.
 
@@ -14199,74 +14199,74 @@ The every-wave, W3 and existing suites (spec section 7.9), run in the foreground
 
 | # | Command | Test Files | Tests | s | rc |
 |---|---|---|---|---|---|
-| 01 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )` | 1 passed (1) | 55 passed (55) | 10 | 0 |
+| 01 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )` | 1 passed (1) | 55 passed (55) | 14 | 0 |
 | 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 530 passed (530) | 17 | 0 |
-| 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` | 2 passed (2) | 32 passed (32) | 12 | 0 |
-| 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 55 | 0 |
-| 05 | `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-cache.test.ts test/docs-lanes.test.ts test/docs-headers.test.ts test/docs-file-bytes.test.ts test/docs-policy.test.ts )` | 6 passed (6) | 914 passed (914) | 4 | 0 |
-| 06 | `( cd server && ./node_modules/.bin/vitest run test/docs-console-latency.test.ts )` | 1 passed (1) | 4 passed (4) | 12 | 0 |
+| 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` | 2 passed (2) | 32 passed (32) | 13 | 0 |
+| 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 58 | 0 |
+| 05 | `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-cache.test.ts test/docs-lanes.test.ts test/docs-headers.test.ts test/docs-file-bytes.test.ts test/docs-policy.test.ts )` | 6 passed (6) | 944 passed (944) | 4 | 0 |
+| 06 | `( cd server && ./node_modules/.bin/vitest run test/docs-console-latency.test.ts )` | 1 passed (1) | 4 passed (4) | 11 | 0 |
 | 07 | `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/coord-routes-single-file.test.ts test/coord-pause-route.test.ts test/verb-gate.test.ts test/whitelist-subset.test.ts )` | 6 passed (6) | 346 passed (346) | 6 | 0 |
-| 08 | `( cd server && ./node_modules/.bin/vitest run test/capsupported.test.ts test/routes.test.ts test/update-routes.test.ts test/boot.test.ts test/auth-passkey.test.ts test/auth-wire.test.ts )` | 6 passed (6) | 308 passed (308) | 33 | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/capsupported.test.ts test/routes.test.ts test/update-routes.test.ts test/boot.test.ts test/auth-passkey.test.ts test/auth-wire.test.ts )` | 6 passed (6) | 308 passed (308) | 24 | 0 |
 | 09 | `( cd server && ./node_modules/.bin/vitest run test/docs-source.test.ts test/docs-budget.test.ts test/docs-shared.test.ts test/docs-parity.test.ts )` | 4 passed (4) | 471 passed (471) | 6 | 0 |
 | 10 | `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )` | 1 passed (1) | 13 passed \| 437 skipped (450) | 4 | 0 |
 
-The full server suite, in 53 batches that hold every file vitest's include reaches exactly once (files one call cannot hold run as `-t` pieces of their top-level describes). This run's first pass: red (red on the first run: F24, F25). First full run of this wave: **red** (at `87126057c672`).
+The full server suite, in 53 batches that hold every file vitest's include reaches exactly once (files one call cannot hold run as `-t` pieces of their top-level describes). This run's first pass: red (red on the first run: F17, F24, F25). First full run of this wave: **red** (at `87126057c672`).
 
 | # | Command | Test Files | Tests | s | rc |
 |---|---|---|---|---|---|
-| F01 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-a/> )` | 11 passed (11) | 548 passed (548) | 99 | 0 |
-| F02 | `( cd server && ./node_modules/.bin/vitest run <the 27 files whose name matches /^ccd-(b\|c[a-h])/> )` | 27 passed (27) | 997 passed \| 1 skipped (998) | 495 | 0 |
-| F03 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-c/> )` | 5 passed (5) | 178 passed (178) | 63 | 0 |
-| F04 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-[d-h]/> )` | 11 passed (11) | 683 passed (683) | 69 | 0 |
-| F05 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-[i-o]/> )` | 14 passed (14) | 584 passed (584) | 112 | 0 |
-| F06 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-p/> )` | 14 passed (14) | 408 passed (408) | 110 | 0 |
-| F07 | `( cd server && ./node_modules/.bin/vitest run <the 13 files whose name matches /^ccd-r[a-e]/> )` | 13 passed (13) | 245 passed (245) | 75 | 0 |
-| F08 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccd-r/> )` | 9 passed (9) | 246 passed (246) | 53 | 0 |
-| F09 | `( cd server && ./node_modules/.bin/vitest run <the 16 files whose name matches /^ccd-s/> )` | 16 passed (16) | 389 passed \| 8 skipped (397) | 29 | 0 |
-| F10 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-[t-v]/> )` | 6 passed (6) | 119 passed (119) | 9 | 0 |
-| F11 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-ws-expire/> )` | 6 passed (6) | 135 passed (135) | 110 | 0 |
-| F12 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-(w[a-r]\|wsa\|ws-[a-g])/> )` | 5 passed (5) | 191 passed (191) | 82 | 0 |
-| F13 | `( cd server && ./node_modules/.bin/vitest run <the 4 files whose name matches /^ccd-/> )` | 4 passed (4) | 82 passed (82) | 38 | 0 |
-| F14 | `( cd server && ./node_modules/.bin/vitest run <the 34 files whose name matches /^[ab]/> )` | 34 passed (34) | 1088 passed (1088) | 54 | 0 |
-| F15 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^(ca\|ccdargv\|ccg)/> )` | 9 passed (9) | 274 passed \| 5 skipped (279) | 19 | 0 |
-| F16 | `( cd server && ./node_modules/.bin/vitest run <the 1 files whose name matches /^ccrc-install-graphify\./> )` | 1 passed (1) | 58 passed (58) | 136 | 0 |
-| F17 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccrc-[a-h]/> )` | 9 passed (9) | 562 passed \| 3 skipped (565) | 180 | 0 |
-| F18 | `( cd server && ./node_modules/.bin/vitest run <the 10 files whose name matches /^ccrc-/> )` | 10 passed (10) | 562 passed \| 4 skipped (566) | 72 | 0 |
-| F19 | `( cd server && ./node_modules/.bin/vitest run <the 23 files whose name matches /^ch/> )` | 23 passed (23) | 1072 passed (1072) | 187 | 0 |
-| F20 | `( cd server && ./node_modules/.bin/vitest run <the 47 files whose name matches /^c/> )` | 47 passed (47) | 5885 passed (5885) | 175 | 0 |
-| F21 | `( cd server && ./node_modules/.bin/vitest run <the 78 files whose name matches /^[d-k]/> )` | 78 passed (78) | 4521 passed \| 3 skipped (4524) | 159 | 0 |
-| F22 | `( cd server && ./node_modules/.bin/vitest run <the 59 files whose name matches /^[l-o]/> )` | 59 passed (59) | 1405 passed \| 11 skipped (1416) | 145 | 0 |
-| F23 | `( cd server && ./node_modules/.bin/vitest run <the 65 files whose name matches /^[p-r]/> )` | 65 passed (65) | 1877 passed \| 5 skipped (1882) | 176 | 0 |
-| F24 | `( cd server && ./node_modules/.bin/vitest run <the 54 files whose name matches /^[st]/> )` | 1 failed (1) | 1 failed \| 13 passed (14) | 193 | 1; re-run alone: 1 |
+| F01 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-a/> )` | 11 passed (11) | 548 passed (548) | 88 | 0 |
+| F02 | `( cd server && ./node_modules/.bin/vitest run <the 27 files whose name matches /^ccd-(b\|c[a-h])/> )` | 27 passed (27) | 997 passed \| 1 skipped (998) | 390 | 0 |
+| F03 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-c/> )` | 5 passed (5) | 178 passed (178) | 61 | 0 |
+| F04 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-[d-h]/> )` | 11 passed (11) | 683 passed (683) | 57 | 0 |
+| F05 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-[i-o]/> )` | 14 passed (14) | 584 passed (584) | 105 | 0 |
+| F06 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-p/> )` | 14 passed (14) | 408 passed (408) | 105 | 0 |
+| F07 | `( cd server && ./node_modules/.bin/vitest run <the 13 files whose name matches /^ccd-r[a-e]/> )` | 13 passed (13) | 245 passed (245) | 80 | 0 |
+| F08 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccd-r/> )` | 9 passed (9) | 246 passed (246) | 59 | 0 |
+| F09 | `( cd server && ./node_modules/.bin/vitest run <the 16 files whose name matches /^ccd-s/> )` | 16 passed (16) | 389 passed \| 8 skipped (397) | 37 | 0 |
+| F10 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-[t-v]/> )` | 6 passed (6) | 119 passed (119) | 10 | 0 |
+| F11 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-ws-expire/> )` | 6 passed (6) | 135 passed (135) | 133 | 0 |
+| F12 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-(w[a-r]\|wsa\|ws-[a-g])/> )` | 5 passed (5) | 191 passed (191) | 79 | 0 |
+| F13 | `( cd server && ./node_modules/.bin/vitest run <the 4 files whose name matches /^ccd-/> )` | 4 passed (4) | 82 passed (82) | 41 | 0 |
+| F14 | `( cd server && ./node_modules/.bin/vitest run <the 34 files whose name matches /^[ab]/> )` | 34 passed (34) | 1088 passed (1088) | 48 | 0 |
+| F15 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^(ca\|ccdargv\|ccg)/> )` | 9 passed (9) | 274 passed \| 5 skipped (279) | 22 | 0 |
+| F16 | `( cd server && ./node_modules/.bin/vitest run <the 1 files whose name matches /^ccrc-install-graphify\./> )` | 1 passed (1) | 58 passed (58) | 152 | 0 |
+| F17 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccrc-[a-h]/> )` | 9 passed (9) | 562 passed \| 3 skipped (565) | 203 | 1; re-run alone: 0 |
+| F18 | `( cd server && ./node_modules/.bin/vitest run <the 10 files whose name matches /^ccrc-/> )` | 10 passed (10) | 562 passed \| 4 skipped (566) | 81 | 0 |
+| F19 | `( cd server && ./node_modules/.bin/vitest run <the 23 files whose name matches /^ch/> )` | 23 passed (23) | 1072 passed (1072) | 175 | 0 |
+| F20 | `( cd server && ./node_modules/.bin/vitest run <the 47 files whose name matches /^c/> )` | 47 passed (47) | 5885 passed (5885) | 141 | 0 |
+| F21 | `( cd server && ./node_modules/.bin/vitest run <the 78 files whose name matches /^[d-k]/> )` | 78 passed (78) | 4551 passed \| 3 skipped (4554) | 178 | 0 |
+| F22 | `( cd server && ./node_modules/.bin/vitest run <the 59 files whose name matches /^[l-o]/> )` | 59 passed (59) | 1405 passed \| 11 skipped (1416) | 141 | 0 |
+| F23 | `( cd server && ./node_modules/.bin/vitest run <the 65 files whose name matches /^[p-r]/> )` | 65 passed (65) | 1877 passed \| 5 skipped (1882) | 170 | 0 |
+| F24 | `( cd server && ./node_modules/.bin/vitest run <the 54 files whose name matches /^[st]/> )` | 1 failed \| 53 passed (54) | 1 failed \| 3566 passed \| 3 skipped (3570) | 239 | 1; re-run alone: 1 |
 |  | FAIL: test/tmp-sweep.test.ts > ccd-tmp-sweep: refusals and brakes > FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed |  |  |  |  |
-| F25 | `( cd server && ./node_modules/.bin/vitest run <the 50 files whose name matches no earlier pattern> )` | 1 passed (1) | 43 passed (43) | 137 | 1; re-run alone: 0 |
-| F26 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part1 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 58 passed \| 87 skipped (145) | 162 | 0 |
-| F27 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part2 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 77 passed \| 68 skipped (145) | 196 | 0 |
-| F28 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: rest>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 6 passed \| 139 skipped (145) | 1 | 0 |
-| F29 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part1 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 65 passed \| 49 skipped (114) | 208 | 0 |
-| F30 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part2 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 49 passed \| 65 skipped (114) | 197 | 0 |
-| F31 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: rest>' test/ccd-ws-reap.test.ts )` | 1 skipped (1) | 114 skipped (114) | 1 | 0 |
-| F32 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part1 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 96 passed \| 261 skipped (357) | 28 | 0 |
-| F33 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part2 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 156 passed \| 201 skipped (357) | 98 | 0 |
-| F34 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part3 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 44 passed \| 313 skipped (357) | 18 | 0 |
-| F35 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part4 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 59 passed \| 298 skipped (357) | 44 | 0 |
-| F36 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: rest>' test/ccrc-account.test.ts )` | 1 passed (1) | 2 passed \| 355 skipped (357) | 2 | 0 |
-| F37 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part1 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 73 passed \| 815 skipped (888) | 54 | 0 |
-| F38 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part2 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 125 passed \| 763 skipped (888) | 118 | 0 |
-| F39 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part3 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 127 passed \| 761 skipped (888) | 127 | 0 |
-| F40 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part4 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 185 passed \| 703 skipped (888) | 140 | 0 |
-| F41 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part5 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 97 passed \| 791 skipped (888) | 78 | 0 |
-| F42 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part6 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 113 passed \| 775 skipped (888) | 32 | 0 |
-| F43 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: rest>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 153 passed \| 735 skipped (888) | 155 | 0 |
-| F44 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part1 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 60 passed \| 258 skipped (318) | 151 | 0 |
-| F45 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part2 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 63 passed \| 255 skipped (318) | 200 | 0 |
-| F46 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part3 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 68 passed \| 250 skipped (318) | 178 | 0 |
-| F47 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part4 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 73 passed \| 245 skipped (318) | 59 | 0 |
-| F48 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: rest>' test/ccrc-install.test.ts )` | 1 passed (1) | 34 passed \| 284 skipped (318) | 155 | 0 |
-| F49 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part1 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 99 passed \| 415 skipped (514) | 82 | 0 |
-| F50 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part2 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 156 passed \| 358 skipped (514) | 90 | 0 |
-| F51 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part3 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 94 passed \| 420 skipped (514) | 166 | 0 |
-| F52 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part4 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 153 passed \| 361 skipped (514) | 198 | 0 |
+| F25 | `( cd server && ./node_modules/.bin/vitest run <the 50 files whose name matches no earlier pattern> )` | 1 failed \| 49 passed (50) | 1 failed \| 1367 passed (1368) | 114 | 1; re-run alone: 0 |
+| F26 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part1 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 58 passed \| 87 skipped (145) | 211 | 0 |
+| F27 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part2 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 77 passed \| 68 skipped (145) | 215 | 0 |
+| F28 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: rest>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 6 passed \| 139 skipped (145) | 2 | 0 |
+| F29 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part1 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 65 passed \| 49 skipped (114) | 259 | 0 |
+| F30 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part2 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 49 passed \| 65 skipped (114) | 246 | 0 |
+| F31 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: rest>' test/ccd-ws-reap.test.ts )` | 1 skipped (1) | 114 skipped (114) | 4 | 0 |
+| F32 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part1 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 96 passed \| 261 skipped (357) | 40 | 0 |
+| F33 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part2 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 156 passed \| 201 skipped (357) | 169 | 0 |
+| F34 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part3 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 44 passed \| 313 skipped (357) | 32 | 0 |
+| F35 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part4 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 59 passed \| 298 skipped (357) | 81 | 0 |
+| F36 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: rest>' test/ccrc-account.test.ts )` | 1 passed (1) | 2 passed \| 355 skipped (357) | 8 | 0 |
+| F37 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part1 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 73 passed \| 815 skipped (888) | 90 | 0 |
+| F38 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part2 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 125 passed \| 763 skipped (888) | 162 | 0 |
+| F39 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part3 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 127 passed \| 761 skipped (888) | 169 | 0 |
+| F40 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part4 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 185 passed \| 703 skipped (888) | 178 | 0 |
+| F41 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part5 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 97 passed \| 791 skipped (888) | 103 | 0 |
+| F42 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part6 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 113 passed \| 775 skipped (888) | 39 | 0 |
+| F43 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: rest>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 153 passed \| 735 skipped (888) | 236 | 0 |
+| F44 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part1 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 60 passed \| 258 skipped (318) | 176 | 0 |
+| F45 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part2 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 63 passed \| 255 skipped (318) | 253 | 0 |
+| F46 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part3 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 68 passed \| 250 skipped (318) | 264 | 0 |
+| F47 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part4 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 73 passed \| 245 skipped (318) | 91 | 0 |
+| F48 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: rest>' test/ccrc-install.test.ts )` | 1 passed (1) | 34 passed \| 284 skipped (318) | 280 | 0 |
+| F49 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part1 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 99 passed \| 415 skipped (514) | 164 | 0 |
+| F50 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part2 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 156 passed \| 358 skipped (514) | 111 | 0 |
+| F51 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part3 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 94 passed \| 420 skipped (514) | 175 | 0 |
+| F52 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part4 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 153 passed \| 361 skipped (514) | 256 | 0 |
 | F53 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: rest>' test/ccrc-update.test.ts )` | 1 skipped (1) | 514 skipped (514) | 3 | 0 |
 
 ```text
@@ -14284,7 +14284,7 @@ OK test/ccrc-update.test.ts: 502 tests ran once each across its pieces, 12 skipp
 From `w3-invariants.py` (scope from W3's own commits; net shapes against the base, or the last merge of main):
 
 ```text
-base 5a6e5d3d7ef5, ref f82cb9fbcabf, tip 8fff7c916195, 27 W3 commits, 1 merges of main
+base 5a6e5d3d7ef5, ref f82cb9fbcabf, tip e3bd8859ef41, 39 W3 commits, 1 merges of main
 PASS scope          20 files touched by W3 commits; outside the scope: none; scope files untouched: none
 PASS untouched      ccd/, shared/, pwa/, agent/, index.ts, docs/ports.ts, docs/ccdsource.ts, lifecycle.ts, ccdargv.ts, remote/runner.ts, README.md, CLAUDE.md changed vs ref: none
 PASS docs-files     tracked ['cache.ts', 'ccdsource.ts', 'hooks.ts', 'lane.ts', 'policy.ts', 'ports.ts', 'routes.ts']; on disk ['cache.ts', 'ccdsource.ts', 'hooks.ts', 'lane.ts', 'policy.ts', 'ports.ts', 'routes.ts']
@@ -14303,7 +14303,7 @@ PASS deviations     ## Deviations found x1; defined ['D-4464', 'D-4465', 'D-4466
 
 ### Mutation table
 
-Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `8fff7c916195`, one row at a time, each file restored byte for byte after its row.
+Every `W3-T<n>-M<k>` row of Tasks 1-11 and every `W3-FR<r>-M<k>` row of a fix round (carried in Task 11's block), extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `e3bd8859ef41`, one row at a time, each file restored byte for byte after its row.
 
 | Row | Task | File | Result | First red case (measured) |
 |---|---|---|---|---|
@@ -14394,13 +14394,13 @@ Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W3-T4-M1 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane admits by laneAdmit, applied to its head (section 6.3) > 2 small jobs start at once and the third waits for a slo |
 | W3-T4-M2 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane is strict FIFO (section 6.3) > jobs start in the order they were queued |
 | W3-T4-M3 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane is strict FIFO (section 6.3) > a large head blocks a small job behind it that would admit on its own |
-| W3-T4-M4 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane refuses past its queue and its wait (M6.2, section 6.3) > with 2 running and 32 queued, the next is docs-busy {la |
+| W3-T4-M4 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane refuses past its queue and its wait (M6.2, section 6.3) > with 2 running and 32 queued, the next is docs-busy {la |
 | W3-T4-M5 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane refuses past its queue and its wait (M6.2, section 6.3) > a queued job still waits at 9999 ms, is docs-busy at 10 |
 | W3-T4-M6 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: abandonment in the read lane (refinement (j), section 6.3) > aborting a queued job answers abandoned, dequeues it, and it never |
 | W3-T4-M7 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane releases a slot on every settle, once (section 6.3) > a rejected exec frees its slot (the next queued starts) and |
-| W3-T4-M8 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > the same key twice: the second waits behind |
-| W3-T4-M9 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > three keys: 2 run and the third waits for a |
-| W3-T4-M10 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > with 2 running and 8 queued across keys, th |
+| W3-T4-M8 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > the same key twice: the second waits behind |
+| W3-T4-M9 | T4 (re-anchored in T11) | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F8: lane verdicts are L1's > fetchAdmit: 2 running, key running=false is full (full wins over skip) |
+| W3-T4-M10 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > with 2 running and 8 queued across keys, th |
 | W3-T4-M11 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > the same queue with the global bound reache |
 | W3-T4-M12 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: single-flight (section 6.4, refinement (j)) > two joins on one key start once and both receive the one value |
 | W3-T4-M13 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: single-flight (section 6.4, refinement (j)) > a settled flight frees its key: a third join starts again |
@@ -14421,8 +14421,8 @@ Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W3-T4-M28 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > close answers every queued fetch busy, leav |
 | W3-T4-M29 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the generation counter (section 6.4) > starts at 0 per key, bump answers the new value, and keys are independent |
 | W3-T4-M30 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: single-flight (section 6.4, refinement (j)) > a lone joiner whose signal is already aborted starts a flight whose signal is abo |
-| W3-T4-M31 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > 8 queued behind one running key with a glob |
-| W3-T4-M32 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > with 2 running and 8 queued across keys, th |
+| W3-T4-M31 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > 8 queued behind one running key with a glob |
+| W3-T4-M32 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > with 2 running and 8 queued across keys, th |
 | W3-T5-M1 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > blob cache: the same (repoKey, blob) under two nodes  |
 | W3-T5-M2 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > listing map: the same tree under two nodes is two com |
 | W3-T5-M3 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > 65 values of 1 MiB stay within DOCS_CACHE_BYTES: the first is evi |
@@ -14507,7 +14507,7 @@ Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W3-T7-M21 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: an index flight begun before a refresh's fetch neither answers a later GET nor fills the micro-cache (section 6.5: "dropped by an |
 | W3-T7-M22 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: an index flight begun before a refresh's fetch neither answers a later GET nor fills the micro-cache (section 6.5: "dropped by an |
 | W3-T7-M23 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > a local ref (no fet |
-| W3-T8-M1 | T8 | `server/test/auth-gate.test.ts` | red | test/auth-gate.test.ts > the scanner is looking at something > found all four files, and EXACTLY the route count the surface has |
+| W3-T8-M1 | T8 | `server/test/auth-gate.test.ts` | red | test/auth-gate.test.ts > the scanner is looking at something > found all five files, and EXACTLY the route count the surface has |
 | W3-T8-M2 | T8 | `server/src/server.ts` | red | test/auth-gate.test.ts > the scanner is COMPLETE — measured against Fastify's own route table > …and in the other direction: nothing the scan found is a phantom |
 | W3-T8-M3 | T8 | `server/src/server.ts` | red | test/auth-gate.test.ts > the scanner is COMPLETE — measured against Fastify's own route table > …and in the other direction: nothing the scan found is a phantom |
 | W3-T8-M4 | T8 | `server/src/server.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > every /api/docs route lives i |
@@ -14556,21 +14556,40 @@ Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W3-T11-M14 | T11 | `server/src/docs/policy.ts` | red | test/docs-headers.test.ts > W3 T3: the response policy (M5.5, section 5.3) > json-404-immutable: a non-200 is always no-store |
 | W3-T11-M15 | T11 | `server/src/docs/policy.ts` | red | test/docs-file-bytes.test.ts > M5.6 — Cache-Control: immutable only on a committed raster 200 > a draft raster 200, a committed JSON 200 and a draft JSON 200 ar |
 | W3-T11-M16 | T11 | `server/src/docs/policy.ts` | red | test/docs-routes.test.ts > M3.4 — every refusal before an exec answers its word and status, with zero execs > file: a mixed pin |
+| W3-FR1-M1 | FR1 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > FR1 review F1: a committed show line that passes check 8 and carries a deep unknown key is a 502 schema, never cached, never a 500 >  |
+| W3-FR1-M2 | FR1 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > FR1 review F2: provenance runs at onRequest, so an unproven request's body is never parsed > a marker-less POST refresh with an inva |
+| W3-FR1-M3 | FR1 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > FR1 review F3: the blob-cache hit branch of the file route, on ONE app with two GETs each > a .png holding SVG text answers 422 r |
+| W3-FR1-M4 | FR1 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > FR1 review F3: the blob-cache hit branch of the file route, on ONE app with two GETs each > a true committed .png answers raw ima |
+| W3-FR1-M5 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F4: the tree shape guard refuses a non-finite attemptAgeMs and an entry path that is not key text > stamp.attemptAgeMs Inf |
+| W3-FR1-M6 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F4: the tree shape guard refuses a non-finite attemptAgeMs and an entry path that is not key text > an entry whose path is |
+| W3-FR1-M7 | FR1 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > FR1 review F5: a read whose every requester left is taken from Fastify and its socket ended, never answered late > a queued tree GET  |
+| W3-FR1-M8 | FR1 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > FR1 review F6: a settled flight detaches its joiners, so a joiner that goes later touches nothing of the dead flight > a joiner whose  |
+| W3-FR1-M10 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > an answer of exactly 1 MiB beside a large one admits (over, not at) |
+| W3-FR1-M11 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F8: lane verdicts are L1's > laneOverflow: the read lane with 31 waiting overflows=false |
+| W3-FR1-M12 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F8: lane verdicts are L1's > fetchAdmit: 2 running, key running=true is full (full wins over skip) |
+| W3-FR1-M13 | FR1 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane admits by laneAdmit, applied to its head (section 6.3) > a second large job waits; exactly DOCS_LANE_LARGE_RAW is |
+| W3-FR1-M14 | FR1 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane admits by laneAdmit, applied to its head (section 6.3) > a second large job waits; exactly DOCS_LANE_LARGE_RAW is |
+| W3-FR1-M15 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > an answer of exactly 1 MiB beside a large one admits (over, not at) |
+| W3-FR1-M9 | FR1 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > FR1 review F9: a stored entry owns its bytes > a small pooled source is stored as the cache's own copy: its buffer is exactly its leng |
 
-249 rows; 249 measured as expected.
+264 rows; 264 measured as expected.
 
 ### Notes
 
 - Task 11: Findings: 16 (fixed 14, carried 0, not a defect 1, ruled departures 1). Commits: 7fbb195b2 0102095ed fabb83849 79651fb14 4380db8a6 f419310a3 8e663c862 0b1367fb0 e1ae037d2 90642272c 0bb98422b 7f19adbd3 87126057c. Panel tip 7a1936dd4e640610931b1ec596f1c656a9ce323a; fix-wave tip 87126057c672d90dd06e11f3cf5ac14983201e76.
 - Merged origin/main (#330) at a316d60b3 under worker clause 16 (merge-tree conflict); counts re-derived; W3-T8-M6 and W3-T8-M12 re-anchored at 8fff7c916.
-- This section replaces the one written at 633010a1b, which measured the tree before that merge; the wave's FIRST full-run verdict (`red`, at 87126057c672) is unchanged and was never rewritten. This re-run is on the merged tip.
-- suite F25 full-rest: red on this run's first pass (test/update-store-nodes.test.ts, the `heir guard IS isHalting` case: Test timed out in 20000ms under load; the same case timed out on the pre-merge run too), green re-run alone (43 passed in 56 s); a load flake.
-- suite F24: test/tmp-sweep.test.ts `FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed` red on this run's first pass and red alone (1 failed | 13 passed); it was measured red in a `git archive` copy of the base (5a6e5d3d7) on the pre-merge run; main-red, not W3's.
+- This section replaces the one written at 77862e265 (before fix round 1); the wave's FIRST full-run verdict (`red`, at 87126057c672) is unchanged and was never rewritten. This re-run is on the fix-round tip.
+- suite F17 full-ccrc-a-h: red on this run's first pass (rc=1; `Test Files  9 passed (9)`, `Tests  562 passed | 3 skipped (565)`, `Errors  1 error`: an unhandled `write EPIPE` raised from test/ccrc-api.test.ts:109, no test failed), green re-run alone (`Test Files  9 passed (9)`, `Tests  562 passed | 3 skipped (565)`, rc=0); a load flake.
+- suite F25 full-rest: red on this run's first pass (`Tests  1 failed | 1367 passed (1368)`: test/update-store-nodes.test.ts, the `heir guard IS isHalting` case, Test timed out in 20000ms under load), green re-run alone (`Tests  43 passed (43)` in 52 s); a load flake.
+- suite F24 full-s-t: test/tmp-sweep.test.ts `FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed` red on this run's first pass (`Tests  1 failed | 3566 passed | 3 skipped (3570)`) and red alone (`Tests  1 failed | 13 passed (14)`); it was measured red in a `git archive` copy of the base (5a6e5d3d7) on the wave's first full run; main-red, not W3's.
 - Coordinator ruling (mail 4080, 2026-10-09) on main-red tmp-sweep: the wave brief lists tmp-sweep's FAILS CLOSED row as a known red; recorded, not fixed by W3 (red at the base 5a6e5d3d7 too).
-- Mutation rows: 249 ids from 255 rows in 12 blocks (T1 25, T2 40, T3 19, T4 32, T5 30, T6 31, T7 23, T8 13, T9 14, T10 6, T11 22, T12 0); the extractor reports 6 re-anchors by Task 11 (W3-T5-M7, W3-T5-M18, W3-T5-M19, W3-T6-M27, W3-T8-M6, W3-T8-M12); no row needed a re-anchor in this task.
-- Route counts on the merged tree (re-derived by the coordinator at a316d60b3): ROUTES.length 97 = 51+33+7+2+4, HTTP 94, gated 61, exempt-HTTP 33, gate.ts numeral 94; the plan's arithmetic gave 90/93/58 on its base, and the difference is main's own routes (#320 stall-watch, #330 box-token lifecycle). The `gate-shape` and `sd-shape` invariants are judged against the merge's second parent (main), so main's edits do not count as W3's.
+- Mutation rows: 264 ids from 276 rows in 12 blocks (T1 25, T2 40, T3 19, T4 32, T5 30, T6 31, T7 23, T8 13, T9 14, T10 6, T11 43, T12 0); the extractor reports 12 re-anchors by Task 11 (W3-T5-M7, W3-T5-M18, W3-T5-M19, W3-T6-M27, W3-T8-M6, W3-T8-M12, W3-T4-M4, W3-T4-M8, W3-T4-M9, W3-T4-M10, W3-T4-M31, W3-T4-M32); no row needed a re-anchor in this task; mutate.py ended `264 rows; 264 measured as expected.`
+- Route counts on the merged tree (re-derived by the coordinator at a316d60b3): ROUTES.length 97 = 51+33+7+2+4, HTTP 94, gated 61, exempt-HTTP 33, gate.ts numeral 94; the plan's arithmetic gave ROUTES 93, HTTP 90, gated 58 on its base, and the difference is main's own routes (#320 stall-watch, #330 box-token lifecycle). The `gate-shape` and `sd-shape` invariants are judged against the merge's second parent (main), so main's edits do not count as W3's.
 - Deviation count: the plan's "five deviations" reads six (brief override), and the section holds eight entries, D-4464..D-4471 (six refinements, D-4470 the listing-map floor from Task 5's review, D-4471 the WebSocket-upgrade escape from Task 11's review 2-2).
 - 43 per-task minors (Tasks 1-10) were deferred, none load-bearing, listed in the worker's SDD ledger.
+- Fix round 1 (review 361, coordinator mail 4110): F1-F6 pinned with rows W3-FR1-M1..M8; F7 tightened D-4471's three tests (gate-before-provenance ordering shown, the file route upgraded, lane/flight/cache asserted directly); F8 moved fetch admission (`fetchAdmit`), both queue overflows (`laneOverflow`) and the large-job predicate (`laneLarge`) into L1, with `laneAdmit`'s fourth clause calling `laneLarge` (one in-place line in W2's function, behaviour unchanged), rows W3-T4-M4/M8/M9/M10/M31/M32 re-anchored and W3-FR1-M10..M15 added; F9 made the blob cache hold its own copy of the bytes (W3-FR1-M9); F10 joins the carried list with its measured number; F11-F13 corrected words and this record. No D-number was spent.
+- The plan's Task 4 Decision 1 says the lane's "one comparison" is `isLarge`; after fix round 1 the lane makes none: every lane verdict is L1's (`laneAdmit`, `fetchAdmit`, `laneOverflow`, `laneLarge`). The code now follows the spec's rings rather than that text; no D-number, by the coordinator's ruling (mail 4110).
+- W2's plan (`2026-10-06-native-docs-reader-w2-grants-and-adapter.md`) has mutation rows anchored on `laneAdmit`'s old inline fourth clause, which fix round 1's ruled in-place edit replaced with a `laneLarge` call; that plan is closed and its anchors are snapshots, so W2's table is not re-runnable against this tree as written. Two W3 rows' `red` text (W3-T11-M9, W3-T8-M1) quotes case titles fix round 1 retitled; both rows still measure red.
 
 ### Carried, not fixed
 
@@ -14580,7 +14599,7 @@ Every `W3-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 - W7 prose: two test comments (`coord-store.test.ts`, `run-routes.test.ts`) still say no `app.setErrorHandler` exists in `server/src`; after W3 one does, plugin-scoped (`hooks.ts`). CLAUDE.md's known-load-flakes bullet gains `docs-console-latency`. DEFERRED to W7 (refinement (u): no README or CLAUDE.md edit here).
 - SEC-3 (a killed helper orphans git's process group; the lane holds a slot until the runner budget and never kills), SEC-4 (fetch stamps accumulate, one per branch name) and the missing stamp after a failed post-fetch `for-each-ref`: CARRIED to W5 and ccd, not fixed.
 - `branch: null` means detached OR unmeasured; the partial-clone word pair (`git-failed {step:'cat-file'}` on git 2.43, `unknown-commit` on 2.55); `too-many-entries` read by `count`: each CARRIED verbatim by every route, never mapped or defaulted.
-- The generation map (`docsGenerations`, `lane.ts`) gains one entry per (node, project) ever refreshed and one per node, and nothing bounds how many project names there are (the grammar bounds a name's length only). The growth is one short key and one number per new name, each a session-gated POST; an entry cannot be dropped safely, since a counter reset to 0 lets a request join a flight keyed on the old value. CARRIED as accepted.
+- The generation map (`docsGenerations`, `lane.ts`) gains one entry per (node, project) ever refreshed and one per node, and nothing bounds how many project names there are (the grammar bounds a name's length only). The growth is one short key and one number per new name, each a session-gated POST; an entry cannot be dropped safely, since a counter reset to 0 lets a request join a flight keyed on the old value. Review 361 F10 measured it: 20 000 refreshes of distinct names grew the heap about 11.3 MB after GC, about 560 B per name. CARRIED as accepted.
 - `policy.ts`'s `lowerAscii` twins `shared/docs.ts`'s module-private ASCII lowering, because W3 must not edit `shared/`; Task 2's parity describe pins both homes to `DOCS_RASTER_EXT`. CARRIED to W7's residue.
 - W7 spec pass: section 5.3's "every docs response" should name both escapes: refinement (d)'s router-level refusals (D-4464) and the WebSocket upgrade (D-4471).
 - The adapter's second redaction pass rewrites values, not key names (review 317). W3 sends every failure body as the adapter returns it and builds none from ccd's keys; the fix is L3's `redactBody`, outside W3's row, and the path is latent (no W1 ccd verb writes untrusted text into a key). CARRIED to a later adapter change.
