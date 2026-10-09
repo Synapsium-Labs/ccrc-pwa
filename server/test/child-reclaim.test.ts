@@ -172,7 +172,7 @@ describe('the fourteen words', () => {
     }
   });
 
-  // A token is exactly one of: a ws-reclaim refusal the kind map classes, one of the two pre-lock
+  // A token is exactly one of: a ws-reclaim refusal the kind map classes, one of the pre-lock
   // failures (`childReclaimFailureLine`), or unknown. The journal-only vocabulary (`LC_REFUSAL_WORD`)
   // is where the pre-lock failures live, so it must share no word with the kind map: a word in both
   // would be classed twice, by two readers that need not agree (spec §5.9).
@@ -311,13 +311,21 @@ describe('parseChildReclaimResult', () => {
   });
 
   // Parity: the ONE word this file special-cases must still be the word ccd
-  // actually prints. A ccd rename would silently return this exception to
-  // ordinary `resumable` handling with no red anywhere else, because
-  // `parseChildReclaimResult` never fails to parse a `{failed:…}` document —
-  // it just stops recognising the special case.
-  it("the special-cased word is ccd's own — `_ws_reclaim_failed_json probe-unmeasured`", () => {
+  // prints AT THE RECLAIM SITE. Retargeted at wave 6 (spec §5.9): the site
+  // became `_ws_reclaim_fail … probe-unmeasured`, so the journal line and the
+  // document come from one word. A whole-file `toContain` of the old
+  // `_ws_reclaim_failed_json probe-unmeasured` stayed green on ws-expire's twin
+  // alone, which made it vacuous. So this reads only the code lines of the
+  // RECLAIM region.
+  it("the special-cased word is ccd's own — the RECLAIM region's `_ws_reclaim_fail … probe-unmeasured`", () => {
     const ccd = readFileSync(CCD, 'utf8');
-    expect(ccd).toContain('_ws_reclaim_failed_json probe-unmeasured');
+    const begin = ccd.indexOf('RECLAIM-BEGIN');
+    const end = ccd.indexOf('RECLAIM-END');
+    expect(begin, 'the RECLAIM region is missing its BEGIN marker').toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(begin);
+    const code = ccd.slice(begin, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code).toMatch(/_ws_reclaim_fail "\$id" "" probe-unmeasured "\$REAP_DETAIL"/);
+    expect(code, 'no unjournaled printer of the word is left in the region').not.toContain('_ws_reclaim_failed_json probe-unmeasured');
   });
 
   // Review 170 F20: a PRE-LOCK die of `cmd_ws_reclaim` — recognised POSITIVELY
@@ -360,12 +368,14 @@ describe('parseChildReclaimResult', () => {
       ['python3 unavailable', 'cannot quote the reclaim record safely'],
       ['flock unavailable', 'flock (util-linux) is unavailable'],
     ];
-    // The failure's own word (spec §5.9): the one a pre-lock die journals as its `refusal` — ccd writes the
-    // flock die through `_lc_refuse reclaim … flock-unavailable`, the lock die likewise. The other dies
-    // journal nothing, so their read carries none. Each row's word is spelled here, apart from the source.
+    // The failure's own word (spec §5.9): the one a pre-lock die journals as its `refusal`. ccd writes the
+    // flock die through `_lc_refuse reclaim … flock-unavailable`, and the lock die likewise. Since wave 6
+    // (spec §5.9) the bad-token and bad-run-id dies use `… token-malformed` and `… run-id-malformed`. The
+    // usage, bad-session-id and python3 dies journal nothing, so their read carries no word. Each row's
+    // word is spelled here, apart from the source.
     const PRE_LOCK_TOKEN: Readonly<Record<string, string | null>> = {
-      usage: null, 'bad token': null, 'bad run id': null, 'bad session id': null, 'python3 unavailable': null,
-      'flock unavailable': 'flock-unavailable',
+      usage: null, 'bad token': 'token-malformed', 'bad run id': 'run-id-malformed', 'bad session id': null,
+      'python3 unavailable': null, 'flock unavailable': 'flock-unavailable',
     };
     it.each(SINGLE_LINE_NEEDLES)('%s is resume: "pre-lock-die", and the detail is ccd\'s own message', (what, needle) => {
       const msg = dieMessage(needle);
@@ -1435,7 +1445,8 @@ describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclai
       .toMatchObject({ resume: 'pre-lock-die', token: 'flock-unavailable' });
     expect(parseChildReclaimResult(ID, '', 'ccd: cannot open the reap lock at /real/path.lock'))
       .toMatchObject({ resume: 'pre-lock-die', token: 'lock-unopenable' });
-    expect(die('bad token')).toMatchObject({ resume: 'pre-lock-die', token: null });
+    expect(die('bad token')).toMatchObject({ resume: 'pre-lock-die', token: 'token-malformed' });
+    expect(die('bad session id')).toMatchObject({ resume: 'pre-lock-die', token: null });
     expect(parseChildReclaimResult(ID, JSON.stringify({ failed: 'pin-failed', detail: 'x' }), ''))
       .toMatchObject({ resume: 'resumable', token: 'pin-failed' });
     expect(parseChildReclaimResult(ID, JSON.stringify({ failed: 'probe-unmeasured', detail: 'x' }), ''))

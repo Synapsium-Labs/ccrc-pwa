@@ -108,7 +108,7 @@ const serverSources = (): string => {
 const CONTRACT = [
   'Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.',
   'The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.',
-  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was deferred or never started); this session’s own workspace is cleaned up by a human, or by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).',
+  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was deferred or never started); this session’s own workspace is cleaned up by a human, or — when it carries no child marker — by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).',
   'This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.',
   'A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.',
   'A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.',
@@ -540,6 +540,13 @@ describe('the coordinator skill: linkage', () => {
       // of every session's hands. The forbid-mention case below is what turns
       // this permission-to-omit into a prohibition.
       'POST /api/coord/reclaim-pause',
+      // STALL-WATCH SETTINGS wave 1 — the operator-dial shape a third time. A
+      // coordinator told about this door would be told how to lower the watch
+      // on its own workers, or stretch their quiet time, which is the watch's
+      // own defeat. Neither half is named, for the caps reason: the read is the
+      // first half of the invitation. The forbid-mention case below forbids it.
+      'GET /api/coord/stall-watch',
+      'POST /api/coord/stall-watch',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1593,6 +1600,12 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // writes, contains the same token).
     expect(allSkillText).not.toContain('/api/coord/reclaim-pause');
     expect(allSkillText).not.toContain('reclaim-pause');
+  });
+
+  it('never names the stall-watch settings door — a door that would tell a coordinator how to lower the watch on its own workers or stretch their quiet time', () => {
+    // Stall-watch settings wave 1, the caps dial's accounting: EXEMPT above
+    // only PERMITS the omission; this is what FORBIDS the mention.
+    expect(allSkillText).not.toContain('/api/coord/stall-watch');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {

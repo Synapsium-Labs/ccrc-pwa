@@ -145,15 +145,19 @@ describe('whitelist.checkPath', () => {
     expect(await checkPath(proj, cfg, 'write')).toBeNull();
   });
 
-  // ── design 2026-09-20 §8: the eight ~/.ccrc node files ──────────────────
+  // ── design 2026-09-20 §8: the nine ~/.ccrc node files (the ninth is box-token lifecycle wave 1's) ──
   // D-3176 — the spec put these in whitelist-structural.test.ts,
   // which pins only the EXEC whitelist (tsc-spawned compile errors, no checkPath
   // case at all); every other checkPath case is in this describe, so these are.
   describe('the ~/.ccrc node files — exact basenames, READ mode only', () => {
-    const EIGHT = ['build.json', 'ccrc-caps', 'floor', 'installed', 'node-id', 'previous', 'update-intent', 'update.json'];
+    const NINE = ['box-token-generation', 'build.json', 'ccrc-caps', 'floor', 'installed', 'node-id', 'previous',
+      'update-intent', 'update.json'];
     // Every other name ccd/ccrc writes (or could) beside them — the secrets first.
     const REFUSED = ['agent.env', 'auth.scrypt', 'coord.db', 'deploy.env', 'ccrc.env', 'exposure.env',
-      'mail.token', 'accounts.json', 'accounts.sh', 'build.json.bak', '.build.json.tmp', path.join('logs', 'x')];
+      'mail.token', 'accounts.json', 'accounts.sh', 'build.json.bak', '.build.json.tmp', path.join('logs', 'x'),
+      // The box-token lifecycle's server-side files beside the ninth name: values, state and temps stay refused.
+      'mail-previous.token', 'mail-pending-0123456789abcdef.token', 'box-token.json', 'box-token-retired.json',
+      'token-sync.json', '.box-token-generation.tmp-0123456789abcdef', 'box-token-generation.bak'];
 
     function seedCcrc(): string {
       seed();
@@ -162,17 +166,17 @@ describe('whitelist.checkPath', () => {
       return ccrc;
     }
 
-    it('the set is exactly the eight §8 names — a ninth is a design change, not an edit', () => {
+    it('the set is exactly the nine names (§8 plus box-token-generation) — a tenth is a design change, not an edit', () => {
       // The grant DERIVES from NODE_FILE_BASENAMES, so a name added to
       // NODE_FILES is a read grant; this is the line that makes that visible.
-      expect([...NODE_FILE_BASENAMES].sort()).toEqual(EIGHT);
+      expect([...NODE_FILE_BASENAMES].sort()).toEqual(NINE);
     });
 
-    it('admits each of the eight for read, absent or present, at its canonical path', async () => {
+    it('admits each of the nine for read, absent or present, at its canonical path', async () => {
       const ccrc = seedCcrc();
       const cfg = { home, projectsRoot };
       const canonicalCcrc = await canonicalize(ccrc);
-      for (const b of EIGHT) {
+      for (const b of NINE) {
         const p = path.join(ccrc, b);
         // Absent first: a node whose writer has not run yet must read `absent`
         // over the wire, not `forbidden` → `unreadable`.
@@ -190,7 +194,7 @@ describe('whitelist.checkPath', () => {
         expect(await checkPath(path.join(ccrc, r), cfg, 'read'), `${r} must NOT be readable`).toBeNull();
       }
       // The directory itself: admitting it would let `readdir` list agent.env's
-      // existence and `lstat`'s parent probe widen past the eight.
+      // existence and `lstat`'s parent probe widen past the nine.
       expect(await checkPath(ccrc, cfg, 'read'), '~/.ccrc itself must NOT be readable').toBeNull();
       expect(await checkPath(path.join(ccrc, 'build.json', 'x'), cfg, 'read')).toBeNull();
       mkdirSync(path.join(home, '.ccrc-evil'), { recursive: true });
@@ -199,15 +203,15 @@ describe('whitelist.checkPath', () => {
       expect(await checkPath(path.join(outside, 'build.json'), cfg, 'read')).toBeNull();
     });
 
-    it('write mode admits none of the eight — the agent never writes a node file', async () => {
+    it('write mode admits none of the nine — the agent never writes a node file', async () => {
       const ccrc = seedCcrc();
       const cfg = { home, projectsRoot };
-      for (const b of EIGHT) {
+      for (const b of NINE) {
         expect(await checkPath(path.join(ccrc, b), cfg, 'write'), `${b} must NOT be writable`).toBeNull();
       }
     });
 
-    it('a live SYMLINK carrying a node-file name is refused — at a secret, at another of the eight, or outside', async () => {
+    it('a live SYMLINK carrying a node-file name is refused — at a secret, at another of the nine, or outside', async () => {
       const ccrc = seedCcrc();
       const cfg = { home, projectsRoot };
       writeFileSync(path.join(ccrc, 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
@@ -225,7 +229,7 @@ describe('whitelist.checkPath', () => {
       expect(await checkPath(path.join(ccrc, 'installed'), cfg, 'read'), 'the real file keeps its own grant').not.toBeNull();
     });
 
-    it('a ~/.ccrc that is itself a symlink admits its own eight and nothing else', async () => {
+    it('a ~/.ccrc that is itself a symlink admits its own nine and nothing else', async () => {
       seed();
       const cfg = { home, projectsRoot };
       const real = mkTmp('ccrc-wl-ccrc-real-');
@@ -303,6 +307,29 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['project-pool', 'demo'])).toBe(false);
     expect(isExecAllowed('ccd', ['project-pool'])).toBe(false);
     expect(isExecAllowed('ccd', ['project-pool', '--pool', 'pool-a'])).toBe(false);
+  });
+
+  // NATIVE DOCS READER wave 2 (spec 2026-10-01 section 2 (a), the verb table): every exact argv the server's
+  // builders emit crosses its grant, and nothing bare, positional, misplaced or misspelled does. The grant stops
+  // at the flag; arity is ccd's, and the server's layer-2c table in `whitelist-subset.test.ts` pins it.
+  it('grants the four docs verbs ONLY with their flag, and admits every argv the spec table names', () => {
+    const sha = 'a'.repeat(40);
+    expect(isExecAllowed('ccd', ['docs-index', '--all'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-tree', '--project', 'demo'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-tree', '--project', 'demo', '--ref', 'ws/a'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-show', '--project', 'demo', '--commit', sha, '--ref', 'refs/remotes/origin/main',
+      '--section', 'specs', '--path', 'a.md', '--max-bytes', '2097152'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-show', '--project', 'demo', '--draft-branch', 'main', '--head', sha,
+      '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-fetch', '--project', 'demo'])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-fetch', '--project', 'demo', '--branch', 'ws/a'])).toBe(true);
+    for (const verb of ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch']) {
+      expect(isExecAllowed('ccd', [verb]), verb).toBe(false);
+    }
+    expect(isExecAllowed('ccd', ['docs-tree', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-tree', '--ref', 'r', '--project', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-index', '--project', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-showx', '--project', 'demo'])).toBe(false);
   });
 
   it('is still a whitelist — plausible adjacent subcommands stay refused', () => {

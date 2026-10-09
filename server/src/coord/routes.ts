@@ -11,7 +11,7 @@ import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
-import { CCD_ARGV, RECLAIM_PAUSE_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, RECLAIM_PAUSE_CAP, ROUTE_CAP, capSupported, deviceActor, verbSupported, sweepDec } from '../ccdargv.js';
 import { escalate, demote, classRungEffortReset, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
 import { CLASSES, type ModelClass } from '../../../shared/models.js';
 import { decideCaps } from './caps.js';
@@ -19,17 +19,24 @@ import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
-import { toRunSummary, type ClaimEndResult, type CoordStore } from './store.js';
+import { toRunSummary, type ClaimEndResult, type CoordStore, type StallSettingsWrite } from './store.js';
 import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
-import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { queueSystemMail } from './rundefs.js';
+import { MAIL_DISABLED_MARKER, queueSystemMail } from './rundefs.js';
+import { STALL_QUIET_MS } from './stall.js';
+import {
+  STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS, decideStallSettings,
+  parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBoxHeld, stallEffectKey, stallFilesExceed,
+  stallLevelOf, stallNeedsConfirm, stallNextStep, stallNoticeCounts, stallSettingsAfter, stallSettingsChange,
+  stallStages, stallUnheldBoxOf, stallWriteEffect, type StallBoxArming, type StallResolved,
+} from './stallsettings.js';
 import { childBindGate } from './childBind.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
@@ -42,6 +49,7 @@ import {
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
+  type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api.js';
 
 /**
@@ -240,6 +248,10 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
+    // Reached only through the sweep's handle, never from a route: no route passes a sweep guard. Mapped so the
+    // switch stays total.
+    case 'claimant-changed': return reply.code(409).send({ ok: false, error: 'claimant-changed', claimedBy: r.claimedBy });
+    case 'sweep-stopped': return reply.code(409).send({ ok: false, error: 'sweep-stopped', stop: r.stop, fleetAct: r.fleetAct });
     default: {
       const _exhaustive: never = r;
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
@@ -434,6 +446,14 @@ export interface CoordRoutesHandle {
     abandon: (runId: number) => Promise<CloseOutcome>,
     refusalOf: (runId: number) => Extract<CloseOutcome, { ok: false }> | null,
   ) => Promise<T>): Promise<T>;
+  /** The SAME hold, handed `closeRun`'s abandon arm as the DEAD-COORDINATOR LANE runs it (workspace lifecycle spec
+   *  2026-09-24 §5.4): `causedBy: 'sweep'`, never the operator's word; the compare-and-set on `claimedBy` against the
+   *  crashed id; the lane's re-measure, which the arm runs before the fleet act and again before the commit; CCR-15 wave
+   *  3's `childReclaim` port wired exactly as the abandon route wires it. The lane's only way to end a run, so the
+   *  reclaim door — which runs inside this serialiser — can never interleave with it. */
+  withSweepAbandon<T>(coord: CoordStore, fn: (
+    abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
+  ) => Promise<T>): Promise<T>;
 }
 
 /**
@@ -518,6 +538,13 @@ export function registerCoordRoutes(
       childReclaim: childReclaimPort(deps, coord) },
     runId, { intent: 'abandon' }, 'operator'), (runId) => abandonRefusal(coord, runId)));
 
+  /** The dead-coordinator lane's abandon (workspace lifecycle spec §5.4) — `withAbandon`'s deps, `'sweep'` and the
+   *  crashed id, inside the same `coordMutex`. Handed to the watcher by `buildServer`. */
+  const withSweepAbandon: CoordRoutesHandle['withSweepAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId, crashedId, stillCrashed) => closeRun(
+    { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
+      childReclaim: childReclaimPort(deps, coord) },
+    runId, { intent: 'abandon' }, 'sweep', { claimedBy: crashedId, stillCrashed })));
+
   // The process's ONE `LedgerLog` (the parts-B handoff): the file half of the
   // allocator's MAX(file, db) recovery, held here and handed into
   // `allocateDeviations` per call — `log` is a parameter of that store
@@ -550,10 +577,10 @@ export function registerCoordRoutes(
    * neither tolerance applies.
    */
   const requireMailToken = (req: FastifyRequest, reply: FastifyReply, route: string): boolean => {
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], route);
     if (verdict === 'ok') return true;
     const detail = verdict === 'legacy'
-      ? `no box token presented — ${route} grants no legacy tolerance (that is /api/notify only)`
+      ? `no box token presented — ${route} grants no legacy tolerance`
       : verdict === 'unconfigured'
         ? `no box token is configured on this server — ${route} fails shut on an unconfigured token, ` +
           'it does not fail open'
@@ -669,13 +696,17 @@ export function registerCoordRoutes(
     //
     // `'unconfigured'` (Task 7 fix-round finding 3 / D-39): a server whose
     // token file was never minted must not run this route open, the way
-    // `/api/notify` is still entitled to — `/api/mail` has no pre-existing
-    // deployed caller a strict gate could strand, the identical argument
+    // `/api/notify` was entitled to until the box-token lifecycle —
+    // `/api/mail` has no pre-existing deployed caller a strict gate could strand, the identical argument
     // that already ruled out a `'legacy'` tolerance here.
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    //
+    // HISTORY since the box-token lifecycle (spec 4.3): `/api/notify` lost both
+    // tolerances too and now refuses the same three verdicts; the contrast above
+    // records why this route never had either.
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
-        ? 'no box token presented — /api/mail grants no legacy tolerance (that is /api/notify only)'
+        ? 'no box token presented — /api/mail grants no legacy tolerance'
         : verdict === 'unconfigured'
           ? 'no box token is configured on this server — /api/mail fails shut on an unconfigured ' +
             'token, it does not fail open (fix-round finding 3)'
@@ -994,10 +1025,10 @@ export function registerCoordRoutes(
     // Same gate, same reasoning: see the ingress route above (fix-round
     // finding 3/5) — `/api/mail/:id/ack` has no legacy caller either, and
     // (fix-round finding 3 / D-39) no unconfigured-token pass-through either.
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/mail/:id/ack');
     if (verdict !== 'ok') {
       const detail = verdict === 'legacy'
-        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance (that is /api/notify only)'
+        ? 'no box token presented — /api/mail/:id/ack grants no legacy tolerance'
         : verdict === 'unconfigured'
           ? 'no box token is configured on this server — /api/mail/:id/ack fails shut on an ' +
             'unconfigured token, it does not fail open (fix-round finding 3)'
@@ -2506,6 +2537,210 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, ...view });
   });
 
+  /** `GET`/`POST /api/coord/stall-watch` — the stall watch's level and quiet time become a choice the operator makes
+   *  on the Settings page (stall watch settings, design 2026-10-05 §10). One path serves both verbs, as caps does, so
+   *  one `SESSION_ONLY` entry covers the door.
+   *
+   *  NOT BOX-TOKEN, AND NOT `UNGATED`, for the caps dial's two reasons. The box token gates machine lanes, and an
+   *  operator choosing a level in the PWA is not one; gating it on the fleet's shared secret would put it behind a key
+   *  the PWA does not hold. Nor is it a release valve: raising the level releases no wedge, so `UNGATED`'s argument
+   *  (D-282) does not apply. It is an ordinary same-origin PWA write: session-gated when `CCRC_AUTH` is armed (no row
+   *  in `auth/gate.ts`'s EXEMPT table), open dark otherwise. `coord-pause-route.test.ts`'s `SESSION_ONLY` holds both
+   *  halves against this file.
+   *
+   *  THE UNARMED BOX, said plainly, as the caps door's "open dark, like every other write the console makes" says it.
+   *  With the gate unarmed, any process that reaches this server, a fleet session included, can change the level or
+   *  the quiet time, as it can the caps. What stands against that is three things: no skill names this door (the
+   *  forbid-mention cases in the coordinator, worker and reviewer suites); every change leaves a feed row naming its
+   *  actor, `flag-off` when unarmed; and arming the gate. The worker a check is about is the session most motivated to
+   *  lower the watch, which is why none of the three skills may name the path.
+   *
+   *  THE VIEW IS BUILT ONCE, by `stallWatchView`, and both halves send it (the `capsView` precedent). It composes and
+   *  decides nothing: the resolver and the readers are L1's (`stallsettings.ts`). It never throws.
+   *  - The resolution runs in its own `try`, and only that `try` claims a fallback. On a throw the reply carries what
+   *    the sweeps' own catch runs: the fleet box's files and the built-in quiet time, with the fallback line's reason.
+   *    A fallback the watcher reports (`watcher.stallFallback()`) is reported even when this one succeeded.
+   *  - The resolved reading's stages are read inside that same `try`, beside the resolver, which reads the same
+   *    stages for every chosen running level: a fault there is the resolution's, so it claims the fallback and the
+   *    reply shows the files-only reading.
+   *  - The view-only readers run in a second `try`, which claims no fallback: a throw there leaves `next` and
+   *    `filesExceed` out and keeps the reading measured, and the sweeps are not affected, because they never call
+   *    those readers. `{ measured: false }` means one thing, a registry that could not be listed; a reader fault never
+   *    answers it, except when the files-only reading's own readers throw over the box arming, under a fallback,
+   *    where no reading of the box can be stated and the `fallback` beside it names the fault.
+   *  - The notice counts run in a third, so a count that fails answers `notices: { ok: false }`, never a 500.
+   *  Each `try` warns once per standing fault and re-arms when it next succeeds, so a page polling every minute does
+   *  not repeat the line.
+   *
+   *  THE WRITE IS DECIDED BY THE SERVER (departure `server-decides-the-confirm` (D-4033)). The body is decided by L1
+   *  (`decideStallSettings`; unknown keys are refused, departure `unknown-keys-refused` (D-4029)). The route then
+   *  measures what the write would do, from the row as it stands and the row the write will leave, against the
+   *  listing it just took, and refuses a write that needs a confirm with 409 `confirm-required` until the body carries
+   *  the effect's key (departure `confirm-on-stage-diff` (D-4034)). From the listing to the write there is no `await`,
+   *  so no other request moves the row in between; the store still writes only over the row measured here, and a
+   *  conflict is measured once more on the row it found. One synchronous transaction, so no `coordMutex` (departure
+   *  `no-coord-mutex-for-stall-settings` (D-4030)). The reply re-reads the store, never the body.
+   *
+   *  THE FEED ROW names only what changed, and a write that changed nothing records nothing (departure
+   *  `no-op-write-records-no-feed-event` (D-4031)). The actor is `deviceActor(sessionAuth(req).device)` when the gate
+   *  is armed, the same call `server.ts`'s `pwaDec` makes; unarmed it is `flag-off`, the gate's own word, because the
+   *  session reading does not consult the flag and would record a session nobody presented. The label is only ever
+   *  handed to `deviceActor`, never branched on; `stall-settings-route.test.ts` holds that (M29). */
+  const stallViewWarned = new Set<string>();
+  /** One line per standing fault in one part of the view, re-armed when that part next succeeds. */
+  const stallViewNote = (part: string, fault: string | null): void => {
+    if (fault === null) { stallViewWarned.delete(part); return; }
+    if (stallViewWarned.has(part)) return;
+    stallViewWarned.add(part);
+    try {
+      console.warn(`ccrc-server: stall-watch view: ${part} failed (${fault})`);
+    } catch { /* a log line must not fail the view */ }
+  };
+  /** A thrown value's message, cut to 200 characters, composed as the sweeps' catch composes its own: a fixed word
+   *  stands when even reading the error throws. */
+  const stallFaultReason = (err: unknown): string => {
+    try {
+      return (err instanceof Error ? err.message : String(err)).slice(0, 200);
+    } catch {
+      return 'an unreadable fault';
+    }
+  };
+
+  const stallWatchView = (
+    store: CoordStore, names: readonly string[] | null, now: number,
+    watcherFallback: { readonly at: number; readonly reason: string } | null,
+  ): StallWatchView => {
+    // The resolution, as `stallResolveNow` runs it. With no listing it is still taken, over an empty one, for the
+    // quiet time alone, which reads no flag of the box (§6.2); `effective` then stays unmeasured.
+    let chosen: StallWatchView['chosen'] = { level: 'unreadable', quietMs: 'unreadable', updatedAt: null, stored: 'unreadable' };
+    let resolution: { readonly box: StallBoxArming; readonly r: StallResolved; readonly stages: StallWatchStages } | null = null;
+    let ownFault: string | null = null;
+    try {
+      const parsed = parseStallSettings(store.stallSettings());
+      chosen = {
+        level: parsed.level.kind === 'follow' ? 'follow' : parsed.level.kind === 'chosen' ? parsed.level.level : 'unreadable',
+        quietMs: parsed.quiet.kind === 'default' ? 'default' : parsed.quiet.kind === 'set' ? parsed.quiet.ms : 'unreadable',
+        updatedAt: parsed.updatedAt,
+        stored: parsed.stored,
+      };
+      const box = stallBoxArmingOf(names ?? [], names !== null && names.includes(MAIL_DISABLED_MARKER));
+      const r = resolveStallWatch(box, parsed);
+      resolution = { box, r, stages: stallStages(r.arming) };
+    } catch (err) {
+      ownFault = stallFaultReason(err);
+    }
+    stallViewNote('the resolution', ownFault);
+    const fallback = watcherFallback ?? (ownFault === null ? null : { at: now, reason: ownFault });
+    // Under any fallback the reply shows what the sweeps' catch runs: the files alone and the built-in quiet time.
+    const applied = fallback === null ? resolution : null;
+
+    let effective: StallWatchEffective = { measured: false };
+    let readerFault: string | null = null;
+    if (names !== null) {
+      try {
+        if (applied !== null) {
+          // Every field of the reading comes from the first `try`, so only `next` and `filesExceed` can be left out.
+          const { box, r, stages } = applied;
+          effective = { measured: true, level: r.effective, files: r.files, source: r.levelSource, stages, held: r.held };
+          effective = { measured: true, level: r.effective, files: r.files, source: r.levelSource, stages, held: r.held,
+            next: stallNextStep(r.arming, r.chosen), filesExceed: stallFilesExceed(box, r) };
+        } else {
+          // The files-only reading: neither the parse nor the resolver, so neither fault can reach it.
+          const box = stallBoxArmingOf(names, names.includes(MAIL_DISABLED_MARKER));
+          const level = stallLevelOf(box);
+          const stages = stallStages(box);
+          const held = stallBoxHeld(box);
+          effective = { measured: true, level, files: level, source: 'files', stages, held };
+          effective = { measured: true, level, files: level, source: 'files', stages, held,
+            next: stallNextStep(box, null), filesExceed: false };
+        }
+      } catch (err) {
+        readerFault = stallFaultReason(err);
+      }
+    }
+    stallViewNote('a view reader', readerFault);
+
+    let notices: StallWatchView['notices'] = { ok: false };
+    let countFault: string | null = null;
+    try {
+      const since = now - STALL_NOTICE_WINDOW_MS;
+      const read = store.stallObservationsSince(since);
+      if (read.ok) notices = { ok: true, since, windowMs: STALL_NOTICE_WINDOW_MS, counts: stallNoticeCounts(read.rows) };
+      else countFault = read.detail.slice(0, 200);
+    } catch (err) {
+      countFault = stallFaultReason(err);
+    }
+    stallViewNote('the notice counts', countFault);
+
+    return {
+      chosen,
+      effective,
+      quiet: {
+        effectiveMs: applied === null ? STALL_QUIET_MS : applied.r.quietMs,
+        builtInMs: STALL_QUIET_MS,
+        minMs: STALL_QUIET_MIN_MS,
+        maxMs: STALL_QUIET_MAX_MS,
+        stepMs: STALL_QUIET_STEP_MS,
+        source: applied === null ? 'default' : applied.r.quietSource,
+      },
+      notices,
+      fallback,
+    };
+  };
+
+  app.get('/api/coord/stall-watch', async (_req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
+  });
+
+  app.post('/api/coord/stall-watch', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    const decided = decideStallSettings(req.body);
+    if (!decided.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: decided.detail });
+    const names = await deps.io.readdir(deps.cfg.registryDir);
+    // From here to the write there is no `await`.
+    const at = Date.now();
+    let expected = coord.stallSettings();
+    let written: Extract<StallSettingsWrite, { kind: 'written' }> | null = null;
+    // Measured at most twice: on the row read here, and once more on the row a conflict found.
+    for (let measure = 0; measure < 2 && written === null; measure++) {
+      // An effect measured on a row that could not be read would be measured on the wrong row: refused, Fastify's
+      // 500, and nothing written.
+      if (expected.kind === 'unreadable') throw new Error(`stall settings unreadable, nothing written: ${expected.detail}`);
+      const effect: StallWriteEffect = names === null ? { measured: false } : stallWriteEffect(
+        stallBoxArmingOf(names, names.includes(MAIL_DISABLED_MARKER)), stallUnheldBoxOf(names),
+        expected, stallSettingsAfter(expected, decided.patch, at));
+      const effectKey = stallEffectKey(effect, parseStallSettings(expected).updatedAt);
+      if (stallNeedsConfirm(effect) && decided.confirm !== effectKey) {
+        const refusal: StallConfirmRequired = { ok: false, error: 'confirm-required', effect, effectKey };
+        return reply.code(409).send(refusal);
+      }
+      const w = coord.setStallSettings(decided.patch, at, expected);
+      if (w.kind === 'written') written = w;
+      else expected = w.before;
+    }
+    if (written === null) throw new Error('stall settings changed outside the server twice during one write; nothing written');
+    const change = stallSettingsChange(written.before, written.after);
+    const log = deps.notifyLog;
+    if (change !== null && log) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      try {
+        const ev = log.record({ kind: 'coord', sessionId: '', title: 'stall watch changed', body: `${change}; by ${actor}`, runId: null });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — stall watch settings written, feed archive degraded`);
+      } finally {
+        // The caps door's reason (D-1213): `record()` minted the seq, so its persistence follows `record()`.
+        void log.flush();
+      }
+    }
+    return reply.code(200).send({ ok: true, ...stallWatchView(coord, names, Date.now(), watcher?.stallFallback() ?? null) });
+  });
+
   /**
    * Child-reclamation wave 5 (spec §5.9): each row's `childReclaim`, composed
    * over the rows `GET /api/runs` already read. The DECISION is
@@ -2608,7 +2843,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2644,7 +2879,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/signals');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false, error: 'unauthenticated', verdict: session.verdict,
@@ -2693,7 +2928,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/items');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2750,7 +2985,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/feed');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2811,7 +3046,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/lifecycle');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -2886,7 +3121,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/peers');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3236,7 +3471,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/claims');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3775,7 +4010,7 @@ export function registerCoordRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/asks');
         if (token !== 'ok') {
           return reply.code(401).send({
             ok: false,
@@ -3826,5 +4061,5 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, asks: read.asks });
   });
 
-  return { withAbandon };
+  return { withAbandon, withSweepAbandon };
 }

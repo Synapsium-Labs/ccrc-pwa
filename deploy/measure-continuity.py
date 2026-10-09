@@ -76,6 +76,20 @@ def read_lines(path):
 #         alone. The deferred counts are split the same way, so the stranded
 #         backlog draining (deferred on a stranded pair) is told apart from a
 #         steady state that still overruns the budget.
+#         WHY A CARRY COPIED, AND HOW MUCH (D-4500, D-4501). A first carry
+#         that linked through the common mount logs `(link: via-mount)`
+#         (counted as `link`, and in `link_via_mount`); one that copied logs
+#         `(copy: <cause> <bytes|?> bytes)` (counted as `copy`); a merge appends
+#         `, via-mount V` and one `, copy: <cause> <F> files <B> bytes` per
+#         cause. `copy_by_cause` sums, per cause word, the first carries, the
+#         merged files and their bytes; `copied_bytes` splits the bytes by
+#         first carry and merge; `merged_via_mount` sums V. A bare `(copy)` —
+#         what ccd wrote before D-4501 — is `copy_legacy`, and a copy whose
+#         size ccd could not measure (`?`) is `copy_unsized`: both are copies,
+#         neither carries a byte figure. Causes are read generically
+#         (`[a-z-]+`), so a word ccd adds later is counted, never `other`.
+#         §9's stage-1 target: `exdev-*` copies at 0 on a box whose filesystem
+#         has a read-write mount exposing every account root.
 # resume  every Workflow tool call carrying `resumeFromRunId`, deduplicated by
 #         tool-use id across the account-root copies a swapping session
 #         accumulates, classified by its tool result: ok, journal-missing
@@ -98,7 +112,11 @@ def in_window(t, ctx):
 CARRY = re.compile(TS + r" sidecar (\S+) -> (.+) \(([^()]*)\)$")
 DIVERGED = re.compile(TS + r" sidecar (\S+) diverged (.+) longer (.+)$")
 SWAP = re.compile(TS + r" swap \S+: (\S+) -> (\S+) \(uuid (\S+)\)$")
-MERGED = re.compile(r"^merged \+(\d+) ~(\d+) !(\d+)(?:, deferred (\d+))?$")
+MERGED = re.compile(r"^merged \+(\d+) ~(\d+) !(\d+)(?:, deferred (\d+))?"
+                    r"((?:, via-mount \d+|, copy: [a-z-]+ \d+ files \d+ bytes)*)$")
+MERGED_VIA = re.compile(r", via-mount (\d+)")
+MERGED_COPY = re.compile(r", copy: ([a-z-]+) (\d+) files (\d+) bytes")
+COPY = re.compile(r"^copy: ([a-z-]+) (\d+|\?) bytes$")
 KEPT_REASONS = ("busy", "budget", "error")
 
 
@@ -106,14 +124,42 @@ def carry_counts(modes_seen):
     modes = {"link": 0, "copy": 0, "merged": 0, "kept": 0,
              "kept: busy": 0, "kept: budget": 0, "kept: error": 0, "other": 0}
     added = replaced = diverged = deferred_carries = deferred_actions = 0
+    link_via = merged_via = copy_legacy = copy_unsized = 0
+    by_cause = {}
+    copied_bytes = {"first_carry": 0, "merge": 0}
+
+    def cause_row(cause):
+        return by_cause.setdefault(cause, {"first_carries": 0, "merged_files": 0, "bytes": 0})
+
     for mode in modes_seen:
         mm = MERGED.match(mode)
+        cm = COPY.match(mode)
         if mm:
             modes["merged"] += 1
             added += int(mm.group(1)); replaced += int(mm.group(2)); diverged += int(mm.group(3))
             k = int(mm.group(4) or 0)
             deferred_carries += 1 if k else 0
             deferred_actions += k
+            merged_via += sum(int(v) for v in MERGED_VIA.findall(mm.group(5)))
+            for cause, files, nbytes in MERGED_COPY.findall(mm.group(5)):
+                row = cause_row(cause)
+                row["merged_files"] += int(files); row["bytes"] += int(nbytes)
+                copied_bytes["merge"] += int(nbytes)
+        elif mode == "link: via-mount":
+            modes["link"] += 1
+            link_via += 1
+        elif cm:
+            modes["copy"] += 1
+            row = cause_row(cm.group(1))
+            row["first_carries"] += 1
+            if cm.group(2) == "?":
+                copy_unsized += 1
+            else:
+                row["bytes"] += int(cm.group(2))
+                copied_bytes["first_carry"] += int(cm.group(2))
+        elif mode == "copy":
+            modes["copy"] += 1
+            copy_legacy += 1
         elif mode in modes:
             modes[mode] += 1
         else:
@@ -128,6 +174,9 @@ def carry_counts(modes_seen):
         "kept_other_than_busy_budget": modes["kept"] + modes["kept: error"],
         "merged_added": added, "merged_replaced": replaced, "merged_diverged": diverged,
         "deferred_carries": deferred_carries, "deferred_actions": deferred_actions,
+        "link_via_mount": link_via, "merged_via_mount": merged_via,
+        "copy_legacy": copy_legacy, "copy_unsized": copy_unsized,
+        "copy_by_cause": by_cause, "copied_bytes": copied_bytes,
     }
 
 

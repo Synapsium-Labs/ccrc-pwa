@@ -103,7 +103,7 @@ export interface ChildReclaimAsk {
  *  be worse than absent"). The entry describes ONE workspace generation, by
  *  two keys, its birth (`bornAt`) and the run its marker names
  *  (`markerRunId`): a slug minted again is a new child, sighted afresh
- *  (`childReclaimSameGeneration` states the one window the two keys leave).
+ *  (`childReclaimSameGeneration` states the windows the two keys leave).
  *
  *  THE BOUND (spec §5.7) is three figures, never run together. From its
  *  lease's first ask, the holder is licensed within the ceiling plus one pass
@@ -200,14 +200,22 @@ export const childReclaimFirstSighting = (
  *  licence-ripe presence episode license a request to the new one; a marker naming a different run
  *  ends the old generation there. A null birth never matches.
  *
- *  THE ONE WINDOW LEFT is one run minting the same slug twice, with no pass between to forget the old
+ *  A FIRST WINDOW LEFT is one run minting the same slug twice, with no pass between to forget the old
  *  entry. The old workspace must have been eligible while its run could still mint: `planned`, bound to
  *  another session past the spawn stall. Then, before the next pass, the old row is removed by anything
  *  but this lane's own reclaim (whose answer forgets the entry), a dispatch finds that session spent and
  *  unbinds the run, the next dispatch's ws-add draws the same slug, and the run then leaves that binding
  *  (abandoned, or bound to yet another workspace past `planned`). The next pass must also come before
- *  the mirror holds the new `create`. A pass in between that reads the run with no session, with this
- *  one, or inside the spawn stall, or that lists no row for the slug, deletes the entry. */
+ *  the mirror PLACES the new `create`: a `create` that carries no clock, or one dated ahead of the
+ *  server's, is not placed. A pass in between that reads the run with no session, with this
+ *  one, or inside the spawn stall, or that lists no row for the slug, deletes the entry.
+ *
+ *  A SECOND, SAME-RUN ROUTE is not this function's to close: a licensed request (one sent with
+ *  `--defer-expired`, because the old workspace's presence episode ran past its ceiling, spec §5.7) that
+ *  is still queued behind other work on the session's queue when the same run mints the slug again. The
+ *  executor re-reads the marker against the request's own run when the job reaches the front, so a
+ *  marker naming that same run passes, and the new workspace is asked about on the old one's licence.
+ *  Nothing in the entry can see it, because the request is already out. Carried to wave 7. */
 export const childReclaimSameGeneration = (
   entry: ChildReclaimSweepEntry, bornAt: number | null, markerRunId: number,
 ): boolean => entry.bornAt !== null && entry.bornAt === bornAt && entry.markerRunId === markerRunId;
@@ -904,11 +912,14 @@ const INTENT: LifecycleOutcome = 'intent';
 const REFUSED: LifecycleOutcome = 'refused';
 const FAILED: LifecycleOutcome = 'failed';
 
-/** The two `reclaim` refusals ccd journals for a PRE-LOCK die, keyed by the die. Spelled here, once:
- *  `coord/` code reads them by property, never as a quoted literal. */
+/** The `reclaim` refusals ccd journals for a PRE-LOCK die, keyed by the die. Spelled here, once:
+ *  `coord/` code reads them by property, never as a quoted literal. `flock` and `lock` date from
+ *  wave 3. `token` and `runId` date from wave 6 (spec §5.9): the two argv dies tied to an id,
+ *  journaled once the session id is valid. The usage, bad-session-id and python3 dies are never
+ *  journaled, so they are never here. */
 export const CHILD_RECLAIM_PRE_LOCK_TOKEN = {
-  flock: 'flock-unavailable', lock: 'lock-unopenable',
-} as const satisfies Readonly<Record<'flock' | 'lock', LcRefusalToken>>;
+  flock: 'flock-unavailable', lock: 'lock-unopenable', token: 'token-malformed', runId: 'run-id-malformed',
+} as const satisfies Readonly<Record<'flock' | 'lock' | 'token' | 'runId', LcRefusalToken>>;
 export type ChildReclaimPreLockToken = (typeof CHILD_RECLAIM_PRE_LOCK_TOKEN)[keyof typeof CHILD_RECLAIM_PRE_LOCK_TOKEN];
 const CHILD_RECLAIM_PRE_LOCK_TOKENS: readonly string[] = Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN);
 /** Use THIS, never `.includes(x as ChildReclaimPreLockToken)`: `isRunState`'s rule. */
@@ -916,12 +927,12 @@ export function isChildReclaimPreLockToken(v: unknown): v is ChildReclaimPreLock
   return typeof v === 'string' && CHILD_RECLAIM_PRE_LOCK_TOKENS.includes(v);
 }
 /** A `reclaim` line that is part of a run of FAILURES (spec §5.9): `failed`, or `refused` with one
- *  of the two pre-lock tokens. ccd journals its pre-lock lock dies through `_lc_refuse`; the
+ *  of the pre-lock tokens. ccd journals those pre-lock dies through `_lc_refuse`; the
  *  executor reads the same call as a `pre-lock-die` failure and the sweep retries it, so the
- *  report reads it as the failure it is, never as a settled refusal. ONLY these two, by name: a
+ *  report reads it as the failure it is, never as a settled refusal. ONLY these, by name: a
  *  token ccd starts journaling under `reclaim` later is classified when it is added, in this
  *  table or in `CHILD_RECLAIM_TOKEN_KIND`, and is never inherited. NOT read by
- *  `childReclaimTerminalRefusal`: neither token is terminal. */
+ *  `childReclaimTerminalRefusal`: no pre-lock token is terminal. */
 export const childReclaimFailureLine = (e: { readonly outcome: string; readonly refusal: string | null }): boolean =>
   e.outcome === FAILED || (e.outcome === REFUSED && isChildReclaimPreLockToken(e.refusal));
 
@@ -1018,8 +1029,8 @@ export type ChildReclaimJournalAttention = Extract<ChildReclaimAttention, { read
  *  DERIVED FROM THE MIRROR ALONE, "so a restart does not lose it": an
  *  audit-time terminal refusal is a mirror row like any other, because wave
  *  3's `cmd_ws_audit --reclaim` journals each terminal verdict it answers
- *  (`verb ws-audit`), and a failure is the `_lc_fail` line of an attempt that
- *  started, or the `_lc_refuse` line of a pre-lock die
+ *  (`verb ws-audit`), and a failure is an `_lc_fail` line (an attempt that
+ *  started, or a probe that could not run, spec §5.9) or a pre-lock die's `_lc_refuse` line
  *  (`childReclaimFailureLine`). No executor answer and no in-memory memo is an input. A report:
  *  nothing waits on it. A failure's sentence is its journal word first
  *  (`lcRefusalWord`, the journal-only map) and the server's lookup second —

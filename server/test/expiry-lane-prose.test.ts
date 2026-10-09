@@ -24,14 +24,25 @@ describe('README: what happens to an archived workspace now', () => {
     expect(para).toContain('`$REG/reclaim-paused` is the fleet’s one cleanup switch');
     expect(para).toContain('never kills');
   });
+  it('says a kept leaf is listed, an older ccd’s silence is the feed row’s, and a day of resumable failures slows the asking (wave 5)', () => {
+    const at = readme.indexOf('**Archived workspaces are cleaned up after seven days**');
+    const para = readme.slice(at, at + 4200);
+    expect(para).toContain('is listed, saying what was kept and why, until the server restarts');
+    expect(para).toContain('a fleet box whose ccd predates that report says so in the feed row only');
+    // Listed from the ladder's hour (a box answer at once); the day is when it STANDS (review 355, F6).
+    expect(para).toContain('is listed after an hour (a box answer at once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last error, asked again every four hours, never stopping.');
+    expect(para).not.toContain('is retried, backing off, for a day;');
+    expect(para).toContain('The entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again');
+    expect(para).not.toContain('stops asking for that archive');
+  });
   it('the coordinator’s own workspace: by a human — or, with no child marker, by the server seven days after its archive', () => {
     expect(readme).toContain('a coordinator\'s own workspace is still cleaned up by a human — or, when it carries no child marker, by the server seven days after it is archived, once the operator has armed the expiry lane with `$REG/expire-lane-live` (until then the lane only records what it would expire)');
   });
   it('every other passage that names the switch says it stops the expiry too, and calls the row the cleanup row', () => {
     expect(readme).toContain('The cleanup row beneath it keeps the same discipline for `$REG/reclaim-paused`, the fleet\'s one cleanup switch');
-    expect(readme).toContain('it pauses every reclamation and every expiry fleet-wide');
+    expect(readme).toContain('it pauses every reclamation, every expiry and the dead-coordinator lane fleet-wide');
     expect(readme).toContain('and the expiry of archived workspaces stops too');
-    expect(readme).toContain('raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation and the expiry of archived workspaces)');
+    expect(readme).toContain('raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane)');
     expect(readme, 'the row is not the reclaim row any more').not.toContain('reclaim row on `/runs`');
   });
 });
@@ -43,9 +54,10 @@ describe('the coordinator’s reference, §6', () => {
     expect(s).toContain('`has-coordinated` means the child has coordinated a run, so its workspace is cleaned up by a human. No');
     expect(s).toContain('it stays until a human cleans it up, or — when it carries no child marker — until the server cleans it up seven days after it is archived, once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)');
   });
-  it('clause 3 says it too: the cleanup follows the archive once the operator has armed the lane', () => {
+  it('clause 3 says it too: the cleanup follows the archive once the operator has armed the lane — never for a child', () => {
+    // A nested coordinator's own workspace is a CHILD, CCR-15's, never expired (review 313, parked item 3).
     const clause = flat('ccd/coordinator-skill/SKILL.md');
-    expect(clause).toContain('this session’s own workspace is cleaned up by a human, or by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).');
+    expect(clause).toContain('this session’s own workspace is cleaned up by a human, or — when it carries no child marker — by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).');
   });
   it('no skill file names the lane’s live switch — a session told about the dial could arm a deletion', () => {
     const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];
@@ -70,5 +82,32 @@ describe('the specs', () => {
     // The words carry the arming condition (the coordinator's ruling), and the two spec places that quote clause 3 say so.
     expect(s).toContain('**The words carry the arming condition**');
     expect(s).toContain('Coordinator clause 3\'s closing sentence (§5.3). Amended by this design’s wave 3b');
+    // Review 313's residue, closed by wave 4: each of its departures reaches §5.3's list, so the spec says what shipped.
+    expect(s).toContain("**Review 313's residue, closed by wave 4**");
+    for (const said of ['backs off on the failure ladder and is listed', 'learn slots go in `nextAskAt` order',
+      'listed at once and never asked again for that archive', 'ends the row\'s would-expire, in-use and held reports',
+      // The residue sentence is exact about a hold (final review of wave 4, B-F1): the box's verdicts stand on a sighting
+      // that is NOT held; a hold replaces a non-final report and the row is re-audited once it is due after the release.
+      'the verdicts the box itself gave (refused, failing, no evidence) stand on a sighting that is not held',
+      'a hold replaces a non-final report (a would-expire, an in-use or a retryable failing one) and the row is re-audited as soon as it is due again after the release',
+      'a hold never replaces a report whose row the lane has stopped asking',
+      'reads no archive from a ccd that prints the instant',
+      'is a row that moved', 'names its instant (`due <instant>`), never a period']) expect(s).toContain(said);
+    // An ineligible sighting does NOT clear every report: the box's own verdicts stand (review of wave 4's Task 4, I1).
+    expect(s).not.toContain('clears every report');
+  });
+  it('§5.3 records wave 5’s follow-ups: the consent binds the branch, a failed state-changed is audited afresh, a kept leaf, a day of failures', () => {
+    const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    expect(s).toContain("**As wave 5 closes the lane's follow-ups**");
+    for (const item of ['**The consent binds the branch.**', '**A `failed` `state-changed` is audited afresh.**', '**A kept leaf is listed.**',
+      '**A day of resumable failures slows the asking.**', 'A branch already absent when the token was minted reads absent twice and expires with its work in the attic',
+      'An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing',
+      'mints a fresh token over what stands', 'The lane asks again every four hours, never stopping',
+      'No answer that ends no attempt replaces the entry or resets its run', 'finds that none had begun',
+      // The attached shape is the pin's to refuse (review 355, F2), and the tier's clock is the verb's alone (F3).
+      'With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as `pin-failed`, which is resumable',
+      "A failure of the act's own audit never reaches the persistent tier, only the verb's does"]) expect(s).toContain(item);
+    for (const gone of ['is final.**', 'stops the asking.**', 'The lane does not ask again until the archive changes',
+      '(a branch deleted, or made, in between)']) expect(s).not.toContain(gone);
   });
 });

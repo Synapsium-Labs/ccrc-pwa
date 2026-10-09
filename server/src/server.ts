@@ -52,9 +52,10 @@ import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
-import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
+import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
+import { registerTokenRoutes, type TokenRouteDriver } from './token/routes.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -300,11 +301,21 @@ export interface Deps {
    *  reads `performance.now()`. A test sets it. */
   monotonicMs?: () => number;
   /** The box token every fleet->server POST must carry (coord/token.ts).
-   *  Optional the same way `push`/`notifyLog` are: a box with none configured
-   *  keeps working, unauthenticated, and says so once at boot. NOT optional the
+   *  Optional the same way `push`/`notifyLog` are in what a test must supply: a
+   *  box with none configured (no holder, or a holder with no current value
+   *  because its mint failed) refuses every box-token lane with a 401, verdict
+   *  `unconfigured`, and boot says so; there is no unauthenticated mode. NOT optional the
    *  way `queue` refuses to be — there is no fallback here that could quietly
-   *  construct a second, different token. */
-  mailToken?: string | null;
+   *  construct a second, different token. A `BoxTokenHolder` since the box-token
+   *  lifecycle (spec 4.2): the process's one accept-set, mutated in place by the
+   *  driver, so every lane reads it here at request time and a rotation needs no
+   *  restart. A literal string is what tests inject, with today's meaning. */
+  mailToken?: string | BoxTokenHolder | null;
+  /** The box-token driver as the token routes see it (`token/routes.ts`): the
+   *  claim door, the hand-out commit, "Rotate now" and the view. Read at request
+   *  time. Absent (tests, or a box whose driver was not built) means the claim
+   *  door answers `404 no-claim` and the rotate route `501 not-configured`. */
+  tokenDriver?: TokenRouteDriver;
   /** The coordination database (Build 7). Optional exactly like `push` and
    *  `notifyLog`: absent means the coord routes answer 501 and the mail lane
    *  never runs, which is what a box with no coordination configured should
@@ -1551,27 +1562,35 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   //
   // AUTHENTICATED SINCE BUILD 7 (operator ruling, spec:150-155). This was the
   // one box->server ingress carrying zero identity while the server
-  // regex-routed its body INTO a session's chat stream — see `checkMailToken`
-  // for the one-deploy-generation tolerance and for when it comes out.
+  // regex-routed its body INTO a session's chat stream. FAIL-SHUT since the
+  // box-token lifecycle (spec 4.3): the one-deploy-generation `legacy`
+  // tolerance and the `unconfigured` pass-through are both gone, so every
+  // verdict but `'ok'` is a 401 here exactly as on every other box-token lane.
   app.post('/api/notify', async (req, reply) => {
-    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+    const verdict = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/notify');
+    if (verdict === 'legacy' || verdict === 'unconfigured') {
+      // Logged for the same reason the wrong-token arm below is: three silent
+      // layers (notify.sh's `|| true`, ccd's `/dev/null`, `logger: false`) sit
+      // between this refusal and any operator.
+      console.warn(verdict === 'legacy'
+        ? 'ccrc-server: /api/notify refused a request with NO box token (401) — the fleet box\'s ' +
+          'notify.sh has no token file to read'
+        : 'ccrc-server: /api/notify refused a request: this server holds no box token (401)');
+      return reply.code(401).send({ ok: false, error: 'unauthenticated' });
+    }
     if (verdict === 'bad') {
       // `Fastify({ logger: false })` (above) means a bare 401 leaves NOTHING
       // in the journal — three silent layers stack on top of it too
       // (notify.sh's own `|| true`, and ccd invoking it with its output
       // redirected to `/dev/null`), so this line is the only place a wrong
       // token — a stray trailing space, a stale copy after a rotation — ever
-      // becomes visible to an operator, the same way `legacy` already is
-      // below. Never logs the presented value: that would put the secret
+      // becomes visible to an operator, the same way `legacy` and
+      // `unconfigured` already are above (they refuse too). Never logs the presented value: that would put the secret
       // (or a caller's guess at it) in a log file readable by anyone who can
       // read the log.
       console.warn('ccrc-server: /api/notify refused a request with the WRONG box token (401) — ' +
         'check that deploy/ccrc-mail.token matches on both boxes byte-for-byte');
       return reply.code(401).send({ ok: false, error: 'unauthenticated' });
-    }
-    if (verdict === 'legacy') {
-      console.warn('ccrc-server: /api/notify accepted a request with NO box token (legacy ' +
-        'tolerance, one deploy generation) — deploy the agent to ship the new notify.sh');
     }
     const body = (req.body ?? {}) as { message?: unknown };
     if (typeof body.message !== 'string') {
@@ -1649,6 +1668,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // It answers with its handle (workspace lifecycle §5.2): the coordination serialiser with the operator abandon inside
   // it, which the archive door below runs its `{programme:'end'}` on.
   const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
+  // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
+  // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
+  // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
+  watcher?.useCoordSerialiser?.(coordRoutes);
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
   // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
@@ -1657,6 +1680,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that finds no row for this box yet measures once instead of answering an
   // empty node list.
   registerUpdateRoutes(app, deps, sessionAuth, watcher);
+
+  // The box-token lifecycle's claim door and "Rotate now" (spec 4.6), registered
+  // from their own file — the fourth that `auth-gate.test.ts`'s `ROUTES` and
+  // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
+  // is read at request time, so a box with no driver answers `no-claim`/`501`.
+  registerTokenRoutes(app, deps);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
@@ -2801,7 +2830,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/pools/epoch');
         if (token !== 'ok') {
           return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: session.verdict });
         }
