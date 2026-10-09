@@ -12453,6 +12453,17 @@ Two rows re-anchored at run time after the merge of `main` (#330, the box-token 
   "test/docs-policy.test.ts"
  ],
  "red": "server docs-lanes + docs-policy: 1 failed | 664 passed (665) — an answer of exactly 1 MiB beside a large one admits (over, not at)"
+},
+{
+ "id": "W3-FR1-M9",
+ "pkg": "server",
+ "file": "server/src/docs/cache.ts",
+ "old": "      const own = Buffer.allocUnsafeSlow(value.bytes.byteLength);\n      own.set(value.bytes);\n      slots.set(at, { value: { answer: value.answer, bytes: own }, charge: c });\n",
+ "new": "      slots.set(at, { value, charge: c });\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 1 failed | 41 passed (42) — a small pooled source is stored as the cache's own copy: its buffer is exactly its length, and the source is not shared"
 }
 ]
 ```
