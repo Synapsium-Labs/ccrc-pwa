@@ -537,7 +537,7 @@ describe('reapRuns — only dead, quiet, ours, by name', () => {
     utimesSync(run, past, past);
     utimesSync(path.join(run, RUN_TMP), past, past);
     expect(lstatSync(run).mtimeMs, 'the mtime was not rewound, so this case proves nothing').toBeLessThan(Date.now() - 3_000_000);
-    const r = await reapRuns(base, { now: Date.now() + 500, quietS: 1 });
+    const r = await reapRuns(base, { now: Date.now() + 500, quietS: 60 });
     expect(r.left).toEqual([[name(run), 'dead:not-quiet']]);
     expect(existsSync(run)).toBe(true);
   });
