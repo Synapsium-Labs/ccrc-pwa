@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { AccountUsage, FleetSession, RosterWire } from '../../../shared/api';
-import { LIMIT_TRACK, QuickConfirm, Sheet, fillVariants, limitBand, toast } from '@ccrc/ui';
+import { Chip, LIMIT_TRACK, QuickConfirm, Sheet, fillVariants, limitBand, toast } from '@ccrc/ui';
 import { accountHue, accountLabel, accountPool, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { projectPoolOf, splitByPool } from '../lib/pools';
@@ -348,10 +348,9 @@ export function AccountRow({
       data-disabled={off ? 'true' : 'false'}
       onClick={() => onPick(wrapper)}
     >
-      <span className="chip" style={chipStyle}>
-        <i aria-hidden="true" />
+      <Chip dot style={chipStyle}>
         {accountLabel(roster, wrapper)}
-      </span>
+      </Chip>
       {suggested && <span className="acct-suggested">suggested</span>}
       {poolChip != null && poolChip !== '' && (
         <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>

@@ -21,6 +21,7 @@ export { TextInput, TEXT_INPUT, type TextInputProps } from './primitives/text-in
 export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
 export { Well, WELL, type WellProps } from './primitives/well';
+export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,

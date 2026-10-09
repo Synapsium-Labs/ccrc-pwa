@@ -14,7 +14,7 @@ import {
   substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
-import { BackButton, Sheet, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
+import { BackButton, Chip, Sheet, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -274,23 +274,22 @@ export function SessionHeader({
             </>
           )}
           {wrapper !== '' && (
-            <span className="chip chip--active">
-              <i aria-hidden="true" />
+            <Chip dot className="chip--active">
               {accountLabel(roster, wrapper)}
-            </span>
+            </Chip>
           )}
           {repo !== null && (
-            <span className="chip chip--repo" title="repository">
+            <Chip className="chip--repo" title="repository">
               {repo}
-            </span>
+            </Chip>
           )}
           {/* Derived from archivedAt, never from pr.phase — merging archives
               nothing, so a merged PR sits on a live workspace until a human
               archives it, and must not claim the chip meanwhile. */}
           {session?.archivedAt != null && (
-            <span className="chip chip--archived">
+            <Chip className="chip--archived">
               archived{session.pr?.number != null ? ` · merged #${session.pr.number}` : ''}
-            </span>
+            </Chip>
           )}
           {/* Status, account, model, effort and branch share ONE wrapping row —
               two fixed rows cost a line of chat height on every screen to say

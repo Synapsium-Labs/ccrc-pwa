@@ -76,6 +76,7 @@ export const OWNED = [
   'opt-body', 'opt-label', 'opt-desc', 'opt-enter',
   'banner', 'banner-msg',                                        // Banner / bannerVariants
   'well',                                                        // Well / WELL
+  'chip',                                                        // Chip / CHIP (the dot is an <i>, not a class)
 ];
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */

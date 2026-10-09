@@ -348,21 +348,11 @@
   transition: transform var(--dur-press) var(--curve-swift);
 }
 /* Account chip — mono name first, hue second (colors arrive inline from
-   lib/accounts.ts token names; a dead card drains its chip to gray). */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
-  padding: var(--sp-1) 9px;
-  border-radius: var(--r-full);
-}
-.chip i {
-  width: 5px;
-  height: 5px;
-  border-radius: var(--r-full);
-  background: currentColor;
-}
+   lib/accounts.ts token names; a dead card drains its chip to gray).
+   THE PILL ITSELF is @ccrc/ui's `Chip` now, and its dot with it. What never
+   moved is what the colours MEAN: an account hue is ccrc routing vocabulary,
+   so it still arrives from outside, through the inline `style` this comment
+   already described and through chat.css's three colour-only modifiers. */
 
 /* Status line — mono readout beside the chip; tabular so ticking relative
    times never jitter sideways. */

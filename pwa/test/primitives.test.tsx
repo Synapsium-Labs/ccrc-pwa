@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { BACK_BUTTON, BackButton, DOOR, Door, LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, toast } from '@ccrc/ui';
+import { BACK_BUTTON, BackButton, CHIP, CHIP_DOT, Chip, DOOR, Door, LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, toast } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself.
 afterEach(() => {
@@ -400,6 +400,72 @@ describe('BackButton', () => {
     expect(el).toHaveAttribute('type', 'button');
     fireEvent.click(el);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+// — Chip —
+
+describe('Chip', () => {
+  // Same rule as BackButton and Door: the EXPORTED constant, never the source
+  // file. The pill is pure appearance and vitest runs with `css: false`, so
+  // nothing in this repo can compute it — these assertions ARE the mechanism.
+  // Measured: deleting `rounded-full` from CHIP reddened nothing before this
+  // block existed, across the three suites that render chips.
+  it('is a pill, with the two literals the rules carried', () => {
+    // --r-full. A chip that loses this reads as a badge, which is a different
+    // control: a badge counts, a chip labels.
+    expect(CHIP).toContain('rounded-full');
+    // 6px sits between --sp-1 (4px) and --sp-2 (8px); 9px between --sp-2 and
+    // --sp-3 (12px). Pinned so a later tidy-up cannot round either to a token
+    // and call it a no-op — both would be visual changes.
+    expect(CHIP).toContain('gap-[6px]');
+    expect(CHIP).toContain('px-[9px]');
+    expect(CHIP).toContain('py-1');
+  });
+
+  it('is a mono micro-label that sets no colour of its own', () => {
+    expect(CHIP).toContain('font-mono');
+    expect(CHIP).toContain('text-xs');
+    expect(CHIP).toContain('font-medium');
+    expect(CHIP).toContain('leading-none');
+    // THE POINT OF THE EXTRACTION. An account hue is ccrc routing vocabulary,
+    // so it arrives from outside — inline style, or chat.css's three
+    // colour-only modifiers. A `text-`/`bg-` here would be a second place
+    // that decides what a chip means.
+    expect(CHIP).not.toMatch(/(^|\s)(text|bg)-(?!xs)[a-z]/);
+  });
+
+  it('restores what the `font` shorthand reset, so an ancestor cannot leak in', () => {
+    // The rule used the shorthand, which zeroes font-style and
+    // font-variant-numeric. Utilities do not. The app sets
+    // `font-variant-numeric: tabular-nums` in twenty-odd places.
+    expect(CHIP).toContain('not-italic');
+    expect(CHIP).toContain('normal-nums');
+  });
+
+  it('gives the dot currentColor and nothing else to drift from', () => {
+    expect(CHIP_DOT).toContain('bg-current');
+    expect(CHIP_DOT).toContain('size-[5px]');
+    expect(CHIP_DOT).toContain('rounded-full');
+    // `.chip i` declared three things. `flex-none` would stop the dot
+    // shrinking under a long label, which the original allowed.
+    expect(CHIP_DOT).not.toContain('flex-none');
+  });
+
+  it('renders the dot only when asked, and always aria-hidden', () => {
+    const { container, rerender } = render(<Chip>ccrc-pwa</Chip>);
+    expect(container.querySelector('i')).toBeNull();
+    rerender(<Chip dot>team·alt</Chip>);
+    const dot = container.querySelector('i');
+    expect(dot).not.toBeNull();
+    expect(dot).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('keeps the `chip` hook class, which chat.css’s three modifiers sit beside', () => {
+    const { container } = render(<Chip className="chip--archived">archived</Chip>);
+    const el = container.querySelector('span');
+    expect(el).toHaveClass('chip');
+    expect(el).toHaveClass('chip--archived');
   });
 });
 
