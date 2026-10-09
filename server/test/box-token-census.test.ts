@@ -55,9 +55,10 @@
 // 8 and is now scanned by `coord-pause-route.test.ts`'s `enumerations()`, which
 // reads the door names and the CAPS cardinal together (D-1168, closed).
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -895,5 +896,129 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
       .toContain('ccd-pool-sync.timer');
     expect(b, 'the bullet no longer names the resolved-pool document')
       .toContain('/api/pools/epoch');
+  });
+});
+
+// ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
+//
+// `server/src/docs/routes.ts` is the FOURTH file that registers routes. Its four are session-gated, NOT EXEMPT and
+// consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
+// one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
+// token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own
+// hooks would gate all four routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
+// `ALL_LANES`: a docs read or refresh is not a coordination write, so CLAUDE.md's box-token bullet owes it no
+// sentence and no number word moves. And the page grammar's prefix is never a SERVER route (§3.13's new scan): a
+// `/docs/...` URL is the PWA's page, answered by the SPA shell, under every file in `server/src`.
+describe('the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
+  const DOCS_SRC = read('server/src/docs/routes.ts');
+  /** Every source file of the docs surface, by listing the directory, so a file added there is read without an edit
+   *  here. */
+  const DOCS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'docs'))
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/docs/${f}`);
+  /** The four doors, by path (§3.4). Hand-kept for the NAMES only: the cases below derive the same set from the file
+   *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
+  const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
+    '/api/docs/:project/refresh'];
+  const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
+  const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
+  /** The registration lines the planted-call controls anchor on (the plan's fixed registration text). */
+  const TREE_LINE = "app.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {";
+  const REFRESH_LINE = "app.post('/api/docs/:project/refresh', async (req, reply) => {";
+  /** Every `.ts` file under `server/src`, repo-relative. */
+  const SERVER_FILES = (readdirSync(path.join(REPO, 'server', 'src'), { recursive: true }) as string[])
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/${f.split(path.sep).join('/')}`);
+
+  it('docs/routes.ts registers what the checks below reason over, and every docs file is read', () => {
+    // Anti-vacuity: every loop below is over REGISTERED, DOCS_FILES or SERVER_FILES.
+    expect(REGISTERED.length, 'the docs scan collapsed — this describe is over nothing').toBe(DOCS_DOORS.length);
+    expect(new Set(REGISTERED).size, 'a docs route is registered twice').toBe(REGISTERED.length);
+    expect(DOCS_FILES, 'the docs directory listing lost a file this census must read').toEqual(expect.arrayContaining([
+      'server/src/docs/cache.ts', 'server/src/docs/hooks.ts', 'server/src/docs/lane.ts', 'server/src/docs/routes.ts',
+    ]));
+    expect(SERVER_FILES, 'the server/src listing is not recursive — the /docs scan would miss every subdirectory')
+      .toEqual(expect.arrayContaining(['server/src/server.ts', 'server/src/docs/routes.ts', 'server/src/coord/routes.ts']));
+  });
+
+  it('DOCS_DOORS is exactly what docs/routes.ts registers, in both directions', () => {
+    expect(REGISTERED.map(pathOf).sort(),
+      'docs/routes.ts and DOCS_DOORS disagree — a route was added or removed on one side only')
+      .toEqual([...DOCS_DOORS].sort());
+  });
+
+  it('no docs file consults the box token, and no docs handler is a lane (§3.4: no box token is used)', () => {
+    for (const rel of DOCS_FILES) {
+      const src = read(rel);
+      for (const re of GATE_PATTERNS) {
+        expect(re.test(src), `${rel} consults the box token (${re.source}) — a docs route would be gated by it`)
+          .toBe(false);
+      }
+    }
+    expect(lanesIn(DOCS_SRC)).toEqual([]);
+  });
+
+  it('a box-token call planted after the tree GET or the refresh POST is SEEN — the lane source is live', () => {
+    // The control for the two cases above: they would pass just as green over a scanner that could not see this file.
+    for (const [anchor, k] of [[TREE_LINE, 'GET /api/docs/:project/tree'],
+      [REFRESH_LINE, 'POST /api/docs/:project/refresh']] as const) {
+      expect(DOCS_SRC, `the registration line of ${k} moved — re-point this control at it`).toContain(anchor);
+      for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+        const planted = DOCS_SRC.replace(anchor, `${anchor}\n    ${call}`);
+        expect(lanesIn(planted), `a planted ${call} in ${k} went unseen`).toEqual([k]);
+        expect(GATE_PATTERNS.some((re) => re.test(planted)), `a planted ${call} went unseen by the file scan`)
+          .toBe(true);
+      }
+    }
+  });
+
+  it('a route planted with another verb, or through app.route(), is SEEN and breaks the both-directions equality', () => {
+    const plants = [
+      ["app.delete('/api/docs/x', async (req, reply) => { reply.code(200).send({ ok: true }); });", 'DELETE /api/docs/x'],
+      ["app.route({ method: 'PUT', url: '/api/docs/y', handler: async (req, reply) => { if (req) { reply.code(200).send({ ok: true }); } } });",
+        'PUT /api/docs/y'],
+    ] as const;
+    for (const [text, k] of plants) {
+      const planted = registrationsIn(`${DOCS_SRC}\n${text}\n`).map((r) => r.key);
+      expect(planted, `a planted ${k} went unseen`).toContain(k);
+      expect(planted.map(pathOf).sort(), `a planted ${k} left the door set unchanged`)
+        .not.toEqual([...DOCS_DOORS].sort());
+      expect(REGISTERED).not.toContain(k);
+    }
+  });
+
+  it('DOCS_DOORS joins neither the session-only coordination writes nor the box-token lanes', () => {
+    for (const door of DOCS_DOORS) {
+      expect(SESSION_ONLY_ALL, `${door} was counted as a coordination write`).not.toContain(door);
+      expect(ALL_LANES.map(pathOf), `${door} was counted as a box-token lane`).not.toContain(door);
+    }
+  });
+
+  it('every /api/docs route lives in docs/routes.ts, and no file in server/src registers a /docs route', () => {
+    // §3.13's new scan, over every file and through the quote-agnostic `registrationsIn`: a docs route registered
+    // anywhere else would miss the docs plugin's provenance and response policy, and a `/docs` route would answer a
+    // URL that is the PWA's page.
+    const misplaced: string[] = [];
+    const pageRoutes: string[] = [];
+    for (const rel of SERVER_FILES) {
+      for (const { key: k } of registrationsIn(read(rel))) {
+        if (pathOf(k).startsWith('/api/docs') && rel !== 'server/src/docs/routes.ts') misplaced.push(`${rel}: ${k}`);
+        if (pathOf(k).startsWith(DOCS_PAGE_PREFIX)) pageRoutes.push(`${rel}: ${k}`);
+      }
+    }
+    expect(misplaced, 'a docs route is registered outside the docs plugin').toEqual([]);
+    expect(pageRoutes, 'a server route answers the Docs page prefix').toEqual([]);
+  });
+
+  it('a /docs route planted in each quote form, or through app.route(), is SEEN by that scan', () => {
+    const body = 'async (req, reply) => { reply.code(200).send({ ok: true }); }';
+    for (const text of [
+      `app.get('${DOCS_PAGE_PREFIX}/x', ${body});`,
+      `app.get("${DOCS_PAGE_PREFIX}/x", ${body});`,
+      'app.get(\x60' + DOCS_PAGE_PREFIX + '/x\x60, ' + body + ');',
+      `app.route({ method: 'GET', url: '${DOCS_PAGE_PREFIX}/x', handler: ${body} });`,
+    ]) {
+      const keys = registrationsIn(`${DOCS_SRC}\n${text}\n`).map((r) => r.key);
+      expect(keys.filter((k) => pathOf(k).startsWith(DOCS_PAGE_PREFIX)), `${text} went unseen`)
+        .toEqual([`GET ${DOCS_PAGE_PREFIX}/x`]);
+    }
   });
 });

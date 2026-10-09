@@ -55,6 +55,8 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
+import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
@@ -1661,6 +1663,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that finds no row for this box yet measures once instead of answering an
   // empty node list.
   registerUpdateRoutes(app, deps, sessionAuth, watcher);
+
+  // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
+  // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
+  // nothing else; which is why `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts`'s docs describe read
+  // `docs/routes.ts` by name. The root's gate hook runs before the plugin's own, so a signed-out request meets the
+  // gate first. The composition is built here, once per `buildServer` (two servers share no lane and no cache), over
+  // a getter: the adapter reads `deps.fleetState` at every call, so it sees the one state object the link mutates in
+  // place, and a replaced one too. Registered UNCONDITIONALLY: before the handshake, and in local mode with no
+  // measured caps, the adapter itself refuses every call before any exec. The read registration is never handed a
+  // fetcher; only the refresh is.
+  const docs = composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } });
+  await app.register(async (app) => {
+    installDocsRequestPolicy(app);
+    installDocsResponsePolicy(app);
+    registerDocsReadRoutes(app, docs.readers, docs.lanes);
+    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
+  });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
