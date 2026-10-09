@@ -51,3 +51,39 @@ upstream: src/tools/lcm-describe-id.ts
 commit: e05d8d3
 upstream-sha256: e695a7575a24d4a4b4ba79e94a8cb82e4db0b2b0910988ce7746014fa57f7f5c
 changed: JavaScript as extractNodeId; the bare-id, reference-line, several-ids, all-zero and lowercase rules are kept; the id grammar is ccrc's node id (L or N plus 6 to 20 hex, a trailing ellipsis tolerated) instead of sum_ and file_; the reference line is the card's History line, whose structural id is the one after "History: node "
+
+
+item: FTS5 query sanitiser (P1)
+ours: ccd/history/lib.mjs
+upstream: src/store/fts5-sanitize.ts
+commit: e05d8d3
+upstream-sha256: 7bddb29f821a827325368a71a67a84072afe716ad434ade9ffc3579b03606557
+changed: JavaScript as sanitizeFtsQuery; the quoted-phrase extraction and per-token quoting are kept; a token or phrase ending in a star (inside or right after its closing quote) becomes a quoted term followed by a star, an FTS5 prefix query, where upstream kept the star inside the quotes; the 17 upstream test cases are re-derived in server/test, not copied
+
+item: snippet window and query terms (P9)
+ours: ccd/history/lib.mjs
+upstream: src/store/full-text-fallback.ts
+commit: e05d8d3
+upstream-sha256: bf4846a6a062ad5ca24b883bb42bc8d697ac068042b0ca37e02e69c727d289db
+changed: JavaScript as queryTerms and snippetWindow (upstream lines 1, 11, 19-22 and 58-84); the term normaliser, the window constants and the earliest-hit rule are kept; each term is also tried without a common ending, the search is case-insensitive in place instead of on a lowercased copy whose indices can drift, no cut splits a surrogate pair, and the CJK and LIKE paths are not ported
+
+item: regex-syntax-in-FTS detector and message (V2)
+ours: ccd/history/lib.mjs
+upstream: src/tools/lcm-grep-tool.ts
+commit: e05d8d3
+upstream-sha256: cbebf5cfd2fb025aa609192b7527680d66b4313e65dc5723979a8a09eea19ede
+changed: JavaScript without the TypeScript annotations; the detector (upstream lines 97-154) is kept line for line as regexSyntaxIn; the message becomes the hint line of plain grep's exit 2, which names --regex
+
+item: safe regex guard (P10)
+ours: ccd/history/lib.mjs
+upstream: src/store/search-regex.ts
+commit: e05d8d3
+upstream-sha256: 9dbdaba8700eb4d095e209a9415317ba6674db4131dd510735d02897756f2df0
+changed: JavaScript as guardRegex; the length bound and the nested-quantifier and quantified-alternation tests are kept as a floor; a structural rule refusing a repeated group whose body can match more than one way is added, because upstream admits (.*a){8}$; the result is a discriminated refusal (too-long, nested, invalid) instead of null
+
+item: hybrid sort over integer timestamps (P8)
+ours: ccd/history/lib.mjs
+upstream: src/store/full-text-sort.ts
+commit: e05d8d3
+upstream-sha256: 094bd7e91965bcf0479c4fccd73ac0324f9b875421dee590d0ca783d0594a64f
+changed: JavaScript as ftsOrderBy; the three-way switch and the 0.001-per-hour decay are kept; the age is hours from an integer ts_ms and a bound :now_ms parameter instead of julianday over a string (julianday of an integer is NULL), a NULL time counts as oldest, a future time ages 0, an unknown sort throws instead of defaulting to recency, and the column expression must be a name

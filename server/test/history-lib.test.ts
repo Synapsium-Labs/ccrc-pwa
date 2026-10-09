@@ -36,6 +36,8 @@ import * as historyCrypto from 'node:crypto';
 import * as libExport from '../../ccd/history/lib.mjs';
 import * as healthLib from '../../ccd/history/lib.mjs';
 import * as libScope from '../../ccd/history/lib.mjs';
+import * as libSearch from '../../ccd/history/lib.mjs';
+import { DatabaseSync as FtsDb } from 'node:sqlite';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -3509,4 +3511,223 @@ describe('recall-off: the path is formed only from a checked id, and the file na
   it('an unreadable file holds the arm (off), never silently recalls', () => {
     expect(libScope.decideRecallOff({ file: { state: 'unreadable' }, generation: G })).toBe('off');
   });
+});
+
+// ===========================================================================
+// W1-B2 Task 2: search primitives (spec §8.4 grep, §11 V2, P1, P8, P9, P10).
+// C6 is owned here. The FTS semantics are proved against a real in-memory
+// FTS5 table with the store's own blobs_fts definition, opened by this test
+// file (lib.mjs never imports node:sqlite).
+// ===========================================================================
+/** The store's blobs_fts definition (store.mjs FTS_DDL), on an in-memory DB. */
+const ftsCorpus = (docs: ReadonlyArray<readonly [number, string]>): FtsDb => {
+  const db = new FtsDb(':memory:');
+  db.exec("CREATE VIRTUAL TABLE blobs_fts USING fts5(body, content='', contentless_delete=1, tokenize='porter unicode61')");
+  const ins = db.prepare('INSERT INTO blobs_fts(rowid, body) VALUES (?, ?)');
+  for (const [id, body] of docs) ins.run(id, body);
+  return db;
+};
+const matchIds = (db: FtsDb, q: string): number[] =>
+  db.prepare('SELECT rowid AS id FROM blobs_fts WHERE blobs_fts MATCH ? ORDER BY rowid').all(q).map((r) => Number(r['id']));
+
+describe('sanitizeFtsQuery: every token quoted, AND semantics, a trailing star outside the quotes (spec 8.4; C6)', () => {
+  // The upstream suite's seventeen behaviours, re-derived with ccrc's own inputs (spec §12: not copied). One
+  // behaviour changes on purpose: a token ending in `*` keeps its star OUTSIDE the quotes (row 6).
+  const CASES: ReadonlyArray<readonly [string, string, string]> = [
+    ['1 quotes each plain token', 'grep history', '"grep" "history"'],
+    ['2 keeps a hyphen inside its token', 'store-unbound refusal', '"store-unbound" "refusal"'],
+    ['3 neutralises a boolean operator', 'drain OR ingest', '"drain" "OR" "ingest"'],
+    ['4 strips a stray double quote', 'spool "drain"', '"spool" "drain"'],
+    ['5 neutralises a column filter', 'body:secret value', '"body:secret" "value"'],
+    ['6 moves a trailing star outside the quotes (ccrc change)', 'sweep*', '"sweep"*'],
+    ['7 answers the empty phrase for an empty query', '', '""'],
+    ['8 answers the empty phrase for whitespace only', ' \t\n ', '""'],
+    ['9 quotes a single token', 'recall', '"recall"'],
+    ['10 collapses runs of whitespace', 'x    y  z', '"x" "y" "z"'],
+    ['11 neutralises NOT', 'NOT spool', '"NOT" "spool"'],
+    ['12 neutralises NEAR(', 'NEAR(drain spool)', '"NEAR(drain" "spool)"'],
+    ['13 neutralises a leading caret', '^anchor', '"^anchor"'],
+    ['14 keeps a quoted phrase whole', '"journal replay" order', '"journal replay" "order"'],
+    ['15 keeps several quoted phrases', '"store id" AND "writer token"', '"store id" "AND" "writer token"'],
+    ['16 mixes phrases and plain tokens', 'find "redaction pair" in blob', '"find" "redaction pair" "in" "blob"'],
+    ['17 answers the empty phrase for an empty quoted phrase', '""', '""'],
+  ];
+  it.each(CASES)('%s', (_name, raw, want) => {
+    expect(libSearch.sanitizeFtsQuery(raw)).toBe(want);
+  });
+  it('a SHA prefix, bare or quoted, becomes a prefix query; a star mid-token or alone stays literal', () => {
+    expect(libSearch.sanitizeFtsQuery('a0860d1f*')).toBe('"a0860d1f"*');
+    expect(libSearch.sanitizeFtsQuery('"a0860d1f"*')).toBe('"a0860d1f"*');
+    expect(libSearch.sanitizeFtsQuery('"error handl*" retry')).toBe('"error handl"* "retry"');
+    expect(libSearch.sanitizeFtsQuery('sweep** x')).toBe('"sweep"* "x"');
+    expect(libSearch.sanitizeFtsQuery('a*b')).toBe('"a*b"');
+    expect(libSearch.sanitizeFtsQuery('*')).toBe('"*"');
+  });
+  it('on the store\'s FTS5 definition: the SHA prefix finds the SHA, terms AND, and no input is a syntax error', () => {
+    const db = ftsCorpus([[1, 'commit a0860d1f2c3b landed'], [2, 'drain spool ok'], [3, 'drain only'], [4, 'running fast'], [5, 'NEAR the end']]);
+    expect(matchIds(db, libSearch.sanitizeFtsQuery('a0860d1f*'))).toEqual([1]);
+    expect(matchIds(db, '"a0860d1f*"'), 'upstream kept the star inside the quotes, which finds nothing').toEqual([]);
+    expect(matchIds(db, libSearch.sanitizeFtsQuery('drain spool'))).toEqual([2]);
+    expect(matchIds(db, libSearch.sanitizeFtsQuery('drain'))).toEqual([2, 3]);
+    for (const raw of ['', '""', 'NEAR(a b)', 'x OR', 'body:secret', '"unclosed', '^start', 'a*b', '*', '-v', '(paren']) {
+      expect(() => matchIds(db, libSearch.sanitizeFtsQuery(raw)), raw).not.toThrow();
+    }
+    expect(matchIds(db, '"run"*'), 'porter stems the index: a prefix inside the stem finds it').toEqual([4]);
+    expect(matchIds(db, '"runn"*'), 'and a prefix past the stem misses it: the skill teaches hex prefixes').toEqual([]);
+  });
+});
+
+describe('regexSyntaxIn and its hint: regex syntax in plain grep is refused without querying (spec 8.4; V2)', () => {
+  it.each([
+    ['a|b', 'alternation'], ['fo.*bar', 'wildcard'], ['x.+', 'wildcard'], ['foo[0-9]', 'character class'],
+    ['^start', 'anchor'], ['end$', 'anchor'], ['two ^words', 'anchor'], ['x \\d', 'regex character escape'],
+  ])('%s is %s', (pattern, syntax) => {
+    expect(libSearch.regexSyntaxIn(pattern)).toBe(syntax);
+  });
+  it.each(['a0860d1f*', '"a|b"', 'server/src/io.ts', 'arr[]', '$HOME', 'a^b', '"^x"', `D-${12}`, '#123', 'foo.bar', 'x.y.z', 'cost$5'])(
+    '%s is not regex syntax', (pattern) => {
+      expect(libSearch.regexSyntaxIn(pattern)).toBeNull();
+    });
+  it('the hint names --regex and the rewrite', () => {
+    expect(libSearch.regexSyntaxHint('a|b', 'alternation'))
+      .toBe('hint: grep searches words, not a regex (alternation): use --regex for `a|b`, or rewrite it as 1-3 literal terms or one quoted phrase');
+  });
+});
+
+describe('guardRegex: a discriminated refusal, never a silent no-match (spec 8.4; P10, C8a pure half)', () => {
+  it('refuses (.*a){8}$, which upstream admits, as nested; and every catastrophic shape with it', () => {
+    for (const p of ['(.*a){8}$', '(a+)+', '(a|aa)+', '(\\d+\\.)+', '(?:x*y){2,}', '((ab)*c){3}', '(?<n>a+)+$', '(a?){25}', '((a|b)c)*']) {
+      expect(libSearch.guardRegex(p), p).toEqual({ ok: false, why: 'nested' });
+    }
+  });
+  it('admits fixed-shape repeats, optional groups, unrepeated alternation and escaped parentheses', () => {
+    for (const p of ['gho_[A-Za-z0-9]{36}', '(abc){2}', '(foo)?bar', 'error: (timeout|refused)', '(?:abc)+', 'a{2,5}', '\\(x*\\){3}', '[(]a*[)]+', 'x{,3}']) {
+      expect(libSearch.guardRegex(p), p).toEqual({ ok: true, source: p });
+    }
+  });
+  it('a pattern past REGEX_MAX_LEN is too-long, one that does not compile invalid', () => {
+    expect(libSearch.REGEX_MAX_LEN).toBe(500);
+    expect(libSearch.guardRegex('a'.repeat(500))).toEqual({ ok: true, source: 'a'.repeat(500) });
+    expect(libSearch.guardRegex('a'.repeat(501))).toEqual({ ok: false, why: 'too-long' });
+    for (const p of ['(', '[', '*a', 'a{2,1}', '(?<x', 'a)']) expect(libSearch.guardRegex(p), p).toEqual({ ok: false, why: 'invalid' });
+    expect(libSearch.guardRegex(7 as unknown as string)).toEqual({ ok: false, why: 'invalid' });
+  });
+  it('the worker budget is 5 s', () => {
+    expect(libSearch.REGEX_BUDGET_MS).toBe(5000);
+  });
+});
+
+describe('regexPrefilter: only a whole-word literal, so the FTS prefilter never drops a hit (spec 8.4)', () => {
+  it.each([
+    ['^deploy\\.sh', '"deploy"'], [' gho_[A-Za-z0-9]+', '"gho"'], ['error: timeout ', '"timeout"'],
+    ['^alpha betagamma$', '"betagamma"'], ['^run\\s', '"run"'], ['(foo) bar ', '"bar"'],
+  ])('%s prefilters on %s', (pattern, want) => {
+    expect(libSearch.regexPrefilter(pattern)).toBe(want);
+  });
+  it.each(['^runn', '\\bfoo\\b', 'foo|bar', '^ab$', '^fooo?$', '(foo) bar', 'plain words', '^caf. ', '^[a-z]+ '])(
+    '%s gives no prefilter: a full scan of the scope', (pattern) => {
+      expect(libSearch.regexPrefilter(pattern)).toBeNull();
+    });
+  it('on the store\'s FTS5 definition, the prefilter finds every text the pattern matches', () => {
+    const docs: ReadonlyArray<readonly [number, string]> = [
+      [1, 'deploy.sh ran clean'], [2, 'redeploy.sh ran'], [3, 'deploy.sh: exit 2'], [4, 'token gho_ABCDEF12 seen'],
+      [5, 'error: timeout after 5s'], [6, 'error: timeouts'], [7, 'running fast'], [8, 'unrelated'],
+    ];
+    const db = ftsCorpus(docs);
+    for (const pattern of ['^deploy\\.sh', ' gho_[A-Za-z0-9]+', 'error: timeout ']) {
+      const re = new RegExp(pattern);
+      const truth = docs.filter(([, body]) => re.test(body)).map(([id]) => id);
+      const pre = libSearch.regexPrefilter(pattern);
+      expect(pre, pattern).not.toBeNull();
+      const found = matchIds(db, pre as string);
+      for (const id of truth) expect(found, `${pattern}: the prefilter dropped doc ${id}`).toContain(id);
+    }
+    expect(new RegExp('^runn').test('running fast')).toBe(true);
+    expect(matchIds(db, '"runn"*'), 'why a prefix never prefilters: porter stems it out of reach').toEqual([]);
+  });
+});
+
+describe('ftsOrderBy: hybrid over integer ts_ms, NULL last (spec 8.4; P8)', () => {
+  const NOW = 1_760_000_000_000;
+  const H = 3_600_000;
+  it('spells each sort, and refuses an unknown sort or a column that is not a name', () => {
+    expect(libSearch.GREP_SORTS).toEqual(['recency', 'relevance', 'hybrid']);
+    expect(libSearch.ftsOrderBy('recency', 'e.ts_ms')).toBe('e.ts_ms DESC');
+    expect(libSearch.ftsOrderBy('relevance', 'e.ts_ms')).toBe('rank ASC, e.ts_ms DESC');
+    expect(libSearch.ftsOrderBy('hybrid', 'e.ts_ms')).toContain('COALESCE(e.ts_ms, 0)');
+    expect(libSearch.ftsOrderBy('hybrid', 'e.ts_ms')).not.toContain('julianday');
+    expect(() => libSearch.ftsOrderBy('newest', 'e.ts_ms')).toThrow(TypeError);
+    for (const bad of ['e.ts_ms; DROP TABLE x', 'ts_ms)', '', '1ts']) expect(() => libSearch.ftsOrderBy('recency', bad), bad).toThrow(TypeError);
+  });
+  it('on real FTS5: relevance, recency and hybrid order a strong old hit, a weak new one and an undated one differently', () => {
+    const db = ftsCorpus([
+      [1, 'drain drain drain spool'], [2, 'drain then a long tail of other words about the store and its writer token and journal'],
+      [3, 'drain drain drain spool'], ...Array.from({ length: 30 }, (_, k) => [10 + k, `unrelated filler ${k}`] as const),
+    ]);
+    db.exec('CREATE TABLE e (id INTEGER PRIMARY KEY, ts_ms INTEGER)');
+    const ts = db.prepare('INSERT INTO e (id, ts_ms) VALUES (?, ?)');
+    ts.run(1, NOW - 2000 * H);
+    ts.run(2, NOW - H);
+    ts.run(3, null);
+    // Only `hybrid` names `:now_ms`, and node:sqlite refuses a named parameter the statement lacks.
+    const order = (sort: string): number[] => {
+      const sql = `SELECT e.id AS id FROM blobs_fts JOIN e ON e.id = blobs_fts.rowid WHERE blobs_fts MATCH ? ORDER BY ${libSearch.ftsOrderBy(sort, 'e.ts_ms')}`;
+      const st = db.prepare(sql);
+      const rows = sql.includes(':now_ms') ? st.all({ now_ms: NOW }, '"drain"') : st.all('"drain"');
+      return rows.map((r) => Number(r['id']));
+    };
+    expect(order('relevance')).toEqual([1, 3, 2]);
+    expect(order('recency')).toEqual([2, 1, 3]);
+    expect(order('hybrid'), 'the old strong hit outranks the new weak one; the undated one sorts last').toEqual([1, 2, 3]);
+    expect(db.prepare('SELECT julianday(1760000000000) AS j').get()?.['j'], 'refuted candidate 2: julianday of an integer').toBeNull();
+  });
+});
+
+describe('queryTerms and snippetWindow: the earliest hit, stems included, from redacted text (spec 8.4; P9)', () => {
+  const wellFormed = (s: string): boolean => Buffer.from(s, 'utf8').toString('utf8') === s;
+  it('query terms are lowercased words and phrases, edge punctuation and a trailing star stripped, each once', () => {
+    expect(libSearch.queryTerms(`"Error handling" --force a0860d1f* D-${12} force`)).toEqual(['error handling', 'force', 'a0860d1f', 'd-12']);
+    expect(libSearch.queryTerms('   ')).toEqual([]);
+  });
+  it('the window holds 24 characters before and 40 after the earliest hit, with ... at a cut end', () => {
+    const text = `${'x'.repeat(100)}Needle${'y'.repeat(100)}`;
+    expect(libSearch.snippetWindow(text, ['needle'])).toBe(`...${'x'.repeat(24)}Needle${'y'.repeat(40)}...`);
+    expect(libSearch.snippetWindow('short Needle here', ['needle'])).toBe('short Needle here');
+  });
+  it('a stemmed or prefix hit is found by the word without its ending', () => {
+    expect(libSearch.snippetWindow(`${'x'.repeat(100)} running fast`, ['runs'])).toBe(`...${'x'.repeat(23)} running fast`);
+    expect(libSearch.snippetWindow(`${'z'.repeat(100)} the sweeps ran`, ['sweeping'])).toContain('sweeps');
+  });
+  it('no hit gives the first 80 characters', () => {
+    expect(libSearch.snippetWindow(`${'a'.repeat(100)}`, ['zzz'])).toBe(`${'a'.repeat(77)}...`);
+    expect(libSearch.snippetWindow('  tiny  ', ['zzz'])).toBe('tiny');
+  });
+  it('a case fold that changes length before the hit does not move the window, and no cut splits a surrogate pair', () => {
+    const out = libSearch.snippetWindow(`${'İ'.repeat(30)}Needle tail`, ['needle']);
+    expect(out).toContain('Needle');
+    for (let pad = 0; pad < 4; pad += 1) {
+      const s = libSearch.snippetWindow(`${'😀'.repeat(20)}${'p'.repeat(pad)}needle${'😀'.repeat(30)}`, ['needle']);
+      expect(wellFormed(s), `pad ${pad}`).toBe(true);
+      expect(s).toContain('needle');
+    }
+    expect(wellFormed(libSearch.snippetWindow('😀'.repeat(60), ['zzz']))).toBe(true);
+  });
+});
+
+describe('parseTimeBound: --since and --before (spec 8.4)', () => {
+  const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
+  it('reads <n>d, <n>h and <n>min before now', () => {
+    expect(libSearch.parseTimeBound('7d', NOW)).toBe(NOW - 7 * 86_400_000);
+    expect(libSearch.parseTimeBound('3h', NOW)).toBe(NOW - 3 * 3_600_000);
+    expect(libSearch.parseTimeBound('90min', NOW)).toBe(NOW - 90 * 60_000);
+  });
+  it('reads an ISO date as UTC midnight, and a date-time only with a zone', () => {
+    expect(libSearch.parseTimeBound('2026-10-01', NOW)).toBe(Date.UTC(2026, 9, 1));
+    expect(libSearch.parseTimeBound('2026-10-01T10:00:00Z', NOW)).toBe(Date.UTC(2026, 9, 1, 10));
+    expect(libSearch.parseTimeBound('2026-10-01T10:00:00+02:00', NOW)).toBe(Date.UTC(2026, 9, 1, 8));
+  });
+  it.each(['2026-10-01T10:00:00', '2026-02-30', '2026-13-01', '7m', '0d', '7 d', 'yesterday', '', '2026-10-01T25:00Z'])(
+    '%s is null (bad-args)', (s) => {
+      expect(libSearch.parseTimeBound(s, NOW)).toBeNull();
+    });
 });

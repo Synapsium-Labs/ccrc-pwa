@@ -459,3 +459,24 @@ export function resolveScopedId(i: { wanted: string; inScope: readonly string[];
 export function extractNodeId(raw: string): { ok: true; id: string } | { ok: false; error: string; hint?: string };
 export function recallOffPath(home: string, id: string): string;
 export function decideRecallOff(i: { file: Presence<string>; generation: string }): 'off' | 'stale' | 'none';
+
+
+// --- W1-B2 Task 2: search primitives (spec §8.4 grep, §11 V2, P1, P8, P9, P10)
+export function sanitizeFtsQuery(raw: string): string;
+export function queryTerms(raw: string): string[];
+export function regexSyntaxIn(pattern: string): string | null;
+export function regexSyntaxHint(pattern: string, syntax: string): string;
+export const REGEX_MAX_LEN: 500;
+export const REGEX_BUDGET_MS: 5000;
+export type RegexGuard = { ok: true; source: string } | { ok: false; why: 'too-long' | 'nested' | 'invalid' };
+export function guardRegex(pattern: string): RegexGuard;
+export function regexPrefilter(pattern: string): string | null;
+export type GrepSort = 'recency' | 'relevance' | 'hybrid';
+export const GREP_SORTS: readonly GrepSort[];
+export const GREP_LIMIT_MAX: 100;
+export const GREP_LIMIT_DEFAULT: 20;
+export const RANK_POOL: 2000;
+export const HYBRID_AGE_DECAY: 0.001;
+export function ftsOrderBy(sort: string, tsExpr: string): string;
+export function snippetWindow(text: string, terms: readonly string[]): string;
+export function parseTimeBound(s: string, nowMs: number): number | null;

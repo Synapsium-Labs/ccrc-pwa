@@ -3268,3 +3268,392 @@ export function decideRecallOff({ file, generation }) {
   if (file.state !== 'value') return 'off';
   return file.value.trim() === generation ? 'off' : 'stale';
 }
+
+
+// ===========================================================================
+// W1-B2 recall, Task 2: search primitives (spec §8.4 grep, §11 V2, P1, P8,
+// P9, P10). Pure text and SQL-fragment decisions: the CLI runs the query and
+// the regex worker runs the match. Task 1's module-private `escapeRe` is
+// reused here.
+// ===========================================================================
+
+// derived from lossless-claw src/store/fts5-sanitize.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** The FTS5 MATCH text for plain `grep <words>` (§8.4, §11 P1). Every token
+ *  is quoted, so FTS5 operators (`OR`, `NOT`, `NEAR(`), column filters and
+ *  punctuation are literal text, and the terms are joined by spaces, which
+ *  FTS5 reads as AND. A quoted phrase stays one phrase. ccrc's change: a token
+ *  or phrase ENDING in `*` (inside or right after its closing quote) becomes
+ *  a quoted term followed by `*`, an FTS5 prefix query, so `a0860d1f*` finds a
+ *  SHA by its prefix with no trigram index; upstream kept the star inside the
+ *  quotes, where it matches nothing. Porter stems a prefix query too, so a
+ *  prefix cut inside a word's stem can miss (`runn*` does not find
+ *  `running`, measured); a hex prefix is never stemmed. An empty query is
+ *  `""`, which matches nothing and never errors. */
+export function sanitizeFtsQuery(raw) {
+  const text = String(raw);
+  const parts = [];
+  const bare = (chunk) => {
+    for (const t of chunk.split(/\s+/).filter(Boolean)) parts.push(quoteFtsTerm(t.replace(/"/g, '')));
+  };
+  const phraseRe = /"([^"]+)"(\*?)/g;
+  let last = 0;
+  for (let m = phraseRe.exec(text); m !== null; m = phraseRe.exec(text)) {
+    bare(text.slice(last, m.index));
+    const phrase = m[1].replace(/"/g, '').trim();
+    if (phrase) parts.push(quoteFtsTerm(m[2] === '*' ? `${phrase}*` : phrase));
+    last = m.index + m[0].length;
+  }
+  bare(text.slice(last));
+  return parts.length > 0 ? parts.join(' ') : '""';
+}
+
+/** One quoted FTS5 term. A trailing run of stars moves outside the quotes as
+ *  one star; a term that is nothing but stars stays a quoted literal. */
+function quoteFtsTerm(t) {
+  const m = /^([\s\S]*?[^*\s])\s*\*+$/.exec(t);
+  return m === null ? `"${t}"` : `"${m[1]}"*`;
+}
+
+// derived from lossless-claw src/store/full-text-fallback.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const RAW_TERM_RE = /"([^"]+)"|(\S+)/g;
+const EDGE_PUNCTUATION_RE = /^[`'"()[\]{}<>.,:;!?*_+=|\\/-]+|[`'"()[\]{}<>.,:;!?*_+=|\\/-]+$/g;
+
+function normalizeQueryTerm(raw) {
+  return typeof raw === 'string' ? raw.trim().replace(EDGE_PUNCTUATION_RE, '').toLowerCase() : '';
+}
+
+/** The plain words of a query, lowercased, edge punctuation (a trailing `*`
+ *  included) stripped, each once: the snippet window's needles (§11 P9). */
+export function queryTerms(raw) {
+  const terms = [];
+  for (const m of String(raw).matchAll(RAW_TERM_RE)) {
+    const t = normalizeQueryTerm(m[1] ?? m[2] ?? '');
+    if (t.length > 0 && !terms.includes(t)) terms.push(t);
+  }
+  if (terms.length === 0) {
+    const t = normalizeQueryTerm(String(raw));
+    if (t.length > 0) terms.push(t);
+  }
+  return terms;
+}
+
+// derived from lossless-claw src/tools/lcm-grep-tool.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** Clear regex syntax in a plain query, which would make FTS5 miss silently
+ *  (§8.4, §11 V2): grep refuses it with exit 2 `regex-syntax` and a hint,
+ *  WITHOUT querying. Conservative on purpose, not a parser: nothing inside
+ *  double quotes counts, `.` counts only before `*`, `+` or `?`, and `^` or
+ *  `$` only at a word edge. */
+export function regexSyntaxIn(pattern) {
+  let inQuote = false;
+  let escaped = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    const next = pattern[index + 1];
+    if (escaped) {
+      escaped = false;
+      if (!inQuote && char && /[bBdDsSwW]/.test(char)) return 'regex character escape';
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+    if (inQuote) continue;
+    if (char === '|') return 'alternation';
+    if (char === '.' && (next === '*' || next === '+' || next === '?')) return 'wildcard';
+    if (char === '[') {
+      const closing = pattern.indexOf(']', index + 1);
+      if (closing > index + 1) return 'character class';
+    }
+    if (char === '^' && (index === 0 || /\s/.test(pattern[index - 1] ?? ''))) return 'anchor';
+    if (char === '$' && (index === pattern.length - 1 || /\s/.test(next ?? ''))) return 'anchor';
+  }
+  return null;
+}
+
+/** The `hint:` line that goes with exit 2 `regex-syntax`. The caller redacts
+ *  and escapes the echoed pattern like any field it prints. */
+export function regexSyntaxHint(pattern, syntax) {
+  return `hint: grep searches words, not a regex (${syntax}): use --regex for \`${pattern}\`, or rewrite it as 1-3 literal terms or one quoted phrase`;
+}
+
+/** The longest `--regex` pattern admitted (upstream's bound, §11 P10). */
+export const REGEX_MAX_LEN = 500;
+/** The regex worker's wall-clock kill, chosen (§8.4). */
+export const REGEX_BUDGET_MS = 5000;
+
+// derived from lossless-claw src/store/search-regex.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const REGEX_QUANTIFIER = String.raw`(?:[+*?]|\{\d+(?:,\d*)?\})`;
+const NESTED_QUANTIFIER_RE = new RegExp(`${REGEX_QUANTIFIER}\\)${REGEX_QUANTIFIER}`);
+const QUANTIFIED_ALTERNATION_RE = /\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)(?:[+*?]|\{\d)/;
+
+/** The `--regex` guard (§8.4, §11 P10): a DISCRIMINATED refusal, never a
+ *  null that reads as "no match". `too-long` past REGEX_MAX_LEN; `invalid`
+ *  when it does not compile; `nested` for upstream's two shapes and for
+ *  ccrc's structural rule (`repeatsVariableGroup`), which refuted candidate 1
+ *  needs: upstream admits `(.*a){8}$`, which backtracks for seconds on 30
+ *  characters. A refused pattern spawns no worker. The worker compiles
+ *  `source` with no flags. */
+export function guardRegex(pattern) {
+  if (typeof pattern !== 'string') return { ok: false, why: 'invalid' };
+  if (pattern.length > REGEX_MAX_LEN) return { ok: false, why: 'too-long' };
+  try {
+    new RegExp(pattern);
+  } catch {
+    return { ok: false, why: 'invalid' };
+  }
+  if (NESTED_QUANTIFIER_RE.test(pattern) || QUANTIFIED_ALTERNATION_RE.test(pattern)) return { ok: false, why: 'nested' };
+  if (repeatsVariableGroup(pattern)) return { ok: false, why: 'nested' };
+  return { ok: true, source: pattern };
+}
+
+/** A quantifier starting at `k`, as {len, min, max}, or null. */
+function regexQuantifierAt(p, k) {
+  const c = p[k];
+  if (c === '*') return { len: 1, min: 0, max: Infinity };
+  if (c === '+') return { len: 1, min: 1, max: Infinity };
+  if (c === '?') return { len: 1, min: 0, max: 1 };
+  if (c !== '{') return null;
+  const m = /^\{(\d+)(?:(,)(\d*))?\}/.exec(p.slice(k, k + 24));
+  if (m === null) return null;
+  const min = Number(m[1]);
+  const max = m[2] === undefined ? min : m[3] === '' ? Infinity : Number(m[3]);
+  return { len: m[0].length, min, max };
+}
+
+/** ccrc's structural ReDoS rule: a group repeated more than once (a
+ *  quantifier whose maximum exceeds 1) whose body can match in more than one
+ *  way, through a variable quantifier or an alternation anywhere inside it,
+ *  nested groups included. Escapes and character classes are skipped, and a
+ *  group's own `(?:`, `(?=`, `(?<name>` prefix is not a quantifier. It
+ *  refuses some harmless patterns (`(a|b){2}`) to refuse every catastrophic
+ *  one of that shape; the refusal names `--regex` and the pattern, so the
+ *  session rewrites it. */
+function repeatsVariableGroup(p) {
+  const open = [];
+  let i = 0;
+  const skipQuantifier = (q) => {
+    i += q.len;
+    if (p[i] === '?') i += 1;
+  };
+  while (i < p.length) {
+    const c = p[i];
+    if (c === '\\') { i += 2; continue; }
+    if (c === '[') {
+      i += 1;
+      while (i < p.length && p[i] !== ']') i += p[i] === '\\' ? 2 : 1;
+      i += 1;
+      continue;
+    }
+    if (c === '(') {
+      open.push(false);
+      i += 1;
+      if (p[i] === '?') {
+        i += 1;
+        if (p[i] === '<' && p[i + 1] !== '=' && p[i + 1] !== '!') {
+          while (i < p.length && p[i] !== '>') i += 1;
+          i += 1;
+        } else {
+          i += p[i] === '<' ? 2 : 1;
+        }
+      }
+      continue;
+    }
+    if (c === '|') {
+      if (open.length > 0) open[open.length - 1] = true;
+      i += 1;
+      continue;
+    }
+    if (c === ')') {
+      const variable = open.pop() === true;
+      i += 1;
+      const q = regexQuantifierAt(p, i);
+      if (q !== null && q.max > 1 && variable) return true;
+      if (open.length > 0 && (variable || (q !== null && q.min !== q.max))) open[open.length - 1] = true;
+      if (q !== null) skipQuantifier(q);
+      continue;
+    }
+    const q = regexQuantifierAt(p, i);
+    if (q !== null) {
+      if (q.min !== q.max && open.length > 0) open[open.length - 1] = true;
+      skipQuantifier(q);
+      continue;
+    }
+    i += 1;
+  }
+  return false;
+}
+
+/** The FTS prefilter `--regex` runs before its worker (§8.4), or null for a
+ *  full scan of the scope. It must never drop a true hit, so it names only a
+ *  WHOLE-WORD literal every match contains: a top-level run of 3 or more
+ *  ASCII letters or digits, each unquantified, bounded on both sides by an
+ *  unquantified anchor (`^`, `$`), literal whitespace (` `, `\s`, `\t`,
+ *  `\n`, `\r`) or literal ASCII punctuation, in a pattern with no top-level
+ *  alternation. Those bounds are FTS5 separators, so the run is one whole
+ *  token, and an exact-token query (no star) finds it: porter stems the query
+ *  and the index alike. A prefix query (`"runn"*` misses `running`) and
+ *  `\b` (which can sit beside a non-ASCII letter FTS5 keeps in the token)
+ *  never make one. The longest such run wins; FTS5 folds case, so the
+ *  prefilter is a superset of a case-sensitive pattern. */
+export function regexPrefilter(pattern) {
+  const atoms = [];
+  for (let i = 0; i < pattern.length;) {
+    const c = pattern[i];
+    if (c === '|') return null;
+    if (c === '\\') {
+      const n = pattern[i + 1] ?? '';
+      atoms.push(/[stnr]/.test(n) || /[!-/:-@[-`{-~]/.test(n) ? { t: 'sep' } : { t: 'other' });
+      i += 2;
+    } else if (c === '[') {
+      i += 1;
+      while (i < pattern.length && pattern[i] !== ']') i += pattern[i] === '\\' ? 2 : 1;
+      i += 1;
+      atoms.push({ t: 'other' });
+    } else if (c === '(') {
+      let depth = 0;
+      for (; i < pattern.length; i += 1) {
+        if (pattern[i] === '\\') { i += 1; continue; }
+        if (pattern[i] === '[') {
+          i += 1;
+          while (i < pattern.length && pattern[i] !== ']') i += pattern[i] === '\\' ? 2 : 1;
+          continue;
+        }
+        if (pattern[i] === '(') depth += 1;
+        if (pattern[i] === ')' && --depth === 0) break;
+      }
+      i += 1;
+      atoms.push({ t: 'other' });
+    } else if (regexQuantifierAt(pattern, i) !== null) {
+      const q = regexQuantifierAt(pattern, i);
+      if (atoms.length > 0) atoms[atoms.length - 1] = { t: 'other' };
+      i += q.len;
+      if (pattern[i] === '?') i += 1;
+    } else {
+      if (/[A-Za-z0-9]/.test(c)) atoms.push({ t: 'word', ch: c });
+      else if (c === '^' || c === '$' || c === ' ' || (/[!-/:-@[-`{-~]/.test(c) && c !== '.')) atoms.push({ t: 'sep' });
+      else atoms.push({ t: 'other' });
+      i += 1;
+    }
+  }
+  let best = '';
+  for (let k = 0; k < atoms.length;) {
+    if (atoms[k].t !== 'word') { k += 1; continue; }
+    let e = k;
+    while (e < atoms.length && atoms[e].t === 'word') e += 1;
+    const run = atoms.slice(k, e).map((a) => a.ch).join('');
+    const bounded = k > 0 && atoms[k - 1].t === 'sep' && e < atoms.length && atoms[e].t === 'sep';
+    if (bounded && run.length >= 3 && run.length > best.length) best = run;
+    k = e;
+  }
+  return best === '' ? null : `"${best}"`;
+}
+
+/** The sorts `grep --sort` takes (§8.4); `recency` is the default. */
+export const GREP_SORTS = Object.freeze(['recency', 'relevance', 'hybrid']);
+/** `--limit` (§8.4): at most 100; 20 when not given, chosen. */
+export const GREP_LIMIT_MAX = 100;
+export const GREP_LIMIT_DEFAULT = 20;
+/** Every grep sort ranks and pages over the top 2,000 in-scope matches; §8.4 gives the pool to hybrid only (D-4681 (history-grep-pages-end-at-rank-pool)). */
+export const RANK_POOL = 2000;
+/** The hybrid sort's age decay per hour: upstream's AGE_DECAY_RATE (§11 P8). */
+export const HYBRID_AGE_DECAY = 0.001;
+
+// derived from lossless-claw src/store/full-text-sort.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** The ORDER BY of a ranked grep query (§8.4, §11 P8). `rank` is FTS5's
+ *  BM25, lower is better. `hybrid` divides it by an age term in HOURS taken
+ *  from the integer `ts_ms` and the statement's bound `:now_ms` parameter:
+ *  upstream's `julianday(<ts>)` is NULL for an integer (measured, refuted
+ *  candidate 2), which silently degrades the sort to recency. A NULL
+ *  timestamp counts as the oldest, so it sorts last, never first; a
+ *  timestamp ahead of the clock ages 0. `tsExpr` is interpolated into SQL,
+ *  so only a (qualified) column name is accepted. */
+export function ftsOrderBy(sort, tsExpr) {
+  if (typeof tsExpr !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(tsExpr)) {
+    throw new TypeError(`ftsOrderBy: not a column name: ${JSON.stringify(tsExpr)}`);
+  }
+  switch (sort) {
+    case 'recency':
+      return `${tsExpr} DESC`;
+    case 'relevance':
+      return `rank ASC, ${tsExpr} DESC`;
+    case 'hybrid':
+      return `(rank / (1 + (MAX(0, :now_ms - COALESCE(${tsExpr}, 0)) / 3600000.0) * ${HYBRID_AGE_DECAY})) ASC, ${tsExpr} DESC`;
+    default:
+      throw new TypeError(`ftsOrderBy: sort outside GREP_SORTS: ${String(sort)}`);
+  }
+}
+
+/** Word endings tried when a stemmed match leaves a literal term unfound. */
+const SNIPPET_STEM_SUFFIXES = Object.freeze(['ing', 'ed', 'es', 's']);
+
+/** A slice end that never splits a surrogate pair. */
+function cutBefore(s, n) {
+  if (n <= 0) return 0;
+  if (n >= s.length) return s.length;
+  const code = s.charCodeAt(n);
+  return code >= 0xdc00 && code <= 0xdfff ? n - 1 : n;
+}
+
+// derived from lossless-claw src/store/full-text-fallback.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** The grep snippet (§8.4, §11 P9): a window of 24 characters before and 40
+ *  after the earliest hit, `...` at a cut end; no hit gives the first 80. A
+ *  contentless FTS5 table has no snippet() (it answers NULL, measured), so
+ *  this is the only path, and the caller hands it REDACTED text (§8.3):
+ *  redact, then cut. For a longer body that text is a window around the
+ *  hit plus ENTRY_REDACT_MARGIN on each side, redacted and cut back to the
+ *  window, never the whole body (Task 12's displaySnippet, which hitSnippet
+ *  calls; snippetWindow's search is Task 12's snippetSpan; spec §8.3 and
+ *  §8.4, the plan's Global Constraints R2). FTS5 matched through porter stems and prefixes, so each
+ *  term is also tried without a common ending (`runs` finds `running` by
+ *  `run`). The search is case-insensitive in place: no lowercased copy whose
+ *  indices could drift from the text's. */
+export function snippetWindow(text, terms) {
+  const content = String(text);
+  let at = -1;
+  let len = 0;
+  for (const term of terms) {
+    const needles = [term];
+    for (const s of SNIPPET_STEM_SUFFIXES) if (term.endsWith(s) && term.length - s.length >= 3) needles.push(term.slice(0, -s.length));
+    for (const needle of needles) {
+      if (needle === '') continue;
+      const idx = new RegExp(escapeRe(needle), 'i').exec(content)?.index ?? -1;
+      if (idx !== -1 && (at === -1 || idx < at || (idx === at && needle.length > len))) {
+        at = idx;
+        len = needle.length;
+      }
+    }
+  }
+  if (at === -1) {
+    const head = content.trim();
+    return head.length <= 80 ? head : `${head.slice(0, cutBefore(head, 77)).trimEnd()}...`;
+  }
+  let start = Math.max(0, at - 24);
+  if (start > 0 && cutBefore(content, start) !== start) start -= 1;
+  const end = cutBefore(content, Math.min(content.length, at + Math.max(len, 1) + 40));
+  const prefix = start > 0 ? '...' : '';
+  const suffix = end < content.length ? '...' : '';
+  return `${prefix}${content.slice(start, end).trim()}${suffix}`;
+}
+
+/** `--since` / `--before` (§8.4), plan-chosen grammar: `<n>d`, `<n>h` or
+ *  `<n>min` before now, or an ISO-8601 date (UTC midnight) or date-time with
+ *  `Z` or an offset. A date-time without a zone would depend on the box's
+ *  timezone, and an impossible date (`2026-02-30`) would roll over, so both
+ *  are null, which the CLI answers exit 2 `bad-args`. Minutes are `min`,
+ *  never `m`, which `prune --older-than` reads as months. */
+export function parseTimeBound(s, nowMs) {
+  const t = String(s).trim();
+  const rel = /^([1-9][0-9]{0,6})(d|h|min)$/.exec(t);
+  if (rel !== null) return nowMs - Number(rel[1]) * { d: 86_400_000, h: 3_600_000, min: 60_000 }[rel[2]];
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/.exec(t);
+  if (m === null) return null;
+  const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (day.getUTCFullYear() !== Number(m[1]) || day.getUTCMonth() !== Number(m[2]) - 1 || day.getUTCDate() !== Number(m[3])) return null;
+  const ms = Date.parse(t);
+  return Number.isFinite(ms) ? ms : null;
+}
