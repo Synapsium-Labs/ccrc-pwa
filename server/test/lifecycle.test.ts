@@ -13,7 +13,7 @@ import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import { LIFECYCLE } from '../../shared/lifecycle.js';
-import { RUN_PREFIX } from './run-tmp.globalsetup.mjs';
+import { RUN_PREFIX, RUN_QUIET_S } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import type { FleetReadiness } from '../src/readiness.js';
@@ -1157,12 +1157,14 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
   it('declares the server suite\'s per-run temp parent, an E class its own creator collects (#316)', () => {
     // One `ccrc-testrun-XXXXXX` directory per server vitest run, removed at teardown, by the signal arm, or by a
     // later run's reap. L0 cannot import the prefix, so the row's `root` is the one textual second copy of it,
-    // and this case is what keeps the two in step.
+    // and this case is what keeps the two in step. The quiet window has no copy at all: the row names it.
     const c = LIFECYCLE.find((x) => x.name === 'server-test-run-dirs');
     expect(c, 'shared/lifecycle.ts declares no server-test-run-dirs class').toBeTruthy();
     expect(c!.pattern).toBe('E');
     expect(c!.root).toContain(RUN_PREFIX);
     expect(c!.collector).toContain('run-tmp.globalsetup.mjs');
+    expect(c!.collector).toContain('RUN_QUIET_S');
+    expect(`${c!.collector} ${c!.bound}`, 'the row carries a copy of RUN_QUIET_S\'s number').not.toContain(String(RUN_QUIET_S));
   });
 });
 

@@ -14,7 +14,8 @@
 //
 // LIVENESS IS A SOCKET, NOT A PID (D-4499). The owner listens on `live.sock`; a later run CONNECTS to decide
 // whether the owner is alive. Measured, each:
-//   - a SIGSTOPped owner still connects (the kernel accepts into the backlog), so a paused run is `live`;
+//   - a SIGSTOPped owner still connects (the kernel accepts into the backlog), so a paused run is `live` — but
+//     only while its listen queue has room: see KNOWN LIMITATION below for a run paused a long time;
 //   - a SIGKILLed owner whose forked child is still alive refuses (ECONNREFUSED): libuv opens every fd
 //     close-on-exec, so the workers do not inherit the listening socket, and main's death is visible while
 //     orphan workers run on;
@@ -58,6 +59,17 @@
 // WHAT THIS DOES NOT DO. It never signals another process: its arm exits this one. It does not collect
 // vitest's own `TestProject.tmpDir` (a follow-up), loose `ccrc-*` directories from before it existed (proposal
 // 3 of #316, a follow-up), or a TMPDIR no later run visits.
+//
+// KNOWN LIMITATION: A LONG-PAUSED RUN ON macOS (D-4499's amendment). A stopped owner never accepts, and each
+// probe's connection stays in its listen queue after the prober hangs up. Once the queue is full, macOS refuses
+// with ECONNREFUSED, which reads `dead` beside owner.json, after 128 probes (kern.ipc.somaxconn); Linux answers
+// EAGAIN, `unmeasurable:EAGAIN`, which is never acted on, after 512 (Node's backlog of 511). Both measured, on
+// Node 26 and Node 22. Every run probes every run in its base twice (setup and teardown), so about 64 later runs
+// under one TMPDIR while a whole run is stopped (Ctrl-Z, a debugger pause; a mutation sweep makes that many) read
+// it `dead` on macOS, and because nothing in a stopped run writes, it is quiet too and is condemned. When it
+// resumes its fixtures are gone, and its teardown's `condemn` answers `gone` and WARNS — the one place that
+// learns. There is no pid veto: a pid answers differently in every pid namespace and is reused, which is why
+// liveness is a socket at all.
 //
 // WHY A `.mjs` THAT IMPORTS ONLY `node:` BUILTINS. Bare-`node` children import it (`run-tmp.test.ts` spawns
 // real owners), and the node floor (22.16) cannot strip types; `shared/base-url.mjs` is the precedent.
@@ -141,6 +153,9 @@ function tryConnect(sock, ms) {
  *  | not a socket  | –                  | any          | `unmeasurable:not-a-socket` |
  *  | socket        | other error, 2 s   | any          | `unmeasurable:<code>`       |
  *  | too long      | –                  | any          | `unmeasurable:EINVAL`       |
+ *
+ *  A stopped owner `connects` only while its listen queue has room; past it, macOS gives ECONNREFUSED (`dead`)
+ *  and Linux EAGAIN (`unmeasurable:EAGAIN`) — the header's KNOWN LIMITATION.
  *
  *  `unowned` is a directory nobody finished making, or one an orphan worker re-created; `unmeasurable` is never
  *  acted on.

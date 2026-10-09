@@ -94,9 +94,9 @@ export function removeTmpFixturesEachTest(): void {
   });
 }
 
-// THE RUN PARENT (#316). Every directory `mkTmp` makes now lands inside the run's own
-// `$TMPDIR/ccrc-testrun-XXXXXX/tmp` (`run-tmp.globalsetup.mjs`, vitest's `globalSetup`), which the run removes at
-// teardown or on a signal, and which a later run removes after a SIGKILL. That parent is what a KILLED run can no
-// longer leak. The hook below and R20a above both stay: they bound the peak disk use WITHIN a run (R20a's file made
-// about 650 directories and 2.5 GB), and the parent goes only when the whole run ends.
+// THE RUN PARENT (#316). Every directory `mkTmp` makes now lands inside the run's own `$TMPDIR/ccrc-testrun-XXXXXX/tmp`
+// (`run-tmp.globalsetup.mjs`, vitest's `globalSetup`), which the run removes at teardown or on a signal, and which a
+// later run under the same TMPDIR removes once it is quiet after a SIGKILL, so a KILLED run leaves one parent behind
+// until then, not hundreds. The hook below and R20a above both stay: they bound the peak disk use WITHIN a run (R20a's
+// file made about 650 directories and 2.5 GB), and the parent goes only when the whole run ends.
 afterAll(removeTmpFixtures);

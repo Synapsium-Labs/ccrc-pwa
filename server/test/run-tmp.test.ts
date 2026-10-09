@@ -140,6 +140,8 @@ describe('probeRun — six verdicts, never folded', () => {
   });
 
   it('T2b: a SIGSTOPped owner still answers live — the kernel accepts, the process need not run', async () => {
+    // While its listen queue has room, that is: past 128 probes on macOS it reads `dead`, past 512 on Linux
+    // `unmeasurable:EAGAIN` (measured) — the module header's KNOWN LIMITATION. One probe is far inside both.
     const o = await startOwner(socketBase());
     process.kill(o.pid, 'SIGSTOP');
     try {
@@ -205,7 +207,7 @@ describe('probeRun — six verdicts, never folded', () => {
     const longLink = path.join(base, 'x'.repeat(90));
     symlinkSync(base, longLink);
     const longRun = path.join(longLink, path.basename(o.run));
-    expect(Buffer.byteLength(path.join(longRun, RUN_SOCKET))).toBeGreaterThan(108);
+    expect(Buffer.byteLength(path.join(longRun, RUN_SOCKET))).toBeGreaterThan(RUN_SUN_PATH_MAX);
     expect(await probeRun(longRun)).toBe('unmeasurable:EINVAL');
     expect(await probeRun(o.run)).toBe('dead');
   });
