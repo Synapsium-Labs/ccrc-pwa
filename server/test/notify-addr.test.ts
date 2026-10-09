@@ -326,11 +326,13 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
   /** A curl that records one argv word per line, and its stdin, and dials nothing. */
   const recordingCurl = (home: string): void => {
     writeFileSync(path.join(stubBinDir(home), 'curl'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/curl.argv"\ncat > "$HOME/curl.stdin"\nexit 0\n', { mode: 0o755 });
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/curl.argv"\nexport -p > "$HOME/curl.env"\ncat > "$HOME/curl.stdin"\nexit 0\n', { mode: 0o755 });
     for (const t of ['head', 'cat']) symlinkSync(realPath(t), path.join(stubBinDir(home), t));
   };
   const words = (home: string): string[] => readFileSync(path.join(home, 'curl.argv'), 'utf8').split('\n');
   const fed = (home: string): string => readFileSync(path.join(home, 'curl.stdin'), 'utf8');
+  /** What the recording curl was handed in its ENVIRONMENT (`export -p`: POSIX, so no `env` binary on the stub PATH). */
+  const exported = (home: string): string => readFileSync(path.join(home, 'curl.env'), 'utf8');
 
   it('with a token: argv holds neither the token nor its header, and stdin carries the one config line', () => {
     const home = mkTmp('ccrc-notify-tok-');
@@ -377,6 +379,34 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr, 'an inherited xtrace printed the token').not.toContain(TOKEN);
     expect(fed(home)).toBe(CONFIG);
+  });
+
+  // `set +a` in the same first statement as `set +x`: an inherited allexport (an exported SHELLOPTS=allexport)
+  // turns the plain `tok=` assignment into an export, so the token reached curl's ENVIRONMENT, readable by
+  // its owner in /proc/<pid>/environ for the life of the call. The same hunt for a `tok` the caller already
+  // exported, which keeps its export attribute through a plain assignment unless it is unset first.
+  it('an inherited allexport (SHELLOPTS=allexport) keeps the token out of curl\'s environment', () => {
+    const home = mkTmp('ccrc-notify-allexport-');
+    recordingCurl(home);
+    const r = runNotify(home, {
+      CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: tokenFile(home), SHELLOPTS: 'allexport',
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fed(home), 'the hunt is not vacuous: the value really was sent, on stdin').toBe(CONFIG);
+    expect(exported(home), 'the token reached curl\'s environment').not.toContain(TOKEN);
+    expect(exported(home)).not.toMatch(/^export tok=/m);
+  });
+
+  it('a tok already EXPORTED by the caller does not carry the token into curl\'s environment either', () => {
+    const home = mkTmp('ccrc-notify-preexport-');
+    recordingCurl(home);
+    const r = runNotify(home, {
+      CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: tokenFile(home), tok: 'inherited',
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fed(home)).toBe(CONFIG);
+    expect(exported(home), 'the token reached curl\'s environment').not.toContain(TOKEN);
+    expect(exported(home)).not.toMatch(/^export tok=/m);
   });
 
   // THE OTHER DIRECTION (wave 13, R16): the hook's own stdin, whatever ccd or a

@@ -7679,7 +7679,7 @@ _bt_find() {
       say="the server recovered its token from a sibling file at boot ($(_bt_age "$a") ago), and no rotation has followed"
       fix="$card" ;;
     server:retire-overdue:*) cls=FAIL
-      say="the previous value is $a min past its hard bound and still stands, so a retired value is still accepted"
+      say="the previous value is $a min past its hard bound and its digest is not yet recorded as retired, so a value written back would be adopted at the next boot"
       fix="the driver retires it on its next tick; if it stays, read the server's log (an unreadable previous-value file beside box-token.json holds the retirement) and repair that file's mode, then it retires itself" ;;
     server:retiring-unlanded:*) cls=FAIL
       say="a retired value's digest has waited $a min to be appended to box-token-retired.json, and box-token.json is its only durable copy"

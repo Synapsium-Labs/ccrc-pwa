@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set +x +a   # FIRST LINE OF CODE, and it is a SECRETS control: a claim code and a box token pass through this file. +x: an inherited xtrace would print them; +a: an inherited allexport (SHELLOPTS, or a caller's `set -a`) would export `code` and `tok` into curl's environment.
+set +x +a   # FIRST LINE OF CODE, and it is a SECRETS control: a claim code and a box token pass through this file. +x: an inherited xtrace would print them; +a: allexport inherited through an exported SHELLOPTS would export `code` and `tok` into curl's environment.
 umask 077
 # ccrc-token-sync — the fleet box's half of the box-token lifecycle (design
 # 2026-10-07, §4.5 and §10.3). `ccd/ccrc` dispatches `ccrc token …` here,
@@ -342,7 +342,7 @@ cmd_sync() {
   command -v python3 >/dev/null 2>&1 || _ts_env_die "python3 is not on PATH — nothing was claimed"
 
   _ts_sweep
-  _ts_client_ok || _ts_refuse stale-client "~/.local/bin/ccrc-api sends the box token on its argv (an install before wave 13); replace it before a sync — nothing was claimed"
+  _ts_client_ok || _ts_refuse stale-client "~/.local/bin/ccrc-api cannot be shown to keep the box token off its argv (an install before wave 13, or a file this verb cannot read); replace it before a sync — nothing was claimed"
   _ts_server_url
 
   [ -e "$NODE_ID_FILE" ] || [ -L "$NODE_ID_FILE" ] || _ts_env_die "no node id at ~/.ccrc/node-id — run ccrc install; nothing was claimed"

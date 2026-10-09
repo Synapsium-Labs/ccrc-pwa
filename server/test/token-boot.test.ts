@@ -638,7 +638,7 @@ describe('the both-role boot write: recorded role only (spec 4.10)', () => {
     const r = await boot(home, { ...both, roleSource: 'derived-absent' });
     expect(existsSync(P(home).fleetFile)).toBe(false);
     expect(r.warnings).toContain(`ccrc-server: box token: this box's role is not recorded as both, so the server will not write `
-      + `${P(home).fleetFile}; with no file there, notify.sh is refused (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
+      + `${P(home).fleetFile}; with no file there, notify.sh sends nothing (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
   });
 
   it("recorded both with the README's agent.env (CCRC_SERVER_URL only) is armed, and gets its fleet file and generation file", async () => {

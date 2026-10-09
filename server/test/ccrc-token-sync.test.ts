@@ -413,7 +413,7 @@ describe('ccrc token sync: set +x first, umask 077, and the environment exits', 
     expect(lines[1]).toBe('umask 077');
   });
 
-  // Review of B1: an inherited allexport (SHELLOPTS=allexport, or `set -a` in the caller) turns every plain
+  // Review of B1: an inherited allexport (an exported SHELLOPTS=allexport) turns every plain
   // assignment into an export, so `code` and `tok` reached curl's ENVIRONMENT. The option is cleared in the
   // same first statement as xtrace, before any assignment.
   it('an inherited allexport (SHELLOPTS=allexport) puts neither the code nor the value in curl\'s environment', () => {
@@ -600,7 +600,7 @@ describe('ccrc token sync: the shell spellings agree with L0 (plan Global Constr
     expect(code.filter((l) => /\bpython3 -c\b/.test(l))).toEqual([]);
     expect(code.filter((l) => /\bpython3 -I -c\b/.test(l)).length).toBe(3);
     // And no spelling that takes another route to the interpreter (a bare `python3 "$x"`, `python3 -m`, `python3 -`).
-    expect(code.filter((l) => /\bpython3 (?!-I -c\b)(?!>\/dev\/null)(?![a-z])/.test(l) && !/command -v python3|^\s*\[?.*"python3 /.test(l))).toEqual([]);
+    expect(code.filter((l) => /\bpython3 (?!-I -c\b)(?!>\/dev\/null)(?![a-z])/.test(l) && !/command -v python3/.test(l))).toEqual([]);
   });
 
   it('the agent\'s frozen argv is the verb this file answers', () => {

@@ -183,12 +183,14 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
     expect(notifySh, 'the token is back on curl\'s argv').not.toMatch(/-H\s+"x-ccrc-mail-token/);
   });
 
-  it('starts with set +x, then umask 077, before any other statement (spec 4.9)', () => {
+  it('starts with set +x +a, then umask 077, before any other statement (spec 4.9)', () => {
     // The first two lines of code after the shebang and before the first
     // comment, the shape ccd-pool-sync and ccd-update-sync carry: a token
-    // client whose xtrace could be inherited turns it off before it reads one.
+    // client whose xtrace could be inherited turns it off before it reads one,
+    // and its allexport (an exported SHELLOPTS) with it, so `tok` never becomes
+    // an exported variable curl inherits.
     const code = notifySh.split('\n').slice(1).filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));
-    expect(code.slice(0, 2).map((l) => l.replace(/\s+#.*$/, ''))).toEqual(['set +x', 'umask 077']);
+    expect(code.slice(0, 2).map((l) => l.replace(/\s+#.*$/, ''))).toEqual(['set +x +a', 'umask 077']);
   });
 
   it('skips blank and #-comment lines, then strips ALL whitespace from the value line', () => {

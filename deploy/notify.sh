@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token below.
+set +x +a   # FIRST LINE OF CODE, and it is a SECRETS control — the box token below. +x: an inherited xtrace would print it; +a: an inherited allexport (an exported SHELLOPTS) would export `tok` into curl's environment.
 umask 077
 # ccd swap hook -> ccrc. $1 = human-readable message.
 #
@@ -33,6 +33,7 @@ umask 077
 # server mints the token) would be read as a secret whose leading bytes are a
 # comment nobody meant to sign with.
 TOKEN_FILE="${CCRC_MAIL_TOKEN_FILE:-$HOME/.cc-secrets/ccrc-mail.token}"
+unset tok   # a caller that exported `tok` would keep it exported through the assignment below
 tok=""
 if [ -r "$TOKEN_FILE" ]; then
   tok="$(grep -v '^[[:space:]]*#' "$TOKEN_FILE" | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')"

@@ -237,11 +237,11 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
       if (st.current.id !== null) await writeGenerationFile(paths.generation, st.current.id);
       st = { ...st, fleetConfirmed: st.current.id };
     } catch (e) {
-      warn(`could not write ${paths.fleetFile} (${errno(e)}); this box's notify.sh is refused until it is written`);
+      warn(`could not write ${paths.fleetFile} (${errno(e)}); this box's notify.sh sends nothing until it is written`);
     }
   } else if (i.role === 'both' && i.roleSource !== 'recorded' && i.fleetMode === 'local' && !agentEnvMarksFleet
     && !(await fileExists(paths.fleetFile))) {
-    warn(`this box's role is not recorded as both, so the server will not write ${paths.fleetFile}; with no file there, notify.sh is refused (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
+    warn(`this box's role is not recorded as both, so the server will not write ${paths.fleetFile}; with no file there, notify.sh sends nothing (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
   }
 
   // D-4410: the unusable retired list is set aside after boot's decisions (just before the state is recorded), under a new name, never overwritten; ONE warning covers it and, when

@@ -539,7 +539,8 @@ fails: "The mail bus and its token", under "Fleet coordination" below. One case 
 single box whose role is only derived as `both` (placed by `deploy.sh`, or a dev launch with
 `CCRC_FLEET` unset and no `CCRC_ROLE` recorded) never gets the fleet copy written, so `notify.sh` sends
 nothing and `ccrc-api` answers `no-token`; the server warns at boot, and the remedy is to record
-`CCRC_ROLE=both` in `~/.ccrc/ccrc.env`.
+`CCRC_ROLE=both` in `~/.ccrc/ccrc.env` and then restart `ccrc.service` (the role is read only at boot).
+A `deploy.sh` box re-ships a local `deploy/ccrc.env` over that file, so record the role there too.
 
 The block below is the single-box form of the two steps:
 
@@ -585,6 +586,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
+| `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). PASS or SKIP only in wave 1: a finding that will be a FAIL or WARN prints as a SKIP with its word, and a SKIP is never counted in doctor's exit code |
 
 `ccrc doctor --fix` cures the failing checks that know how — `skills`, `wrappers` and `codex`, each by
 the shipped tree's own installer — and measures them again; the second verdict is the one that counts (D-3113). Without the flag
@@ -1089,6 +1091,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `memory [--apply]` | census each project's memory, then converge it into one store ("One memory store per project", below) |
 | `models <id> <subcommand>`, `models refresh <id>\|--all`, `models litellm <id>` | a lane's model-class registry, and the provider catalogue it is classified against |
 | `codex start\|stop\|status\|login <id>` | a Codex lane's LiteLLM gateway and shim; refused on a server-role box |
+| `token sync\|probe` | the box token's fleet side: `sync --from agent` is ccrc-agent's token-sync op (a one-time code on stdin, trade for the new value, write `~/.cc-secrets/ccrc-mail.token`, prove it with one call); `probe --file <path> [--url <base>]` presents a file's value once and prints only the HTTP status and accepted, refused or unmeasured |
 | `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
@@ -1106,7 +1109,8 @@ backup; unmanaged entries survive byte-identically), marker-verified wrappers on
 `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under `~/ccrc-versions`
 and a leftover `~/ccrc.migrating`, and the installed executables — and preserves `~/.ccrc` (less the node's
 install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`, `previous`, `install-step`, `update.json`,
-`update.lock`, `update-intent`, `migrating-to` — which leave with the tree), the registry rows and operator switches,
+`update.lock`, `update-intent`, `migrating-to`, `box-token-generation`, `token-sync.json` — which leave with the
+tree), `~/.cc-secrets/ccrc-mail.token` (never touched), the registry rows and operator switches,
 worktrees and `~/ccrc-backups`, printing (never running) the keep-aside restore commands. `--purge` additionally
 removes `~/.ccrc`'s config (roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
 `~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
