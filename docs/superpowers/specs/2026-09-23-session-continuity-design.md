@@ -266,8 +266,9 @@ direct link fails — the first carry's `cp -al`, or the walk's `os.link` with `
 `link-failed` and never routes) — ccd reads the kernel's own mount table (`/proc/self/mountinfo`), finds a
 read-write mount of the same filesystem under which both trees appear, and links through it only when each alias's
 `(st_dev, st_ino)` equals its original's. A mount stacked over an alias path, or one inside either tree, rules the
-alias out. The route runs only after a link has failed, so a box where linking works runs as before; a wrong table
-costs a copy, never a write elsewhere. Every copy that remains names one cause from a closed vocabulary —
+alias out, and a read-only destination mount is `link-failed`, never routed around. The route runs only after a link
+has failed, so a box where linking works runs as before; a wrong table costs a copy, never a link into another tree.
+Every copy that remains names one cause from a closed vocabulary —
 `exdev-other-fs`, `exdev-no-root`, `root-unreachable`, `root-mismatch`, `root-failed`, `mounts-absent`,
 `mounts-unreadable`, `link-failed`, `route-error` — and its bytes (D-4501). The first carry logs `(link)`,
 `(link: via-mount)`, or `(copy: <cause> <bytes|?> bytes)`; a merge appends `, via-mount V` and one
@@ -710,9 +711,12 @@ bound to a pane instance).
 - **Two different files of equal size and equal nanosecond mtime read as equal:** the quick check's named cost;
   equality is never decided on size alone, pinned.
 - **A stale, forged or overmounted mount table names the wrong alias** (D-4500): an alias is used only when its
-  `(st_dev, st_ino)` equals the original's for both trees, so the table can cost a copy, never a write elsewhere
-  (pinned with a decoy of the right shape). The residue is TOCTOU: a mount between the proof and the link could still
-  redirect it; only root can make one, and the window is a few syscalls wide.
+  `(st_dev, st_ino)` equals the original's for both trees, so the table can cost a copy, never a link into another
+  tree (pinned with a decoy of the right shape). The proof covers the two roots; beneath them, the alias shows the
+  same files only if the table lists every mount inside the trees, which the kernel's own table always does — a
+  hand-made `CCD_MOUNTINFO` that left one out could link the file such a mount hides (harness-only; production reads
+  `/proc/self/mountinfo`). The residue is TOCTOU: a mount between the proof and the link could still redirect it;
+  only root can make one, and the window is a few syscalls wide.
 - **The whole-volume mount is missing, read-only or not traversable for the caller:** every carry copies, as before
   D-4500, but the log names it (`exdev-no-root`, `root-unreachable`) and §9 counts it.
 - **The model ignores the manifest:** counts reach the operator and the coordinator anyway; §9 retires prompt text

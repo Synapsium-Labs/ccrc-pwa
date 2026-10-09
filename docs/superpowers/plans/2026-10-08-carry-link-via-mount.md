@@ -153,7 +153,10 @@ ccd never asks whether a third mount (the volume mounted whole) exposes both pat
      `anc == '/' or p == anc or p.startswith(anc + '/')`.
    - When two rows have the same target, the later row in the table wins (`>=`).
    - If either path has no holding mount, the answer is `mounts-unreadable`.
-   - If one mount holds both, the answer is `link-failed`.
+   - If the destination's holding mount is read-only, the answer is `link-failed`: `link(2)` refuses there with
+     `EROFS` before it compares mounts, and no route may get around a read-only mount (review of #317).
+   - If one mount holds both, the answer is `root-mismatch` when a mount sits strictly inside either tree (only that
+     mount can have refused the link), and `link-failed` otherwise (review of #317).
    - If the two holding mounts have different `majmin`, the answer is `exdev-other-fs`.
 4. Work out where each path sits inside the filesystem: `v = holder.root + (r − holder.target)`.
 5. The candidates are rows that are on the same `majmin`, are `rw`, and have a `root` that is a component-boundary
@@ -177,8 +180,13 @@ ccd never asks whether a third mount (the volume mounted whole) exposes both pat
 empty third field.
 
 **The vocabulary is spelled once, in Python:** `CARRY_CAUSES = ('exdev-other-fs', 'exdev-no-root', 'root-unreachable',
-'root-mismatch', 'root-failed', 'mounts-absent', 'mounts-unreadable', 'link-failed', 'route-error')`. The bash side
-sets only its `route-error` default and `root-failed`, and a census test pins both against the tuple.
+'root-mismatch', 'root-failed', 'mounts-absent', 'mounts-unreadable', 'link-failed', 'route-error')`. The program
+unpacks it into named constants (`EXDEV_OTHER_FS`, …, `ROUTE_ERROR`) and every answer names one, so a misspelling is a
+`NameError`, not a new word in swap.log (review of #317: the first cut re-typed each word as a literal at about fifteen
+sites). The bash side sets only its `route-error` default and `root-failed`. Three census cases pin it: R10b (every
+bash `CARRY_ROUTE=` word is in the tuple), R10c (every member is produced by some case, and no case produces another
+word) and R10d (no cause-shaped literal in the program outside the tuple line; the walk's action kinds, read from its
+own `queue()` calls, are the only other hyphenated words).
 
 ### 3.2 First carry (`_swap_carry_sidecars`)
 
@@ -206,6 +214,8 @@ sets only its `route-error` default and `root-failed`, and a census test pins bo
   - Any other errno is `link-failed`.
 - A copy keeps today's temp-and-rename and counts `copied[cause] += [1, st_size]`.
 - Everything else (the compares, `mkparents`, `~R`, the `diverged` rows) keeps the **account** paths.
+- A `diverged` row writes a newline in a path as `\n`, so every row is one line the walk printed whole, and no file
+  name can forge a `via` or `copied` row (review of #317: a file named `x<newline>via 9` added `, via-mount 9`).
 - **New rows, printed before `merged`:** `via <V>`, and `copied <cause> <F> <B>` (one per cause, sorted). The `merged
   N R D K` row is unchanged, so the bash regex that reads it is too.
 - **Bash appends to the log line:** `, via-mount V`, and one `, copy: <cause> <F> files <B> bytes` per cause.
@@ -225,14 +235,15 @@ parenthesis.
 
 | cause | fact | the operator's fix |
 |---|---|---|
-| `exdev-other-fs` | different filesystems | put both roots on one filesystem |
+| `exdev-other-fs` | different filesystems (by `stat`, or the two holding mounts name different devices) | put both roots on one filesystem |
 | `exdev-no-root` | separate mounts; no read-write mount of that filesystem exposes both | mount the filesystem, or a directory above every account root, read-write at a second path |
 | `root-unreachable` | the alias could not be stat'ed | give the fleet user search permission along the common mount's path |
-| `root-mismatch` | the alias is another directory, or a mount sits inside a tree | inspect `findmnt`; nothing was written through the alias |
+| `root-mismatch` | the alias is another directory, or a mount sits inside a tree (also when one mount holds both) | inspect `findmnt`: a mount inside an account tree makes every carry of it copy; nothing was written through the alias |
 | `root-failed` | the link failed through a verified alias | check that the filesystem is writable, and for EMLINK, ENOSPC or a quota |
-| `mounts-absent` / `mounts-unreadable` | no table / a table ccd could not read | mount `/proc` / report it |
-| `link-failed` | the link failed on one mount (EMLINK, ENOSPC, EPERM) | check the disk and the link counts |
-| `route-error` | python3 is missing, or the route crashed | read the swap's stderr; install python3 |
+| `mounts-absent` | no table: expected on macOS; on Linux, no `/proc` | nothing on macOS; on Linux, mount `/proc` |
+| `mounts-unreadable` | the table could not be read, no line parses, or no mount holds a tree | check the fleet user can read `/proc/self/mountinfo`; otherwise report it |
+| `link-failed` | the link failed on one mount (EMLINK, ENOSPC, EPERM), or the destination's mount is read-only | check the disk and the link counts, and whether the destination root is mounted read-only |
+| `route-error` | python3 is missing (nothing on stderr), the route program crashed (its exception on stderr), or it answered outside its shape (nothing on stderr) | read the swap's stderr; with no crash line, install python3 if the box has none, else report it |
 
 ### 3.5 The instrument
 
@@ -316,11 +327,13 @@ parenthesis.
   | R3 | a root of `/home/.cl` is not an ancestor: `exdev-no-root` |
   | R4 | two rows on one target, `ro` then `rw`: `via`, because the later row wins |
   | R5 | a mount stacked over `vol/home`: `exdev-no-root` |
-  | R6 | one mount: `link-failed` |
-  | R7 | a garbage table: `mounts-unreadable` (R7b: no row holds the path) |
+  | R6 | one mount: `link-failed` (R6b: one mount, and a mount inside a tree: `root-mismatch`) |
+  | R7 | a garbage table: `mounts-unreadable` (R7b: no row holds the path; R7c: a directory where the table should be, a non-ENOENT read error) |
   | R8 | an absent table: `mounts-absent` |
   | R9 | differing devices (`/dev/shm` when `crossDevice`, else skipped): `exdev-other-fs` (R9b: the table's two holders on different devices, every platform) |
   | R10 | each route-mode word is in `CARRY_CAUSES` (R10b: the bash side's words too) |
+  | R11 | the destination root's own mount read-only, a common mount present: `link-failed` |
+  | R10c, R10d | at the file's foot: every `CARRY_CAUSES` member produced by some case and no other word; no cause-shaped literal in the program outside the tuple |
 
   - **How it fails:** `_carry_link_route: command not found`, so `CARRY_ROUTE` is empty in every case.
 - [ ] **Verify:** `( cd server && ./node_modules/.bin/vitest run test/ccd-carry-link-route.test.ts --maxWorkers=1 )`. It must be red.
@@ -336,7 +349,9 @@ parenthesis.
   - the vfsmount rule, and that it was measured;
   - why the route is lazy;
   - why it reads `mountinfo` and not `findmnt`;
-  - that the inode proof is the safety property: a wrong table costs a copy, never a write elsewhere;
+  - that the inode proof is the safety property: a wrong table costs a copy, never a link into another tree (the
+    proof covers the roots; the content beneath them rests on the table listing every mount, which the kernel's
+    always does — narrowed in the review of #317);
   - the TOCTOU residue;
   - that `CCD_MOUNTINFO` is a harness seam, like `CCD_RECLAIM_RESIDUE_ROOT`, which satisfies the reason
     `CCD_DISK_FLOOR_GB`'s comment gives for an override (it cannot aim a write at another tree);
@@ -365,6 +380,11 @@ parenthesis.
   | C9 | `FAKE_CP_AL_FAIL=1`: `root-failed`, no nest, and the content landed |
   | C10 | no fake kernel but a routable table: `(link)`, never via (the laziness pin) |
   | C11 | a copy prints the `COPY` warning on stderr |
+  | C12 | `command -v python3` fails: the `route-error` default, the tree still copied and sized |
+  | C13 | `_carry_py` dies before it answers: `route-error` |
+  | C14 | `_plat_bytes` fails: `(copy: exdev-no-root ? bytes)` |
+  | C15 | the program answers a cause that is not one lowercase word: `route-error` |
+  | C16 | the program answers `via` with aliases that are not directories: `route-error`, nothing made through them |
 
   **How they fail on today's `ccd/ccd`:** `(copy)` in C1–C9 and C11. C10 is the control, and it is green before
   and after.
@@ -396,8 +416,13 @@ merge-parse block), `server/test/ccd-swap-carry-merge.test.ts`, and the new rout
   | M1 | `(merged +1 ~0 !0, via-mount 1)`, shared inode |
   | M2 | no common row: `(merged +1 ~0 !0, copy: exdev-no-root 1 files 7 bytes)` |
   | M3 | `FAKE_LINK_ERRNO=EMLINK`: `copy: link-failed 1 files 7 bytes` (only `EXDEV` routes) |
-  | M4 | diverged rows name the account paths: `diverged <.claude-d…> longer <.claude…>` alongside `via-mount 1` |
+  | M4 | a same-size, different-content file older than the routed one, so its `diverged` row is written AFTER the alias link: it names the account paths, `via-mount 1`, and no alias path reaches swap.log |
   | M5 | `FAKE_ROUTE_CRASH=1`: `copy: route-error 1 files 7 bytes`, and the merge still lands |
+  | M6 | copies of one cause are one clause, files and bytes summed: `copy: exdev-no-root 2 files 9 bytes` |
+  | M7 | `FAKE_LINK_ERRNO=EXDEV`, so the link through the proved alias fails too: `copy: root-failed 2 files 9 bytes`, and the walk keeps merging |
+  | M8 | no fake kernel over a routable table: `(merged +1 ~0 !0)`, never routed (the walk's laziness pin) |
+  | M9 | a diverged file named `x<newline>via 9`: no `via-mount`, the row written with `\n` |
+  | M10 | diverged files named `via 9` and `copied link-failed 5 5`: nothing counted (the anchors) |
 
   - **Update** the `/dev/shm` case to expect `(merged +1 ~0 !0, copy: exdev-other-fs 1 files 2 bytes)`.
   - **How they fail today:** the bare `(merged +1 ~0 !0)` / `(merged +1 ~0 !1)`.
@@ -439,35 +464,58 @@ merge-parse block), `server/test/ccd-swap-carry-merge.test.ts`, and the new rout
 ## Mutation-table plan
 
 Every row was re-measured on the branch (macOS; each mutation applied alone, the named suites run, then restored).
-The predicted reds all held; the measured column adds what else went red.
+The predicted reds all held; the measured column adds what else went red. The column was measured again after the
+review of #317 added its cases (R6b, R7c, R11, R10c, R10d, C12–C16, M7–M10), so it names those too; R9 and the
+real-kernel case are skipped on macOS, and C8 runs (not root).
 
 | guard | mutation | reds (predicted) | measured |
 |---|---|---|---|
 | inode proof | `if True:` | C4 decoy | C4 |
 | `rw` filter | drop `c[3]` | C3 | C3 |
 | a mount inside a tree | `if False:` | C7 | C7 |
-| component boundary | `p.startswith(anc)` | R3, R5, C2, C3, M2 | R3, R5, C2, C3, M2, M6 |
+| component boundary | `p.startswith(anc)` | R3, R5, C2, C3, M2 | R3, R5, C2, C3, C14, M2, M6, M9, M10, R10c |
 | octal decoding | `unesc` = identity | C6 | C6 |
-| stacked mounts, later row wins | `>=` → `>` | R4 | R4 |
+| stacked mounts, later row wins | `>=` → `>` | R4 | R4, R11 |
 | only `EXDEV` routes | `if True:` | M3 | M3 |
 | the second clear | drop it | C9: nest present | C9 |
-| `realpath` | `ra, rb = a, b` | R2 | R2 |
+| `realpath` | `ra, rb = a, b` | R2 | R2, M5 (`FAKE_ROUTE_CRASH` patches `os.path.realpath`) |
 | alias holder check | `if False:` | R5 | R5 |
-| byte count | drop `$b bytes` | C2–C9 | C2–C5, C7–C9, C11, and ccd-swap's nest case (C6 links) |
+| byte count | drop `$b bytes` | C2–C9 | C2–C5, C7–C9, C11–C16, R10c, and ccd-swap's nest case (C6 links) |
 | route-crash containment | `safe_route` → `route` in the walk | M5: becomes `(kept: error)` | M5 |
 | laziness | route before the direct `cp -al` | C10 | C10 |
 | the walker's via link | drop it | M1 | M1, M4 |
 | the copy warnings | drop the first carry's / the merge's `echo … >&2` | C11 / M2 | C11 / M2 |
-| the merge copy clause | drop `csuf+=…` | M2 | M2, M3, M5, M6, and measure-continuity's end-to-end case (the `/dev/shm` case is Linux-only) |
-| a cause outside the vocabulary | the final `exdev-no-root` misspelt | R10 | R3, R5, R10, C2, C3, M2, M6 |
-| the bash census | `CARRY_ROUTE=root-failed` misspelt | R10b | R10b, C9 |
-| the harness seam | drop the `CCD_MOUNTINFO` default | the ccd-swap nest case on Linux, which turns into `link-failed` (macOS is green either way) | on macOS: ccd-swap green, as predicted, but R1–R9b red (they write their table at the seam's default path) |
+| the merge copy clause | drop `csuf+=…` | M2 | M2, M3, M5, M6, M7, M9, M10, and measure-continuity's end-to-end case (the `/dev/shm` case is Linux-only) |
+| a cause outside the vocabulary | the final `exdev-no-root` returned as a misspelt literal | R10 | R3, R5, R10, C2, C3, C14, M2, M6, M9, M10, R10c, R10d |
+| the bash census | `CARRY_ROUTE=root-failed` misspelt | R10b | R10b, C9, R10c |
+| the harness seam | drop the `CCD_MOUNTINFO` default | the ccd-swap nest case on Linux, which turns into `link-failed` (macOS is green either way) | on macOS: ccd-swap green, as predicted, but R1–R7c, R9b, R11 and R10c red (they write their table at the seam's default path; R8 is green either way, R9 skipped) |
 | the instrument's parse | the old `MERGED` | Task 5 cases | both Task 5 cases |
+| *review of #317:* the walk's `root-failed` word | `cause = ROOT_FAILED` → `LINK_FAILED` | M7 | M7 |
+| *review:* the walk's `root-failed` catch | `except OSError` → `except ZeroDivisionError` (the walk dies: `(kept: error)`) | M7 | M7 |
+| *review:* aliases never replace the account paths | after the alias link, `src, dst = r[1], r[2]` | M4 | M4 |
+| *review:* the `route-error` default | `CARRY_ROUTE=` (empty) | C12, C13 | C12, C13, C15, C16 |
+| *review:* the `?` byte count | drop `&& [[ "$b" =~ ^[0-9]+$ ]] \|\| b='?'` | C14 | C14 |
+| *review:* a table that cannot be read | the non-ENOENT `OSError` → `MOUNTS_ABSENT` | R7c | R7c |
+| *review:* the walk is lazy | the walk routes before its direct `os.link` | M8 | M8 |
+| *review:* the alias must be a directory | the bash `-d` check → `true` | C16 | C16 |
+| *review:* a cause is one lowercase word | the bash cause filter → `true` | C15 | C15, R10c |
+| *review:* a newline in a diverged path | `row_path` returns the path raw | M9 | M9 |
+| *review:* the `via` anchor | drop `^` | M10 | M9, M10 |
+| *review:* the `copied` anchor | drop `^` | M10 | M10 |
+| *review:* a read-only destination mount | `if not mb[3]:` → `if False:` | R11 | R11 |
+| *review:* one mount, a mount inside a tree | `ROOT_MISMATCH if inside(…) else LINK_FAILED` → `LINK_FAILED` | R6b | R6b |
+| *review:* a cause literal re-typed | `cause = ROOT_FAILED` → `cause = 'root-failed'` | R10d | R10d |
+| *review:* a member no case produces | add `'never-made'` to the tuple (and its name to the unpack) | R10c | R10c |
 
 ## Edge cases, macOS, back-compat
 
-- **Safety rests on the inode proof.** A stale table, an overmount or a forged `CCD_MOUNTINFO` can only cause a copy
-  (measured: the decoy was untouched).
+- **Safety rests on the inode proof.** A stale table, an overmount or a forged `CCD_MOUNTINFO` can only cause a copy,
+  never a link into another tree (measured: the decoy was untouched). The proof covers the two roots; the content
+  beneath them rests on the table listing every mount inside the trees, which the kernel's own always does, so only
+  a hand-made table that left one out could link the file such a mount hides (narrowed in the review of #317).
+- **Known limitation: a read-only SOURCE mount is not checked.** The route refuses a read-only destination
+  (`link-failed`), but a read-only source root still routes: the link writes only the destination's directory, yet
+  the source inode gains a writable name. No such mount exists on the fleet; left as a named limitation.
 - **The residue is TOCTOU.** A mount operation between the proof and the link can still redirect it. Only root can do
   that, the window is narrow, and it is named in the header.
 - **Mount namespaces:** `/proc/self` is the namespace that links. None of the shipped units sets
@@ -491,10 +539,15 @@ Two departures, issued by the allocator at dispatch and defined here, in the com
   "The first carry to an account keeps today's path unchanged" is reversed for failures: the direct `cp -al` is
   unchanged, but its failure now routes before copying. §1.2 item 1's "every first carry since 2026-09-22 is
   `(copy)`" becomes dated history. The route is lazy, reads the kernel's mount table, and links through an alias
-  only once its inode is proved equal to the original's.
+  only once its inode is proved equal to the original's. *Extended by the review of #317 (same number):* a read-only
+  destination holding mount answers `link-failed` and is never routed around; when one mount holds both trees, a
+  mount inside either tree answers `root-mismatch` rather than `link-failed`; and the program names every cause only
+  through constants unpacked from `CARRY_CAUSES`. A read-only SOURCE mount stays unchecked, a named limitation.
 - **D-4501** `carry-copy-says-why` (Tasks 3–5) — changes the swap.log grammar (§3.4), adds the stderr warning, and
   adds the instrument's keys (§3.5). Amends §5.1's "The log line becomes…" and §9's stage-1 row, which gains copy
-  bytes by cause.
+  bytes by cause. *Extended by the review of #317 (same number):* the walk writes a newline in a `diverged` path as
+  `\n`, so no file name can forge a `via` or `copied` row into the verdict, and the cause table's remedies cover every
+  condition each word stands for.
 
 The plan's original third departure, a doctor check that reads a ccd log, was dropped with its task and holds no number.
 
@@ -511,8 +564,8 @@ The plan's original third departure, a doctor check that reads a ccd log, was dr
 - **`deploy/measure-continuity.py`'s stage-1 header comment.**
 - **The programme ledger.** A dated entry citing #317, the two numbers, and the deploy order.
 - **`ccd/ccd` comments.** Rewrite the NAMED COST, the sidecar header, the walker table's absent row and the QUICK
-  CHECK as dated history plus the new behaviour. Leave the stale "one environment override" comment alone, and cite
-  it from `CCD_MOUNTINFO`'s header.
+  CHECK as dated history plus the new behaviour. The stale "one environment override" comment was first left alone;
+  the review of #317 rewrote it to state the rule rather than a count, and `CCD_MOUNTINFO`'s header cites the rule.
 - **CLAUDE.md:** no change.
 
 ## Risks, and what is deliberately out of scope
