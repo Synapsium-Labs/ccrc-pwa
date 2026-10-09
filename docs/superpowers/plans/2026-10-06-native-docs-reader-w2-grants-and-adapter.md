@@ -7815,30 +7815,30 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 
 ## Wave 2 results
 
-Measured 2026-10-08 09:41 UTC on the tree at `86cc82c3f80c` (base `a17e14bc00c4`, 22 W2 commits on the first-parent line). Every number below was printed by a Task 9 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+Measured 2026-10-09 02:32 UTC on the tree at `2349d857e3db` (base `a17e14bc00c4`, 23 W2 commits on the first-parent line). Every number below was printed by a Task 9 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
 
 ### Suites
 
 | # | Command | Test Files | Tests | rc |
 |---|---|---|---|---|
 | 01 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )` | 1 passed (1) | 55 passed (55) | 0 |
-| 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 472 passed (472) | 0 |
+| 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 523 passed (523) | 0 |
 | 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts )` | 1 passed (1) | 31 passed (31) | 0 |
 | 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 0 |
 | 05 | `( cd agent && ./node_modules/.bin/vitest run )` | 25 passed (25) | 471 passed (471) | 0 |
 | 06 | `( cd server && ./node_modules/.bin/vitest run test/whitelist-subset.test.ts test/verb-gate.test.ts test/capsupported.test.ts test/ccdargv-brand.test.ts test/ccdargv-dec-parity.test.ts )` | 5 passed (5) | 167 passed (167) | 0 |
 | 07 | `( cd server && ./node_modules/.bin/vitest run test/remote-runner.test.ts test/pr-timeout-budget.test.ts test/swap-timeout-budget.test.ts )` | 3 passed (3) | 32 passed (32) | 0 |
 | 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-source.test.ts test/docs-policy.test.ts test/docs-budget.test.ts )` | 3 passed (3) | 494 passed (494) | 0 |
-| 09 | `( cd server && ./node_modules/.bin/vitest run test/lifecycle.test.ts test/ccd-archive.test.ts test/caps-token-shape.test.ts )` | 3 passed (3) | 147 passed (147) | 0 |
+| 09 | `( cd server && ./node_modules/.bin/vitest run test/lifecycle.test.ts test/ccd-archive.test.ts test/caps-token-shape.test.ts )` | 3 passed (3) | 155 passed (155) | 0 |
 | 10 | `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/docs-parity.test.ts test/docs-url.test.ts )` | 3 passed (3) | 382 passed (382) | 0 |
-| 11 | `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )` | 1 passed (1) | 13 passed \| 322 skipped (335) | 0 |
+| 11 | `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )` | 1 passed (1) | 13 passed \| 437 skipped (450) | 0 |
 
 ### Invariants
 
 From `w2-invariants.py` (W2's own commits: `git log --first-parent --no-merges <base>..HEAD`):
 
 ```text
-base a17e14bc00c4, tip 86cc82c3f80c, 22 W2 commits
+base a17e14bc00c4, tip 2349d857e3db, 23 W2 commits
 PASS scope          25 files touched by W2 commits; outside the scope: none; scope files untouched: none
 PASS untouched      ccd/, shared/ (agent-protocol.ts and FLEET_PROTO included), pwa/src, server.ts, index.ts, README.md edited by W2: none
 PASS docs-files     tracked ['server/src/docs/ccdsource.ts', 'server/src/docs/policy.ts', 'server/src/docs/ports.ts']; on disk ['server/src/docs/ccdsource.ts', 'server/src/docs/policy.ts', 'server/src/docs/ports.ts']
@@ -7852,7 +7852,7 @@ FAIL sd-shape       single-definition.test.ts: 1 in-place want-line edit, 1 EOF 
 
 ### Mutation table
 
-Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `mutate.py` in a `git archive` copy of the tree at `86cc82c3f80c`, one row at a time, each file restored byte for byte after its row. `load` is a guard that throws at module load (Task 1, rows M2 and M3).
+Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `mutate.py` in a `git archive` copy of the tree at `2349d857e3db`, one row at a time, each file restored byte for byte after its row. `load` is a guard that throws at module load (Task 1, rows M2 and M3).
 
 | Row | Task | File | Result | First red case (measured) |
 |---|---|---|---|---|
@@ -7922,7 +7922,7 @@ Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `muta
 | W2-T4-M22 | T4 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > docsSendPolicy (section 5.3's onSend hook as an L1 verdict, refinement (m)) > content type "text/html" is refused: 500 response-type- |
 | W2-T5-M1 | T5 | `server/src/remote/runner.ts` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / |
 | W2-T5-M2 | T5 | `server/src/remote/runner.ts` | red | test/remote-runner.test.ts > per-verb timeouts > sends ["docs-fetch","--project","x"] with a 60000 ms budget |
-| W2-T5-M3 | T5 | `server/src/remote/runner.ts` | red | test/remote-runner.test.ts > per-verb timeouts > sends ["docs-index","--all"] with a 20000 ms budget |
+| W2-T5-M3 | T5 | `server/src/remote/runner.ts` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / |
 | W2-T5-M4 | T5 | `ccd/ccd` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > docs-show: helper deadline + KILL_GRACE_S + 5 s < the r |
 | W2-T5-M5 | T5 | `ccd/ccd` | red | test/docs-budget.test.ts > docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > docs-index: helper deadline + KILL_GRACE_S + 5 s < the  |
 | W2-T5-M6 | T5 | `ccd/ccrc-doctor-checks` | red | test/docs-budget.test.ts > the doctor waits exactly as long as a Docs page (M7.4, the runner-budget clause) > CCRC_DOCTOR_DOCS_TIMEOUT's default equals CCD_VERB |
@@ -8057,6 +8057,8 @@ Every `W2-T<n>-M<k>` row of Tasks 1-8, extracted from this plan and run by `muta
 - W2-T7-M6, W2-FR-M3: re-anchored to the shipped text; same mutation (fix round 1 commit 52a884b01 rewrote the onRef guard in checkShow to `!(typeof ans.onRef === 'string' && Object.hasOwn(ON_REF_WORDS, ans.onRef))`; T7-M6 removes that whole line, FR-M3 replaces `Object.hasOwn(ON_REF_WORDS, ans.onRef)` with `(ans.onRef in ON_REF_WORDS)`).
 - Fix-round-2 rows W2-FR3-M1..M15 (15 rows, task FR3, all in server/test/docs-source.test.ts) are not in the plan's JSON fences: they come from the coordinator's review 336 (fix round 2, mail 3965), exact strings in fr2/fix-report.md and fr2/fr3-rows.json (M10 in its re-anchored form at 560c56762), each measured red once by its implementer. W2-FR2-M3 is unchanged (same old/new); its red text in the table now reads from the enlarged docs-source.test.ts (23 failed | 131 passed at 560c56762); the runner's expect is red/load, not a count, so no expectation changed.
 - Fix-round-3 rows W2-FR4-M1..M11 (11 rows, task FR4, all in server/test/docs-source.test.ts) are not in the plan's JSON fences: they come from the coordinator's review 337 (fix round 3, mail 3988), exact strings in fr3/fix-report.md and fr3/fr4-rows.json, each measured red once by its implementer. W2-FR3-M4, M11 and M12 are re-anchored to their fr3/fr4-rows.json forms (same mutations, text as shipped at 86cc82c3f); the other W2-FR3 rows are unchanged. Table count: 147 plan rows + 14 + 2 + 15 + 11 = 189.
+- Merge of origin/main (2349d857e, coordinator mail 4068): single-definition.test.ts conflict resolved by keeping main's text, the in-place want line, and W2's docs block appended last; W2's own commits unchanged. Net hunks of `git diff -U0 a17e14bc0 HEAD -- server/test/single-definition.test.ts` now include main's hunks as well (`@@ -1324,0 +1325,2 @@`, `@@ -1328 +1330 @@`, `@@ -4188 +4190 @@`, `@@ -4788,0 +4791,663 @@`); W2's own net hunks against main, `git diff -U0 origin/main HEAD -- server/test/single-definition.test.ts`, are `@@ -4190 +4190 @@` (the one in-place want-line change) and `@@ -5187,0 +5188,266 @@` (the 266-line append). The checkers printed the same as before the merge except the first invariants line (tip 2349d857e3db, 23 W2 commits instead of 22 at 86cc82c3f: the previous results commit); sd-shape lists the same three hunks (ruling 3847).
+- W2-T5-M3: still red, but its recorded first red case now names test/docs-budget.test.ts (the four CCD_VERB_TIMEOUT_MS rows) where the previous run named test/remote-runner.test.ts (sends ["docs-index","--all"]); the row's command runs both files, vitest prints whichever reports first, and the mutation fails both. No code changed.
 
 ### Carried, not fixed
 
