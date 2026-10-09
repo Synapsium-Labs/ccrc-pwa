@@ -16,7 +16,7 @@ spec's after wave 1.
 
 | # | spec wave | scope | run | PRs | state |
 |---|---|---|---|---|---|
-| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
+| 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | — | **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | The arming PR: flips doctor's `box-token` FAIL and WARN arms on. Trigger: the GPT-lane lane-1 B4 soak gate recorded closed. Bound: merged before row 3's first PR | — | — | later |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
@@ -212,6 +212,35 @@ spec's after wave 1.
     the merge's check. It runs the held-out panel, plus the security and state-machine lenses. It also reports, for
     each of review 349's findings and for I3, I4 and sec-M2, whether it is closed, and judges the worker's readings
     against the rulings.
+- **2026-10-08 21:51 UTC: review 352 closed (fix round 1 at `fa384df19`); one finding meets a bar class by its letter,
+  so it went to the operator.**
+  - **The panel:** six Opus lenses (the held-out three, security, state machine, and closure), with three Sonnet
+    refuters per finding; 93 agents, none unverified and none unexamined. 17 confirmed findings dedupe to 13, all
+    minor, and 12 were refuted.
+  - **Closure:** every ruled pin reds when its fix is reverted (27 of 27 rows). Review 349's F1 to F12, I3, I4 and
+    sec-M2 are each closed. Live safety was re-proved: with part A alone, `verb-missing` gives no failure count, no
+    401 and no promotion. No new line prints a value, a code or a digest.
+  - **Bar classes, each needing at least two faults or a both-local box, and none reachable live in part A:**
+    - F1, class 3 by its letter: a failed digest append followed by an unusable `box-token.json` loses the digest,
+      and a written-back value is then adopted. Fix direction: an unusable state file takes the foreign posture.
+    - F2, class 3 borderline: on a both box, a persistently failing own-write blocks the previous value's
+      retirement past its hard bound on disk. The accept set still honours the bound in memory.
+    - F3, class 3 by its letter only (2–1): `retireValue` deletes an unreadable previous file with no digest.
+    - F4, class 10 on a strict reading: the door's import pin misses an indented or same-line import.
+  - **The rest, no class:**
+    - F5: number 4413's worker reading is looser than the ruling's "actually in flight".
+    - F6: a failed foreign mint loses the owed rotation.
+    - F7 to F9: unpinned arms.
+    - F10 and F11: door lines missing a node id.
+    - F12 and F13: prose.
+- **2026-10-09 06:25 UTC: the operator ruled "Merge now, fix in part B".**
+  - Part A merges as reviewed.
+  - F1 to F13 and number 4411's "grace ended" wording become part B's first task, on part A's files, before part
+    B's token verb ships. Part B's review gates them.
+  - `main` had moved to `d33a566bb` (#315, #319 and four docs PRs), with six files changed on both sides. So the
+    worker first merges `main` and re-runs the shared pins (mail 4084). A test edit beyond the merge stops and comes
+    to me, because claim 1124 (run 342) now holds `server.ts`, `gate.ts`, `auth-gate`, `box-token-census` and
+    `single-definition`.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
