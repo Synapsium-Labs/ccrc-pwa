@@ -91,6 +91,16 @@ describe('_ws_collect_qdir: the quarantine is a real directory of this uid at 07
     expect(rc).toBe('2');
     expect(fs.existsSync(root())).toBe(false);
   });
+
+  it('an absence that could not be measured is unmeasured: 2, and the quarantine is made only when PROVEN absent', () => {
+    fs.mkdirSync(root(), { recursive: true });
+    const q = path.join(root(), '.ccd-quarantine');
+    const [rc, got, w] = ask('_ws_reclaim_absent() { _WS_ABSENT_WHY=stub; return 2; }; _ws_collect_qdir', '_WS_Q', '_WS_Q_WHY');
+    expect(rc, w).toBe('2');
+    expect(got).toBe('');
+    expect(w).toContain('never asked');
+    expect(fs.existsSync(q), 'the quarantine was made on an unmeasured answer').toBe(false);
+  });
 });
 
 describe('_ws_collect_slot_path / _ws_collect_slot_make: `slot.<id>.<ns>.<pid>`, exclusive, never reused', () => {
@@ -145,6 +155,15 @@ describe('_ws_collect_slot_path / _ws_collect_slot_make: `slot.<id>.<ns>.<pid>`,
     const [rc] = ask(`_ws_collect_slot_make '${path.join(h.home, 'nowhere', 'slot.x.1.2')}'`, '_WS_SLOT_WHY');
     expect(rc).toBe('2');
   });
+
+  it('an absence that could not be measured, over a writable parent, is unmeasured: 2, and no slot is made', () => {
+    const s = path.join(h.home, 'q', `slot.${ID}.1.2`);
+    fs.mkdirSync(path.dirname(s));
+    const [rc, why] = ask(`_ws_reclaim_absent() { _WS_ABSENT_WHY=stub; return 2; }; _ws_collect_slot_make '${s}'`, '_WS_SLOT_WHY');
+    expect(rc, why).toBe('2');
+    expect(why).toContain('never asked');
+    expect(fs.existsSync(s), 'the slot was made on an unmeasured answer').toBe(false);
+  });
 });
 
 describe('_ws_collect_ident: an lstat — a real directory with this dev:ino and birth time, never followed', () => {
@@ -169,6 +188,33 @@ describe('_ws_collect_ident: an lstat — a real directory with this dev:ino and
     fs.mkdirSync(locked);
     chmodFor(locked, 0o600);
     expect(h.sh(`_ws_collect_ident '${path.join(locked, 'x')}' 1:1 1; echo $?`)).toBe('2');
+  });
+
+  // An identity that cannot be READ is unmeasured, never "something else stands":
+  // a caller reads 1 as a mismatch, and only 2 as a retry.
+  it.each([
+    ['its dev:ino read fails', '_plat_devino() { return 1; };'],
+    ['its dev:ino read answers no dev:ino', '_plat_devino() { echo 12; };'],
+    ['its birth-time read fails', '_plat_btime() { return 1; };'],
+    ['its birth-time read answers no number', '_plat_btime() { echo -; };'],
+  ])('the directory, when %s, is unmeasured: 2', (_label, seam) => {
+    fs.mkdirSync(leaf(), { recursive: true });
+    const { di, bt } = ident(leaf());
+    expect(h.sh(`${seam} _ws_collect_ident '${leaf()}' '${di}' '${bt}'; echo $?`)).toBe('2');
+  });
+
+  // NEVER FOLLOWED, BY MECHANISM: each spelling below lstat()s the link's TARGET,
+  // which is the very directory, so without the refusal each answered 0.
+  it.each([
+    ['`link/`', (l: string): string => `${l}/`, (): string => leaf()],
+    ['`link/.`', (l: string): string => `${l}/.`, (): string => leaf()],
+    ['`link/..`, the link at a child of the directory', (l: string): string => `${l}/..`, (): string => path.join(leaf(), 'sub')],
+  ])('a path spelled %s is refused: 2, never the directory a link names', (_label, spell, target) => {
+    fs.mkdirSync(path.join(leaf(), 'sub'), { recursive: true });
+    const { di, bt } = ident(leaf());
+    const link = path.join(h.home, 'link');
+    fs.symlinkSync(target(), link);
+    expect(h.sh(`_ws_collect_ident '${spell(link)}' '${di}' '${bt}'; echo $?`)).toBe('2');
   });
 });
 
@@ -258,6 +304,25 @@ describe('_ws_collect_move: renameat2(RENAME_NOREPLACE), PROVEN by lstat — nev
     expect(rc).toBe('2');
     expect(why).toContain('no \'mv --no-copy\'');
     expect(ident(leaf())).toEqual({ di, bt });
+    expect(fs.existsSync(dst())).toBe(false);
+  });
+
+  it.skipIf(!LINUX).each([
+    ['another directory’s identity', (): { di: string; bt: string } => {
+      const other = path.join(h.home, 'other');
+      fs.mkdirSync(other);
+      return ident(other);
+    }],
+    ['an identity that is no dev:ino and birth time', (): { di: string; bt: string } => ({ di: 'garbage', bt: 'x' })],
+  ])('identity is asked BEFORE the rename: src not PROVEN %s is refused — 2, mv never run, nothing moved', (_label, want) => {
+    const own = setup();
+    const { di, bt } = want();
+    const rec = '_WS_MV_NOCOPY=1; mv() { echo "$*" >> "$HOME/mv-calls"; command mv "$@"; };';
+    const [rc, why] = move(leaf(), dst(), di, bt, rec);
+    expect(rc, why).toBe('2');
+    expect(why).toContain('nothing was renamed');
+    expect(fs.existsSync(path.join(h.home, 'mv-calls')), 'mv was run').toBe(false);
+    expect(ident(leaf()), 'the directory at src still stands').toEqual(own);
     expect(fs.existsSync(dst())).toBe(false);
   });
 

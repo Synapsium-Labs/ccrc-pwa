@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=485cd312f65cc9a814ee0131e58aab83b3ec243b0a2bb965932eb9ba06772fa0
+# ccrc:generated 1 sha256=7fd551bf2569fe265242610b45b91a4cc2b25c596bf091b206b519829e4be633
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31785,8 +31785,14 @@ _ws_collect_mv_ok() {   # -> 0 when this box's `mv` has `--no-copy` (asked once,
 }
 
 _ws_collect_ident() {   # path dev:ino btime -> 0 path is a real directory (an lstat: never followed) with this device,
-  #                        inode and birth time; 1 something else stands there, or nothing does; 2 could not be read
+  #                        inode and birth time; 1 something else stands there, or nothing does; 2 could not be read,
+  #                        or path ends in `/`, `/.` or `/..`
+  # NEVER FOLLOWED, BY MECHANISM: a path ending in `/`, `/.` or `/..` names what
+  # a link before it POINTS AT — `[[ -L link/ ]]` is false and `stat link/`
+  # reads the target (measured, and so for `link/.` and `link/..`) — so such a
+  # spelling is refused before anything is asked of it.
   local p="${1-}" want="${2-}" bt="${3-}" have hbt rc
+  case "$p" in */|*/.|*/..) return 2 ;; esac
   if [[ -L "$p" ]] || { [[ -e "$p" ]] && [[ ! -d "$p" ]]; }; then return 1; fi
   if [[ ! -e "$p" ]]; then
     _ws_reclaim_absent "$p"; rc=$?
@@ -31801,7 +31807,13 @@ _ws_collect_ident() {   # path dev:ino btime -> 0 path is a real directory (an l
 
 _WS_MOVE_WHY=''
 _ws_collect_move() {   # src dst dev:ino btime -> 0 PROVEN moved: dst is that directory, and nothing stands at src;
-  #                       1 PROVEN not moved: src is still that directory; 2 unmeasured (_WS_MOVE_WHY)
+  #                       1 PROVEN not moved: src is still that directory; 2 unmeasured (_WS_MOVE_WHY), and 2 with
+  #                       nothing renamed when src is not PROVEN that directory before the rename
+  # IDENTITY FIRST: before anything is renamed, src must be that directory (an
+  # lstat, `_ws_collect_ident`), or the answer is 2 and `mv` is never run. So a
+  # different directory at src, or an identity that is no dev:ino and birth
+  # time at all, is refused BEFORE acting, and the caller's own earlier check
+  # is re-asked inside the move, so the window it leaves is this function's.
   # THE PROOF IS AN lstat, NEVER mv's EXIT CODE (spec §5.10): coreutils changed
   # what `mv -n` answers on a skip in 9.2, and a `mv` that copied would answer 0
   # over a new inode. The same proof serves the move into a slot and the move
@@ -31812,6 +31824,9 @@ _ws_collect_move() {   # src dst dev:ino btime -> 0 PROVEN moved: dst is that di
   # non-zero answer as unmeasured.
   local src="${1-}" dst="${2-}" want="${3-}" bt="${4-}" err mrc a b
   _WS_MOVE_WHY=''
+  _ws_collect_ident "$src" "$want" "$bt"; a=$?
+  (( a == 0 )) \
+    || { _WS_MOVE_WHY="$src is not PROVEN the directory $want (identity answer $a), so nothing was renamed"; return 2; }
   _ws_collect_mv_ok \
     || { _WS_MOVE_WHY="this box has no 'mv --no-copy' (or is Darwin), so $src was never renamed — a rename that could copy is never used"; return 2; }
   err=$(_ws_collect_mv "$src" "$dst" 2>&1); mrc=$?
