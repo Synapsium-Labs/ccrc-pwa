@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9e1d1d3768aa3667d75f870194c7a2b1438a438d7876ff3593eb3c0fa296da7b
+# ccrc:generated 1 sha256=8a4b74f20436ee4e99ed99535fbcac3dd9c64129d9222b40b51f8bc25d31e1a1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31462,6 +31462,256 @@ _ws_expire_return_gap() { :; }
 # `capSupported(state, 'expire-v1')`, which refuses on no evidence; wave 3b
 # composes it, this wave ships it inert.
 # ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
+
+# ── temp-root collection: ws-collect (spec 2026-09-22 §5.2, §5.10) ────────────── COLLECT-BEGIN ──
+# A child's temp root `$HOME/.cc-tmp/<id>` that outlived its row — kept by a
+# reclaim tail that found it in use, or left by a human verb — is collected by
+# `ws-collect`, composed by the server and by nothing else (CLAUDE.md SAFETY:
+# forbidden to every session). A SIBLING of `ws-reclaim` and `ws-expire`, never
+# a flag on either: rung 2's `.child` marker is gone for this population, and
+# its only evidence is the positive witness `$REG/tmproots/<id>` (spec §5.2).
+# This region holds what is the collector's OWN — its quarantine record, its
+# quarantine and slot, its rename and the proof of it, its idle walk, its token
+# and its row rule — and borrows the rest from the RECLAIM region: the witness,
+# the removal helper and its checkout question, the in-use probe, the absence
+# proof and the lock `$REG/.reap-<id>.lock`.
+#
+# THE RECORD IS RESUME AUTHORITY; THE JOURNAL IS NOT. Before anything moves, the
+# verb writes `$REG/tmpquarantine/<id>.<ns>.<pid>` (temp file, then rename): the
+# witness line it acted on, the token it was given, and every checkout outside
+# the leaf its pre-move question accepted. It names NO path of its own: the slot
+# it moves the leaf into is DERIVED from the record's name under the physical
+# quarantine (`_ws_collect_qpath`), so a space in a path never splits it. A
+# crash at any later step leaves the record, and the next audit of that id finds
+# it, whatever the witness says by then. ccd reads no journal to decide anything.
+# The record is same-uid writable, as the witness is, and shares its TRUST note:
+# it guards against ccd's own crash and a recycled id, never a hostile session.
+#
+# WHERE. `tmpquarantine/` is a DOTLESS registry subdirectory, the `pools/` and
+# `tmproots/` precedent: every registry glob ccd ships is suffix-shaped and every
+# registry `find` is depth-1 and name-filtered, so `_reg_purge`, `_ws_slug_free`,
+# `ccd ls` and the server's registry read never see it, and the record outlives
+# the row it was never part of (`ccd-collect-record.test.ts` pins each). Its
+# writer's temp file is dot-leading inside it, never read as a record. A record
+# is found by EXACT parse — its name less its two trailing all-digit dot-fields
+# must equal the id — never by an `<id>.*` prefix, because ids admit dots: a
+# nested project's `p-calm-mesa.v2-quiet-river` is not `p-calm-mesa`'s.
+#
+# THE QUARANTINE is `<physical ~/.cc-tmp>/.ccd-quarantine`, on the leaf's own file
+# system so a rename never crosses one: a real directory of this uid at 0700,
+# made by a plain `mkdir -m 0700` when absent and refused as anything else. A
+# slot in it is `slot.<id>.<ns>.<pid>`, made by an exclusive `mkdir`; the
+# `slot.` prefix keeps it clear of any rule keyed on a leaf's own name, and the
+# leaf moves to `<slot>/leaf`. Its name pairs it with its record.
+#
+# LINUX ONLY. `_ws_collect_mv` holds the region's one GNU spelling, `mv -T -n
+# --no-copy`: one renameat2(RENAME_NOREPLACE), never a copy. A box whose `mv` has
+# no `--no-copy`, and Darwin, answer unmeasured, and so does the idle walk's GNU
+# `find -printf` there. `macos-platform.test.ts` exempts exactly that function.
+_WS_REC_ID=''
+_WS_QREC_WHY=''; _WS_QRECS_WHY=''
+_WS_QREC_ID=''; _WS_QREC_SLOT=''; _WS_QREC_DEV=''; _WS_QREC_INO=''; _WS_QREC_BTIME=''
+_WS_QREC_RUN=''; _WS_QREC_AT=''; _WS_QREC_TOKEN=''; _WS_QREC_CHECKOUTS=''
+_WS_QRECS=()
+WS_COLLECT_RECORD_MAX=65536   # the most bytes one quarantine record may hold, its newline included
+
+_ws_collect_enc() {   # text -> on stdout, every byte outside [A-Za-z0-9._/:@+~-] spelled %XX (upper-case hex)
+  # ONE SPELLING FOR A PATH IN A key=value LINE (spec §5.10). A record holds
+  # paths — each admin directory and back-link the checkout question accepted —
+  # on one space-separated line, so a space, `,`, `=` or `%` in a path would
+  # split a field. Its slot is never one of them: G5 derives it. INJECTIVE: `%` is itself spelled, so two texts never
+  # encode alike, and comparing two encodings compares the texts. Bytes, never
+  # characters (`LC_ALL=C`).
+  local LC_ALL=C s="${1-}" o='' c i
+  for (( i = 0; i < ${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._/:@+~-]) o+="$c" ;;
+      *) printf -v c '%%%02X' "'$c"; o+="$c" ;;
+    esac
+  done
+  printf '%s' "$o"
+}
+
+_ws_collect_pairs_ok() {   # list -> 0 when '' or a comma list of `<enc>=<enc>` pairs, each side `_ws_collect_enc`'s spelling
+  local LC_ALL=C e='([A-Za-z0-9._/:@+~-]|%[0-9A-F]{2})+'
+  local re="^$e=$e(,$e=$e)*\$"
+  [[ -z "${1-}" || "$1" =~ $re ]]
+}
+
+_ws_collect_rec_id() {   # name -> 0 with _WS_REC_ID = the id a `<id>.<ns>.<pid>` name is for: its two trailing
+  #                          all-digit dot-fields stripped, and nothing else; 1 when the name is no such name
+  # EXACT, NEVER A PREFIX: the longest leading part the two trailing fields leave
+  # is the id, and it must itself be an id a witness is named for.
+  local LC_ALL=C re='^(.+)\.([0-9]+)\.([0-9]+)$' got
+  _WS_REC_ID=''
+  [[ "${1-}" =~ $re ]] || return 1
+  got="${BASH_REMATCH[1]}"
+  _ws_tmproot_id_ok "$got" || return 1
+  _WS_REC_ID="$got"
+}
+
+_ws_collect_qrec_dir() { printf '%s' "$REG/tmpquarantine"; }   # -> the quarantine records' directory (a path, not a decision)
+
+_WS_QPATH=''; _WS_QPATH_WHY=''
+_ws_collect_qpath() {   # -> 0 with _WS_QPATH = `<physical ~/.cc-tmp>/.ccd-quarantine`, resolved and NEVER made;
+  #                        2 (_WS_QPATH_WHY) when ~/.cc-tmp cannot be resolved
+  # ONE RESOLUTION, NO WRITE (G5). `_ws_collect_qdir` makes the quarantine
+  # under this path; the record reader only DERIVES a slot under it, and the
+  # audit that reads records is read-only. `_ws_dir_physical`'s eighth call
+  # site, and the COLLECT region's only one: the quarantine maker, the record
+  # writer and the record reader all ask it here, and so must every later
+  # collector function that needs the physical `~/.cc-tmp`.
+  local root="$HOME/.cc-tmp"
+  _WS_QPATH=''; _WS_QPATH_WHY=''
+  _ws_dir_physical "$root" || { _WS_QPATH_WHY="$root cannot be resolved ($_WS_PHYS_WHY)"; return 2; }
+  [[ -n "$_WS_PHYS" && "$_WS_PHYS" != / ]] || { _WS_QPATH_WHY="$root resolved to an unusable path"; return 2; }
+  _WS_QPATH="${_WS_PHYS%/}/.ccd-quarantine"
+}
+
+_ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by reading it back; 1 not written
+  #                                (_WS_QREC_WHY) — the caller then refuses before anything moves
+  # THE WITNESS LINE IT ACTED ON is the caller's last `_ws_tmproot_witness_read`
+  # of id (`_WS_WIT_*`), and the CHECKOUTS its last pre-move `_ws_leaf_checkouts`
+  # of the leaf (`_WS_CHECKOUTS_ACCEPTED`). A witness with no birth time (`-`) is
+  # never acted on, so it is never recorded either. The record's name is its
+  # slot's, less `slot.`: `<id>.<ns>.<pid>`, which pairs the two. The slot must
+  # lie in the physical quarantine (`_ws_collect_qpath`), and the body names no
+  # path: the reader derives the slot from the name (G5). A record that
+  # stands is never overwritten, and its directory is made 0700 on first write.
+  local LC_ALL=C id="${1-}" slot="${2-}" token="${3-}" dir base name f tmp line co
+  _WS_QREC_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_QREC_WHY="'$id' is not an id a witness is named for, so no record was written"; return 1; }
+  base="${slot##*/}"
+  [[ "$slot" == /* && "$base" == slot.* ]] || { _WS_QREC_WHY="$slot is not a quarantine slot's path, so no record was written"; return 1; }
+  name="${base#slot.}"
+  _ws_collect_rec_id "$name" && [[ "$_WS_REC_ID" == "$id" ]] \
+    || { _WS_QREC_WHY="$base is not a slot named for $id, so no record was written"; return 1; }
+  _ws_collect_qpath || { _WS_QREC_WHY="$_WS_QPATH_WHY, so no record was written"; return 1; }
+  [[ "${slot%/*}" == "$_WS_QPATH" ]] \
+    || { _WS_QREC_WHY="$slot is not in the quarantine $_WS_QPATH, so no record was written"; return 1; }
+  [[ "$token" =~ ^[0-9a-f]{64}$ ]] || { _WS_QREC_WHY="the token is not one ccd mints, so no record was written"; return 1; }
+  [[ "${_WS_WIT_DEV-}" =~ ^[0-9]+$ && "${_WS_WIT_INO-}" =~ ^[0-9]+$ && "${_WS_WIT_BTIME-}" =~ ^[1-9][0-9]*$ \
+     && "${_WS_WIT_AT-}" =~ ^[0-9]{13}$ ]] && _child_runid_valid "${_WS_WIT_RUN-}" \
+    || { _WS_QREC_WHY="no witness of $id with a birth time was read, so no record was written"; return 1; }
+  co="${_WS_CHECKOUTS_ACCEPTED-}"
+  _ws_collect_pairs_ok "$co" || { _WS_QREC_WHY="the accepted checkouts are not a list ccd writes, so no record was written"; return 1; }
+  line="v=1 id=$id dev=$_WS_WIT_DEV ino=$_WS_WIT_INO btime=$_WS_WIT_BTIME run=$_WS_WIT_RUN at=$_WS_WIT_AT token=$token checkouts=$co"
+  (( ${#line} + 1 <= WS_COLLECT_RECORD_MAX )) \
+    || { _WS_QREC_WHY="the record of $id would hold more than $WS_COLLECT_RECORD_MAX bytes, so none was written"; return 1; }
+  dir=$(_ws_collect_qrec_dir)
+  [[ ! -L "$dir" ]] || { _WS_QREC_WHY="$dir is a link, which is never followed, so no record was written"; return 1; }
+  [[ -e "$dir" ]] || mkdir -m 0700 -- "$dir" 2>/dev/null || :
+  [[ -d "$dir" && ! -L "$dir" ]] || { _WS_QREC_WHY="$dir could not be made a directory, so no record was written"; return 1; }
+  f="$dir/$name"
+  [[ ! -e "$f" && ! -L "$f" ]] || { _WS_QREC_WHY="$f already stands — a record is never overwritten"; return 1; }
+  tmp="$dir/.$name.$BASHPID.$RANDOM.tmp"
+  { printf '%s\n' "$line" > "$tmp"; } 2>/dev/null \
+    || { rm -f -- "$tmp" 2>/dev/null; _WS_QREC_WHY="$tmp could not be written, so no record was written"; return 1; }
+  mv -f -- "$tmp" "$f" 2>/dev/null \
+    || { rm -f -- "$tmp" 2>/dev/null; _WS_QREC_WHY="$tmp could not be renamed to $f, so no record was written"; return 1; }
+  if ! _ws_collect_record_read "$f" || [[ "$_WS_QREC_TOKEN" != "$token" || "$_WS_QREC_SLOT" != "$slot" ]]; then
+    rm -f -- "$f" 2>/dev/null
+    _WS_QREC_WHY="$f did not read back as it was written, so it was removed and nothing moves"; return 1
+  fi
+  return 0
+}
+
+_ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO
+  #                               _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS)
+  #                               | 1 absent | 2 unreadable or malformed | 3 unmeasured: the physical
+  #                               ~/.cc-tmp cannot be resolved, so no slot is derived (_WS_QPATH_WHY)
+  # FOUR ANSWERS, NEVER AN OVERLOADED 2. As the witness reader's, a link, a
+  # directory, a dot-leading or unparseable NAME, a `checkouts=` list in no
+  # spelling ccd writes and a `tmpquarantine/` that is itself a link all answer
+  # 2: the record is not one ccd writes, and its caller keeps it. The body is
+  # judged first, and only a well-formed one asks for its slot: a physical
+  # `~/.cc-tmp` that cannot be resolved says nothing against the record, only
+  # that its slot cannot be derived now, so that is 3, unmeasured, and its
+  # caller retries. Every field is cleared first. The content's id must be the one its own
+  # name parses to (rc 2 otherwise, G5). The body names NO path: `_WS_QREC_SLOT`
+  # is DERIVED, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`, through
+  # `_ws_collect_qpath`, which makes nothing, so a record never names another
+  # id's slot and a space in a path never splits one. `_WS_QREC_CHECKOUTS` stays in
+  # `_ws_collect_enc`'s spelling, the form `_ws_leaf_checkouts`' alias compares.
+  local LC_ALL=C f="${1-}" name body line fd max
+  local -a m
+  local re='^v=1 id=([A-Za-z0-9._-]+) dev=([0-9]+) ino=([0-9]+) btime=([1-9][0-9]*) run=([^ ]+) at=([0-9]{13}) token=([0-9a-f]{64}) checkouts=([^ ]*)$'
+  _WS_QREC_ID=''; _WS_QREC_SLOT=''; _WS_QREC_DEV=''; _WS_QREC_INO=''; _WS_QREC_BTIME=''
+  _WS_QREC_RUN=''; _WS_QREC_AT=''; _WS_QREC_TOKEN=''; _WS_QREC_CHECKOUTS=''
+  name="${f##*/}"
+  [[ "$name" != .* ]] && _ws_collect_rec_id "$name" || return 2
+  [[ ! -L "${f%/*}" ]] || return 2
+  [[ -e "$f" || -L "$f" ]] || return 1
+  [[ -f "$f" && ! -L "$f" ]] || return 2
+  max="$WS_COLLECT_RECORD_MAX"
+  { exec {fd}<"$f"; } 2>/dev/null || return 2
+  IFS= read -r -N "$(( max + 1 ))" body <&"$fd" || :
+  { exec {fd}<&-; } 2>/dev/null || :
+  (( ${#body} <= max )) && [[ "$body" == *$'\n' ]] || return 2
+  line="${body%$'\n'}"
+  [[ "$line" != *$'\n'* && "$line" =~ $re ]] || return 2
+  m=("${BASH_REMATCH[@]}")
+  [[ "${m[1]}" == "$_WS_REC_ID" ]] || return 2
+  _child_runid_valid "${m[5]}" || return 2
+  _ws_collect_pairs_ok "${m[8]}" || return 2
+  _ws_collect_qpath || return 3
+  _WS_QREC_ID="${m[1]}"; _WS_QREC_SLOT="$_WS_QPATH/slot.$name"; _WS_QREC_DEV="${m[2]}"; _WS_QREC_INO="${m[3]}"
+  _WS_QREC_BTIME="${m[4]}"; _WS_QREC_RUN="${m[5]}"; _WS_QREC_AT="${m[6]}"; _WS_QREC_TOKEN="${m[7]}"
+  _WS_QREC_CHECKOUTS="${m[8]}"
+  return 0
+}
+
+_ws_collect_records_of() {   # id -> 0 with _WS_QRECS = the path of every record named for id EXACTLY (also printed,
+  #                              one per line; none when the directory is PROVEN absent); 2 (_WS_QRECS_WHY) when the
+  #                              records could not be listed
+  # A RECORD IS NEVER INVISIBLE: an unlistable directory, one that is a link,
+  # or a file where it should be answers 2, never "no record". Dot-leading names
+  # (a writer's temp file) and names that are no `<id>.<ns>.<pid>` are skipped.
+  local LC_ALL=C id="${1-}" dir outf errf err rc n
+  _WS_QRECS=(); _WS_QRECS_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_QRECS_WHY="'$id' is not an id a record is named for"; return 2; }
+  dir=$(_ws_collect_qrec_dir)
+  [[ ! -L "$dir" ]] || { _WS_QRECS_WHY="$dir is a link, which is never followed, so its records were never listed"; return 2; }
+  _ws_reclaim_absent "$dir"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_QRECS_WHY="$_WS_ABSENT_WHY — whether a record of $id stands was never asked"; return 2; }
+  [[ -d "$dir" ]] || { _WS_QRECS_WHY="$dir is not a directory, so its records were never listed"; return 2; }
+  outf=$(_plat_mktemp) || { _WS_QRECS_WHY="could not make a scratch file to list $dir"; return 2; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_QRECS_WHY="could not make a scratch file to list $dir"; return 2; }
+  find -P "$REG/tmpquarantine" -mindepth 1 -maxdepth 1 -name '*.*' ! -name '.*' -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$outf"
+    _WS_QRECS_WHY="could not list $dir (find exit $rc${err:+: ${err%%$'\n'*}}), so whether a record of $id stands was never asked"
+    return 2
+  fi
+  while IFS= read -r -d '' n; do
+    _ws_collect_rec_id "${n##*/}" && [[ "$_WS_REC_ID" == "$id" ]] || continue
+    _WS_QRECS+=("$n")
+    printf '%s\n' "$n"
+  done < "$outf"
+  rm -f "$outf"
+  return 0
+}
+
+_ws_collect_record_drop() {   # file -> 0 the record is gone, PROVEN; 1 not a record's path, nothing touched;
+  #                               2 not proven gone (_WS_QREC_WHY)
+  # ORDER (spec §5.10): the record goes LAST, after the slot and the witness, so
+  # a crash anywhere before leaves it for the next audit.
+  local f="${1-}" dir rc
+  _WS_QREC_WHY=''
+  dir=$(_ws_collect_qrec_dir)
+  [[ "${f%/*}" == "$dir" && "${f##*/}" != .* ]] && _ws_collect_rec_id "${f##*/}" \
+    || { _WS_QREC_WHY="$f is not a quarantine record's path, so nothing was touched"; return 1; }
+  [[ ! -L "$dir" ]] || { _WS_QREC_WHY="$dir is a link, which is never followed, so $f was left"; return 2; }
+  rm -f -- "$f" 2>/dev/null || { _WS_QREC_WHY="$f could not be removed"; return 2; }
+  _ws_reclaim_absent "$f"; rc=$?
+  (( rc != 1 )) || { _WS_QREC_WHY="$f stands again after its removal"; return 2; }
+  (( rc != 2 )) || { _WS_QREC_WHY="$_WS_ABSENT_WHY — that $f is gone was never proven"; return 2; }
+  return 0
+}
+# ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
