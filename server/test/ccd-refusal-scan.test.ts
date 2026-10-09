@@ -29,7 +29,7 @@ const lineAt = (s: string, i: number): string => {
   return s.slice(a, b === -1 ? undefined : b).trim();
 };
 
-/** D4's four destructive verbs, ws-reclaim (child reclamation, wave 3) as the fifth and ws-expire (workspace lifecycle, wave 3) as the sixth. Floors are measured minima, not guesses. */
+/** D4's four destructive verbs, ws-reclaim (child reclamation, wave 3) as the fifth, ws-expire (workspace lifecycle, wave 3) as the sixth and ws-collect (child reclamation, wave 7) as the seventh. Floors are measured minima, not guesses. */
 const VERBS: readonly (readonly [string, string, number])[] = [
   ['cmd_ws_rm', 'cmd_ws_rename', 8000],
   ['cmd_forget', 'cmd_ls', 2000],
@@ -40,19 +40,23 @@ const VERBS: readonly (readonly [string, string, number])[] = [
   ['cmd_ws_reclaim', '_ws_reclaim_locked', 3500],
   // Measured 3761 characters for cmd_ws_expire's pre-lock parse and lock when this entry was written.
   ['cmd_ws_expire', '_ws_expire_locked', 3200],
+  // Measured 5661 characters for cmd_ws_collect's pre-lock parse, population check and lock when this entry was written.
+  ['cmd_ws_collect', '_ws_collect_locked', 5100],
 ];
 
 /**
- * THE FOURTEEN DIES A REFUSAL RECORD CANNOT DESCRIBE, each for one stated reason.
+ * THE SIXTEEN DIES A REFUSAL RECORD CANNOT DESCRIBE, each for one stated reason.
  * Four are `cmd_ws_reap`'s pre-lock rungs, which D15 leaves alone: three run
  * before `$id` has been validated at all and the fourth is the `_json_str`
  * probe — the emitter itself is what is missing there, so an emit would be the
  * thing being reported. Two are the `--reason` loop arms, which run before any
- * id is bound. The set is EXACT: a fifteenth sanctioned die reds the count.
+ * id is bound. The set is EXACT: a seventeenth sanctioned die reds the count.
  *
  * Six are cmd_ws_reclaim's (child reclamation, wave 3), for reap's own reasons: its usage line runs before $id is bound, its four --actor/--reason checks are the loop arms that run before any id is bound, and its _json_str probe is the emitter being missing. Its "bad session id" is the SAME literal as reap's and needs no second entry; it stays a die because an id that failed its own shape check is no id to journal against (spec §5.9). Its token and run-id checks are NOT here: since wave 6 they run after the session id is validated and journal through `_lc_refuse` (spec §5.9) — "bad token" stays in this set for reap's and ws-expire's own literal.
  *
  * Two are cmd_ws_expire's (workspace lifecycle, wave 3), for the same reasons: its usage line runs before $id is bound, and its _json_str probe is the emitter being missing. Its four --actor/--reason checks are the SAME literals as ws-reclaim's, and its "bad token" and "bad session id" the SAME as reap's, and need no second entry.
+ *
+ * Two are cmd_ws_collect's (child reclamation, wave 7), for ws-expire's reasons: its usage line runs before $id is bound, and its _json_str probe is the emitter being missing. Its four --actor/--reason checks, "bad token" and "bad session id" are the SAME literals and need no second entry; its "bad session id" also refuses a dot-leading id, which is no child's and no witness's.
  */
 const SANCTIONED: readonly string[] = [
   'die "usage: ccd ws-rm [--reason <text>] <id>"',
@@ -69,6 +73,8 @@ const SANCTIONED: readonly string[] = [
   'die "--reason is longer than $_LC_DEC_MAX bytes"',
   'die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"',
   'die "python3 unavailable — cannot quote the expiry record safely"',
+  'die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"',
+  'die "python3 unavailable — cannot quote the collection record safely"',
 ];
 
 describe('every die in a destructive verb is reached through _lc_refuse or _lc_fail', () => {
@@ -107,7 +113,7 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
   it('every sanctioned die is STILL THERE — a stale exemption is a hole', () => {
     // Mutant: convert `die "bad token"` and leave it in SANCTIONED -> this fails
     // with `a sanctioned die that no longer exists: [ 'die "bad token"' ]`.
-    expect(SANCTIONED.length, 'the sanctioned set changed size').toBe(14);
+    expect(SANCTIONED.length, 'the sanctioned set changed size').toBe(16);
     const all = VERBS.map(([n, u]) => bodyOf(n, u)).join('\n');
     expect(SANCTIONED.filter((s) => !all.includes(s)), 'a sanctioned die that no longer exists')
       .toEqual([]);
@@ -178,6 +184,28 @@ describe('every die in a destructive verb is reached through _lc_refuse or _lc_f
       '_ws_expire_locked grew a die — past the lock, route it through _lc_fail and the "failed" document').toEqual([]);
   });
 
+  it('holds the collection emits at exactly two in ws-collect — one refusal point, one flock decline (child reclamation, wave 7)', () => {
+    // `_ws_collect_refused` journals every refusal past the lock decline — the verdict point, and a refusal after a
+    // PROVEN restore — through one `_lc_emit`; the lock decline in `cmd_ws_collect` is the second. Comment lines are
+    // not code.
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect([...code.matchAll(/_lc_emit collect refused "\$id" "[^"]*" verb ws-collect /g)]).toHaveLength(2);
+  });
+
+  it('the collector’s locked functions contain NO die — past the lock, a failure is _ws_reclaim_fail and JSON', () => {
+    for (const [name, floor] of [
+      // Measured 2998, 7499, 5900, 4180 and 1950 characters when this entry was written; each floor is that less 500, rounded down to a hundred.
+      ['_ws_collect_locked', 2400], ['_ws_collect_fresh', 6900], ['_ws_collect_resume', 5400],
+      ['_ws_collect_after_move', 3600], ['_ws_collect_finish', 1400],
+    ] as const) {
+      const from = src.indexOf(`${name}() {`);
+      const body = from > -1 ? src.slice(from, src.indexOf('\n}\n', from)) : '';
+      expect(body.length, `${name} could not be sliced`).toBeGreaterThan(floor);
+      expect([...body.matchAll(/(^|\s|\|\|\s*|;\s*)die "/g)].map((m) => lineAt(body, m.index!)),
+        `${name} grew a die — past the lock, route it through _ws_reclaim_fail and the "failed" document`).toEqual([]);
+    }
+  });
+
   it('the reclaim lock\'s two inner functions contain NO die — past the lock, a failure is _lc_fail and JSON', () => {
     for (const [name, until, floor] of [
       ['_ws_reclaim_locked', '# ── end child reclamation', 2500],
@@ -207,6 +235,14 @@ describe('every literal refusal argument ccd carries is a token L0 or wsaudit al
     // its third argument IS the journal token, so it is a literal position too.
     for (const m of src.matchAll(/_ws_reclaim_fail\s+"[^"]*"\s+"[^"]*"\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
     for (const m of src.matchAll(/_lc_emit\s+[a-z-]+\s+refused\s+"[^"]*"\s+""\s+verb\s+[a-z-]+\s+refusal\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
+    // THE COLLECTOR (child reclamation wave 7). `ws-collect` journals every refusal at its ONE refusal point,
+    // `_ws_collect_refused id tx <word> …`; the evaluation it shares with `ws-audit --collect` answers through
+    // `_ws_collect_refuse <word> …`, and the verb journals that word at the same point. Both are literal positions,
+    // read inside the COLLECT region only; each regex requires `\s` right after its name, so neither meets the other.
+    const collect = src.slice(src.indexOf('COLLECT-BEGIN'), src.indexOf('COLLECT-END'));
+    expect(collect.length, 'the COLLECT region was found — an empty cut harvests nothing').toBeGreaterThan(20000);
+    for (const m of collect.matchAll(/_ws_collect_refuse\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
+    for (const m of collect.matchAll(/_ws_collect_refused\s+"[^"]*"\s+"[^"]*"\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
     expect(found.size, 'the scan found almost no tokens — it is vacuous').toBeGreaterThanOrEqual(14);
     expect([...found].filter((t) => !known.has(t)).sort(), 'tokens no vocabulary owns').toEqual([]);
     expect(LC_REFUSAL_TOKENS.filter((t) => !found.has(t)).sort(),
