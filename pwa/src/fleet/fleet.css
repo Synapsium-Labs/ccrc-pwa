@@ -214,13 +214,16 @@
 /* An 11px line box inside `padding: var(--sp-1) 0` measured ~19px tall — well
    under WCAG 2.2 SC 2.5.8's 24px floor — on a control whose action cannot be
    undone (there is no un-ack; `bucketSince` will not advance again until the
-   bucket changes). A real 24px box, and deliberately NOT the invisible
-   ::before overlay `.sess-actions` and `.proj-card-add` use to reach
-   --tap-min: an overlay overhangs its neighbours, and every neighbour here —
-   the label, the count, the unseen pill — is inert, so an overhang would
-   convert a near-miss that does nothing today into an irreversible
-   activation. Growing the visible box is the only direction that is safe for
-   this particular button. */
+   bucket changes). It went to a real 24px box for one wave, and to `--tap-min`
+   now (V2, operator's ruling).
+
+   STILL NOT THE INVISIBLE ::before OVERLAY `.sess-actions` and
+   `.proj-card-add` use to reach the floor, and this is the rule's own measured
+   argument rather than a preference: an overlay overhangs its neighbours, and
+   every neighbour here — the label, the count, the unseen pill — is INERT, so
+   an overhang would convert a near-miss that does nothing today into an
+   irreversible activation. Growing the visible box was the only safe
+   direction; the ruling is that an un-undoable ack is worth the height. */
 .bucket-head .bucket-head-seen {
   border: 0;
   background: none;
@@ -228,7 +231,7 @@
   font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-ui);
   display: inline-grid;
   place-items: center;
-  min-height: var(--sp-6);
+  min-height: var(--tap-min);
   padding: 0 var(--sp-2);
   margin-right: calc(-1 * var(--sp-2)); /* the chip's own right padding is the gutter */
   cursor: pointer;

@@ -314,10 +314,10 @@ describe('fleet density and alignment', () => {
 
   // The ack control's own floor. `padding: var(--sp-1) 0` around an 11px line
   // measured ~19px — under WCAG 2.2's 24px — on a control whose action cannot
-  // be undone.
-  it('gives "Mark all seen" a real 24px box rather than an overhanging overlay', () => {
+  // be undone. 24px for one wave, `--tap-min` since V2 (operator's ruling).
+  it('gives "Mark all seen" a real tap-sized box rather than an overhanging overlay', () => {
     const rule = ruleFor('.bucket-head .bucket-head-seen');
-    expect(declValue(rule, 'min-height')).toBe('var(--sp-6)');
+    expect(declValue(rule, 'min-height')).toBe('var(--tap-min)');
     // Deliberately NOT the ::before overlay pattern: every neighbour in the
     // chip is inert, so an overhang would turn a near-miss that does nothing
     // into an irreversible ack.

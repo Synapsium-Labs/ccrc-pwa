@@ -87,22 +87,22 @@
 /* Model / effort / ultracode / branch chips, from the pane statusline. The
    model + effort chips are tappable (open their choosers). They share the one
    .chat-meta row above. */
-/* THE 24px FLOOR, not 44 (operator's call, this wave). These chips are
-   TAPPABLE — the comment above says so, they open the model and effort
-   choosers — and they measured about 19px: `padding: 3px 9px` around
-   `--fs-2xs` at line-height 1, plus a hairline. The smallest controls in the
-   app, found by `control-census.test.ts` and not by a reader.
+/* 24px HERE IS THE LABEL'S FLOOR, and only the label's.
+   These chips measured about 19px — `padding: 3px 9px` around `--fs-2xs` at
+   line-height 1, plus a hairline — the smallest controls in the app, found by
+   `control-census.test.ts` and not by a reader. They went to `--sp-6` (24px,
+   WCAG 2.2 SC 2.5.8) for one wave while the operator weighed the visual cost,
+   and this rule keeps that number for the one chip that is NOT a control:
+   `.metachip--branch` is a `<span>`, a read-only statement of the branch, and
+   a 44px pill for a label is height spent on nothing.
 
-   `--sp-6` (24px, WCAG 2.2 SC 2.5.8), on `.bucket-head-seen`'s terms and for
-   its reasons: the `::before` overlay `.sess-actions`/`.proj-card-add` use to
-   reach --tap-min would overhang the OTHER chip, and both chips are live
-   controls — an overhang turns a near-miss into opening the wrong chooser.
-   Growing the visible box is the only safe direction, and a 44px pill in a
-   meta row is a different design: chat.css's own header note records that two
-   fixed rows cost a line of chat height on every screen. +5px per row is the
-   proportionate half of that.
-   The two chips stay UNDER `--tap-min` in the control census, with this
-   argument, exactly as `.bucket-head-seen` does. */
+   THE TWO LIVE CHIPS TAKE `--tap-min` BELOW (V1, operator's ruling). They open
+   the model and the effort chooser, and the overlay the rest of the app uses to
+   reach the floor is barred here for a measured reason: a `::before` on either
+   chip overhangs the OTHER, and an overhang between two live choosers turns a
+   near-miss into opening the wrong one. Growing the visible box was always the
+   only safe direction; what it costs is ~20px on one meta row, which the
+   operator weighed against two choosers nobody can reliably hit. */
 .metachip {
   display: inline-flex;
   align-items: center;
@@ -117,7 +117,11 @@
   font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-secondary);
 }
+/* V1: the floor is on the BUTTON selector, not on `.metachip`, which is the
+   whole of why this is safe to do at all — `.metachip--branch` is a span and
+   keeps the 24px box above. A control gets the target; a label does not. */
 button.metachip {
+  min-height: var(--tap-min);
   cursor: pointer;
   transition: transform var(--dur-press) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
@@ -551,11 +555,20 @@ button.metachip:active {
   background: var(--bg-surface);
   overflow: hidden;
 }
+/* V2 (operator's ruling): `--tap-min`, up from the ~29px `--sp-2` around
+   `--fs-sm` at line-height 1 produced. It already cleared SC 2.5.8's 24 and the
+   last wave left it alone for a measured reason — 44 adds about 15px to EVERY
+   compaction marker in a transcript, which is real reading cost on a phone. The
+   ruling went the other way: it is a full-width disclosure, so it was easy to
+   hit horizontally and short only vertically, and "short only vertically" is
+   still the axis a thumb misses on. The padding is unchanged; the floor does
+   the growing, so a marker with a long label still wraps the way it did. */
 .compaction-head {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
+  min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-3);
   background: transparent;
   border: none;

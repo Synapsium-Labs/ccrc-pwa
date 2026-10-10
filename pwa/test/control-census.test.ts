@@ -309,11 +309,13 @@ const CONTROLS: Record<string, string> = {
     + '`fleet-css.test.ts` asserts `.sess-open` must NOT regain a `min-height`. '
     + 'It is the label LINE inside the tap surface, not the surface.',
   'fleet/BucketBar.tsx <button> bucket-head-seen':
-    'UNDER, 24px by `--sp-6`, and ARGUED in the stylesheet at length: WCAG 2.2 '
-    + "SC 2.5.8's floor, chosen because the `::before` overlay the two OVERLAY "
-    + 'entries use would overhang neighbours that are INERT, turning a near-miss '
-    + 'that does nothing today into an irreversible activation. The only safe '
-    + 'direction here is growing the visible box, which is a design change.',
+    'TOKEN. `.bucket-head .bucket-head-seen` declares `--tap-min` since V2 '
+    + '(operator\'s ruling). It stood at 24px by `--sp-6` for one wave with the '
+    + 'argument the stylesheet still carries: the `::before` overlay the two '
+    + 'OVERLAY entries use would overhang neighbours that are INERT, turning a '
+    + 'near-miss that does nothing today into an irreversible ack, so growing '
+    + 'the visible box was the only safe direction — and that is a visual '
+    + 'change, which is why it waited for a ruling rather than a refactor.',
   'session/PendingBubble.tsx <button> (none)':
     'SELECTOR .pending-actions button. The `Discard` button, with no class at '
     + 'all — and covered anyway, because the floor is on an ELEMENT selector. '
@@ -332,26 +334,29 @@ const CONTROLS: Record<string, string> = {
     + 'the operator chose that floor: the copy button sits on the code well\'s '
     + 'bar beside the language label, and a 44px bar is a different code block.',
   'session/MessageBubble.tsx <button> compaction-head':
-    'UNDER `--tap-min` and ABOVE the WCAG floor: about 29px — `--sp-2` (8px) '
-    + 'above and below `--fs-sm` (13px) at line-height 1 — against SC '
-    + '2.5.8\'s 24. A full-width disclosure, so it is easy to hit horizontally '
-    + 'and short only vertically. Left as it is this wave: it already clears '
-    + 'the floor the operator chose, and 44 would add 15px to EVERY compaction '
-    + 'marker in a transcript.',
+    'TOKEN since V2 (operator\'s ruling). It was about 29px — `--sp-2` (8px) '
+    + 'above and below `--fs-sm` (13px) at line-height 1 — which already cleared '
+    + 'SC 2.5.8\'s 24, and the last wave left it there because 44 adds about '
+    + '15px to EVERY compaction marker in a transcript. The ruling weighed that '
+    + 'against the axis a thumb actually misses on: a full-width disclosure is '
+    + 'easy to hit horizontally and was short only vertically.',
   'session/SessionHeader.tsx <button> (computed)':
-    'UNDER .metachip, 24px. The effort chip — `metachip` or '
-    + '`metachip--ultra` — on the same rule as the model chip below. The '
-    + 'citation is REQUIRED because the class is computed: see '
+    'SELECTOR button.metachip. The effort chip — `metachip` or '
+    + '`metachip--ultra` — on the same rule as the model chip below, which '
+    + 'declares `--tap-min` since V1. SELECTOR rather than TOKEN for the '
+    + 'reason the arm itself enforces: the class here is COMPUTED, so there is '
+    + 'no class to look a floor up by, and the entry has to name the rule. See '
     + 'CITES_A_RULE.',
   'session/SessionHeader.tsx <button> metachip metachip--model':
-    'UNDER `--tap-min`, and that is now a DECISION rather than an oversight: '
-    + '24px by `--sp-6`, WCAG 2.2 SC 2.5.8, on `.bucket-head-seen`\'s terms. '
-    + 'They measured about 19px — `padding: 3px 9px` around `--fs-2xs` at '
-    + 'line-height 1 plus a hairline, the smallest controls in the app, found '
-    + 'by this census and not by a reader. The overlay that would reach 44 '
-    + 'would overhang the OTHER chip, and both are live choosers; growing the '
-    + 'visible box is the only safe direction, and a 44px pill in a meta row '
-    + 'is a different design. The operator chose the WCAG floor.',
+    'TOKEN button.metachip, since V1 (operator\'s ruling). They measured about '
+    + '19px — `padding: 3px 9px` around `--fs-2xs` at line-height 1 plus a '
+    + 'hairline, the smallest controls in the app, found by this census and not '
+    + 'by a reader — then 24px by `--sp-6` for one wave. The floor is on the '
+    + 'BUTTON selector, not on `.metachip`, and that is what makes it safe: '
+    + '`.metachip--branch` is a `<span>` stating the branch and keeps the 24px '
+    + 'box, because a label is not a target. The overlay that would have '
+    + 'reached 44 without growing anything is still barred — it would overhang '
+    + 'the OTHER chip, and both are live choosers.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */
@@ -453,10 +458,18 @@ describe('hand-drawn controls', () => {
       })
       .map(([k]) => k).sort();
     expect(grown, 'this now declares --tap-min — re-register it as TOKEN').toEqual([]);
+    // SIX BEFORE V1 AND V2, TWO AFTER. The four that left are the two session
+    // meta chips (V1), the seen chip and the compaction disclosure (V2) — each
+    // an operator ruling, because growing a visible box is a visual change and
+    // every one of them had already been argued down to "the only safe
+    // direction is a design change". The two that remain are the ones whose
+    // argument is not about safety: `.code-block-copy` at 32px, because a 44px
+    // bar is a different code block, and `.dlg-later` at 40px in its one-line
+    // state.
     expect(
       Object.values(CONTROLS).filter((v) => v.startsWith('UNDER')).length,
       'the UNDER arm still records every control below the floor',
-    ).toBe(6);
+    ).toBe(2);
   });
 
 
