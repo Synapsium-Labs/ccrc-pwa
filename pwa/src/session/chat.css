@@ -997,9 +997,6 @@ button.metachip:active {
   border: none;
   background: none;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift);
 }
@@ -1040,9 +1037,6 @@ button.metachip:active {
 .ask-envelope-more-heading {
   margin: 0 0 var(--sp-2);
   color: var(--ink-tertiary);
-  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1424,3 +1418,4 @@ button.metachip:active {
 .history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--fs-xs); }
 .history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--fs-xs); }
 .history-loading, .history-empty, .history-error { color: var(--ink-secondary); padding: var(--sp-3) 0; }
+

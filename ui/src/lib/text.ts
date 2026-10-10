@@ -36,3 +36,44 @@ export const MONO_PATH = 'block font-mono text-xs text-ink-secondary break-all';
 export const ATTENTION_DOT =
   "before:content-[''] before:block before:size-[6px] before:rounded-full"
   + ' before:bg-status-attention';
+
+/** The MICRO-LABEL above a block: mono, 2xs, medium, uppercase, tracked out.
+ *
+ *  FOUR COPIES, AND THE FOURTH WAS INSIDE `@ccrc/ui`. Three stylesheet rules
+ *  declared the identical four — `tool-card.css .tool-eyebrow`,
+ *  `task-card.css .task-card-field dt` and `chat.css
+ *  .ask-envelope-more-heading` — and `sheet.tsx` spelled the same utilities
+ *  inline for `.sheet-eyebrow`. The app's shape census could not see any of
+ *  it: two of the rules are in `@ccrc/ui`, which it left out of scope, and
+ *  the fourth is not a rule at all. The census reads both packages in the
+ *  same commit that adds this, which is what will refuse the fifth.
+ *
+ *  COLOUR IS NOT HERE, deliberately: `--ink-tertiary` is what each rule
+ *  declares and what the contrast gate measures it by, keyed on
+ *  `<basename> <selector>`. A colour that moved into a utility string would
+ *  leave three gate entries measuring a rule that no longer paints — the
+ *  "shape moves, ground stays" rule this package follows for every
+ *  migration. Each call site keeps its own one-declaration rule.
+ *
+ *  `not-italic normal-nums`: the three rules used the `font:` SHORTHAND,
+ *  which resets `font-style` and `font-variant` on the way past. Longhand
+ *  utilities do not, so the resets are spelled — the same two `KEYCAP`
+ *  carries, for the same reason. */
+export const EYEBROW =
+  'font-mono text-2xs font-medium uppercase leading-none tracking-caps'
+  + ' not-italic normal-nums';
+
+/** A LIST THAT IS NOT A LIST — bullets off, no indent, laid out as a grid.
+ *
+ *  FOUR COPIES, THREE OF THEM IN THE APP: `fleet.css .settings-nodes` and
+ *  `.settings-releases`, `.update-move-sheet .update-move-list`, and
+ *  `mail-card.css .mail-card-artifacts` inside this package — the fourth is
+ *  why the shape census now reads both. `list-style: none; margin: 0;
+ *  padding: 0; display: grid` is the whole of it: a semantic `<ul>`/`<ol>`
+ *  that must not look like one.
+ *
+ *  NO GAP, deliberately. Each of the four picks its own (`--sp-1`, or none at
+ *  all), and the row rhythm is the list's own decision rather than this
+ *  shape's. NO GROUND either — nothing here paints, so unlike a card shell
+ *  this one can move without taking a contrast-gate key with it. */
+export const RESET_LIST = 'list-none m-0 p-0 grid';

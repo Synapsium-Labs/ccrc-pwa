@@ -35,7 +35,7 @@ export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
 // Two constants with no component of their own: each is a handful of
 // utilities that two or three app rules spelled identically, and wrapping
 // either in a `<span>` would add an element nobody asked for.
-export { MONO_PATH, ATTENTION_DOT } from './lib/text';
+export { MONO_PATH, ATTENTION_DOT, EYEBROW, RESET_LIST } from './lib/text';
 export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,

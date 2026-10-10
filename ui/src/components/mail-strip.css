@@ -101,7 +101,7 @@
   .mail-strip .mail-strip-kind {
     font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--ls-caps-sm);
     color: var(--ink-tertiary);
   }
   .mail-strip .mail-strip-subject {
@@ -115,7 +115,7 @@
     flex-basis: 100%;
     font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--ls-caps-sm);
     color: var(--status-attention-text);
   }
   /* Build 8 §4.5: a delivery the lane is still retrying but cannot hand over,
@@ -129,7 +129,7 @@
     flex-basis: 100%;
     font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--ls-caps-sm);
     color: var(--status-attention-text);
   }
   /* The collapsed head's copy of the same signal: `flex: none` rather than a
@@ -139,7 +139,7 @@
     flex: none;
     font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--ls-caps-sm);
     color: var(--status-attention-text);
   }
   /* D-792: one gate has been holding this delivery a while. NOTHING HAS FAILED,

@@ -31,7 +31,7 @@ import {
   rollbackTargetRefusal, settledDoneDetail,
 } from '../../../shared/api';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
-import { Button, elapsedWords } from '@ccrc/ui';
+import { Button, RESET_LIST, elapsedWords } from '@ccrc/ui';
 import {
   isManagedNode, rollbackBlockers, type MoveIntent, type RollbackBlocker,
 } from '../fleet/movePlan';
@@ -252,7 +252,7 @@ export function ReleaseList({ releases, nodes, onMove }: {
 }): ReactNode {
   if (releases.length === 0) return null;
   return (
-    <ul className="settings-releases" aria-label="Releases">
+    <ul className={`settings-releases ${RESET_LIST}`} aria-label="Releases">
       {sortReleases(releases).map((r) => <ReleaseItem key={r.tag} release={r} nodes={nodes} onMove={onMove} />)}
     </ul>
   );
@@ -479,7 +479,7 @@ export function NodeList({ nodes, releases, now, catalogueLastOkAt, onAcked, onM
 }): ReactNode {
   if (nodes.length === 0) return null;
   return (
-    <ul className="settings-nodes" aria-label="Nodes">
+    <ul className={`settings-nodes ${RESET_LIST}`} aria-label="Nodes">
       {nodes.map((n) => (
         <NodeItem
           key={n.nodeId} node={n} releases={releases} now={now} catalogueLastOkAt={catalogueLastOkAt} onAcked={onAcked} onMove={onMove}

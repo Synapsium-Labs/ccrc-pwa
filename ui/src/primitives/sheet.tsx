@@ -4,6 +4,7 @@
 import { Drawer } from 'vaul';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/cn';
+import { EYEBROW } from '../lib/text';
 
 export interface SheetProps {
   open: boolean;
@@ -115,7 +116,7 @@ export function Sheet({
           {eyebrow ? (
             <p
               className={cn(
-                'sheet-eyebrow mb-2 flex-none font-mono text-2xs font-medium uppercase leading-none tracking-caps [overflow-wrap:anywhere]',
+                `sheet-eyebrow mb-2 flex-none ${EYEBROW} [overflow-wrap:anywhere]`,
                 full ? 'px-4 text-ink-on-well/55' : 'text-ink-tertiary',
               )}
             >

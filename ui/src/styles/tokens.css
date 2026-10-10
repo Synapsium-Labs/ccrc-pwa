@@ -227,6 +227,14 @@
   --weight-semibold: 600;
 
   --ls-caps: 0.08em;  /* uppercase mono eyebrows/labels */
+  /* The LIGHTER caps tracking — half of --ls-caps. Found by the shape census
+     reading both packages: `0.04em` was written out SEVEN times in four
+     stylesheets (the mail card's and strip's `-kind` labels, the login title,
+     the passkeys sub-eyebrow) and named nowhere, so the one value the design
+     system actually has two of had a token for one of them. Same number, so
+     nothing moves; what changes is that the eighth consumer has somewhere to
+     take it from. */
+  --ls-caps-sm: 0.04em;
 
   /* ------------------------------------------------------------------ *
    *  SPACE, RADIUS, TOUCH, SIZE                                         *

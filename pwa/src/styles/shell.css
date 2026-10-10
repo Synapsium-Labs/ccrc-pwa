@@ -315,7 +315,7 @@
 }
 .login-title {
   font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-mono);
-  letter-spacing: 0.04em;
+  letter-spacing: var(--ls-caps-sm);
 }
 .login-copy {
   max-width: 40ch;

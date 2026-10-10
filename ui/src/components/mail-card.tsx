@@ -31,6 +31,7 @@
 // from the PWA is a stated non-goal. A control here would be a second door on
 // one act — the same reasoning that keeps `Answer` in `ToolCard` from
 // answering anything.
+import { RESET_LIST } from '../lib/text';
 import type { ReactNode } from 'react';
 import type { MailEnvelope } from '../../../shared/api';
 import { Well } from '../primitives/well';
@@ -69,7 +70,7 @@ export function MailCard({ envelope }: { envelope: MailEnvelope }): ReactNode {
         // PATHS, NEVER PAYLOADS (spec:52-53) — and rendered as paths, not as
         // links: nothing on this card fetches anything, and a tappable path
         // would promise a fetch this surface does not have.
-        <ul className="mail-card-artifacts">
+        <ul className={`mail-card-artifacts ${RESET_LIST}`}>
           {/* Keyed by INDEX, not by path: nothing upstream forbids a sender
               listing the same path twice, and a duplicate key would drop a
               row from a list whose whole job is to be complete. The list is

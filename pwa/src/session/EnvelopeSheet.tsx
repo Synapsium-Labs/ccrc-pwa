@@ -18,7 +18,7 @@
 import { Fragment, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk, HookAskQuestion } from '../../../shared/api';
-import { Button, OptionRow, Sheet, toast } from '@ccrc/ui';
+import { Button, EYEBROW, OptionRow, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import './chat.css';
 
@@ -358,7 +358,7 @@ export function EnvelopeSheet({
           // to miss at a glance — the heading below and `.ask-envelope-more`'s
           // separator rule say in words what the colour only implies.
           <div className="ask-envelope-more">
-            <p className="ask-envelope-more-heading">answer these in the terminal</p>
+            <p className={`ask-envelope-more-heading ${EYEBROW}`}>answer these in the terminal</p>
             {rest.map((q, qi) => (
               <Fragment key={qi}>
                 {q.header && <p className="dlg-header-chip">{q.header}</p>}

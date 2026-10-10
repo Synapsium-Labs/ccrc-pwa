@@ -6,7 +6,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import React, { useCallback, useState, type ReactNode } from 'react';
-import { Prose } from '@ccrc/ui';
+import { EYEBROW, Prose } from '@ccrc/ui';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -139,8 +139,8 @@ function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
   return (
     <div className="code-block">
       <div className="code-block-bar">
-        <span className="code-block-lang">{label}</span>
-        <button type="button" className="code-block-copy" onClick={onCopy}
+        <span className={`code-block-lang ${EYEBROW}`}>{label}</span>
+        <button type="button" className={`code-block-copy ${EYEBROW}`} onClick={onCopy}
                 aria-label="Copy code" data-copied={copied || undefined}>
           <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
         </button>

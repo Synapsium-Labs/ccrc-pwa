@@ -35,6 +35,19 @@
 // rules can share declarations and mean different things, and the registry is
 // where that gets argued once instead of rediscovered every wave. What it
 // refuses is the silent third copy.
+// THIS WAVE'S MEASUREMENTS, since both halves changed:
+//
+//   | mutation                                            | result     |
+//   |-----------------------------------------------------|------------|
+//   | a `@ccrc/ui` sheet dropped from the walk            | 1 red      |
+//   | a fifth eyebrow planted in @ccrc/ui                 | 1 red (*)  |
+//   | a fifth eyebrow planted in the app                  | 1 red      |
+//   | the `.mail-strip + .task-strip` entry deleted       | 1 red      |
+//
+// (*) by the SIGNATURE half, not by clustering — a single new copy has no
+// partner to pair with, which is exactly what that half exists for, and it
+// is how this table was found to be worth running at all: the clustering
+// alone stayed green.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -46,15 +59,44 @@ import {
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
 
-/** The app's own stylesheets. `@ccrc/ui`'s are deliberately out of scope: a
- *  duplicate THERE is a duplicate inside one package, which its own reviews
- *  see, and the drift this guard exists for is the app re-inventing what the
- *  design system already has. */
+/** BOTH PACKAGES' stylesheets. `@ccrc/ui`'s were deliberately out of scope
+ *  until this wave, on the argument that a duplicate THERE is a duplicate
+ *  inside one package, which its own reviews see.
+ *
+ *  THAT ARGUMENT IS FALSIFIED, by the same measurement that falsified it for
+ *  the markup census one file over. The EYEBROW — mono, 2xs, medium,
+ *  uppercase, tracked out — was declared SEVEN times: three app rules, three
+ *  `@ccrc/ui` rules and once inline in `sheet.tsx`'s own class string. Four
+ *  of the seven were invisible here, because two of them are in this package
+ *  and the pairs they would have clustered with were too. Nobody's review
+ *  caught them in six waves of this branch; a census reading one package
+ *  could not.
+ *
+ *  The two kinds of finding are both worth having and are NOT the same kind:
+ *  a cluster spanning the packages says the app re-invented the design
+ *  system, and a cluster inside `@ccrc/ui` says the design system has two
+ *  names for one shape. Both are registered below, each with its own
+ *  argument. */
+const uiRead = (...seg: string[]): string =>
+  readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', ...seg), 'utf8');
+
 const SHEETS: [string, string][] = [
   ['fleet.css', read('fleet', 'fleet.css')],
   ['chat.css', read('session', 'chat.css')],
   ['shell.css', read('styles', 'shell.css')],
   ['base.css', read('styles', 'base.css')],
+  ['ui/mail-card.css', uiRead('components', 'mail-card.css')],
+  ['ui/mail-strip.css', uiRead('components', 'mail-strip.css')],
+  ['ui/prose.css', uiRead('components', 'prose.css')],
+  ['ui/task-card.css', uiRead('components', 'task-card.css')],
+  ['ui/task-strip.css', uiRead('components', 'task-strip.css')],
+  ['ui/tool-card.css', uiRead('components', 'tool-card.css')],
+  ['ui/attach-button.css', uiRead('components', 'attach-button.css')],
+  ['ui/attach-tray.css', uiRead('components', 'attach-tray.css')],
+  ['ui/build-line.css', uiRead('components', 'build-line.css')],
+  ['ui/typed-label.css', uiRead('components', 'typed-label.css')],
+  ['ui/option-row.css', uiRead('primitives', 'option-row.css')],
+  ['ui/reset.css', uiRead('styles', 'reset.css')],
 ];
 
 interface Rule { sheet: string; sel: string; decls: string[] }
@@ -193,10 +235,51 @@ const REGISTERED: Record<string, string> = {
     'DIFFERENT THINGS. Mono plus the same four-declaration truncation as the '
     + 'pair above, on three slots of the session line. Siblings in one '
     + 'component, again.',
-  ['fleet.css .settings-nodes + fleet.css .settings-releases '
-    + '+ fleet.css .update-move-sheet .update-move-list']:
-    'DIFFERENT THINGS. Four declarations that spell "a list with no bullets": '
-    + 'grid, none, 0, 0. Three lists of three different things.',
+  // ── Both packages, since this wave. Seven of the eight below are inside
+  // `@ccrc/ui` or span it, and none was visible to this file before.
+  'chat.css .compaction + ui/tool-card.css .toolcard':
+    'GROUND, NOT CHROME. The same card shell, and it cannot move. Four declarations, identical: '
+    + 'surface, hairline, --r-md, overflow hidden. What makes it immovable is '
+    + 'the `background`: both rules are SELF-GROUNDED, which is what lets the '
+    + 'contrast gate measure their descendants through route 2b, and a ground '
+    + 'that moved into a utility string would take the route with it. Strip '
+    + 'the ground and three declarations are left, under this census\'s own '
+    + 'floor. The shape moves, the ground stays — so here the shape is the '
+    + 'ground, and it stays.',
+  'ui/mail-card.css .mail-card .mail-card-kind + ui/mail-strip.css .mail-strip .mail-strip-kind':
+    'GROUND, NOT CHROME. One label on two surfaces — the mail kind word, on the card and on the '
+    + 'strip row. It is the EYEBROW at `--weight-regular` rather than medium, '
+    + 'which is why it is not that constant; its tracking is now '
+    + '`--ls-caps-sm`, the token this wave named after finding the literal '
+    + 'seven times. Two rules remain because each is scoped to its own '
+    + 'self-grounded host (`.mail-card` / `.mail-strip`), which is how the '
+    + 'gate measures them; one shared rule would have no host at all.',
+  'ui/mail-strip.css .mail-strip .mail-strip-abandoned + ui/mail-strip.css .mail-strip .mail-strip-blocked':
+    'DIFFERENT THINGS. Two marks of one shape saying opposite things: `blocked` is a mail '
+    + 'the operator must act on, `abandoned` is one nobody will. They differ '
+    + 'only in ink today, and folding them would mean one rule plus a data '
+    + 'attribute — the same two states with one more name, and a gate entry '
+    + 'for each either way.',
+  'ui/mail-strip.css .mail-strip + ui/task-strip.css .task-strip':
+    'SHAPE ALREADY MIGRATED. The strip skin, and the ruling that leaves it twinned is already made '
+    + 'and already written down: `CollapsibleStrip`\'s own header says it '
+    + 'owns the SHAPE and not the SKIN, because hoisting the base rules into '
+    + 'one sheet rekeys every contrast-gate entry naming the old one '
+    + '(`<basename> <selector>`), and the skins are not in fact identical — '
+    + '`.mail-strip` sets `color` to make itself self-grounded for route 1 '
+    + 'and `.task-strip` does not. This cluster is that decision, measured.',
+  'ui/mail-strip.css .mail-strip .mail-strip-summary + ui/task-strip.css .task-summary':
+    'SHAPE ALREADY MIGRATED. The same ruling as the strip root above: the shape is '
+    + '`CollapsibleStrip`\'s `summary` slot, which both already go through. '
+    + 'What clusters is the skin each strip keeps on purpose.',
+  'ui/mail-strip.css .mail-strip-count + ui/task-strip.css .task-count':
+    'SHAPE ALREADY MIGRATED. The same ruling — `CollapsibleStrip`\'s `count` slot. Byte-identical '
+    + 'skins, in two sheets whose keys the gate holds.',
+  'ui/mail-strip.css .mail-strip-headline + ui/task-strip.css .task-headline':
+    'SHAPE ALREADY MIGRATED. The same ruling — `CollapsibleStrip`\'s `headline` slot.',
+  'ui/mail-strip.css .mail-strip-rows + ui/task-strip.css .task-rows':
+    'SHAPE ALREADY MIGRATED. The same ruling — the rows region `CollapsibleStrip` renders only while '
+    + 'open.',
 };
 
 describe('every duplicated shape in the app stylesheets is registered', () => {
@@ -221,10 +304,21 @@ describe('every duplicated shape in the app stylesheets is registered', () => {
   });
 
   it('gives every entry a reason that says which kind it is', () => {
-    // Two verdicts and no third: this is the next migration, or these rules
-    // mean different things. "Leave it for now" is not a verdict.
+    // FOUR VERDICTS AND NO FIFTH. Two are the original pair: this is the next
+    // migration, or these rules mean different things. "Leave it for now" is
+    // still not a verdict.
+    //
+    // The other two arrived with `@ccrc/ui`'s sheets, and neither could exist
+    // while this census read one package. `SHAPE ALREADY MIGRATED` is a
+    // cluster whose shape IS a component already — `CollapsibleStrip` owns
+    // the strip, and its own header argues why the three skins stay in three
+    // sheets. `GROUND, NOT CHROME` is a cluster held together by the thing
+    // that may not move: a `background` makes a rule self-grounded, which is
+    // how the contrast gate reaches its descendants, so hoisting it would
+    // take the measurement with it and leave three declarations behind.
+    const VERDICTS = ['NEXT', 'DIFFERENT THINGS', 'SHAPE ALREADY MIGRATED', 'GROUND, NOT CHROME'];
     for (const [k, why] of Object.entries(REGISTERED)) {
-      expect(why.startsWith('NEXT') || why.startsWith('DIFFERENT THINGS'), k).toBe(true);
+      expect(VERDICTS.some((v) => why.startsWith(v)), k).toBe(true);
       expect(why.length, k).toBeGreaterThan(60);
     }
   });
@@ -310,6 +404,17 @@ const MIGRATED: Record<string, string[]> = {
     'height: 6px',
     'background: var(--status-attention)',
   ],
+  // The eyebrow's four, as the three stylesheet copies spelled them. It is
+  // the signature a FIFTH copy would carry however it is written: the size,
+  // the caps tracking, the transform and the medium weight. Planting one in
+  // `@ccrc/ui` left the clustering above green — there is no partner left to
+  // pair with, which is this half's whole reason for existing.
+  'EYEBROW': [
+    'var(--fs-2xs)',
+    'var(--ls-caps)',
+    'text-transform: uppercase',
+    'var(--weight-medium)',
+  ],
   '<TextInput>': [
     'min-height: var(--tap-min)',
     'background: var(--bg-raised)',
@@ -323,6 +428,12 @@ const MIGRATED: Record<string, string[]> = {
  *  point, so a rule that looks like a migrated shape has to be named here with
  *  the reason it is not one. */
 const CARRIERS: Record<string, string> = {
+  'EYEBROW chat.css .dlg-header-chip':
+    'a PILL, not a label: it carries the eyebrow\'s four and then paints '
+    + 'itself — accent tint, accent ink, r-full, its own padding — and its '
+    + 'line-height is 1.4 where every real eyebrow is 1, because a pill needs '
+    + 'the room its padding implies. Wearing EYEBROW would be four utilities '
+    + 'to undo one of them',
   '<Button variant="quiet"> fleet.css .offline-banner':
     'a sticky status strip, not a control — no cursor, no press, --sp-8 tall '
     + 'rather than the tap floor',
@@ -331,7 +442,16 @@ const CARRIERS: Record<string, string> = {
 };
 
 describe('no app rule re-implements a shape that has already migrated', () => {
-  const appRules = rules();
+  // THE APP'S SHEETS ALONE, unlike the clustering above. The question here is
+  // "did the app re-invent a component?", and `@ccrc/ui`'s own rules are the
+  // wrong place to ask it: `option-row.css .opt` carries `<ListRow>`'s
+  // signature and `task-strip.css .task-line` carries `<BareRow>`'s, because
+  // each is a SIBLING primitive built from the same four declarations in the
+  // package that owns them both. Scanning them would mean registering two
+  // carriers whose only reason is "this is the design system", which teaches
+  // nobody anything and dilutes a list whose two real entries each name a
+  // rule that LOOKS like a control and is not one.
+  const appRules = rules().filter((r) => !r.sheet.startsWith('ui/'));
 
   it('has rules to scan — the signature check is not vacuously empty', () => {
     expect(appRules.length).toBeGreaterThanOrEqual(200);

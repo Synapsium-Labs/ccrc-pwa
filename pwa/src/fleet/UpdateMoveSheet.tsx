@@ -48,7 +48,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MoveRequestAnswer } from '../../../shared/api';
-import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, RESET_LIST, Sheet, toast } from '@ccrc/ui';
 import { ApiError, api, moveSkipText, updateErrorText } from '../lib/api';
 import { moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackHowText, type PlannedMove } from './movePlan';
 import './fleet.css';
@@ -247,7 +247,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
         {lines.length === 0 ? (
           <p className={QC_CONSEQUENCE}>{moveEmptyText(plan.intent)}</p>
         ) : (
-          <ol className="update-move-list" role="list" aria-label="Nodes this moves, in order">
+          <ol className={`update-move-list ${RESET_LIST}`} role="list" aria-label="Nodes this moves, in order">
             {plan.nodes.map((n, i) => <li key={n.nodeId} className="update-move-node">{lines[i]}</li>)}
           </ol>
         )}

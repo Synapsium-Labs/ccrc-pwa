@@ -2219,7 +2219,7 @@ button.proj-card-pool::before {
 .auth-block-sub {
   font: var(--weight-medium) var(--fs-2xs) / 1.25 var(--family-mono);
   color: var(--ink-tertiary);
-  letter-spacing: 0.04em;
+  letter-spacing: var(--ls-caps-sm);
   margin-top: 2px;
 }
 
@@ -2957,7 +2957,8 @@ button.proj-card-pool::before {
    --bg-page is what is behind the text. The badges and the notes block are
    self-grounded (each sets its own background AND colour) so the auditor
    measures them without a registration. */
-.settings-releases { list-style: none; margin: 0; padding: 0; display: grid; }
+/* settings-releases: the list reset moved to `RESET_LIST` (@ccrc/ui), worn on the
+   element itself — nothing is left for a rule to say. */
 .settings-release {
   display: grid;
   gap: var(--sp-2);
@@ -3014,7 +3015,8 @@ button.proj-card-pool::before {
    INHERITED_GROUNDS against --bg-page, the .settings-release-date argument.
    The desired cell reuses the release list's self-grounded channel badges
    (already measured); the move buttons carry no note of their own. */
-.settings-nodes { list-style: none; margin: 0; padding: 0; display: grid; }
+/* settings-nodes: the list reset moved to `RESET_LIST` (@ccrc/ui), worn on the
+   element itself — nothing is left for a rule to say. */
 .settings-node {
   display: grid;
   gap: var(--sp-1);
@@ -3140,11 +3142,7 @@ button.proj-card-pool::before {
   padding: var(--sp-3);
 }
 .update-move-sheet .update-move-list {
-  display: grid;
   gap: var(--sp-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 .update-move-sheet .update-move-node {
   min-width: 0;

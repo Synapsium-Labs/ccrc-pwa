@@ -306,17 +306,18 @@
     border-bottom: 1px solid var(--well-bar-hair);
   }
   .code-block-lang {
-    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-    letter-spacing: var(--ls-caps); text-transform: uppercase;
     color: var(--syn-comment);
   }
   .code-block-copy {
-    appearance: none; border: 1px solid transparent; border-radius: var(--r-sm);
-    background: transparent; color: var(--ink-on-well);
-    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-    letter-spacing: var(--ls-caps); text-transform: uppercase;
-    padding: var(--sp-1) var(--sp-2); min-height: var(--sp-8);
-    cursor: pointer; -webkit-tap-highlight-color: transparent;
+    appearance: none;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-on-well);
+    padding: var(--sp-1) var(--sp-2);
+    min-height: var(--sp-8);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
     transition: color var(--dur-fast) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
   }
   /* --accent-on-well, not --accent: this label sits on the code well's bar, which

@@ -17,6 +17,7 @@
 import { useState, type ReactNode } from 'react';
 import type { TaskNotification } from '../../../shared/api';
 import { FOCUS_RING } from '../lib/focus';
+import { EYEBROW } from '../lib/text';
 import './task-card.css';
 
 /** `completed` and `failed` are the two the harness writes today, and an
@@ -44,7 +45,7 @@ export function TaskCard({ notification }: { notification: TaskNotification }): 
             same refusal `runLabel` makes about a mail with no run. */}
         <span className="task-card-summary">{summary ?? 'background task'}</span>
         {status !== null && (
-          <span className={`task-card-status ${statusTone(status)}`.trim()}>{status}</span>
+          <span className={`task-card-status ${EYEBROW} ${statusTone(status)}`.trim()}>{status}</span>
         )}
       </p>
       {fields.length > 0 && (
@@ -64,7 +65,7 @@ export function TaskCard({ notification }: { notification: TaskNotification }): 
             <dl className="task-card-fields">
               {fields.map((f, i) => (
                 <div className="task-card-field" key={`${i}-${f.name}`}>
-                  <dt>{f.name}</dt>
+                  <dt className={EYEBROW}>{f.name}</dt>
                   <dd>{f.value}</dd>
                 </div>
               ))}

@@ -61,7 +61,7 @@
     flex: none;
     font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: var(--ls-caps-sm);
     color: var(--ink-tertiary);
   }
   .mail-card .mail-card-subject {
@@ -78,10 +78,6 @@
   /* PATHS, never payloads — and never links: nothing on this card fetches
      anything, so nothing on it may look tappable. */
   .mail-card .mail-card-artifacts {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
     gap: var(--sp-1);
   }
   .mail-card .mail-card-artifact {

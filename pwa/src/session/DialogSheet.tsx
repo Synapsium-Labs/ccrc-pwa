@@ -107,7 +107,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk } from '../../../shared/api';
-import { OptionRow, Sheet, Well, toast } from '@ccrc/ui';
+import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
@@ -428,7 +428,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
           the raw view shows the whole question exactly as the terminal does. */}
       <button
         type="button"
-        className="dlg-details-toggle"
+        className={`dlg-details-toggle ${EYEBROW}`}
         onClick={() => setDetails((d) => !d)}
         aria-expanded={details}
       >

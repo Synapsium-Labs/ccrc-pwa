@@ -40,9 +40,6 @@
   }
   .task-card-status {
     flex: none;
-    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
     color: var(--ink-tertiary);
     border: 1px solid var(--edge-subtle);
     border-radius: var(--r-full);
@@ -73,9 +70,6 @@
   }
   .task-card-field { display: grid; gap: 2px; min-width: 0; }
   .task-card-field dt {
-    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
     color: var(--ink-tertiary);
   }
   .task-card-field dd {

@@ -87,9 +87,6 @@
     gap: var(--sp-2);
   }
   .tool-eyebrow {
-    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
     color: var(--ink-tertiary);
   }
   .tool-meta {
@@ -192,9 +189,6 @@
   .tool-ask-outlabel {
     flex: 1;
     min-width: 0;
-    font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-    letter-spacing: var(--ls-caps);
-    text-transform: uppercase;
     color: var(--ink-tertiary);
   }
   .tool-ask-outrow[aria-expanded='true'] .tool-chev {

@@ -158,7 +158,7 @@ function controls(): Map<string, number[]> {
           const name = a.name.getText();
           const init = a.initializer;
           const lit = init !== undefined && ts.isStringLiteral(init) ? init.text : null;
-          if (name === 'className') cls = lit ?? (init === undefined ? '(none)' : '(computed)');
+          if (name === 'className') cls = lit ?? staticHead(init) ?? (init === undefined ? '(none)' : '(computed)');
           if (name === 'role') role = lit;
           if (name === 'type') type = lit;
           if (name === 'onClick') onClick = true;
@@ -350,6 +350,26 @@ const OVERLAYS: Record<string, string> = {
  *  the token there would fight the line-box arithmetic instead of expressing
  *  it. Both say so in their own entries. */
 const FLOOR_BY_VALUE = ['fab', 'composer-input'];
+
+/** A template literal's STATIC HEAD — the hook class a call site spells
+ *  before it interpolates a shared constant: `` `dlg-details-toggle
+ *  ${EYEBROW}` `` keys as `dlg-details-toggle`.
+ *
+ *  WHY IT IS NOT `(computed)`. The chrome that moved into `EYEBROW` left the
+ *  hook class exactly where it was, and the rule this census asks about is
+ *  still keyed on that class in the stylesheet. Read as computed, five
+ *  controls would have had to cite a rule that is right there in the
+ *  key — and the entries that really are computed (a `cn()` call, a ternary)
+ *  would have been joined by five that are not, which is how a "cite the
+ *  rule" requirement stops meaning anything. A leading literal is as static
+ *  as a whole literal; what follows it is not this census's question. */
+function staticHead(init: ts.JsxAttributeValue | undefined): string | null {
+  if (init === undefined || !ts.isJsxExpression(init)) return null;
+  const e = init.expression;
+  if (e === undefined || !ts.isTemplateExpression(e)) return null;
+  const head = e.head.text.trim();
+  return head === '' ? null : head;
+}
 
 /** The class half of a key — past the file and past the `<tag>`. */
 const classOfKey = (key: string): string => key.slice(key.indexOf('> ') + 2);

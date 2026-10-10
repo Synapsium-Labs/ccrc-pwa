@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { FOCUS_RING } from '../lib/focus';
+import { EYEBROW } from '../lib/text';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { ChatEvent } from '../../../shared/api';
 // NOT framer-motion's `useReducedMotion`, although it is right there in the
@@ -156,7 +157,7 @@ function AskOutcome({ result }: { result: ToolResultEvent }): ReactNode {
         aria-expanded={expanded}
         onClick={() => setExpanded((e) => !e)}
       >
-        <span className="tool-ask-outlabel">no answer</span>
+        <span className={`tool-ask-outlabel ${EYEBROW}`}>no answer</span>
         {result.isError && <span className="exit-badge">ERROR</span>}
         <span className="tool-chev" aria-hidden="true">
           ▸
@@ -367,7 +368,7 @@ function GenericToolCard({
             transition={reduced ? { duration: 0 } : { duration: 0.24, ease: [0.2, 0, 0, 1] }}
           >
             <div className="tool-body">
-              <p className="tool-eyebrow">input</p>
+              <p className={`tool-eyebrow ${EYEBROW}`}>input</p>
               <Well>{use.input}</Well>
               {/* One cue PER WELL — the input and the result are cut against
                   two different caps (TOOL_INPUT_MAX / TOOL_RESULT_MAX) and a
@@ -375,7 +376,7 @@ function GenericToolCard({
               <TruncationCue bytes={use.truncatedBytes} />
               {result !== undefined && (
                 <>
-                  <p className="tool-eyebrow">result</p>
+                  <p className={`tool-eyebrow ${EYEBROW}`}>result</p>
                   <Well>{result.text === '' ? '(no output)' : result.text}</Well>
                   <TruncationCue bytes={result.truncatedBytes} />
                 </>
