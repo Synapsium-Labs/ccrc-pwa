@@ -2109,7 +2109,8 @@ closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave7-prefligh
 
 Where wave 7's code and its draft rulings narrowed or spelled out the rulings above (R65, R66, R67, R68, R69, R70,
 R71 and R72), they now read as follows. This note amends; it edits no earlier text. It names each departure by slug
-and carries no number: the coordinator assigns this wave's numbers. The spec text every committed comment of this
+and carries no number: the coordinator assigns this wave's numbers; the wave 7 plan's `## Deviations found` defines
+them. The spec text every committed comment of this
 wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5.6, §7 and §8.
 
 **R66 (population, record, order).**
@@ -2120,10 +2121,30 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   vocabulary had no word for, so it answers ws-reap's and ws-expire's existing `in-progress`, retryable and unjournaled.
 - `witness-without-leaf-collectable-at-the-audit`: a witness whose leaf is proven absent, with no record and no slot
   of the id, is `collectable` at the audit under a token of its own (`mode=collect-absent`), so the verb has a consent
-  to spend on the drop that "no orphaned slot" allows.
+  to spend on the drop that "no orphaned slot" allows, once the physical `~/.cc-tmp` is on the device the witness
+  carries (`collect-absence-needs-the-recorded-device`, below).
 - `witness-only-refuses-a-standing-slot`: a witnessed id whose leaf is absent is refused `quarantine-kept`, terminal,
   while any of its slots stands with no record naming it, and its witness stays; this closes the orphaned-slot shape
-  for a record lost out of band.
+  for a record lost out of band, in the collector's own arms only (`fresh-collect-refuses-beside-a-standing-slot` and
+  `tail-drop-ignores-a-recordless-slot`, below).
+- `fresh-collect-refuses-beside-a-standing-slot`: the fresh present-leaf arm asks the id's slots after the registry
+  rung and refuses `quarantine-kept`, terminal and journaled `refused`, while any slot of the id stands with no record
+  naming it; a slot listing that fails is unmeasured `quarantine`, a nested id's slot is not counted, and the witness
+  stays. The resume never asks, because a record names its own slot there.
+- `collect-absence-needs-the-recorded-device`: before either of the collector's arms believes an absence, the resume's
+  `removed` phase and the witness-only arm's absent leaf, it compares the device of the physical `~/.cc-tmp` with the
+  `dev=` the record or the witness carries; a mismatch, a device that cannot be read, or a `~/.cc-tmp` that cannot be
+  resolved answers unmeasured `device`, retried and unjournaled, and nothing is dropped. An empty mount point is thus
+  never read as the leaf's absence; the `moved` and `unmoved` phases never ask the device.
+- `tail-drop-believes-an-absent-leaf`: a stated residual, carried to wave 9's pre-flight list. The reclaim tail's own
+  drop of a witness whose leaf is absent is unchanged and asks no device. Beside it, two more: the device test cannot
+  tell an empty bind-mount point from the leaf's absence when the bind source and the mount point share a file system
+  (`device-test-cannot-see-a-same-device-bind-mount`), and a PERMANENT change of the physical `~/.cc-tmp`'s device
+  holds every witness without a leaf and every `removed` record at unmeasured `device` on every pass, with no terminal
+  word and no journal row (`permanent-device-change-holds-every-absence`), fail-closed and never self-healing, so a lane
+  must not read a standing `device` answer as transient.
+- `tail-drop-ignores-a-recordless-slot`: a stated residual, carried to wave 9's pre-flight list. The reclaim tail's
+  witness drop (`_ws_tmproot_remove`) still drops the witness of an id whose recordless slot stands.
 - `verb-population-refuses-linked-tmproots`: the verb refuses a `tmproots/` that is itself a link as
   `probe-unmeasured`, before taking any lock, as the audit does, so neither takes a lock for a name it cannot place in
   the population.
@@ -2132,14 +2153,27 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   lock), never `not-witnessed`, whose sentence says ccrc never handed the id out.
 - `record-written-from-a-fresh-witness-read`: the writer cannot bind its witness fields to an id, so the verb reads
   the id's witness directly before the record write, and the record's read-back compares it with what the consent bound.
-- `spawn-at-consented-stops-at-the-record`: a recycled spawn between the consent and the record now stops the verb at
-  that read-back as `probe-unmeasured`, before anything moves, where it used to be `registered` after the move; both
-  are retryable and the earlier stop is safer. The race suite's report called it `consented-stops-at-the-witness-re-read`.
-- `crash-at-moved-after-a-spawn-keeps-the-leaf-in-its-slot`: a stated residual. A recycled spawn can adopt the leaf
-  between the record and the move; if ccd is killed between the move and the re-proof, the next audit reads the phase
-  `moved` and refuses `registered` with no token, so the live child's adopted scratch stays in the slot for the
-  child's life. Nothing durable is lost, and once the child's row is gone the record resumes and the leaf is collected
-  with no idle floor.
+- `spawn-at-consented-stops-at-the-record`: a recycled spawn between the consent and the record that changes the
+  witness now stops the verb at that read-back as `probe-unmeasured`, before anything moves, where it used to be
+  `registered` after the move; both are retryable and the earlier stop is safer. A same-run recycled child, or one whose
+  witness write failed, passes the read-back, so the sentence is false for it and it reaches the move
+  (`crash-at-moved-residual-widened`). The race suite's report called it `consented-stops-at-the-witness-re-read`.
+- `crash-at-moved-after-a-spawn-keeps-the-leaf-in-its-slot`: a stated residual, widened as
+  `crash-at-moved-residual-widened` in three ways. A recycled spawn can adopt the leaf between the record and the move.
+  (i) The kill window runs from the move to the putback's move-back rename, not just to the re-proof. (ii) A same-run
+  recycled child, or one whose witness write failed, passes the record's read-back. (iii) Before the adopting child's
+  `mkdir -p` runs again the next audit reads the phase `moved` and answers `registered` with no token; after it, the
+  audit answers TERMINAL `quarantine-kept`, journaled `refused` on every pass for the child's life, and it clears by
+  itself once the path is free. The retaken-path arm stays above the registry (R-e and R66: never silent). The live
+  child's adopted scratch stays in the slot for the child's life, nothing durable is lost, and once the child's row is
+  gone and the path is free the record resumes and the leaf is collected with no idle floor.
+- `quarantine-kept-sentence-true-in-every-state`: the `quarantine-kept` lifecycle sentence claims no move by ccrc and no
+  "exactly as they are", names a quarantine record or slot it cannot read, prove or clear and the original path taken again among its causes,
+  says it keeps "what still stands of it and any record of it" (some `failed quarantine-kept` arms come after the leaf
+  was removed or the slot rmdir'd), and says "nothing further was removed", so it is true after a forged record, a
+  crash plus a fault, an unwound slot and a retaken path alike.
+- `registered-sentence-names-residue`: the `registered` sentence says a workspace with this id, or what one left
+  behind, still stands in the registry; the plan had prescribed the old text, so this departs from it.
 - `refusal-detail-one-string`: the verb's refusal prints the same cut detail it journals, so the document and the
   journal row never disagree.
 - `leaf-why-cut-at-the-sink`: the removal's reason is handed raw to its sinks, which cut it, where an earlier cut at
@@ -2175,6 +2209,17 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
 - `accepted-on-physical-arm-unreachable`: the accepted-pair record on the physical-spelling arm cannot be reached
   through the question, so its deletion has no red; the line stays so the list is complete if the arm ever becomes
   reachable.
+- `quarantine-made-without-setgid`: R67 step 3's "plain `mkdir -m 0700`" gains `chmod g-s` on the directory that call
+  made, because on a setgid `~/.cc-tmp` a bare `mkdir` is born 2700 and the mode check refuses it for ever; a quarantine
+  that already stands at 2700 stays unmeasured and is the operator's to fix, and a `mkdir` lost to another maker is
+  never chmod-ed.
+- `audit-asks-the-quarantine-question`: the fresh and the resume audit ask a read-only check of the quarantine (a real
+  directory, not a link, of this uid, mode exactly 0700, or proven absent) and make and write nothing; the verb alone
+  asks the maker. Anything else answers unmeasured `quarantine`, exit 1, so a bad quarantine no longer licenses a move
+  that the verb would refuse on every pass.
+- `alias-refusal-ends-at-the-putback`: a stated residual, carried to the path-identity programme. The alias refuses an
+  outside back-link that a recycled admin name carries only while the leaf is in its slot; once the putback restores the
+  leaf, the pre-existing un-aliased rule decides, as it did before this wave, and the wave adds no deletion class.
 - `real-holder-double-forked`: the in-use probe never counts a child of ccd's own process, so the only real-process
   pin double-forks its holder; the verb must stay a ccd process of its own, never run inside a long-lived session's
   process.
@@ -2188,9 +2233,16 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   30 s for the walk, 10 s for the in-use probe and 30 s for the checkout scan make 70 s, plus the row pass.
 - `g9-kill-grace-residual`: each bounded probe adds its TERM-to-KILL grace, so the worst case is about 79 s, and 94 s
   at the widest grace, against the 90 s row; a runner that kills the audit gets no document, which fails closed.
-- `malformed-floor-knob-is-unmeasured`: a non-empty floor knob that is not a whole number answers unmeasured, naming
-  the knob, and the document prints no floor (`floorS` null) and no instant; a whole number of 10 or more digits
-  clamps to 999999999. A raise asked for unreadably is never folded to the 24 hour minimum.
+- `malformed-floor-knob-is-unmeasured`: on the FRESH rungs a non-empty floor knob that is not a whole number answers
+  unmeasured, naming the knob, and the document prints no floor (`floorS` null) and no instant; a resume asks no floor,
+  prints `floorS: null` and decides nothing from it. A whole number of ten or more significant digits clamps to
+  999999999. A raise asked for unreadably is never folded to the 24 hour minimum.
+- `floor-knob-reads-its-value-before-the-clamp`: the knob's leading zeros are stripped first and an all-zero knob reads
+  0; the clamp is asked of the length of what is left, and only then is the value compared, so `0000000001` is the
+  86400 minimum and arithmetic never sees more than nine digits.
+- `audit-asks-owner-write`: the fresh audit answers unmeasured `mode` for a leaf whose own mode lacks owner write, or
+  whose mode cannot be read, so no move is attempted and no `failed` row is journaled per pass; the leaf stays listed
+  and the collector never changes a leaf's mode, because the token binds it.
 - `resume-token-binds-checkouts`: the resume token also binds the record's `checkouts=` list, which the removal is
   handed as the checkouts it accepts, so a record whose list changed is another consent.
 - `registry-direct-lookups-measured`: the collector's `.child` and `.uuid` lookups are measured by the absence proof,
@@ -2225,6 +2277,12 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
 - `rung8-reason-cut`: rung 8's no-record reason names an admin entry whose name a session chose, so both arms cut it
   through `_ws_leaf_why_line` before it reaches the journal, and the reason for an entry that names the tree leads with
   its conclusion ("git's worktree list omitted a record that exists"), so the cut keeps it.
+- `rung8-empty-gitdir-is-unreadable`: an admin entry whose `gitdir` names no path on its first line, empty or blank, is
+  unreadable too, on the standing arm and the vanished arm alike, so the vanished arm mints no token over a record never
+  read; `ws-expire`'s ladder runs the same matcher and answers unmeasured, never `no-worktree-record`.
+- `rk-stops-before-the-branch-not-before-any-delete`: R-k's stop for an all-zero tip is before the branch's
+  compare-and-swap, not before every delete; a resume whose tree is already gone has by then deleted each nested
+  checkout's branch, after an attic pin, and the child's own vanished worktree record, as the base did.
 - `rk-tip-case-removes-the-tree`: the red-first case for an all-zero tombstone tip removes the tree first, because with
   the tree standing the branch-holder check stops the tail before the compare-and-swap and the fixture would pin nothing.
 - `generation-read-under-the-compaction-lock`: X1's generation read takes the row's compaction lock, as every other
@@ -2268,6 +2326,9 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   behaviour.
 
 **Prose and the wave-6 plan.**
+- `nul-back-link-prose-corrected`: the sentences on a NUL in an admin directory's back-link say what is measured: the
+  tree is refused only when the `.git` path holds no newline, accepted when the NUL sits at that newline's offset, and
+  unmeasured otherwise; the corner and its missing pins go to the path-identity programme.
 - `wave6-plan-text-corrected-by-deviation-entry`, which Task 9's report calls `wave6-plan-prose-scoped`: one
   departure under two names, so no number is spent twice. The merged wave-6 plan is not edited, and the three
   sentences review 346 found too wide are corrected in a deviation entry of this wave's plan and in the committed ccd
