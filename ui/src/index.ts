@@ -29,6 +29,7 @@ export { ListRow, LIST_ROW, type ListRowProps } from './primitives/list-row';
 export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/cover-screen';
 export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
 export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
+export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
 // Two constants with no component of their own: each is a handful of
 // utilities that two or three app rules spelled identically, and wrapping
 // either in a `<span>` would add an element nobody asked for.

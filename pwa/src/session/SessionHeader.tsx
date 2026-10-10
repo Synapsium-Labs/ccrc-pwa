@@ -14,7 +14,9 @@ import {
   substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
-import { BackButton, Chip, ListRow, Sheet, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
+import {
+  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, useNow,
+} from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -329,22 +331,12 @@ export function SessionHeader({
           )}
         </div>
       </div>
-      <button
-        type="button"
-        className="keycap keycap--term"
-        aria-label="Terminal"
-        onClick={onOpenTerminal}
-      >
+      <Keycap className="keycap--term" aria-label="Terminal" onClick={onOpenTerminal}>
         <span aria-hidden="true">&gt;_</span>
-      </button>
-      <button
-        type="button"
-        className="keycap keycap--more"
-        aria-label="More"
-        onClick={() => setMenuOpen(true)}
-      >
+      </Keycap>
+      <Keycap className="keycap--more" aria-label="More" onClick={() => setMenuOpen(true)}>
         <span aria-hidden="true">⋯</span>
-      </button>
+      </Keycap>
       {/* Top right, to the right of the ···. `esc` keeps the OUTER edge because
           it is the interrupt and its position is muscle memory; on a fine
           pointer esc is absent and this becomes rightmost naturally. */}
@@ -352,15 +344,9 @@ export function SessionHeader({
         <PrKeycap pr={session.pr} onOpen={() => setPrOpen(true)} />
       )}
       {!finePointer && (
-        <button
-          type="button"
-          className="keycap keycap--esc"
-          aria-label="Stop"
-          disabled={!busy}
-          onClick={onInterrupt}
-        >
+        <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={onInterrupt}>
           esc
-        </button>
+        </Keycap>
       )}
 
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>

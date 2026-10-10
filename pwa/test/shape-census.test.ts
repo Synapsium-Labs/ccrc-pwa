@@ -40,7 +40,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   ATTENTION_DOT, BARE_ROW, CONTROL_ROW, CONTROL_ROW_NOTE, COUNT_BADGE, COVER_SCREEN,
-  LIST_ROW, MONO_PATH, TEXT_INPUT, TEXT_INPUT_INLINE, buttonVariants,
+  KEYCAP, LIST_ROW, MONO_PATH, TEXT_INPUT, TEXT_INPUT_INLINE, buttonVariants,
 } from '@ccrc/ui';
 
 const read = (...seg: string[]): string =>
@@ -279,6 +279,14 @@ const MIGRATED: Record<string, string[]> = {
     'cursor: pointer',
     'text-align: left',
   ],
+  // Keycap's signature is the one declaration no other shape has: a bottom
+  // border twice the width of the other three. That asymmetry IS the keycap.
+  '<Keycap>': [
+    'border-bottom-width: 2px',
+    'border-radius: var(--r-sm)',
+    'place-items: center',
+    'letter-spacing: var(--ls-caps)',
+  ],
   '<CountBadge>': [
     'background: var(--status-attention-tint)',
     'color: var(--status-attention-text)',
@@ -377,6 +385,14 @@ describe('no app rule re-implements a shape that has already migrated', () => {
     for (const u of ["before:content-['']", 'before:size-[6px]', 'before:bg-status-attention']) {
       expect(ATTENTION_DOT, u).toContain(u);
     }
+    for (const u of ['border-b-2', 'rounded-sm', 'min-w-tap', 'min-h-tap', 'tracking-caps',
+      'enabled:active:translate-y-px']) {
+      expect(KEYCAP, u).toContain(u);
+    }
+    // And it supplies NO ground: both are descendant rules in the app's own
+    // sheets, one of them a `color-mix` neither half of the gate could follow
+    // into a variant.
+    expect(KEYCAP).not.toMatch(/\bbg-/);
   });
 
   it('names no rule carrying a migrated signature that this registry has not seen', () => {

@@ -17,7 +17,7 @@ import type { ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { Button, Sheet } from '@ccrc/ui';
+import { Button, Keycap, Sheet } from '@ccrc/ui';
 import { api, ApiError } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
@@ -1232,16 +1232,16 @@ export function TerminalDrawer({
               only door touch has to the console history. */}
           <div className="term-keys-seq">
             {QUICK_KEYS.map((k) => (
-              <button
+              <Keycap
                 key={k.label}
-                type="button"
-                className="keycap"
+                /* No modifier and no hook class: `KEYCAP` carries `keycap`,
+                   and `.term-keys .keycap` is what skins it. */
                 aria-label={k.label}
                 onPointerDown={(e) => e.preventDefault()} // keep focus in the terminal
                 onClick={() => typed(k.seq)}
               >
                 <span aria-hidden="true">{k.legend}</span>
-              </button>
+              </Keycap>
             ))}
           </div>
           {/* A phone has no wheel, and MEASURED against the real Terminal, a
@@ -1256,9 +1256,8 @@ export function TerminalDrawer({
               than a glyph for the same reason: every other legend here IS the
               key it transmits, and `⇞` would promise a PageUp this button
               never sends. */}
-          <button
-            type="button"
-            className="keycap keycap--act"
+          <Keycap
+            className="keycap--act"
             aria-label={atLive ? 'Scroll back' : 'Back to live'}
             /* A real toggle, not two buttons: one key in, the same key out.
                `aria-pressed` is what carries the engaged state to AT and,
@@ -1280,7 +1279,7 @@ export function TerminalDrawer({
                 names what it sends: from live it offers `hist`, and from the
                 history it offers the way back. */}
             <span aria-hidden="true">{atLive ? 'hist' : 'live'}</span>
-          </button>
+          </Keycap>
         </div>
       </div>
     </Sheet>

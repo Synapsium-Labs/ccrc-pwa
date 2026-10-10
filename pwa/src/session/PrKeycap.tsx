@@ -9,6 +9,7 @@
 // A tap does exactly one thing in every state: open the sheet. No state of the
 // cap performs an action, so a misread badge can never cost anything.
 import type { ReactNode } from 'react';
+import { Keycap } from '@ccrc/ui';
 import type { PrChecks, PrReason, PrState } from '../../../shared/api';
 import { UNCHECKED_PR } from '../../../shared/api';
 import { UNSUPPORTED_VERB_TEXT } from '../lib/api';
@@ -236,9 +237,8 @@ export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => voi
   const state = pr ?? UNCHECKED_PR;
   const glyph = state.checks === null ? null : CHECK_GLYPH[state.checks];
   return (
-    <button
-      type="button"
-      className="keycap keycap--pr"
+    <Keycap
+      className="keycap--pr"
       data-phase={state.phase}
       data-checks={state.checks ?? undefined}
       aria-label={prSentence(state)}
@@ -247,6 +247,6 @@ export function PrKeycap({ pr, onOpen }: { pr: PrState | null; onOpen: () => voi
       <span className="pr-dot" aria-hidden="true" />
       <span className="pr-legend">{prLegend(state)}</span>
       {glyph !== null && <span className="pr-glyph" aria-hidden="true">{glyph}</span>}
-    </button>
+    </Keycap>
   );
 }

@@ -172,24 +172,15 @@ button.metachip:active {
    edge, mono legends, 44px targets; pressing compresses like a key. `esc`
    is enabled only while the session is busy — otherwise it sits greyed,
    a dead key on the board. */
+/* `<Keycap>` carries the ten declarations this rule shared with
+   `.term-keys .keycap` below — the grid, the mono caps, the heavier bottom
+   border, the `--r-sm` corner and the 1px press. What stays is the GROUND:
+   chrome fill, strong hairline, primary ink, and the stand-down. */
 .chat-head .keycap {
   flex: none;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
-  display: grid;
-  place-items: center;
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
-  letter-spacing: var(--ls-caps);
   color: var(--ink-primary);
   background: var(--bg-raised);
-  border: 1px solid var(--edge-strong);
-  border-bottom-width: 2px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.chat-head .keycap:active:not(:disabled) {
-  transform: translateY(1px);
+  border-color: var(--edge-strong);
 }
 .chat-head .keycap:disabled {
   color: var(--ink-disabled);
@@ -1493,25 +1484,18 @@ button.metachip:active {
 .term-keys-seq::-webkit-scrollbar {
   display: none;
 }
+/* The ground only — see `.chat-head .keycap`. Every colour here is a
+   `color-mix` over `--ink-on-well`, which is exactly why it did not travel
+   into the component: `utility-pairs.test.ts` resolves a utility back to a
+   token through theme.css's `@theme` block, and an arbitrary
+   `bg-[color-mix(…)]` has no stem there to resolve. Moved, the pair would be
+   measured by neither half of the gate. */
 .term-keys .keycap {
   flex: 1 0 auto;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
-  display: grid;
-  place-items: center;
   padding: 0 var(--sp-2);
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
-  letter-spacing: var(--ls-caps);
   color: var(--ink-on-well);
   background: color-mix(in srgb, var(--ink-on-well) 9%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ink-on-well) 22%, transparent);
-  border-bottom-width: 2px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.term-keys .keycap:active {
-  transform: translateY(1px);
+  border-color: color-mix(in srgb, var(--ink-on-well) 22%, transparent);
 }
 
 /* The history door. Cut from the same ink as the keys deliberately: --accent
@@ -1558,8 +1542,6 @@ button.metachip:active {
   .jump-latest,
   .draft-cancel,
   .dlg-later,
-  .chat-head .keycap,
-  .term-keys .keycap,
   .pending-actions button,
   .opt {
     transition: none;

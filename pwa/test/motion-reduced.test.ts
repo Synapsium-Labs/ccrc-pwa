@@ -42,7 +42,7 @@
 // the distinction that let `.acct-fill` through, so the strictness is the
 // point rather than an awkwardness to work around.
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { stylesheets, PWA_ROOT } from '../design/audit.mjs';
 
@@ -130,9 +130,44 @@ const EXEMPT: Record<string, string> = {};
 describe('every moving rule honours prefers-reduced-motion', () => {
   it('found motion to check — the scan is not vacuously empty', () => {
     // Without this the suite passes by matching nothing, which is how a census
-    // guard dies. Measured 17 moving rules across both packages today.
+    // guard dies. Measured 17 moving rules across both packages when this was
+    // written; 14 today, and the THREE that left did not stop moving — they
+    // became components, where the preference rides as
+    // `motion-reduce:transition-none` on the element rather than as a rule in
+    // a sheet. A rule that moves out of a stylesheet leaves this census by
+    // construction, so the floor follows it down and the assertion below
+    // catches the other side.
     const total = all.reduce((n, s) => n + s.moving.length, 0);
-    expect(total).toBeGreaterThanOrEqual(15);
+    expect(total).toBeGreaterThanOrEqual(12);
+  });
+
+  it('and the components that took that motion honour the preference too', () => {
+    // THE OTHER HALF, and the one the floor above cannot see. Every press,
+    // glow and shimmer the design system carries as a utility must name
+    // `motion-reduce:` beside it, or a reader who asked for stillness gets the
+    // movement anyway — with no rule anywhere for the scan above to find.
+    const walk = (dir: string): string[] => {
+      const out: string[] = [];
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) out.push(...walk(full));
+        else if (e.name.endsWith('.tsx') && !e.name.endsWith('.stories.tsx')) out.push(full);
+      }
+      return out;
+    };
+    const uiSrc = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
+    const offenders: string[] = [];
+    let honoured = 0;
+    for (const file of walk(uiSrc)) {
+      const code = readFileSync(file, 'utf8');
+      const moves = /\b(transition-transform|transition-\[|animate-)/.test(code);
+      const honours = code.includes('motion-reduce:');
+      if (honours) honoured += 1;
+      if (moves && !honours) offenders.push(path.relative(uiSrc, file));
+    }
+    expect(offenders, 'a component moves without naming motion-reduce:').toEqual([]);
+    // Non-vacuous: the walk really found components that honour it.
+    expect(honoured).toBeGreaterThanOrEqual(6);
   });
 
   it('found the reduced-motion blocks too — both halves, or the check is one-sided', () => {
