@@ -32,6 +32,11 @@ import {
 } from '../../../shared/api';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Button, RESET_LIST, elapsedWords } from '@ccrc/ui';
+
+// Re-exported for `SettingsScreen`'s box-token card, which reads the same two
+// clocks this surface does. One import of the clock vocabulary per screen,
+// rather than two screens reaching separately into `@ccrc/ui` and `./updates`.
+export { elapsedWords };
 import {
   isManagedNode, rollbackBlockers, type MoveIntent, type RollbackBlocker,
 } from '../fleet/movePlan';

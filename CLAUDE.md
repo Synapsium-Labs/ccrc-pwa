@@ -68,8 +68,8 @@ real values: `deploy/reference-fleet.md` (gitignored).
   the same TMPDIR removes, once quiet, after a SIGKILL (`server/test/run-tmp.globalsetup.mjs`, #316). Second boundary: `ghContainedEnv()` plants
   a poisoned `gh` on PATH so a stray real `gh` (which carries a `gho_` repo-WRITE token) can't fire — containment is per-test, not structural.
 - **NEVER print secret file CONTENTS.** The box/mail token is one shared secret per box
-  (`~/.cc-secrets/ccrc-mail.token` on fleet host, `~/.ccrc/mail.token` on server), from one gitignored
-  `deploy/ccrc-mail.token`. Existence checks by `ls` only. The committed `.example` placeholder is refused at boot
+  (`~/.cc-secrets/ccrc-mail.token` on fleet host, `~/.ccrc/mail.token` on server), minted and rotated by
+  the server, never shipped by `deploy.sh`. Existence checks by `ls` only. The committed `.example` placeholder is refused at boot
   (`MailTokenPlaceholderUnedited`) — this repo is **public** (AGPL-3.0 since 2026-08-22: `LICENSE`, `CONTRIBUTING.md`,
   `SECURITY.md`): treat everything in it as public.
 - **`gh` has NO exec-whitelist entry, deliberately** — the host `gh` token has `repo` WRITE scope and there's no

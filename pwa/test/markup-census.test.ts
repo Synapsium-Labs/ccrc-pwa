@@ -341,6 +341,20 @@ const REGISTERED_LITERALS: Record<string, string> = {
  *  about the difference the signature cannot see. */
 const REGISTERED_LEAVES: Record<string, string> = {
   // No NEXT. Every leaf below is argued, not deferred.
+  'Button.settings-check[disabled,onClick,variant]':
+    'DIFFERENT THINGS, and this one arrived on a MERGE. Two sections\' primary '
+    + 'action — *Check now* on Updates and *Rotate now* on the box-token card — '
+    + 'each a ghost Button wearing `.settings-check`, the one app class that '
+    + 'stops it filling the section. The duplication IS the design system '
+    + 'working rather than drift to fold: both reach for the primitive and for '
+    + 'the same single-declaration override, and what differs is the whole of '
+    + 'what either does. A component taking a label and a handler as props '
+    + 'would be `Button` with two more names. '
+    + 'WORTH SAYING HOW IT GOT HERE: the box-token card landed on main writing '
+    + '`className="btn-ghost settings-check"` on a raw <button>, six lines from '
+    + 'its own sibling that uses the component — and this branch\'s two new '
+    + 'guards both named it the moment main was merged in. Fixing it to the '
+    + 'primitive is what created this leaf, which is the better problem.',
   'Button.sess-sheet-remove[disabled,onClick,title,variant]':
     'DIFFERENT THINGS, and the sheet only ever renders ONE of them: `Clean up '
     + 'workspace…` on an archived workspace, `Forget session…` on a dead '

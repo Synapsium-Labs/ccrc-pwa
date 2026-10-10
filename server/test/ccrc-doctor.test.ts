@@ -1496,8 +1496,16 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  where it answers. Measured the same way: deleting this `+ 1` reds the two
  *  pins that read the skip count directly, `counts BOTH lines in the summary`
  *  (`expected 5 to be 4`) and `prints a summary count LAST, and it adds up to
- *  the table` (`expected 41 to be 42`). */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 5;
+ *  the table` (`expected 41 to be 42`).
+ *
+ *  RAISED BY ONE AGAIN (box-token lifecycle Task B5): `box-token` SKIPs
+ *  `no-role` on every platform — `healthy()`'s ccrc.env records no CCRC_ROLE,
+ *  and the box holds neither the server's `mail.token`/`box-token.json` nor a
+ *  fleet agent's `agent.env`, so neither arm has a subject. Measured the same
+ *  way: with the check in the table and this `+ 1` absent, "every line is
+ *  exactly PASS|WARN|FAIL|SKIP" and "prints a summary count LAST" red, and so
+ *  does every `(N skipped)` pin that reads this constant. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 6;
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -13677,5 +13685,28 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
     expect(historyLines(r.stdout).find((l) => l.startsWith(prefix)), r.stdout).toBeDefined();
     expect(lineAfter(r.stdout, prefix)).toBe(`  remedy: ${own!.remedy}`);
     expect(r.stdout).not.toMatch(/undefined|NaN/);
+  });
+});
+
+// ── box-token, through `ccrc doctor` (box-token lifecycle Task B5) ────────
+// The check's states are `doctor-box-token.test.ts`'s; these two pin what only the real runner can: that the
+// check is in the table, that its SKIP is counted as a skip (exactly one SKIP line, rc 3), and that a
+// `CCRC_ROLE=server` box runs the server arm rather than the D-3111 "hosts no sessions" skip.
+describe('ccrc doctor: box-token', () => {
+  it('healthy() records no role and holds no token file: one SKIP no-role line, counted as a skip, rc 0', () => {
+    const r = runDoctor(healthy('ccrc-doctor-bt-norole-'));
+    const lines = r.stdout.split('\n').filter((l) => / box-token: /.test(l));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^SKIP box-token: no-role — /);
+    expect(r.stdout).not.toMatch(/^FAIL box-token: /m);
+    expect(r.code).toBe(0);
+  });
+
+  it('a CCRC_ROLE=server box with no mail.token runs the server arm: token-absent, reported as SKIP in wave 1', () => {
+    const home = healthy('ccrc-doctor-bt-server-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    const line = anyVerdictFor(runDoctor(home).stdout, 'box-token');
+    expect(line).toMatch(/^SKIP box-token: server: token-absent — .*; reported as SKIP until the FAIL and WARN arms ship$/);
+    expect(line).not.toMatch(/hosts no sessions/);
   });
 });

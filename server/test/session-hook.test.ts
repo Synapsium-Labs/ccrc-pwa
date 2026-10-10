@@ -8363,7 +8363,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   "the only survivor" among its `- Modify:` bullets — below its referent.
       //   Frozen, like the rest of that paragraph; the two spec anchors into the
       //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
-      'deploy/deploy.sh': 4,
+      // 4 -> 3 at box-token-lifecycle wave 2 B7 (`ship_secret` and its two calls left deploy.sh, ~20 lines above
+      //   `:629`): `plan:3330 deploy/deploy.sh:629` now holds a comment that names `install_atomic`, a token its
+      //   clause quotes, so the audit anchors it by coincidence. Still stale in fact, still frozen.
+      'deploy/deploy.sh': 3,
       // `ccd/ccrc` 5 -> 4, RE-MEASURED on the centralised-update-management
       // branch (Tasks 9-13, part B): `ccd/ccrc` grew 12,559 -> 12,851 lines
       // (+292, `wc -l`) and NEITHER corpus document changed (spec and plan
@@ -8687,7 +8690,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // shift under a frozen anchor, measured by `cite-remeasure.py` against
     // `origin/main` (`total stated 197  base 197  tree 202`); no other key
     // moved.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
+    // 202 -> 201 on the merge of `origin/main` at `562ef658` into the
+    // design-system wave: main's own `197 -> 196` moved ONE key in the other
+    // direction (`'deploy/deploy.sh'` 4 -> 3, argued beside the map), and the
+    // two deltas are disjoint — this branch's five are all in
+    // `single-definition.test.ts`, main's one is in `deploy/deploy.sh`. The
+    // headline is the SUM of the merged map, which is the point of it being a
+    // mechanism rather than a second number: 202 - 1.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8909,7 +8919,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // line in the cited file — see the note above this assertion.
         'server/test/single-definition.test.ts:32-37',
         'deploy/deploy.sh:560',
-        'deploy/deploy.sh:629',
+        // LEFT at box-token-lifecycle wave 2 B7 (removed `ship_secret` from deploy.sh): `deploy/deploy.sh:629` now holds
+        // a comment naming `install_atomic`, which its clause quotes. Coincidence, not repair; see D2849_INVISIBLE_SINCE_PR136.
         // ENTERS at review 179's fix round 1 (S6-R11): `ccd/ccrc:5217` fails again, see the census entry.
         // ENTERS again at the composition onto `0ffa07f3` (the note above this assertion).
         'ccd/ccrc:5217',
@@ -8965,7 +8976,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // STILL EMPTY at the composition onto origin/main `a742eb6a` (#214), S6-R11. N emptied it on its own growth and
     // C on its own; composed, the two shifts stack (`_exp_env_write`'s comment, M's `:5217`, is at `:5433`), and the
     // dump of the composed tree lists all five of D2849 in the set above. No D-number.
-    const D2849_INVISIBLE_SINCE_PR136: string[] = [];
+    // NON-EMPTY AGAIN at box-token-lifecycle wave 2 B7, by the mechanism above: B7 removed `ship_secret` and its two
+    // calls from deploy.sh, sliding a comment that names `install_atomic` under `:629`, so the audit anchors it by
+    // coincidence. Still stale in fact and frozen; the assertion checks the other four.
+    const D2849_INVISIBLE_SINCE_PR136: string[] = ['deploy/deploy.sh:629'];
     expect(D2849.filter((k) => set.includes(k)),
       'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)')
       .toEqual(D2849.filter((k) => !D2849_INVISIBLE_SINCE_PR136.includes(k)));
