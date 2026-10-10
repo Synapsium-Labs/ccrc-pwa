@@ -130,7 +130,7 @@ describe.skipIf(!LINUX)('then the order: the leaf proven gone, the EMPTY slot, t
     expect(fs.existsSync(path.join(quarantineOf(h), slots(h)[0]!, 'leaf')), 'what stands there, kept').toBe(true);
     expect(records(h)).toHaveLength(1);
     expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness stays').toBe(o.witness);
-  });
+  }, 60_000);
 
   it('a record that cannot be dropped: quarantine-kept — and the next pass finishes it from the record', () => {
     makeOrphan(h);
@@ -192,7 +192,7 @@ describe.skipIf(!LINUX)('compare-and-drop — the witness this collection acted 
     expect(fs.readFileSync(path.join(elsewhere, COL_ID), 'utf8'), 'the witness through the link, never dropped').toBe(o.witness);
     expect(fs.readdirSync(elsewhere), 'and nothing moved aside beside it').toEqual([COL_ID]);
     expect(records(h), 'the record, kept').toHaveLength(1);
-  });
+  }, 60_000);
 
   it.skipIf(ROOT)('a witness that cannot be moved aside keeps the record: quarantine-kept, the next pass finishes', () => {
     makeOrphan(h);
@@ -245,7 +245,7 @@ describe.skipIf(!LINUX)('the witness writer’s dead temp files — the exact sh
     expect(docOf(r.stdout)).toMatchObject({ collected: COL_ID, witness: 'dropped' });
     expect(fs.existsSync(path.join(elsewhere, OLD[0]!)), 'never reaped through the link').toBe(true);
     expect(String(eventsOf(h.home, 'collect').at(-1)!['detail'])).toContain('0 stale witness temp file(s) removed');
-  });
+  }, 60_000);
 
   it('none goes while the slug does not read free at that instant', () => {
     makeOrphan(h);

@@ -40,6 +40,27 @@ const slotLeaf = (): string => path.join(quarantineOf(h), slots(h)[0]!, 'leaf');
 /** The seam points a fresh collection passes up to and including the move. A case that ends at step 5 passes these
  *  and NO later point: never `proven` (step 6 never ran), and never the putback's `restoring` (no restore was tried). */
 const TO_THE_MOVE = ['locked', 'consented', 'recorded', 'slotted', 'moved'];
+const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** THE DETAIL A STEP-5 DOUBT LEAVES, as the document carries it: the verb moves the leaf back and reports
+ *  `<id> was moved back to <orig> and nothing was removed: <why>`, through ccd's ONE cut (`_ws_leaf_why_line`: its
+ *  own "—" read as "-", the first 300 bytes kept, the cut marked "…"). The whole line is compared, so no assertion
+ *  depends on how long the fixture HOME is: `<orig>` holds HOME once, and a reason naming a table under HOME holds
+ *  it again, so a hand-counted prefix of the cut detail reds on a longer TMPDIR (review of batch C, Important 1).
+ *  Every path here is ASCII, so a byte is a character. */
+const movedBackDetail = (why: string): string => {
+  const t = `${COL_ID} was moved back to ${origOf(h)} and nothing was removed: ${why}`.replace(/—/g, '-');
+  expect(t, 'the CONTROL: an ASCII line, so the cut counts characters as ccd counts bytes').toMatch(/^[\x20-\x7e]*$/);
+  return t.length > 300 ? `${t.slice(0, 300)}…` : t;
+};
+/** `_ws_collect_mounts_clear`, wrapped (this suite's `declare -f` seam pattern): every reason it sets is appended
+ *  UNCUT to `$HOME/mounts-why`, so a case reads which of (e)'s causes answered, whatever the cut kept. A file that
+ *  stays absent means (e) was never asked: a doubt before it (a /proc walk out of time at (c)) answered instead. */
+const MOUNTS_WHY = 'eval "_real_mounts_clear() $(declare -f _ws_collect_mounts_clear | tail -n +2)";'
+  + ' _ws_collect_mounts_clear() { _real_mounts_clear "$@"; local r=$?;'
+  + ' printf \'%s\\n\' "$_WS_MOUNTS_WHY" >> "$HOME/mounts-why"; return $r; };';
+/** The slot's PHYSICAL path, as a pattern (its name carries the clock and the pid). */
+const slotRe = (): string => `${esc(quarantineOf(h))}/slot\\.${esc(COL_ID)}\\.[0-9]+\\.[0-9]+`;
 
 describe.skipIf(!LINUX)('(a) and (b) — the id is registered again', () => {
   it('a child marker after the move: registered, moved back', () => {
@@ -165,7 +186,10 @@ describe.skipIf(!LINUX)('(d) — no registry row at, inside or through the leaf,
     const r = collectVerb(h, collectToken(h), { pre: `${ROWS_STUB} ${gapAt('moved', 'printf 2 > "$HOME/rows-now"')}` });
     expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
     // For the row rule's reason, not (c)'s: a /proc walk out of time answers this same word, moved back (see (e)).
-    expect(String(docOf(r.stdout)['detail'])).toContain(' and nothing was removed: stub: a row lies inside ');
+    // The stub logs every ask, so its LAST is step 5's own, of the pre-move spelling with nothing standing there; and
+    // the document carries the stub's reason, cut once (`movedBackDetail`), at any HOME length.
+    expect(linesOf(h, 'rows-asked').at(-1), 'step 5 asked the row rule').toBe(`${COL_ID}|${leafOf(h)}|absent`);
+    expect(docOf(r.stdout)['detail']).toBe(movedBackDetail(`stub: a row lies inside ${leafOf(h)}`));
     back(o);
   }, 60_000);
 
@@ -183,7 +207,7 @@ describe.skipIf(!LINUX)('(d) — no registry row at, inside or through the leaf,
     expect(doc['failed'], 'never the unmeasured answer').toBeUndefined();
     back(o);
     journaled('refused', 'containment-unproven');
-  });
+  }, 60_000);
 });
 
 describe.skipIf(!LINUX)('(e) — nothing mounted at or under the slot’s leaf, in the kernel’s own table', () => {
@@ -192,19 +216,25 @@ describe.skipIf(!LINUX)('(e) — nothing mounted at or under the slot’s leaf, 
 
   for (const sub of ['leaf/mnt', 'leaf']) {
     // FOR THE RIGHT REASON (review 369's C3): (c)'s real /proc walk runs before (e), and a walk that outruns its 10 s
-    // bound under load answers the same `failed probe-unmeasured`, moved back. So the detail must name the MOUNT. The
-    // timeout covers the case's three ccd calls (the orphan's witness write, the audit, the verb) and the four walks
-    // among them (the audit's one, the verb's re-run of it and step 5's two): 4 x 10 s of walk bound is 40 s, and 60 s
-    // leaves the shells their 20. So a slow walk reds on this assertion, naming itself, and never on the clock.
+    // bound under load answers the same `failed probe-unmeasured`, moved back. So (e) itself must have answered, with
+    // the MOUNT: its uncut reason is read from `MOUNTS_WHY`'s record, and the document must carry exactly that reason,
+    // cut once (`movedBackDetail`) — neither depends on the fixture HOME's length. The timeout covers the case's three
+    // ccd calls (the orphan's witness write, the audit, the verb) and the four walks among them (the audit's one, the
+    // verb's re-run of it and step 5's two): 4 x 10 s of walk bound is 40 s, and 60 s leaves the shells their 20. So
+    // a slow walk reds on these assertions, naming itself, and never on the clock.
     it(`a mount at <slot>/${sub}: moved back, then probe-unmeasured (ruling T6 OPEN8)`, () => {
       const o = makeOrphan(h);
       realMounts(h);
-      const r = collectVerb(h, collectToken(h), { pre: `${MOUNTS_SEAM} ${mountAt(sub)}` });
+      const r = collectVerb(h, collectToken(h), { pre: `${MOUNTS_SEAM} ${MOUNTS_WHY} ${mountAt(sub)}` });
       expect(r.code).toBe(1);
       const doc = docOf(r.stdout);
       expect(doc['failed']).toBe('probe-unmeasured');
-      expect(String(doc['detail']), 'refused for the mount, not for a walk that did not finish')
-        .toMatch(new RegExp(`^${COL_ID} was moved back to .+ and nothing was removed: something is mounted at /`));
+      const whys = linesOf(h, 'mounts-why');
+      expect(whys, 'refused by (e) itself, for the mount — never by a walk that did not finish').toEqual([
+        expect.stringMatching(new RegExp(
+          `^something is mounted at ${slotRe()}/${esc(sub)}, at or under ${slotRe()}/leaf — ccd never removes across a mount$`)),
+      ]);
+      expect(doc['detail'], 'and the document carries that reason').toBe(movedBackDetail(whys[0]!));
       back(o);
       journaled('failed', 'probe-unmeasured');
     }, 60_000);
@@ -241,31 +271,40 @@ describe.skipIf(!LINUX)('(e) — nothing mounted at or under the slot’s leaf, 
     expect(ask(`${dir}/leafy`), 'the CONTROL: a sibling is not under it').toBe('0');
   });
 
-  // These two answer the same word as a walk out of time too, so each must name its own table, as the mount cases do.
-  // The table's path leads the reason; the 300-byte cut can take what follows it.
+  // These two answer the same word as a walk out of time too, so each must be (e)'s own answer, naming its table, as
+  // the mount cases are. A table's reason STARTS with the table's path, under HOME, and in the cut line it follows the
+  // HOME-bearing `<orig>`: so the cause is read from `MOUNTS_WHY`'s uncut record, and the detail is compared whole.
   it('a table that cannot be read: probe-unmeasured, moved back', () => {
     const o = makeOrphan(h);
-    const r = collectVerb(h, collectToken(h), { pre: '_ws_collect_mountinfo() { printf \'%s\' "$HOME/no-such-table"; };' });
+    const r = collectVerb(h, collectToken(h),
+      { pre: `_ws_collect_mountinfo() { printf '%s' "$HOME/no-such-table"; }; ${MOUNTS_WHY}` });
     expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
-    expect(String(docOf(r.stdout)['detail'])).toContain(` and nothing was removed: ${path.join(h.home, 'no-such-table')}`);
+    const whys = linesOf(h, 'mounts-why');
+    expect(whys, '(e) answered: the table could not be read').toEqual([expect.stringMatching(new RegExp(
+      `^${esc(path.join(h.home, 'no-such-table'))} could not be read, so whether anything is mounted under ${slotRe()}/leaf was never asked$`))]);
+    expect(docOf(r.stdout)['detail'], 'and the document carries that reason').toBe(movedBackDetail(whys[0]!));
     back(o);
   }, 60_000);
 
   it('a table with no mount in it: probe-unmeasured, moved back', () => {
     const o = makeOrphan(h);
     realMounts(h);
-    const r = collectVerb(h, collectToken(h), { pre: `${MOUNTS_SEAM} ${gapAt('moved', ': > "$HOME/mountinfo"')}` });
+    const r = collectVerb(h, collectToken(h), { pre: `${MOUNTS_SEAM} ${MOUNTS_WHY} ${gapAt('moved', ': > "$HOME/mountinfo"')}` });
     expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
-    expect(String(docOf(r.stdout)['detail'])).toContain(` and nothing was removed: ${path.join(h.home, 'mountinfo')}`);
+    const whys = linesOf(h, 'mounts-why');
+    expect(whys, '(e) answered: the table listed no mount').toEqual([
+      `${path.join(h.home, 'mountinfo')} listed no mount at all, so the table was never read`,
+    ]);
+    expect(docOf(r.stdout)['detail'], 'and the document carries that reason').toBe(movedBackDetail(whys[0]!));
     back(o);
   }, 60_000);
 });
 
-describe.skipIf(!LINUX)('after the move, nothing is asked of the tree: never the idle floor, never the walk', () => {
+describe.skipIf(!LINUX)('after the move, nothing is asked of the tree: never the idle floor, never the idle walk', () => {
   // The move stamps the leaf's ctime, so a floor asked again after it would read the leaf as busy every time (spec
   // §5.10: step 5 is never the tree token or the idle floor). `_ws_collect_floor_s` is the floor's ONE test seam
   // (ruling G4); here it answers 0 until a seam at `moved` raises it to the production 86400. Every other fresh case
-  // lowers the floor for the whole run or stubs the walk, so a re-ask there reds nothing (review 369's C3).
+  // lowers the floor for the whole run or stubs the idle walk, so a re-ask there reds nothing (review 369's C3).
   const FLOOR_RISES = '_ws_collect_floor_s() { if [[ -e "$HOME/floor-up" ]]; then echo 86400; else echo 0; fi; };';
 
   it('the floor raised at the move is never asked again: collected', () => {
@@ -281,7 +320,7 @@ describe.skipIf(!LINUX)('after the move, nothing is asked of the tree: never the
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(docOf(r.stdout)).toMatchObject({ collected: COL_ID, resumed: false });
     expect(gaps(h)).toEqual([...TO_THE_MOVE, 'proven', 'removed', 'emptied', 'witnessed', 'dropped']);
-  });
+  }, 60_000);
 });
 
 describe.skipIf(!LINUX)('(f) — identity, asked LAST, directly before the removal', () => {

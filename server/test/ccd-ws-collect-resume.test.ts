@@ -89,8 +89,7 @@ describe.skipIf(!LINUX)('a run that died resumes FROM ITS RECORD', () => {
     const o = makeOrphan(h);
     expect(collectVerb(h, collectToken(h), { pre: crashAt('slotted') }).code).toBe(137);
     const slot = slotDir();
-    const stray = 'for s in "$HOME/.cc-tmp/.ccd-quarantine"/slot.*; do printf s > "$s/stray"; done';
-    const r = collectVerb(h, collectToken(h), { pre: gapAt('consented', stray) });
+    const r = collectVerb(h, collectToken(h), { pre: gapAt('consented', `printf s > '${slot}/stray'`) });
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const doc = docOf(r.stdout);
     expect(doc['failed']).toBe('quarantine-kept');
@@ -99,7 +98,7 @@ describe.skipIf(!LINUX)('a run that died resumes FROM ITS RECORD', () => {
     expect(records(h), 'the record, kept').toHaveLength(1);
     expect(inoAt(o.leaf), 'the leaf, where it was').toBe(o.ino);
     expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
-  });
+  }, 60_000);
 
   for (const [point, witness] of [['removed', 'dropped'], ['emptied', 'dropped'], ['witnessed', 'absent']] as const) {
     it(`died at ${point}: the order finishes from there — witness ${witness}, the record last`, () => {
