@@ -261,14 +261,17 @@ describe('_ws_collect_floor_s / _ws_collect_floor_held — max(24 h, the knob); 
 
   // Leading zeros are stripped BEFORE the length clamp, and the clamp is asked BEFORE any arithmetic reads the value
   // (ruling G4): ten zero-padded digits are 1, never the clamp; a twenty-digit knob past 2^64 clamps, never wraps.
+  // Every row also says nothing on stderr: all zeros read 0, so the compare never meets an empty `10#`, which would
+  // fail with an arithmetic error on stderr and leave the floor at 24 h.
   const PADDED: [string, string][] = [
     ['0000000001', '86400'], ['000000000000172800', '172800'], ['18446744073709551617', '999999999'],
     ['0000000000', '86400'], ['00000000000999999999', '999999999'], ['0000000000999999998', '999999998'],
   ];
   it.each(PADDED)('the knob %j: its significant digits are read, clamped by their count before their value — %s', (k, want) => {
-    const [rc = '', out = '', why = ''] = h.sh(`WS_COLLECT_IDLE_FLOOR_S='${k}'; out=$(_ws_collect_floor_s); rc=$?;`
-      + ` _ws_collect_floor_s >/dev/null; printf '%s\\x1f%s\\x1f%s' "$rc" "$out" "$_WS_FLOOR_WHY"`).split('\x1f');
-    expect({ rc, out, why }).toEqual({ rc: '0', out: want, why: '' });
+    const [rc = '', out = '', why = '', err = ''] = h.sh(`WS_COLLECT_IDLE_FLOOR_S='${k}';`
+      + ` out=$(_ws_collect_floor_s 2>"$HOME/floor.err"); rc=$?; _ws_collect_floor_s >/dev/null 2>>"$HOME/floor.err";`
+      + ` printf '%s\\x1f%s\\x1f%s\\x1f%s' "$rc" "$out" "$_WS_FLOOR_WHY" "$(cat -- "$HOME/floor.err")"`).split('\x1f');
+    expect({ rc, out, why, err }).toEqual({ rc: '0', out: want, why: '', err: '' });
   });
 
   it.skipIf(!LINUX).each(PADDED.slice(0, 3))('the audit document prints `floorS` for the knob %j as %s', (k, want) => {
