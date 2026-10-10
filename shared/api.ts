@@ -8012,9 +8012,9 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'ccrc found that what it would remove is not only this workspace’s own tree — another session’s tree or registry row lies at, inside or through it, or the recorded path is not this workspace’s worktree — so it stopped. The session was stopped and nothing further was deleted. A retry finds the same thing until that other tree or row is moved or removed.',
   // The temp-root collector (spec §5.10). `witness-mismatch` is TERMINAL, journaled `refused` by `ws-audit --collect`
   // and `ws-collect`; so is `quarantine-kept` when what it names is one the collector cannot read, prove or clear, or
-  // the directory's original path is taken again. `ws-collect` also journals it `failed` when a record could not be
-  // cleared, dropped or compared and is kept for a later pass. Each says only what is true wherever it is printed: the
-  // audit removes nothing, and the verb answers either word before it removes anything further.
+  // the directory's original path is taken again. `ws-collect` also journals it `failed` when it stopped partway (for
+  // example a record, slot or witness it could not read back, clear or compare, or a removal or restore it could not
+  // prove) and keeps what stands. Each says only what is true wherever it is printed: nothing further is removed.
   'witness-mismatch':
     'The temporary directory under this id is not the one ccrc recorded handing out — it was replaced or moved, or its record cannot be read or vouches for too little — so ccrc’s collector will not remove it. Nothing was removed; it is listed for you to look at.',
   'quarantine-kept':
