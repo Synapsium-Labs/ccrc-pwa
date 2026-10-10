@@ -53,7 +53,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   ATTENTION_DOT, BARE_ROW, CONTROL_ROW, CONTROL_ROW_NOTE, COUNT_BADGE, COVER_SCREEN,
-  KEYCAP, LIST_ROW, MONO_PATH, TEXT_INPUT, TEXT_INPUT_INLINE, buttonVariants,
+  EYEBROW, KEYCAP, LIST_ROW, MONO_PATH, RESET_LIST, TEXT_INPUT, TEXT_INPUT_INLINE,
+  buttonVariants,
 } from '@ccrc/ui';
 
 const read = (...seg: string[]): string =>
@@ -519,6 +520,26 @@ describe('no app rule re-implements a shape that has already migrated', () => {
     // sheets, one of them a `color-mix` neither half of the gate could follow
     // into a variant.
     expect(KEYCAP).not.toMatch(/\bbg-/);
+
+    // THE EYEBROW'S SIX, and the two resets that are easiest to lose. Every
+    // one of the three rules this absorbed used the `font:` SHORTHAND, which
+    // resets `font-style` and `font-variant` on its way past; longhand
+    // utilities do not, so dropping `not-italic` would italicise an eyebrow
+    // inside any italic host and nothing else would notice.
+    for (const u of ['font-mono', 'text-2xs', 'font-medium', 'uppercase', 'leading-none',
+      'tracking-caps', 'not-italic', 'normal-nums']) {
+      expect(EYEBROW, u).toContain(u);
+    }
+    // And it carries NO colour: `--ink-tertiary`, `--syn-comment` and
+    // `--ink-on-well` are three different inks on three different grounds,
+    // each measured by the contrast gate in its own rule. A colour here would
+    // be one of them claiming to be all three.
+    expect(EYEBROW).not.toMatch(/\btext-ink-|\btext-syn-/);
+
+    // The list reset's four, and the gap it deliberately does not set: each
+    // of the four lists picks its own row rhythm.
+    for (const u of ['list-none', 'm-0', 'p-0', 'grid']) expect(RESET_LIST, u).toContain(u);
+    expect(RESET_LIST).not.toMatch(/\bgap-/);
   });
 
   it('names no rule carrying a migrated signature that this registry has not seen', () => {
