@@ -42,7 +42,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
-import { Button, ListRow, Sheet, Skeleton, TextInput } from '@ccrc/ui';
+import { Button, ListRow, Sheet, Skeleton, TEXT_INPUT_STACKED, TextInput } from '@ccrc/ui';
 
 /** The sheet's confirm control. It was the FIFTH copy of the quiet control's
  *  eleven declarations — `quiet-control.test.ts` found it the day the other
@@ -828,7 +828,7 @@ export function StartProgramSheet({
           Slug, title, and the project it runs in — the coordinator picks up from there.
         </p>
         <TextInput
-          className="mb-2 transition-[border-color] duration-fast ease-swift motion-reduce:transition-none"
+          className={TEXT_INPUT_STACKED}
           placeholder="Program slug (e.g. build4-conversation-and-controls)"
           aria-label="Program slug"
           aria-invalid={showKickoffError}
@@ -840,7 +840,7 @@ export function StartProgramSheet({
           <p id="program-kickoff-error" className="program-start-error">{kickoffVerdict.detail}.</p>
         )}
         <TextInput
-          className="mb-2 transition-[border-color] duration-fast ease-swift motion-reduce:transition-none"
+          className={TEXT_INPUT_STACKED}
           placeholder="Program title"
           aria-label="Program title"
           aria-invalid={title !== '' && kickoffOversize}
@@ -850,7 +850,7 @@ export function StartProgramSheet({
         />
 
         <TextInput
-          className="mb-2 transition-[border-color] duration-fast ease-swift motion-reduce:transition-none"
+          className={TEXT_INPUT_STACKED}
           type="search"
           placeholder="Search projects"
           aria-label="Search projects"

@@ -48,7 +48,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MoveRequestAnswer } from '../../../shared/api';
-import { Button, Sheet, toast } from '@ccrc/ui';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
 import { ApiError, api, moveSkipText, updateErrorText } from '../lib/api';
 import { moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackHowText, type PlannedMove } from './movePlan';
 import './fleet.css';
@@ -245,7 +245,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
     <Sheet open onClose={onClose} title={headline}>
       <div className="update-move-sheet">
         {lines.length === 0 ? (
-          <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">{moveEmptyText(plan.intent)}</p>
+          <p className={QC_CONSEQUENCE}>{moveEmptyText(plan.intent)}</p>
         ) : (
           <ol className="update-move-list" role="list" aria-label="Nodes this moves, in order">
             {plan.nodes.map((n, i) => <li key={n.nodeId} className="update-move-node">{lines[i]}</li>)}
@@ -254,7 +254,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
         {plan.intent.direction === 'rollback' && lines.length > 0 && (
           <p className="qc-consequence">{rollbackHowText(plan.intent.to)}</p>
         )}
-        <div className="qc-actions grid gap-2">
+        <div className={QC_ACTIONS}>
           {lines.length > 0 && !answered && (
             <Button variant="primary" disabled={busy} onClick={confirm}>
               {busy ? 'Sending…' : headline}

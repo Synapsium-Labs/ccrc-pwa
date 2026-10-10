@@ -17,7 +17,9 @@ export { Sheet, type SheetProps } from './primitives/sheet';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';
 export { CollapsibleStrip, type CollapsibleStripProps } from './primitives/collapsible-strip';
 export { Banner, bannerVariants, type BannerProps } from './primitives/banner';
-export { TextInput, TEXT_INPUT, TEXT_INPUT_INLINE, type TextInputProps } from './primitives/text-input';
+export {
+  TextInput, TEXT_INPUT, TEXT_INPUT_INLINE, TEXT_INPUT_STACKED, type TextInputProps,
+} from './primitives/text-input';
 export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
 export { Well, WELL, type WellProps } from './primitives/well';
@@ -34,7 +36,7 @@ export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
 // utilities that two or three app rules spelled identically, and wrapping
 // either in a `<span>` would add an element nobody asked for.
 export { MONO_PATH, ATTENTION_DOT } from './lib/text';
-export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
+export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,
   ToastHost,

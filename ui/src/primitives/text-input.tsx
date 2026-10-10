@@ -61,6 +61,25 @@ export const TEXT_INPUT =
  *  have meant a cva, a story per value and a type — for three utilities. */
 export const TEXT_INPUT_INLINE = 'rounded-sm border-edge-strong px-2';
 
+/** The same object, stacked in a sheet above the thing it filters or names.
+ *
+ *  These are the two declarations the header above calls "the call site's
+ *  business" — `.proj-search`'s margin and its focus transition. They were,
+ *  and the markup census found what happened next: FOUR call sites spelling
+ *  the same five utilities, across `NewSessionSheet` and `StartProgramSheet`.
+ *  A decision written four times is a decision with no owner.
+ *
+ *  NOT folded into `TEXT_INPUT`. Every other field in the app — the login
+ *  field, the hold-reason field, the two inline ones — sits where a margin
+ *  below it would move something, and none of them animates its border. The
+ *  base stays the base; this is the composition a stacked field reaches for.
+ *
+ *  `motion-reduce:transition-none` rides along because the transition does:
+ *  the pair is the one unit, and separating them is how a reduced-motion
+ *  escape hatch gets left behind by the next copy. */
+export const TEXT_INPUT_STACKED =
+  'mb-2 transition-[border-color] duration-fast ease-swift motion-reduce:transition-none';
+
 export interface TextInputProps extends InputHTMLAttributes<HTMLInputElement> {
   className?: string;
 }

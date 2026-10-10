@@ -26,7 +26,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ARCHIVE_REFUSALS, isArchiveRefusal } from '../../../shared/api';
-import { Button, Sheet } from '@ccrc/ui';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet } from '@ccrc/ui';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
 import './fleet.css';
 
@@ -195,13 +195,13 @@ export function ArchiveConflictSheet({
             `CLAIMED_CONSEQUENCE`, which is a single-source-of-truth win this
             branch has no argument with — the branch had only restyled the
             literals it replaced. Main's text, the branch's utilities. */}
-        <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">
+        <p className={QC_CONSEQUENCE}>
           {claimedSentence(named)}
         </p>
-        <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">
+        <p className={QC_CONSEQUENCE}>
           {CLAIMED_CONSEQUENCE}
         </p>
-        <div className="qc-actions grid gap-2">
+        <div className={QC_ACTIONS}>
           <Button variant="primary" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}
           </Button>

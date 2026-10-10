@@ -90,16 +90,29 @@ type Jsx = ts.JsxElement | ts.JsxSelfClosingElement;
 
 const opening = (n: Jsx): ts.JsxOpeningLikeElement => (ts.isJsxElement(n) ? n.openingElement : n);
 
-/** The static `className`, `'*'` for a computed one, `''` for none. A computed
- *  className still marks the element as HOOKED — two blocks that both compute
- *  one are the same shape as far as the tree goes — but it can never match a
- *  literal, which keeps `cn(...)` call sites from being read as copies of a
- *  string they may not produce. */
+/** The static `className`, `{NAME}` for a bare constant, `'*'` for anything
+ *  else computed, `''` for none.
+ *
+ *  THE CONSTANT CASE IS NOT COSMETIC. Naming a copied class string — which is
+ *  what the literal half of this census asks for — turns `className="qc-actions
+ *  grid gap-2"` into `className={QC_ACTIONS}`. Read as `'*'` that block would
+ *  have no literal class anywhere in it, `hooked` would drop it, and the
+ *  duplication it still carries would vanish from the census the moment
+ *  somebody did the right thing about the string. Measured: the four confirm
+ *  rows disappeared on exactly that edit. A bare identifier is as static as a
+ *  literal, so it is read as one.
+ *
+ *  A `cn(...)` call or a template still answers `'*'`: it marks the element
+ *  HOOKED — two blocks that both compute one are the same shape as far as the
+ *  tree goes — but it can never match a literal, which keeps a call site from
+ *  being read as a copy of a string it may not produce. */
 function classOf(n: Jsx): string {
   for (const a of opening(n).attributes.properties) {
     if (!ts.isJsxAttribute(a) || a.name.getText() !== 'className') continue;
     const init = a.initializer;
     if (init !== undefined && ts.isStringLiteral(init)) return init.text;
+    if (init !== undefined && ts.isJsxExpression(init) && init.expression !== undefined
+      && ts.isIdentifier(init.expression)) return `{${init.expression.text}}`;
     return '*';
   }
   return '';
@@ -251,7 +264,7 @@ const REGISTERED_BLOCKS: Record<string, string> = {
     + 'offers the ones a RUNNING session may move to, and each passes '
     + '`AccountRow` a different set of facts. The shared part is `AccountRow`, '
     + 'which they already share.',
-  'div.qc-actions grid gap-2(Button,Button)':
+  'div.{QC_ACTIONS}(Button,Button)':
     'DIFFERENT THINGS, in the BUTTONS. The container is a copied string and '
     + 'the literal half of this census has it. What sits inside is not one '
     + 'shape: `ArchiveSheet` renders two primaries (archive, and stop-only), '
@@ -264,24 +277,6 @@ const REGISTERED_BLOCKS: Record<string, string> = {
 /** The same, for copied className literals. */
 const REGISTERED_LITERALS: Record<string, string> = {
   // ── NEXT ────────────────────────────────────────────────────────────────
-  'duration-fast ease-swift mb-2 motion-reduce:transition-none transition-[border-color]':
-    'NEXT. A `TextInput` modifier — a bottom margin and a border-colour '
-    + 'transition — spelled at four call sites across two sheets. It is not in '
-    + '`TEXT_INPUT` because the app\'s other inputs do not animate, so moving '
-    + 'it into the base would change them; it wants the name '
-    + '`TEXT_INPUT_INLINE` already has next to it.',
-  'gap-2 grid qc-actions':
-    'NEXT. The confirm row\'s container, FIVE call sites, one of them inside '
-    + '`QuickConfirm` itself — the four in the app are copies of the design '
-    + 'system\'s own composition, hook class and utilities together.',
-  'leading-normal mb-5 qc-consequence text-base text-ink-secondary':
-    'NEXT. The consequence sentence above that row: SEVEN call sites, same '
-    + 'story. `ArchiveSheet` writes the hook alone with no utilities at all, '
-    + 'and its sentences are therefore NOT this shape — that sheet leans on '
-    + '`.abandon-sheet`\'s own grid gap, which is a real difference in '
-    + 'rendering and is preserved, not folded.',
-
-  // ── DIFFERENT THINGS ────────────────────────────────────────────────────
   'settings-legend settings-theme-group':
     'DIFFERENT THINGS. Two hook classes on one element, twice, inside the '
     + 'theme picker — a legend that is also a group head. Two classes is not a '

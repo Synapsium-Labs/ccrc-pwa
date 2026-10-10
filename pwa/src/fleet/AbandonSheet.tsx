@@ -35,7 +35,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';
 import { RUN_WORD, childMarkOf } from './runWords';
-import { Button, Sheet, toast } from '@ccrc/ui';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
 import './fleet.css';
 
@@ -265,10 +265,10 @@ export function AbandonSheet({
   return (
     <Sheet open onClose={onClose} title="Abandon this run?">
       <div className="abandon-sheet">
-        <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">
+        <p className={QC_CONSEQUENCE}>
           {abandonConsequence(run, workspaceChild)}
         </p>
-        <div className="qc-actions grid gap-2">
+        <div className={QC_ACTIONS}>
           <Button variant="primary" disabled={busy} onClick={confirm}>
             {busy ? 'Abandoning…' : 'Abandon'}
           </Button>

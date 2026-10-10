@@ -20,7 +20,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
-import { Button, Sheet, TextInput } from '@ccrc/ui';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, TextInput } from '@ccrc/ui';
 import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import './fleet.css';
 
@@ -284,7 +284,7 @@ export function ResumeSheet({
   return (
     <Sheet open onClose={onClose} title="The coordinator is gone">
       <div className="abandon-sheet">
-        <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">
+        <p className={QC_CONSEQUENCE}>
           {claimedBy === null
             // Unreachable from the board (the row's gate needs a claimant to
             // measure), and stated rather than collapsed into `return null`:
@@ -294,7 +294,7 @@ export function ResumeSheet({
             : `${claimedBy} claims run ${run.id} — ${run.program}, wave ${run.wave} — and this box measured it dead. Cheapest door first: bring the pane back, tell it to pick the wave up, or hand the program to another session.`}
         </p>
         {claimedBy !== null && (
-          <div className="qc-actions grid gap-2">
+          <div className={QC_ACTIONS}>
             <Button variant="primary" disabled={busy !== null} onClick={revive}>
               {busy === 'revive' ? 'Reviving…' : `Revive ${claimedBy}`}
             </Button>
@@ -329,7 +329,7 @@ export function ResumeSheet({
             </Button>
           </div>
         )}
-        {note !== null && <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">{note}</p>}
+        {note !== null && <p className={QC_CONSEQUENCE}>{note}</p>}
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>
