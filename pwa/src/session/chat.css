@@ -1285,7 +1285,7 @@ button.metachip:active {
   flex-direction: column;
   gap: 2px;
   width: 100%;
-  min-height: 44px;
+  min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-3);
   text-align: left;
   background: transparent;

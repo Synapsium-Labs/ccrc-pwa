@@ -630,3 +630,110 @@ describe('every strip head clears the tap floor — the whole chrome, not one co
     expect(consumers).toHaveLength(HEADS.length);
   });
 });
+
+// ── the floor is a token, and nothing may re-type it ───────────────────────
+//
+// This file's own header says the scrape must prove a rule is "written
+// against the shared token rather than a literal `44px` that would not follow
+// the token". SIX DECLARATIONS WERE LITERALS — `.sess-line`'s row floor and
+// its actions column, `.sess-body`, `.sess-sheet .btn-ghost`,
+// `.proj-card-toggle` and `.slash-item` — in rules this file does not scrape,
+// so the drift it was built to stop had already happened five rules away from
+// where it was looking.
+//
+// A LIST OF SCRAPES CANNOT CATCH THIS; a census can. `--tap-min` is 44px
+// today, so every one of those rules rendered correctly and nothing looked
+// wrong — which is exactly why it needed a mechanism rather than a reader:
+// the day the token moves, a literal stays behind and the control silently
+// stops meeting the floor it was written for.
+//
+// SIZE PROPERTIES ONLY. `tokens.css` defines the token itself, and its glow
+// shadows carry a 44px BLUR that has nothing to do with a thumb; scoping to
+// the properties where a tap floor is actually spelled keeps those out
+// without an exemption list that would need maintaining.
+//
+// MEASURED, five mutations against the whole file (baseline 49 passed):
+//
+//   | mutation                                          | result |
+//   |---------------------------------------------------|--------|
+//   | one `var(--tap-min)` typed back as `44px`         | 1 red  |
+//   | a `244px` column width                            | green  |
+//   | `min-height: 44px` inside a COMMENT               | green  |
+//   | the stylesheet walk returns nothing                | 1 red  |
+//   | `grid-template-columns` dropped from SIZE_PROPS    | 1 red  |
+//
+// Rows two and three are the false positives this must NOT have. Rows four
+// and five are holes that were open when this was first written: with
+// `literals()` walking the sheets itself, emptying that walk left all 49
+// green, and the property list could be narrowed past the very declaration
+// the wave fixed. Both are closed by `reads the stylesheets at all`.
+const SIZE_PROPS = [
+  'height', 'min-height', 'max-height',
+  'width', 'min-width', 'max-width',
+  'block-size', 'min-block-size', 'inline-size', 'min-inline-size',
+  'flex-basis', 'grid-template-columns', 'grid-template-rows',
+  'grid-auto-rows', 'grid-auto-columns', 'inset',
+];
+
+describe('the tap floor is spelled as the token', () => {
+  const UI_STYLES = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
+  const SHEETS: [string, string][] = [
+    ['pwa/src/fleet/fleet.css', read('fleet', 'fleet.css')],
+    ['pwa/src/session/chat.css', read('session', 'chat.css')],
+    ['pwa/src/styles/shell.css', read('styles', 'shell.css')],
+    ['pwa/src/styles/base.css', read('styles', 'base.css')],
+    ...readdirSync(UI_STYLES, { recursive: true })
+      .filter((f): f is string => typeof f === 'string' && f.endsWith('.css'))
+      .map((f): [string, string] => [
+        `ui/src/${f}`, readFileSync(path.join(UI_STYLES, f), 'utf8'),
+      ]),
+  ];
+
+  /** EVERY size declaration in every stylesheet, as `file:line prop: value`.
+   *  One walk, so the census and the proof that it walked read the same list —
+   *  measured: with `literals()` doing its own walk, emptying that walk left
+   *  all 49 green. A guard whose evidence comes from a different loop than its
+   *  verdict is a guard that can be switched off without going red. */
+  const sizeDecls = (): string[] => {
+    const out: string[] = [];
+    for (const [name, src] of SHEETS) {
+      stripComments(src).split('\n').forEach((line, i) => {
+        const m = /^\s*([a-z-]+)\s*:\s*([^;]*)/.exec(line);
+        if (m === null) return;
+        const [, prop = '', value = ''] = m;
+        if (!SIZE_PROPS.includes(prop)) return;
+        out.push(`${name}:${i + 1} ${prop}: ${value.trim()}`);
+      });
+    }
+    return out.sort();
+  };
+
+  /** The ones that type the floor out instead of naming it.
+   *  `(?<![\d.])` so `244px` and `144px` are not 44px. */
+  const literals = (): string[] =>
+    sizeDecls().filter((d) => /(?<![\d.])44px/.test(d.slice(d.indexOf(': ') + 2)));
+
+  it('finds no literal 44px in any size declaration', () => {
+    expect(literals(), 'write var(--tap-min); a literal does not follow the token').toEqual([]);
+  });
+
+  it('reads the stylesheets at all', () => {
+    // Without this the test above is green on an empty list for the wrong
+    // reason — a renamed file, a changed path, a comment stripper that ate
+    // everything, or a walk that stopped walking.
+    expect(SHEETS.length).toBeGreaterThan(8);
+    expect(sizeDecls().length).toBeGreaterThan(200);
+    // And it reaches the rules this wave fixed, by PROPERTY as well as by
+    // count — measured: dropping `grid-template-columns` from SIZE_PROPS left
+    // all 49 green, and that property is where `.sess-line`'s actions column
+    // spelled the floor.
+    const named = sizeDecls().filter((d) => d.includes('var(--tap-min)'));
+    expect(named.length).toBeGreaterThan(10);
+    expect(named.filter((d) => d.includes('grid-template-columns:'))).not.toEqual([]);
+    expect(named.filter((d) => d.includes('min-height:')).length).toBeGreaterThan(8);
+    // The token it is asking for still exists, with the value the six
+    // replaced literals were spelling.
+    const tokens = SHEETS.find(([n]) => n.endsWith('tokens.css'))?.[1] ?? '';
+    expect(tokens).toMatch(/--tap-min:\s*44px/);
+  });
+});

@@ -807,10 +807,10 @@
      a flex row, not a grid track — a missing sibling there just isn't
      there; it cannot compact anything, so there is no display:none
      grid-compaction hazard left to guard against. */
-  grid-template-columns: auto minmax(0, 1fr) 44px;
+  grid-template-columns: auto minmax(0, 1fr) var(--tap-min);
   align-items: center;
   gap: var(--sp-2);
-  min-height: 44px; /* thumb target — the row is a tap surface, not a label */
+  min-height: var(--tap-min); /* thumb target — the row is a tap surface, not a label */
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-md);
 }
@@ -1053,7 +1053,7 @@
   justify-content: center;
   gap: 2px;
   min-width: 0;
-  min-height: 44px;   /* thumb target: this block is what gets tapped */
+  min-height: var(--tap-min);   /* thumb target: this block is what gets tapped */
   cursor: pointer;
   line-height: var(--lh-tight);
 }
@@ -1552,7 +1552,7 @@ button.sess-held {
 
 .sess-sheet .btn-ghost {
   justify-content: flex-start;
-  min-height: 44px;
+  min-height: var(--tap-min);
 }
 
 .sess-sheet-note {
@@ -1640,7 +1640,7 @@ button.sess-held {
   gap: var(--sp-2);
   flex: 1;
   min-width: 0;
-  min-height: 44px;
+  min-height: var(--tap-min);
   padding: 0;
   background: none;
   border: 0;

@@ -70,13 +70,20 @@ describe('fleet density and alignment', () => {
     expect(rule).not.toContain('align-items: baseline');
   });
 
-  it('keeps the 44px thumb target on the row and on the block that is tapped', () => {
+  it('keeps the thumb target on the row and on the block that is tapped', () => {
     // The fix is centring, NOT shrinking: these are tap surfaces. The floor
     // lives on .sess-body, the block the row's click forwarder is on — NOT on
     // .sess-open, which is only the label line inside it now that the
     // subagent toggle had to become a real, un-nested <button>.
-    expect(ruleFor('.sess-line')).toContain('min-height: 44px');
-    expect(ruleFor('.sess-body')).toContain('min-height: 44px');
+    //
+    // THE TOKEN, NOT THE LITERAL. This test used to require `min-height: 44px`
+    // on both — which is how two of the six hard-coded floors stayed hard
+    // coded: the guard asked for the literal by name. `--tap-min` IS 44px, so
+    // nothing rendered differently and nothing looked wrong; what the literal
+    // cost was the ability to move the floor. See `tap-targets.test.tsx`'s
+    // census, which refuses a literal in any size declaration now.
+    expect(ruleFor('.sess-line')).toContain('min-height: var(--tap-min)');
+    expect(ruleFor('.sess-body')).toContain('min-height: var(--tap-min)');
   });
 
   // Task 7 fix round 2. The row's controls must all be siblings, never
