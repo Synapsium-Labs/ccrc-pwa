@@ -49,7 +49,7 @@ const emptyGitdir = (main: string, slug: string, body = ''): void => {
 };
 const EMPTY_BODIES: [string, string][] = [
   ['empty (`: >`)', ''], ['a lone newline', '\n'], ['a space and a newline', ' \n'], ['a tab', '\t'],
-  ['a blank first line over a second', '\nnot-a-path\n'],
+  ['a blank first line over a second', '\nnot-a-path\n'], ['a carriage return and a newline', '\r\n'],
 ];
 const NAMES_NO_PATH = 'gitdir names no path on its first line';
 
@@ -216,9 +216,9 @@ describe('ws-expire runs the same ladder, so it answers the same', () => {
     expect(eventsOf(h.home, 'expire'), 'an expiry’s unmeasured answer is journaled nowhere').toEqual([]);
   }, 90_000);
 
-  it('an archived workspace whose admin gitdir reads EMPTY: expiry unmeasured (exit 1, journaled nowhere), never no-worktree-record', () => {
+  it.each(EMPTY_BODIES)('an archived workspace whose admin gitdir reads %s: expiry unmeasured (exit 1, journaled nowhere), never no-worktree-record', (_label, body) => {
     const { main } = makeArchived(h);
-    emptyGitdir(main, 'quiet-dune');
+    emptyGitdir(main, 'quiet-dune', body);
     const r = expireEvalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.detail).toContain(NAMES_NO_PATH);
