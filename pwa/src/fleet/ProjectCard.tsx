@@ -15,12 +15,11 @@
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { BareRow, Button } from '@ccrc/ui';
-import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RosterWire, RunSummary } from '../../../shared/api';
+import type { FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RosterWire, RunSummary } from '../../../shared/api';
 import { repoLabel } from '../../../shared/api';
-import { accountLabel } from '../lib/accounts';
-import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
 import { coordPresence, type CoordPresence } from './coordWords';
+import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 import { formatElapsed } from './formatReset';
 import { releasedByProgramme, type FleetGroup } from './groupFleet';
 import { archivableReleased } from './archiveReleased';
@@ -57,26 +56,6 @@ export const NEST_BRACKET = '└─';
  *
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
-
-/** One project's authoritative placement read. Request state, row absence and
- *  legacy omission stay distinct so the card never turns ignorance into a
- *  per-account claim. */
-export type ProjectPlacementRead =
-  | { kind: 'pending' }
-  | { kind: 'failed' }
-  | { kind: 'missing' }
-  | { kind: 'legacy' }
-  | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
-
-/** The pool a placement read names, or `null`. The SAME projection the fleet
- *  screen's `poolFor` makes, spelled ONCE and exported rather than twice: only
- *  a `measured` read carries a pool, and every other kind (`pending`,
- *  `failed`, `missing`, `legacy`) answers `null` — ignorance, never an account
- *  claim. Lives beside `ProjectPlacementRead` because it is that type's own
- *  reader; the fleet screen memoises its per-project lookup ON TOP of it. */
-export const poolOfPlacement = (read: ProjectPlacementRead): ProjectPoolWire | null =>
-  read.kind === 'measured' ? read.pool : null;
-
 
 function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): ReactNode {
   const spawn = dispatchWindow(run, nowMs);
@@ -240,7 +219,6 @@ export function ProjectCard({
   // Only a legacy row's forecast falls back to the global projection; no row
   // reads a pool value from the independently paced websocket frame.
   const pool = poolOfPlacement(placement);
-  const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
   const poolDim = pools?.enforcement === 'unavailable';
 
   // Task 4 fix round 1: a row belonging to THIS card's own project keeps
@@ -251,49 +229,10 @@ export function ProjectCard({
   const poolOf = (s: FleetSession): ProjectPoolWire | null =>
     s.project === group.project ? pool : poolFor(s.project);
 
-  // A legacy server's global projection is honest only while no readable tag
-  // narrows the project. Pending/failed/missing reads make no account claim.
-  const legacySafe = pool === null || pool.state === 'untagged';
-  const forecast = placement.kind === 'measured' && placement.placement.kind === 'projected'
-    ? placement.placement
-    : placement.kind === 'legacy' && legacySafe
-      ? projected
-      : undefined;
-
-  // Headroom, not load: "91% free" is the question being asked ("can this
-  // workspace actually run?"), and the answer stays legible when the score is
-  // above the swap ceiling — which ccd's rule permits, since it returns the
-  // least-loaded account even when every account is pinned.
-  const headroom = forecast ? 100 - forecast.score : null;
-  const placeableNames = poolLabelList(roster, pool);
-  const measuredNone = placement.kind === 'measured' && placement.placement.kind === 'none';
-  // The THIRD meaning of `none` (D-2854): the row was fetched with a class
-  // and every eligible lane measured unservable for it. Only a `?class=`
-  // fetch can ever carry this. The fleet screen's class chooser (routing
-  // slice 5, Task 6) now sends one whenever an operator picks a class there
-  // — with the chooser left on "Coordinator row" the fetch stays unrouted
-  // and a card never takes this branch, reading exactly as before.
-  const measuredNoneClass = placement.kind === 'measured' && placement.placement.kind === 'none'
-    ? placement.placement.class
-    : undefined;
-  const legacyNone = placement.kind === 'legacy' && legacySafe && projected === null;
-  const addLabel = forecast
-    ? `New workspace on ${group.project} — ${accountLabel(roster, forecast.wrapper)}, ${headroom}% free`
-    : measuredNoneClass !== undefined
-      ? `New workspace on ${group.project} — no lane can serve ${measuredNoneClass}`
-      : measuredNone || legacyNone
-      ? poolName === null
-        ? placeableNames === ''
-          ? `New workspace on ${group.project} — all disabled`
-          : `New workspace on ${group.project} — ${placeableNames} all disabled`
-        : placeableNames === ''
-          ? `New workspace on ${group.project} — nothing is in pool ${poolName}`
-          : `New workspace on ${group.project} — nothing in pool ${poolName} is placeable, ${placeableNames} all disabled`
-      : placement.kind === 'failed'
-        ? `New workspace on ${group.project} — placement check failed; reopen ccrc to retry`
-        : placement.kind === 'missing'
-          ? `New workspace on ${group.project} — project absent from the latest placement check; reload ccrc`
-          : `New workspace on ${group.project}`;
+  // The add control's whole sentence — the forecast, the headroom, and every
+  // way a read can have no answer — is `addWorkspaceLabel`'s, beside the type
+  // it branches on (`placementWords.ts`).
+  const addLabel = addWorkspaceLabel(group.project, placement, projected, roster);
 
   // Status never owns the card's perimeter except for attention (the one state
   // that asks the reader to ACT). Busy lost it: on a one-session project the

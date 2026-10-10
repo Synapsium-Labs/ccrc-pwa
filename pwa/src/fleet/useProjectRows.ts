@@ -25,7 +25,7 @@ import type {
 } from '../../../shared/api';
 import type { ModelClass } from '../../../shared/models';
 import { api, apiErrorText } from '../lib/api';
-import { poolOfPlacement, type ProjectPlacementRead } from './ProjectCard';
+import { poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 
 /** The pools frame reduced to one comparable string. Key ORDER is not
  *  significance: the wire is rebuilt per frame, so an object that re-serialises
