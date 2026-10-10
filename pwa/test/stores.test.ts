@@ -1515,7 +1515,12 @@ describe('Build 4 wave 4 — the wire additions that were refused', () => {
 // and branches 192#1, 299#1, 322#1, 324#1, 328#1, 356#1, 405#1, 643#1 of
 // `stores/session.ts` uncovered with the pwa suite green).
 describe('the session store’s guards against a stale key, a second socket and a body it cannot read', () => {
-  const prompt = (): ReturnType<typeof vi.fn> => vi.fn().mockResolvedValue(undefined);
+  /** `api.prompt`'s own signature, not a bare `vi.fn()`: the loose form is
+   *  assignable to nothing the store asks for, and the project-wide
+   *  typecheck (not the per-file one) is where that shows. */
+  type Prompt = (id: string, text: string,
+                 opts?: { replaceDraft?: boolean; attachments?: string[] }) => Promise<void>;
+  const prompt = () => vi.fn<Prompt>().mockResolvedValue(undefined);
 
   it('the 5 s echo fallback does nothing for a pending that already left', async () => {
     // `clearConfirmed` removed it when the echo landed, so the timer fires
@@ -1637,9 +1642,15 @@ describe('the session store’s guards against a stale key, a second socket and 
     // not revived — an older server omits it. Keeping the previous file
     // would have the reconnect ask for an offset inside a different
     // transcript.
+    // CAST, not revived — which is the whole reason the `?? null` is there.
+    // `file` is REQUIRED on the frame type, so an older server omitting it is
+    // not expressible in TypeScript; it arrives through
+    // `ReconnectingSocket`'s `onMessage`, which casts. The cast here is the
+    // same lie the wire tells, written down.
     const after = applySessionMsg(
       { ...emptySnap(), file: '/t/u-old.jsonl', offset: 7 },
-      { type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 120, missing: false },
+      { type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 120,
+        missing: false } as unknown as SessionStreamMsg,
     );
     expect(after.file).toBeNull();
   });
