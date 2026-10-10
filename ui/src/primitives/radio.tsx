@@ -30,6 +30,7 @@
 // safe one takeable.
 import type { InputHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
+import { FOCUS_RING } from '../lib/focus';
 
 /** The option ROW: the label a thumb lands on.
  *
@@ -40,8 +41,16 @@ import { cn } from '../lib/cn';
 export const RADIO_OPTION =
   'flex items-center gap-2 min-w-0 min-h-tap cursor-pointer group-disabled:cursor-default';
 
-/** The input itself. 18px square, flush: the row above supplies the target. */
-export const RADIO_INPUT = 'flex-none w-[18px] h-[18px] m-0';
+/** The input itself. 18px square, flush: the row above supplies the target.
+ *
+ *  THE RING IS THE ONE THING THE APP RULE NEVER HAD. `.settings-option input`
+ *  declared four properties and left the focus cue to the UA's default
+ *  outline, which is whatever the platform draws and is not this palette's
+ *  phosphor. `focus-ring.test.ts` red the moment this component existed —
+ *  "1 control(s), 0 ring(s)" — because the system's rule is that every
+ *  focusable control it renders owns the ring. Keyboard focus only
+ *  (`focus-visible`), so a tap still shows nothing. */
+export const RADIO_INPUT = `flex-none w-[18px] h-[18px] m-0 ${FOCUS_RING}`;
 
 /** The sentence beside it. `min-w-0` so a long one wraps inside the row
  *  instead of pushing the radio off it. */

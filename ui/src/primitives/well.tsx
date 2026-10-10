@@ -27,6 +27,15 @@
 // restore exactly that, so a well under an italic or tabular-nums ancestor
 // renders as it always did. Without them this would be a silent visual change
 // in whichever screen grew such an ancestor first.
+//
+// AND NO VARIANT AXIS, measured when a design-system audit proposed one. The
+// five classes call sites pass are not tones: `mail-card-body`, `dlg-raw`,
+// `opt-preview`, `draft-well` and `tool-ask-well` each adjust this surface for
+// the box it sits in — a max-height here, a margin there. Naming five one-off
+// adjustments as if they were a vocabulary would invent a word per call site
+// and put the design system in charge of five layouts it cannot see. The well
+// has ONE appearance, which is the point of it: wherever the terminal peeks
+// through, it looks the same.
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 

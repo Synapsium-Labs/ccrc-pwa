@@ -14,6 +14,21 @@
 // stayed in the app with its `.opt-inert` markers. What the design system owns
 // is the pill; what ccrc owns is what the pill means.
 //
+// RE-OPENED BY A DESIGN-SYSTEM AUDIT AND RE-CLOSED, with the three modifiers
+// measured instead of described, so the next reader does not have to look:
+//
+//   .chip--active    --acct-active on --acct-active-tint  (chat.css)
+//   .chip--archived  --ink-tertiary on --bg-raised, and its rule carries the
+//                    reason it is not the well: ink-tertiary on well measures
+//                    3.17:1 in LIGHT, under the floor
+//   .chip--repo      font-family: var(--family-mono) — not a tone at all
+//
+// The first is an account alias, the second a measured contrast decision
+// belonging to the surface it sits on, the third a family. A `tone` axis over
+// those three would be the design system holding ccrc's account vocabulary,
+// one app screen's contrast argument, and a typeface, under one word that
+// means none of them. The call sites keep the classes.
+//
 // THE DOT IS `currentColor` BY DESIGN. `.chip i` set `background:
 // currentColor`, so the dot takes whatever colour the chip was given from
 // outside without that colour needing to be named twice. Keeping it means a
