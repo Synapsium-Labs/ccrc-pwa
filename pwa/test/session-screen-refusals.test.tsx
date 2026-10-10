@@ -12,6 +12,8 @@ import type { FleetSession } from '../../shared/api';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { ToastHost } from '@ccrc/ui';
 import { createSessionStore } from '../src/stores/session';
+import * as apiModule from '../src/lib/api';
+import { ApiError } from '../src/lib/api';
 import { createFleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -60,8 +62,14 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   child: { kind: 'none' }, releasedFrom: null, ...patch,
 });
 
+/** The last render's stores, so a case can drive the session's own status —
+ *  the Stop control is gated on `busy`, which is the session stream's fact,
+ *  not the fleet frame's. */
+const stores: { store: ReturnType<typeof createSessionStore> } = { store: null as never };
+
 const renderScreen = (patch: Partial<FleetSession> = {}, status: 'idle' | 'dead' = 'idle') => {
   const store = createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
+  stores.store = store;
   const fleet = createFleetStore();
   act(() => { fleet.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [fleetSession(patch)] }); });
   render(<><SessionScreen id={ID} store={store} fleet={fleet} /><ToastHost /></>);
@@ -135,5 +143,30 @@ describe('Restore, on a session already put away', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('button', { name: /Restore/ }));
     expect(await screen.findByText(/Couldn't restore — registry row is gone/)).toBeInTheDocument();
+  });
+});
+
+describe('Stop — two sentences, because 409 is not a failure', () => {
+  it('a 409 says there was nothing to stop, and says it QUIETLY', async () => {
+    // `/interrupt` answers 409 when the pane is idle, which is not an error:
+    // the reader asked for a stop and got one, in the sense that nothing is
+    // running. A red toast there would teach them to distrust the button.
+    const interrupt = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'not-busy' }));
+    vi.spyOn(apiModule.api, 'interrupt').mockImplementation(interrupt);
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    const said = await screen.findByText(/nothing to stop/);
+    expect(said.closest('[role="status"]'), 'an idle pane is a status, not an alert').not.toBeNull();
+  });
+
+  it('anything else IS a failure, and names what ccd said', async () => {
+    vi.spyOn(apiModule.api, 'interrupt')
+      .mockRejectedValue(new Error('tmux: no server running'));
+    renderScreen();
+    act(() => { stores.store.setState({ status: 'busy' }); });
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    const said = await screen.findByText("Couldn't stop — tmux: no server running");
+    expect(said.closest('[role="alert"]')).not.toBeNull();
   });
 });
