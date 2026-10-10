@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=dab721e7700ab10ed5c3623a1f98c2c91831b791028de6ac41faa59d473a0596
+# ccrc:generated 1 sha256=ee01a1a88f6f80734ab3e8fe01e8198ab128d55fe20ecc4ea05341617200ddb9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32626,8 +32626,11 @@ _ws_collect_idle() {   # leaf -> 0 with _WS_IDLE_NEWEST_NS = the newest CTIME un
 _WS_FLOOR_WHY=''
 _ws_collect_floor_s() {   # -> rc 0 and the idle floor on stdout, whole seconds: 86400 (24 h, spec §5.10) when
   #                          WS_COLLECT_IDLE_FLOOR_S is unset, empty, or a whole number at or below that; the knob when
-  #                          it is a whole number ABOVE that; 999999999 when it is a whole number of ten digits or more
-  #                          (the raise is honoured, clamped so the arithmetic never wraps). rc 2, NOTHING printed and
+  #                          it is a whole number ABOVE that; 999999999 when it is a whole number of ten or more
+  #                          significant digits (the raise is honoured, clamped so the arithmetic never wraps). Its
+  #                          leading zeros are stripped first (all zeros read 0, so `0000000001` is 1, never the
+  #                          clamp); the clamp is asked of the LENGTH of what is left, and only then is the value
+  #                          compared, so arithmetic never sees more than nine digits. rc 2, NOTHING printed and
   #                          _WS_FLOOR_WHY naming the knob, when the knob is set, non-empty and not a whole number
   #                          (`172800s`, `48h`, `172800 `): a raise asked for unreadably is unmeasured, never folded to
   #                          24 h. The knob only RAISES the floor. This is the floor's ONE definition (ruling G4): the
@@ -32638,6 +32641,7 @@ _ws_collect_floor_s() {   # -> rc 0 and the idle floor on stdout, whole seconds:
   if [[ -n "$o" ]]; then
     [[ "$o" =~ ^[0-9]+$ ]] \
       || { _WS_FLOOR_WHY="WS_COLLECT_IDLE_FLOOR_S is set and is not a whole number of seconds, so the raised floor it asks for was never read"; return 2; }
+    o="${o#"${o%%[!0]*}"}"; o="${o:-0}"
     if (( ${#o} > 9 )); then b=999999999
     elif (( 10#$o > b )); then b=$(( 10#$o )); fi
   fi

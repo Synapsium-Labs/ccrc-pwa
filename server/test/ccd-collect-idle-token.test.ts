@@ -27,6 +27,7 @@ import path from 'node:path';
 import { CCD } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { AGED, collectAudit, collectOf, makeOrphan } from './collectFixture.js';
 
 let h: PrHarness;
 let restore: [string, number][] = [];
@@ -242,7 +243,7 @@ describe('_ws_collect_floor_s / _ws_collect_floor_held — max(24 h, the knob); 
     expect(held(NEWEST - 1n, FLOOR0), 'a clock behind the newest change is still not idle').toBe('1');
   });
 
-  it('the knob RAISES it; unset, empty or a whole number at or below 24 h leaves it at 24 h; ten digits or more clamp', () => {
+  it('the knob RAISES it; unset, empty or a whole number at or below 24 h leaves it at 24 h; ten or more significant digits clamp', () => {
     expect(h.sh('WS_COLLECT_IDLE_FLOOR_S=90000; _ws_collect_floor_s')).toBe('90000');
     expect(held(NEWEST + DAY_NS, 'WS_COLLECT_IDLE_FLOOR_S=90000;')).toBe('1');
     expect(held(NEWEST + 90_000n * 1_000_000_000n, 'WS_COLLECT_IDLE_FLOOR_S=90000;')).toBe('0');
@@ -251,12 +252,31 @@ describe('_ws_collect_floor_s / _ws_collect_floor_held — max(24 h, the knob); 
       expect(h.sh(`WS_COLLECT_IDLE_FLOOR_S='${v}'; _ws_collect_floor_s`), `knob ${JSON.stringify(v)}`).toBe('86400');
     }
     expect(held(NEWEST + DAY_NS - 1n, 'WS_COLLECT_IDLE_FLOOR_S=3600;'), 'a lower knob never lowers it').toBe('1');
-    // Ten digits or more: the raise is honoured, clamped so the arithmetic never wraps.
+    // Ten or more significant digits: the raise is honoured, clamped so the arithmetic never wraps.
     const MAX_NS = 999_999_999n * 1_000_000_000n;
     expect(h.sh('WS_COLLECT_IDLE_FLOOR_S=9999999999; _ws_collect_floor_s')).toBe('999999999');
     expect(held(NEWEST + MAX_NS - 1n, 'WS_COLLECT_IDLE_FLOOR_S=9999999999;')).toBe('1');
     expect(held(NEWEST + MAX_NS, 'WS_COLLECT_IDLE_FLOOR_S=9999999999;')).toBe('0');
   });
+
+  // Leading zeros are stripped BEFORE the length clamp, and the clamp is asked BEFORE any arithmetic reads the value
+  // (ruling G4): ten zero-padded digits are 1, never the clamp; a twenty-digit knob past 2^64 clamps, never wraps.
+  const PADDED: [string, string][] = [
+    ['0000000001', '86400'], ['000000000000172800', '172800'], ['18446744073709551617', '999999999'],
+    ['0000000000', '86400'], ['00000000000999999999', '999999999'], ['0000000000999999998', '999999998'],
+  ];
+  it.each(PADDED)('the knob %j: its significant digits are read, clamped by their count before their value — %s', (k, want) => {
+    const [rc = '', out = '', why = ''] = h.sh(`WS_COLLECT_IDLE_FLOOR_S='${k}'; out=$(_ws_collect_floor_s); rc=$?;`
+      + ` _ws_collect_floor_s >/dev/null; printf '%s\\x1f%s\\x1f%s' "$rc" "$out" "$_WS_FLOOR_WHY"`).split('\x1f');
+    expect({ rc, out, why }).toEqual({ rc: '0', out: want, why: '' });
+  });
+
+  it.skipIf(!LINUX).each(PADDED.slice(0, 3))('the audit document prints `floorS` for the knob %j as %s', (k, want) => {
+    makeOrphan(h);
+    const a = collectAudit(h, { pre: `WS_COLLECT_IDLE_FLOOR_S='${k}'; ${AGED}` });
+    expect(collectOf(a)['floorS'], a.stderr).toBe(Number(want));
+    expect(collectOf(a)['unmeasured'], a.stderr).toBeNull();
+  }, 60_000);
 
   it('a set knob that is not a whole number is UNMEASURED: nothing printed, rc 2, the knob named, and the floor not held (2)', () => {
     // '90000+1' is an expression, not a whole number: the grammar refuses it before any arithmetic reads it.
