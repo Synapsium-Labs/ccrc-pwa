@@ -553,12 +553,12 @@ export const GROUNDS = {
   'tool-card.css .exit-badge': { under: ['var(--bg-surface)'], why: 'card ground; the same pair the gate calls "EXIT-badge pill". Measured on all five plausible grounds: it clears on surface (4.81) and sheet (4.81) but reads 4.44 on page and 4.14 on raised, so this choice IS load-bearing — .toolcard (tool-card.css) and .tool-ask both set background: var(--bg-surface)' },
   // Markdown tables and the terminal keycaps use an ink-tinted transparent
   // wash over whatever they sit on.
-  'chat.css .msg-assist thead th': { under: ['var(--bg-page)'], why: 'assistant messages have no fill of their own' },
+  'prose.css .msg-assist thead th': { under: ['var(--bg-page)'], why: 'assistant messages have no fill of their own' },
   'chat.css .term-keys .keycap': { under: ['var(--bg-well)'], why: 'the terminal screen is the well' },
   // `background: transparent` rules — the border and the ink are the whole
   // treatment.
   'chat.css .pending-actions button': { under: ['var(--bg-page)'], why: 'ghost button in the message column; chat.css:16 paints the screen --bg-page. Clears on every plausible ground' },
-  'chat.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: MessageBubble.tsx renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
+  'prose.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: MessageBubble.tsx renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
   'chat.css .compaction-head': { under: ['var(--bg-page)'], why: 'a full-width divider in the message column. Clears on every plausible ground' },
   'task-card.css .task-card-toggle': { under: ['var(--bg-surface)'], why: 'the disclosure is rendered INSIDE .task-card (TaskCard.tsx), which paints background: var(--bg-surface) — the same ground .mail-card gives its own contents' },
 };
@@ -685,7 +685,7 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: 'AccountPoolSheet\'s free-text field label (Task 9, account-pool-membership wave 1) sits directly in .sheet-panel, same as .pool-note/.route-field-label above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
-  'chat.css .code-block-lang': {
+  'prose.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
   },

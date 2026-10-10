@@ -272,29 +272,29 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'chat.css .msg-receipt--failed',
   'chat.css .pending-error',
   'chat.css .pending-actions .pending-retry',
-  'chat.css .msg-assist',
-  'chat.css .msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4',
-  'chat.css .msg-assist h4',
-  'chat.css .msg-assist strong',
-  'chat.css .msg-assist ul, .msg-assist ol',
-  'chat.css .msg-assist li::marker',
-  'chat.css .msg-assist .task-list-item input[type=\'checkbox\']:checked::after',
-  'chat.css .msg-assist .task-list-item:has(input:checked)',
-  'chat.css .msg-assist a',
-  'chat.css .msg-assist .kbd-plus',
-  'chat.css .msg-assist .hljs-comment, .msg-assist .hljs-quote',
-  'chat.css .msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
-  'chat.css .msg-assist .hljs-string, .msg-assist .hljs-regexp',
-  'chat.css .msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
-  'chat.css .msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
-  'chat.css .msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
-  'chat.css .msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
-  'chat.css .msg-assist .hljs-tag',
-  'chat.css .msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
-  'chat.css .msg-assist .hljs-meta',
-  'chat.css .msg-assist .hljs-deletion',
-  'chat.css .msg-assist .hljs-addition',
-  'chat.css .msg-assist .hljs-link',
+  'prose.css .msg-assist',
+  'prose.css .msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4',
+  'prose.css .msg-assist h4',
+  'prose.css .msg-assist strong',
+  'prose.css .msg-assist ul, .msg-assist ol',
+  'prose.css .msg-assist li::marker',
+  'prose.css .msg-assist .task-list-item input[type=\'checkbox\']:checked::after',
+  'prose.css .msg-assist .task-list-item:has(input:checked)',
+  'prose.css .msg-assist a',
+  'prose.css .msg-assist .kbd-plus',
+  'prose.css .msg-assist .hljs-comment, .msg-assist .hljs-quote',
+  'prose.css .msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
+  'prose.css .msg-assist .hljs-string, .msg-assist .hljs-regexp',
+  'prose.css .msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
+  'prose.css .msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
+  'prose.css .msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
+  'prose.css .msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
+  'prose.css .msg-assist .hljs-tag',
+  'prose.css .msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
+  'prose.css .msg-assist .hljs-meta',
+  'prose.css .msg-assist .hljs-deletion',
+  'prose.css .msg-assist .hljs-addition',
+  'prose.css .msg-assist .hljs-link',
   'chat.css .compaction-glyph',
   'chat.css .compaction-hint',
   'chat.css .compaction-head:hover .compaction-hint',
@@ -470,23 +470,23 @@ describe('the gate fails a mutated tree', () => {
     // five variants set no `color`, so a hand-written DECLARED_PAIRS list was
     // the only thing measuring them and it was a literal copy. Now the base
     // rule is re-measured once per variant.
-    const o = expectFail('src/session/chat.css', (s) =>
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
       s.replace(
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--status-attention-tint); }",
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--bg-well); }",
       ));
-    expect(o).toMatch(/FAIL.*LIGHT chat\.css \.msg-assist \.callout \[as .*warning/);
+    expect(o).toMatch(/FAIL.*LIGHT prose\.css \.msg-assist \.callout \[as .*warning/);
   });
 
   it("a callout variant's label hue is made invisible against its own tint", () => {
     // The second half of P1: `--callout-hue: var(--status-attention-tint)`
     // paints the ::before label the same colour as the panel behind it (1.00).
-    const o = expectFail('src/session/chat.css', (s) =>
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
       s.replace(
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text);",
         "[data-callout='warning']   { --callout-hue: var(--status-attention-tint);",
       ));
-    expect(o).toMatch(/FAIL.*chat\.css \.msg-assist \.callout::before \[as .*warning/);
+    expect(o).toMatch(/FAIL.*prose\.css \.msg-assist \.callout::before \[as .*warning/);
   });
 
   // ── the three spellings that forged the "unforgeable" claim ───────────────
@@ -518,9 +518,9 @@ describe('the gate fails a mutated tree', () => {
       ".callout[data-callout='rogue'] { --callout-tint: var(--bg-well); }",
     ],
   ])('a callout variant %s still cannot hide the well', (_n, rule) => {
-    const o = expectFail('src/session/chat.css', forge(rule));
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout \[as /);
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout::before \[as /);
+    const o = expectFail('../ui/src/components/prose.css', forge(rule));
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT prose\.css \.msg-assist \.callout \[as /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT prose\.css \.msg-assist \.callout::before \[as /);
   });
 
   it('a callout variant hides the well from ANOTHER stylesheet', () => {
@@ -529,16 +529,16 @@ describe('the gate fails a mutated tree', () => {
     // file a custom property was rebound in.
     const o = expectFail('src/fleet/fleet.css', (s) =>
       `${s}\n.msg-assist .callout[data-callout='crossfile'] { --callout-tint: var(--bg-well); }\n`);
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist \.callout \[as fleet\.css /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT prose\.css \.msg-assist \.callout \[as fleet\.css /);
   });
 
   it("a pseudo-element spells its host differently from the rule that paints it", () => {
     // The same string comparison, one function down: the ::before host was
     // looked up by exact `file selector` key, so a pseudo hanging off a
     // differently-spelled host was silently unmeasured.
-    const o = expectFail('src/session/chat.css', (s) =>
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
       `${s}\n.msg-assist .md-body .callout::before { color: var(--callout-tint); }\n`);
-    expect(o).toMatch(/FAIL\s+1\.00 .*chat\.css \.msg-assist \.md-body \.callout::before/);
+    expect(o).toMatch(/FAIL\s+1\.00 .*prose\.css \.msg-assist \.md-body \.callout::before/);
   });
 
   // ── the value the browser paints, not the first one written ───────────────
@@ -624,9 +624,9 @@ describe('the gate fails a mutated tree', () => {
     ],
     [
       'is a DESCENDANT of a self-grounded rule its own selector names',
-      'src/session/chat.css',
+      '../ui/src/components/prose.css',
       '.msg-assist pre .rogue { color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.msg-assist pre \.rogue \[in chat\.css \.msg-assist pre\]/,
+      /FAIL\s+2\.44 .*LIGHT prose\.css \.msg-assist pre \.rogue \[in prose\.css \.msg-assist pre\]/,
     ],
   ])('a rule that %s cannot hide the well', (_n, rel, rule, want) => {
     expect(expectFail(rel as string, (s) => `${s}\n${rule}\n`)).toMatch(want);
@@ -637,7 +637,7 @@ describe('the gate fails a mutated tree', () => {
     // NOTHING measured this rule. Both rows must exist and both must clear 4.5:
     // the label is --fs-2xs (11px) uppercase mono, so it is body text.
     const rows = report.measured.filter((m) =>
-      m.label.includes('chat.css .code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
+      m.label.includes('prose.css .code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
     expect(rows).toHaveLength(THEME_COUNT);
     for (const r of rows) {
       expect(r.floor).toBe(4.5);
@@ -650,10 +650,10 @@ describe('the gate fails a mutated tree', () => {
     // The bind between the fix and the gate: --accent flips with the theme and
     // the light one is tuned for paper, so on the well bar it is 3.03. If
     // anybody "simplifies" this token away, the gate says so.
-    const o = expectFail('src/session/chat.css', (s) =>
-      s.replace('color: var(--accent-on-well);\n  border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);',
-        'color: var(--accent);\n  border-color: color-mix(in srgb, var(--accent) 40%, transparent);'));
-    expect(o).toMatch(/FAIL\s+3\.0\d .*LIGHT chat\.css \.code-block-copy \[as \.code-block-copy:hover/);
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
+      s.replace('color: var(--accent-on-well);\n    border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);',
+        'color: var(--accent);\n    border-color: color-mix(in srgb, var(--accent) 40%, transparent);'));
+    expect(o).toMatch(/FAIL\s+3\.0\d .*LIGHT prose\.css \.code-block-copy \[as \.code-block-copy:hover/);
   });
 
   // ── background-image: read, or fail loudly. Never skipped ─────────────────
@@ -800,9 +800,9 @@ describe('the gate fails a mutated tree', () => {
   it('a PSEUDO-ELEMENT painting with a colour the auditor cannot resolve is a FAILURE', () => {
     // The colour of the ::before label, replaced — not prepended: declOf reads
     // the LAST declaration now, so a prepended one would be overwritten.
-    const o = expectFail('src/session/chat.css', (s) =>
-      s.replace('  color: var(--callout-hue);\n', '  color: var(--no-such-token);\n'));
-    expect(o).toMatch(/chat\.css \.msg-assist \.callout::before.*unknown custom property --no-such-token/);
+    const o = expectFail('../ui/src/components/prose.css', (s) =>
+      s.replace('    color: var(--callout-hue);\n', '    color: var(--no-such-token);\n'));
+    expect(o).toMatch(/prose\.css \.msg-assist \.callout::before.*unknown custom property --no-such-token/);
   });
 
   it('an INHERITED_GROUNDS entry whose rule was renamed away is a FAILURE', () => {
@@ -841,8 +841,8 @@ describe('the gate fails a mutated tree', () => {
   });
 
   it('a GROUNDS entry whose rule stopped being self-grounded is a FAILURE', () => {
-    const o = expectFail('src/session/chat.css', (s) => s.replace('.code-block-copy {\n', '.code-block-copy-renamed {\n'));
-    expect(o).toMatch(/stale grounds registry entry: chat\.css \.code-block-copy /);
+    const o = expectFail('../ui/src/components/prose.css', (s) => s.replace('.code-block-copy {\n', '.code-block-copy-renamed {\n'));
+    expect(o).toMatch(/stale grounds registry entry: prose\.css \.code-block-copy /);
   });
 
   it('a SELF_GROUNDED_EXEMPT entry left behind by a renamed rule is a FAILURE', () => {
@@ -1271,12 +1271,12 @@ describe('every stylesheet under src/ is audited', () => {
     // is behind them — not --bg-well, which the GROUNDS entry used to claim and
     // which flattered every ratio here.
     for (const sel of ['.code-block-copy', '.code-block-lang']) {
-      const rows = report.measured.filter((m) => m.label.endsWith(`chat.css ${sel}`));
+      const rows = report.measured.filter((m) => m.label.endsWith(`prose.css ${sel}`));
       expect(rows.map((m) => m.label), sel).toHaveLength(THEME_COUNT);
       for (const r of rows) expect(r.ratio, r.label).toBeGreaterThanOrEqual(4.5);
     }
-    expect(GROUNDS['chat.css .code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
-    expect(INHERITED_GROUNDS['chat.css .code-block-lang']?.under).toEqual(['var(--well-bar-bg)']);
+    expect(GROUNDS['prose.css .code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
+    expect(INHERITED_GROUNDS['prose.css .code-block-lang']?.under).toEqual(['var(--well-bar-bg)']);
   });
 
   it('clears its floor on every pair, in both themes', () => {
@@ -1475,7 +1475,7 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
     // The bind: every variant's --callout-tint is read off the rule. If a
     // variant is added, the base rule is re-measured through it with no
     // registration anywhere.
-    const rules = rulesOf(ROOT, 'src/session/chat.css');
+    const rules = rulesOf(ROOT, '../ui/src/components/prose.css');
     const variants = rules.filter((r) => /^\.msg-assist \.callout\[data-callout='\w+'\]$/.test(r.selector));
     expect(variants.map((r) => r.selector)).toHaveLength(VARIANTS.length);
     for (const r of variants) {
@@ -1496,9 +1496,12 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
       .filter((r) => r.selector !== '.msg-assist .callout' && declOf(r.body, '--callout-tint') !== null);
     expect(rebinders.map(ruleKey)).toHaveLength(VARIANTS.length);
     for (const r of rebinders) {
-      const as = r.file === 'chat.css' ? r.selector : ruleKey(r);
+      // The callout lives in @ccrc/ui's prose.css now, so a variant written in
+      // that same file is named by its selector alone and one written anywhere
+      // else carries its file — which is what `ruleKey` already spells.
+      const as = r.file === 'prose.css' ? r.selector : ruleKey(r);
       expect(
-        report.measured.some((m) => m.label.endsWith(`chat.css .msg-assist .callout [as ${as}]`)),
+        report.measured.some((m) => m.label.endsWith(`prose.css .msg-assist .callout [as ${as}]`)),
         `no measured context for ${ruleKey(r)}`,
       ).toBe(true);
     }

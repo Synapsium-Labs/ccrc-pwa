@@ -6,6 +6,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import React, { useCallback, useState, type ReactNode } from 'react';
+import { Prose } from '@ccrc/ui';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -284,9 +285,9 @@ function FoldedCard({
       {open && (raw
         ? <pre className="compaction-body compaction-raw">{text}</pre>
         : (
-          <div className="compaction-body msg-assist">
+          <Prose className="compaction-body">
             <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={mdComponents}>{text}</Markdown>
-          </div>
+          </Prose>
         ))}
     </div>
   );
@@ -405,9 +406,9 @@ export function MessageBubble({
   }
 
   return (
-    <div className="msg-assist">
+    <Prose>
       <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={mdComponents}>{event.text}</Markdown>
       {streaming && <span className="stream-caret" aria-hidden="true" />}
-    </div>
+    </Prose>
   );
 }

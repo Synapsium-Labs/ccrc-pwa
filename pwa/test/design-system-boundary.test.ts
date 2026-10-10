@@ -97,6 +97,7 @@ export const OWNED = [
   'well',                                                        // Well / WELL
   'chip',                                                        // Chip / CHIP (the dot is an <i>, not a class)
   'keycap',                                                      // Keycap / KEYCAP
+  'msg-assist',                                                  // Prose / PROSE
   // THE ELEVEN THE LIST HAD MISSED, found by the derivation below rather than
   // by a reader. Every one is emitted by the composite named beside it and
   // selected by that composite's own stylesheet, which is the definition of a

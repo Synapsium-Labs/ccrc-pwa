@@ -66,6 +66,10 @@ export { TaskStrip, orderTasks, summarize } from './components/task-strip';
 // `BuildLine` knows that a box whose version it cannot vouch for is the thing
 // to say loudly; it reads a `NodeWire[]` and nothing else.
 export { BuildLine } from './components/build-line';
+// `Prose` is the one composite that renders no tree of its own: what makes
+// prose prose is seventy-six rules, and the app still owns the react-markdown
+// map that decides which element each token becomes.
+export { Prose, PROSE } from './components/prose';
 
 // — themes —
 // The palettes themselves live in styles/tokens.css and are DISCOVERED by the
