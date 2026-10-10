@@ -33,7 +33,7 @@ import { inlinePauseError } from './CoordBanner';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
 import { api, apiErrorText } from '../lib/api';
-import { toast } from '@ccrc/ui';
+import { Button, toast } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
@@ -130,9 +130,9 @@ export function ChildReclaimBanner({
       <div className="child-reclaim-status" role="status">
         <span className="child-reclaim-glyph" aria-hidden="true">{CHILD_RECLAIM_MARKER_GLYPH[marker]}</span>
         <span className="child-reclaim-word">{CHILD_RECLAIM_MARKER_WORD[marker]}</span>
-        <button type="button" className="child-reclaim-toggle" disabled={busy} onClick={onToggle}>
+        <Button variant="quiet" size="fit" className="child-reclaim-toggle flex-none" disabled={busy} onClick={onToggle}>
           {toggleLabel}
-        </button>
+        </Button>
         {error !== null && <p className="child-reclaim-error">{error}</p>}
       </div>
       {attention.length > 0 && (

@@ -170,7 +170,8 @@ describe('every self-grounded utility pair a component renders is measured', () 
     // instead of red. Measured 3 pairs across 2 files today — few, because
     // most ui components inherit their ground rather than painting one, and
     // those stay with audit.mjs's INHERITED_GROUNDS machinery by design.
-    expect(pairs.length).toBeGreaterThanOrEqual(3);
+    // Four since the quiet variant arrived with a ground of its own.
+    expect(pairs.length).toBeGreaterThanOrEqual(4);
     expect(new Set(pairs.map((p) => p.file)).size).toBeGreaterThanOrEqual(2);
   });
 
@@ -199,6 +200,26 @@ describe('every self-grounded utility pair a component renders is measured', () 
       state: '',
       ink: 'var(--ink-on-well)',
       ground: 'var(--bg-well)',
+    });
+  });
+
+  it('includes the quiet control, whose five rules the gate used to measure', () => {
+    // `.coord-toggle`, `.child-reclaim-toggle`, `.caps-save`,
+    // `.program-start-door` and `.program-start-go` each declared
+    // `color: var(--ink-secondary)` over `background: var(--bg-raised)`, and
+    // audit.mjs measured all five across twelve palettes — SIXTY of the
+    // gate's checks. Folding them into one cva variant took the gate from
+    // 3564 to 3504, which is exactly those sixty and not one more.
+    //
+    // The coverage did not evaporate; it moved HERE, where one assertion
+    // stands for all five because they render one class string. The variant is
+    // self-grounded on purpose — it declares `bg-raised` as well as its ink —
+    // precisely so this derivation has a ground to find.
+    expect(pairs).toContainEqual({
+      file: 'button.tsx',
+      state: '',
+      ink: 'var(--ink-secondary)',
+      ground: 'var(--bg-raised)',
     });
   });
 

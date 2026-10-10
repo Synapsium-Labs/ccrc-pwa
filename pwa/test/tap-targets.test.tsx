@@ -31,7 +31,7 @@ import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
-import { MailStrip } from '@ccrc/ui';
+import { MailStrip, buttonVariants } from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -272,8 +272,8 @@ describe('the two rules that were already scraped still reach a real element', (
     // Task 6 (`.mail-strip-head`),  — `.mail-back` and `.runs-back` left this
     // loop with the other three back chevrons when they became `BackButton`;
     // their floor is asserted against the component below,
-    // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`), Task 12
-    // (`.run-abandon`) and Task 13 (`.program-start-door`, `.program-start-go`)
+    // Build 4 Task 11 (`.coord-banner`), Task 12
+    // (`.run-abandon`) and Task 13
     // join the same loop rather than getting their own — one place where
     // "every floored rule stays on the token" is checked, not a second copy
     // of the assertion per branch.
@@ -285,11 +285,10 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.fleet-runs-row'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(mailStripCss, '.mail-strip .mail-strip-head'),
-      ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
-      ruleIn(fleetCss, '.child-reclaim-banner'), ruleIn(fleetCss, '.child-reclaim-toggle'),
+      ruleIn(fleetCss, '.coord-banner'),
+      ruleIn(fleetCss, '.child-reclaim-banner'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
-      ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
-      ruleIn(fleetCss, '.caps-control'), ruleIn(fleetCss, '.caps-save'),
+      ruleIn(fleetCss, '.caps-control'),
       ruleIn(fleetCss, '.caps-input'), ruleIn(fleetCss, '.mail-chip'),
       ruleIn(fleetCss, '.proj-released-toggle'), ruleIn(fleetCss, '.proj-released-archive'),
     ]) {
@@ -323,6 +322,19 @@ describe('.mail-badge — the only door to /mail', () => {
 // The render half of each pair below is untouched: the hook class is still on
 // the element, which is the half that proves the floor reaches real markup.
 const backButton = readUi('primitives', 'back-button.tsx');
+
+// AND SO DID FOUR QUIET CONTROLS. `.coord-toggle`, `.child-reclaim-toggle`,
+// `.caps-save` and `.program-start-door` declared the same eleven
+// declarations — three of them byte-identical — and are one cva variant now.
+// Their floor is asserted against the composed class string rather than four
+// rules, and the render half of each pair below is untouched: the hook class
+// is still on the element, which is the half that proves the floor reaches
+// real markup.
+const QUIET = buttonVariants({ variant: 'quiet', size: 'fit' });
+function expectQuietIsATarget(): void {
+  expect(QUIET).toContain('min-h-tap');
+  expect(QUIET).not.toContain('44px');
+}
 
 describe('.mail-back — the feed’s back control', () => {
   it('is at least one tap square, off the shared token', () => {
@@ -430,7 +442,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
 
 describe('.coord-toggle — the pause banner’s own toggle', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.coord-toggle'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
   it('is the class the rendered toggle actually carries, once a coord frame has landed', () => {
     const store = makeStore();
@@ -486,7 +498,7 @@ describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
 
 describe('.program-start-door — the only door onto a new program', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.program-start-door'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
   it('is the class the rendered footer control actually carries', () => {
     const store = makeStore();
@@ -497,7 +509,7 @@ describe('.program-start-door — the only door onto a new program', () => {
 
 describe('.program-start-go — the sheet’s own confirm control', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.program-start-go'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
   it('is the class the rendered confirm button actually carries', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({

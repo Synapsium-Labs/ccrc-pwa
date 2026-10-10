@@ -27,6 +27,24 @@ export const buttonVariants = cva(
           'btn-primary border-0 bg-accent text-ink-on-accent text-base font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
         ghost:
           'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
+        /** `quiet` — the raised mono control. FOUR app rules declared the same
+         *  eleven declarations: `.coord-toggle`, `.child-reclaim-toggle` and
+         *  `.caps-save` were byte-identical, and `.program-start-door`
+         *  differed only in its font size. fleet.css said so itself, twice,
+         *  in comments pointing at the other copies ("Same self-grounded pair
+         *  as `.coord-toggle`/`.sess-actions` — not reinvented"). A comment
+         *  is a request; this is the mechanism.
+         *
+         *  Self-grounded on purpose: it declares its own `bg-raised` as well
+         *  as its ink, so `design/audit.mjs` can recover a ground for the
+         *  pair rather than guessing the surface behind it.
+         *
+         *  The press is `0.96`, not the base's `0.97` — three of the four
+         *  rules said 0.96 and the fourth (`.caps-save`) said 0.97, which it
+         *  keeps by passing it at the call site. Folding both to one number
+         *  would be a visual change, and this wave has none. */
+        quiet:
+          'border border-edge-subtle bg-raised text-ink-secondary font-mono text-2xs font-medium leading-none not-italic normal-nums enabled:active:scale-[0.96]',
       },
       /** How wide. `full` is the sheet shape and the default — a sheet's
        *  commit button spans it. `fit` is the one every OTHER row wanted:

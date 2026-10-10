@@ -2570,22 +2570,10 @@ button.proj-card-pool::before {
    identical --bg-surface ground — the quiet cue, never the only cue. */
 .coord-banner .coord-glyph { color: var(--ink-tertiary); flex: none; }
 .coord-word { flex: 1; min-width: 0; }
-/* Same self-grounded pair as `.sess-actions`/`.proj-card-add` — bg-raised
-   fill, edge-subtle hairline, ink-secondary ink — not reinvented. */
-.coord-toggle {
-  flex: none;
-  min-height: var(--tap-min);
-  padding: 0 var(--sp-3);
-  background: var(--bg-raised);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.coord-toggle:active { transform: scale(0.96); }
-.coord-toggle:disabled { cursor: default; }
+/* `.coord-toggle` is `<Button variant="quiet">` — the chrome these eleven
+   declarations used to spell out lives in the variant now, and three other
+   controls spelled out the same eleven. The class stays as a hook: a selector
+   for tests and for any app rule that needs to place it. */
 /* The reclaim row (child-reclamation wave 4) — the pause banner's shape and its
    discipline: a switch is a STATE, not a living pane, so no --glow, no animation
    and no box-shadow anywhere under .child-reclaim-*. Self-grounded (its own
@@ -2614,20 +2602,7 @@ button.proj-card-pool::before {
 .child-reclaim-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0; }
 .child-reclaim-banner .child-reclaim-glyph { color: var(--ink-tertiary); flex: none; }
 .child-reclaim-word { flex: 1; min-width: 0; }
-.child-reclaim-toggle {
-  flex: none;
-  min-height: var(--tap-min);
-  padding: 0 var(--sp-3);
-  background: var(--bg-raised);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.child-reclaim-toggle:active { transform: scale(0.96); }
-.child-reclaim-toggle:disabled { cursor: default; }
+/* `.child-reclaim-toggle` is `<Button variant="quiet">` — see `.coord-toggle`. */
 .child-reclaim-banner .child-reclaim-error { flex-basis: 100%; margin: 0; color: var(--ink-secondary); }
 .child-reclaim-banner .child-reclaim-attention {
   flex-basis: 100%;
@@ -2691,20 +2666,8 @@ button.proj-card-pool::before {
   color: var(--ink-tertiary);
 }
 
-.caps-save {
-  flex: none;
-  min-height: var(--tap-min);
-  padding: 0 var(--sp-3);
-  background: var(--bg-raised);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-
-.caps-save:active { transform: scale(0.97); }
+/* `.caps-save` is `<Button variant="quiet">` — see `.coord-toggle`. Its own
+   0.97 press rides at the call site, since the variant carries 0.96. */
 
 /* Named-ancestor descendant for the same reason `.coord-error` is one. */
 .caps-control .caps-note {
@@ -2799,26 +2762,14 @@ button.proj-card-pool::before {
  *  animation, no box-shadow anywhere under .program-start-*, same    *
  *  discipline as the coord banner and the abandon sheet above.       *
  * ------------------------------------------------------------------ */
-/* Same self-grounded pair as `.coord-toggle`/`.sess-actions` — bg-raised
-   fill, edge-subtle hairline, ink-secondary ink — not reinvented.
-   NO `flex: none` (review M6): it came across with the copy from
-   `.coord-toggle`, which sits in `.coord-banner`, a flex row. This door's own
-   parent is `.runs-screen` (`display: grid`, above), where a flex shorthand
-   is inert — a declaration that reads as load-bearing and decides nothing.
-   Pinned by `fleet-css.test.ts` so it cannot drift back in with the next
-   copy-paste. */
-.program-start-door {
-  min-height: var(--tap-min);
-  padding: 0 var(--sp-3);
-  background: var(--bg-raised);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.program-start-door:active { transform: scale(0.96); }
+/* `.program-start-door` is `<Button variant="quiet">` — see `.coord-toggle`.
+   It was the fourth copy of those eleven declarations, differing only in font
+   size, which the call site passes as `text-xs`.
+   NO `flex: none` SURVIVES THE MOVE, and for the same reason review M6 took
+   it out: this door's parent is `.runs-screen` (`display: grid`), where a flex
+   shorthand decides nothing. The other three call sites DO pass `flex-none`,
+   because their parents are flex rows — which is why the variant does not
+   carry it. */
 
 /* Self-grounded (sets its own color AND background — the same pairing
    `.abandon-sheet`/`.coord-banner` use above), so every
@@ -2877,20 +2828,10 @@ button.proj-card-pool::before {
   color: var(--status-dead-text);
 }
 /* Same self-grounded pair as `.program-start-door` above — not reinvented. */
-.program-start-go {
-  min-height: var(--tap-min);
-  width: 100%;
-  padding: 0 var(--sp-3);
-  background: var(--bg-raised);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.program-start-go:active:not(:disabled) { transform: scale(0.98); }
-.program-start-go:disabled { cursor: default; }
+/* `.program-start-go` is `<Button variant="quiet">` — the FIFTH copy of those
+   eleven declarations, found by `quiet-control.test.ts` the day the other four
+   were folded. Its width, its `--fs-sm` step and its shallower 0.98 press ride
+   at the call site (StartProgramSheet.tsx's `GO`). */
 
 /* ── Hot files (Build 9 wave 9) ──────────────────────────────────────────
    The live claims, intent first. MailStrip's chrome, fleet-side. */
@@ -3338,11 +3279,15 @@ button.proj-card-pool::before {
    A SECOND block, and its POSITION is the whole point. A media query adds
    no specificity, so the block near the top of this file can only beat a
    rule declared BEFORE it — every selector it names is, which is why it
-   works. These three are declared later (.acct-fill:804,
-   .program-start-door:2821, .program-start-go:2891), so naming them up
-   there sets `transition: none` and then the rule's own `transition`
-   re-declares it a thousand lines down and wins. Measured: adding them to
-   the first block changed nothing.
+   works. `.acct-fill` is declared later, so naming it up there sets
+   `transition: none` and then the rule's own `transition` re-declares it a
+   thousand lines down and wins. Measured: adding it to the first block
+   changed nothing.
+
+   `.program-start-door` and `.program-start-go` were the other two, and both
+   left when they became `<Button variant="quiet">`: the component carries
+   `motion-reduce:transition-none` itself, which is a utility on the element
+   rather than a rule in this sheet, so no position argument applies to them.
 
    .acct-fill animates its WIDTH as a usage window fills. The first block's
    `.acct-list .acct-row` entry never covered it — `transition` does not
@@ -3352,9 +3297,7 @@ button.proj-card-pool::before {
    motion-reduced.test.ts checks BOTH halves now: that a moving rule is
    named, and that the naming block is positioned to win. */
 @media (prefers-reduced-motion: reduce) {
-  .acct-fill,
-  .program-start-door,
-  .program-start-go {
+  .acct-fill {
     transition: none;
   }
 }

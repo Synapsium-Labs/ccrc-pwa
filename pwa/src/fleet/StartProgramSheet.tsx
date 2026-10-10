@@ -42,7 +42,18 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
-import { Sheet, Skeleton, TextInput } from '@ccrc/ui';
+import { Button, Sheet, Skeleton, TextInput } from '@ccrc/ui';
+
+/** The sheet's confirm control. It was the FIFTH copy of the quiet control's
+ *  eleven declarations — `quiet-control.test.ts` found it the day the other
+ *  four were folded, which is the whole reason that census exists.
+ *
+ *  Three things ride beside the variant rather than in it, because they are
+ *  this control's and not the family's: it spans the sheet (`size` defaults
+ *  to `full`, so nothing is passed), it is a step up in size at `--fs-sm`,
+ *  and it presses to 0.98 — shallower than the family's 0.96, as its own rule
+ *  always said. */
+const GO = 'program-start-go text-sm enabled:active:scale-[0.98]';
 import { accountLabel } from '../lib/accounts';
 import { markerState } from './coordWords';
 import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
@@ -792,21 +803,21 @@ export function StartProgramSheet({
         {`Started ${kickoffFailed.sessionId}, but its kickoff could not be queued `
           + `— nothing was sent, and it has no brief yet. ${kickoffFailed.why}`}
       </p>
-      <button
-        type="button"
-        className="program-start-go"
+      <Button
+        variant="quiet"
+        className={GO}
         disabled={retrying}
         onClick={() => void retryKickoff()}
       >
         {retrying ? 'Queueing…' : 'Queue the kickoff again'}
-      </button>
-      <button
-        type="button"
-        className="program-start-go"
+      </Button>
+      <Button
+        variant="quiet"
+        className={GO}
         onClick={() => navigate(`/s/${encodeURIComponent(kickoffFailed.sessionId)}`)}
       >
         Open it without a brief
-      </button>
+      </Button>
     </>
   );
 
@@ -1088,9 +1099,9 @@ export function StartProgramSheet({
                   suppression. Reachable whenever `queueKickoff()` is slow
                   after a D-291 timeout has already set `starting` back to
                   false. */}
-              <button
-                type="button"
-                className="program-start-go"
+              <Button
+                variant="quiet"
+                className={GO}
                 disabled={
                   !kickoffVerdict.ok || starting
                   || placement?.kind !== 'projected' || existing !== null
@@ -1104,7 +1115,7 @@ export function StartProgramSheet({
                     : placement?.kind !== 'projected'
                       ? 'Checking placement…'
                       : `Start ${slug.trim() === '' ? '…' : slug.trim()} on ${accountLabel(roster, placement.wrapper)}`}
-              </button>
+              </Button>
             </>
           )
         )}

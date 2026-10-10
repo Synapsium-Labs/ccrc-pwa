@@ -4,7 +4,27 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { TEXT_INPUT } from '@ccrc/ui';
+import { TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+
+/** The quiet control's shipped class string. FOUR rules in this stylesheet
+ *  declared these eleven declarations; they are one cva variant now, so the
+ *  claims that used to be read off a rule are read off what ships instead.
+ *  `buttonVariants()` rather than the raw variant literal, because what
+ *  reaches an element is base + variant + size composed. */
+const QUIET = buttonVariants({ variant: 'quiet', size: 'fit' });
+/** The floor moved from a rule to a component, exactly as the five back
+ *  chevrons' did. `min-h-tap` resolves through theme.css's
+ *  `--spacing-tap: var(--tap-min)`, which `theme-bridge.test.ts` pins — so a
+ *  utility that silently stopped resolving to the token reds there. */
+function expectQuietIsATarget(): void {
+  expect(QUIET).toContain('min-h-tap');
+  expect(QUIET).not.toContain('44px');
+}
+/** A quiet control is a STATE, not a living pane — the discipline the
+ *  stylesheet used to hold for each copy, held once. */
+function expectQuietIsNotAlive(): void {
+  for (const word of ['glow', 'animate', 'shadow']) expect(QUIET).not.toContain(word);
+}
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
   atBlock, declValue, declaredValues, norm, normSel, ruleIn, selectorsOf, stripComments,
@@ -746,16 +766,19 @@ describe('the program-ready badge is not a living pane', () => {
 // the same reason.
 describe('the coord banner is not a living pane, and its toggle is a real target', () => {
   it('no .coord-* rule glows, breathes or animates', () => {
-    for (const sel of ['.coord-banner', '.coord-banner .coord-glyph', '.coord-word', '.coord-toggle', '.coord-banner .coord-error']) {
+    for (const sel of ['.coord-banner', '.coord-banner .coord-glyph', '.coord-word', '.coord-banner .coord-error']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
       expect(rule, sel).not.toContain('box-shadow');
     }
+    // `.coord-toggle` left this list when it became `<Button variant="quiet">`.
+    // The claim did not: it is made against the class string that ships.
+    expectQuietIsNotAlive();
   });
 
   it('.coord-toggle is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleFor('.coord-toggle'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
 
   it('.coord-banner itself clears the floor too — it is a status row, not just a label', () => {
@@ -793,15 +816,17 @@ describe('the reclaim row is not a living pane, and its toggle is a real target'
     const sels = RULES.map((r) => r.sel);
     expect(sels).toContain('.child-reclaim-status');
     expect(sels).toContain('.child-reclaim-banner .child-reclaim-item');
-    expect(sels).toContain('.child-reclaim-toggle');
+    expect(sels).toContain('.child-reclaim-word');
     for (const { sel, body } of RULES) {
       expect(body, sel).not.toContain('--glow');
       expect(body, sel).not.toContain('animation');
       expect(body, sel).not.toContain('box-shadow');
     }
+    // The toggle is `<Button variant="quiet">` and has no rule here to derive.
+    expectQuietIsNotAlive();
   });
   it('.child-reclaim-toggle and the row clear the tap floor, off the shared token', () => {
-    expect(declValue(ruleFor('.child-reclaim-toggle'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
     expect(declValue(ruleFor('.child-reclaim-banner'), 'min-height')).toBe('var(--tap-min)');
   });
   it('.child-reclaim-banner is self-grounded — its own color AND background', () => {
@@ -923,9 +948,13 @@ describe('the program-start door and sheet are not living panes, and every real 
   it('no .program-start-* rule glows, breathes or animates', () => {
     const rules = [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
       .filter((m) => (m[1] ?? '').includes('.program-start-'));
-    // Ten today: door, door:active, sheet, ledger+note, timeout, warn,
-    // existing+refuse+error, go, go:active, go:disabled.
-    expect(rules.length).toBeGreaterThanOrEqual(10);
+    // Five today. It was ten: the door, the confirm control and their three
+    // state rules left when both became `<Button variant="quiet">` — the
+    // sheet, its ledger+note, its timeout, its warn and its
+    // existing+refuse+error remain.
+    expect(rules.length).toBeGreaterThanOrEqual(5);
+    // The claim the departed five carried, against what ships instead.
+    expectQuietIsNotAlive();
     for (const m of rules) {
       const sel = norm(m[1] ?? '');
       const rule = norm(m[2] ?? '');
@@ -950,15 +979,24 @@ describe('the program-start door and sheet are not living panes, and every real 
   // inert, a declaration that reads as load-bearing and does nothing.
   it('.program-start-door declares no flex — its parent .runs-screen is a grid', () => {
     expect(declValue(ruleFor('.runs-screen'), 'display')).toBe('grid');
-    expect(declValue(ruleFor('.program-start-door'), 'flex')).toBeNull();
+    // The claim survived the move to `<Button variant="quiet">`, and it is why
+    // the variant does NOT carry `flex-none`: the other three quiet controls
+    // sit in flex rows and pass it at the call site, this one must not. Both
+    // halves are checked — the variant, and this call site's own className.
+    expect(QUIET).not.toContain('flex-none');
+    const runsScreen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'RunsScreen.tsx'), 'utf8');
+    const door = /className="program-start-door[^"]*"/.exec(runsScreen);
+    expect(door, 'the door still carries its hook class').not.toBeNull();
+    expect(door?.[0]).not.toContain('flex-none');
   });
 
   it('.program-start-door is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleFor('.program-start-door'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
 
   it('.program-start-go is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleFor('.program-start-go'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
 
   // The named-ancestor descendant pair itself (Task 12 review lesson, applied

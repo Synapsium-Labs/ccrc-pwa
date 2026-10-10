@@ -22,7 +22,7 @@ import type { ReactNode } from 'react';
 import type { MarkerState } from '../../../shared/api';
 import { COORD_CONFIRM_MS, MARKER_GLYPH, MARKER_WORD, markerState } from './coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../lib/api';
-import { toast } from '@ccrc/ui';
+import { Button, toast } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
@@ -169,9 +169,9 @@ export function CoordBanner({
     <div className="coord-banner" role="status">
       <span className="coord-glyph" aria-hidden="true">{MARKER_GLYPH[pauseState]}</span>
       <span className="coord-word">{MARKER_WORD[pauseState]}</span>
-      <button type="button" className="coord-toggle" disabled={busy} onClick={onToggle}>
+      <Button variant="quiet" size="fit" className="coord-toggle flex-none" disabled={busy} onClick={onToggle}>
         {toggleLabel}
-      </button>
+      </Button>
       {error !== null && <p className="coord-error">{error}</p>}
     </div>
   );

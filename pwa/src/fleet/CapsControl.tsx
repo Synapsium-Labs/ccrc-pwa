@@ -28,6 +28,7 @@
 // renders `null`.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Button } from '@ccrc/ui';
 import type { CoordCaps, CoordCapsView } from '../../../shared/api';
 import { ApiError, api, apiErrorText } from '../lib/api';
 import './fleet.css';
@@ -182,9 +183,19 @@ export function CapsControl({
         draft.perDay ?? String(view.caps.maxSessionsPerDay),
         view.usage.dispatchedIn24h, view.caps.maxSessionsPerDay,
         (v) => setDraft((d) => ({ ...d, perDay: v })))}
-      <button type="button" className="caps-save" disabled={busy} onClick={onSave}>
+      <Button
+        variant="quiet"
+        size="fit"
+        /* `enabled:active:scale-[0.97]` is not decoration: `.caps-save` was the
+           one of the four quiet controls that pressed to 0.97 rather than 0.96.
+           Kept at the call site so the variant can carry the majority figure
+           and nothing moves. */
+        className="caps-save flex-none enabled:active:scale-[0.97]"
+        disabled={busy}
+        onClick={onSave}
+      >
         {busy ? 'saving…' : 'save'}
-      </button>
+      </Button>
       {/* ONE note element, ALWAYS mounted, and it is the live region (D-1222).
           Always mounted because a `role="status"` inserted at the same moment its
           text appears is announced unreliably; the region has to exist first and

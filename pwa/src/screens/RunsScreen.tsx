@@ -48,7 +48,7 @@ import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
-import { BackButton, useNow } from '@ccrc/ui';
+import { BackButton, Button, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -787,9 +787,9 @@ export function RunsScreen({
       {/* Task 13, spec §4.4: ONE door, rendered here regardless of the
           board's own state below — a program starts before any run exists
           to show. */}
-      <button type="button" className="program-start-door" onClick={() => setStartOpen(true)}>
+      <Button variant="quiet" size="fit" className="program-start-door text-xs" onClick={() => setStartOpen(true)}>
         Start a program
-      </button>
+      </Button>
 
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not
