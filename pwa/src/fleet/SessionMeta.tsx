@@ -139,6 +139,31 @@ export interface SessionMetaProps {
   onToggleSubagents: () => void;
 }
 
+/**
+ * A durable MARKER whose presence is the fact and whose reason may be a thing
+ * this build cannot read. Written out twice before this — once for §2.4's swap
+ * block, once for ruling 6's strand — with identical logic and different nouns.
+ *
+ * `?? null` on the object and a type check on the KEY: the same one-level-
+ * deeper guard `lifecycleQualifier` carries, for the same reason (the fleet
+ * frame is CAST, not revived, and ccd/server/PWA are versioned apart). Measured
+ * at HEAD: a marker carrying only `at` rendered "swap blocked — undefined".
+ * The marker's PRESENCE is the durable fact and must outlive a reason this
+ * build could not read; `undefined` beside it is not a reason, so the cell
+ * drops the half it does not have and keeps the half it does.
+ *
+ * `at` is deliberately never read: the registry's fail-shut arm writes `at: 0`
+ * for a real but unreadable marker.
+ */
+const markerNote = (
+  marker: { reason?: unknown } | null | undefined,
+  word: string,
+): { reason: string | null; note: string } | null => {
+  if (marker === null || marker === undefined) return null;
+  const reason = typeof marker.reason === 'string' && marker.reason !== '' ? marker.reason : null;
+  return { reason, note: reason === null ? word : `${word} — ${reason}` };
+};
+
 export function SessionMeta({
   session, roster, projectPool, onOpenRun, selected, state, dead,
   subagentList, subagentsOpen, subagentsId, onToggleSubagents,
@@ -225,32 +250,10 @@ export function SessionMeta({
   const turnAge =
     wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
 
-  const swapBlocked = session.swapBlocked ?? null;
-  // `?? null` on the object, and a type check on the KEY — the same one-level-
-  // deeper guard `lifecycleQualifier` carries, for the same reason (the fleet
-  // frame is cast, not revived, and ccd/server/PWA are versioned apart).
-  // Measured at HEAD: a marker carrying only `at` rendered "swap blocked —
-  // undefined". The marker's PRESENCE is the durable fact §2.4 is about and
-  // must outlive a reason this build could not read; `undefined` beside it is
-  // not a reason, so the cell drops the half it does not have and keeps the
-  // half it does.
-  const swapReason =
-    typeof swapBlocked?.reason === 'string' && swapBlocked.reason !== '' ? swapBlocked.reason : null;
-  const swapNote =
-    swapBlocked === null ? null
-    : swapReason === null ? 'swap blocked'
-    : `swap blocked — ${swapReason}`;
-
-  // The strand (ruling 6). The marker's PRESENCE is the durable fact and must
-  // outlive a reason this build could not read. `at` is deliberately ignored:
-  // the registry's fail-shut arm uses `at: 0` for a real but unreadable marker.
-  const stranded = session.stranded ?? null;
-  const strandReason =
-    typeof stranded?.reason === 'string' && stranded.reason !== '' ? stranded.reason : null;
-  const strandNote =
-    stranded === null ? null
-    : strandReason === null ? 'stranded'
-    : `stranded — ${strandReason}`;
+  // Two markers, one shape. §2.4's swap block and ruling 6's strand are the
+  // same fact in two nouns, and they were written out twice.
+  const swap = markerNote(session.swapBlocked, 'swap blocked');
+  const strand = markerNote(session.stranded, 'stranded');
 
   // The supervisor's standing substrate fault (spec §4) — the console cannot
   // currently SEE this session, so every field above may be frozen at its
@@ -466,18 +469,18 @@ export function SessionMeta({
               REASON STRING IS THE DISPLAY — rendered verbatim, never parsed,
               `title` carrying the full text past the cell's own ellipsis,
               same contract as .sess-held. */}
-          {swapNote !== null && swapBlocked !== null && (
-            <span className="sess-swapblocked" data-swapblocked="true" title={swapReason ?? swapNote}>
-              {swapNote}
+          {swap !== null && (
+            <span className="sess-swapblocked" data-swapblocked="true" title={swap.reason ?? swap.note}>
+              {swap.note}
             </span>
           )}
 
           {/* A strand is a durable marker that no eligible account can take
               this live session. It stays distinct from swap refusal because
               their remedies differ, and the reason remains verbatim. */}
-          {!dead && strandNote !== null && (
-            <span className="sess-stranded" data-stranded="true" title={strandReason ?? strandNote}>
-              {strandNote}
+          {!dead && strand !== null && (
+            <span className="sess-stranded" data-stranded="true" title={strand.reason ?? strand.note}>
+              {strand.note}
             </span>
           )}
 
