@@ -55,7 +55,7 @@ import {
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
-import { buttonVariants, DOOR, ToastHost } from '@ccrc/ui';
+import { buttonVariants, DOOR, RADIO_FIELDSET, RADIO_OPTION, ToastHost } from '@ccrc/ui';
 import { declValue, ruleIn } from './cssRule';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -629,9 +629,13 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
   });
 
   it('floors every option row at the tap target, keeps a fieldset shrinkable, and tints the amber line with the attention ink', () => {
+    // The first two moved from this sheet into `@ccrc/ui`'s `Radio`, with the
+    // rest of a skin that turned out to be entirely layout — so they are read
+    // off the component's class strings and the amber line, which PAINTS and
+    // stayed, is still read off the sheet.
     const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
-    expect(declValue(ruleIn(css, '.settings-option'), 'min-height')).toBe('var(--tap-min)');
-    expect(declValue(ruleIn(css, '.settings-fieldset'), 'min-width')).toBe('0');
+    expect(RADIO_OPTION.split(/\s+/)).toContain('min-h-tap');
+    expect(RADIO_FIELDSET.split(/\s+/)).toContain('min-w-0');
     expect(declValue(ruleIn(css, '.settings-catalogue--amber'), 'color')).toBe('var(--status-attention-text)');
   });
 });

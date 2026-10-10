@@ -24,7 +24,8 @@ import {
 } from '../../../shared/api';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import {
-  BackButton, Button, PHOSPHOR, SYSTEM, Skeleton, THEMES, toast, useNow,
+  BackButton, Button, PHOSPHOR, RADIO_FIELDSET, RADIO_LEGEND, Radio, RadioFieldset,
+  SYSTEM, Skeleton, THEMES, toast, useNow,
 } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
@@ -99,54 +100,17 @@ export function autoGateMissing(nodes: readonly NodeWire[]): NodeWire[] {
 
 /** The node ids a `409 auto-needs-rollback-gate` names; null for any other failure, and for a 409 naming no id
  *  (the caller then toasts the route's own sentence rather than an empty "not yet on:"). */
-/** A radio group: a legend, then one labelled radio per choice.
- *
- *  THREE CALL SITES in this file — release notifications, update channel,
- *  auto-install — and the markup census named them. The classes stay
- *  `settings-*`: fleet.css grounds them there, the fieldset paints nothing,
- *  and this file is their only consumer, so moving them anywhere would cost
- *  three rules and buy nothing.
- *
- *  `value` IS NULLABLE because two of the three read it off a wire row that
- *  may not have arrived: `fleet !== null && fleet.channel === c` is the same
- *  question as `value={fleet?.channel ?? null}`, asked once instead of per
- *  option.
- *
- *  `disabled` on the FIELDSET and `disabled` on an OPTION are two different
- *  gates and both are needed — see D-3315 at the auto-install call site, where
- *  disabling the whole set would remove the one safe choice exactly when the
- *  node caps are incomplete. */
-function RadioFieldset<T extends string>(
-  { legend, name, options, value, onPick, disabled, describedBy }: {
-    legend: string;
-    /** The radio group's `name` — the thing that makes the set one choice. */
-    name: string;
-    options: { value: T; label: ReactNode; disabled?: boolean }[];
-    value: T | null;
-    onPick: (value: T) => void;
-    disabled?: boolean;
-    describedBy?: string;
-  },
-): ReactNode {
-  return (
-    <fieldset className="settings-fieldset" disabled={disabled} aria-describedby={describedBy}>
-      <legend className="settings-legend">{legend}</legend>
-      {options.map((o) => (
-        <label key={o.value} className="settings-option">
-          <input
-            type="radio"
-            name={name}
-            value={o.value}
-            checked={value === o.value}
-            disabled={o.disabled}
-            onChange={() => onPick(o.value)}
-          />
-          <span className="settings-option-sentence">{o.label}</span>
-        </label>
-      ))}
-    </fieldset>
-  );
-}
+// `RadioFieldset` LEFT THIS FILE — it is `@ccrc/ui`'s now, with the five
+// fleet.css rules that skinned it. The argument that kept it local was "this
+// file is their only consumer, so moving them anywhere would cost three rules
+// and buy nothing", and what it was weighed against has changed: the design
+// system could not render a radio at all, which is a hole a third consumer
+// would have met with no way to reach either half. The move cost nothing a
+// contrast-gate entry names, because every one of those rules was layout.
+//
+// What stays here is the SKIN that paints — `.settings-theme` and its body —
+// passed in as `className`, the same arrangement `CollapsibleStrip` has with
+// the three strips.
 
 function gateRefusalOf(err: unknown): string[] | null {
   if (!(err instanceof ApiError) || err.status !== 409) return null;
@@ -180,14 +144,15 @@ function ThemeRow({ choice, current, onPick, swatch = true }: {
 }): ReactNode {
   const active = current === choice.id;
   return (
-    <label className="settings-option settings-theme" data-active={active}>
-      <input
-        type="radio"
-        name="settings-theme"
-        value={choice.id}
-        checked={active}
-        onChange={() => onPick(choice.id)}
-      />
+    <Radio
+      className="settings-theme"
+      data-active={active}
+      name="settings-theme"
+      value={choice.id}
+      checked={active}
+      onChange={() => onPick(choice.id)}
+      bare
+    >
       <span className="settings-theme-body">
         <span className="settings-theme-name">{choice.label}</span>
         <span className="settings-note">{choice.note}</span>
@@ -210,7 +175,7 @@ function ThemeRow({ choice, current, onPick, swatch = true }: {
           <i style={{ background: 'var(--status-dead)' }} />
         </span>
       )}
-    </label>
+    </Radio>
   );
 }
 
@@ -238,15 +203,15 @@ export function AppearanceSection(): ReactNode {
   return (
     <section className="settings-section" aria-labelledby={titleId}>
       <h2 id={titleId} className="settings-section-title">Appearance</h2>
-      <fieldset className="settings-fieldset">
-        <legend className="settings-legend">Theme</legend>
+      <fieldset className={RADIO_FIELDSET}>
+        <legend className={RADIO_LEGEND}>Theme</legend>
         <ThemeRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} swatch={false} />
         {/* Grouped by how the palette reads, because that is the first thing
             anyone is choosing between — and the ask was light AND dark, not a
             dark list with one light apology. */}
-        <p className="settings-legend settings-theme-group">Dark</p>
+        <p className={`${RADIO_LEGEND} settings-theme-group`}>Dark</p>
         {dark.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
-        <p className="settings-legend settings-theme-group">Light</p>
+        <p className={`${RADIO_LEGEND} settings-theme-group`}>Light</p>
         {light.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
       </fieldset>
     </section>

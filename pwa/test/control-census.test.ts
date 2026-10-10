@@ -255,12 +255,13 @@ const CONTROLS: Record<string, string> = {
     + 'div and not a button. It declares the floor anyway, because it IS what '
     + 'a thumb lands on, and one of the six literals this branch converted was '
     + 'this rule.',
-  'screens/SettingsScreen.tsx <input> (none)':
-    'SELECTOR .settings-option. The radios are 18px by design — a radio IS '
-    + 'small — and the hit area is the LABEL that wraps each one, which '
-    + 'declares the floor. Both call sites (the notification/channel/auto '
-    + 'groups through `RadioFieldset`, and the theme picker through '
-    + '`ThemeRow`) render the input inside that label.',
+  // THE RADIOS LEFT THIS CENSUS with the dropdowns above, and for the same
+  // reason: they are `<Radio>` / `<RadioFieldset>` (@ccrc/ui) now, so the app
+  // draws no radio by hand. The verdict this entry carried — SELECTOR
+  // `.settings-option`, "a radio IS small, and the hit area is the LABEL that
+  // wraps it" — is unchanged as an argument; what changed is where it is
+  // enforced. `RADIO_OPTION` carries `min-h-tap` and `tap-targets.test.tsx`
+  // reads it off the component, exactly as it reads `TEXT_INPUT`'s.
   'session/Composer.tsx <textarea> composer-input':
     'TOKEN by VALUE — see FLOOR_BY_VALUE. `padding: 10px 0` around '
     + '`--fs-input` (16px) at `--lh-normal` (1.5) is 10 + 24 + 10 = 44 exactly, '

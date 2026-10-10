@@ -2894,23 +2894,12 @@ button.proj-card-pool::before {
 /* A fieldset's UA default is `min-inline-size: min-content`, which lets one
    long sentence push the page sideways on a phone; zero it like every grid
    child in this file. */
-.settings-fieldset { display: grid; min-width: 0; margin: 0; padding: 0; border: 0; }
-.settings-legend {
-  padding: 0;
-  margin-bottom: var(--sp-1);
-  font: var(--weight-medium) var(--fs-xs) / var(--lh-tight) var(--family-mono);
-}
-.settings-option {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-width: 0;
-  min-height: var(--tap-min);
-  cursor: pointer;
-}
-.settings-option input { flex: none; width: 18px; height: 18px; margin: 0; }
-.settings-fieldset:disabled .settings-option { cursor: default; }
-.settings-option-sentence { min-width: 0; font-size: var(--fs-sm); line-height: var(--lh-normal); }
+/* THE RADIO SKIN LEFT THIS SHEET. `.settings-fieldset`, `.settings-legend`,
+   `.settings-option`, its 18px input and its sentence are `@ccrc/ui`'s
+   `Radio`/`RadioFieldset` now — every one of those declarations was layout,
+   so nothing a contrast-gate entry names moved with them, and the tap floor
+   the row carries is the component's rather than this file's. What stays
+   below is the part that PAINTS: the theme picker's own rows. */
 .settings-note { font-size: var(--fs-xs); line-height: var(--lh-normal); color: var(--ink-secondary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the section's width. */

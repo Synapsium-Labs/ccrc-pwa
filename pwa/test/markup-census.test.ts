@@ -331,10 +331,10 @@ const REGISTERED_BLOCKS: Record<string, string> = {
 /** The same, for copied className literals. */
 const REGISTERED_LITERALS: Record<string, string> = {
   // ── NEXT ────────────────────────────────────────────────────────────────
-  'settings-legend settings-theme-group':
-    'DIFFERENT THINGS. Two hook classes on one element, twice, inside the '
-    + 'theme picker — a legend that is also a group head. Two classes is not a '
-    + 'composition; it is one element wearing both of its names.',
+  // The pair this registered — `settings-legend settings-theme-group`, twice
+  // in the theme picker — is no longer a literal: `.settings-legend` is
+  // `RADIO_LEGEND` (@ccrc/ui) and the two `<p>`s interpolate it. Nothing was
+  // folded and nothing drifted; the string simply stopped being a string.
 };
 
 /** The same, for copied LEAVES. Five today, and the argument for each is

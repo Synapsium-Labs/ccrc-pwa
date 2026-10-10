@@ -21,6 +21,10 @@ export {
   TextInput, TEXT_INPUT, TEXT_INPUT_INLINE, TEXT_INPUT_STACKED, type TextInputProps,
 } from './primitives/text-input';
 export { Select, SELECT, type SelectProps } from './primitives/select';
+export {
+  Radio, RadioFieldset, RADIO_OPTION, RADIO_INPUT, RADIO_SENTENCE, RADIO_FIELDSET, RADIO_LEGEND,
+  type RadioProps, type RadioFieldsetProps,
+} from './primitives/radio';
 export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
 export { Well, WELL, type WellProps } from './primitives/well';
