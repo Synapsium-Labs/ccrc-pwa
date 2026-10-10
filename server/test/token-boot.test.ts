@@ -638,7 +638,7 @@ describe('the both-role boot write: recorded role only (spec 4.10)', () => {
     const r = await boot(home, { ...both, roleSource: 'derived-absent' });
     expect(existsSync(P(home).fleetFile)).toBe(false);
     expect(r.warnings).toContain(`ccrc-server: box token: this box's role is not recorded as both, so the server will not write `
-      + `${P(home).fleetFile}; with no file there, notify.sh is refused (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
+      + `${P(home).fleetFile}; with no file there, notify.sh sends nothing (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
   });
 
   it("recorded both with the README's agent.env (CCRC_SERVER_URL only) is armed, and gets its fleet file and generation file", async () => {
@@ -661,11 +661,12 @@ describe('the both-role boot write: recorded role only (spec 4.10)', () => {
   });
 
   // Mixed versions (spec 10.1 "Notify tolerance removed"): the real notify.sh, through the loopback curl front, to
-  // a server built with the boot's holder. A recorded both box is accepted; a derived one (no file) is refused.
+  // a server built with the boot's holder. A recorded both box is accepted; on a derived one (no fleet file)
+  // notify.sh finds no token and sends nothing (D-4393), so no request reaches the server at all.
   const tool = (n: string): string => spawnSync('bash', ['-c', `command -v ${n}`], { encoding: 'utf8' }).stdout.trim();
   it.each([
     ['recorded both: notify.sh is accepted', 'recorded', true],
-    ['derived both: no fleet file, so notify.sh is refused', 'derived-absent', false],
+    ['derived both: no fleet file, so notify.sh sends nothing', 'derived-absent', false],
   ] as const)('%s', async (_n, roleSource, accepted) => {
     const home = mkHome();
     const r = await boot(home, { ...both, roleSource });
@@ -690,7 +691,9 @@ describe('the both-role boot write: recorded role only (spec 4.10)', () => {
       expect(code).toBe(0);
       expect(existsSync(path.join(home, 'curl-poison'))).toBe(false);
       expect(seen).toEqual(accepted ? ['cc swap: x moved a -> b'] : []);
-      if (!accepted) expect(warn.mock.calls.flat().join(' ')).toMatch(/notify/);
+      // D-4393: with no fleet file notify.sh sends NOTHING, so no request reaches the server: it logs no refused
+      // notify (every refusal there warns), and the loopback front recorded no refusal either (checked above).
+      if (!accepted) expect(warn.mock.calls.flat().join(' ')).not.toMatch(/notify/);
     } finally { await app.close(); }
   });
 });
@@ -827,15 +830,185 @@ describe('boot hardening around a recorded promotion, a state-unknown write and 
     expect(readFileSync(P(home).state, 'utf8')).toBe(before);
   });
 
-  it('a malformed box-token.json beside a usable mail.token: warned, the value adopted as unverifiable, the state rewritten', async () => {
+  it('a malformed box-token.json beside a usable mail.token: warned, set aside, the value NOT adopted (D-4414, F1), the state rewritten', async () => {
     const home = mkHome();
     const r0 = await boot(home);
     const v = r0.holder.currentValue() as string;
     writeFileSync(P(home).state, '{"v":1,"not":"a state"}\n');
-    const r = await boot(home);
-    expect(checkMailToken(r.holder, v)).toBe('ok');
-    expect(r.state).toMatchObject({ origin: 'adopted', rotationOwed: true, owedWhy: 'adopted' });
+    const r = await boot(home, { now: 4242 });
+    expect(checkMailToken(r.holder, v)).toBe('bad');                          // boot cannot match it to its own write record
+    expect(r.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
     expect(r.warnings.join('\n')).toContain(`${P(home).state} is unusable`);
     expect((await readState(P(home).state)).kind).toBe('state');
+    expect(readFileSync(`${P(home).state}.unusable-4242`, 'utf8')).toBe('{"v":1,"not":"a state"}\n');
+    neverPrinted(r.printed, v);
+  });
+});
+
+// D-4414 (review 352 F1): an unusable box-token.json takes D-4410's foreign posture, as an unusable retired file does. The
+// `retiring` record, the only durable home of a digest whose append had not landed, lived in it.
+describe('an unusable box-token.json never lets boot adopt a value it did not write (D-4414, F1)', () => {
+  const stateAsides = (home: string): string[] => readdirSync(path.join(home, '.ccrc')).filter((n) => n.startsWith('box-token.json.unusable-'));
+  const writeBack = (home: string, value: string): void => {
+    rmSync(P(home).current);
+    writeFileSync(P(home).current, `# an older deploy.sh shipped this\n${value}\n`, { mode: 0o600 });
+  };
+  /** F1's sequence up to the damage: L retired with its append failed (so its digest is only in `retiring`), then the
+   *  state damaged in the way the variant says, then L written back. The retired file does not exist. */
+  async function failedAppendThenDamage(home: string, damage: (s: BoxTokenState) => string): Promise<{ old: string; next: string; raw: string }> {
+    const paths = P(home);
+    const { old, next, state } = await rotateOnce(home, await boot(home));
+    rmSync(paths.previous);
+    const settled: BoxTokenState = { ...state, previous: null, retiring: [{ sha256: valueDigestHex(old), at: Date.now() }] };
+    const raw = damage(settled);
+    writeFileSync(paths.state, raw, { mode: 0o600 });
+    expect(existsSync(paths.retired)).toBe(false);
+    writeBack(home, old);
+    return { old, next, raw };
+  }
+  const variants: [string, (s: BoxTokenState) => string][] = [
+    ['a version this build does not read (v:2)', (s) => `${JSON.stringify({ ...s, v: 2 })}\n`],
+    ['one malformed retiring entry', (s) => `${JSON.stringify({ ...s, retiring: [...(s.retiring ?? []), { sha256: 'not-hex', at: 1 }] })}\n`],
+  ];
+
+  it.each(variants)("F1's sequence, %s: a failed append, then an unusable state file, L written back, a restart: L is refused", async (_n, damage) => {
+    const home = mkHome();
+    const { old, raw } = await failedAppendThenDamage(home, damage);
+    const r = await boot(home, { now: 9001 });
+    expect(checkMailToken(r.holder, old, 'POST /api/mail')).toBe('bad');
+    expect(r.holder.currentValue()).not.toBe(old);
+    expect(r.holder.currentValue()).toMatch(TOKEN_VALUE_RE);
+    expect(readFileSync(P(home).current, 'utf8').trim()).toBe(r.holder.currentValue());
+    expect(r.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
+    // set aside under a new name, byte-equal; a fresh record stands in its place
+    expect(stateAsides(home)).toEqual(['box-token.json.unusable-9001']);
+    expect(readFileSync(path.join(home, '.ccrc', 'box-token.json.unusable-9001'), 'utf8')).toBe(raw);
+    expect((await readState(P(home).state)).kind).toBe('state');
+    expect(r.warnings.filter((w) => w.includes(P(home).state))).toHaveLength(1);
+    neverPrinted(r.printed, old, r.holder.currentValue() as string);
+  });
+
+  it('boot 2 and after: while the set-aside state file stands, a written-back value is still not adopted', async () => {
+    const home = mkHome();
+    const { old } = await failedAppendThenDamage(home, (s) => `${JSON.stringify({ ...s, v: 2 })}\n`);
+    const r1 = await boot(home, { now: 9002 });                               // the aside holds the only record of L's digest
+    expect(stateAsides(home)).toEqual(['box-token.json.unusable-9002']);
+    writeBack(home, old);
+    const r2 = await boot(home, { now: 9003 });                               // the state is readable now; L is not in the retired file
+    expect(r2.holder.currentValue()).not.toBe(old);
+    expect(checkMailToken(r2.holder, old)).toBe('bad');
+    expect(r2.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
+    expect(stateAsides(home)).toEqual(['box-token.json.unusable-9002']);       // untouched, never read back
+    const w = r2.warnings.filter((x) => x.includes('unusable-9002'));
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain('removing');
+    // a server-written current stays current under the same posture
+    const r3 = await boot(home, { now: 9004 });
+    expect(r3.holder.currentValue()).toBe(r2.holder.currentValue());
+    expect(r3.state).toMatchObject({ rotationOwed: true });
+    neverPrinted(r1.printed + r2.printed, old);
+  });
+
+  it('with the set-aside state file removed after review, a genuinely hand-made value is adopted as before', async () => {
+    const home = mkHome();
+    await failedAppendThenDamage(home, (s) => `${JSON.stringify({ ...s, v: 2 })}\n`);
+    await boot(home, { now: 9005 });
+    rmSync(path.join(home, '.ccrc', 'box-token.json.unusable-9005'));
+    const hand = mintValue();
+    writeBack(home, hand);
+    const r = await boot(home, { now: 9006 });
+    expect(checkMailToken(r.holder, hand)).toBe('ok');
+    expect(r.state).toMatchObject({ origin: 'adopted', rotationOwed: true, owedWhy: 'adopted' });
+  });
+
+  it('the set-aside never overwrites a file already holding the name', async () => {
+    const home = mkHome();
+    await failedAppendThenDamage(home, (s) => `${JSON.stringify({ ...s, v: 2 })}\n`);
+    const taken = `${P(home).state}.unusable-9007`;
+    writeFileSync(taken, 'an earlier set-aside', { mode: 0o600 });
+    await boot(home, { now: 9007 });
+    expect(readFileSync(taken, 'utf8')).toBe('an earlier set-aside');
+    expect(stateAsides(home).sort()).toEqual(['box-token.json.unusable-9007', 'box-token.json.unusable-9007-1']);
+  });
+
+  it('a state file that cannot be READ is still unreadable, never unusable: boot refuses and sets nothing aside (D-4403 item 2)', async () => {
+    const home = mkHome();
+    const v = mintValue();
+    writeFileSync(P(home).current, `${v}\n`, { mode: 0o600 });
+    mkdirSync(P(home).state);
+    await expect(bootBoxToken(input(home))).rejects.toThrow('unreadable (EISDIR)');
+    expect(stateAsides(home)).toEqual([]);
+  });
+
+  it.skipIf(isRoot)('a state file that cannot be moved aside refuses boot, naming the path and errno, and leaves it byte-identical', async () => {
+    const home = mkHome();
+    await boot(home);
+    const raw = '{"v":2}\n';
+    writeFileSync(P(home).state, raw);
+    const dir = path.join(home, '.ccrc');
+    chmodSync(dir, 0o500);                                                     // listing works; the hard link (and every write) is refused
+    try {
+      const err = await bootBoxToken(input(home)).then(() => null, (e: unknown) => e as Error);
+      expect(err?.message).toBe(`${P(home).state}: unusable, and it could not be set aside (EACCES); boot refuses rather than overwrite it`);
+    } finally { chmodSync(dir, 0o700); }
+    expect(readFileSync(P(home).state, 'utf8')).toBe(raw);
+  });
+});
+
+// D-4414 (review 352 F6): a failed mint keeps the rotation it owes.
+describe('a failed mint carries its owed rotation to the driver (D-4414, F6)', () => {
+  it.skipIf(isRoot)('a foreign value under an unusable retired file and a mint that fails: BootResult names retired-written-back', async () => {
+    const home = mkHome();
+    const hand = mintValue();
+    writeFileSync(P(home).current, `${hand}\n`, { mode: 0o600 });
+    writeFileSync(P(home).retired, 'not json at all', { mode: 0o600 });
+    chmodSync(path.join(home, '.ccrc'), 0o500);
+    try {
+      const r = await boot(home);
+      expect(r.mintFailed).toBe(true);
+      expect(r.mintOwed).toBe('retired-written-back');
+      expect(r.state).toBeNull();
+      neverPrinted(r.printed, hand);
+    } finally { chmodSync(path.join(home, '.ccrc'), 0o700); }
+  });
+
+  it.skipIf(isRoot)('a first mint that fails owes nothing, and a mint that works carries no owed word', async () => {
+    const home = mkHome();
+    chmodSync(path.join(home, '.ccrc'), 0o500);
+    try {
+      const r = await boot(home);
+      expect(r.mintFailed).toBe(true);
+      expect(r.mintOwed).toBeNull();
+    } finally { chmodSync(path.join(home, '.ccrc'), 0o700); }
+    expect((await boot(mkHome())).mintOwed).toBeNull();
+  });
+});
+
+// D-4414 (review 352 F3, boot half): the auxiliary arm never drops the record of a previous file it could not read.
+describe('boot keeps the record of a previous file it cannot read (D-4414, F3)', () => {
+  it.skipIf(isRoot)('an unreadable mail-previous.token: the record and the file stay, the slot is empty, a rotation is owed, one warning', async () => {
+    const home = mkHome();
+    const paths = P(home);
+    const { old } = await rotateOnce(home, await boot(home));
+    chmodSync(paths.previous, 0o000);
+    try {
+      const r = await boot(home);
+      expect(r.state?.previous, 'the record is kept').not.toBeNull();
+      expect(existsSync(paths.previous)).toBe(true);
+      expect(checkMailToken(r.holder, old)).toBe('bad');                       // the accept set holds nothing it cannot read
+      expect(r.state).toMatchObject({ rotationOwed: true, owedWhy: 'aux-unusable' });
+      expect(r.warnings.filter((w) => w.includes('cannot be read (EACCES)'))).toHaveLength(1);
+      neverPrinted(r.printed, old);
+    } finally { chmodSync(paths.previous, 0o600); }
+  });
+
+  it('an UNUSABLE previous file (read, but no value) still empties its slot and drops the record, as before', async () => {
+    const home = mkHome();
+    const paths = P(home);
+    await rotateOnce(home, await boot(home));
+    writeFileSync(paths.previous, '# no value here\n', { mode: 0o600 });
+    const r = await boot(home);
+    expect(r.state?.previous).toBeNull();
+    expect(r.state).toMatchObject({ rotationOwed: true, owedWhy: 'aux-unusable' });
   });
 });

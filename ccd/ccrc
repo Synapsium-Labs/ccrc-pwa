@@ -1369,6 +1369,22 @@ BOX_INSTALLED_FILE="$HOME/.ccrc/installed"
 BOX_NODE_ID_FILE="$HOME/.ccrc/node-id"
 BOX_CAPS_FILE="$HOME/.ccrc/ccrc-caps"
 BOX_FLOOR_FILE="$HOME/.ccrc/floor"
+
+# ── THE BOX TOKEN'S TWO NODE-SCOPED, NON-SECRET FILES (design 2026-10-07 §4.5, §8)
+#   box-token-generation — the generation id the last `ccrc token sync` wrote
+#                          (NODE_FILES.tokenGeneration; the server reads it
+#                          over the agent's node-file grant);
+#   token-sync.json      — that run's report, which doctor reads.
+# Both are written by `ccd/ccrc-token-sync`, which spells its own copies (it
+# is a standalone file and sources nothing); uninstall removes them with the
+# node files. The box token's VALUE and STATE files — mail.token, its
+# pending and previous siblings, box-token.json, box-token-retired.json —
+# are not node files: they stay with mail.token, so a reinstall never finds
+# value files without their state, and only --purge takes them (with
+# ~/.ccrc whole). ~/.cc-secrets/ccrc-mail.token is never this verb's: that
+# directory also holds operator lane secrets.
+BOX_TOKEN_GENERATION_FILE="$HOME/.ccrc/box-token-generation"
+BOX_TOKEN_SYNC_REPORT="$HOME/.ccrc/token-sync.json"
 # The words, by wave (design 2026-09-20 §9). Each wave's spine ADDS its own,
 # so the file records what this install can do, never what a design intends:
 #   W1 — verify (`_upd_fetch` runs verify-provenance.mjs), node-id
@@ -1377,9 +1393,12 @@ BOX_FLOOR_FILE="$HOME/.ccrc/floor"
 #        accepted), update-gate (`_upd_gate`, exit 4, `--no-gate`), rollback
 #        (`ccrc rollback`); and, Linux only, detach — below.
 #   W6 — versions (a kept version is a flip: `_upd_restore_arm1`, `_ver_flip_back`).
+#   box-token lifecycle wave 1 — token-sync (`cmd_token` and the
+#        `ccd/ccrc-token-sync` it runs: the verb ccrc-agent's `token-sync` op
+#        spawns). Every os: the op runs it in the foreground, never --detach.
 # ccrc-install.test.ts pins every word to the machinery it names, so a word
 # cannot ship ahead of its code.
-CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions)
+CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions token-sync)
 
 # The words only a LINUX install can do: detach (W4). `--detach` hands the run
 # to a transient unit (`_svc_run_detached`), and `_upd_detach_os_check`
@@ -1518,8 +1537,9 @@ CCRC_DDNS_UNIT="ccrc-ddns"
 # directory exists anywhere in `ccd/` or `deploy/` today (measured by grep);
 # when Task 22 adds one it should not chmod an existing directory in either
 # direction: widening one silently would be worse than the state it found, and
-# narrowing one is a decision about a directory `deploy/deploy.sh`'s
-# `ship_secret` also writes into. The 0600 on the FILE is what will protect the
+# narrowing one is a decision about a directory the box token's fleet copy is
+# written into (by `ccrc token sync`, or by the server itself on a box recorded
+# as `CCRC_ROLE=both`; `deploy/deploy.sh` no longer ships it). The 0600 on the FILE is what will protect the
 # secret, exactly as CLAUDE.md argues for `~/.ccrc` being 0775 on the reference
 # fleet.
 ACCT_SECRETS_DIR="$HOME/.cc-secrets"
@@ -2008,7 +2028,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|restamp|version|watchdog|history}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|token|restamp|version|watchdog|history}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2226,6 +2246,12 @@ already running).
             trusts the printed root once, and login is passphrase-only:
             passkeys need a domain), status (what is configured; the token
             is reported SET/NOT SET, never printed)
+  token     the box token's fleet side. "ccrc token sync --from agent" is
+            ccrc-agent's token-sync op: it trades a one-time code (on stdin)
+            for the new value, writes ~/.cc-secrets/ccrc-mail.token and
+            proves it with one call. "ccrc token probe --file <path>
+            [--url <base>]" presents a file's value once and prints only the
+            HTTP status and accepted, refused or unmeasured
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
             on ccd/ccd's line 2) after its body changed: the regenerator a
             merge needs there. A file with no marker is refused, never adopted$(_usage_history_paragraph)
@@ -5232,6 +5258,21 @@ cmd_adopt() {
   [[ -f "$adopt" ]] \
     || _ccrc_die "adopt's script is missing: $adopt — is this a complete ccrc install?"
   exec "$BASH" "$adopt" "$@"
+}
+
+# ── cmd_token — the box token's fleet side (design 2026-10-07 §4.5) ───────
+# The body is the standalone `ccd/ccrc-token-sync`, beside this file, exactly
+# as `cmd_adopt` reaches `ccrc-adopt` and for its reasons: `exec "$BASH"`, so
+# no PATH lookup and no dependence on the exec bit, and the sibling's own
+# usage, exit codes and stdout/stderr split arrive unaltered. That file owns
+# every argument; this function parses none. Kept out of this file because
+# `ccd/ccrc` is a hot file other runs edit, and the verb's whole contract
+# (the claim, the atomic write, the proof) is one reviewable unit there.
+cmd_token() {
+  local body="$CCRC_HERE/ccrc-token-sync"
+  [[ -f "$body" ]] \
+    || _ccrc_die "token's script is missing: $body — is this a complete ccrc install?"
+  exec "$BASH" "$body" "$@"
 }
 
 # ── cmd_passwd — THE ONE WRITER OF ~/.ccrc/auth.scrypt ────────────────────
@@ -23560,6 +23601,12 @@ _uninst_tree_bins() {
   rm -f -- "$BOX_PREVIOUS_FILE" "$BOX_INSTALL_STEP_FILE" "$BOX_UPDATE_JSON" "$BOX_UPDATE_LOCK" \
     "$BOX_INTENT_FILE" "$BOX_MIGRATION_FILE" \
     || _ccrc_die "removing the node's update state files failed"
+  # The box token's two node-scoped records go with them (design 2026-10-07
+  # §8): an uninstalled box confirms no generation and has no sync to report.
+  # The value and state files are NOT here, on purpose (see their
+  # declaration): they stay with mail.token.
+  rm -f -- "$BOX_TOKEN_GENERATION_FILE" "$BOX_TOKEN_SYNC_REPORT" \
+    || _ccrc_die "removing the box token's generation record and sync report failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself
@@ -23617,6 +23664,7 @@ _uninst_tree_bins() {
     || _ccrc_die "removing ccd's body from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
   echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
@@ -23969,6 +24017,7 @@ case "$VERB" in
   logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   expose)  cmd_expose "$@" ;;
+  token)   cmd_token "$@" ;;
   restamp) cmd_restamp "$@" ;;
   watchdog) cmd_watchdog "$@" ;;
   history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;

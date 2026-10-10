@@ -11,6 +11,7 @@
 import type { Hue } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
+import type { BoxTokenView } from './box-token.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -8909,7 +8910,7 @@ export const FLEET_SCOPE = '*';
  *  checked since this process started — never "up to date". */
 export interface CatalogueState { lastOkAt: number | null; lastError: { at: number; reason: string } | null }
 /** `GET /api/updates` (§12). */
-export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[] }
+export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView }
 
 /** Every refusal word an update route answers with (§12). */
 export type UpdateRouteError =
