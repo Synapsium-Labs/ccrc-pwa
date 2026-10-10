@@ -40,9 +40,19 @@ export const ASessionGate: Story = {
     className: 'gap-4 bg-page text-ink-primary',
     role: 'dialog',
     'aria-modal': true,
+    /* A dialog MUST be named, and `LoginScreen` — the real call site this
+       story reconstructs — names itself exactly this way. The story did not,
+       and axe's `aria-dialog-name` said so the first time a browser rendered
+       it: a fixture that models the one thing the app gets right, wrong. */
+    'aria-labelledby': 'cover-screen-story-title',
     children: (
       <>
-        <h1 className="m-0 font-mono text-lg font-semibold leading-tight tracking-[0.04em]">ccrc</h1>
+        <h1
+          id="cover-screen-story-title"
+          className="m-0 font-mono text-lg font-semibold leading-tight tracking-[0.04em]"
+        >
+          ccrc
+        </h1>
         <p className="m-0 max-w-[40ch] font-ui text-base font-medium leading-normal">
           This console is gated. Sign in to reach the fleet.
         </p>

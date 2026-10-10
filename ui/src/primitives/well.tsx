@@ -38,6 +38,7 @@
 // through, it looks the same.
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
+import { FOCUS_RING } from '../lib/focus';
 
 /** Token for token as `chat.css .well` declared it.
  *
@@ -59,10 +60,19 @@ export interface WellProps extends HTMLAttributes<HTMLPreElement> {
 
 /** Always a `<pre>`: all seven call sites were, and the surface exists to show
  *  bytes exactly as they arrived — `whitespace-pre-wrap` is load-bearing, not
- *  decoration. A site needing another element takes `WELL` directly. */
-export function Well({ className, children, ...props }: WellProps): ReactNode {
+ *  decoration. A site needing another element takes `WELL` directly.
+ *
+ *  `tabIndex={0}` IS NOT DECORATION EITHER, and it is the first thing a real
+ *  browser said about this component: axe's `scrollable-region-focusable`,
+ *  through the Storybook runner, on the `Tall` story. A well scrolls — that is
+ *  what `max-h-well-max` plus `overflow-y-auto` MEANS — and a region that
+ *  scrolls with no way to focus it is content a keyboard cannot reach. A mouse
+ *  wheel and a finger could always read the rest of a long tool output; a
+ *  keyboard could not. Overridable, like every other prop, for a call site
+ *  that knows its well never overflows. */
+export function Well({ className, children, tabIndex = 0, ...props }: WellProps): ReactNode {
   return (
-    <pre className={cn(WELL, className)} {...props}>
+    <pre className={cn(WELL, FOCUS_RING, className)} tabIndex={tabIndex} {...props}>
       {children}
     </pre>
   );

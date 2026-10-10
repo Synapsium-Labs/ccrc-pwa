@@ -66,7 +66,15 @@ export function TypedLabel({ text, className }: { text: string; className?: stri
   }, [text, reduced]);
 
   return (
-    <span className={className} aria-label={text}>
+    /* `role="img"` IS WHAT MAKES THE NAME LEGAL, and axe said so the first
+       time a browser rendered this: `aria-prohibited-attr` — a bare `<span>`
+       has no role, and an element with no role may not carry `aria-label`,
+       so the name every paragraph above argues for was being DROPPED by the
+       accessibility tree rather than held still. The role is the smallest one
+       that both permits a name and tells a screen reader to announce that
+       name INSTEAD of walking the children, which is exactly the contract
+       here: the children are a typing animation and the label is the word. */
+    <span className={className} role="img" aria-label={text}>
       <span aria-hidden="true">
         {shown}
         {shown !== text && <span className="typed-caret" aria-hidden="true">▏</span>}

@@ -20,7 +20,8 @@
     "storybook": "storybook dev -p 6006",
     "test": "tsc --noEmit",
     "themes": "node design/make-themes.mjs --write",
-    "themes:check": "node design/make-themes.mjs --check"
+    "themes:check": "node design/make-themes.mjs --check",
+    "test-storybook": "test-storybook"
   },
   "peerDependencies": {
     "react": "^19.0.0",
@@ -37,11 +38,13 @@
     "@storybook/addon-a11y": "^10.6.0",
     "@storybook/addon-docs": "^10.6.0",
     "@storybook/react-vite": "^10.6.0",
+    "@storybook/test-runner": "^0.26.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.13.4",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "axe-playwright": "^2.2.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "storybook": "^10.6.0",

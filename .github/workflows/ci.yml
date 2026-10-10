@@ -500,13 +500,71 @@ jobs:
       # it could have been broken for weeks and no leg would have said. It
       # builds in seconds and the step costs almost nothing.
       #
-      # This proves the stories BUILD, not that they look right. Rendering them
-      # and running axe needs @storybook/test-runner and a browser in CI, which
-      # is a real dependency decision rather than a line of yaml.
+      # This proves the stories BUILD, not that they look right. RENDERING them
+      # is the `storybook-a11y` job below — that dependency decision was taken,
+      # and this step stays because it is the cheap half and it runs on a leg
+      # that is REQUIRED by name, where that one is not.
       - name: Storybook builds (the one surface that renders the components)
         if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
         working-directory: ui
         run: npm run build-storybook
+
+  # ── the one place a component is RENDERED and MEASURED ─────────────────────
+  #
+  # Every other guard in this repo reads SOURCE. design/audit.mjs parses
+  # stylesheet rules, utility-pairs resolves class strings back to tokens, the
+  # six censuses read files, and vitest runs with `css: false` — so not one of
+  # the ~3,900 tests above can compute a style. quiet-control.test.ts states
+  # the hole in its own header: if `bg-raised` fell out of the button variant,
+  # every quiet control in the app would render transparent and the whole
+  # suite would stay green.
+  #
+  # This closes it. A real browser loads the built Storybook, renders all 152
+  # stories, and the a11y addon runs axe over each one — reading COMPUTED
+  # colour, roles and names off real elements. What it measures is what a story
+  # happens to render, which is narrower than the gate's every-rule sweep and
+  # is exactly the half the gate cannot reach.
+  #
+  # IT FOUND FOUR THINGS ON ITS FIRST RUN, which is the argument for the
+  # dependency: a scrollable `<pre>` no keyboard could focus (`Well`), an
+  # `aria-label` on a roleless `<span>` that the accessibility tree was
+  # dropping (`TypedLabel`, where holding the name still IS the component's
+  # whole purpose), and two story fixtures rendering a nameless button and an
+  # unnamed dialog — teaching the next call site to write one.
+  #
+  # ADDITIVE AND NON-REQUIRED, the `test-macos` arrangement and for the same
+  # reason: a red here blocks no pull request while the leg earns trust, and
+  # the PR page still shows it. It is deliberately NOT in `full-suite`'s
+  # `needs` yet — promote it there once it has run quiet for a while.
+  storybook-a11y:
+    runs-on: ubuntu-latest
+    # The browser download dominates; the run itself is ~40s for 152 stories.
+    timeout-minutes: 20
+    if: github.event_name != 'merge_group'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - working-directory: ui
+        run: npm ci
+      # Chromium only, and `--with-deps` because a bare runner has none of the
+      # shared libraries headless chromium links against.
+      - working-directory: ui
+        run: npx playwright install --with-deps chromium
+      - working-directory: ui
+        run: npm run build-storybook -- --quiet
+      # Served as static files rather than `storybook dev`: the dev server
+      # compiles on demand, so a slow first story reads as a timeout. The
+      # background process outlives this step, which is what the wait is for.
+      - working-directory: ui
+        run: |
+          npx --yes http-server storybook-static --port 6006 --silent &
+          npx --yes wait-on tcp:127.0.0.1:6006 -t 60000
+      - working-directory: ui
+        run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
 
   # The Darwin arms' standing mechanism (the macOS port's review, finding 3):
   # every `describe.skipIf(!IS_DARWIN)` block and `itDarwin` case in the

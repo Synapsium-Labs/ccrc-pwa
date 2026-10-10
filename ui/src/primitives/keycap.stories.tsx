@@ -19,6 +19,13 @@ type Story = StoryObj<typeof meta>;
  *  an icon button. */
 export const OnChrome: Story = {
   args: {
+    /* `aria-label` BECAUSE THE LEGEND IS HIDDEN: every cap's glyph is
+       `aria-hidden` (it is a picture of a key, not a word), so the button's
+       name has to come from the label — which is what all six app call sites
+       do and what this story did not, until axe's `button-name` said so
+       through the Storybook runner. A story that renders a nameless button
+       teaches the next call site to write one. */
+    'aria-label': 'Terminal',
     className: 'flex-none bg-raised text-ink-primary border-edge-strong',
     children: <span aria-hidden="true">&gt;_</span>,
   },
@@ -30,6 +37,7 @@ export const OnChrome: Story = {
  *  measure it rather than moving into a variant where neither half could. */
 export const OnTheWell: Story = {
   args: {
+    'aria-label': 'Escape',
     className: 'flex-none px-2 text-ink-on-well'
       + ' bg-[color-mix(in_srgb,var(--ink-on-well)_9%,transparent)]'
       + ' border-[color-mix(in_srgb,var(--ink-on-well)_22%,transparent)]',
@@ -38,9 +46,9 @@ export const OnTheWell: Story = {
   render: (args) => (
     <div className="flex gap-2 rounded-md bg-well p-3">
       <Keycap {...args} />
-      <Keycap className={args.className}><span aria-hidden="true">tab</span></Keycap>
-      <Keycap className={args.className}><span aria-hidden="true">^C</span></Keycap>
-      <Keycap className={args.className}><span aria-hidden="true">hist</span></Keycap>
+      <Keycap className={args.className} aria-label="Tab"><span aria-hidden="true">tab</span></Keycap>
+      <Keycap className={args.className} aria-label="Interrupt"><span aria-hidden="true">^C</span></Keycap>
+      <Keycap className={args.className} aria-label="History"><span aria-hidden="true">hist</span></Keycap>
     </div>
   ),
 };
