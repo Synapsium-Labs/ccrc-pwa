@@ -29,7 +29,10 @@ export interface ProjectPickerProps {
   query: string;
   onQuery: (query: string) => void;
   /** `null` until the list lands. */
-  list: unknown[] | null;
+  /** The rows themselves are not read here — only whether they ARRIVED. The
+   *  type is `readonly` because the single reader (`useProjectList`) hands back
+   *  a frozen view, and an adapter may not widen what it received. */
+  list: readonly unknown[] | null;
   /** The read's own failure sentence, or `null`. */
   listError: string | null;
   /** The list loaded and nothing in it matches `query`. The caller decides

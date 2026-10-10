@@ -53,7 +53,6 @@ import { Button, Sheet, TEXT_INPUT_STACKED, TextInput } from '@ccrc/ui';
  *  to `full`, so nothing is passed), it is a step up in size at `--fs-sm`,
  *  and it presses to 0.98 — shallower than the family's 0.96, as its own rule
  *  always said. */
-const GO = 'program-start-go text-sm enabled:active:scale-[0.98]';
 import { accountLabel } from '../lib/accounts';
 import { markerState } from './coordWords';
 import { api, apiErrorText, kickoffErrorText } from '../lib/api';
@@ -70,6 +69,8 @@ import {
   startErrorText, startProgramPlacement, startedSessionFor,
   type OpenRunVerdict,
 } from './startProgramPolicy';
+import { KickoffRecovery, PROGRAM_GO, type KickoffFailure } from './KickoffRecovery';
+import { useProjectList } from './useProjectList';
 import './fleet.css';
 
 
@@ -154,8 +155,6 @@ export function StartProgramSheet({
   const [title, setTitle] = useState('');
   const [project, setProject] = useState<ProjectRow | null>(null);
   const [query, setQuery] = useState('');
-  const [list, setList] = useState<ProjectRow[] | null>(null);
-  const [listError, setListError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -175,23 +174,16 @@ export function StartProgramSheet({
    * `sessionId` is the id `startedSessionFor` MEASURED, carried verbatim: a
    * retry must not re-open the addressing question D-291/D-292 already settled.
    */
-  const [kickoffFailed, setKickoffFailed] =
-    useState<{ sessionId: string; slug: string; title: string; why: string } | null>(null);
+  const [kickoffFailed, setKickoffFailed] = useState<KickoffFailure | null>(null);
   const [retrying, setRetrying] = useState(false);
 
   // Fetch the project list the moment the sheet opens — same idiom
   // NewSessionSheet already uses for the same call.
-  useEffect(() => {
-    if (!open) return undefined;
-    let cancelled = false;
-    setList(null);
-    setListError(null);
-    loadProjects().then(
-      (r) => { if (!cancelled) setList(r.projects); },
-      (err: unknown) => { if (!cancelled) setListError(apiErrorText(err)); },
-    );
-    return () => { cancelled = true; };
-  }, [open, loadProjects]);
+  // The project plane — a read on open, three answers, and the query's own
+  // filter — lives in `useProjectList`: it was the one part of this 770-line
+  // function that stood alone, and its `null`-vs-error distinction is what
+  // `ProjectPicker` renders three arms from.
+  const { list, listError, matching } = useProjectList(open, query, loadProjects);
 
   // Lesson (Task 12's own review, applied here ahead of time): this sheet is
   // mounted UNCONDITIONALLY at RunsScreen level and `open` only toggles the
@@ -375,9 +367,6 @@ export function StartProgramSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions]);
 
-  const needle = query.trim().toLowerCase();
-  const filtered =
-    list === null ? [] : needle === '' ? list : list.filter((p) => p.name.toLowerCase().includes(needle));
 
   // D-292: recomputed on every render from the reactive store selector.
   // Wrapper-independent — see `liveMainCheckoutIn`'s own docstring for why a
@@ -533,84 +522,13 @@ export function StartProgramSheet({
     checkForMatch();
   };
 
-  /** The standing kickoff-failure recovery — the statement, plus the two acts
-   *  that finish it — as ONE node, rather than a run of JSX buried in the last
-   *  arm of the chain below.
-   *
-   *  Program-leverage wave 4 minted it: a standing statement with an act beside
-   *  it, not a toast (see `kickoffFailed`'s own declaration for why), and both
-   *  controls reuse classes that are already grounded and pinned
-   *  (`program-start-error`, `program-start-go`) rather than introducing a
-   *  coloured rule the contrast census has never seen.
-   *
-   *  WAVE-5 REVIEW, MINOR 6 (D-1149) is why it is a node. It lived inside the
-   *  confirm fragment, which is the LAST arm of that chain, so EVERY arm above
-   *  it retired the recovery by rendering instead of it — and one of those arms
-   *  is now driven by a prop the run board rebuilds every ~2 s
-   *  (`openRunProjects`, `screens/RunsScreen.tsx`). A run opening in this
-   *  project while a queue failure was standing therefore replaced a live retry
-   *  door and an open-anyway door with a sentence about a collision, on a poll
-   *  tick the operator never touched — and the retry door is the ONLY control
-   *  that can re-post for that session (`retryKickoff`). A recovery that
-   *  vanishes mid-recovery is worse than one never offered: nothing durable
-   *  exists to retry from anywhere else.
-   *
-   *  HOISTING, deliberately, and not the other available fix — carving the
-   *  standing-failure case out of the run arm's own condition. That one renders
-   *  the CONFIRM fragment while a failure stands, whose Start is withheld only
-   *  by `existing !== null`; and `existing` goes null the moment the operator
-   *  picks a DIFFERENT project, which is exactly the move D-1121 exists to
-   *  support. D-1130's refusal would then have to be re-derived as a sixth
-   *  `disabled` term — and, by `start()`'s own note, a matching early return —
-   *  demoting a structural no-button refusal to a disabled control for a case
-   *  that is ordinary rather than rare. This way the refusal keeps its slot,
-   *  its copy and its posture, and simply stops eating something that was never
-   *  its business.
-   *
-   *  THE CURRENT CHAIN, enumerated so this warning cannot drift behind a hand-kept
-   *  cardinal. The existing-checkout condition renders its refusal alone and
-   *  displaces recovery. The run-board condition renders its refusal together
-   *  with recovery, so it does not displace it. Measured placement `none` renders
-   *  one refusal arm and displaces recovery; its global, no-pool and named-pool
-   *  messages are semantic copy subcases, not additional syntactic arms. Measured
-   *  `unmeasurable` renders its refusal alone and displaces recovery. Old-server
-   *  `pool-blind` renders its refusal alone and displaces recovery. The final
-   *  confirmation fragment renders the ordinary confirmation together with
-   *  recovery. This list deliberately names each live condition and its effect,
-   *  so the next reader measures the chain rather than treating this fix as
-   *  having cleaned every arm.
-   *
-   *  `null` when no failure is standing, so an arm that renders it says nothing
-   *  extra in the ordinary case. */
-  const recovery = kickoffFailed === null ? null : (
-    <>
-      <p className="program-start-error">
-        {/* Wave-4 review, MINOR 3 (D-1120). This used to open
-            "<id> is running, but…", which on a 404 asserts the exact
-            fact the registry had just denied — above a retry that
-            cannot succeed. What the sheet KNOWS is that it started
-            the session and that nothing was queued for it; the
-            reason comes last, where a `why` with no trailing period
-            (the `err.message` floor) does not read as a typo. */}
-        {`Started ${kickoffFailed.sessionId}, but its kickoff could not be queued `
-          + `— nothing was sent, and it has no brief yet. ${kickoffFailed.why}`}
-      </p>
-      <Button
-        variant="quiet"
-        className={GO}
-        disabled={retrying}
-        onClick={() => void retryKickoff()}
-      >
-        {retrying ? 'Queueing…' : 'Queue the kickoff again'}
-      </Button>
-      <Button
-        variant="quiet"
-        className={GO}
-        onClick={() => navigate(`/s/${encodeURIComponent(kickoffFailed.sessionId)}`)}
-      >
-        Open it without a brief
-      </Button>
-    </>
+  // The standing recovery is its own component (`KickoffRecovery`), and its
+  // file carries the argument for why — including the half extraction cannot
+  // enforce: EVERY arm of the chain below must render it BESIDE its own
+  // refusal, never instead of it (D-1149).
+  const recovery = (
+    <KickoffRecovery failure={kickoffFailed} retrying={retrying}
+                     onRetry={() => void retryKickoff()} />
   );
 
   return (
@@ -646,9 +564,9 @@ export function StartProgramSheet({
           onQuery={setQuery}
           list={list}
           listError={listError}
-          empty={filtered.length === 0}
+          empty={matching.length === 0}
         >
-            {filtered.map((p) => {
+            {matching.map((p) => {
               const selected = p.workdir === project?.workdir;
               return (
                 <ProjectRowShell
@@ -880,7 +798,7 @@ export function StartProgramSheet({
                   false. */}
               <Button
                 variant="quiet"
-                className={GO}
+                className={PROGRAM_GO}
                 disabled={
                   !kickoffVerdict.ok || starting
                   || placement?.kind !== 'projected' || existing !== null

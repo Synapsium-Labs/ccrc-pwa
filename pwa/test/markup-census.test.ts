@@ -348,13 +348,17 @@ const REGISTERED_LEAVES: Record<string, string> = {
     + 'is the substrate-fault gate (`disabled`/`title`), which is one '
     + 'expression used twice, and a component taking it as a prop would be the '
     + 'same gate with one more name.',
-  'Button.{GO}[disabled,onClick,variant]':
-    'THE SHARED DECISION IS ALREADY NAMED. `GO` is the quiet control\'s '
-    + 'eleven declarations plus this sheet\'s own three, a constant this file '
-    + 'defines and both buttons wear. What differs is everything else: the '
-    + 'main Start button is gated on the kickoff verdict, the placement and a '
-    + 'collision, and the recovery panel\'s Retry only on its own in-flight '
-    + 'flag — and they are never on screen together.',
+  'Button.{PROGRAM_GO}[disabled,onClick,variant]':
+    'THE SHARED DECISION IS ALREADY NAMED. `PROGRAM_GO` is the quiet '
+    + 'control\'s eleven declarations plus this family\'s own three, one '
+    + 'constant both buttons wear. What differs is everything else: the main '
+    + 'Start button is gated on the kickoff verdict, the placement and a '
+    + 'collision, and the recovery\'s Retry only on its own in-flight flag — '
+    + 'and they are never on screen together. '
+    + 'REKEYED when `KickoffRecovery` was split out of `StartProgramSheet`: '
+    + 'the constant moved to the new file and was renamed to have one home '
+    + '(the literal census red on the two copies within the minute), and this '
+    + 'key is the class literal, so the move rekeyed the entry.',
   'TextInput.{TEXT_INPUT_STACKED}[aria-describedby,aria-invalid,aria-label,onChange,placeholder,value]':
     'TWO FIELDS OF ONE FORM — the program\'s slug and its title. Same '
     + 'attribute set because both are labelled, validated text inputs, which '
