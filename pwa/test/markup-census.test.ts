@@ -11,7 +11,7 @@
 //
 // WHAT THIS ONE DOES, in two halves:
 //
-//  1. BLOCKS. Every JSX element in the app is reduced to a STRUCTURAL
+//  1. BLOCKS. Every JSX element in BOTH packages is reduced to a STRUCTURAL
 //     signature — tag name, its static `className` if it has one, and the
 //     same of each child element, recursively. Props, text and expressions
 //     are dropped: what is left is the SHAPE of the tree. Two elements with
@@ -49,6 +49,8 @@
 //   | an entry registered for a block that does not exist  | 1 red      |
 //   | a two-word className literal copied into two files   | 3 red      |
 //   | the file walk returns an empty list                  | 3 red      |
+//   | a 3-element block copied twice INSIDE @ccrc/ui       | 1 red      |
+//   | one block copied ACROSS the two packages             | 1 red      |
 //
 // Baseline: 5 passed. The last row is why "reads markup at all" exists: a
 // census that silently finds nothing reports a serene zero duplicates.
@@ -149,9 +151,20 @@ const hooked = (n: Jsx): boolean => (classOf(n) !== '' && classOf(n) !== '*') ||
 
 const MIN_ELEMENTS = 3;
 
+/** BOTH packages. The block half read `pwa/src` alone until this wave, on the
+ *  argument the shape census still makes for stylesheets: a duplicate inside
+ *  one package is that package's own review to catch. THIS BRANCH FALSIFIED
+ *  THAT. `BareRow` was extracted from eight rules in three stylesheets, two of
+ *  them inside `@ccrc/ui` itself, and nobody had seen either until a census
+ *  looked — so the package's reviews demonstrably do not catch it.
+ *
+ *  It finds nothing today (31 component files, 37 blocks of three elements or
+ *  more, zero duplicated), and that is the point of a census rather than an
+ *  argument against one: it refuses the FIRST duplicate, including one that
+ *  spans the two packages. Measured by injecting one. */
 function blocks(): Map<string, string[]> {
   const found = new Map<string, string[]>();
-  for (const [name, file] of APP) {
+  for (const [name, file] of [...APP, ...UI]) {
     const src = parse(file);
     const visit = (n: ts.Node): void => {
       if (ts.isJsxElement(n) && size(n) >= MIN_ELEMENTS && hooked(n)) {
