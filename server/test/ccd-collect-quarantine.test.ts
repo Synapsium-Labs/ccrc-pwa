@@ -193,13 +193,17 @@ describe('_ws_collect_qdir, the MAKER: the check, the mkdir, `chmod g-s` on what
     + ' _ws_reclaim_absent() { if [[ "$1" == */.ccd-quarantine && ! -e "$HOME/raced" ]]; then : > "$HOME/raced";'
     + ` ${make}; return 0; fi; _orig_absent "$@"; };`;
 
-  it('on a setgid ~/.cc-tmp the quarantine it makes is 0700 — the CONTROL: a bare `mkdir -m 0700` there is 2700', () => {
+  it('on a setgid ~/.cc-tmp the quarantine it makes is 0700 — the CONTROL, on Linux: a bare `mkdir -m 0700` there is 2700', () => {
     fs.mkdirSync(root(), { mode: 0o755 });
     fs.chmodSync(root(), 0o2755);
     expect(fs.statSync(root()).mode & 0o7777, 'the CONTROL: ~/.cc-tmp is setgid').toBe(0o2755);
-    const probe = path.join(root(), 'probe');
-    h.sh(`mkdir -m 0700 -- '${probe}'`);
-    expect(fs.statSync(probe).mode & 0o7777, 'the CONTROL: a plain mkdir inherits the setgid bit').toBe(0o2700);
+    // Linux hands a new directory a setgid parent's bit; BSD and macOS give it the parent's group without the bit. So
+    // this CONTROL runs on Linux only, like the file's Linux-only cases below. The maker's chmod-call pin runs everywhere.
+    if (LINUX) {
+      const probe = path.join(root(), 'probe');
+      h.sh(`mkdir -m 0700 -- '${probe}'`);
+      expect(fs.statSync(probe).mode & 0o7777, 'the CONTROL: a plain mkdir inherits the setgid bit').toBe(0o2700);
+    }
     const [rc, got, why] = ask(`${CHMOD_LOG} _ws_collect_qdir`, '_WS_Q', '_WS_Q_WHY');
     expect(rc, why).toBe('0');
     expect(got).toBe(path.join(fs.realpathSync(root()), '.ccd-quarantine'));
