@@ -1317,12 +1317,21 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     const line = ruleFor('.fleet-runs-line');
     expect(declValue(line, 'display')).toBe('flex');
 
-    const screen = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
-    const head = screen.slice(screen.indexOf('<header className="fleet-head">'),
-                              screen.indexOf('</header>'));
+    // THE HEAD MOVED AND THIS GUARD WENT VACUOUS — measured, not suspected.
+    // `<header className="fleet-head">` left `FleetScreen.tsx` for its own
+    // component; `indexOf` answered -1 twice, `slice(-1, -1)` answered `''`,
+    // and `expect('').not.toContain(…)` passed for a file that no longer held
+    // the markup it was reading. So the head is read where it LIVES, and the
+    // read asserts it found something before it asserts what is absent — the
+    // non-vacuity floor this file now owes every text scrape it makes.
+    const head = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'FleetHead.tsx'), 'utf8');
+    expect(head, 'the fleet head is not in FleetHead.tsx — find it and re-point this read')
+      .toContain('<header className="fleet-head">');
     expect(head, 'the chooser is back inside <header>, where it never fit')
       .not.toContain('fleet-class-select');
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
     expect(screen).toContain('<div className="fleet-runs-line">');
   });
 

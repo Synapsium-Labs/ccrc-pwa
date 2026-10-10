@@ -3,11 +3,10 @@
 // offline/notice banners, skeletons while the first snapshot is in flight, a
 // friendly first-run block, and a floating "+" within thumb reach that opens
 // the NewSessionSheet.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ATTENTION_DOT, BareRow, BuildLine, Button, QuickConfirm, Skeleton,
-  toast, useNow,
+  ATTENTION_DOT, BareRow, BuildLine, Button, Skeleton, useNow,
 } from '@ccrc/ui';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
@@ -20,70 +19,25 @@ import { useUpdatesView } from '../fleet/useUpdatesView';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
-import { groupFleet, inReleasedFold } from '../fleet/groupFleet';
-import { archivableReleased, archiveReleased, archiveReleasedSummary } from '../fleet/archiveReleased';
-import { ProjectCard, poolOfPlacement, type ProjectPlacementRead } from '../fleet/ProjectCard';
+import { groupFleet } from '../fleet/groupFleet';
+import { ArchiveAllConfirm, useArchiveAll } from '../fleet/ArchiveAllPlane';
+import { ProjectCard } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
 import { anyDispatchPending, isRunClosed, runCard, runHomeProject } from '../fleet/runWords';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
-import { api, apiErrorText } from '../lib/api';
+import { useProjectRows } from '../fleet/useProjectRows';
+import { useActionsSheet } from '../fleet/useActionsSheet';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseenAt, prune, subscribeAcks } from '../lib/seen';
 import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { boardHome, type FleetSession, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire, type ProjectRow } from '../../../shared/api';
+import { boardHome } from '../../../shared/api';
 import '../fleet/fleet.css';
-
-const poolsFingerprint = (pools: ProjectPoolsWire): string => JSON.stringify(
-  pools,
-  (_key, value: unknown) => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
-    return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
-  },
-);
-
-type PoolSelection = {
-  project: string;
-  pool?: NonNullable<ProjectRow['pool']>;
-};
-
-type PoolWrite = {
-  project: string;
-  pool: NonNullable<ProjectRow['pool']>;
-};
-
-/** The pool the sheet is opened on, and the one it keeps while it stays open —
- *  ONE reading used by both the card tap and the open-sheet remeasurement, so
- *  the two can never drift (D-2721). A live write for THIS project precedes the
- *  route read (D-2704/D-2707; D-2714 pins when the bridge clears).
- *
- *  The non-measured arm yields no pool. At the tap site it cannot fire at all:
- *  the only way to open this sheet is `PoolChip`, and `ProjectCard` renders no
- *  chip for a non-measured read. It is the REMEASUREMENT that made this arm
- *  reachable, and its caller — not this function — decides what a read that
- *  cannot speak means for an already-open sheet (D-2722). Nothing here may
- *  conclude "old server, fall through to the frame": that path is unreachable
- *  from both call sites, and a shipped justification for an unreachable path
- *  is a false claim. */
-const poolSelectionFor = (
-  project: string,
-  read: ProjectPlacementRead,
-  write: PoolWrite | null,
-): PoolSelection => {
-  const written = write?.project === project ? write.pool : undefined;
-  return {
-    project,
-    ...(written !== undefined
-      ? { pool: written }
-      : read.kind === 'measured' ? { pool: read.pool } : {}),
-  };
-};
-
 
 export function FleetScreen({
   store = useFleetStore,
@@ -169,203 +123,11 @@ export function FleetScreen({
   const open = onOpen ?? ((id: string) => navigate(`/s/${encodeURIComponent(id)}`));
   const [newOpen, setNewOpen] = useState(false);
   const newSession = onNewSession ?? (() => setNewOpen(true));
-  // Keep the route-owned subject through vaul's exit animation, as the other
-  // fleet sheets do. Pool and project come from the same `/api/projects` row.
-  const [poolSelection, setPoolSelection] = useState<{
-    project: string;
-    pool?: NonNullable<ProjectRow['pool']>;
-  } | null>(null);
-  const [poolOpen, setPoolOpen] = useState(false);
-  const poolWrite = useRef<{ project: string; pool: NonNullable<ProjectRow['pool']> } | null>(null);
-
-  // The fleet socket is the source of truth: no optimistic row here — the new
-  // session appears on the next snapshot, so a refusal (e.g. no origin/HEAD)
-  // never briefly shows a workspace that ccd declined to create.
-  //
-  // In-flight per PROJECT — a COURTESY now, no longer the gate. ccd's own
-  // `cmd_ws_add` takes a per-project `flock -n` spanning slug selection through
-  // the last registry write and refuses a second concurrent add with
-  // `busy: another ws-add for <project> is in flight`, so the two-worktrees
-  // outcome this comment used to describe as unfixed is closed on the box —
-  // which matters, because React state does not survive a reload and never
-  // covered a second tab, a second device, or the coordinator's own HTTP call.
-  // This state is kept because it spares the operator a round trip and a
-  // refusal toast, not because it prevents anything.
-  //
-  // The window is bounded too: the settle is capped at SPAWN_SETTLE_S (240s) on
-  // this path, not the ~15 minutes an unbounded `_accept_first_run_prompts`
-  // used to allow — and a settle that runs out is now a REPORT against a
-  // workspace that exists, is claimed and is supervised, not an orphan.
-  const [adding, setAdding] = useState<ReadonlySet<string>>(() => new Set());
-
-  // `/api/projects` performs one agent round trip per project, so this lifecycle
-  // has no timer. Pools-frame identity and visible-page return invalidate it;
-  // the latter remeasures changed limits when a phone is picked up. A successful
-  // add is the other imperative refresh. Generations keep late responses from
-  // overwriting a newer measurement. The visibility token coalesces only an
-  // equal reconnect frame while that visibility read remains unresolved; a
-  // changed frame still starts its own request immediately (D-2702).
-  // The class chooser (routing spec, slice 5, Task 6): `''` is the unset
-  // "Coordinator row" — the class-blind fetch and route-less `+` every build
-  // before this task has always sent. A ref beside the state, not a
-  // `refreshProjects` dependency: that callback's identity is kept stable
-  // for the pools/visibility effects below, so the class it reads has to
-  // arrive through the same synchronously-updated-ref idiom `poolsFingerprintRef`
-  // already uses two lines down, rather than by giving it a changing identity.
-  const [classFilter, setClassFilter] = useState<'' | 'default' | ModelClass>('');
-  const classFilterRef = useRef<'' | 'default' | ModelClass>('');
-  classFilterRef.current = classFilter;
-  const projectRequest = useRef(0);
-  const visibilityRequest = useRef<{ token: number; pools: string } | null>(null);
-  const writeRefresh = useRef<{ token: number; write: { project: string; pool: NonNullable<ProjectRow['pool']> } } | null>(null);
-  const poolsFingerprintRef = useRef(pools === null ? null : poolsFingerprint(pools));
-  poolsFingerprintRef.current = pools === null ? null : poolsFingerprint(pools);
-  const [projectRows, setProjectRows] = useState<
-    | { kind: 'legacy' }
-    | { kind: 'pending' }
-    | { kind: 'failed' }
-    | { kind: 'ready'; rows: readonly ProjectRow[] }
-  >({ kind: 'legacy' });
-  const refreshProjects = useCallback(async (
-    visibilityPools?: string,
-    write?: { project: string; pool: NonNullable<ProjectRow['pool']> },
-  ): Promise<void> => {
-    const request = ++projectRequest.current;
-    if (visibilityPools !== undefined) visibilityRequest.current = { token: request, pools: visibilityPools };
-    if (write !== undefined) writeRefresh.current = { token: request, write };
-    setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'pending' });
-    try {
-      const cls = classFilterRef.current;
-      const response = await api.projects(cls === '' ? undefined : cls);
-      if (request === projectRequest.current) {
-        setProjectRows({ kind: 'ready', rows: response.projects });
-        useStore.getState().setProjects(response.projects);
-      }
-    } catch {
-      if (request === projectRequest.current) {
-        setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'failed' });
-      }
-    } finally {
-      if (visibilityRequest.current?.token === request) visibilityRequest.current = null;
-      if (writeRefresh.current?.token === request) {
-        const { write } = writeRefresh.current;
-        if (poolWrite.current === write) poolWrite.current = null;
-        writeRefresh.current = null;
-      }
-    }
-  }, []);
-  useEffect(() => {
-    if (pools === null) return;
-    const fingerprint = poolsFingerprint(pools);
-    if (visibilityRequest.current?.pools === fingerprint) return;
-    visibilityRequest.current = null;
-    void refreshProjects();
-  }, [pools, refreshProjects]);
-  useEffect(() => {
-    const onVisible = (): void => {
-      if (document.visibilityState === 'visible' && poolsFingerprintRef.current !== null) {
-        void refreshProjects(poolsFingerprintRef.current);
-      }
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [refreshProjects]);
-
-  // Memoised on the rows it reads, so the remeasurement below can depend on it
-  // honestly: a reader rebuilt every render would make that effect re-run on
-  // every render it caused.
-  const placementFor = useCallback((project: string): ProjectPlacementRead => {
-    if (projectRows.kind !== 'ready') return projectRows;
-    const row = projectRows.rows.find((candidate) => candidate.name === project);
-    if (row === undefined) return { kind: 'missing' };
-    return Object.hasOwn(row, 'pool') && row.pool !== undefined
-      && Object.hasOwn(row, 'placement') && row.placement !== undefined
-      ? { kind: 'measured', pool: row.pool, placement: row.placement }
-      : { kind: 'legacy' };
-  }, [projectRows]);
-
-  // Task 4 fix round 1: a card's own `placement`/`pool` names ONE project —
-  // its own. A row the key flip moved onto this card belongs to a DIFFERENT
-  // project by construction, so its off-pool judgment needs THAT project's
-  // tag, not this card's. The absence discipline itself is `poolOfPlacement`'s
-  // and is spelled once beside `ProjectPlacementRead` (final fix round): only
-  // a `measured` read yields a pool, everything else (`pending`/`failed`/
-  // `missing`/`legacy`) answers `null` — no account claim from an unmeasured
-  // or absent read. What THIS adds is the per-project lookup and the memo.
-  const poolFor = useCallback((project: string): ProjectPoolWire | null =>
-    poolOfPlacement(placementFor(project)), [placementFor]);
-
-  // Task 6: a displaced row's repo label needs ITS OWN project's repo, which
-  // is by construction a different project from the card it renders on — the
-  // same shape `poolFor` above threads for the same reason.
-  const repoFor = useCallback((project: string): ProjectRepoWire | undefined => {
-    if (projectRows.kind !== 'ready') return undefined;
-    const row = projectRows.rows.find((candidate) => candidate.name === project);
-    // `Object.hasOwn`: the key ABSENT is an older server and must read as
-    // "nothing measured", never as `{state:'unmeasured'}` (ProjectRow's doc).
-    return row !== undefined && Object.hasOwn(row, 'repo') ? row.repo : undefined;
-  }, [projectRows]);
-
-  // D-2721: the selection is a snapshot taken when the card was tapped, and the
-  // route remeasures underneath an open sheet — a pools frame, a visible-page
-  // return and the write's own refresh each land a fresher `ProjectRow.pool` in
-  // `projectRows` that the tapped value would otherwise outlive, leaving the
-  // card and the sheet above it stating different pools for one project at one
-  // instant. Nothing new is fetched here: the answer is already in this
-  // component, only the wiring was missing.
-  //
-  // ONLY while open. The snapshot's other job (:129) is to survive vaul's exit
-  // animation, so remeasuring through the close would flip the copy mid-flight
-  // — to the FRAME's pool, or to "this box has not said" only in the narrow
-  // case where no frame has arrived at all. Frozen on close stays frozen.
-  //
-  // D-2722: a read that is not `measured` leaves the selection ALONE. This is
-  // forced, not preferred — the seam has no vocabulary for measured absence.
-  // `selectedPool`'s `undefined` already means "old server omitted the field",
-  // and every `ProjectPoolWire` member asserts a tag file was reached, so there
-  // is no value here that says "the route answered and did not list this
-  // project" (D-2723 parks the carrier that could). Clearing it hands the sheet
-  // to `projectPoolOf`, and that FABRICATES rather than going stale: a project
-  // the frame never listed reads back `{state:'untagged'}` — "every account may
-  // serve it", the constraint-LIFTING direction — and a `listed:false` frame
-  // reads back `{state:'unreadable'}`, naming a tag file nobody opened. Keeping
-  // the last value the route actually measured is the only other thing this
-  // seam can express. Keyed on the READ, never on whether the result happens to
-  // carry a pool: that shape is `poolSelectionFor`'s decision, and re-reading it
-  // here would silently change this rule if its convention ever moved.
-  useEffect(() => {
-    if (!poolOpen) return;
-    setPoolSelection((selected) => {
-      if (selected === null) return selected;
-      const read = placementFor(selected.project);
-      if (read.kind !== 'measured') return selected;
-      return poolSelectionFor(selected.project, read, poolWrite.current);
-    });
-  }, [poolOpen, placementFor]);
-
-  const addWorkspace = async (project: string): Promise<void> => {
-    if (adding.has(project)) return;
-    setAdding((s) => new Set(s).add(project));
-    try {
-      // Seeds the SAME class the chooser fetched with — the `+` starts a
-      // workspace on the lane the row above it just forecast, rather than
-      // asking the coordinator to re-decide from an unset row.
-      await (classFilter === ''
-        ? api.workspaceAdd(project)
-        : api.workspaceAdd(project, { class: classFilter }));
-      void refreshProjects();
-    } catch (err) {
-      toast(`Couldn't create workspace — ${apiErrorText(err)}`, 'error');
-    } finally {
-      // finally, not the try tail: a refusal must re-arm the button, or ccd
-      // saying no leaves a `+` that can never be pressed again.
-      setAdding((s) => {
-        const next = new Set(s);
-        next.delete(project);
-        return next;
-      });
-    }
-  };
+  // The `/api/projects` plane — rows, class, placement readers, the `+`'s
+  // in-flight set and the pool sheet's selection — lives in its own hook
+  // (`useProjectRows`), which is where its generation discipline and its two
+  // deviations are argued.
+  const projects = useProjectRows(pools, useStore.getState().setProjects);
 
   const projected = useProjectedHome();
   // Once, not three times in one interpolation: the footer's count and its
@@ -414,90 +176,21 @@ export function FleetScreen({
   // which polls on its own.
   const fleetHealth = useFleetHealth();
   const updates = useUpdatesView();
-  // One sheet for the whole screen, fed by whichever line was tapped. Only
-  // the id is the source of truth (Finding 5 of the whole-branch review):
-  // `actionsSession` is refreshed from the live `sessions` list below rather
-  // than frozen at tap time, so a fleet update while the sheet is open keeps
-  // its limit note and Remove-workspace visibility current. `actionsOpen` is
-  // a separate boolean — matching how NewSessionSheet and SwapSheet are
-  // toggled elsewhere in this file — so closing never clears the session:
-  // SessionActionsSheet stays mounted and vaul gets to play its exit
-  // animation instead of popping out of existence (Finding 2).
-  const [actionsId, setActionsId] = useState<string | null>(null);
-  const [actionsOpen, setActionsOpen] = useState(false);
-  const [actionsSession, setActionsSession] = useState<FleetSession | null>(null);
+  // The ··· sheet's own lifecycle (`useActionsSheet`) — which session it is
+  // about, and what it does when that session changes or vanishes.
+  const actions = useActionsSheet(sessions);
   // The guarded reap flow, reachable from the fleet line's ··· regardless of
   // whether that session's chat screen is currently open — an archived
   // workspace's only other route to cleanup is a screen there is no reason
   // to open. Only the id is held: the session it names is looked up fresh
   // from the live list below, same reasoning as `actionsSession` above.
   const [reapId, setReapId] = useState<string | null>(null);
-  // "Archive all" in a card's Released fold (workspace lifecycle spec §5.1): the project whose confirm is open,
-  // and the projects whose loop is running — a second call while one runs is refused, not queued. The guard is a
-  // REF, not the state beside it: a second call from the same render would read the stale state (the state only
-  // drives the button's disabled look). The window it covers is a phone's: the confirm sheet stays tappable while
-  // it animates closed. fleet-screen.test.tsx's double tap cannot reach it — under jsdom the real sheet unmounts before a
-  // second click lands — so archive-all-guard.test.tsx stubs the sheet with a confirm that fires twice in one tick.
+  // "Archive all" in a card's Released fold (workspace lifecycle spec §5.1).
+  // The loop and the confirm's sentence live in `ArchiveAllPlane`; the screen
+  // keeps only which project is asking, because the cards read the in-flight
+  // set and a set owned inside the sheet could not reach them.
   const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
-  const [archivingAll, setArchivingAll] = useState<ReadonlySet<string>>(new Set());
-  const archivingAllRef = useRef<Set<string>>(new Set());
-  // `boardHome`, the card the row RENDERS on — never `s.project`, which a placed row does not share with its card.
-  const archiveAllRows = archiveAllFor === null ? []
-    : sessions.filter((s) => boardHome(s) === archiveAllFor && archivableReleased(s));
-  const archiveAllCount = archiveAllRows.length;
-  const archiveAllLive = archiveAllRows.filter((s) => s.status !== 'dead').length;
-  const runArchiveAll = async (project: string): Promise<void> => {
-    if (archivingAllRef.current.has(project)) return;
-    archivingAllRef.current.add(project);
-    // EVERY folded row of this card, children included: the loop skips a child itself, so its summary counts the
-    // whole fold — "skipped" then agrees with the card's own "skips N child workspaces".
-    const ids = sessions.filter((s) => boardHome(s) === project && inReleasedFold(s)).map((s) => s.id);
-    setArchivingAll((prev) => new Set(prev).add(project));
-    try {
-      const result = await archiveReleased(ids, {
-        // The NEWEST frame, never the render-scoped `sessions`: a row can leave the fold mid-loop.
-        current: (id) => store.getState().sessions.find((s) => s.id === id),
-        archive: (id) => api.archive(id),
-        errorText: apiErrorText,
-      });
-      // A refusal's reason is the only record of it — the refused row stays in the fold with no reason on it — so
-      // that toast carries an action, which keeps it on screen until it is read (Toast.tsx).
-      if (result.refused.length > 0) {
-        toast(archiveReleasedSummary(result), 'error', { label: 'Dismiss', onClick: () => {} });
-      } else {
-        toast(archiveReleasedSummary(result), 'info');
-      }
-    } finally {
-      archivingAllRef.current.delete(project);
-      setArchivingAll((prev) => {
-        const next = new Set(prev);
-        next.delete(project);
-        return next;
-      });
-    }
-  };
-
-  useEffect(() => {
-    if (actionsId === null) return;
-    const live = sessions.find((s) => s.id === actionsId) ?? null;
-    if (live !== null) {
-      setActionsSession(live);
-    } else if (actionsOpen) {
-      // The session vanished from the fleet entirely (workspace removed,
-      // process gone) while the sheet was open — there is nothing left to
-      // act on. Close it exactly as a manual dismiss would: `actionsSession`
-      // keeps its last known value so the sheet still has something to
-      // animate out over, rather than popping (same class of bug as
-      // Finding 2, from a different trigger).
-      setActionsOpen(false);
-    }
-  }, [sessions, actionsId, actionsOpen]);
-
-  const openActionsFor = (session: FleetSession): void => {
-    setActionsId(session.id);
-    setActionsSession(session);
-    setActionsOpen(true);
-  };
+  const archiveAll = useArchiveAll(store);
 
   // `bucket`, not `dialogPending` — the LAST client-side re-derivation of the
   // attention bucket, and the one that sat directly above the bucket bar that
@@ -531,13 +224,6 @@ export function FleetScreen({
     epoch !== undefined && observedEpoch !== undefined && observedEpoch !== epoch
       ? `epoch ${epoch} / observed ${observedEpoch === null ? 'never synced' : observedEpoch}`
       : null;
-
-  // R5 (D-3010): the card set is seeded from the known-project list once it
-  // lands. Before it lands — `legacy`, `pending`, `failed` — the cards are
-  // session-derived exactly as before, and the set only ever GROWS when the
-  // read arrives: a card cannot be destroyed by a read this device has not
-  // made yet. Not hydrated and not persisted, for `pools`' own reason.
-  const knownProjects = projectRows.kind === 'ready' ? projectRows.rows.map((r) => r.name) : [];
 
   // Task 4: which card each run belongs on — the card its WORKER renders on.
   // Built ONCE here from the whole session list, because a card sees only
@@ -655,13 +341,8 @@ export function FleetScreen({
         <select
           className="route-select fleet-class-select"
           aria-label="Class"
-          value={classFilter}
-          onChange={(e) => {
-            const next = e.target.value as '' | 'default' | ModelClass;
-            setClassFilter(next);
-            classFilterRef.current = next;
-            void refreshProjects();
-          }}
+          value={projects.classFilter}
+          onChange={(e) => projects.chooseClass(e.target.value as '' | 'default' | ModelClass)}
         >
           <option value="">Coordinator row</option>
           <option value="default">Default</option>
@@ -702,27 +383,24 @@ export function FleetScreen({
           <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />
 
           <div className="fleet-list">
-            {groupFleet(sessions, knownProjects, acks).map((g) => (
+            {groupFleet(sessions, projects.knownProjects, acks).map((g) => (
               <ProjectCard
                 key={g.project}
                 group={g}
                 onOpen={open}
                 selectedId={selectedId}
-                onAddWorkspace={(p) => void addWorkspace(p)}
+                onAddWorkspace={(p) => void projects.addWorkspace(p)}
                 projected={projected}
-                placement={placementFor(g.project)}
-                poolFor={poolFor}
-                repoFor={repoFor}
-                adding={adding.has(g.project)}
+                placement={projects.placementFor(g.project)}
+                poolFor={projects.poolFor}
+                repoFor={projects.repoFor}
+                adding={projects.adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}
-                onActions={openActionsFor}
+                onActions={actions.openFor}
                 roster={roster}
                 pools={pools}
-                onPool={(p) => {
-                  setPoolSelection(poolSelectionFor(p, placementFor(p), poolWrite.current));
-                  setPoolOpen(true);
-                }}
+                onPool={projects.openPool}
                 /* Task 4 (wave 2): THIS card's runs are the runs whose WORKER
                    renders here — `runCard`, never `r.project`. A run kept on
                    its worker's OWN project's card after the row moved would be
@@ -777,7 +455,7 @@ export function FleetScreen({
                 /* The same inversion, for the Released fold (workspace lifecycle spec §5.1). */
                 releasedOpen={folded.has(`${g.project}::released`)}
                 onArchiveReleased={setArchiveAllFor}
-                archivingReleased={archivingAll.has(g.project)}
+                archivingReleased={archiveAll.archiving.has(g.project)}
               />
             ))}
           </div>
@@ -814,38 +492,27 @@ export function FleetScreen({
       <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
 
       <PoolSheet
-        project={poolSelection?.project ?? null}
-        selectedPool={poolSelection?.pool}
-        open={poolOpen}
-        onClose={() => setPoolOpen(false)}
-        onPoolChanged={(project, pool) => {
-          const write = { project, pool };
-          poolWrite.current = write;
-          setPoolSelection((selected) => selected?.project === project
-            ? { project, pool }
-            : selected);
-          void refreshProjects(undefined, write);
-        }}
+        project={projects.poolSelection?.project ?? null}
+        selectedPool={projects.poolSelection?.pool}
+        open={projects.poolOpen}
+        onClose={projects.closePool}
+        onPoolChanged={projects.notePoolWrite}
         fleet={store}
       />
 
       <SessionActionsSheet
-        session={actionsSession}
-        open={actionsOpen}
-        onClose={() => setActionsOpen(false)}
+        session={actions.session}
+        open={actions.open}
+        onClose={actions.close}
         onReap={setReapId}
         fleet={store}
       />
 
-      <QuickConfirm
-        open={archiveAllFor !== null}
+      <ArchiveAllConfirm
+        project={archiveAllFor}
+        sessions={sessions}
         onClose={() => setArchiveAllFor(null)}
-        title="Archive released workspaces?"
-        consequence={`Archives ${archiveAllCount} released ${archiveAllCount === 1 ? 'workspace' : 'workspaces'} in ${archiveAllFor ?? ''}, one at a time. ${archiveAllLive} of them ${archiveAllLive === 1 ? 'still has a live pane' : 'still have a live pane'}, which is stopped. Restore brings any of them back; once automatic cleanup is on, each is cleaned up seven days after its archive. Child workspaces are skipped, and so is any row that stops being released before its turn.`}
-        confirmLabel={`Archive ${archiveAllCount}`}
-        onConfirm={() => {
-          if (archiveAllFor !== null) void runArchiveAll(archiveAllFor);
-        }}
+        onConfirm={(project) => void archiveAll.run(project)}
       />
 
       <ReapSheet
