@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -77,23 +78,7 @@ const accountsRoute = (): Response =>
     status: 200, headers: { 'content-type': 'application/json' },
   });
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:OpenClawHetzner',
-  wrapper: 'claude',
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: Date.now() - 2 * MIN,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  version: '2.1.0',
-  ...over,
-});
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 /** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
 const makeStore = (): FleetStore =>

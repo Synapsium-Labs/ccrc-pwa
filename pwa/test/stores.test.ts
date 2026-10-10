@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
+import { fleetSession as baseSession } from './fleetFixture';
 import { FLEET_PROTO } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
@@ -33,21 +34,12 @@ const dialogFixture: Dialog = {
   raw: '❯ 1. Yes\n  2. No',
 };
 
-const fleetSession = (id: string, wrapper: string): FleetSession => ({
-  id,
-  wrapper,
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: null,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-});
+const fleetSession = (id: string, wrapper: string): FleetSession =>
+  baseSession({
+    id, wrapper, home: '/home/rc', project: 'OpenClawHetzner',
+    workdir: '/home/rc/projects/OpenClawHetzner',
+    limits: { five: 10, seven: 40 }, version: '2.1.0',
+  });
 
 const emptySnap = (): SessionSnapshot => ({
   events: [],

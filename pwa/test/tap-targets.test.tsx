@@ -17,6 +17,7 @@
 //     a rule with no matching element would silently stop doing.
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import type { CoordCapsView } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -61,15 +62,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 // — fixtures —
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'custom-tools',
-  workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
-  limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'custom-tools', workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,

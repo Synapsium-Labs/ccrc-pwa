@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, PrState, PrView, RunSummary } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ToastHost } from '@ccrc/ui';
 import { PrSheet } from '../src/session/PrSheet';
@@ -12,15 +13,7 @@ const pr = (over: Partial<PrState> = {}): PrState => ({
   ahead: 3, reason: null, checkedAt: Date.now() - 60_000, mergedAt: null, retryAt: null, ...over,
 });
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
-  limits: null, dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: pr(), archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', branch: 'ws/quiet-basin', pr: pr(), ...over }));
 
 const view = (over: Partial<PrView> = {}): PrView => ({
   pr: pr(),

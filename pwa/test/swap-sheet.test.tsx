@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession, ProjectPoolsWire } from '../../shared/api';
+import { fleetSession as baseSession } from './fleetFixture';
 import { api } from '../src/lib/api';
 import { SwapSheet } from '../src/fleet/SwapSheet';
 import { leastLoaded } from '../src/fleet/accountPicker';
@@ -27,19 +28,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 // reason it can be turned into a label at all.
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:OpenClawHetzner', wrapper: 'claude', home: 'claude',
-  project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner',
-  workspace: null, name: null, status: 'idle', statusUpdatedAt: Date.now() - 120_000,
-  limits: { five: 62, seven: 71 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  version: null,
-  ...patch,
-});
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:OpenClawHetzner', project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 120_000, limits: { five: 62, seven: 71 }, ...patch }));
 
 const storeWith = (sessions: FleetSession[], roster = TEST_ROSTER): FleetStore => {
   const store = createFleetStore({ makeSocket: fakeSocket });

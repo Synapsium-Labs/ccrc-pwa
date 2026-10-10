@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, UpdatesView } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { resetAcks } from '../src/lib/seen';
@@ -43,23 +44,7 @@ afterEach(() => {
 
 const MIN = 60_000;
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:OpenClawHetzner',
-  wrapper: 'claude',
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: Date.now() - 2 * MIN,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  version: '2.1.0',
-  ...over,
-});
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 const makeStore = (): FleetStore =>
   createFleetStore({

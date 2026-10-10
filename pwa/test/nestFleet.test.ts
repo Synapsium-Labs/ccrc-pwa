@@ -12,18 +12,11 @@
 // right now and forgets it the moment the programme closes.
 import { describe, it, expect } from 'vitest';
 import type { FleetSession, RunSummary } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { nestFleet, type FleetRow } from '../src/fleet/nestFleet';
 
-const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
-  id, wrapper: 'claude', home: 'claude', project: 'ccrc-pwa', workdir: '/w',
-  workspace: id, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
-  dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
+  fleetSession({ id, project: 'ccrc-pwa', workspace: id, ...over });
 
 /** A run in the shape the `runs` frame actually carries one. `claimedBy` is
  *  spelled at every call site rather than defaulted, because the ownership

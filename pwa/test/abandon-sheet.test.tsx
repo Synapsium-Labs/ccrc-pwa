@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { ChildMark, CoordCapsView, FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -48,15 +49,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
 
 // `runs-screen.test.tsx`'s own `sess` builder, verbatim: a full `FleetSession`
 // literal, because `tsc` covers `test/`. Its `id` is the `sessionId` of `run()`.
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'ccrc-pwa-clear-cove', wrapper: 'claude', home: 'claude', project: 'ccrc-pwa',
-  workdir: '/w', workspace: 'clear-cove', name: null, status: 'idle', statusUpdatedAt: null,
-  limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/clear-cove', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-clear-cove', project: 'ccrc-pwa', workspace: 'clear-cove', branch: 'ws/clear-cove', bucket: 'working', ...over }));
 
 // The confirm line's four sentences, for `run()` (id 3, workspace clear-cove), spelled
 // out in full: a sentence is the thing under test here, so it is never rebuilt from the

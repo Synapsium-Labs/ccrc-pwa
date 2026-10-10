@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
 import { TYPE_MS, TypedLabel } from '@ccrc/ui';
@@ -34,16 +35,7 @@ const prefersReduced = (reduced: boolean): void => {
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
-  status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
-  version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-quiet-mesa', workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', ...over }));
 
 describe('TypedLabel', () => {
   it('is silent on first mount — the whole value, immediately', () => {

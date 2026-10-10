@@ -1,15 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { sortFleet } from '../src/fleet/sortFleet';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 
-const s = (over: Partial<FleetSession>): FleetSession => ({
-  id: over.id ?? 'x', wrapper: 'claude2', home: 'claude2', project: over.id ?? 'x', workdir: '/w',
-  workspace: null,
-  name: null, status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, version: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  ...over,
-});
+const s = (over: Partial<FleetSession>): FleetSession => (fleetSession({ id: over.id ?? 'x', wrapper: 'claude2', home: 'claude2', project: over.id ?? 'x', ...over }));
 
 describe('sortFleet', () => {
   // The server decides which bucket a session is in (`sessionBucket`,

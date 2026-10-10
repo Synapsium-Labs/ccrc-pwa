@@ -6,6 +6,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, RunSummary } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
 import { ArchiveSheet } from '../src/fleet/ArchiveSheet';
 import { createFleetStore } from '../src/stores/fleet';
@@ -13,17 +14,7 @@ import { ApiError, type api } from '../src/lib/api';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-amber', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w/demo/amber', workspace: 'amber', name: null,
-  status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
-  version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null,
-  ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-amber', workdir: '/w/demo/amber', workspace: 'amber', ...over }));
 const RUN7 = { id: 7, program: 'lifecycle', wave: 1, waveOf: 3 };
 const RUN8 = { id: 8, program: 'lifecycle', wave: 2, waveOf: 3 };
 const claimedRun = (r: typeof RUN7, state: RunSummary['state'] = 'working'): RunSummary =>

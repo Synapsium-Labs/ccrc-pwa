@@ -48,23 +48,22 @@ import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import { START_PROGRAM_WAIT_MS, openRunVerdict, startedSessionFor } from '../src/fleet/startProgramPolicy';
 import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
+import { fleetSession } from './fleetFixture';
 import { ToastHost } from '@ccrc/ui';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { navigate } from '../src/lib/router';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude-ccrc-pwa', wrapper: 'claude', home: 'claude', project: 'ccrc-pwa',
-  workdir: '/w', workspace: null, name: null, status: 'idle', statusUpdatedAt: null,
-  limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  // An alive row: `lifecycle` answers "why is this row NOT alive", so null is
-  // the correct value here, not merely the one that compiles.
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession =>
+  fleetSession({
+    id: 'claude-ccrc-pwa', project: 'ccrc-pwa',
+    // An alive row: `lifecycle` answers "why is this row NOT alive", so null is
+    // the correct value here, not merely the one that compiles — and it is the
+    // shared fixture's default for that reason.
+    lifecycle: null,
+    ...over,
+  });
 
 const proj = (over: Partial<ProjectRow> = {}): ProjectRow => ({
   name: 'ccrc-pwa', workdir: '/home/u/projects/ccrc-pwa', ...over,
