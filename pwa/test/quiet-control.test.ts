@@ -47,9 +47,18 @@ const SITES = [
   { file: ['screens', 'RunsScreen.tsx'], hook: 'program-start-door', flex: false },
   // The fifth, found BY this file on the day the other four were folded —
   // `.program-start-go` carried the same eleven declarations in the same
-  // stylesheet and nobody had noticed. Three uses in one sheet component, all
-  // through one shared `GO` string, so the count below is 3 rather than 1.
-  { file: ['fleet', 'StartProgramSheet.tsx'], hook: 'program-start-go', flex: false, uses: 3 },
+  // stylesheet and nobody had noticed.
+  //
+  // IT IS NOW TWO FILES, and this test is what noticed: `KickoffRecovery` was
+  // split out of `StartProgramSheet` and took two of the three controls with
+  // it, so a single `uses: 3` entry went red within the minute. The literal
+  // lives in ONE place (`PROGRAM_GO`, exported from the new file — the literal
+  // census refused the two copies), so the sheet's own entry declares that it
+  // IMPORTS the string rather than spelling it, and the flex assertion is
+  // still made against the real literal exactly once.
+  { file: ['fleet', 'KickoffRecovery.tsx'], hook: 'program-start-go', flex: false, uses: 2 },
+  { file: ['fleet', 'StartProgramSheet.tsx'], hook: 'program-start-go', flex: false, uses: 1,
+    importsFrom: ['fleet', 'KickoffRecovery.tsx'] },
 ] as const;
 
 describe('the quiet control — one variant where four rules were', () => {
@@ -103,9 +112,14 @@ describe('the quiet control — one variant where four rules were', () => {
       const code = src(...site.file);
       const uses = [...code.matchAll(/variant="quiet"/g)].length;
       expect(uses, site.hook).toBe('uses' in site ? site.uses : 1);
-      // The class string, wherever it is spelled: inline on the element, or
-      // hoisted to a `const` when one control is rendered from three places.
-      const cls = new RegExp(`['"]${site.hook}[^'"]*['"]`).exec(code);
+      // The class string, wherever it is spelled: inline on the element,
+      // hoisted to a `const` when one control is rendered twice, or — for a
+      // site that IMPORTS the constant — read from the file that owns the
+      // literal, named by `importsFrom`. Without that arm this scan would
+      // look for a string in a file that only has an identifier, and a
+      // `not.toBeNull()` on the result would red for the wrong reason.
+      const owner = 'importsFrom' in site ? site.importsFrom : site.file;
+      const cls = new RegExp(`['"]${site.hook}[^'"]*['"]`).exec(src(...owner));
       expect(cls, site.hook).not.toBeNull();
       expect((cls?.[0] ?? '').includes('flex-none'), site.hook).toBe(site.flex);
     }
