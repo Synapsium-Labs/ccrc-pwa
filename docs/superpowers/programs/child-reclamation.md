@@ -47,6 +47,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-10 22:02 — the amended wave-done (4183) is verified at `aa1c06c4a`. Run 347 is at `awaiting-review`, and scoped review run 374 is opened.**
+  - **The merge.** `aa1c06c4a` merges origin/main `995a05750` (#339, #343, #341, #340, #345) into `ee17287e0`. Its
+    tree differs from git's own merge of the same two commits ONLY in README.md (measured), the one conflicted hunk:
+    the compaction paragraph's anchors into `shared/api.ts`. ccd/ccd is unchanged by the merge.
+  - **Measured.** origin's tip equals the fingerprint. PR #344 is OPEN and MERGEABLE, and merge-tree against
+    origin/main exits 0. CI was running at the advance. 49 at-merge files were each run alone, all green, plus tsc,
+    the pwa build, the pwa suite and `mark --check`.
+  - **Review run 374** reads `7a4b0a195..aa1c06c4a` only, against `wave7/fix-round-1-rulings.md`. It runs the held-out
+    panel, plus the plan's SAFETY lens on each code fix with its mutation row reverted. It is told to stop if it is
+    off an Anthropic account, and to keep every command approval-free.
+
 - **2026-10-10 21:51 — wave 7's fix-round wave-done (4180) is received at `ee17287e0`. Main is absorbed before the review (4181).**
   - **The claim.** Suite `green`: 104 server files, each run alone at the tip (4328 passed). tsc, the pwa build and
     `mark --check` also pass. The full sharded suite was not re-run; the first full run (4147) stands. The code
