@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { Button, ListRow, Sheet, Skeleton, TEXT_INPUT_STACKED, TextInput, toast } from '@ccrc/ui';
+import { Button, ListRow, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
@@ -25,6 +25,7 @@ import {
   pickerEmptiness,
 } from './SwapSheet';
 import { useAccountUsage } from './useProjectedHome';
+import { ProjectPicker } from './ProjectPicker';
 import './fleet.css';
 
 function ProjectRowButton({ row, selected, pool, onPick }: {
@@ -337,22 +338,13 @@ export function NewSessionSheet({
           >
             <span aria-hidden="true">‹</span> on {accountLabel(roster, wrapper)} — change
           </button>
-          <TextInput
-            className={TEXT_INPUT_STACKED}
-            type="search"
-            placeholder="Search projects"
-            aria-label="Search projects"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {list === null && listError === null ? (
-            <Skeleton lines={4} className="proj-skel" />
-          ) : listError !== null ? (
-            <p className="proj-error" role="alert">
-              Couldn't load the project list — {listError}
-            </p>
-          ) : (
-            <div className="proj-list">
+          <ProjectPicker
+            query={query}
+            onQuery={setQuery}
+            list={list}
+            listError={listError}
+            empty={inPool.length === 0 && otherPool.length === 0}
+          >
               {inPool.map((candidate) => (
                 <ProjectRowButton
                   key={candidate.workdir}
@@ -388,11 +380,7 @@ export function NewSessionSheet({
                   ))}
                 </>
               )}
-              {inPool.length === 0 && otherPool.length === 0 && (
-                <p className="proj-none">No project matches "{query}"</p>
-              )}
-            </div>
-          )}
+          </ProjectPicker>
           {/* The optional routing row (routing spec, slice 4, Task 6): every
               option is derived from `CLASSES`/`effortOptions` at render time,
               never a hand-typed list, so a class or effort rung this build

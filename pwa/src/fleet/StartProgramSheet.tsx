@@ -42,7 +42,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
-import { Button, ListRow, Sheet, Skeleton, TEXT_INPUT_STACKED, TextInput } from '@ccrc/ui';
+import { Button, ListRow, Sheet, TEXT_INPUT_STACKED, TextInput } from '@ccrc/ui';
 
 /** The sheet's confirm control. It was the FIFTH copy of the quiet control's
  *  eleven declarations — `quiet-control.test.ts` found it the day the other
@@ -63,6 +63,7 @@ import { useProjectedHome } from './useProjectedHome';
 import {
   READY_GLYPH, READY_PENDING_GLYPH, missingPreconditions, readinessTitle, readinessWord,
 } from './readinessWords';
+import { ProjectPicker } from './ProjectPicker';
 import './fleet.css';
 
 
@@ -849,22 +850,13 @@ export function StartProgramSheet({
           onChange={(e) => setTitle(e.target.value)}
         />
 
-        <TextInput
-          className={TEXT_INPUT_STACKED}
-          type="search"
-          placeholder="Search projects"
-          aria-label="Search projects"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        {list === null && listError === null ? (
-          <Skeleton lines={4} className="proj-skel" />
-        ) : listError !== null ? (
-          <p className="proj-error" role="alert">
-            Couldn't load the project list — {listError}
-          </p>
-        ) : (
-          <div className="proj-list">
+        <ProjectPicker
+          query={query}
+          onQuery={setQuery}
+          list={list}
+          listError={listError}
+          empty={filtered.length === 0}
+        >
             {filtered.map((p) => {
               const selected = p.workdir === project?.workdir;
               return (
@@ -909,9 +901,7 @@ export function StartProgramSheet({
                 </ListRow>
               );
             })}
-            {filtered.length === 0 && <p className="proj-none">No project matches "{query}"</p>}
-          </div>
-        )}
+        </ProjectPicker>
 
         {project !== null && (
           existing !== null && !isOwnAttempt ? (
