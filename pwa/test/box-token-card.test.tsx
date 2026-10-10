@@ -82,6 +82,12 @@ describe('readBoxTokenView — the ONE reader of UpdatesView.boxToken', () => {
     ['a role this build does not know', { ...BT(), role: 'edge' }],
     ['a stall with a reason this build does not know', { ...BT(), stalled: { why: 'weekly', since: 5 } }],
     ['a file finding this build does not know', { ...BT(), fileProblem: { at: 5, file: 'current', word: 'stolen' } }],
+    // R-g: a word the server sends is looked up in a keyed table; a name every object inherits is not a word.
+    ['an inherited key as the fleet word', { ...BT(), fleetConfirmed: 'toString' }],
+    ['__proto__ as the fleet word', { ...BT(), fleetConfirmed: '__proto__' }],
+    ['an inherited key as a recovery source', { ...BT(), lastBootRecovery: { at: 5, source: 'constructor' } }],
+    ['an inherited key as a stall reason', { ...BT(), stalled: { why: 'toString', since: 5 } }],
+    ['an inherited key as a file slot', { ...BT(), fileProblem: { at: 5, file: 'hasOwnProperty', word: 'changed' } }],
   ])('%s reads as null — "not reported", never a made-up idle', (_w, raw) => {
     expect(readBoxTokenView(raw)).toBeNull();
   });
@@ -214,6 +220,15 @@ describe('the card words (spec 4.7)', () => {
     const bad = await mount(view({ phase: 'rotating' }));
     expect(within(bad).getByText('Box-token state: not reported (the server\'s answer could not be read).')).toBeInTheDocument();
     expect(within(bad).queryByRole('button', { name: 'Rotate now' })).toBeNull();
+  });
+
+  // R-g: the literal is asserted because the screen's own constant is module-local. A `toString` fleet word must read
+  // as "not reported", and must never reach the page as the inherited function's source text.
+  it('a fleet word that is an inherited key reads as not reported, and never prints a function', async () => {
+    const card = await mount(view({ ...BT(), fleetConfirmed: 'toString' }));
+    expect(within(card).getByText('Box-token state: not reported (the server\'s answer could not be read).')).toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Rotate now' })).toBeNull();
+    expect(card.textContent ?? '').not.toContain('function toString');
   });
 
   it('survives asUpdatesView\'s rebuild: a dropped malformed node does not drop the box-token field', () => {
