@@ -112,3 +112,113 @@ describe('SessionScreen opens the history from the header overflow', () => {
     await waitFor(() => expect(spy).toHaveBeenCalledWith('claude:demo'));
   });
 });
+
+// THE DEGRADED ROWS. Every row above carries a complete `obs` and `dec`; the
+// journal is a RECORD, so a line that lost a field is the ordinary case the
+// later rows read against — and none of those arms had a case (measured:
+// statements 27 and 88 and branches 27#0, 47#0, 49#1, 52#0, 57#1, 61#0, 61#1,
+// 129#1, 130#1 of `HistoryTab.tsx` uncovered with this file 8/8 green).
+describe('a journal row that lost a field still says what it knows', () => {
+  it('a line with no readable time shows an em dash and sinks to the END', () => {
+    // `null` is not 0 — 0 is a date. And the sort sends an undated row last
+    // rather than first, because a row claiming to predate the session is
+    // a worse lie than one admitting it has no time.
+    const spy = stub({ events: [ev({ at: null, verb: 'ws-rm' }), ev({ at: T0, verb: 'ws-archive' })], gaps: [] });
+    render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    return waitFor(() => {
+      expect(spy).toHaveBeenCalled();
+      const times = [...document.querySelectorAll('.history-when')].map((n) => n.textContent);
+      expect(times, 'the undated row did not sink').toEqual([expect.stringContaining('·'), '—']);
+    });
+  });
+
+  it('a row that observed NOTHING says so, rather than leaving the cell empty', async () => {
+    // `obs: null` is a real shape — a journal line written by a surface with
+    // no cgroup to read. "observed: nothing" is a measurement; an empty cell
+    // reads as a rendering bug.
+    stub({ events: [ev({ obs: null, dec: null })], gaps: [] });
+    render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    expect(await screen.findByText('observed: nothing')).toBeInTheDocument();
+    expect(screen.getByText('declared: nothing')).toBeInTheDocument();
+  });
+
+  it('an observation with no classification says `unclassified`, and omits a pane it has none of', async () => {
+    stub({ events: [ev({ obs: { cg: null, cgraw: null, pid: 1, ppid: 0, pane: null, paneWhy: null, tty: false, ssh: null } })], gaps: [] });
+    render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    const cell = await screen.findByText(/^observed:/);
+    expect(cell.textContent).toBe('observed: unclassified');
+  });
+
+  it('a declaration with no actor and no reason is just its surface', async () => {
+    // Three optional halves on one line, each omitted independently: a
+    // trailing ` · ` or ` — ` with nothing after it is the failure this
+    // shape prevents.
+    stub({ events: [ev({ dec: { surface: 'pwa', actor: null, reason: null, crosspool: null } })], gaps: [] });
+    render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    const cell = await screen.findByText(/^declared:/);
+    expect(cell.textContent).toBe('declared: pwa');
+  });
+
+  it('a refusal this build has a word for is said in words', async () => {
+    stub({ events: [ev({ outcome: 'refused', refusal: 'tip-unreadable' })], gaps: [] });
+    render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    await waitFor(() => expect(document.querySelector('.history-refusal')).not.toBeNull());
+    const said = document.querySelector('.history-refusal')?.textContent ?? '';
+    expect(said, 'the raw token reached the reader').not.toBe('tip-unreadable');
+    expect(said).toMatch(/could not resolve/);
+  });
+
+  it("a refusal from another family renders as ITSELF — a grep target beats silence", async () => {
+    // `wsaudit`'s tokens have no L0 word here. Rendering nothing would make
+    // a refused row look like it refused for no reason at all.
+    stub({ events: [ev({ outcome: 'refused', refusal: 'some-token-from-wsaudit' })], gaps: [] });
+    render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    expect(await screen.findByText('some-token-from-wsaudit')).toBeInTheDocument();
+  });
+
+  it('a row with no refusal renders no refusal cell at all', async () => {
+    stub({ events: [ev()], gaps: [] });
+    render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    await waitFor(() => expect(document.querySelector('.history-row')).not.toBeNull());
+    expect(document.querySelector('.history-refusal'),
+      'an empty refusal cell is a cell that says something happened').toBeNull();
+  });
+
+  it('a row with no uid is still keyed, and renders beside one that has one', async () => {
+    // `e.uid ?? i`: a journal line whose uid the box could not read must not
+    // collide with another's React key, which is how two rows become one.
+    stub({ events: [ev({ uid: null, verb: 'ws-rm' }), ev({ uid: null, verb: 'ws-archive' })], gaps: [] });
+    render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    await waitFor(() => expect(document.querySelectorAll('.history-row')).toHaveLength(2));
+  });
+
+  it('a read for an EARLIER open cannot render over the newer one', async () => {
+    // The `live` flag, and reaching it takes two opens: with `open={false}`
+    // the sheet renders nothing at all, so a late answer is invisible either
+    // way (measured — deleting the flag leaves a one-open case green). The
+    // tab re-fetches on EVERY open, so the real hazard is a slow first read
+    // landing after a second has already answered: without the flag it
+    // overwrites the newer rows with the older ones.
+    const pending: ((r: LifecycleQueryResult) => void)[] = [];
+    vi.spyOn(api, 'lifecycle').mockImplementation(() =>
+      new Promise<LifecycleQueryResult>((res) => { pending.push(res); }));
+
+    const { rerender } = render(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    expect(await screen.findByText(/Reading the journal/)).toBeInTheDocument();
+    rerender(<HistoryTab id="demo-quiet-basin" open={false} onClose={() => {}} />);
+    rerender(<HistoryTab id="demo-quiet-basin" open onClose={() => {}} />);
+    await waitFor(() => expect(pending).toHaveLength(2));
+
+    // The SECOND read answers first, with one row; then the first read's
+    // answer lands with two.
+    await act(async () => { pending[1]!({ events: [ev({ verb: 'ws-archive' })], gaps: [] }); await Promise.resolve(); });
+    await waitFor(() => expect(document.querySelectorAll('.history-row')).toHaveLength(1));
+
+    await act(async () => {
+      pending[0]!({ events: [ev({ verb: 'ws-rm' }), ev({ verb: 'ws-reap' })], gaps: [] });
+      await Promise.resolve();
+    });
+    expect(document.querySelectorAll('.history-row'),
+      "an earlier open's answer replaced the newer one").toHaveLength(1);
+  });
+}, 20_000);
