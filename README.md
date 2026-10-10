@@ -3770,7 +3770,7 @@ inside or through it, a workdir that is the main checkout, a link or non-directo
 stopped and nothing further was deleted, and a retry finds the same thing until the other tree or row is moved or
 removed. What could not be asked stays `worktree-remove-failed`. The failed document carries `crumb`, saying whether
 the failure was printed past the act's breadcrumb, and omits it where that is not known (`ws-expire`'s own
-pre-breadcrumb documents, every `ws-collect` document). Git's silence about a worktree record is no longer believed
+pre-breadcrumb documents, its resumed arm's `probe-unmeasured`, every `ws-collect` document). Git's silence about a worktree record is no longer believed
 without reading its admin entries, so `no-worktree-record` becomes a retried unmeasured answer when an entry could not
 be read, and a vanished tree whose record names the all-zero head is unmeasured at the audit. The reclaim token also
 binds the row's generation (`ws-audit --reclaim` prints it as `generation`), so a token minted over one row is never

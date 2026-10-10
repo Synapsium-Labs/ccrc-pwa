@@ -110,7 +110,13 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   clear it and a single green isolated run is not proof it was the load. `ccd-bounded-reads`' D4 family bounds
   a real ~788ms call at a 5000ms `runBounded` deadline; measured failing once in a 22-file `ccd-[a-f,h]*` batch
   under load and green in isolation and on re-run — the bound is now 15000ms, but the family still shells a
-  real `timeout`-wrapped child process, so a badly loaded box can still starve it.
+  real `timeout`-wrapped child process, so a badly loaded box can still starve it. The collector suites shell the real
+  10 s `/proc` walk (`_ws_path_users`) in `ccd-ws-collect-reprove`, `-order`, `-resume`, `-move` and `-verb` (four walks
+  a case at step 5, thirteen in the verb's one-JSON-line case) and, in a few cases each, `ccd-collect-audit-rungs`,
+  `-audit-resume`, `-audit` and `-idle-token`, and under load they fail in two shapes: vitest's `Test timed out in
+  20000ms` when a case's ccd calls together outrun it, or an `unmeasured` `in-use` answer (`the walk of /proc did not
+  finish within 10s`) when one walk passes its bound; a walk measured about 0.13 s at the median and 1.1 s at the worst
+  at load 11, so re-run the file alone.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
