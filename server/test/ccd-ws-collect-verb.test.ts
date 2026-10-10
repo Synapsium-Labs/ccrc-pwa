@@ -126,7 +126,12 @@ describe.skipIf(!LINUX)('stdout is ONE JSON line', () => {
     makeOrphan(h);
     fs.rmSync(leafOf(h), { recursive: true });
     expect(one(collectVerb(h, collectToken(h)), 'witness-only')).toMatchObject({ collected: COL_ID, record: null });
-  });
+  // ITS OWN TIMEOUT, sized to its ccd calls (review 369's C4: it failed ALONE on the 20 s default at load 28). Thirteen
+  // calls, each sourcing all of ccd: three orphans' witness writes, six verbs and four audits. Among them are thirteen
+  // real /proc walks (`_ws_path_users`, each bounded at 10 s): the refused verb's 1, the crashed verb's audit 1 and
+  // its own 1, the resume's audit 2 and its verb 4, and the fresh audit 1 and its verb 3 (the Darwin verb, the
+  // witness-only audit and its verb walk nothing). 13 x 10 s = 130 s of walk bound, and 30 s more for the shells.
+  }, 160_000);
 });
 
 describe.skipIf(!LINUX)('a witness whose leaf is gone, beside a quarantine slot of its id that NO record names', () => {

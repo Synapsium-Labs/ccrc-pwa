@@ -236,15 +236,36 @@ describe('no call site outside the platform block runs a GNU-only command bare',
     'ccrc-adopt': 'a template-less `mktemp`',
   };
 
-  /** `ccd`'s ONE legitimate GNU spelling outside the platform block: the temp-root
-   *  collector's rename, `_ws_collect_mv` (its COLLECT region), `mv -T -n
-   *  --no-copy` — one renameat2(RENAME_NOREPLACE) that never falls back to a copy
-   *  (spec 2026-09-22 §5.10). It stays out of the platform block by design (that
-   *  block is byte-identical in `ccd` and `ccrc`, and the rename is the collector's
-   *  alone), and it is LINUX-ONLY by construction: the function's first line
-   *  answers 2 on Darwin before `mv` is reached. Cut exactly as the hook's epoch
-   *  copy is — ONE function, pinned below — so a renamed function makes the cut
-   *  MISS, which surfaces as an `mv -T` hit, never a silently wider exemption. */
+  /** `ccd`'s ONE EXEMPTED GNU spelling outside the platform block, the only one
+   *  there that a row of the table above matches: the temp-root collector's
+   *  rename, `_ws_collect_mv` (its COLLECT region), `mv -T -n --no-copy` — one
+   *  renameat2(RENAME_NOREPLACE) that never falls back to a copy (spec 2026-09-22
+   *  §5.10). It stays out of the platform block by design (that block is
+   *  byte-identical in `ccd` and `ccrc`, and the rename is the collector's alone),
+   *  and it is LINUX-ONLY by construction: the function's first line answers 2 on
+   *  Darwin before `mv` is reached. Cut exactly as the hook's epoch copy is — ONE
+   *  function, pinned below — so a renamed function makes the cut MISS, which
+   *  surfaces as an `mv -T` hit, never a silently wider exemption.
+   *
+   *  THE COLLECTOR'S OTHER GNU SPELLINGS outside the block match no row of the
+   *  table, so they need no cut, and none is exempted here. Each is safe on Darwin
+   *  for its own stated reason (review 369's F16):
+   *  - UNREACHABLE there: the idle walk's `find -P <leaf> -xdev -printf '%C@\n'`
+   *    (`_ws_collect_idle`). The function refuses Darwin at its top (`walk-failed`),
+   *    before `find` is reached.
+   *  - VALIDATED there, each failing closed:
+   *    - `date +%s%N` (`_ws_collect_now_ns`). BSD `date` prints `<seconds>N`, and
+   *      both callers hold the print to `^[1-9][0-9]{9,18}$` (the slot's name and
+   *      the idle floor's clock), so Darwin reads no clock (rc 2), never a wrong one.
+   *    - The resume's slot listing, `find -P <slot> -mindepth 1 -maxdepth 1
+   *      -printf '%f/'` (`_ws_collect_resume_eval`). BSD `find` refuses `-printf`
+   *      with a non-zero exit, and the listing fails closed on that exit code
+   *      (unmeasured `slot`).
+   *    - `flock` (the reap lock, at the audit and at the verb). Each asks
+   *      `command -v flock` first, so a box without util-linux answers unmeasured
+   *      `flock` at the audit and refuses `flock-unavailable` at the verb: the
+   *      verb never runs unserialised.
+   *  (The audit also answers unmeasured `platform` on Darwin before any of these.) */
   const COLLECT_MV = /^_ws_collect_mv\(\) \{[^\n]*\n[\s\S]*?\n\}\n/m;
 
   /** One file's scanned text: the platform block cut where the file carries
