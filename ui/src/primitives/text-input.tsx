@@ -37,7 +37,7 @@ export const TEXT_INPUT =
   // The focus cue is a border colour change, not a ring: a 44px field on a
   // phone has no room for an offset ring, and the phosphor on the edge is the
   // same cue every other focusable surface in this palette uses.
-  + ' focus:border-accent'
+  + ' focus:border-phosphor'
   // The placeholder ink, which is the declaration one of the three copies
   // was missing. On a field with no placeholder attribute it is inert, which
   // is why putting it on the shared base changes nothing for the login field.

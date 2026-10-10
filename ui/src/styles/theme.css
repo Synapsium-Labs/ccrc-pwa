@@ -84,12 +84,28 @@
   --color-ink-tertiary:  var(--ink-tertiary);
   --color-ink-disabled:  var(--ink-disabled);
   --color-ink-on-well:   var(--ink-on-well);
-  --color-ink-on-accent: var(--ink-on-accent);
+  --color-ink-on-phosphor: var(--ink-on-accent);
 
   /* --- accent (the phosphor) ------------------------------------------ */
-  --color-accent:         var(--accent);
-  --color-accent-tint:    var(--accent-tint);
-  --color-accent-on-well: var(--accent-on-well);
+  /* THE BRAND HUE IS `phosphor`, NOT `accent`, and shadcn is the reason.
+     Every shadcn component writes `bg-accent`/`text-accent-foreground` for a
+     MUTED HOVER SURFACE; ccrc's `--accent` is the brand phosphor, a saturated
+     green that would turn every pasted dropdown's hover into a highlighter.
+     One of the two had to give up the Tailwind key, and it is cheaper here:
+     FOUR call sites in this package and none in the app, measured, against
+     every shadcn component ever pasted.
+
+     THE CSS VARIABLES DO NOT MOVE. `--accent`, `--accent-tint`,
+     `--accent-on-well` and `--ink-on-accent` are the token names twelve
+     palettes in tokens.css bind and ~200 stylesheet rules read; renaming
+     those would be a different and far larger change, and would move the
+     contrast gate. What changes is only the Tailwind KEY — the utility's
+     spelling — so the compiled colour is identical and the gate is unmoved.
+     `pwa/test/utility-pairs.test.ts` pins the primary button's pair through
+     the new spelling and says why. */
+  --color-phosphor:         var(--accent);
+  --color-phosphor-tint:    var(--accent-tint);
+  --color-phosphor-on-well: var(--accent-on-well);
 
   /* --- session status. GLOW MEANS LIFE: busy/attention emit, the rest
          are matte. The glow itself is a shadow utility, below. ---------- */

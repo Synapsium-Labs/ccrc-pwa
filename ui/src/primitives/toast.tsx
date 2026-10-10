@@ -106,7 +106,7 @@ export function ToastHost(): ReactNode {
                   dismiss();
                   action.onClick();
                 }}
-                className={`toast-action -my-3 -mr-2 ml-1 min-h-tap flex-none cursor-pointer rounded-sm border-0 bg-none px-2 font-ui text-sm font-semibold leading-none text-accent transition-transform duration-press ease-swift active:scale-[0.94] motion-reduce:transition-none ${FOCUS_RING}`}
+                className={`toast-action -my-3 -mr-2 ml-1 min-h-tap flex-none cursor-pointer rounded-sm border-0 bg-none px-2 font-ui text-sm font-semibold leading-none text-phosphor transition-transform duration-press ease-swift active:scale-[0.94] motion-reduce:transition-none ${FOCUS_RING}`}
               >
                 {action.label}
               </button>

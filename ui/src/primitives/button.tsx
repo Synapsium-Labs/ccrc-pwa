@@ -24,7 +24,7 @@ export const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          'btn-primary border-0 bg-accent text-ink-on-accent text-base font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
+          'btn-primary border-0 bg-phosphor text-ink-on-phosphor text-base font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
         ghost:
           'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
         /** `quiet` — the raised mono control. FOUR app rules declared the same

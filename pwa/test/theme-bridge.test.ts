@@ -149,7 +149,12 @@ describe('the @theme bridge resolves, and says inline', () => {
 const SHADCN_RESERVED = [
   'background', 'foreground', 'card', 'card-foreground', 'popover',
   'popover-foreground', 'primary', 'primary-foreground', 'secondary',
-  'secondary-foreground', 'muted', 'muted-foreground', 'accent-foreground',
+  'secondary-foreground', 'muted', 'muted-foreground',
+  // `accent` JOINED THIS LIST when the brand hue was renamed to `phosphor`.
+  // It was ccrc's own key and therefore could not be reserved; now it is
+  // free, and the point of freeing it was that shadcn may have it. ccrc
+  // taking it back would re-create the collision the rename removed.
+  'accent', 'accent-foreground',
   'destructive', 'destructive-foreground', 'border', 'input', 'ring',
 ];
 
@@ -164,10 +169,44 @@ describe('the bridge keeps ccrc vocabulary, not shadcn’s', () => {
     ).toEqual([]);
   });
 
-  it('still owns --color-accent as the phosphor, which is why the above matters', () => {
-    // The concrete collision. If this entry ever stops meaning the accent, the
-    // guard above is guarding a name nobody uses and should be re-argued.
-    expect(Object.fromEntries(decls)['--color-accent']).toBe('var(--accent)');
+  it('calls the brand hue `phosphor`, and leaves `accent` free for shadcn', () => {
+    // THE COLLISION IS GONE, which is what this wave did and all it did.
+    // `--color-accent` used to mean ccrc's phosphor — the primary button's
+    // fill — while every shadcn component writes `bg-accent` for a MUTED
+    // HOVER SURFACE. One of the two had to give up the Tailwind key, and it
+    // was cheaper here: FOUR utility call sites in `@ccrc/ui` and none in the
+    // app, measured, against every shadcn component ever pasted.
+    //
+    // THE CSS VARIABLES DID NOT MOVE. `--accent`, `--accent-tint`,
+    // `--accent-on-well` and `--ink-on-accent` are what twelve palettes bind
+    // and what the stylesheets read; only the Tailwind KEY changed, so the
+    // compiled colour is identical and the gate stayed at 3456.
+    const theme = Object.fromEntries(decls);
+    expect(theme['--color-phosphor']).toBe('var(--accent)');
+    expect(theme['--color-phosphor-tint']).toBe('var(--accent-tint)');
+    expect(theme['--color-phosphor-on-well']).toBe('var(--accent-on-well)');
+    expect(theme['--color-ink-on-phosphor']).toBe('var(--ink-on-accent)');
+    // And nothing re-takes the freed key — the reservation above says so for
+    // every shadcn name, this says it for the one that used to be ours.
+    expect(theme['--color-accent']).toBeUndefined();
+  });
+
+  it('still refuses the alias LAYER, which the rename did not authorise', () => {
+    // WHAT THE RENAME DID NOT DO. The ruling this file enforces has two
+    // halves, and only one of them was about `accent`:
+    //
+    //   1. the COLLISION — `bg-accent` meaning two different colours. Gone.
+    //   2. the PRINCIPLE — "an alias gives one value two names and the next
+    //      reader cannot tell which is authoritative", the reason wave 1
+    //      RENAMED six families rather than aliasing them. UNTOUCHED.
+    //
+    // Mapping `--color-primary: var(--accent)` would satisfy (1) and break
+    // (2): `phosphor` and `primary` would be two names for one value. That is
+    // a design-system decision, not a refactor's, so the reservation above
+    // still holds for all eighteen names and this test says why it holds even
+    // now that the collision is gone.
+    const keys = new Set(decls.map(([k]) => k));
+    expect([...keys].filter((k) => SHADCN_RESERVED.some((n) => k === `--color-${n}`))).toEqual([]);
   });
 
   it('derives every radius from --r-*, not from a single shadcn --radius', () => {

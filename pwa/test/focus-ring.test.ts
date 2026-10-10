@@ -76,7 +76,11 @@ describe('every focusable control in @ccrc/ui carries the ring', () => {
       BARE_ROW, LIST_ROW, TEXT_INPUT, BACK_BUTTON, DOOR,
     })) {
       expect(value, name).toContain('focus-visible:outline-2');
-      expect(value, name).toContain('focus-visible:outline-accent');
+      // `outline-phosphor`, not `outline-accent`: the brand hue's Tailwind KEY
+      // was renamed when `accent` was freed for shadcn. The CSS variable it
+      // resolves to is still `--accent`, which is what the rule comparison
+      // below asserts — so this is a spelling change and not a colour one.
+      expect(value, name).toContain('focus-visible:outline-phosphor');
     }
   });
 
@@ -128,7 +132,7 @@ describe('every focusable control in @ccrc/ui carries the ring', () => {
     // that said something else would be invisible in the app and WRONG in
     // Storybook — the worst shape, because only the design system would lie.
     expect(FOCUS_RING).toContain('focus-visible:outline-2');
-    expect(FOCUS_RING).toContain('focus-visible:outline-accent');
+    expect(FOCUS_RING).toContain('focus-visible:outline-phosphor');
     expect(FOCUS_RING).toContain('focus-visible:outline-offset-2');
     expect(FOCUS_RING).not.toContain('focus:');          // never a mouse press
     const rule = /:focus-visible\s*\{([^}]*)\}/.exec(BASE_CSS)?.[1] ?? '';

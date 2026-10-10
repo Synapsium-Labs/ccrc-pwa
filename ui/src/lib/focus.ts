@@ -33,4 +33,4 @@
  *  only. Appended to a component's class string, never to a call site's — a
  *  ring is the component's business, like its radius. */
 export const FOCUS_RING =
-  'focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2';
+  'focus-visible:outline-2 focus-visible:outline-phosphor focus-visible:outline-offset-2';

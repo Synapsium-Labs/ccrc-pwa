@@ -37,6 +37,19 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom', 'vaul', 'framer-motion'],
     alias: {
+      // `@/…` RESOLVES INTO `@ccrc/ui`'s SOURCE, not into pwa's. shadcn's CLI
+      // writes `@/lib/utils`-style imports into whatever `components.json`
+      // points at, and `components.json` lives in `ui/` because that is where
+      // a pasted component belongs. pwa compiles ui's source directly
+      // (`exports['.']` is `src/index.ts`), so pwa's bundler has to resolve
+      // the alias too or the pasted file builds nowhere.
+      //
+      // ONE MEANING, THREE RESOLVERS: this alias, `ui/vite.config.ts`'s, and
+      // `ui/tsconfig.json`'s `paths`. `pwa/test/shadcn-alias.test.ts` pins
+      // that the three agree — the same seam `shared/models`' twins taught
+      // this branch, where `tsc` and the bundle read different files and the
+      // type check passed on a binding that was `undefined` at runtime.
+      '@': fileURLToPath(new URL('../ui/src', import.meta.url)),
       'react-dom': fileURLToPath(new URL('./node_modules/react-dom', import.meta.url)),
       react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
       vaul: fileURLToPath(new URL('./node_modules/vaul', import.meta.url)),
