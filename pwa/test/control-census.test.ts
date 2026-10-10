@@ -303,26 +303,32 @@ const CONTROLS: Record<string, string> = {
     + 'its own words: it inherits min-height from `.pending-actions button`, so '
     + 'the tap target is the shared token.',
   'session/MessageBubble.tsx <button> code-block-copy':
-    'UNDER, 32px by `--sp-8`, declared in `ui/src/components/prose.css`. A '
-    + 'deliberate token rather than an oversight, but it is not the floor, and '
-    + 'the rule says nothing about why 32 is enough here. Unchanged: the copy '
-    + "button sits on the code well's bar beside the language label, and a 44px "
-    + 'bar is a different code block.',
+    'UNDER `--tap-min` and ABOVE the WCAG floor: 32px by `--sp-8`, declared '
+    + 'in `ui/src/components/prose.css`, against SC 2.5.8\'s 24. A deliberate '
+    + 'token rather than an oversight. Left as it is this wave for the reason '
+    + 'the operator chose that floor: the copy button sits on the code well\'s '
+    + 'bar beside the language label, and a 44px bar is a different code block.',
   'session/MessageBubble.tsx <button> compaction-head':
-    'UNDER, about 29px: `--sp-2` (8px) above and below `--fs-sm` (13px) at '
-    + 'line-height 1. A full-width disclosure — easy to hit horizontally, short '
-    + 'vertically.',
+    'UNDER `--tap-min` and ABOVE the WCAG floor: about 29px — `--sp-2` (8px) '
+    + 'above and below `--fs-sm` (13px) at line-height 1 — against SC '
+    + '2.5.8\'s 24. A full-width disclosure, so it is easy to hit horizontally '
+    + 'and short only vertically. Left as it is this wave: it already clears '
+    + 'the floor the operator chose, and 44 would add 15px to EVERY compaction '
+    + 'marker in a transcript.',
   'session/SessionHeader.tsx <button> (computed)':
-    'UNDER .metachip, about 19px. The effort chip — `metachip` or '
+    'UNDER .metachip, 24px. The effort chip — `metachip` or '
     + '`metachip--ultra` — on the same rule as the model chip below. The '
     + 'citation is REQUIRED because the class is computed: see '
     + 'CITES_A_RULE.',
   'session/SessionHeader.tsx <button> metachip metachip--model':
-    'UNDER, about 19px: `padding: 3px 9px` around `--fs-2xs` (11px) at '
-    + 'line-height 1, plus a hairline. The model and effort chips are TAPPABLE '
-    + "(they open their choosers) and chat.css's own comment says so, which is "
-    + 'what makes this a floor question rather than a label. The smallest '
-    + 'controls in the app, and this census found them.',
+    'UNDER `--tap-min`, and that is now a DECISION rather than an oversight: '
+    + '24px by `--sp-6`, WCAG 2.2 SC 2.5.8, on `.bucket-head-seen`\'s terms. '
+    + 'They measured about 19px — `padding: 3px 9px` around `--fs-2xs` at '
+    + 'line-height 1 plus a hairline, the smallest controls in the app, found '
+    + 'by this census and not by a reader. The overlay that would reach 44 '
+    + 'would overhang the OTHER chip, and both are live choosers; growing the '
+    + 'visible box is the only safe direction, and a 44px pill in a meta row '
+    + 'is a different design. The operator chose the WCAG floor.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */

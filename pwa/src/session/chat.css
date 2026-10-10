@@ -87,9 +87,26 @@
 /* Model / effort / ultracode / branch chips, from the pane statusline. The
    model + effort chips are tappable (open their choosers). They share the one
    .chat-meta row above. */
+/* THE 24px FLOOR, not 44 (operator's call, this wave). These chips are
+   TAPPABLE — the comment above says so, they open the model and effort
+   choosers — and they measured about 19px: `padding: 3px 9px` around
+   `--fs-2xs` at line-height 1, plus a hairline. The smallest controls in the
+   app, found by `control-census.test.ts` and not by a reader.
+
+   `--sp-6` (24px, WCAG 2.2 SC 2.5.8), on `.bucket-head-seen`'s terms and for
+   its reasons: the `::before` overlay `.sess-actions`/`.proj-card-add` use to
+   reach --tap-min would overhang the OTHER chip, and both chips are live
+   controls — an overhang turns a near-miss into opening the wrong chooser.
+   Growing the visible box is the only safe direction, and a 44px pill in a
+   meta row is a different design: chat.css's own header note records that two
+   fixed rows cost a line of chat height on every screen. +5px per row is the
+   proportionate half of that.
+   The two chips stay UNDER `--tap-min` in the control census, with this
+   argument, exactly as `.bucket-head-seen` does. */
 .metachip {
   display: inline-flex;
   align-items: center;
+  min-height: var(--sp-6);
   gap: 5px;
   max-width: 100%;
   min-width: 0;
