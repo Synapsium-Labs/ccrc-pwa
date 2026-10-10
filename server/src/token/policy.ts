@@ -148,12 +148,13 @@ export function foreignUnderUnusableRetired(i: { retiredUnusable: boolean; state
 // ── D-4412: a retired value presented on a box-token lane owes one forward rotation, bounded ────────────────
 /** `fresh` is the retired presentations the holder counted since the driver last asked. The state returned owes a
  *  rotation for the word `retired-presented`, or null when nothing new is owed: no new presentation; a rotation
- *  already owed, staged, handed out, promoting or running (`busy`); or one already owed for this word within
- *  `HOLD_REPROBE_MS`. The server cannot tell the fleet from the holder of the leaked value, so this bound is the
- *  protection: the gate, the one-rotation-at-a-time rule and the backoff then apply as to every rotation. */
-export function oweForRetiredPresentation(i: { state: BoxTokenState; fresh: number; busy: boolean; lastOwedAt: number | null; now: number }): BoxTokenState | null {
+ *  already owed, staged, handed out or promoting; or one already owed for this word within `HOLD_REPROBE_MS`. "Or
+ *  running" needs no input of its own: the driver asks only between ticks, and ticks are single-flight, so a send or
+ *  a promotion that runs has already left its mark in `pending` or `promoting` (review 352, F9). The server cannot tell
+ *  the fleet from the holder of the leaked value, so this bound is the protection: the gate, the one-rotation-at-a-time rule and the backoff then apply as to every rotation. */
+export function oweForRetiredPresentation(i: { state: BoxTokenState; fresh: number; lastOwedAt: number | null; now: number }): BoxTokenState | null {
   const s = i.state;
-  if (i.fresh <= 0 || i.busy || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
+  if (i.fresh <= 0 || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
   if (i.lastOwedAt !== null && i.now - i.lastOwedAt < HOLD_REPROBE_MS) return null;
   return owe(s, 'retired-presented');
 }
@@ -323,7 +324,13 @@ export function backoffMs(failures: number): number {
 /** `state` may be null: a boot whose mint failed with no history has none (an addition to the contract's
  *  non-null parameter). */
 export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; generation: GenerationObservation | null;
-  rotateRequested: boolean; backoffUntil: number | null; now: number }): DriverAction {
+  rotateRequested: boolean; backoffUntil: number | null; now: number;
+  /** D-4414 (F3): the driver could not retire the previous value this tick (its file would not read, so no digest could
+   *  be recorded). The retirement waits for a later tick: both retire arms step aside for the rest of this one. It does
+   *  NOT unblock the promote path: a generation read that confirms a pending generation still selects `promote`, ahead of
+   *  every arm below it, and `promote` returns held while the file will not read. The ticks loop there until the file
+   *  reads, with no forward rotation started and nothing dropped. */
+  retireHeld?: boolean }): DriverAction {
   const { state, gate, now } = i;
   if (state === null || (!gate.open && gate.hold === 'mint-failed')) return { kind: 'retry-mint' };
   if (state.promoting !== null) return { kind: 'promote', generation: state.promoting.id, via: 'op-result' };
@@ -332,6 +339,12 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
     if (confirmed !== null) return { kind: 'promote', generation: confirmed, via: 'generation-read' };
   }
   const staged = state.pending.find((p) => p.handedOutAt === null);
+  // D-4414 (F2): the previous value's hard bound retires it (and records its digest) BEFORE the own-write branch below,
+  // which returns `backoff` or a failing promote for as long as the fleet-file write keeps failing: a retirement is never
+  // held behind a write that cannot succeed, or a written-back value would be adopted at the next boot.
+  if (state.previous !== null && now >= state.previous.hardUntil && i.retireHeld !== true) {
+    return { kind: 'retire', why: retireDue(state.previous, now) === 'grace' ? 'grace' : 'hard-bound' };
+  }
   // F3(c): the own-write promote waits out the backoff like every other retry; "Rotate now" asks for a stage, not for this.
   if (staged && gate.open && gate.mode === 'both-local') {
     if (i.backoffUntil !== null && now < i.backoffUntil) return { kind: 'backoff', until: i.backoffUntil };
@@ -339,7 +352,7 @@ export function nextAction(i: { state: BoxTokenState | null; gate: GateVerdict; 
   }
   if (state.previous !== null) {
     const due = retireDue(state.previous, now);
-    if (due === 'grace' || due === 'hard-bound') return { kind: 'retire', why: due };
+    if ((due === 'grace' || due === 'hard-bound') && i.retireHeld !== true) return { kind: 'retire', why: due };
     if (due === 'extend' && !state.rotationOwed) return { kind: 'extend-grace' };
   }
   if (staged) {

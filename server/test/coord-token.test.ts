@@ -141,6 +141,17 @@ describe('readMailToken THROWS on the unedited placeholder (review finding 13)',
     expect(lines).toEqual([PLACEHOLDER_TOKEN]);
   });
 
+  it('the example no longer tells anyone to copy it: the server mints the value (spec 4.9)', () => {
+    // The file stays for its placeholder line (the refusal above is pinned to
+    // it); its comment used to say "Copy to deploy/ccrc-mail.token … and
+    // deploy.sh ships it to BOTH boxes", which after the first rotation would
+    // put the retired value back.
+    const comment = EXAMPLE.split(/\r?\n/).filter((l) => l.trim().startsWith('#')).join('\n');
+    expect(comment).toContain('You do not need a copy of this file.');
+    expect(comment).toContain('The server mints the box token itself');
+    expect(comment, 'the example still tells the operator to copy and ship it').not.toMatch(/Copy to|ships it to/);
+  });
+
   it('accepts a value once the placeholder line is actually replaced', () => {
     const home = mkTmp('ccrc-token-');
     const p = tokenPathIn(home);
@@ -155,19 +166,31 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
   const notifyShPath = path.join(repoRoot, 'deploy', 'notify.sh');
   const notifySh = readFileSync(notifyShPath, 'utf8');
 
-  it('still sends the header conditionally on a non-empty token', () => {
-    // Fix-round finding 4(c): deleting this one line is a mutant that stays
-    // green in every suite today — the server accepts the tokenless POST as
-    // `legacy`, so the defect surfaces one deploy later, as a silent total
-    // loss of swap notices, the moment the tolerance is removed.
+  it('sends nothing without a token, and the header on every POST it does send (D-4393)', () => {
+    // Fix-round finding 4(c) named the header line as a mutant no suite saw
+    // while the server accepted a tokenless POST as `legacy`. Box-token
+    // lifecycle Part A removed that tolerance, so a tokenless POST is now a
+    // guaranteed 401: the hook exits before the curl instead (D-4393), and the
+    // header line no longer needs its own `[ -n "$tok" ]` guard.
     //
-    // R16 (centralised-update wave 13): the header now rides curl's STDIN as a
-    // `-K -` config line, never argv, so the pin is on the guarded config line
-    // and the `-K -` beside the curl it feeds. `notify-addr.test.ts` RUNS the
-    // script and pins the same thing by what curl was handed.
-    expect(notifySh).toContain(`{ [ -n "$tok" ] && printf 'header = "x-ccrc-mail-token: %s"\\n' "$tok"; } |\n`
+    // R16 (centralised-update wave 13): the header rides curl's STDIN as a
+    // `-K -` config line, never argv, so the pin is on the guard, the config
+    // line and the `-K -` beside the curl it feeds. `notify-addr.test.ts`
+    // RUNS the script and pins the same thing by what curl was handed.
+    expect(notifySh).toContain('[ -n "$tok" ] || exit 0\n'
+      + `printf 'header = "x-ccrc-mail-token: %s"\\n' "$tok" |\n`
       + 'curl -fsS -m 5 -X POST "$BASE/api/notify" -K - \\\n');
     expect(notifySh, 'the token is back on curl\'s argv').not.toMatch(/-H\s+"x-ccrc-mail-token/);
+  });
+
+  it('starts with set +x +a, then umask 077, before any other statement (spec 4.9)', () => {
+    // The first two lines of code after the shebang and before the first
+    // comment, the shape ccd-pool-sync and ccd-update-sync carry: a token
+    // client whose xtrace could be inherited turns it off before it reads one,
+    // and its allexport (an exported SHELLOPTS) with it, so `tok` never becomes
+    // an exported variable curl inherits.
+    const code = notifySh.split('\n').slice(1).filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));
+    expect(code.slice(0, 2).map((l) => l.replace(/\s+#.*$/, ''))).toEqual(['set +x +a', 'umask 077']);
   });
 
   it('skips blank and #-comment lines, then strips ALL whitespace from the value line', () => {

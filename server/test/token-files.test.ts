@@ -248,6 +248,25 @@ describe('box-token.json and box-token-retired.json', () => {
     expect(await readState(p)).toEqual({ kind: 'unusable' });
   });
 
+  // F13 (review 352): `overCap` validates the state with its list cut to the cap, so entries PAST the cap are never
+  // validated. A list of cap-many valid entries plus a malformed one beyond it therefore reads over-cap, not plain
+  // unusable. That fails safe, because boot adopts neither: an over-cap state refuses boot, and any other unusable state takes
+  // D-4414's set-aside posture (a fresh current minted, a rotation owed). The docstrings say exactly this.
+  it('entries past the cap are not validated: cap-many valid entries plus a junk one beyond them read over-cap (fails safe)', async () => {
+    const { dir } = fixture();
+    const p = path.join(dir, 'box-token.json');
+    let s = mintedState(1000, { dev: 1, ino: 2, writtenAtMs: 1000 }, null, null, '0123456789abcdef');
+    for (let i = 0; i < PENDING_HARD_CAP; i++) {
+      const id = String(i + 1).repeat(16);
+      s = handedOutState(stagedState(s, id, 2000 + i, { dev: 1, ino: 10 + i, writtenAtMs: 2000 }), id, 3000 + i);
+    }
+    writeFileSync(p, JSON.stringify({ ...s, pending: [...s.pending, 'junk'] }));
+    expect(await readState(p)).toEqual({ kind: 'unusable', why: 'over-cap' });
+    // a malformed entry WITHIN the cap is still D-4403's plain arm
+    writeFileSync(p, JSON.stringify({ ...s, pending: [...s.pending.slice(0, 2), 'junk', 'junk'] }));
+    expect(await readState(p)).toEqual({ kind: 'unusable' });
+  });
+
   // Conventions I1 (D-4403 item 2): a read FAILURE is not malformed content; the two need different handling.
   it('a state or retired file that cannot be read answers unreadable with the errno word, never unusable (D-4403)', async () => {
     const { dir } = fixture();

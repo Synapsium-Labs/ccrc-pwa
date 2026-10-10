@@ -132,8 +132,17 @@ const REAL_TOOLS = ['jq', 'grep', 'tail', 'cut', 'tr'];
  *  to exercise the `CCRC_ADDR` override passes it back via `extraEnv`. */
 function runNotify(home: string, extraEnv: NodeJS.ProcessEnv = {}, input?: string): SpawnSyncReturns<string> {
   const bin = stubBinDir(home);
-  for (const name of REAL_TOOLS) {
+  // `head` reads the token's value line (the R16 cases below plant it themselves).
+  for (const name of [...REAL_TOOLS, 'head']) {
     if (!existsSync(path.join(bin, name))) symlinkSync(realPath(name), path.join(bin, name));
+  }
+  // D-4393: notify.sh posts nothing without a token, so an address case that
+  // names no token file gets a fixture one at the default fleet path. A case
+  // that passes `CCRC_MAIL_TOKEN_FILE` (even an absent one) gets exactly that.
+  if (!('CCRC_MAIL_TOKEN_FILE' in extraEnv)) {
+    mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
+    const p = path.join(home, '.cc-secrets', 'ccrc-mail.token');
+    if (!existsSync(p)) writeFileSync(p, `${'y'.repeat(64)}\n`, { mode: 0o600 });
   }
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.CCRC_ADDR;
@@ -305,7 +314,7 @@ describe('deploy/notify.sh address resolution', () => {
 // config line, never its argv, where every process listing on the box can read
 // it for the life of the call. The token is a fixture value, in a token DOCUMENT
 // (a `#` preamble above one value line) at `CCRC_MAIL_TOKEN_FILE`; reading it
-// takes `head`, which the address cases above never reach.
+// takes `head`, which `runNotify` now links for every case (D-4393).
 describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (R16)', () => {
   const TOKEN = 'z'.repeat(64);
   const CONFIG = `header = "x-ccrc-mail-token: ${TOKEN}"\n`;
@@ -317,11 +326,13 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
   /** A curl that records one argv word per line, and its stdin, and dials nothing. */
   const recordingCurl = (home: string): void => {
     writeFileSync(path.join(stubBinDir(home), 'curl'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/curl.argv"\ncat > "$HOME/curl.stdin"\nexit 0\n', { mode: 0o755 });
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/curl.argv"\nexport -p > "$HOME/curl.env"\ncat > "$HOME/curl.stdin"\nexit 0\n', { mode: 0o755 });
     for (const t of ['head', 'cat']) symlinkSync(realPath(t), path.join(stubBinDir(home), t));
   };
   const words = (home: string): string[] => readFileSync(path.join(home, 'curl.argv'), 'utf8').split('\n');
   const fed = (home: string): string => readFileSync(path.join(home, 'curl.stdin'), 'utf8');
+  /** What the recording curl was handed in its ENVIRONMENT (`export -p`: POSIX, so no `env` binary on the stub PATH). */
+  const exported = (home: string): string => readFileSync(path.join(home, 'curl.env'), 'utf8');
 
   it('with a token: argv holds neither the token nor its header, and stdin carries the one config line', () => {
     const home = mkTmp('ccrc-notify-tok-');
@@ -336,13 +347,66 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
     expect(fed(home)).toBe(CONFIG);
   });
 
-  it('with no token: it still sends (the tolerance), and the config curl reads is empty', () => {
+  // D-4393: with `/api/notify`'s `legacy` and `unconfigured` tolerance gone
+  // (box-token lifecycle Part A), a tokenless POST is a guaranteed 401 that the
+  // curl's `|| true` swallows. So the hook sends nothing at all and exits 0, as it
+  // does with no address: notify is best-effort, and the missing token file is
+  // what doctor's fleet arm reports. Three ways to have no value, one answer.
+  it.each([
+    ['the token file is absent', null],
+    ['the token file is all preamble', '# only a comment\n\n'],
+    ['the token file is empty', ''],
+  ])('with no token (%s): curl never runs, and the hook exits 0 (D-4393)', (_w, content) => {
     const home = mkTmp('ccrc-notify-notok-');
     recordingCurl(home);
-    const r = runNotify(home, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: path.join(home, 'absent.token') });
+    const f = path.join(home, 'no-value.token');
+    if (content !== null) writeFileSync(f, content, { mode: 0o600 });
+    const r = runNotify(home, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: f });
     expect(r.status, r.stderr).toBe(0);
-    expect(words(home)).toContain('http://127.0.0.1:9/api/notify');
-    expect(fed(home), 'an absent token must send no header line').toBe('');
+    expect(existsSync(path.join(home, 'curl.argv')), 'a tokenless notify still dialled the server').toBe(false);
+  });
+
+  // `set +x` FIRST (spec 4.9): an inherited xtrace (`bash -x`, or an exported
+  // SHELLOPTS=xtrace) would trace the token read and the printf line to stderr.
+  // ccd discards this hook's stderr today, but a hand run or a future caller
+  // would not, and the other three clients already carry the line.
+  it('an inherited xtrace prints no token: SHELLOPTS=xtrace leaves stderr clean, and the call still goes out', () => {
+    const home = mkTmp('ccrc-notify-xtrace-');
+    recordingCurl(home);
+    const r = runNotify(home, {
+      CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: tokenFile(home), SHELLOPTS: 'xtrace',
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'an inherited xtrace printed the token').not.toContain(TOKEN);
+    expect(fed(home)).toBe(CONFIG);
+  });
+
+  // `set +a` in the same first statement as `set +x`: an inherited allexport (an exported SHELLOPTS=allexport)
+  // turns the plain `tok=` assignment into an export, so the token reached curl's ENVIRONMENT, readable by
+  // its owner in /proc/<pid>/environ for the life of the call. The same hunt for a `tok` the caller already
+  // exported, which keeps its export attribute through a plain assignment unless it is unset first.
+  it('an inherited allexport (SHELLOPTS=allexport) keeps the token out of curl\'s environment', () => {
+    const home = mkTmp('ccrc-notify-allexport-');
+    recordingCurl(home);
+    const r = runNotify(home, {
+      CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: tokenFile(home), SHELLOPTS: 'allexport',
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fed(home), 'the hunt is not vacuous: the value really was sent, on stdin').toBe(CONFIG);
+    expect(exported(home), 'the token reached curl\'s environment').not.toContain(TOKEN);
+    expect(exported(home)).not.toMatch(/^export tok=/m);
+  });
+
+  it('a tok already EXPORTED by the caller does not carry the token into curl\'s environment either', () => {
+    const home = mkTmp('ccrc-notify-preexport-');
+    recordingCurl(home);
+    const r = runNotify(home, {
+      CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: tokenFile(home), tok: 'inherited',
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fed(home)).toBe(CONFIG);
+    expect(exported(home), 'the token reached curl\'s environment').not.toContain(TOKEN);
+    expect(exported(home)).not.toMatch(/^export tok=/m);
   });
 
   // THE OTHER DIRECTION (wave 13, R16): the hook's own stdin, whatever ccd or a
@@ -360,7 +424,8 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
       CCRC_MAIL_TOKEN_FILE: withToken ? tokenFile(home) : path.join(home, 'absent.token'),
     }, hostile);
     expect(r.status, r.stderr).toBe(0);
-    expect(fed(home), 'curl was handed the hook\'s stdin as config').toBe(withToken ? CONFIG : '');
+    if (withToken) expect(fed(home), 'curl was handed the hook\'s stdin as config').toBe(CONFIG);
+    else expect(existsSync(path.join(home, 'curl.stdin')), 'a tokenless notify still ran curl (D-4393)').toBe(false);
   });
 
   // Through the REAL curl, behind the test front that admits `-K -` with
@@ -369,7 +434,7 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
   it.each([
     ['with a token', true],
     ['with no token', false],
-  ])('%s, through the loopback curl front to a listener: the body arrives, and the header iff there is a token', async (_w, withToken) => {
+  ])('%s, through the loopback curl front to a listener: with a token the body and header arrive, with none nothing does (D-4393)', async (_w, withToken) => {
     const home = mkTmp('ccrc-notify-front-');
     const got: { auth: string | undefined; body: string }[] = [];
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -400,7 +465,7 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
       });
       expect(code).toBe(0);
       expect(existsSync(path.join(home, 'curl-poison')), 'the front refused notify.sh\'s call').toBe(false);
-      expect(got).toEqual([{ auth: withToken ? TOKEN : undefined, body: '{"message":"test message"}' }]);
+      expect(got).toEqual(withToken ? [{ auth: TOKEN, body: '{"message":"test message"}' }] : []);
     } finally {
       await new Promise<void>((r) => { server.close(() => r()); });
     }

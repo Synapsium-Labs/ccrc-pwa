@@ -562,6 +562,60 @@ describe('F3(c): the own-write promote waits out the backoff', () => {
   });
 });
 
+// D-4414 (review 352 F2): on a recorded both box a staged own-write generation that keeps failing must never keep the
+// previous value from being retired (and its digest recorded) at its hard bound.
+describe('D-4414 F2: the hard bound retires the previous value before the own-write branch', () => {
+  const G = '1'.repeat(16);
+  const staged = (): BoxTokenState => ({ ...stagedState({ ...base(), rotationOwed: true, owedWhy: 'adopted' }, G, 2000, W(2)),
+    previous: { id: null, seq: 0, graceUntil: 5000, hardUntil: 9000, currentPresented: true, write: W(3) } });
+  const gate = rotationGate(bothLocal());
+  const ask = (now: number, backoffUntil: number | null, retireHeld?: boolean) =>
+    nextAction({ state: staged(), gate, generation: null, rotateRequested: false, backoffUntil, now, ...(retireHeld === undefined ? {} : { retireHeld }) });
+
+  it('past hardUntil with a staged own-write generation (in a backoff or not) the answer is retire, not promote or backoff', () => {
+    expect(ask(9000, null)).toEqual({ kind: 'retire', why: 'grace' });
+    expect(ask(9500, 99_000)).toEqual({ kind: 'retire', why: 'grace' });
+    const unpresented = { ...staged(), previous: { ...(staged().previous as NonNullable<BoxTokenState['previous']>), currentPresented: false } };
+    expect(nextAction({ state: unpresented, gate, generation: null, rotateRequested: false, backoffUntil: 99_000, now: 9500 }))
+      .toEqual({ kind: 'retire', why: 'hard-bound' });
+  });
+
+  it('before hardUntil the own-write branch still goes first (grace alone does not pre-empt it)', () => {
+    expect(ask(6000, null)).toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+    expect(ask(6000, 99_000)).toEqual({ kind: 'backoff', until: 99_000 });
+  });
+
+  it('a retirement the driver could not do this tick (retireHeld) does not block the own-write branch', () => {
+    expect(ask(9500, null, true)).toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+    expect(ask(9500, 99_000, true)).toEqual({ kind: 'backoff', until: 99_000 });
+  });
+});
+
+// D-4414 (F3): the grace-end retirement (before the hard bound, any gate) is also held aside by `retireHeld`, so a previous
+// value whose file will not read does not loop retire -> hold until the step cap and starve stage / send / hold.
+describe('D-4414 F3: a held grace-end retirement blocks nothing else, on a remote gate too', () => {
+  const G = '1'.repeat(16);
+  const withPrev = (s: BoxTokenState): BoxTokenState => ({ ...s,
+    previous: { id: null, seq: 0, graceUntil: 5000, hardUntil: 90_000, currentPresented: true, write: W(3) } });
+  const owed = (): BoxTokenState => withPrev({ ...base(), rotationOwed: true, owedWhy: 'aux-unusable' });
+  const stagedOne = (): BoxTokenState => withPrev(stagedState({ ...base(), rotationOwed: true, owedWhy: 'adopted' }, G, 2000, W(2)));
+  const ask = (state: BoxTokenState, gate: GateVerdict, retireHeld?: boolean) =>
+    nextAction({ state, gate, generation: null, rotateRequested: false, backoffUntil: null, now: 6000,
+      ...(retireHeld === undefined ? {} : { retireHeld }) });
+
+  it('past graceUntil and before the hard bound the retirement is asked for, until the driver says it is held', () => {
+    expect(ask(owed(), OPEN)).toEqual({ kind: 'retire', why: 'grace' });
+    expect(ask(owed(), OPEN, true)).toEqual({ kind: 'stage', why: 'aux-unusable' });
+  });
+
+  it('held, a staged value on an open remote gate is sent, and on a closed gate the hold is named', () => {
+    expect(ask(stagedOne(), OPEN)).toEqual({ kind: 'retire', why: 'grace' });
+    expect(ask(stagedOne(), OPEN, true)).toEqual({ kind: 'send', generation: G, nodeId: NODE });
+    const closed = rotationGate(remote({ linkUp: false }));
+    expect(ask(stagedOne(), closed, true)).toMatchObject({ kind: 'hold' });
+  });
+});
+
 describe('F7: the timings that bound a live re-probe are pinned by value', () => {
   it('HOLD_REPROBE_MS is one hour (a 55-minute re-probe is faster than the plan, and reds here)', () => {
     expect(HOLD_REPROBE_MS).toBe(60 * 60_000);
@@ -610,7 +664,7 @@ describe('D-4410: the retiring record (a digest in box-token.json until the appe
 describe('D-4412: a retired presentation owes one forward rotation, bounded', () => {
   const idle = (): BoxTokenState => ({ ...base(), origin: 'rotated' });
   const ask = (over: Partial<Parameters<typeof oweForRetiredPresentation>[0]> = {}) =>
-    oweForRetiredPresentation({ state: idle(), fresh: 1, busy: false, lastOwedAt: null, now: 10_000_000, ...over });
+    oweForRetiredPresentation({ state: idle(), fresh: 1, lastOwedAt: null, now: 10_000_000, ...over });
 
   it('a new retired presentation on an idle, nothing-owed state owes the word retired-presented', () => {
     expect(ask()).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
@@ -630,10 +684,6 @@ describe('D-4412: a retired presentation owes one forward rotation, bounded', ()
     ['a recorded promotion', (s: BoxTokenState) => ({ ...s, promoting: { id: '1'.repeat(16) } })],
   ])('nothing new is owed while a rotation is in flight: %s', (_n, mk) => {
     expect(ask({ state: mk(idle()) })).toBeNull();
-  });
-
-  it('nothing new is owed while a send or a promotion is running (the driver feeds it)', () => {
-    expect(ask({ busy: true })).toBeNull();
   });
 
   it('at most one per HOLD_REPROBE_MS: just inside the bound owes nothing, at it owes again', () => {

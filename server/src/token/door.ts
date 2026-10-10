@@ -10,10 +10,14 @@ import {
 import { mintClaimCode } from './files.js';
 
 /** What one claim step answers the route. A 200 carries the value, served from
- *  memory (the holder's pending slot via `valueOf`), never from the pending file. */
+ *  memory (the holder's pending slot via `valueOf`), never from the pending file. `nodeId` is the presenting node, which
+ *  passed NODE_ID_RE and (a 200 being a bound match) is the node the code was bound to: the route's lines name it (F11). */
 export type ClaimStep =
-  | { status: 200; generation: string; value: string }
+  | { status: 200; generation: string; value: string; nodeId: string }
   | { status: 400 | 403 | 404 | 410 | 429; error: ClaimRefusal; generation: string | null };
+
+/** `; <label> node <id>` for an id that passed NODE_ID_RE, else nothing: a log line never carries a string that failed the shape. */
+const nodeClause = (label: string, id: string | null): string => (id === null ? '' : `; ${label} node ${id}`);
 
 const sha256 = (s: string): Buffer => createHash('sha256').update(s, 'utf8').digest();
 
@@ -103,11 +107,12 @@ export class ClaimDoor {
       // The code was live but its generation is gone from the holder: the code is
       // burned, nothing is handed out, and the driver is told to discard it.
       this.alerts.expired.push(reply.generation);
-      this.warn(`ccrc-server: box token: a live claim code named generation ${reply.generation}, ` +
-        'which the server no longer holds; nothing was handed out');
+      // Spec 7.1 (F11): the outcome's word and its node ids, both NODE_ID_RE-checked above; never the code.
+      this.warn(`ccrc-server: box token: claim door no-claim: a live claim code named generation ${reply.generation}, ` +
+        `which the server no longer holds; nothing was handed out${nodeClause('bound to', bound)}${nodeClause('presented by', presented)}`);
       return { status: 404, error: 'no-claim', generation: reply.generation };
     }
-    return { status: 200, generation: reply.generation, value };
+    return { status: 200, generation: reply.generation, value, nodeId: presented as string };
   }
 
   private slotDigest(hex: string | undefined, i: number): Buffer {
@@ -125,7 +130,7 @@ export class ClaimDoor {
     }
     // Spec 7.1: a claim-door outcome is logged with its word and its node id. The ids are NODE_ID_RE-shaped by now
     // (`claimNow` passes null for one that is not), and the line never carries a code or a digest.
-    const who = (label: string, id: string | null): string => (id === null ? '' : `; ${label} node ${id}`);
+    const who = nodeClause;
     if (alert.kind === 'replay') {
       this.alerts.replays++;
       if (this.lastReplayWarnAt !== null && now - this.lastReplayWarnAt < CLAIM_ALERT_EVERY_MS) return;

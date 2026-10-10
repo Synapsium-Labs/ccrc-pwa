@@ -1095,12 +1095,13 @@ const curlFullArgv = (home: string): string[] => (existsSync(join(home, 'curl-fu
 const checkLine = (s: string): string => s.split('\n').find((l) => l.startsWith('check: ')) ?? '';
 
 /** The words THIS ccrc can do (`_ccrc_cap_words`), as `--check` joins them:
- *  W1's three, W4's four and W6's `versions`, `detach` on Linux only
+ *  W1's three, W4's four, W6's `versions` and the box-token lifecycle's
+ *  `token-sync`, `detach` on Linux only
  *  (decision 17). A literal, not a read of ccd/ccrc — a pin derived from the
  *  list it pins cannot red. */
 const CAPS_NOW = process.platform === 'darwin'
-  ? 'verify,node-id,floor,update-json,update-gate,rollback,versions'
-  : 'verify,node-id,floor,update-json,update-gate,rollback,versions,detach';
+  ? 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync'
+  : 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync,detach';
 /** The machine line as key → value. Values never contain a space or `=`
  *  (caps= joins its words with commas), so one split per field is exact. */
 const parseCheck = (s: string): Record<string, string> =>
