@@ -17,10 +17,18 @@ export interface Themes {
   /** `[data-theme='light']`, named because the token-pair contract and dozens
    *  of registry comments speak of it by name. */
   LIGHT: Theme;
-  /** EVERY palette discovered in tokens.css, keyed by its `data-theme` value
-   *  — the set every measurement actually loops over. `DARK`/`LIGHT` above are
-   *  conveniences onto the same data, not a different source. */
+  /** EVERY palette discovered in tokens.css, keyed by its `data-theme` value.
+   *  `DARK`/`LIGHT` above are conveniences onto the same data, not a different
+   *  source. */
   byName: Record<string, Theme>;
+  /** `[label, palette]` for every palette the app can render, `:root` first —
+   *  and THIS is the set every measurement loops over (`audit` destructures
+   *  it as `THEMES`). Declared because it was missing: the declaration said
+   *  `byName` was "the set every measurement actually loops over", which was
+   *  the only description of a field the module does not expose that way, and
+   *  a consumer reading `all` got a type error for a field that has always
+   *  been there. */
+  all: ReadonlyArray<readonly [string, Theme]>;
 }
 
 export interface Rule {
