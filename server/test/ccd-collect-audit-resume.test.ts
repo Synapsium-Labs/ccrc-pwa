@@ -325,6 +325,23 @@ describe.skipIf(!LINUX)('a moved leaf is re-proven: registered, in use under eit
     expect(readJournal(h.home)).toEqual([]);
   }, 60_000);
 
+  it('a record that VANISHES between the listing and its read: unmeasured `records`, exit 1 — never the terminal word, journaled nowhere', () => {
+    // Only an actor that does not take the reap lock removes a record, so this is a retry, as the verb's own twin
+    // answers it (ruling R-l). Review 369's C3: mutated to the terminal word, this arm stayed green.
+    const { ident } = setup();
+    const rec = plantOwn(ident);
+    const seam = 'eval "_orig_resume_eval() $(declare -f _ws_collect_resume_eval | tail -n +2)";'
+      + ' _ws_collect_resume_eval() { rm -f -- "$2"; _orig_resume_eval "$@"; };';
+    const a = collectAudit(h, { pre: seam });
+    expect(fs.existsSync(rec), 'the CONTROL: it vanished after the listing named it').toBe(false);
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('records');
+    expect(String(a.doc!['detail'])).toContain('vanished while it was read');
+    expect(collectOf(a)['records'], 'the listing named it').toEqual([recName()]);
+    expect(readJournal(h.home)).toEqual([]);
+  }, 60_000);
+
   it('a slot leaf whose absence cannot be measured after its identity answered 1: unmeasured `slot`', () => {
     const { ident } = setup();
     plantOwn(ident);

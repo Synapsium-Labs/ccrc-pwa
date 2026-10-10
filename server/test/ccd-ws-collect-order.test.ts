@@ -118,6 +118,20 @@ describe.skipIf(!LINUX)('then the order: the leaf proven gone, the EMPTY slot, t
     expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness stays until the slot is gone').toBe(o.witness);
   });
 
+  it('a directory standing at the slot’s leaf after the removal is KEPT by the order’s FIRST proof, the leaf’s absence — never left to the rmdir to notice', () => {
+    // The rmdir would refuse a slot that still holds `leaf` too, with the same word, so only the detail tells which
+    // proof answered (review 369's C3: this guard was masked by the rmdir).
+    const o = makeOrphan(h);
+    const r = collectVerb(h, collectToken(h), { pre: gapAt('removed', 'mkdir "$3/leaf"') });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: the slot's leaf is not proven gone/);
+    expect(fs.existsSync(path.join(quarantineOf(h), slots(h)[0]!, 'leaf')), 'what stands there, kept').toBe(true);
+    expect(records(h)).toHaveLength(1);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness stays').toBe(o.witness);
+  });
+
   it('a record that cannot be dropped: quarantine-kept — and the next pass finishes it from the record', () => {
     makeOrphan(h);
     const r1 = collectVerb(h, collectToken(h), { pre: '_ws_collect_record_drop() { return 1; };' });
@@ -164,6 +178,22 @@ describe.skipIf(!LINUX)('compare-and-drop — the witness this collection acted 
     expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the newer one stands').toMatch(/ run=9 /);
   });
 
+  it('a `tmproots/` that has become a LINK by the compare is never followed: the witness it reaches stands, and the record is KEPT', () => {
+    // A linked `tmproots/` is refused before the lock (the population check), so only a swap inside the act reaches
+    // this guard (review 369's C3 named it unreachable from every earlier case).
+    const o = makeOrphan(h);
+    const elsewhere = path.join(h.home, 'tmproots-elsewhere');
+    const r = collectVerb(h, collectToken(h),
+      { pre: gapAt('emptied', `mv "$REG/tmproots" '${elsewhere}' && ln -s '${elsewhere}' "$REG/tmproots"`) });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toContain('the leaf is gone, but its witness could not be compared and dropped: ');
+    expect(fs.readFileSync(path.join(elsewhere, COL_ID), 'utf8'), 'the witness through the link, never dropped').toBe(o.witness);
+    expect(fs.readdirSync(elsewhere), 'and nothing moved aside beside it').toEqual([COL_ID]);
+    expect(records(h), 'the record, kept').toHaveLength(1);
+  });
+
   it.skipIf(ROOT)('a witness that cannot be moved aside keeps the record: quarantine-kept, the next pass finishes', () => {
     makeOrphan(h);
     const dir = path.dirname(witnessOf(h));
@@ -199,6 +229,22 @@ describe.skipIf(!LINUX)('the witness writer’s dead temp files — the exact sh
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(fs.readdirSync(path.dirname(witnessOf(h))).sort()).toEqual([...OLD.slice(1), ...FRESH].sort());
     expect(String(eventsOf(h.home, 'collect').at(-1)!['detail'])).toContain('1 stale witness temp file(s) removed');
+  });
+
+  it('none goes through a `tmproots/` that has become a LINK by the reap: a temp file it reaches stands', () => {
+    // As at the compare: only a swap inside the act reaches this guard (review 369's C3).
+    makeOrphan(h);
+    const elsewhere = path.join(h.home, 'tmproots-elsewhere');
+    fs.mkdirSync(elsewhere);
+    const old = Date.now() / 1000 - 7200;
+    fs.writeFileSync(path.join(elsewhere, OLD[0]!), 'x');
+    fs.utimesSync(path.join(elsewhere, OLD[0]!), old, old);
+    const r = collectVerb(h, collectToken(h),
+      { pre: gapAt('witnessed', `mv "$REG/tmproots" "$HOME/tmproots-was" && ln -s '${elsewhere}' "$REG/tmproots"`) });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(docOf(r.stdout)).toMatchObject({ collected: COL_ID, witness: 'dropped' });
+    expect(fs.existsSync(path.join(elsewhere, OLD[0]!)), 'never reaped through the link').toBe(true);
+    expect(String(eventsOf(h.home, 'collect').at(-1)!['detail'])).toContain('0 stale witness temp file(s) removed');
   });
 
   it('none goes while the slug does not read free at that instant', () => {

@@ -12,7 +12,7 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf, measOf } from './lifecycleHelpers.js';
 import {
-  COL_ID, GAP_LOG, WRONG_TOKEN, collectAudit, collectToken, collectVerb, crashAt, docOf, evalSays, gaps, inoAt,
+  COL_ID, GAP_LOG, WRONG_TOKEN, collectAudit, collectToken, collectVerb, crashAt, docOf, evalSays, gapAt, gaps, inoAt,
   makeOrphan, quarantineOf, records, recordsDir, regOf, slots, witnessOf,
 } from './wsCollectFixture.js';
 
@@ -78,6 +78,24 @@ describe.skipIf(!LINUX)('a run that died resumes FROM ITS RECORD', () => {
     const doc = docOf(r.stdout);
     expect(doc['failed']).toBe('quarantine-kept');
     expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: the leaf never left /);
+    expect(records(h), 'the record, kept').toHaveLength(1);
+    expect(inoAt(o.leaf), 'the leaf, where it was').toBe(o.ino);
+    expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
+  });
+
+  it('died before the move, then a stray entry reaches the empty slot inside the lock: the unwind is an rmdir, never a recursive remove — KEPT, the entry standing', () => {
+    // The evaluation found the slot empty (an `unmoved` resume); what reaches it after the consent is not this verb's
+    // to empty (review 369's C3: a recursive remove at this call site stayed green).
+    const o = makeOrphan(h);
+    expect(collectVerb(h, collectToken(h), { pre: crashAt('slotted') }).code).toBe(137);
+    const slot = slotDir();
+    const stray = 'for s in "$HOME/.cc-tmp/.ccd-quarantine"/slot.*; do printf s > "$s/stray"; done';
+    const r = collectVerb(h, collectToken(h), { pre: gapAt('consented', stray) });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toMatch(/^the quarantine record \S+ is kept, and nothing further was removed: the leaf never left /);
+    expect(fs.readFileSync(path.join(slot, 'stray'), 'utf8'), 'the stray entry stands').toBe('s');
     expect(records(h), 'the record, kept').toHaveLength(1);
     expect(inoAt(o.leaf), 'the leaf, where it was').toBe(o.ino);
     expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);

@@ -10,8 +10,8 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import {
-  COL_ID, MOUNTS_SEAM, PROBE_STUB, ROWS_CLEAR, ROWS_STUB, collectAudit, collectToken, collectVerb, docOf, gapAt, holderAt, inoAt,
-  killHolder, leafOf, linesOf, makeOrphan, origOf, quarantineOf, realMounts, records, regOf, slots, witnessOf,
+  COL_ID, MOUNTS_SEAM, PROBE_STUB, ROWS_CLEAR, ROWS_STUB, collectAudit, collectToken, collectVerb, docOf, gapAt, gaps, holderAt,
+  inoAt, killHolder, leafOf, linesOf, makeOrphan, origOf, quarantineOf, realMounts, records, regOf, slots, witnessOf,
   type Orphan,
 } from './wsCollectFixture.js';
 
@@ -37,6 +37,9 @@ const journaled = (outcome: string, token: string): void => {
   expect(ev[1]!['tx'], 'it closes the intent’s transaction').toBe(ev[0]!['tx']);
 };
 const slotLeaf = (): string => path.join(quarantineOf(h), slots(h)[0]!, 'leaf');
+/** The seam points a fresh collection passes up to and including the move. A case that ends at step 5 passes these
+ *  and NO later point: never `proven` (step 6 never ran), and never the putback's `restoring` (no restore was tried). */
+const TO_THE_MOVE = ['locked', 'consented', 'recorded', 'slotted', 'moved'];
 
 describe.skipIf(!LINUX)('(a) and (b) — the id is registered again', () => {
   it('a child marker after the move: registered, moved back', () => {
@@ -170,10 +173,14 @@ describe.skipIf(!LINUX)('(d) — no registry row at, inside or through the leaf,
       + ' printf \'%s\\n\' "$HOME/.cc-tmp/$2/repo" > "$REG/demo-other.workdir"';
     const r = collectVerb(h, collectToken(h), { pre: gapAt('moved', plant) });
     const doc = docOf(r.stdout);
-    // Task 4's rule answers a row it places inside the leaf `containment-unproven`, and a row it cannot place (its
-    // workdir moved with the leaf) unmeasured. Either way the leaf goes back, and that is what this pins.
-    expect(['containment-unproven', 'probe-unmeasured']).toContain(doc['refused'] ?? doc['failed']);
+    // Task 4's rule PLACES this row: its workdir is a string under the pre-move spelling, compared literally though
+    // nothing stands there now (ruling G6), so the answer is exactly the refusal — never the unmeasured answer a row
+    // it could not place would give (review 369's C3: this case once accepted either).
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(doc['refused'], r.stdout).toBe('containment-unproven');
+    expect(doc['failed'], 'never the unmeasured answer').toBeUndefined();
     back(o);
+    journaled('refused', 'containment-unproven');
   });
 });
 
@@ -182,15 +189,23 @@ describe.skipIf(!LINUX)('(e) — nothing mounted at or under the slot’s leaf, 
     gapAt('moved', `printf '9999 1 0:99 / %s rw,relatime - tmpfs tmpfs rw\\n' "$3/${sub}" >> "$HOME/mountinfo"`);
 
   for (const sub of ['leaf/mnt', 'leaf']) {
+    // FOR THE RIGHT REASON (review 369's C3): (c)'s real /proc walk runs before (e), and a walk that outruns its 10 s
+    // bound under load answers the same `failed probe-unmeasured`, moved back. So the detail must name the MOUNT. The
+    // timeout covers the case's three ccd calls (the orphan's witness write, the audit, the verb) and the four walks
+    // among them (the audit's one, the verb's re-run of it and step 5's two): 4 x 10 s of walk bound is 40 s, and 60 s
+    // leaves the shells their 20. So a slow walk reds on this assertion, naming itself, and never on the clock.
     it(`a mount at <slot>/${sub}: moved back, then probe-unmeasured (ruling T6 OPEN8)`, () => {
       const o = makeOrphan(h);
       realMounts(h);
       const r = collectVerb(h, collectToken(h), { pre: `${MOUNTS_SEAM} ${mountAt(sub)}` });
       expect(r.code).toBe(1);
-      expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
+      const doc = docOf(r.stdout);
+      expect(doc['failed']).toBe('probe-unmeasured');
+      expect(String(doc['detail']), 'refused for the mount, not for a walk that did not finish')
+        .toMatch(new RegExp(`^${COL_ID} was moved back to .+ and nothing was removed: something is mounted at /`));
       back(o);
       journaled('failed', 'probe-unmeasured');
-    });
+    }, 60_000);
   }
 
   it('the CONTROL: a mount at a SIBLING of the leaf is not under it — collected', () => {
@@ -212,6 +227,18 @@ describe.skipIf(!LINUX)('(e) — nothing mounted at or under the slot’s leaf, 
     expect(ask(`${dir}/leafy`), 'the CONTROL: a sibling is not under it').toBe('0');
   });
 
+  it('a NEWLINE in a mount point is compared encoded too, as \\012 — asked of the comparison directly', () => {
+    // Unreachable through the verb: a slot path lies under the PHYSICAL `~/.cc-tmp`, which `_ws_dir_physical` refuses
+    // when it holds a newline, and an id holds none. The kernel's table can still carry one, so the comparison is asked
+    // directly, as the case above asks it.
+    const dir = path.join(h.home, 'vol\nnewline');
+    realMounts(h);
+    fs.appendFileSync(path.join(h.home, 'mountinfo'), `9999 1 0:99 / ${dir.replace(/\n/g, '\\012')}/leaf/mnt rw - tmpfs tmpfs rw\n`);
+    const ask = (d: string): string => h.sh(`${MOUNTS_SEAM} _ws_collect_mounts_clear '${d}'; printf '%s' "$?"`);
+    expect(ask(`${dir}/leaf`), 'the encoded line names a mount under it').toBe('1');
+    expect(ask(`${dir}/leafy`), 'the CONTROL: a sibling is not under it').toBe('0');
+  });
+
   it('a table that cannot be read: probe-unmeasured, moved back', () => {
     const o = makeOrphan(h);
     const r = collectVerb(h, collectToken(h), { pre: '_ws_collect_mountinfo() { printf \'%s\' "$HOME/no-such-table"; };' });
@@ -225,6 +252,29 @@ describe.skipIf(!LINUX)('(e) — nothing mounted at or under the slot’s leaf, 
     const r = collectVerb(h, collectToken(h), { pre: `${MOUNTS_SEAM} ${gapAt('moved', ': > "$HOME/mountinfo"')}` });
     expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
     back(o);
+  });
+});
+
+describe.skipIf(!LINUX)('after the move, nothing is asked of the tree: never the idle floor, never the walk', () => {
+  // The move stamps the leaf's ctime, so a floor asked again after it would read the leaf as busy every time (spec
+  // §5.10: step 5 is never the tree token or the idle floor). `_ws_collect_floor_s` is the floor's ONE test seam
+  // (ruling G4); here it answers 0 until a seam at `moved` raises it to the production 86400. Every other fresh case
+  // lowers the floor for the whole run or stubs the walk, so a re-ask there reds nothing (review 369's C3).
+  const FLOOR_RISES = '_ws_collect_floor_s() { if [[ -e "$HOME/floor-up" ]]; then echo 86400; else echo 0; fi; };';
+
+  it('the floor raised at the move is never asked again: collected', () => {
+    makeOrphan(h);
+    fs.writeFileSync(path.join(h.home, 'floor-up'), '');
+    const control = collectAudit(h, { floor: false, pre: FLOOR_RISES });
+    expect(docOf(control.stdout)['verdict'], 'the CONTROL: the raised floor refuses this leaf, so no re-ask could pass')
+      .toBe('changed-recently');
+    fs.rmSync(path.join(h.home, 'floor-up'));
+    const token = collectToken(h, { floor: false, pre: FLOOR_RISES });
+    const r = collectVerb(h, token, { floor: false, pre: `${FLOOR_RISES} ${gapAt('moved', ': > "$HOME/floor-up"')}` });
+    expect(fs.existsSync(path.join(h.home, 'floor-up')), 'the CONTROL: the floor rose at the move').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(docOf(r.stdout)).toMatchObject({ collected: COL_ID, resumed: false });
+    expect(gaps(h)).toEqual([...TO_THE_MOVE, 'proven', 'removed', 'emptied', 'witnessed', 'dropped']);
   });
 });
 
@@ -242,6 +292,10 @@ describe.skipIf(!LINUX)('(f) — identity, asked LAST, directly before the remov
     expect(fs.existsSync(o.leaf), 'nothing went to the leaf’s path').toBe(false);
     expect(records(h), 'its record, kept').toHaveLength(1);
     journaled('refused', 'quarantine-kept');
+    // KEPT BY STEP 5's OWN identity proof (f), and by after_move's KEPT arm: never past it to step 6 (`proven`), and
+    // never into the putback (`restoring`), whose own identity-first check would answer the same word and hide either
+    // guard's loss (review 369's C2: Task 6 rows 33 and 60, masked since the putback asks identity first).
+    expect(gaps(h), 'refused at step 5, with no removal and no restore tried').toEqual(TO_THE_MOVE);
   });
 
   it('the slot’s leaf GONE after the move is no swap: failed probe-unmeasured at exit 1, nothing moved back, the record and slot standing — and the next pass finishes from them', () => {
@@ -258,6 +312,9 @@ describe.skipIf(!LINUX)('(f) — identity, asked LAST, directly before the remov
     expect(fs.readdirSync(path.join(quarantineOf(h), slots(h)[0]!)), 'the slot stands, empty').toEqual([]);
     expect(fs.existsSync(leafOf(h)), 'nothing was moved back').toBe(false);
     journaled('failed', 'probe-unmeasured');
+    // ITS OWN ANSWER, the rc-3 arm of `vanished-slot-leaf-is-a-retry`: no restore is even tried. Without that arm the
+    // putback would be, and its own vanish answer is the same word (review 369's C2), so only the seam can tell.
+    expect(gaps(h), 'no restore was tried').toEqual(TO_THE_MOVE);
     const r2 = collectVerb(h, collectToken(h));
     expect(r2.code, r2.stdout + r2.stderr).toBe(0);
     expect(docOf(r2.stdout)).toMatchObject({ collected: COL_ID, resumed: true, witness: 'dropped' });
