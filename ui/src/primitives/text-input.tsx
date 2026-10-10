@@ -22,6 +22,7 @@
 // gun pointed at mobile.
 import type { InputHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
+import { FOCUS_RING } from '../lib/focus';
 
 /** The shared object, token for token as all three rules declared it.
  *
@@ -40,7 +41,8 @@ export const TEXT_INPUT =
   // The placeholder ink, which is the declaration one of the three copies
   // was missing. On a field with no placeholder attribute it is inert, which
   // is why putting it on the shared base changes nothing for the login field.
-  + ' placeholder:text-ink-tertiary';
+  + ' placeholder:text-ink-tertiary'
+  + ` ${FOCUS_RING}`;
 
 export interface TextInputProps extends InputHTMLAttributes<HTMLInputElement> {
   className?: string;

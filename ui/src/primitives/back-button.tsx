@@ -38,6 +38,7 @@
 // legible in one place instead of being spread across two stylesheets.
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
+import { FOCUS_RING } from '../lib/focus';
 
 /** The shared chrome, token for token as all five rules declared it.
  *
@@ -55,7 +56,8 @@ export const BACK_BUTTON =
   + ' font-ui text-[26px] font-regular leading-none text-ink-secondary cursor-pointer'
   + ' [transition:transform_var(--dur-press)_var(--curve-swift),color_var(--dur-fast)_var(--curve-swift)]'
   + ' motion-reduce:transition-none'
-  + ' active:scale-[0.88] active:text-ink-primary';
+  + ' active:scale-[0.88] active:text-ink-primary'
+  + ` ${FOCUS_RING}`;
 
 export interface BackButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** The glyph. Every call site passes `‹` today; it is a prop rather than

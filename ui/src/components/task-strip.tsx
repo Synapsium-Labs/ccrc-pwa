@@ -11,6 +11,7 @@
 // nothing at all, so ordinary conversations never pay a row for it.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { FOCUS_RING } from '../lib/focus';
 import { CollapsibleStrip } from '../primitives/collapsible-strip';
 import type { TaskItem } from '../../../shared/api';
 import './task-strip.css';
@@ -50,7 +51,7 @@ function TaskRow({ task }: { task: TaskItem }): ReactNode {
     <li className={`task-row task-row--${task.status}`}>
       <button
         type="button"
-        className="task-line"
+        className={`task-line ${FOCUS_RING}`}
         onClick={() => hasDetail && setOpen((o) => !o)}
         aria-expanded={hasDetail ? open : undefined}
         disabled={!hasDetail}
@@ -99,7 +100,7 @@ export function TaskStrip({ tasks }: { tasks: TaskItem[] }): ReactNode {
           done.map((t) => <TaskRow key={t.id} task={t} />)
         ) : (
           <li className="task-row task-row--fold">
-            <button type="button" className="task-fold" onClick={() => setShowDone(true)}>
+            <button type="button" className={`task-fold ${FOCUS_RING}`} onClick={() => setShowDone(true)}>
               … +{done.length} completed
             </button>
           </li>

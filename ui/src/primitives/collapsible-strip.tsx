@@ -22,6 +22,7 @@
 // pinned only through whichever domain strip happens to render it.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { FOCUS_RING } from '../lib/focus';
 
 export interface CollapsibleStripProps {
   /** The root class, e.g. `mail-strip`. Gains `--open` while expanded. */
@@ -73,7 +74,7 @@ export function CollapsibleStrip({
     <section className={open ? `${root} ${root}--open` : root} aria-label={label}>
       <button
         type="button"
-        className={`${part}-head`}
+        className={`${part}-head ${FOCUS_RING}`}
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
       >

@@ -13,6 +13,7 @@
 // and nowhere else now.
 import type { ReactNode } from 'react';
 import { cn } from '../lib/cn';
+import { FOCUS_RING } from '../lib/focus';
 import './option-row.css';
 
 export interface OptionRowProps {
@@ -63,7 +64,10 @@ export function OptionRow({
   busy,
   className,
 }: OptionRowProps): ReactNode {
-  const cls = cn('opt', selected && 'opt--selected', className);
+  // The ring rides the row only when it IS a control — `onClick` absent
+  // means a plain <div>, and a div that cannot be focused must not carry
+  // focus utilities that would never fire.
+  const cls = cn('opt', onClick !== undefined && FOCUS_RING, selected && 'opt--selected', className);
   const inner = (
     <>
       {glyph !== undefined && (

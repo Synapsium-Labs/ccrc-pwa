@@ -2,6 +2,7 @@
 // surface for attaching: the old success toast is gone, because it landed on top
 // of the very input it told you to type into.
 import type { ReactNode } from 'react';
+import { FOCUS_RING } from '../lib/focus';
 import './attach-spin.css';
 import './attach-tray.css';
 
@@ -61,7 +62,7 @@ export function AttachTray({ images, onRemove, onRetry }: AttachTrayProps): Reac
           {img.state === 'failed' && (
             <button
               type="button"
-              className="attach-strip attach-chip-retry"
+              className={`attach-strip attach-chip-retry ${FOCUS_RING}`}
               onClick={() => onRetry(img.key)}
             >
               retry
@@ -69,7 +70,7 @@ export function AttachTray({ images, onRemove, onRetry }: AttachTrayProps): Reac
           )}
           <button
             type="button"
-            className="attach-remove"
+            className={`attach-remove ${FOCUS_RING}`}
             aria-label={`Remove ${img.file.name}`}
             onClick={() => onRemove(img.key)}
           >

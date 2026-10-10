@@ -4,6 +4,8 @@
 // to live here now lives in useStagedImages, shared with paste and
 // drag-and-drop so all three doors hand the whole batch to `add()` at once.
 import { useRef } from 'react';
+import { cn } from '../lib/cn';
+import { FOCUS_RING } from '../lib/focus';
 import type { ChangeEvent, ReactNode } from 'react';
 import './attach-spin.css';
 import './attach-button.css';
@@ -43,7 +45,7 @@ export function AttachButton({ onPick, disabled = false }: AttachButtonProps): R
       />
       <button
         type="button"
-        className="attach-btn"
+        className={cn('attach-btn', FOCUS_RING)}
         aria-label="Attach an image"
         disabled={disabled}
         onClick={() => input.current?.click()}

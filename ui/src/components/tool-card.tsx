@@ -11,6 +11,7 @@
 // failure tokens rather than a chip that says a choice was made.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { FOCUS_RING } from '../lib/focus';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { ChatEvent } from '../../../shared/api';
 // NOT framer-motion's `useReducedMotion`, although it is right there in the
@@ -151,7 +152,7 @@ function AskOutcome({ result }: { result: ToolResultEvent }): ReactNode {
     <div className="tool-ask-out">
       <button
         type="button"
-        className="tool-ask-outrow"
+        className={`tool-ask-outrow ${FOCUS_RING}`}
         aria-expanded={expanded}
         onClick={() => setExpanded((e) => !e)}
       >
@@ -287,7 +288,7 @@ function AskCard({
           {state === 'awaiting' && onAnswer !== undefined && (
             <button
               type="button"
-              className="ask-answer"
+              className={`ask-answer ${FOCUS_RING}`}
               title="Open the answer sheet"
               onClick={onAnswer}
             >
@@ -343,7 +344,7 @@ function GenericToolCard({
     <div className="toolcard">
       <button
         type="button"
-        className="tool-row"
+        className={`tool-row ${FOCUS_RING}`}
         aria-expanded={expanded}
         onClick={() => setExpanded((e) => !e)}
       >

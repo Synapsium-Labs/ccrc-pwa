@@ -16,6 +16,7 @@
 // tappable path would promise a fetch this surface does not have.
 import { useState, type ReactNode } from 'react';
 import type { TaskNotification } from '../../../shared/api';
+import { FOCUS_RING } from '../lib/focus';
 import './task-card.css';
 
 /** `completed` and `failed` are the two the harness writes today, and an
@@ -50,7 +51,7 @@ export function TaskCard({ notification }: { notification: TaskNotification }): 
         <>
           <button
             type="button"
-            className="task-card-toggle"
+            className={`task-card-toggle ${FOCUS_RING}`}
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
           >

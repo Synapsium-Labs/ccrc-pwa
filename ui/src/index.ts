@@ -63,6 +63,7 @@ export {
 } from './styles/themes';
 
 export { cn } from './lib/cn';
+export { FOCUS_RING } from './lib/focus';
 // Pure utilities the composites above brought with them. `useNow` is the one
 // shared re-render tick for live readouts, and `elapsedWords` the one spelling
 // of "how long has this been going on" — both had app consumers before the
