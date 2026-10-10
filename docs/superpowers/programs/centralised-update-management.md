@@ -1182,6 +1182,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       claims 1132 and 1129.
       - STATUS: fleet and server v0.0.137, newest v0.0.137, backups fleet 147M/server 618M, disk free fleet 214G/work
         volume 253G/server 33G, no anomalies.
+    - **2026-10-10 20:43 UTC: v0.0.138 and v0.0.139 auto-converged unattended on 10-09; v0.0.140 published at
+      20:40:48, not yet moved, inside the usual lag.** No action was taken.
+      - The hourly checks paused for 27 hours, while this session waited on an operator answer. Each move in that
+        time was measured afterwards from the box-token driver's own hold log. v0.0.138 (#339, published 18:47:51)
+        moved the fleet at 18:51 and the server at 18:53. v0.0.139 (#343, published 18:55:47) moved the fleet at
+        19:25 and the server at 19:27. Both went fleet first.
+      - v0.0.140 is #341, box-token part B. Its move starts the first live rotation of the box token, which the
+        box-token programme's ledger watches.
+      - **Wave 15 (run 300) is still held.** Claim 1142 (child reclamation's wave 7, run 347, PR #344) holds `ccd/ccd`
+        and `server/test/macos-platform.test.ts`. Claim 1141 (ccrc-history's wave 3, run 354) holds `ccd/ccrc`.
+      - STATUS: fleet and server v0.0.139, newest v0.0.140, backups fleet 148M/server 621M, disk free fleet 215G/work
+        volume 247G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
