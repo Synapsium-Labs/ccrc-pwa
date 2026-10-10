@@ -22,7 +22,7 @@ import type { ReactNode } from 'react';
 import type {
   FleetSession, ProjectPoolWire, RosterWire, SessionBucket,
 } from '../../../shared/api';
-import { StatusDot, TypedLabel } from '@ccrc/ui';
+import { StatusDot, TypedLabel, elapsedShort } from '@ccrc/ui';
 import { sessionLabel } from './sessionLabel';
 import { SessionMeta } from './SessionMeta';
 import './fleet.css';
@@ -56,16 +56,13 @@ const WORD: Record<SessionBucket, string> = {
 let stamped: HTMLElement | null = null;
 
 /** '<1m' | '5m' | '3h' | '2d' since a subagent's hook-reported `startedAt`.
- *  Same shape as PrKeycap's `rel()` (a PR's age) — reimplemented locally for
- *  the same reason that file gives: there is no shared time-formatting
- *  module yet to import from. Unlike `rel()`, this never returns null: a
- *  subagent row always shows SOME elapsed time, even a fresh one. */
+ *  The ladder is `elapsedShort`'s — the shared module whose absence this
+ *  docstring used to cite as the reason for a local copy. What stays here is
+ *  the under-a-minute word: unlike `PrKeycap`'s `rel()`, this never renders
+ *  nothing — a subagent row always shows SOME elapsed time, even a fresh
+ *  one. */
 function subagentElapsed(startedAt: number): string {
-  const m = Math.floor(Math.max(0, Date.now() - startedAt) / 60_000);
-  if (m < 1) return '<1m';
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+  return elapsedShort(Date.now() - startedAt) ?? '<1m';
 }
 
 

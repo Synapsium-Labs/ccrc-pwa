@@ -89,4 +89,4 @@ export { FOCUS_RING } from './lib/focus';
 // migration and keep them, because a second copy of either is the drift
 // `single-definition.test.ts` exists to stop.
 export { useNow } from './lib/use-now';
-export { elapsedWords } from './lib/elapsed';
+export { elapsedWords, elapsedShort } from './lib/elapsed';

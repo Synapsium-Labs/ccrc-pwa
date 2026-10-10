@@ -35,3 +35,30 @@ export function elapsedWords(ms: number): string {
   if (m > 0) return `${m}m`;
   return 'moments';
 }
+
+/** THE COARSE LADDER — `5m`, `3h`, `2d`: one unit, never compound, floored to
+ *  whole minutes. `null` under a minute.
+ *
+ *  THREE COPIES, EACH WITH THE SAME EXCUSE. `SessionLine`'s
+ *  `subagentElapsed`, `lifecycleWords`' `elapsed` and `PrKeycap`'s `rel` were
+ *  the same four lines, and all three carried a docstring saying so —
+ *  "reimplemented locally … there is no shared time-formatting module to
+ *  import from yet". There is; it is this file, and it already held
+ *  `elapsedWords` and `stopwatch`. A comment is a request.
+ *
+ *  `null`, NOT `'<1m'`, because that is the one decision the three callers
+ *  genuinely disagree about: two render `<1m` and the PR cap renders nothing
+ *  at all under a minute, which its own docstring argues for (a cap that says
+ *  `<1m` claims a reading where it has a rounding). So the LADDER is shared
+ *  and the under-a-minute word stays each caller's.
+ *
+ *  It is a FOURTH format here and not a replacement for the other three:
+ *  `elapsedWords` is compound (`2d 4h`), `stopwatch` counts a live span in
+ *  seconds, `formatReset` counts DOWN. This one is the coarse ago-chip. */
+export function elapsedShort(ms: number): string | null {
+  const m = Math.floor(Math.max(0, ms) / 60_000);
+  if (m < 1) return null;
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
