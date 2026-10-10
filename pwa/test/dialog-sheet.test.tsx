@@ -797,6 +797,60 @@ describe('DialogSheet (hook envelope)', () => {
     ).toBeInTheDocument();
   });
 
+  // — the three envelope arms nothing reached (measured: statements 75, 193
+  // and 204 and branches 75#0, 198#1, 364#1 of `EnvelopeSheet.tsx`) —
+
+  it('a pane with FEWER rows than the envelope asks about is not a correspondence', () => {
+    // THE STRAY ARROW WALK. `answerDialog` walks the pane BY INDEX, so a tap
+    // is only safe when the envelope's rows and the pane's describe the same
+    // question. A pane mid-redraw can show one row where the envelope has
+    // two: every row it DOES show may line up, and answering would still
+    // send an arrow walk past the end of a menu that is not the one on
+    // screen. The length check is what refuses that, and it is the arm the
+    // per-row prefix comparison structurally cannot reach.
+    renderWithAsk(QUESTION_ASK, matchingDialog({ options: [{ index: 1, label: 'Canary first' }] }));
+    // The rows render — the envelope is still what the reader is shown — but
+    // none of them answers.
+    expect(screen.getByText(/Canary first/)).toBeInTheDocument();
+    expect(screen.getByText(
+      "This can't be matched to what's on the terminal pane yet — answer it there, "
+      + 'or wait for it to catch up.')).toBeInTheDocument();
+  });
+
+  it('a read-only SECOND question with no header renders no chip rather than an empty one', () => {
+    // `header` is optional on the wire, and the arm that reads it is in the
+    // `rest` block — the questions this sheet renders read-only, because only
+    // the first ever sends. Measured: a header-less FIRST question does not
+    // reach it at all, so the fixture has to carry two.
+    renderWithAsk(
+      { questions: [
+        { question: 'First: which env?', header: 'Env',
+          options: [{ label: 'Staging' }, { label: 'Prod' }] },
+        { question: 'Second: and the region?',
+          options: [{ label: 'eu-west' }, { label: 'us-east' }] },
+      ] },
+      matchingDialog({ options: [{ index: 1, label: 'Staging' }, { index: 2, label: 'Prod' }] }),
+    );
+    expect(screen.getByText('Second: and the region?')).toBeInTheDocument();
+    const chips = [...document.querySelectorAll('.dlg-header-chip')].map((n) => n.textContent);
+    expect(chips, 'an empty header chip was rendered for the question that has none')
+      .toEqual(['Env']);
+  });
+
+  it('a Deny that fails for any OTHER reason says what went wrong', async () => {
+    // The 409 has its own deliberately ambiguous sentence (the case above).
+    // Every other failure is unambiguous and must say so: a 502 from a box
+    // whose tmux is gone is not "the session may be idle".
+    vi.spyOn(api, 'interrupt').mockRejectedValue(
+      new ApiError(502, { ok: false, stderr: 'tmux: no server running' }));
+    renderWithAsk(APPROVAL_ASK, yesNoDialog());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(await screen.findByText(/Couldn't decline — tmux: no server running/)).toBeInTheDocument();
+    expect(screen.queryByText(/may be idle or the request already resolved/),
+      "the ambiguous sentence was used for an unambiguous failure").toBeNull();
+  });
+
   it('N1: toasts honestly about a 409 on the envelope path — nothing on screen actually changed', async () => {
     vi.spyOn(api, 'answerDialog').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'stale-dialog' }),
