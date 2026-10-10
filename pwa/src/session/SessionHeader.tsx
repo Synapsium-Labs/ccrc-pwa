@@ -14,7 +14,9 @@ import {
   substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
-import { BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, statusLabel, useNow } from '@ccrc/ui';
+import {
+  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, elapsedShort, statusLabel, useNow,
+} from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -83,16 +85,14 @@ function clock(elapsedMs: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
-/** '2m' | '3h' | '5d' — null under a minute (callers phrase that case). */
-function relShort(now: number, then: number | null): string | null {
-  if (then === null) return null;
-  const minutes = Math.floor(Math.max(0, now - then) / 60_000);
-  if (minutes < 1) return null;
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
+/** '2m' | '3h' | '5d' — `elapsedShort`'s own ladder, and `null` under a
+ *  minute because this header's sentences phrase that case themselves
+ *  ("working…", "idle"). A FOURTH copy of those four lines lived here: the
+ *  fold that collected `SessionLine`'s, `lifecycleWords`' and `PrKeycap`'s
+ *  missed it, because this one took `(now, then)` rather than a span and so
+ *  matched no signature the census was looking for. */
+const relShort = (now: number, then: number | null): string | null =>
+  then === null ? null : elapsedShort(now - then);
 
 /** One row of the session menu: a label, and — for the three that answer a
  *  slash command — the command itself, dimmed, read by nobody.
