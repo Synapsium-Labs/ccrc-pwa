@@ -1427,3 +1427,114 @@ describe('moveSkipText — an unknown skip word (review MINOR 2)', () => {
     expect(said).toContain('toString');
   });
 });
+
+// ── THE THIN WRAPPERS, called for real (measured: 10 uncovered statements) ──
+//
+// Every one of these is one line — a method, a path, sometimes a body — and
+// every test in the app SPIES over them, so their bodies had never run. A
+// spy proves the call site; it cannot prove the ROUTE. A typo'd path or a
+// renamed body field would reach a real box before anything noticed, which is
+// the one failure a client this thin can still have.
+describe('api client — each door sends exactly its own request', () => {
+  const seen: { url: string; init?: RequestInit }[] = [];
+  const api = createApi(((url: RequestInfo | URL, init?: RequestInit) => {
+    seen.push({ url: String(url), init });
+    return Promise.resolve(jsonResponse(200, { ok: true }));
+  }) as unknown as typeof fetch);
+
+  const sent = (): { url: string; method: string; body: unknown } => {
+    const last = seen[seen.length - 1];
+    if (last === undefined) throw new Error('no request was made');
+    const raw = last.init?.body;
+    return {
+      url: last.url,
+      method: last.init?.method ?? 'GET',
+      body: typeof raw === 'string' ? JSON.parse(raw) : undefined,
+    };
+  };
+
+  const ID = 'claude:Open Claw';            // a space, so encoding is proved too
+  const ENC = 'claude%3AOpen%20Claw';
+
+  it('POSTs the fleet reboot with no body at all', async () => {
+    await api.rebootFleet();
+    expect(sent()).toEqual({ url: '/api/fleet/reboot', method: 'POST', body: undefined });
+  });
+
+  it('POSTs an account pool set under the ENCODED account id', async () => {
+    await api.setAccountPools('acct a/b', ['pool-a']);
+    expect(sent()).toEqual({
+      url: '/api/pools/accounts/acct%20a%2Fb', method: 'POST', body: { pools: ['pool-a'] },
+    });
+  });
+
+  it('POSTs a routing write as {field,value} — never a slash command', async () => {
+    // The whole point of this route: the record is written, and ccd types it.
+    // A body shaped `{route}` or `{command}` would be a different contract.
+    await api.route(ID, 'effort', 'high');
+    expect(sent()).toEqual({
+      url: `/api/sessions/${ENC}/route`, method: 'POST', body: { field: 'effort', value: 'high' },
+    });
+  });
+
+  it('POSTs a dialog answer by INDEX, with the dialog it was shown', async () => {
+    await api.answerDialog(ID, 'd7', 2);
+    expect(sent()).toEqual({
+      url: `/api/sessions/${ENC}/dialog`, method: 'POST', body: { dialogId: 'd7', optionIndex: 2 },
+    });
+  });
+
+  it('POSTs an ask answer with the askKey verbatim', async () => {
+    // The key is minted server-side and carried back unchanged: the server
+    // re-reads the CURRENT envelope and refuses unless it still matches, so a
+    // client that reshaped it could answer a question nobody was shown.
+    await api.answerAsk(ID, 'k-abc', [0, 2]);
+    expect(sent()).toEqual({
+      url: `/api/sessions/${ENC}/ask`, method: 'POST', body: { askKey: 'k-abc', optionIndexes: [0, 2] },
+    });
+  });
+
+  it('POSTs the verified Enter with the box row it expects to find', async () => {
+    await api.submit(ID, 'the text already in the box');
+    expect(sent()).toEqual({
+      url: `/api/sessions/${ENC}/submit`, method: 'POST', body: { expect: 'the text already in the box' },
+    });
+  });
+
+  it('POSTs the interrupt with no body', async () => {
+    await api.interrupt(ID);
+    expect(sent()).toEqual({ url: `/api/sessions/${ENC}/interrupt`, method: 'POST', body: undefined });
+  });
+
+  it('GETs the command list under the session', async () => {
+    await api.commands(ID);
+    expect(sent()).toEqual({ url: `/api/sessions/${ENC}/commands`, method: 'GET', body: undefined });
+  });
+
+  it('GETs the notification catch-up with an EMPTY epoch spelled out', async () => {
+    // `epoch ?? ''` — a null epoch is a device that has never heard from this
+    // box, and the server reads the empty string as exactly that. Dropping
+    // the parameter would make it ambiguous with "epoch unknown".
+    await api.catchUp(null, 12);
+    expect(sent()).toEqual({
+      url: '/api/notifications/catchup?epoch=&seq=12', method: 'GET', body: undefined,
+    });
+  });
+
+  it('reads `released` off the abandon door, and defaults it TRUE when absent', async () => {
+    // `body.released !== false` — an older server answers `{}`, and the door
+    // did release the claim. Only an explicit `false` means it did not.
+    const quiet = createApi(((url: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(url), init });
+      return Promise.resolve(jsonResponse(200, {}));
+    }) as unknown as typeof fetch);
+    expect(await quiet.abandonRun(7)).toEqual({ released: true });
+    expect(sent().url).toBe('/api/runs/7/abandon');
+  });
+
+  it('…and FALSE when the server says so', async () => {
+    const refused = createApi((() =>
+      Promise.resolve(jsonResponse(200, { released: false }))) as unknown as typeof fetch);
+    expect(await refused.abandonRun(7)).toEqual({ released: false });
+  });
+});
