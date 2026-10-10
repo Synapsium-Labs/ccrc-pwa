@@ -59,12 +59,13 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // The child temp-root collector (spec 2026-09-22 §5.10): its probes, a quarantine move, and the removal of a tree that
   // can hold gigabytes, all under the reap lock. It earns ws-reclaim's budget, not the flat 90 s it would silently
   // inherit without this row. Its audit is `ws-audit` and keeps that verb's row. A fresh collection runs eight bounded
-  // probes, about 180 s in all: the evaluation's 70 s (the idle walk 30, the in-use probe 10, the checkout scan 30),
-  // step 3a's checkout scan 30, step 5's two in-use probes 2 x 10, and the removal's 60 (its checkout scan 30, then the
-  // permission pass `_ws_reclaim_normalise`, a second 30 s walk) — plus each probe's TERM-to-KILL grace (3 s by default,
-  // 24 s over eight). That leaves about 36 s for the `rm` itself, which no bound of its own caps. At the widest grace
-  // (8 s each) the probes alone can reach about 244 s, past the row, and it still fails safe. A big leaf may need
-  // several passes, and nothing is lost: the quarantine record carries the next pass.
+  // probes, at most about 180 s in all: the evaluation's 70 s (the idle walk 30, the in-use probe 10, the checkout scan
+  // 30), step 3a's checkout scan 30, step 5's two in-use probes 2 x 10, and the removal's 60 (its checkout scan 30, then
+  // the permission pass `_ws_reclaim_normalise`'s bounded walk, 30). A probe that reaches its bound ends the act, so at
+  // most ONE TERM-to-KILL grace is paid (3 s by default, 8 s at the widest): about 183 s, or 188 s. The rest of the row,
+  // about 57 s (52 s at the widest grace), is shared by work no bound caps: the permission pass's second walk, which
+  // looks for what is still unreadable, the registry row passes, and the `rm` itself. A big leaf can outrun the row, and
+  // it fails safe: it may need several passes, and nothing is lost, because the quarantine record carries the next pass.
   'ws-collect': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
