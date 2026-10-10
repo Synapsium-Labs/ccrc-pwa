@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ReconnectingSocket } from '../src/lib/ws';
+import { ReconnectingSocket, wsUrl } from '../src/lib/ws';
 
 /** Scripted stand-in for the browser WebSocket — tests drive open/message/drop. */
 class FakeSocket {
@@ -372,5 +372,98 @@ describe('ReconnectingSocket — the identity guards and the refused-attempt run
     last().onclose?.(new CloseEvent('close'));
     expect(check, 'it opened, so the drop was a drop').not.toHaveBeenCalled();
     socket.stop();
+  });
+});
+
+// THE IDENTITY GUARDS, REACHED. The three stale-socket cases above prove
+// `detach` works — they invoke the FakeSocket's driver, which finds the
+// handler already gone, so the guard inside it never runs (measured:
+// statements 165, 172 and 188 of `lib/ws.ts` uncovered with those cases
+// green). That is one of two mechanisms, and only one of them is the
+// browser's own hazard: an event can already be IN FLIGHT when `detach`
+// removes the handler, and the handler it was dispatched to still runs. So
+// these cases capture the handler first and call it after the swap — exactly
+// the frame a browser has already queued.
+describe('an event already in flight when the socket was replaced', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    FakeSocket.instances = [];
+  });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  /** The first socket's handlers, held across its own replacement. */
+  const firstAndSecond = () => {
+    const h = makeHarness();
+    h.socket.start();
+    const first = last();
+    const held = {
+      onopen: first.onopen, onmessage: first.onmessage,
+      onclose: first.onclose, onerror: first.onerror,
+    };
+    first.open();
+    first.drop();
+    vi.advanceTimersByTime(10_000);
+    const second = last();
+    expect(second, 'a second socket was made').not.toBe(first);
+    return { ...h, held, second };
+  };
+
+  it('a queued `open` for the replaced socket cannot report open', () => {
+    const { socket, onState, held } = firstAndSecond();
+    onState.mockClear();
+    held.onopen?.(new Event('open'));
+    expect(onState, 'a socket nobody listens to reported the stream up').not.toHaveBeenCalled();
+    socket.stop();
+  });
+
+  it('a queued FRAME for the replaced socket is not delivered', () => {
+    // The damaging one: the frame carries a `since` cursor from the old
+    // connection, so delivering it would move the reader's position
+    // backwards in a stream the new socket is already ahead of.
+    const { socket, onMessage, held } = firstAndSecond();
+    onMessage.mockClear();
+    held.onmessage?.({ data: JSON.stringify({ type: 'events', offset: 7 }) } as MessageEvent);
+    expect(onMessage, "the replaced socket's frame was delivered").not.toHaveBeenCalled();
+    socket.stop();
+  });
+
+  it('a queued close for the replaced socket does not take the LIVE one down', () => {
+    // `handleDown` is shared by close and error, and it nulls `this.ws`. Run
+    // for a stale socket it would drop the live connection and start the
+    // backoff ladder over — a reconnect storm out of one late event.
+    const { socket, onState, held, second } = firstAndSecond();
+    onState.mockClear();
+    held.onclose?.(new Event('close') as CloseEvent);
+    held.onerror?.(new Event('error'));
+    expect(onState, 'a stale close took the live socket down').not.toHaveBeenCalled();
+    expect(second.closed, 'the live socket was torn down by a stale event').toBe(false);
+    // And the live socket still works, which is the claim that matters.
+    second.open();
+    expect(onState).toHaveBeenCalledWith('open');
+    socket.stop();
+  });
+});
+
+describe('wsUrl follows the page’s own scheme', () => {
+  it('a page on https gets wss, and one on http gets ws', () => {
+    // A `ws://` socket from an `https://` page is blocked outright as mixed
+    // content — the console is simply dead there, with no frame and no
+    // refusal to read. The gate's own HTTPS arm (Caddy + DuckDNS) is the
+    // ordinary deployment, so this is the arm that ships.
+    const original = window.location;
+    try {
+      Reflect.deleteProperty(window, 'location');
+      Object.defineProperty(window, 'location',
+        { value: { protocol: 'https:', host: 'box.example.org' }, configurable: true, writable: true });
+      expect(wsUrl('/ws/fleet')).toBe('wss://box.example.org/ws/fleet');
+
+      Object.defineProperty(window, 'location',
+        { value: { protocol: 'http:', host: 'localhost:7788' }, configurable: true, writable: true });
+      expect(wsUrl('/ws/fleet')).toBe('ws://localhost:7788/ws/fleet');
+    } finally {
+      Reflect.deleteProperty(window, 'location');
+      Object.defineProperty(window, 'location', { value: original, configurable: true, writable: true });
+    }
   });
 });
