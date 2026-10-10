@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MessageBubble } from '../src/session/MessageBubble';
 
-afterEach(cleanup);
+// `cleanup` AND `restoreAllMocks`: measured, because the second link case
+// below spied `window.open` while the first case's spy was still installed,
+// and `vi.spyOn` on an already-mocked method hands back the SAME mock — so a
+// fresh expectation read the previous test's call and the assertion inverted.
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const assistant = (text: string) =>
   render(<MessageBubble id="s" event={{ kind: 'assistant', uuid: 'a1', ts: '2026-07-21T20:00:00Z', text }} />);
@@ -151,5 +155,87 @@ describe('a markdown table gets its own scroll container', () => {
     expect(wrap).not.toBeNull();
     expect(wrap?.querySelector('table'), 'the wrapper owns the table, not the other way round')
       .not.toBeNull();
+  });
+});
+
+describe('the link arms that are not http', () => {
+  it('passes a `mailto:` through unchanged — only a SCHEME-LESS host is rewritten', () => {
+    // `absolute`'s second arm. Prefixing `https://` onto `mailto:a@b.c` would
+    // make a mail link unopenable; the rewrite exists only for a bare host,
+    // which would otherwise resolve same-origin and be swallowed by the PWA's
+    // navigation fallback.
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    assistant('[mail me](mailto:ops@example.com)');
+    fireEvent.click(screen.getByRole('link', { name: 'mail me' }));
+    expect(open).toHaveBeenCalledWith('mailto:ops@example.com', '_blank', 'noopener,noreferrer');
+  });
+
+  it('does nothing at all for a link with no target', () => {
+    // `openExternal`'s `if (!href) return` — and the DEFAULT is not prevented
+    // either, so the browser keeps whatever behaviour an empty href has
+    // instead of the app swallowing the tap.
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    assistant('[nowhere]()');
+    const link = screen.getByText('nowhere');
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(ev);
+    expect(open).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented, 'an empty href is the browser\'s business').toBe(false);
+  });
+});
+
+describe('a blockquote that only LOOKS like an alert', () => {
+  it('is not tagged when its first child is a list', () => {
+    // `remarkAlerts`' first guard: `p.type !== 'paragraph'`. A quoted list
+    // whose first item happens to start with the marker text is still a list.
+    assistant('> - [!NOTE] inside a list item');
+    expect(document.querySelector('.callout')).toBeNull();
+    expect(document.querySelector('blockquote li')).not.toBeNull();
+  });
+
+  it('is not tagged when the marker is emphasised rather than plain text', () => {
+    // The second guard: `lead.type !== 'text'`. Emphasis makes the lead an
+    // `emphasis` node, and the marker is then prose the author styled, not
+    // syntax — which is exactly the distinction the guard keeps.
+    assistant('> *[!NOTE]* styled, not syntax');
+    expect(document.querySelector('.callout')).toBeNull();
+    expect(document.querySelector('blockquote em')).not.toBeNull();
+  });
+});
+
+describe('the receipt, and the attachments a user message carries', () => {
+  it('prints no time at all for an unparsable stamp — receipts degrade quietly', () => {
+    render(<MessageBubble id="s" event={{ kind: 'user', uuid: 'u1', ts: 'not-a-date', text: 'hi' }} />);
+    const receipt = document.querySelector('.msg-receipt');
+    expect(receipt?.textContent?.trim(), 'the tick stays, the time goes').toBe('✓');
+  });
+
+  it('renders a sent clip as a thumbnail, and its PATH leaves the prose', () => {
+    // `splitClipPaths` pulls the typed path out of the text: the reader sees
+    // the image they attached, not the filename ccd typed into the pane.
+    render(
+      <MessageBubble id="demo-quiet-mesa" event={{
+        kind: 'user', uuid: 'u2', ts: '2026-07-21T20:00:00Z',
+        text: '/home/rc/.cc-clips/demo-quiet-mesa/clip-1-a1b2.png look at this',
+      }} />,
+    );
+    const img = screen.getByRole('img', { name: 'clip-1-a1b2.png' });
+    expect(img).toHaveClass('msg-attach-img');
+    expect(screen.getByText('look at this'), 'the prose keeps only the words').toBeInTheDocument();
+    expect(screen.queryByText(/\.cc-clips/), 'the path is not prose').toBeNull();
+  });
+
+  it('degrades a clip deleted off disk to its NAME, never a broken-image box', () => {
+    // `onError` → the name. A broken-image icon would read as a bug in the
+    // app rather than as a file the operator removed.
+    render(
+      <MessageBubble id="demo-quiet-mesa" event={{
+        kind: 'user', uuid: 'u3', ts: '2026-07-21T20:00:00Z',
+        text: '/home/rc/.cc-clips/demo-quiet-mesa/clip-9-zzzz.png',
+      }} />,
+    );
+    fireEvent.error(screen.getByRole('img', { name: 'clip-9-zzzz.png' }));
+    expect(screen.getByText('clip-9-zzzz.png')).toHaveClass('msg-attach-gone');
+    expect(screen.queryByRole('img')).toBeNull();
   });
 });
