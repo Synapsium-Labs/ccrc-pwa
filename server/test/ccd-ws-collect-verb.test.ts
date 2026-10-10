@@ -224,6 +224,32 @@ describe.skipIf(!LINUX)('the stop arms before the move', () => {
   });
 });
 
+describe.skipIf(!LINUX || ROOT)('a leaf without owner write (departure audit-asks-owner-write)', () => {
+  it('a 0555 leaf: the evaluation answers unmeasured `mode` — failed probe-unmeasured at the verdict point, no rename attempted, nothing made', () => {
+    const o = makeOrphan(h);
+    fs.chmodSync(o.leaf, 0o555);
+    try {
+      const audit = auditDoc();
+      expect([audit['verdict'], (audit['collect'] as Record<string, unknown>)['unmeasured']], 'the audit')
+        .toEqual(['unmeasured', 'mode']);
+      const mvLog = 'mv() { [[ "$1" == --help ]] || echo "$*" >> "$HOME/mv-calls"; command mv "$@"; };';
+      const r = collectVerb(h, WRONG_TOKEN, { pre: `${GAP_LOG} ${mvLog}` });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const doc = docOf(r.stdout);
+      expect(doc['failed']).toBe('probe-unmeasured');
+      expect(String(doc['detail'])).toContain('is mode 555');
+      expect(gaps(h), 'refused at the verdict point').toEqual(['locked']);
+      expect(fs.existsSync(path.join(h.home, 'mv-calls')), 'a rename was attempted').toBe(false);
+      expect(inoAt(o.leaf)).toBe(o.ino);
+      expect(fs.statSync(o.leaf).mode & 0o7777, 'the collector never changes a leaf’s mode').toBe(0o555);
+      expect(records(h)).toEqual([]);
+      expect(fs.existsSync(quarantineOf(h)), 'no quarantine was made').toBe(false);
+      expect(fs.readFileSync(witnessOf(h), 'utf8')).toBe(o.witness);
+      expect(rows()).toEqual([['failed', 'probe-unmeasured']]);
+    } finally { fs.chmodSync(o.leaf, 0o700); }
+  });
+});
+
 describe.skipIf(!LINUX)('a setgid ~/.cc-tmp (departure quarantine-made-without-setgid)', () => {
   it('collects: the quarantine the verb makes there has its setgid bit cleared, 0700 — never the 2700 a plain mkdir leaves', () => {
     const o = makeOrphan(h);

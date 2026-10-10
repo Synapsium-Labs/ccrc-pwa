@@ -15,8 +15,17 @@ import {
 } from './collectFixture.js';
 
 let h: PrHarness;
-beforeEach(() => { h = makePrHarness('ccrc-collect-rungs-'); });
-afterEach(() => { h.cleanup(); });
+/** Modes a case set, restored before cleanup: a leaf without owner write cannot have its entries removed. */
+let restore: [string, number][] = [];
+beforeEach(() => { h = makePrHarness('ccrc-collect-rungs-'); restore = []; });
+afterEach(() => {
+  for (const [p, m] of restore.reverse()) { try { fs.chmodSync(p, m); } catch { /* gone */ } }
+  h.cleanup();
+});
+const chmodFor = (p: string, mode: number): void => {
+  restore.push([p, fs.statSync(p).mode & 0o7777]);
+  fs.chmodSync(p, mode);
+};
 
 const LINUX = process.platform === 'linux';
 const ROOT = process.getuid?.() === 0;
@@ -237,6 +246,53 @@ describe.skipIf(!LINUX)('the quarantine: the audit asks what the verb refuses on
       + ' _orig_absent "$@"; };';
     expectUnmeasured(collectAudit(h, { pre: `${AGED} ${seam}` }), 'whether the quarantine stands was never asked');
     expect(fs.existsSync(quarantineOf(h))).toBe(false);
+  }, 60_000);
+});
+
+// OWNER WRITE (spec §5.10, departure audit-asks-owner-write): a directory whose own mode lacks owner write cannot be
+// renamed to another parent (the rename rewrites its `..`), so a 0555 leaf the audit licensed would fail the verb's
+// NOREPLACE rename on every pass. The audit answers it unmeasured, naming the mode. The collector never changes a
+// leaf's mode before the move — the token binds it — so the leaf stays listed, as it is.
+describe.skipIf(!LINUX || ROOT)('mode: a leaf without owner write is never licensed to move', () => {
+  const expectMode = (a: Answer, mode: string): void => {
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('mode');
+    expect(String(a.doc!['detail'])).toContain(`is mode ${mode}`);
+    expect(String(a.doc!['detail'])).toContain('without owner write');
+    expect(a.doc!['token']).toBeUndefined();
+    expect(readJournal(h.home), 'a retried word is journaled nowhere').toEqual([]);
+  };
+
+  it('a 0555 leaf: unmeasured `mode`, exit 1, no token — its mode and its contents as they were; owner write back, collectable', () => {
+    const { leaf } = makeOrphan(h);
+    chmodFor(leaf, 0o555);
+    const before = (fs.readdirSync(leaf, { recursive: true }) as string[]).map(String).sort();
+    expectMode(collectAudit(h, { pre: AGED }), '555');
+    expect(fs.statSync(leaf).mode & 0o7777, 'the audit never changes a leaf’s mode').toBe(0o555);
+    expect((fs.readdirSync(leaf, { recursive: true }) as string[]).map(String).sort()).toEqual(before);
+    fs.chmodSync(leaf, 0o700);
+    expect(verdictOf(collectAudit(h, { pre: AGED })), 'the CONTROL: owner write back').toBe('collectable');
+  }, 60_000);
+
+  it('a 2555 leaf: the OWNER digit is read, third from the right of the octal print, never the first', () => {
+    const { leaf } = makeOrphan(h);
+    chmodFor(leaf, 0o2555);
+    expect(fs.statSync(leaf).mode & 0o7777, 'the CONTROL: the setgid bit took').toBe(0o2555);
+    expectMode(collectAudit(h, { pre: AGED }), '2555');
+    fs.chmodSync(leaf, 0o2755);
+    expect(verdictOf(collectAudit(h, { pre: AGED })), 'the CONTROL: 2755 has owner write').toBe('collectable');
+  }, 60_000);
+
+  it('a leaf whose mode cannot be read: unmeasured `mode`, never licensed', () => {
+    const { leaf } = makeOrphan(h);
+    const seam = 'eval "_orig_mode() $(declare -f _plat_mode | tail -n +2)";'
+      + ` _plat_mode() { if [[ "$1" == '${leaf}' ]]; then return 1; fi; _orig_mode "$@"; };`;
+    const a = collectAudit(h, { pre: `${AGED} ${seam}` });
+    expect(a.code, a.stderr).toBe(1);
+    expect(collectOf(a)['unmeasured']).toBe('mode');
+    expect(String(a.doc!['detail'])).toContain(`the mode of ${leaf} could not be read`);
+    expect(a.doc!['token']).toBeUndefined();
   }, 60_000);
 });
 

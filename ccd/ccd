@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=00e6f5f112c31e333f4233fb8f96dd29d89e8ac8952baa6fa517027c20626481
+# ccrc:generated 1 sha256=8a60e0b2d752df27b41f10f1d609c70e093409a8cdbd0ce78ed2e144c9d20b52
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32910,7 +32910,7 @@ _ws_collect_slots_of() {   # id -> 0 with _WS_QSLOTS = the path of every quarant
 
 _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP_TOKEN), a word, or `unmeasured`
   #                        (_WS_COLLECT_PROBE). The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
-  local id="$1" leaf="$HOME/.cc-tmp/$1" rc floor why=walk-failed
+  local id="$1" leaf="$HOME/.cc-tmp/$1" rc floor why=walk-failed mode owner
   _ws_collect_registered "$id"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
@@ -32960,6 +32960,18 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_collect_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME its witness names — it is offered to the operator, never taken"
     return 1
   fi
+  # OWNER WRITE, read off the leaf whose identity was just proven (spec
+  # §5.10): a directory without it cannot be renamed to another parent, so the
+  # verb's rename would fail on every pass. `_plat_mode` prints the octal bits
+  # with no leading zeros (`755`, `555`, `2755`), so the owner's digit is the
+  # third from the right, and a shorter print has none. The collector never
+  # changes a leaf's mode before the move: a chmod stamps the leaf's ctime,
+  # which the token binds, so the verb acts only on the mode measured here.
+  mode=$(_plat_mode "$leaf" 2>/dev/null) && [[ "$mode" =~ ^[0-7]{1,4}$ ]] \
+    || { _ws_collect_unmeasured mode "the mode of $leaf could not be read, so whether it can be renamed into the quarantine is unknown — the next pass asks again"; return 1; }
+  owner="00$mode"; owner="${owner: -3:1}"
+  (( (owner & 2) != 0 )) \
+    || { _ws_collect_unmeasured mode "$leaf is mode $mode: without owner write it cannot be renamed into the quarantine, so it is not licensed to move — the collector never changes a leaf's mode, and it stays listed as it is"; return 1; }
   _ws_collect_idle "$leaf"; rc=$?
   if (( rc != 0 )) || [[ ! "${_WS_IDLE_NEWEST_NS-}" =~ ^[0-9]{1,19}$ || ! "${_WS_IDLE_COUNT-}" =~ ^[0-9]{1,9}$ ]]; then
     if (( rc != 0 )); then case "${_WS_IDLE_WHY-}" in timeout|unreadable|cap) why="$_WS_IDLE_WHY" ;; esac; fi
