@@ -445,7 +445,7 @@ describe('per-target state — the two bugs AbandonSheet measured, on this sheet
 // reclaim door's pair and one case upstream kills revive's RESOLVE arm; the
 // other three arms — revive's REJECT, and BOTH of re-kickoff's — had no
 // killer at all (measured: statements 217, 237 and 250 of `ResumeSheet.tsx`
-// uncovered with this file 33/33 green). They are four separate `if`s
+// uncovered with this file 35/35 green). They are four separate `if`s
 // precisely because a promise can be superseded on either arm, and the arm
 // that writes an ERROR is the damaging one: a sentence about run 3's ccd
 // failure appearing under run 9's still-alive coordinator reads as run 9's.

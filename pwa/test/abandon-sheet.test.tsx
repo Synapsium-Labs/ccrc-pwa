@@ -535,3 +535,113 @@ describe('per-target state (review fix round 1, Important 1)', () => {
     expect(screen.getByText(/^Abandon run 7 —/)).toBeInTheDocument();
   });
 });
+
+// THE REST OF `abandonErrorText`'s DISPATCH, and the one guard its twin
+// sheets already have a killer for. Every arm above sends a WELL-FORMED body;
+// the arms below send the shapes a box under load actually produces — a body
+// that is not an object, a 502 that carried no stderr, a 409 word this build
+// has never heard of — and each had no case at all (measured: statements 74,
+// 102, 126 and branches 78#1, 85#1, 86#1, 87#0, 96#1, 105#1, 109#1, 112#1,
+// 145#2, 258#0 uncovered with this file 38/38 green).
+describe('abandonErrorText — the shapes a well-formed fixture never sends', () => {
+  const refusedWith = (err: unknown): void => {
+    render(<AbandonSheet run={run()} onClose={() => {}}
+                         abandonRun={vi.fn().mockRejectedValue(err)} />);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+  };
+
+  it('a rejection that is not an ApiError at all is still a sentence', async () => {
+    // `fetch` rejecting with a `TypeError` when the box goes away mid-request
+    // is the ordinary producer. This sheet has no toast to defer to, so a
+    // silent sheet would be the whole failure.
+    refusedWith(new TypeError('Failed to fetch'));
+    expect(await screen.findByText(/a reason this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  it('a 409 whose body is not an object reads its code as absent, not as a crash', async () => {
+    // A proxy in front of the box answering `text/html` is how a 409 arrives
+    // as a string. `(body as {error?: unknown}).error` on a string is
+    // `undefined`, which is why the `typeof` guard is the thing that must be
+    // measured — without it the expression still evaluates and the case still
+    // lands on `unknown`, so nothing but a test says the guard carries weight.
+    refusedWith(new ApiError(409, 'Conflict'));
+    expect(await screen.findByText(/a reason this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  it('a 409 bad-transition with NO `from` says the bare sentence, never "already undefined"', async () => {
+    refusedWith(new ApiError(409, { ok: false, error: 'bad-transition' }));
+    const said = await screen.findByText(/this run already closed/i);
+    // The base sentence says "already" itself, so the claim is about the
+    // trailing CLAUSE: `— it was already <word>` is what `from` buys.
+    expect(said.textContent, 'no `from` means no trailing clause').not.toMatch(/it was already/i);
+  });
+
+  it('a 409 bad-transition whose `from` is not a RunState drops the clause rather than printing the token', async () => {
+    // `isRunState` is the gate. A server that someday renames a state sends a
+    // word this build cannot translate, and `RUN_WORD[from]` would be
+    // `undefined` — "it was already undefined" is the sentence the guard
+    // exists to prevent.
+    refusedWith(new ApiError(409, { ok: false, error: 'bad-transition', from: 'hibernating' }));
+    const said = await screen.findByText(/this run already closed/i);
+    expect(said.textContent).not.toMatch(/hibernating|undefined/);
+  });
+
+  it('a 409 carrying a refusal word this build has never heard of lands on the designated unknown', async () => {
+    refusedWith(new ApiError(409, { ok: false, refused: 'moon-phase-wrong' }));
+    expect(await screen.findByText(/a reason this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  it('a 502 with no stderr says the release failed, rather than printing nothing', async () => {
+    refusedWith(new ApiError(502, { ok: false, error: 'ccd-failed' }));
+    expect(await screen.findByText('the release failed')).toBeInTheDocument();
+  });
+
+  it('a 502 whose stderr is only whitespace is the same as none', async () => {
+    // The trim is the point: a verb that wrote a newline and died is a real
+    // shape, and rendering it leaves a blank line where the reason goes.
+    refusedWith(new ApiError(502, { ok: false, error: 'ccd-failed', stderr: ' \n\t ' }));
+    expect(await screen.findByText('the release failed')).toBeInTheDocument();
+  });
+
+  it('a status this build does not dispatch on falls to the same catch-all', async () => {
+    // 413 `hold-oversize` is reachable on this route and deliberately has no
+    // copy of its own — it names the SURVIVING run's hold, which this sheet
+    // is not abandoning and cannot name (`abandonErrorText`'s closing note).
+    refusedWith(new ApiError(413, { ok: false, error: 'hold-oversize', limit: 2048 }));
+    expect(await screen.findByText(/a reason this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  it("a superseded refusal cannot write run 3's reason into run 7's open sheet", async () => {
+    // The REJECT arm's generation guard. The case two describes up kills the
+    // resolve arm only; this is the arm that writes the damaging thing — a
+    // sentence about run 3's transport failure under run 7's confirm line.
+    let fail!: () => void;
+    const abandonRun = vi.fn((id: number) => {
+      if (id !== 3) return Promise.resolve({ released: true });
+      return new Promise<{ released: boolean }>((_res, rej) => {
+        fail = () => rej(new ApiError(502, { ok: false, stderr: 'ccd: ws-release: run 3 is wedged' }));
+      });
+    });
+    render(<Harness abandonRun={abandonRun} />);
+    fireEvent.click(screen.getByRole('button', { name: /^abandon$/i }));
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^abandon$/i })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /open run 7/i }));
+    expect(await screen.findByText(/^Abandon run 7 —/)).toBeInTheDocument();
+
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.queryByText(/run 3 is wedged/)).toBeNull();
+    expect(screen.getByRole('button', { name: /^abandon$/i })).not.toBeDisabled();
+  });
+});
+
+// `workspaceOf`'s last fallback. The confirm line names the workspace, and a
+// run that has neither a workspace nor a branch — a `planned` row the
+// coordinator opened before any dispatch minted one — would otherwise name
+// nothing at all. The id is the only identifier left, and it is the one the
+// operator sees on the board.
+it('a run with neither workspace nor branch is named by its id', () => {
+  render(<AbandonSheet run={run({ workspace: null, branch: null, sessionId: 'ccrc-pwa-clear-cove' })}
+                       onClose={() => {}} abandonRun={vi.fn()} />);
+  expect(screen.getByText(/^Abandon run 3 — 3\?/)).toBeInTheDocument();
+});
