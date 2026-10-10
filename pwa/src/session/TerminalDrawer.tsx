@@ -16,12 +16,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   defaultMakeTerm, historyFailureSentence,
-  type DrawerTerm, type HistoryPane, type MakeHistoryTerm, type MakeTerm,
+  type DrawerTerm, type MakeHistoryTerm, type MakeTerm,
 } from './terminalFactory';
 import { attachHistoryPane } from './historyPane';
 import { attachReachForHistory } from './reachForHistory';
+import { histFromPane, histFromReadError, type Hist } from './historyRead';
 import { Button, Keycap, Sheet } from '@ccrc/ui';
-import { api, ApiError } from '../lib/api';
+import { api } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
@@ -50,11 +51,6 @@ type Conn = 'connecting' | 'open' | 'down';
  *  one history read, in its three states. They are four VALUES rather than a
  *  pair of booleans because the view renders differently for each, and
  *  "reading" must not be mistakable for "there is nothing here". */
-type Hist =
-  | { at: 'live' }
-  | { at: 'reading' }
-  | { at: 'history'; text: string; lines: number; pane?: HistoryPane }
-  | { at: 'empty'; why: string; detail?: string };
 
 export interface TerminalDrawerProps {
   id: string;
@@ -126,51 +122,11 @@ export function TerminalDrawer({
         // all — and the identity check is what keeps a stale answer from
         // standing in for a newer one.
         if (req !== reqRef.current || histRef.current.at !== 'reading') return;
-        // NOTHING ABOVE THE SCREEN IS NOT A HISTORY. `capture-pane` answers
-        // with the visible screen even when no line has ever scrolled off, so
-        // a successful read alone would put up a second copy of what the
-        // reader is already looking at — with an empty scrollbar on it and a
-        // wheel that moves nothing. Measured on this fleet: four of ten live
-        // panes hold no scrollback at all.
-        //
-        // The COUNT decides, never the screen the pane is on: a pane on the
-        // alternate screen keeps the scrollback it already had (measured on a
-        // private socket — 453 stored lines still captured at
-        // `alternate_on=1`), so refusing on that flag would hide a real
-        // history behind a full-screen app. The flag only says a zero will
-        // stay zero while the app is up.
-        //
-        // `=== 0` and not `!r.scrollback`: an older server omits the field and
-        // an unmeasurable pane sends nothing, and neither is a zero. Both keep
-        // the behaviour this drawer shipped with.
-        if (r.scrollback === 0) {
-          goHist({
-            at: 'empty',
-            why: r.alternate === true
-              ? 'a full-screen app is up — nothing scrolls off while it is'
-              : 'nothing has scrolled off this pane yet',
-          });
-          return;
-        }
-        // ABSENT IS NOT ZERO, one last time: only a probe that answered `ok`
-        // gives the reader two numbers to size itself by, and an older server
-        // or an unmeasurable pane leaves it on the `lines * 3` fallback that
-        // shipped before either field existed.
-        const pane = typeof r.scrollback === 'number' && typeof r.width === 'number'
-          ? { history: r.scrollback, width: r.width }
-          : undefined;
-        goHist({ at: 'history', text: r.text, lines: r.lines, pane });
+        goHist(histFromPane(r));
       },
       (e: unknown) => {
         if (req !== reqRef.current) return;
-        // WHY, not just "failed": a dead pane, a tmux that could not answer and
-        // an unreachable box are three different facts to the reader, and the
-        // server already told them apart. `ApiError.body` carries the route's
-        // own word for it AND, for a 502, the tmux message underneath.
-        const body = e instanceof ApiError ? (e.body as { error?: unknown; detail?: unknown }) : null;
-        const why = typeof body?.error === 'string' ? body.error : 'unreachable';
-        const detail = typeof body?.detail === 'string' ? body.detail : undefined;
-        if (histRef.current.at === 'reading') goHist({ at: 'empty', why, detail });
+        if (histRef.current.at === 'reading') goHist(histFromReadError(e));
       },
     );
   };
