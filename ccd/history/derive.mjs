@@ -271,11 +271,14 @@ function receiptWindow(copy, b, id) {
  *  classified. With no graph the miner reads Edit-shaped and Read paths only (§6.4). */
 function minedRefs(s, kit, sources, pairIdx, budget) {
   const lines = [];
+  const redactInput = (value) => typeof value === 'string' ? redactField(value, pairIdx) : value;
   for (const r of sources) {
     if (r.type !== 'assistant' || r.tool_name === null) continue;
     const body = bodyOf(s, r.blob_id, budget);
     const uses = (Array.isArray(body) ? body : []).filter((x) => x !== null && typeof x === 'object' && x.type === 'tool_use')
-      .map((x) => ({ type: 'tool_use', name: x.name, input: { file_path: x.input?.file_path, notebook_path: x.input?.notebook_path, command: x.input?.command } }));
+      .map((x) => ({ type: 'tool_use', name: x.name, input: {
+        file_path: redactInput(x.input?.file_path), notebook_path: redactInput(x.input?.notebook_path), command: redactInput(x.input?.command),
+      } }));
     if (uses.length > 0) lines.push(JSON.stringify({ type: 'assistant', message: { content: uses } }));
   }
   const out = [];
@@ -388,9 +391,9 @@ function parseFailedFields(copy, pick) {
 function deriveOne(db, ictx, kit, s, pass, b, budget) {
   const ep = epochFor(s, pass, b.cc_uuid);
   if (ep === null) return 'waiting';
-  // This tick renamed, but did not drain, an event file that can name this session. A steer receipt there could affect
-  // this leaf, so leave it mutable until the next tick; unrelated session leaves still finalize normally.
-  if (ictx.pendingReceiptSessionUuids?.has(b.cc_uuid)) return 'waiting';
+  // A spool census that did not complete cannot prove any receipt absent, so it holds every leaf. Once measured,
+  // only candidate sessions wait for the next tick to drain their receipt; unrelated leaves still finalize normally.
+  if (ictx.pendingReceiptState.kind === 'unmeasured' || ictx.pendingReceiptState.sessionUuids.has(b.cc_uuid)) return 'waiting';
   const holding = holdingCopy(s, pass, b);
   if (holding === null) return 'waiting';
   const copy = copyPlan(s, pass, holding.file_id, budget);

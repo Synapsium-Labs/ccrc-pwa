@@ -13,7 +13,7 @@ import {
 } from './historyHelpers.js';
 import { compactionSequence, steeredBlock, userRow, type Row } from './historyFixtures.js';
 import {
-  leafId, historyPaths, NODE_PARSER_VERSION, GIST_MAX, NATIVE_GIST_MAX, TOPIC_CHARS, beltWidth,
+  leafId, historyPaths, NODE_PARSER_VERSION, GIST_MAX, NATIVE_GIST_MAX, TOPIC_CHARS, beltWidth, makePairIndex, secretPairs,
 } from '../../ccd/history/lib.mjs';
 import { createStore, openWriter, closeWriter, withTx, getStep, setStep } from '../../ccd/history/store.mjs';
 
@@ -436,6 +436,115 @@ describe('a queued receipt holds only its session leaf until the next drain (two
     expect(leavesOf(box, CARRIER_U).map((leaf) => ({ kind: leaf.kind, status: leaf.status })))
       .toEqual([{ kind: 'steered_leaf', status: 'ok' }]);
   }, 120_000);
+});
+
+describe('an unmeasured spool holds every leaf until receipt candidates are measured (two-phase spool; review fix round 1)', () => {
+  const CARRIER_ID = 'claude-unmeasured-carrier';
+  const CARRIER_U = '0189abcd-1234-4678-9abc-0000000000e3';
+  const NATIVE_ID = 'claude-unmeasured-native';
+  const NATIVE_U = '0189abcd-1234-4678-9abc-0000000000e4';
+  const steered = (): string => [
+    '<summary>', '1. Primary Request and Intent:', '   An unmeasured-spool receipt race fixture.', '</summary>',
+    steeredBlock({ gist: 'The delayed receipt must steer this leaf after spool measurement resumes.', expand: 'receipt, unmeasured', refs: 'server/test/history-derive.test.ts' }),
+  ].join('\n');
+
+  it('holds all leaves for an unusable-spool tick, then drains the receipt and derives its steered leaf while measured-empty permits unrelated leaves', () => {
+    const box = makeHistoryBox('ccrc-hist-unmeasured-spool-');
+    const carrier = compactionSequence({ n: 1, trigger: 'manual', summaryText: steered, seed: 0xa6, sessionId: CARRIER_U, startMs: T0 });
+    const native = compactionSequence({ n: 1, trigger: 'manual', seed: 0xa7, sessionId: NATIVE_U, startMs: T0 });
+    plant(box, CARRIER_ID, CARRIER_U, carrier.rows);
+    plant(box, NATIVE_ID, NATIVE_U, native.rows);
+
+    const first = runSweep(box);
+    expect(first.code, first.stderr).toBe(0);
+    const at = Date.parse(String(carrier.rows.find((row) => row['uuid'] === carrier.boundaryUuids[0])!['timestamp']));
+    spoolLine(box, CARRIER_ID, { v: 1, ev: 'steer', id: CARRIER_ID, sid: CARRIER_U, leaf: '', ts: at - 500 });
+
+    const spool = path.join(box.root, 'spool');
+    const heldSpool = path.join(box.root, 'spool-held');
+    fs.renameSync(spool, heldSpool);
+    fs.writeFileSync(spool, 'refused spool');
+    try {
+      const unavailable = runSweep(box);
+      expect(unavailable.code, unavailable.stderr).toBe(0);
+    } finally {
+      fs.rmSync(spool);
+      fs.renameSync(heldSpool, spool);
+    }
+    expect(leavesOf(box, CARRIER_U), 'a refused spool leaves receipt candidates unmeasured').toEqual([]);
+    expect(leavesOf(box, NATIVE_U), 'unmeasured is a global leaf hold, not measured-empty').toEqual([]);
+
+    const renamed = runSweep(box);
+    expect(renamed.code, renamed.stderr).toBe(0);
+    expect(leavesOf(box, CARRIER_U), 'the receipt is newly renamed and still pending').toEqual([]);
+    expect(leavesOf(box, NATIVE_U).map((leaf) => ({ kind: leaf.kind, status: leaf.status })), 'a measured candidate set excludes unrelated sessions')
+      .toEqual([{ kind: 'native_leaf', status: 'not-requested' }]);
+
+    const drained = runSweep(box);
+    expect(drained.code, drained.stderr).toBe(0);
+    expect(leavesOf(box, CARRIER_U).map((leaf) => ({ kind: leaf.kind, status: leaf.status })))
+      .toEqual([{ kind: 'steered_leaf', status: 'ok' }]);
+  }, 180_000);
+});
+
+describe('field-first miner redaction (review fix round 1)', () => {
+  const ID = 'claude-miner-field-redaction';
+  const U = '0189abcd-1234-4678-9abc-0000000000e5';
+  const SECRET = 'fieldfirstminersecret-0123456789';
+
+  it('redacts raw tool input fields before passing their JSON to mineTokens', async () => {
+    const box = makeHistoryBox('ccrc-hist-miner-field-redaction-');
+    const seq = compactionSequence({ n: 1, trigger: 'manual', workRows: 4, seed: 0xa8, sessionId: U, startMs: T0 });
+    const rows = seq.rows.map((row) => JSON.parse(JSON.stringify(row)) as Row);
+    const source = rows.find((row) => {
+      const content = (row['message'] as { content?: Array<{ type?: string; name?: string }> } | undefined)?.content ?? [];
+      return content.some((item) => item.type === 'tool_use' && item.name === 'Read');
+    });
+    expect(source, 'CONTROL: the fixture supplies a Read tool-use row').toBeDefined();
+    const content = (source!['message'] as { content?: Array<{ type?: string; input?: Record<string, unknown> }> }).content ?? [];
+    const part = content.find((item) => item.type === 'tool_use');
+    expect(part?.input, 'CONTROL: the Read row carries tool input').toBeDefined();
+    part!.input!['file_path'] = `/home/u/${SECRET}/source.ts`;
+    part!.input!['notebook_path'] = `/home/u/${SECRET}/source.ipynb`;
+    part!.input!['command'] = `cat /home/u/${SECRET}/source.ts`;
+    plant(box, ID, U, rows);
+    settle(box);
+
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>;
+      newBudget(): unknown;
+    };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      nodeToolkit(): { HEADING_RE: RegExp; fencedRanges(t: string): { ranges: Array<[number, number]>; closed: number }; mineTokens(w: string, re: RegExp | null): Array<{ token: string; tag: string }> };
+      deriveLeaves(db: ReturnType<typeof openWriter>, ictx: Record<string, unknown>, budget: unknown): unknown;
+    };
+    const db = openWriter(historyPaths(box.home).dbFile);
+    let seen = '';
+    try {
+      withTx(db, 'NORMAL', () => {
+        db.prepare('DELETE FROM node_refs').run();
+        db.prepare('DELETE FROM nodes_fts').run();
+        db.prepare('DELETE FROM nodes').run();
+        db.prepare("DELETE FROM derivation_state WHERE step = 'leaves'").run();
+      });
+      const real = D.nodeToolkit();
+      const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), null);
+      ictx['pairIdx'] = makePairIndex(secretPairs([SECRET]).pairs);
+      ictx['fts'] = true;
+      ictx['nodeKit'] = {
+        ...real,
+        mineTokens: (input: string, re: RegExp | null) => {
+          seen = input;
+          return real.mineTokens(input, re);
+        },
+      };
+      D.deriveLeaves(db, ictx, S.newBudget());
+    } finally {
+      closeWriter(db);
+    }
+    expect(seen).toContain('[redacted]');
+    expect(seen).not.toContain(SECRET);
+  }, 180_000);
 });
 
 describe('a carried copy of an earlier gist is invalid even past the cap (spec 7.4 items 2, 5, 6, 10; IN-6)', () => {

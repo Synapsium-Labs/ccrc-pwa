@@ -482,13 +482,14 @@ export function obsForLine(obs, rec) {
 /** The draining files, in journaling order: tick ms, then pid, then name. That is the order their `file` records
  *  were written in, so a held clear never chains before an earlier held startup of the same id (rev 3.2 review, DI9).
  *  readdir order is a hash order, and lexical order puts tick 1000 before tick 900. Neither is used. */
-export function listDraining(home) {
+export function listDraining(home, complete = false) {
   const P = historyPaths(home);
   // FU8 (D-4347 (history-planted-entries-never-wedge)): a link at `.draining` is never listed through, and a non-directory
-  // there lists nothing (its readdir threw ENOTDIR out of a pass that only journals, M16).
-  if (dirKind(P.draining) !== 'dir') return [];
+  // there lists nothing (its readdir threw ENOTDIR out of a pass that only journals, M16). A receipt census needs to
+  // distinguish that unavailable listing from a measured empty directory.
+  if (dirKind(P.draining) !== 'dir') return complete ? null : [];
   let names;
-  try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return []; throw e; }
+  try { names = readdirSync(P.draining); } catch (e) { if (e && e.code === 'ENOENT') return complete ? null : []; throw e; }
   return names
     .map((n) => ({ name: n, parts: drainingNameParts(n) }))
     .filter((x) => x.parts !== null)
@@ -1181,15 +1182,19 @@ export function drainSpool(db, c) {
   // D-4338 (history-sidecar-write-failure-holds): a failed observation of this tick's renames is the same hold,
   // counted once for the tick; the renamed files wait without a sidecar and are observed at their next journaling.
   const renamed = renameAndObserve(c.home, tickMs, c.now());
-  // Every remaining file is intentionally unread (newly renamed or held), so it may carry a steer receipt. Carry
-  // its bounded session UUID candidates into derivation rather than parsing the file before the next drain.
-  c.pendingReceiptSessionUuids = new Set();
-  const receiptEpochStmts = tickStmts(db);
-  for (const name of listDraining(c.home)) {
-    const id = idOfDrainingName(name);
-    for (const { u } of receiptEpochStmts.epochsOfId.all(id)) c.pendingReceiptSessionUuids.add(u);
-    const current = readRegUuid(c.home, id);
-    if (current !== null) c.pendingReceiptSessionUuids.add(current);
+  // Every remaining file is intentionally unread (newly renamed or held), so it may carry a steer receipt. Only a
+  // complete census may narrow that uncertainty to bounded session UUID candidates for derivation.
+  const sessionUuids = new Set();
+  const names = listDraining(c.home, true);
+  if (names !== null) {
+    const receiptEpochStmts = tickStmts(db);
+    for (const name of names) {
+      const id = idOfDrainingName(name);
+      for (const { u } of receiptEpochStmts.epochsOfId.all(id)) sessionUuids.add(u);
+      const current = readRegUuid(c.home, id);
+      if (current !== null) sessionUuids.add(current);
+    }
+    c.pendingReceiptState = { kind: 'measured', sessionUuids };
   }
   if (renamed.failed && !failedCounted) countOutside(db, 'journal_write_failed');
   // D-4418 (history-spool-append-regular-file-only), FR2c (review 344 F3): each node the hook refuses at spool/<id>.jsonl,
@@ -2000,6 +2005,8 @@ export async function tick(db, ctx) {
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   // F16: one transcript index and one first-row memory per tick, shared by the drain's location rule and the candidates' (confirmClear) below
   ctx.firstRows = newFirstRowCache();
+  // A failed or refused drain never proves its remaining receipt set empty.
+  ctx.pendingReceiptState = { kind: 'unmeasured' };
   ctx.hints = drainSpool(db, ctx);
   // Then the candidates: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
   // location. Each is decided in its own FULL transaction and flushed right after (§9.2 step 1, §6.1).
@@ -2037,9 +2044,9 @@ export async function tick(db, ctx) {
   if (ctx.ingest && !(ing !== null && ing.paused)) await deriveFts(db, ictx, ctx.budget);
   // Derive, nodes (W1-B2 Task 8): leaves from the boundaries stored so far, under the FTS backfill's gate, because a
   // node grows db/ (§9.3), and after it, so a new node's nodes_fts row is written in a tick whose tables exist.
-  // A receipt file newly renamed in this tick is deliberately not read until the next one; its bounded session UUID
-  // candidates identify affected leaves so another session's native leaves remain final. deriveNodes is synchronous. D-4224
-  ictx.pendingReceiptSessionUuids = ctx.pendingReceiptSessionUuids;
+  // A receipt file newly renamed in this tick is deliberately not read until the next one. A complete spool census
+  // narrows its bounded candidate session UUIDs; an unmeasured census holds every leaf. deriveNodes is synchronous. D-4224
+  ictx.pendingReceiptState = ctx.pendingReceiptState;
   if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);
   // §6.2's merge steps run under any pause (§9.2: only ingest pauses): they purge a late pair's deleted bytes and
   // free space rather than take it.
@@ -2942,7 +2949,7 @@ export function floorProbeFor(dir, statfs) {
  *  (ftsPrepare's tables). admitFile, budgetLeft and isBusy are this module's own, handed to derive.mjs, which imports nothing of the sweep (W1-B2 Task 8). */
 export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS_OK) {
   const off = historyPaths(home).off;
-  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, admitFile, budgetLeft, isBusy };
+  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, pendingReceiptState: { kind: 'measured', sessionUuids: new Set() }, admitFile, budgetLeft, isBusy };
 }
 
 // ---------------------------------------------------------------------------------------------
