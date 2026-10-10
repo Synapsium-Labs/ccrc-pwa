@@ -434,6 +434,23 @@ const blocks = SEEDS.map((seed) => {
   return `[data-theme='${seed.name}'] {\n  /* ${seed.label} */\n${body}\n}`;
 }).join('\n\n');
 
+// THE `dark:` VARIANT, GENERATED FROM THE SAME SEEDS.
+//
+// ccrc's dark is the DEFAULT — `:root` is Phosphor & Ink — so Tailwind's own
+// `dark` variant (which expects an opt-in `.dark` class or a `prefers-color-scheme`
+// query) matches nothing here. A pasted shadcn component writes `dark:bg-muted`
+// and would simply never see it.
+//
+// So `dark` means "the root is not one of the LIGHT palettes", and the list of
+// those is DATA, not a literal: it is the hand-tuned `light` plus every seed
+// whose own `dark` flag is false. Hand-writing it would be a fourth enumeration
+// of the theme catalogue (`themes.ts` and these seeds are the other two), which
+// is the drift `--check` exists to refuse — so it is emitted here and checked
+// in CI with the palettes it is derived from.
+const LIGHT_IDS = ['light', ...SEEDS.filter((s) => !s.dark).map((s) => s.name)];
+const DARK_VARIANT = `@custom-variant dark (&:where(:root${LIGHT_IDS
+  .map((id) => `:not([data-theme='${id}'])`).join('')} *));`;
+
 const banner = `${START}
 /* ${SEEDS.length} palettes, each DERIVED from a seed in ui/design/make-themes.mjs
    and fitted against THAT FILE'S OWN floors before it was written here. The
@@ -447,6 +464,11 @@ const banner = `${START}
    so every token a block omits falls through to :root — which is why the
    generator emits a COMPLETE palette rather than a diff. */
 ${blocks}
+
+/* The dark: variant, derived from the same seeds — see the note above
+   LIGHT_IDS in ui/design/make-themes.mjs for why it is generated and not
+   written by hand. :root is DARK here, so this is a list of the exceptions. */
+${DARK_VARIANT}
 ${END}`;
 
 const src = readFileSync(TOKENS, 'utf8');

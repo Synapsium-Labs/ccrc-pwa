@@ -1075,6 +1075,11 @@
   --syn-comment:             #8B948C;
   color-scheme:              light;
 }
+
+/* The dark: variant, derived from the same seeds — see the note above
+   LIGHT_IDS in ui/design/make-themes.mjs for why it is generated and not
+   written by hand. :root is DARK here, so this is a list of the exceptions. */
+@custom-variant dark (&:where(:root:not([data-theme='light']):not([data-theme='github-light']):not([data-theme='solarized-light']):not([data-theme='catppuccin-latte']) *));
 /* === END GENERATED THEMES === */
 
 /* ==========================================================================

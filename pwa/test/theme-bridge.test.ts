@@ -33,6 +33,7 @@
 // that ruling, enforced.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { THEMES } from '@ccrc/ui';
 import path from 'node:path';
 
 const UI_STYLES = path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles');
@@ -247,5 +248,71 @@ describe('the @utility escapes resolve too', () => {
     const unresolved = bodies.flatMap(([, name, decl]) =>
       varsIn(decl ?? '').filter((t) => !declared.has(t)).map((t) => `@utility ${name}: var(${t})`));
     expect(unresolved).toEqual([]);
+  });
+});
+
+// ── THE `dark:` VARIANT ─────────────────────────────────────────────────────
+//
+// WHAT IT IS, and why it is not the alias layer the tests above refuse. A
+// Tailwind VARIANT is a selector, not a token: it gives no value a second
+// name, so the principle wave 1 ruled on — "an alias gives one value two
+// names and the next reader cannot tell which is authoritative" — has nothing
+// to say about it. What it does is make `dark:…` mean something here at all:
+// ccrc's dark is the DEFAULT (`:root` is Phosphor & Ink), so Tailwind's own
+// `dark` variant, which expects an opt-in `.dark` class or a
+// `prefers-color-scheme` query, matches nothing on this console. A pasted
+// shadcn component writes `dark:bg-muted` and would simply never see it.
+//
+// WHY IT IS GENERATED. `dark` here means "the root is not one of the LIGHT
+// palettes", and that list is DATA: the hand-tuned `light` plus every seed
+// whose own `dark` flag is false. Hand-writing it would be a FOURTH
+// enumeration of the theme catalogue — `themes.ts`, the seeds and the
+// generated `[data-theme]` blocks are the other three — so
+// `design/make-themes.mjs` emits it and `npm run themes:check` refuses drift.
+//
+// WHAT THIS TEST ADDS that `themes:check` cannot: the generator and
+// `themes.ts` are two files, and `themes:check` only ever compares the
+// generator against its own output. A palette added to `themes.ts` and not to
+// the seeds (or marked `light` in one and `dark` in the other) produces a
+// variant that is wrong about a theme the picker offers, and neither the
+// generator nor the gate would notice.
+describe('the dark: variant means "not a light palette", and agrees with the picker', () => {
+  /** Read INSIDE each test, not at module scope: a missing variant then reds
+   *  one case with its own sentence instead of throwing during collection,
+   *  where vitest reports "no tests" and the message is lost (measured). */
+  const darkLine = (): string => {
+    const m = /@custom-variant\s+dark\s*\(([^\n]*)\);/.exec(tokensCss);
+    expect(m, 'tokens.css declares no `dark` custom variant — run `npm run themes`')
+      .not.toBeNull();
+    return m![1] ?? '';
+  };
+
+  /** The ids the variant EXCLUDES, read off the selector it generated. */
+  const excludedIds = (line: string): string[] =>
+    [...line.matchAll(/:not\(\[data-theme='([^']+)'\]\)/g)].map((m) => m[1] ?? '');
+
+  it('excludes exactly the themes the catalogue calls light', () => {
+    // `THEMES` is what the picker renders, so it is the list an operator can
+    // actually reach. A variant that disagreed with it would be dark-styling
+    // a palette the operator is reading as light.
+    const light = THEMES.filter((t) => t.mode === 'light').map((t) => t.id);
+    expect(excludedIds(darkLine()).sort(), 'the variant and the theme catalogue disagree')
+      .toEqual([...light].sort());
+  });
+
+  it('scopes itself to :root, so it reads the stamp and not an element class', () => {
+    // The stamp lives on the document element (`data-theme`), which is why the
+    // condition is on `:root` and the subject is a descendant. A `.dark`-class
+    // variant would need something to add that class, and nothing does.
+    const line = darkLine();
+    expect(line).toContain(':root');
+    expect(line, 'a descendant selector is what lets any element carry the utility')
+      .toMatch(/\*\s*\)?\s*$/);
+    expect(line, 'Tailwind’s class strategy has no writer here').not.toContain('.dark');
+  });
+
+  it('is the ONLY custom variant, so there is one place to look', () => {
+    const all = [...tokensCss.matchAll(/@custom-variant\s+([\w-]+)/g)].map((m) => m[1] ?? '');
+    expect(all).toEqual(['dark']);
   });
 });
