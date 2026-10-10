@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=159a56a7036f63ed72a1de5a0a5479757ee8c23eacc6b6135f3d19aef5dac0ae
+# ccrc:generated 1 sha256=dab721e7700ab10ed5c3623a1f98c2c91831b791028de6ac41faa59d473a0596
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32908,6 +32908,32 @@ _ws_collect_slots_of() {   # id -> 0 with _WS_QSLOTS = the path of every quarant
   return 0
 }
 
+_WS_ROOTDEV_WHY=''
+_ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on device dev (decimal, as a witness and a
+  #                             record spell it); 1 when it is on another; 2 when its device could not be read — 1 and
+  #                             2 with _WS_ROOTDEV_WHY, naming the path, the device read there and the one `what` carries
+  # AN ABSENCE NEEDS THE RECORDED DEVICE (spec §5.10): with `~/.cc-tmp`'s volume
+  # missing and its mount point standing empty, every leaf and slot under it
+  # reads absent. So an arm that would act on an absence — the witness-only
+  # arm's absent leaf, a resume's `removed` — first asks that the physical
+  # `~/.cc-tmp` (`_ws_collect_qpath`, never made) is on the device the witness
+  # or the record carries. A `~/.cc-tmp` that cannot be resolved, PROVEN absent
+  # included, has no device to read: 2. Reads only.
+  local want="${1-}" what="${2-}" root have
+  _WS_ROOTDEV_WHY=''
+  _ws_collect_qpath \
+    || { _WS_ROOTDEV_WHY="$_WS_QPATH_WHY, so its device was never compared with device $want that $what carries"; return 2; }
+  root="${_WS_QPATH%/.ccd-quarantine}"
+  [[ "$want" =~ ^[0-9]+$ ]] \
+    || { _WS_ROOTDEV_WHY="$what carries no device, so the device of $root was never compared with it"; return 2; }
+  have=$(_plat_devino "$root" 2>/dev/null) && [[ "$have" =~ ^[0-9]+:[0-9]+$ ]] \
+    || { _WS_ROOTDEV_WHY="the device of $root could not be read, so it was never compared with device $want that $what carries"; return 2; }
+  have="${have%%:*}"
+  [[ "$have" == "$want" ]] && return 0
+  _WS_ROOTDEV_WHY="$root is on device $have, not on device $want that $what carries — an empty mount point, or another volume, is never read as the leaf's absence"
+  return 1
+}
+
 _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP_TOKEN), a word, or `unmeasured`
   #                        (_WS_COLLECT_PROBE). The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
   local id="$1" leaf="$HOME/.cc-tmp/$1" rc floor why=walk-failed mode owner
@@ -32927,6 +32953,10 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     # unless a quarantine slot of the id stands. With no record naming it, that
     # slot (which may hold the leaf) is the operator's: TERMINAL, and the
     # witness stays beside it, so the slot is never orphaned in silence.
+    # FIRST, the absence is believed only on the device the witness carries:
+    # an empty mount point is no proof that the leaf is gone.
+    _ws_collect_root_dev "$_WS_WIT_DEV" "the witness of $id" \
+      || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
     _WS_COLLECT_LEAF=absent
     _ws_collect_slots_of "$id"; rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
@@ -33017,7 +33047,9 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # record's directory stands in its slot (`<slot>/leaf`, the record's dev, ino
   # and birth time) and NOTHING stands at the id; `unmoved` — it stands at the
   # id and the slot holds nothing; `removed` — it stands at neither (the slot's
-  # leaf was removed, or the restore and a later tail took it). The slot is
+  # leaf was removed, or the restore and a later tail took it), which is believed
+  # only while the physical `~/.cc-tmp` is on the device the record carries
+  # (`_ws_collect_root_dev`: an empty mount point proves nothing). The slot is
   # never read from the record: Task 4's reader DERIVES it from the record's
   # name, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<record name>` (the record
   # body carries no path), and the slot may hold `leaf` and nothing else.
@@ -33103,7 +33135,11 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
     leaf:absent) phase=moved ;;
     leaf:*)      _ws_collect_refuse quarantine-kept "something stands at $orig, the path the leaf in $slot was moved from — the original path was retaken, so the leaf cannot go back; the record, the slot and its leaf are kept for the operator"; return 1 ;;
     absent:match) phase=unmoved ;;
-    *)          phase=removed ;;
+    *)          # NEITHER PLACE holds it, which is believed only on the device
+                # the record carries (`moved` and `unmoved` prove it by identity).
+                _ws_collect_root_dev "$_WS_QREC_DEV" "the quarantine record $name" \
+                  || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
+                phase=removed ;;
   esac
   _WS_COLLECT_PHASE="$phase"
   # THE REGISTRY, asked only now: a retaken original path is TERMINAL above,

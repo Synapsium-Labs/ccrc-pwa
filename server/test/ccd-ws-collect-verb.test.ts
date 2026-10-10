@@ -81,6 +81,31 @@ describe.skipIf(!LINUX)('a collection, end to end', () => {
   });
 });
 
+describe.skipIf(!LINUX)('a witness whose leaf reads absent, off the device it carries (departure collect-absence-needs-the-recorded-device)', () => {
+  // With `~/.cc-tmp`'s volume missing and its mount point standing empty, the leaf reads absent. The evaluation the
+  // verb re-runs in the lock asks the physical `~/.cc-tmp`'s device first; a forged `dev=` in the witness stands for the
+  // missing volume, with no mount.
+  it('failed probe-unmeasured at the verdict point: the witness is never dropped, and nothing is made', () => {
+    makeOrphan(h);
+    fs.rmSync(leafOf(h), { recursive: true });
+    const forged = fs.readFileSync(witnessOf(h), 'utf8').replace(/\bdev=\d+\b/, 'dev=1');
+    fs.writeFileSync(witnessOf(h), forged);
+    const audit = auditDoc();
+    expect([audit['verdict'], (audit['collect'] as Record<string, unknown>)['unmeasured']], 'the audit')
+      .toEqual(['unmeasured', 'device']);
+    const r = collectVerb(h, WRONG_TOKEN, { pre: GAP_LOG });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toMatch(/ is on device \d+, not on device 1 that the witness of demo-quiet-reef carries /);
+    expect(gaps(h), 'refused at the verdict point').toEqual(['locked']);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness, kept').toBe(forged);
+    expect(fs.existsSync(quarantineOf(h)), 'no quarantine').toBe(false);
+    expect(records(h)).toEqual([]);
+    expect(rows()).toEqual([['failed', 'probe-unmeasured']]);
+  });
+});
+
 describe.skipIf(!LINUX)('stdout is ONE JSON line', () => {
   it('on every arm — refused, failed, resumed, collected and witness-only — exactly one line, and it parses', () => {
     // `docOf` reads the LAST line, so a stray line above the document (a helper printing to stdout) would pass every

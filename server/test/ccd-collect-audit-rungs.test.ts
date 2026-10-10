@@ -179,6 +179,56 @@ describe.skipIf(!LINUX)('a witness whose leaf is PROVEN gone: collectable at onc
     expect(fs.existsSync(witnessOf(h)), 'an audit drops nothing').toBe(true);
   }, 60_000);
 
+  // AN ABSENCE NEEDS THE RECORDED DEVICE (spec §5.10, departure collect-absence-needs-the-recorded-device): with
+  // `~/.cc-tmp`'s volume missing and its mount point standing empty, every leaf reads absent. So before the arm
+  // believes the absence, the physical `~/.cc-tmp` must be on the device the witness carries. A forged `dev=` in the
+  // witness stands for the missing volume, with no mount.
+  it('a witness whose device is not the physical ~/.cc-tmp’s: unmeasured `device`, exit 1, no token — the witness as it was', () => {
+    const { leaf } = makeOrphan(h);
+    fs.rmSync(leaf, { recursive: true });
+    const real = fs.readFileSync(witnessOf(h), 'utf8');
+    const dev = /\bdev=(\d+)\b/.exec(real)![1]!;
+    expect(verdictOf(collectAudit(h, { pre: NO_WALK })), 'the CONTROL: the device it carries').toBe('collectable');
+    const forged = real.replace(/\bdev=\d+\b/, 'dev=1');
+    fs.writeFileSync(witnessOf(h), forged);
+    const a = collectAudit(h, { pre: NO_WALK });
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('device');
+    const root = fs.realpathSync(path.dirname(leaf));
+    expect(String(a.doc!['detail'])).toBe(`${root} is on device ${dev}, not on device 1 that the witness of ${COL_ID} carries`
+      + " — an empty mount point, or another volume, is never read as the leaf's absence: nothing is dropped, and the next"
+      + ' pass asks again');
+    expect(a.doc!['token']).toBeUndefined();
+    expect(readJournal(h.home)).toEqual([]);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness').toBe(forged);
+  }, 60_000);
+
+  it('a ~/.cc-tmp PROVEN absent has no device to compare: unmeasured `device`, never a dropped witness', () => {
+    const { leaf } = makeOrphan(h);
+    fs.rmSync(path.dirname(leaf), { recursive: true });
+    const a = collectAudit(h, { pre: NO_WALK });
+    expect(a.code, a.stderr).toBe(1);
+    expect(collectOf(a)['unmeasured']).toBe('device');
+    expect(String(a.doc!['detail'])).toContain('cannot be resolved');
+    expect(String(a.doc!['detail'])).toContain('so its device was never compared with device');
+    expect(a.doc!['token']).toBeUndefined();
+    expect(fs.existsSync(witnessOf(h))).toBe(true);
+  }, 60_000);
+
+  it('a device that cannot be read: unmeasured `device`', () => {
+    const { leaf } = makeOrphan(h);
+    fs.rmSync(leaf, { recursive: true });
+    const root = fs.realpathSync(path.dirname(leaf));
+    const seam = 'eval "_orig_devino() $(declare -f _plat_devino | tail -n +2)";'
+      + ` _plat_devino() { if [[ "$1" == '${root}' ]]; then return 1; fi; _orig_devino "$@"; };`;
+    const a = collectAudit(h, { pre: `${NO_WALK} ${seam}` });
+    expect(a.code, a.stderr).toBe(1);
+    expect(collectOf(a)['unmeasured']).toBe('device');
+    expect(String(a.doc!['detail'])).toContain(`the device of ${root} could not be read`);
+    expect(a.doc!['token']).toBeUndefined();
+  }, 60_000);
+
   it.skipIf(ROOT)('a leaf whose absence cannot be proven is unmeasured `leaf`, never gone', () => {
     const { leaf } = makeOrphan(h);
     const root = path.dirname(leaf);

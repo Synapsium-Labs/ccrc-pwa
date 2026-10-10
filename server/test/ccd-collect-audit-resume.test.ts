@@ -66,6 +66,57 @@ describe.skipIf(!LINUX)('the phases, read off the disk', () => {
     expect(collectAudit(h).doc).toMatchObject({ resume: 'removed', verdict: 'collectable', exists: false });
   }, 60_000);
 
+  // `removed` IS AN ABSENCE, and an absence needs the recorded device (spec §5.10, departure
+  // collect-absence-needs-the-recorded-device): with `~/.cc-tmp`'s volume missing and its mount point standing empty,
+  // the leaf reads gone from both places, and the verb would drop the witness and the record over a slot that still
+  // holds it. A forged `dev=` in the record stands for the missing volume, with no mount. `moved` and `unmoved` are
+  // proven by an identity that includes the device, so only `removed` asks.
+  it('removed, but the physical ~/.cc-tmp is not on the record’s device: unmeasured `device`, exit 1 — the record as it was', () => {
+    const { ident } = setup();
+    const rec = plantOwn(ident, { dev: '1' });
+    const slot = moveIntoSlot(h);
+    fs.rmSync(path.join(slot, 'leaf'), { recursive: true });
+    const a = collectAudit(h);
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('device');
+    const root = fs.realpathSync(path.join(h.home, '.cc-tmp'));
+    expect(String(a.doc!['detail'])).toBe(`${root} is on device ${ident.dev}, not on device 1 that the quarantine record`
+      + ` ${recName()} carries — an empty mount point, or another volume, is never read as the leaf's absence: nothing is`
+      + ' dropped, and the next pass asks again');
+    expect(a.doc!['token']).toBeUndefined();
+    expect(a.doc!['resume'], 'no phase is answered over an absence not believed').toBeUndefined();
+    expect(readJournal(h.home)).toEqual([]);
+    expect(fs.existsSync(rec), 'the record').toBe(true);
+    fs.writeFileSync(rec, recordLine(recordFor(ident)));
+    expect(collectAudit(h).doc, 'the CONTROL: the record’s own device').toMatchObject({ resume: 'removed', verdict: 'collectable' });
+  }, 60_000);
+
+  it('removed, and the device of the physical ~/.cc-tmp cannot be read: unmeasured `device`', () => {
+    const { ident } = setup();
+    plantOwn(ident);
+    const slot = moveIntoSlot(h);
+    fs.rmSync(path.join(slot, 'leaf'), { recursive: true });
+    const root = fs.realpathSync(path.join(h.home, '.cc-tmp'));
+    const seam = 'eval "_orig_devino() $(declare -f _plat_devino | tail -n +2)";'
+      + ` _plat_devino() { if [[ "$1" == '${root}' ]]; then return 1; fi; _orig_devino "$@"; };`;
+    const a = collectAudit(h, { pre: seam });
+    expect(a.code, a.stderr).toBe(1);
+    expect(collectOf(a)['unmeasured']).toBe('device');
+    expect(String(a.doc!['detail'])).toContain(`the device of ${root} could not be read`);
+  }, 60_000);
+
+  it('moved and unmoved never ask the device: their identity already includes it', () => {
+    const { ident } = setup();
+    plantOwn(ident);
+    const root = fs.realpathSync(path.join(h.home, '.cc-tmp'));
+    const seam = 'eval "_orig_devino() $(declare -f _plat_devino | tail -n +2)";'
+      + ` _plat_devino() { if [[ "$1" == '${root}' ]]; then return 1; fi; _orig_devino "$@"; };`;
+    expect(collectAudit(h, { pre: seam }).doc).toMatchObject({ resume: 'unmoved', verdict: 'collectable' });
+    moveIntoSlot(h);
+    expect(collectAudit(h, { pre: seam }).doc).toMatchObject({ resume: 'moved', verdict: 'collectable' });
+  }, 60_000);
+
   it('the resume token is the fork’s, binds the phase, and is never the fresh token', () => {
     const { ident } = setup();
     const fresh = collectAudit(h, { pre: AGED }).doc!['token'];

@@ -87,7 +87,9 @@ describe.skipIf(!LINUX)('the population: a witness or a record of the id, and a 
   it('the record lookup is EXACT: a nested id’s record never puts its parent in the population', () => {
     fs.mkdirSync(path.join(h.home, '.cc-tmp'), { recursive: true });
     const nested = `${COL_ID}.7`;
-    plantRecord(h, recName(nested), recordLine(recordFor({ dev: '1', ino: '2', btime: '3' }, nested)));
+    // The record carries ~/.cc-tmp's own device: a `removed` resume believes the absence only on the recorded volume.
+    const dev = String(fs.statSync(path.join(h.home, '.cc-tmp'), { bigint: true }).dev);
+    plantRecord(h, recName(nested), recordLine(recordFor({ dev, ino: '2', btime: '3' }, nested)));
     plantRecord(h, `${COL_ID}.123.abc`, 'not a record of anyone\n');
     const parent = collectAudit(h);
     expect(verdictOf(parent)).toBe('not-witnessed');

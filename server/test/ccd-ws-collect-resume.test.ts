@@ -96,6 +96,35 @@ describe.skipIf(!LINUX)('a run that died resumes FROM ITS RECORD', () => {
     });
   }
 
+  it('died at removed, but ~/.cc-tmp reads off the record’s device: failed probe-unmeasured — the record, its empty slot and the witness as they were; on the record’s own device, it finishes', () => {
+    // An absence needs the recorded device (departure collect-absence-needs-the-recorded-device): with `~/.cc-tmp`'s
+    // volume missing and its mount point empty, `removed` would drop the witness and the record over a slot that still
+    // holds the leaf. A forged `dev=` in the record stands for the missing volume, with no mount.
+    const o = makeOrphan(h);
+    expect(collectVerb(h, collectToken(h), { pre: crashAt('removed') }).code).toBe(137);
+    const rec = recPath();
+    const slot = slotDir();
+    const real = fs.readFileSync(rec, 'utf8');
+    const forged = real.replace(/\bdev=\d+\b/, 'dev=1');
+    fs.writeFileSync(rec, forged);
+    const audit = JSON.parse(collectAudit(h).stdout.trim().split('\n').pop()!) as Record<string, unknown>;
+    expect([audit['verdict'], (audit['collect'] as Record<string, unknown>)['unmeasured']], 'the audit')
+      .toEqual(['unmeasured', 'device']);
+    const r = collectVerb(h, WRONG_TOKEN, { pre: GAP_LOG });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toMatch(/ is on device \d+, not on device 1 that the quarantine record \S+ carries /);
+    expect(gaps(h).slice(-1), 'refused at the verdict point').toEqual(['locked']);
+    expect(fs.readFileSync(rec, 'utf8'), 'the record').toBe(forged);
+    expect(fs.readdirSync(slot), 'the slot, standing empty').toEqual([]);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness').toBe(o.witness);
+    expect(intents(), 'no second intent: it acted on nothing').toBe(1);
+    fs.writeFileSync(rec, real);
+    expect(docOf(collectVerb(h, collectToken(h)).stdout), 'the CONTROL: on the record’s own device it finishes')
+      .toMatchObject({ collected: COL_ID, resumed: true, witness: 'dropped' });
+  });
+
   it('a resume re-proves step 5: a child that took the id after the crash stops it, and the leaf goes back', () => {
     const o = makeOrphan(h);
     expect(collectVerb(h, collectToken(h), { pre: crashAt('moved') }).code).toBe(137);
