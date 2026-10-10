@@ -170,3 +170,70 @@ describe('Stop — two sentences, because 409 is not a failure', () => {
     expect(said.closest('[role="alert"]')).not.toBeNull();
   });
 });
+
+describe('the screen\'s own wiring — each prop is the store\'s act, not a copy of it', () => {
+  it('Back leaves for the fleet, which is the only way out of a session on a phone', () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole('button', { name: /back/i }));
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('Retry on a failed send calls the STORE\'s retry, with that send\'s own key', async () => {
+    // `useStore.getState().retry(key)` — the screen holds no retry of its
+    // own, because a second implementation would have to re-derive which call
+    // to repeat (`PendingSend` remembers it, deliberately).
+    renderScreen();
+    const retry = vi.spyOn(stores.store.getState(), 'retry');
+    act(() => {
+      stores.store.setState({
+        pending: [{ key: 'p1', text: 'hello', state: 'failed', error: 'tmux: no server running' }],
+      });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(retry).toHaveBeenCalledWith('p1');
+  });
+
+  it('Discard calls the store\'s discard, with the same key', async () => {
+    renderScreen();
+    const discard = vi.spyOn(stores.store.getState(), 'discard');
+    act(() => {
+      stores.store.setState({
+        pending: [{ key: 'p2', text: 'hello', state: 'failed', error: 'refused' }],
+      });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    expect(discard).toHaveBeenCalledWith('p2');
+  });
+
+  it('publishes the composer height on :root, where the toast host can read it', () => {
+    // NOT on `.chat`: `ToastHost` is not inside this subtree and custom
+    // properties only inherit downward, which is the whole reason this
+    // observer exists. jsdom's `ResizeObserver` stub never fires, so this
+    // installs one that does — the only way the callback is reachable at all.
+    const observers: (() => void)[] = [];
+    // A plain field, not a parameter property: this tsconfig sets
+    // `erasableSyntaxOnly`, which refuses the shorthand outright.
+    vi.stubGlobal('ResizeObserver', class {
+      cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb;
+        observers.push(() => this.cb(
+          [{ contentRect: { height: 84.4 } } as ResizeObserverEntry], this as never));
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    });
+    const { unmount } = (() => {
+      const r = renderScreen();
+      return { ...r, unmount: () => cleanup() };
+    })();
+    expect(observers.length, 'the composer is observed').toBeGreaterThan(0);
+    act(() => { for (const fire of observers) fire(); });
+    expect(document.documentElement.style.getPropertyValue('--composer-h'),
+      'rounded, because a fractional pixel in a custom property is noise').toBe('84px');
+    unmount();
+    expect(document.documentElement.style.getPropertyValue('--composer-h'),
+      'cleared on unmount, so the fleet screen keeps the plain offset').toBe('');
+  });
+});
