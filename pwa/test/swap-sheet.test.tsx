@@ -9,7 +9,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession, ProjectPoolsWire } from '../../shared/api';
 import { api } from '../src/lib/api';
-import { SwapSheet, leastLoaded } from '../src/fleet/SwapSheet';
+import { SwapSheet } from '../src/fleet/SwapSheet';
+import { leastLoaded } from '../src/fleet/accountPicker';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
 

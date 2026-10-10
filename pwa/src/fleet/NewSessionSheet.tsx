@@ -17,13 +17,14 @@ import { effortOptions, modelOptions } from '../lib/models';
 import { poolSide } from '../lib/pools';
 import { declaredAccountPool } from '../../../shared/poolrule';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { AccountRow } from './AccountRow';
+import { PoolTag } from './PoolTag';
 import {
-  AccountRow,
   disabledWrappers,
   factsFor,
   pickableWrappers,
   pickerEmptiness,
-} from './SwapSheet';
+} from './accountPicker';
 import { useAccountUsage } from './useProjectedHome';
 import { ProjectPicker } from './ProjectPicker';
 import './fleet.css';
@@ -34,7 +35,6 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
   pool: string | null;
   onPick: (project: ProjectRow) => void;
 }): ReactNode {
-  const poolLabel = `pool · ${pool ?? ''}`;
   return (
     <ListRow
       className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
@@ -42,11 +42,7 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
     >
       <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
       <span className="proj-name">{row.name}</span>
-      {pool !== null && (
-        <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>
-          {poolLabel}
-        </span>
-      )}
+      <PoolTag pool={pool} />
       <span className="proj-dir">{row.workdir}</span>
     </ListRow>
   );

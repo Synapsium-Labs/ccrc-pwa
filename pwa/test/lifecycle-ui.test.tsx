@@ -16,7 +16,8 @@ import { api, ApiError } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
-import { SwapSheet, pickableWrappers } from '../src/fleet/SwapSheet';
+import { SwapSheet } from '../src/fleet/SwapSheet';
+import { pickableWrappers } from '../src/fleet/accountPicker';
 import { SessionScreen } from '../src/screens/SessionScreen';
 import { TEST_ROSTER } from './rosterFixture';
 

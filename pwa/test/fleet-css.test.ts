@@ -1204,16 +1204,29 @@ describe('maximum pool name account-row fit (D-2688)', () => {
     expect(POOL_NAME_RE.test(maximumPool)).toBe(true);
   });
 
-  it('keeps the complete pool identity in both sheet renderers', () => {
-    const swapSheet = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'fleet', 'SwapSheet.tsx'), 'utf8');
-    const newSession = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'fleet', 'NewSessionSheet.tsx'), 'utf8');
-    const fullIdentity = '<span className="acct-pool" aria-label={poolLabel} title={poolLabel}>';
+  it('keeps the complete pool identity in the ONE renderer both sheets use', () => {
+    // IT USED TO BE TWO. This read named `SwapSheet.tsx` and
+    // `NewSessionSheet.tsx` and asked each for the same four lines of markup —
+    // which was the honest shape while the two really did draw them
+    // separately. They are now one `PoolTag`, so the identity is asserted
+    // where it is written, and the two sheets are asserted to go THROUGH it:
+    // a copy that came back would show up as a second `acct-pool` span.
+    const src = (...rel: string[]): string =>
+      readFileSync(path.join(import.meta.dirname, '..', 'src', ...rel), 'utf8');
+    const tag = src('fleet', 'PoolTag.tsx');
+    expect(tag, 'the pool chip is not in PoolTag.tsx — find it and re-point this read')
+      .toContain('<span className="acct-pool" aria-label={label} title={label}>');
 
-    expect(swapSheet).toContain(fullIdentity);
-    expect(newSession).toContain(fullIdentity);
-    expect(newSession).toContain('<AccountRow');
+    for (const file of [['fleet', 'AccountRow.tsx'], ['fleet', 'NewSessionSheet.tsx']]) {
+      const text = src(...file);
+      expect(text, `${file.join('/')} no longer renders the pool chip at all`)
+        .toContain('<PoolTag pool=');
+      expect(text, `${file.join('/')} draws its own acct-pool span again — one voice, one chip`)
+        .not.toContain('className="acct-pool"');
+    }
+    expect(src('fleet', 'SwapSheet.tsx'), 'the swap sheet left the shared row')
+      .toContain('<AccountRow');
+    expect(src('fleet', 'NewSessionSheet.tsx')).toContain('<AccountRow');
   });
 
   it('makes only the pool label yield room to the fixed gauges at 320px', () => {
