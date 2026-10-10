@@ -239,3 +239,115 @@ describe('the receipt, and the attachments a user message carries', () => {
     expect(screen.queryByRole('img')).toBeNull();
   });
 });
+
+// — the image arms, the autolink, and the two renderers that hand off —
+describe('an image URL is an image, however the author wrote it', () => {
+  it('a markdown LINK whose target is an image renders the image, and names it from the path', () => {
+    // A link and an image are two different things in Markdown and the same
+    // thing to a reader on a phone: a URL ending `.png` is something to look
+    // at, not something to navigate to. The alt text comes from the last path
+    // segment with the query stripped, so a signed URL does not put its
+    // signature in the accessible name.
+    assistant('[look](https://box.example.org/shots/pane.png?sig=abc#x)');
+    const img = document.querySelector('img.msg-img');
+    expect(img).toHaveAttribute('alt', 'pane.png');
+    expect(img).toHaveAttribute('src', 'https://box.example.org/shots/pane.png?sig=abc#x');
+  });
+
+  it('an image target with no path segment of its own is called `image`', () => {
+    // The `|| 'image'` fallback, and reaching it took a measurement: a URL
+    // ending in a SLASH is not an image URL at all (`IMG_EXT` anchors the
+    // extension at the end or at `?`/`#`), so the only target that is read as
+    // an image and yields an empty name is one whose whole value is a
+    // fragment — `#diagram.png`, an in-page anchor named after a file. An
+    // empty alt on a tap-to-open image leaves a screen reader with a link
+    // that announces nothing at all.
+    assistant('[look](#diagram.png)');
+    expect(document.querySelector('img.msg-img')).toHaveAttribute('alt', 'image');
+  });
+
+  it('a markdown IMAGE goes through the same renderer, and opens externally on tap', () => {
+    // `openExternal` on the wrapping anchor: a bare `<a>` in a standalone PWA
+    // navigates the app itself, which closes the session.
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    assistant('![a pane](https://box.example.org/p.png)');
+    const link = document.querySelector('a.msg-img-link');
+    expect(link).not.toBeNull();
+    fireEvent.click(link!);
+    expect(open).toHaveBeenCalledWith('https://box.example.org/p.png', '_blank', 'noopener,noreferrer');
+  });
+
+  it('a bare URL in prose is autolinked and opens externally too', () => {
+    // remark-gfm finds it; this renderer is what keeps the tap out of the
+    // app's own navigation.
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    assistant('see https://example.org/docs for the rest');
+    fireEvent.click(screen.getByRole('link', { name: 'https://example.org/docs' }));
+    expect(open).toHaveBeenCalledWith('https://example.org/docs', '_blank', 'noopener,noreferrer');
+  });
+
+  it('a sent clip opens externally on tap, rather than navigating the app', () => {
+    // The attachment path's own anchor — the third place this bubble wires
+    // `openExternal`, and the only one whose href the component builds itself.
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    render(<MessageBubble id="claude:Proj" event={{
+      kind: 'user', uuid: 'u1', ts: '2026-07-21T20:00:00Z',
+      text: 'look at this\n/home/u/.cc-clips/claude-Proj/clip-1-a1b2.png',
+    }} />);
+    const link = document.querySelector('a.msg-img-link');
+    expect(link).not.toBeNull();
+    fireEvent.click(link!);
+    expect(open).toHaveBeenCalledWith(expect.stringContaining('clip-1-a1b2.png'),
+      '_blank', 'noopener,noreferrer');
+  });
+});
+
+describe('the inline-code renderer hands a BLOCK back untouched', () => {
+  it('a fenced block is left to CodeBlock, not read as a keystroke', () => {
+    // `code` serves both inline spans and fenced blocks. The two arms it
+    // refuses are the ones CodeBlock owns: a `language-` class, and any text
+    // carrying a newline — a fence with no language, which is how a pasted
+    // traceback arrives. Read as a keystroke, a two-line paste would come out
+    // as caps.
+    assistant('```\nfirst\nsecond\n```');
+    expect(document.querySelectorAll('kbd'), 'a fenced block was read as a keystroke').toHaveLength(0);
+    expect(document.body.textContent).toContain('first');
+    expect(document.body.textContent).toContain('second');
+  });
+
+  it('and a LABELLED fence likewise', () => {
+    assistant('```ts\nconst a = 1;\n```');
+    expect(document.querySelectorAll('kbd')).toHaveLength(0);
+    expect(document.body.textContent).toContain('const a = 1;');
+  });
+
+  it('a fence whose CONTENT is keystroke-shaped is still source, not caps', () => {
+    // NO MUTANT CAN DISTINGUISH THIS HAND-OFF, and that is the finding rather
+    // than a gap in the case. Deleting the guard leaves all 29 green, for a
+    // reason worth writing down: `pre` renders `CodeBlock`, which rebuilds its
+    // own content from `nodeText(children)` — so whatever the `code` renderer
+    // returned is flattened back to text and discarded. The guard is therefore
+    // an optimisation, not a behaviour, and what this case pins is the
+    // OUTCOME: the day CodeBlock renders its children as NODES instead, a
+    // fence holding exactly `Ctrl+C` is what would come out as two keycaps
+    // (`keystrokeParts` trims, so the trailing newline does not save it).
+    assistant('```\nCtrl+C\n```');
+    expect(document.querySelector('.code-block'), 'the fence is still a code block').not.toBeNull();
+    expect(document.querySelectorAll('kbd'),
+      'a fenced block was rendered as keycaps').toHaveLength(0);
+    expect(document.querySelector('.code-block')?.textContent).toContain('Ctrl+C');
+  });
+});
+
+describe('a system message whose first line is blank', () => {
+  it('is labelled `system message` rather than with an empty strip', () => {
+    // The fold's label is the first line, and a system message that opens with
+    // a newline would give the card a label of nothing at all — a tappable
+    // strip with no words on it.
+    render(<MessageBubble id="s" event={{
+      kind: 'system', uuid: 'y1', ts: '2026-07-21T20:00:00Z',
+      text: '\nthe body is below',
+    }} />);
+    expect(screen.getByText('system message')).toBeInTheDocument();
+  });
+});
