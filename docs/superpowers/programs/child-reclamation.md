@@ -47,6 +47,30 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-10 23:32 — review 374 is accepted and closed `done`, and wave 7 fix round 2 is sent (4189). Run 347 is back at `working`.**
+  - **How it ran.** brisk-canyon, on an Anthropic account with no swap: the held-out panel, the SAFETY lens once per
+    code fix with each mutation row reverted, and three Sonnet refuters per finding. 127 agents, 0 errors. It
+    confirmed: C13's blank-gitdir commit is inside its slug; F7 changed no code; the plan defines exactly the 30
+    assigned numbers; and R72 holds.
+  - **CI on #344 at `aa1c06c4a` was red in the required `test (server)`.** The D-3510 pin in `ccd-child-tmpdir` caught
+    the F3 maker's `chmod g-s -- "$q"`. BSD chmod reads that `--` as a file, so on Darwin every quarantine would be
+    refused (seen on the advisory macOS leg); Linux was correct, and no deletion changed. The round 1 per-file lists
+    never ran that file. The tip was held still under the review, and the fix was folded into this round.
+  - **The rulings** are `wave7/fix-round-2-rulings.md` in the evidence archive. An attack (two Opus lenses, two Sonnet
+    refuters per finding) kept 8 of 12 findings, and they are folded in.
+    - Code: the `chmod -- g-s` order, with the test that pinned the old order changed in the same commit.
+    - Prose: the collector's region header, and F3's prose split clause by clause.
+    - Pins: C13's `\r\n` body and its ws-expire reach, C8's all-zeros row via stderr, and the Linux-only setgid control.
+    - Comments: the runner comment's arithmetic.
+  - **F3 narrows ruling F3, by my ruling.** The witness-only arm lists the quarantine's slots but does not ask its uid
+    and mode half. It moves nothing into the quarantine, so the build stands, and the prose is scoped clause by
+    clause inside `audit-asks-the-quarantine-question`'s number.
+  - **No new number:** each item corrects an existing slug, and 4532 and 4533 stay in reserve.
+  - **Carried to wave 9's pre-flight list:** `collect-why-cases-red-past-the-cut`,
+    `source-parent-without-owner-write-loops`, `floor-knob-zero-strip-is-quadratic` and
+    `corrupt-admin-entry-holds-the-repository`.
+  - **The worker pushes and sends the wave-done in the same turn.** CI is the coordinator's re-measure.
+
 - **2026-10-10 22:02 — the amended wave-done (4183) is verified at `aa1c06c4a`. Run 347 is at `awaiting-review`, and scoped review run 374 is opened.**
   - **The merge.** `aa1c06c4a` merges origin/main `995a05750` (#339, #343, #341, #340, #345) into `ee17287e0`. Its
     tree differs from git's own merge of the same two commits ONLY in README.md (measured), the one conflicted hunk:
