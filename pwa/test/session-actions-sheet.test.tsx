@@ -8,7 +8,7 @@ import { READER_MIN_COLS } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { createFleetStore } from '../src/stores/fleet';
-import { ApiError, type api } from '../src/lib/api';
+import { ApiError, HOLD_EMPTY_REASON_TEXT, type api } from '../src/lib/api';
 import { TEST_ROSTER } from './rosterFixture';
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-quiet-mesa', workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', ...over }));
@@ -870,5 +870,54 @@ describe('the spawn notes, one per state', () => {
     renderSheet(s({ spawnState: 'vanished', status: 'dead', bucket: 'dead' }));
     expect(screen.getByText(/tmux session disappeared/)).toBeInTheDocument();
     expect(screen.getByText(/resumed\s+from the transcript, not from that pane/)).toBeInTheDocument();
+  });
+});
+
+// — the hold composer's remaining three arms —
+//
+// MOST OF IT WAS ALREADY HERE, and finding that out was the measurement: the
+// empty-reason refusal, its clear-on-keystroke and the `oversize` detail
+// sentence all have cases further up this file, and the first drafts of the
+// three below were duplicates of them (the mutation run named both copies).
+// What was genuinely unreached is the whitespace-only reason, the `oversize`
+// that carries NO detail, and what Cancel forgets.
+describe('the hold composer, past the arms already covered', () => {
+  const openComposer = (): void => {
+    renderSheet(workspaceSession());
+    fireEvent.click(screen.getByRole('button', { name: 'Hold' }));
+  };
+
+  it('a reason of only whitespace is empty too', () => {
+    // `reason.trim()`. A hold whose reason is three spaces is a row nobody
+    // can read later, and the box would refuse it — so the refusal is here,
+    // where it costs no round trip.
+    openComposer();
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(screen.getByText(HOLD_EMPTY_REASON_TEXT)).toBeInTheDocument();
+  });
+
+  it('an `oversize` with no detail falls back to the ordinary translator', async () => {
+    // The guard is on `typeof detail === 'string'`: the case above this one
+    // in the file proves the detail is PREFERRED, and this proves its absence
+    // is survivable — a 413 with nothing more specific to say must not render
+    // an empty sentence.
+    stubFetch({ ok: false, error: 'oversize' }, 413);
+    openComposer();
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:build9' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(await screen.findByText(/Couldn't hold —/)).toBeInTheDocument();
+  });
+
+  it('Cancel closes the composer and forgets what was typed', () => {
+    // The reason is not a draft: reopening Hold for a row must not offer the
+    // program name from a hold the operator abandoned.
+    openComposer();
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:gone' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByLabelText('Hold reason')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hold' }));
+    expect(screen.getByLabelText('Hold reason')).toHaveValue('');
   });
 });
