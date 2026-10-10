@@ -123,9 +123,9 @@ function runGate(dir: string = ROOT): { status: number | null; stdout: string } 
 // D-2689 freezes identities from this green audit run. A blind spot may disappear,
 // but an added identity must be measured or explicitly registered before it ships.
 const GRANDFATHERED_UNCOVERED = new Set([
-  'fleet.css .wordmark',
-  'fleet.css .wordmark::before',
-  'fleet.css .fleet-count',
+  '.wordmark',
+  '.wordmark::before',
+  '.fleet-count',
   // `.pool-epoch-lag` (Task 9) is REGISTERED in INHERITED_GROUNDS
   // (design/audit.mjs), not grandfathered here — review round 1, C2: an
   // earlier version of this file admitted it here on the mistaken claim that
@@ -138,181 +138,181 @@ const GRANDFATHERED_UNCOVERED = new Set([
   // must be measured or explicitly registered before it ships." `.fleet-count`
   // itself stays grandfathered as pre-existing debt, not a licence to add a
   // second one beside it.
-  'fleet.css .notice-x',
-  'fleet.css .notice-x:active',
-  'fleet.css .status-line--busy',
-  'fleet.css .status-line--idle',
-  'fleet.css .status-line--attention',
-  'fleet.css .status-line--dead',
-  'fleet.css .first-run-mark',
-  'fleet.css .first-run-title',
-  'fleet.css .first-run-copy',
-  'fleet.css .sheet-copy',
-  'fleet.css .acct-gauge',
-  'fleet.css .acct-unknown',
-  'fleet.css .acct-condemned',
-  'fleet.css .acct-none',
-  'fleet.css .acct-chev',
-  'fleet.css .acct-change',
-  'fleet.css .acct-change:active',
-  'fleet.css .proj-glyph',
-  'fleet.css .proj-name',
-  'fleet.css .proj-dir',
-  'fleet.css .proj-none, .proj-error',
-  'fleet.css .proj-error',
-  'fleet.css .accounts-strip-empty',
-  'fleet.css .acct-win',
-  'fleet.css .acct-pct',
-  'fleet.css .acct-reset',
-  'fleet.css .sess-meta',
-  'fleet.css .sess-meta > *:not(:first-child)::before',
-  'fleet.css .sess-state--waiting',
-  'fleet.css .sess-state--working',
-  'fleet.css .sess-state--exited',
-  'fleet.css .sess-subagent-row',
-  'fleet.css .sess-ctxpressure',
-  'fleet.css .sess-ctxpressure[data-wedge]',
-  'fleet.css .sess-warn',
-  'fleet.css .sess-unmeasured',
-  'fleet.css .sess-substrate',
-  'fleet.css .sess-held, .sess-lifecycle, .sess-swapblocked, .sess-ask-state',
-  'fleet.css .sess-acct-away',
-  'fleet.css .sess-ask',
-  'fleet.css .sess-sheet-note',
-  'fleet.css .sess-hold-error',
-  'fleet.css .proj-card-chevron',
-  'fleet.css .proj-card-count',
-  'fleet.css .proj-card-attn',
-  'fleet.css .proj-card-busy',
-  'fleet.css .proj-card-pin[data-mixed]',
-  'fleet.css .proj-nest-bracket',
-  'fleet.css .proj-pending',
-  'fleet.css .proj-pending-glyph',
-  'fleet.css .proj-pending-meta > *:not(:first-child)::before',
-  'fleet.css .proj-pending-program',
-  'fleet.css .proj-pending-elapsed',
-  'fleet.css .fleet-archived-row, .fleet-runs-row',
-  'fleet.css .archive-total',
-  'fleet.css .archive-row',
-  'fleet.css .archive-project',
-  'fleet.css .archive-size',
-  'fleet.css .archive-empty',
-  'fleet.css .accounts-title',
-  'fleet.css .accounts-projection',
-  'fleet.css .accounts-disabled-note',
-  'fleet.css .accounts-fresh',
-  'fleet.css .accounts-session',
-  'fleet.css .mail-badge',
-  'fleet.css .mail-badge:active',
-  'fleet.css .mail-badge[data-unread=\'true\']',
-  'fleet.css .mail-title',
-  'fleet.css .mail-note',
-  'fleet.css .mail-dropped',
-  'fleet.css .mail-empty',
-  'fleet.css .runs-title',
-  'fleet.css .runs-empty',
-  'fleet.css .runs-wave',
-  'fleet.css .hotfiles-chevron',
-  'fleet.css .hotfiles-holder',
-  'fleet.css .hotfiles-expiry',
-  'fleet.css .hotfiles-intent',
-  'chat.css .chat-title',
-  'chat.css .chat-crumb-sep',
-  'chat.css .chat-crumb',
-  'chat.css .chat .status-line--busy',
-  'chat.css .chat .status-line--idle',
-  'chat.css .chat .status-line--attention',
-  'chat.css .chat .status-line--dead',
-  'chat.css .metachip--model',
-  'chat.css .metachip--branch',
-  'chat.css .keycap--pr[data-phase=\'unchecked\'] .pr-dot',
-  'chat.css .keycap--pr[data-phase=\'none\'] .pr-dot',
-  'chat.css .keycap--pr[data-phase=\'merged\'] .pr-dot',
-  'chat.css .keycap--pr[data-phase=\'closed\']',
-  'chat.css .keycap--pr[data-phase=\'unknown\'] .pr-dot',
-  'chat.css .keycap--pr[data-checks=\'pass\'] .pr-dot',
-  'chat.css .keycap--pr[data-checks=\'fail\'] .pr-dot',
-  'chat.css .keycap--pr[data-checks=\'pending\'] .pr-dot',
-  'chat.css .pr-lede',
-  'chat.css .pr-facts',
-  'chat.css .pr-warn',
-  'chat.css .pr-check-names',
-  'chat.css .pr-label',
-  'chat.css .pr-title',
-  'chat.css .pr-checkline',
-  'chat.css .pr-note',
-  'chat.css .reap-rows dt',
-  'chat.css .reap-rows dd',
-  'chat.css .reap-note',
-  'chat.css .reap-refusal',
-  'chat.css .reap-sensitive',
-  'chat.css .reap-children-list',
-  'chat.css .menu-item',
-  'chat.css .menu-hint',
-  'chat.css .menu-item--danger .menu-label',
-  'task-strip.css .task-head',
-  'task-strip.css .task-mark',
-  'task-strip.css .task-mark--running',
-  'task-strip.css .task-chevron',
-  'task-strip.css .task-summary',
-  'task-strip.css .task-line',
-  'task-strip.css .task-glyph',
-  'task-strip.css .task-row--in_progress .task-glyph',
-  'task-strip.css .task-row--completed .task-subject',
-  'task-strip.css .task-row--completed .task-glyph',
-  'task-strip.css .task-detail',
-  'task-strip.css .task-fold',
-  'task-strip.css .task-fold:active',
-  'chat.css .ts-divider',
-  'chat.css .sys-divider--restart',
-  'chat.css .sys-divider--stalled',
-  'chat.css .sys-divider--limit',
-  'chat.css .msg-receipt',
-  'chat.css .msg-receipt--ok b',
-  'chat.css .msg-receipt--failed',
-  'chat.css .pending-error',
-  'chat.css .pending-actions .pending-retry',
-  'prose.css .msg-assist',
-  'prose.css .msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4',
-  'prose.css .msg-assist h4',
-  'prose.css .msg-assist strong',
-  'prose.css .msg-assist ul, .msg-assist ol',
-  'prose.css .msg-assist li::marker',
-  'prose.css .msg-assist .task-list-item input[type=\'checkbox\']:checked::after',
-  'prose.css .msg-assist .task-list-item:has(input:checked)',
-  'prose.css .msg-assist a',
-  'prose.css .msg-assist .kbd-plus',
-  'prose.css .msg-assist .hljs-comment, .msg-assist .hljs-quote',
-  'prose.css .msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
-  'prose.css .msg-assist .hljs-string, .msg-assist .hljs-regexp',
-  'prose.css .msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
-  'prose.css .msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
-  'prose.css .msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
-  'prose.css .msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
-  'prose.css .msg-assist .hljs-tag',
-  'prose.css .msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
-  'prose.css .msg-assist .hljs-meta',
-  'prose.css .msg-assist .hljs-deletion',
-  'prose.css .msg-assist .hljs-addition',
-  'prose.css .msg-assist .hljs-link',
-  'chat.css .compaction-glyph',
-  'chat.css .compaction-hint',
-  'chat.css .compaction-head:hover .compaction-hint',
-  'chat.css .msg-working',
-  'chat.css .msg-working-glyph',
-  'tool-card.css .tool-name',
-  'tool-card.css .tool-sum',
-  'tool-card.css .tool-dur',
-  'tool-card.css .tool-chev',
-  'tool-card.css .tool-eyebrow',
-  'tool-card.css .tool-meta',
-  'tool-card.css .tool-cut',
-  'tool-card.css .tool-ask-q',
-  'tool-card.css .tool-ask-outlabel',
-  'tool-card.css .ask-state.ask-live',
-  'tool-card.css .ask-state.ask-unanswered',
-  'chat.css .prompt-glyph',
-  'chat.css .composer-input',
+  '.notice-x',
+  '.notice-x:active',
+  '.status-line--busy',
+  '.status-line--idle',
+  '.status-line--attention',
+  '.status-line--dead',
+  '.first-run-mark',
+  '.first-run-title',
+  '.first-run-copy',
+  '.sheet-copy',
+  '.acct-gauge',
+  '.acct-unknown',
+  '.acct-condemned',
+  '.acct-none',
+  '.acct-chev',
+  '.acct-change',
+  '.acct-change:active',
+  '.proj-glyph',
+  '.proj-name',
+  '.proj-dir',
+  '.proj-none, .proj-error',
+  '.proj-error',
+  '.accounts-strip-empty',
+  '.acct-win',
+  '.acct-pct',
+  '.acct-reset',
+  '.sess-meta',
+  '.sess-meta > *:not(:first-child)::before',
+  '.sess-state--waiting',
+  '.sess-state--working',
+  '.sess-state--exited',
+  '.sess-subagent-row',
+  '.sess-ctxpressure',
+  '.sess-ctxpressure[data-wedge]',
+  '.sess-warn',
+  '.sess-unmeasured',
+  '.sess-substrate',
+  '.sess-held, .sess-lifecycle, .sess-swapblocked, .sess-ask-state',
+  '.sess-acct-away',
+  '.sess-ask',
+  '.sess-sheet-note',
+  '.sess-hold-error',
+  '.proj-card-chevron',
+  '.proj-card-count',
+  '.proj-card-attn',
+  '.proj-card-busy',
+  '.proj-card-pin[data-mixed]',
+  '.proj-nest-bracket',
+  '.proj-pending',
+  '.proj-pending-glyph',
+  '.proj-pending-meta > *:not(:first-child)::before',
+  '.proj-pending-program',
+  '.proj-pending-elapsed',
+  '.fleet-archived-row, .fleet-runs-row',
+  '.archive-total',
+  '.archive-row',
+  '.archive-project',
+  '.archive-size',
+  '.archive-empty',
+  '.accounts-title',
+  '.accounts-projection',
+  '.accounts-disabled-note',
+  '.accounts-fresh',
+  '.accounts-session',
+  '.mail-badge',
+  '.mail-badge:active',
+  '.mail-badge[data-unread=\'true\']',
+  '.mail-title',
+  '.mail-note',
+  '.mail-dropped',
+  '.mail-empty',
+  '.runs-title',
+  '.runs-empty',
+  '.runs-wave',
+  '.hotfiles-chevron',
+  '.hotfiles-holder',
+  '.hotfiles-expiry',
+  '.hotfiles-intent',
+  '.chat-title',
+  '.chat-crumb-sep',
+  '.chat-crumb',
+  '.chat .status-line--busy',
+  '.chat .status-line--idle',
+  '.chat .status-line--attention',
+  '.chat .status-line--dead',
+  '.metachip--model',
+  '.metachip--branch',
+  '.keycap--pr[data-phase=\'unchecked\'] .pr-dot',
+  '.keycap--pr[data-phase=\'none\'] .pr-dot',
+  '.keycap--pr[data-phase=\'merged\'] .pr-dot',
+  '.keycap--pr[data-phase=\'closed\']',
+  '.keycap--pr[data-phase=\'unknown\'] .pr-dot',
+  '.keycap--pr[data-checks=\'pass\'] .pr-dot',
+  '.keycap--pr[data-checks=\'fail\'] .pr-dot',
+  '.keycap--pr[data-checks=\'pending\'] .pr-dot',
+  '.pr-lede',
+  '.pr-facts',
+  '.pr-warn',
+  '.pr-check-names',
+  '.pr-label',
+  '.pr-title',
+  '.pr-checkline',
+  '.pr-note',
+  '.reap-rows dt',
+  '.reap-rows dd',
+  '.reap-note',
+  '.reap-refusal',
+  '.reap-sensitive',
+  '.reap-children-list',
+  '.menu-item',
+  '.menu-hint',
+  '.menu-item--danger .menu-label',
+  '.task-head',
+  '.task-mark',
+  '.task-mark--running',
+  '.task-chevron',
+  '.task-summary',
+  '.task-line',
+  '.task-glyph',
+  '.task-row--in_progress .task-glyph',
+  '.task-row--completed .task-subject',
+  '.task-row--completed .task-glyph',
+  '.task-detail',
+  '.task-fold',
+  '.task-fold:active',
+  '.ts-divider',
+  '.sys-divider--restart',
+  '.sys-divider--stalled',
+  '.sys-divider--limit',
+  '.msg-receipt',
+  '.msg-receipt--ok b',
+  '.msg-receipt--failed',
+  '.pending-error',
+  '.pending-actions .pending-retry',
+  '.msg-assist',
+  '.msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4',
+  '.msg-assist h4',
+  '.msg-assist strong',
+  '.msg-assist ul, .msg-assist ol',
+  '.msg-assist li::marker',
+  '.msg-assist .task-list-item input[type=\'checkbox\']:checked::after',
+  '.msg-assist .task-list-item:has(input:checked)',
+  '.msg-assist a',
+  '.msg-assist .kbd-plus',
+  '.msg-assist .hljs-comment, .msg-assist .hljs-quote',
+  '.msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
+  '.msg-assist .hljs-string, .msg-assist .hljs-regexp',
+  '.msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
+  '.msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
+  '.msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
+  '.msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
+  '.msg-assist .hljs-tag',
+  '.msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
+  '.msg-assist .hljs-meta',
+  '.msg-assist .hljs-deletion',
+  '.msg-assist .hljs-addition',
+  '.msg-assist .hljs-link',
+  '.compaction-glyph',
+  '.compaction-hint',
+  '.compaction-head:hover .compaction-hint',
+  '.msg-working',
+  '.msg-working-glyph',
+  '.tool-name',
+  '.tool-sum',
+  '.tool-dur',
+  '.tool-chev',
+  '.tool-eyebrow',
+  '.tool-meta',
+  '.tool-cut',
+  '.tool-ask-q',
+  '.tool-ask-outlabel',
+  '.ask-state.ask-live',
+  '.ask-state.ask-unanswered',
+  '.prompt-glyph',
+  '.composer-input',
   // The vendored preflight's own placeholder default (@ccrc/ui's reset.css),
   // caught by THIS guard the first time both halves met: main introduced the
   // grandfathered-census check, wave 1 introduced the stylesheet. It is
@@ -322,54 +322,54 @@ const GRANDFATHERED_UNCOVERED = new Set([
   // derivative of whatever ink its host already carries. The app's only real
   // placeholder, `.composer-input::placeholder`, is listed on its own right
   // below and measured where it actually renders.
-  'reset.css ::placeholder',
-  'chat.css .composer-input::placeholder',
-  'attach-button.css .attach-btn',
-  'attach-button.css .attach-btn:disabled',
-  'attach-button.css .attach-btn[aria-busy=\'true\']',
-  'chat.css .composer[data-disabled=\'true\'] .prompt-glyph',
-  'chat.css .composer[data-disabled=\'true\'] .composer-input::placeholder',
-  'chat.css .draft-copy',
-  'chat.css .draft-cancel, .dlg-later',
-  'chat.css .draft-cancel:active, .dlg-later:active',
-  'option-row.css .opt',
-  'option-row.css .opt:disabled:not([aria-busy=\'true\']), .opt[aria-disabled=\'true\']',
-  'option-row.css .opt:disabled:not([aria-busy=\'true\']) .opt-glyph, .opt:disabled:not([aria-busy=\'true\']) .opt-idx, .opt:disabled:not([aria-busy=\'true\']) .opt-enter, .opt[aria-disabled=\'true\'] .opt-glyph, .opt[aria-disabled=\'true\'] .opt-idx, .opt[aria-disabled=\'true\'] .opt-enter',
-  'option-row.css .opt-glyph',
-  'option-row.css .opt-idx',
-  'option-row.css .opt-desc',
-  'chat.css .opt-preview-toggle',
-  'chat.css .dlg-body',
-  'option-row.css .opt-enter',
-  'chat.css .opt-wait',
-  'chat.css .sheet-foot',
-  'chat.css .dlg-details-toggle',
-  'chat.css .dlg-details-toggle:hover',
-  'chat.css .dlg-copy',
-  'chat.css .ask-envelope-more-heading',
-  'chat.css .chat-empty-mark',
-  'chat.css .chat-empty-title',
-  'chat.css .chat-empty-copy',
-  'chat.css .term-overlay-word',
-  'chat.css .term-overlay-word--lost',
-  'chat.css .term-retry',
-  'chat.css .slash-name',
-  'chat.css .slash-badge',
-  'chat.css .slash-desc',
-  'chat.css .history-when',
-  'chat.css .history-act',
-  'chat.css .history-verb',
-  'chat.css .history-outcome',
-  'chat.css .history-obs, .history-dec',
-  'chat.css .history-corr',
-  'chat.css .history-refusal',
-  'chat.css .history-row--gap, .history-gap',
-  'chat.css .history-loading, .history-empty, .history-error',
-  'shell.css .shell-accounts .acct-win',
-  'shell.css .shell-accounts .acct-pct',
-  'shell.css .shell-accounts .acct-reset',
-  'shell.css .shell-placeholder-mark',
-  'shell.css .shell-placeholder-copy',
+  '::placeholder',
+  '.composer-input::placeholder',
+  '.attach-btn',
+  '.attach-btn:disabled',
+  '.attach-btn[aria-busy=\'true\']',
+  '.composer[data-disabled=\'true\'] .prompt-glyph',
+  '.composer[data-disabled=\'true\'] .composer-input::placeholder',
+  '.draft-copy',
+  '.draft-cancel, .dlg-later',
+  '.draft-cancel:active, .dlg-later:active',
+  '.opt',
+  '.opt:disabled:not([aria-busy=\'true\']), .opt[aria-disabled=\'true\']',
+  '.opt:disabled:not([aria-busy=\'true\']) .opt-glyph, .opt:disabled:not([aria-busy=\'true\']) .opt-idx, .opt:disabled:not([aria-busy=\'true\']) .opt-enter, .opt[aria-disabled=\'true\'] .opt-glyph, .opt[aria-disabled=\'true\'] .opt-idx, .opt[aria-disabled=\'true\'] .opt-enter',
+  '.opt-glyph',
+  '.opt-idx',
+  '.opt-desc',
+  '.opt-preview-toggle',
+  '.dlg-body',
+  '.opt-enter',
+  '.opt-wait',
+  '.sheet-foot',
+  '.dlg-details-toggle',
+  '.dlg-details-toggle:hover',
+  '.dlg-copy',
+  '.ask-envelope-more-heading',
+  '.chat-empty-mark',
+  '.chat-empty-title',
+  '.chat-empty-copy',
+  '.term-overlay-word',
+  '.term-overlay-word--lost',
+  '.term-retry',
+  '.slash-name',
+  '.slash-badge',
+  '.slash-desc',
+  '.history-when',
+  '.history-act',
+  '.history-verb',
+  '.history-outcome',
+  '.history-obs, .history-dec',
+  '.history-corr',
+  '.history-refusal',
+  '.history-row--gap, .history-gap',
+  '.history-loading, .history-empty, .history-error',
+  '.shell-accounts .acct-win',
+  '.shell-accounts .acct-pct',
+  '.shell-accounts .acct-reset',
+  '.shell-placeholder-mark',
+  '.shell-placeholder-copy',
 ]);
 const report = audit(ROOT);
 
@@ -387,6 +387,23 @@ const report = audit(ROOT);
 // introduced to fix, re-armed as a convenience. Reading through throws if the
 // shape goes, and throwing is the correct outcome.
 const THEME_COUNT = Object.keys(report.themes.byName).length + 1; // + :root, which has no block
+
+/** The rows measured for ONE rule, one per palette.
+ *
+ *  A row's label is `<PALETTE> <key><context suffix>`, and the key is the
+ *  SELECTOR alone now (`ruleKey`, design/audit.mjs). `endsWith(key)` used to
+ *  be an identity because the file prefix made it one; it is not any more —
+ *  `.acct-pool` is a suffix of `.sheet-panel .acct-pool` too, and the first
+ *  assertion to meet the shorter key counted 24 rows where it wanted 12. No
+ *  palette name contains a space, so the leading one is dropped and the
+ *  remainder compared WHOLE.
+ *
+ *  `\s+`, not one space: `DARK ` and `LIGHT` are PADDED to a common width for
+ *  the gate's printed column, so two of the twelve rows carry a second space
+ *  and an `indexOf(' ')` split left them starting with it — 10 rows where the
+ *  assertion wanted 12, which is how this was measured. */
+const rowsFor = (key: string): typeof report.measured =>
+  report.measured.filter((m) => m.label.replace(/^\S+\s+/, '') === key);
 const { DARK, LIGHT } = loadThemes(ROOT);
 const THEMES: readonly (readonly [string, Record<string, string>])[] = [
   ['DARK ', DARK],
@@ -454,7 +471,7 @@ describe('the gate fails a mutated tree', () => {
     // gates #1, the BLOCKER: --ink-secondary on --bg-well is 2.44 in light.
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names { color: var(--status-dead-text);', '.pr-check-names { color: var(--ink-secondary); background: var(--bg-well);'));
-    expect(o).toMatch(/FAIL.*LIGHT chat\.css \.pr-check-names/);
+    expect(o).toMatch(/FAIL.*LIGHT \.pr-check-names/);
   });
 
   it('the finding-1 shape is hidden in src/styles/base.css', () => {
@@ -462,7 +479,7 @@ describe('the gate fails a mutated tree', () => {
     // rule with this exact shape passed green. Stylesheets are DISCOVERED now.
     const o = expectFail('src/styles/base.css', (s) =>
       s.replace('::selection {', '.base-mutant { color: var(--ink-secondary); background: var(--bg-well); }\n::selection {'));
-    expect(o).toMatch(/FAIL.*LIGHT base\.css \.base-mutant/);
+    expect(o).toMatch(/FAIL.*LIGHT \.base-mutant/);
   });
 
   it('a markdown CALLOUT VARIANT rebinds its tint to the well', () => {
@@ -475,7 +492,7 @@ describe('the gate fails a mutated tree', () => {
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--status-attention-tint); }",
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--bg-well); }",
       ));
-    expect(o).toMatch(/FAIL.*LIGHT prose\.css \.msg-assist \.callout \[as .*warning/);
+    expect(o).toMatch(/FAIL.*LIGHT \.msg-assist \.callout \[as .*warning/);
   });
 
   it("a callout variant's label hue is made invisible against its own tint", () => {
@@ -486,7 +503,7 @@ describe('the gate fails a mutated tree', () => {
         "[data-callout='warning']   { --callout-hue: var(--status-attention-text);",
         "[data-callout='warning']   { --callout-hue: var(--status-attention-tint);",
       ));
-    expect(o).toMatch(/FAIL.*prose\.css \.msg-assist \.callout::before \[as .*warning/);
+    expect(o).toMatch(/FAIL.*\.msg-assist \.callout::before \[as .*warning/);
   });
 
   // ── the three spellings that forged the "unforgeable" claim ───────────────
@@ -519,8 +536,8 @@ describe('the gate fails a mutated tree', () => {
     ],
   ])('a callout variant %s still cannot hide the well', (_n, rule) => {
     const o = expectFail('../ui/src/components/prose.css', forge(rule));
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT prose\.css \.msg-assist \.callout \[as /);
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT prose\.css \.msg-assist \.callout::before \[as /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT \.msg-assist \.callout \[as /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT \.msg-assist \.callout::before \[as /);
   });
 
   it('a callout variant hides the well from ANOTHER stylesheet', () => {
@@ -529,7 +546,7 @@ describe('the gate fails a mutated tree', () => {
     // file a custom property was rebound in.
     const o = expectFail('src/fleet/fleet.css', (s) =>
       `${s}\n.msg-assist .callout[data-callout='crossfile'] { --callout-tint: var(--bg-well); }\n`);
-    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT prose\.css \.msg-assist \.callout \[as fleet\.css /);
+    expect(o).toMatch(/FAIL\s+2\.44 .*LIGHT \.msg-assist \.callout \[as \.msg-assist \.callout\[data-callout='crossfile'\]\]/);
   });
 
   it("a pseudo-element spells its host differently from the rule that paints it", () => {
@@ -538,7 +555,7 @@ describe('the gate fails a mutated tree', () => {
     // differently-spelled host was silently unmeasured.
     const o = expectFail('../ui/src/components/prose.css', (s) =>
       `${s}\n.msg-assist .md-body .callout::before { color: var(--callout-tint); }\n`);
-    expect(o).toMatch(/FAIL\s+1\.00 .*prose\.css \.msg-assist \.md-body \.callout::before/);
+    expect(o).toMatch(/FAIL\s+1\.00 .*\.msg-assist \.md-body \.callout::before/);
   });
 
   // ── the value the browser paints, not the first one written ───────────────
@@ -550,22 +567,22 @@ describe('the gate fails a mutated tree', () => {
     [
       'a duplicated `background` — the second one is what paints',
       '.e7-mutant { color: var(--ink-secondary); background: var(--bg-surface); background: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.e7-mutant/,
+      /FAIL\s+2\.44 .*LIGHT \.e7-mutant/,
     ],
     [
       'a duplicated `color` — the second one is what paints',
       '.e7b-mutant { background: var(--bg-well); color: var(--ink-on-well); color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.e7b-mutant/,
+      /FAIL\s+2\.44 .*LIGHT \.e7b-mutant/,
     ],
     [
       'a duplicated `opacity` — the second one is what fades',
       '.e10-mutant { opacity: 1; opacity: 0.72; }',
-      /unregistered fade chat\.css \.e10-mutant 0\.72/,
+      /unregistered fade \.e10-mutant 0\.72/,
     ],
     [
       '`background: none` reset, then a `background-color` longhand',
       '.e1-mutant { color: var(--ink-secondary); background: none; background-color: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.e1-mutant/,
+      /FAIL\s+2\.44 .*LIGHT \.e1-mutant/,
     ],
   ])('the gate measures %s', (_n, rule, want) => {
     expect(expectFail('src/session/chat.css', (s) => `${s}\n${rule}\n`)).toMatch(want);
@@ -590,43 +607,43 @@ describe('the gate fails a mutated tree', () => {
       'overrides `color` on a :hover of a self-grounded rule',
       'src/session/chat.css',
       '.pr-body-preview:hover { color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as \.pr-body-preview:hover\]/,
+      /FAIL\s+2\.44 .*LIGHT \.pr-body-preview \[as \.pr-body-preview:hover\]/,
     ],
     [
       'overrides `color` from ANOTHER stylesheet',
       'src/fleet/fleet.css',
       ".pr-body-preview[data-x] { color: var(--ink-secondary); }",
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as fleet\.css \.pr-body-preview\[data-x\]\]/,
+      /FAIL\s+2\.44 .*LIGHT \.pr-body-preview \[as \.pr-body-preview\[data-x\]\]/,
     ],
     [
       'swaps only the GROUND under an inherited ink',
       'src/session/chat.css',
       '.metachip.is-rogue { background: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip\.is-rogue\]/,
+      /FAIL\s+2\.44 .*LIGHT \.metachip \[as \.metachip\.is-rogue\]/,
     ],
     [
       'restates the WHOLE selector a second time, colour only',
       'src/session/chat.css',
       '.pr-body-preview { color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.pr-body-preview \[as \.pr-body-preview\]/,
+      /FAIL\s+2\.44 .*LIGHT \.pr-body-preview \[as \.pr-body-preview\]/,
     ],
     [
       'restates the whole selector a second time, ground only',
       'src/session/chat.css',
       '.metachip { background: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip\]/,
+      /FAIL\s+2\.44 .*LIGHT \.metachip \[as \.metachip\]/,
     ],
     [
       'splits the ink and the ground across two rules with the SAME qualifier',
       'src/session/chat.css',
       '.metachip:hover { color: var(--ink-secondary); }\n.metachip:hover { background: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.metachip \[as \.metachip:hover \+ \.metachip:hover\]/,
+      /FAIL\s+2\.44 .*LIGHT \.metachip \[as \.metachip:hover \+ \.metachip:hover\]/,
     ],
     [
       'is a DESCENDANT of a self-grounded rule its own selector names',
       '../ui/src/components/prose.css',
       '.msg-assist pre .rogue { color: var(--ink-secondary); }',
-      /FAIL\s+2\.44 .*LIGHT prose\.css \.msg-assist pre \.rogue \[in prose\.css \.msg-assist pre\]/,
+      /FAIL\s+2\.44 .*LIGHT \.msg-assist pre \.rogue \[in \.msg-assist pre\]/,
     ],
   ])('a rule that %s cannot hide the well', (_n, rel, rule, want) => {
     expect(expectFail(rel as string, (s) => `${s}\n${rule}\n`)).toMatch(want);
@@ -637,7 +654,7 @@ describe('the gate fails a mutated tree', () => {
     // NOTHING measured this rule. Both rows must exist and both must clear 4.5:
     // the label is --fs-2xs (11px) uppercase mono, so it is body text.
     const rows = report.measured.filter((m) =>
-      m.label.includes('prose.css .code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
+      m.label.includes('.code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
     expect(rows).toHaveLength(THEME_COUNT);
     for (const r of rows) {
       expect(r.floor).toBe(4.5);
@@ -653,7 +670,7 @@ describe('the gate fails a mutated tree', () => {
     const o = expectFail('../ui/src/components/prose.css', (s) =>
       s.replace('color: var(--accent-on-well);\n    border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);',
         'color: var(--accent);\n    border-color: color-mix(in srgb, var(--accent) 40%, transparent);'));
-    expect(o).toMatch(/FAIL\s+3\.0\d .*LIGHT prose\.css \.code-block-copy \[as \.code-block-copy:hover/);
+    expect(o).toMatch(/FAIL\s+3\.0\d .*LIGHT \.code-block-copy \[as \.code-block-copy:hover/);
   });
 
   // ── background-image: read, or fail loudly. Never skipped ─────────────────
@@ -685,17 +702,17 @@ describe('the gate fails a mutated tree', () => {
     [
       'the blocker shape in UPPERCASE',
       '.forge-upper { COLOR: var(--ink-secondary); BACKGROUND: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.forge-upper/,
+      /FAIL\s+2\.44 .*LIGHT \.forge-upper/,
     ],
     [
       'the blocker shape in MiXeD case, longhand background',
       '.forge-mixed { CoLoR: var(--ink-secondary); Background-Color: var(--bg-well); }',
-      /FAIL\s+2\.44 .*LIGHT chat\.css \.forge-mixed/,
+      /FAIL\s+2\.44 .*LIGHT \.forge-mixed/,
     ],
     [
       'an element fade spelled OPACITY',
       '.forge-op { OPACITY: 0.4; }',
-      /unregistered fade chat\.css \.forge-op 0\.4/,
+      /unregistered fade \.forge-op 0\.4/,
     ],
     [
       'a whole animation spelled @KEYFRAMES with an UPPERCASE stop',
@@ -721,7 +738,7 @@ describe('the gate fails a mutated tree', () => {
   it('a new element fade is added with no contrast decision', () => {
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names {', '.sess-meta-mutant { opacity: 0.72; }\n.pr-check-names {'));
-    expect(o).toMatch(/unregistered fade chat\.css \.sess-meta-mutant 0\.72/);
+    expect(o).toMatch(/unregistered fade \.sess-meta-mutant 0\.72/);
   });
 
   it('the same fade is spelled `opacity: 72%`', () => {
@@ -729,14 +746,14 @@ describe('the gate fails a mutated tree', () => {
     // NaN out of the fade set, so this shipped unregistered and unmeasured.
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names {', '.sess-meta-mutant { opacity: 72%; }\n.pr-check-names {'));
-    expect(o).toMatch(/unregistered fade chat\.css \.sess-meta-mutant 0\.72/);
+    expect(o).toMatch(/unregistered fade \.sess-meta-mutant 0\.72/);
   });
 
   it('the same fade is spelled `opacity: 0.72 !important`', () => {
     // Same NaN hole; `!important` is already used in this audited file set.
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('.pr-check-names {', '.sess-meta-mutant { opacity: 0.72 !important; }\n.pr-check-names {'));
-    expect(o).toMatch(/unregistered fade chat\.css \.sess-meta-mutant 0\.72/);
+    expect(o).toMatch(/unregistered fade \.sess-meta-mutant 0\.72/);
   });
 
   it('a registered fade is deepened past the floor of a pair it composites', () => {
@@ -747,7 +764,7 @@ describe('the gate fails a mutated tree', () => {
     // one registered fade left in the audited set rather than being dropped.
     const o = expectFail('src/session/chat.css', (s) =>
       s.replace('  opacity: 0.6;\n  cursor: default;', '  opacity: 0.4;\n  cursor: default;'));
-    expect(o).toMatch(/unregistered fade chat\.css \.pending-actions \.pending-send-it:disabled 0\.4/);
+    expect(o).toMatch(/unregistered fade \.pending-actions \.pending-send-it:disabled 0\.4/);
   });
 
   it('an unregistered @keyframes opacity trough is introduced', () => {
@@ -768,7 +785,7 @@ describe('the gate fails a mutated tree', () => {
   // that is the direction nothing was checking.
   it('an `opacity` the auditor cannot read as a number is a FAILURE, not a skip', () => {
     const o = expectFail('src/session/chat.css', (s) => `${s}\n.e11-mutant { opacity: var(--x-fade); }\n`);
-    expect(o).toMatch(/chat\.css \.e11-mutant: opacity "var\(--x-fade\)" is not a static value/);
+    expect(o).toMatch(/\.e11-mutant: opacity "var\(--x-fade\)" is not a static value/);
   });
 
   it('a @keyframes stop the auditor cannot read as a number is a FAILURE, not a skip', () => {
@@ -783,7 +800,7 @@ describe('the gate fails a mutated tree', () => {
     // Skipping such a rule is how a translucent tint ships unmeasured.
     const o = expectFail('src/session/chat.css', (s) =>
       `${s}\n.e12-mutant { color: var(--ink-primary); background: color-mix(in srgb, var(--bg-well) 50%, transparent); }\n`);
-    expect(o).toMatch(/chat\.css \.e12-mutant: background .* is translucent and has no GROUNDS entry/);
+    expect(o).toMatch(/\.e12-mutant: background .* is translucent and has no GROUNDS entry/);
   });
 
   it('a KEYFRAME_TROUGHS entry left behind by a renamed animation is a FAILURE', () => {
@@ -802,7 +819,7 @@ describe('the gate fails a mutated tree', () => {
     // the LAST declaration now, so a prepended one would be overwritten.
     const o = expectFail('../ui/src/components/prose.css', (s) =>
       s.replace('    color: var(--callout-hue);\n', '    color: var(--no-such-token);\n'));
-    expect(o).toMatch(/prose\.css \.msg-assist \.callout::before.*unknown custom property --no-such-token/);
+    expect(o).toMatch(/\.msg-assist \.callout::before.*unknown custom property --no-such-token/);
   });
 
   it('an INHERITED_GROUNDS entry whose rule was renamed away is a FAILURE', () => {
@@ -811,8 +828,8 @@ describe('the gate fails a mutated tree', () => {
         '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label-renamed {'));
     // Two branches, one mutation: the hand-written ground names a rule that is
     // gone, and the registry key is stale.
-    expect(o).toMatch(/stale INHERITED_GROUNDS entry: no rule fleet\.css \.proj-archived-body/);
-    expect(o).toMatch(/stale inherited registry entry: fleet\.css \.proj-archived-body/);
+    expect(o).toMatch(/stale INHERITED_GROUNDS entry: no rule \.proj-archived-body/);
+    expect(o).toMatch(/stale inherited registry entry: \.proj-archived-body/);
   });
 
   it('an INHERITED_GROUNDS rule that stops setting a colour of its own is a FAILURE', () => {
@@ -822,14 +839,14 @@ describe('the gate fails a mutated tree', () => {
     const o = expectFail('src/fleet/fleet.css', (s) =>
       s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--ink-secondary);',
         '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: inherit;'));
-    expect(o).toMatch(/INHERITED_GROUNDS fleet\.css \.proj-archived-body.* sets no colour of its own/);
+    expect(o).toMatch(/INHERITED_GROUNDS \.proj-archived-body.* sets no colour of its own/);
   });
 
   it('an INHERITED_GROUNDS rule painting with an unresolvable colour is a FAILURE', () => {
     const o = expectFail('src/fleet/fleet.css', (s) =>
       s.replace('.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--ink-secondary);',
         '.proj-archived-body .sess-line:not(.sess-line--active) .sess-label {\n  color: var(--no-such-token);'));
-    expect(o).toMatch(/fleet\.css \.proj-archived-body.*unknown custom property --no-such-token/);
+    expect(o).toMatch(/\.proj-archived-body.*unknown custom property --no-such-token/);
   });
 
   it('an OPACITY_REGISTRY pair the auditor cannot resolve is a FAILURE', () => {
@@ -837,17 +854,17 @@ describe('the gate fails a mutated tree', () => {
     // gate tree carries its own copy of the auditor, which is the point.
     const o = expectFail('design/audit.mjs', (s) =>
       s.replace("[['running tool dot on a card', 'var(--status-busy)'", "[['running tool dot on a card', 'var(--no-such-token)'"));
-    expect(o).toMatch(/tool-card\.css \.tool-dot--run 0\.8 — running tool dot on a card: unknown custom property/);
+    expect(o).toMatch(/\.tool-dot--run 0\.8 — running tool dot on a card: unknown custom property/);
   });
 
   it('a GROUNDS entry whose rule stopped being self-grounded is a FAILURE', () => {
     const o = expectFail('../ui/src/components/prose.css', (s) => s.replace('.code-block-copy {\n', '.code-block-copy-renamed {\n'));
-    expect(o).toMatch(/stale grounds registry entry: prose\.css \.code-block-copy /);
+    expect(o).toMatch(/stale grounds registry entry: \.code-block-copy /);
   });
 
   it('a SELF_GROUNDED_EXEMPT entry left behind by a renamed rule is a FAILURE', () => {
     const o = expectFail('src/session/chat.css', (s) => s.replace('.send-btn:disabled {\n', '.send-btn-renamed:disabled {\n'));
-    expect(o).toMatch(/stale exempt registry entry: chat\.css \.send-btn:disabled /);
+    expect(o).toMatch(/stale exempt registry entry: \.send-btn:disabled /);
   });
 
   it('a rule paints with a colour the auditor cannot resolve', () => {
@@ -870,7 +887,7 @@ describe('the gate fails a mutated tree', () => {
 
   it('a registry entry is left behind pointing at a rule that is gone', () => {
     const o = expectFail('src/fleet/fleet.css', (s) => s.replace('.bell:disabled {\n  opacity: 0.35;', '.bell:disabled {\n  opacity: 1;'));
-    expect(o).toMatch(/stale opacity registry entry: fleet\.css \.bell:disabled 0\.35/);
+    expect(o).toMatch(/stale opacity registry entry: \.bell:disabled 0\.35/);
   });
 
   // The pin for the /tmp leak: the removal has to be observable from the NEXT
@@ -1271,12 +1288,12 @@ describe('every stylesheet under src/ is audited', () => {
     // is behind them — not --bg-well, which the GROUNDS entry used to claim and
     // which flattered every ratio here.
     for (const sel of ['.code-block-copy', '.code-block-lang']) {
-      const rows = report.measured.filter((m) => m.label.endsWith(`prose.css ${sel}`));
+      const rows = rowsFor(sel);
       expect(rows.map((m) => m.label), sel).toHaveLength(THEME_COUNT);
       for (const r of rows) expect(r.ratio, r.label).toBeGreaterThanOrEqual(4.5);
     }
-    expect(GROUNDS['prose.css .code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
-    expect(INHERITED_GROUNDS['prose.css .code-block-lang']?.under).toEqual(['var(--well-bar-bg)']);
+    expect(GROUNDS['.code-block-copy']?.under).toEqual(['var(--well-bar-bg)']);
+    expect(INHERITED_GROUNDS['.code-block-lang']?.under).toEqual(['var(--well-bar-bg)']);
   });
 
   it('clears its floor on every pair, in both themes', () => {
@@ -1496,12 +1513,12 @@ describe('every markdown callout variant is measured from the stylesheet', () =>
       .filter((r) => r.selector !== '.msg-assist .callout' && declOf(r.body, '--callout-tint') !== null);
     expect(rebinders.map(ruleKey)).toHaveLength(VARIANTS.length);
     for (const r of rebinders) {
-      // The callout lives in @ccrc/ui's prose.css now, so a variant written in
-      // that same file is named by its selector alone and one written anywhere
-      // else carries its file — which is what `ruleKey` already spells.
-      const as = r.file === 'prose.css' ? r.selector : ruleKey(r);
+      // A variant names itself by its selector wherever it lives — the gate's
+      // key stopped carrying a file, so the callout's own sheet is no longer
+      // a special case here.
+      const as = ruleKey(r);
       expect(
-        report.measured.some((m) => m.label.endsWith(`prose.css .msg-assist .callout [as ${as}]`)),
+        report.measured.some((m) => m.label.endsWith(`.msg-assist .callout [as ${as}]`)),
         `no measured context for ${ruleKey(r)}`,
       ).toBe(true);
     }
@@ -1616,7 +1633,7 @@ describe('every static opacity is registered and composited', () => {
         "    knownBelowFloor: 'the escape hatch this round claims to have deleted',",
       ));
     const r = runGate(dir);
-    expect(r.stdout).toMatch(/OPACITY_REGISTRY tool-card\.css \.tool-dot--run 0\.8 is \{knownBelowFloor\}/);
+    expect(r.stdout).toMatch(/OPACITY_REGISTRY \.tool-dot--run 0\.8 is \{knownBelowFloor\}/);
     expect(r.stdout).toMatch(/^FAIL/m);
     expect(r.status).not.toBe(0);
   });
@@ -1670,11 +1687,11 @@ describe('every @keyframes opacity trough is registered', () => {
 // ── a spot check the maths cannot fake ──────────────────────────────────────
 describe('the three well-trap rules the blocker was found in', () => {
   it.each([
-    ['chat.css', '.pr-body-preview'],
-    ['chat.css', '.dlg-reply-input'],
-    ['chat.css', '.msg-attach-gone'],
-  ])('%s %s is measured against the well it paints itself on', (file, selector) => {
-    const rows = report.measured.filter((m) => m.label.endsWith(`${file} ${selector}`));
+    '.pr-body-preview',
+    '.dlg-reply-input',
+    '.msg-attach-gone',
+  ])('%s is measured against the well it paints itself on', (selector) => {
+    const rows = rowsFor(selector);
     expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail).toContain('var(--bg-well)');
@@ -1695,12 +1712,12 @@ describe('the three well-trap rules the blocker was found in', () => {
 // ── account-pool project-card cells ─────────────────────────────────────────
 describe('the pool chip and stranded count are measured, not left in the blind spot', () => {
   it.each([
-    ['fleet.css .proj-card-pool', 'var(--ink-tertiary)'],
-    ["fleet.css .proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']", 'var(--status-attention-text)'],
-    ['fleet.css .proj-card-stranded', 'var(--status-attention-text)'],
+    ['.proj-card-pool', 'var(--ink-tertiary)'],
+    [".proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']", 'var(--status-attention-text)'],
+    ['.proj-card-stranded', 'var(--status-attention-text)'],
   ])('%s is grounded on the project card', (key, ink) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
@@ -1712,11 +1729,11 @@ describe('the pool chip and stranded count are measured, not left in the blind s
 // ── account-pool picker cells ────────────────────────────────────────────────
 describe('the account-pool picker colours are measured, not left in the blind spot', () => {
   it.each([
-    ['fleet.css .acct-pool', 'var(--ink-tertiary)'],
-    ['fleet.css .acct-disclosure', 'var(--ink-secondary)'],
-    ['fleet.css .pool-note', 'var(--ink-tertiary)'],
+    ['.acct-pool', 'var(--ink-tertiary)'],
+    ['.acct-disclosure', 'var(--ink-secondary)'],
+    ['.pool-note', 'var(--ink-tertiary)'],
   ])('%s is grounded on the sheet it sits in', (key, ink) => {
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
@@ -1730,12 +1747,12 @@ describe('the account-pool picker colours are measured, not left in the blind sp
     // A selected project row replaces the sheet ground. Compare the registry
     // with THIS selector's declaration, not a generic CSS parse, so either side
     // changing independently fails rather than pricing an obsolete surface.
-    const key = 'fleet.css .proj-row--selected .acct-pool';
+    const key = '.proj-row--selected .acct-pool';
     const selectedRow = rulesOf(ROOT, 'src/fleet/fleet.css')
       .find((rule) => rule.selector === '.proj-row--selected');
     expect(selectedRow).toBeDefined();
     expect(INHERITED_GROUNDS[key]?.under).toEqual([bgOf(selectedRow?.body ?? '')]);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     for (const row of rows) {
@@ -1757,12 +1774,12 @@ describe('the account-pool picker colours are measured, not left in the blind sp
 // leaving a rule unmeasured.
 describe('the Task 9 fleet-head, sheet, and account-chip colours are measured, not left in the blind spot', () => {
   it.each([
-    ['fleet.css .pool-new-label', 'var(--ink-tertiary)', 'var(--bg-sheet)'],
-    ['fleet.css .pool-epoch-lag', 'var(--ink-tertiary)', 'var(--bg-page)'],
-    ["fleet.css .acct-pool-chip[data-pool='untagged']", 'var(--ink-tertiary)', 'var(--bg-surface)'],
-    ["fleet.css .acct-pool-chip[data-pool='stale']", 'var(--status-attention-text)', 'var(--bg-surface)'],
+    ['.pool-new-label', 'var(--ink-tertiary)', 'var(--bg-sheet)'],
+    ['.pool-epoch-lag', 'var(--ink-tertiary)', 'var(--bg-page)'],
+    [".acct-pool-chip[data-pool='untagged']", 'var(--ink-tertiary)', 'var(--bg-surface)'],
+    [".acct-pool-chip[data-pool='stale']", 'var(--status-attention-text)', 'var(--bg-surface)'],
   ])('%s is grounded, not grandfathered', (key, ink, ground) => {
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     expect(GRANDFATHERED_UNCOVERED, key).not.toContain(key);
@@ -1777,9 +1794,9 @@ describe('the Task 9 fleet-head, sheet, and account-chip colours are measured, n
 // ── account-pool session-row cells ──────────────────────────────────────────
 describe('the pool session cells are measured, not left in the blind spot', () => {
   it.each(['.sess-stranded', '.sess-offpool'])('%s clears both themes on the ordinary row', (selector) => {
-    const key = `fleet.css ${selector}`;
+    const key = selector;
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     expect(report.uncovered, key).not.toContain(key);
     for (const row of rows) {
@@ -1803,8 +1820,8 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
     // UNCOVERED census — their ground is DOM knowledge a parser cannot recover —
     // so a new coloured cell beside them would silently join them there. The
     // INHERITED_GROUNDS entry is what makes it MEASURED.
-    expect(INHERITED_GROUNDS['fleet.css .sess-spawn']?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith('fleet.css .sess-spawn'));
+    expect(INHERITED_GROUNDS['.sess-spawn']?.under).toEqual(['var(--bg-surface)']);
+    const rows = rowsFor('.sess-spawn');
     expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
   });
@@ -1816,9 +1833,9 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
     // either, so without its own entry that half stays in the census while the
     // base half is measured — the worst of both, because the report then LOOKS
     // like the cell is covered.
-    const key = "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised'], .sess-spawn[data-spawn='narrow-widened']";
+    const key = ".sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised'], .sess-spawn[data-spawn='narrow-widened']";
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows).toHaveLength(THEME_COUNT);
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
   });
@@ -1827,10 +1844,10 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
 // ── F3's program-ready badge (program-leverage wave 3) ─────────────────────
 describe("the program-ready badge is measured, not left in the blind spot", () => {
   it.each([
-    ['fleet.css .sheet-panel .proj-ready', 'var(--ink-tertiary)'],
-    ["fleet.css .sheet-panel .proj-ready[data-verdict='ready']", 'var(--status-busy-text)'],
-    ["fleet.css .sheet-panel .proj-ready[data-verdict='blocked']", 'var(--status-dead-text)'],
-    ['fleet.css .sheet-panel .proj-ready-why', 'var(--ink-tertiary)'],
+    ['.sheet-panel .proj-ready', 'var(--ink-tertiary)'],
+    [".sheet-panel .proj-ready[data-verdict='ready']", 'var(--status-busy-text)'],
+    [".sheet-panel .proj-ready[data-verdict='blocked']", 'var(--status-dead-text)'],
+    ['.sheet-panel .proj-ready-why', 'var(--ink-tertiary)'],
   ])('%s is grounded on the sheet it sits in', (key, ink) => {
     // The badge sits inside `.sheet-panel`, which paints
     // `background: var(--bg-sheet)`. Its selector NAMES that ancestor — which
@@ -1846,7 +1863,7 @@ describe("the program-ready badge is measured, not left in the blind spot", () =
     // the report LOOKING covered — the trap the spawn-chip variant entry above
     // spells out.
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
@@ -1858,8 +1875,8 @@ describe("the program-ready badge is measured, not left in the blind spot", () =
 // ── D-161's two new coloured children on the sign-in card ───────────────────
 describe("the sign-in block's ink is measured, not asserted in a comment", () => {
   it.each([
-    ['fleet.css .auth-block-title', 'var(--ink-primary)'],
-    ['fleet.css .auth-block-sub', 'var(--ink-tertiary)'],
+    ['.auth-block-title', 'var(--ink-primary)'],
+    ['.auth-block-sub', 'var(--ink-tertiary)'],
   ])('%s is grounded on the card it sits in', (key, ink) => {
     // Both are children of `.auth-block`, which sets
     // `background: var(--bg-surface)` two rules up in the SAME stylesheet — and
@@ -1869,7 +1886,7 @@ describe("the sign-in block's ink is measured, not asserted in a comment", () =>
     // the thing this file exists to make impossible. Same shape, and the same
     // fix, as the spawn chip above.
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(ink);
@@ -1891,9 +1908,9 @@ describe("the sign-in block's ink is measured, not asserted in a comment", () =>
     // outright. So the rules are gone from both the registry and the census,
     // and the coverage went UP — `.accounts-door`'s ground was never measured
     // by this gate before.
-    expect(INHERITED_GROUNDS['fleet.css .accounts-door']).toBeUndefined();
-    expect(INHERITED_GROUNDS['fleet.css .settings-door']).toBeUndefined();
-    expect(report.uncovered).not.toContain('fleet.css .accounts-door');
+    expect(INHERITED_GROUNDS['.accounts-door']).toBeUndefined();
+    expect(INHERITED_GROUNDS['.settings-door']).toBeUndefined();
+    expect(report.uncovered).not.toContain('.accounts-door');
     for (const ground of ['var(--bg-page)', 'var(--bg-surface)']) {
       for (const theme of [DARK, LIGHT]) {
         expect(ratio('var(--ink-secondary)', [ground], theme)).toBeGreaterThanOrEqual(4.5);
@@ -1949,11 +1966,11 @@ describe('the /settings shell and its door are measured, not left in the blind s
   };
 
   it.each([
-    ['fleet.css .settings-title'],
+    ['.settings-title'],
   ])('%s is registered on the page and measured in both themes', (key) => {
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
     expect(report.uncovered).not.toContain(key);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {
       expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
@@ -1995,9 +2012,9 @@ describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on t
   };
 
   it.each([
-    ['build-line.css .build-line'],
-    ['build-line.css .build-line-side--warn'],
-    ['build-line.css .build-line-next'],
+    ['.build-line'],
+    ['.build-line-side--warn'],
+    ['.build-line-next'],
   ])('%s also clears AA on the mobile ground (--bg-page)', (key) => {
     // Measured: --ink-tertiary 6.23 dark / 5.25 light (.build-line);
     // --status-attention-text 10.89 dark / 5.45 light (the other two).
@@ -2013,10 +2030,10 @@ describe('the child-of-run label is measured, not left in the blind spot (wave 5
     // Same shape as .sess-spawn/.sess-repo: a .sess-meta cell whose selector
     // names no painted ancestor, so without its INHERITED_GROUNDS entry it
     // would join the uncovered census, which new rules may not do.
-    const key = 'fleet.css .sess-child';
+    const key = '.sess-child';
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     expect(report.uncovered).not.toContain(key);
-    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    const rows = rowsFor(key);
     // THEME_COUNT, not 2: this branch's audit measures every palette in the
     // catalogue, not only DARK and LIGHT — the same count its siblings
     // .sess-spawn and .sess-repo are held to a few describes above.

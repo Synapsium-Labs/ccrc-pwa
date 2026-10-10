@@ -30,7 +30,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   INHERITED_GROUNDS, KEYFRAME_TROUGHS, PWA_ROOT, audit, blockBody, customProps, loadThemes,
-  ratio, resolveColor, stylesheets, subjectCompound,
+  ratio, resolveColor, rulesOf, stylesheets, subjectCompound,
 } from '../design/audit.mjs';
 
 const made: string[] = [];
@@ -72,7 +72,15 @@ const problemsOf = (dir: string): string[] => audit(dir).problems as string[];
 // out: the entry that happens to be first is not the claim — "an entry whose
 // rule is gone" is.
 const [INHERITED_KEY] = Object.keys(INHERITED_GROUNDS);
-const [INHERITED_FILE, INHERITED_SEL] = (INHERITED_KEY ?? '').split(' ');
+const INHERITED_SEL = INHERITED_KEY ?? '';
+// WHICH SHEET IT LIVES IN IS A SEARCH, not a slice of the key. The gate keys a
+// rule by its selector alone now (`ruleKey`, design/audit.mjs), and that is the
+// point of the format: nothing in a rule's identity says where it lives, so a
+// test that wants to open its sheet has to go and find it. `stylesheets()` is
+// the same list the auditor itself reads, so the search cannot look somewhere
+// the gate does not.
+const INHERITED_REL = stylesheets(PWA_ROOT)
+  .find((rel) => rulesOf(PWA_ROOT, rel).some((r) => r.selector === INHERITED_SEL)) ?? '';
 
 describe('a clean tree is the control', () => {
   it('the stylesheets alone, audited by the real auditor, raise no problem', () => {
@@ -83,6 +91,49 @@ describe('a clean tree is the control', () => {
   });
 }, 30_000);
 
+describe('one selector, one sheet — the price of a key that carries no file', () => {
+  it('reports a selector two sheets declare, naming both', () => {
+    // The gate keys a rule by its SELECTOR (design/audit.mjs `ruleKey`), which
+    // is what lets a rule move between sheets without rekeying every registry
+    // entry, census row and mutation anchor that names it. The price is that
+    // one selector in two sheets would be one key meaning two rules —
+    // silently, and in the hand-kept registries first, where a `why:` would be
+    // answering about a rule its author never read.
+    //
+    // So it is measured. Delete the loop in `audit()` and this reds.
+    const dir = sheetTree();
+    const forged = '.forged-two-homes { color: var(--ink-primary); }\n';
+    edit(dir, 'src/fleet/fleet.css', (s) => `${s}\n${forged}`);
+    edit(dir, 'src/session/chat.css', (s) => `${s}\n${forged}`);
+    expect(problemsOf(dir)).toContain(
+      '.forged-two-homes: declared in chat.css and fleet.css — the gate keys a rule'
+      + ' by its selector alone, so two sheets cannot share one');
+  });
+
+  it('a selector declared TWICE IN ONE sheet is the ordinary cascade, not a collision', () => {
+    // The distinction the refusal above must not swallow: 21 `file selector`
+    // keys repeat inside one sheet today, and `contextsFor` already measures
+    // the second rule as a context of the first. Only a SECOND HOME is a
+    // collision.
+    const dir = sheetTree();
+    edit(dir, 'src/fleet/fleet.css', (s) =>
+      `${s}\n.forged-one-home { color: var(--ink-primary); }\n`
+      + '.forged-one-home { color: var(--ink-secondary); }\n');
+    expect(problemsOf(dir).filter((p) => p.includes('forged-one-home'))).toEqual([]);
+  });
+
+  it('`from` and `to` keep their file, because a keyframe stop is not an identity', () => {
+    // Four sheets declare `to` today and three declare `from`. They are the
+    // one shape the check has to skip, and the reason is the same one that
+    // makes keyframe keys carry a file in `ruleKey`.
+    const sheets = stylesheets(PWA_ROOT);
+    const homes = (sel: string): string[] =>
+      sheets.filter((rel) => rulesOf(PWA_ROOT, rel).some((r) => r.selector === sel));
+    expect(homes('to').length, 'the exemption would be vacuous').toBeGreaterThan(1);
+    expect(audit(sheetTree()).problems).toEqual([]);
+  });
+}, 30_000);
+
 describe('a registry entry whose rule is gone', () => {
   it('names the entry AND the registry — twice, because two checks see it', () => {
     // The route check (section 4) cannot measure what is not there, and the
@@ -90,7 +141,7 @@ describe('a registry entry whose rule is gone', () => {
     // sentences are wanted: the first tells the reader which measurement was
     // lost, the second which registry to edit.
     const dir = sheetTree();
-    edit(dir, `src/fleet/${INHERITED_FILE}`, (s) => {
+    edit(dir, INHERITED_REL, (s) => {
       const at = s.indexOf(`${INHERITED_SEL} {`);
       if (at < 0) throw new Error(`no rule ${INHERITED_SEL} in the copy`);
       const close = s.indexOf('}', at);
@@ -108,7 +159,7 @@ describe('a registry entry whose rule is gone', () => {
     // what is gone is the ink the entry was written to ground. Collapsing the
     // two would send the operator to delete a live registry entry.
     const dir = sheetTree();
-    edit(dir, `src/fleet/${INHERITED_FILE}`, (s) => {
+    edit(dir, INHERITED_REL, (s) => {
       const at = s.indexOf(`${INHERITED_SEL} {`);
       const close = s.indexOf('}', at);
       const body = s.slice(at, close);
@@ -125,7 +176,7 @@ describe('a registry entry whose rule is gone', () => {
     // theme on purpose: a token that exists in one palette and not the other
     // is a real shape, and one sentence for both would hide which.
     const dir = sheetTree();
-    edit(dir, `src/fleet/${INHERITED_FILE}`, (s) => {
+    edit(dir, INHERITED_REL, (s) => {
       const at = s.indexOf(`${INHERITED_SEL} {`);
       const close = s.indexOf('}', at);
       const body = s.slice(at, close);
@@ -141,13 +192,13 @@ describe('a registry entry whose rule is gone', () => {
 
 describe('a fade nobody registered', () => {
   it('names the rule, its exact opacity, and what an entry has to carry', () => {
-    // The key is `<file> <selector> <value>` — the VALUE is part of it,
-    // because the same rule at two opacities composites two different inks.
+    // The key is `<selector> <value>` — the VALUE is part of it, because the
+    // same rule at two opacities composites two different inks.
     const dir = sheetTree();
     edit(dir, 'src/fleet/fleet.css', (s) =>
       `${s}\n.forged-fade-for-the-gate {\n  color: var(--ink);\n  opacity: 0.42;\n}\n`);
     expect(problemsOf(dir)).toContain(
-      'unregistered fade fleet.css .forged-fade-for-the-gate 0.42 — add it to OPACITY_REGISTRY'
+      'unregistered fade .forged-fade-for-the-gate 0.42 — add it to OPACITY_REGISTRY'
       + ' with the pairs it composites or a reason it composites no coloured content');
   });
 
@@ -161,9 +212,9 @@ describe('a fade nobody registered', () => {
       `${s}\n.forged-dynamic-fade {\n  color: var(--ink);\n  opacity: var(--some-fade);\n}\n`);
     const problems = problemsOf(dir);
     expect(problems).toContain(
-      'fleet.css .forged-dynamic-fade: opacity "var(--some-fade)" is not a static value'
+      '.forged-dynamic-fade: opacity "var(--some-fade)" is not a static value'
       + ' — it cannot be measured, so it cannot ship');
-    expect(problems.filter((p) => p.includes('unregistered fade fleet.css .forged-dynamic-fade')),
+    expect(problems.filter((p) => p.includes('unregistered fade .forged-dynamic-fade')),
       'a value nothing can read must not also be reported as an unregistered fade').toEqual([]);
   });
 
@@ -419,15 +470,21 @@ describe('the last two parser refusals', () => {
     // describes. An earlier draft merged INSTEAD of keeping the singles, which
     // re-opened three variant spellings; both are kept, and the merged row is
     // labelled with both names so the reader can find either.
+    //
+    // BOTH RESTATEMENTS IN ONE SHEET, deliberately. The forge used to put the
+    // second in chat.css, which was incidental to what it proves and is now a
+    // refusal in its own right: the gate keys a rule by its selector alone, so
+    // one selector declared by two sheets is reported rather than measured.
+    // Two rules with one selector in ONE sheet is the ordinary cascade and
+    // always was — 21 such keys ship today.
     const dir = sheetTree();
     edit(dir, 'src/fleet/fleet.css', (s) =>
       `${s}\n.forged-base { color: var(--ink-primary); background: var(--bg-page); }\n`
-      + '.forged-base.is-on { color: var(--ink-secondary); }\n');
-    edit(dir, 'src/session/chat.css', (s) =>
-      `${s}\n.forged-base.is-on { background: var(--bg-raised); }\n`);
+      + '.forged-base.is-on { color: var(--ink-secondary); }\n'
+      + '.forged-base.is-on { background: var(--bg-raised); }\n');
     const labels = (audit(dir).measured as { label: string }[])
       .map((m) => m.label).filter((l) => l.includes('.forged-base'));
-    expect(labels.some((l) => l.includes('[as .forged-base.is-on + chat.css .forged-base.is-on]')),
+    expect(labels.some((l) => l.includes('[as .forged-base.is-on + .forged-base.is-on]')),
       'the two restatements were never measured as the one element they paint').toBe(true);
     expect(labels.some((l) => l.endsWith('[as .forged-base.is-on]')),
       'the singles must survive the merge').toBe(true);
