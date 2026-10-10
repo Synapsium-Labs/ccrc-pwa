@@ -44,7 +44,8 @@ import {
 import type {
   CoordStatus, FleetSession, ProjectReadiness, ProjectRow, ReadinessFacts,
 } from '../../shared/api';
-import { StartProgramSheet, openRunVerdict, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
+import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
+import { START_PROGRAM_WAIT_MS, openRunVerdict, startedSessionFor } from '../src/fleet/startProgramPolicy';
 import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
