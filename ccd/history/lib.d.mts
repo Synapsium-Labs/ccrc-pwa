@@ -578,3 +578,25 @@ export function classifyRef(v: string): RefKind | null;
 export interface NodeRef { kind: string; value: string; origin: 'model' | 'tool_use' | 'meta' }
 export function capRefs(refs: Iterable<NodeRef>): { refs: NodeRef[]; capped: boolean };
 export function directiveFlag(text: string): boolean;
+
+// --- W1-B2 Task 5: spans, leaf ids, readiness, fan-in, parent rollups (spec §6.1, §6.3)
+export interface SpanRow { readonly uuid: string; readonly pos: number; readonly isBoundary: boolean; readonly isSummary: boolean }
+export interface SpanBoundary { readonly uuid: string; readonly headUuid: string | null; readonly kept: ReadonlySet<string>; readonly summaryUuid: string | null }
+export interface SpanLeaf { boundaryUuid: string; spanStartUuid: string; sources: string[]; headMissing: boolean }
+export function planSpans(i: { rows: readonly SpanRow[]; boundaries: readonly SpanBoundary[] }): { leaves: SpanLeaf[]; liveTail: string[] };
+export function decideLeafId(i: { ccrcId: string; ccUuid: string; spanStartUuid: string; boundaryUuid: string; plainBoundOther: boolean }): { id: string; forked: boolean };
+export const RAW_LEAF_GRACE_MS: number;
+export function eofAfterBoundary(i: { eofMs: number | null; boundaryTsMs: number | null }): boolean;
+export function leafReady(i: { summaryStored: boolean; fileAtEofAfterBoundary: boolean }): boolean;
+export const FAN_IN: Readonly<{ leaf: 8; condensed: 4 }>;
+export interface FanInSlot { readonly nodeId: string | null; readonly final: boolean; readonly parented: boolean }
+export function planFanIn(i: { slots: readonly FanInSlot[]; width: number }): string[][];
+export function firstSentence(text: string): string;
+export interface RollupChild {
+  gist: string | null; topics: readonly string[]; refs: readonly { kind: string; value: string; origin: string }[];
+  earliestMs: number | null; latestMs: number | null; srcChars: number; descCount: number; descChars: number;
+}
+export function parentRollup(children: readonly RollupChild[]): {
+  gist: string | null; topics: string[]; refs: { kind: string; value: string; origin: string }[];
+  earliestMs: number | null; latestMs: number | null; srcChars: number; descCount: number; descChars: number; capped: boolean;
+};

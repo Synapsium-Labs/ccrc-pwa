@@ -4312,3 +4312,179 @@ export function directiveFlag(text) {
   const units = s.match(/\n+|[^\n.!?]+[.!?]*\s*/g) ?? [s];
   return units.some((unit) => !/^\n+$/.test(unit) && DIRECTIVE_SHAPED_PATTERNS.some((p) => p.test(unit)));
 }
+
+// ===========================================================================
+// Spans, leaf ids, readiness, fan-in and parent rollups (spec §6.1 "Span
+// rule: an exact partition" and "Two forks after one head"; §6.3; W1-B2
+// Task 5). Pure: derive.mjs (L4) reads ONE copy's rows in file order
+// (memberships.line, a byte offset) with its boundaries' metadata and hands
+// them in; nothing here reads the store. D-4687 (history-span-exact-partition)
+// D-4688 (history-span-per-boundary-copy) D-4689 (history-leaf-id-fork-qualified)
+// ===========================================================================
+
+/** The leaves one copy's boundaries make, and its live tail (§6.1).
+ *  `rows` are the copy's stored rows in any order: they are sorted by `pos`, the row's byte offset in that copy.
+ *  `boundaries` are the SAME copy's boundary rows, each with:
+ *  - `headUuid` (preservedSegment.headUuid);
+ *  - `kept` (the members of preservedMessages.allUuids; a member absent from the copy is never tested);
+ *  - `summaryUuid` (the summary row the parser chose, or null).
+ *  Leaf N covers [head(N-1), boundary(N)), an epoch's first leaf from the copy's first row, minus:
+ *  - boundary and summary rows;
+ *  - the rows of [head(N-1), boundary(N-1)) absent from kept(N-1). Leaf N-1 claimed them: compaction N-1
+ *    summarised them although they sit after its head (G12, ruled Q5);
+ *  - the rows of [head(N), boundary(N)) in kept(N). Compaction N kept them verbatim: they belong to leaf N+1.
+ *  The live tail is what no leaf covers yet: the last compaction's kept rows and every row after it.
+ *  logicalParentUuid is never an input: it names the preserved tail's END (§6.1, M). A head absent from the copy
+ *  (or, against every measurement, after its boundary) makes the boundary itself the edge, flagged `headMissing`,
+ *  and the leaf's span start still names head(N-1): ids never change. */
+export function planSpans({ rows, boundaries }) {
+  const order = [...rows].sort((a, b) => a.pos - b.pos);
+  const at = new Map(order.map((r, i) => [r.uuid, i]));
+  const summaries = new Set(boundaries.map((b) => b.summaryUuid).filter((u) => typeof u === 'string'));
+  const structural = (r) => r.isBoundary || r.isSummary || summaries.has(r.uuid);
+  const bs = boundaries.filter((b) => at.has(b.uuid)).sort((x, y) => at.get(x.uuid) - at.get(y.uuid));
+  // A boundary's preserved-tail window [head, boundary), or null when its head is not before it in this copy.
+  const windowOf = (b) => {
+    const to = at.get(b.uuid);
+    const from = typeof b.headUuid === 'string' ? at.get(b.headUuid) : undefined;
+    return from === undefined || from > to ? null : { from, to };
+  };
+  const leaves = [];
+  for (let k = 0; k < bs.length; k += 1) {
+    const b = bs[k];
+    const prev = k === 0 ? null : bs[k - 1];
+    const prevWin = prev === null ? null : windowOf(prev);
+    const own = windowOf(b);
+    // Leaf N starts at head(N-1): the rows compaction N-1 kept verbatim are its own.
+    const start = prev === null ? 0 : prevWin === null ? at.get(prev.uuid) : prevWin.from;
+    const sources = [];
+    for (let i = start; i < at.get(b.uuid); i += 1) {
+      const r = order[i];
+      if (structural(r)) continue;
+      // Leaf N-1 claimed these (G12).
+      if (prevWin !== null && i < prevWin.to && !prev.kept.has(r.uuid)) continue;
+      // Compaction N keeps these verbatim: leaf N+1's.
+      if (own !== null && i >= own.from && b.kept.has(r.uuid)) continue;
+      sources.push(r.uuid);
+    }
+    leaves.push({
+      boundaryUuid: b.uuid,
+      spanStartUuid: prev === null ? order[0].uuid : (prev.headUuid ?? prev.uuid),
+      sources,
+      headMissing: prev !== null && prevWin === null,
+    });
+  }
+  const last = bs.length === 0 ? null : bs[bs.length - 1];
+  const lastWin = last === null ? null : windowOf(last);
+  const tailFrom = last === null ? 0 : lastWin === null ? at.get(last.uuid) + 1 : lastWin.from;
+  const liveTail = [];
+  for (let i = tailFrom; i < order.length; i += 1) {
+    const r = order[i];
+    if (structural(r)) continue;
+    if (lastWin !== null && i < lastWin.to && !last.kept.has(r.uuid)) continue;
+    liveTail.push(r.uuid);
+  }
+  return { leaves, liveTail };
+}
+
+/** A leaf's id (§6.1 "Two forks after one head"). The plain id hashes (ccrc id, cc uuid, span start). When that
+ *  id is already bound to ANOTHER boundary (two forked copies each compacted after the same head), the first bound
+ *  keeps it, as "the first claim stands" does for uuids, and this boundary's leaf takes the boundary-qualified id
+ *  (`leaf_id_forked`). */
+export function decideLeafId({ ccrcId, ccUuid, spanStartUuid, boundaryUuid, plainBoundOther }) {
+  if (plainBoundOther) return { id: leafId(ccrcId, ccUuid, spanStartUuid, boundaryUuid), forked: true };
+  return { id: leafId(ccrcId, ccUuid, spanStartUuid), forked: false };
+}
+
+/** How long after a boundary's own time a file read to its end proves the boundary has no summary row coming.
+ *  Claude Code appends the summary within moments of the boundary; a tick that read in between must not make
+ *  the leaf raw for good. *Chosen*. D-4690 (history-raw-leaf-grace) */
+export const RAW_LEAF_GRACE_MS = 5 * 60 * 1000;
+
+/** Whether the file holding a boundary was read to its end late enough to say its summary row is missing. `eofMs`
+ *  is the holding file's ingest_files.eof_ms: the start of the last tick that left its cursor at end-of-file.
+ *  `boundaryTsMs` is the boundary's time; derive.mjs passes the newest stamped row before a boundary that has none
+ *  of its own. With no time known at all the answer is false: end-of-file alone is exactly the race the grace
+ *  closes, so such a boundary waits rather than going raw for good. */
+export function eofAfterBoundary({ eofMs, boundaryTsMs }) {
+  if (eofMs === null || boundaryTsMs === null) return false;
+  return eofMs >= boundaryTsMs + RAW_LEAF_GRACE_MS;
+}
+
+/** A leaf is derived once it is final (§7.4 item 1, §6.3 "only leaves whose status is final"): its summary row is
+ *  stored (native, or steered from W3), or its file shows it never will be (a raw leaf). Never earlier: a raw
+ *  leaf is never written while it could still be a native one. */
+export function leafReady({ summaryStored, fileAtEofAfterBoundary }) {
+  return summaryStored === true || fileAtEofAfterBoundary === true;
+}
+
+/** The plugin's tested fan-in (§6.3, §11 P23; the 2 is a pressure arm ccrc has no consumer for): 8 leaves make a
+ *  depth-1 parent, 4 nodes make each level above. */
+export const FAN_IN = Object.freeze({ leaf: 8, condensed: 4 });
+
+/** The groups of `width` slots that become parents now (§6.3). `slots` are ONE holding copy's nodes of one depth
+ *  within one epoch, in boundaries.ord order (RB4): fan-in never crosses a /clear epoch and a parent never mixes
+ *  forks. A slot is `nodeId: null` while its node does not exist yet (a boundary not ready), `final: false` while
+ *  it may still change, `parented` once a parent holds it.
+ *  Grouping starts at the first unparented slot and stops at the first group holding a null, non-final or
+ *  parented slot: the nodes after a gap wait for it. */
+export function planFanIn({ slots, width }) {
+  if (!Number.isSafeInteger(width) || width < 2) throw new TypeError(`planFanIn: width must be an integer of at least 2, got ${String(width)}`);
+  const groups = [];
+  let i = slots.findIndex((s) => !s.parented);
+  if (i < 0) return groups;
+  while (i + width <= slots.length) {
+    const g = slots.slice(i, i + width);
+    if (g.some((s) => s.nodeId === null || !s.final || s.parented)) break;
+    groups.push(g.map((s) => s.nodeId));
+    i += width;
+  }
+  return groups;
+}
+
+/** A gist's first sentence (§6.3): up to and including the first `.`, `!` or `?` that ends the text or is
+ *  followed by whitespace, else up to the first newline, else the whole gist; trimmed. So `v1.2` stays inside it. */
+export function firstSentence(text) {
+  const t = String(text ?? '').trim();
+  const m = /[.!?](?=\s|$)|\n/.exec(t);
+  if (m === null) return t;
+  return t.slice(0, m[0] === '\n' ? m.index : m.index + 1).trim();
+}
+
+/** A parent from its children (§6.3), deterministic and rebuildable (a W3 steered <ccrc-node> gist replaces only
+ *  the gist):
+ *  - gist: each child's first sentence, joined with a space, cut at GIST_MAX by capText; null when no child has
+ *    one (the leaves' own spelling of "no gist", never '');
+ *  - topics: the union in first-seen order through capTopics (each once, at most TOPICS_MAX of at most TOPIC_CHARS);
+ *  - refs: the union through capRefs (each (kind, value) once, the first origin kept, at most REFS_MAX);
+ *  - time: the earliest child start to the latest child end;
+ *  - srcChars: the children's; descCount: every descendant node; descChars: the descendants' gist chars.
+ *  The three caps are Task 4's, the ones a leaf is cut by, so a parent and a leaf never disagree about a cut.
+ *  A cut sets `capped`; no marker is ever inserted. D-4691 (history-node-char-counts) */
+export function parentRollup(children) {
+  const sentences = [];
+  for (const c of children) {
+    const s = typeof c.gist === 'string' ? firstSentence(c.gist) : '';
+    if (s !== '') sentences.push(s);
+  }
+  const joined = sentences.join(' ');
+  const gist = capText(joined, GIST_MAX);
+  const topics = capTopics(children.flatMap((c) => c.topics));
+  const cut = capRefs(children.flatMap((c) => c.refs));
+  let earliestMs = null;
+  let latestMs = null;
+  let srcChars = 0;
+  let descCount = 0;
+  let descChars = 0;
+  for (const c of children) {
+    if (c.earliestMs !== null && (earliestMs === null || c.earliestMs < earliestMs)) earliestMs = c.earliestMs;
+    if (c.latestMs !== null && (latestMs === null || c.latestMs > latestMs)) latestMs = c.latestMs;
+    srcChars += c.srcChars;
+    descCount += c.descCount + 1;
+    descChars += c.descChars + (typeof c.gist === 'string' ? c.gist.length : 0);
+  }
+  return {
+    gist: joined === '' ? null : gist.text, topics: topics.topics, refs: cut.refs, earliestMs, latestMs, srcChars, descCount, descChars,
+    capped: gist.capped || topics.capped || cut.capped,
+  };
+}

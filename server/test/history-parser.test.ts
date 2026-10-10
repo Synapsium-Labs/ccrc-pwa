@@ -10,6 +10,8 @@ import { describe, it, expect } from 'vitest';
 import * as parse from '../../ccd/history/lib.mjs';
 import { HEADING_RE, fencedRanges } from '../../ccd/compact-card.mjs';
 import { FULL_SECTIONS, UP_TO_SECTIONS, summaryText, steeredBlock } from './historyFixtures.js';
+import * as libSpan from '../../ccd/history/lib.mjs';
+import { compactionSequence } from './historyFixtures.js';
 
 const KIT: parse.GistKit = { HEADING_RE, fencedRanges };
 const NO_PAIRS = parse.makePairIndex([]);
@@ -322,5 +324,300 @@ describe('directiveFlag: flag only, nothing stripped (spec 7.4 item 9; P29)', ()
     'The system prompt file lives under ccd/.', 'I will act as Dan would',
   ])('does not flag %s', (text) => {
     expect(parse.directiveFlag(text)).toBe(false);
+  });
+});
+
+
+// ===========================================================================
+// W1-B2 Task 5: the span rule, leaf ids, readiness, fan-in and parent rollups
+// (spec §6.1 "Span rule: an exact partition", §6.3). Pure, over
+// historyFixtures.ts's compactionSequence; runs on darwin too.
+// ===========================================================================
+const SPAN_SESSION = '0189abcd-1234-4678-9abc-0000000000b1';
+const SPAN_ID = 'claude-demo';
+type SpanSeq = ReturnType<typeof compactionSequence>;
+
+/** One fixture copy as derive.mjs hands it to planSpans. Positions increase but are not contiguous: derive.mjs
+ *  passes byte offsets. Each boundary carries its head, its allUuids exactly as read (the member absent from the
+ *  copy included), and its anchor as the summary. */
+function spanInputsOf(rows: readonly Record<string, unknown>[]): { rows: libSpan.SpanRow[]; boundaries: libSpan.SpanBoundary[] } {
+  return {
+    rows: rows.map((r, i) => ({
+      uuid: String(r['uuid']), pos: 1000 + i * 137,
+      isBoundary: r['subtype'] === 'compact_boundary', isSummary: r['isCompactSummary'] === true,
+    })),
+    boundaries: rows.filter((r) => r['subtype'] === 'compact_boundary').map((r) => {
+      const b = libSpan.boundaryOf(r)!;
+      return { uuid: String(r['uuid']), headUuid: b.headUuid, kept: new Set(b.allUuids ?? []), summaryUuid: b.anchorUuid };
+    }),
+  };
+}
+
+/** Leaf k's sources by construction (§6.1): the rows compaction k-1 kept and the rows after boundary k-1 that
+ *  are not its summary, then work(k) and unkept(k). */
+const spanExpected = (s: SpanSeq, k: number): string[] => [
+  ...(k === 0 ? [] : [...s.keptUuids[k - 1]!, ...s.afterUuids[k - 1]!]),
+  ...s.workUuids[k]!, ...s.unkeptUuids[k]!,
+];
+
+describe('planSpans: the exact partition over one copy (DM5; spec 6.1)', () => {
+  for (const trigger of ['auto', 'manual'] as const) {
+    it(`DM5 ${trigger}: each leaf's sources are exact, its span starts at head(N-1), and the rest is live`, () => {
+      const s = compactionSequence({ n: 3, trigger, seed: trigger === 'auto' ? 0x51 : 0x52, sessionId: SPAN_SESSION });
+      const plan = libSpan.planSpans(spanInputsOf(s.rows));
+      expect(plan.leaves.map((l) => l.boundaryUuid)).toEqual(s.boundaryUuids);
+      for (let k = 0; k < 3; k += 1) {
+        const leaf = plan.leaves[k]!;
+        expect(leaf.sources, `leaf ${k}`).toEqual(spanExpected(s, k));
+        expect(leaf.spanStartUuid, `leaf ${k}`).toBe(k === 0 ? String(s.rows[0]!['uuid']) : s.headUuids[k - 1]);
+        expect(leaf.headMissing, `leaf ${k}`).toBe(false);
+      }
+      expect(plan.liveTail).toEqual([...s.keptUuids[2]!, ...s.afterUuids[2]!, ...s.liveUuids]);
+    });
+  }
+
+  it('DM5: every row is in exactly one leaf or the live tail, never two; boundary and summary rows in neither', () => {
+    const s = compactionSequence({ n: 4, trigger: 'manual', unkeptBeforeBoundary: 3, seed: 0x53, sessionId: SPAN_SESSION });
+    const plan = libSpan.planSpans(spanInputsOf(s.rows));
+    const seen = new Map<string, number>();
+    for (const u of [...plan.leaves.flatMap((l) => l.sources), ...plan.liveTail]) seen.set(u, (seen.get(u) ?? 0) + 1);
+    const structural = new Set([...s.boundaryUuids, ...s.summaryUuids]);
+    for (const r of s.rows) {
+      const u = String(r['uuid']);
+      expect(seen.get(u) ?? 0, u).toBe(structural.has(u) ? 0 : 1);
+    }
+    // §6.1: before the epoch's last boundary, only the rows its compaction keeps verbatim wait outside a leaf:
+    // they belong to leaf N+1, which the next boundary mints.
+    const last = s.rows.findIndex((r) => r['uuid'] === s.boundaryUuids[3]);
+    const inLeaves = new Set(plan.leaves.flatMap((l) => l.sources));
+    const keptByLast = new Set(s.keptUuids[3]);
+    for (const r of s.rows.slice(0, last)) {
+      const u = String(r['uuid']);
+      if (structural.has(u) || keptByLast.has(u)) continue;
+      expect(inLeaves.has(u), `${u} sits before the last boundary and is in no leaf`).toBe(true);
+    }
+  });
+
+  it('DM5 CONTROL: the fixture is the measured shape (anchor +4 after an auto boundary, +1 after a manual one; allUuids holds an absent uuid and the post-summary reminder)', () => {
+    for (const trigger of ['auto', 'manual'] as const) {
+      const s = compactionSequence({ n: 1, trigger, seed: 0x54, sessionId: SPAN_SESSION });
+      const at = (u: string): number => s.rows.findIndex((r) => r['uuid'] === u);
+      expect(at(s.summaryUuids[0]!) - at(s.boundaryUuids[0]!), trigger).toBe(trigger === 'auto' ? 4 : 1);
+      const b = libSpan.boundaryOf(s.rows[at(s.boundaryUuids[0]!)])!;
+      expect(b.headUuid).toBe(s.headUuids[0]);
+      expect(b.allUuids!.filter((u) => at(u) < 0), 'one allUuids member is absent from the file').toHaveLength(1);
+      expect(b.allUuids).toContain(s.afterUuids[0]![s.afterUuids[0]!.length - 1]);
+    }
+  });
+
+  it('DM5: rows arrive in any order; positions decide, never array order', () => {
+    const s = compactionSequence({ n: 2, trigger: 'auto', seed: 0x55, sessionId: SPAN_SESSION });
+    const inputs = spanInputsOf(s.rows);
+    expect(libSpan.planSpans({ rows: [...inputs.rows].reverse(), boundaries: [...inputs.boundaries].reverse() }))
+      .toEqual(libSpan.planSpans(inputs));
+  });
+
+  it("a head absent from the copy falls back to boundary(N-1)'s position, flagged headMissing, and the id still starts at head(N-1)", () => {
+    const s = compactionSequence({ n: 2, trigger: 'manual', seed: 0x56, sessionId: SPAN_SESSION });
+    const inputs = spanInputsOf(s.rows);
+    const ghost = '00000056-0000-4000-8000-0000000ffff0';
+    const plan = libSpan.planSpans({ rows: inputs.rows, boundaries: inputs.boundaries.map((b, k) => (k === 0 ? { ...b, headUuid: ghost } : b)) });
+    // With no head in this copy, compaction 0's preserved tail cannot be told apart: its boundary is the edge.
+    expect(plan.leaves[0]!.sources).toEqual([...s.workUuids[0]!, ...s.keptUuids[0]!, ...s.unkeptUuids[0]!]);
+    expect(plan.leaves[0]!.headMissing).toBe(false);
+    expect(plan.leaves[1]!.headMissing).toBe(true);
+    expect(plan.leaves[1]!.spanStartUuid).toBe(ghost);
+    expect(plan.leaves[1]!.sources).toEqual([...s.afterUuids[0]!, ...s.workUuids[1]!, ...s.unkeptUuids[1]!]);
+  });
+
+  it('a copy with no boundary mints no leaf: it is all live tail', () => {
+    const s = compactionSequence({ n: 0, trigger: 'manual', tailRows: 5, seed: 0x57, sessionId: SPAN_SESSION });
+    const plan = libSpan.planSpans(spanInputsOf(s.rows));
+    expect(plan.leaves).toEqual([]);
+    expect(plan.liveTail).toEqual(s.liveUuids);
+  });
+});
+
+describe('the exact partition: compaction N claims its unkept rows (DM6, ruled Q5)', () => {
+  const typeOf = (s: SpanSeq, u: string): unknown => s.rows.find((r) => r['uuid'] === u)!['type'];
+
+  it('DM6 manual: two unkept user rows and one unkept hook attachment in [head, boundary) belong to leaf N, never N+1; the kept rows to N+1', () => {
+    const s = compactionSequence({ n: 2, trigger: 'manual', unkeptBeforeBoundary: 3, seed: 0x61, sessionId: SPAN_SESSION });
+    expect(s.unkeptUuids[0]!.map((u) => typeOf(s, u)), 'CONTROL: the fixture is the case DM6 names').toEqual(['user', 'attachment', 'user']);
+    const plan = libSpan.planSpans(spanInputsOf(s.rows));
+    for (const u of s.unkeptUuids[0]!) {
+      expect(plan.leaves[0]!.sources, u).toContain(u);
+      expect(plan.leaves[1]!.sources, u).not.toContain(u);
+    }
+    for (const u of s.keptUuids[0]!) {
+      expect(plan.leaves[1]!.sources, u).toContain(u);
+      expect(plan.leaves[0]!.sources, u).not.toContain(u);
+    }
+  });
+
+  it('DM6 auto: one unkept prompt_snapshot belongs to leaf N, never N+1', () => {
+    const s = compactionSequence({ n: 2, trigger: 'auto', unkeptBeforeBoundary: 1, seed: 0x62, sessionId: SPAN_SESSION });
+    const snap = s.unkeptUuids[0]![0]!;
+    expect(s.rows.find((r) => r['uuid'] === snap)!['attachment'], 'CONTROL').toMatchObject({ type: 'prompt_snapshot' });
+    const plan = libSpan.planSpans(spanInputsOf(s.rows));
+    expect(plan.leaves[0]!.sources).toContain(snap);
+    expect(plan.leaves[1]!.sources).not.toContain(snap);
+  });
+
+  it('DM6: an allUuids member absent from the file changes nothing', () => {
+    const s = compactionSequence({ n: 3, trigger: 'manual', unkeptBeforeBoundary: 3, seed: 0x63, sessionId: SPAN_SESSION });
+    const asRead = spanInputsOf(s.rows);
+    const present = new Set(asRead.rows.map((r) => r.uuid));
+    expect(asRead.boundaries.every((b) => [...b.kept].some((u) => !present.has(u))), 'CONTROL: every kept list names an absent uuid').toBe(true);
+    const presentOnly = { rows: asRead.rows, boundaries: asRead.boundaries.map((b) => ({ ...b, kept: new Set([...b.kept].filter((u) => present.has(u))) })) };
+    expect(libSpan.planSpans(asRead)).toEqual(libSpan.planSpans(presentOnly));
+  });
+
+  it("DM6: leaf ids equal the rev-2 rule's, because the span still starts at head(N-1)", () => {
+    const s = compactionSequence({ n: 3, trigger: 'manual', unkeptBeforeBoundary: 3, seed: 0x64, sessionId: SPAN_SESSION });
+    const plan = libSpan.planSpans(spanInputsOf(s.rows));
+    plan.leaves.forEach((l, k) => {
+      const start = k === 0 ? String(s.rows[0]!['uuid']) : s.headUuids[k - 1]!;
+      expect(libSpan.decideLeafId({ ccrcId: SPAN_ID, ccUuid: SPAN_SESSION, spanStartUuid: l.spanStartUuid, boundaryUuid: l.boundaryUuid, plainBoundOther: false }), `leaf ${k}`)
+        .toEqual({ id: libSpan.leafId(SPAN_ID, SPAN_SESSION, start), forked: false });
+    });
+  });
+});
+
+describe('decideLeafId: the first bound keeps the plain id, a later fork is boundary-qualified (spec 6.1; DM37 pure half)', () => {
+  const START = '00000065-0000-4000-8000-000000000001';
+  const BOUNDARY = '00000065-0000-4000-8000-000000000002';
+  it('a span start no other boundary holds gives the plain id', () => {
+    expect(libSpan.decideLeafId({ ccrcId: SPAN_ID, ccUuid: SPAN_SESSION, spanStartUuid: START, boundaryUuid: BOUNDARY, plainBoundOther: false }))
+      .toEqual({ id: libSpan.leafId(SPAN_ID, SPAN_SESSION, START), forked: false });
+  });
+  it('a plain id already bound to another boundary gives the boundary-qualified id, flagged forked', () => {
+    const r = libSpan.decideLeafId({ ccrcId: SPAN_ID, ccUuid: SPAN_SESSION, spanStartUuid: START, boundaryUuid: BOUNDARY, plainBoundOther: true });
+    expect(r).toEqual({ id: libSpan.leafId(SPAN_ID, SPAN_SESSION, START, BOUNDARY), forked: true });
+    expect(r.id).not.toBe(libSpan.leafId(SPAN_ID, SPAN_SESSION, START));
+    expect(r.id).toMatch(/^L[0-9a-f]{20}$/);
+  });
+});
+
+describe('leafReady and eofAfterBoundary: a raw leaf is never written while it could still be native (spec 7.4 item 1)', () => {
+  const B = Date.parse('2026-10-01T10:00:00.000Z');
+  it('a stored summary is ready at once', () => {
+    expect(libSpan.leafReady({ summaryStored: true, fileAtEofAfterBoundary: false })).toBe(true);
+  });
+  it('without a summary, only a file read to its end at least RAW_LEAF_GRACE_MS after the boundary is ready', () => {
+    expect(libSpan.RAW_LEAF_GRACE_MS).toBe(5 * 60 * 1000);
+    expect(libSpan.eofAfterBoundary({ eofMs: null, boundaryTsMs: B })).toBe(false);
+    expect(libSpan.eofAfterBoundary({ eofMs: B + 1000, boundaryTsMs: B })).toBe(false);
+    expect(libSpan.eofAfterBoundary({ eofMs: B + libSpan.RAW_LEAF_GRACE_MS - 1, boundaryTsMs: B })).toBe(false);
+    expect(libSpan.eofAfterBoundary({ eofMs: B + libSpan.RAW_LEAF_GRACE_MS, boundaryTsMs: B })).toBe(true);
+    expect(libSpan.eofAfterBoundary({ eofMs: B + 10 * libSpan.RAW_LEAF_GRACE_MS, boundaryTsMs: null }),
+      'no time known: never final on end-of-file alone (derive.mjs passes the newest stamped row before the boundary)').toBe(false);
+    expect(libSpan.leafReady({ summaryStored: false, fileAtEofAfterBoundary: false })).toBe(false);
+    expect(libSpan.leafReady({ summaryStored: false, fileAtEofAfterBoundary: true })).toBe(true);
+  });
+});
+
+describe('planFanIn: 8 final leaves make a parent, 4 nodes per level above, one holding copy of one epoch at a time (spec 6.3, RB4)', () => {
+  const slot = (i: number, o: Partial<libSpan.FanInSlot> = {}): libSpan.FanInSlot =>
+    ({ nodeId: `L${i.toString(16).padStart(20, '0')}`, final: true, parented: false, ...o });
+  const slots = (n: number, from = 0): libSpan.FanInSlot[] => Array.from({ length: n }, (_, i) => slot(from + i));
+
+  it("FAN_IN is the plugin's tested 8 and 4, frozen", () => {
+    expect(libSpan.FAN_IN).toEqual({ leaf: 8, condensed: 4 });
+    expect(Object.isFrozen(libSpan.FAN_IN)).toBe(true);
+  });
+  it('8 final leaves make one group; a 9th waits for 7 more; 16 make two', () => {
+    expect(libSpan.planFanIn({ slots: slots(8), width: 8 })).toEqual([slots(8).map((s) => s.nodeId)]);
+    expect(libSpan.planFanIn({ slots: slots(9), width: 8 })).toEqual([slots(8).map((s) => s.nodeId)]);
+    expect(libSpan.planFanIn({ slots: slots(16), width: 8 })).toEqual([slots(8).map((s) => s.nodeId), slots(8, 8).map((s) => s.nodeId)]);
+    expect(libSpan.planFanIn({ slots: slots(7), width: 8 })).toEqual([]);
+  });
+  it('DM26 pure half: a not-ready slot (null) or a non-final one stops grouping, so 8 leaves with one non-final make no parent', () => {
+    const notReady = slots(9).map((s, i) => (i === 3 ? { ...s, nodeId: null } : s));
+    expect(libSpan.planFanIn({ slots: notReady, width: 8 })).toEqual([]);
+    const nonFinal = slots(8).map((s, i) => (i === 5 ? { ...s, final: false } : s));
+    expect(libSpan.planFanIn({ slots: nonFinal, width: 8 })).toEqual([]);
+  });
+  it('grouping starts at the first unparented slot', () => {
+    const done = slots(8).map((s) => ({ ...s, parented: true }));
+    expect(libSpan.planFanIn({ slots: [...done, ...slots(8, 8)], width: 8 })).toEqual([slots(8, 8).map((s) => s.nodeId)]);
+    expect(libSpan.planFanIn({ slots: done, width: 8 })).toEqual([]);
+  });
+  it('DM26 pure half: the caller passes one holding copy of one epoch at a time (RB4), so 5 leaves then 3 across a /clear make no parent', () => {
+    expect(libSpan.planFanIn({ slots: slots(5), width: libSpan.FAN_IN.leaf })).toEqual([]);
+    expect(libSpan.planFanIn({ slots: slots(3, 5), width: libSpan.FAN_IN.leaf })).toEqual([]);
+  });
+  it('level 2 groups 4 depth-1 parents', () => {
+    expect(libSpan.planFanIn({ slots: slots(5), width: libSpan.FAN_IN.condensed })).toEqual([slots(4).map((s) => s.nodeId)]);
+  });
+  it('a width under 2 is a programming error', () => {
+    expect(() => libSpan.planFanIn({ slots: slots(3), width: 1 })).toThrow(TypeError);
+  });
+});
+
+describe('parentRollup: a parent is deterministic and rebuildable from its children (spec 6.3)', () => {
+  const child = (o: Partial<libSpan.RollupChild> = {}): libSpan.RollupChild => ({
+    gist: 'First point. Second point.', topics: [], refs: [], earliestMs: null, latestMs: null,
+    srcChars: 0, descCount: 0, descChars: 0, ...o,
+  });
+
+  it('firstSentence ends at the first stop followed by whitespace or the end, or at the first newline', () => {
+    expect(libSpan.firstSentence('Fixed the parser. Then the tests.')).toBe('Fixed the parser.');
+    expect(libSpan.firstSentence('Shipped v1.2 today')).toBe('Shipped v1.2 today');
+    expect(libSpan.firstSentence('Line one\nLine two.')).toBe('Line one');
+    expect(libSpan.firstSentence('  Done!  More.')).toBe('Done!');
+    expect(libSpan.firstSentence('Why? Because.')).toBe('Why?');
+    expect(libSpan.firstSentence('')).toBe('');
+  });
+
+  it("the gist is each child's first sentence, joined, capped at GIST_MAX with capped set and no marker", () => {
+    expect(libSpan.parentRollup([child({ gist: 'A one. A two.' }), child({ gist: null }), child({ gist: 'B one.' })]).gist).toBe('A one. B one.');
+    const long = Array.from({ length: 8 }, (_, i) => child({ gist: `${String(i).repeat(199)}. tail.` }));
+    const r = libSpan.parentRollup(long);
+    const joined = long.map((c) => c.gist!.split(' ')[0]).join(' ');
+    expect(joined.length).toBeGreaterThan(libSpan.GIST_MAX);
+    expect(r.gist).toBe(joined.slice(0, libSpan.GIST_MAX));
+    expect(r.capped).toBe(true);
+    expect(r.gist).not.toMatch(/\[|…/);
+    // The cut never splits a surrogate pair (Task 4's capText): a pair straddling GIST_MAX goes whole.
+    const pair = String.fromCodePoint(0x1f600);
+    expect(libSpan.parentRollup([child({ gist: `${'a'.repeat(libSpan.GIST_MAX - 1)}${pair}.` })]).gist).toBe('a'.repeat(libSpan.GIST_MAX - 1));
+  });
+
+  it('no child with a first sentence gives a NULL gist, never an empty string (the leaves\' own spelling of "no gist")', () => {
+    const r = libSpan.parentRollup([child({ gist: null }), child({ gist: null })]);
+    expect(r.gist).toBeNull();
+    expect(r.capped).toBe(false);
+    expect(libSpan.parentRollup([child({ gist: '   ' })]).gist).toBeNull();
+  });
+
+  it('topics and refs are unions in first-seen order; refs dedupe by kind and value and keep the first origin', () => {
+    const r = libSpan.parentRollup([
+      child({ topics: ['a', 'b'], refs: [{ kind: 'path', value: 'server/src/x.ts', origin: 'model' }] }),
+      child({ topics: ['b', 'c'], refs: [{ kind: 'path', value: 'server/src/x.ts', origin: 'tool_use' }, { kind: 'sha', value: 'a0860d1f', origin: 'tool_use' }] }),
+    ]);
+    expect(r.topics).toEqual(['a', 'b', 'c']);
+    expect(r.refs).toEqual([{ kind: 'path', value: 'server/src/x.ts', origin: 'model' }, { kind: 'sha', value: 'a0860d1f', origin: 'tool_use' }]);
+    expect(r.capped).toBe(false);
+  });
+
+  it('the unions are capped: TOPICS_MAX topics, REFS_MAX refs', () => {
+    const r = libSpan.parentRollup([
+      child({ topics: Array.from({ length: 20 }, (_, i) => `t${i}`) }),
+      child({ refs: Array.from({ length: libSpan.REFS_MAX + 5 }, (_, i) => ({ kind: 'path', value: `src/f${i}.ts`, origin: 'tool_use' })) }),
+    ]);
+    expect(r.topics).toHaveLength(libSpan.TOPICS_MAX);
+    expect(r.refs).toHaveLength(libSpan.REFS_MAX);
+    expect(r.capped).toBe(true);
+  });
+
+  it('the time range runs from the earliest to the latest; source chars, descendants and their gist chars add up', () => {
+    const r = libSpan.parentRollup([
+      child({ gist: 'abc.', earliestMs: 100, latestMs: 200, srcChars: 10 }),
+      child({ gist: 'de.', earliestMs: null, latestMs: null, srcChars: 5, descCount: 2, descChars: 30 }),
+      child({ gist: null, earliestMs: 50, latestMs: 300, srcChars: 1 }),
+    ]);
+    expect({ e: r.earliestMs, l: r.latestMs, src: r.srcChars, n: r.descCount, chars: r.descChars })
+      .toEqual({ e: 50, l: 300, src: 16, n: 5, chars: 37 });
   });
 });

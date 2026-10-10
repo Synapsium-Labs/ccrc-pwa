@@ -198,3 +198,175 @@ export const steeredBlock = (o: {
     `</ccrc-${kind}>`,
   ].join('\n');
 };
+
+// ---------------------------------------------------------------------------
+// W1-B2 Task 5: a transcript with N compactions, in the measured shape (spec 2026-10-05 §6.1, §7.4 item 1,
+// §4.1 G12). Per segment k, in file order:
+//   work(k) is summarised; kept(k) is preserved verbatim; unkept(k) is inside [head(k), boundary(k)) but absent
+//   from allUuids. The boundary is followed by its summary and a reminder, with auto boundaries adding hooks.
+//   allUuids includes one absent uuid and the reminder. Every uuid includes a seed, so separate calls do not share.
+// ---------------------------------------------------------------------------
+
+export interface CompactionSequenceOpts {
+  /** Compactions, each a boundary row and its summary. 0 gives live rows only. */
+  n: number;
+  trigger: 'manual' | 'auto';
+  /** Rows in [head(k), boundary(k)) absent from allUuids(k). Default 2 on manual, 0 on auto. */
+  unkeptBeforeBoundary?: number;
+  /** The preserved tail's length, at least 1 (its first row is head(k)). Default 2. */
+  keptAfterHead?: number;
+  /** Summarised rows before each preserved tail. Default 4. */
+  workRows?: number;
+  /** Live rows after the last summary. Default 2. */
+  tailRows?: number;
+  /** The uuid namespace. Default 1. */
+  seed?: number;
+  /** The transcript uuid every row names. */
+  sessionId?: string;
+  /** The first row's time; each row is 1 s after the one before. Default 2026-10-01T10:00:00Z. */
+  startMs?: number;
+  /** Every assistant row's message.model. Default 'claude-fixture-4'. */
+  model?: string;
+  /** Summary k's text. Default fixtureSummaryText. */
+  summaryText?: (k: number) => string;
+  /** Boundary k names ITSELF as the anchor (2.1.289's partial `from`, §7.4 item 1); the summary row stays. */
+  anchorIsBoundary?: boolean;
+  /** No summary row at all: the anchor names a uuid absent from the file (DM25). */
+  dropSummary?: boolean;
+}
+
+export interface CompactionSequence {
+  rows: Row[];
+  boundaryUuids: string[];
+  headUuids: string[];
+  /** The summary row's uuid; under dropSummary, the absent uuid boundary k's anchor names. */
+  summaryUuids: string[];
+  workUuids: string[][];
+  keptUuids: string[][];
+  unkeptUuids: string[][];
+  /** Rows after boundary k other than its summary, in file order: the auto attachments, then the reminder. */
+  afterUuids: string[][];
+  liveUuids: string[];
+}
+
+/** A closed nine-section summary naming segment k. */
+export const fixtureSummaryText = (k: number): string => [
+  '<analysis>',
+  `Reviewing segment ${k} before writing the summary.`,
+  '</analysis>',
+  '<summary>',
+  '1. Primary Request and Intent:',
+  `   The operator asked for segment ${k} of the fixture.`,
+  '2. Key Technical Concepts:',
+  `   - fixture-concept-${k}`,
+  '3. Files and Code Sections:',
+  `   - /home/u/worktrees/p/quiet-basin/src/segment-${k}.ts`,
+  '4. Errors and fixes:',
+  '   - none',
+  '5. Problem Solving:',
+  `   Segment ${k} needed no workaround.`,
+  '6. All user messages:',
+  `   - Please do segment ${k}.`,
+  '7. Pending Tasks:',
+  '   - none',
+  '8. Current Work:',
+  `   Working on segment ${k} of the fixture.`,
+  '9. Optional Next Step:',
+  `   Continue with segment ${k + 1}.`,
+  '</summary>',
+].join('\n');
+
+export function compactionSequence(o: CompactionSequenceOpts): CompactionSequence {
+  const seed = o.seed ?? 1;
+  const keptN = o.keptAfterHead ?? 2;
+  if (keptN < 1) throw new Error('compactionSequence: a preserved tail needs at least one kept row, its head');
+  const unkeptN = o.unkeptBeforeBoundary ?? (o.trigger === 'manual' ? 2 : 0);
+  const workN = o.workRows ?? 4;
+  const tailN = o.tailRows ?? 2;
+  const sessionId = o.sessionId ?? '0189abcd-1234-4678-9abc-000000000001';
+  const t0 = o.startMs ?? Date.parse('2026-10-01T10:00:00.000Z');
+  const model = o.model ?? 'claude-fixture-4';
+  const textOf = o.summaryText ?? fixtureSummaryText;
+  let counter = 0;
+  const mint = (): string => {
+    counter += 1;
+    return `${seed.toString(16).padStart(8, '0')}-0000-4000-8000-${counter.toString(16).padStart(12, '0')}`;
+  };
+  const rows: Row[] = [];
+  const base = (uuid: string): RowBase => ({
+    uuid, ts: new Date(t0 + rows.length * 1000).toISOString(),
+    parentUuid: rows.length === 0 ? null : String(rows[rows.length - 1]!['uuid']), sessionId,
+  });
+  const push = (r: Row): string => { rows.push(r); return String(r['uuid']); };
+  const req = (): { requestId: string; msgId: string } => ({ requestId: `req_fx_${seed}_${counter}`, msgId: `msg_fx_${seed}_${counter}` });
+  const out: CompactionSequence = {
+    rows, boundaryUuids: [], headUuids: [], summaryUuids: [], workUuids: [], keptUuids: [], unkeptUuids: [],
+    afterUuids: [], liveUuids: [],
+  };
+  for (let k = 0; k < o.n; k += 1) {
+    const work: string[] = [];
+    let toolUseId = '';
+    for (let j = 0; j < workN; j += 1) {
+      const u = mint();
+      if (j % 4 === 0) work.push(push(userRow({ ...base(u), text: `Segment ${k} request ${j}.` })));
+      else if (j % 4 === 1) {
+        toolUseId = `toolu_fx_${seed}_${k}_${j}`;
+        work.push(push(toolUseRow({
+          ...base(u), ...req(), model, toolUseId, name: 'Read',
+          input: { file_path: `/home/u/worktrees/p/quiet-basin/src/segment-${k}-${j}.ts` },
+        })));
+      } else if (j % 4 === 2) work.push(push(toolResultRow({ ...base(u), toolUseId, content: `contents of segment ${k} file ${j}` })));
+      else work.push(push(assistantRow({ ...base(u), ...req(), model, text: `Done with step ${j} of segment ${k}.` })));
+    }
+    const kept: string[] = [];
+    for (let i = 0; i < keptN; i += 1) {
+      const u = mint();
+      kept.push(push(i % 2 === 0
+        ? userRow({ ...base(u), text: `Kept request ${k}.${i}.` })
+        : assistantRow({ ...base(u), ...req(), model, text: `Kept answer ${k}.${i}.` })));
+    }
+    const unkept: string[] = [];
+    for (let i = 0; i < unkeptN; i += 1) {
+      const u = mint();
+      if (o.trigger === 'auto') {
+        unkept.push(push(attachmentRow({ ...base(u), attachment: { type: 'prompt_snapshot', content: `snapshot ${k}.${i}` } })));
+      } else if (i % 3 === 1) {
+        unkept.push(push(attachmentRow({ ...base(u), attachment: { type: 'hook_additional_context', content: [`hook context ${k}.${i}`] } })));
+      } else {
+        unkept.push(push(userRow({ ...base(u), text: `<command-name>/compact</command-name> ${k}.${i}` })));
+      }
+    }
+    const b = mint();
+    const s = mint();
+    const absent = mint();
+    const reminder = mint();
+    const anchor = o.dropSummary === true ? mint() : o.anchorIsBoundary === true ? b : s;
+    const tail = kept[kept.length - 1]!;
+    out.boundaryUuids.push(push(boundaryRow({
+      ...base(b), parentUuid: tail, trigger: o.trigger,
+      headUuid: kept[0]!, anchorUuid: anchor, tailUuid: tail, allUuids: [...kept, absent, reminder],
+    })));
+    const after: string[] = [];
+    if (o.trigger === 'auto') {
+      for (let i = 0; i < 3; i += 1) {
+        const u = mint();
+        after.push(push(attachmentRow({ ...base(u), attachment: { type: 'hook_success', content: `post-compact hook ${k}.${i}` } })));
+      }
+    }
+    if (o.dropSummary !== true) push(summaryRow({ ...base(s), text: textOf(k) }));
+    after.push(push(attachmentRow({ ...base(reminder), attachment: { type: 'todo_reminder', content: [] } })));
+    out.headUuids.push(kept[0]!);
+    out.summaryUuids.push(o.dropSummary === true ? anchor : s);
+    out.workUuids.push(work);
+    out.keptUuids.push(kept);
+    out.unkeptUuids.push(unkept);
+    out.afterUuids.push(after);
+  }
+  for (let i = 0; i < tailN; i += 1) {
+    const u = mint();
+    out.liveUuids.push(push(i % 2 === 0
+      ? userRow({ ...base(u), text: `Live request ${i}.` })
+      : assistantRow({ ...base(u), ...req(), model, text: `Live answer ${i}.` })));
+  }
+  return out;
+}
