@@ -30,6 +30,7 @@ import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
+import { AttentionList } from './AttentionList';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
 import { api, apiErrorText } from '../lib/api';
@@ -135,25 +136,21 @@ export function ChildReclaimBanner({
         </Button>
         {error !== null && <p className={`child-reclaim-error ${CONTROL_ROW_NOTE}`}>{error}</p>}
       </div>
-      {attention.length > 0 && (
-        <ul className="child-reclaim-attention" aria-label="children reclamation could not clean up">
-          {attention.map((a) => !('sessionId' in a) ? (
-            <li key={`kept-many ${a.word}`} className="child-reclaim-item">
-              <span className="child-reclaim-sentence">{a.sentence}</span>
-              {a.members.map((m) => (
-                <span key={m.sessionId} className="child-reclaim-who">{`run #${m.runId} · ${m.sessionId}`}</span>
-              ))}
-            </li>
-          ) : (
-            <li key={a.sessionId} className="child-reclaim-item">
-              <span className="child-reclaim-who">
-                {a.runId === null ? a.sessionId : `run #${a.runId} · ${a.sessionId}`}
-              </span>
-              <span className="child-reclaim-sentence">{a.sentence}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <AttentionList
+        label="children reclamation could not clean up"
+        lines={attention.map((a) => (!('sessionId' in a)
+          ? {
+            key: `kept-many ${a.word}`,
+            who: a.members.map((m) => `run #${m.runId} · ${m.sessionId}`),
+            sentence: a.sentence,
+            sentenceFirst: true,
+          }
+          : {
+            key: a.sessionId,
+            who: [a.runId === null ? a.sessionId : `run #${a.runId} · ${a.sessionId}`],
+            sentence: a.sentence,
+          }))}
+      />
       {/* Workspace lifecycle wave 3b: the expiry lane's own list, under the children's — the same switch stops both
           lanes, and the two lists stay two (child reclamation's run chip never reads this one). */}
       <ExpiryAttention coord={coord} />

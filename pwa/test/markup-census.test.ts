@@ -243,14 +243,6 @@ const REGISTERED_BLOCKS: Record<string, string> = {
     + 'shape census documents its own 0.72 window.',
   'select.route-select(option,option,option)':
     'NEXT, inside the field above.',
-  ['ul.child-reclaim-attention(li.child-reclaim-item('
-    + 'span.child-reclaim-who,span.child-reclaim-sentence))']:
-    'NEXT. `ExpiryAttention` and `DeadCoordinatorAttention` are twenty-two '
-    + 'line files that differ in three expressions: the words helper, the key, '
-    + 'and the aria-label. The cleanup row renders both, one under the other.',
-  'li.child-reclaim-item(span.child-reclaim-who,span.child-reclaim-sentence)':
-    'NEXT, the line inside that list — which `ChildReclaimBanner` writes a '
-    + 'third time for its own lane.',
   'span.settings-theme-body(span.settings-theme-name,span.settings-note)':
     'NEXT. A name over its note, in the theme picker: once in the per-palette '
     + 'row and once inline for "Follow system", which is not a palette and so '
