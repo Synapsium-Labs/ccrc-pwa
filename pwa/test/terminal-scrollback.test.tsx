@@ -163,7 +163,11 @@ const fakeTermFactory = () => {
  *  test can measure what the drawer does BEFORE the history has landed — which
  *  is the real xterm's behaviour (`write` parses asynchronously) and the shape
  *  the opening scroll got wrong. */
-const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
+const fakeHistoryFactory = (
+  // `rowHeight` is injectable because a terminal that has not painted yet
+  // reports ZERO, and the drag's re-measure is the arm that answers for it.
+  { defer = false, rowHeight }: { defer?: boolean; rowHeight?: () => number } = {},
+) => {
   const write = vi.fn<(data: string) => void>();
   const dispose = vi.fn<() => void>();
   const scrolled: number[] = [];
@@ -207,7 +211,7 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
           fits.push(fits.length + 1);
           return { cols: 48, rows: 20 };
         },
-        rowHeight: () => ROW_PX,
+        rowHeight: rowHeight ?? ((): number => ROW_PX),
         offset: (px: number) => {
           offsets.push(px);
         },
@@ -379,7 +383,7 @@ const ARROWS: [string, string][] = [
 /** An opened drawer on scripted doubles, with the socket's frames already
  *  cleared: every assertion below is about what the GESTURE put there, never
  *  about the attach that preceded it. */
-const mountDrawer = (histOpts?: { defer?: boolean; onClose?: () => void }) => {
+const mountDrawer = (histOpts?: { defer?: boolean; onClose?: () => void; rowHeight?: () => number }) => {
   const t = fakeTermFactory();
   const h = fakeHistoryFactory(histOpts);
   const view = render(
@@ -2085,5 +2089,174 @@ describe('a read the reader abandoned stays gone', () => {
     await act(async () => { settle(json(200, OK_HISTORY)); await flush(); });
 
     expect(m.h.write, 'a read nobody abandoned failed to paint').toHaveBeenCalled();
+  });
+});
+
+// — the gesture's own guards, which every drag above walks past —
+//
+// Each of these answers a question about a terminal or a finger that is not
+// what the ordinary drag assumes: a row height of ZERO (nothing painted yet),
+// a move with no down (a pointer stream that began somewhere else), a finger
+// that RESTED before lifting, the pointer echo of a touch already counted,
+// and two fingers. Measured: statements 255, 257, 258, 300, 341, 345 and
+// branch 268#1 of `historyPane.ts` uncovered with this file 80/80 green.
+describe('the history drag, when the glass or the finger is not what a drag assumes', () => {
+  const openWith = async (histOpts?: Parameters<typeof mountDrawer>[0]) => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const m = mountDrawer(histOpts);
+    act(() => { m.t.wheel(-120); });
+    await waitFor(() => expect(m.h.write).toHaveBeenCalled());
+    return m;
+  };
+
+  it('a terminal that has not painted yet is re-measured on the first move, and the drag lands', async () => {
+    // `begin` reads the row height, and xterm reports 0 until it has laid a
+    // row out — a drawer dragged in the same frame it opened. Caching that
+    // zero would make the history immovable for the rest of the gesture; the
+    // re-measure on the first `step` is what makes the first drag work.
+    let painted = false;
+    const { h, view } = await openWith({ rowHeight: () => (painted ? ROW_PX : 0) });
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.pointerDown(el, { pointerId: 1, clientY: 0, isPrimary: true, button: 0 });
+    painted = true;                                    // xterm laid out a row
+    fireEvent.pointerMove(el, { pointerId: 1, clientY: 3 * ROW_PX, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: 3 * ROW_PX, isPrimary: true });
+
+    expect(h.scrolled, 'the re-measure never happened, so the drag moved nothing').toEqual([-3]);
+  });
+
+  it('a terminal that never reports a row height scrolls nothing, and does not throw', async () => {
+    // The degrade. Dividing by a zero row height is `Infinity` rows, which is
+    // a `scrollLines(Infinity)` into xterm — so the guard returns instead,
+    // leaving the view where it is.
+    const { h, view } = await openWith({ rowHeight: () => 0 });
+    h.scrolled.length = 0;
+
+    drag(histHost(view), 0, 10 * ROW_PX);
+
+    expect(h.scrolled).toEqual([]);
+    expect(h.offsets.filter((px) => !Number.isFinite(px)),
+      'a zero row height reached the transform as Infinity').toEqual([]);
+  });
+
+  it('a move with no down scrolls nothing — the drag belongs to whoever began it', async () => {
+    // TWO FAMILIES, TWO GUARDS, and only one of them is `dragging`. A
+    // `pointermove` for a stream that began elsewhere is turned away by
+    // `active !== ev.pointerId` before it ever reaches the step, so the
+    // pointer pair cannot reach this condition at all. The TOUCH pair can: it
+    // has no id to compare, by design — iOS cancels the pointer stream when
+    // another sheet preventDefaults a touch, so the touch path must follow
+    // whatever finger it is given. A `touchmove` whose `touchstart` landed on
+    // the sheet handle above is exactly that, and without the flag it would
+    // scroll the history by the distance from `lastY`'s initial 0.
+    const { h, view } = await openWith();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.pointerMove(el, { pointerId: 9, clientY: 5 * ROW_PX, isPrimary: true });
+    fireEvent.touchMove(el, { touches: [{ clientY: 5 * ROW_PX }] });
+
+    expect(h.scrolled, 'a move nobody began scrolled the history').toEqual([]);
+  });
+
+  it('the pointer ECHO of a touch is ignored — one finger is counted once', async () => {
+    // A browser fires both families for the same finger. Counted twice, every
+    // touch drag would move the history twice as far as the thumb did, which
+    // is the whole reason the touch path takes ownership for its duration.
+    const { h, view } = await openWith();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.touchStart(el, { touches: [{ clientY: 0 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 3 * ROW_PX }] });
+    // The echo, in full: down, move, up, with the same travel.
+    fireEvent.pointerDown(el, { pointerId: 1, clientY: 0, isPrimary: true, button: 0 });
+    fireEvent.pointerMove(el, { pointerId: 1, clientY: 3 * ROW_PX, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: 3 * ROW_PX, isPrimary: true });
+    fireEvent.touchEnd(el, { touches: [] });
+
+    expect(h.scrolled.reduce((a, b) => a + b, 0),
+      'the echo was counted, so the history moved twice as far as the finger').toBe(-3);
+
+    // AND THE ECHO MUST NOT OUTLIVE THE TOUCH — a property, not a killer, and
+    // measured as such. Deleting `down`'s own `viaTouch` guard leaves all 86
+    // cases green, because the echo it then adopts is stopped twice more: by
+    // `move`'s `viaTouch` while the finger is down, and by `step`'s
+    // `dragging` once `touchend` has called `finish`. It is defence in depth,
+    // so what this tail pins is the OUTCOME the three guards share; the day
+    // one of the other two is relaxed, this is the case that notices.
+    h.scrolled.length = 0;
+    fireEvent.pointerMove(el, { pointerId: 1, clientY: 6 * ROW_PX, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: 6 * ROW_PX, isPrimary: true });
+    expect(h.scrolled, "the echo's tail kept scrolling after the finger lifted").toEqual([]);
+  });
+
+  it('a second finger abandons the drag rather than following one of the two', async () => {
+    // A pinch arrives as a `touchstart` with two touches — on this layer, as a
+    // `touchmove` with two as well, since the second finger can land after the
+    // first. Either way the gesture is not a scroll, and the honest answer is
+    // to stop where the first finger left it.
+    const { h, view } = await openWith();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.touchStart(el, { touches: [{ clientY: 0 }, { clientY: 200 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 4 * ROW_PX }, { clientY: 240 }] });
+    fireEvent.touchEnd(el, { touches: [] });
+    expect(h.scrolled, 'a pinch scrolled the history').toEqual([]);
+
+    // A second finger arriving MID-drag: the first finger's travel stands,
+    // and nothing is added for the pinch.
+    fireEvent.touchStart(el, { touches: [{ clientY: 0 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 2 * ROW_PX }] });
+    expect(h.scrolled).toEqual([-2]);
+    fireEvent.touchMove(el, { touches: [{ clientY: 6 * ROW_PX }, { clientY: 300 }] });
+    fireEvent.touchEnd(el, { touches: [] });
+    expect(h.scrolled, 'the pinch kept scrolling what the drag had begun').toEqual([-2]);
+  });
+
+  it('two moves in the SAME millisecond leave the speed alone — no division by zero', async () => {
+    // A phone can deliver two `touchmove`s inside one millisecond, and `dy /
+    // dt` is then `Infinity`. The smoothed speed would carry it to the lift,
+    // and `glide(Infinity)` is a throw with no end: `scrollLines` asked for a
+    // non-finite number of rows, on a view that never settles. The guard
+    // leaves the speed at whatever the last real sample said — here nothing,
+    // so the view is PLACED.
+    //
+    // Measured with a frozen clock rather than a fast one: a real `dt` of 0 is
+    // exactly what cannot be arranged by firing events quickly.
+    let now = 5_000;
+    const frames: Array<(t: number) => void> = [];
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => frames.push(cb));
+    vi.stubGlobal('cancelAnimationFrame', () => { frames.length = 0; });
+
+    const { h, view } = await openWith();
+    h.scrolled.length = 0;
+    h.offsets.length = 0;
+    const el = histHost(view);
+
+    fireEvent.touchStart(el, { touches: [{ clientY: 0 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 2 * ROW_PX }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 4 * ROW_PX }] });
+    fireEvent.touchEnd(el, { touches: [] });
+
+    expect(h.scrolled, 'the drag itself still moves, clock or no clock').toEqual([-2, -2]);
+
+    // The lift is where a speed of Infinity would show: run whatever frames
+    // are queued (the drawer queues its own for the paint latch, so their
+    // presence proves nothing — what they DO does) and the view must not move
+    // another row, nor be asked for a non-finite one.
+    const settled = [...h.scrolled];
+    for (let i = 0; i < 10; i += 1) {
+      const cb = frames.shift();
+      if (cb === undefined) break;
+      now += 1000 / 60;
+      act(() => cb(now));
+    }
+    expect(h.scrolled, 'a speed of Infinity was carried into the lift').toEqual(settled);
+    expect([...h.scrolled, ...h.offsets].filter((n) => !Number.isFinite(n))).toEqual([]);
   });
 });
