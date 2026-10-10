@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=aa1f2bf19e77892b3d901e6da91f58f0067ed5a819de1750f88a80a1a5f07ab7
+# ccrc:generated 1 sha256=a9a55573ce80cbe58c1ee16e84aef4fc79aa10cba2f601009dd6c9ad2b4885f4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32204,8 +32204,12 @@ _ws_expire_return_gap() { :; }
 # THE QUARANTINE is `<physical ~/.cc-tmp>/.ccd-quarantine`, on the leaf's own file
 # system so a rename never crosses one: a real directory of this uid at 0700,
 # made by the verb alone — a plain `mkdir -m 0700` when PROVEN absent, then
-# `chmod g-s` on what that mkdir made — and refused as anything else, by the
-# audit's read-only question as by the verb (`_ws_collect_qcheck`). A
+# `chmod g-s` on what that mkdir made. Beside a present leaf and on a resume it
+# is refused as anything else, by the audit's read-only question as by the
+# verb (`_ws_collect_qcheck`). Beside an absent leaf the evaluation only lists
+# its slots (`_ws_collect_slots_of`), so a quarantine that is a link or not a
+# directory, or whose slots cannot be listed, is unmeasured there; it does not
+# ask the uid and mode half, because that arm moves nothing into it. A
 # slot in it is `slot.<id>.<ns>.<pid>`, made by an exclusive `mkdir`; the
 # `slot.` prefix keeps it clear of any rule keyed on a leaf's own name, and the
 # leaf moves to `<slot>/leaf`. Its name pairs it with its record.
@@ -32789,8 +32793,20 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 #     of `$REG` shows the lock this process holds: a `$REG` that can be searched but not listed makes every
 #     glob come back empty, and `_ws_slug_free` then answers free over a
 #     standing row (measured);
-#   witness-mismatch (TERMINAL) — the witness unreadable, without a birth
-#     time, or not the real directory at the id by dev, ino and birth time;
+#   witness-mismatch (TERMINAL) — the witness unreadable, or without a birth
+#     time. The leaf's absence is then MEASURED, and a leaf PROVEN absent
+#     takes the witness-only arm (below);
+#   the quarantine, asked READ-ONLY (`_ws_collect_qcheck`) — one the verb
+#     would refuse licenses no move into it: unmeasured `quarantine`;
+#   quarantine-kept (TERMINAL) — a slot of the id stands that no record names
+#     (`_ws_collect_slots_of`; a quarantine that is a link or not a directory,
+#     or whose slots cannot be listed, is unmeasured `quarantine`). It may hold
+#     an earlier leaf of the id, so it is asked before the leaf's own words;
+#   witness-mismatch (TERMINAL) — the leaf a link or not a directory, or not
+#     the real directory at the id by dev, ino and birth time;
+#   owner write — a leaf without it cannot be renamed into the quarantine, so
+#     it is not licensed to move: unmeasured `mode`, as is a mode that cannot
+#     be read;
 #   changed-recently — the newest CTIME over every entry under the leaf, the leaf
 #     included, younger than the floor (Task 4's `_ws_collect_floor_held`
 #     against `_ws_collect_floor_s`); mtime is never read. A knob the floor
@@ -32805,10 +32821,18 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 #     its terminal refusals.
 # A probe that cannot answer ends it at its rung as `unmeasured`, and names
 # itself in `collect.unmeasured`. A witness whose leaf is PROVEN absent, with
-# no record standing, is collectable at once with a token of its own: the verb
-# then drops the witness, and nothing else (spec §5.10, "never orphaned in silence") —
-# unless a quarantine slot of the id stands, which with no record naming it is
-# the operator's (`quarantine-kept`), and the witness stays beside it.
+# no record standing, takes its own arm. The absence is believed only on the
+# device the witness records (`_ws_collect_root_dev`): a physical `~/.cc-tmp`
+# on another device, or one whose device cannot be read, is unmeasured
+# `device`, since an empty mount point is no proof that the leaf is gone.
+# Then a slot of the id that no record names is the operator's
+# (`quarantine-kept`, and the witness stays beside it), and a quarantine that
+# is a link or not a directory, or whose slots cannot be listed, is unmeasured
+# `quarantine`. Past those it is collectable at once with a token of its own,
+# and the verb then drops the witness and nothing else. So a FRESH collection
+# never orphans a slot in silence (spec §5.10): the resume does not ask,
+# because a record names its own slot there, and the reclaim tail's witness
+# drop is not the collector's (`tail-drop-ignores-a-recordless-slot`).
 #
 # THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
 # `collectable` MEANS a token, spelled through `_json_str` as the other audits'
@@ -32994,6 +33018,10 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_collect_root_dev "$_WS_WIT_DEV" "the witness of $id" \
       || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
     _WS_COLLECT_LEAF=absent
+    # This arm lists the quarantine's slots, so a quarantine that is a link or
+    # not a directory, or whose slots cannot be listed, answers unmeasured
+    # `quarantine`; it does not ask `_ws_collect_qcheck`'s uid and mode half,
+    # because it moves nothing into the quarantine.
     _ws_collect_slots_of "$id"; rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
     (( ${#_WS_QSLOTS[@]} == 0 )) \
@@ -34099,9 +34127,13 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
   fi
   # 1 — THE CONSENT IS THE TOKEN, recomputed HERE by the one evaluation
   # `ws-audit --collect` runs (`_ws_collect_fork`): where a record stands, the
-  # record, its slot's leaf and the phase read off the disk; else the witness,
-  # the registry, the idle floor, the tree's newest ctime and count, the probe,
-  # the checkouts and the row rule — all before anything moves.
+  # record, its slot's leaf and the phase read off the disk; else the registry
+  # and the witness, then, beside a leaf PROVEN absent, the physical
+  # `~/.cc-tmp`'s device against the witness's and the id's recordless slots;
+  # beside a present leaf, the quarantine (read-only), the id's recordless
+  # slots, the leaf's identity and owner write, the idle floor, the tree's
+  # newest ctime and count, the probe, the checkouts and the row rule — all
+  # before anything moves.
   _ws_collect_fork "$id"
   [[ -n "${REAP_VERDICT-}" ]] || { REAP_VERDICT=unmeasured; REAP_DETAIL="the collection evaluation answered no verdict for $id"; }
   if [[ "${REAP_VERDICT-}" == collectable && "$token" != "${REAP_TOKEN-}" ]]; then
