@@ -891,3 +891,71 @@ describe('store.mjs: readBounded (review 316 F10, F18; D-4347 (history-planted-e
     expect(r.stdout).toBe('{"state":"unreadable"}');
   });
 });
+
+// ── W1-B2 Task 9: the lineage range CTE (P7) and the edge lookups — DM9 (spec 2026-10-05 §6.3, §6.7) ───────
+// On real SQLite: a condensed node's lineage is its SOURCES (the leaves it condenses, then their entries), never
+// its consumers; the walk survives a cycle (UNION); childrenOf and parentOf read the two directions by name.
+import * as v9s from 'vitest';
+import * as tmp9s from './tmpHelpers.js';
+import * as lib9s from '../../ccd/history/lib.mjs';
+import * as store9s from '../../ccd/history/store.mjs';
+import type { DatabaseSync as Db9s } from 'node:sqlite';
+
+const T9S = 'd9a00000-1111-4111-8111-111111111111';
+
+/** One family, one transcript, four entries; leaves L1 (entries 1, 2) and L2 (entries 3, 4) under parent N. */
+function lineageStore9(): { db: Db9s; l1: string; l2: string; n: string } {
+  const home = tmp9s.mkTmp('ccrc-hist-dm9-');
+  store9s.createStore(home);
+  const db = store9s.openWriter(lib9s.historyPaths(home).dbFile);
+  const l1 = lib9s.leafId('claude-a-demo', T9S, 'span-1');
+  const l2 = lib9s.leafId('claude-a-demo', T9S, 'span-2');
+  const n = lib9s.parentId([l1, l2]);
+  db.exec('BEGIN');
+  db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, 'claude-a-demo', '', 'demo', 1)").run();
+  db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(T9S);
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 7), Buffer.from([0]));
+  const ent = db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 1, 'user', 'operator', 1, 0, 0, 1, ?)");
+  for (let k = 1; k <= 4; k += 1) ent.run(k, `d9a00000-0000-4000-8000-${k.toString(16).padStart(12, '0')}`, 1000 + k);
+  const node = db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, parser_version, created_ms) VALUES (?, 1, 1, 1, ?, ?, 'ok', 1, 1)");
+  node.run(l1, 'native_leaf', 0);
+  node.run(l2, 'native_leaf', 0);
+  node.run(n, 'condensed', 1);
+  const src = db.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, ?)');
+  src.run(l1, 1, 0); src.run(l1, 2, 1); src.run(l2, 3, 0); src.run(l2, 4, 1);
+  const kid = db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+  kid.run(n, l1, 0); kid.run(n, l2, 1);
+  db.exec('COMMIT');
+  return { db, l1, l2, n };
+}
+
+v9s.describe('DM9: the lineage walks toward a node\'s sources, on real SQLite (W1-B2 Task 9)', () => {
+  v9s.it('a condensed node\'s lineage lists its sources\' entries; a leaf\'s lists its own; the edges read both ways', () => {
+    const { db, l1, l2, n } = lineageStore9();
+    try {
+      const of = (id: string): number[] => store9s.lineageEntries(db, id).map((r) => r.entryId).sort((a, b) => a - b);
+      v9s.expect(of(n), 'the parent condenses L1 and L2: their four entries').toEqual([1, 2, 3, 4]);
+      v9s.expect(of(l1)).toEqual([1, 2]);
+      // Rows come grouped by leaf id (code-unit order) and in each leaf's ord.
+      const byLeaf = [[l1, 0, 1001], [l1, 1, 1002], [l2, 0, 1003], [l2, 1, 1004]];
+      const expected = l1 < l2 ? byLeaf : [...byLeaf.slice(2), ...byLeaf.slice(0, 2)];
+      v9s.expect(store9s.lineageEntries(db, n).map((r) => [r.nodeId, r.ord, r.tsMs])).toEqual(expected);
+      v9s.expect(store9s.childrenOf(db, n)).toEqual([{ childId: l1, ord: 0 }, { childId: l2, ord: 1 }]);
+      v9s.expect(store9s.childrenOf(db, l1)).toEqual([]);
+      v9s.expect(store9s.parentOf(db, l1)).toBe(n);
+      v9s.expect(store9s.parentOf(db, n)).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  v9s.it('a cycle in node_children ends the walk (UNION), and the lineage stays the sources\'', () => {
+    const { db, l2, n } = lineageStore9();
+    try {
+      db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, 0)').run(l2, n);
+      v9s.expect(store9s.lineageEntries(db, n).map((r) => r.entryId).sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    } finally {
+      db.close();
+    }
+  });
+});

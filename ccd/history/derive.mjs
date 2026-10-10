@@ -15,11 +15,11 @@ import { closeSync, readSync } from 'node:fs';
 import { HEADING_RE, fencedRanges, mineTokens } from '../compact-card.mjs';
 import {
   LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, classifyRef, decideLeafId, directionOfSummaryRow,
-  directiveFlag, eofAfterBoundary, forkCounts, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
-  parseBlocks, pickHoldingCopy, pickReceipt, planSpans, producerOfCopy, redactField, selectBlock, summaryParts,
-  summaryRowFor,
+  directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
+  parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
+  summaryParts, summaryRowFor, withinBudget,
 } from './lib.mjs';
-import { bump, getStep, setStep, unbrotli, withTx } from './store.mjs';
+import { bump, getStep, parentOf, setStep, unbrotli, withTx } from './store.mjs';
 
 /** derivation_state steps this module keeps (§6.2). None is the 'recover' step status reads. */
 const LEAF_STEP = 'leaves';                   // version NODE_PARSER_VERSION; cursor: every boundary at or below it has its leaf or a LEAF_CRASHED_STEP marker
@@ -541,4 +541,270 @@ export function deriveLeaves(db, ictx, budget) {
 /** Derive, nodes (§9.2 step 6, §6.3). Task 9 adds the parents and the nodes_fts backfill after the leaves. */
 export function deriveNodes(db, ictx, budget) {
   deriveLeaves(db, ictx, budget);
+  deriveParents(db, ictx, budget);
+  indexNodesFts(db, ictx, budget);
+}
+
+// ── Parents: fan-in per epoch, deterministic rollups (spec §6.3; W1-B2 Task 9) ───────────────────────────
+//
+// Which leaves group:
+//   - 8 leaves make a depth-1 parent, and 4 nodes per level above (FAN_IN; lib's planFanIn decides each group);
+//   - never across a /clear epoch: an epoch's slots are its own main transcript's boundaries, in `ord`;
+//   - never across two forks: those slots are split per HOLDING COPY, the transcript file Task 8's holdingCopy
+//     picks for each boundary, and fan-in runs per copy, so a parent's children share one copy (the
+//     coordinator's ruling RB4; slug history-span-per-boundary-copy, extended to fan-in);
+//   - only over FINAL leaves: a boundary whose leaf is not derived yet is a null slot, and a null slot stops the
+//     group of its own copy, so a parent never skips a span to fill itself.
+// What a parent is:
+//   - its id is parentId(child ids, in order), so a retry, a reparse or a rebuild re-derives the same id (§6.1);
+//   - its gist, topics, refs, time range and counts come from lib's parentRollup over the children's stored
+//     fields. No model summarises anything (§6.3: "always deterministic and rebuildable").
+// Writes: each parent, its node_children and node_refs rows, and (when the FTS tables exist) its nodes_fts row
+// commit in ONE NORMAL transaction. A node is derived and rebuildable, never journaled (§9.14).
+// Cursor (slug history-parents-cursor-by-rowid, NEW): ('parents', NODE_PARSER_VERSION) holds the highest
+// nodes.rowid already considered. Only an epoch that gained a node since then is walked again; a budget that
+// ends mid-walk leaves the cursor where it was, so the next tick walks those epochs again.
+
+const PARENTS_STEP = 'parents';
+/** The nodes_fts backfill's derivation step. Exported: doctor --repair (W1-B2 Task 23) resets its cursor when it
+ *  recreates nodes_fts. */
+export const NODES_FTS_STEP = 'nodes-fts';
+const NODES_FTS_STEP_VERSION = 1;
+/** The nodes_fts backfill's page: one NORMAL transaction each. */
+const NODES_FTS_BATCH = 256;
+/** A walk never climbs past this depth. 4^31 leaves is no store this code will meet; the bound only keeps a
+ *  hand-damaged node_children table from looping. */
+const MAX_FAN_DEPTH = 32;
+
+function parentsBudgetLeft(budget) {
+  return withinBudget({ elapsedMs: budget.now() - budget.startMs, bytes: budget.bytes, maxMs: budget.maxMs, maxBytes: budget.maxBytes });
+}
+
+/** A node's `topics` column as a list. A parent writes a JSON array; a column that is not one reads as one
+ *  topic per line. */
+function topicsOfColumn(text) {
+  if (text === null || text === undefined || text === '') return [];
+  try {
+    const v = JSON.parse(text);
+    if (Array.isArray(v)) return v.filter((x) => typeof x === 'string');
+  } catch {
+    // not JSON: one topic per line, below
+  }
+  return String(text).split('\n').map((t) => t.trim()).filter((t) => t !== '');
+}
+
+const PARENT_STMTS = new WeakMap();
+function parentStmts(db) {
+  let s = PARENT_STMTS.get(db);
+  if (s === undefined) {
+    s = {
+      maxRow: db.prepare('SELECT max(rowid) AS r FROM nodes'),
+      touched: db.prepare('SELECT DISTINCT session_pk, epoch_seq FROM nodes WHERE rowid > ?'),
+      epochTranscripts: db.prepare('SELECT t.transcript_pk AS transcript_pk FROM epochs e JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid '
+        + "WHERE e.session_pk = ? AND e.seq = ? AND t.agent_id = '' ORDER BY t.transcript_pk"),
+      bounds: db.prepare('SELECT entry_id, transcript_pk FROM boundaries WHERE transcript_pk = ? ORDER BY ord'),
+      leafAt: db.prepare('SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0'),
+      exists: db.prepare('SELECT 1 AS x FROM nodes WHERE node_id = ?'),
+      node: db.prepare('SELECT node_id, session_pk, epoch_seq, transcript_pk, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars FROM nodes WHERE node_id = ?'),
+      refs: db.prepare('SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid'),
+      rowidOf: db.prepare('SELECT rowid AS r FROM nodes WHERE node_id = ?'),
+      insNode: db.prepare('INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, '
+        + 'summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, '
+        + 'directive_flag, capped, parser_version, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+      insChild: db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)'),
+      insRef: db.prepare('INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?) ON CONFLICT (node_id, kind, value) DO NOTHING'),
+    };
+    PARENT_STMTS.set(db, s);
+  }
+  return s;
+}
+
+/** A node's stored fields, as parentRollup and the nodes_fts row read them. */
+function storedNode(db, id) {
+  const s = parentStmts(db);
+  const r = s.node.get(id);
+  return {
+    row: r,
+    rollup: {
+      gist: typeof r.gist === 'string' ? r.gist : null,
+      topics: topicsOfColumn(r.topics),
+      refs: s.refs.all(id).map((x) => ({ kind: x.kind, value: x.value, origin: x.origin })),
+      earliestMs: r.earliest_ms === null ? null : Number(r.earliest_ms),
+      latestMs: r.latest_ms === null ? null : Number(r.latest_ms),
+      srcChars: Number(r.src_chars ?? 0),
+      descCount: Number(r.desc_count ?? 0),
+      descChars: Number(r.desc_chars ?? 0),
+    },
+  };
+}
+
+/** One nodes_fts row: the gist, the topics one per line and the ref values one per line, through lib's nodeIndexTexts
+ *  with this tick's pairs (W1-B2 Task 7A: B1's entryIndexText on each column, so redactForIndex's escape readings and
+ *  the belt, §8.3 layer 4; spec §6.2 `nodes_fts`, rev 3.5). It is the one index-text rule B1 applies to
+ *  blobs_fts, and Task 8's indexNode writes through it too. The parts are taken from redacted text already (§6.2);
+ *  this pass also catches a pair learned since. */
+function insertNodeFts(db, ictx, rowid, gist, topics, refs) {
+  const t = nodeIndexTexts({ gist, topics, refs: refs.map((r) => r.value) }, ictx.pairIdx);
+  db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(rowid, t.gist, t.topics, t.refs);
+}
+
+/** The parent of `childIds` at `depth`, unless it exists. Returns its id, or null when it was there. */
+function createParent(db, ictx, childIds, depth) {
+  const s = parentStmts(db);
+  const id = parentId(childIds);
+  if (s.exists.get(id) !== undefined) return null;
+  const kids = childIds.map((c) => storedNode(db, c));
+  const first = kids[0].row;
+  const r = parentRollup(kids.map((k) => k.rollup));
+  withTx(db, 'NORMAL', () => {
+    s.insNode.run(id, first.session_pk, first.epoch_seq, first.transcript_pk, 'condensed', depth, 'ok', r.gist, JSON.stringify(r.topics),
+      r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars, directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0,
+      NODE_PARSER_VERSION, ictx.nowMs);
+    childIds.forEach((c, i) => { s.insChild.run(id, c, i); });
+    for (const ref of r.refs) s.insRef.run(id, ref.kind, ref.value, ref.origin);
+    if (ictx.fts === true) insertNodeFts(db, ictx, s.rowidOf.get(id).r, r.gist, r.topics, r.refs);
+  });
+  return id;
+}
+
+/** Fan-in over ONE holding copy's level-0 slots, level by level (§6.3). Each slot holds its leaf or null; each
+ *  level above holds the parents of the level below, in their children's order. Returns the parents made. */
+function fanInLevels(db, ictx, level0) {
+  let made = 0;
+  let level = level0;
+  for (let depth = 0; depth < MAX_FAN_DEPTH && level.length > 0; depth += 1) {
+    const width = depth === 0 ? FAN_IN.leaf : FAN_IN.condensed;
+    const slots = level.map((id) => ({ nodeId: id, final: id !== null, parented: id !== null && parentOf(db, id) !== null }));
+    for (const group of planFanIn({ slots, width })) {
+      if (createParent(db, ictx, group, depth + 1) !== null) made += 1;
+    }
+    const next = [];
+    for (const id of level) {
+      if (id === null) continue;
+      const p = parentOf(db, id);
+      if (p !== null && !next.includes(p)) next.push(p);
+    }
+    level = next;
+  }
+  return made;
+}
+
+/** Every parent one epoch can have now (§6.3; the coordinator's ruling RB4). Level 0 is split PER HOLDING COPY:
+ *  each boundary of the epoch's main transcript, in `ord`, joins the slot list of the file Task 8's holdingCopy
+ *  picks for it (a live file first, then the smallest file_id, among the files that have it as a member).
+ *  - Why: `boundaries.ord` is numbered per transcript in arrival order, so two forks of one transcript
+ *    interleave in it. One list for the whole transcript would let a parent take leaves of both forks, and a
+ *    leaf not derived yet in one fork would stop the other's grouping. Per copy, a null slot stops only its own
+ *    copy, and a parent's children share one copy.
+ *  - A shared head falls to the copy that holds it (the smaller file_id when both are live), so the other fork's
+ *    list starts after the fork.
+ *  - A boundary no file holds has no leaf (Task 8 waits on it) and joins no list.
+ *  - The split is read when a parent is minted. A parent minted earlier keeps its children: they read parented
+ *    (parentOf), and planFanIn never regroups a parented slot.
+ *  The lists run in ascending file_id. Returns the parents made. */
+function deriveEpochParents(db, ictx, sessionPk, epochSeq) {
+  const s = parentStmts(db);
+  const ds = stmts(db);
+  const pass = { files: new Map() };
+  const copies = new Map();   // holding file_id → its level-0 slots, in ord
+  for (const t of s.epochTranscripts.all(sessionPk, epochSeq)) {
+    for (const b of s.bounds.all(t.transcript_pk)) {
+      const holding = holdingCopy(ds, pass, b);
+      if (holding === null) continue;
+      const copyKey = holding.file_id;
+      if (!copies.has(copyKey)) copies.set(copyKey, []);
+      const leaf = s.leafAt.get(b.entry_id);
+      copies.get(copyKey).push(leaf === undefined ? null : leaf.node_id);
+    }
+  }
+  let made = 0;
+  for (const key of [...copies.keys()].sort((x, y) => Number(x) - Number(y))) made += fanInLevels(db, ictx, copies.get(key));
+  return made;
+}
+
+/** Fan-in for every epoch that gained a node since the cursor (§6.3). Returns how many parents it made. */
+export function deriveParents(db, ictx, budget) {
+  const s = parentStmts(db);
+  const step = getStep(db, PARENTS_STEP, NODE_PARSER_VERSION);
+  const from = step === null || step.cursor === null ? 0 : Number(step.cursor);
+  const top = s.maxRow.get().r;
+  if (top === null || Number(top) <= from) return 0;
+  let made = 0;
+  for (const e of s.touched.all(from)) {
+    if (!parentsBudgetLeft(budget)) return made;
+    made += deriveEpochParents(db, ictx, e.session_pk, e.epoch_seq);
+  }
+  setStep(db, PARENTS_STEP, NODE_PARSER_VERSION, String(top), null);
+  return made;
+}
+
+/** The nodes_fts backfill (§6.2): every node past the ('nodes-fts', 1) cursor with no nodes_fts row gets one.
+ *  This covers a node derived while the FTS tables did not exist, or after doctor --repair recreated them.
+ *  A node indexed at derivation is skipped, never inserted twice: a second insert of one rowid throws.
+ *  Returns the rows added. */
+export function indexNodesFts(db, ictx, budget) {
+  if (ictx.fts !== true) return 0;
+  const step = getStep(db, NODES_FTS_STEP, NODES_FTS_STEP_VERSION);
+  let cursor = step === null || step.cursor === null ? 0 : Number(step.cursor);
+  const page = db.prepare('SELECT rowid AS rid, node_id FROM nodes WHERE rowid > ? ORDER BY rowid LIMIT ?');
+  const has = db.prepare('SELECT 1 AS x FROM nodes_fts WHERE rowid = ?');
+  let added = 0;
+  while (parentsBudgetLeft(budget)) {
+    const rows = page.all(cursor, NODES_FTS_BATCH);
+    if (rows.length === 0) break;
+    withTx(db, 'NORMAL', () => {
+      for (const r of rows) {
+        if (has.get(r.rid) !== undefined) continue;
+        const n = storedNode(db, r.node_id).rollup;
+        insertNodeFts(db, ictx, r.rid, n.gist, n.topics, n.refs);
+        added += 1;
+      }
+      cursor = Number(rows[rows.length - 1].rid);
+      setStep(db, NODES_FTS_STEP, NODES_FTS_STEP_VERSION, String(cursor), null);
+    });
+  }
+  return added;
+}
+
+/** Every condensed node above `nodeIds`, re-rolled from its children as they are stored now (§6.3), for a reparse
+ *  (W1-B2 Task 21) or a pair learned late (Task 29). Ids and node_children never change; a parent's rollup fields,
+ *  node_refs and nodes_fts row do. Lower levels go first, so each level reads children already re-rolled. Returns
+ *  how many parents it rewrote. */
+export function rerollParents(db, ictx, nodeIds) {
+  const s = parentStmts(db);
+  const depthOf = db.prepare('SELECT depth FROM nodes WHERE node_id = ?');
+  const kidsOf = db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord');
+  const setParent = db.prepare('UPDATE nodes SET gist = ?, topics = ?, earliest_ms = ?, latest_ms = ?, src_chars = ?, '
+    + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ? WHERE node_id = ?');
+  const dropRefs = db.prepare('DELETE FROM node_refs WHERE node_id = ?');
+  const above = new Map();
+  for (const id of nodeIds) {
+    let p = parentOf(db, id);
+    for (let k = 0; p !== null && k < MAX_FAN_DEPTH && !above.has(p); k += 1) {
+      const d = depthOf.get(p);
+      if (d === undefined) break;
+      above.set(p, Number(d.depth));
+      p = parentOf(db, p);
+    }
+  }
+  const order = [...above.entries()].sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map(([id]) => id);
+  let n = 0;
+  for (const id of order) {
+    const kids = kidsOf.all(id).map((r) => storedNode(db, r.child_id));
+    if (kids.length === 0) continue;
+    const r = parentRollup(kids.map((k) => k.rollup));
+    withTx(db, 'NORMAL', () => {
+      setParent.run(r.gist, JSON.stringify(r.topics), r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars,
+        directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0, NODE_PARSER_VERSION, id);
+      dropRefs.run(id);
+      for (const ref of r.refs) s.insRef.run(id, ref.kind, ref.value, ref.origin);
+      if (ictx.fts === true) {
+        const rowid = s.rowidOf.get(id).r;
+        db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(rowid);
+        insertNodeFts(db, ictx, rowid, r.gist, r.topics, r.refs);
+      }
+    });
+    n += 1;
+  }
+  return n;
 }

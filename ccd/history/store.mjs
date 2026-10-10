@@ -1003,3 +1003,47 @@ export function setStep(db, step, version, cursor, completedMs) {
     ON CONFLICT (step, version) DO UPDATE SET cursor = excluded.cursor, completed_ms = excluded.completed_ms`)
     .run(step, version, cursor, completedMs);
 }
+
+// ── Lineage: the range CTE and the two edge lookups (spec §6.3; W1-B2 Task 9) ────────────────────────────
+// The edge names are directional (§6.3):
+//   - node_sources is leaf → its entries, ordered;
+//   - node_children is parent → the nodes it condenses, ordered.
+// The lineage walks DOWN, from a node to what it condenses and then to those nodes' source entries. The
+// upstream subtree CTE walks toward a summary's CONSUMERS with UNION ALL (summary-store.ts:780-822); it is not
+// ported (§11, refuted candidate 4). UNION, not UNION ALL, so a cycle in node_children ends the walk.
+// derived from lossless-claw src/store/summary-store.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+// From getSummaryMessageSeqRange, upstream lines 595-621. SQLite keeps a CROSS JOIN's order, so this visits
+// the lineage before it looks up any link. A reordered join could scan every family's links once per node.
+const LINEAGE_SQL = `WITH RECURSIVE source_nodes(node_id) AS (
+  SELECT ?
+  UNION
+  SELECT nc.child_id
+  FROM node_children nc
+  JOIN source_nodes s ON s.node_id = nc.node_id
+)
+SELECT ns.node_id AS node_id, ns.entry_id AS entry_id, ns.ord AS ord, e.ts_ms AS ts_ms
+FROM source_nodes s
+CROSS JOIN node_sources ns ON ns.node_id = s.node_id
+CROSS JOIN entries e ON e.entry_id = ns.entry_id
+ORDER BY ns.node_id, ns.ord`;
+
+/** Every source entry under `nodeId`: a leaf's own, or every leaf's below a parent. Rows come grouped by leaf id
+ *  and in each leaf's `ord`. Ordering the leaves themselves (by `boundaries.ord`) is the caller's job. */
+export function lineageEntries(db, nodeId) {
+  return db.prepare(LINEAGE_SQL).all(nodeId).map((r) => ({
+    nodeId: r.node_id, entryId: Number(r.entry_id), ord: Number(r.ord), tsMs: r.ts_ms === null ? null : Number(r.ts_ms),
+  }));
+}
+
+/** What `nodeId` condenses, in order (empty for a leaf). */
+export function childrenOf(db, nodeId) {
+  return db.prepare('SELECT child_id, ord FROM node_children WHERE node_id = ? ORDER BY ord').all(nodeId)
+    .map((r) => ({ childId: r.child_id, ord: Number(r.ord) }));
+}
+
+/** The node that condenses `nodeId`, or null. Fan-in gives a node one parent; ORDER BY keeps the answer
+ *  deterministic over a hand-damaged table. */
+export function parentOf(db, nodeId) {
+  const r = db.prepare('SELECT node_id FROM node_children WHERE child_id = ? ORDER BY node_id LIMIT 1').get(nodeId);
+  return r === undefined ? null : r.node_id;
+}

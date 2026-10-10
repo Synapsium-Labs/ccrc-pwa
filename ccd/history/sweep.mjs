@@ -1257,6 +1257,17 @@ export function mergeFamily(db, fromPk, toPk) {
   const into = db.prepare('SELECT ccrc_id, generation FROM sessions WHERE session_pk = ?').get(toPk);
   db.prepare("UPDATE recall_calls SET generation = ? WHERE ccrc_id = ? AND generation = ''").run(into.generation, into.ccrc_id);
   db.prepare('UPDATE sessions SET merged_into = ? WHERE session_pk = ?').run(toPk, fromPk);
+  // W1-B2 (Task 9): nodes follow their epochs (slug history-rekey-merges). A merge keeps every epoch and only
+  // renumbers its seq. So every node of either family re-points to (toPk, the seq its transcript's epoch now
+  // has); node ids never change (§6.1), and a parent never spans two epochs. A node whose transcript is in no
+  // epoch of (id, G) cannot be placed. The derivation never makes one, but a damaged table could: it stays where
+  // it is and is counted nodes_unrepointed. This runs inside the caller's transaction, like the rest of the merge.
+  const epochOfNode = 'SELECT e.seq FROM epochs e JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid '
+    + 'WHERE t.transcript_pk = nodes.transcript_pk AND e.session_pk = ?';
+  db.prepare(`UPDATE nodes SET session_pk = ?, epoch_seq = (${epochOfNode}) WHERE session_pk IN (?, ?) AND EXISTS (${epochOfNode})`)
+    .run(toPk, toPk, fromPk, toPk, toPk);
+  const stranded = Number(db.prepare('SELECT count(*) AS n FROM nodes WHERE session_pk = ?').get(fromPk).n);
+  if (stranded > 0) bump(db, 'nodes_unrepointed', stranded);
 }
 
 /** When generation G appears for an id whose unmerged `''` family holds `uuid` confirmed, that family is G's row-life:

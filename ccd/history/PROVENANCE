@@ -138,6 +138,13 @@ commit: e05d8d3
 upstream-sha256: 35f872f704e92b363e7913f7fd09119adaa0f500c4365dd683e773f6c54eb95c
 changed: JavaScript; the violation key (table, rowid, parent, fkid joined with NUL) and the baseline diff (upstream lines 692-718) are kept, but the result is structured ({newViolations, preExisting}) instead of a status string parsed by prefix, and the store adapter, not this function, runs foreign_key_check
 
+item: lineage range CTE (P7)
+ours: ccd/history/store.mjs
+upstream: src/store/summary-store.ts
+commit: e05d8d3
+upstream-sha256: 835353c4442fc2c3a036e23e077bbb24816f745256aa01eb4f4a99bb6c449c1d
+changed: JavaScript; the recursive source walk of getSummaryMessageSeqRange (upstream lines 595-621) keeps UNION and the pinned CROSS JOIN order, but runs over node_children and node_sources (directional names), selects ccrc's columns and returns the rows instead of a min/max range
+
 item: FTS table self-heal checks (P24)
 ours: ccd/history/lib.mjs
 upstream: src/db/migration.ts

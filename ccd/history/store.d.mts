@@ -54,3 +54,9 @@ export function createFtsTables(db: import('node:sqlite').DatabaseSync): void;
 
 export function getStep(db: DatabaseSync, step: string, version: number): { cursor: string | null; completedMs: number | null } | null;
 export function setStep(db: DatabaseSync, step: string, version: number, cursor: string | null, completedMs?: number | null): void;
+
+// --- W1-B2 Task 9: lineage (§6.3; the P7 range CTE) and the edge lookups
+export interface LineageRow { readonly nodeId: string; readonly entryId: number; readonly ord: number; readonly tsMs: number | null }
+export function lineageEntries(db: DatabaseSync, nodeId: string): LineageRow[];
+export function childrenOf(db: DatabaseSync, nodeId: string): { childId: string; ord: number }[];
+export function parentOf(db: DatabaseSync, nodeId: string): string | null;
