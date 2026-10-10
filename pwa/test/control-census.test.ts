@@ -292,14 +292,14 @@ const CONTROLS: Record<string, string> = {
     + 'entries use would overhang neighbours that are INERT, turning a near-miss '
     + 'that does nothing today into an irreversible activation. The only safe '
     + 'direction here is growing the visible box, which is a design change.',
-  'session/ChatList.tsx <button> (none)':
+  'session/PendingBubble.tsx <button> (none)':
     'SELECTOR .pending-actions button. The `Discard` button, with no class at '
     + 'all — and covered anyway, because the floor is on an ELEMENT selector. '
     + 'This is the entry that argues for the SELECTOR arm: a census keyed on '
     + 'classes alone would have had nothing to say about it.',
-  'session/ChatList.tsx <button> pending-retry':
+  'session/PendingBubble.tsx <button> pending-retry':
     'SELECTOR .pending-actions button. The same rule.',
-  'session/ChatList.tsx <button> pending-send-it':
+  'session/PendingBubble.tsx <button> pending-send-it':
     'SELECTOR .pending-actions button. The same rule, and chat.css says so in '
     + 'its own words: it inherits min-height from `.pending-actions button`, so '
     + 'the tap target is the shared token.',

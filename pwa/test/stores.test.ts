@@ -1500,9 +1500,11 @@ describe('Build 4 wave 4 — the wire additions that were refused', () => {
 
   it("the mail ChatItem is a RENDER-MODEL member, not a ChatEvent one", () => {
     // The distinction the whole design rests on: `{kind:'mail'}` exists in
-    // `ChatList.tsx`'s `ChatItem`, which is PWA-local and derived per render,
-    // and nowhere in `shared/api.ts`, which is the wire.
-    expect(sourceOf('pwa', 'src', 'session', 'ChatList.tsx')).toContain("kind: 'mail'");
+    // `ChatItem`, which is PWA-local and derived per render, and nowhere in
+    // `shared/api.ts`, which is the wire. `ChatItem` left `ChatList.tsx` for
+    // `chatItems.ts` — the renderer and the model it renders — so this reads
+    // the model's own file; a read of the list would now pass over markup.
+    expect(sourceOf('pwa', 'src', 'session', 'chatItems.ts')).toContain("kind: 'mail'");
     expect(sourceOf('shared', 'api.ts')).not.toContain("kind: 'mail'");
   });
 });

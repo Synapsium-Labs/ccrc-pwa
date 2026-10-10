@@ -18,7 +18,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
 import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
-import { buildChatItems, ChatListInner } from '../src/session/ChatList';
+import { ChatListInner } from '../src/session/ChatList';
+import { buildChatItems } from '../src/session/chatItems';
 import { applySessionMsg, type SessionSnapshot } from '../src/stores/session';
 import { norm, stripComments } from './cssRule';
 
