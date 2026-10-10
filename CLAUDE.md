@@ -114,7 +114,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   10 s `/proc` walk (`_ws_path_users`) in `ccd-ws-collect-reprove`, `-order`, `-resume`, `-move` and `-verb` (four walks
   a case at step 5, thirteen in the verb's one-JSON-line case) and, in a few cases each, `ccd-collect-audit-rungs`,
   `-audit-resume`, `-audit` and `-idle-token`, and under load they fail in two shapes: vitest's `Test timed out in
-  20000ms` when a case's ccd calls together outrun it, or an `unmeasured` `in-use` answer (`the walk of /proc did not
+  <n>ms` when a case's ccd calls together outrun it, or an `unmeasured` `in-use` answer (`the walk of /proc did not
   finish within 10s`) when one walk passes its bound; a walk measured about 0.13 s at the median and 1.1 s at the worst
   at load 11, so re-run the file alone.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,

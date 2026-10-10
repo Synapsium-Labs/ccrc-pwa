@@ -2234,8 +2234,8 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
 - `g9-kill-grace-residual`: each bounded probe adds its TERM-to-KILL grace, so the worst case is about 79 s, and 94 s
   at the widest grace, against the 90 s row; a runner that kills the audit gets no document, which fails closed.
 - `malformed-floor-knob-is-unmeasured`: on the FRESH rungs a non-empty floor knob that is not a whole number answers
-  unmeasured, naming the knob, and the document prints no floor (`floorS` null) and no instant; a resume asks no floor,
-  prints `floorS: null` and decides nothing from it. A whole number of ten or more significant digits clamps to
+  unmeasured, naming the knob, and the document prints no floor (`floorS` null) and no instant; a resume decides nothing
+  from the floor, and with such a knob its document prints `floorS: null`. A whole number of ten or more significant digits clamps to
   999999999. A raise asked for unreadably is never folded to the 24 hour minimum.
 - `floor-knob-reads-its-value-before-the-clamp`: the knob's leading zeros are stripped first and an all-zero knob reads
   0; the clamp is asked of the length of what is left, and only then is the value compared, so `0000000001` is the

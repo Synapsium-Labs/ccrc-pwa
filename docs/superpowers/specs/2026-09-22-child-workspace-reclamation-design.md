@@ -1070,13 +1070,14 @@ collected, and it also compares the id's clips leaf, so that a row there refuses
 clone inside a dead child's temp root is deleted with the leaf.
 
 **The audit's answer.** Under `$REG/.reap-<id>.lock`, taken without waiting, the audit prints one document and runs
-the fresh rungs in order, the first that does not pass ending it: `registered`; `not-witnessed`; for a witnessed id
+the fresh rungs in order, the first that does not pass ending it: `registered`; `not-witnessed`; `witness-mismatch`
+for a witness that is unreadable or records no birth time, asked before the leaf is read at all; for a witnessed id
 whose leaf is absent, the witness-only arm below; for a present leaf, the quarantine question (unmeasured
 `quarantine`, below), the refusal `quarantine-kept` while any slot of the id stands with no record naming it
 (`fresh-collect-refuses-beside-a-standing-slot`: a fresh collection is never made beside such a slot, and the witness
 stays; a slot listing that fails is unmeasured `quarantine`, and a nested id's slot is not counted), then
-`witness-mismatch` (the witness unreadable, without a birth time, or not the real directory at the id by device, inode
-and birth time); the leaf's owner write (unmeasured `mode`, `audit-asks-owner-write`: a leaf whose own mode lacks
+`witness-mismatch` again when the leaf is a link, not a directory, or not the real directory its witness names by
+device, inode and birth time; the leaf's owner write (unmeasured `mode`, `audit-asks-owner-write`: a leaf whose own mode lacks
 owner write cannot be renamed to another parent, so the audit licenses no move, no `failed` row is journaled per pass,
 and the leaf stays listed; the collector never changes a leaf's mode, and the token binds it through the change time);
 the idle walk; the floor, `changed-recently`; `in-use`; the checkout question and the row rule, both
@@ -1113,8 +1114,8 @@ not an input of a resume, because the record is its authority.
 and it must be at least `max(86400, knob)` seconds old, where the knob (`WS_COLLECT_IDLE_FLOOR_S`) only raises the
 floor. Only the change time is read. The modification time is user-settable, so a future one would hold a leaf for
 ever, and every change that moves it stamps the change time too. A non-empty knob that is not a whole number is not
-folded to 24 hours: a fresh audit answers unmeasured, naming the knob, and prints no floor (a resume asks no floor: it
-prints `floorS: null` and decides nothing from it). A whole number of ten or more significant digits is clamped to
+folded to 24 hours: a fresh audit answers unmeasured, naming the knob, and prints no floor (a resume decides nothing from the
+floor, and with such a knob its document prints `floorS: null`). A whole number of ten or more significant digits is clamped to
 999999999 (`floor-knob-reads-its-value-before-the-clamp`): the knob's leading zeros are stripped first and an all-zero
 knob reads 0, the clamp is asked of the length of what is left, and only then is the value compared, so `0000000001`
 is the 86400 minimum and arithmetic never sees more than nine digits. The walk is GNU `find -P <leaf> -xdev -printf %C@` under `LC_ALL=C`: it never
@@ -1269,7 +1270,7 @@ with neither a witness nor a quarantine record is never visited.
 before it reads anything, the verb never renames, and the idle walk's GNU `find` has no Darwin spelling; the same
 holds on a box whose `mv` has no `--no-copy`, and where `flock` is unavailable. Also unmeasured, and retried: a
 `tmproots/` that is a link; quarantine records that cannot be listed; a registry that cannot be listed or a row that
-cannot be placed; a floor knob that is not a number (on a fresh audit; a resume asks no floor); a walk that timed out, hit the cap or met an unreadable entry; a
+cannot be placed; a floor knob that is not a number (on a fresh audit; a resume decides nothing from the floor); a walk that timed out, hit the cap or met an unreadable entry; a
 clock that cannot be read; a probe that cannot look; a checkout question that could not be answered; a quarantine that
 is not a real directory of this uid at mode 0700, or quarantine slots that cannot be listed beside a present leaf; a
 leaf whose own mode lacks owner write, or cannot be read (`mode`); a physical `~/.cc-tmp` that is off the device a
@@ -1304,10 +1305,15 @@ or slot whose absence cannot be proven; and a token that cannot be minted. The a
   the leaf is collected with no idle floor. A same-run recycled child, or one whose witness write failed, passes the
   record's read-back and so reaches the move: `spawn-at-consented-stops-at-the-record` holds only for a spawn whose
   witness write changes the witness.
+- The alias refusal holds only while the leaf is in its slot (`alias-refusal-ends-at-the-putback`). After the putback
+  restores the leaf there is no alias, and the un-aliased `rec == f` back-link rule decides, as it did before this
+  wave, so a later worktree that recycled an admin name and whose back-link names the restored `.git` passes it. The
+  rule is shared with the reclaim tail; the wave adds no deletion class. Carried to the path-identity programme.
 - A persistent step-5 doubt makes a move and a move-back on every floor, journaled `failed` `probe-unmeasured`: a
   mount inside the leaf, a mount table that cannot be read, or the in-use probe timing out under load. Each move-back
-  restamps the change time, so each cycle waits a fresh floor, and nothing is lost. The `containment-unproven` loop is
-  the other one.
+  restamps the change time, so each cycle waits a fresh floor, and nothing is lost. A removal refusal that no
+  earlier check predicted loops the other way: it puts the leaf back as `containment-unproven` once per idle floor, and
+  nothing is lost.
 - The device test cannot tell an empty bind-mount point from the leaf's absence when the bind source and the mount
   point share a file system, because both carry the same device
   (`device-test-cannot-see-a-same-device-bind-mount`): the absence is believed, as it was before the device test.
