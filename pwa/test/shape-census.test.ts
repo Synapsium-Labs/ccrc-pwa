@@ -35,6 +35,22 @@
 // rules can share declarations and mean different things, and the registry is
 // where that gets argued once instead of rediscovered every wave. What it
 // refuses is the silent third copy.
+//
+// THE FOUR CENSUSES, and what each one is blind to — written here so the next
+// reader does not rediscover a hole by hitting it:
+//
+//   * `shape-census` (this file): stylesheet RULES in both packages,
+//     clustered by what they declare. Blind to anything not in a stylesheet.
+//   * `markup-census`: JSX trees of three elements or more, `className=`
+//     literals of two words or more, and LEAVES with two attributes beyond
+//     the class. Blind to a class string that lives in a constant.
+//   * `control-census`: every hand-drawn interactive element, and how each
+//     one reaches a thumb.
+//   * `literal-census`: every string of 25+ characters written in two files —
+//     a sentence in a `Record`, a `title=`, a `console.warn`. Blind to
+//     nothing structural, because it reads no structure at all.
+//
+// Each exists because the one before it was measured blind to a real copy.
 // THIS WAVE'S MEASUREMENTS, since both halves changed:
 //
 //   | mutation                                            | result     |

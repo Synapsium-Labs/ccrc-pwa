@@ -1,5 +1,21 @@
 // Every control the app draws by hand, and how it reaches a thumb.
 //
+//
+// THE FOUR CENSUSES, and what each one is blind to — written here so the next
+// reader does not rediscover a hole by hitting it:
+//
+//   * `shape-census`: stylesheet RULES in both packages,
+//     clustered by what they declare. Blind to anything not in a stylesheet.
+//   * `markup-census`: JSX trees of three elements or more, `className=`
+//     literals of two words or more, and LEAVES with two attributes beyond
+//     the class. Blind to a class string that lives in a constant.
+//   * `control-census` (this file): every hand-drawn interactive element,
+//     and how each one reaches a thumb.
+//   * `literal-census`: every string of 25+ characters written in two files —
+//     a sentence in a `Record`, a `title=`, a `console.warn`. Blind to
+//     nothing structural, because it reads no structure at all.
+//
+// Each exists because the one before it was measured blind to a real copy.
 // WHAT THIS COVERS THAT NOTHING ELSE DOES. `focus-ring.test.ts` is a census
 // of keyboard focus — over `ui/src` only. `tap-targets.test.tsx` scrapes the
 // floor for a named handful of rules and, since this wave, refuses a literal
