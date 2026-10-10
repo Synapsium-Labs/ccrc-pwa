@@ -74,6 +74,34 @@ export interface NewSessionSheetProps {
   fleet?: FleetStore;
 }
 
+/** One field of the optional routing row: a label over a select.
+ *
+ *  THREE CALL SITES, all in this sheet. The markup census pairs only two of
+ *  them — the third renders a different NUMBER of literal `<option>`s and an
+ *  exact structural match cannot see past that, which is the limit documented
+ *  in the census itself rather than tuned away. Reading found the third.
+ *
+ *  The options stay `children`: every one of them is derived at render time
+ *  from `CLASSES` or `effortOptions`, and a `options={[...]}` prop would make
+ *  this component decide how a route value is spelled. It should not. */
+function RouteField(
+  { label, value, onChange, children }: {
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    children: ReactNode;
+  },
+): ReactNode {
+  return (
+    <label className="route-field">
+      <span className="route-field-label">{label}</span>
+      <select className="route-select" value={value} onChange={(e) => onChange(e.target.value)}>
+        {children}
+      </select>
+    </label>
+  );
+}
+
 export function NewSessionSheet({
   open,
   onClose,
@@ -372,45 +400,24 @@ export function NewSessionSheet({
               sends no `route` key at all — the coordinator row an ordinary
               start has always landed on. */}
           <div className="route-row">
-            <label className="route-field">
-              <span className="route-field-label">Class</span>
-              <select
-                className="route-select"
-                value={routeClass}
-                onChange={(e) => setRouteClass(e.target.value)}
-              >
-                <option value="">Coordinator row</option>
-                <option value="default">Default</option>
-                {[...CLASSES].reverse().map((c) => (
-                  <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
-                ))}
-              </select>
-            </label>
-            <label className="route-field">
-              <span className="route-field-label">Effort</span>
-              <select
-                className="route-select"
-                value={routeEffort}
-                onChange={(e) => setRouteEffort(e.target.value)}
-              >
-                <option value="">Unset</option>
-                {effortOptions(wrapper, null, false).map((o) => (
-                  <option key={o.route.value} value={o.route.value}>{o.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="route-field">
-              <span className="route-field-label">Workflows</span>
-              <select
-                className="route-select"
-                value={routeWorkflow}
-                onChange={(e) => setRouteWorkflow(e.target.value)}
-              >
-                <option value="">Unset</option>
-                <option value="on">on</option>
-                <option value="off">off</option>
-              </select>
-            </label>
+            <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
+              <option value="">Coordinator row</option>
+              <option value="default">Default</option>
+              {[...CLASSES].reverse().map((c) => (
+                <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
+              ))}
+            </RouteField>
+            <RouteField label="Effort" value={routeEffort} onChange={setRouteEffort}>
+              <option value="">Unset</option>
+              {effortOptions(wrapper, null, false).map((o) => (
+                <option key={o.route.value} value={o.route.value}>{o.label}</option>
+              ))}
+            </RouteField>
+            <RouteField label="Workflows" value={routeWorkflow} onChange={setRouteWorkflow}>
+              <option value="">Unset</option>
+              <option value="on">on</option>
+              <option value="off">off</option>
+            </RouteField>
           </div>
           <p className="sheet-copy route-note">
             Unset fields take the coordinator row (Opus · ultracode, Sonnet subagents, workflows on).

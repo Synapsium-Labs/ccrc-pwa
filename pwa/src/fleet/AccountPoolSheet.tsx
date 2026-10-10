@@ -25,6 +25,7 @@ import type { RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { POOL_NAME_RE } from '../../../shared/roster';
 import { Button, Sheet, TextInput, TEXT_INPUT_INLINE } from '@ccrc/ui';
+import { PoolList } from './PoolList';
 import { poolOptions } from '../lib/pools';
 import './fleet.css';
 
@@ -138,28 +139,11 @@ export function AccountPoolSheet({
           nothing on the fleet enforces it yet.
         </p>
       )}
-      <div className="pool-list">
-        {options.map((poolName) => (
-          <button
-            key={poolName}
-            type="button"
-            className="pool-row"
-            aria-label={`pool ${poolName}`}
-            onClick={() => onSet(account, [poolName])}
-          >
-            {poolName}
-          </button>
-        ))}
-        <button
-          type="button"
-          className="pool-row"
-          data-none="true"
-          aria-label="no pool set here — defers to the roster's declared default"
-          onClick={() => onSet(account, [])}
-        >
-          no pool
-        </button>
-      </div>
+      <PoolList
+        options={options}
+        onPick={(pool) => onSet(account, pool === null ? [] : [pool])}
+        noneLabel="no pool set here — defers to the roster's declared default"
+      />
       <div className="pool-new-row">
         <label className="pool-new-label" htmlFor="account-pool-new-name">New pool name</label>
         <TextInput

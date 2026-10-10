@@ -154,6 +154,28 @@ export interface DialogSheetProps {
   raise?: number;
 }
 
+/** The way out of a question this app cannot render: open the terminal, or
+ *  not now.
+ *
+ *  TWO CALL SITES, and the second is not a near-copy — it was the same eight
+ *  lines, WORDS INCLUDED. That is the part worth naming: "Open terminal to
+ *  answer" and "Not now" are copy, and copy written twice drifts in a way no
+ *  type catches. The handlers stay the callers': the unparsed branch hides the
+ *  sheet, the parsed one closes it behind a busy gate, and those are two
+ *  different things on purpose (see `openTerminal` below). */
+function TerminalCta({ onOpen, onLater }: { onOpen: () => void; onLater: () => void }): ReactNode {
+  return (
+    <div className="dlg-actions">
+      <Button variant="primary" onClick={onOpen}>
+        Open terminal to answer
+      </Button>
+      <button type="button" className="dlg-later" onClick={onLater}>
+        Not now
+      </button>
+    </div>
+  );
+}
+
 export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetProps): ReactNode {
   const useStore = store ?? getSessionStore(id);
   const dialog = useStore((s) => s.dialog);
@@ -316,20 +338,13 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
           session picks up from there.
         </p>
         <Well className="dlg-raw">{shown.raw}</Well>
-        <div className="dlg-actions">
-          <Button
-            variant="primary"
-            onClick={() => {
-              hide();
-              onOpenTerminal?.();
-            }}
-          >
-            Open terminal to answer
-          </Button>
-          <button type="button" className="dlg-later" onClick={close}>
-            Not now
-          </button>
-        </div>
+        <TerminalCta
+          onOpen={() => {
+            hide();
+            onOpenTerminal?.();
+          }}
+          onLater={close}
+        />
       </Sheet>
     );
   }
@@ -633,14 +648,7 @@ function EnvelopeSheet({
     onOpenTerminal?.();
   };
   const terminalCta = !canAnswer && (
-    <div className="dlg-actions">
-      <Button variant="primary" onClick={openTerminal}>
-        Open terminal to answer
-      </Button>
-      <button type="button" className="dlg-later" onClick={close}>
-        Not now
-      </button>
-    </div>
+    <TerminalCta onOpen={openTerminal} onLater={close} />
   );
 
   if ('approval' in ask) {

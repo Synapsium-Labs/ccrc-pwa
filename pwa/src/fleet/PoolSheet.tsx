@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectPoolWire, ProjectPoolsWire } from '../../../shared/api';
+import { PoolList } from './PoolList';
 import { Sheet, toast } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 import { poolOptions, projectPoolOf } from '../lib/pools';
@@ -196,30 +197,12 @@ export function PoolSheet({
         {currentCopy}{' '}
         An account may serve a project when either side is untagged or the names agree.
       </p>
-      <div className="pool-list">
-        {options.map((name) => (
-          <button
-            key={name}
-            type="button"
-            className="pool-row"
-            disabled={saving}
-            aria-label={`pool ${name}`}
-            onClick={() => setPool(name)}
-          >
-            {name}
-          </button>
-        ))}
-        <button
-          type="button"
-          className="pool-row"
-          data-none="true"
-          disabled={saving}
-          aria-label="no pool — every account may serve it"
-          onClick={() => setPool(null)}
-        >
-          no pool
-        </button>
-      </div>
+      <PoolList
+        options={options}
+        onPick={setPool}
+        noneLabel="no pool — every account may serve it"
+        disabled={saving}
+      />
     </Sheet>
   );
 }

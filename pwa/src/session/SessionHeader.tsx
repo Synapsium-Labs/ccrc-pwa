@@ -15,7 +15,7 @@ import {
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
 import {
-  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, useNow,
+  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
@@ -93,6 +93,35 @@ function relShort(now: number, then: number | null): string | null {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+/** One row of the session menu: a label, and — for the three that answer a
+ *  slash command — the command itself, dimmed, read by nobody.
+ *
+ *  SIX CALL SITES in this file and nowhere else, which is why it lives here
+ *  rather than in `@ccrc/ui`: a menu row that knows a hint is a slash command
+ *  is this app's idea, and three of these rows carry a substrate gate whose
+ *  reasons are argued at the call sites below. The markup census named the
+ *  three with hints; the three without are the same row with one child.
+ *
+ *  `aria-hidden` on the hint is deliberate and was already: the label is the
+ *  accessible name, and "/model" read aloud after it is noise. */
+function MenuItem(
+  { label, hint, className, disabled, title, onClick }: {
+    label: string;
+    hint?: string;
+    className?: string;
+    disabled?: boolean;
+    title?: string;
+    onClick: () => void;
+  },
+): ReactNode {
+  return (
+    <ListRow className={cn('menu-item', className)} disabled={disabled} title={title} onClick={onClick}>
+      <span className="menu-label">{label}</span>
+      {hint !== undefined && <span className="menu-hint" aria-hidden="true">{hint}</span>}
+    </ListRow>
+  );
 }
 
 export function SessionHeader({
@@ -351,59 +380,39 @@ export function SessionHeader({
 
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
         <div className="menu">
-          <ListRow className="menu-item" onClick={() => menuAct(onChangeModel)}>
-            <span className="menu-label">Change model</span>
-            <span className="menu-hint" aria-hidden="true">
-              /model
-            </span>
-          </ListRow>
-          <ListRow className="menu-item" onClick={() => menuAct(onChangeEffort)}>
-            <span className="menu-label">Change effort</span>
-            <span className="menu-hint" aria-hidden="true">
-              /effort
-            </span>
-          </ListRow>
-          <ListRow className="menu-item" onClick={() => menuAct(onOpenHistory)}>
-            <span className="menu-label">History</span>
-            <span className="menu-hint" aria-hidden="true">
-              journal
-            </span>
-          </ListRow>
-          <ListRow
-            className="menu-item"
+          <MenuItem label="Change model" hint="/model" onClick={() => menuAct(onChangeModel)} />
+          <MenuItem label="Change effort" hint="/effort" onClick={() => menuAct(onChangeEffort)} />
+          <MenuItem label="History" hint="journal" onClick={() => menuAct(onOpenHistory)} />
+          {/* Gated like Archive below (branch review): this item opens the SAME
+              SwapSheet as the actions sheet's gated opener, and SwapSheet's
+              confirm fires api.swap with no substrate check of its own — so
+              an ungated door here was a swap reachable with no gate anywhere. */}
+          <MenuItem
+            label="Move to another account"
             disabled={fault !== null}
             title={faultTitle}
             onClick={() => menuAct(onMoveAccount)}
-          >
-            {/* Gated like Archive below (branch review): this item opens the SAME
-                SwapSheet as the actions sheet's gated opener, and SwapSheet's
-                confirm fires api.swap with no substrate check of its own — so
-                an ungated door here was a swap reachable with no gate anywhere. */}
-            <span className="menu-label">Move to another account</span>
-          </ListRow>
+          />
           {/* Archive for every session, Restore for one already put away (workspace lifecycle §5.2) — never both.
               Archive is gated like Move above: it ends the pane. It needs the row to choose its words, so a deep
               link that has not seen its first frame yet offers it disabled. Restore is gated exactly where it IS
               Restart's request (`restoreReachesEnsure`: a main checkout posts `/ensure`); a workspace's `ws-restore`
               is a different verb and stays ungated, as in the actions sheet. */}
           {session !== null && isPutAway(session) ? (
-            <ListRow
-              className="menu-item"
+            <MenuItem
+              label="Restore"
               disabled={fault !== null && restoreReachesEnsure(session)}
               title={restoreReachesEnsure(session) ? faultTitle : undefined}
               onClick={() => menuAct(onRestore)}
-            >
-              <span className="menu-label">Restore</span>
-            </ListRow>
+            />
           ) : (
-            <ListRow
-              className="menu-item menu-item--danger"
+            <MenuItem
+              label="Archive"
+              className="menu-item--danger"
               disabled={fault !== null || session === null}
               title={faultTitle}
               onClick={() => menuAct(onArchive)}
-            >
-              <span className="menu-label">Archive</span>
-            </ListRow>
+            />
           )}
         </div>
       </Sheet>

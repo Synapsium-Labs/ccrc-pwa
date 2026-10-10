@@ -87,6 +87,55 @@ export function autoGateMissing(nodes: readonly NodeWire[]): NodeWire[] {
 
 /** The node ids a `409 auto-needs-rollback-gate` names; null for any other failure, and for a 409 naming no id
  *  (the caller then toasts the route's own sentence rather than an empty "not yet on:"). */
+/** A radio group: a legend, then one labelled radio per choice.
+ *
+ *  THREE CALL SITES in this file — release notifications, update channel,
+ *  auto-install — and the markup census named them. The classes stay
+ *  `settings-*`: fleet.css grounds them there, the fieldset paints nothing,
+ *  and this file is their only consumer, so moving them anywhere would cost
+ *  three rules and buy nothing.
+ *
+ *  `value` IS NULLABLE because two of the three read it off a wire row that
+ *  may not have arrived: `fleet !== null && fleet.channel === c` is the same
+ *  question as `value={fleet?.channel ?? null}`, asked once instead of per
+ *  option.
+ *
+ *  `disabled` on the FIELDSET and `disabled` on an OPTION are two different
+ *  gates and both are needed — see D-3315 at the auto-install call site, where
+ *  disabling the whole set would remove the one safe choice exactly when the
+ *  node caps are incomplete. */
+function RadioFieldset<T extends string>(
+  { legend, name, options, value, onPick, disabled, describedBy }: {
+    legend: string;
+    /** The radio group's `name` — the thing that makes the set one choice. */
+    name: string;
+    options: { value: T; label: ReactNode; disabled?: boolean }[];
+    value: T | null;
+    onPick: (value: T) => void;
+    disabled?: boolean;
+    describedBy?: string;
+  },
+): ReactNode {
+  return (
+    <fieldset className="settings-fieldset" disabled={disabled} aria-describedby={describedBy}>
+      <legend className="settings-legend">{legend}</legend>
+      {options.map((o) => (
+        <label key={o.value} className="settings-option">
+          <input
+            type="radio"
+            name={name}
+            value={o.value}
+            checked={value === o.value}
+            disabled={o.disabled}
+            onChange={() => onPick(o.value)}
+          />
+          <span className="settings-option-sentence">{o.label}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 function gateRefusalOf(err: unknown): string[] | null {
   if (!(err instanceof ApiError) || err.status !== 409) return null;
   if (typeof err.body !== 'object' || err.body === null) return null;
@@ -551,10 +600,18 @@ function NodeList({ nodes, releases, now, catalogueLastOkAt, onAcked, onMove }: 
 // the palette itself, drawn by stamping `data-theme` on the swatch element so
 // the very tokens the row names resolve inside it. A row that lies about its
 // colours is impossible: there is no second copy of them to drift.
-function ThemeRow({ choice, current, onPick }: {
-  choice: ThemeChoice;
+function ThemeRow({ choice, current, onPick, swatch = true }: {
+  /** Structural, not `ThemeChoice`: "Follow system" is not a palette and
+   *  carries no `mode`, but it IS this row — same label over the same note,
+   *  same radio, in the same group. It was written out a second time instead,
+   *  and the markup census found it. */
+  choice: { id: string; label: string; note: string };
   current: string;
   onPick: (id: string) => void;
+  /** "Follow system" draws none: there is no single palette to preview, and
+   *  five swatches of whichever one happens to be applied would be a preview
+   *  of the wrong thing. */
+  swatch?: boolean;
 }): ReactNode {
   const active = current === choice.id;
   return (
@@ -575,20 +632,31 @@ function ThemeRow({ choice, current, onPick }: {
           root. The preview is therefore the real palette rather than a
           hand-copied approximation of it. `phosphor` carries no block — it is
           :root — so it deliberately stamps nothing and inherits the default. */}
-      <span
-        className="settings-theme-swatch"
-        aria-hidden="true"
-        {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
-      >
-        <i style={{ background: 'var(--bg-surface)' }} />
-        <i style={{ background: 'var(--ink-primary)' }} />
-        <i style={{ background: 'var(--accent)' }} />
-        <i style={{ background: 'var(--status-attention)' }} />
-        <i style={{ background: 'var(--status-dead)' }} />
-      </span>
+      {swatch && (
+        <span
+          className="settings-theme-swatch"
+          aria-hidden="true"
+          {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
+        >
+          <i style={{ background: 'var(--bg-surface)' }} />
+          <i style={{ background: 'var(--ink-primary)' }} />
+          <i style={{ background: 'var(--accent)' }} />
+          <i style={{ background: 'var(--status-attention)' }} />
+          <i style={{ background: 'var(--status-dead)' }} />
+        </span>
+      )}
     </label>
   );
 }
+
+/** Not a palette, and deliberately not in `THEMES`: the generator writes that
+ *  list and `themes:check` rules on it. This is the row that says "whichever
+ *  of those two the phone is in". */
+const FOLLOW_SYSTEM = {
+  id: SYSTEM,
+  label: 'Follow system',
+  note: 'Phosphor & Ink after dark, Phosphor Daylight otherwise.',
+};
 
 /** Exported for its test. The rest of this screen mounts a `/api/updates`
  *  poll, and a test of a radio group should not need a control plane. */
@@ -607,21 +675,7 @@ export function AppearanceSection(): ReactNode {
       <h2 id={titleId} className="settings-section-title">Appearance</h2>
       <fieldset className="settings-fieldset">
         <legend className="settings-legend">Theme</legend>
-        <label className="settings-option settings-theme" data-active={current === SYSTEM}>
-          <input
-            type="radio"
-            name="settings-theme"
-            value={SYSTEM}
-            checked={current === SYSTEM}
-            onChange={() => pick(SYSTEM)}
-          />
-          <span className="settings-theme-body">
-            <span className="settings-theme-name">Follow system</span>
-            <span className="settings-note">
-              Phosphor &amp; Ink after dark, Phosphor Daylight otherwise.
-            </span>
-          </span>
-        </label>
+        <ThemeRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} swatch={false} />
         {/* Grouped by how the palette reads, because that is the first thing
             anyone is choosing between — and the ask was light AND dark, not a
             dark list with one light apology. */}
@@ -738,21 +792,14 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
         <p className="settings-note">This browser cannot receive Web Push.</p>
       )}
       {view !== null && (
-        <fieldset className="settings-fieldset" disabled={saving}>
-          <legend className="settings-legend">Release notifications</legend>
-          {NOTIFY_MODES.map((m) => (
-            <label key={m} className="settings-option">
-              <input
-                type="radio"
-                name="settings-notify"
-                value={m}
-                checked={checked === m}
-                onChange={() => void choose(m)}
-              />
-              <span className="settings-option-sentence">{NOTIFY_LABELS[m]}</span>
-            </label>
-          ))}
-        </fieldset>
+        <RadioFieldset
+          legend="Release notifications"
+          name="settings-notify"
+          options={NOTIFY_MODES.map((m) => ({ value: m, label: NOTIFY_LABELS[m] }))}
+          value={checked}
+          onPick={(m) => void choose(m)}
+          disabled={saving}
+        />
       )}
     </section>
   );
@@ -914,45 +961,31 @@ function UpdatesBody({ view, stale, now, reload }: {
   return (
     <>
       {stale && <p className="settings-note">{STALE_TEXT}</p>}
-      <fieldset className="settings-fieldset" disabled={busy}>
-        <legend className="settings-legend">Channel</legend>
-        {UPDATE_CHANNELS.map((c) => (
-          <label key={c} className="settings-option">
-            <input
-              type="radio"
-              name="settings-channel"
-              value={c}
-              checked={fleet !== null && fleet.channel === c}
-              onChange={() => writeIntent({ channel: c })}
-            />
-            <span className="settings-option-sentence">{CHANNEL_SENTENCES[c]}</span>
-          </label>
-        ))}
-      </fieldset>
-      <fieldset
-        className="settings-fieldset"
+      <RadioFieldset
+        legend="Channel"
+        name="settings-channel"
+        options={UPDATE_CHANNELS.map((c) => ({ value: c, label: CHANNEL_SENTENCES[c] }))}
+        value={fleet?.channel ?? null}
+        onPick={(c) => writeIntent({ channel: c })}
         disabled={busy}
-        aria-describedby={gateNote !== null ? gateNoteId : undefined}
-      >
-        <legend className="settings-legend">Auto-install</legend>
-        {AUTO_MODES.map((m) => (
-          <label key={m} className="settings-option">
-            <input
-              type="radio"
-              name="settings-auto"
-              value={m}
-              checked={fleet !== null && fleet.auto === m}
-              // D-3315: only the non-'off' choices are gated on the node caps — the
-              // route accepts `auto: 'off'` unconditionally (server/src/update/routes.ts),
-              // so disabling the whole fieldset would remove the one safe action
-              // exactly when the gate is incomplete.
-              disabled={m !== 'off' && missing.length > 0}
-              onChange={() => writeIntent({ auto: m })}
-            />
-            <span className="settings-option-sentence">{AUTO_LABELS[m]}</span>
-          </label>
-        ))}
-      </fieldset>
+      />
+      <RadioFieldset
+        legend="Auto-install"
+        name="settings-auto"
+        /* D-3315: only the non-'off' choices are gated on the node caps — the
+           route accepts `auto: 'off'` unconditionally (server/src/update/routes.ts),
+           so disabling the whole fieldset would remove the one safe action
+           exactly when the gate is incomplete. */
+        options={AUTO_MODES.map((m) => ({
+          value: m,
+          label: AUTO_LABELS[m],
+          disabled: m !== 'off' && missing.length > 0,
+        }))}
+        value={fleet?.auto ?? null}
+        onPick={(m) => writeIntent({ auto: m })}
+        disabled={busy}
+        describedBy={gateNote !== null ? gateNoteId : undefined}
+      />
       {gateNote !== null && <p id={gateNoteId} className="settings-note">{gateNote}</p>}
       <Button variant="ghost" className="settings-check" disabled={busy} onClick={checkNow}>
         Check now

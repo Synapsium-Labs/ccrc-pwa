@@ -211,44 +211,17 @@ const duplicated = (m: Map<string, string[]>): string[] =>
  *  is stale and reds, because a list of excuses nobody can delete is how a
  *  census rots. */
 const REGISTERED_BLOCKS: Record<string, string> = {
-  // ── NEXT: one block, written twice, and nothing stopping the extraction ──
-  'ListRow.menu-item(span.menu-label,span.menu-hint)':
-    'NEXT. The session menu row — a `ListRow` with a label and a dimmed hint '
-    + 'naming the slash command behind it. Four copies, all in SessionHeader.tsx.',
+  // No NEXT. Every block below is argued, not deferred.
   'div.acct-rows(AccountMeterRow,AccountMeterRow)':
-    'NEXT. The 5h/7d meter pair. Two call sites that must agree on WHICH '
-    + 'windows an account has — `AccountsStrip` guards each on null, '
-    + '`AccountsScreen` renders both and passes null through.',
-  'div.dlg-actions(Button,button.dlg-later)':
-    'NEXT. "Open terminal to answer" beside "Not now", twice in DialogSheet.tsx '
-    + '— the same two doors out of a question this app cannot render.',
-  'div.pool-list(button.pool-row,button.pool-row)':
-    'NEXT. The pool picker: every roster pool, then "no pool". `PoolSheet` and '
-    + '`AccountPoolSheet` write it out identically. THIS IS THE BLOCK THAT '
-    + 'ARGUED FOR THIS FILE — one `.pool-row` rule, correctly shared, and the '
-    + 'markup around it copied where the stylesheet census could never look.',
-  ['fieldset.settings-fieldset(legend.settings-legend,'
-    + 'label.settings-option(input,span.settings-option-sentence))']:
-    'NEXT. A radio group: legend, then one labelled radio per mode. Three '
-    + 'copies in SettingsScreen.tsx — notifications, channel, auto-install.',
-  'label.settings-option(input,span.settings-option-sentence)':
-    'NEXT, inside the fieldset above: the labelled radio itself. It is listed '
-    + 'separately because the census measures every element, and folding the '
-    + 'fieldset folds this with it.',
-  'label.route-field(span.route-field-label,select.route-select(option,option,option))':
-    'NEXT. A labelled select. Three in NewSessionSheet.tsx — class, effort, '
-    + 'workflows — of which the census pairs two: the third renders a '
-    + 'different NUMBER of literal options, and an exact structural match '
-    + 'cannot see past that. Documented rather than tuned, for the reason the '
-    + 'shape census documents its own 0.72 window.',
-  'select.route-select(option,option,option)':
-    'NEXT, inside the field above.',
-  'span.settings-theme-body(span.settings-theme-name,span.settings-note)':
-    'NEXT. A name over its note, in the theme picker: once in the per-palette '
-    + 'row and once inline for "Follow system", which is not a palette and so '
-    + 'did not reach for the component the others use.',
-
-  // ── DIFFERENT THINGS: these blocks agree and will keep agreeing ──────────
+    'DIFFERENT THINGS, and the census found the difference rather than the '
+    + 'sameness. Both render the 5h and 7d meters, but `AccountsStrip` guards '
+    + 'each on null — its own comment says "only render a window that exists — '
+    + 'gpt (Codex Pro) is weekly-only" — while `AccountsScreen` renders both '
+    + 'unconditionally and passes `?? null` through. A missing window is '
+    + 'therefore ABSENT on the board and EMPTY on the accounts screen. That is '
+    + 'a design question for the operator, not something to fold silently: a '
+    + 'shared component would have to carry a flag for it, which is the same '
+    + 'two behaviours with one more name.',
   'div.acct-list(AccountRow,p.acct-none)':
     'DIFFERENT THINGS. Both sheets list accounts and both say something when '
     + 'the list is empty, but they are answering different questions — '
@@ -273,9 +246,6 @@ const REGISTERED_LITERALS: Record<string, string> = {
     'DIFFERENT THINGS. Two hook classes on one element, twice, inside the '
     + 'theme picker — a legend that is also a group head. Two classes is not a '
     + 'composition; it is one element wearing both of its names.',
-  'settings-option settings-theme':
-    'DIFFERENT THINGS, the same way: the palette row is a settings option AND '
-    + 'a theme swatch, and both stylesheets name it.',
 };
 
 describe('markup census', () => {
