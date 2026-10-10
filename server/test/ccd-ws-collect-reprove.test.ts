@@ -164,8 +164,10 @@ describe.skipIf(!LINUX)('(d) — no registry row at, inside or through the leaf,
     const o = makeOrphan(h);
     const r = collectVerb(h, collectToken(h), { pre: `${ROWS_STUB} ${gapAt('moved', 'printf 2 > "$HOME/rows-now"')}` });
     expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
+    // For the row rule's reason, not (c)'s: a /proc walk out of time answers this same word, moved back (see (e)).
+    expect(String(docOf(r.stdout)['detail'])).toContain(' and nothing was removed: stub: a row lies inside ');
     back(o);
-  });
+  }, 60_000);
 
   it('the real rule: another session’s row inside the pre-move spelling, written after the move — moved back, nothing removed', () => {
     const o = makeOrphan(h);
@@ -239,20 +241,24 @@ describe.skipIf(!LINUX)('(e) — nothing mounted at or under the slot’s leaf, 
     expect(ask(`${dir}/leafy`), 'the CONTROL: a sibling is not under it').toBe('0');
   });
 
+  // These two answer the same word as a walk out of time too, so each must name its own table, as the mount cases do.
+  // The table's path leads the reason; the 300-byte cut can take what follows it.
   it('a table that cannot be read: probe-unmeasured, moved back', () => {
     const o = makeOrphan(h);
     const r = collectVerb(h, collectToken(h), { pre: '_ws_collect_mountinfo() { printf \'%s\' "$HOME/no-such-table"; };' });
     expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
+    expect(String(docOf(r.stdout)['detail'])).toContain(` and nothing was removed: ${path.join(h.home, 'no-such-table')}`);
     back(o);
-  });
+  }, 60_000);
 
   it('a table with no mount in it: probe-unmeasured, moved back', () => {
     const o = makeOrphan(h);
     realMounts(h);
     const r = collectVerb(h, collectToken(h), { pre: `${MOUNTS_SEAM} ${gapAt('moved', ': > "$HOME/mountinfo"')}` });
     expect(docOf(r.stdout)['failed']).toBe('probe-unmeasured');
+    expect(String(docOf(r.stdout)['detail'])).toContain(` and nothing was removed: ${path.join(h.home, 'mountinfo')}`);
     back(o);
-  });
+  }, 60_000);
 });
 
 describe.skipIf(!LINUX)('after the move, nothing is asked of the tree: never the idle floor, never the walk', () => {
