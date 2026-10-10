@@ -646,13 +646,3 @@ export function getSessionStore(id: string): SessionStore {
   }
   return s;
 }
-
-export function useSessionStore(id: string): SessionState;
-export function useSessionStore<T>(id: string, selector: (s: SessionState) => T): T;
-export function useSessionStore<T>(
-  id: string,
-  selector?: (s: SessionState) => T,
-): SessionState | T {
-  const store = getSessionStore(id);
-  return selector ? store(selector) : store();
-}

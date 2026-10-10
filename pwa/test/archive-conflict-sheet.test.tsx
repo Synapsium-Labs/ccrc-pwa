@@ -286,7 +286,7 @@ describe('a superseded forced archive cannot act on a different session’s shee
   it('its SUCCESS neither closes nor reports — the sheet on screen is another session’s', async () => {
     let land!: () => void;
     const onDone = vi.fn();
-    const archive: ArchiveFn = vi.fn(() => new Promise((res) => { land = () => res(null); }));
+    const archive: ArchiveFn = vi.fn(() => new Promise<null>((res) => { land = () => res(null); }));
     render(<Switcher archive={archive} onDone={onDone} />);
     fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
     fireEvent.click(screen.getByTestId('switch'));
@@ -300,7 +300,7 @@ describe('a superseded forced archive cannot act on a different session’s shee
 
   it('its REFUSAL cannot print one session’s stderr under another’s name', async () => {
     let fail!: () => void;
-    const archive: ArchiveFn = vi.fn(() => new Promise((_res, rej) => {
+    const archive: ArchiveFn = vi.fn(() => new Promise<null>((_res, rej) => {
       fail = () => rej(new ApiError(502, { ok: false, error: 'ccd-failed', stderr: 'ws-archive: demo-x is busy' }));
     }));
     render(<Switcher archive={archive} />);
