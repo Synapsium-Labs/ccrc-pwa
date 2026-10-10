@@ -197,7 +197,7 @@ describe.skipIf(!LINUX)('a witness whose leaf is PROVEN gone: collectable at onc
     expect(collectOf(a)['unmeasured']).toBe('device');
     const root = fs.realpathSync(path.dirname(leaf));
     expect(String(a.doc!['detail'])).toBe(`${root} is on device ${dev}, not on device 1 that the witness of ${COL_ID} carries`
-      + " — an empty mount point, or another volume, is never read as the leaf's absence: nothing is dropped, and the next"
+      + " — a mount point on another device is never read as the leaf's absence: nothing is dropped, and the next"
       + ' pass asks again');
     expect(a.doc!['token']).toBeUndefined();
     expect(readJournal(h.home)).toEqual([]);

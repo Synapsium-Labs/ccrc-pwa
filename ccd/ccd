@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c5c5b86e7fb7e680b0d88e5a411ead01a83710fd27873e4d3ba77891e44009b3
+# ccrc:generated 1 sha256=6e1f5d29aa9471ed4d8bb40aca2da07501860f585813f38acd2f102aa2ee06fc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28804,7 +28804,9 @@ _ws_reclaim_no_record() {   # common workdir -> 0 when NO admin entry of the rep
   # list` exits 0 and OMITS the stanza of a record whose `gitdir` it cannot
   # read — every linked stanza when `worktrees/` cannot be listed (measured,
   # git 2.43) — so `_ws_reclaim_record`'s rc 1 alone reads an unreadable
-  # record as none. Asked of the entries themselves, through the one matcher
+  # record as none. It LISTS a record whose `gitdir` is blank (empty after
+  # the trim) at no path, which the matcher refuses too: a first line that
+  # names no path measured nothing. Asked of the entries themselves, through the one matcher
   # (`_ws_reclaim_admin_entries`), whether the tree stands or is gone. Its
   # readers' globals are shadowed: asking this changes nothing a caller read.
   local common="$1" w="$2" e
@@ -29337,7 +29339,8 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
 # that absence as unmeasured, never as either value. Set by `_ws_reclaim_locked`
 # and by the shared tail; `cmd_ws_collect` shadows it to '' with `local` (a
 # collection has no breadcrumb). So `ws-expire`'s own pre-breadcrumb documents,
-# and every `ws-collect` document, carry no key. Assigned here, when ccd is
+# its resumed arm's `probe-unmeasured` (printed while its `expire:` breadcrumb
+# stands), and every `ws-collect` document, carry no key. Assigned here, when ccd is
 # read, so an exported value can never reach a document.
 _WS_RCL_CRUMB=''
 _ws_reclaim_failed_json() {   # token detail -> the post-start failure document on stdout, with
@@ -29890,8 +29893,11 @@ _ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read 
   # before the bytes, and the read is the group's redirection (an unopenable file
   # answers 1). A NUL becomes a newline, never dropped. What an INNER one means
   # is each caller's: in the `.git` file it splits the line, unmeasured; in an
-  # admin directory's `gitdir` back-link it leaves a newline no compare
-  # matches, so the tree is refused. A TRAILING one is a line end each caller
+  # admin directory's `gitdir` back-link it leaves a newline in the text that is
+  # compared with the `.git` path, so the tree is refused when that path holds no
+  # newline, accepted when the NUL sits at the offset of a newline the path does
+  # hold (a hand-crafted file: git writes no NUL), and unmeasured otherwise
+  # (the corner is the path-identity programme's). A TRAILING one is a line end each caller
   # strips, so `gitdir: A\0` and `gitdir: A\n\0` both read as A. Git reads the
   # second as `A\n` and fails; ccd answers measured, safely: an A inside the
   # leaf passes before any back-link is read (removing the leaf removes all of
@@ -29978,7 +29984,11 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
   # THIS `.git` back is the leaf's — rung 9's `_ws_reclaim_gitdir_own`, asked
   # of any repository — or, under the collector's alias, the pre-move spelling
   # the two conditions below admit. Anything else is a tree git records
-  # elsewhere: moved here, or an admin name a later worktree recycled.
+  # elsewhere: moved here, or an admin name a later worktree recycled. "Names
+  # THIS `.git` back" is a compare of text with each NUL of the back-link read
+  # as a newline, so it is literal only for a back-link without a NUL: one
+  # whose NUL sits at the offset of a newline in the `.git` path passes
+  # (`_ws_leaf_read_small` says which cases are refused and which are not).
   _ws_reclaim_absent "$adp/gitdir"; rc=$?
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whose tree $adp records was never asked"; return 2; }
   (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which lies outside the leaf and holds no record of which tree it belongs to — the tree at $d is not provably the leaf's own"; return 1; }
@@ -29998,7 +30008,11 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the
   # (`accepted`, the quarantine record's list), and (2) nothing stands at that
   # pre-move spelling now, PROVEN. A later worktree that recycled the admin
   # name — a recycled slug's `git worktree add` at the same spelling — fails one
-  # or the other and refuses, as it does with no alias.
+  # or the other and refuses WHILE THE LEAF IS IN THE SLOT (spec §5.10, the
+  # residual `alias-refusal-ends-at-the-putback`). Once the putback restores the
+  # leaf to its original path there is no alias: the un-aliased `rec == f` rule
+  # above decides, as it did before this wave, and a recycled worktree whose
+  # back-link names the restored `.git` passes it.
   if [[ -n "$alias" ]]; then
     if [[ "$d" == "$lp" ]]; then pre="${alias%/}"; else pre="${alias%/}/${d#"${lp%/}/"}"; fi
     if [[ "$rec" == "$pre/.git" ]] \
@@ -30038,7 +30052,9 @@ _ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is 
   # directory it names resolved physically — absent refuses (git no longer
   # records the tree), unresolvable is unmeasured, inside the leaf passes;
   # outside it passes only as a linked worktree whose admin `gitdir` names
-  # this `.git` back (literally, or by its directory's physical path), and
+  # this `.git` back (literally, or by its directory's physical path; each NUL
+  # of the back-link is read as a newline, so a hand-crafted one whose NUL sits
+  # at the offset of a newline in the `.git` path passes too), and
   # refuses otherwise. Anything else named `.git` is unmeasured. A refusal
   # outranks an unmeasured entry, whatever order the walk lists them in.
   # THE ALIAS (the collector's alone, spec §5.10): `alias` is the leaf's physical
@@ -31208,7 +31224,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not write the tombstone or the breadcrumb for $id — nothing was destroyed"
       return 1
     fi
-    _WS_RCL_CRUMB=true
+    _WS_RCL_CRUMB=true   # redundant: `_ws_reclaim_tail` sets it at its own top, before any failure printer it reaches
     phase="$start"
   fi
   _ws_reclaim_tail "$id" "$phase" "$lctx" "$RECLAIM_CHILDOF" "$surface" "$declared" "$resumed"
@@ -32266,7 +32282,9 @@ _ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by readi
   # never acted on, so it is never recorded either. The record's name is its
   # slot's, less `slot.`: `<id>.<ns>.<pid>`, which pairs the two. The slot must
   # lie in the physical quarantine (`_ws_collect_qpath`), and the body names no
-  # path: the reader derives the slot from the name (G5). A record that
+  # slot path: the reader derives the slot from the name (G5). The one kind of
+  # path it carries is the `checkouts=` list's encoded admin and back-link paths.
+  # A record that
   # stands is never overwritten, and its directory is made 0700 on first write.
   local LC_ALL=C id="${1-}" slot="${2-}" token="${3-}" dir base name f tmp line co
   _WS_QREC_WHY=''
@@ -32325,8 +32343,9 @@ _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT
   # reason rc 3 carries. A record that stands as a file but will not OPEN is
   # folded into 2 with the malformed ones: its caller keeps it, never retries
   # it. Every field is cleared first. The content's id must be the one its own
-  # name parses to (rc 2 otherwise, G5). The body names NO path: `_WS_QREC_SLOT`
-  # is DERIVED, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`, through
+  # name parses to (rc 2 otherwise, G5). The body names NO slot path (its
+  # `checkouts=` list's encoded admin and back-link paths are the one kind of path
+  # it carries): `_WS_QREC_SLOT` is DERIVED, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`, through
   # `_ws_collect_qpath`, which makes nothing, so a record never names another
   # id's slot and a space in a path never splits one. `_WS_QREC_CHECKOUTS` stays in
   # `_ws_collect_enc`'s spelling, the form `_ws_leaf_checkouts`' alias compares.
@@ -32942,7 +32961,7 @@ _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on dev
     || { _WS_ROOTDEV_WHY="the device of $root could not be read, so it was never compared with device $want that $what carries"; return 2; }
   have="${have%%:*}"
   [[ "$have" == "$want" ]] && return 0
-  _WS_ROOTDEV_WHY="$root is on device $have, not on device $want that $what carries — an empty mount point, or another volume, is never read as the leaf's absence"
+  _WS_ROOTDEV_WHY="$root is on device $have, not on device $want that $what carries — a mount point on another device is never read as the leaf's absence"
   return 1
 }
 
@@ -32992,7 +33011,8 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   # earlier leaf of it. Collecting this one would drop the witness and take
   # the id out of the population, and that slot would be listed by no audit
   # again: TERMINAL, as on the absent arm, and asked before the leaf's own
-  # words, so the slot is never orphaned by the collector in silence.
+  # words, so a FRESH collection never orphans the slot in silence (the resume
+  # arm does not ask `_ws_collect_slots_of`: a record names its own slot there).
   _ws_collect_slots_of "$id"; rc=$?
   (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
   (( ${#_WS_QSLOTS[@]} == 0 )) \
@@ -33064,7 +33084,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # (`_ws_collect_root_dev`: an empty mount point proves nothing). The slot is
   # never read from the record: Task 4's reader DERIVES it from the record's
   # name, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<record name>` (the record
-  # body carries no path), and the slot may hold `leaf` and nothing else.
+  # body carries no slot path), and the slot may hold `leaf` and nothing else.
   # Anything the collector did not leave there is `quarantine-kept`: the record
   # and the slot stay for the operator, as they stand. So is a slot leaf with
   # ANYTHING at the id: the original path was retaken, the leaf can never go

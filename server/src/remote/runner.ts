@@ -56,9 +56,13 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // Archived-workspace expiry (spec 2026-09-24 §5.3): ws-reclaim's machinery — the pin phase, the settle and the same
   // teardown — on an archived workspace, so it earns the same budget.
   'ws-expire': 240_000,
-  // The child temp-root collector (spec 2026-09-22 §5.10): a walk bounded at 30 s, a quarantine move, and the removal of
-  // a tree that can hold gigabytes, all under the reap lock. It earns ws-reclaim's budget, not the flat 90 s it would
-  // silently inherit without this row. Its audit is `ws-audit` and keeps that verb's row.
+  // The child temp-root collector (spec 2026-09-22 §5.10): its probes, a quarantine move, and the removal of a tree that
+  // can hold gigabytes, all under the reap lock. It earns ws-reclaim's budget, not the flat 90 s it would silently
+  // inherit without this row. Its audit is `ws-audit` and keeps that verb's row. The probes are bounded and add up to
+  // about 150 s: the evaluation's 70 s (the idle walk 30, the in-use probe 10, the checkout scan 30), then step 3a's
+  // checkout scan 30, step 5's two in-use probes 2 x 10 and the removal's own checkout scan 30 — plus each probe's
+  // TERM-to-KILL grace (3 s by default). That leaves about 90 s, less the grace, for the `rm` itself, which no bound of
+  // its own caps. A big leaf may need several passes, and nothing is lost: the quarantine record carries the next pass.
   'ws-collect': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger

@@ -82,7 +82,7 @@ describe.skipIf(!LINUX)('the phases, read off the disk', () => {
     expect(collectOf(a)['unmeasured']).toBe('device');
     const root = fs.realpathSync(path.join(h.home, '.cc-tmp'));
     expect(String(a.doc!['detail'])).toBe(`${root} is on device ${ident.dev}, not on device 1 that the quarantine record`
-      + ` ${recName()} carries — an empty mount point, or another volume, is never read as the leaf's absence: nothing is`
+      + ` ${recName()} carries — a mount point on another device is never read as the leaf's absence: nothing is`
       + ' dropped, and the next pass asks again');
     expect(a.doc!['token']).toBeUndefined();
     expect(a.doc!['resume'], 'no phase is answered over an absence not believed').toBeUndefined();
