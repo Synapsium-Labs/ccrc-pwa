@@ -51,7 +51,7 @@ import {
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, entryIndexText, HEALTH_COUNTERS, RETENTION_STATE_META,
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
-  makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, parseBeltState, formatBeltState,
+  makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
@@ -69,7 +69,8 @@ const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable]
 
 /** The shim's argv, exactly: `[--op <verb> <op-args…>] [--roster-unreadable]
  *  --secrets <file…> -- <home…>` (§5.1 step 5). An op's arguments run up to the
- *  first `--roster-unreadable` or `--secrets`. Anything else is `bad-args`. */
+ *  first `--roster-unreadable` or `--secrets`. Sources are normalized in stable first-seen order and
+ *  refused before a pass opens the store unless the shared bounded source-list contract admits them. */
 export function parseSweepArgv(argv) {
   let i = 0;
   let op = null;
@@ -87,7 +88,9 @@ export function parseSweepArgv(argv) {
   const secrets = [];
   while (i < argv.length && argv[i] !== '--') secrets.push(argv[i++]);
   if (argv[i] !== '--') return { error: 'bad-args' };
-  return { op, opArgs, rosterUnreadable, secrets, homes: argv.slice(i + 1) };
+  const normalizedSecrets = normalizeRedactSources(secrets);
+  if (normalizedSecrets === null) return { error: 'bad-args' };
+  return { op, opArgs, rosterUnreadable, secrets: normalizedSecrets, homes: argv.slice(i + 1) };
 }
 
 /** `fs.promises.statfs` raced against a deadline (§9.3; RR15;
@@ -3605,7 +3608,7 @@ export function secretsStep(db, ctx, secretFiles) {
     if (belt.overflow > 0) bump(db, BELT_COUNTERS.overflow, belt.overflow);
     setMeta(db, 'redact_unreadable', JSON.stringify(loaded.unreadable));
     // A pass handed no declared paths keeps the last list: a stale path can only mask more.
-    if (secretFiles.length > 0) setMeta(db, REDACT_SOURCES_META, JSON.stringify([...secretFiles]));
+    if (secretFiles.length > 0) setMeta(db, REDACT_SOURCES_META, JSON.stringify(secretFiles));
   });
   // The redact_hashes rowids of the belt's units: the belt state's live set (§6.2 "The belt").
   const rid = derivStmts(db).pairRid;

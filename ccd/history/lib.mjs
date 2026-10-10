@@ -5553,12 +5553,26 @@ export function beltWitnessMoved(state, witness) {
   return state !== null && state.w !== undefined && state.w !== witness;
 }
 
-/** meta redact_sources: a JSON array of at most 256 absolute paths; anything else names none. */
+/** The shared source-list bound: the sweep persists only an admitted list, and the CLI accepts only one. */
+export const REDACT_SOURCES_MAX = 256;
+
+/** Normalize source paths in stable first-seen order, then admit the bounded absolute-path list; anything else names none. */
+export function normalizeRedactSources(paths) {
+  if (!Array.isArray(paths)) return null;
+  const seen = new Set();
+  const normalized = [];
+  for (const p of paths) {
+    if (typeof p !== 'string' || !p.startsWith('/') || p.length >= 4096 || p.includes('\0')) return null;
+    if (!seen.has(p)) { seen.add(p); normalized.push(p); }
+  }
+  return normalized.length <= REDACT_SOURCES_MAX ? normalized : null;
+}
+
+/** meta redact_sources: a normalized, bounded absolute source list; malformed data names none. */
 export function parseRedactSources(text) {
-  let a;
-  try { a = JSON.parse(text ?? '[]'); } catch { return []; }
-  if (!Array.isArray(a) || a.length > 256) return [];
-  return a.every((p) => typeof p === 'string' && p.startsWith('/') && p.length < 4096 && !p.includes('\0')) ? a : [];
+  let parsed;
+  try { parsed = JSON.parse(text ?? '[]'); } catch { return []; }
+  return normalizeRedactSources(parsed) ?? [];
 }
 
 // ===========================================================================

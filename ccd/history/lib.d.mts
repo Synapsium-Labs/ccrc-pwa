@@ -676,6 +676,8 @@ export const BELT_GRAMS_MAX: number;
 export const BELT_META: 'fts_belt';
 export const BELT_NODES_STEP: 'nodes-belt';
 export const REDACT_SOURCES_META: 'redact_sources';
+export const REDACT_SOURCES_MAX: number;
+export function normalizeRedactSources(paths: unknown): string[] | null;
 export const BELT_COUNTERS: Readonly<{ overflow: string; generations: string }>;
 export interface Belt {
   readonly units: readonly Uint8Array[];

@@ -3715,4 +3715,50 @@ describe('O59 (W1-B2 Task 7B): the substring belt in the index (spec §6.2, §8.
       } finally { db.close(); }
     } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
   });
+
+  it('admits normalized redact_sources at the shared bound and refuses overflow before it writes', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-source-bound-');
+    try {
+      const p = btSecret(box, 'declared.env', `ZQ_DECLARED=${mint()}\n`);
+      const repeats = Array.from({ length: 257 }, () => p);
+      expect(runSweep(box, [], { secrets: repeats }).code, '257 copies of one declared path are one source').toBe(0);
+      let db = openStoreRO(box);
+      try {
+        expect(btMeta(db, lib.REDACT_SOURCES_META), 'only the normalized source list is persisted').toBe(JSON.stringify([p]));
+        expect(lib.parseRedactSources(btMeta(db, lib.REDACT_SOURCES_META))).toEqual([p]);
+      } finally { db.close(); }
+
+      const accepted = [p, ...Array.from({ length: 255 }, (_, i) => path.join(box.home, '.cc-secrets', `source-${i}.env`))];
+      expect(runSweep(box, [], { secrets: accepted }).code, 'the 256-source boundary is accepted').toBe(0);
+      db = openStoreRO(box);
+      let before: { sources: string | undefined; pairs: number; belt: string | undefined };
+      try {
+        before = {
+          sources: btMeta(db, lib.REDACT_SOURCES_META),
+          pairs: Number((db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as { n: number }).n),
+          belt: btMeta(db, lib.BELT_META),
+        };
+        expect(lib.parseRedactSources(before.sources), 'every producer-accepted source list round-trips through the reader').toEqual(accepted);
+      } finally { db.close(); }
+
+      const unchanged = (why: string): void => {
+        db = openStoreRO(box);
+        try {
+          expect({
+            sources: btMeta(db, lib.REDACT_SOURCES_META),
+            pairs: Number((db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as { n: number }).n),
+            belt: btMeta(db, lib.BELT_META),
+          }, why).toEqual(before!);
+        } finally { db.close(); }
+      };
+      const rejected = Array.from({ length: 257 }, (_, i) => path.join(box.home, '.cc-secrets', `overflow-${i}.env`));
+      const overflow = runSweep(box, [], { secrets: rejected });
+      expect(overflow.code, overflow.stderr).toBe(2);
+      unchanged('an over-limit list writes no metadata, pairs, or belt state');
+      const relative = runSweep(box, [], { secrets: [...accepted.slice(0, 255), 'relative.env'] });
+      expect(relative.code, relative.stderr).toBe(2);
+      unchanged('a non-absolute source writes no metadata, pairs, or belt state');
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
 });

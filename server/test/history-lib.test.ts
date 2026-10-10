@@ -4883,8 +4883,12 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
     expect(libRedact.beltWitnessMoved({ v: V, rids: [], gen: null, w: 'a' }, 'a')).toBe(false);
     expect(libRedact.beltWitnessMoved({ v: V, rids: [], gen: null }, 'a'), 'no witness recorded claims nothing').toBe(false);
     expect(libRedact.beltWitnessMoved(null, 'a')).toBe(false);
+    expect(libRedact.REDACT_SOURCES_MAX).toBe(256);
+    expect(libRedact.normalizeRedactSources(['/h/.config/gw.env', '/h/.config/gw.env'])).toEqual(['/h/.config/gw.env']);
     expect(libRedact.parseRedactSources('["/h/.config/gw.env"]')).toEqual(['/h/.config/gw.env']);
-    for (const bad of [undefined, 'x', '["rel/path"]', '{"a":1}']) expect(libRedact.parseRedactSources(bad)).toEqual([]);
+    for (const bad of [undefined, 'x', '["rel/path"]', '{"a":1}', JSON.stringify(Array.from({ length: 257 }, (_, i) => `/h/${i}`))]) {
+      expect(libRedact.parseRedactSources(bad)).toEqual([]);
+    }
   });
 
   it('R-version: a generation opened under another BELT_VERSION restarts from cursor 0, and the version is stamped only after a full walk', () => {
