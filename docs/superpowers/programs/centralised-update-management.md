@@ -1206,6 +1206,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is still held, by claims 1142 (`ccd/ccd`, `macos-platform.test.ts`) and 1141 (`ccd/ccrc`).
       - STATUS: fleet and server v0.0.142, newest v0.0.142, backups fleet 164M/server 624M, disk free fleet 215G/work
         volume 254G/server 33G, no anomalies.
+    - **2026-10-10 22:42 UTC: v0.0.143 converged.** No action was taken. It is #347, the box-token programme's
+      docs PR, published at 22:20:24. The fleet moved at 22:36, 16 minutes later, and the server at 22:38. The box
+      token stayed on generation 3 across the restart, with no hold, no failure and no fleet 401. Wave 15 (run 300)
+      is still held by claims 1142 and 1141.
+      - STATUS: fleet and server v0.0.143, newest v0.0.143, backups fleet 164M/server 626M, disk free fleet 215G/work
+        volume 252G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
