@@ -58,11 +58,12 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   'ws-expire': 240_000,
   // The child temp-root collector (spec 2026-09-22 §5.10): its probes, a quarantine move, and the removal of a tree that
   // can hold gigabytes, all under the reap lock. It earns ws-reclaim's budget, not the flat 90 s it would silently
-  // inherit without this row. Its audit is `ws-audit` and keeps that verb's row. The probes are bounded and add up to
-  // about 150 s: the evaluation's 70 s (the idle walk 30, the in-use probe 10, the checkout scan 30), then step 3a's
-  // checkout scan 30, step 5's two in-use probes 2 x 10 and the removal's own checkout scan 30 — plus each probe's
-  // TERM-to-KILL grace (3 s by default). That leaves about 90 s, less the grace, for the `rm` itself, which no bound of
-  // its own caps. A big leaf may need several passes, and nothing is lost: the quarantine record carries the next pass.
+  // inherit without this row. Its audit is `ws-audit` and keeps that verb's row. A fresh collection runs seven bounded
+  // probes, about 180 s in all: the evaluation's 70 s (the idle walk 30, the in-use probe 10, the checkout scan 30),
+  // step 3a's checkout scan 30, step 5's two in-use probes 2 x 10, and the removal's 60 (its checkout scan 30, then the
+  // permission pass `_ws_reclaim_normalise`, a second 30 s walk) — plus each probe's TERM-to-KILL grace (3 s by default).
+  // That leaves about 60 s, less the grace, for the `rm` itself, which no bound of its own caps. A big leaf may need
+  // several passes, and nothing is lost: the quarantine record carries the next pass.
   'ws-collect': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger

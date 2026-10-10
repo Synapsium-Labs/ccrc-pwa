@@ -496,6 +496,14 @@ describe('the three RETRYABLE words are declared with their first journal sites,
   });
 });
 
+describe('`quarantine-kept` is true after a partial removal too (quarantine-kept-sentence-true-in-every-state)', () => {
+  it('is the ruled sentence, and never says it keeps what it found', () => {
+    // `failed quarantine-kept` also prints after an unwind rmdir'd the slot, or a removal took the leaf, so only what STILL stands is kept.
+    expect(LC_REFUSAL_WORD['quarantine-kept']).toBe('ccrc’s collector found something it cannot finish safely — a quarantine record or slot it cannot read, prove or clear, or the directory’s original path taken again — and keeps what still stands of it and any record of it. Nothing further was removed. It is listed for you to look at, and ccrc finishes it on a later look only if it can prove it again.');
+    expect(LC_REFUSAL_WORD['quarantine-kept']).not.toContain('keeps what it found');
+  });
+});
+
 describe('`registered` names residue (registered-sentence-names-residue)', () => {
   it('says a workspace with the id, or what one left behind, still stands — it does not claim a workspace exists', () => {
     // `_ws_collect_registered` also answers on a lone `.generation`, `hold` or `reaping` row, which frees itself never.

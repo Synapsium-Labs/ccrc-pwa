@@ -307,7 +307,10 @@ describe('the two TERMINAL words are declared, each with a sentence true under a
     // retaken path among its causes.
     const w = LC_REFUSAL_WORD['quarantine-kept'];
     expect(w).toMatch(/original path taken again/);
-    expect(w).toMatch(/cannot read or prove/);
+    expect(w).toMatch(/cannot read, prove or clear/);
+    expect(w).toMatch(/keeps what still stands of it and any record of it/);
+    // The `failed` arms run after an unwind or a removal already took something, so nothing here was "found" and kept whole.
+    expect(w).not.toContain('keeps what it found');
     expect(w).not.toMatch(/set aside|\bmoved\b|exactly as/);
   });
 });
