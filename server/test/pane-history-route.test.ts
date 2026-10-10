@@ -297,7 +297,11 @@ describe('the shipped comments say what F1 measured', () => {
   const MEASURED = [
     'server/src/exec.ts',
     'server/src/server.ts',
-    'pwa/src/session/TerminalDrawer.tsx',
+    // The FACTORY, not the drawer: `defaultMakeHistoryTerm` and F1's
+    // measurement left `TerminalDrawer.tsx` for `terminalFactory.ts` when the
+    // drawer's two halves were separated. This list reds rather than going
+    // quiet when that happens — which is how the move was caught.
+    'pwa/src/session/terminalFactory.ts',
   ] as const;
 
   it('no shipped comment claims tmux never reflows a stored line (F1)', () => {
