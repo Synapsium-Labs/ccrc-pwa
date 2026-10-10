@@ -34,6 +34,7 @@ import {
   CLAIMED_CONSEQUENCE, claimedSentence, isArchiveConflictRun, runPhrase, type ArchiveConflictRun,
 } from './ArchiveConflictSheet';
 import './fleet.css';
+import { substrateFaultText } from './substrateWords';
 
 /** Whether a session is already put away, so its menu and its actions sheet offer Restore where every other session
  *  offers Archive (spec §5.2). Every row the Archived fold holds (`inArchivedFold`, the ONE predicate — never
@@ -148,7 +149,7 @@ export function ArchiveSheet({
     // re-read at the moment of firing and the refusal named rather than swallowed.
     const fault = substrateFault(session);
     if (fault !== null) {
-      setError(`tmux unreachable — ${fault.text}`);
+      setError(substrateFaultText(fault));
       return;
     }
     const mine = gen.current;
@@ -287,7 +288,7 @@ export function ArchiveSheet({
           )}
           {stopOnly && (
             <Button variant="primary" disabled={stopFault !== null}
-                    title={stopFault !== null ? `tmux unreachable — ${stopFault.text}` : undefined}
+                    title={stopFault === null ? undefined : substrateFaultText(stopFault)}
                     onClick={() => { onStopOnly!(sid); onClose(); }}>
               Stop only
             </Button>

@@ -25,6 +25,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
+import { PRESS_FEEDBACK } from '../lib/press';
 
 /** The shared chrome, token for token as both rules declared it.
  *
@@ -37,9 +38,7 @@ export const DOOR =
   'inline-flex items-center gap-[5px] min-h-tap px-1 py-0 border-0 rounded-sm'
   + ' bg-transparent text-ink-secondary font-mono text-2xs font-medium leading-none'
   + ' cursor-pointer'
-  + ' [transition:transform_var(--dur-press)_var(--curve-swift),color_var(--dur-fast)_var(--curve-swift)]'
-  + ' motion-reduce:transition-none'
-  + ' active:scale-[0.88] active:text-ink-primary'
+  + ` ${PRESS_FEEDBACK}`
   + ` ${FOCUS_RING}`;
 
 /** The glyph beside the word. It is DECORATION — `aria-hidden`, because the

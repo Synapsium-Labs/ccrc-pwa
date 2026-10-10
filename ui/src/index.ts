@@ -36,6 +36,7 @@ export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
 // utilities that two or three app rules spelled identically, and wrapping
 // either in a `<span>` would add an element nobody asked for.
 export { MONO_PATH, ATTENTION_DOT, EYEBROW, RESET_LIST } from './lib/text';
+export { PRESS_FEEDBACK } from './lib/press';
 export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,

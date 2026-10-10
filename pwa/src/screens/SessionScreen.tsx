@@ -23,6 +23,7 @@ import { DialogSheet } from '../session/DialogSheet';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
+import { substrateFaultTitle } from '../fleet/substrateWords';
 import { SessionHeader } from '../session/SessionHeader';
 import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
@@ -296,9 +297,10 @@ export function SessionScreen({
   // pane nobody can measure. Read through `substrateFault`, never
   // `live.substrate`: the live frame is cast, not revived, so an older
   // server's row lacks the key at runtime. `faultTitle` is SessionLine's
-  // chip's own `tmux unreachable — <reason>` string, never a second copy.
+  // chip's own `tmux unreachable — <reason>` string — `substrateFaultText`
+  // now, which is what this comment claimed for seven copies of it.
   const fault = live === null ? null : substrateFault(live);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = live === null ? undefined : substrateFaultTitle(live);
 
   const restart = async (): Promise<void> => {
     if (restarting) return;

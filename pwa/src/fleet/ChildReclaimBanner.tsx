@@ -22,23 +22,19 @@
 // the server's sentence; the PWA counts nothing itself. The two item shapes are
 // told apart by `sessionId`, the field the reader checks: every single item has
 // one, and a collapsed line is rebuilt by the reader with none.
-import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { MarkerState } from '../../../shared/api';
-import { COORD_CONFIRM_MS } from './coordWords';
 import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from './childReclaimWords';
-import { inlinePauseError } from './CoordBanner';
+import { useMarkerToggle } from './useMarkerToggle';
 import { AttentionList } from './AttentionList';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
-import { api, apiErrorText } from '../lib/api';
-import { Button, ControlRow, CONTROL_ROW_NOTE, toast } from '@ccrc/ui';
+import { api } from '../lib/api';
+import { Button, ControlRow, CONTROL_ROW_NOTE } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
-type Phase = 'idle' | 'pausing' | 'resuming' | 'unconfirmed';
 
 export function ChildReclaimBanner({
   store = useFleetStore,
@@ -51,76 +47,14 @@ export function ChildReclaimBanner({
 }): ReactNode {
   const coord = store((s) => s.coord);
   const coordFrameSeen = store((s) => s.coordFrameSeen);
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [error, setError] = useState<string | null>(null);
-  const wantedRef = useRef<MarkerState | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const marker = childReclaimMarker(coord);
-
-  const clearTimer = (): void => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  // A NEW value for THIS row's own marker is a fresh measurement: it retires
-  // an inline refusal about the old one (the same guarantee CoordBanner's
-  // own settle effect keeps), and it settles the outstanding tap ONLY when
-  // it reports the value the tap asked for.
-  //
-  // Keyed on `marker`, not on `coord` itself: one frame now carries
-  // both rows' facts — `pause`/`mail` for the sibling banner, `reclaim`/
-  // `childReclaimAttention` for this one. Keying on the whole `coord` object
-  // meant a `pause` flip, or merely a fresh 60s sweep tick changing nothing
-  // this row renders but the attention list, gave `coord` a new identity and
-  // cleared THIS row's refusal though `reclaim` itself never moved — a
-  // refusal disappearing while nothing it was about changed. Keying on
-  // `marker` (`childReclaimMarker(coord)`, already computed above from this
-  // same `coord`) keeps that same guarantee: this effect now runs only when
-  // the RECLAIM switch's own reading changes.
-  useEffect(() => {
-    setError(null);
-    if (wantedRef.current !== null && marker === wantedRef.current) {
-      wantedRef.current = null;
-      clearTimer();
-      setPhase('idle');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marker]);
-
-  useEffect(() => () => clearTimer(), []);
+  // The switch's whole behaviour is `useMarkerToggle`'s, shared with the pause
+  // banner — which is what this file's header asked for in prose ("CoordBanner's
+  // shape, deliberately") and now gets as one implementation.
+  const pause = useMarkerToggle(marker, (set) => childReclaimPause(set ? 'on' : 'off'));
 
   if (!coordFrameSeen || coord === null || marker === null) return null;
   const attention = childReclaimAttentionOf(coord);
-
-  const onToggle = (): void => {
-    setError(null);
-    const wantPause = marker !== 'set';
-    const wanted: MarkerState = wantPause ? 'set' : 'clear';
-    wantedRef.current = wanted;
-    setPhase(wantPause ? 'pausing' : 'resuming');
-    clearTimer();
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      if (wantedRef.current === wanted) setPhase('unconfirmed');
-    }, COORD_CONFIRM_MS);
-    childReclaimPause(wantPause ? 'on' : 'off').catch((err: unknown) => {
-      wantedRef.current = null;
-      clearTimer();
-      setPhase('idle');
-      const inline = inlinePauseError(err);
-      if (inline !== null) { setError(inline); return; }
-      toast(apiErrorText(err), 'error');
-    });
-  };
-
-  const busy = phase === 'pausing' || phase === 'resuming';
-  const toggleLabel =
-    phase === 'pausing' ? 'pausing…'
-    : phase === 'resuming' ? 'resuming…'
-    : phase === 'unconfirmed' ? 'unconfirmed — check /runs'
-    : marker === 'set' ? 'Resume cleanup' : 'Pause cleanup';
 
   return (
     <ControlRow className="child-reclaim-banner">
@@ -131,10 +65,13 @@ export function ChildReclaimBanner({
       <div className="child-reclaim-status" role="status">
         <span className="child-reclaim-glyph" aria-hidden="true">{CHILD_RECLAIM_MARKER_GLYPH[marker]}</span>
         <span className="child-reclaim-word">{CHILD_RECLAIM_MARKER_WORD[marker]}</span>
-        <Button variant="quiet" size="fit" className="child-reclaim-toggle flex-none" disabled={busy} onClick={onToggle}>
-          {toggleLabel}
+        <Button variant="quiet" size="fit" className="child-reclaim-toggle flex-none"
+                disabled={pause.busy} onClick={pause.toggle}>
+          {pause.label({ set: 'Resume cleanup', clear: 'Pause cleanup' })}
         </Button>
-        {error !== null && <p className={`child-reclaim-error ${CONTROL_ROW_NOTE}`}>{error}</p>}
+        {pause.error !== null && (
+          <p className={`child-reclaim-error ${CONTROL_ROW_NOTE}`}>{pause.error}</p>
+        )}
       </div>
       <AttentionList
         label="children reclamation could not clean up"

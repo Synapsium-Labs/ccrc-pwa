@@ -42,6 +42,7 @@ import { childOfRunLabel } from './runWords';
 import { spawnChip } from './spawnWords';
 import { LastSpawnChip, UnmeasuredChip } from './chips';
 import './fleet.css';
+import { substrateFaultText } from './substrateWords';
 
 /** Routing policy calls a window critical above this. */
 const CRITICAL = 75;
@@ -263,7 +264,7 @@ export function SessionMeta({
   const fault = substrateFault(session);
   const faultTitle =
     fault === null ? undefined
-    : fault.at === 0 ? `tmux unreachable — ${fault.text}`
+    : fault.at === 0 ? substrateFaultText(fault)
     : `tmux unreachable since ${new Date(fault.at).toLocaleString(undefined, {
         day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
       })} — ${fault.text}`;

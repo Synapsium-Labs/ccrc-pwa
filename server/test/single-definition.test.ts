@@ -379,6 +379,37 @@ describe('one sessionLabel', () => {
   });
 });
 
+describe("one 'tmux unreachable' sentence (design-system wave)", () => {
+  // SEVEN COPIES, and three of them carried a comment saying the string was
+  // "SessionLine's chip's own `tmux unreachable — <reason>`, never a second
+  // copy". Every one of those was the second copy. The sentence is operator
+  // COPY, so it lives in the PWA (`pwa/src/fleet/substrateWords.ts`) rather
+  // than beside `substrateFault` in L0, and this is what keeps it there.
+  //
+  // Invisible to every census on this branch by construction: it is not a
+  // stylesheet rule, not an element, not a two-word class literal and not a
+  // leaf's attribute set — one template literal, in seven files.
+  const SENTENCE = /`tmux unreachable — \$\{/;
+
+  it('is composed in exactly one file, and that file is substrateWords.ts', () => {
+    const holders = ALL.filter((f) => SENTENCE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['pwa/src/fleet/substrateWords.ts']);
+  });
+
+  it('and every surface that showed it still reaches it', () => {
+    // The other direction: a fold that deleted the callers instead of pointing
+    // them at the word would satisfy the test above and lose the tooltip.
+    for (const f of [
+      'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
+      'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/screens/SessionScreen.tsx',
+      'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
+    ]) {
+      expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
+        .toMatch(/substrateFaultT(ext|itle)\(/);
+    }
+  });
+});
+
 describe('one boardHome (board-placement wave 2, Task 1)', () => {
   // `boardProject ?? project` is the wire's ONE fallback (`shared/api.ts`,
   // `FleetSession.boardProject`'s docstring). A second spelling in any

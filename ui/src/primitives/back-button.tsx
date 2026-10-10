@@ -48,6 +48,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
+import { PRESS_FEEDBACK } from '../lib/press';
 
 /** The shared chrome, token for token as all five rules declared it.
  *
@@ -71,9 +72,7 @@ export const BACK_BUTTON =
   'back-btn'
   + ' flex-none min-w-tap min-h-tap border-none bg-transparent rounded-sm'
   + ' font-ui text-[26px] font-regular leading-none text-ink-secondary cursor-pointer'
-  + ' [transition:transform_var(--dur-press)_var(--curve-swift),color_var(--dur-fast)_var(--curve-swift)]'
-  + ' motion-reduce:transition-none'
-  + ' active:scale-[0.88] active:text-ink-primary'
+  + ` ${PRESS_FEEDBACK}`
   + ` ${FOCUS_RING}`;
 
 export interface BackButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

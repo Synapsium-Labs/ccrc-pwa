@@ -21,6 +21,7 @@ import { api, apiErrorText } from '../lib/api';
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
+import { substrateFaultText, substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
 import { HoldControl } from './HoldControl';
 import { ArchiveSheet, isPutAway, restoreReachesEnsure, restoreSession } from './ArchiveSheet';
@@ -142,7 +143,7 @@ export function SessionActionsSheet({
   // `faultTitle` is THE chip's own string (`SessionLine`'s `.sess-substrate`),
   // never a second copy of the reason.
   const fault = substrateFault(session);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = substrateFaultTitle(session);
 
   const restart = async (): Promise<void> => {
     if (restarting) return;
@@ -184,7 +185,7 @@ export function SessionActionsSheet({
     // fleet frame updates live under the open sheets. `ArchiveSheet` disables the button on the same fault.
     const stopFault = substrateFault(session);
     if (stopFault !== null) {
-      toast(`Couldn't stop — tmux unreachable — ${stopFault.text}`, 'error');
+      toast(`Couldn't stop — ${substrateFaultText(stopFault)}`, 'error');
       return;
     }
     void (async () => {

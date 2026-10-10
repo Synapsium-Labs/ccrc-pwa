@@ -18,6 +18,7 @@ import { isRunClosed } from '../fleet/runWords';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
+import { substrateFaultText } from '../fleet/substrateWords';
 
 /** The one fact every merged-and-unarchived note below opens with, spelled
  *  once because it is the same fact in all three: nothing archives on merge,
@@ -140,7 +141,7 @@ export function PrSheet({
   // derived fault per render, the chip's own string on `title`, read through
   // `substrateFault` (the live frame is cast, not revived).
   const fault = substrateFault(session);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = fault === null ? undefined : substrateFaultText(fault);
 
   /** The archive door. It is NOT `act('Archiving', …)`: a `409 run-open` is not
    *  a failure the operator can act on from a toast — the refusal names WHICH

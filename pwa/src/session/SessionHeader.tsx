@@ -26,6 +26,7 @@ import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
 import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
+import { substrateFaultText } from '../fleet/substrateWords';
 
 export interface SessionHeaderProps {
   session: FleetSession | null;
@@ -259,13 +260,15 @@ export function SessionHeader({
   // The substrate gate (spec §4): under a standing fault the console cannot
   // SEE this session, so Archive (and a main checkout's Restore) — an offer to act on a pane nobody can measure
   // — refuses, disabled with the reason on `title` (the PrSheet idiom; the
-  // string is SessionLine's chip's own `tmux unreachable — <reason>`, never a
-  // second copy). Read through `substrateFault`: the live frame is cast, not
+  // string is `substrateFaultText`, the chip's own `tmux unreachable —
+  // <reason>`. THIS COMMENT USED TO END "never a second copy" over a line that
+  // spelled the sentence out — one of seven that did; the words live in
+  // `substrateWords.ts` now). Read through `substrateFault`: the frame is cast, not
   // revived, so an older server's row lacks the key at runtime. Interrupt
   // (esc) stays ungated — it targets the turn, not the substrate, and is not
   // on the spec's destructive list.
   const fault = session === null ? null : substrateFault(session);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = fault === null ? undefined : substrateFaultText(fault);
 
   // The project is the ground; the second crumb is this particular workspace.
   // Without it, two workspaces of one project produce two identical headers.
