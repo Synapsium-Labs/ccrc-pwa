@@ -50,6 +50,7 @@ import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { navigate } from '../src/lib/router';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
@@ -2173,5 +2174,88 @@ describe('missingPreconditions agrees with readyVerdict, by construction', () =>
         }
       }
     }
+  });
+});
+
+// ── THE RETRY DOOR'S OWN ARMS (measured: statements 342, 351, 352 and 609 of
+// `StartProgramSheet.tsx` uncovered). Every case above retries ONCE and
+// succeeds. A queue that refuses twice is the ordinary case on a box that is
+// still wrong, and the recovery block has to survive it with the NEW reason
+// — otherwise the operator reads the first refusal for ever and the second
+// one, which is the one that would tell them what changed, is lost.
+describe('a kickoff that could not be queued, twice', () => {
+  const mount = (queueKickoff: ReturnType<typeof vi.fn>) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const store = makeStore();
+    render(
+      <>
+        <StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+          createSession={async () => {}} queueKickoff={queueKickoff}
+          loadProjects={async () => ({ roots: [], projects: [proj()] })} />
+        <ToastHost />
+      </>,
+    );
+    return store;
+  };
+
+  const reachFailure = async (store: FleetStore): Promise<void> => {
+    // This file's `afterEach` does not reset the route, so an earlier case's
+    // navigation would make every `location.pathname` claim below vacuous
+    // (measured — the "Open it without a brief" mutant survived on it).
+    navigate('/');
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+    act(() => { store.setState({ sessions: [sess()] }); });
+    await screen.findByText(/could not be queued/i);
+  };
+
+  it('re-plants the block with the SECOND reason, not the first', async () => {
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockRejectedValueOnce(new ApiError(502, { ok: false, stderr: 'mail: store is locked' }));
+    const store = mount(queueKickoff);
+    await reachFailure(store);
+
+    fireEvent.click(screen.getByRole('button', { name: /queue the kickoff again/i }));
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledTimes(2));
+
+    // The new reason, and the door still offered — the operator can fix the
+    // box and tap again without reopening the sheet.
+    expect(await screen.findByText(/mail: store is locked/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /queue the kickoff again/i })).not.toBeDisabled();
+    expect(location.pathname, 'a failed retry navigated anyway').not.toBe('/s/claude-ccrc-pwa');
+  });
+
+  it('a second tap while the retry is in flight queues nothing more', async () => {
+    // `retrying` guards the handler as well as the button: the button is
+    // disabled while the call is out, and the guard is what makes a double
+    // tap landing in the same frame harmless.
+    let land!: () => void;
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
+      .mockImplementationOnce(() => new Promise<void>((res) => { land = () => res(); }));
+    const store = mount(queueKickoff);
+    await reachFailure(store);
+
+    const button = screen.getByRole('button', { name: /queue the kickoff again/i });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(queueKickoff, 'the second tap queued a second kickoff').toHaveBeenCalledTimes(2);
+    await act(async () => { land(); await Promise.resolve(); });
+  });
+
+  it('“Open it without a brief” goes to the session, leaving the kickoff unsent', async () => {
+    // The second door, and the honest one: the session IS running, so the
+    // operator may want to brief it by hand from inside. It must not queue
+    // anything on the way — that is what the other button is for.
+    const queueKickoff = vi.fn()
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }));
+    const store = mount(queueKickoff);
+    await reachFailure(store);
+
+    fireEvent.click(screen.getByRole('button', { name: /open it without a brief/i }));
+    await waitFor(() => expect(location.pathname).toBe('/s/claude-ccrc-pwa'));
+    expect(queueKickoff, 'opening the session queued a kickoff').toHaveBeenCalledTimes(1);
   });
 });

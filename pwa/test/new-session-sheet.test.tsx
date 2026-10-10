@@ -397,3 +397,52 @@ describe('NewSessionSheet — the routing fields ride the start, and only when s
       .toHaveValue('');
   });
 });
+
+// — the third routing field, and the order the list is already in —
+describe('the routing row’s third select, and the project order', () => {
+  it('Workflows alone posts `route: { workflow: … }` and nothing else', async () => {
+    // The one field of three with no case. Each contributes its key
+    // INDEPENDENTLY — an unset select adds nothing — so a request carrying
+    // `class` or `effort` here would be the sheet deciding something the
+    // operator left alone.
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
+
+    fireEvent.click(await screen.findByText('demo'));
+    fireEvent.change(screen.getByLabelText('Workflows'), { target: { value: 'off' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+      route: { workflow: 'off' },
+    }));
+  });
+
+  it('keeps the SERVER’s order for projects this box has never run', async () => {
+    // The sort puts the recently-active first, and its `undefined === undefined`
+    // arm is what keeps everything else where the server put it. Sorting those
+    // against `-1` would be stable in V8 and arbitrary in principle; stating
+    // the arm is what makes it a decision.
+    await openAtStepTwo([
+      proj('zulu', { state: 'tagged', name: 'pool-a' }),
+      proj('alpha', { state: 'tagged', name: 'pool-a' }),
+      proj('mike', { state: 'tagged', name: 'pool-a' }),
+    ]);
+    await screen.findByText('zulu');
+    const names = [...document.querySelectorAll('.proj-name')].map((n) => n.textContent);
+    expect(names, 'the list was re-ordered for rows nothing has run').toEqual(['zulu', 'alpha', 'mike']);
+  });
+
+  it('a project behind the disclosure shows its own pool name', async () => {
+    // The disclosed rows carry the pool they belong to — that is the whole
+    // reason they are disclosed rather than hidden — and a `tagged` pool is
+    // the only state that has a name to show.
+    await openAtStepTwo([
+      proj('mine', { state: 'tagged', name: 'pool-a' }),
+      proj('theirs', { state: 'tagged', name: 'pool-b' }),
+    ]);
+    fireEvent.click(await screen.findByRole('button', { name: /other pool/i }));
+    expect(await screen.findByText('theirs')).toBeInTheDocument();
+    expect(screen.getByTitle(/pool-b/)).toBeInTheDocument();
+  });
+});
