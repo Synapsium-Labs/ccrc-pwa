@@ -668,14 +668,17 @@ function createParent(db, ictx, childIds, depth) {
 }
 
 /** Fan-in over ONE holding copy's level-0 slots, level by level (§6.3). Each slot holds its leaf or null; each
- *  level above holds the parents of the level below, in their children's order. Returns the parents made. */
-function fanInLevels(db, ictx, level0) {
+ *  level above holds the parents of the level below, in their children's order. The budget is checked before every
+ *  group because one large epoch must remain resumable; a retry finds prior parents through parentOf and mints only
+ *  the groups still absent. */
+function fanInLevels(db, ictx, level0, budget) {
   let made = 0;
   let level = level0;
   for (let depth = 0; depth < MAX_FAN_DEPTH && level.length > 0; depth += 1) {
     const width = depth === 0 ? FAN_IN.leaf : FAN_IN.condensed;
     const slots = level.map((id) => ({ nodeId: id, final: id !== null, parented: id !== null && parentOf(db, id) !== null }));
     for (const group of planFanIn({ slots, width })) {
+      if (!parentsBudgetLeft(budget)) return { made, complete: false };
       if (createParent(db, ictx, group, depth + 1) !== null) made += 1;
     }
     const next = [];
@@ -686,7 +689,7 @@ function fanInLevels(db, ictx, level0) {
     }
     level = next;
   }
-  return made;
+  return { made, complete: true };
 }
 
 /** Every parent one epoch can have now (§6.3; the coordinator's ruling RB4). Level 0 is split PER HOLDING COPY:
@@ -701,14 +704,15 @@ function fanInLevels(db, ictx, level0) {
  *  - A boundary no file holds has no leaf (Task 8 waits on it) and joins no list.
  *  - The split is read when a parent is minted. A parent minted earlier keeps its children: they read parented
  *    (parentOf), and planFanIn never regroups a parented slot.
- *  The lists run in ascending file_id. Returns the parents made. */
-function deriveEpochParents(db, ictx, sessionPk, epochSeq) {
+ *  The lists run in ascending file_id. Returns the parents made and whether the complete epoch fit its budget. */
+function deriveEpochParents(db, ictx, sessionPk, epochSeq, budget) {
   const s = parentStmts(db);
   const ds = stmts(db);
   const pass = { files: new Map() };
   const copies = new Map();   // holding file_id → its level-0 slots, in ord
   for (const t of s.epochTranscripts.all(sessionPk, epochSeq)) {
     for (const b of s.bounds.all(t.transcript_pk)) {
+      if (!parentsBudgetLeft(budget)) return { made: 0, complete: false };
       const holding = holdingCopy(ds, pass, b);
       if (holding === null) continue;
       const copyKey = holding.file_id;
@@ -718,8 +722,12 @@ function deriveEpochParents(db, ictx, sessionPk, epochSeq) {
     }
   }
   let made = 0;
-  for (const key of [...copies.keys()].sort((x, y) => Number(x) - Number(y))) made += fanInLevels(db, ictx, copies.get(key));
-  return made;
+  for (const key of [...copies.keys()].sort((x, y) => Number(x) - Number(y))) {
+    const r = fanInLevels(db, ictx, copies.get(key), budget);
+    made += r.made;
+    if (!r.complete) return { made, complete: false };
+  }
+  return { made, complete: true };
 }
 
 /** Fan-in for every epoch that gained a node since the cursor (§6.3). Returns how many parents it made. */
@@ -732,7 +740,9 @@ export function deriveParents(db, ictx, budget) {
   let made = 0;
   for (const e of s.touched.all(from)) {
     if (!parentsBudgetLeft(budget)) return made;
-    made += deriveEpochParents(db, ictx, e.session_pk, e.epoch_seq);
+    const r = deriveEpochParents(db, ictx, e.session_pk, e.epoch_seq, budget);
+    made += r.made;
+    if (!r.complete) return made;
   }
   setStep(db, PARENTS_STEP, NODE_PARSER_VERSION, String(top), null);
   return made;
@@ -752,16 +762,24 @@ export function indexNodesFts(db, ictx, budget) {
   while (parentsBudgetLeft(budget)) {
     const rows = page.all(cursor, NODES_FTS_BATCH);
     if (rows.length === 0) break;
+    let examined = cursor;
+    let pageAdded = 0;
     withTx(db, 'NORMAL', () => {
       for (const r of rows) {
-        if (has.get(r.rid) !== undefined) continue;
-        const n = storedNode(db, r.node_id).rollup;
-        insertNodeFts(db, ictx, r.rid, n.gist, n.topics, n.refs);
-        added += 1;
+        if (!parentsBudgetLeft(budget)) break;
+        if (has.get(r.rid) === undefined) {
+          const n = storedNode(db, r.node_id).rollup;
+          insertNodeFts(db, ictx, r.rid, n.gist, n.topics, n.refs);
+          pageAdded += 1;
+        }
+        examined = Number(r.rid);
       }
-      cursor = Number(rows[rows.length - 1].rid);
-      setStep(db, NODES_FTS_STEP, NODES_FTS_STEP_VERSION, String(cursor), null);
+      if (examined > cursor) setStep(db, NODES_FTS_STEP, NODES_FTS_STEP_VERSION, String(examined), null);
     });
+    added += pageAdded;
+    if (examined === cursor) break;
+    cursor = examined;
+    if (examined !== Number(rows[rows.length - 1].rid)) break;
   }
   return added;
 }
@@ -772,21 +790,19 @@ export function indexNodesFts(db, ictx, budget) {
  *  how many parents it rewrote. */
 export function rerollParents(db, ictx, nodeIds) {
   const s = parentStmts(db);
-  const depthOf = db.prepare('SELECT depth FROM nodes WHERE node_id = ?');
   const kidsOf = db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord');
   const setParent = db.prepare('UPDATE nodes SET gist = ?, topics = ?, earliest_ms = ?, latest_ms = ?, src_chars = ?, '
     + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ? WHERE node_id = ?');
   const dropRefs = db.prepare('DELETE FROM node_refs WHERE node_id = ?');
-  const above = new Map();
-  for (const id of nodeIds) {
-    let p = parentOf(db, id);
-    for (let k = 0; p !== null && k < MAX_FAN_DEPTH && !above.has(p); k += 1) {
-      const d = depthOf.get(p);
-      if (d === undefined) break;
-      above.set(p, Number(d.depth));
-      p = parentOf(db, p);
-    }
-  }
+  // A derived DAG may share a child between valid parents. Walk every reverse edge, not parentOf's deterministic
+  // convenience answer; UNION makes this terminate even if a damaged table contains a cycle.
+  const aboveRows = db.prepare(`WITH RECURSIVE ancestors(node_id) AS (
+    SELECT node_id FROM node_children WHERE child_id IN (${nodeIds.map(() => '?').join(', ')})
+    UNION
+    SELECT nc.node_id FROM node_children nc JOIN ancestors a ON a.node_id = nc.child_id
+  )
+  SELECT a.node_id, n.depth FROM ancestors a JOIN nodes n ON n.node_id = a.node_id WHERE n.depth > 0`).all(...nodeIds);
+  const above = new Map(aboveRows.map((r) => [r.node_id, Number(r.depth)]));
   const order = [...above.entries()].sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map(([id]) => id);
   let n = 0;
   for (const id of order) {

@@ -854,7 +854,7 @@ interface Derive9 {
   rerollParents(db: Db9, ictx: object, nodeIds: readonly string[]): number;
 }
 interface Sweep9 {
-  newBudget(): object;
+  newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number }): object;
   mergeFamily(db: Db9, fromPk: number, toPk: number): void;
 }
 const derive9 = async (): Promise<Derive9> => (await import('../../ccd/history/derive.mjs')) as unknown as Derive9;
@@ -1033,6 +1033,104 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
     }
   });
 
+  v9.it('rerollParents reaches every reverse-ancestry branch once, including cycles, and replaces every parent FTS row', async (ctx) => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-reroll-fanin-', 32, new Set());
+    try {
+      if (store9.probeFts5(fx.db) !== 'present') ctx.skip();
+      store9.createFtsTables(fx.db);
+      const ictx = { nowMs: 5_000, fts: true, pairIdx: NO_PAIRS9 };
+      d.deriveParents(fx.db, { ...ictx, fts: false }, s.newBudget());
+      const left = lib9.parentId(fx.leafIds.slice(0, 8));
+      const right = lib9.parentId(fx.leafIds.slice(8, 16));
+      const top = lib9.parentId([left, right, lib9.parentId(fx.leafIds.slice(16, 24)), lib9.parentId(fx.leafIds.slice(24, 32))]);
+      const branch = 'R9branch00000000000001';
+      const branchTop = 'R9branch00000000000002';
+      const cycle = 'R9branch00000000000003';
+      const node = fx.db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms) VALUES (?, 1, 1, 1, 'condensed', ?, 'ok', ?, '[]', 1, 1, 0, 0, 0, 1, 1)");
+      node.run(branch, 1, 'stale side branch');
+      node.run(branchTop, 2, 'stale side top');
+      node.run(cycle, 3, 'stale cycle');
+      const edge = fx.db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+      edge.run(branch, fx.leafIds[2]!, 0);
+      edge.run(branchTop, branch, 0);
+      fx.db.prepare('UPDATE nodes SET depth = 3 WHERE node_id = ?').run(top);
+      edge.run(top, branchTop, 4);
+      edge.run(cycle, cycle, 0); // A reachable damaged cycle must terminate without duplicate rewrites.
+      edge.run(cycle, fx.leafIds[2]!, 1);
+      for (const id of [left, right, top, branch, branchTop, cycle]) {
+        const rid = (fx.db.prepare('SELECT rowid AS rid FROM nodes WHERE node_id = ?').get(id) as { rid: number }).rid;
+        fx.db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, \'\', \'\')').run(rid, `old-${id}`);
+      }
+      fx.db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run('Leaf 3 fresh reroll content.', fx.leafIds[2]!);
+      v9.expect(d.rerollParents(fx.db, ictx, [fx.leafIds[2]!])).toBe(5);
+      for (const id of [left, branch, branchTop, cycle]) {
+        const row = fx.db.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(id) as { gist: string };
+        v9.expect(row.gist, `${id}: rewrite follows every parent edge`).toContain('Leaf 3 fresh reroll content.');
+        const rid = (fx.db.prepare('SELECT rowid AS rid FROM nodes WHERE node_id = ?').get(id) as { rid: number }).rid;
+        const fts = fx.db.prepare('SELECT gist FROM nodes_fts WHERE rowid = ?').get(rid) as { gist: string };
+        v9.expect(fts.gist).toContain('Leaf 3 fresh reroll content.');
+        v9.expect(fts.gist).not.toBe(`old-${id}`);
+      }
+      v9.expect((fx.db.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(top) as { gist: string }).gist).not.toBe(`old-${top}`);
+      v9.expect(children9(fx.db, branch)).toEqual([fx.leafIds[2]!]);
+      v9.expect(children9(fx.db, branchTop)).toEqual([branch]);
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('a tiny advancing budget leaves a parent epoch resumable, then a retry completes every expected parent exactly once', async () => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-parents-budget-', 32, new Set());
+    try {
+      let clock = 0;
+      const tight = s.newBudget(() => ++clock, { maxMs: 35 });
+      const first = d.deriveParents(fx.db, { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 }, tight);
+      v9.expect(first, 'the budget expires inside this epoch, not only before it starts').toBeGreaterThan(0);
+      v9.expect(first).toBeLessThan(5);
+      v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION), 'an incomplete epoch cannot advance its low-water mark').toBeNull();
+      v9.expect(parents9(fx.db, 1).length).toBeLessThan(4);
+      d.deriveParents(fx.db, { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 }, s.newBudget());
+      const level1 = [0, 8, 16, 24].map((i) => lib9.parentId(fx.leafIds.slice(i, i + 8)));
+      v9.expect(parents9(fx.db, 1).map((p) => p.node_id)).toEqual(level1);
+      v9.expect(parents9(fx.db, 2).map((p) => p.node_id)).toEqual([lib9.parentId(level1)]);
+      v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor).toBe('33');
+    } finally {
+      fx.db.close();
+    }
+  });
+
+  v9.it('a tiny advancing budget commits only the examined nodes_fts prefix and a retry indexes every remaining node once', async (ctx) => {
+    const d = await derive9();
+    const s = await sweep9();
+    const fx = epochFixture9('ccrc-hist-nfts-budget-', 12, new Set());
+    try {
+      if (store9.probeFts5(fx.db) !== 'present') ctx.skip();
+      store9.createFtsTables(fx.db);
+      let clock = 0;
+      const ictx = { nowMs: 5_000, fts: true, pairIdx: NO_PAIRS9 };
+      const first = d.indexNodesFts(fx.db, ictx, s.newBudget(() => ++clock, { maxMs: 4 }));
+      v9.expect(first, 'the budget expires inside a single 256-row page').toBeGreaterThan(0);
+      v9.expect(first).toBeLessThan(12);
+      const step = store9.getStep(fx.db, 'nodes-fts', 1);
+      v9.expect(step).not.toBeNull();
+      const cursor = Number(step!.cursor);
+      const indexed = fx.db.prepare('SELECT max(rowid) AS r, count(*) AS n FROM nodes_fts').get() as { r: number; n: number };
+      v9.expect(cursor, 'cursor reaches exactly the successful prefix').toBe(Number(indexed.r));
+      v9.expect(Number(indexed.n)).toBe(first);
+      v9.expect((fx.db.prepare('SELECT count(*) AS n FROM nodes WHERE rowid > ? AND rowid IN (SELECT rowid FROM nodes_fts)').get(cursor) as { n: number }).n).toBe(0);
+      const retried = d.indexNodesFts(fx.db, ictx, s.newBudget());
+      v9.expect(retried).toBe(12 - first);
+      v9.expect((fx.db.prepare('SELECT count(*) AS n FROM nodes_fts').get() as { n: number }).n).toBe(12);
+      v9.expect(store9.getStep(fx.db, 'nodes-fts', 1)?.cursor).toBe('12');
+    } finally {
+      fx.db.close();
+    }
+  });
+
   v9.it('through real ticks: 8 leaves in one epoch make one parent; 8 leaves spanning a /clear make none, and the late-confirmed /clear epoch has no node before it is confirmed', () => {
     const one = h9.makeHistoryBox('ccrc-hist-dm26-one-');
     const acct = Object.keys(one.accountHome)[0]!;
@@ -1142,12 +1240,12 @@ v9.describe('the nodes_fts backfill and a re-key that moves nodes (W1-B2 Task 9)
       db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (2, ?, ?, 'demo', 2)").run(ID9, G);
       U.forEach((u, i) => { db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (?, ?)').run(i + 1, u); });
       const ep = db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, ?, ?, 'startup', 'hook', 1)");
-      ep.run(1, 1, U[0]!); ep.run(1, 2, U[1]!); ep.run(2, 1, U[2]!);
+      ep.run(1, 1, U[0]!); ep.run(1, 2, U[1]!); ep.run(2, 1, U[0]!); ep.run(2, 2, U[2]!);
       const node = db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, parser_version, created_ms) VALUES (?, ?, ?, ?, ?, ?, 'ok', 1, 1)");
       node.run('L1aaaaaaaaaaaaaaaaaaaa', 1, 1, 1, 'native_leaf', 0);
       node.run('N1aaaaaaaaaaaaaaaaaaaa', 1, 1, 1, 'condensed', 1);
       node.run('L2aaaaaaaaaaaaaaaaaaaa', 1, 2, 2, 'native_leaf', 0);
-      node.run('L3aaaaaaaaaaaaaaaaaaaa', 2, 1, 3, 'native_leaf', 0);
+      node.run('L3aaaaaaaaaaaaaaaaaaaa', 2, 2, 3, 'native_leaf', 0);
       node.run('L4aaaaaaaaaaaaaaaaaaaa', 1, 1, 4, 'native_leaf', 0);
       db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, 0)').run('N1aaaaaaaaaaaaaaaaaaaa', 'L1aaaaaaaaaaaaaaaaaaaa');
       s.mergeFamily(db, 1, 2);
@@ -1157,12 +1255,12 @@ v9.describe('the nodes_fts backfill and a re-key that moves nodes (W1-B2 Task 9)
         return [r.session_pk, r.epoch_seq];
       };
       v9.expect((db.prepare('SELECT seq, cc_session_uuid FROM epochs WHERE session_pk = 2 ORDER BY seq').all() as { seq: number; cc_session_uuid: string }[])
-        .map((e) => [e.seq, e.cc_session_uuid])).toEqual([[1, U[0]], [2, U[1]], [3, U[2]]]);
-      v9.expect(where('L1aaaaaaaaaaaaaaaaaaaa'), 'a leaf moves with its epoch').toEqual([2, 1]);
-      v9.expect(where('N1aaaaaaaaaaaaaaaaaaaa'), 'a parent moves with its epoch').toEqual([2, 1]);
-      v9.expect(where('L2aaaaaaaaaaaaaaaaaaaa')).toEqual([2, 2]);
-      v9.expect(where('L3aaaaaaaaaaaaaaaaaaaa'), "(id, G)'s own epoch is renumbered after the merged ones").toEqual([2, 3]);
-      v9.expect(where('L4aaaaaaaaaaaaaaaaaaaa'), 'no epoch holds its transcript: it stays').toEqual([1, 1]);
+        .map((e) => [e.seq, e.cc_session_uuid])).toEqual([[1, U[1]], [2, U[0]], [3, U[2]]]);
+      v9.expect(where('L1aaaaaaaaaaaaaaaaaaaa'), 'a leaf moves to the retained destination epoch for its shared transcript UUID').toEqual([2, 2]);
+      v9.expect(where('N1aaaaaaaaaaaaaaaaaaaa'), 'a parent moves to that same retained destination epoch').toEqual([2, 2]);
+      v9.expect(where('L2aaaaaaaaaaaaaaaaaaaa')).toEqual([2, 1]);
+      v9.expect(where('L3aaaaaaaaaaaaaaaaaaaa'), "(id, G)'s own unrelated epoch is renumbered after the merged ones").toEqual([2, 3]);
+      v9.expect(where('L4aaaaaaaaaaaaaaaaaaaa'), 'no destination-family epoch holds its transcript: it stays').toEqual([1, 1]);
       v9.expect((db.prepare("SELECT n FROM counters WHERE name = 'nodes_unrepointed'").get() as { n: number }).n).toBe(1);
     } finally {
       db.close();
