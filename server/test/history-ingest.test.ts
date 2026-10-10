@@ -2441,13 +2441,16 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       const { sweep: S, store, lib } = await IX.api();
       const box = IX.newBox('ccrc-hist-f2p-');
       try {
-        const v = `zqf${hex(12)}2`;   // glued by _ or -: §8.3's run grammar leaves it, and a phrase still finds it
+        // Printed with its own `-` as spaces: a phrase of its unit still finds it (unicode61 drops both), and no piece
+        // reaches SECRET_SEGMENT_MIN, so neither the pair, its glue windows nor the belt removes it (W1-B2 Task 7A).
+        const v = `zqf${hex(4)}-${hex(5)}-${hex(4)}2`;
+        const spaced = v.replace(/-/g, ' ');
         const u = `zqu${hex(12)}5`;   // stand-alone: the redaction removes it
         IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
           IX.user(IX.uuidN(1), null, `note ${u} end`, 1),
-          IX.user(IX.uuidN(2), IX.uuidN(1), `note ${v}_tail end`, 2),
-          IX.user(IX.uuidN(3), IX.uuidN(2), `note ${v}-tail end`, 3),
-          IX.user(IX.uuidN(4), IX.uuidN(3), `note ${v}_tail two end`, 4),
+          IX.user(IX.uuidN(2), IX.uuidN(1), `note ${spaced} tail end`, 2),
+          IX.user(IX.uuidN(3), IX.uuidN(2), `note ${spaced} other end`, 3),
+          IX.user(IX.uuidN(4), IX.uuidN(3), `note ${spaced} tail two end`, 4),
         ]));
         IX.sweepTwice(box);
         const P = lib.historyPaths(box.home);
@@ -2480,7 +2483,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
           expect(metaV(w, 'fts_reindex_rid')).toBe(String(ra));
           seen.push(await tick());                                    // u is owed again, and its blob is already clean
           expect(seen).toEqual([3, 1, 0, 0, 0]);
-          expect(matches(w, `"${v}"`), 'CONTROL: the shape: the glued value stays in the index, a phrase still finds all three').toBe(3);
+          expect(matches(w, `"${v}"`), 'CONTROL: the shape: the spaced value stays in the index, a phrase still finds all three').toBe(3);
         } finally { w.close(); }
       } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     });

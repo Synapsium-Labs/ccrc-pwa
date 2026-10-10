@@ -1687,13 +1687,13 @@ export function sessionHashPairs(jsonText) {
 
 /** The pairs, indexed by length, so the value layer hashes only runs whose
  *  length some pair has. */
-export function makePairIndex(pairs) {
+export function makePairIndex(pairs, belt = null) {
   const byLen = new Map();
   for (const p of pairs) {
     if (!byLen.has(p.len)) byLen.set(p.len, new Set());
     byLen.get(p.len).add(p.sha256);
   }
-  return { byLen };
+  return { byLen, belt };
 }
 
 /** A pair index that answers exactly as makePairIndex(pairs) and counts, in probe.hits, every value-layer match on
@@ -1708,8 +1708,8 @@ export function makePairIndex(pairs) {
  *  answered no is also no in Q. So both computations asked the same queries and got the same answers, and the stored
  *  row already equals the full redaction: it needs no rewrite. A recomputation that did record an owed hit is the
  *  row to rewrite. The test is by hash, with the redaction's own code, so it holds for a value glued to a
- *  neighbour that no quoted phrase finds, and for a pair that has no value (sessions.json's idHash). */
-export function makeProbeIndex(pairs, mark) {
+ *  neighbour that no quoted phrase finds, and for a pair that has no value (sessions.json's idHash). W1-B2 Task 7A: under `beltAll` every layer-4 and glue-window hit counts too, because both depend on the loaded values and on BELT_VERSION's code, which the argument above does not cover; and the glue windows' budget depends on the SET of registered lengths, not only on the answers, so a probe without `beltAll` is no completeness proof once a glue window can run: every re-derivation passes `beltAll: true` (Task 7B). */
+export function makeProbeIndex(pairs, mark, { belt = null, beltAll = false } = {}) {
   const all = [...pairs];
   const base = makePairIndex(all);
   const owed = makePairIndex(all.filter((p) => p.rid > mark));
@@ -1721,28 +1721,33 @@ export function makeProbeIndex(pairs, mark) {
       has: (sha) => { if (!shas.has(sha)) return false; if (os.has(sha)) probe.hits += 1; return true; },
     });
   }
-  return { byLen, probe };
+  return { byLen, probe, belt, beltAll };
 }
 
 /** meta fts_rederive's grammar, `<target> <cursor> <end>`; anything else (undefined included) is null
  *  (D-4344, history-reindex-mark-by-rederivation). */
 export function parseRederiveState(text) {
-  const m = /^([0-9]{1,15}) ([0-9]{1,15}) ([0-9]{1,15})$/.exec(text ?? '');
-  return m === null ? null : { target: Number(m[1]), cursor: Number(m[2]), end: Number(m[3]) };
+  const m = /^([0-9]{1,15}) ([0-9]{1,15}) ([0-9]{1,15})( b)?$/.exec(text ?? '');
+  return m === null ? null : { target: Number(m[1]), cursor: Number(m[2]), end: Number(m[3]), ...(m[4] === undefined ? {} : { belt: true }) };
 }
 export function formatRederiveState(s) {
-  return `${s.target} ${s.cursor} ${s.end}`;
+  return `${s.target} ${s.cursor} ${s.end}${s.belt === true ? ' b' : ''}`;
 }
 /** Whether a re-derivation generation is open: its saved target lies above the mark (D-4344,
  *  history-reindex-mark-by-rederivation). The one test of it, read by rederivePlan and phraseValues. */
 function rederiveOpen(mark, state) {
-  return state !== null && state.target > mark;
+  return state !== null && (state.target > mark || state.belt === true);
 }
 /** Continue a generation whose target lies above the mark; else start one when a pair lies above it; else nothing.
  *  A malformed state restarts from 0, which is conservative (D-4344, history-reindex-mark-by-rederivation). */
-export function rederivePlan(mark, top, maxBlobId, state) {
-  if (rederiveOpen(mark, state)) return state;
-  if (top > mark) return { target: top, cursor: 0, end: maxBlobId };
+export function rederivePlan(mark, top, maxBlobId, state, beltDue = false, restart = false) {
+  // `restart` (decideBelt's, R-version): the belt is due and the open generation carries no record of its units under
+  // this BELT_VERSION (one opened under another version, by a build without the belt, or whose record a due record
+  // cleared), so its walk is begun again rather than finished under a stamp it could not earn.
+  if (rederiveOpen(mark, state) && !restart) return state;
+  // A belt generation (§6.2 "The belt", decideBelt) re-derives every indexed blob with no new pair; it is open at its
+  // own mark until its completion writes the state without ` b`.
+  if (top > mark || beltDue) return { target: Math.max(top, mark), cursor: 0, end: maxBlobId, ...(beltDue ? { belt: true } : {}) };
   return null;
 }
 /** The values the same-tick phrase fast path searches (D-4344, history-reindex-mark-by-rederivation; review 344 F2):
@@ -1892,7 +1897,7 @@ function redactLayers(segment, idx, context) {
   // layers are the belt there.
   let s = segment.replace(/[A-Za-z0-9_-]+/g, (run) => {
     const shas = idx.byLen.get(run.length);
-    return shas !== undefined && shas.has(sha256Hex(run)) ? REDACTED_MARK : run;
+    return shas !== undefined && shas.has(sha256Hex(run)) ? REDACTED_MARK : glueRedact(run, idx);
   });
   // Layer 2: context. The value after NAME=, NAME: or "name": " when NAME is
   // an identifier name; after a bearer header and the box-token header; and
@@ -2175,6 +2180,11 @@ function markSpansAt(plain, offsets) {
  *  any of them.
  *  D-4307 (history-redaction-csi-joined-belt, amended: review 316 F1 and M1, security reviews of ee55098c2 and 2a8c791bf) */
 export function redactField(text, idx) {
+  return beltMask(redactLayered(text, idx), idx.belt, true, beltHit(idx));
+}
+
+/** redactField's three layers over its readings, before the belt: B1's redactField body, unchanged. */
+function redactLayered(text, idx) {
   if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx);
   const raw = redactRun(text, idx);
   let out = '';
@@ -2238,12 +2248,12 @@ function markEscapeGluedSpans(s) {
  *  backslash marked (`markEscapeGluedSpans`), so no part of a secret a further decode would separate is indexed.
  *  `idx` is required: `sidecarIndexText(…, null)` never calls this. */
 export function redactForIndex(text, idx) {
-  let t = redactField(text, idx);
+  let t = redactIndexReading(text, idx);
   let keep = t;
   for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
     const u = unescapeJsonText(t);
     if (u === t) return keep;
-    t = redactField(u, idx);
+    t = redactIndexReading(u, idx);
     if (t !== u) keep = t;
   }
   return markEscapeGluedSpans(t);
@@ -2284,7 +2294,7 @@ export function sidecarIndexText(bytes, idx) {
   // are redactForIndex's (D-4343): a nested JSON level or a backslash-u-005c chain glues an escape letter onto a
   // secret one decode later, and the last redaction below reads every remaining level, keeping a deeper reading only
   // when it redacted something.
-  if (idx !== null) text = redactField(text, idx);
+  if (idx !== null) text = redactIndexReading(text, idx);
   text = unescapeJsonText(text);
   if (idx !== null) text = redactForIndex(text, idx);
   return cutIndexText(text, w.windowCut, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN);
@@ -5038,4 +5048,544 @@ export function ftsTablesHealthy({ tables, columns }) {
   const healthy = (t) => tables.has(t) && FTS_SHADOWS[t].every((s) => tables.has(s))
     && FTS_COLUMNS[t].every((c) => (columns[t] ?? []).includes(c));
   return { blobs: healthy('blobs_fts'), nodes: healthy('nodes_fts') };
+}
+
+// ===========================================================================
+// The substring belt (spec §8.3 layer 4 and layer 1's glue windows, §6.2 "The belt"; rev 3.5; W1-B2 Task 7A;
+// coordinator rulings 4019 and 4043, reviews 344 F9 and 351). Layer 1 matches a registered unit only as a whole
+// `[A-Za-z0-9_-]` run, so a unit glued to a neighbour (`ab_<v>`, `ab<v>`) or a run an escape sequence took a character
+// of (`ESC[` + `P…`) kept most of a secret as one FTS term and printed it (B1's D-4344
+// (history-reindex-mark-by-rederivation) and D-4307 (history-redaction-csi-joined-belt) name both limits). Two repairs,
+// both inside redactField so every caller has them:
+// layer 1's glue windows (by hash, so a rotated value and a sessions.json hash are covered), and layer 4, which masks
+// every stretch sharing beltWidth(unit) or more consecutive characters, folded, with a unit this process loaded.
+// ===========================================================================
+
+/** The belt's derivation version (meta fts_belt's `v`). A store whose recorded version differs, a B1 store's absent
+ *  state included, re-derives its whole index once (decideBelt, rederivePlan); a generation open across a bump is
+ *  restarted, and a completion stamps the version its walk ran under (`gv`, ruling R-version). Bump it with any change
+ *  to layer 4, to the glue windows, to beltWidth, to beltFold or to the seed rule. */
+export const BELT_VERSION = 1;
+/** The bits a matched stretch must carry in its unit's folded alphabet: SECRET_SEGMENT_MIN base64url characters'
+ *  72 bits, the bound §8.3 already sets on a segment. */
+export const BELT_BITS = 72;
+/** The widths the belt scans at, ascending; the floor is SECRET_SEGMENT_MIN, the shortest unit. */
+export const BELT_K_LADDER = Object.freeze([12, 14, 16, 18, 21]);
+/** The most grams one belt holds (about 15 MiB); a unit past it stays in layer 1 only and is counted. */
+export const BELT_GRAMS_MAX = 65536;
+/** meta key: the belt state, formatBeltState's JSON (rowids only, never a value). */
+export const BELT_META = 'fts_belt';
+/** The derivation step that re-redacts every node's stored fields when a re-derivation generation opens. */
+export const BELT_NODES_STEP = 'nodes-belt';
+/** meta key: the declared secretsFile paths the last tick read (JSON array, paths only). */
+export const REDACT_SOURCES_META = 'redact_sources';
+/** The belt's counter words (sweep.mjs writes them). */
+export const BELT_COUNTERS = Object.freeze({ overflow: 'redact_belt_overflow', generations: 'redact_belt_generations' });
+/** The glue windows one run may hash before it is replaced whole (fail closed): this plus a quarter of its length. */
+const GLUE_HASH_FLOOR = 64;
+/** The window characters one run may hash before it is replaced whole (fail closed): this plus 4 × its length, each
+ *  window charged its length before it is hashed (spec §8.3, review R69; *chosen*). A count bound alone costs
+ *  (64 + n/4) × the longest registered pair. */
+const GLUE_HASH_BYTES_FLOOR = 64 * 1024;
+
+/** A character's belt code: 1-38 for `[a-z0-9_-]` (an upper-case letter folds to its lower case), 0 for any other
+ *  ASCII character, a boundary no gram crosses. */
+const BELT_CODE = (() => {
+  const t = new Uint8Array(128);
+  let c = 1;
+  for (const ch of 'abcdefghijklmnopqrstuvwxyz0123456789_-') { t[ch.charCodeAt(0)] = c; c += 1; }
+  for (let u = 0x41; u <= 0x5a; u += 1) t[u] = t[u + 0x20];
+  return t;
+})();
+const FOLD_MEMO = new Map();
+const FOLD_MEMO_MAX = 4096;
+/** The combining marks FTS5 unicode61 drops inside a token at remove_diacritics 1, the default B1's `porter unicode61`
+ *  tables use: U+0300-0304, U+0306-030C, U+030F, U+0311, U+031B, U+0323-0328, U+032D-032E, U+0330-0331. Measured
+ *  against node:sqlite on every code point U+0080..U+2FFFF (the case `beltFold is unicode61's own fold`); every other
+ *  mark is a boundary to unicode61, so it is one to the belt. */
+const isDroppedMark = (c) => (c >= 0x300 && c <= 0x304) || (c >= 0x306 && c <= 0x30c) || c === 0x30f || c === 0x311
+  || c === 0x31b || (c >= 0x323 && c <= 0x328) || c === 0x32d || c === 0x32e || c === 0x330 || c === 0x331;
+const isAsciiAlnum = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a);
+
+/** A non-ASCII code point's belt code, exactly as FTS5 unicode61 (remove_diacritics 1) folds it inside a token
+ *  (coordinator ruling R-fold): one of the marks it drops is dropped (-1); a character whose canonical decomposition is
+ *  an ASCII letter or digit alone, or that and one dropped mark, folds to that character's code; U+017F and U+1E9B
+ *  (long s, and long s with a dot above) fold to `s`, as unicode61's case fold takes them; anything else is a
+ *  boundary (0), a letter with two marks included, which unicode61 keeps as itself. Memoised per code point
+ *  (bounded), so CJK-dense text costs one lookup a character. */
+export function beltFold(cp) {
+  const hit = FOLD_MEMO.get(cp);
+  if (hit !== undefined) return hit;
+  let c = 0;
+  if (isDroppedMark(cp)) c = -1;
+  else if (cp === 0x17f || cp === 0x1e9b) c = BELT_CODE[0x73];
+  else {
+    const d = String.fromCodePoint(cp).normalize('NFD');
+    const b = d.charCodeAt(0);
+    if (isAsciiAlnum(b) && (d.length === 1 || (d.length === 2 && isDroppedMark(d.charCodeAt(1))))) c = BELT_CODE[b];
+  }
+  if (FOLD_MEMO.size < FOLD_MEMO_MAX) FOLD_MEMO.set(cp, c);
+  return c;
+}
+
+/** The width a unit is masked at: the stretch its folded alphabet needs to carry BELT_BITS, never more than the unit,
+ *  rounded DOWN to BELT_K_LADDER (rounding down only masks more). */
+export function beltWidth(unit) {
+  const u = unit.toLowerCase();
+  let size;
+  if (/^[0-9]+$/.test(u)) size = 10;
+  else if (/^[0-9a-f]+$/.test(u)) size = 16;
+  else size = (/[0-9]/.test(u) ? 10 : 0) + (/[a-z]/.test(u) ? 26 : 0) + (u.includes('_') ? 1 : 0) + (u.includes('-') ? 1 : 0);
+  const need = size < 2 ? u.length : Math.min(u.length, Math.ceil(BELT_BITS / Math.log2(size)));
+  let w = BELT_K_LADDER[0];
+  for (const s of BELT_K_LADDER) if (s <= need) w = s;
+  return w;
+}
+
+/** Whether the gram of `unit` at `off`, `w` long, may seed a mask: at least a third of its folded characters are
+ *  distinct (a padding run seeds nothing), and it holds a digit or both an upper- and a lower-case letter. So a
+ *  snake_case, kebab-case or CONSTANT_CASE word, or the wordy part of a token (`claude-sonnet-`), seeds nothing. The
+ *  price depends on the unit's alphabet (measured, 2000 random 40-character values each, and 5.4M base64url grams):
+ *  a token's gram fails this about once in 10^4 when it is mixed-case, about once in 5 × 10^4 when it is base64url
+ *  (measured 2.07e-5), but a one-case `[a-z0-9]` token's about once in 100 and
+ *  a base32 `[A-Z2-7]` one's about once in 18. A print that holds any seeding gram is still masked to its run; a
+ *  partial print of a one-case unit's digit-free window alone is left (spec §8.3 "What it cannot see"). A value of
+ *  one-case letters only is left to layer 1 (its pair and its glue windows). */
+function beltSeeds(unit, off, w) {
+  let digit = false;
+  let lower = false;
+  let upper = false;
+  const seen = new Set();
+  for (let k = off; k < off + w; k += 1) {
+    const c = unit.charCodeAt(k);
+    if (c >= 0x30 && c <= 0x39) digit = true;
+    else if (c >= 0x61 && c <= 0x7a) lower = true;
+    else if (c >= 0x41 && c <= 0x5a) upper = true;
+    seen.add(BELT_CODE[c]);
+  }
+  if (seen.size * 3 < w) return false;
+  return digit || (lower && upper);
+}
+
+const BELT_BASE = 0x01000193;
+function beltPow(e) {
+  let r = 1;
+  for (let i = 0; i < e; i += 1) r = Math.imul(r, BELT_BASE);
+  return r;
+}
+function beltSame(a, ai, b, bi, w) {
+  for (let k = 0; k < w; k += 1) if (a[ai + k] !== b[bi + k]) return false;
+  return true;
+}
+
+/** The units the belt masks for `values`: secretUnits' rule, so layer 4, layer 1 and the late-pair search agree. */
+export function beltUnits(values) {
+  return [...new Set([...values].flatMap((v) => secretUnits(v)))];
+}
+
+/** The belt over `units` (secretUnits' runs of `[A-Za-z0-9_-]`, SECRET_SEGMENT_MIN or more). Each width holds a table
+ *  from a seeding gram's 32-bit rolling hash (high 30 bits) to the grams with it; every candidate is compared code by
+ *  code, so a collision never changes an answer. Units are taken in sorted order until BELT_GRAMS_MAX; the rest are
+ *  counted in `overflow`. Held in this process's memory only; `texts` is what the --regex child is handed. */
+export function makeBelt(units) {
+  const codesOf = [];
+  const texts = [];
+  const byWidth = new Map();
+  let grams = 0;
+  let overflow = 0;
+  for (const unit of [...new Set(units)].sort()) {
+    const w = beltWidth(unit);
+    const n = unit.length - w + 1;
+    if (n < 1 || !/^[A-Za-z0-9_-]+$/.test(unit)) continue;
+    if (grams + n > BELT_GRAMS_MAX) { overflow += 1; continue; }
+    const codes = new Uint8Array(unit.length);
+    for (let i = 0; i < unit.length; i += 1) codes[i] = BELT_CODE[unit.charCodeAt(i)];
+    const at = codesOf.length;
+    codesOf.push(codes);
+    texts.push(unit);
+    let t = byWidth.get(w);
+    if (t === undefined) {
+      t = { w, pw: beltPow(w - 1), table: new Map() };
+      byWidth.set(w, t);
+    }
+    let h = 0;
+    for (let i = 0; i < unit.length; i += 1) {
+      if (i >= w) h = (h - Math.imul(codes[i - w], t.pw)) | 0;
+      h = (Math.imul(h, BELT_BASE) + codes[i]) | 0;
+      if (i < w - 1) continue;
+      const off = i - w + 1;
+      if (!beltSeeds(unit, off, w)) continue;
+      const key = h >>> 2;
+      const list = t.table.get(key);
+      if (list !== undefined && list.some((g) => beltSame(codesOf[g.unit], g.off, codes, off, w))) continue;
+      if (list === undefined) t.table.set(key, [{ unit: at, off }]);
+      else list.push({ unit: at, off });
+      grams += 1;
+    }
+  }
+  return { units: codesOf, texts, widths: [...byWidth.values()].sort((a, b) => a.w - b.w), grams, overflow };
+}
+
+/** A reading of a text: a string and, per UTF-16 unit of it, the range of the text it came from (null: itself). */
+const readFrom = (r, i) => (r.from === null ? i : r.from[i]);
+const readTo = (r, i) => (r.to === null ? i + 1 : r.to[i]);
+
+/** `r` with every match of `re` (global) replaced by `fn(match)`, each replacement character mapped to the match. */
+function mapReading(r, re, fn) {
+  const parts = [];
+  const from = [];
+  const to = [];
+  let last = 0;
+  re.lastIndex = 0;
+  for (let m = re.exec(r.s); m !== null; m = re.exec(r.s)) {
+    for (let i = last; i < m.index; i += 1) { from.push(readFrom(r, i)); to.push(readTo(r, i)); }
+    parts.push(r.s.slice(last, m.index));
+    const rep = fn(m);
+    const a = readFrom(r, m.index);
+    const b = readTo(r, m.index + m[0].length - 1);
+    for (let i = 0; i < rep.length; i += 1) { from.push(a); to.push(b); }
+    parts.push(rep);
+    last = m.index + m[0].length;
+    if (m[0].length === 0) re.lastIndex += 1;
+  }
+  if (last === 0 && parts.length === 0) return r;
+  for (let i = last; i < r.s.length; i += 1) { from.push(readFrom(r, i)); to.push(readTo(r, i)); }
+  parts.push(r.s.slice(last));
+  return { s: parts.join(''), from: Int32Array.from(from), to: Int32Array.from(to) };
+}
+
+/** The bytes of one escape sequence that introduce it: a 7-bit ESC, its fill and the `[`, `P`, `N` or `O` after it
+ *  when a byte follows that, or the one 8-bit introducer. The rest (parameters, intermediates, the final byte) is what
+ *  a stray introducer may have taken from a value. */
+function introducerLen(seq) {
+  if (seq.charCodeAt(0) !== 0x1b) return 1;
+  let k = 1;
+  while (k < seq.length && SEQ_FILL_RE.test(seq[k])) k += 1;
+  return k < seq.length - 1 && '[PNO'.includes(seq[k]) ? k + 1 : k;
+}
+
+/** Scan one reading: every window equal to a seeding gram of its width adds its source range to `cover` (a difference
+ *  array over the masked text) and calls `onHit` (the re-derivation's probe). Linear per width. */
+function scanReading(r, belt, cover, onHit) {
+  const s = r.s;
+  const codes = new Uint8Array(s.length);
+  const from = new Int32Array(s.length);
+  const to = new Int32Array(s.length);
+  let n = 0;
+  for (let i = 0; i < s.length;) {
+    const u = s.charCodeAt(i);
+    let len = 1;
+    let c;
+    if (u < 0x80) c = BELT_CODE[u];
+    else {
+      const cp = s.codePointAt(i);
+      if (cp > 0xffff) len = 2;
+      c = beltFold(cp);
+    }
+    if (c >= 0) {
+      codes[n] = c;
+      if (r.from === null) { from[n] = i; to[n] = i + len; } else { from[n] = r.from[i]; to[n] = r.to[i + len - 1]; }
+      n += 1;
+    }
+    i += len;
+  }
+  for (const t of belt.widths) {
+    const w = t.w;
+    let h = 0;
+    let run = 0;
+    for (let i = 0; i < n; i += 1) {
+      const c = codes[i];
+      if (c === 0) { run = 0; h = 0; continue; }
+      if (run >= w) h = (h - Math.imul(codes[i - w], t.pw)) | 0;
+      else run += 1;
+      h = (Math.imul(h, BELT_BASE) + c) | 0;
+      if (run < w) continue;
+      const list = t.table.get(h >>> 2);
+      if (list === undefined) continue;
+      if (!list.some((x) => beltSame(belt.units[x.unit], x.off, codes, i - w + 1, w))) continue;
+      cover[from[i - w + 1]] += 1;
+      cover[to[i]] -= 1;
+      if (onHit !== null) onHit();
+    }
+  }
+}
+
+/** Layer 4 (spec §8.3): `text` with every stretch sharing a seeding gram with a unit of `belt` replaced by
+ *  REDACTED_MARK. Readings: the text, and when it holds an escape introducer, the text with every ANSI sequence removed
+ *  and the text with every sequence's introducer removed (what a stray `ESC[` took stays in place); with `decode`, the
+ *  same three of each JSON-escape decode, up to INDEX_UNESCAPE_PASSES, stopping at the first that changes nothing. Each
+ *  reading is folded (ASCII case, unicode61's diacritics, beltFold) and maps every character back to the range of
+ *  `text` it came from. The masked ranges are their union, each widened to the `[A-Za-z0-9_-]` run around it but never
+ *  over a JSON escape's letter or hex digit, then each replaced by one mark; a span that starts inside an escape takes
+ *  the whole escape, so no mark follows a bare backslash. A mark holds no unit's width of run characters, so the result
+ *  is a fixed point. Cost: at most 3 * (1 + INDEX_UNESCAPE_PASSES) readings, each scanned once per width
+ *  (BELT_K_LADDER.length at most) with an exact comparison of at most the width per hash hit, and one widening pass
+ *  that reads each character at most once (a cover inside an already widened span joins it, ruling R-linear): O(text),
+ *  pinned by the case `the widening is linear`. `onHit` (or null) is called once per matched window. */
+export function beltMask(text, belt, decode, onHit = null) {
+  if (belt === null || belt === undefined || belt.widths.length === 0 || text.length < BELT_K_LADDER[0]) return text;
+  const cover = new Int32Array(text.length + 1);
+  let r = { s: text, from: null, to: null };
+  for (let level = 0; ; level += 1) {
+    scanReading(r, belt, cover, onHit);
+    if (ESCAPE_INTRODUCER_RE.test(r.s)) {
+      scanReading(mapReading(r, ANSI_ESCAPE_RE, () => ''), belt, cover, onHit);
+      scanReading(mapReading(r, ANSI_ESCAPE_RE, (m) => m[0].slice(introducerLen(m[0]))), belt, cover, onHit);
+    }
+    if (!decode || level >= INDEX_UNESCAPE_PASSES || !r.s.includes('\\')) break;
+    const d = mapReading(r, JSON_ESCAPE_RE, (m) => (m[1] !== undefined ? JSON_ESCAPE_CHAR[m[1]] : String.fromCharCode(parseInt(m[2], 16))));
+    if (d === r || d.s === r.s) break;
+    r = d;
+  }
+  // The masked spans: each union of covered ranges, widened to the `[A-Za-z0-9_-]` run around it. The widening is
+  // linear (ruling R-linear): a cover that starts at or before the end the last span was widened to joins that span,
+  // so no character is widened over twice. (A cover inside an already widened run used to push a span of its own and
+  // rescan the rest of the run, quadratic in it.) A left widening never takes a JSON escape's letter or hex digit, and
+  // a span that starts inside an escape takes the whole escape, so no mark follows a bare backslash and a `--json`
+  // string stays valid, as REDACTED_MARK promises (finding R31).
+  const n = text.length;
+  const spans = [];
+  let depth = 0;
+  for (let i = 0; i < n; i += 1) {
+    const was = depth;
+    depth += cover[i];
+    if (depth > 0) {
+      const last = spans.length === 0 ? null : spans[spans.length - 1];
+      if (was === 0 && (last === null || i > last[1])) {
+        const floor = last === null ? 0 : last[1];
+        let s = i;
+        while (s > floor && isRunByte(text.charCodeAt(s - 1)) && jsonEscapeAt(text, s - 1) < 0) s -= 1;
+        if (last !== null && s === floor) last[1] = i + 1;
+        else spans.push([s, i + 1]);
+      } else if (i + 1 > last[1]) last[1] = i + 1;
+    } else if (was > 0) widenRun(text, spans[spans.length - 1]);
+  }
+  if (spans.length === 0) return text;
+  widenRun(text, spans[spans.length - 1]);
+  let out = '';
+  let last = 0;
+  for (const [s0, e] of spans) {
+    if (e <= last) continue;
+    const at = jsonEscapeAt(text, s0);
+    const s = at < 0 ? s0 : at;
+    out += text.slice(last, Math.max(s, last)) + REDACTED_MARK;
+    last = e;
+  }
+  return out + text.slice(last);
+}
+
+/** A span's right widening over the `[A-Za-z0-9_-]` run after it. A backslash ends it, so it never enters an escape. */
+function widenRun(text, sp) {
+  while (sp[1] < text.length && isRunByte(text.charCodeAt(sp[1]))) sp[1] += 1;
+}
+
+const isHexByte = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x46) || (b >= 0x61 && b <= 0x66);
+
+/** The index of the backslash of the JSON escape whose letter or hex digit `text[k]` is (`\n`, `A`), or -1. A
+ *  backslash opens an escape only after an even number of backslashes (`\\n` is an escaped backslash, then a letter).
+ *  Cost: at most five characters back, and the backslash run there. */
+function jsonEscapeAt(text, k) {
+  for (let b = k - 1; b >= 0 && b >= k - 5; b -= 1) {
+    if (text.charCodeAt(b) !== 0x5c) continue;
+    let r = b;
+    while (r > 0 && text.charCodeAt(r - 1) === 0x5c) r -= 1;
+    if ((b - r) % 2 === 1) return -1;
+    if (k === b + 1) return JSON_ESCAPE_CHAR[text[k]] !== undefined || text[k] === 'u' ? b : -1;
+    if (text[b + 1] !== 'u') return -1;
+    for (let h = b + 2; h <= k; h += 1) if (!isHexByte(text.charCodeAt(h))) return -1;
+    return b;
+  }
+  return -1;
+}
+
+/** The probe callback of a re-derivation index (makeProbeIndex with beltAll): every layer-4 and glue-window hit is an
+ *  owed hit, because both depend on the loaded values and on BELT_VERSION's code, which the owed-pair argument does
+ *  not cover. Null for every other index. */
+function beltHit(idx) {
+  return idx.beltAll === true && idx.probe !== undefined ? () => { idx.probe.hits += 1; } : null;
+}
+
+/** One index reading's redaction (redactForIndex's readings, the sidecar's raw pass): the three layers, then the belt
+ *  over the literal and escape readings only. An FTS term is a run of the literal text, and redactForIndex decodes
+ *  the deeper levels itself, each through this. */
+function redactIndexReading(text, idx) {
+  return beltMask(redactLayered(text, idx), idx.belt, false, beltHit(idx));
+}
+
+const isGlueSep = (c) => c === 0x5f || c === 0x2d;
+const GLUE_SEP_RE = /[_-]/;
+
+/** `text` with each maximal union of the [start, end) pairs in `iv` (non-empty) replaced by the mark. */
+function maskIntervals(text, iv) {
+  const pairs = [];
+  for (let k = 0; k < iv.length; k += 2) pairs.push([iv[k], iv[k + 1]]);
+  pairs.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let out = '';
+  let at = 0;
+  let a = pairs[0][0];
+  let b = pairs[0][1];
+  for (let k = 1; k < pairs.length; k += 1) {
+    if (pairs[k][0] <= b) { b = Math.max(b, pairs[k][1]); continue; }
+    out += text.slice(at, a) + REDACTED_MARK;
+    at = b;
+    a = pairs[k][0];
+    b = pairs[k][1];
+  }
+  return out + text.slice(at, a) + REDACTED_MARK + text.slice(b);
+}
+
+/** Layer 1's glue windows (§8.3, rev 3.5): in a `[A-Za-z0-9_-]` run that is not itself a pair, every window that starts
+ *  at the run's start or at or right after a `_` or `-`, ends at the run's end or at or right before one, holds a
+ *  letter or digit, and has a length some pair has, is tested by (length, sha256) as a run is. A value glued by `_` or
+ *  `-` (which unicode61 splits off as its own terms) is matched by its pair alone, a rotated value and a sessions.json
+ *  hash included. One run takes at most GLUE_HASH_FLOOR plus a quarter of its length in hashes, and hashes at most
+ *  GLUE_HASH_BYTES_FLOOR plus 4 × its length in window characters, each window charged before it is hashed; past
+ *  either budget it is replaced whole, fail closed. One run's glue cost is then linear in its length plus a constant,
+ *  whatever the registered lengths. */
+function glueRedact(run, idx) {
+  const n = run.length;
+  if (n <= SECRET_SEGMENT_MIN || idx.byLen.size === 0 || !GLUE_SEP_RE.test(run)) return run;
+  const starts = [];
+  const isEnd = new Uint8Array(n + 1);
+  const alnum = new Int32Array(n + 1);
+  isEnd[n] = 1;
+  for (let k = 0; k < n; k += 1) {
+    const sep = isGlueSep(run.charCodeAt(k));
+    alnum[k + 1] = alnum[k] + (sep ? 0 : 1);
+    if (k === 0 || sep || isGlueSep(run.charCodeAt(k - 1))) starts.push(k);
+    if (sep) { isEnd[k] = 1; isEnd[k + 1] = 1; }
+  }
+  const hit = beltHit(idx);
+  let budget = GLUE_HASH_FLOOR + (n >>> 2);
+  let bytes = GLUE_HASH_BYTES_FLOOR + 4 * n;
+  const iv = [];
+  for (const [len, shas] of idx.byLen) {
+    if (len >= n) continue;
+    for (const i of starts) {
+      const j = i + len;
+      if (j > n) break;
+      if (isEnd[j] === 0 || alnum[j] === alnum[i]) continue;
+      budget -= 1;
+      bytes -= len;
+      if (budget < 0 || bytes < 0) {
+        if (hit !== null) hit();
+        return REDACTED_MARK;
+      }
+      if (shas.has(sha256Hex(run.slice(i, j)))) {
+        iv.push(i, j);
+        if (hit !== null) hit();
+      }
+    }
+  }
+  return iv.length === 0 ? run : maskIntervals(run, iv);
+}
+
+/** fts_belt's witness is a short JSON array (sweep's beltWitness); a longer string is no state. */
+const BELT_WITNESS_MAX = 512;
+
+/** meta fts_belt's grammar: `{"v":<int>,"rids":[<rid>…],"gen":null|[<rid>…]}`, then `"gv":<int>` exactly when `gen` is
+ *  a list (the BELT_VERSION the open generation opened under, ruling R-version), then optionally `"w":"<witness>"`
+ *  (sweep's beltWitness when a belt-aware pass last wrote the state, ruling R-rollback). Every rid is a positive
+ *  integer. Anything else (undefined included) is null, which decideBelt reads as due. */
+export function parseBeltState(text) {
+  let o;
+  try { o = JSON.parse(text ?? ''); } catch { return null; }
+  const rids = (a) => Array.isArray(a) && a.every((x) => Number.isSafeInteger(x) && x > 0);
+  if (o === null || typeof o !== 'object' || !Number.isSafeInteger(o.v) || !rids(o.rids)) return null;
+  if (o.gen === null ? o.gv !== undefined : !(rids(o.gen) && Number.isSafeInteger(o.gv))) return null;
+  if (o.w !== undefined && !(typeof o.w === 'string' && o.w.length <= BELT_WITNESS_MAX)) return null;
+  return { v: o.v, rids: [...o.rids], gen: o.gen === null ? null : [...o.gen], ...(o.gen === null ? {} : { gv: o.gv }), ...(o.w === undefined ? {} : { w: o.w }) };
+}
+/** The text parseBeltState reads back: `gv` only beside a list `gen`, `w` only when set, so the due record
+ *  `{ v: 0, rids: [], gen: null }` (Tasks 21 and 23 write it) is `{"v":0,"rids":[],"gen":null}` exactly. */
+export function formatBeltState(s) {
+  return JSON.stringify({ v: s.v, rids: s.rids, gen: s.gen, ...(s.gen === null ? {} : { gv: s.gv }), ...(s.w === undefined ? {} : { w: s.w }) });
+}
+
+/** The belt's decision for one tick (§6.2 "The belt"). `live`: the redact_hashes rowids of the units this tick's belt
+ *  holds. `rids`: the units every indexed row is known to carry the belt of, at version `v`. `gen`: the units live at
+ *  every tick of the open generation, which opened under version `gv`.
+ *  - A unit no longer live leaves `rids` and `gen`: a row indexed while its value is not loaded lacks its belt.
+ *  - Due: the version differs (a B1 store's absent state, and the `v: 0` due record, included), or a live unit at or
+ *    below the mark is not in `rids` (its file readable again). A unit above the mark is the pair generation's.
+ *  - Restart (ruling R-version): when due, an open generation whose `gen` is absent (one a build without the belt
+ *    opened, or one a due record cleared) or was recorded under another BELT_VERSION covers nothing this version can
+ *    stamp, so rederivePlan begins its walk again from cursor 0 rather than finishing one that ran partly under other
+ *    code.
+ *  `next` is the state to write, without `w` (the sweep adds it). Pure. */
+export function decideBelt(state, live, mark) {
+  if (state === null) return { due: true, restart: true, next: { v: 0, rids: [], gen: null } };
+  const L = new Set(live);
+  const keep = (a) => a.filter((r) => L.has(r));
+  const genOk = state.gen !== null && state.gv === BELT_VERSION;
+  const next = { v: state.v, rids: state.v === BELT_VERSION ? keep(state.rids) : [], gen: genOk ? keep(state.gen) : null, ...(genOk ? { gv: BELT_VERSION } : {}) };
+  const covered = new Set(next.rids);
+  const due = state.v !== BELT_VERSION || live.some((r) => r <= mark && !covered.has(r));
+  return { due, restart: due && !genOk, next };
+}
+/** The state a completed generation leaves: the units live at every one of its ticks (`gen`), at the version its walk
+ *  ran under (`gv`, which decideBelt keeps only when it is BELT_VERSION). A generation with no `gen` (one a B1 pass
+ *  opened, or one whose record a due record cleared) covers nothing new, so the belt stays due. */
+export function beltAfterGeneration(next) {
+  return next.gen === null ? { v: next.v, rids: next.rids, gen: null } : { v: next.gv, rids: [...next.gen].sort((a, b) => a - b), gen: null };
+}
+/** Whether a build that writes index rows without the belt (B1, after a rollback) wrote since a belt-aware pass last
+ *  recorded the store's witness (ruling R-rollback): `witness` (sweep's beltWitness, measured now) differs from the
+ *  state's `w`. A state with no `w` (none recorded yet, or the due record Tasks 21 and 23 write) claims nothing: it is
+ *  due already, or about to be stamped. Pure. */
+export function beltWitnessMoved(state, witness) {
+  return state !== null && state.w !== undefined && state.w !== witness;
+}
+
+/** meta redact_sources: a JSON array of at most 256 absolute paths; anything else names none. */
+export function parseRedactSources(text) {
+  let a;
+  try { a = JSON.parse(text ?? '[]'); } catch { return []; }
+  if (!Array.isArray(a) || a.length > 256) return [];
+  return a.every((p) => typeof p === 'string' && p.startsWith('/') && p.length < 4096 && !p.includes('\0')) ? a : [];
+}
+
+// ===========================================================================
+// The index's escape readings for display and nodes_fts (spec §8.3 "Where it runs", §6.2 `nodes_fts`, rev 3.5;
+// W1-B2 Task 7A; B1's D-4343 and D-4419,
+// and B1's run 302 notes to B2). The belt's decoded readings find only a unit this process loaded; a value held as a
+// pair alone (a rotated value, a sessions.json hash) glued to a literal escape is separated only by redactForIndex's
+// readings. So a read verb shows a field as the index holds it, and nodes_fts indexes what blobs_fts would.
+// ===========================================================================
+
+/** The longest field redactForDisplay reads through every escape reading, in UTF-16 units: the window an entry's index
+ *  text is redacted over (B1's D-4419). */
+export const DISPLAY_READINGS_MAX = ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN;
+
+/** A recalled field as a read verb shows it, so no output shows a value the index masked (§8.3's field pass, with the
+ *  escape readings B1 gave the index).
+ *  - Up to DISPLAY_READINGS_MAX it IS redactForIndex: the field as it came, redacted, unless a deeper JSON-escape
+ *    reading removed something; then that reading is shown, decoded. A field whose escapes hide nothing is shown
+ *    exactly as redactField shows it.
+ *  - Past it (expand reads a sidecar up to SIDECAR_WHOLE_MAX), the field is redacted once, and each maximal span of
+ *    `[A-Za-z0-9_.-]` characters and backslashes that holds a backslash and a run character (the spans B1's
+ *    exhaustion rule marks) is read through redactForIndex alone and replaced by the mark when any of its readings
+ *    removed something. The cost stays linear, and a long JSON text's ordinary escapes print as they are. Residual,
+ *    past the bound only: a value only the context layer sees after a decode, with no backslash touching it.
+ *  It calls nothing but redactField and redactForIndex (whose readings are redactIndexReading's, the belt included),
+ *  so it fails closed as they do (R2). */
+export function redactForDisplay(text, idx) {
+  if (text.length <= DISPLAY_READINGS_MAX) return redactForIndex(text, idx);
+  const t = redactField(text, idx);
+  if (!t.includes('\\')) return t;
+  return t.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) && redactForIndex(span, idx) !== span ? REDACTED_MARK : span));
+}
+
+/** A nodes_fts row's three column texts (§6.2): the gist, each topic and each ref value through entryIndexText (B1's
+ *  escape readings and window, the belt included), topics and refs then joined one per line, as Tasks 8 and 9 index
+ *  them. Every nodes_fts writer calls it (Task 8's indexNode, Task 9's insertNodeFts, Task 29's redactNodeFields), so
+ *  a row is a function of its node's stored fields and the pair index's answers alone, which Task 29's node step
+ *  recomputes and compares. */
+export function nodeIndexTexts(fields, idx) {
+  const one = (s) => entryIndexText(String(s), idx);
+  return {
+    gist: fields.gist === null || fields.gist === undefined ? '' : one(fields.gist),
+    topics: (fields.topics ?? []).map(one).join('\n'),
+    refs: (fields.refs ?? []).map(one).join('\n'),
+  };
 }

@@ -285,15 +285,19 @@ export interface SecretPair { len: number; sha256: string }
 export function secretPairs(values: readonly string[]): { pairs: SecretPair[]; unsegmentable: number };
 export function secretUnits(value: string): string[];
 export function sessionHashPairs(jsonText: string): SecretPair[];
-export interface PairIndex { readonly byLen: ReadonlyMap<number, { has(sha256: string): boolean }> }
-export function makePairIndex(pairs: Iterable<SecretPair>): PairIndex;
+export interface PairIndex {
+  readonly byLen: ReadonlyMap<number, { has(sha256: string): boolean }>;
+  readonly belt?: Belt | null;
+  readonly beltLive?: readonly number[];
+}
+export function makePairIndex(pairs: Iterable<SecretPair>, belt?: Belt | null): PairIndex;
 export interface RankedPair extends SecretPair { readonly rid: number }
-export interface ProbeIndex extends PairIndex { readonly probe: { hits: number } }
-export function makeProbeIndex(pairs: Iterable<RankedPair>, mark: number): ProbeIndex;
-export interface RederiveState { target: number; cursor: number; end: number }
+export interface ProbeIndex extends PairIndex { readonly probe: { hits: number }; readonly beltAll: boolean }
+export function makeProbeIndex(pairs: Iterable<RankedPair>, mark: number, opts?: { belt?: Belt | null; beltAll?: boolean }): ProbeIndex;
+export interface RederiveState { target: number; cursor: number; end: number; belt?: true }
 export function parseRederiveState(text: string | undefined): RederiveState | null;
 export function formatRederiveState(s: RederiveState): string;
-export function rederivePlan(mark: number, top: number, maxBlobId: number, state: RederiveState | null): RederiveState | null;
+export function rederivePlan(mark: number, top: number, maxBlobId: number, state: RederiveState | null, beltDue?: boolean, restart?: boolean): RederiveState | null;
 export function phraseValues(mark: number, state: RederiveState | null, values: string[], fresh: string[]): string[];
 export const LEAD_PREFIXES_MAX: number;
 export const LEAD_READINGS_MAX: number;
@@ -663,3 +667,40 @@ export function diffForeignKeys(baseline: readonly FkRow[], current: readonly Fk
 export const FTS_SHADOWS: Readonly<{ blobs_fts: readonly string[]; nodes_fts: readonly string[] }>;
 export const FTS_COLUMNS: Readonly<{ blobs_fts: readonly string[]; nodes_fts: readonly string[] }>;
 export function ftsTablesHealthy(m: { tables: ReadonlySet<string>; columns: Readonly<Record<string, readonly string[]>> }): { blobs: boolean; nodes: boolean };
+
+// --- W1-B2 Task 7A: the substring belt (spec §8.3 layer 4 and layer 1's glue windows, §6.2 "The belt"; rev 3.5)
+export const BELT_VERSION: number;
+export const BELT_BITS: number;
+export const BELT_K_LADDER: readonly number[];
+export const BELT_GRAMS_MAX: number;
+export const BELT_META: 'fts_belt';
+export const BELT_NODES_STEP: 'nodes-belt';
+export const REDACT_SOURCES_META: 'redact_sources';
+export const BELT_COUNTERS: Readonly<{ overflow: string; generations: string }>;
+export interface Belt {
+  readonly units: readonly Uint8Array[];
+  readonly texts: readonly string[];
+  readonly widths: readonly { readonly w: number; readonly pw: number; readonly table: ReadonlyMap<number, readonly { readonly unit: number; readonly off: number }[]> }[];
+  readonly grams: number;
+  readonly overflow: number;
+}
+export function beltWidth(unit: string): number;
+export function beltFold(cp: number): number;
+export function beltUnits(values: Iterable<string>): string[];
+export function makeBelt(units: Iterable<string>): Belt;
+export function beltMask(text: string, belt: Belt | null | undefined, decode: boolean, onHit?: (() => void) | null): string;
+/** `gv`: the BELT_VERSION an open generation opened under, present exactly when `gen` is a list (R-version). `w`: the
+ *  store's witness when a belt-aware pass last wrote the state (R-rollback). */
+export interface BeltState { v: number; rids: number[]; gen: number[] | null; gv?: number; w?: string }
+export function parseBeltState(text: string | null | undefined): BeltState | null;
+export function formatBeltState(s: BeltState): string;
+export function decideBelt(state: BeltState | null, live: readonly number[], mark: number): { due: boolean; restart: boolean; next: BeltState };
+export function beltAfterGeneration(next: BeltState): BeltState;
+export function beltWitnessMoved(state: BeltState | null, witness: string): boolean;
+export function parseRedactSources(text: string | null | undefined): string[];
+
+// --- W1-B2 Task 7A: the index's escape readings for display and nodes_fts (spec §8.3, §6.2; rev 3.5)
+export const DISPLAY_READINGS_MAX: number;
+export function redactForDisplay(text: string, idx: PairIndex): string;
+export function nodeIndexTexts(fields: { gist: string | null; topics: readonly string[] | null; refs: readonly string[] }, idx: PairIndex):
+  { gist: string; topics: string; refs: string };

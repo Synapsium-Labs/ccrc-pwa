@@ -4593,3 +4593,407 @@ describe('FTS self-heal checks: ftsTablesHealthy over per-table shadows (spec 8.
     }
   });
 });
+
+// ── W1-B2 Task 7A: the substring belt (spec §8.3 layer 4 and layer 1's glue windows, §6.2 "The belt"; rev 3.5; O59) ──
+// Coordinator rulings 4019 and 4043, reviews 344 F9 and 351. Every fixture value is minted at runtime. The leak shapes
+// are the ones B1 measured (review 351; fr2's "For the coordinator" items 1-2): a stray `ESC[` whose final byte takes a
+// value's second character behind a mid-span `ESC[0m` (31 of 32 characters one term; 27 when a closing sequence splits
+// off the last four), and a value glued to a neighbour by `_`, `-` or a letter. A "belt leak" is a stretch of
+// beltWidth(value) consecutive characters of the value, ASCII case folded (unicode61 folds case).
+describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib half)', () => {
+  const ESC = String.fromCharCode(27);
+  const BS = String.fromCharCode(92);
+  const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const alnum = (n: number): string => Array.from(historyCrypto.randomBytes(n), (b) => AL[b % 62]!).join('');
+  /** 32 characters: `Q`, then `P` (a CSI final byte a stray `ESC[` takes), then 29 more, then a digit (review 351's shape).
+   *  Offsets 9, 19 and 29 are `e`, `A` and `o`, each with a precomposed acute form (the precomposed shape, finding R16). */
+  const mint = (): string => `QP${alnum(7)}e${alnum(9)}A${alnum(9)}o${alnum(1)}7`;
+  const ACUTE = String.fromCharCode(0x301);
+  /** The longest stretch `out` shares with `v`, case folded and with every nonspacing mark dropped. That is unicode61's
+   *  fold for every character these fixtures print (U+0301 and precomposed acute letters); beltFold's own case pins the
+   *  exact fold over every code point. */
+  const shared = (out: string, v: string): number => {
+    const o = out.normalize('NFD').replace(/\p{Mn}/gu, '').toLowerCase();
+    const w = v.toLowerCase();
+    let best = 0;
+    for (let i = 0; i < w.length; i += 1) for (let j = i + best + 1; j <= w.length && o.includes(w.slice(i, j)); j += 1) best = j - i;
+    return best;
+  };
+  const strip = (s: string): string => s.replace(new RegExp(`${ESC}\\[[0-9;]*[A-Za-z]`, 'g'), '');
+  const decoded = (s: string): string => s.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+  const shapes = (v: string): Array<[string, string]> => [
+    ['a stray ESC[ behind a mid-span ESC[0m takes the second character (31 of 32)', `w ${v[0]}${ESC}[0m${ESC}[${v.slice(1)} y`],
+    ['the same, a closing ESC[0m before the last four (27 of 32)', `w ${v[0]}${ESC}[0m${ESC}[${v.slice(1, 28)}${ESC}[0m${v.slice(28)} y`],
+    ['glued to letters with no separator', `note ab${v}cd end`],
+    ['printed in upper case', `note ${v.toUpperCase()} end`],
+    ['glued by _', `note ab_${v}_tail end`],
+    ['glued by - on both sides', `note ab-${v}-tail end`],
+    ['three stray ESC[ each take a character', `note ${v.slice(0, 8)}${ESC}[${v.slice(8, 18)}${ESC}[${v.slice(18)} end`],
+    ['a combining mark after every tenth character', `note ${[...v].map((c, i) => (i % 10 === 9 ? `${c}${ACUTE}` : c)).join('')} end`],
+    // é, Á and ó as one code point each: unicode61 folds each to its letter, so the term holds the value whole.
+    ['every tenth character precomposed with an acute, glued by letters', `note ab${[...v].map((c, i) => (i % 10 === 9 ? `${c}${ACUTE}`.normalize('NFC') : c)).join('')}cd end`],
+  ];
+  const beltIdx = (values: string[]): libRedact.PairIndex =>
+    libRedact.makePairIndex(libRedact.secretPairs(values).pairs, libRedact.makeBelt(libRedact.beltUnits(values)));
+  const pairIdx = (values: string[]): libRedact.PairIndex => libRedact.makePairIndex(libRedact.secretPairs(values).pairs);
+
+  it('CONTROL: with pairs alone, the measured shapes still leak 31, 27, 32 and 32 characters', () => {
+    const v = mint();
+    const idx = pairIdx([v]);
+    expect(shapes(v).slice(0, 4).map(([, t]) => shared(libRedact.entryIndexText(t, idx), v))).toEqual([31, 27, 32, 32]);
+  });
+
+  it.each(shapes('x'.repeat(32)).map(([n]) => n))('%s: no index text, field or final string keeps a belt-width stretch', (name) => {
+    const v = mint();
+    const text = new Map(shapes(v)).get(name)!;
+    const idx = beltIdx([v]);
+    const w = libRedact.beltWidth(v);
+    const field = libRedact.redactField(text, idx);
+    for (const out of [libRedact.entryIndexText(text, idx), field, strip(field), libRedact.redactFinal(text, idx)]) {
+      expect(shared(out, v), JSON.stringify(out)).toBeLessThan(w);
+    }
+    expect(field).toContain(libRedact.REDACTED_MARK);
+  });
+
+  it('the measured shapes give exactly these texts', () => {
+    const v = mint();
+    const idx = beltIdx([v]);
+    const M = libRedact.REDACTED_MARK;
+    const [two, close, letters, , under, dash] = shapes(v).map(([, t]) => libRedact.entryIndexText(t, idx));
+    expect(two, 'the run from the sequence\'s parameters on is one mark').toBe(`w ${v[0]}${ESC}[${M} y`);
+    expect(close).toBe(`w ${v[0]}${ESC}[${M} y`);
+    expect(letters, 'a letter-glued value: its whole run').toBe(`note ${M} end`);
+    expect(under, 'a _-glued value: layer 1\'s glue window, its neighbours kept').toBe(`note ab_${M}_tail end`);
+    expect(dash).toBe(`note ab-${M}-tail end`);
+  });
+
+  it('a field: a value split by JSON escapes into pieces under its width is masked through the decoded reading', () => {
+    const v = mint();
+    const split = [...v].map((c, i) => (i % 8 === 7 ? `${BS}u00${c.charCodeAt(0).toString(16)}` : c)).join('');
+    const text = `cfg "${split}" end`;
+    expect(shared(text, v), 'CONTROL: no literal piece reaches the width').toBeLessThan(libRedact.beltWidth(v));
+    expect(shared(decoded(libRedact.redactField(text, pairIdx([v]))), v), 'CONTROL: decoded, the three layers show it whole').toBe(32);
+    expect(libRedact.redactField(text, beltIdx([v]))).toBe(`cfg "${libRedact.REDACTED_MARK}" end`);
+  });
+
+  it('a field: a letter-glued value split by colour codes into pieces under its width is masked through the stripped reading', () => {
+    const v = mint();
+    const text = `ok ab${v.slice(0, 10)}${ESC}[1m${v.slice(10, 20)}${ESC}[0m${v.slice(20)} end`;
+    expect(shared(strip(libRedact.redactField(text, pairIdx([v]))), v), 'CONTROL: a terminal shows the value whole').toBe(32);
+    expect(libRedact.redactField(text, beltIdx([v]))).toBe(`ok ${libRedact.REDACTED_MARK} end`);
+  });
+
+  it('the glue windows need no value: a pair alone (a rotated value, a sessions.json hash) masks its value glued by _ or -', () => {
+    const tok = alnum(43);
+    const idx = libRedact.makePairIndex([{ len: 43, sha256: historyCrypto.createHash('sha256').update(tok).digest('hex') }]);
+    expect(libRedact.redactField(`cookie sess_${tok}-x end`, idx)).toBe(`cookie sess_${libRedact.REDACTED_MARK}-x end`);
+    expect(libRedact.redactField(`cookie ${tok}_v2 end`, idx)).toBe(`cookie ${libRedact.REDACTED_MARK}_v2 end`);
+    expect(libRedact.redactField(`cookie x${tok} end`, idx), 'glued by a letter: layer 4\'s, never the windows\'').toBe(`cookie x${tok} end`);
+  });
+
+  it('the glue windows are bounded: a 1 MiB run of _a with a pair loaded is marked whole, and a rule of dashes is no window', () => {
+    const idx = pairIdx([alnum(40)]);
+    const t0 = Date.now();
+    // A boolean, never the string: a red must not print a 1 MiB diff (ruling R-runner; it overflowed the runner's buffer).
+    const whole = libRedact.redactField('_a'.repeat(1 << 19), idx);
+    expect(whole === libRedact.REDACTED_MARK, `a 1 MiB run is marked whole (got ${whole.length} characters)`).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(libRedact.redactField(`${'-'.repeat(80)}\n`, idx)).toBe(`${'-'.repeat(80)}\n`);
+  });
+
+  it('the glue windows are bounded in hashed bytes: 1 MiB of runs twice a 16 KiB unit\'s length is replaced whole, in time', () => {
+    // Spec §8.3 (review R69): a run hashes at most GLUE_HASH_BYTES_FLOOR + 4 × n window characters, each window charged
+    // its length before it is hashed. Under the hash count alone each 32 KiB run hashes 64 + 8,192 windows of 16 KiB:
+    // 4.2 s of sha256 for this text on Node 24.14.1 (measured), against 5 ms with the byte budget.
+    const idx = pairIdx([alnum(16 * 1024)]);
+    const text = Array.from({ length: 32 }, () => 'a_'.repeat(16 * 1024)).join(' ');
+    const t0 = Date.now();
+    const out = libRedact.redactField(text, idx);
+    const ms = Date.now() - t0;
+    // A boolean, never the string: a red must not print a 1 MiB diff (ruling R-runner).
+    expect(out.split(' ').every((w) => w === libRedact.REDACTED_MARK), `every run is replaced whole (got ${out.length} characters)`).toBe(true);
+    expect(ms, 'the spec\'s bound').toBeLessThan(10_000);
+    // The tighter bound the byte budget keeps (B1's layers 1-3 take 23 ms over this text, measured), and the one the
+    // no-bytes mutant reds: a count bound alone spends seconds hashing.
+    expect(ms, 'the hashed-byte budget').toBeLessThan(2_000);
+  });
+
+  it('beltWidth: 72 bits of the unit\'s folded alphabet, at most its length, rounded down to the ladder', () => {
+    expect(libRedact.BELT_K_LADDER).toEqual([12, 14, 16, 18, 21]);
+    expect(libRedact.beltWidth(historyCrypto.randomBytes(32).toString('hex'))).toBe(18);
+    expect(libRedact.beltWidth(mint())).toBe(14);
+    // Ends in `0_-`: its folded alphabet is always 38 (a draw without a digit, `_` or `-` answers 16, finding R12).
+    expect(libRedact.beltWidth(`${historyCrypto.randomBytes(27).toString('base64url')}0_-`)).toBe(14);
+    expect(libRedact.beltWidth('7771234567890123456789')).toBe(21);
+    expect(libRedact.beltWidth(alnum(12))).toBe(12);
+  });
+
+  it('the seed rule: a wordy unit and a padding run seed nothing, so ordinary words stay; layer 1 still takes the whole value', () => {
+    const word = 'zq_project_name_production_main';
+    const pad = `AAAAAAAAAAAAAAAAAAAA${alnum(4)}`;
+    const idx = beltIdx([word, pad]);
+    expect(libRedact.redactField('see other_project_name_production_main here', idx)).toBe('see other_project_name_production_main here');
+    expect(libRedact.redactField(`pad ${'A'.repeat(24)} here`, idx)).toBe(`pad ${'A'.repeat(24)} here`);
+    expect(libRedact.redactField(`see ${word} here`, idx)).toBe(`see ${libRedact.REDACTED_MARK} here`);
+  });
+
+  it('the seed rule\'s price: a one-case [a-z0-9] unit is masked wherever a print holds a digit, and a digit-free K-window alone is the named residual', () => {
+    const lower = 'abcdefghijklmnopqrstuvwxyz';
+    const pick = (s: string): string => s[historyCrypto.randomBytes(1)[0]! % s.length]!;
+    // A digit at every sixth offset: every 14-wide gram holds two, so every gram seeds.
+    const one = Array.from({ length: 32 }, (_, i) => (i % 6 === 5 ? pick('0123456789') : pick(lower))).join('');
+    const idx = beltIdx([one]);
+    expect(libRedact.beltWidth(one), 'CONTROL: 36 folded characters, 72 bits in 14').toBe(14);
+    expect(libRedact.redactField(`note ab${one}cd end`, idx), 'glued by letters').toBe(`note ${libRedact.REDACTED_MARK} end`);
+    expect(libRedact.redactField(`note ${one.slice(3, 17).toUpperCase()} end`, idx), 'a partial print, upper-cased').toBe(`note ${libRedact.REDACTED_MARK} end`);
+    // Fourteen letters, then a digit: the first window holds no digit and one case, so it seeds nothing (spec §8.3
+    // "What it cannot see"). A change to the seed rule reds here and must restate the price.
+    const res = `${Array.from({ length: 14 }, () => pick(lower)).join('')}7${Array.from({ length: 17 }, () => pick(lower)).join('')}`;
+    expect(libRedact.redactField(`note ab${res.slice(0, 14)}cd end`, beltIdx([res])), 'the residual').toBe(`note ab${res.slice(0, 14)}cd end`);
+  });
+
+  it('no false positive: 1 MiB of prose, code, hashes and base64, and this repository\'s README, are unchanged by 50 random values', () => {
+    const vals = Array.from({ length: 50 }, (_, i) => (i % 2 === 0 ? historyCrypto.randomBytes(32).toString('hex') : historyCrypto.randomBytes(30).toString('base64url')));
+    const W = ['the', 'commit', 'function', 'const x = f(y);', 'deadbeef', 'x_y-z', 'README.md', '=>', 'claude-opus', '\n'];
+    let text = '';
+    for (let i = 0; text.length < 1 << 20; i += 1) {
+      text += `${W[i % W.length]} `;
+      if (i % 7 === 0) text += `${historyCrypto.randomBytes(20).toString('hex')} `;
+      if (i % 11 === 0) text += `${historyCrypto.randomBytes(24).toString('base64')} `;
+    }
+    const readme = readFileSync(join(REPO, 'README.md'), 'utf8');
+    for (const t of [text, readme]) {
+      expect(libRedact.redactField(t, beltIdx(vals)) === libRedact.redactField(t, pairIdx(vals))).toBe(true);
+      expect(libRedact.entryIndexText(t, beltIdx(vals)) === libRedact.entryIndexText(t, pairIdx(vals))).toBe(true);
+    }
+  });
+
+  it('a mark is a fixed point, a short text is returned as is, and a belt past BELT_GRAMS_MAX counts its overflow', () => {
+    const v = mint();
+    const idx = beltIdx([v]);
+    const once = libRedact.redactField(shapes(v)[0]![1], idx);
+    expect(libRedact.redactField(once, idx)).toBe(once);
+    expect(libRedact.beltMask('short', idx.belt, true)).toBe('short');
+    const many = libRedact.makeBelt(Array.from({ length: 3000 }, () => alnum(40)));
+    expect(many.grams).toBeLessThanOrEqual(libRedact.BELT_GRAMS_MAX);
+    expect(many.overflow).toBeGreaterThan(0);
+  });
+
+  it('the probe: under beltAll every layer-4 and glue-window hit is owed; without it none is', () => {
+    const v = mint();
+    const ranked = libRedact.secretPairs([v]).pairs.map((p) => ({ ...p, rid: 1 }));
+    const belt = libRedact.makeBelt(libRedact.beltUnits([v]));
+    const hits = (beltAll: boolean, text: string): number => {
+      const idx = libRedact.makeProbeIndex(ranked, 1, { belt, beltAll });
+      libRedact.entryIndexText(text, idx);
+      return idx.probe.hits;
+    };
+    expect(hits(true, `x ab${v}cd y`)).toBeGreaterThan(0);
+    expect(hits(true, `x ab_${v} y`), 'a glue-window hit').toBeGreaterThan(0);
+    expect(hits(false, `x ab${v}cd y`)).toBe(0);
+    expect(hits(false, `x ab_${v} y`), 'rid 1 at mark 1 is not owed').toBe(0);
+  });
+
+  it('the generation state: a belt generation carries " b", stays open at its own mark, and rederivePlan opens one when the belt is due', () => {
+    expect(libRedact.parseRederiveState('7 0 9 b')).toEqual({ target: 7, cursor: 0, end: 9, belt: true });
+    expect(libRedact.parseRederiveState('7 0 9')).toEqual({ target: 7, cursor: 0, end: 9 });
+    expect(libRedact.formatRederiveState({ target: 7, cursor: 3, end: 9, belt: true })).toBe('7 3 9 b');
+    expect(libRedact.rederivePlan(7, 7, 9, null, true)).toEqual({ target: 7, cursor: 0, end: 9, belt: true });
+    expect(libRedact.rederivePlan(7, 7, 9, null)).toBeNull();
+    expect(libRedact.phraseValues(7, { target: 7, cursor: 3, end: 9, belt: true }, ['a', 'b'], ['b']), 'open at its own mark').toEqual(['b']);
+  });
+
+  it('decideBelt: due on another version or no state, and when a live unit at or below the mark is uncovered; a unit no longer live leaves', () => {
+    const V = libRedact.BELT_VERSION;
+    expect(libRedact.decideBelt(null, [3], 5)).toEqual({ due: true, restart: true, next: { v: 0, rids: [], gen: null } });
+    expect(libRedact.decideBelt({ v: V - 1, rids: [3], gen: null }, [3], 5).due).toBe(true);
+    expect(libRedact.decideBelt({ v: V, rids: [3, 4], gen: [3, 4], gv: V }, [3, 9], 5)).toEqual({ due: false, restart: false, next: { v: V, rids: [3], gen: [3], gv: V } });
+    expect(libRedact.decideBelt({ v: V, rids: [3], gen: null }, [3, 4], 5).due, 'unit 4 is back and uncovered').toBe(true);
+    expect(libRedact.decideBelt({ v: V, rids: [3], gen: null }, [3, 9], 5).due, 'unit 9 lies above the mark: the pair generation owes it').toBe(false);
+    expect(libRedact.beltAfterGeneration({ v: 0, rids: [], gen: [9, 3], gv: V })).toEqual({ v: V, rids: [3, 9], gen: null });
+    expect(libRedact.beltAfterGeneration({ v: 0, rids: [], gen: null })).toEqual({ v: 0, rids: [], gen: null });
+    for (const bad of [undefined, '', '{', '{"v":1,"rids":[0],"gen":null}', '{"v":1,"rids":[1]}', '{"v":"1","rids":[],"gen":null}',
+      '{"v":1,"rids":[],"gen":[1]}', '{"v":1,"rids":[],"gen":null,"gv":1}', '{"v":1,"rids":[],"gen":null,"w":7}']) {
+      expect(libRedact.parseBeltState(bad), String(bad)).toBeNull();
+    }
+    const s = { v: V, rids: [1, 2], gen: [2], gv: V, w: '[9,1]' };
+    expect(libRedact.parseBeltState(libRedact.formatBeltState(s))).toEqual(s);
+    expect(libRedact.formatBeltState({ v: 0, rids: [], gen: null }), 'the due record Tasks 21 and 23 write, byte for byte').toBe('{"v":0,"rids":[],"gen":null}');
+    expect(libRedact.beltWitnessMoved({ v: V, rids: [], gen: null, w: 'a' }, 'b'), 'another build moved the witness').toBe(true);
+    expect(libRedact.beltWitnessMoved({ v: V, rids: [], gen: null, w: 'a' }, 'a')).toBe(false);
+    expect(libRedact.beltWitnessMoved({ v: V, rids: [], gen: null }, 'a'), 'no witness recorded claims nothing').toBe(false);
+    expect(libRedact.beltWitnessMoved(null, 'a')).toBe(false);
+    expect(libRedact.parseRedactSources('["/h/.config/gw.env"]')).toEqual(['/h/.config/gw.env']);
+    for (const bad of [undefined, 'x', '["rel/path"]', '{"a":1}']) expect(libRedact.parseRedactSources(bad)).toEqual([]);
+  });
+
+  it('R-version: a generation opened under another BELT_VERSION restarts from cursor 0, and the version is stamped only after a full walk', () => {
+    const V = libRedact.BELT_VERSION;
+    // The reviewers' scenario with this code as the newer version: a state recorded under V - 1, its belt
+    // generation open and mid-walk (cursor 100 of 900).
+    const old = { v: V - 1, rids: [3], gen: [3, 4], gv: V - 1 };
+    const midWalk = { target: 5, cursor: 100, end: 900, belt: true as const };
+    const d = libRedact.decideBelt(old, [3, 4], 5);
+    expect(d, 'due, and the open generation\'s record is dropped').toEqual({ due: true, restart: true, next: { v: V - 1, rids: [], gen: null } });
+    const plan = libRedact.rederivePlan(5, 5, 900, midWalk, d.due, d.restart);
+    expect(plan, 'restarted at cursor 0').toEqual({ target: 5, cursor: 0, end: 900, belt: true });
+    // Task 7B records the units live at the restart, under this version. Mid-walk the state is still V - 1 and due,
+    // and its own generation is not restarted again.
+    const mid = libRedact.decideBelt({ ...d.next, gen: [3, 4], gv: V }, [3, 4], 5);
+    expect([mid.due, mid.restart]).toEqual([true, false]);
+    expect(libRedact.rederivePlan(5, 5, 900, { ...plan!, cursor: 450 }, mid.due, mid.restart)).toEqual({ ...plan, cursor: 450 });
+    const done = libRedact.beltAfterGeneration(mid.next);
+    expect(done, 'only the completed walk stamps V').toEqual({ v: V, rids: [3, 4], gen: null });
+    expect(libRedact.decideBelt(done, [3, 4], 5).due).toBe(false);
+    expect(libRedact.beltAfterGeneration({ v: V - 1, rids: [], gen: [9, 3], gv: V - 1 }), 'a completion stamps the version its walk ran under')
+      .toEqual({ v: V - 1, rids: [3, 9], gen: null });
+    expect(libRedact.decideBelt({ v: V, rids: [3], gen: null }, [3], 5).restart, 'nothing due: no restart').toBe(false);
+    expect(libRedact.rederivePlan(7, 9, 900, { target: 9, cursor: 40, end: 800 }, true, false), 'a due belt continues a generation that carries this version\'s record')
+      .toEqual({ target: 9, cursor: 40, end: 800 });
+  });
+
+  it('beltFold is unicode61\'s own fold: node:sqlite\'s tokenizer agrees on every code point U+0080..U+2FFFF', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(':memory:');
+    try {
+      // B1's tables use 'porter unicode61'; porter only stems ASCII words, so unicode61 alone is the fold.
+      db.exec("CREATE VIRTUAL TABLE t USING fts5(b, tokenize='unicode61')");
+      db.exec("CREATE VIRTUAL TABLE tv USING fts5vocab(t, 'instance')");
+      const ins = db.prepare('INSERT INTO t (rowid, b) VALUES (?, ?)');
+      const cps: number[] = [];
+      db.exec('BEGIN');
+      for (let cp = 0x80; cp <= 0x2ffff; cp += 1) {
+        if (cp >= 0xd800 && cp <= 0xdfff) continue;   // a lone surrogate is no character
+        cps.push(cp);
+        ins.run(cp, `q${String.fromCodePoint(cp)}q`);
+      }
+      db.exec('COMMIT');
+      const terms = new Map<number, string[]>();
+      for (const r of db.prepare('SELECT doc, term FROM tv').all() as { doc: number; term: string }[]) {
+        const a = terms.get(Number(r.doc)) ?? [];
+        a.push(r.term);
+        terms.set(Number(r.doc), a);
+      }
+      const AL = 'abcdefghijklmnopqrstuvwxyz0123456789';
+      /** unicode61's reading of `q<cp>q`: dropped (-1: one term `qq`), an ASCII letter or digit (its belt code, 1-36),
+       *  or anything else (0: a boundary, or a character no ASCII term can hold). */
+      const sqlite = (cp: number): number => {
+        const a = terms.get(cp) ?? [];
+        if (a.length === 1 && a[0] === 'qq') return -1;
+        const m = a.length === 1 ? a[0]!.slice(1, -1) : '';
+        return m.length === 1 && AL.includes(m) ? AL.indexOf(m) + 1 : 0;
+      };
+      expect(cps.length, 'CONTROL: every code point was read').toBe(0x2ffff - 0x80 + 1 - 0x800);
+      expect([0xe9, 0x301, 0x305, 0x17f, 0x1d5, 0x2010].map(sqlite), 'CONTROL: é is e, U+0301 dropped, U+0305 a boundary, ſ is s, Ǖ (two marks) kept, a hyphen a boundary')
+        .toEqual([5, -1, 0, 19, 0, 0]);
+      const diverge = cps.filter((cp) => libRedact.beltFold(cp) !== sqlite(cp)).map((cp) => cp.toString(16));
+      expect(diverge.length, `diverging code points (first 20): ${diverge.slice(0, 20).join(' ')}`).toBe(0);
+    } finally { db.close(); }
+  });
+
+  it('the widening is linear: a run that repeats a 14-wide gram glued by an uncovered letter, 8x longer, costs under 16x', () => {
+    const v = mint();
+    const idx = beltIdx([v]);
+    // The glue letter never equals the gram's next character, case folded: were it v[14] (x or X, 8 draws in 256),
+    // the window crossing each glue would match a gram of v, the run would be one cover, and mutant (t) stayed green
+    // (finding V10 measured it: 117 ms and 238 ms).
+    const g = v[14]!.toLowerCase() === 'x' ? 'z' : 'x';
+    const shape = (bytes: number): string => `${v.slice(0, 14)}${g}`.repeat(Math.ceil(bytes / 15));
+    const best = (t: string): number => {
+      let m = Infinity;
+      for (let k = 0; k < 5; k += 1) {
+        const t0 = performance.now();
+        const out = libRedact.beltMask(t, idx.belt, true);
+        m = Math.min(m, performance.now() - t0);
+        expect(out === libRedact.REDACTED_MARK, 'the whole run is one mark').toBe(true);
+      }
+      return m;
+    };
+    best(shape(4096));   // warm-up
+    const small = best(shape(64 * 1024));
+    const large = best(shape(512 * 1024));
+    // Measured on the prototype (Node 24.14.1): 2.6-2.9 ms and 18 ms, a ratio near 7. The per-cover rescan this
+    // replaces cost 0.6 s and 37 s here (review: 1.1 s and 56 s), a ratio near 64.
+    expect(large / Math.max(small, 0.5), `64 KiB ${small.toFixed(1)} ms, 512 KiB ${large.toFixed(1)} ms`).toBeLessThan(16);
+    expect(large, '512 KiB within the bound').toBeLessThan(2_000);
+  });
+
+  it('a --json string stays valid: no widening takes a JSON escape\'s letter or hex digit, and a span that starts inside an escape takes it whole', () => {
+    const v = mint();
+    const idx = beltIdx([v]);
+    const w = libRedact.beltWidth(v);
+    for (const pre of ['a\n', 'a\u0001', 'grep x\t', 'q"']) {
+      const s = libRedact.redactFinal(JSON.stringify({ t: `${pre}${v}y`, u: `x${v}\n` }), idx);
+      let o: { t: string; u: string } | null = null;
+      try { o = JSON.parse(s); } catch { o = null; }
+      expect(o, `${JSON.stringify(pre)}: ${s}`).not.toBeNull();
+      expect(Math.max(shared(o!.t, v), shared(o!.u, v)), s).toBeLessThan(w);
+      expect(s).toContain(libRedact.REDACTED_MARK);
+    }
+    expect(libRedact.redactFinal(JSON.stringify({ t: `a\n${v}` }), idx), 'the escape stays, the value goes').toBe(`{"t":"a\\n${libRedact.REDACTED_MARK}"}`);
+    // A unit that begins with `n`, printed after a backslash-n: the literal reading's cover starts on the escape's
+    // letter, and the span takes the whole escape.
+    const nv = `n${v}`;
+    const s2 = libRedact.redactFinal(JSON.stringify({ t: `a\n${v}zz` }), beltIdx([nv]));
+    expect(s2, 'the span took the escape whole').toBe(`{"t":"a${libRedact.REDACTED_MARK}"}`);
+  });
+});
+
+// ── W1-B2 Task 7A: the index's escape readings for display and nodes_fts (spec §8.3 "Where it runs", §6.2, rev 3.5;
+// B1's D-4343 and D-4419; B1's run 302 notes) ──
+describe('lib: nodeIndexTexts and redactForDisplay read every escape level the index reads (W1-B2 Task 7A)', () => {
+  /** A 40-character value built at runtime (no key-shaped literal in a public repo): one run, registered as a pair.
+   *  The index below holds its pair and no belt, as a rotated value or a sessions.json hash is held. */
+  const V = Array.from({ length: 40 }, (_, i) => 'abcdefghjkmnpqrstuvwxyz23456789'[(i * 7 + 3) % 31]).join('');
+  const idx = libRedact.makePairIndex(libRedact.secretPairs([V]).pairs);
+  /** What a tool printing JSON leaves in a row: a literal backslash and `n` glued onto the value (B1's review 316 F2). */
+  const glued = JSON.stringify({ text: `\n${V}` });
+  /** A backslash-u-005c chain: two decodes separate the value. */
+  const nested = `x \\u005cn${V} y`;
+
+  it('up to its bound redactForDisplay is redactForIndex: a value glued to a literal escape is masked where redactField leaves it', () => {
+    expect(libRedact.redactField(glued, idx), 'CONTROL: one reading leaves the glued value').toContain(V);
+    expect(libRedact.redactField(nested, idx), 'CONTROL: and the chained one').toContain(V);
+    for (const t of [glued, nested, `plain ${V} text`]) {
+      const shown = libRedact.redactForDisplay(t, idx);
+      expect(shown, t).not.toContain(V);
+      expect(shown, t).toContain(libRedact.REDACTED_MARK);
+      expect(shown, 'the text the index would hold').toBe(libRedact.redactForIndex(t, idx));
+    }
+  });
+
+  it('text whose escapes hide nothing is shown exactly as it came: a Windows path, LaTeX, a JSON line break', () => {
+    for (const t of ['C:\\new_folder\\table.txt', '\\begin{document} and \\n twice', '{"a":"b\\nc"}', 'no escapes at all']) {
+      expect(libRedact.redactForDisplay(t, idx), t).toBe(t);
+    }
+  });
+
+  it('past DISPLAY_READINGS_MAX each escape-glued span is masked only when its own readings remove something', () => {
+    expect(libRedact.DISPLAY_READINGS_MAX).toBe(libRedact.ENTRY_FTS_BYTES + libRedact.ENTRY_REDACT_MARGIN);
+    const big = `${'w '.repeat(libRedact.DISPLAY_READINGS_MAX / 2)}${glued} and \\nfoo and ${nested} end`;
+    expect(big.length, 'CONTROL: past the bound').toBeGreaterThan(libRedact.DISPLAY_READINGS_MAX);
+    // Booleans, never the 1 MiB strings: a red must not print a 1 MiB diff (ruling R-runner).
+    expect(libRedact.redactField(big, idx).includes(V), 'CONTROL: one reading leaves the glued values').toBe(true);
+    const shown = libRedact.redactForDisplay(big, idx);
+    expect(shown.includes(V), 'no glued value is shown').toBe(false);
+    expect(shown.includes(' and \\nfoo and '), 'an escape that hides nothing prints as it came').toBe(true);
+    expect(shown.endsWith(' end')).toBe(true);
+  });
+
+  it('nodeIndexTexts takes the gist, each topic and each ref value through entryIndexText, topics and refs one per line', () => {
+    const t = libRedact.nodeIndexTexts({ gist: `zqgist ${glued}`, topics: [`zqtopic ${nested}`, 'plain topic'], refs: ['src/a.ts', glued] }, idx);
+    for (const col of [t.gist, t.topics, t.refs]) expect(col).not.toContain(V);
+    expect(t.gist).toBe(libRedact.entryIndexText(`zqgist ${glued}`, idx));
+    expect(t.topics.split('\n').at(-1)).toBe('plain topic');
+    expect(t.refs.split('\n')[0]).toBe('src/a.ts');
+    expect(libRedact.nodeIndexTexts({ gist: null, topics: null, refs: [] }, idx)).toEqual({ gist: '', topics: '', refs: '' });
+  });
+
+  it('nodeIndexTexts depends on the pairs only through the index\'s answers: a probe index returns the same texts and counts the owed hit', () => {
+    const pairs = libRedact.secretPairs([V]).pairs.map((p, i) => ({ ...p, rid: i + 1 }));
+    const probe = libRedact.makeProbeIndex(pairs, 0);
+    const fields = { gist: `zqgist ${glued}`, topics: [], refs: [] };
+    expect(libRedact.nodeIndexTexts(fields, probe)).toEqual(libRedact.nodeIndexTexts(fields, idx));
+    expect(probe.probe.hits, 'the owed pair was asked and answered yes').toBeGreaterThan(0);
+  });
+});
