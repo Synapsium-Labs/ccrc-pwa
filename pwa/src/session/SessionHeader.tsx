@@ -109,7 +109,15 @@ function relShort(now: number, then: number | null): string | null {
 function MenuItem(
   { label, hint, className, disabled, title, onClick }: {
     label: string;
-    hint?: string;
+    /** A NODE, not a string, and `server/test/no-routing-keystroke-from-server.test.ts`
+     *  is why. Two of these hints ARE the slash commands, and that census
+     *  refuses a quote immediately before `/effort` or `/model` anywhere under
+     *  `pwa/src` — the record is the arbiter and ccd is the one typer, so a
+     *  routing keystroke must not exist as a string literal in this app even
+     *  as a label. The original markup said them as JSX text; so do the call
+     *  sites below. Measured: as `hint="/model"` the guard went red naming
+     *  both lines. */
+    hint?: ReactNode;
     className?: string;
     disabled?: boolean;
     title?: string;
@@ -380,8 +388,8 @@ export function SessionHeader({
 
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
         <div className="menu">
-          <MenuItem label="Change model" hint="/model" onClick={() => menuAct(onChangeModel)} />
-          <MenuItem label="Change effort" hint="/effort" onClick={() => menuAct(onChangeEffort)} />
+          <MenuItem label="Change model" hint={<>/model</>} onClick={() => menuAct(onChangeModel)} />
+          <MenuItem label="Change effort" hint={<>/effort</>} onClick={() => menuAct(onChangeEffort)} />
           <MenuItem label="History" hint="journal" onClick={() => menuAct(onOpenHistory)} />
           {/* Gated like Archive below (branch review): this item opens the SAME
               SwapSheet as the actions sheet's gated opener, and SwapSheet's
