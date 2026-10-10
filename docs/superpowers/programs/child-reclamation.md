@@ -56,7 +56,9 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     the pwa build, the pwa suite and `mark --check`.
   - **Review run 374** reads `7a4b0a195..aa1c06c4a` only, against `wave7/fix-round-1-rulings.md`. It runs the held-out
     panel, plus the plan's SAFETY lens on each code fix with its mutation row reverted. It is told to stop if it is
-    off an Anthropic account, and to keep every command approval-free.
+    off an Anthropic account, and to keep every command approval-free. It was dispatched at 22:03 to `brisk-canyon`, on
+    an Anthropic account with no swap, and advanced to `working`. Its brief is `review-374-brief.md` in the evidence
+    archive (6540 bytes).
 
 - **2026-10-10 21:51 — wave 7's fix-round wave-done (4180) is received at `ee17287e0`. Main is absorbed before the review (4181).**
   - **The claim.** Suite `green`: 104 server files, each run alone at the tip (4328 passed). tsc, the pwa build and
