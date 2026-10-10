@@ -39,6 +39,7 @@ import * as libScope from '../../ccd/history/lib.mjs';
 import * as libSearch from '../../ccd/history/lib.mjs';
 import { DatabaseSync as FtsDb } from 'node:sqlite';
 import * as libOut from '../../ccd/history/lib.mjs';
+import * as libOps from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -3904,4 +3905,370 @@ describe('costRow and pickExpandBody (spec 8.4 describe, 6.1 variants)', () => {
   it('fits=in up to the output cap, over past it', () => { expect(libOut.costRow(20000)).toEqual({ chars: 20000, fits: 'in' }); expect(libOut.costRow(20001)).toEqual({ chars: 20001, fits: 'over' }); expect(libOut.costRow(10, 5)).toEqual({ chars: 10, fits: 'over' }); });
   it('expand prints the body without ccd\'s ... fill, whichever copy came first (DM2b pure half)', () => { const clean = [{ type: 'text', text: '' }, { type: 'text', text: 'done' }]; const filled = [{ type: 'text', text: '...' }, { type: 'text', text: 'done' }]; expect(libOut.pickExpandBody({ primary: filled, variants: [{ body: clean, cause: 'ccd-sanitize' }] })).toBe(clean); expect(libOut.pickExpandBody({ primary: clean, variants: [{ body: filled, cause: 'ccd-sanitize' }] })).toBe(clean); });
   it('a variant of unknown cause, or one mislabelled ccd-sanitize, leaves the primary', () => { const a = [{ type: 'text', text: '...' }]; const b = [{ type: 'text', text: 'two' }]; expect(libOut.pickExpandBody({ primary: a, variants: [{ body: b, cause: 'unknown' }] })).toBe(a); expect(libOut.pickExpandBody({ primary: a, variants: [{ body: b, cause: 'ccd-sanitize' }] })).toBe(a); expect(libOut.pickExpandBody({ primary: a, variants: [] })).toBe(a); });
+});
+
+// ===========================================================================
+// W1-B2 Task 6: the operator-verb decisions (spec §6.6, §6.9, §8.3, §8.4),
+// pure. The CLI's door (Task 19) and the sweep's --op dispatch both call
+// them, so the two doors answer the same words (C64).
+// ===========================================================================
+describe('the refusal words B2 adds are exit-2 REASONS (spec 8.3; NEW history-reasons-repair-backup, NEW history-ops-refused-while-recovering)', () => {
+  it('repair-refused, backup-refused and recovering map to exit 2, and REFUSALS derives them', () => {
+    for (const w of ['repair-refused', 'backup-refused', 'recovering']) expect(libOps.REASONS[w], w).toBe(libOps.EXIT.REFUSED);
+    expect(libOps.REFUSALS).toEqual(expect.arrayContaining(['repair-refused', 'backup-refused', 'recovering']));
+  });
+  it("recovering is also doctor's WARN word: one word, two tables, as store-unmeasured already is", () => {
+    expect(libOps.HEALTH_WORDS['recovering']).toBe('warn');
+    expect(libOps.HEALTH_WORDS['store-unmeasured']).toBe('fail');
+    expect(libOps.REASONS['store-unmeasured']).toBe(libOps.EXIT.DB);
+  });
+});
+
+describe('decideOpGate while a recovery step is registered: every writing form but restore and rebuild is refused, with RB12-RB14\'s exemptions (RB6; NEW history-ops-refused-while-recovering)', () => {
+  const FORMS = libOps.WRITING_FORMS as unknown as Readonly<Record<string, Readonly<{ op: string; irreversible: boolean; binding: boolean }>>>;
+  /** RB6's list: import --apply (both forms), prune --apply, reparse --apply, doctor --repair, --backup, --adopt, --migrate.
+   *  migrate and adopt are refused here because `recovering` alone carries none of RB13's or RB14's facts. */
+  const REFUSED = ['import-apply', 'import-session-apply', 'prune-apply', 'reparse-apply', 'repair', 'backup', 'adopt', 'migrate'];
+  /** RB6 allows restore and rebuild (they replace the step); RB12 exempts W2's recall-off forms. */
+  const ALLOWED = ['restore', 'rebuild', 'recall-off', 'recall-off-clear-all'];
+  const recovering = { claudecode: false, historyOff: false, recovering: true };
+  const S = '0189abcd-1234-4678-9abc-0000000000e1';
+  const ver = (value: number): libOps.Presence<number> => ({ state: 'value', value });
+  const sid = (value: string): libOps.Presence<string> => ({ state: 'value', value });
+  const absent = { state: 'absent' } as const;
+  const unreadable = { state: 'unreadable' } as const;
+  const refusedRecovering = { ok: false, rc: 2, reason: 'recovering' };
+
+  it('CONTROL: the two lists cover every WRITING_FORMS key exactly once', () => {
+    expect([...REFUSED, ...ALLOWED].sort()).toEqual(Object.keys(FORMS).sort());
+  });
+  it('each RB6 form answers recovering; restore, rebuild and the recall-off forms (RB12) pass; a dry run passes', () => {
+    for (const f of REFUSED) expect(libOps.decideOpGate(f, recovering, true, null), f).toEqual(refusedRecovering);
+    for (const f of ALLOWED) expect(libOps.decideOpGate(f, recovering, true, null), f).toEqual({ ok: true });
+    expect(libOps.decideOpGate(null, recovering, false, 'cc-demo-quiet-basin')).toEqual({ ok: true });
+  });
+  it("RB13: migrate is refused only while the stored user_version equals the code's; an older or a newer store passes; an unmeasured version keeps the refusal", () => {
+    // codeVersion null builds an env with NO codeVersion key ("not measured"); undefined would select the default 2.
+    const at = (storedVersion: libOps.Presence<number> | undefined, codeVersion: number | null = 2) => ({ ...recovering, storedVersion, ...(codeVersion === null ? {} : { codeVersion }) });
+    expect(libOps.decideOpGate('migrate', at(ver(2)), true, null), 'stored = code').toEqual(refusedRecovering);
+    expect(libOps.decideOpGate('migrate', at(ver(1)), true, null), 'a restored older backup').toEqual({ ok: true });
+    expect(libOps.decideOpGate('migrate', at(ver(3)), true, null), 'newer: openStore answers it, not this row').toEqual({ ok: true });
+    for (const sv of [unreadable, absent, undefined]) {
+      expect(libOps.decideOpGate('migrate', at(sv), true, null), `storedVersion ${JSON.stringify(sv)}`).toEqual(refusedRecovering);
+    }
+    expect(libOps.decideOpGate('migrate', at(ver(1), null), true, null), 'no code version measured').toEqual(refusedRecovering);
+    // The version facts exempt migrate alone.
+    for (const f of REFUSED.filter((x) => x !== 'migrate')) expect(libOps.decideOpGate(f, at(ver(1)), true, null), f).toEqual(refusedRecovering);
+  });
+  it('RB14: adopt is exempt only on an unbound store (store.id absent); a store.id present, unreadable or unmeasured keeps the refusal', () => {
+    const with_ = (storeId: libOps.Presence<string> | undefined) => ({ ...recovering, storeId });
+    expect(libOps.decideOpGate('adopt', with_(absent), true, null), 'unbound').toEqual({ ok: true });
+    for (const p of [sid(S), unreadable, undefined]) {
+      expect(libOps.decideOpGate('adopt', with_(p), true, null), `storeId ${JSON.stringify(p)}`).toEqual(refusedRecovering);
+    }
+    // store.id absent exempts adopt alone.
+    for (const f of REFUSED.filter((x) => x !== 'adopt')) expect(libOps.decideOpGate(f, with_(absent), true, null), f).toEqual(refusedRecovering);
+    // The exemption sits after B1's bumps: adopt still needs a TTY and refuses a cc- pane.
+    expect(libOps.decideOpGate('adopt', with_(absent), false, null)).toEqual({ ok: false, rc: 2, reason: 'needs-tty' });
+    expect(libOps.decideOpGate('adopt', with_(absent), true, 'cc-demo-quiet-basin')).toEqual({ ok: false, rc: 2, reason: 'irreversible-in-pane' });
+  });
+  it("B1's bumps still answer first: CLAUDECODE, the TTY, a cc- pane, history-off", () => {
+    expect(libOps.decideOpGate('repair', { ...recovering, claudecode: true }, true, null)).toEqual({ ok: false, rc: 2, reason: 'apply-in-session' });
+    expect(libOps.decideOpGate('repair', recovering, false, null)).toEqual({ ok: false, rc: 2, reason: 'needs-tty' });
+    expect(libOps.decideOpGate('repair', recovering, true, 'cc-demo-quiet-basin')).toEqual({ ok: false, rc: 2, reason: 'irreversible-in-pane' });
+    expect(libOps.decideOpGate('backup', { ...recovering, historyOff: true }, true, null)).toEqual({ ok: false, rc: 2, reason: 'history-off' });
+  });
+  it('recovering absent (the CLI half) or false refuses nothing new', () => {
+    for (const f of REFUSED) {
+      expect(libOps.decideOpGate(f, { claudecode: false, historyOff: false }, true, null), f).toEqual({ ok: true });
+      expect(libOps.decideOpGate(f, { claudecode: false, historyOff: false, recovering: false }, true, null), f).toEqual({ ok: true });
+    }
+  });
+});
+
+describe("parseOpVerbArgs: each verb's argv, decided once for both doors (spec 8.4)", () => {
+  const ok = (op: string, args: string[]): libOps.OpArgs => {
+    const r = libOps.parseOpVerbArgs(op, args);
+    if (!r.ok) throw new Error(`${op} ${args.join(' ')}: ${r.reason}`);
+    return r.args;
+  };
+  const why = (op: string, args: string[]): string => {
+    const r = libOps.parseOpVerbArgs(op, args);
+    return r.ok ? 'ok' : r.reason;
+  };
+  const FILE = '/home/u/.claude/projects/-home-u-worktrees-p-quiet-basin/0189abcd-1234-4678-9abc-000000000001.jsonl';
+
+  it("import keeps B1's grammar: --apply, and --session with --file, both or neither", () => {
+    expect(ok('import', [])).toEqual({ op: 'import', apply: false, session: null, file: null });
+    expect(ok('import', ['--apply'])).toEqual({ op: 'import', apply: true, session: null, file: null });
+    expect(ok('import', ['--session', 'claude-demo', '--file', FILE, '--apply'])).toEqual({ op: 'import', apply: true, session: 'claude-demo', file: FILE });
+    expect(why('import', ['--session', 'claude-demo'])).toBe('bad-args');
+    expect(why('import', ['--apply', '--apply'])).toBe('bad-args');
+    expect(why('import', ['stray'])).toBe('bad-args');
+    expect(why('import', ['--session'])).toBe('bad-args');
+    expect(why('import', ['--session', '../x', '--file', FILE])).toBe('bad-id');
+    expect(why('import', ['--session', 'claude-demo', '--file', '/home/u/notes.txt'])).toBe('bad-args');
+    expect(why('import', ['--session', 'claude-demo', '--file', '/home/u/x/not-a-uuid.jsonl'])).toBe('bad-args');
+  });
+
+  it('migrate, repair, backup and adopt take no arguments', () => {
+    for (const op of ['migrate', 'repair', 'backup', 'adopt']) {
+      expect(ok(op, []), op).toEqual({ op });
+      expect(why(op, ['--apply']), op).toBe('bad-args');
+    }
+  });
+
+  it('prune needs --older-than; under 30 days is older-than-floor (DM22 pure half)', () => {
+    expect(ok('prune', ['--older-than', '90d'])).toEqual({ op: 'prune', days: 90, apply: false });
+    expect(ok('prune', ['--older-than', '3m', '--apply'])).toEqual({ op: 'prune', days: 90, apply: true });
+    expect(ok('prune', ['--apply', '--older-than', '30d'])).toEqual({ op: 'prune', days: 30, apply: true });
+    expect(why('prune', ['--older-than', '7d'])).toBe('older-than-floor');
+    expect(why('prune', ['--older-than', '29 days'])).toBe('older-than-floor');
+    expect(why('prune', [])).toBe('bad-args');
+    expect(why('prune', ['--apply'])).toBe('bad-args');
+    expect(why('prune', ['--older-than', 'soon'])).toBe('bad-args');
+    expect(why('prune', ['--older-than'])).toBe('bad-args');
+  });
+
+  it('reparse takes a full 20-hex node id or a session, never both, plus --apply', () => {
+    const NODE = 'L0123456789abcdef0123';
+    expect(ok('reparse', [])).toEqual({ op: 'reparse', node: null, session: null, apply: false });
+    expect(ok('reparse', ['--node', NODE, '--apply'])).toEqual({ op: 'reparse', node: NODE, session: null, apply: true });
+    expect(ok('reparse', ['--node', 'N0123456789abcdef0123'])).toMatchObject({ node: 'N0123456789abcdef0123' });
+    expect(ok('reparse', ['--session', 'claude-demo'])).toEqual({ op: 'reparse', node: null, session: 'claude-demo', apply: false });
+    expect(why('reparse', ['--node', 'L0123ab'])).toBe('bad-args');
+    expect(why('reparse', ['--node', NODE.toUpperCase()])).toBe('bad-args');
+    expect(why('reparse', ['--node', NODE, '--session', 'claude-demo'])).toBe('bad-args');
+    expect(why('reparse', ['--session', '..'])).toBe('bad-id');
+  });
+
+  it('restore takes exactly one bare backup name; a path, a temp or another name is restore-refused (C57 pure half)', () => {
+    expect(ok('restore', ['20261001T000000Z.db'])).toEqual({ op: 'restore', name: '20261001T000000Z.db' });
+    expect(ok('restore', ['pre-v2.db'])).toEqual({ op: 'restore', name: 'pre-v2.db' });
+    for (const n of ['../20261001T000000Z.db', 'backups/20261001T000000Z.db', '.20261001T000000Z.db.tmp',
+      '20261001T000000Z.db.tmp', 'pre-v0.db', 'history.db', '/home/u/x.db']) {
+      expect(why('restore', [n]), n).toBe('restore-refused');
+    }
+    expect(why('restore', [])).toBe('bad-args');
+    expect(why('restore', ['pre-v2.db', 'pre-v3.db'])).toBe('bad-args');
+    expect(why('restore', ['--apply'])).toBe('bad-args');
+  });
+
+  it('rebuild takes an optional --store-id of the uuid grammar', () => {
+    const S = '0189abcd-1234-4678-9abc-0000000000e1';
+    expect(ok('rebuild', [])).toEqual({ op: 'rebuild', storeId: null });
+    expect(ok('rebuild', ['--store-id', S])).toEqual({ op: 'rebuild', storeId: S });
+    expect(why('rebuild', ['--store-id', S.toUpperCase()])).toBe('bad-args');
+    expect(why('rebuild', ['--store-id'])).toBe('bad-args');
+    expect(why('rebuild', [S])).toBe('bad-args');
+  });
+
+  it('a verb B2 does not run is bad-args (recall-off ships in W2)', () => {
+    expect(why('recall-off', ['claude-demo'])).toBe('bad-args');
+    expect(why('frobnicate', [])).toBe('bad-args');
+  });
+});
+
+describe('parseDuration, backupNameOf and restoreNameOk (spec 6.6, 8.4; P15)', () => {
+  it("parseDuration reads upstream's units: d, w, m (30 days), y (365), any case and spacing; nothing else", () => {
+    expect(libOps.parseDuration('90d')).toBe(90);
+    expect(libOps.parseDuration('1w')).toBe(7);
+    expect(libOps.parseDuration('3m')).toBe(90);
+    expect(libOps.parseDuration('1y')).toBe(365);
+    expect(libOps.parseDuration(' 2 WEEKS ')).toBe(14);
+    expect(libOps.parseDuration('45 days')).toBe(45);
+    for (const s of ['0d', '-5d', '5', '', 'd', '1.5d', 'ninety days']) expect(libOps.parseDuration(s), s).toBeNull();
+    expect(libOps.PRUNE_FLOOR_DAYS).toBe(30);
+  });
+  it('backupNameOf is the UTC second (`YYYYMMDDTHHMMSSZ.db`, §8.4), and restoreNameOk accepts it', () => {
+    expect(libOps.backupNameOf(Date.parse('2026-10-01T00:00:00.000Z'))).toBe('20261001T000000Z.db');
+    expect(libOps.backupNameOf(Date.parse('2026-12-31T23:59:59.999Z'))).toBe('20261231T235959Z.db');
+    expect(libOps.restoreNameOk(libOps.backupNameOf(Date.now()))).toBe(true);
+    expect(libOps.restoreNameOk('pre-v12.db')).toBe(true);
+    expect(() => libOps.backupNameOf(-1)).toThrow(TypeError);
+  });
+});
+
+describe('decideOpDoor: which no-store answer a writing verb gets before any spawn (spec 8.3 "Which no-store answer", 8.4)', () => {
+  const S = '0189abcd-1234-4678-9abc-0000000000e1';
+  const absent = { state: 'absent' as const };
+  const unreadable = { state: 'unreadable' as const };
+  const id = { state: 'value' as const, value: S };
+  /** decideCliStore's input, as Task 10's cliFactsOf(measureReach(home)) builds it. */
+  const reach = (o: Partial<libOps.CliStoreFacts> = {}): libOps.CliStoreFacts => ({
+    darwin: false, role: 'fleet', statSettled: true, dbDir: 'dir', shim: 'present',
+    storeId: absent, pending: absent, writer: absent, db: 'absent', dbStoreId: absent,
+    wal: false, shm: false, journalStoreDirs: [], backupsDb: [], ...o,
+  });
+  const stored = { storeId: id, db: 'present' as const, dbStoreId: id };
+  it('macOS and a recorded server role are exit 9, whatever is on disk', () => {
+    expect(libOps.decideOpDoor(reach({ darwin: true, ...stored }))).toEqual({ ok: false, exit: 9 });
+    expect(libOps.decideOpDoor(reach({ role: 'server', ...stored }))).toEqual({ ok: false, exit: 9 });
+    expect(libOps.decideOpDoor(reach({ role: 'server', shim: 'unmeasured' }))).toEqual({ ok: false, exit: 9 });
+  });
+  it('no shim, no store.id and no DB: never installed, exit 9, whatever else the history root holds', () => {
+    expect(libOps.decideOpDoor(reach({ shim: 'absent' }))).toEqual({ ok: false, exit: 9 });
+    expect(libOps.decideOpDoor(reach({ shim: 'absent', journalStoreDirs: [S] })), 'a journal directory is not a store').toEqual({ ok: false, exit: 9 });
+  });
+  it('a store.id or a DB with no shim is exit 2 writer-absent, never 9: a plain uninstall kept the data', () => {
+    for (const o of [stored, { storeId: id }, { db: 'present' as const, dbStoreId: id }, { db: 'zero-byte' as const }]) {
+      expect(libOps.decideOpDoor(reach({ shim: 'absent', ...o })), JSON.stringify(o)).toEqual({ ok: false, exit: 2, reason: 'writer-absent' });
+    }
+  });
+  it('an unmeasured shim, store.id or DB, a dangling db/ or an unsettled stat is exit 5 with its own word, never read as absent (IV5)', () => {
+    expect(libOps.decideOpDoor(reach({ shim: 'unmeasured' }))).toEqual({ ok: false, exit: 5, reason: 'store-unmeasured' });
+    expect(libOps.decideOpDoor(reach({ shim: 'absent', storeId: unreadable }))).toEqual({ ok: false, exit: 5, reason: 'store-unmeasured' });
+    expect(libOps.decideOpDoor(reach({ shim: 'absent', db: 'unmeasured' }))).toEqual({ ok: false, exit: 5, reason: 'store-unmeasured' });
+    expect(libOps.decideOpDoor(reach({ shim: 'absent', dbDir: 'dangling' }))).toEqual({ ok: false, exit: 5, reason: 'store-root-dangling' });
+    expect(libOps.decideOpDoor(reach({ shim: 'absent', statSettled: false }))).toEqual({ ok: false, exit: 5, reason: 'store-unreachable' });
+  });
+  it('a shim present goes on to the gate and the shim\'s own pass, with a store or not', () => {
+    expect(libOps.decideOpDoor(reach())).toEqual({ ok: true });
+    expect(libOps.decideOpDoor(reach(stored))).toEqual({ ok: true });
+  });
+});
+
+describe("decideBind: the binding verbs' preconditions, unreadable never read as absent (spec 6.9, 8.4; C57, C58, C67 pure halves)", () => {
+  const S = '0189abcd-1234-4678-9abc-0000000000e1';
+  const T = '0189abcd-1234-4678-9abc-0000000000e2';
+  const v = (value: string) => ({ state: 'value' as const, value });
+  const absent = { state: 'absent' as const };
+  const unreadable = { state: 'unreadable' as const };
+  const facts = (o: Partial<libOps.BindFacts> = {}): libOps.BindFacts => ({
+    role: 'fleet', dbDir: 'dir', storeId: absent, pending: absent, writer: absent, db: 'absent', dbStoreId: absent,
+    wal: false, shm: false, journalStoreDirs: [], backupsDb: [],
+    codeVersion: 1, storedVersion: absent, storeIdArg: null, journalDirs: [], backup: null, ...o,
+  });
+  const backup = (o: Partial<libOps.BindBackup> = {}): libOps.BindBackup =>
+    ({ regular: true, storeId: v(S), userVersion: 1, integrityOk: true, ...o });
+  const refused = (kind: 'adopt' | 'restore' | 'rebuild', o: Partial<libOps.BindFacts>) =>
+    libOps.decideBind(kind, facts(o));
+  /** history.db's own user_version, as Task 26's bindFactsOf measures it (storedVersionAt). */
+  const ver = (value: number): libOps.Presence<number> => ({ state: 'value', value });
+  /** A DB adopt can bind: present, with a readable store_id, at this build's version. */
+  const adoptable = { db: 'present' as const, dbStoreId: v(S), storedVersion: ver(1) };
+
+  it('C67: an unreadable store.id, pending marker or store.writer, or an unmeasured db/ or DB, is exit 5 store-unmeasured for every binding verb', () => {
+    for (const kind of ['adopt', 'restore', 'rebuild'] as const) {
+      for (const o of [{ storeId: unreadable }, { pending: unreadable }, { writer: unreadable }, { dbDir: 'unmeasured' as const }, { db: 'unmeasured' as const }]) {
+        expect(refused(kind, o), `${kind} ${JSON.stringify(o)}`).toMatchObject({ ok: false, rc: 5, reason: 'store-unmeasured' });
+      }
+    }
+    expect(refused('adopt', { db: 'present', dbStoreId: unreadable })).toMatchObject({ ok: false, rc: 5, reason: 'store-unmeasured' });
+  });
+
+  it('a dangling db/ is exit 5 store-root-dangling', () => {
+    expect(refused('restore', { dbDir: 'dangling' })).toMatchObject({ ok: false, rc: 5, reason: 'store-root-dangling' });
+  });
+
+  it('adopt binds a present DB with a readable store_id and no store.id, at or below this build\'s version', () => {
+    expect(libOps.decideBind('adopt', facts(adoptable))).toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('adopt', facts({ ...adoptable, pending: v(T) }))).toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('adopt', facts({ ...adoptable, codeVersion: 2 })), 'an older store: its migration is the writer\'s').toEqual({ ok: true, storeId: S });
+  });
+
+  it("adopt refuses a store newer than this build, and an unreadable user_version is exit 5 (G9; RB17: lib decides, the arm relays)", () => {
+    const newer = refused('adopt', { ...adoptable, storedVersion: ver(2) });
+    expect(newer).toMatchObject({ ok: false, rc: 2, reason: 'adopt-refused' });
+    if (!newer.ok) expect(newer.detail).toBe('history.db is schema 2; this build knows 1: adopt it with the build that wrote it');
+    for (const sv of [unreadable, absent]) {
+      expect(refused('adopt', { ...adoptable, storedVersion: sv }), JSON.stringify(sv)).toMatchObject({ ok: false, rc: 5, reason: 'store-unmeasured' });
+    }
+    // The version is adopt's own fact: restore and rebuild never read it (their DB must be absent).
+    expect(libOps.decideBind('restore', facts({ storedVersion: unreadable, backup: backup() }))).toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('rebuild', facts({ storedVersion: unreadable, storeId: v(S) }))).toEqual({ ok: true, storeId: S });
+  });
+
+  it('adopt refuses: store.id present (equal or different), no readable store_id, no DB, or its own pending marker', () => {
+    for (const o of [
+      { db: 'present' as const, dbStoreId: v(S), storeId: v(S) },
+      { db: 'present' as const, dbStoreId: v(S), storeId: v(T) },
+      { db: 'present' as const, dbStoreId: absent },
+      { db: 'absent' as const },
+      { db: 'zero-byte' as const },
+      { db: 'present' as const, dbStoreId: v(S), pending: v(S) },
+    ]) {
+      expect(refused('adopt', o), JSON.stringify(o)).toMatchObject({ ok: false, rc: 2, reason: 'adopt-refused' });
+    }
+  });
+
+  it('restore binds the backup onto a box with no DB, or whose store.id names the backup\'s store', () => {
+    expect(libOps.decideBind('restore', facts({ backup: backup() }))).toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('restore', facts({ storeId: v(S), backup: backup() }))).toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('restore', facts({ journalStoreDirs: [S], backupsDb: ['20261001T000000Z.db'], backup: backup() })),
+      'store-recoverable evidence is what a restore exists for').toEqual({ ok: true, storeId: S });
+  });
+
+  it('restore passes the pre-copy check with version and integrity not yet measured', () => {
+    expect(libOps.decideBind('restore', facts({ backup: backup({ userVersion: null, integrityOk: null }) }))).toEqual({ ok: true, storeId: S });
+  });
+
+  it('restore refuses: a DB present, a leftover WAL, a non-regular or unnamed backup, an unreadable or foreign store_id, a newer schema, a failed integrity_check', () => {
+    for (const o of [
+      { db: 'present' as const, dbStoreId: v(S), backup: backup() },
+      { db: 'zero-byte' as const, backup: backup() },
+      { wal: true, backup: backup() },
+      { shm: true, backup: backup() },
+      { backup: null },
+      { backup: backup({ regular: false }) },
+      { backup: backup({ storeId: unreadable }) },
+      { backup: backup({ storeId: absent }) },
+      { backup: backup({ storeId: v('not-a-uuid') }) },
+      { storeId: v(T), backup: backup() },
+      { backup: backup({ userVersion: 2 }) },
+      { backup: backup({ integrityOk: false }) },
+    ]) {
+      expect(refused('restore', o), JSON.stringify(o)).toMatchObject({ ok: false, rc: 2, reason: 'restore-refused' });
+    }
+  });
+
+  it("rebuild's store_id: store.id's; else the one journal directory whose heads agree; else --store-id among several", () => {
+    expect(libOps.decideBind('rebuild', facts({ storeId: v(S) }))).toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('rebuild', facts({ journalStoreDirs: [S], journalDirs: [{ storeId: S, headsAgree: true }] }))).toEqual({ ok: true, storeId: S });
+    const two = { journalStoreDirs: [S, T], journalDirs: [{ storeId: S, headsAgree: true }, { storeId: T, headsAgree: true }] };
+    expect(libOps.decideBind('rebuild', facts({ ...two, storeIdArg: T }))).toEqual({ ok: true, storeId: T });
+    expect(libOps.decideBind('rebuild', facts({ ...two, storeId: v(T), storeIdArg: T }))).toEqual({ ok: true, storeId: T });
+  });
+
+  it('rebuild refuses: a DB, a leftover WAL, nothing naming a store, store.id against --store-id, several directories unnamed, a --store-id naming no directory, heads naming another store', () => {
+    const two = { journalStoreDirs: [S, T], journalDirs: [{ storeId: S, headsAgree: true }, { storeId: T, headsAgree: true }] };
+    for (const o of [
+      { db: 'present' as const, dbStoreId: v(S), storeId: v(S) },
+      { wal: true, storeId: v(S) },
+      {},
+      { ...two, storeId: v(S), storeIdArg: T },
+      { ...two },
+      { ...two, storeIdArg: '0189abcd-1234-4678-9abc-0000000000e3' },
+      { journalStoreDirs: [S], journalDirs: [{ storeId: S, headsAgree: false }] },
+      { journalStoreDirs: [S], journalDirs: [{ storeId: S, headsAgree: false }], storeIdArg: S },
+    ]) {
+      expect(refused('rebuild', o), JSON.stringify(o)).toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused' });
+    }
+  });
+
+  it("rebuild's refusal names the candidate directories", () => {
+    const r = libOps.decideBind('rebuild', facts({ journalStoreDirs: [S, T], journalDirs: [{ storeId: S, headsAgree: true }, { storeId: T, headsAgree: true }] }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.detail).toContain(S);
+      expect(r.detail).toContain(T);
+    }
+  });
+
+  it('rebuild with an unlistable journal/ is exit 5 store-unmeasured', () => {
+    expect(refused('rebuild', { journalStoreDirs: ['(unlistable)'] })).toMatchObject({ ok: false, rc: 5, reason: 'store-unmeasured' });
+  });
+
+  it('a kind outside BIND_KINDS is a programming error', () => {
+    expect(() => libOps.decideBind('import' as 'adopt', facts())).toThrow(TypeError);
+  });
+});
+
+describe('decideReparse: the preflight limits (spec 8.4, 11 L8; DM21, C62 pure halves)', () => {
+  it('up to REPARSE_MAX_TARGETS runs; one more is reparse-too-many; any pruned span is span-pruned', () => {
+    expect(libOps.decideReparse({ targets: libOps.REPARSE_MAX_TARGETS, prunedSpans: 0 })).toEqual({ ok: true });
+    expect(libOps.decideReparse({ targets: 0, prunedSpans: 0 })).toEqual({ ok: true });
+    expect(libOps.decideReparse({ targets: libOps.REPARSE_MAX_TARGETS + 1, prunedSpans: 0 })).toEqual({ ok: false, reason: 'reparse-too-many' });
+    expect(libOps.decideReparse({ targets: 1, prunedSpans: 1 })).toEqual({ ok: false, reason: 'span-pruned' });
+  });
 });

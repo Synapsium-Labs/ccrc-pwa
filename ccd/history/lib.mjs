@@ -36,13 +36,18 @@ export const EXIT = Object.freeze({
 // the spec names only in prose: `bad-args`, `regex-syntax`, `regex-refused`,
 // `project-unreadable`, `store-zero-byte`, `store-schema-missing`, `store-read-failed`.
 const REASON_ROWS = [
+  // `repair-refused` and `backup-refused` (W1-B2): doctor --repair refused on integrity_check or on a NEW
+  // foreign-key violation, and doctor --backup refused for room. D-4696 (history-reasons-repair-backup)
+  // `recovering` (W1-B2, RB6): a writing --op form refused while a recovery step is registered (decideOpGate).
+  // It is doctor's WARN word too; one word in two tables, as store-unmeasured is.
+  // D-4698 (history-ops-refused-while-recovering)
   [EXIT.REFUSED, [
     'bad-args', 'regex-syntax', 'regex-refused', 'regex-timeout', 'cross-project', 'out-of-scope',
     'project-unreadable', 'headless-unarmed', 'headless-in-pane', 'headless-unlisted', 'no-identity',
     'bad-id', 'apply-in-session', 'needs-tty', 'irreversible-in-pane', 'history-off', 'span-pruned',
     'older-than-floor', 'reparse-too-many', 'workspace-unreadable', 'harness-unsupported',
     'harness-unreadable', 'generation-unreadable', 'writer-absent', 'adopt-refused', 'restore-refused',
-    'rebuild-refused', 'migrate-refused',
+    'rebuild-refused', 'migrate-refused', 'repair-refused', 'backup-refused', 'recovering',
     // `roster-unreadable` and `uuid-claimed` (Task 26F, D-4313): `--op import`'s two refusals that used to answer
     // exit 0 — the shim passed --roster-unreadable (no homes to list or admit), or an operator's --session --file
     // mapping names a uuid another family already holds confirmed. Plan-chosen words.
@@ -1056,6 +1061,27 @@ export function formOf(op, args) {
   }
 }
 
+/** RB6 with RB12-RB14 (W1-B2): whether a writing form still runs while a ('recover', ms) step is registered. Every
+ *  other form is refused `recovering` by decideOpGate's row below. D-4698 (history-ops-refused-while-recovering)
+ *  - restore and rebuild replace the step (RB6);
+ *  - W2's recall-off forms move no cursor: a privacy switch (RB12);
+ *  - migrate, only while the stored user_version is a measured value other than the code's (RB13): a restored older
+ *    backup migrates first, or it would wait on its own step, which runs only at the code's version;
+ *  - adopt, only on an unbound store, store.id absent (RB14): no pass opens such a store until it is bound.
+ *  The facts are measured by Task 19's two halves. One that was not measured never exempts (IV5): an absent or
+ *  unreadable version, no code version, or a store.id that is unreadable rather than absent keeps the refusal. */
+function recoveryExempt(op, env) {
+  switch (op) {
+    case 'restore': case 'rebuild': return true;
+    case 'recall-off': return true;
+    case 'migrate':
+      return Number.isSafeInteger(env.codeVersion) && env.storedVersion?.state === 'value'
+        && env.storedVersion.value !== env.codeVersion;
+    case 'adopt': return env.storeId?.state === 'absent';
+    default: return false;
+  }
+}
+
 function refuseGate(reason) {
   return { ok: false, rc: EXIT.REFUSED, reason };
 }
@@ -1075,6 +1101,12 @@ export function decideOpGate(form, env, isTTY, paneName) {
   if (f.irreversible && !isTTY) return refuseGate('needs-tty');
   if (f.irreversible && typeof paneName === 'string' && paneName.startsWith('cc-')) return refuseGate('irreversible-in-pane');
   if (env.historyOff && !f.binding) return refuseGate('history-off');
+  // RB6 (W1-B2): while a ('recover', ms) step is registered, a writing form is refused unless recoveryExempt (above)
+  // exempts it: restore and rebuild (RB6), W2's recall-off forms (RB12), migrate on a store whose version is not the
+  // code's (RB13), adopt on an unbound store (RB14). Task 19 measures `recovering` and those facts read-only in both
+  // halves: the CLI's pre-check spawns nothing, and the sweep's is authoritative.
+  // D-4698 (history-ops-refused-while-recovering)
+  if (env.recovering === true && !recoveryExempt(f.op, env)) return refuseGate('recovering');
   return { ok: true };
 }
 
@@ -4487,4 +4519,249 @@ export function parentRollup(children) {
     gist: joined === '' ? null : gist.text, topics: topics.topics, refs: cut.refs, earliestMs, latestMs, srcChars, descCount, descChars,
     capped: gist.capped || topics.capped || cut.capped,
   };
+}
+
+// ===========================================================================
+// Operator-verb decisions (spec §6.6, §6.9, §8.3 "Which no-store answer",
+// §8.4; W1-B2 Task 6). Pure: the CLI's door and the sweep's --op dispatch
+// both call them, so the two doors answer the same words (C64).
+// D-4692 (history-adopt-verb) D-4693 (history-restore-verb) D-4694 (history-rebuild-verb)
+// ===========================================================================
+
+/** A restorable backup's bare name under db/backups/ (§8.4, §6.11): doctor --backup's `<ts>.db` or the
+ *  writer's `pre-v<N>.db`. A `/`, a dot-prefixed temp, a `.tmp` or any other name never matches. */
+const RESTORE_NAME_RE = /^(?:[0-9]{8}T[0-9]{6}Z|pre-v[1-9][0-9]*)\.db$/;
+
+/** argv after `--op <verb>`, read against `spec` (flag -> 'bool' | 'value'): each flag at most once, a value
+ *  flag followed by its value, anything not starting with `-` a positional. null on an unknown or repeated
+ *  flag, or a value flag with nothing after it. */
+function readOpFlags(args, spec) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (!Object.hasOwn(spec, a)) {
+      if (typeof a !== 'string' || a.startsWith('-')) return null;
+      positional.push(a);
+      continue;
+    }
+    if (Object.hasOwn(flags, a)) return null;
+    if (spec[a] === 'bool') { flags[a] = true; continue; }
+    if (i + 1 >= args.length) return null;
+    i += 1;
+    flags[a] = args[i];
+  }
+  return { flags, positional };
+}
+
+/** One operator verb's argv (§8.4), as both doors read it. `import` keeps B1's grammar (`--apply`, and
+ *  `--session <id> --file <path>` both or neither, the session an idOk id and the file a `<uuid>.jsonl`).
+ *  `prune` needs `--older-than <dur>` at or above PRUNE_FLOOR_DAYS. `reparse` takes `--node <full id>` (Task 1's
+ *  HISTORY_NODE_ID_RE, the one spelling of a full node id) or `--session <id>`, never both
+ *  D-4697 (history-reparse-targets). `restore` takes one bare backup name, refused
+ *  `restore-refused` when it is not one (C57). `rebuild` takes `--store-id <uuid>`. A verb B2 does not run
+ *  (recall-off is W2's) is `bad-args`. */
+export function parseOpVerbArgs(op, args) {
+  const refuse = (reason) => ({ ok: false, reason });
+  const ok = (a) => ({ ok: true, args: Object.freeze(a) });
+  switch (op) {
+    case 'import': {
+      const r = readOpFlags(args, { '--apply': 'bool', '--session': 'value', '--file': 'value' });
+      if (r === null || r.positional.length > 0) return refuse('bad-args');
+      const session = r.flags['--session'] ?? null;
+      const file = r.flags['--file'] ?? null;
+      if ((session === null) !== (file === null)) return refuse('bad-args');
+      if (session !== null) {
+        if (!idOk(session)) return refuse('bad-id');
+        const base = file.slice(file.lastIndexOf('/') + 1);
+        if (!base.endsWith('.jsonl') || !UUID_RE.test(base.slice(0, -'.jsonl'.length))) return refuse('bad-args');
+      }
+      return ok({ op, apply: r.flags['--apply'] === true, session, file });
+    }
+    case 'migrate':
+    case 'repair':
+    case 'backup':
+    case 'adopt':
+      return args.length === 0 ? ok({ op }) : refuse('bad-args');
+    case 'prune': {
+      const r = readOpFlags(args, { '--apply': 'bool', '--older-than': 'value' });
+      if (r === null || r.positional.length > 0 || r.flags['--older-than'] === undefined) return refuse('bad-args');
+      const days = parseDuration(r.flags['--older-than']);
+      if (days === null) return refuse('bad-args');
+      if (days < PRUNE_FLOOR_DAYS) return refuse('older-than-floor');
+      return ok({ op, days, apply: r.flags['--apply'] === true });
+    }
+    case 'reparse': {
+      const r = readOpFlags(args, { '--apply': 'bool', '--node': 'value', '--session': 'value' });
+      if (r === null || r.positional.length > 0) return refuse('bad-args');
+      const node = r.flags['--node'] ?? null;
+      const session = r.flags['--session'] ?? null;
+      if (node !== null && session !== null) return refuse('bad-args');
+      if (node !== null && !HISTORY_NODE_ID_RE.test(node)) return refuse('bad-args');
+      if (session !== null && !idOk(session)) return refuse('bad-id');
+      return ok({ op, node, session, apply: r.flags['--apply'] === true });
+    }
+    case 'restore': {
+      const r = readOpFlags(args, {});
+      if (r === null || r.positional.length !== 1) return refuse('bad-args');
+      const name = r.positional[0];
+      if (!restoreNameOk(name)) return refuse('restore-refused');
+      return ok({ op, name });
+    }
+    case 'rebuild': {
+      const r = readOpFlags(args, { '--store-id': 'value' });
+      if (r === null || r.positional.length > 0) return refuse('bad-args');
+      const storeId = r.flags['--store-id'] ?? null;
+      if (storeId !== null && !UUID_RE.test(storeId)) return refuse('bad-args');
+      return ok({ op, storeId });
+    }
+    default:
+      return refuse('bad-args');
+  }
+}
+
+/** The no-store table's answers a writing verb keeps as they are: what could not be measured or reached. */
+const DOOR_UNMEASURED = Object.freeze(['store-unreachable', 'store-root-dangling', 'store-unmeasured']);
+
+/** Which no-store answer a WRITING verb gets before the CLI spawns the shim (§8.3's table, its writing-verb
+ *  row), over exactly decideCliStore's input, so "is there a store here" is decided by that one table, from
+ *  store.id and the DB, never from whether ~/.ccrc/history exists:
+ *  - macOS or a recorded server role is 9, whatever is on disk;
+ *  - a shim present goes on to decideOpGate and the shim's own pass, which decides the store rows itself;
+ *  - otherwise the table answers. Its 9 (no store.id and no DB: never installed) stays 9. Its unreachable,
+ *    dangling and unmeasured words (5) stand: an input that could not be measured is never read as absent (IV5).
+ *    Any other answer means a store exists, and a writing verb with no shim is 2 `writer-absent`, never 9 (a
+ *    plain uninstall kept the data). D-4183 */
+export function decideOpDoor(f) {
+  if (f.darwin || f.role === 'server') return { ok: false, exit: EXIT.NO_STORE };
+  if (f.shim === 'present') return { ok: true };
+  const t = decideCliStore(f);
+  if (t.exit === EXIT.NO_STORE) return { ok: false, exit: EXIT.NO_STORE };
+  if (t.exit === EXIT.DB && DOOR_UNMEASURED.includes(t.reason)) return { ok: false, exit: EXIT.DB, reason: t.reason };
+  return { ok: false, exit: EXIT.REFUSED, reason: 'writer-absent' };
+}
+
+// derived from lossless-claw src/prune.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const PRUNE_DURATION_RE = /^(\d+)\s*(d|day|days|w|week|weeks|m|month|months|y|year|years)$/i;
+const PRUNE_UNIT_DAYS = Object.freeze({
+  d: 1, day: 1, days: 1, w: 7, week: 7, weeks: 7, m: 30, month: 30, months: 30, y: 365, year: 365, years: 365,
+});
+
+/** A human duration (`90d`, `3m`, `1y`) as days, or null when it is not one (§11 P15, upstream's grammar: a month
+ *  is 30 days, a year 365). */
+export function parseDuration(input) {
+  if (typeof input !== 'string') return null;
+  const trimmed = input.trim().toLowerCase();
+  const match = PRUNE_DURATION_RE.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multiplier = PRUNE_UNIT_DAYS[unit];
+  if (multiplier == null || !Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+  return amount * multiplier;
+}
+
+/** `prune --older-than` under this many days is refused `older-than-floor` (§6.6, *chosen*). */
+export const PRUNE_FLOOR_DAYS = 30;
+
+/** doctor --backup's file name for the UTC second `nowMs` (§8.4): `YYYYMMDDTHHMMSSZ.db`, the form `--op backup`
+ *  publishes under db/backups/ and `doctor --restore` takes. D-4695 (history-backup-preflight-and-rename) */
+export function backupNameOf(nowMs) {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new TypeError(`backupNameOf: a time in ms, got ${String(nowMs)}`);
+  const iso = new Date(nowMs).toISOString();
+  return `${iso.slice(0, 19).replace(/[-:]/g, '')}Z.db`;
+}
+
+/** Whether `name` is a bare backup name `doctor --restore` may open under db/backups/ (§8.4). */
+export function restoreNameOk(name) {
+  return typeof name === 'string' && RESTORE_NAME_RE.test(name);
+}
+
+const BIND_REFUSALS = Object.freeze({ adopt: 'adopt-refused', restore: 'restore-refused', rebuild: 'rebuild-refused' });
+
+/** The binding verbs' preconditions (§8.4, §6.9; the "which also decides the binding verbs' preconditions" arm
+ *  of the store-open decision, §6.4). `f` is the store's measured facts (B1's StoreFacts) plus what the verb
+ *  names: the code's schema version, history.db's own user_version (`storedVersion`), a --store-id, the journal
+ *  directories with whether every head in each names that directory's store, and, for restore, the backup. Before
+ *  anything kind-specific, an input that could not be measured answers 5 `store-unmeasured` (C67): store.id, its
+ *  pending marker, store.writer, db/, history.db. A db/ link to nothing answers 5 `store-root-dangling`. Then:
+ *  - adopt: history.db present with a readable meta.store_id, and store.id absent (equal is nothing to adopt,
+ *    different is two stores claiming this box), and not this box's own interrupted binding (a pending marker
+ *    naming the same store, which the next tick finishes). Last, its user_version: one that is not a measured value
+ *    is 5 `store-unmeasured`, and one above the code's is refused before anything is written, as openStore refuses
+ *    it before its writer's open (G9; DM17 "no write"). That refusal is decided here, never in the L4 arm (RB17);
+ *  - restore: no history.db, no leftover -wal or -shm (SQLite would replay it into the restored file), a regular
+ *    backup with a readable uuid store_id, store.id absent or naming that store, the backup's user_version not
+ *    newer than the code's and its integrity_check not failed. Before the copy, version and integrity may be
+ *    null (not measured yet), and they pass;
+ *  - rebuild: no history.db and no leftover -wal or -shm. Its store_id is store.id's; else the one journal
+ *    directory whose heads agree; else --store-id, which must name one of several. A --store-id disagreeing with
+ *    store.id, naming no directory, or naming one whose heads name another store is refused, with the
+ *    candidates named.
+ *  D-4188 D-4185 D-4186 */
+export function decideBind(kind, f) {
+  if (!Object.hasOwn(BIND_REFUSALS, kind)) throw new TypeError(`decideBind: kind outside BIND_KINDS: ${String(kind)}`);
+  const unmeasured = (detail) => ({ ok: false, rc: EXIT.DB, reason: 'store-unmeasured', detail });
+  const refuse = (detail) => ({ ok: false, rc: EXIT.REFUSED, reason: BIND_REFUSALS[kind], detail });
+  if (f.dbDir === 'dangling') return { ok: false, rc: EXIT.DB, reason: 'store-root-dangling', detail: 'db/ is a link to nothing: recreate its target or remove the link' };
+  if (f.dbDir === 'unmeasured' || f.db === 'unmeasured') return unmeasured('db/ or history.db could not be measured');
+  if (presenceUnreadable(f.storeId)) return unmeasured('store.id exists and cannot be read');
+  if (presenceUnreadable(f.pending)) return unmeasured('store.id.pending exists and cannot be read');
+  if (presenceUnreadable(f.writer)) return unmeasured('store.writer exists and cannot be read');
+  const marker = presenceValue(f.storeId);
+  if (kind === 'adopt') {
+    if (f.db !== 'present') return refuse(f.db === 'zero-byte' ? 'history.db is 0 bytes: there is no store to adopt' : 'there is no history.db to adopt');
+    const inDb = presenceValue(f.dbStoreId);
+    if (f.dbStoreId.state === 'unreadable') return unmeasured("history.db's meta.store_id cannot be read");
+    if (inDb === null) return refuse('history.db has no readable meta.store_id');
+    if (marker !== null) return refuse(marker === inDb ? 'store.id already names this store: nothing to adopt' : `store.id names ${marker} and history.db is ${inDb}: two stores claim this box`);
+    if (presenceValue(f.pending) === inDb) return refuse("store.id.pending names this store: it is this box's own interrupted binding, which the next tick finishes");
+    const stored = presenceValue(f.storedVersion);
+    if (stored === null) return unmeasured("history.db's user_version cannot be read");
+    if (stored > f.codeVersion) return refuse(`history.db is schema ${stored}; this build knows ${f.codeVersion}: adopt it with the build that wrote it`);
+    return { ok: true, storeId: inDb };
+  }
+  if (kind === 'restore') {
+    if (f.db === 'present' || f.db === 'zero-byte') return refuse("history.db is present: a live store is never overwritten; move the old store's three files aside together first");
+    if (f.wal || f.shm) return refuse("a history.db-wal or -shm is left with no history.db: SQLite would replay it into the restored file; move the old store's three files aside together");
+    const bk = f.backup;
+    if (bk === null || !bk.regular) return refuse('the backup is not a regular file under db/backups/');
+    const bkId = presenceValue(bk.storeId);
+    if (bkId === null || !UUID_RE.test(bkId)) return refuse(bk.storeId.state === 'unreadable' ? "the backup's meta.store_id cannot be read" : 'the backup has no meta.store_id');
+    if (marker !== null && marker !== bkId) return refuse(`store.id names ${marker}; the backup is ${bkId}`);
+    if (bk.userVersion !== null && bk.userVersion > f.codeVersion) return refuse(`the backup is schema ${bk.userVersion}; this build knows ${f.codeVersion}`);
+    if (bk.integrityOk === false) return refuse("the backup's integrity_check is not ok");
+    return { ok: true, storeId: bkId };
+  }
+  if (f.db === 'present' || f.db === 'zero-byte') return refuse('history.db is present: rebuild recreates a lost database only');
+  if (f.wal || f.shm) return refuse("a history.db-wal or -shm is left with no history.db: move the old store's three files aside together");
+  if (f.journalStoreDirs.includes('(unlistable)')) return unmeasured('journal/ could not be listed');
+  const dirs = f.journalDirs;
+  const names = dirs.length === 0 ? 'none' : dirs.map((d) => d.storeId).join(', ');
+  const arg = f.storeIdArg;
+  if (arg !== null) {
+    if (marker !== null && marker !== arg) return refuse(`store.id names ${marker}; --store-id names ${arg}`);
+    const d = dirs.find((x) => x.storeId === arg);
+    if (d === undefined) return refuse(`--store-id ${arg} names no journal directory (journal directories: ${names})`);
+    if (!d.headsAgree) return refuse(`journal/${arg}/ holds head records naming another store`);
+    return { ok: true, storeId: arg };
+  }
+  if (marker !== null) return { ok: true, storeId: marker };
+  if (dirs.length === 0) return refuse('nothing names a store_id: no store.id and no journal directory');
+  if (dirs.length > 1) return refuse(`several journal directories: name one with --store-id (journal directories: ${names})`);
+  if (!dirs[0].headsAgree) return refuse(`journal/${dirs[0].storeId}/ holds head records naming another store`);
+  return { ok: true, storeId: dirs[0].storeId };
+}
+
+/** reparse's preflight (§8.4, §11 L8): more than REPARSE_MAX_TARGETS leaves is `reparse-too-many`, and any target
+ *  with a tombstoned source or summary is `span-pruned` (§6.6). Either refuses the whole run, so nothing is
+ *  rewritten. */
+export function decideReparse({ targets, prunedSpans }) {
+  if (targets > REPARSE_MAX_TARGETS) return { ok: false, reason: 'reparse-too-many' };
+  if (prunedSpans > 0) return { ok: false, reason: 'span-pruned' };
+  return { ok: true };
 }

@@ -222,8 +222,8 @@ export interface FileReadInputs {
 export function planFileRead(i: FileReadInputs): 'resume' | 'rescan' | 'retire' | 'skip';
 export const UNKNOWN_OP_FORM: 'unknown-op';
 export function formOf(op: string, args: readonly string[]): string | null;
-export type OpGateReason = 'bad-args' | 'apply-in-session' | 'needs-tty' | 'irreversible-in-pane' | 'history-off';
-export function decideOpGate(form: string | null, env: { claudecode: boolean; historyOff: boolean }, isTTY: boolean, paneName: string | null):
+export type OpGateReason = 'bad-args' | 'apply-in-session' | 'needs-tty' | 'irreversible-in-pane' | 'history-off' | 'recovering';
+export function decideOpGate(form: string | null, env: { claudecode: boolean; historyOff: boolean; recovering?: boolean; storedVersion?: Presence<number>; codeVersion?: number; storeId?: Presence<string> }, isTTY: boolean, paneName: string | null):
   { ok: true } | { ok: false; rc: 2; reason: OpGateReason };
 
 // --- Task 7: epochs and families (spec §6.1, §9.2 step 1, §9.14 Holds)
@@ -600,3 +600,33 @@ export function parentRollup(children: readonly RollupChild[]): {
   gist: string | null; topics: string[]; refs: { kind: string; value: string; origin: string }[];
   earliestMs: number | null; latestMs: number | null; srcChars: number; descCount: number; descChars: number; capped: boolean;
 };
+
+// --- W1-B2 Task 6: operator-verb decisions (spec §6.6, §6.9, §8.3, §8.4)
+export type OpArgs =
+  | { readonly op: 'import'; readonly apply: boolean; readonly session: string | null; readonly file: string | null }
+  | { readonly op: 'migrate' }
+  | { readonly op: 'prune'; readonly days: number; readonly apply: boolean }
+  | { readonly op: 'reparse'; readonly node: string | null; readonly session: string | null; readonly apply: boolean }
+  | { readonly op: 'repair' }
+  | { readonly op: 'backup' }
+  | { readonly op: 'adopt' }
+  | { readonly op: 'restore'; readonly name: string }
+  | { readonly op: 'rebuild'; readonly storeId: string | null };
+export function parseOpVerbArgs(op: string, args: readonly string[]):
+  { ok: true; args: OpArgs } | { ok: false; reason: 'bad-args' | 'bad-id' | 'older-than-floor' | 'restore-refused' };
+export function decideOpDoor(f: CliStoreFacts):
+  | { ok: true } | { ok: false; exit: 9 } | { ok: false; exit: 2; reason: 'writer-absent' }
+  | { ok: false; exit: 5; reason: 'store-unreachable' | 'store-root-dangling' | 'store-unmeasured' };
+export function parseDuration(input: string): number | null;
+export const PRUNE_FLOOR_DAYS: 30;
+export function backupNameOf(nowMs: number): string;
+export function restoreNameOk(name: string): boolean;
+export interface BindBackup { regular: boolean; storeId: Presence<string>; userVersion: number | null; integrityOk: boolean | null }
+export interface BindFacts extends StoreFacts {
+  codeVersion: number; storedVersion: Presence<number>; storeIdArg: string | null;
+  journalDirs: readonly { storeId: string; headsAgree: boolean }[];
+  backup: null | BindBackup;
+}
+export function decideBind(kind: 'adopt' | 'restore' | 'rebuild', f: BindFacts):
+  { ok: true; storeId: string } | { ok: false; rc: 2 | 5; reason: string; detail: string };
+export function decideReparse(i: { targets: number; prunedSpans: number }): { ok: true } | { ok: false; reason: 'reparse-too-many' | 'span-pruned' };

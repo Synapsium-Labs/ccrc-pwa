@@ -123,3 +123,10 @@ upstream: src/summary-fallback.ts
 commit: e05d8d3
 upstream-sha256: 3964bc606fe439c672760f4ca98d1386030eace2313a55011967edd731d85ec9
 changed: JavaScript as directiveFlag; the pattern list and the sentence-unit split (upstream lines 12-16, 19-42 and 48) are kept and only set a flag; the omission markers, the continuation heuristic and the summary builder are not ported, and nothing is stripped
+
+item: duration parser (P15)
+ours: ccd/history/lib.mjs
+upstream: src/prune.ts
+commit: e05d8d3
+upstream-sha256: d443f116d8e13d4ef215dd645058259aa6dea1650c6653eac40417d6cf385d4f
+changed: JavaScript without the TypeScript annotations; parseDuration and its unit table (upstream lines 12-47) are kept line for line, the regex and table renamed PRUNE_DURATION_RE and PRUNE_UNIT_DAYS; ccrc adds a 30-day floor and the older-than-floor refusal around it
