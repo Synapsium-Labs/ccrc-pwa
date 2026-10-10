@@ -18,6 +18,12 @@
 // its rule is a comment pretending to be a gate. The arms are unreachable from
 // the real tree by construction — it passes — so a forged tree is the only way
 // to ask whether they still say anything.
+// EVERY BLOCK CARRIES A 30 s TIMEOUT, as a trailing argument the way
+// `terminal-scrollback.test.ts` spells its own. Each forged tree is a full
+// copy of both packages' stylesheets and a full audit of 12 palettes — about
+// 0.6 s a case in isolation, and measured timing out under the whole suite's
+// load with coverage on. The default 5 s is a statement about unit tests, and
+// this file is not one.
 import { afterEach, describe, expect, it } from 'vitest';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,7 +36,7 @@ import {
 const made: string[] = [];
 afterEach(() => {
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+}, 30_000);
 
 /** A copy of every stylesheet the gate reads, at the same relative paths —
  *  `<tmp>/pwa` beside `<tmp>/ui`, because `stylesheets()` spells the design
@@ -75,7 +81,7 @@ describe('a clean tree is the control', () => {
     expect((r.measured as unknown[]).length,
       'an empty audit would make every refusal below vacuous').toBeGreaterThan(1000);
   });
-});
+}, 30_000);
 
 describe('a registry entry whose rule is gone', () => {
   it('names the entry AND the registry — twice, because two checks see it', () => {
@@ -131,7 +137,7 @@ describe('a registry entry whose rule is gone', () => {
     expect(said.length, 'one sentence per theme, not one for both').toBeGreaterThanOrEqual(2);
     expect(said.every((p) => /ink-that-no-palette-defines/.test(p))).toBe(true);
   });
-});
+}, 30_000);
 
 describe('a fade nobody registered', () => {
   it('names the rule, its exact opacity, and what an entry has to carry', () => {
@@ -171,7 +177,7 @@ describe('a fade nobody registered', () => {
       + `.forged-invisible {\n  color: var(--ink);\n  opacity: 0;\n}\n`);
     expect(problemsOf(dir).filter((p) => /forged-opaque|forged-invisible/.test(p))).toEqual([]);
   });
-});
+}, 30_000);
 
 describe('a keyframe trough nobody registered', () => {
   it('names the trough key and what an entry has to carry', () => {
@@ -208,7 +214,7 @@ describe('a keyframe trough nobody registered', () => {
     expect(problemsOf(dir).some((p) => p.startsWith('stale keyframes registry entry:')),
       'a registered trough whose animation is gone passed in silence').toBe(true);
   });
-});
+}, 30_000);
 
 // — the PARSER's own refusals —
 //
@@ -288,7 +294,7 @@ describe('the auditor refuses what it cannot read, rather than guessing', () => 
     expect(subjectCompound('.msg .md-body .callout[data-x]')).toBe('.callout[data-x]');
     expect(subjectCompound('')).toBe('');
   });
-});
+}, 30_000);
 
 describe('a forged rule the auditor cannot ground', () => {
   it('a background-image under text is a FAIL with a remedy, never a skip', () => {
@@ -328,7 +334,7 @@ describe('a forged rule the auditor cannot ground', () => {
     expect(said.length).toBeGreaterThanOrEqual(2);
     expect(said.every((p) => /add a GROUNDS entry or an exemption with a reason/.test(p))).toBe(true);
   });
-});
+}, 30_000);
 
 // — the palette loader, and the tree walk —
 describe('tokens.css is read strictly, because every measurement starts there', () => {
@@ -386,7 +392,7 @@ describe('tokens.css is read strictly, because every measurement starts there', 
     expect(sheets).toEqual(['src/only.css']);
     expect(sheets.filter((s) => s.startsWith('../ui')), 'no sibling, no sheets from it').toEqual([]);
   });
-});
+}, 30_000);
 
 describe('the last two parser refusals', () => {
   it('a block whose opening token carries no brace at all is refused', () => {
@@ -426,7 +432,7 @@ describe('the last two parser refusals', () => {
     expect(labels.some((l) => l.endsWith('[as .forged-base.is-on]')),
       'the singles must survive the merge').toBe(true);
   });
-});
+}, 30_000);
 
 // — the exemption is honoured on EVERY route —
 //
@@ -482,4 +488,4 @@ describe('an exempt rule stays exempt however the auditor reaches it', () => {
     expect(labels.some((l) => l.includes('.forged-plain-host::after')),
       'the pseudo route is dead, so the three silences above prove nothing').toBe(true);
   });
-});
+}, 30_000);
