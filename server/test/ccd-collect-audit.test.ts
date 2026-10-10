@@ -295,9 +295,20 @@ describe('the two TERMINAL words are declared, each with a sentence true under a
   it('quarantine-kept is true of BOTH its uses: the operator’s terminal refusal, and ws-collect’s `failed` whose record a later pass finishes from', () => {
     // ws-collect (Task 6) also journals the word `failed` when it keeps a record it can finish from later, so the
     // sentence may not say ccrc never finishes; it says when it can.
-    expect(LC_REFUSAL_WORD['quarantine-kept']).toMatch(/could not finish/);
-    expect(LC_REFUSAL_WORD['quarantine-kept']).toMatch(/only while they are as it left them/);
+    expect(LC_REFUSAL_WORD['quarantine-kept']).toMatch(/cannot finish safely/);
+    expect(LC_REFUSAL_WORD['quarantine-kept']).toMatch(/only if it can prove it again/);
     expect(LC_REFUSAL_WORD['quarantine-kept']).not.toMatch(/will not finish|on its own/);
+  });
+
+  it('quarantine-kept is true in every state that prints it (quarantine-kept-sentence-true-in-every-state)', () => {
+    // It prints for a forged or unreadable record, a crash plus a fault (the leaf never left its path), an unwind that
+    // already removed the slot, a retaken original path, and a recordless slot of the id beside a present or an absent
+    // leaf. So it never claims ccrc moved anything, never that everything stands "exactly as" it was, and names the
+    // retaken path among its causes.
+    const w = LC_REFUSAL_WORD['quarantine-kept'];
+    expect(w).toMatch(/original path taken again/);
+    expect(w).toMatch(/cannot read or prove/);
+    expect(w).not.toMatch(/set aside|\bmoved\b|exactly as/);
   });
 });
 

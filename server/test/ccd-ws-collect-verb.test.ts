@@ -495,3 +495,11 @@ describe('the three RETRYABLE words are declared with their first journal sites,
     expect(LC_REFUSAL_WORD[t], `${t} echoes its own token at a person`).not.toContain(t);
   });
 });
+
+describe('`registered` names residue (registered-sentence-names-residue)', () => {
+  it('says a workspace with the id, or what one left behind, still stands — it does not claim a workspace exists', () => {
+    // `_ws_collect_registered` also answers on a lone `.generation`, `hold` or `reaping` row, which frees itself never.
+    expect(LC_REFUSAL_WORD['registered']).toMatch(/or what one left behind, still stands in the registry/);
+    expect(LC_REFUSAL_WORD['registered']).not.toMatch(/exists again/);
+  });
+});

@@ -7885,9 +7885,9 @@ export type LcRefusalToken =
   | 'run-id-malformed'        // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
   | 'containment-refuted'     // ws-reclaim or ws-expire (spec §5.6): the tail's removal-time re-ask PROVED the tree at the workdir is not only the child's own, so it stopped before deleting anything further — journaled `failed`, never `refused`
   | 'witness-mismatch'        // ws-audit --collect and ws-collect (spec §5.10): the temp root at the id is not the real directory its witness names by dev, ino and birth time, or the witness cannot be read or has no birth time — TERMINAL, journaled `refused`: offered to the operator, never taken
-  | 'quarantine-kept'         // ws-audit --collect and ws-collect (spec §5.10): a quarantine record, its slot or its slot's leaf is not as the collector left it — TERMINAL, journaled `refused`, kept as it stands for the operator; or ws-collect kept a record a later pass can finish from — journaled `failed`
+  | 'quarantine-kept'         // ws-audit --collect and ws-collect (spec §5.10): a quarantine record, its slot or its slot's leaf the collector cannot read or prove, or the directory's original path taken again — TERMINAL, journaled `refused`, kept as it stands for the operator; or ws-collect kept a record a later pass can finish from — journaled `failed`
   | 'not-witnessed'           // ws-audit --collect and ws-collect (spec §5.2): no witness and no quarantine record names the id — RETRYABLE: there is nothing to collect
-  | 'registered'              // ws-audit --collect and ws-collect (spec §5.10): a registry row stands for the id again (`.child`, `.uuid`, or what the slug still holds) — RETRYABLE: the temp root is that workspace's
+  | 'registered'              // ws-audit --collect and ws-collect (spec §5.10): a registry row of the id, or what one left behind, still stands (`.child`, `.uuid`, or what the slug still holds) — RETRYABLE: the temp root is treated as that workspace's
   | 'changed-recently';       // ws-audit --collect and ws-collect (spec §5.10): the newest change under the temp root is younger than the idle floor — RETRYABLE
 
 /**
@@ -8011,14 +8011,14 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   'containment-refuted':
     'ccrc found that what it would remove is not only this workspace’s own tree — another session’s tree or registry row lies at, inside or through it, or the recorded path is not this workspace’s worktree — so it stopped. The session was stopped and nothing further was deleted. A retry finds the same thing until that other tree or row is moved or removed.',
   // The temp-root collector (spec §5.10). `witness-mismatch` is TERMINAL, journaled `refused` by `ws-audit --collect`
-  // and `ws-collect`; so is `quarantine-kept` when what it names is not as the collector left it, and `ws-collect` also
+  // and `ws-collect`; so is `quarantine-kept` when what it names is one the collector cannot read or prove, or the directory's original path is taken again, and `ws-collect` also
   // journals it `failed` when it keeps a record that a later pass can finish from. Each says only what is true
   // wherever it is printed: the audit removes nothing, and the verb answers either word before it removes anything
   // further, whether the record it keeps is the operator's or a later pass's.
   'witness-mismatch':
     'The temporary directory under this id is not the one ccrc recorded handing out — it was replaced or moved, or its record cannot be read or vouches for too little — so ccrc’s collector will not remove it. Nothing was removed; it is listed for you to look at.',
   'quarantine-kept':
-    'ccrc set aside a temporary directory to remove and could not finish, so it keeps what stands of it, and any record of it, exactly as they are. Nothing further was removed. ccrc can finish on a later look only while they are as it left them; anything else is listed for you to look at.',
+    'ccrc’s collector found something it cannot finish safely — a quarantine record or slot it cannot read or prove, or the directory’s original path taken again — and keeps what it found. Nothing further was removed. It is listed for you to look at, and ccrc finishes it on a later look only if it can prove it again.',
   // The temp-root collector's RETRYABLE words (spec §5.2, §5.10): printed by `ws-audit --collect`, journaled `refused`
   // by `ws-collect` at its one refusal point. Each is true wherever it is printed: neither the audit nor the verb has
   // removed anything when it answers one. The verb answers `registered` after a PROVEN restore of a leaf it had
@@ -8026,7 +8026,7 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   'not-witnessed':
     'ccrc has no record of handing out a temporary directory under this id, so there is nothing for it to clean up. Nothing was removed.',
   'registered':
-    'A workspace with this id exists again, so the temporary directory there belongs to that workspace and ccrc will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
+    'A workspace with this id, or what one left behind, still stands in the registry, so ccrc treats the temporary directory there as that workspace’s and will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
   'changed-recently':
     'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
 };
