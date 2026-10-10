@@ -17,7 +17,7 @@ export { Sheet, type SheetProps } from './primitives/sheet';
 export { OptionRow, type OptionRowProps } from './primitives/option-row';
 export { CollapsibleStrip, type CollapsibleStripProps } from './primitives/collapsible-strip';
 export { Banner, bannerVariants, type BannerProps } from './primitives/banner';
-export { TextInput, TEXT_INPUT, type TextInputProps } from './primitives/text-input';
+export { TextInput, TEXT_INPUT, TEXT_INPUT_INLINE, type TextInputProps } from './primitives/text-input';
 export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back-button';
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
 export { Well, WELL, type WellProps } from './primitives/well';

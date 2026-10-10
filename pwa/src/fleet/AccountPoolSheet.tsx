@@ -24,7 +24,7 @@ import type { ReactNode } from 'react';
 import type { RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { POOL_NAME_RE } from '../../../shared/roster';
-import { Button, Sheet } from '@ccrc/ui';
+import { Button, Sheet, TextInput, TEXT_INPUT_INLINE } from '@ccrc/ui';
 import { poolOptions } from '../lib/pools';
 import './fleet.css';
 
@@ -162,10 +162,13 @@ export function AccountPoolSheet({
       </div>
       <div className="pool-new-row">
         <label className="pool-new-label" htmlFor="account-pool-new-name">New pool name</label>
-        <input
+        <TextInput
           id="account-pool-new-name"
-          className="pool-new-input"
-          type="text"
+          /* `font-mono` is this field's own: a pool NAME is an identifier the
+             operator matches against `accounts.json`, and the PR title beside
+             it is prose. The only declaration the two inline fields did not
+             share. */
+          className={`pool-new-input ${TEXT_INPUT_INLINE} font-mono`}
           value={name}
           placeholder="pool-name"
           onChange={(e) => setName(e.target.value)}

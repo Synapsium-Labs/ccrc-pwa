@@ -31,7 +31,7 @@ import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
-import { CONTROL_ROW, MailStrip, buttonVariants } from '@ccrc/ui';
+import { CONTROL_ROW, MailStrip, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -187,7 +187,13 @@ describe('.pr-title-input — the one editable field in the PR composer', () => 
   it('is at least one tap tall, off the shared token', () => {
     // A text input below the floor is worse than a short button: the target
     // has to be hit to place a caret, not merely pressed.
-    expect(declValue(ruleIn(chatCss, '.pr-title-input'), 'min-height')).toBe('var(--tap-min)');
+    //
+    // THE FLOOR MOVED FROM A RULE TO A COMPONENT. This field and
+    // `.pool-new-input` declared the same nine declarations; both are
+    // `<TextInput>` wearing `TEXT_INPUT_INLINE` now, and the floor is the
+    // component's — shared with the three fields that were already its.
+    expect(TEXT_INPUT).toContain('min-h-tap');
+    expect(TEXT_INPUT).not.toContain('44px');
   });
 
   it('is the class the rendered title field actually carries', async () => {
@@ -278,8 +284,7 @@ describe('the two rules that were already scraped still reach a real element', (
     // of the assertion per branch.
     for (const rule of [
       ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
-      ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
-      ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
+      ruleIn(fleetCss, '.proj-archived-toggle'),       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
       ruleIn(fleetCss, '.mail-badge'),
       ruleIn(fleetCss, '.fleet-runs-row'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),

@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { substrateFault } from '../../../shared/api';
 import type { FleetSession, PrView } from '../../../shared/api';
-import { Button, QuickConfirm, Sheet, buttonVariants, toast } from '@ccrc/ui';
+import { Button, QuickConfirm, Sheet, TextInput, TEXT_INPUT_INLINE, buttonVariants, toast } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from '../fleet/ArchiveConflictSheet';
 import { isRunClosed } from '../fleet/runWords';
@@ -193,8 +193,8 @@ export function PrSheet({
             <>
               <label className="pr-label" htmlFor="pr-title">Title</label>
               {/* One field, one thumb height. */}
-              <input id="pr-title" className="pr-title-input" type="text" value={title}
-                     onChange={(e) => setTitle(e.target.value)} />
+              <TextInput id="pr-title" className={`pr-title-input ${TEXT_INPUT_INLINE}`} value={title}
+                         onChange={(e) => setTitle(e.target.value)} />
               <label className="pr-label" htmlFor="pr-body">Body preview</label>
               {/* Read-only: a multi-line editor in a bottom sheet is a bad
                   surface, and the body is fully regenerable — prose edits

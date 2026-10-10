@@ -1850,17 +1850,9 @@ button.proj-card-pool::before {
   font-size: var(--fs-xs);
   color: var(--ink-tertiary);
 }
-.pool-new-input {
-  width: 100%;
-  min-height: var(--tap-min);
-  padding: 0 var(--sp-2);
-  font-family: var(--family-mono);
-  font-size: var(--fs-input);
-  color: var(--ink-primary);
-  background: var(--bg-raised);
-  border: 1px solid var(--edge-strong);
-  border-radius: var(--r-sm);
-}
+/* `.pool-new-input` is `<TextInput>` wearing `TEXT_INPUT_INLINE` plus its own
+   `font-mono` — a pool NAME is an identifier, where the PR title field that
+   declared the other eight identically is prose. Hook class kept. */
 .pool-new-create {
   margin-top: var(--sp-2);
 }

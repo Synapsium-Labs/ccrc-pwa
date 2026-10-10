@@ -225,11 +225,9 @@ button.metachip:active {
 .pr-lede { color: var(--ink-primary); font-size: var(--fs-base); line-height: var(--lh-normal); }
 .pr-facts { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
 .pr-warn { color: var(--status-attention-text); font-size: var(--fs-sm); }
-.pr-title-input {
-  width: 100%; min-height: var(--tap-min); padding: 0 var(--sp-2);
-  font-size: var(--fs-input); color: var(--ink-primary);
-  background: var(--bg-raised); border: 1px solid var(--edge-strong); border-radius: var(--r-sm);
-}
+/* `.pr-title-input` is `<TextInput>` wearing `TEXT_INPUT_INLINE`: nine
+   declarations that `.pool-new-input` in fleet.css spelled out identically.
+   The class stays as a hook — the sheet's own tests select on it. */
 /* A read-only preview, not an editor: a multi-line editor in a bottom sheet is
    a bad surface, and the body is fully regenerable — prose edits happen on
    GitHub, one tap away via this sheet's own link. */

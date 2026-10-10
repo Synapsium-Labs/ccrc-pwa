@@ -142,10 +142,6 @@ const REGISTERED: Record<string, string> = {
     'NEXT, and the biggest left: FOURTEEN declarations, identical, in two '
     + 'different stylesheets. A pressable list row with a bottom hairline. '
     + 'Living in two files is how it escaped every wave that read one.',
-  'chat.css .pr-title-input + fleet.css .pool-new-input':
-    'NEXT, and it needs no new component: `TextInput` already ships this exact '
-    + 'shape and exports `TEXT_INPUT`. Two call sites that never migrated — '
-    + 'the cheapest eight declarations in this registry.',
   'fleet.css .bucket-head-unseen + fleet.css .mail-badge-count':
     'NEXT. A count pill in attention ink, six declarations twice. '
     + '`.settings-badge` is a third carrier of the same idea in a quieter '

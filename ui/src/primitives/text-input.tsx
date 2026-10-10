@@ -44,6 +44,23 @@ export const TEXT_INPUT =
   + ' placeholder:text-ink-tertiary'
   + ` ${FOCUS_RING}`;
 
+/** The same object, sharing a row with something else.
+ *
+ *  `.pr-title-input` (the PR sheet's title field) and `.pool-new-input` (the
+ *  pool sheet's name field) declared the same nine declarations as each other
+ *  and differed from the three above in exactly three: a `--r-sm` corner, an
+ *  `--edge-strong` hairline and `--sp-2` of side padding. That is not drift —
+ *  it is what a field looks like when it sits in a row beside a button rather
+ *  than alone on a panel, which is what both of these do and none of the
+ *  other three does.
+ *
+ *  A CONSTANT, NOT A VARIANT AXIS. The header above argues there is one shape
+ *  here and `className` is the whole extension mechanism; that still holds.
+ *  What two call sites needed was not a prop but one place to spell three
+ *  utilities, so a third copy has somewhere to come from. A `size` prop would
+ *  have meant a cva, a story per value and a type — for three utilities. */
+export const TEXT_INPUT_INLINE = 'rounded-sm border-edge-strong px-2';
+
 export interface TextInputProps extends InputHTMLAttributes<HTMLInputElement> {
   className?: string;
 }

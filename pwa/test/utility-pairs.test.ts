@@ -223,6 +223,21 @@ describe('every self-grounded utility pair a component renders is measured', () 
     });
   });
 
+  it('includes the text input, whose two inline copies the gate used to measure', () => {
+    // `.pr-title-input` and `.pool-new-input` each declared
+    // `color: var(--ink-primary)` over `background: var(--bg-raised)` and were
+    // measured across twelve palettes — twenty-four of the gate's checks, which
+    // is exactly what it fell by (3504 -> 3480) when both became `<TextInput>`.
+    // The three fields that migrated before them had already moved this pair
+    // here; the two that arrived late simply joined it.
+    expect(pairs).toContainEqual({
+      file: 'text-input.tsx',
+      state: '',
+      ink: 'var(--ink-primary)',
+      ground: 'var(--bg-raised)',
+    });
+  });
+
   const keyOf = (p: Pair): string => `${p.file} ${p.state}${p.ink} on ${p.ground}`;
 
   for (const [theme, palette] of all) {
