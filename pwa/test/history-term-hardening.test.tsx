@@ -75,7 +75,7 @@ vi.mock('@xterm/addon-fit', () => {
   return { FitAddon };
 });
 
-const { defaultMakeHistoryTerm } = await import('../src/session/TerminalDrawer');
+const { defaultMakeHistoryTerm } = await import('../src/session/terminalFactory');
 const { FitAddon } = await import('@xterm/addon-fit');
 
 /** Build the history terminal and hand back what it asked xterm for. */

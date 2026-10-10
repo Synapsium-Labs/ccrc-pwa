@@ -1339,7 +1339,7 @@ describe('every hand-typed copy of a tokens.css colour is bound to it', () => {
     'design/contrast-check.mjs': 'one hex inside a prose comment explaining why a pair takes attention-TEXT and not the dot hue; no colour is typed into the gate itself (palette() looks every one up by token)',
     'test/contrast.test.ts': 'the hand-computed arithmetic controls this file exists to carry, each already asserted against resolveColor',
     'test/fleet-css.test.ts': 'one hex inside a prose comment about --accent and --status-busy sharing a value',
-    'src/session/TerminalDrawer.tsx': 'the xterm 16-colour ANSI palette. The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
+    'src/session/terminalFactory.ts': 'the xterm 16-colour ANSI palette. The four that matter (background, foreground, cursor, cursorAccent) already come from tokenValue(); the ANSI 16 are a separate table that reuses seven brand hues and adds eight bright variants that are not tokens. Reported, not bound — the file is outside the css lane',
   };
 
   const walk = (dir: string, out: string[] = []): string[] => {

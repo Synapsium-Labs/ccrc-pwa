@@ -30,7 +30,8 @@ import {
 } from '../src/lib/auth';
 import { navigate } from '../src/lib/router';
 import { ReconnectingSocket, type AuthGate } from '../src/lib/ws';
-import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import type { DrawerTerm } from '../src/session/terminalFactory';
 
 // — fixtures —
 

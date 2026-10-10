@@ -15,7 +15,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Terminal } from '@xterm/xterm';
-import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, historyScrollback, historyFailureSentence, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import {
+  defaultMakeHistoryTerm, historyFailureSentence, historyScrollback, paintLag,
+  type DrawerTerm, type HistoryTerm,
+} from '../src/session/terminalFactory';
 import type { PaneHistoryReply } from '../../shared/api';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -1962,8 +1966,13 @@ describe('a failed read says why, in a sentence', () => {
 // jsdom would pass for the wrong reason. What can go red is the call site
 // itself, and the arithmetic underneath it.
 describe('the transform credits rows that moved', () => {
+  // The FACTORY's file, not the drawer's: `defaultMakeHistoryTerm` and its
+  // `scrollLines` block moved to `terminalFactory.ts` when the drawer's two
+  // halves were separated. The read below throws rather than returning an
+  // empty match when the block is absent, which is how this landed as three
+  // honest reds instead of three silent passes.
   const drawerSrc = (): string =>
-    readFileSync(path.resolve(__dirname, '../src/session/TerminalDrawer.tsx'), 'utf8');
+    readFileSync(path.resolve(__dirname, '../src/session/terminalFactory.ts'), 'utf8');
 
   /** The history terminal's own `scrollLines`, as source. */
   const scrollLinesBody = (): string => {
