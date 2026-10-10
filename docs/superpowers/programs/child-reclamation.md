@@ -47,6 +47,29 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-10 21:51 — wave 7's fix-round wave-done (4180) is received at `ee17287e0`. Main is absorbed before the review (4181).**
+  - **The claim.** Suite `green`: 104 server files, each run alone at the tip (4328 passed). tsc, the pwa build and
+    `mark --check` also pass. The full sharded suite was not re-run; the first full run (4147) stands. The code
+    fixes are F3 `a5c54bba2`, F4 `f110794f6`, F8 `d928e404b`, F2 `f7367de30`, C8 `b1d176d41`, and C13 `7e48db9ad` with
+    `e5733a564`. The 30 numbers are defined singly in the plan, each entry opening with its task, as the ledger's
+    definition regex reads.
+  - **The stall.** The worker's background re-review sat about 15 h, from 05:43 to about 20:30, on a permission
+    prompt raised by a `bash -c` and `eval` call. That held mails 4163 and 4164 behind the dialog. The hookstate read
+    `done` with no ask; only the pane's live status file said `waiting`. The operator answered it. Subagent commands
+    are now approval-free, and the scoped review brief says the same.
+  - **Not yet advanced.** PR #344 reads CONFLICTING. origin/main `995a05750` has five merges past the branch's
+    base, and a merge-tree measures one README.md hunk. Main changed nothing in ccd/ccd. Run 347 stays at
+    `working` until the amended wave-done names the merge commit (ruling 4103's pattern).
+  - **Rulings in 4181.**
+    - C13's extension (an empty or whitespace-only first line names no path, since git right-trims gitdir) is
+      inside the ruling's intent, with no new slug. The review confirms `e5733a564`.
+    - F2's three residuals are accepted and carried to wave 9's pre-flight list. They fail closed:
+      `device-test-cannot-see-a-same-device-bind-mount`, `permanent-device-change-holds-every-absence` (a lane must
+      never read it as transient), and a `~/.cc-tmp` deleted whole holding every leafless witness unmeasured.
+    - F5's sentence is accepted pending the review.
+  - **Relayed** to workspace-lifecycle (4182): rung 8's shared ladder now retries an empty or blank admin gitdir,
+    so ws-expire answers the same. Nothing in `_ws_expire_locked` or `_ws_expire_cwd_users` is edited (R72).
+
 - **2026-10-10 02:07 — wave 7 fix round 1 is RULED and sent (mail 4158); run 347 is back at `working`.**
   - **The rulings** are `wave7/fix-round-1-rulings.md` in the evidence archive. The attack, workflow
     `wf_568e4e8b-074` (three Opus lenses, two Sonnet refuters per finding, 54 agents), had 12 of its 25 findings
