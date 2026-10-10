@@ -174,8 +174,10 @@ const LAYOUT_PROPS = new Set([
  *  cannot be added silently, and one that is fixed must be removed here or the
  *  census reds as stale.
  *
- *  EMPTY, and that is the point of the stale half: every entry named its own
- *  fix and each one has now been taken.
+ *  It was EMPTY for a wave — every entry had named its own fix and each had
+ *  been taken — and the three below are not a regression of that. They are a
+ *  decision with a measurement behind it, recorded where the stale half can
+ *  red on it if the decision is ever reversed.
  *
  *    - the two chat-banner entries called themselves an UNDO of the banner's
  *      own `color` and were measured to be undoing nothing — Button's ghost
@@ -187,7 +189,30 @@ const LAYOUT_PROPS = new Set([
  *  An empty census is not a weaker guard: the first assertion below still reds
  *  on any new appearance reach-in, and the unit tests under it keep the
  *  matcher honest while there is nothing live for it to find. */
-const APPEARANCE_CENSUS: Record<string, string> = {};
+const APPEARANCE_CENSUS: Record<string, string> = {
+  // THE TWO KEYCAP GROUNDS, and they are here on purpose rather than as debt.
+  // `Keycap` owns the shape; both of its grounds stay in chat.css because the
+  // terminal's is `color-mix(in srgb, var(--ink-on-well) 9%, transparent)` and
+  // `utility-pairs.test.ts` resolves a utility back to a token through
+  // theme.css's `@theme` block — an arbitrary `bg-[color-mix(…)]` has no stem
+  // there. Moved into a variant, that pair would be measured by NEITHER half
+  // of the gate: not by audit.mjs, which reads stylesheets, and not by the
+  // derivation, which reads stems. So the rules stay where the gate can see
+  // them, and the reach-in is recorded instead of hidden.
+  //
+  // The header's ground travels with the terminal's for one reason: a keycap
+  // is skinned by WHERE IT SITS, through a descendant selector, and splitting
+  // the pair would mean one ground in a variant and one in a sheet for the
+  // same component.
+  'chat.css .chat-head .keycap':
+    "the header keycap's ground — chrome fill, strong hairline, primary ink. "
+    + 'Self-grounded so audit.mjs measures the pair; see the paragraph above.',
+  'chat.css .chat-head .keycap:disabled':
+    'its stand-down, measured as its own pair: surface fill under disabled ink.',
+  'chat.css .term-keys .keycap':
+    "the terminal keycap's ground, every colour a color-mix over --ink-on-well "
+    + '— the one the gate could not follow into a variant.',
+};
 
 /** Every declared property name in a rule body, custom properties included. */
 export function propsOf(body: string): string[] {

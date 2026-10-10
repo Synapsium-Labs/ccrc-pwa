@@ -27,6 +27,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
+const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
 
 /** Class names whose only legitimate source is a cva in @ccrc/ui.
  *
@@ -44,8 +45,11 @@ const SRC = path.join(import.meta.dirname, '..', 'src');
  *      primitive — `QuickConfirm` is one way to build a confirm, and the three
  *      sheets that roll their own still want the same hooks for tests and for
  *      scoped rules.
- *    - `pr-dot`, `tool-dot--run`, `chat-skel`: chat.css's own vocabulary, which
- *      only looks like the primitive's. Word-bounded matching keeps them out.
+ *    - `pr-dot` and `chat-skel`: chat.css's own vocabulary, which only looks
+ *      like the primitive's. Word-bounded matching keeps them out.
+ *      `tool-dot--run` was on this line too and did not belong: ToolCard
+ *      emits it and tool-card.css styles it. Corrected when the completeness
+ *      check at the end of this file found it.
  *    - `opts`, `opt-wait`, `opt-inert`, `opt-degraded`, `opt-preview*`: the
  *      app's, and the distinction is the sharpest one on this list because
  *      they share a prefix with eight entries that ARE owned. `OptionRow`
@@ -63,6 +67,21 @@ const SRC = path.join(import.meta.dirname, '..', 'src');
  *      space, so it reads as a hook class the call site passes through
  *      `className` — which is exactly what it is, carrying no styling and
  *      existing so a screen rendering two banners can say which is which. */
+/** HAND-KEPT, and the test below is what stops it going stale.
+ *
+ *  It had already gone stale once: `Keycap` shipped emitting `.keycap`, two
+ *  app rules redressed it, and `ui-package-boundary.test.ts` — which reads
+ *  this list to decide what counts as a reach-in — could not see either of
+ *  them. A list beside a package that grows is the drift this repo keeps
+ *  rediscovering.
+ *
+ *  It stays a list rather than a derivation because it answers a question no
+ *  derivation can: which tokens are VOCABULARY rather than utilities.
+ *  `dot--busy` belongs here and is selected by no stylesheet at all; `grid`
+ *  and `flex` are emitted on every second line and belong nowhere near it.
+ *  What CAN be derived is the half that went stale — a class this package
+ *  emits that some stylesheet also selects is a hook class by definition, and
+ *  `completes every hook class @ccrc/ui emits` below reds until it is here. */
 export const OWNED = [
   'btn-primary', 'btn-ghost',                                    // Button / buttonVariants
   'dot', 'dot--busy', 'dot--attention', 'dot--idle',             // StatusDot / dotVariants
@@ -77,7 +96,29 @@ export const OWNED = [
   'banner', 'banner-msg',                                        // Banner / bannerVariants
   'well',                                                        // Well / WELL
   'chip',                                                        // Chip / CHIP (the dot is an <i>, not a class)
+  'keycap',                                                      // Keycap / KEYCAP
+  // THE ELEVEN THE LIST HAD MISSED, found by the derivation below rather than
+  // by a reader. Every one is emitted by the composite named beside it and
+  // selected by that composite's own stylesheet, which is the definition of a
+  // hook class — they were simply never typed here, and so neither guard
+  // could see an app sheet or an app component reaching for one.
+  'ask-live', 'ask-unanswered',                                  // ToolCard
+  'tool-dot--run', 'tool-dot--ok', 'tool-dot--err',              // ToolCard
+  'attach-btn',                                                  // AttachButton
+  'build-line-side--warn',                                       // BuildLine
+  'task-card-status--ok', 'task-card-status--bad',               // TaskCard
+  'task-mark--running',                                          // TaskStrip
 ];
+
+/** Tokens the derivation finds that are NOT vocabulary, each with the reason.
+ *  Registered rather than filtered by a cleverer pattern: the pattern is a
+ *  heuristic over string literals, so what it cannot tell apart has to be
+ *  said out loud. */
+export const NOT_VOCABULARY: Record<string, string> = {
+  class: 'the English word, in a sentence inside a comment or an aria string',
+  fleet: 'the English word — BuildLine labels a box "fleet"; the app also has a `.fleet` screen class, which is how it reaches the intersection',
+  'sr-only': "Tailwind's own utility, which a stylesheet in this tree also defines; emitted by Sheet and owned by the framework",
+};
 
 /** Every `className="..."` / `className={'...'}` string literal in a file. */
 export function ownedClassLiterals(source: string): string[] {
@@ -153,7 +194,6 @@ describe('the design-system boundary', () => {
     expect(ownedClassLiterals('<Skeleton lines={1} className="skel--user" />')).toEqual([]);
     expect(ownedClassLiterals('<div className="qc-actions grid gap-2" />')).toEqual([]);
     expect(ownedClassLiterals('<span className="pr-dot" />')).toEqual([]);
-    expect(ownedClassLiterals('<span className="tool-dot--run" />')).toEqual([]);
     expect(ownedClassLiterals('<div className="chat-skel" />')).toEqual([]);
     // the option row's container and the three ccrc markers it carries
     expect(ownedClassLiterals('<div className="opts" />')).toEqual([]);
@@ -166,6 +206,12 @@ describe('the design-system boundary', () => {
     // component and only the marker is a literal. Kept as a POSITIVE case
     // below, because the pair is exactly what the guard must still refuse.
     expect(ownedClassLiterals('<pre className="opt-preview" />')).toEqual([]);
+    // `tool-dot--run` USED TO BE on this list, as "chat.css's look-alike
+    // vocabulary". It is not a look-alike: `tool-card.tsx` emits it and
+    // `tool-card.css` styles it, and chat.css's own comment says so —
+    // "The dot itself is @ccrc/ui's `.tool-dot--run` now". The prose outlived
+    // the migration by a wave; the completeness check below is what found it.
+    expect(ownedClassLiterals('<span className="tool-dot--run" />')).toEqual(['tool-dot--run']);
   });
 
   it('fires on the shape that the Well migration retired', () => {
@@ -181,5 +227,90 @@ describe('the design-system boundary', () => {
 
   it('does not fire on the variant call, which is the sanctioned route', () => {
     expect(ownedClassLiterals("<a className={buttonVariants({ variant: 'ghost' })} />")).toEqual([]);
+  });
+});
+
+// ── THE LIST CANNOT FALL BEHIND THE PACKAGE ──────────────────────────────
+//
+// `OWNED` is read by two guards: this file's (no app component hand-writes an
+// owned class) and `ui-package-boundary.test.ts`'s (no app sheet redresses
+// one). Both are only as complete as the list, and the list is typed by hand.
+//
+// Measured: `Keycap` shipped emitting `.keycap`; `.chat-head .keycap` and
+// `.term-keys .keycap` set `color`, `background` and `border-color` on it; and
+// the appearance census stayed empty, because `keycap` was not in the list and
+// so neither rule counted as a reach-in. Nothing in the tree could have said
+// so.
+//
+// THE DERIVABLE HALF. A token this package EMITS in a class string and that
+// some stylesheet SELECTS is a hook class by definition — that is the exact
+// wording the primitives' own headers use ("stable selectors other stylesheets
+// and the test suite key on"). A Tailwind utility is emitted and never
+// selected; an app class is selected and never emitted. The intersection is
+// the half that can be computed, and it reds until the list has it.
+describe('the owned vocabulary keeps up with the package', () => {
+  const walk = (dir: string, ext: RegExp): string[] => {
+    const acc: string[] = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) acc.push(...walk(full, ext));
+      else if (ext.test(e.name) && !e.name.endsWith('.stories.tsx')) acc.push(full);
+    }
+    return acc;
+  };
+
+  /** Bare lowercase tokens in every class-string literal @ccrc/ui ships.
+   *  Template holes (`${part}-head`) are skipped by construction: what they
+   *  emit is the consumer's word, not this package's. */
+  function uiEmits(): Set<string> {
+    const out = new Set<string>();
+    for (const file of walk(UI_SRC, /\.tsx?$/)) {
+      for (const m of readFileSync(file, 'utf8').matchAll(/'([^'\n]*)'/g)) {
+        const value = m[1] ?? '';
+        for (const token of value.split(/\s+/)) {
+          if (/^[a-z][a-z0-9-]*$/.test(token)) out.add(token);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Every class any stylesheet in either package selects, as a SUBJECT or an
+   *  ancestor — the distinction does not matter here, only that a rule names
+   *  it at all. */
+  function selectedAnywhere(): Set<string> {
+    const out = new Set<string>();
+    for (const file of [...walk(UI_SRC, /\.css$/), ...walk(SRC, /\.css$/)]) {
+      const css = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+      for (const m of css.matchAll(/\.([a-z][a-z0-9-]*)/g)) out.add(m[1] ?? '');
+    }
+    return out;
+  }
+
+  it('completes every hook class @ccrc/ui emits', () => {
+    const emits = uiEmits();
+    const selected = selectedAnywhere();
+    const hooks = [...emits].filter((c) => selected.has(c)).sort();
+    const missing = hooks.filter((c) => !OWNED.includes(c) && NOT_VOCABULARY[c] === undefined);
+    expect(missing, 'a class @ccrc/ui emits and a stylesheet selects is a hook class — add it to OWNED')
+      .toEqual([]);
+  });
+
+  it('registers no exception that the derivation no longer finds', () => {
+    const emits = uiEmits();
+    const selected = selectedAnywhere();
+    const hooks = new Set([...emits].filter((c) => selected.has(c)));
+    expect(Object.keys(NOT_VOCABULARY).filter((c) => !hooks.has(c))).toEqual([]);
+  });
+
+  it('found hooks to compare — the derivation is not vacuously empty', () => {
+    const emits = uiEmits();
+    const selected = selectedAnywhere();
+    const hooks = [...emits].filter((c) => selected.has(c));
+    expect(hooks.length).toBeGreaterThanOrEqual(10);
+    // The two halves really are halves: this package emits far more than it
+    // owns, and the stylesheets select far more than it emits.
+    expect(emits.size).toBeGreaterThan(hooks.length);
+    expect(selected.size).toBeGreaterThan(hooks.length);
   });
 });
