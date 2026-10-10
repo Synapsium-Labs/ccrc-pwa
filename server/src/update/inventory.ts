@@ -75,16 +75,20 @@ const OS_LINE = /^os (linux|darwin)$/;
 export type NodeFileRead =
   | { ok: true; content: string }
   | { ok: false; reason: ReadFailure | 'too-large' };
-type MeasuredFileKey = Exclude<NodeFileKey, 'projection'>;
+type MeasuredFileKey = Exclude<NodeFileKey, 'projection' | 'tokenGeneration'>;
 export type NodeFileReads = Record<MeasuredFileKey, NodeFileRead>;
 export interface NodeConnection { label: string; role: NodeRole; agentOps: readonly string[] | null }
 
 /** Derived from `NODE_FILES`, never hand-listed. `update-intent` is in the
  *  agent's read set so a later screen can SHOW what a fleet node last
  *  received; it is never read back as authority (§8), so the measurement does
- *  not read it at all. */
+ *  not read it at all. `box-token-generation` (box-token lifecycle wave 1) is
+ *  in the read set for the token driver, which reads it itself on its own tick
+ *  through `readNodeFile` (D-4389), so the sweep leaves it out too and still
+ *  reads seven files. */
 const MEASURED_FILE_KEYS: readonly MeasuredFileKey[] =
-  (Object.keys(NODE_FILES) as NodeFileKey[]).filter((k): k is MeasuredFileKey => k !== 'projection');
+  (Object.keys(NODE_FILES) as NodeFileKey[])
+    .filter((k): k is MeasuredFileKey => k !== 'projection' && k !== 'tokenGeneration');
 
 const ABSENT: NodeFileRead = { ok: false, reason: 'absent' };
 const UNREADABLE: NodeFileRead = { ok: false, reason: 'unreadable' };

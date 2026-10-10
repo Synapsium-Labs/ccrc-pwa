@@ -36,6 +36,14 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
 
+/** The env every hook spawn in this file shares (B3M19: one definition, so a variable added here reaches `run`, `runFull`
+ *  and the spool describe's `runSpoolBounded` alike): the fixture HOME, a PATH that finds the fixture's tmux, the pane, the
+ *  session id, the pid and the generation. `env` overrides it: each test adds or breaks its own legs there, never in a
+ *  second copy of this literal. */
+const hookEnv = (env: Record<string, string> = {}): NodeJS.ProcessEnv => ({
+  ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
+  TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION, ...env,
+});
 /** Run the hook with a payload; env overrides let each test break one leg.
  *  Returns the hook's STDOUT, which is empty on every event but SessionStart
  *  (R1) — `encoding: 'utf8'` is what makes execFileSync hand it back as a
@@ -44,13 +52,7 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
   execFileSync('bash', [HOOK], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
-    env: {
-      ...process.env, HOME: home,
-      PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
-      CCRC_SESSION_GENERATION: GENERATION,
-      ...env,
-    },
+    env: hookEnv(env),
   });
 /** `run`, plus stderr: the hook's contract is silence on BOTH streams, and a
  *  bare `find` over a directory that does not exist would break it on stderr
@@ -68,9 +70,7 @@ const run = (payload: object, env: Record<string, string> = {}): string =>
 const runFull = (payload: object, env: Record<string, string> = {}, opts: { allowNonZeroExit?: boolean } = {}): { stdout: string; stderr: string } => {
   const r = spawnSync('bash', [HOOK], {
     input: JSON.stringify(payload), encoding: 'utf8',
-    env: { ...process.env, HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`,
-      TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242',
-      CCRC_SESSION_GENERATION: GENERATION, ...env },
+    env: hookEnv(env),
   });
   if (!opts.allowNonZeroExit) expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   return { stdout: r.stdout, stderr: r.stderr };
@@ -8363,7 +8363,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   "the only survivor" among its `- Modify:` bullets — below its referent.
       //   Frozen, like the rest of that paragraph; the two spec anchors into the
       //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
-      'deploy/deploy.sh': 4,
+      // 4 -> 3 at box-token-lifecycle wave 2 B7 (`ship_secret` and its two calls left deploy.sh, ~20 lines above
+      //   `:629`): `plan:3330 deploy/deploy.sh:629` now holds a comment that names `install_atomic`, a token its
+      //   clause quotes, so the audit anchors it by coincidence. Still stale in fact, still frozen.
+      'deploy/deploy.sh': 3,
       // `ccd/ccrc` 5 -> 4, RE-MEASURED on the centralised-update-management
       // branch (Tasks 9-13, part B): `ccd/ccrc` grew 12,559 -> 12,851 lines
       // (+292, `wc -l`) and NEITHER corpus document changed (spec and plan
@@ -8660,7 +8663,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // moved (argued beside the map, above the `'ccd/ccd'` entry).
     // 197 -> 197 on the merge of `origin/main` at `77c11245` into docs W1: stated 197, base 197, tree 197,
     // measured by `cite-remeasure.py` against `origin/main`; no key moved (argued beside the map).
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(197);
+    // 197 -> 196 at box-token-lifecycle wave 2 B7: `'deploy/deploy.sh'` 4 -> 3 and nothing else moved (argued beside the map).
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8871,7 +8875,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
         'deploy/deploy.sh:560',
-        'deploy/deploy.sh:629',
+        // LEFT at box-token-lifecycle wave 2 B7 (removed `ship_secret` from deploy.sh): `deploy/deploy.sh:629` now holds
+        // a comment naming `install_atomic`, which its clause quotes. Coincidence, not repair; see D2849_INVISIBLE_SINCE_PR136.
         // ENTERS at review 179's fix round 1 (S6-R11): `ccd/ccrc:5217` fails again, see the census entry.
         // ENTERS again at the composition onto `0ffa07f3` (the note above this assertion).
         'ccd/ccrc:5217',
@@ -8927,7 +8932,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // STILL EMPTY at the composition onto origin/main `a742eb6a` (#214), S6-R11. N emptied it on its own growth and
     // C on its own; composed, the two shifts stack (`_exp_env_write`'s comment, M's `:5217`, is at `:5433`), and the
     // dump of the composed tree lists all five of D2849 in the set above. No D-number.
-    const D2849_INVISIBLE_SINCE_PR136: string[] = [];
+    // NON-EMPTY AGAIN at box-token-lifecycle wave 2 B7, by the mechanism above: B7 removed `ship_secret` and its two
+    // calls from deploy.sh, sliding a comment that names `install_atomic` under `:629`, so the audit anchors it by
+    // coincidence. Still stale in fact and frozen; the assertion checks the other four.
+    const D2849_INVISIBLE_SINCE_PR136: string[] = ['deploy/deploy.sh:629'];
     expect(D2849.filter((k) => set.includes(k)),
       'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)')
       .toEqual(D2849.filter((k) => !D2849_INVISIBLE_SINCE_PR136.includes(k)));
@@ -10148,5 +10156,727 @@ describe('the tmux session-name read is bounded', () => {
     const ms = Date.now() - t0;
     expect(ms, `the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
     expect(fs.existsSync(stateFile())).toBe(false);
+  });
+});
+
+// ── ccrc history: the hook's spool line (history spec 2026-10-05 §5.1, §5.5; W1-B1 task 29) ──
+// APPENDED, with NO new import line: an import at the top shifts every line
+// this file's citation census cites. The history modules are reached by
+// dynamic import inside the cases, the way single-definition.test.ts's tail
+// reaches the stall lane. `run`/`runFull`/`home`/`readState`/`GENERATION` are
+// this file's module-level fixture (a fixture HOME, a stub tmux answering
+// cc-demo-quiet-basin, the row's 36-byte generation file).
+describe('history spool: the hook enqueues one fenced, text-free line (spec §5.1)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const ID = 'demo-quiet-basin';
+  /** spec §10.1: the operator's own session must not reach the hook through
+   *  `run`'s `...process.env`. TMUX_PANE is deliberately not blanked (`run` sets '%1', which the hook needs);
+   *  every inherited CCRC_RECALL_* is blanked, per spec §10.1. */
+  const SCRUB: Record<string, string> = {
+    TMUX: '', CLAUDE_CONFIG_DIR: '', CLAUDECODE: '',
+    ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])),
+  };
+  const spoolDir = (): string => path.join(home, '.ccrc', 'history', 'spool');
+  const spoolFile = (id = ID): string => path.join(spoolDir(), `${id}.jsonl`);
+  const plantSpool = (): void => { fs.mkdirSync(spoolDir(), { recursive: true, mode: 0o700 }); };
+  const offSwitch = (): string => path.join(home, '.ccrc', 'history-off');
+  /** Re-point the stub tmux at an id of exactly `n` characters. */
+  const longId = (n: number): string => {
+    const id = 'a'.repeat(n);
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), `#!/bin/sh\necho "cc-${id}"\n`, { mode: 0o755 });
+    return id;
+  };
+  /** Every line of the spool file, through the drain's own grammar. */
+  const parsed = async (id = ID): Promise<Array<{ ordinal: number; raw: string; rec: Record<string, unknown> | null }>> => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    return lib.splitSpoolText(fs.readFileSync(spoolFile(id), 'utf8')).map((l) => {
+      const p = lib.parseSpoolLine(l.raw);
+      return { ordinal: l.ordinal, raw: l.raw, rec: p.ok ? (p.rec as unknown as Record<string, unknown>) : null };
+    });
+  };
+  /** A BASH_ENV that strips the dynamic EPOCHREALTIME builtin (a bash variable
+   *  loses its special value once unset, for good) and, given a value, sets a
+   *  plain variable of that name — the only way to hand the hook a chosen clock. */
+  const epochEnv = (value: string | null): string => {
+    const f = path.join(home, 'epochrealtime.bash');
+    fs.writeFileSync(f, value === null ? 'unset EPOCHREALTIME\n' : `unset EPOCHREALTIME\nEPOCHREALTIME='${value}'\n`);
+    return f;
+  };
+  const PARTIAL = '{"v":1,"ev":"Sto';
+  /** FR3c/FR3d (review 351 F1): a subscript that is not an integer literal, `@` or `*`, on a `name[…]` or as a
+   *  compound-assignment key. Both S1 pins read it: the string case on the block's text, forkForms on its whole source. */
+  const SUBSCRIPT_FORK = /(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/;
+
+  it('S1: the block is builtins only — no $(, backtick, jq, sha, cat or other external — and sits below the turn marker, above the StopFailure exit', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const open = '# >>> history-spool (spec 2026-10-05 §5.1)';
+    const start = src.indexOf(open);
+    const end = src.indexOf('# <<< history-spool');
+    expect(start, 'no history-spool block in the hook').toBeGreaterThan(-1);
+    expect(src.indexOf(open, start + 1), 'two history-spool blocks').toBe(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(start, 'the block must sit below the turn marker').toBeGreaterThan(src.indexOf('_hook_turn_mark "$tmkind" || true; fi'));
+    expect(end, 'the block must sit above the StopFailure exit').toBeLessThan(src.indexOf('[[ -n "$stopfail$sessend" ]] && exit 0'));
+    const code = src.slice(start, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$_hs"`);
+    expect(code).not.toContain('$(');
+    expect(code).not.toContain('`');
+    expect(code).not.toContain('sha');
+    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
+    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the spool block (@P forks)').toBeNull();
+    // FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of `(( ))` is an
+    // integer literal or `${#name}`; a substring offset or length, a subscript, or a compound-assignment key is an integer literal (a
+    // subscript may also be `@` or `*`); any `$[` is named. The S1 stopping line (the forms neither pin chases) is in forkForms'
+    // header.
+    const arith = [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
+      .map((x) => x[1]!)
+      .filter((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0')));
+    expect(arith, 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)').toEqual([]);
+    expect(code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null, 'an arithmetic test operator (review 351 F1)').toBeNull();
+    expect(
+      code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null,
+      'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
+    ).toBeNull();
+    expect(
+      code.match(SUBSCRIPT_FORK)?.[0] ?? null,
+      'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
+    ).toBeNull();
+    expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');
+    expect(code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null, 'let and an integer attribute evaluate arithmetic (review 351 F1)').toBeNull();
+    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+    expect(code.match(external)?.[0] ?? null, 'an external command in the spool block forks on the hot path').toBeNull();
+  });
+
+  it('S2: a subagent payload (agent_id) writes no line', () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID, agent_id: 'agent-7' }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+  });
+
+  it('S3: history-off silences Stop and PostCompact (CONTROL: without it both write)', async () => {
+    plantSpool();
+    fs.writeFileSync(offSwitch(), '');
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'PostCompact', trigger: 'manual', compact_summary: 'a summary', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    fs.rmSync(offSwitch());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'PostCompact', trigger: 'manual', compact_summary: 'a summary', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec?.['ev'])).toEqual(['Stop', 'PostCompact']);
+  });
+
+  it('S4: with no spool directory the hook writes nothing and creates nothing', () => {
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    expect(fs.existsSync(path.join(home, '.ccrc', 'history'))).toBe(false);
+  });
+
+  it('S5: a PostCompact with a 50 KB summary writes one line under SPOOL_LINE_MAX whose keys are a declared set, and no text', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    run({ hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: 'S'.repeat(50_000), session_id: SID }, SCRUB);
+    const lines = await parsed();
+    expect(lines).toHaveLength(1);
+    expect(Buffer.byteLength(lines[0]!.raw)).toBeLessThan(lib.SPOOL_LINE_MAX);
+    expect(lines[0]!.raw).not.toContain('SSSS');
+    const rec = lines[0]!.rec!;
+    const keys = lib.SPOOL_KEYS['PostCompact']!;
+    for (const k of keys.required) expect(rec, k).toHaveProperty(k);
+    for (const k of Object.keys(rec)) expect([...keys.required, ...keys.optional], k).toContain(k);
+    expect(rec).toMatchObject({ v: 1, ev: 'PostCompact', id: ID, sid: SID, trig: 'auto', gen: GENERATION });
+  });
+
+  it('S5: a SessionStart(startup) line carries reg when .uuid holds a uuid, and omits it otherwise', async () => {
+    plantSpool();
+    const uuidFile = path.join(home, '.cc-sessions', `${ID}.uuid`);
+    fs.writeFileSync(uuidFile, `${SID}\n`);
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, SCRUB);
+    fs.rmSync(uuidFile);
+    run({ hook_event_name: 'SessionStart', source: 'resume', session_id: SID }, SCRUB);
+    const [a, b] = await parsed();
+    expect(a!.rec).toMatchObject({ ev: 'SessionStart', src: 'startup', reg: SID });
+    expect(b!.rec).toMatchObject({ ev: 'SessionStart', src: 'resume' });
+    expect(b!.rec).not.toHaveProperty('reg');
+  });
+
+  it('S5: an id of SPOOL_ID_MAX chars writes a line under SPOOL_LINE_MAX; one char more writes none', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    const fits = longId(lib.SPOOL_ID_MAX);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    const lines = await parsed(fits);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.rec).toMatchObject({ ev: 'Stop', id: fits });
+    expect(Buffer.byteLength(lines[0]!.raw)).toBeLessThan(lib.SPOOL_LINE_MAX);
+    const over = longId(lib.SPOOL_ID_MAX + 1);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile(over))).toBe(false);
+    // The hook spells the bound as a literal (no fork may read lib.mjs on the hot path); the two runs above,
+    // sized from the constant the drain's idOk reads, already red on any disagreement. This names the literal.
+    expect(fs.readFileSync(HOOK, 'utf8')).toContain(`(( \${#id} <= ${lib.SPOOL_ID_MAX} ))`);
+  });
+
+  it('S8: under history-off a SessionStart(clear) epoch line is still appended', async () => {
+    plantSpool();
+    fs.writeFileSync(offSwitch(), '');
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec)).toEqual([expect.objectContaining({ ev: 'SessionStart', src: 'clear', sid: SID })]);
+  });
+
+  it('S11: a Stop under set -u with trig never set writes no trig, prints nothing and exits 0', async () => {
+    plantSpool();
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe('');
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'Stop' });
+    expect(l!.rec).not.toHaveProperty('trig');
+  });
+
+  it('S11: a SessionStart whose source is x"y, fork, or absent writes no line at all', () => {
+    plantSpool();
+    run({ hook_event_name: 'SessionStart', source: 'x"y', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+  });
+
+  it('S11: a session_id that is not a lowercase UUID drops sid from a Stop line, never the line; a SessionStart, whose grammar requires sid, writes no line at all', async () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: 'not-a-uuid' }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: 'not-a-uuid' }, SCRUB);
+    const lines = await parsed();
+    // lib.mjs SPOOL_KEYS.SessionStart requires sid (Task 5): a writer with no lowercase-UUID sid emits no
+    // SessionStart line, rather than one the drain would reject whole. `null` here is a line the drain's
+    // grammar rejects: a Stop carrying the wrong sid, or a SessionStart written without one.
+    expect(lines.map((l) => l.rec?.['ev'] ?? null), 'one Stop line, and no SessionStart line').toEqual(['Stop']);
+    expect(lines[0]!.rec).not.toHaveProperty('sid');
+  });
+
+  it('S11: a malformed generation drops gen and a malformed .uuid drops reg; the line is still written', async () => {
+    plantSpool();
+    fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), 'NOT-A-UUID\n');
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, { ...SCRUB, CCRC_SESSION_GENERATION: 'not-a-generation' });
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'SessionStart', src: 'startup', sid: SID });
+    expect(l!.rec).not.toHaveProperty('gen');
+    expect(l!.rec).not.toHaveProperty('reg');
+  });
+
+  it('S12: an unwritable spool file costs the line, never the exit status, the silence or the hookstate write', () => {
+    plantSpool();
+    fs.mkdirSync(spoolFile());   // a DIRECTORY where the file would be: refused before the open (D-4418)
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+  });
+
+  it('S14: SessionStart(compact) and (fork) write no line; startup, resume and clear write one each, each carrying src', async () => {
+    plantSpool();
+    run({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    expect(fs.existsSync(spoolFile())).toBe(false);
+    for (const source of ['startup', 'resume', 'clear']) run({ hook_event_name: 'SessionStart', source, session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => [l.ordinal, l.rec?.['src']])).toEqual([[1, 'startup'], [2, 'resume'], [3, 'clear']]);
+  });
+
+  it('S17: the line is fenced — after a torn partial the next line stands alone, at the ordinal an unfenced file gives it', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    fs.writeFileSync(spoolFile(), PARTIAL);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    const text = fs.readFileSync(spoolFile(), 'utf8');
+    expect(text.endsWith('\n')).toBe(true);
+    const lines = lib.splitSpoolText(text);
+    expect(lines.map((l) => l.ordinal)).toEqual([1, 2]);
+    expect(lines[0]!.raw, 'the torn partial and the new line fused').toBe(PARTIAL);
+    expect(lib.parseSpoolLine(lines[0]!.raw).ok).toBe(false);
+    expect(lib.parseSpoolLine(lines[1]!.raw)).toMatchObject({ ok: true });
+    expect(lib.splitSpoolText(`${PARTIAL}\n${lines[1]!.raw}\n`).map((l) => [l.ordinal, l.raw]))
+      .toEqual(lines.map((l) => [l.ordinal, l.raw]));
+  });
+
+  it.each([
+    ['a comma decimal point', '1700000000,123456', 1700000000123],
+    ['a dot decimal point', '1700000000.123456', 1700000000123],
+    ['an empty fraction', '1700000000,', 1700000000000],
+  ] as const)('ts from EPOCHREALTIME with %s is integer milliseconds', async (_what, value, ms) => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    expect((await parsed())[0]!.rec).toMatchObject({ ev: 'Stop', ts: ms });
+  });
+
+  it.each([
+    ['unset', null],
+    ['malformed', 'not-a-clock'],
+    ['with a leading zero (not a JSON number)', '0.5'],
+  ] as const)('EPOCHREALTIME %s writes the line without ts (the drain stamps the receive time)', async (_what, value) => {
+    plantSpool();
+    // runFull, not run: a malformed clock also reaches the hook's pre-existing turn marker, whose jq
+    // complains on stderr; `run` would let that through to the test output.
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    const [l] = await parsed();
+    expect(l!.rec).toMatchObject({ ev: 'Stop', id: ID });
+    expect(l!.rec).not.toHaveProperty('ts');
+  });
+
+  // ── the drain halves: a real sweep over a real store (Linux: the sweep's carrier is systemd-only) ──
+  itLinux('S14 (drain half): a SessionStart line with no src, planted in the spool, counts spool_line_rejected at drain', async () => {
+    const hh = await import('./historyHelpers.js');
+    const store = await import('../../ccd/history/store.mjs');
+    const box = hh.makeHistoryBox('ccrc-hook-spool-reject-', { role: 'fleet' });
+    store.createStore(box.home);
+    const spool = path.join(box.home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(spool, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(spool, `${ID}.jsonl`), `\n${JSON.stringify({ v: 1, ev: 'SessionStart', id: ID, sid: SID })}\n`);
+    for (let pass = 0; pass < 2; pass += 1) {   // renamed on the first tick, drained on the next
+      const r = hh.runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    expect(hh.counters(box)['spool_line_rejected']).toBe(1);
+  });
+
+  itLinux('S17 (drain half): the hook\'s fenced clear line after a torn partial drains and chains, keyed at ordinal 2', async () => {
+    // The bytes the HOOK wrote, in this file's fixture HOME…
+    plantSpool();
+    fs.writeFileSync(spoolFile(), PARTIAL);
+    run({ hook_event_name: 'SessionStart', source: 'clear', session_id: SID }, SCRUB);
+    const bytes = fs.readFileSync(spoolFile(), 'utf8');
+    // …drained by the real sweep in a history box whose registry names the
+    // row's project and generation. NO `.uuid` row: the periodic scan's
+    // registry backfill (task 17) would map that uuid as an `import` epoch on
+    // the first tick, before this line drains — the row this case measures is
+    // the one the CLEAR line chains (confirmation is DM19's, not this pin's).
+    const hh = await import('./historyHelpers.js');
+    const store = await import('../../ccd/history/store.mjs');
+    const lib = await import('../../ccd/history/lib.mjs');
+    const box = hh.makeHistoryBox('ccrc-hook-spool-chain-', { role: 'fleet' });
+    store.createStore(box.home);
+    const reg = path.join(box.home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, `${ID}.project`), 'alpha');
+    fs.writeFileSync(path.join(reg, `${ID}.generation`), GENERATION);
+    const spool = path.join(box.home, '.ccrc', 'history', 'spool');
+    fs.mkdirSync(spool, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(spool, `${ID}.jsonl`), bytes);
+    for (let pass = 0; pass < 2; pass += 1) {
+      const r = hh.runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+    }
+    const db = hh.openStoreRO(box);
+    try {
+      const epochs = db.prepare(
+        'SELECT e.cc_session_uuid AS uuid, e.cause AS cause FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE s.ccrc_id = ?',
+      ).all(ID) as Array<{ uuid: string; cause: string }>;
+      expect(epochs).toEqual([{ uuid: SID, cause: 'clear' }]);
+      const keys = db.prepare('SELECT event_key AS k FROM spool_receipts').all() as Array<{ k: string }>;
+      expect(keys).toHaveLength(1);
+      const file = (hh.journalRecords(box) as Array<Record<string, unknown>>).find((rec) => rec['k'] === 'file');
+      expect(file, 'no file record in the journal').toBeDefined();
+      expect(keys[0]!.k).toBe(lib.eventKey(String(file!['name']), 2));
+    } finally {
+      db.close();
+    }
+    expect(hh.counters(box)['spool_line_rejected']).toBe(1);
+  });
+
+  // ── Task 36G item 1 (D-4315): the block writes only fields its event's grammar admits ──
+  it('an inherited trig in the hook environment writes no trig on Stop or SessionStart, and the drain accepts both lines (D-4315)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    run({ hook_event_name: 'SessionStart', source: 'startup', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    const lines = await parsed();
+    expect(lines.map((l) => l.rec?.['ev'] ?? null), 'the drain refused a line whole').toEqual(['Stop', 'SessionStart']);
+    for (const l of lines) {
+      expect(lib.parseSpoolLine(l.raw), l.raw).toMatchObject({ ok: true });
+      expect(l.rec, l.raw).not.toHaveProperty('trig');
+    }
+  });
+
+  it('CONTROL: a PostCompact still writes its trig, from the payload and not the environment (D-4315)', async () => {
+    plantSpool();
+    run({ hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: 'a summary', session_id: SID }, { ...SCRUB, trig: 'manual' });
+    expect((await parsed())[0]!.rec).toMatchObject({ ev: 'PostCompact', trig: 'auto' });
+  });
+
+  it.each([
+    ['thirteen-digit seconds, dot', '9999999999999.500'],
+    ['thirteen-digit seconds, comma', '9007199254741,000'],
+    ['thirteen-digit seconds, the smallest', '1000000000000.000'],
+  ] as const)('an EPOCHREALTIME of %s writes the line without ts, which the drain accepts (D-4315)', async (_what, value) => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    plantSpool();
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv(value) });
+    const [l] = await parsed();
+    expect(l!.rec, 'the drain refused the line').not.toBeNull();
+    expect(lib.parseSpoolLine(l!.raw)).toMatchObject({ ok: true });
+    expect(l!.rec).not.toHaveProperty('ts');
+  });
+
+  it('CONTROL: twelve-digit seconds, the widest admitted, write a ts that is a safe integer in ms (D-4315)', async () => {
+    plantSpool();
+    run({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: epochEnv('999999999999.999') });
+    const ts = (await parsed())[0]!.rec!['ts'];
+    expect(ts).toBe(999999999999999);
+    expect(Number.isSafeInteger(ts)).toBe(true);
+  });
+
+  // ── review 316 F38: S1 as SYNTAX — the spool block, and every function it calls, fork nothing ──
+  /** Every form in `code` that makes bash fork or run a program: command or process substitution, a backtick,
+   *  a `${…@…}` parameter transformation (FR2a, review 344 F1: `@P` runs prompt expansion, and so command substitution),
+   *  a subshell, a pipeline, a background job, a coproc, a here-document, or a command word outside `allowed`; and
+   *  (FR3a, review 351 F1) an arithmetic operand bash may evaluate from a variable's text: an operand of `(( ))` or
+   *  `$(( ))` that is not an integer literal or `${#name}`; any `$[ ]`; a `${name:offset:length}` whose offset or length
+   *  is not an integer literal; a subscript that is not an integer literal, `@` or `*`, on a `name[…]` anywhere (a
+   *  `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a key
+   *  in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge` operators of `[[ ]]`. An indexed array's
+   *  subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an associative one is not, but the scan
+   *  cannot tell them apart and names both.
+   *  Not chased (the S1 stopping line, review 351 F1), each a deliberate spelling the spool block does not use: ${!x}
+   *  indirection; [[ -v $v ]], and printf -v "$v" or read -r "$v", with a dynamic name, which forks when the name holds
+   *  a[$(…)]; a dynamic name with a variable subscript there ($x[v], ${x}[v]), which forks through its subscript
+   *  whatever the name holds; a name split from its `[` by a quote, a backslash or a line continuation (x"[v]", x'[v]',
+   *  x\[v\], x\<newline>[v]), which bash joins before the subscript is read; an assignment, printf -v or read into
+   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); and text on a `#`-led line inside a quoted string
+   *  that spans lines, which the comment filter drops before either pin reads it.
+   *  [] = builtins only. Conservative by construction, outside the stopping line above: what it cannot classify is
+   *  reported, never passed. */
+  const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
+    const found: string[] = [];
+    /** FPM3: where does the `((` that starts at `p` end, if it is ARITHMETIC (its content balanced, closed by `))`)? -1 when
+     *  it is not: bash re-parses a `((` that closes any other way as two nested subshells (`$((` as a command
+     *  substitution holding one), and those fork. */
+    const arithEnd = (s: string, p: number): number => {
+      let depth = 0;
+      for (let k = p + 2; k < s.length && s[k] !== '\n'; k++) {
+        if (s[k] === '(') depth++;
+        else if (s[k] === ')') {
+          if (depth === 0) return s[k + 1] === ')' ? k + 2 : -1;
+          depth--;
+        }
+      }
+      return -1;
+    };
+    /** FR2a (review 344 F1): does the `${` whose body starts at `p` apply a transformation, `${name@op}` (`name` a
+     *  variable, a positional or special parameter, `!`/`#` before it, a subscript after it)? Every operator is named,
+     *  not `@P` alone: the block needs none, and only `@P` was measured to fork, so naming them all is the conservative read. */
+    const transformAt = (s: string, p: number): boolean => {
+      const re = /[!#]?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[[^\]\n]*\])?@[^}]/y;
+      re.lastIndex = p;
+      return re.test(s);
+    };
+    /** FR3a (review 351 F1): may this arithmetic text stand? Only integer literals, operators and `${#name}` (read as 0). */
+    const arithOk = (content: string): boolean => !/[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(content.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0'));
+    /** FR3a (review 351 F1; FR3c): the `${` whose body starts at `p` evaluates an operand as arithmetic when it names a
+     *  substring whose offset or length is not a literal, of a variable, a positional or a special parameter (`${$:v}` forks).
+     *  `${x:-}` and `${x:+y}` are operators, not substrings. A subscript is named once, over the whole source (below). */
+    const exprAt = (s: string, p: number): string | null => {
+      const sub = /[!#]?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])/y;
+      sub.lastIndex = p;
+      const m = sub.exec(s);
+      if (!m) return null;
+      const close = s.indexOf('}', p + m[0].length);
+      return close < 0 || !/^\s*-?\d+(?::\s*-?\d+)?$/.test(s.slice(p + m[0].length, close)) ? 'substring offset' : null;
+    };
+    const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
+    // FR3c (review 351 F1): a subscript that is not an integer literal, `@` or `*` — on a `name[…]` anywhere (a `${…}`, an
+    // assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a compound-assignment key
+    // (`x=([v]=1)`, FR3d) — is named on the whole source, before step 1 masks quoted text: an indexed array evaluates it as
+    // arithmetic (an associative one does not, and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an
+    // expansion or an assignment is `$x` and literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name
+    // with a subscript, which is on the stopping line, as is a name split from its `[` (forkForms' header).
+    if (SUBSCRIPT_FORK.test(src)) found.push('subscript');
+    // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
+    let out = '';
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i]!;
+      if (c === '\\') { out += '__'; i++; continue; }
+      if (c === "'") {
+        const j = src.indexOf("'", i + 1);
+        if (j < 0) { found.push('unterminated quote'); break; }
+        out += "''"; i = j; continue;
+      }
+      if (c === '`') { found.push('backtick'); out += '_'; continue; }
+      if (c === '$' && src[i + 1] === '[') found.push('arithmetic operand');   // FR3a: `$[ … ]`, bash's legacy arithmetic expansion
+      if (c === '$' && src[i + 1] === '(' && src[i + 2] !== '(') { found.push('command substitution'); out += '__'; i++; continue; }
+      if (c === '$' && src[i + 1] === '(' && arithEnd(src, i + 1) < 0) { found.push('command substitution'); out += '$( '; i++; continue; }   // FPM3: `$((` that is no arithmetic is a substitution holding a subshell
+      if (c === '"' || (c === '$' && src[i + 1] === '{')) {
+        if (c === '$' && transformAt(src, i + 2)) found.push('parameter transformation');
+        if (c === '$') { const x = exprAt(src, i + 2); if (x !== null) found.push(x); }
+        const stack: string[] = [c === '"' ? '"' : '}'];
+        let j = c === '"' ? i + 1 : i + 2;
+        for (; j < src.length && stack.length > 0; j++) {
+          const d = src[j]!;
+          const top = stack[stack.length - 1];
+          if (d === '\\') { j++; continue; }
+          if (d === '`') found.push('backtick');
+          else if (d === '$' && src[j + 1] === '[') found.push('arithmetic operand');
+          else if (d === '$' && src[j + 1] === '(' && (src[j + 2] !== '(' || arithEnd(src, j + 1) < 0)) found.push('command substitution');
+          else if (d === '$' && src[j + 1] === '(' && !arithOk(src.slice(j + 3, arithEnd(src, j + 1) - 2))) found.push('arithmetic operand');   // FR3a: balanced `$((…))` nested in quotes or a ${…}
+          else if (d === '$' && src[j + 1] === '{') {
+            if (transformAt(src, j + 2)) found.push('parameter transformation');
+            const x = exprAt(src, j + 2);
+            if (x !== null) found.push(x);
+            stack.push('}'); j++;
+          }
+          else if (d === "'" && top === '}' && !stack.includes('"')) { const k = src.indexOf("'", j + 1); j = k < 0 ? src.length : k; }   // B3M16: inside double quotes a ${…} word's single quotes are literal, so what they enclose is live
+          else if (d === '"') { if (top === '"') stack.pop(); else stack.push('"'); }
+          else if (d === '}' && top === '}') stack.pop();
+        }
+        if (stack.length > 0) found.push('unterminated quote');
+        out += c === '"' ? '""' : /^\$\{#[A-Za-z_][A-Za-z0-9_]*\}$/.test(src.slice(i, j)) ? '0' : '$V'; i = j - 1; continue;   // FR3a: `${#name}` is a literal-valued operand, so the arithmetic check before step 3 reads `(( ${#id} <= 224 ))` as `(( 0 <= 224 ))`
+      }
+      out += c;
+    }
+    // 2. Process substitution is expanded even inside [[ ]], so it is looked for BEFORE step 3 blanks those.
+    if (/[<>]\(/.test(out)) found.push('process substitution');
+    // FR3a (review 351 F1): arithmetic operands, checked before step 3 blanks [[ ]] (a `$(( ))` inside one forks too), and the
+    // `[[ ]]` operators that evaluate their operands as arithmetic. On `out`, a quoted "-eq" is a masked string, not an operator.
+    for (let p = out.indexOf('(('); p >= 0; p = out.indexOf('((', p + 1)) {
+      const e = arithEnd(out, p);
+      if (e >= 0 && !arithOk(out.slice(p + 2, e - 2))) found.push('arithmetic operand');
+    }
+    if (/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/.test(out)) found.push('arithmetic test operator');
+    // 3. Blank what may legally hold ( | & : [[ ]] tests, (( )) and $(( )) arithmetic, case patterns.
+    //    FPM3: only a BALANCED `((…))` is arithmetic; any other `((` is two subshell openers and stays visible as such.
+    let m = out.replace(/\[\[ [^\n]*? \]\]/g, '[[ ]]');
+    for (let p = m.indexOf('(('); p >= 0; p = m.indexOf('((', p + 1)) {
+      const e = arithEnd(m, p);
+      if (e < 0) { m = `${m.slice(0, p)}( ${m.slice(p + 1)}`; continue; }
+      const from = m[p - 1] === '$' ? p - 1 : p;
+      m = `${m.slice(0, from)}(( ))${m.slice(e)}`;
+      p = from;
+    }
+    m = m.replace(/(^|\n|;;|\bin)([ \t]*)[^\s();|&<>]+(?:\|[^\s();|&<>]+)*\)/g, '$1$2');
+    // 4. What is left may hold none of these.
+    const bare = m.replace(/\(\( \)\)/g, '');
+    const FORMS: Array<[RegExp, string]> = [
+      [/<</, 'here-document'], [/\bcoproc\b/, 'coproc'],
+      [/(?<!\()\((?!\()/, 'subshell'], [/(?<!\|)\|(?!\|)/, 'pipeline'], [/(?<![&>])&(?![&>])/, 'background'],
+    ];
+    for (const [re, name] of FORMS) if (re.test(bare)) found.push(name);
+    // 5. The first word of every simple command, past its assignments and redirections, must be allowed. The
+    //    split drops the words that open a command position (`if`, `elif`, `then`, `else`, `do`, `!`, a `case WORD in`
+    //    header), so the command after each of them is checked rather than hidden behind an allowed keyword.
+    const LEAD = /^(?:[A-Za-z_][A-Za-z0-9_]*\+?=\S*|\d*[<>]+&?\S*)\s*/;
+    for (const seg of m.split(/;;|&&|\|\||;|\n|\{|\}|!|\bcase\s+\S+\s+in\b|\bif\b|\belif\b|\bthen\b|\bdo\b|\belse\b/)) {
+      let s = seg.trim();
+      for (let a = LEAD.exec(s); a && a[0].length > 0; a = LEAD.exec(s)) s = s.slice(a[0].length);
+      const w = /^\S+/.exec(s)?.[0];
+      if (w !== undefined && !allowed.has(w)) found.push(`command ${w}`);
+    }
+    return found;
+  };
+  /** Bash keywords and builtins the block may run. None of them forks. */
+  const SPOOL_BUILTINS: ReadonlySet<string> = new Set(['if', 'then', 'elif', 'else', 'fi', 'case', 'esac', '[[', '((', 'printf', 'read', 'return', 'true']);
+  /** The hook functions the block calls. Each body is scanned too, against the builtins alone. */
+  const SPOOL_FUNCS = ['_ct_read'] as const;
+  const spoolBlock = (src: string): string => src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'));
+  const hookFnBody = (src: string, name: string): string | null => new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)^\\}`, 'm').exec(src)?.[1] ?? null;
+  const A = '_hs_g="${CCRC_SESSION_GENERATION:-}"';
+  const T = "_hs+='}'";
+  const ROWS: Array<[string, string, string, string]> = [
+    ['a command substitution', A, '_hs_g="$(printf x)"', 'command substitution'],
+    ['a backtick', A, '_hs_g=`printf x`', 'backtick'],
+    ['a substitution inside ${}', A, '_hs_g="${CCRC_SESSION_GENERATION:-$(printf x)}"', 'command substitution'],
+    ['a subshell', "{ printf '\\n%s\\n'", "( printf '\\n%s\\n'", 'subshell'],
+    ['a pipeline', '2>/dev/null || true', '2>/dev/null | true', 'pipeline'],
+    ['a background job', '2>/dev/null || true', '2>/dev/null & true', 'background'],
+    ['an input process substitution', T, "_hs+='}'; read -r _hs_x < <(printf x)", 'process substitution'],
+    ['an output process substitution', T, "_hs+='}'; printf x > >(read -r _hs_x)", 'process substitution'],
+    ['a process substitution inside [[ ]]', T, "_hs+='}'; [[ -e <(printf x) ]] && true", 'process substitution'],
+    ['a coproc', T, "_hs+='}'; coproc true", 'coproc'],
+    ['a trailing &', T, "_hs+='}'; true &", 'background'],
+    ['a here-string', T, "_hs+='}'; read -r _hs_x <<< x", 'here-document'],
+    ['an external program', T, "_hs+='}'; mkdir -p x", 'command mkdir'],
+    ['a path-spelled program', T, "_hs+='}'; /bin/true", 'command /bin/true'],
+    ['a variable command word', T, '_hs+=\'}\'; "$_hs_x" x', 'command ""'],
+    ['a program as an if condition', T, "_hs+='}'; if mkdir -p x; then true; fi", 'command mkdir'],
+    ['a program as an elif condition', T, "_hs+='}'; if [[ -n x ]]; then true; elif /bin/true; then true; fi", 'command /bin/true'],
+    ['a program in a case arm on the case line', T, "_hs+='}'; case \"$src\" in clear) mkdir -p x ;; esac", 'command mkdir'],
+    ['a substitution in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'$(id)\'}"', 'command substitution'],
+    ['a backtick in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'`id`\'}"', 'backtick'],
+    // FPM3: bash re-parses a `((` / `$((` that is not balanced arithmetic as nested subshells / a substitution holding one.
+    ['a subshell spelled ((', T, "_hs+='}'; ((echo x) )", 'subshell'],
+    ['two subshells joined by && under ((', T, "_hs+='}'; ((true) && (mkdir x))", 'subshell'],
+    ['a subshell inside $( (', T, "_hs+='}'; _hs_x=$( (echo x) )", 'command substitution'],
+    ['a substitution spelled $((', T, "_hs+='}'; _hs_x=$((echo x) )", 'command substitution'],
+    ['a substitution spelled $(( inside double quotes', T, '_hs+=\'}\'; _hs_x="$((true) && (mkdir x))"', 'command substitution'],
+    // FR2a (review 344 F1): `${name@op}`, at each place step 1 meets a `${`. `@Q` forks nothing; it is named by choice (transformAt).
+    ['an @P transformation inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION@P}"', 'parameter transformation'],
+    ['an @P transformation outside double quotes', A, '_hs_g=${CCRC_SESSION_GENERATION@P}', 'parameter transformation'],
+    ['an @P transformation nested in a ${} default word', A, '_hs_g="${CCRC_SESSION_GENERATION:-${_hs@P}}"', 'parameter transformation'],
+    ['an @P transformation in single quotes inside ${} inside double quotes', A, '_hs_g="${CCRC_SESSION_GENERATION:-\'${_hs@P}\'}"', 'parameter transformation'],
+    ['an @P transformation of a subscripted name', A, '_hs_g="${_hs[0]@P}"', 'parameter transformation'],
+    ['an @Q transformation', A, '_hs_g="${CCRC_SESSION_GENERATION@Q}"', 'parameter transformation'],
+    // FR3a (review 351 F1): arithmetic evaluates a variable's text, so a name holding `a[$(…)]` forks wherever one is an operand.
+    ['bare-name arithmetic', T, "_hs+='}'; (( _hs_g ))", 'arithmetic operand'],
+    ['a bare name beside ${#name} in the bound', '(( ${#id} <= 224 ))', '(( ${#id} <= _hs_g ))', 'arithmetic operand'],
+    ['a ++ on a name (the old INERT row: it forks when the name holds a subscript)', T, "_hs+='}'; (( i++ ))", 'arithmetic operand'],
+    ['a $name operand in $(( ))', T, "_hs+='}'; printf x $(( $_hs_g + 1 ))", 'arithmetic operand'],
+    ['a bare name in $(( )) inside double quotes', T, '_hs+=\'}\'; printf "$(( _hs_g ))"', 'arithmetic operand'],
+    ['a bare name in $(( )) inside [[ ]]', T, "_hs+='}'; [[ $(( _hs_g )) == 1 ]] && true", 'arithmetic operand'],
+    ['a $[ ] arithmetic expansion', T, "_hs+='}'; printf x $[ _hs_g ]", 'arithmetic operand'],
+    ['a $[ ] arithmetic expansion inside double quotes', T, '_hs+=\'}\'; printf "$[ _hs_g ]"', 'arithmetic operand'],
+    ['an -eq test', T, "_hs+='}'; [[ $_hs_g -eq 0 ]] && true", 'arithmetic test operator'],
+    ['a -gt test on a quoted operand', T, '_hs+=\'}\'; [[ "$_hs_g" -gt 0 ]] && true', 'arithmetic test operator'],
+    ['a variable substring offset', A, '_hs_g=${_hs:_hs_g}', 'substring offset'],
+    ['a variable substring offset inside double quotes', A, '_hs_g="${_hs:_hs_g}"', 'substring offset'],
+    ['a variable substring length', A, '_hs_g="${_hs:0:_hs_g}"', 'substring offset'],
+    ['a variable subscript', A, '_hs_g="${_hs[_hs_g]}"', 'subscript'],
+    ['a $name subscript', A, '_hs_g=${_hs[$_hs_g]}', 'subscript'],
+    ['an indexed assignment with a variable subscript', T, "_hs+='}'; _hs_x[_hs_g]=1", 'command _hs_x[_hs_g]=1'],
+    // FR3c (review 351 F1, task review): a `name[subscript]` wherever it stands, and a special parameter's substring offset.
+    ['read into a variable subscript', T, "_hs+='}'; read -r _hs_x[_hs_g]", 'subscript'],
+    ['printf -v into a variable subscript', T, "_hs+='}'; printf -v _hs_x[_hs_g] %s x", 'subscript'],
+    ['printf -v into a single-quoted variable subscript', T, "_hs+='}'; printf -v '_hs_x[_hs_g]' %s x", 'subscript'],
+    ['a [[ -v ]] test of a variable subscript', T, "_hs+='}'; [[ -v _hs_x[_hs_g] ]] && true", 'subscript'],
+    ['a [[ -v ]] test of a double-quoted variable subscript', T, '_hs+=\'}\'; [[ -v "_hs_x[_hs_g]" ]] && true', 'subscript'],
+    ['an indexed assignment with a variable subscript, as a subscript', T, "_hs+='}'; _hs_x[_hs_g]=1", 'subscript'],
+    ['a $ special parameter with a variable substring offset', A, '_hs_g=${$:_hs_g}', 'substring offset'],
+    ['a ? special parameter with a variable substring offset', A, '_hs_g=${?:_hs_g}', 'substring offset'],
+    ['a - special parameter with a variable substring offset', A, '_hs_g=${-:_hs_g}', 'substring offset'],
+    ['a let', T, "_hs+='}'; let _hs_g", 'command let'],
+    // Fix-round-3 whole-round review (#1/#5): a compound assignment's key is a subscript, and bash evaluates it as arithmetic.
+    ['a compound array assignment with a variable key', T, "_hs+='}'; _hs_x=([_hs_g]=1)", 'subscript'],
+    ['an appended compound assignment with a spaced variable key', T, "_hs+='}'; _hs_x+=( [_hs_g]=1 )", 'subscript'],
+  ];
+  /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
+  const INERT: Array<[string, string, string]> = [
+    ['a substitution inside plain single quotes', A, "_hs_g='${CCRC_SESSION_GENERATION:-$(id)}'"],
+    // FU9 (B4M5): this row reaches the `${`-state's single-quote skip (B3M16), which the row above never does: its quotes
+    // enclose the whole `${…}`, so step 1's top-level arm masks it. Here the `${…}` sits outside double quotes and its
+    // word's single quotes are live, so bash prints `$(id)` literally (measured: C:$(echo SUB)).
+    ['a substitution in single quotes inside a ${} outside double quotes', A, "_hs_g=${CCRC_SESSION_GENERATION:-'$(id)'}"],
+    // FPM3: a balanced arithmetic form is no fork, in either spelling and inside double quotes.
+    ['a (( )) arithmetic command on a literal and ${#name}', T, "_hs+='}'; (( ${#_hs} > 1 ))"],
+    ['a $(( )) arithmetic expansion', T, "_hs+='}'; printf x $(( 1 + 2 ))"],
+    ['a $(( )) arithmetic expansion inside double quotes', T, '_hs+=\'}\'; printf "$(( 1 + (2 * 3) ))"'],
+    // FR2a (review 344 F1): an `@` bash applies no transformation at: in plain single quotes, in a ${} word past its operator, and
+    // in a ${} word's single quotes outside double quotes (B3M16's skip; measured inert, as the first two are).
+    ['an @P transformation inside plain single quotes', A, "_hs_g='${CCRC_SESSION_GENERATION@P}'"],
+    ['an @ in a ${} default word', A, '_hs_g="${CCRC_SESSION_GENERATION:-a@P}"'],
+    ['an @P transformation in single quotes inside a ${} outside double quotes', A, "_hs_g=${CCRC_SESSION_GENERATION:-'${_hs@P}'}"],
+    // FR3a (review 351 F1; the probe, fr3-probe.out): operands that are literals or ${#name}, and the operators and forms that
+    // look like arithmetic and are not (a `==` test, a `${name:-}` default).
+    ['a ${#name} operand in $(( )) inside double quotes', T, '_hs+=\'}\'; printf "$(( ${#_hs} + 1 ))"'],
+    ['a literal substring offset and length', A, '_hs_g="${_hs:0:3}"'],
+    ['a literal negative substring offset', A, '_hs_g=${_hs: -1}'],
+    ['a literal subscript', A, '_hs_g="${_hs[0]}"'],
+    ['a == test', T, "_hs+='}'; [[ $_hs_g == 0 ]] && true"],
+    ['a ${name:-} default, an operator and not a substring', A, '_hs_g=${_hs:-0}'],
+    // FR3c (review 351 F1, task review): a literal subscript is no arithmetic hazard, and `$x[v]` is `$x` and literal text.
+    ['printf -v into a literal subscript', T, "_hs+='}'; printf -v _hs_x[0] %s x"],
+    ['read into a literal subscript', T, "_hs+='}'; read -r _hs_x[0]"],
+    ['an unbraced $name before literal brackets', A, '_hs_g=$_hs[_hs_g]'],
+  ];
+
+  it('S1 (syntax, F38): the spool block and every function it calls hold no fork form', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(forkForms(spoolBlock(src), new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]))).toEqual([]);
+    for (const f of SPOOL_FUNCS) {
+      const body = hookFnBody(src, f);
+      expect(body, f + ' is not defined in the hook').not.toBeNull();
+      expect(forkForms(body!, SPOOL_BUILTINS), f).toEqual([]);
+    }
+  });
+
+  it.each(ROWS)('S1 (syntax, F38): %s planted in the spool block is named', (_label, anchor, replacement, form) => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
+    expect(block).toContain(anchor);
+    expect(forkForms(block.replace(anchor, replacement), allowed)).toContain(form);
+  });
+
+  it.each(INERT)('S1 (syntax, B3M16): %s planted in the spool block is inert and is not named', (_label, anchor, replacement) => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
+    expect(block).toContain(anchor);
+    expect(forkForms(block.replace(anchor, replacement), allowed)).toEqual([]);
+  });
+
+  it('F37: EPOCHREALTIME is read once: a clock that moves between the test and the slice writes no ts or the tested reading, never a mix', async () => {
+    plantSpool();
+    const trapFile = path.join(home, 'epochtrap.bash');
+    fs.writeFileSync(trapFile, 'unset EPOCHREALTIME\nEPOCHREALTIME=1700000001\n'
+      + 'trap \'case $BASH_COMMAND in *"=~ ^[1-9]"*) EPOCHREALTIME=1700000000.999999 ;; *) EPOCHREALTIME=1700000001 ;; esac\' DEBUG\n');
+    runFull({ hook_event_name: 'Stop', session_id: SID }, { ...SCRUB, BASH_ENV: trapFile });
+    const [l] = await parsed();
+    expect(l!.rec).not.toBeNull();
+    expect([undefined, 1700000000999]).toContain(l!.rec!['ts']);
+  });
+
+  it('F37: the spool block expands EPOCHREALTIME exactly once', () => {
+    const code = spoolBlock(fs.readFileSync(HOOK, 'utf8')).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect((code.match(/\$\{?EPOCHREALTIME\b/g) ?? []).length).toBe(1);
+  });
+
+  /** The hook with a wall-clock bound: a hook blocked in open(2) is killed, never left to hang the suite. */
+  const runSpoolBounded = (payload: object): ReturnType<typeof spawnSync> => spawnSync('bash', [HOOK], {
+    input: JSON.stringify(payload), encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL', env: hookEnv(SCRUB),
+  });
+
+  it('F24: a FIFO at the spool path writes no line and never blocks: exit 0, silent, hookstate written, the FIFO left as it was (D-4418)', () => {
+    plantSpool();
+    execFileSync('mkfifo', [spoolFile()]);
+    const r = runSpoolBounded({ hook_event_name: 'Stop', session_id: SID });
+    expect(r.signal).toBeNull();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+    expect(fs.lstatSync(spoolFile()).isFIFO()).toBe(true);
+  }, 30_000);
+
+  it('F24: a symlink at the spool path writes no line and leaves its target byte-identical (D-4418)', () => {
+    plantSpool();
+    const outside = path.join(home, 'outside.txt');
+    fs.writeFileSync(outside, 'outside\n');
+    fs.symlinkSync(outside, spoolFile());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('outside\n');
+    expect(fs.lstatSync(spoolFile()).isSymbolicLink()).toBe(true);
+  });
+
+  it('F24: a dangling symlink at the spool path creates nothing at its target (D-4418)', () => {
+    plantSpool();
+    const nowhere = path.join(home, 'nowhere.jsonl');
+    fs.symlinkSync(nowhere, spoolFile());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.existsSync(nowhere)).toBe(false);
+  });
+
+  it('F24: a symlinked spool directory gets no line (D-4418)', () => {
+    fs.mkdirSync(path.join(home, '.ccrc', 'history'), { recursive: true });
+    const elsewhere = path.join(home, 'elsewhere');
+    fs.mkdirSync(elsewhere, { mode: 0o700 });
+    fs.symlinkSync(elsewhere, spoolDir());
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(fs.readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it('F24 CONTROL: an existing regular spool file is appended to (D-4418)', async () => {
+    plantSpool();
+    fs.writeFileSync(spoolFile(), '');
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    run({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => l.rec?.['ev'])).toEqual(['Stop', 'Stop']);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('F24 (S12\'s guard kept): a regular spool file the hook cannot open costs the line, never the exit status, the silence or the hookstate write (D-4418)', () => {
+    plantSpool();
+    fs.writeFileSync(spoolFile(), '');
+    fs.chmodSync(spoolFile(), 0o400);
+    const r = runFull({ hook_event_name: 'Stop', session_id: SID }, SCRUB);
+    expect(r.stderr).toBe('');
+    expect(readState().state).toBe('done');
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe('');
+  });
+
+  it('F24: the block names its residue\'s bound, and the installer defines it (D-4418)', () => {
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    expect(block).toContain('HOOK_TIMEOUT_S');
+    expect(block).toContain('D-4418');
+    expect(fs.readFileSync(path.resolve(__dirname, '../../ccd/install-session-hooks.sh'), 'utf8')).toMatch(/^HOOK_TIMEOUT_S=\d+$/m);
   });
 });

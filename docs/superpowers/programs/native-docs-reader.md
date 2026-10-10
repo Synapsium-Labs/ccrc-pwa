@@ -18,9 +18,9 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | ccd reads docs: `shared/docs.ts`, `docs-index`/`docs-tree`/`docs-show`/`docs-fetch` and the embedded helper, the doctor's `docs` check | #301 | **merged** 2026-10-06 (`f03d83304`). Executed in the coordinator's session (subagent-driven, 19 tasks, per-task reviews, a six-lens final review, one fix round), not as a run |
-| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | run 315, dispatched 2026-10-07 10:39 UTC. Wave-done at `03826657e`. Review 317 found two defects, fixed in fix round 1, which reported done at `2190cc43f`. Scoped re-review 336 closed both, and found the new scan too narrow in three places and too wide for W3's own code. Fix round 2 (`4017e8262`) closed those; scoped re-review 337 found five more items in the same scan. Fix round 3, the last on this scan, was sent 2026-10-08 09:10 UTC. A closure check follows, then the merge |
-| 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | — | plan written 2026-10-08 (`docs/superpowers/plans/2026-10-07-native-docs-reader-w3-routes.md`, 12 tasks, six deviations), awaiting the operator's review. Dispatch after W2 merges |
-| 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | — | parallel-eligible now. Its `ccd/ccrc-doctor-checks` edit waits on whichever claim holds that file (claim 1072, run 302, on 2026-10-07) |
+| 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | **merged** 2026-10-09 (`5a6e5d3d7`). Run 315: review 317, then three fix rounds (two defects, then the one-reader scan), a merge of `main` after ccrc-history B1 landed, and closure review 343. Run 315 closed done |
+| 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | #339 | **merged** 2026-10-09 (`f4d75a741`). Run 342: review 361, one fix round, scoped re-review 364 clean. After the merge, the operator runs the dark rollout, fleet first, then R2 and R1 (§7.8). Both gate W5's merge |
+| 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | — | plan written 2026-10-09 (`docs/superpowers/plans/2026-10-09-native-docs-reader-w4-pwa-foundation.md`, 12 tasks, four deviations), awaiting the operator's review. Run 367 opened 2026-10-09 with block 4768 to 4783 |
 | 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06) | — | after W3 and W4 |
 | 6 | mockups | — | after W5 |
 | 7 | docs and release | — | after W6 |
@@ -84,6 +84,20 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - **F4, minor: fix.** A backslash-newline inside a string shifted later line numbers.
   - **F5, minor: fix.** The scope CONTROL is rebuilt from the W3-shaped file itself.
 - **2026-10-08: the scan's evasion list is not exhaustive (coordinator).** Fix round 2 asked that list to name "exactly what still evades". A text scan cannot meet that, and each review found new spellings. The list is now "known evasions". Fix round 3 is the last on this scan. Its review checks the round's items, and any new evasion spelling becomes residue for a later wave, unless it hides a reader through a spelling already in the tree or in W3's files.
+- **2026-10-09: W2 lands second after ccrc-history B1.** #315 merged first, as agreed. #319 then conflicted only at the end of `single-definition.test.ts`. The worker merged `main`, kept B1's text where `main` has it, and put W2's block last.
+- **2026-10-09: W2's closure review (run 343, tip `0acbfadea`).** Every item ruled in fix round 3 is closed. The merge is clean. All suites pass, and all 189 mutation rows are red as recorded.
+  - Four minor findings, carried as residue, not fixed. Two rules in the one-reader scan ship without a mutation row: the after-the-dot arm's blank-line skip, and the bare import after another statement. Both only widen what the scan catches. The other two: three docstring wording slips, and one results note that does not name W2-T5-M1's moved first red case.
+  - Four new evasion spellings, none in the tree or in W3's files: U+2028/2029 in a line comment, backslash-CRLF in a string, a string-named import specifier, and a type argument's `>` before a division.
+  - **Ruling:** accepted, and #319 merged at its reviewed head.
+- **2026-10-09: an undispatched review run pins its work run (coordinator lesson).** Review 343 was opened and then waited on the daily cap. When `main` moved, the coordinator could not close 343 (`not-dispatched`), and that blocked sending run 315 back (`review-in-flight`). The workaround: the worker merged `main` while 315 stayed at awaiting-review. 343 then dispatched against the merged tip, and 315's fingerprint was corrected after 343 closed. Open a review run only when its dispatch can follow at once.
+- **2026-10-08/09: claim agreements for W3.**
+  - Claim 1105 (ccrc-history B1) on `single-definition.test.ts`: agreed by its coordinator and holder. It ended when #315 merged.
+  - Claims 1115 and 1116 (box-token-lifecycle wave 1, PR #330) cover `server.ts`, `auth/gate.ts`, `auth-gate.test.ts`, `box-token-census.test.ts` and `single-definition.test.ts`. Agreed by the holder: the second PR to land merges `main`, keeps the other's routes, census entries and blocks, and re-measures every count.
+- **2026-10-08: W3 approved and opened.** The operator accepted the plan ("plan accepted"). Run 342 opened with block 4464 to 4479. Task 9 Step 7 defines the first six, for (d), (i), (j), (s), (v) and (w); the other ten are reserve. A drift replay on `main` plus W2 found only Task 8's route counts moved (#320 added two routes). The brief settles that by re-measurement, and a review of the brief found six defects, all fixed before dispatch.
+- **2026-10-09: W3 ruling during the wave: a WebSocket upgrade bypasses the docs headers (coordinator, mail 4082).** The root websocket plugin answers an upgrade to a docs route with a 101 before the docs plugin's `onSend`. The upgrade passes the gate and provenance first, carries no body and runs no exec, and a browser cannot reach it. It was ruled a deviation (4471), like refinement (d), and pinned by three tests.
+- **2026-10-09: W3's review (run 361, tip `77862e265`).** All eight deviations (4464 to 4471) are real, with true rationales. 13 findings: four important guards had no failing case (the show shape at the route, provenance at `onRequest`, the cache-hit raster rules, two tree shape clauses). Fix round 1 also moved the lane's admission and overflow comparisons into L1, and the blob cache now copies at fill, so its charge bounds the memory it holds. The generation-map growth (about 560 B per refreshed name) stays the plan's carried item. Scoped re-review 364 was clean, and #339 merged at its reviewed head.
+- **2026-10-09: W4 planned in stages (coordinator).** Ground scouts and an architect, writers that applied each task to a scratch tree, then a three-lens review with refuters and one fix pass. The stages kept the coordinator's mail gate from going deaf for hours. Four departures from the spec's text: (a) six rows written against W5 parts are proved on W4 stand-ins, and their W5 halves move to W5's brief; (b) M4.M1's plugin-order mutation cannot fail, so it is replaced; (c) `docs-sw` counts with bash builtins, not `grep -c`; (d) `docs-sw` SKIPs on either fleet signal. W4's run is open with block 4768 to 4783.
+- **2026-10-09: two operator questions from W4's planning.** Q1: should chat show images only for absolute `http(s)` URLs? That is stricter than U3's root-relative and protocol-relative refusal, and closes the path-relative same-origin GET. The plan follows the spec; a ruling changes one predicate and adds a deviation in Task 10 Step 8. Q2: W6's M5.16 scan forbids `postMessage` in the Markdown code, and W4's worker files need it. The Share/Export spec amendment should exempt them.
 - **2026-10-08: W3 plan.** Written by a planning workflow: scouts, an architect, one writer per task prototyping on a scratch tree at W2's tip, a plan review and two fix passes.
   - **12 tasks.** Task 11 is the whole-branch review, run before Task 12's close. Task 12 pushes and opens the PR.
   - **Six departures from the spec's text,** defined by Task 9 Step 7 with the first six numbers of W3's block:
@@ -123,17 +137,16 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - docs-shared's claim about two refinements;
   - the dropped clause "git 2.43 ignores the key".
   - README's doctor table has no row for W1's `docs` check, and its server-role SKIP sentence (the D-3111 list ending "`timeout` and `model-default`") does not name `docs`, although `_check_docs` SKIPs on a `CCRC_ROLE=server` box (reported by another session in mail 3818, 2026-10-07; README is under another programme's claim, so W7 places it).
+- **W2's one-reader scan residue** (review 343): two unpinned widening arms, three docstring wording slips, the W2-T5-M1 note, and four evasion spellings to add to its "Known evasions" list. This is for the next wave that edits `docs-source.test.ts`, or for W7.
+- **W3 residue:** two Task 12 tool texts and one Notes count (review 364); the plan's Task 4 Decision 1 text against the moved L1 verdicts; W2's closed plan rows anchored on `laneAdmit`'s old inline clause. For W7's prose pass: the `coord/store.ts` and `coord/close.ts` comments that say no `app.setErrorHandler` exists, §5.3's "every docs response", which should name the router-level and upgrade escapes, and W4's two stale comments (`pwa/src/lib/api.ts`, `server/test/sourceScan.ts`).
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Next-wave brief (W2), as dispatched to run 315
+## Next-wave brief (W4), for run 367 once the operator approves the plan
 
-The bullets below were the plan. The brief as sent adds R1, the measured drift, the claim gate and the issued block (Decisions, 2026-10-07). W3's brief is written once W2 is accepted.
-
-
-- **Plan:** `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`, Tasks 1-9.
-- **Base:** `main` containing W1's `f03d83304`. The plan's numbers were measured at W1's tip, so counts that include pre-existing tests may differ. What binds is the new cases behaving as written.
-- **Execution skill:** `superpowers:subagent-driven-development`. Routing (matrix row "worker executing a spec'd plan"): Opus·high main loop, Sonnet·high implementers, an Opus·high per-task reviewer, workflows off, `compact 40`.
-- **Branch discipline:** commit on this workspace's own branch, never a separate feature branch.
-- **Deviation block:** the four numbers Task 6 defines, plus a reserve, issued at run-open and named in the brief.
-- **Review:** after the verified wave-done, a review run with the held-out panel (`review-panel.md`). Lenses: rings, version skew (git 2.43 vs 2.55), untrusted input, mutation discipline, spec conformance.
-- **Carried constraints:** the list above, verbatim.
+- **Plan:** `docs/superpowers/plans/2026-10-09-native-docs-reader-w4-pwa-foundation.md`, Tasks 1-12. Task 11 is the held-out whole-branch review; Task 12 pushes and opens the one PR.
+- **Base:** `main` at dispatch, at or after the plan's `6fc7ef115`.
+- **Routing:** matrix row "worker executing a spec'd plan". Opus·high main loop, Sonnet·high implementers, Opus·high task reviewers and Task 11's panel, workflows off, `compact 40`.
+- **Branch discipline:** commit on the workspace's own branch, never a separate feature branch.
+- **Deviation block:** 4768 to 4783. Task 10 Step 8 defines the first four, plus any operator ruling the brief names (Q1).
+- **Claims:** the plan's shared-file list, checked at dispatch and before each task that edits one.
+- **Carried constraints:** the list above.

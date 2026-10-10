@@ -12,7 +12,7 @@ import {
   DEAD_COORDINATOR_JOURNAL_MARGIN_MS, DEAD_COORDINATOR_JOURNAL_TRUSTED, deadAnchorNext, deadCoordinatorAttention,
   deadCoordinatorBackoffMs, deadCoordinatorBreaker, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerKey,
   deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorFeedRows, deadCoordinatorJournal,
-  deadCoordinatorNextEntry, deadCoordinatorReportSentence, deadCoordinatorSighted, deadCoordinatorSince,
+  deadCoordinatorNextEntry, deadCoordinatorReportSentence, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrewFeedRow,
   deadCoordinatorThrew, isDeadCoordinatorKebab,
   type ClaimantReading, type DeadCoordinatorJournal, type DeadCoordinatorJournalRow, type DeadCoordinatorJournalTrust,
 } from '../src/deadCoordinator.js';
@@ -286,6 +286,17 @@ describe('the lane’s memory of one claimant', () => {
     expect(back).toMatchObject({ crashedPasses: 0, report: null });
   });
 
+  it('a reading that ENDS the episode forgets the last recorded outcome, so a second episode is recorded again (review 339, F2)', () => {
+    let e = deadCoordinatorSighted(deadCoordinatorEntry(), { kind: 'crashed', cause: 'orphan' }, NOW);
+    e = deadCoordinatorNextEntry(e, { kind: 'would-end', programmes: [{ slug: 'p', runIds: [1] }] }, 'orphan', NOW, NOW, PASS);
+    expect(e.lastOutcome, 'the CONTROL: the shadow record is remembered').toBe('would-end:p=1');
+    expect(deadCoordinatorSighted(e, { kind: 'crashed', cause: 'orphan' }, NOW + PASS).lastOutcome, 'a crashed pass keeps it').toBe('would-end:p=1');
+    for (const c of [{ kind: 'alive', why: 'x' }, { kind: 'stopped' }, { kind: 'deliberate', act: 'stop' },
+      { kind: 'unmeasured', why: 'w' }, { kind: 'unmeasurable', why: 'u' }] as const) {
+      expect(deadCoordinatorSighted(e, c, NOW + PASS).lastOutcome, c.kind).toBeNull();
+    }
+  });
+
   it('unmeasured IS a report, kept with its first instant until a pass can tell; stuck stands until its runs move', () => {
     const u = deadCoordinatorSighted(deadCoordinatorEntry(), { kind: 'unmeasured', why: 'w' }, NOW);
     expect(deadCoordinatorSighted(u, { kind: 'unmeasured', why: 'w' }, NOW + PASS).report).toEqual({ kind: 'unmeasured', at: NOW, why: 'w' });
@@ -306,12 +317,14 @@ describe('the lane’s memory of one claimant', () => {
 
   it('an act that STOPPED on a re-measure or a switch forgets its passes; a successor does not', () => {
     const e = { ...deadCoordinatorEntry(), crashedPasses: 61 };
-    const ended = (stoppedBy: { kind: 'remeasured' | 'switch' | 'successor'; why: string }) =>
+    const ended = (stoppedBy: { kind: 'remeasured' | 'switch' | 'successor' | 'hold'; why: string }) =>
       deadCoordinatorNextEntry(e, { kind: 'ended', programmes: [], open: [{ slug: 'p', runIds: [1] }], stuck: [], stoppedBy },
         'orphan', NOW, NOW, PASS);
     expect(ended({ kind: 'remeasured', why: 're-measured alive' })).toMatchObject({ crashedPasses: 0, nextAskAt: 0 });
     expect(ended({ kind: 'switch', why: 'reclaim-paused was raised' })).toMatchObject({ crashedPasses: 0, nextAskAt: NOW + PASS });
     expect(ended({ kind: 'successor', why: 'x' })).toMatchObject({ crashedPasses: 61 });
+    // A mirror gone stale at the act learned nothing: the passes stand, and it waits one pass (review 339, F4).
+    expect(ended({ kind: 'hold', why: 'the lifecycle mirror is stale' })).toMatchObject({ crashedPasses: 61, nextAskAt: NOW + PASS });
   });
 
   it('an act that THREW is reported and asked again only after the backoff, never every pass', () => {
@@ -376,6 +389,37 @@ describe('the words', () => {
     expect(both[0]!.body).toContain('1 of 2 runs closed failed and 1 stay open — the act stopped: x; run 8\'s worker was released');
   });
 
+  it('a RE-HELD worker is worded as re-held and still claimed — never as released and unheld (review 339, F3)', () => {
+    const o = { kind: 'ended', programmes: [], open: [{ slug: 'alpha', runIds: [7] }], stuck: [], reheld: [{ slug: 'alpha', runIds: [7] }],
+      stoppedBy: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' } } as const;
+    const rows = deadCoordinatorFeedRows('demo-coord', o, NOW);
+    expect(rows).toEqual([{ title: 'dead coordinator: programme partly ended',
+      body: 'coordinator demo-coord crashed (dead since 2026-09-21 14:13 UTC) and stayed dead an hour; programme alpha was NOT ended: '
+        + '0 of 1 run closed failed and 1 stay open — the act stopped: re-measured alive: tmux reports the pane live; '
+        + 'run 7\'s worker was re-held under a surviving run and stays claimed.' }]);
+    expect(rows[0]!.body).not.toMatch(/released|unheld/);
+    const n = deadCoordinatorNextEntry({ ...deadCoordinatorEntry(), crashedPasses: 3 }, o, 'orphan', NOW, NOW, PASS);
+    expect(n.report, 'a re-hold alone is news: the act did something').toMatchObject({ kind: 'stuck', runs: [] });
+    const sentence = deadCoordinatorReportSentence('demo-coord', n.report!);
+    expect(sentence).toContain('re-held the worker of run 7 of programme alpha under a surviving run (it stays claimed)');
+    expect(sentence).not.toMatch(/released|unheld/);
+  });
+
+  it('an act that THREW gets ONE row naming what is known, whatever it had done — and that nothing more is known (review 339, F13)', () => {
+    const none = deadCoordinatorThrewFeedRow('demo-coord', { kind: 'ended', programmes: [], open: [{ slug: 'alpha', runIds: [7] }],
+      stuck: [], stoppedBy: null, failed: 'database or disk is full', failedRun: 7 }, 'database or disk is full', NOW);
+    expect(none).toEqual({ title: 'dead coordinator: act failed',
+      body: 'coordinator demo-coord crashed (dead since 2026-09-21 14:13 UTC) and stayed dead an hour; the lane\'s act failed '
+        + '(database or disk is full) before it closed any run; run 7\'s abandon is the one that failed, and whether its worker was '
+        + 'released or re-held before the failure is not known. Nothing more is known about which runs or workspaces moved — '
+        + 'check its runs on /runs. It is asked again only after a backoff.' });
+    expect(deadCoordinatorThrewFeedRow('demo-coord', { kind: 'ended', programmes: [{ slug: 'alpha', runIds: [6] }],
+      open: [{ slug: 'beta', runIds: [7] }], stuck: [], stoppedBy: null, failed: 'x', failedRun: 7 }, 'x', NOW).body)
+      .toContain('failed (x) after it closed failed 1 run of programme alpha; run 7\'s abandon is the one that failed');
+    expect(deadCoordinatorThrewFeedRow('demo-coord', null, 'SQLITE_BUSY', NOW).body, 'the serialiser threw: nothing is known')
+      .toContain('failed (SQLITE_BUSY) before it closed any run. Nothing more is known');
+  });
+
   it('an act that FAILED part-way keeps the rows of what it had closed, and says it failed', () => {
     const o = { kind: 'ended', programmes: [{ slug: 'alpha', runIds: [7] }, { slug: 'beta', runIds: [8] }],
       open: [{ slug: 'beta', runIds: [9] }, { slug: 'gamma', runIds: [10] }], stuck: [], stoppedBy: null, failed: 'database or disk is full' } as const;
@@ -405,7 +449,7 @@ describe('the words', () => {
     const s = deadCoordinatorNextEntry(e, { ...o, stuck: [{ runId: 9, why: 'bad-transition' }] }, 'orphan', NOW, NOW, PASS);
     expect(deadCoordinatorReportSentence('demo-coord', s.report!)).toMatch(/run 9 \(bad-transition\) could not be moved[\s\S]*released the worker of run 9/);
     // A throw keeps what it had closed.
-    const t = deadCoordinatorThrew(e, 'SQLITE_FULL', NOW, PASS, { closed: [{ slug: 'alpha', runIds: [7] }], released: [], stop: null });
+    const t = deadCoordinatorThrew(e, 'SQLITE_FULL', NOW, PASS, { closed: [{ slug: 'alpha', runIds: [7] }], released: [], reheld: [], stop: null });
     expect(deadCoordinatorReportSentence('demo-coord', t.report!)).toMatch(/failed \(SQLITE_FULL\)[\s\S]*closed failed 1 run of programme alpha/);
   });
 

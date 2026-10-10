@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~5800 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~5900 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -64,11 +64,12 @@ real values: `deploy/reference-fleet.md` (gitignored).
   (design 2026-09-20 §11: R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
-  cleanup in `tmpHelpers.ts`. Second boundary: `ghContainedEnv()` plants a poisoned `gh` on PATH so a stray real
-  `gh` (which carries a `gho_` repo-WRITE token) can't fire — containment is per-test, not structural.
+  cleanup in `tmpHelpers.ts`, inside one per-run `$TMPDIR/ccrc-testrun-*` parent that teardown or a signal removes at once and a later run under
+  the same TMPDIR removes, once quiet, after a SIGKILL (`server/test/run-tmp.globalsetup.mjs`, #316). Second boundary: `ghContainedEnv()` plants
+  a poisoned `gh` on PATH so a stray real `gh` (which carries a `gho_` repo-WRITE token) can't fire — containment is per-test, not structural.
 - **NEVER print secret file CONTENTS.** The box/mail token is one shared secret per box
-  (`~/.cc-secrets/ccrc-mail.token` on fleet host, `~/.ccrc/mail.token` on server), from one gitignored
-  `deploy/ccrc-mail.token`. Existence checks by `ls` only. The committed `.example` placeholder is refused at boot
+  (`~/.cc-secrets/ccrc-mail.token` on fleet host, `~/.ccrc/mail.token` on server), minted and rotated by
+  the server, never shipped by `deploy.sh`. Existence checks by `ls` only. The committed `.example` placeholder is refused at boot
   (`MailTokenPlaceholderUnedited`) — this repo is **public** (AGPL-3.0 since 2026-08-22: `LICENSE`, `CONTRIBUTING.md`,
   `SECURITY.md`): treat everything in it as public.
 - **`gh` has NO exec-whitelist entry, deliberately** — the host `gh` token has `repo` WRITE scope and there's no
@@ -76,6 +77,14 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **Identity on the fleet is attribution, not authentication:** single UNIX user, ccd has no caller auth. The
   exec whitelist guards ONLY the PWA→server→agent path; the HTTP chokepoint (caps + pause files) is a **contract
   the coordinator skill honors, not an OS wall**. Don't assume server-side checks stop a session acting directly.
+- **`ccrc history`'s writing verbs are the OPERATOR's, never a session's** (spec 2026-10-05 §8.4): every writing
+  form of `ccrc history` (`WRITING_FORMS`, `ccd/history/lib.mjs` — read it, this is not the list), including
+  `… --apply`, `import --session --file --apply` and `doctor --repair/--adopt/--restore/--rebuild/--migrate/--backup`,
+  and their direct form `~/.local/bin/ccd-history-sweep --op …`. Each refuses inside a session
+  (`CLAUDECODE` set), and the irreversible ones also refuse without a TTY or inside a `cc-*` pane: **speed bumps, not
+  walls** (`env -u CLAUDECODE` defeats the first). Never run one from a session to turn a test or a doctor line
+  green: `~/.ccrc/history` holds verbatim session text, secrets sessions printed included, and once Claude Code's
+  retention passes it is that text's only copy.
 
 ## Build / test / deploy
 **No root `package.json`, no root runner.** Four packages, each `"type":"module"`, run cd'd in:
@@ -294,7 +303,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   wave 2): it then ends the coordinator's open runs through the abandon door's own decision, on the coordination
   serialiser, and consults no box token — session-gated when the auth gate is armed, like the abandon door. It is
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
-  route's literal.
+  route's literal. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
+  the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
+  the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`

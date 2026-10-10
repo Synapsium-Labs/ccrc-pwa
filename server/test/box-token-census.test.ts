@@ -55,9 +55,10 @@
 // 8 and is now scanned by `coord-pause-route.test.ts`'s `enumerations()`, which
 // reads the door names and the CAPS cardinal together (D-1168, closed).
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -71,6 +72,11 @@ const SERVER_SRC = read('server/src/server.ts');
  *  where a box-token call on the update surface would BE, so it is read like
  *  the two above. */
 const UPDATE_SRC = read('server/src/update/routes.ts');
+/** The FOURTH file that registers routes (box-token lifecycle, spec 4.6): the
+ *  claim door and "Rotate now". Read as a lane source for the update file's
+ *  reason — a box-token call there would BE a lane — and so that "neither route
+ *  consults the box token" is a measured zero over a file this census reads. */
+const TOKEN_SRC = read('server/src/token/routes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -177,7 +183,8 @@ const lanesIn = (src: string): string[] => {
 
 const COORD_LANES = lanesIn(COORD_SRC);
 const UPDATE_LANES = lanesIn(UPDATE_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES];
+const TOKEN_LANES = lanesIn(TOKEN_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -223,8 +230,17 @@ const ARCHIVE = '/api/sessions/:id/archive';
 const UPDATE_DOORS = ['/api/updates', '/api/updates/intent', '/api/updates/refresh', '/api/updates/ack',
   '/api/updates/apply', '/api/updates/rollback'];
 
+/** The box-token lifecycle's two routes (spec 4.6), registered from
+ *  `server/src/token/routes.ts`, which no harvest above can see. Hand-kept for the
+ *  NAMES only, like `UPDATE_DOORS`: the token-surface describe below derives the
+ *  file's registrations and compares in both directions. `CODE_DOORS` authenticate
+ *  by a single-use code the server issued itself (EXEMPT, reason 7); `TOKEN_DOORS`
+ *  are session-only. Neither consults the box token. */
+const CODE_DOORS = ['/api/token/claim'];
+const TOKEN_DOORS = ['/api/token/rotate'];
+
 /** Every session-only route the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS];
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS, ...TOKEN_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -366,6 +382,10 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(ALL_LANES, 'the new server.ts lane is missing').toContain('GET /api/pools/epoch');
     expect(ALL_LANES, 'the update projection read is missing — update/routes.ts is not being read')
       .toContain('GET /api/updates/intent/:nodeId');
+    // STILL THREE since the box-token lifecycle added a fourth lane source,
+    // `token/routes.ts`, and only because that file adds no lane — asserted
+    // directly, so the arithmetic below cannot stay true for the wrong reason.
+    expect(TOKEN_LANES, 'a token route consults the box token — the lane count moved').toEqual([]);
     // THREE since update-management W2: `server.ts`'s pair plus the update
     // projection read, the one handler in `update/routes.ts` that consults the
     // box token (design 2026-09-20 §12, decision 15).
@@ -815,6 +835,64 @@ describe('the update surface: one dual-credential read, every other route sessio
   });
 });
 
+// ── the token surface (box-token lifecycle, spec 4.6) ────────────────────────
+//
+// `server/src/token/routes.ts` is the FOURTH file that registers routes. Run over
+// it by construction, as the update surface is: no handler there consults the
+// box token, `CODE_DOORS` and `TOKEN_DOORS` together name exactly what it
+// registers, a planted box-token call is SEEN (the control), and CLAUDE.md names
+// both routes after its "What does need saying here" split, so the lanes clause
+// never reads the claim door as a lane.
+describe('the token surface: a code door and a session-only rotate, no box-token lane', () => {
+  const REGISTERED = registrationsIn(TOKEN_SRC).map((r) => r.key);
+
+  it('token/routes.ts registers what the checks below reason over', () => {
+    expect(REGISTERED, 'the token scan collapsed — this describe is over nothing')
+      .toHaveLength(CODE_DOORS.length + TOKEN_DOORS.length);
+    expect(new Set(REGISTERED).size, 'a route is registered twice').toBe(REGISTERED.length);
+  });
+
+  it('no handler there consults the box token, so the lane count stays where it was', () => {
+    expect(TOKEN_LANES).toEqual([]);
+    for (const p of [...CODE_DOORS, ...TOKEN_DOORS]) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${p} became a box-token lane`).not.toContain(p);
+    }
+  });
+
+  it('CODE_DOORS and TOKEN_DOORS are exactly what the file registers, in both directions', () => {
+    const paths = REGISTERED.map((k) => k.slice(k.indexOf(' ') + 1));
+    expect([...paths].sort(),
+      'token/routes.ts and CODE_DOORS/TOKEN_DOORS disagree — a route was added or removed on one side only')
+      .toEqual([...CODE_DOORS, ...TOKEN_DOORS].sort());
+  });
+
+  it('the code door is EXEMPT and the rotate route is not (gate.ts, read as text)', () => {
+    for (const p of CODE_DOORS) expect(GATE_SRC, `${p} has no EXEMPT entry`).toContain(`  ['POST ${p}',`);
+    for (const p of TOKEN_DOORS) expect(GATE_SRC, `${p} became EXEMPT`).not.toContain(`  ['POST ${p}',`);
+  });
+
+  it('a box-token call planted in token/routes.ts is SEEN — the lane source is live, not decorative', () => {
+    const anchor = "app.post('/api/token/rotate', async (_req, reply) => {";
+    expect(TOKEN_SRC, 'the rotate registration line moved — re-point this control at it').toContain(anchor);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = TOKEN_SRC.replace(anchor, `${anchor}\n    ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toContain('POST /api/token/rotate');
+    }
+    expect(lanesIn(TOKEN_SRC)).not.toContain('POST /api/token/rotate');
+  });
+
+  it("CLAUDE.md's box-token bullet names both routes, after its split, and never as a lane", () => {
+    const bullet = passage('CLAUDE.md, the box-token bullet', CLAUDE_MD,
+      '- **Box token gates every coordination WRITE**', '\n- **').replace(/\s+/g, ' ');
+    const split = bullet.indexOf('What does need saying here');
+    expect(split, "the bullet's split anchor moved").toBeGreaterThan(0);
+    for (const p of [...CODE_DOORS, ...TOKEN_DOORS]) {
+      expect(bullet.slice(split), `the bullet does not name ${p} after its split`).toContain(`\`POST ${p}\``);
+      expect(bullet.slice(0, split), `the bullet names ${p} inside its lanes clause`).not.toContain(p);
+    }
+  });
+});
+
 // Task 10 (account-pool-membership wave 1): the account side's freshness
 // dependency, named in CLAUDE.md's Account-pools bullet per spec §8 ("named,
 // not discovered") and pinned here against `_acct_pool_state`'s own body —
@@ -895,5 +973,129 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
       .toContain('ccd-pool-sync.timer');
     expect(b, 'the bullet no longer names the resolved-pool document')
       .toContain('/api/pools/epoch');
+  });
+});
+
+// ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
+//
+// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its four are session-gated, NOT EXEMPT and
+// consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
+// one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
+// token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own
+// hooks would gate all four routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
+// `ALL_LANES`: a docs read or refresh is not a coordination write, so CLAUDE.md's box-token bullet owes it no
+// sentence and no number word moves. And the page grammar's prefix is never a SERVER route (§3.13's new scan): a
+// `/docs/...` URL is the PWA's page, answered by the SPA shell, under every file in `server/src`.
+describe('the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
+  const DOCS_SRC = read('server/src/docs/routes.ts');
+  /** Every source file of the docs surface, by listing the directory, so a file added there is read without an edit
+   *  here. */
+  const DOCS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'docs'))
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/docs/${f}`);
+  /** The four doors, by path (§3.4). Hand-kept for the NAMES only: the cases below derive the same set from the file
+   *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
+  const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
+    '/api/docs/:project/refresh'];
+  const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
+  const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
+  /** The registration lines the planted-call controls anchor on (the plan's fixed registration text). */
+  const TREE_LINE = "app.get('/api/docs/:project/tree', { exposeHeadRoute: false }, async (req, reply) => {";
+  const REFRESH_LINE = "app.post('/api/docs/:project/refresh', async (req, reply) => {";
+  /** Every `.ts` file under `server/src`, repo-relative. */
+  const SERVER_FILES = (readdirSync(path.join(REPO, 'server', 'src'), { recursive: true }) as string[])
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/${f.split(path.sep).join('/')}`);
+
+  it('docs/routes.ts registers what the checks below reason over, and every docs file is read', () => {
+    // Anti-vacuity: every loop below is over REGISTERED, DOCS_FILES or SERVER_FILES.
+    expect(REGISTERED.length, 'the docs scan collapsed — this describe is over nothing').toBe(DOCS_DOORS.length);
+    expect(new Set(REGISTERED).size, 'a docs route is registered twice').toBe(REGISTERED.length);
+    expect(DOCS_FILES, 'the docs directory listing lost a file this census must read').toEqual(expect.arrayContaining([
+      'server/src/docs/cache.ts', 'server/src/docs/hooks.ts', 'server/src/docs/lane.ts', 'server/src/docs/routes.ts',
+    ]));
+    expect(SERVER_FILES, 'the server/src listing is not recursive — the /docs scan would miss every subdirectory')
+      .toEqual(expect.arrayContaining(['server/src/server.ts', 'server/src/docs/routes.ts', 'server/src/coord/routes.ts']));
+  });
+
+  it('DOCS_DOORS is exactly what docs/routes.ts registers, in both directions', () => {
+    expect(REGISTERED.map(pathOf).sort(),
+      'docs/routes.ts and DOCS_DOORS disagree — a route was added or removed on one side only')
+      .toEqual([...DOCS_DOORS].sort());
+  });
+
+  it('no docs file consults the box token, and no docs handler is a lane (§3.4: no box token is used)', () => {
+    for (const rel of DOCS_FILES) {
+      const src = read(rel);
+      for (const re of GATE_PATTERNS) {
+        expect(re.test(src), `${rel} consults the box token (${re.source}) — a docs route would be gated by it`)
+          .toBe(false);
+      }
+    }
+    expect(lanesIn(DOCS_SRC)).toEqual([]);
+  });
+
+  it('a box-token call planted after the tree GET or the refresh POST is SEEN — the lane source is live', () => {
+    // The control for the two cases above: they would pass just as green over a scanner that could not see this file.
+    for (const [anchor, k] of [[TREE_LINE, 'GET /api/docs/:project/tree'],
+      [REFRESH_LINE, 'POST /api/docs/:project/refresh']] as const) {
+      expect(DOCS_SRC, `the registration line of ${k} moved — re-point this control at it`).toContain(anchor);
+      for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+        const planted = DOCS_SRC.replace(anchor, `${anchor}\n    ${call}`);
+        expect(lanesIn(planted), `a planted ${call} in ${k} went unseen`).toEqual([k]);
+        expect(GATE_PATTERNS.some((re) => re.test(planted)), `a planted ${call} went unseen by the file scan`)
+          .toBe(true);
+      }
+    }
+  });
+
+  it('a route planted with another verb, or through app.route(), is SEEN and breaks the both-directions equality', () => {
+    const plants = [
+      ["app.delete('/api/docs/x', async (req, reply) => { reply.code(200).send({ ok: true }); });", 'DELETE /api/docs/x'],
+      ["app.route({ method: 'PUT', url: '/api/docs/y', handler: async (req, reply) => { if (req) { reply.code(200).send({ ok: true }); } } });",
+        'PUT /api/docs/y'],
+    ] as const;
+    for (const [text, k] of plants) {
+      const planted = registrationsIn(`${DOCS_SRC}\n${text}\n`).map((r) => r.key);
+      expect(planted, `a planted ${k} went unseen`).toContain(k);
+      expect(planted.map(pathOf).sort(), `a planted ${k} left the door set unchanged`)
+        .not.toEqual([...DOCS_DOORS].sort());
+      expect(REGISTERED).not.toContain(k);
+    }
+  });
+
+  it('DOCS_DOORS joins neither the session-only coordination writes nor the box-token lanes', () => {
+    for (const door of DOCS_DOORS) {
+      expect(SESSION_ONLY_ALL, `${door} was counted as a coordination write`).not.toContain(door);
+      expect(ALL_LANES.map(pathOf), `${door} was counted as a box-token lane`).not.toContain(door);
+    }
+  });
+
+  it('every /api/docs route lives in docs/routes.ts, and no file in server/src registers a /docs route', () => {
+    // §3.13's new scan, over every file and through the quote-agnostic `registrationsIn`: a docs route registered
+    // anywhere else would miss the docs plugin's provenance and response policy, and a `/docs` route would answer a
+    // URL that is the PWA's page.
+    const misplaced: string[] = [];
+    const pageRoutes: string[] = [];
+    for (const rel of SERVER_FILES) {
+      for (const { key: k } of registrationsIn(read(rel))) {
+        if (pathOf(k).startsWith('/api/docs') && rel !== 'server/src/docs/routes.ts') misplaced.push(`${rel}: ${k}`);
+        if (pathOf(k).startsWith(DOCS_PAGE_PREFIX)) pageRoutes.push(`${rel}: ${k}`);
+      }
+    }
+    expect(misplaced, 'a docs route is registered outside the docs plugin').toEqual([]);
+    expect(pageRoutes, 'a server route answers the Docs page prefix').toEqual([]);
+  });
+
+  it('a /docs route planted in each quote form, or through app.route(), is SEEN by that scan', () => {
+    const body = 'async (req, reply) => { reply.code(200).send({ ok: true }); }';
+    for (const text of [
+      `app.get('${DOCS_PAGE_PREFIX}/x', ${body});`,
+      `app.get("${DOCS_PAGE_PREFIX}/x", ${body});`,
+      'app.get(\x60' + DOCS_PAGE_PREFIX + '/x\x60, ' + body + ');',
+      `app.route({ method: 'GET', url: '${DOCS_PAGE_PREFIX}/x', handler: ${body} });`,
+    ]) {
+      const keys = registrationsIn(`${DOCS_SRC}\n${text}\n`).map((r) => r.key);
+      expect(keys.filter((k) => pathOf(k).startsWith(DOCS_PAGE_PREFIX)), `${text} went unseen`)
+        .toEqual([`GET ${DOCS_PAGE_PREFIX}/x`]);
+    }
   });
 });

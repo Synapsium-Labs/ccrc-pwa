@@ -183,8 +183,40 @@ scan per vocabulary). Names are `delegation_*`; the server journal is `~/.ccrc/d
 fleet state lives under the dotless `$REG/delegation/` — never `lifecycle`.
 
 **Activity id** = server-computed hash of (parent id, parent incarnation, source kind, upstream id, the
-journal id of the first event that named it) — deterministic on replay. Upstream ids: `agent_id`;
-workflow run id + worker index; `tool_use_id` where present. Display names are metadata only.
+journal id of the first event that named it), selected once, when the activity opens, and immutable
+thereafter: replay restores a checkpointed id verbatim and never re-selects it after pruning (below).
+Upstream ids: `agent_id`; workflow run id + worker index; `tool_use_id` where present. Display names
+are metadata only.
+For a workflow run id + worker index or a `tool_use_id`, that journal component stays the journal id of
+the first event naming the upstream id. For an activity keyed by `agent_id`, the activity opens only
+once a QUALIFYING join for that id is known: an Agent launch response, a SubagentStart, or a positive
+agent meta read naming it. A meta is a join read by point lookup (§5.4 rung 2), not a hook or spool
+event: it gains no journal event and no writer, and nothing of it is hashed. Whichever join is known
+first, the journal component is the journal id of the earliest journal event of the parent session,
+under the same incarnation, that names that `agent_id` and is retained when the activity opens. A
+qualifying join gates opening: it contributes no hash component and does not choose among the journal
+events retained when opening occurs. A launch response or a SubagentStart is such an event itself, so
+on every measured order it is the earliest. Opening waits for the join and, when the join is a meta,
+for at least one such event. Once the retained evidence set at opening is fixed, neither the
+qualifying join's kind or order nor the time of a positive meta read contributes a hash component or
+selects among those retained events. Timing can affect which events remain retained before opening
+only through the pruning contract (below and §5.12): an occurrence pruned before any qualifying join
+for that id is durably applied is gone permanently as evidence (clarified 2026-10-07, review 332 F1).
+A tool event whose only delegation evidence is `agent_id` does not qualify by itself: it is kept as
+evidence and opens no activity, and it attaches to the activity once a qualifying join for the same
+`agent_id` is known, whether that join came before it or arrives later; once one is, it may itself be
+the earliest event the activity id hashes. No reader decides this by whether `agent_type` is present
+(amended 2026-10-07 from the real-lane cross-check and reviews 318 and 324: ledger amendment
+`tool-agent-id-alone-is-unjoined-evidence`).
+The selected id is part of checkpointed applied state (§5.12). Reconstruction restores a checkpointed
+activity id verbatim and never re-selects an identity event (the event whose journal id the activity
+id hashes) for that activity from whatever journal suffix remains after pruning. It derives an id by
+the rule above only for an activity the checkpoint does not hold, and then picks the event chosen at
+open, because pruning cannot pass that event before a durable checkpoint holds the id. A bare
+`agent_id` occurrence pruned before any qualifying join for that id is durably applied is no longer
+retained evidence and can never later become the identity event. If a qualifying join is applied while
+it is retained, the activity opens and may select it, and the selected id is in a durable checkpoint
+before pruning can pass it (amended 2026-10-07, review 328 F1).
 
 **Lease id** = a server-minted UUID plus a generation. Server-side identity: (project, admin record,
 creation base, canonical path). Box-side fingerprint (computed by the verbs, never by the server): git
@@ -260,9 +292,13 @@ operator resolves it. A later, higher-rung answer that disagrees with an existin
    `wf_*` stops here**: without rung-2 evidence it is `unmeasured` (retried, and back-filled at a bounded
    rate through the per-session transcript resolver), never passed to rungs 3–4. The name only routes;
    it never links.
-3. **The subagent's own path.** An event emitted from inside a subagent (non-empty `agentId`) of S
-   whose `cwd` or `worktreePath` equals the canonical path, with that `agentId` claimed by no other
-   session. The parent session's own `cwd` never links.
+3. **The subagent's own path.** An event emitted from inside a subagent of S whose `cwd` or
+   `worktreePath` equals the canonical path, with its `agentId` claimed by no other session. An event
+   is inside a subagent only once its `agentId` belongs to an activity of S that a qualifying join has
+   established (§5.2: an Agent launch response, a SubagentStart or an agent meta naming it). A
+   non-empty `agentId` alone is retained evidence, not placement, and no reader decides it by whether
+   `agent_type` is present (amended 2026-10-07, ledger amendment
+   `tool-agent-id-alone-is-unjoined-evidence`). The parent session's own `cwd` never links.
 4. **The session's own creation delta.** One Bash tool call of S whose before- and after-listings
    (same `toolUseId`) differ by exactly one added admin record, while no other session's
    listing window on the same repository overlaps it in time. Overlap is `unresolved`. This is the rung
@@ -479,8 +515,21 @@ hooks never delete; no session invokes these verbs and no skill names them.
 - **Restart:** resume from the persisted cursors; a parent crash makes execution `unknown`, not ended;
   adoption replay keeps id and generation; promotion recovery is §5.7's; a cleanup crash re-measures
   authority and fingerprint.
+- **Activity identity across pruning:** an activity id is selected once, at open (§5.2), and is part
+  of the checkpointed applied state. Reconstruction restores a checkpointed activity id verbatim; it
+  never re-selects an identity event for that activity from whatever journal suffix remains after
+  pruning, and it derives an id by §5.2's rule only for an activity the checkpoint does not hold. A
+  minted identity survives pruning in the checkpoint, not by keeping every identity event forever. A
+  meta read is never journalled, has no writer and is never hashed (§5.2), so neither restoring nor
+  deriving an id reads one as an event (amended 2026-10-07, review 328 F1).
 - **Retention (proposed):** the journal keeps ≥ 30 days and never drops an event an open lease or
   lineage edge references.
+- **Pruning (amended 2026-10-07, review 328 F1):** whatever the retention, pruning may not pass an
+  accepted event until a durable checkpoint covers every activity, lease and lineage projection applied
+  through that event; an activity whose identity event precedes its opening (for example a bare
+  `agent_id` occurrence, §5.2) has its selected id in a durable checkpoint before pruning can pass that
+  event. A bare `agent_id` occurrence pruned before any qualifying join for that id is durably applied
+  is no longer retained evidence and never becomes an identity event.
 
 ### 5.13 Compatibility and mixed versions
 
@@ -613,6 +662,7 @@ measured cell records the failing test and `N failed | M passed`.
 | a vanished bucket before the cursor marks `unmeasured`; a torn line is not ingested | skip each check |
 | an event whose `sessionId` differs from its spool directory is rejected | accept it |
 | replay keeps lease id and generation | bump on replay |
+| replay restores a checkpointed activity id verbatim; pruning passes no event before a durable checkpoint covers it, nor an activity's identity event before a durable checkpoint holds its id | re-select the identity event on replay; prune past the checkpoint; release an activity's older identity event once a checkpoint covers it by position but before one holds its id, one row each |
 | only the journal creates a lease; a carrier alone is never cleanup-eligible | recover a lease from a carrier |
 | `ws-lease-mark`: atomic, generation-strict, flocked, both-direction containment, no symlink, no locked tree, root under the projects root, refuses registry rows | one row per refusal |
 | promotion: claimant attribution, `transferring` stales tokens, dirty or active refuses, `.child` only via dispatch | one row each |

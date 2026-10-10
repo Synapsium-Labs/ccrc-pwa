@@ -201,7 +201,33 @@ describe('install-coordinator-skill.sh default homes are the roster, behavioural
   });
 });
 
-describe('the deploy ships the skill, agent-side — and PR I’s token lane is there', () => {
+/** `line` with a trailing shell comment removed: a `#` opens one only outside quotes and at the line start or after
+ *  whitespace (so `$#`, `${#x}` and a `#` inside a quoted string stay). */
+function stripShellComment(line: string): string {
+  let q: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (q === "'") { if (c === "'") q = null; continue; }
+    if (q === '"') { if (c === '\\') i++; else if (c === '"') q = null; continue; }
+    if (c === '\\') { i++; continue; }
+    if (c === "'" || c === '"') { q = c; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(line[i - 1]!))) return line.slice(0, i);
+  }
+  return line;
+}
+
+/** The deploy.sh code lines that name the box token file (`ccrc-mail.token` or `mail.token`), less the two rsync
+ *  excludes (one per arm) that keep a stale checkout copy from riding `deploy/` to a box. Empty is the pass. A count
+ *  other than two excludes is reported as its own line, so a lost exclude is as red as a planted ship. */
+function tokenNamingLines(text: string): string[] {
+  const code = text.split('\n').map((l) => stripShellComment(l).trimEnd()).filter((l) => /mail\.token/.test(l));
+  const EXCLUDE = /^\s+--exclude 'ccrc-mail\.token' \\$/;
+  const excludes = code.filter((l) => EXCLUDE.test(l));
+  const rest = code.filter((l) => !EXCLUDE.test(l)).map((l) => l.trim());
+  return excludes.length === 2 ? rest : [...rest, `<${excludes.length} rsync token excludes, not 2>`];
+}
+
+describe('the deploy ships the skill, agent-side — and no longer ships the token (its rsync excludes are kept)', () => {
   const repo = (f: string): string => readFileSync(path.resolve(__dirname, '../..', f), 'utf8');
   const deploy = repo('deploy/deploy.sh');
   const agentArm = deploy.slice(deploy.indexOf('if [ "$TARGET" = "agent" ]'), deploy.indexOf('\nelse\n'));
@@ -234,13 +260,54 @@ describe('the deploy ships the skill, agent-side — and PR I’s token lane is 
     expect(line).toContain('--delete');
   });
 
-  // The three below are assertions about PR I's work, deliberately. The skill
-  // is useless without the token, and a silently absent lane would surface as a
-  // coordinator that cannot authenticate — a long way from here. They check
-  // SHAPE and EXISTENCE only: no test in this repo reads a token, and a token
-  // in a fixture is a token in a CI log.
-  it('the agent arm ships the fleet host’s copy of the box token', () => {
-    expect(agentArm).toContain("ship_secret ccrc-mail.token '~/.cc-secrets' ccrc-mail.token");
+  // The three below are assertions about PR I's token lane, deliberately. They
+  // check SHAPE and EXISTENCE only: no test in this repo reads a token, and a
+  // token in a fixture is a token in a CI log.
+  //
+  // Box-token lifecycle wave 1 (spec 4.9): deploy.sh no longer ships the token
+  // at all. The server mints its own at boot and hands the fleet box its copy
+  // over the agent link, so after the first rotation the gitignored
+  // `deploy/ccrc-mail.token` holds the retired value, and shipping it would put
+  // the leaked value back on both boxes. The pin that the agent arm ships it is
+  // flipped to ABSENCE, over the whole file: the function and both of its calls.
+  // The rsync excludes stay, so a stale source file left in a checkout never
+  // rides `deploy/` to either box.
+  it('deploy.sh ships no box token: no ship_secret function and no call, in either arm', () => {
+    expect(deploy, 'deploy.sh still ships the box token').not.toMatch(/\bship_secret\b/);
+    // Review 362 F5: the function's absence is not the property. ANY non-comment line naming the token file, in
+    // either spelling, other than the two rsync excludes is a way to ship it back (a bare scp to either box).
+    expect(tokenNamingLines(deploy), 'a non-comment deploy.sh line names the box token file').toEqual([]);
+    // The two rsync argument lines (one per arm), not the comment that explains them.
+    expect(deploy.match(/^\s+--exclude 'ccrc-mail\.token' \\$/gm) ?? [],
+      'an rsync lost its token exclude: a stale source file would ride deploy/ to the box').toHaveLength(2);
+  });
+
+  // The scan's own rows: planted deploy.sh texts, so a scan that matched nothing could not pass for a clean file.
+  describe('the no-ship scan, on planted texts', () => {
+    const EX = "    --exclude 'ccrc-mail.token' \\\n";
+    const base = `rsync -az \\\n${EX}    deploy/ "$BOX:x/"\nrsync -az \\\n${EX}    deploy/ "$AGENT_BOX:x/"\n`;
+    it('the real file is clean, and the clean base is clean', () => {
+      expect(tokenNamingLines(deploy)).toEqual([]);
+      expect(tokenNamingLines(base)).toEqual([]);
+    });
+    it('refuses the server-arm re-ship spelling', () => {
+      expect(tokenNamingLines(`${base}"\${SCP[@]}" deploy/ccrc-mail.token "$BOX:.ccrc/mail.token"\n`)).toHaveLength(1);
+    });
+    it('refuses the fleet-arm re-ship spelling', () => {
+      expect(tokenNamingLines(`${base}"\${SCP[@]}" deploy/ccrc-mail.token "$AGENT_BOX:.cc-secrets/ccrc-mail.token"\n`)).toHaveLength(1);
+    });
+    it('refuses a bare mail.token line and a line whose trailing comment hides nothing', () => {
+      expect(tokenNamingLines(`${base}cp x ~/.ccrc/mail.token # ship it\n`)).toHaveLength(1);
+      expect(tokenNamingLines(`${base}echo "# not a comment" ; scp a ccrc-mail.token\n`)).toHaveLength(1);
+    });
+    it('accepts a commented-out mention, whole-line or trailing', () => {
+      expect(tokenNamingLines(`${base}# "\${SCP[@]}" deploy/ccrc-mail.token "$BOX:.ccrc/mail.token"\n`)).toEqual([]);
+      expect(tokenNamingLines(`${base}echo ok  # ccrc-mail.token is not shipped\n`)).toEqual([]);
+    });
+    it('a lost or extra exclude is red too', () => {
+      expect(tokenNamingLines(base.replace(EX, ''))).toHaveLength(1);
+      expect(tokenNamingLines(`${base}rsync \\\n${EX}`)).toHaveLength(1);
+    });
   });
 
   it('notify.sh presents it under the header the server actually checks', () => {

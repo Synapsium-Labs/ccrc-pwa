@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { bindFixture, fixtureTable, plantFakeKernel } from './fixtures/fakeMountKernel.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-measure-continuity-'); });
@@ -129,6 +130,70 @@ describe('the carry section', () => {
     const plain = measure('--since', '2026-09-20').carry;
     expect(plain.excluding_stranded, 'no --deployed, no split').toBeNull();
     expect(plain.carries).toBe(4);
+  });
+});
+
+describe('the carry section reads why a carry copied, and how much (D-4500, D-4501)', () => {
+  it('counts what the real carry writes through the route: a link via the mount, a copy by cause, and a merge\'s copy', () => {
+    // The fleet's geometry, faked (`fixtures/fakeMountKernel.ts`): the first
+    // uuid's first carry links through the whole mount; then, under a table
+    // with no second mount, its return visit copies one new file and a second
+    // uuid's first carry copies its tree — both `exdev-no-root`.
+    const W = 'c0ffee00-6666-4bcc-b60b-0cfc0dc3d199';
+    put('.claude', 'tool-results/r.json', 'RESULT\n');
+    const k = plantFakeKernel(h.home);
+    const env = { ...bindFixture(h.home), ...k.env };
+    const bare = path.join(h.home, 'no-common-mountinfo');
+    fs.writeFileSync(bare, fixtureTable(h.home, { common: 'none' }));
+    const carry = (u: string, e: Record<string, string>): void => {
+      h.sh(`${k.cpStub} _swap_carry_sidecars "$HOME/.claude" "$HOME/.claude-d" ${u} 2>/dev/null`, e);
+    };
+    carry(UUID, env);
+    put('.claude', 'tool-results/new.txt', 'NEW\n');
+    const p = path.join(h.home, '.claude', 'projects', PDIR, W, 'tool-results', 'w.json');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, 'W-RESULT\n');
+    carry(UUID, { ...env, CCD_MOUNTINFO: bare });
+    carry(W, { ...env, CCD_MOUNTINFO: bare });
+    const c = measure().carry;
+    expect(c.carries).toBe(3);
+    expect(c.by_mode.other, 'every new form is read').toBe(0);
+    expect([c.by_mode.link, c.by_mode.copy, c.by_mode.merged]).toEqual([1, 1, 1]);
+    expect(c.link_via_mount).toBe(1);
+    expect(c.merged_via_mount).toBe(0);
+    const cause = c.copy_by_cause['exdev-no-root'];
+    expect([cause.first_carries, cause.merged_files]).toEqual([1, 1]);
+    expect(c.copied_bytes.merge).toBe(4);
+    expect(c.copied_bytes.first_carry).toBeGreaterThanOrEqual('W-RESULT\n'.length);
+    expect(cause.bytes).toBe(c.copied_bytes.first_carry + c.copied_bytes.merge);
+    expect([c.copy_legacy, c.copy_unsized]).toEqual([0, 0]);
+  });
+
+  it('reads every form ccd has written: the legacy bare (copy), a copy it could not size, and a merge with links and two causes', () => {
+    const row = (n: number, mode: string): string => `2026-10-08 10:00:0${n} sidecar ${UUID} -> /d/${n} (${mode})`;
+    writeLog([
+      row(0, 'link'),
+      row(1, 'link: via-mount'),
+      row(2, 'copy'),
+      row(3, 'copy: exdev-no-root 100 bytes'),
+      row(4, 'copy: root-mismatch ? bytes'),
+      row(5, 'merged +3 ~1 !0, via-mount 2'),
+      row(6, 'merged +2 ~0 !1, deferred 4, via-mount 1, copy: exdev-no-root 1 files 50 bytes, copy: link-failed 1 files 7 bytes'),
+      row(7, 'kept: busy'),
+    ]);
+    const c = measure().carry;
+    expect(c.carries).toBe(8);
+    expect(c.by_mode).toMatchObject({ link: 2, copy: 3, merged: 2, 'kept: busy': 1, other: 0 });
+    expect([c.link_via_mount, c.merged_via_mount]).toEqual([1, 3]);
+    expect([c.copy_legacy, c.copy_unsized]).toEqual([1, 1]);
+    expect(c.copy_by_cause).toEqual({
+      'exdev-no-root': { first_carries: 1, merged_files: 1, bytes: 150 },
+      'root-mismatch': { first_carries: 1, merged_files: 0, bytes: 0 },
+      'link-failed': { first_carries: 0, merged_files: 1, bytes: 7 },
+    });
+    expect(c.copied_bytes).toEqual({ first_carry: 100, merge: 57 });
+    expect([c.merged_added, c.merged_replaced, c.merged_diverged]).toEqual([5, 1, 1]);
+    expect([c.deferred_carries, c.deferred_actions]).toEqual([1, 4]);
   });
 });
 
