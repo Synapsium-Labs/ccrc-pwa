@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f54304939467a6df03fa4f87bf37ca0d98c98c0e4bb08fe3b9b74f5fa9b706c5
+# ccrc:generated 1 sha256=00e6f5f112c31e333f4233fb8f96dd29d89e8ac8952baa6fa517027c20626481
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32178,7 +32178,9 @@ _ws_expire_return_gap() { :; }
 #
 # THE QUARANTINE is `<physical ~/.cc-tmp>/.ccd-quarantine`, on the leaf's own file
 # system so a rename never crosses one: a real directory of this uid at 0700,
-# made by a plain `mkdir -m 0700` when absent and refused as anything else. A
+# made by the verb alone — a plain `mkdir -m 0700` when PROVEN absent, then
+# `chmod g-s` on what that mkdir made — and refused as anything else, by the
+# audit's read-only question as by the verb (`_ws_collect_qcheck`). A
 # slot in it is `slot.<id>.<ns>.<pid>`, made by an exclusive `mkdir`; the
 # `slot.` prefix keeps it clear of any rule keyed on a leaf's own name, and the
 # leaf moves to `<slot>/leaf`. Its name pairs it with its record.
@@ -32402,22 +32404,57 @@ _ws_collect_record_drop() {   # file -> 0 the record is gone, PROVEN; 1 not a re
 
 _ws_collect_now_ns() { date +%s%N; }   # the clock the idle floor and a slot's name read, epoch ns — a function, so a test can name the instant
 
-_WS_Q=''; _WS_Q_WHY=''
-_ws_collect_qdir() {   # -> 0 with _WS_Q = the quarantine, `<physical ~/.cc-tmp>/.ccd-quarantine` (made, 0700, when
-  #                       PROVEN absent); 2 (_WS_Q_WHY) when it is anything but a real directory of this uid at 0700
+_WS_QSTATE=''; _WS_Q_WHY=''
+_ws_collect_qcheck() {   # -> 0 with _WS_QPATH = the quarantine and _WS_QSTATE `absent` (PROVEN: the verb makes it)
+  #                         or `ok` (a real directory, not a link, of this uid at mode 700); 2 (_WS_Q_WHY) for every
+  #                         other shape: a link, a non-directory, another uid's directory, any other mode, an absence
+  #                         it cannot prove, or a `~/.cc-tmp` that cannot be resolved
+  # THE QUARANTINE QUESTION, READ-ONLY (spec §5.10): it makes, changes and
+  # writes nothing, so `ws-audit --collect` asks it — the fresh present-leaf
+  # arm and the resume alike — and refuses a quarantine the verb would refuse,
+  # instead of licensing a move that fails on every pass. The verb's maker
+  # (`_ws_collect_qdir`) asks it around its own mkdir. A quarantine that stands
+  # at 2700 is answered here like any other mode: the operator's to fix.
   local q me owner mode rc
-  _WS_Q=''; _WS_Q_WHY=''
+  _WS_QSTATE=''; _WS_Q_WHY=''
   _ws_collect_qpath || { _WS_Q_WHY="$_WS_QPATH_WHY, so no quarantine was asked for"; return 2; }
   q="$_WS_QPATH"
   _ws_reclaim_absent "$q"; rc=$?
   (( rc != 2 )) || { _WS_Q_WHY="$_WS_ABSENT_WHY — whether the quarantine stands was never asked"; return 2; }
-  (( rc != 0 )) || mkdir -m 0700 -- "$q" 2>/dev/null || :
-  [[ -d "$q" && ! -L "$q" ]] || { _WS_Q_WHY="$q is not a real directory (a link, not a directory, or it could not be made)"; return 2; }
+  (( rc != 0 )) || { _WS_QSTATE=absent; return 0; }
+  [[ -d "$q" && ! -L "$q" ]] || { _WS_Q_WHY="$q is not a real directory (a link, or not a directory)"; return 2; }
   me=$(id -u) || { _WS_Q_WHY="this uid could not be read, so whether $q is ours was never asked"; return 2; }
   owner=$(_ws_leaf_uid "$q") || { _WS_Q_WHY="who owns $q could not be read"; return 2; }
   [[ "$owner" == "$me" ]] || { _WS_Q_WHY="$q belongs to uid $owner, not this uid $me"; return 2; }
   mode=$(_plat_mode "$q" 2>/dev/null) || { _WS_Q_WHY="the mode of $q could not be read"; return 2; }
   [[ "$mode" == 700 ]] || { _WS_Q_WHY="$q is mode $mode, not 0700"; return 2; }
+  _WS_QSTATE=ok
+}
+
+_WS_Q=''
+_ws_collect_qdir() {   # -> 0 with _WS_Q = the quarantine, `<physical ~/.cc-tmp>/.ccd-quarantine` (made, 0700, when
+  #                       PROVEN absent); 2 (_WS_Q_WHY) when it is anything but a real directory of this uid at 0700
+  # THE MAKER, the verb's alone (`_ws_collect_locked`): the check, then — only
+  # when it PROVED the quarantine absent — a plain `mkdir -m 0700`, never `-p`.
+  # Under a setgid `~/.cc-tmp` the kernel hands that new directory the setgid
+  # bit (2700), so `chmod g-s` clears it, on what THIS call's mkdir made and
+  # nothing else (departure quarantine-made-without-setgid). Then the check
+  # again, which must answer `ok`. A mkdir that fails because another verb
+  # made the quarantine first falls to that same re-check, and what the other
+  # made is judged as it stands, never chmod-ed.
+  local q err
+  _WS_Q=''; _WS_Q_WHY=''
+  _ws_collect_qcheck || return 2
+  q="$_WS_QPATH"
+  if [[ "$_WS_QSTATE" == absent ]]; then
+    if err=$(mkdir -m 0700 -- "$q" 2>&1); then
+      chmod g-s -- "$q" 2>/dev/null || { _WS_Q_WHY="$q was made, but its setgid bit could not be cleared"; return 2; }
+      err=''
+    fi
+    _ws_collect_qcheck || return 2
+    [[ "$_WS_QSTATE" == ok ]] \
+      || { _WS_Q_WHY="$q could not be made${err:+: ${err%%$'\n'*}}"; return 2; }
+  fi
   _WS_Q="$q"
 }
 
@@ -32904,6 +32941,11 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     return 0
   fi
   _WS_COLLECT_LEAF=present
+  # THE QUARANTINE the verb would move the leaf into, asked READ-ONLY and
+  # first: a quarantine the verb refuses licenses nothing, and decides nothing
+  # from what it holds (spec §5.10).
+  _ws_collect_qcheck \
+    || { _ws_collect_unmeasured quarantine "$_WS_Q_WHY — no leaf is licensed to move into it, and the next pass asks again"; return 1; }
   [[ -d "$leaf" && ! -L "$leaf" ]] \
     || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory its witness names; it is offered to the operator"; return 1; }
   _ws_collect_ident "$leaf" "$_WS_WIT_DEV:$_WS_WIT_INO" "$_WS_WIT_BTIME"; rc=$?
@@ -32975,7 +33017,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # journaled nowhere and asked again by the next pass — a bind mount not up
   # yet is no fault of the record's, and keeping it would journal a retryable
   # fact on every audit.
-  local id="$1" rec name q='' slot sleaf orig="$HOME/.cc-tmp/$1" rc sstate=absent ostate=other phase ents
+  local id="$1" rec name slot sleaf orig="$HOME/.cc-tmp/$1" rc sstate=absent ostate=other phase ents
   shift
   (( $# == 1 )) \
     || { _ws_collect_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
@@ -32988,15 +33030,14 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
     || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
   [[ "${_WS_QREC_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
     || { _ws_collect_refuse quarantine-kept "the quarantine record $rec records no birth time, so device and inode alone would vouch for what it names — it is kept for the operator"; return 1; }
+  # THE QUARANTINE, asked as the fresh arm asks it (`_ws_collect_qcheck`,
+  # READ-ONLY, mode included): ccd never reads a slot through a quarantine the
+  # verb would refuse. A `~/.cc-tmp` PROVEN absent holds no quarantine to ask.
   _ws_reclaim_absent "$HOME/.cc-tmp"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured quarantine "$_WS_ABSENT_WHY"; return 1; }
   if (( rc != 0 )); then
-    _ws_collect_qpath || { _ws_collect_unmeasured quarantine "$_WS_QPATH_WHY"; return 1; }
-    q="$_WS_QPATH"
-    if [[ -L "$q" ]] || { [[ -e "$q" ]] && { [[ ! -d "$q" ]] || [[ ! -O "$q" ]]; }; }; then
-      _ws_collect_unmeasured quarantine "$q is a link, not a directory, or not this uid's — ccd never reads a slot through it"
-      return 1
-    fi
+    _ws_collect_qcheck \
+      || { _ws_collect_unmeasured quarantine "$_WS_Q_WHY — ccd never reads a slot through it, and the next pass asks again"; return 1; }
   fi
   slot="$_WS_QREC_SLOT"; sleaf="$slot/leaf"; _WS_COLLECT_SLOT="$slot"
   if [[ -L "$slot" ]] || { [[ -e "$slot" ]] && [[ ! -d "$slot" ]]; }; then

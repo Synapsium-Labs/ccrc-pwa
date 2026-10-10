@@ -183,19 +183,59 @@ describe.skipIf(!LINUX)('the stop arms before the move', () => {
     expect(rows()).toEqual([['intent', null], ['failed', 'probe-unmeasured']]);
   });
 
-  it('a quarantine that is not a real directory of this uid at 0700: failed probe-unmeasured before any record — nothing moved', () => {
+  // The quarantine question is asked TWICE: by the evaluation the audit shares (read-only, `_ws_collect_qcheck`), so no
+  // audit licenses a move into a quarantine the verb refuses, and again by the verb's maker (`_ws_collect_qdir`), which
+  // runs the same check around its mkdir. The first case is the evaluation's refusal, the second the maker's own,
+  // reached past an evaluation stubbed to consent.
+  it('a quarantine that is not a real directory of this uid at 0700: the evaluation answers unmeasured — failed probe-unmeasured at the verdict point, nothing moved', () => {
     const o = makeOrphan(h);
     fs.mkdirSync(path.join(h.home, 'elsewhere-q'), { mode: 0o700 });
     fs.symlinkSync(path.join(h.home, 'elsewhere-q'), quarantineOf(h));
-    const r = collectVerb(h, collectToken(h));
+    const audit = auditDoc();
+    expect([audit['verdict'], (audit['collect'] as Record<string, unknown>)['unmeasured']], 'the audit')
+      .toEqual(['unmeasured', 'quarantine']);
+    expect(audit['token'], 'the audit licenses nothing').toBeUndefined();
+    const r = collectVerb(h, WRONG_TOKEN, { pre: GAP_LOG });
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const doc = docOf(r.stdout);
     expect(doc['failed']).toBe('probe-unmeasured');
-    expect(String(doc['detail'])).toMatch(/^nothing was moved: .* is not a real directory/);
+    expect(String(doc['detail'])).toContain('is not a real directory');
+    expect(gaps(h), 'refused at the verdict point').toEqual(['locked']);
     expect(inoAt(o.leaf)).toBe(o.ino);
     expect(records(h)).toEqual([]);
     expect(fs.readdirSync(path.join(h.home, 'elsewhere-q')), 'nothing went through the link').toEqual([]);
     expect(rows()).toEqual([['failed', 'probe-unmeasured']]);
+  });
+
+  it('… and the maker asks it again past a consenting evaluation: failed probe-unmeasured before any record — nothing moved', () => {
+    const o = makeOrphan(h);
+    fs.mkdirSync(path.join(h.home, 'elsewhere-q'), { mode: 0o700 });
+    fs.symlinkSync(path.join(h.home, 'elsewhere-q'), quarantineOf(h));
+    const r = collectVerb(h, WRONG_TOKEN, { pre: `${GAP_LOG} ${evalSays(WRONG_TOKEN)}` });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const doc = docOf(r.stdout);
+    expect(doc['failed']).toBe('probe-unmeasured');
+    expect(String(doc['detail'])).toMatch(/^nothing was moved: .* is not a real directory/);
+    expect(gaps(h), 'past the consent, before any record').toEqual(['locked', 'consented']);
+    expect(inoAt(o.leaf)).toBe(o.ino);
+    expect(records(h)).toEqual([]);
+    expect(fs.readdirSync(path.join(h.home, 'elsewhere-q')), 'nothing went through the link').toEqual([]);
+    expect(rows()).toEqual([['failed', 'probe-unmeasured']]);
+  });
+});
+
+describe.skipIf(!LINUX)('a setgid ~/.cc-tmp (departure quarantine-made-without-setgid)', () => {
+  it('collects: the quarantine the verb makes there has its setgid bit cleared, 0700 — never the 2700 a plain mkdir leaves', () => {
+    const o = makeOrphan(h);
+    fs.chmodSync(path.dirname(o.leaf), 0o2755);
+    expect(fs.statSync(path.dirname(o.leaf)).mode & 0o7777, 'the CONTROL: ~/.cc-tmp is setgid').toBe(0o2755);
+    const r = collectVerb(h, collectToken(h));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(docOf(r.stdout)).toMatchObject({ collected: COL_ID, resumed: false, witness: 'dropped' });
+    expect(fs.existsSync(o.leaf), 'the leaf').toBe(false);
+    expect(fs.statSync(quarantineOf(h)).mode & 0o7777).toBe(0o700);
+    expect(records(h)).toEqual([]);
+    expect(slots(h)).toEqual([]);
   });
 });
 

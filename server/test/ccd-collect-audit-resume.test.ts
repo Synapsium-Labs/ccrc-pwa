@@ -303,6 +303,50 @@ describe.skipIf(!LINUX)('a moved leaf is re-proven: registered, in use under eit
     expect(collectOf(a)['unmeasured']).toBe('quarantine');
   }, 60_000);
 
+  // The resume asks the fresh arm's READ-ONLY quarantine question (`_ws_collect_qcheck`, spec §5.10, departure
+  // audit-asks-the-quarantine-question), MODE INCLUDED: a slot is never read through a quarantine the verb would refuse.
+  it.each([
+    ['mode 0755', 0o755, 'is mode 755, not 0700'],
+    ['mode 2700 (setgid)', 0o2700, 'is mode 2700, not 0700'],
+  ])('a quarantine at %s: unmeasured `quarantine`, exit 1, journaled nowhere — the record and its slot as they were', (_label, mode, why) => {
+    const { ident } = setup();
+    const rec = plantOwn(ident);
+    const slot = moveIntoSlot(h);
+    fs.chmodSync(quarantineOf(h), mode);
+    expect(fs.statSync(quarantineOf(h)).mode & 0o7777, 'the CONTROL').toBe(mode);
+    const a = collectAudit(h);
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('quarantine');
+    expect(String(a.doc!['detail'])).toContain(why);
+    expect(a.doc!['token']).toBeUndefined();
+    expect(readJournal(h.home)).toEqual([]);
+    expect(fs.existsSync(rec), 'the record').toBe(true);
+    expect(identityOf(path.join(slot, 'leaf')), 'the slot’s leaf').toEqual(ident);
+    expect(fs.statSync(quarantineOf(h)).mode & 0o7777, 'never chmod-ed').toBe(mode);
+  }, 60_000);
+
+  it('another uid’s quarantine: unmeasured `quarantine`', () => {
+    const { ident } = setup();
+    plantOwn(ident);
+    moveIntoSlot(h);
+    const uid = 'eval "_orig_uid() $(declare -f _ws_leaf_uid | tail -n +2)";'
+      + ' _ws_leaf_uid() { if [[ "$1" == */.ccd-quarantine ]]; then echo 999999; return 0; fi; _orig_uid "$@"; };';
+    const a = collectAudit(h, { pre: uid });
+    expect(a.code, a.stderr).toBe(1);
+    expect(collectOf(a)['unmeasured']).toBe('quarantine');
+    expect(String(a.doc!['detail'])).toContain('belongs to uid 999999');
+  }, 60_000);
+
+  it('no quarantine at all: an unmoved resume is collectable, and the audit makes none', () => {
+    const { ident } = setup();
+    plantOwn(ident);
+    expect(fs.existsSync(quarantineOf(h)), 'the CONTROL: none stands').toBe(false);
+    const a = collectAudit(h);
+    expect(a.doc).toMatchObject({ resume: 'unmoved', verdict: 'collectable' });
+    expect(fs.existsSync(quarantineOf(h)), 'the audit made the quarantine').toBe(false);
+  }, 60_000);
+
   it('a record whose slot cannot be derived — the physical ~/.cc-tmp cannot be resolved — is unmeasured `quarantine`: exit 1, never kept, journaled nowhere (ruling R-a)', () => {
     // The record is well formed; only its slot, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`, cannot be derived.
     // A later pass may resolve it (a bind mount not up yet, `~/.cc-tmp` not yet remade), so the record reader answers

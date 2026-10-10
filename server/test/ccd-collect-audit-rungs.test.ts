@@ -10,8 +10,8 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { readJournal, refusalsOf } from './lifecycleHelpers.js';
 import { holdCwd } from './wsExpireFixture.js';
 import {
-  AGED, COL_ID, NO_WALK, PAUSE, type Answer, collectAudit, collectOf, holdTmpdir, leafOf, makeOrphan, regDir,
-  replaceLeaf, secondsAgoNs, verdictOf, walkAt, walked, witnessOf,
+  AGED, COL_ID, NO_WALK, PAUSE, type Answer, collectAudit, collectOf, holdTmpdir, leafOf, makeOrphan, quarantineOf,
+  regDir, replaceLeaf, secondsAgoNs, verdictOf, walkAt, walked, witnessOf,
 } from './collectFixture.js';
 
 let h: PrHarness;
@@ -179,6 +179,64 @@ describe.skipIf(!LINUX)('a witness whose leaf is PROVEN gone: collectable at onc
       expect(a.code, a.stderr).toBe(1);
       expect(collectOf(a)['unmeasured']).toBe('leaf');
     } finally { fs.chmodSync(root, 0o700); }
+  }, 60_000);
+});
+
+// THE QUARANTINE QUESTION (spec §5.10, departure audit-asks-the-quarantine-question): the verb refuses on a quarantine
+// that is not a real directory of this uid at 0700, so the audit asks the same READ-ONLY question first, and a pass
+// never licenses a move the verb would refuse on every pass. The audit makes nothing: only the verb makes it.
+describe.skipIf(!LINUX)('the quarantine: the audit asks what the verb refuses on, and makes nothing', () => {
+  const lsnap = (p: string): string => {
+    try { const s = fs.lstatSync(p, { bigint: true }); return `${s.ino}:${(s.mode & 0o7777n).toString(8)}:${s.isSymbolicLink()}`; } catch { return 'absent'; }
+  };
+  const expectUnmeasured = (a: Answer, why: string): void => {
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('quarantine');
+    expect(String(a.doc!['detail'])).toContain(why);
+    expect(a.doc!['token']).toBeUndefined();
+    expect(readJournal(h.home), 'a retried word is journaled nowhere').toEqual([]);
+  };
+
+  it('no quarantine: collectable, a token minted — and the audit leaves none behind', () => {
+    makeOrphan(h);
+    expect(fs.existsSync(quarantineOf(h)), 'the CONTROL: none stands').toBe(false);
+    const a = collectAudit(h, { pre: AGED });
+    expect(a.code, a.stderr).toBe(0);
+    expect(verdictOf(a)).toBe('collectable');
+    expect(a.doc!['token']).toMatch(/^[0-9a-f]{64}$/);
+    expect(fs.existsSync(quarantineOf(h)), 'the audit made the quarantine').toBe(false);
+  }, 60_000);
+
+  it.each([
+    ['a link to a 0700 directory', (q: string): void => { fs.mkdirSync(`${q}.real`, { mode: 0o700 }); fs.symlinkSync(`${q}.real`, q); }, 'is not a real directory'],
+    ['a file', (q: string): void => { fs.writeFileSync(q, 'x', { mode: 0o600 }); }, 'is not a real directory'],
+    ['a directory at mode 0755', (q: string): void => { fs.mkdirSync(q); fs.chmodSync(q, 0o755); }, 'is mode 755, not 0700'],
+    ['a directory at mode 2700 (setgid)', (q: string): void => { fs.mkdirSync(q); fs.chmodSync(q, 0o2700); }, 'is mode 2700, not 0700'],
+  ])('a quarantine that is %s: unmeasured `quarantine`, exit 1, no token — and it stands as it was', (_label, plant, why) => {
+    const { leaf } = makeOrphan(h);
+    plant(quarantineOf(h));
+    const before = lsnap(quarantineOf(h));
+    expectUnmeasured(collectAudit(h, { pre: AGED }), why);
+    expect(lsnap(quarantineOf(h)), 'the audit changed the quarantine').toBe(before);
+    expect(fs.existsSync(path.join(leaf, 'cdk.out', 'manifest.json')), 'the leaf').toBe(true);
+  }, 60_000);
+
+  it('another uid’s quarantine: unmeasured `quarantine`', () => {
+    makeOrphan(h);
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    const uid = 'eval "_orig_uid() $(declare -f _ws_leaf_uid | tail -n +2)";'
+      + ' _ws_leaf_uid() { if [[ "$1" == */.ccd-quarantine ]]; then echo 999999; return 0; fi; _orig_uid "$@"; };';
+    expectUnmeasured(collectAudit(h, { pre: `${AGED} ${uid}` }), 'belongs to uid 999999');
+  }, 60_000);
+
+  it('a quarantine whose absence cannot be proven: unmeasured `quarantine`, and nothing is made', () => {
+    makeOrphan(h);
+    const seam = 'eval "_orig_absent() $(declare -f _ws_reclaim_absent | tail -n +2)";'
+      + ' _ws_reclaim_absent() { if [[ "$1" == */.ccd-quarantine ]]; then _WS_ABSENT_WHY="stub: $1 could not be looked at"; return 2; fi;'
+      + ' _orig_absent "$@"; };';
+    expectUnmeasured(collectAudit(h, { pre: `${AGED} ${seam}` }), 'whether the quarantine stands was never asked');
+    expect(fs.existsSync(quarantineOf(h))).toBe(false);
   }, 60_000);
 });
 

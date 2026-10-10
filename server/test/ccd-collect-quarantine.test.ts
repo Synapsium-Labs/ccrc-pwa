@@ -103,6 +103,160 @@ describe('_ws_collect_qdir: the quarantine is a real directory of this uid at 07
   });
 });
 
+// THE QUESTION, READ-ONLY (spec §5.10, departure audit-asks-the-quarantine-question): `ws-audit --collect` asks it of
+// the quarantine and makes nothing, so a quarantine the verb would refuse is refused at the audit too, and no pass
+// licenses a move the verb cannot make. Every shape below is asserted to stand afterwards as it was planted.
+describe('_ws_collect_qcheck: the quarantine question, READ-ONLY — PROVEN absent, or a real 0700 directory of this uid', () => {
+  const q = (): string => path.join(root(), '.ccd-quarantine');
+  const lsnap = (p: string): string => {
+    try { const s = fs.lstatSync(p, { bigint: true }); return `${s.ino}:${(s.mode & 0o7777n).toString(8)}:${s.isSymbolicLink()}`; } catch { return 'absent'; }
+  };
+
+  it('PROVEN absent: 0 with `absent` and the PHYSICAL path — and nothing is made', () => {
+    const vol = path.join(h.home, 'vol');
+    fs.mkdirSync(vol);
+    fs.symlinkSync(vol, root());
+    const [rc, state, qp, why] = ask('_ws_collect_qcheck', '_WS_QSTATE', '_WS_QPATH', '_WS_Q_WHY');
+    expect(rc, why).toBe('0');
+    expect(state).toBe('absent');
+    expect(qp).toBe(path.join(fs.realpathSync(vol), '.ccd-quarantine'));
+    expect(fs.existsSync(qp!), 'the check made the quarantine').toBe(false);
+  });
+
+  it('a real directory of this uid at 0700: 0 with `ok`, untouched', () => {
+    fs.mkdirSync(q(), { recursive: true, mode: 0o700 });
+    fs.chmodSync(q(), 0o700);
+    const before = lsnap(q());
+    const [rc, state, why] = ask('_ws_collect_qcheck', '_WS_QSTATE', '_WS_Q_WHY');
+    expect(rc, why).toBe('0');
+    expect(state).toBe('ok');
+    expect(lsnap(q())).toBe(before);
+  });
+
+  it.each([
+    ['a LINK to a 0700 directory', (p: string): void => { fs.mkdirSync(`${p}.real`, { mode: 0o700 }); fs.symlinkSync(`${p}.real`, p); }, 'is not a real directory'],
+    ['a FILE', (p: string): void => { fs.writeFileSync(p, 'x', { mode: 0o600 }); }, 'is not a real directory'],
+    ['a directory at mode 0755', (p: string): void => { fs.mkdirSync(p); fs.chmodSync(p, 0o755); }, 'is mode 755, not 0700'],
+    ['a directory at mode 2700 (setgid): the operator’s to fix, never chmod-ed', (p: string): void => {
+      fs.mkdirSync(p); fs.chmodSync(p, 0o2700);
+      expect(fs.statSync(p).mode & 0o7777, 'the CONTROL: the setgid bit took').toBe(0o2700);
+    }, 'is mode 2700, not 0700'],
+  ])('%s: 2 with its why — and it stands as it was planted', (_label, plant, why) => {
+    fs.mkdirSync(root(), { recursive: true });
+    plant(q());
+    const before = lsnap(q());
+    const [rc, state, w] = ask('_ws_collect_qcheck', '_WS_QSTATE', '_WS_Q_WHY');
+    expect(rc).toBe('2');
+    expect(state).toBe('');
+    expect(w).toContain(why);
+    expect(lsnap(q()), 'the check changed what it asked of').toBe(before);
+  });
+
+  it('another uid’s directory: 2, naming both uids', () => {
+    fs.mkdirSync(q(), { recursive: true, mode: 0o700 });
+    const [rc, , w] = ask('_ws_leaf_uid() { echo 999999; }; _ws_collect_qcheck', '_WS_QSTATE', '_WS_Q_WHY');
+    expect(rc).toBe('2');
+    expect(w).toContain('belongs to uid 999999');
+  });
+
+  it('an absence it cannot prove: 2, and nothing is made', () => {
+    fs.mkdirSync(root(), { recursive: true });
+    const [rc, state, w] = ask('_ws_reclaim_absent() { _WS_ABSENT_WHY=stub; return 2; }; _ws_collect_qcheck', '_WS_QSTATE', '_WS_Q_WHY');
+    expect(rc).toBe('2');
+    expect(state).toBe('');
+    expect(w).toContain('stub — whether the quarantine stands was never asked');
+    expect(fs.existsSync(q())).toBe(false);
+  });
+
+  it('no ~/.cc-tmp at all: 2 — the quarantine’s path cannot be resolved, and nothing is made', () => {
+    const [rc, , w] = ask('_ws_collect_qcheck', '_WS_QSTATE', '_WS_Q_WHY');
+    expect(rc).toBe('2');
+    expect(w).toContain('cannot be resolved');
+    expect(fs.existsSync(root())).toBe(false);
+  });
+});
+
+// THE MAKER is the verb's alone: the check, a plain `mkdir -m 0700` (never `-p`) when the check PROVED it absent, then
+// `chmod g-s` on what THIS call made (departure quarantine-made-without-setgid: under a setgid `~/.cc-tmp` the kernel
+// hands a new directory the setgid bit, 2700), then the check again, which must answer `ok`.
+describe('_ws_collect_qdir, the MAKER: the check, the mkdir, `chmod g-s` on what it made, the check again', () => {
+  const q = (): string => path.join(root(), '.ccd-quarantine');
+  /** Every chmod the maker runs, logged to `$HOME/chmod-calls`, then run. */
+  const CHMOD_LOG = 'chmod() { printf \'%s\\n\' "$*" >> "$HOME/chmod-calls"; command chmod "$@"; };';
+  const chmodCalls = (): string[] => {
+    const p = path.join(h.home, 'chmod-calls');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+  };
+  /** The check's absence proof answers "absent" ONCE, and `make` runs first: another maker, between the check and
+   *  this call's mkdir. Every later ask is the real proof. */
+  const raceMaker = (make: string): string => 'eval "_orig_absent() $(declare -f _ws_reclaim_absent | tail -n +2)";'
+    + ' _ws_reclaim_absent() { if [[ "$1" == */.ccd-quarantine && ! -e "$HOME/raced" ]]; then : > "$HOME/raced";'
+    + ` ${make}; return 0; fi; _orig_absent "$@"; };`;
+
+  it('on a setgid ~/.cc-tmp the quarantine it makes is 0700 — the CONTROL: a bare `mkdir -m 0700` there is 2700', () => {
+    fs.mkdirSync(root(), { mode: 0o755 });
+    fs.chmodSync(root(), 0o2755);
+    expect(fs.statSync(root()).mode & 0o7777, 'the CONTROL: ~/.cc-tmp is setgid').toBe(0o2755);
+    const probe = path.join(root(), 'probe');
+    h.sh(`mkdir -m 0700 -- '${probe}'`);
+    expect(fs.statSync(probe).mode & 0o7777, 'the CONTROL: a plain mkdir inherits the setgid bit').toBe(0o2700);
+    const [rc, got, why] = ask(`${CHMOD_LOG} _ws_collect_qdir`, '_WS_Q', '_WS_Q_WHY');
+    expect(rc, why).toBe('0');
+    expect(got).toBe(path.join(fs.realpathSync(root()), '.ccd-quarantine'));
+    expect(fs.statSync(got!).mode & 0o7777).toBe(0o700);
+    expect(chmodCalls()).toEqual([`g-s -- ${got}`]);
+  });
+
+  it('a quarantine already standing at 2700 is never chmod-ed: 2, and it stays 2700 — the operator’s to fix', () => {
+    fs.mkdirSync(q(), { recursive: true });
+    fs.chmodSync(q(), 0o2700);
+    expect(fs.statSync(q()).mode & 0o7777, 'the CONTROL').toBe(0o2700);
+    const [rc, got, why] = ask(`${CHMOD_LOG} _ws_collect_qdir`, '_WS_Q', '_WS_Q_WHY');
+    expect(rc).toBe('2');
+    expect(got).toBe('');
+    expect(why).toContain('is mode 2700, not 0700');
+    expect(fs.statSync(q()).mode & 0o7777).toBe(0o2700);
+    expect(chmodCalls()).toEqual([]);
+  });
+
+  it('the check is asked again after the mkdir: a mkdir that left another mode answers 2', () => {
+    fs.mkdirSync(root(), { recursive: true });
+    const [rc, got, why] = ask('mkdir() { command mkdir "$@" && command chmod 0755 -- "${@: -1}"; }; _ws_collect_qdir', '_WS_Q', '_WS_Q_WHY');
+    expect(rc).toBe('2');
+    expect(got).toBe('');
+    expect(why).toContain('is mode 755, not 0700');
+  });
+
+  it('a `chmod g-s` that fails on what it made: 2, naming it', () => {
+    fs.mkdirSync(root(), { recursive: true });
+    const [rc, got, why] = ask('chmod() { return 1; }; _ws_collect_qdir', '_WS_Q', '_WS_Q_WHY');
+    expect(rc).toBe('2');
+    expect(got).toBe('');
+    expect(why).toContain('its setgid bit could not be cleared');
+  });
+
+  it('a mkdir that loses to another maker falls to the check again: 0 over a 0700 quarantine, which it never chmods', () => {
+    fs.mkdirSync(root(), { recursive: true });
+    const [rc, got, why] = ask(`${CHMOD_LOG} ${raceMaker(`command mkdir -m 0700 -- '${q()}'`)} _ws_collect_qdir`, '_WS_Q', '_WS_Q_WHY');
+    expect(fs.existsSync(path.join(h.home, 'raced')), 'the CONTROL: the race ran').toBe(true);
+    expect(rc, why).toBe('0');
+    expect(got).toBe(path.join(fs.realpathSync(root()), '.ccd-quarantine'));
+    expect(chmodCalls(), 'a quarantine this call did not make is never chmod-ed').toEqual([]);
+  });
+
+  it('… and 2 over one the other maker left at 2700, which it never chmods', () => {
+    fs.mkdirSync(root(), { recursive: true });
+    const make = `command mkdir -m 0700 -- '${q()}' && command chmod 2700 -- '${q()}'`;
+    const [rc, got, why] = ask(`${CHMOD_LOG} ${raceMaker(make)} _ws_collect_qdir`, '_WS_Q', '_WS_Q_WHY');
+    expect(fs.existsSync(path.join(h.home, 'raced')), 'the CONTROL: the race ran').toBe(true);
+    expect(rc).toBe('2');
+    expect(got).toBe('');
+    expect(why).toContain('is mode 2700, not 0700');
+    expect(fs.statSync(q()).mode & 0o7777).toBe(0o2700);
+    expect(chmodCalls()).toEqual([]);
+  });
+});
+
 describe('_ws_collect_slot_path / _ws_collect_slot_make: `slot.<id>.<ns>.<pid>`, exclusive, never reused', () => {
   it('the path is `<q>/slot.<id>.<ns>.<pid>`, the ns from the collector’s clock', () => {
     const [rc, s] = ask(`_ws_collect_now_ns() { echo 1791470480213200844; }; _ws_collect_slot_path /q ${ID}`, '_WS_SLOT');
