@@ -204,7 +204,7 @@ describe('_ws_collect_qdir, the MAKER: the check, the mkdir, `chmod g-s` on what
     expect(rc, why).toBe('0');
     expect(got).toBe(path.join(fs.realpathSync(root()), '.ccd-quarantine'));
     expect(fs.statSync(got!).mode & 0o7777).toBe(0o700);
-    expect(chmodCalls()).toEqual([`g-s -- ${got}`]);
+    expect(chmodCalls()).toEqual([`-- g-s ${got}`]);
   });
 
   it('a quarantine already standing at 2700 is never chmod-ed: 2, and it stays 2700 — the operator’s to fix', () => {
