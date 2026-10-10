@@ -26,6 +26,27 @@ import './chat.css';
  *  from here. */
 const NOT_ARCHIVED = 'Not archived — ccrc does not archive on merge.';
 
+/** The one door out of this sheet to the PR itself.
+ *
+ *  THREE BYTE-IDENTICAL COPIES, text included. Neither census caught it: the
+ *  literal half reads static `className` strings and this one is a
+ *  `buttonVariants()` CALL, and the block half's floor is three elements
+ *  while this is one. So it was found by reading — recorded here rather than
+ *  by widening a census to single elements, which would name every `<span>`
+ *  in the tree.
+ *
+ *  AN ANCHOR WEARING A BUTTON. It navigates off the app, so it is an `<a>`
+ *  with `rel="noreferrer"`; the look is the design system's ghost button, and
+ *  `control-census.test.ts`'s VARIANT arm checks that `buttonVariants()`
+ *  still carries the tap floor this anchor relies on. */
+function OpenOnGitHub({ url }: { url: string }): ReactNode {
+  return (
+    <a className={buttonVariants({ variant: 'ghost' })} href={url} target="_blank" rel="noreferrer">
+      Open on GitHub
+    </a>
+  );
+}
+
 export function PrSheet({
   session, open, onClose, onReap,
   archive = api.archive,
@@ -253,7 +274,7 @@ export function PrSheet({
                 <p className="pr-check-names" data-testid="pr-check-names">{pr.checkNames.join(', ')}</p>
               )}
               {pr.url !== null && (
-                <a className={buttonVariants({ variant: 'ghost' })} href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+                <OpenOnGitHub url={pr.url} />
               )}
               <Button variant="ghost"
                       onClick={() => { void navigator.clipboard?.writeText(pr.url ?? ''); toast('Link copied', 'info'); }}>
@@ -280,7 +301,7 @@ export function PrSheet({
           {pr?.phase === 'merged' && (
             <>
               {pr.url !== null && (
-                <a className={buttonVariants({ variant: 'ghost' })} href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+                <OpenOnGitHub url={pr.url} />
               )}
               {archived ? (
                 <>
@@ -354,7 +375,7 @@ export function PrSheet({
                   aria-label speaks. Deleting the second copy is the only fix
                   that makes the drift impossible rather than merely absent. */}
               {pr.url !== null && (
-                <a className={buttonVariants({ variant: 'ghost' })} href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+                <OpenOnGitHub url={pr.url} />
               )}
             </>
           )}
