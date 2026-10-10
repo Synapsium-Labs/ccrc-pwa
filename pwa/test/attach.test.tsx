@@ -281,3 +281,40 @@ describe('Composer drag-and-drop', () => {
     expect(composer).not.toHaveAttribute('data-drop');
   });
 });
+
+// THE TWO WAYS THE CANVAS CAN REFUSE, and neither had a case (measured:
+// statements 40 and 45 of `useAttachImage.ts` uncovered). Both end the same
+// way for the reader — the chip goes to `failed` and offers Retry — but they
+// are two different facts, and a downscale that resolved with something
+// unusable instead of throwing would upload a blank image.
+describe('downscaleImage refuses rather than returning something unusable', () => {
+  it('a 2d context the browser will not give is a thrown sentence', async () => {
+    // jsdom's own answer, and a real one: a tab under memory pressure, or a
+    // canvas past the platform's area limit, returns null here. The bitmap is
+    // still released — the `finally` is what keeps a refusal from leaking the
+    // decoded image.
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 100, height: 100, close })));
+    // No `stubCanvas()`: jsdom's unstubbed `getContext('2d')` is exactly the
+    // null this guard is written for.
+    await expect(downscaleImage(new File(['x'], 'a.png', { type: 'image/png' })))
+      .rejects.toThrow('canvas is unavailable');
+    expect(close, 'a refusal leaked the decoded bitmap').toHaveBeenCalled();
+  });
+
+  it('an encode that hands back no blob is a rejection, not a resolve with null', async () => {
+    // `toBlob`'s callback takes `Blob | null`, and the null arm is real — an
+    // out-of-memory encode. Resolving with it would put `null` into the
+    // upload, which is a request with no body rather than a failed chip.
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 100, height: 100, close })));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(
+      ((cb: BlobCallback) => { cb(null); }) as unknown as typeof HTMLCanvasElement.prototype.toBlob);
+
+    await expect(downscaleImage(new File(['x'], 'a.png', { type: 'image/png' })))
+      .rejects.toThrow("couldn't encode the image");
+    expect(close).toHaveBeenCalled();
+  });
+});
