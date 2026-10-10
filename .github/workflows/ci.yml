@@ -493,6 +493,21 @@ jobs:
         working-directory: ui
         run: npm run themes:check
 
+      # Storybook is the design system's only surface that RENDERS its
+      # components; everything else about ui is a text scrape (vitest runs with
+      # `css: false`, so nothing in this repo computes a style). Until now CI
+      # only TYPECHECKED the stories — `build-storybook` was never exercised, so
+      # it could have been broken for weeks and no leg would have said. It
+      # builds in seconds and the step costs almost nothing.
+      #
+      # This proves the stories BUILD, not that they look right. Rendering them
+      # and running axe needs @storybook/test-runner and a browser in CI, which
+      # is a real dependency decision rather than a line of yaml.
+      - name: Storybook builds (the one surface that renders the components)
+        if: env.CCRC_LEG == 'run' && matrix.package == 'pwa'
+        working-directory: ui
+        run: npm run build-storybook
+
   # The Darwin arms' standing mechanism (the macOS port's review, finding 3):
   # every `describe.skipIf(!IS_DARWIN)` block and `itDarwin` case in the
   # server suite skips on every ubuntu leg above, so without this job the
