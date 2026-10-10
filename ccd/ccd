@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ee01a1a88f6f80734ab3e8fe01e8198ab128d55fe20ecc4ea05341617200ddb9
+# ccrc:generated 1 sha256=03eddae3e575908d2a95b2a41627063a69467875491e521d13c09e4ac9a0072d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28751,7 +28751,7 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
 _ws_reclaim_admin_entries() {   # common path recorded -> 0 with `<d>/logs/HEAD` and `gitdir:<d>` appended to
   #                                  _WS_LOGS for every <common>/worktrees/<d> whose `gitdir` names <path>/.git (as
   #                                  given, or resolved); 1 (_WS_KEEP_WHY) when `worktrees/` or an entry could not
-  #                                  be read, or `recorded` is 1 and no entry names it
+  #                                  be read, an entry's `gitdir` reads empty, or `recorded` is 1 and no entry names it
   # GIT'S ADMIN ENTRIES, READ WHOLE — `_ws_reclaim_log_of`'s walk of a gone
   # checkout, and the ONE matcher of an entry to a path: the ladder asks it
   # too, of a STANDING tree git's list printed no record of
@@ -28776,6 +28776,11 @@ _ws_reclaim_admin_entries() {   # common path recorded -> 0 with `<d>/logs/HEAD`
     g=$(cat -- "$d/gitdir" 2>/dev/null) \
       || { _WS_KEEP_WHY="$d/gitdir cannot be read — whether $d is git's record of $arg was never asked"; return 1; }
     g="${g%%$'\n'*}"
+    # AN EMPTY `gitdir` MEASURED NOTHING (spec §5.5, rung 8's rule): git's list
+    # leaves such a record out with exit 0, as it leaves out an unreadable one
+    # (measured, git 2.43), so "names something else" was never read off it.
+    [[ -n "$g" ]] \
+      || { _WS_KEEP_WHY="$d/gitdir is empty, and git's worktree list leaves out such a record — whether $d is git's record of $arg was never asked"; return 1; }
     [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] || continue
     [[ -d "$d" && ! -L "$d" ]] \
       || { _WS_KEEP_WHY="$d, git's record of $arg, is not a directory — what it names was never read"; return 1; }
