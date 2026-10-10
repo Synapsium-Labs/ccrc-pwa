@@ -1219,6 +1219,15 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - from the worker's residuals: the 4-hour upper bound and `flock-unavailable`'s halt; the shadow "nothing was
       deleted" over a standing row; Task 8's census bound at `_ws_tombstone`; a lane case for a hold at the post-act
       re-measure.
+- **2026-10-10 21:50 — CCR-15 wave 7's fix round changes one `ws-expire` answer (calm-mesa's FYI 4182, acked).**
+  - PR #344 (run 347, not merged) makes rung 8's matcher, `_ws_reclaim_admin_entries`, treat an admin entry whose
+    `gitdir` names no path (empty, or whitespace only) as unreadable. `ws-expire` shares that ladder, so an archive in
+    that shape now retries unmeasured. Before, the standing arm answered terminal `no-worktree-record` and the vanished
+    arm minted a token with `head=''`. `_ws_expire_locked` and `_ws_expire_cwd_users` are not edited (R72 holds).
+  - The server's `archivedExpiry.ts` maps `no-worktree-record` to terminal (`origin/main`, line 46). That stays right
+    for a record that is truly absent; the change only moves the empty-gitdir shape to the retry path.
+  - Wave 6's plan checks that no lane test or journal word pins the old terminal answer, or a blank-head token, for an
+    empty gitdir. calm-mesa mails when #344 merges; wave 6 still waits on it.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -1321,7 +1330,7 @@ operator creates `$REG/expire-lane-live` by hand. The dead-coordinator lane reco
 the operator creates `$REG/dead-coordinator-lane-live` by hand.
 
 **Wave 6 is run 358**, opened 2026-10-09 08:20 (planned; the run's wave 7 of 7), with numbers 4617–4632, written
-bare. It waits on CCR-15 wave 7 (run 347, building) reaching `main`. Then its plan is drafted from the wave 6 bullet
+bare. It waits on CCR-15 wave 7 (run 347, PR #344, fix round awaiting a scoped review) reaching `main`. Then its plan is drafted from the wave 6 bullet
 below and the carried items in the 10-09 entries. Wave 5 (run 345) merged as #335 (`6fc7ef115`, the 10-09 08:20
 entry). Its evidence and reviews 355–357 are in `.superpowers/sdd/coordinator-evidence/run345/`.
 - **Wave 5 deploys AGENT-FIRST through ccrc's updater** (the operator applies it from the console). Afterwards, check
@@ -1361,6 +1370,7 @@ entry). Its evidence and reviews 355–357 are in `.superpowers/sdd/coordinator-
   entry) and review 355's F7 (the 10-09 07:00 entry): `stillCrashed` re-reads the mirror's health state and its gap list
   after the claimant's measure. Both reads are synchronous, so the revive window stays closed. From review 355's F2:
   `_ws_expire_locked`'s consent-branch comment names the attached-HEAD shape, where a deleted branch is refused at the pin as
-  `pin-failed`.
+  `pin-failed`. From CCR-15 wave 7 (mail 4182, the 10-10 21:50 entry): an archive whose admin `gitdir` names no path now
+  retries unmeasured on the expiry lane; no lane test or journal word may pin the old terminal answer.
 - **Wave 2's three operator questions stay open:** the PR sheet's "Archive now", the remote-mode worktree check, and
   L5's sentence.
