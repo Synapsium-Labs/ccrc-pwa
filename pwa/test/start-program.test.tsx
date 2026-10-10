@@ -2184,7 +2184,11 @@ describe('missingPreconditions agrees with readyVerdict, by construction', () =>
 // — otherwise the operator reads the first refusal for ever and the second
 // one, which is the one that would tell them what changed, is lost.
 describe('a kickoff that could not be queued, twice', () => {
-  const mount = (queueKickoff: ReturnType<typeof vi.fn>) => {
+  /** The prop's own signature, not a bare `vi.fn()`: the loose form is
+   *  assignable to nothing the sheet asks for, and the PROJECT-wide typecheck
+   *  is where that shows (the per-file run reports no error on it). */
+  type Queue = (id: string, b: { slug: string; title: string }) => Promise<{ queued: boolean }>;
+  const mount = (queueKickoff: ReturnType<typeof vi.fn<Queue>>) => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
     render(
@@ -2211,7 +2215,7 @@ describe('a kickoff that could not be queued, twice', () => {
   };
 
   it('re-plants the block with the SECOND reason, not the first', async () => {
-    const queueKickoff = vi.fn()
+    const queueKickoff = vi.fn<Queue>()
       .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
       .mockRejectedValueOnce(new ApiError(502, { ok: false, stderr: 'mail: store is locked' }));
     const store = mount(queueKickoff);
@@ -2232,9 +2236,11 @@ describe('a kickoff that could not be queued, twice', () => {
     // disabled while the call is out, and the guard is what makes a double
     // tap landing in the same frame harmless.
     let land!: () => void;
-    const queueKickoff = vi.fn()
+    const queueKickoff = vi.fn<Queue>()
       .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }))
-      .mockImplementationOnce(() => new Promise<void>((res) => { land = () => res(); }));
+      .mockImplementationOnce(() => new Promise<{ queued: boolean }>((res) => {
+        land = () => res({ queued: true });
+      }));
     const store = mount(queueKickoff);
     await reachFailure(store);
 
@@ -2249,7 +2255,7 @@ describe('a kickoff that could not be queued, twice', () => {
     // The second door, and the honest one: the session IS running, so the
     // operator may want to brief it by hand from inside. It must not queue
     // anything on the way — that is what the other button is for.
-    const queueKickoff = vi.fn()
+    const queueKickoff = vi.fn<Queue>()
       .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }));
     const store = mount(queueKickoff);
     await reachFailure(store);
