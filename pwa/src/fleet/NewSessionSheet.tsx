@@ -19,6 +19,7 @@ import { declaredAccountPool } from '../../../shared/poolrule';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { AccountRow } from './AccountRow';
 import { PoolTag } from './PoolTag';
+import { OtherPoolsDisclosure } from './chips';
 import {
   disabledWrappers,
   factsFor,
@@ -357,14 +358,11 @@ export function NewSessionSheet({
               )}
               {otherPool.length > 0 && (
                 <>
-                  <button
-                    type="button"
-                    className="acct-disclosure"
-                    aria-expanded={showOther}
-                    onClick={() => setShowOther((shown) => !shown)}
-                  >
-                    show other pools ({otherPool.length})
-                  </button>
+                  <OtherPoolsDisclosure
+                    count={otherPool.length}
+                    shown={showOther}
+                    onToggle={() => setShowOther((shown) => !shown)}
+                  />
                   {showOther && otherPool.map((candidate) => (
                     <ProjectRowButton
                       key={candidate.workdir}

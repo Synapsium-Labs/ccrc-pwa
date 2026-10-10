@@ -24,6 +24,16 @@
 //     of them inside `@ccrc/ui`'s own `QuickConfirm`, the component the other
 //     six were copying.
 //
+//  3. LEAVES. Every element with NO element children, a hook class, and two
+//     or more attributes besides `className` — keyed on tag, class and the
+//     sorted attribute NAMES. This half exists because the other two have
+//     floors (three elements, two words) and a one-word leaf is under both:
+//     `span.acct-pool[aria-label,title]` was written out twice with the same
+//     `pool · <name>` used as both accessible name and tooltip, and the spawn
+//     and unreadable chips were each written twice across two files, title
+//     template included. Three real copies, invisible to this file until it
+//     grew this half.
+//
 // THREE ELEMENTS IS THE FLOOR, MEASURED. At four the census loses
 // `div.pool-list(button.pool-row, button.pool-row)`, the trio of `qc-actions`
 // confirm rows and the session menu's item — every duplicate a reader would
@@ -52,7 +62,20 @@
 //   | a 3-element block copied twice INSIDE @ccrc/ui       | 1 red      |
 //   | one block copied ACROSS the two packages             | 1 red      |
 //
-// Baseline: 5 passed. The last row is why "reads markup at all" exists: a
+// Baseline: 5 passed.
+//
+// The leaf half was measured the same way, after the three copies it found
+// were extracted (`PoolTag`, `LastSpawnChip`, `UnmeasuredChip`):
+//
+//   | mutation                                            | result     |
+//   |-----------------------------------------------------|------------|
+//   | PoolTag's span hand-drawn into a second app file    | 1 red      |
+//   | the `span.sess-held` entry deleted                  | 1 red      |
+//   | an entry for a leaf that does not exist             | 1 red      |
+//   | the leaf walk returns an empty map                  | 2 red      |
+//   | `LastSpawnChip` hand-drawn back into RunRow         | 1 red      |
+//
+// Baseline: 7 passed. The last row is why "reads markup at all" exists: a
 // census that silently finds nothing reports a serene zero duplicates.
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -213,6 +236,59 @@ function literals(): Map<string, string[]> {
   return found;
 }
 
+/** THE THIRD HALF, and the measured reason it exists. The two above have
+ *  floors that are right for what they measure and blind in the same place:
+ *  the block half starts at THREE elements, the literal half at TWO words. A
+ *  LEAF with a one-word hook class is under both — and three real copies lived
+ *  there. `span.acct-pool[aria-label,title]` was written out in `AccountRow`
+ *  and in `NewSessionSheet`'s project row, same class, same attributes, same
+ *  `pool · <name>` text used as both the accessible name and the tooltip.
+ *  `span.sess-spawn[data-spawn,title]` and
+ *  `span.sess-unmeasured[data-unmeasured,title]` were each written twice
+ *  across two files, title template included. None of them was visible to
+ *  this file until it grew this half.
+ *
+ *  A leaf is counted when it has NO element children, a literal or named
+ *  class (the block half's `hooked` rule, for its reason), and TWO OR MORE
+ *  attributes besides `className`. The attribute floor is what keeps the
+ *  stylesheet being USED out of the census: `<span className="pool-row">` at
+ *  two call sites is a hook class doing its job, and `.pool-row` is the case
+ *  the file header opens with. Two attributes on top of it is a composition —
+ *  a title AND a data attribute, an aria-label AND a tooltip — and that is
+ *  what drifts when it is written twice.
+ *
+ *  ATTRIBUTE NAMES, NEVER VALUES: two leaves that differ only in what they
+ *  pass are the same decision about what to render, which is the whole
+ *  question. Registered entries below say which of those are genuinely two
+ *  things. */
+function leaves(): Map<string, string[]> {
+  const found = new Map<string, string[]>();
+  for (const [name, file] of [...APP, ...UI]) {
+    const src = parse(file);
+    const visit = (n: ts.Node): void => {
+      if ((ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) && kids(n).length === 0) {
+        const cls = classOf(n);
+        if (cls !== '' && cls !== '*') {
+          const attrs = opening(n).attributes.properties
+            .filter((a): a is ts.JsxAttribute => ts.isJsxAttribute(a) && a.name.getText() !== 'className')
+            .map((a) => a.name.getText())
+            .sort();
+          if (attrs.length >= 2) {
+            const key = `${opening(n).tagName.getText()}.${cls}[${attrs.join(',')}]`;
+            const line = src.getLineAndCharacterOfPosition(n.getStart()).line + 1;
+            const at = `${name}:${line}`;
+            const prev = found.get(key);
+            if (prev === undefined) found.set(key, [at]); else prev.push(at);
+          }
+        }
+      }
+      n.forEachChild(visit);
+    };
+    visit(src);
+  }
+  return found;
+}
+
 const duplicated = (m: Map<string, string[]>): string[] =>
   [...m.entries()].filter(([, v]) => v.length >= 2).map(([k]) => k).sort();
 
@@ -261,6 +337,43 @@ const REGISTERED_LITERALS: Record<string, string> = {
     + 'composition; it is one element wearing both of its names.',
 };
 
+/** The same, for copied LEAVES. Five today, and the argument for each is
+ *  about the difference the signature cannot see. */
+const REGISTERED_LEAVES: Record<string, string> = {
+  // No NEXT. Every leaf below is argued, not deferred.
+  'Button.sess-sheet-remove[disabled,onClick,title,variant]':
+    'DIFFERENT THINGS, and the sheet only ever renders ONE of them: `Clean up '
+    + 'workspace…` on an archived workspace, `Forget session…` on a dead '
+    + 'non-workspace row — mutually exclusive by construction. What they share '
+    + 'is the substrate-fault gate (`disabled`/`title`), which is one '
+    + 'expression used twice, and a component taking it as a prop would be the '
+    + 'same gate with one more name.',
+  'Button.{GO}[disabled,onClick,variant]':
+    'THE SHARED DECISION IS ALREADY NAMED. `GO` is the quiet control\'s '
+    + 'eleven declarations plus this sheet\'s own three, a constant this file '
+    + 'defines and both buttons wear. What differs is everything else: the '
+    + 'main Start button is gated on the kickoff verdict, the placement and a '
+    + 'collision, and the recovery panel\'s Retry only on its own in-flight '
+    + 'flag — and they are never on screen together.',
+  'TextInput.{TEXT_INPUT_STACKED}[aria-describedby,aria-invalid,aria-label,onChange,placeholder,value]':
+    'TWO FIELDS OF ONE FORM — the program\'s slug and its title. Same '
+    + 'attribute set because both are labelled, validated text inputs, which '
+    + 'is what a form field is; the values, the labels and the error each one '
+    + 'points at are all different, and the shared styling is '
+    + '`TEXT_INPUT_STACKED`, a named constant in `@ccrc/ui`.',
+  'span.proj-ready[data-verdict,title]':
+    'DIFFERENT CLAIMS, in the two arms of one ternary. The first says a '
+    + 'readiness measurement is IN FLIGHT (`data-verdict="pending"`, a fixed '
+    + 'title and the pending glyph); the second states the verdict it came '
+    + 'back with. Folding them would mean a component whose job is to decide '
+    + 'which of two sentences to render — which is the ternary.',
+  'span.sess-held[data-held,title]':
+    'DIFFERENT CONTENT, same chip. The session line renders the hold REASON as '
+    + 'the chip\'s text; the archive row renders ` · held` after the slug, '
+    + 'with the reason in the title only, because that cell is already the '
+    + 'workspace\'s name. One is a word, the other a suffix.',
+};
+
 describe('markup census', () => {
   it('registers every duplicated block', () => {
     const dups = duplicated(blocks());
@@ -286,6 +399,18 @@ describe('markup census', () => {
     expect(stale, 'this literal is no longer copied — drop the entry').toEqual([]);
   });
 
+  it('registers every duplicated leaf', () => {
+    const dups = duplicated(leaves());
+    const missing = dups.filter((d) => REGISTERED_LEAVES[d] === undefined);
+    expect(missing, 'a leaf written twice is a chip nobody wrote — register it or extract it').toEqual([]);
+  });
+
+  it('keeps no stale leaf entry', () => {
+    const dups = new Set(duplicated(leaves()));
+    const stale = Object.keys(REGISTERED_LEAVES).filter((k) => !dups.has(k));
+    expect(stale, 'this leaf is no longer duplicated — drop the entry').toEqual([]);
+  });
+
   it('reads markup at all', () => {
     // The whole census is a parse away from reporting a serene zero. If the
     // file walk or the TSX parse ever silently finds nothing, every test above
@@ -294,5 +419,6 @@ describe('markup census', () => {
     expect(UI.length).toBeGreaterThan(20);
     expect(blocks().size).toBeGreaterThan(100);
     expect(literals().size).toBeGreaterThan(30);
+    expect(leaves().size).toBeGreaterThan(40);
   });
 });

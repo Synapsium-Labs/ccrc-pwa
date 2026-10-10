@@ -173,6 +173,24 @@ export function releaseDate(ms: number): string {
   return typeof ms === 'number' && isPlaceableInstant(ms) ? new Date(ms).toISOString().slice(0, 10) : '—';
 }
 
+/** One move control — Install, Roll back, Ack. FOUR CALL SITES, and what they
+ *  share is the styling triple (`variant="ghost" size="fit"` on
+ *  `.settings-move`), not the decision: each carries its own label, its own
+ *  disabled condition and its own intent. Named so the triple is written once
+ *  and a fifth control cannot style itself differently by accident. */
+function MoveButton({ disabled, onClick, children }: {
+  disabled: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <Button variant="ghost" size="fit" className="settings-move"
+            disabled={disabled} onClick={onClick}>
+      {children}
+    </Button>
+  );
+}
+
 /** Wave 8 item C: the reason a Roll back to `tag` is not offered, grouped by word. `no-bundle` is said with the tag
  *  (noBundleRollbackText); any other word through the route's own copy (`moveSkipText` reads `UPDATE_ERROR_TEXT`,
  *  and has a fallback for a word it does not know). */
@@ -220,9 +238,9 @@ function ReleaseItem({ release: r, nodes, onMove }: {
         {direction === 'running'
           ? <span className="settings-release-running">{releaseRunningText(r.tag, nodes)}</span>
           : (
-            <Button variant="ghost" size="fit" className="settings-move" disabled={blockers.length > 0} onClick={() => onMove(intent as MoveIntent)}>
+            <MoveButton disabled={blockers.length > 0} onClick={() => onMove(intent as MoveIntent)}>
               {direction === 'rollback' ? 'Roll back' : 'Install'}
-            </Button>
+            </MoveButton>
           )}
       </div>
     </li>
@@ -435,23 +453,21 @@ function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }
       <div className="settings-node-actions">
         {!darwin && (
           <>
-            <Button
-              variant="ghost" size="fit" className="settings-move"
+            <MoveButton
               disabled={next === null}
               onClick={() => { if (next !== null) onMove({ scope: 'node', direction: 'update', nodeId: n.nodeId, tag: next }); }}
             >
               Update
-            </Button>
-            <Button
-              variant="ghost" size="fit" className="settings-move"
+            </MoveButton>
+            <MoveButton
               disabled={previous === null || previousRefusal !== null}
               onClick={() => { if (previous !== null && previousRefusal === null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
             >
               Roll back
-            </Button>
+            </MoveButton>
           </>
         )}
-        <Button variant="ghost" size="fit" className="settings-move" disabled={!ackable || acking} onClick={ack}>Ack</Button>
+        <MoveButton disabled={!ackable || acking} onClick={ack}>Ack</MoveButton>
       </div>
     </li>
   );

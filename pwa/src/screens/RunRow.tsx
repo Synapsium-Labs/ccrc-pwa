@@ -21,6 +21,7 @@ import {
   resumeNote, runKindChip, runWarnings, runItems, runState,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
+import { LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
 import { coordPresence } from '../fleet/coordWords';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
@@ -185,11 +186,7 @@ export function RunRow({
           second `.run-…` class for one meaning is two vocabularies over one
           field. `.sess-line` and `.run-row` both sit on `--bg-surface`, so the
           chip's ink brings no new contrast pair with it. */}
-      {verdict !== null && (
-        <span className="sess-spawn" data-spawn={verdict.data} title={`last spawn: ${verdict.data}`}>
-          {verdict.word}
-        </span>
-      )}
+      <LastSpawnChip chip={verdict} />
       {/* The worker's read counter, in the fleet card's own class — the same
           reuse this row already makes of `.sess-spawn` and `.sess-unmeasured`
           next door, and for the same reason: a second `.run-…` class for one
@@ -228,15 +225,7 @@ export function RunRow({
       {reclaim !== null && reclaim.line !== null && (
         <span className="run-child-reclaim-sentence">{reclaim.line}</span>
       )}
-      {degradedFields.length > 0 && (
-        <span
-          className="sess-unmeasured"
-          data-unmeasured="true"
-          title={`registry ${degradedFields.join('/')} temporarily unreadable — retrying`}
-        >
-          unreadable
-        </span>
-      )}
+      <UnmeasuredChip fields={degradedFields} />
       {warnings.length > 0 && (
         // Its own wrapped LINE, not another inline cell: `.run-row` is
         // `flex-wrap: wrap`, so a `flex-basis: 100%` child becomes a sub-row

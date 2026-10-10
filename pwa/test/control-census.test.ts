@@ -191,7 +191,11 @@ const CONTROLS: Record<string, string> = {
   // ── TOKEN: the control's own rule declares the floor ─────────────────────
   'fleet/MailBadge.tsx <button> mail-badge': 'TOKEN. The mail door in the fleet header.',
   'fleet/NewSessionSheet.tsx <button> acct-change': 'TOKEN. The change-account line above the project list.',
-  'fleet/NewSessionSheet.tsx <button> acct-disclosure': 'TOKEN. The routing row disclosure.',
+  'fleet/chips.tsx <button> acct-disclosure':
+    'TOKEN. "show other pools (N)" — ONE entry where there were two, because '
+    + 'the two sheets that drew it were drawing the same button down to the '
+    + 'parenthesised count (`OtherPoolsDisclosure`). The rule it leans on is '
+    + 'unchanged; what is gone is the second copy of the markup.',
   'fleet/PasskeyNotice.tsx <button> passkey-notice': 'TOKEN. A standing fact about the box, tappable to act on it.',
   'fleet/PoolList.tsx <button> pool-row': 'TOKEN. Both rows of the pool picker.',
   'fleet/ProjectCardHead.tsx <button> proj-card-add': 'TOKEN, and OVERLAY below: the rule carries the token and the ::before carries the hit area.',
@@ -199,7 +203,6 @@ const CONTROLS: Record<string, string> = {
   'fleet/ProjectCardHead.tsx <button> proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
   'fleet/SessionLine.tsx <button> sess-actions': 'TOKEN, and OVERLAY below.',
   'fleet/SessionMeta.tsx <button> sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
-  'fleet/SwapSheet.tsx <button> acct-disclosure': "TOKEN. NewSessionSheet's disclosure rule, same class.",
   'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
   'screens/AuthSection.tsx <button> accounts-session': 'TOKEN. Revoke, on a passkey row — the SAME class the\n    session rows above it use, which is why the auth section leaving AccountsScreen for its own file put a\n    second key under one class rather than moving one.',
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",

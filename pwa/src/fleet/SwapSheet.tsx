@@ -20,6 +20,7 @@ import { projectPoolOf, splitByPool } from '../lib/pools';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useAccountUsage } from './useProjectedHome';
 import { AccountRow } from './AccountRow';
+import { OtherPoolsDisclosure } from './chips';
 import {
   disabledWrappers, factsFor, leastLoaded, pickableWrappers, pickerEmptiness,
 } from './accountPicker';
@@ -253,14 +254,11 @@ export function SwapSheet({
           </p>
         ) : split.crossing.length > 0 ? (
           <>
-            <button
-              type="button"
-              className="acct-disclosure"
-              aria-expanded={showOther}
-              onClick={() => setShowOther((shown) => !shown)}
-            >
-              show other pools ({split.crossing.length})
-            </button>
+            <OtherPoolsDisclosure
+              count={split.crossing.length}
+              shown={showOther}
+              onToggle={() => setShowOther((shown) => !shown)}
+            />
             {showOther && (
               <div className="acct-list">
                 {split.crossing.map((w) => (

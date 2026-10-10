@@ -159,6 +159,30 @@ function TableWrap({ children }: { children?: ReactNode }): ReactNode {
   return <div className="md-table-wrap"><table>{children}</table></div>;
 }
 
+/** An image, as a link that opens it full-size outside the app.
+ *
+ *  TWO MARKDOWN RENDERERS, ONE BLOCK: `a` reaches it when a link's href IS an
+ *  image, `img` when the markdown wrote an image directly, and the two had
+ *  the same two elements with the same four attributes each. It is two
+ *  elements, so the markup census's block half (floor: three) could not see
+ *  it, and the classes are one word each, so its literal half could not
+ *  either — the leaf half added in the same commit is what named it.
+ *
+ *  `src={href}` in both arms. The `img` renderer used to pass its raw `src`
+ *  while computing `href` for the anchor from the same value, so a non-string
+ *  `src` would have reached the `<img>` and not the `<a>`; react-markdown
+ *  types it `string | undefined`, and an `<img>` handed anything else was
+ *  already broken, so one value for both is the honest shape. */
+function ImageLink({ href, alt }: { href: string | undefined; alt: string }): ReactNode {
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link"
+       onClick={(e) => openExternal(e, href)}>
+      <img src={href} alt={alt} loading="lazy" className="msg-img" />
+    </a>
+  );
+}
+
+
 /** Open in the external browser (a bare `<a>` in a standalone PWA would try to
  *  navigate the app itself), and render image URLs inline as tap-to-open images. */
 const mdComponents: Components = {
@@ -166,9 +190,7 @@ const mdComponents: Components = {
     if (isImageUrl(href)) {
       const name = href.split('/').pop()?.split(/[?#]/)[0] || 'image';
       return (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
-          <img src={href} alt={name} loading="lazy" className="msg-img" />
-        </a>
+        <ImageLink href={href} alt={name} />
       );
     }
     return (
@@ -180,9 +202,7 @@ const mdComponents: Components = {
   img({ src, alt }) {
     const href = typeof src === 'string' ? src : undefined;
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
-        <img src={src} alt={alt ?? ''} loading="lazy" className="msg-img" />
-      </a>
+      <ImageLink href={href} alt={alt ?? ''} />
     );
   },
   code({ className, children }) {

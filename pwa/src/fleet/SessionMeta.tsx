@@ -40,6 +40,7 @@ import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { childOfRunLabel } from './runWords';
 import { spawnChip } from './spawnWords';
+import { LastSpawnChip, UnmeasuredChip } from './chips';
 import './fleet.css';
 
 /** Routing policy calls a window critical above this. */
@@ -329,11 +330,7 @@ export function SessionMeta({
               `.sess-held`/`.sess-acct` shrink — which is why this cell is
               `flex: none` in fleet.css: §2.4 lengthens the hold reason in the
               same build and the two changes compound. */}
-          {chip !== null && (
-            <span className="sess-spawn" data-spawn={chip.data} title={`last spawn: ${chip.data}`}>
-              {chip.word}
-            </span>
-          )}
+          <LastSpawnChip chip={chip} />
 
           {/* Registry ladder (architecture doc, increment 1's second half —
               Task 2): this row's identity triple could not be fully measured
@@ -351,15 +348,7 @@ export function SessionMeta({
               not revived (`stores/fleet.ts`'s `asFleetMsg`), so a row from a
               server that predates this field can lack the key entirely at
               runtime — see `unmeasuredFields`'s own docstring. */}
-          {unmeasuredFields(session).length > 0 && (
-            <span
-              className="sess-unmeasured"
-              data-unmeasured="true"
-              title={`registry ${unmeasuredFields(session).join('/')} temporarily unreadable — retrying`}
-            >
-              unreadable
-            </span>
-          )}
+          <UnmeasuredChip fields={unmeasuredFields(session)} />
 
           {/* The substrate fault (spec §4), same quiet register as
               .sess-unmeasured above: generic words on the cell, the REASON
