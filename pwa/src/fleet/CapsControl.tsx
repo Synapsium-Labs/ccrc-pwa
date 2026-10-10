@@ -28,7 +28,7 @@
 // renders `null`.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button } from '@ccrc/ui';
+import { Button, ControlRow } from '@ccrc/ui';
 import type { CoordCaps, CoordCapsView } from '../../../shared/api';
 import { ApiError, api, apiErrorText } from '../lib/api';
 import './fleet.css';
@@ -174,7 +174,7 @@ export function CapsControl({
   );
 
   return (
-    <div className="caps-control" role="group" aria-label="coordination caps">
+    <ControlRow className="caps-control" role="group" aria-label="coordination caps">
       {field('workers', 'caps-workers',
         draft.workers ?? String(view.caps.maxConcurrentWorkers),
         view.usage.running, view.caps.maxConcurrentWorkers,
@@ -214,6 +214,6 @@ export function CapsControl({
             ? 'unconfirmed — the answer could not be read; reload to see what was stored'
             : ''}
       </p>
-    </div>
+    </ControlRow>
   );
 }

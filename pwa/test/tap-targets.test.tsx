@@ -31,7 +31,7 @@ import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
-import { MailStrip, buttonVariants } from '@ccrc/ui';
+import { CONTROL_ROW, MailStrip, buttonVariants } from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -272,8 +272,7 @@ describe('the two rules that were already scraped still reach a real element', (
     // Task 6 (`.mail-strip-head`),  — `.mail-back` and `.runs-back` left this
     // loop with the other three back chevrons when they became `BackButton`;
     // their floor is asserted against the component below,
-    // Build 4 Task 11 (`.coord-banner`), Task 12
-    // (`.run-abandon`) and Task 13
+    // Build 4 Task 12 (`.run-abandon`) and Task 13
     // join the same loop rather than getting their own — one place where
     // "every floored rule stays on the token" is checked, not a second copy
     // of the assertion per branch.
@@ -285,10 +284,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.fleet-runs-row'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(mailStripCss, '.mail-strip .mail-strip-head'),
-      ruleIn(fleetCss, '.coord-banner'),
-      ruleIn(fleetCss, '.child-reclaim-banner'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
-      ruleIn(fleetCss, '.caps-control'),
       ruleIn(fleetCss, '.caps-input'), ruleIn(fleetCss, '.mail-chip'),
       ruleIn(fleetCss, '.proj-released-toggle'), ruleIn(fleetCss, '.proj-released-archive'),
     ]) {
@@ -335,6 +331,24 @@ function expectQuietIsATarget(): void {
   expect(QUIET).toContain('min-h-tap');
   expect(QUIET).not.toContain('44px');
 }
+
+// AND SO DID THREE CONTROL ROWS. `.coord-banner`, `.child-reclaim-banner` and
+// `.caps-control` declared the same twelve; what is left of each in fleet.css
+// is the two-declaration ground its descendants are measured against, so the
+// floor is read off `<ControlRow>` instead.
+describe('the control row — one shape where three rules were', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(CONTROL_ROW).toContain('min-h-tap');
+    expect(CONTROL_ROW).not.toContain('44px');
+  });
+  it('supplies no ground of its own — the consumer keeps that, for the audit', () => {
+    // The split this component exists to hold. A `bg-*` creeping in here is
+    // the change that would un-measure nine descendant rules in fleet.css,
+    // silently, with every gate still green.
+    expect(CONTROL_ROW).not.toMatch(/\bbg-/);
+    expect(CONTROL_ROW).not.toMatch(/\btext-ink-/);
+  });
+});
 
 describe('.mail-back — the feed’s back control', () => {
   it('is at least one tap square, off the shared token', () => {

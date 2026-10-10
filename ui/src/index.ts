@@ -22,6 +22,7 @@ export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
 export { Well, WELL, type WellProps } from './primitives/well';
 export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
+export { ControlRow, CONTROL_ROW, type ControlRowProps } from './primitives/control-row';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,

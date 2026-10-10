@@ -2553,17 +2553,16 @@ button.proj-card-pool::before {
  *  anywhere under .coord-* — the same rule "runs are not living panes" *
  *  already holds a few rules up, one screen over.                      *
  * ------------------------------------------------------------------ */
+/* WHAT IS LEFT IS THE GROUND, AND ONLY THE GROUND. The shape — the wrapping
+   flex row, the tap floor, the padding, the hairline and the mono type — is
+   `<ControlRow>` now; three rules in this file declared the same twelve. These
+   two declarations stayed behind because they are not decoration: they are
+   what lets `design/audit.mjs` recover a ground for the descendants below, and
+   nine rules across the three rows depend on it. Painted as a utility instead,
+   all nine leave the measured set and every gate still prints ALL PASS.
+   `fleet-css.test.ts` pins each of the three as self-grounded. */
 .coord-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  min-height: var(--tap-min);
-  padding: var(--sp-1) var(--sp-3);
   background: var(--bg-surface);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
 }
 /* Same nested idiom as `.run-row .run-glyph` a few rules up, against the
@@ -2580,17 +2579,9 @@ button.proj-card-pool::before {
    color AND background) so `design/audit.mjs` recovers a ground for every
    descendant below; every ink here is one the coord banner already measures on
    --bg-surface, so no new colour pair is priced. */
+/* The ground, and only the ground — see `.coord-banner`. */
 .child-reclaim-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  min-height: var(--tap-min);
-  padding: var(--sp-1) var(--sp-3);
   background: var(--bg-surface);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
 }
 /* The switch readout (glyph, word, toggle,
@@ -2620,19 +2611,13 @@ button.proj-card-pool::before {
    way. Self-grounded (both `color` and `background`) so `design/audit.mjs` can
    recover a ground and measure the contrast — a colourless rule lands in
    `uncovered` and the gate cannot see it at all. */
+/* The ground — see `.coord-banner` — plus the one declaration that was never
+   part of the shared shape: this row alone anchors an out-of-flow live region
+   (`.caps-note:empty`), which is why it was the only one of the three to
+   declare `position`. */
 .caps-control {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-  /* Anchors the empty live region's out-of-flow box (see `.caps-note:empty`). */
   position: relative;
-  min-height: var(--tap-min);
-  padding: var(--sp-1) var(--sp-3);
   background: var(--bg-surface);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
 }
 

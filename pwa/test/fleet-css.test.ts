@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+import { CONTROL_ROW, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 
 /** The quiet control's shipped class string. FOUR rules in this stylesheet
  *  declared these eleven declarations; they are one cva variant now, so the
@@ -24,6 +24,14 @@ function expectQuietIsATarget(): void {
  *  stylesheet used to hold for each copy, held once. */
 function expectQuietIsNotAlive(): void {
   for (const word of ['glow', 'animate', 'shadow']) expect(QUIET).not.toContain(word);
+}
+/** The three control rows' floor moved the same way their shape did. What is
+ *  left in this stylesheet under `.coord-banner`, `.child-reclaim-banner` and
+ *  `.caps-control` is the GROUND — the two declarations the audit's descendant
+ *  pass needs — so the tap floor is read off `<ControlRow>`. */
+function expectControlRowIsATarget(): void {
+  expect(CONTROL_ROW).toContain('min-h-tap');
+  expect(CONTROL_ROW).not.toContain('44px');
 }
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
@@ -782,7 +790,7 @@ describe('the coord banner is not a living pane, and its toggle is a real target
   });
 
   it('.coord-banner itself clears the floor too — it is a status row, not just a label', () => {
-    expect(declValue(ruleFor('.coord-banner'), 'min-height')).toBe('var(--tap-min)');
+    expectControlRowIsATarget();
   });
 
   // Task 14 gate: same self-grounded proof `.abandon-sheet`/`.program-start-
@@ -827,7 +835,7 @@ describe('the reclaim row is not a living pane, and its toggle is a real target'
   });
   it('.child-reclaim-toggle and the row clear the tap floor, off the shared token', () => {
     expectQuietIsATarget();
-    expect(declValue(ruleFor('.child-reclaim-banner'), 'min-height')).toBe('var(--tap-min)');
+    expectControlRowIsATarget();
   });
   it('.child-reclaim-banner is self-grounded — its own color AND background', () => {
     const rule = ruleFor('.child-reclaim-banner');

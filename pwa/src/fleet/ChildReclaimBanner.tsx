@@ -33,7 +33,7 @@ import { inlinePauseError } from './CoordBanner';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
 import { api, apiErrorText } from '../lib/api';
-import { Button, toast } from '@ccrc/ui';
+import { Button, ControlRow, toast } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
@@ -122,7 +122,7 @@ export function ChildReclaimBanner({
     : marker === 'set' ? 'Resume cleanup' : 'Pause cleanup';
 
   return (
-    <div className="child-reclaim-banner">
+    <ControlRow className="child-reclaim-banner">
       {/* `role="status"` covers the switch readout
           ALONE (glyph, word, toggle, error) — never the attention list below,
           whose own changes must not re-announce every standing child's
@@ -160,6 +160,6 @@ export function ChildReclaimBanner({
       {/* Workspace lifecycle wave 4: the dead-coordinator lane's own list, under the expiry lane's — the same switch stops
           all three lanes, and each list stays its own. */}
       <DeadCoordinatorAttention coord={coord} />
-    </div>
+    </ControlRow>
   );
 }
