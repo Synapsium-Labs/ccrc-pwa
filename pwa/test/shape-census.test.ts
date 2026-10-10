@@ -267,25 +267,17 @@ const REGISTERED: Record<string, string> = {
     + 'attribute — the same two states with one more name, and a gate entry '
     + 'for each either way.',
   'ui/mail-strip.css .mail-strip + ui/task-strip.css .task-strip':
-    'SHAPE ALREADY MIGRATED. The strip skin, and the ruling that leaves it twinned is already made '
-    + 'and already written down: `CollapsibleStrip`\'s own header says it '
-    + 'owns the SHAPE and not the SKIN, because hoisting the base rules into '
-    + 'one sheet rekeys every contrast-gate entry naming the old one '
-    + '(`<basename> <selector>`), and the skins are not in fact identical — '
-    + '`.mail-strip` sets `color` to make itself self-grounded for route 1 '
-    + 'and `.task-strip` does not. This cluster is that decision, measured.',
-  'ui/mail-strip.css .mail-strip .mail-strip-summary + ui/task-strip.css .task-summary':
-    'SHAPE ALREADY MIGRATED. The same ruling as the strip root above: the shape is '
-    + '`CollapsibleStrip`\'s `summary` slot, which both already go through. '
-    + 'What clusters is the skin each strip keeps on purpose.',
-  'ui/mail-strip.css .mail-strip-count + ui/task-strip.css .task-count':
-    'SHAPE ALREADY MIGRATED. The same ruling — `CollapsibleStrip`\'s `count` slot. Byte-identical '
-    + 'skins, in two sheets whose keys the gate holds.',
-  'ui/mail-strip.css .mail-strip-headline + ui/task-strip.css .task-headline':
-    'SHAPE ALREADY MIGRATED. The same ruling — `CollapsibleStrip`\'s `headline` slot.',
-  'ui/mail-strip.css .mail-strip-rows + ui/task-strip.css .task-rows':
-    'SHAPE ALREADY MIGRATED. The same ruling — the rows region `CollapsibleStrip` renders only while '
-    + 'open.',
+    'GROUND, NOT CHROME — and the LAST of the five strip clusters, now that the '
+    + 'other four are one rule each in `primitives/collapsible-strip.css`. The '
+    + 'ruling that kept all five twinned was the gate\'s key format '
+    + '(`<basename> <selector>`), which is spent: a rule is keyed by its '
+    + 'selector and may live where it belongs. What keeps THIS one twinned is '
+    + 'the ground. `.mail-strip` sets `color` beside its `background` to make '
+    + 'itself self-grounded for route 1, which is what lets every '
+    + '`.mail-strip .foo` below be measured through route 2b instead of '
+    + 'landing in the uncovered census; `.task-strip` sets no colour and needs '
+    + 'none. Grouping the nine they share would split mail\'s pair across two '
+    + 'rules and take that grounding with it.',
 };
 
 describe('every duplicated shape in the app stylesheets is registered', () => {
@@ -294,9 +286,19 @@ describe('every duplicated shape in the app stylesheets is registered', () => {
   it('found clusters to judge — the census is not vacuously empty', () => {
     // Without this it passes by finding nothing, which is how a census dies:
     // a parser change stops matching rules and the guard goes quiet rather
-    // than red. Measured 14 clusters over 5,459 lines of app CSS today.
-    expect(found.length).toBeGreaterThanOrEqual(10);
-    expect(found.flat().length).toBeGreaterThanOrEqual(25);
+    // than red.
+    //
+    // THE FLOOR IS THE REGISTRY, not a number typed here. It was 10 and had to
+    // be edited the first time a wave actually folded things — nine app
+    // clusters into grouped selectors, four strip skins into
+    // `collapsible-strip.css` — which is a floor doing the opposite of its
+    // job: standing in the way of the work it was written to enable. Tied to
+    // the registry it cannot rot, and it still fails the same way, because a
+    // parser that matches nothing finds none of the entries either.
+    expect(found.length).toBe(Object.keys(REGISTERED).length);
+    expect(found.length, 'the census found nothing at all — the parser is broken')
+      .toBeGreaterThan(0);
+    expect(found.flat().length).toBeGreaterThanOrEqual(2 * found.length);
   });
 
   it('names no shape this registry has not seen', () => {

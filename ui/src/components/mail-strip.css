@@ -44,45 +44,23 @@
     color: var(--ink-tertiary);
   }
 
-  .mail-strip-headline {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui);
-  }
-  .mail-strip-count {
-    flex: none;
-    font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
-    font-variant-numeric: tabular-nums;
-    color: var(--ink-secondary);
-    background: var(--bg-raised);
-    border-radius: var(--r-full);
-    padding: var(--sp-1) 9px;
-  }
+  /* `.mail-strip-headline` and `.mail-strip-count` are in
+     ../primitives/collapsible-strip.css now, written once with the task
+     strip's. */
   .mail-strip .mail-strip-chevron {
     flex: none;
     font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
     color: var(--ink-tertiary);
   }
 
+  /* The summary's LAYOUT is shared (../primitives/collapsible-strip.css); its
+     ink stays here, and stays SCOPED, so `design/audit.mjs` reaches it through
+     route 2b under this host. Ground stays. */
   .mail-strip .mail-strip-summary {
-    padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
-    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
-    font-variant-numeric: tabular-nums;
     color: var(--ink-tertiary);
   }
 
-  .mail-strip-rows {
-    list-style: none;
-    margin: 0;
-    padding: 0 0 var(--sp-2);
-    border-top: 1px solid var(--edge-subtle);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    min-height: 0;
-  }
+  /* `.mail-strip-rows` is shared too — same file. */
   .mail-strip-row {
     padding: var(--sp-2) var(--sp-3);
     display: flex;

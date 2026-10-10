@@ -3,16 +3,22 @@
 // shape with three vocabularies before this file: `TaskStrip` and `MailStrip`
 // here in the design system, and `HotFilesStrip` over in the app.
 //
-// IT OWNS THE SHAPE, NOT THE SKIN. Every class name arrives as a prop and the
-// consumer's own stylesheet still defines it, which is the whole reason this
-// extraction costs nothing: `mail-strip.css`, `task-strip.css` and `fleet.css`
-// are untouched, so not one contrast-gate rule key moves. The alternative —
-// hoisting the identical base rules into a `collapsible-strip.css` — rekeys
-// every registry entry naming the old sheet (`<basename> <selector>` is the
-// key), and the three skins are NOT in fact identical: `.mail-strip` sets
-// `color` to make itself self-grounded for the audit's route 1 while
-// `.task-strip` does not, and `.hotfiles` has no summary line at all. Those are
-// differences in what each strip IS, not drift to be collapsed.
+// IT OWNS THE SHAPE, AND NOW THE PART OF THE SKIN THAT WAS NEVER A CHOICE.
+// Every class name still arrives as a prop and each strip's own stylesheet
+// still defines it; what changed is that four slots — headline, count,
+// summary layout, rows — stopped being written twice. This paragraph used to
+// say the hoist was impossible, "because hoisting the identical base rules
+// into a `collapsible-strip.css` rekeys every registry entry naming the old
+// sheet (`<basename> <selector>` is the key)". That was true, and it was a
+// TEST'S KEY FORMAT deciding where code may live; `design/audit.mjs` keys a
+// rule by its selector now, so the reason is spent and the rules moved.
+//
+// The rest stays twinned, and the sheet beside this one argues each case: the
+// ROOTS, because `.mail-strip` sets `color` beside its `background` to be
+// self-grounded for route 1 while `.task-strip` does not; the SUMMARY'S INK,
+// for the same reason one level down; and `.hotfiles` entirely, which has no
+// summary line, a different rows padding and a headline that does not
+// truncate. Those are differences in what each strip IS.
 //
 // WHAT DRIFTED was the structure, and it drifted in the direction a shared
 // stylesheet would not have caught: `.task-head` has `min-height: var(--sp-8)`
@@ -21,6 +27,7 @@
 // fourth chrome, and the shape now has a story of its own rather than being
 // pinned only through whichever domain strip happens to render it.
 import { useState } from 'react';
+import './collapsible-strip.css';
 import type { ReactNode } from 'react';
 import { BARE_ROW } from './bare-row';
 import { cn } from '../lib/cn';

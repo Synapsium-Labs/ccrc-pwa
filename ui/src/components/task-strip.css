@@ -54,45 +54,23 @@
     to   { opacity: 1; }
   }
 
-  .task-headline {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui);
-  }
-  .task-count {
-    flex: none;
-    font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
-    font-variant-numeric: tabular-nums;
-    color: var(--ink-secondary);
-    background: var(--bg-raised);
-    border-radius: var(--r-full);
-    padding: var(--sp-1) 9px;
-  }
+  /* `.task-headline` and `.task-count` are in
+     ../primitives/collapsible-strip.css now, written once with the mail
+     strip's. */
   .task-chevron {
     flex: none;
     font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
     color: var(--ink-tertiary);
   }
 
+  /* The summary's LAYOUT is shared (../primitives/collapsible-strip.css); its
+     ink stays here, because this rule names no self-grounded ancestor and is
+     registered in INHERITED_GROUNDS under this key. Ground stays. */
   .task-summary {
-    padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
-    font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
-    font-variant-numeric: tabular-nums;
     color: var(--ink-tertiary);
   }
 
-  .task-rows {
-    list-style: none;
-    margin: 0;
-    padding: 0 0 var(--sp-2);
-    border-top: 1px solid var(--edge-subtle);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    min-height: 0;
-  }
+  /* `.task-rows` is shared too — same file. */
   .task-line {
     display: flex;
     align-items: baseline;
