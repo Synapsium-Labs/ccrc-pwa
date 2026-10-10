@@ -243,3 +243,134 @@ describe('ReconnectingSocket', () => {
     expect(instances()).toHaveLength(2); // one retry, no duplicate from the trailing close
   });
 });
+
+// ── THE ARMS NOTHING ASKED (measured: 10 uncovered statements at 90.74%) ──
+//
+// Every one is a condition the socket distinguishes on purpose, and three of
+// them are about the SAME question asked twice: is this callback still the
+// current socket's? A stale socket that writes through is the bug the identity
+// guards exist for, and nothing had driven one.
+describe('ReconnectingSocket — the identity guards and the refused-attempt rung', () => {
+  // ITS OWN SETUP, because the block above keeps its in the describe that owns
+  // it: without this the instance list carries sockets from earlier cases and
+  // the clock is real, which made four of these cases read as failures of the
+  // code rather than of the harness (measured — `expected 3 to be 1`).
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    FakeSocket.instances = [];
+  });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('start() twice is one socket — the second call is a no-op', () => {
+    // `if (!this.stopped) return`. Two sockets for one stream means two `since`
+    // cursors and a transcript delivered twice.
+    const { socket } = makeHarness();
+    socket.start();
+    socket.start();
+    expect(instances()).toHaveLength(1);
+    socket.stop();
+  });
+
+  it('a STALE socket\'s open is ignored — only the current one may report open', () => {
+    // The first socket drops, a second is made, and then the first one's
+    // `onopen` lands late. Without the guard the state machine would report
+    // `open` for a socket nobody is listening to, and the real one's frames
+    // would arrive into a connection the UI thinks is already up.
+    const { socket, onState } = makeHarness();
+    socket.start();
+    const first = last();
+    first.open();
+    first.onclose?.(new CloseEvent('close'));
+    vi.advanceTimersByTime(10_000);
+    const second = last();
+    expect(second, 'a second socket was made').not.toBe(first);
+    onState.mockClear();
+    first.open();
+    expect(onState, 'the stale socket cannot move the state').not.toHaveBeenCalled();
+    socket.stop();
+  });
+
+  it('a STALE socket\'s frames are dropped', () => {
+    const { socket, onMessage } = makeHarness();
+    socket.start();
+    const first = last();
+    first.open();
+    first.onclose?.(new CloseEvent('close'));
+    vi.advanceTimersByTime(10_000);
+    onMessage.mockClear();
+    first.message(JSON.stringify({ type: 'hello' }));
+    expect(onMessage, "a replaced socket's frame describes a connection nobody has")
+      .not.toHaveBeenCalled();
+    socket.stop();
+  });
+
+  it('a non-string frame is dropped without parsing', () => {
+    // These streams are JSON TEXT only; a binary frame is not a frame this
+    // protocol has, and `JSON.parse` on a Blob would throw inside the handler.
+    const { socket, onMessage } = makeHarness();
+    socket.start();
+    last().open();
+    last().message(new ArrayBuffer(4));
+    expect(onMessage).not.toHaveBeenCalled();
+    socket.stop();
+  });
+
+  it('send() answers false, never throws, when the socket dies mid-call', () => {
+    // The window between the readyState check and the write. `send` returns a
+    // BOOLEAN precisely so a caller can re-state on the next open rather than
+    // queue — the docstring's own argument — and a throw here would reach a
+    // caller that has no catch.
+    const { socket } = makeHarness();
+    socket.start();
+    const sock = last() as unknown as { readyState: number; send: () => void; open: () => void };
+    sock.readyState = 1;
+    sock.open();
+    sock.send = () => { throw new DOMException('InvalidStateError'); };
+    expect(socket.send({ type: 'ping' })).toBe(false);
+    socket.stop();
+  });
+
+  it('a constructor that THROWS goes down and schedules a retry', () => {
+    // A `new WebSocket()` can throw synchronously (a malformed URL, a blocked
+    // scheme). Unhandled it would escape `connect()` and leave the ladder
+    // never scheduled — the socket would simply stop existing.
+    const onState = vi.fn();
+    const socket = new ReconnectingSocket({
+      url: () => '/ws/session/s1',
+      onMessage: vi.fn(),
+      onState,
+      makeSocket: () => { throw new DOMException('SyntaxError'); },
+    });
+    socket.start();
+    expect(onState).toHaveBeenCalledWith('down');
+    expect(vi.getTimerCount(), 'a retry is pending — the ladder did not stop').toBeGreaterThan(0);
+    socket.stop();
+  });
+
+  it('an attempt that never OPENED asks whether the box is refusing us', () => {
+    // The browser cannot tell a refusal from a drop, so the socket asks. Only
+    // for an attempt that never opened: a connection that opened and later
+    // dropped was plainly not refused, and asking then would spend a request
+    // on every ordinary network blip.
+    const check = vi.fn();
+    const auth = { lost: () => false, check, onRegained: () => () => {} };
+    const socket = new ReconnectingSocket({
+      url: () => '/ws/session/s1',
+      onMessage: vi.fn(),
+      onState: vi.fn(),
+      makeSocket: (u) => new FakeSocket(u) as unknown as WebSocket,
+      auth,
+    });
+    socket.start();
+    last().onclose?.(new CloseEvent('close'));
+    expect(check, 'never opened — it may have been refused').toHaveBeenCalledTimes(1);
+
+    check.mockClear();
+    vi.advanceTimersByTime(10_000);
+    last().open();
+    last().onclose?.(new CloseEvent('close'));
+    expect(check, 'it opened, so the drop was a drop').not.toHaveBeenCalled();
+    socket.stop();
+  });
+});
