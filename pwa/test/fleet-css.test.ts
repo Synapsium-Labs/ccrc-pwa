@@ -4,7 +4,8 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { BARE_ROW, CONTROL_ROW, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+import { BARE_ROW, CONTROL_ROW, SELECT, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+import { cn } from '../../ui/src/lib/cn';
 
 /** The quiet control's shipped class string. FOUR rules in this stylesheet
  *  declared these eleven declarations; they are one cva variant now, so the
@@ -1271,48 +1272,43 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
   //
   // Two independent faults produced that, and both are pinned below.
 
-  /** Specificity as a (0,x,0) count — classes, attributes and pseudo-classes.
-   *  Enough here for the same reason it is enough at the spawn chip above:
-   *  there is no id and no element name anywhere near these two selectors. */
-  const spec = (sel: string): number =>
-    (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
-
-  it('wins the width override by SPECIFICITY, the only way it can win it', () => {
-    // FAULT 1. The chooser reuses `.route-select`'s chrome and must reject its
-    // `width: 100%`, which is right for a grid cell and wrong for a control
-    // sized to its own option list. The rule that shipped said so as
-    // `.fleet-class-select { width: auto }` — one class, (0,1,0), declared
-    // ~650 lines ABOVE `.route-select`, which is also (0,1,0). Equal
+  it('wins the width override by REPLACING it, which needs no cascade at all', () => {
+    // FAULT 1. The chooser reuses the routing field's chrome and must reject
+    // its `width: 100%`, which is right for a field in a grid cell and wrong
+    // for a control sized to its own option list. The rule that shipped said
+    // so as `.fleet-class-select { width: auto }` — one class, (0,1,0),
+    // declared ~650 lines ABOVE `.route-select`, which was also (0,1,0). Equal
     // specificity, so the tie went to source order and the override never
     // applied ONCE: the control rendered at 286px at 390px and 528px at 700px
     // instead of the 167px its options ask for. A comment, not a mechanism.
+    //
+    // The compound selector that fixed it was a cascade trick holding a layout
+    // decision together. There is no cascade in the answer any more: the
+    // chooser is `<Select>` (@ccrc/ui), its width is a UTILITY, and `cn` is
+    // tailwind-merge — so the caller's `w-auto` does not out-rank `w-full`, it
+    // REMOVES it before the class string reaches the DOM. No selector, no
+    // specificity, no source order, and no way to lose a tie.
+    //
+    // Both halves are asserted, because either alone is vacuous: the component
+    // has to be claiming a width for there to be one to drop, and the merge
+    // has to actually drop it.
+    expect(SELECT, 'Select no longer claims the full width — there is nothing to replace')
+      .toContain('w-full');
+    // By UTILITY, not by substring: `max-w-full` contains the four characters
+    // `w-full` and is a different property entirely.
+    const merged = cn(SELECT, 'w-auto flex-none max-w-full').split(/\s+/);
+    expect(merged, 'the caller\'s width lost: two width utilities reach the DOM')
+      .not.toContain('w-full');
+    expect(merged).toContain('w-auto');
+    expect(merged, 'the chooser lost the cap it asks for').toContain('max-w-full');
+
+    // …and no stylesheet rule may quietly take the decision back. A
+    // `.route-select` or a single-class `.fleet-class-select` returning to this
+    // sheet is the exact shape that was dead code for the whole of #116's life
+    // and read as a fix while doing nothing.
     const scrubbed = stripComments(css);
-    const baseAt = scrubbed.search(/\.route-select\s*\{/);
-    const overrideAt = scrubbed.search(/\.route-select\.fleet-class-select\s*\{/);
-
-    expect(overrideAt, 'the compound override is gone — the chooser is back on source order')
-      .toBeGreaterThan(-1);
-    expect(baseAt, '.route-select is gone; this pair no longer describes the stylesheet')
-      .toBeGreaterThan(-1);
-
-    // Without BOTH of these the assertion below is vacuous: there has to be a
-    // `width` to beat, and it has to be declared later, or source order alone
-    // would already have settled it and specificity would prove nothing.
-    expect(declValue(ruleFor('.route-select'), 'width'),
-      '.route-select no longer claims the full width, so there is nothing to override')
-      .toBe('100%');
-    expect(baseAt,
-      '.route-select now PRECEDES the override, so this test no longer proves anything')
-      .toBeGreaterThan(overrideAt);
-
-    expect(spec('.route-select.fleet-class-select'),
-      'the override no longer out-specifies .route-select, so it loses the tie to source order')
-      .toBeGreaterThan(spec('.route-select'));
-    expect(declValue(ruleFor('.route-select.fleet-class-select'), 'width')).toBe('auto');
-
-    // …and no single-class restatement may creep back in beside it: that is
-    // the exact shape that was dead code for the whole of #116's life, and it
-    // reads as a fix while doing nothing.
+    expect(scrubbed, 'a dropdown rule is back in fleet.css — the chooser is a component now')
+      .not.toMatch(/(^|[\s,}])\.route-select\b/);
     expect(scrubbed, 'a single-class .fleet-class-select rule is back — it cannot win the cascade')
       .not.toMatch(/(^|[\s,}])\.fleet-class-select\s*\{/);
   });

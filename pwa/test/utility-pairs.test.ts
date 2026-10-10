@@ -44,6 +44,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { loadThemes, ratio } from '../design/audit.mjs';
+import { cn } from '../../ui/src/lib/cn';
+import * as ui from '@ccrc/ui';
 
 const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
 
@@ -281,5 +283,84 @@ describe('every self-grounded utility pair a component renders is measured', () 
       .filter(([, why]) => why.trim().length < 80)
       .map(([k]) => k);
     expect(unexplained).toEqual([]);
+  });
+});
+
+// ── the string the DOM actually gets ────────────────────────────────────────
+describe('every class string survives the merge that renders it', () => {
+  // THE PAIR THIS FILE MEASURES HAS TO REACH THE ELEMENT. Every component here
+  // renders `cn(BASE, className)`, and `cn` is tailwind-merge, which drops the
+  // earlier of two utilities it believes touch the same property. It classifies
+  // an unknown utility BY PREFIX — and this theme renames two families that
+  // Tailwind v4 owns, so `text-input` and `text-2xs` looked like text COLOURS
+  // and `font-regular` looked like a font FAMILY.
+  //
+  // Seven shipped strings lost a utility on the way to the DOM because of it:
+  // `TEXT_INPUT` and `SELECT` rendered with NO ink utility at all, and `Well`
+  // and `ControlRow` rendered in the UI family rather than mono. Every guard in
+  // the tree reads the string, and the string was right — the loss happened
+  // inside `cn`, where nothing was looking. `ui/src/lib/cn.ts` declares the two
+  // groups now; this is the measurement that says it still does.
+  //
+  // It is also the general form: a future renamed family breaks this without
+  // anyone having to think of it.
+  //
+  //   | mutation                                   | result            |
+  //   |--------------------------------------------|-------------------|
+  //   | `font-size` group deleted from cn.ts       | 1 red (ink lost)  |
+  //   | `font-weight` group deleted from cn.ts     | 1 red (family)    |
+  //   | the exported-constant source removed       | green — and that  |
+  //   |                                            | is why it is here |
+  //
+  // The third row is the finding: the per-literal scan ALONE cannot see this
+  // class of defect, because the strings that collide are written apart.
+  // TWO SOURCES, AND THE SECOND IS THE ONE THAT CATCHES THIS. The per-file
+  // literals above are what a component writes; the EXPORTED constants are
+  // what an element wears. They differ because a long class string is written
+  // as a CONCATENATION — `TEXT_INPUT` is five literals with comments between
+  // them — so `text-ink-primary` and `text-input` never appear in the same
+  // literal and a per-literal check cannot see them collide. Measured: with
+  // the font-size group deleted from `cn`, the literal scan stayed green and
+  // the constant scan went red.
+  const exported = Object.entries(ui)
+    .filter((e): e is [string, string] => typeof e[1] === 'string')
+    .filter(([, v]) => /(^|\s)(bg|text|border|font|min-h|w)-[a-z0-9]/.test(v));
+  // `buttonVariants()` is deliberately NOT a source: a cva composes BASE then
+  // VARIANT, and a variant overriding the base is the mechanism working —
+  // `ghost` replaces the base's `transition-transform`, `quiet` its `font-ui`
+  // and its press scale. A check over the composed string would read every
+  // intended override as a loss. What is checked here is each string ALONE.
+  const strings: [string, string][] = [
+    ...componentFiles(UI_SRC).flatMap((f) =>
+      classStrings(readFileSync(f, 'utf8')).map((s) => [path.basename(f), s] as [string, string])),
+    ...exported,
+  ];
+
+  it('reads enough strings for the check to mean something', () => {
+    expect(strings.length).toBeGreaterThan(40);
+    expect(exported.length, 'no exported class string was found — the scan is vacuous')
+      .toBeGreaterThan(8);
+    expect(exported.map(([k]) => k)).toContain('TEXT_INPUT');
+    expect(exported.map(([k]) => k)).toContain('SELECT');
+  });
+
+  it('loses no utility between the source and the element', () => {
+    const lost: string[] = [];
+    for (const [file, s] of strings) {
+      const kept = new Set(cn(s).split(/\s+/));
+      const dropped = s.split(/\s+/).filter((t) => t !== '' && !kept.has(t));
+      if (dropped.length > 0) lost.push(`${file}: ${dropped.join(' ')}  (in "${s}")`);
+    }
+    expect(lost).toEqual([]);
+  });
+
+  it('still lets a caller override what a component set', () => {
+    // The other direction, and the reason `cn` exists at all: teaching it the
+    // two groups must not turn it into `clsx`. A width, an ink and a size are
+    // each replaceable by the call site — `FleetScreen`'s chooser depends on
+    // exactly this for its `w-auto`.
+    const merged = cn('w-full text-ink-primary text-input', 'w-auto text-ink-tertiary text-2xs')
+      .split(/\s+/);
+    expect(merged).toEqual(['w-auto', 'text-ink-tertiary', 'text-2xs']);
   });
 });

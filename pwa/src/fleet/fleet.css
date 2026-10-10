@@ -88,19 +88,21 @@
  * put two controls side by side only while somebody held a hot file, and leave
  * this one orphaned again the moment the last claim expired.
  *
- * `.route-select`'s chrome is still reused verbatim — same edge, ground and
- * tap-min height as the new-session sheet's routing row. What is NOT reused is
- * its `width: 100%`, and this override must OUT-SPECIFY that rule rather than
- * merely restate it: `.route-select` is declared some 650 lines further down
- * and carries equal specificity (one class each), so the single-class
- * `.fleet-class-select { width: auto }` that shipped lost the tie to source
- * order and never applied once. That is why the control rendered at 286px
- * instead of 167px, and `flex-shrink: 0` then forbade it giving any of that
- * back: the head overflowed the viewport by 225px at 390px and by 219px at
- * 700px, so the defect was never phone-only. `.fleet-runs-row` takes its
- * `width: 100%` from `<BareRow>` now, so the override below wins by LAYER
- * rather than by specificity — an unlayered app rule beats every utility,
- * from any position. `fleet-css.test.ts` pins both. */
+ * The chooser wears `<Select>`'s chrome — same edge, ground and tap-min height
+ * as the new-session sheet's routing row, because it is now literally the same
+ * component. What it does NOT take is that component's `width: 100%`, and the
+ * override that shipped for it here lost the tie to source order and never
+ * applied once: `.fleet-class-select { width: auto }`, one class, declared
+ * ~650 lines ABOVE `.route-select`'s equally single-class rule. That is why the
+ * control rendered at 286px instead of 167px, and `flex-shrink: 0` then forbade
+ * it giving any of that back — the head overflowed the viewport by 225px at
+ * 390px and by 219px at 700px, so the defect was never phone-only. NEITHER
+ * HALF OF THAT ARGUMENT IS A SELECTOR ANY MORE: the chooser passes
+ * `w-auto flex-none max-w-full` to `<Select>` and tailwind-merge drops the
+ * component's own `w-full` before the class string is rendered, and
+ * `.fleet-runs-row` takes its `width: 100%` from `<BareRow>`, so the override
+ * below wins by LAYER — an unlayered app rule beats every utility, from any
+ * position. `fleet-css.test.ts` pins both. */
 .fleet-runs-line {
   display: flex;
   align-items: center;
@@ -114,11 +116,6 @@
   flex: 1 1 0;
   min-width: 0;
   width: auto;
-}
-.route-select.fleet-class-select {
-  width: auto;
-  flex: none;
-  max-width: 100%;
 }
 /* Notification toggle — a quiet bell; lit when push is on.
  *
@@ -706,19 +703,9 @@
   font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
-.route-select {
-  width: 100%;
-  min-height: var(--tap-min);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  background: var(--bg-raised);
-  color: var(--ink-primary);
-  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
-  padding: 0 var(--sp-2);
-}
-.route-select:focus {
-  border-color: var(--accent);
-}
+/* `.route-select` left this sheet: the chooser is `<Select>` (@ccrc/ui), and
+   its chrome is a utility string there — the same ten declarations `TextInput`
+   already carried. Nothing here declares a dropdown any more. */
 .sheet-confirm {
   margin-top: var(--sp-2);
 }

@@ -242,11 +242,13 @@ const CONTROLS: Record<string, string> = {
     'TOKEN. A `role="link"` div with `tabIndex={0}` and a keydown handler — '
     + 'the strip D-161 calls the only door to /accounts. `.accounts-strip` '
     + 'declares the floor.',
-  'fleet/NewSessionSheet.tsx <select> route-select':
-    'TOKEN. `.route-select` declares the floor; all three routing fields wear '
-    + 'it through `RouteField`.',
-  'screens/FleetScreen.tsx <select> route-select fleet-class-select':
-    'TOKEN. The same rule, with the head\'s own width modifier beside it.',
+  // THE TWO DROPDOWNS LEFT THIS CENSUS, and the right way round: they are
+  // `<Select>` (@ccrc/ui) now, so the app draws no dropdown by hand and there
+  // is nothing here to classify — the same reason no `<Button>` call site
+  // appears above. Their floor moved with them, from `.route-select`'s
+  // `min-height: var(--tap-min)` to the component's own `min-h-tap`, which
+  // `tap-targets.test.tsx` reads off the class string exactly as it reads
+  // `TEXT_INPUT`'s. A floor deleted inside the package reds a test in the app.
   'fleet/SessionLine.tsx <div> sess-body':
     'TOKEN. Not a control so much as the row\'s convenience forwarder for the '
     + 'dead space between cells — its own comment argues at length why it is a '

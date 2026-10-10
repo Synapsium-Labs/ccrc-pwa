@@ -32,7 +32,9 @@ import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
-import { BARE_ROW, CONTROL_ROW, MailStrip, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+import {
+  BARE_ROW, CONTROL_ROW, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
+} from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -197,6 +199,34 @@ describe('.pr-title-input — the one editable field in the PR composer', () => 
     // component's — shared with the three fields that were already its.
     expect(TEXT_INPUT).toContain('min-h-tap');
     expect(TEXT_INPUT).not.toContain('44px');
+  });
+
+  it('and so is every dropdown, off the same token in the same package', () => {
+    // The app's two `<select>`s wore `.route-select`, whose `min-height:
+    // var(--tap-min)` `control-census.test.ts` used to verify as a TOKEN claim
+    // against the stylesheet. There is no rule to read any more — the chooser
+    // is `<Select>` — so the floor is read where it now lives. A `<select>`
+    // under the floor is the same defect as a short field: it has to be hit to
+    // open a list, and on a phone that list is a sheet.
+    expect(SELECT).toContain('min-h-tap');
+    expect(SELECT).not.toContain('44px');
+  });
+
+  it('keeps that floor on the chooser that drops the component\'s width', () => {
+    // The fleet head's class chooser passes `w-auto flex-none max-w-full`, and
+    // tailwind-merge REMOVES the component's `w-full` rather than letting it
+    // lose a specificity tie (`fleet-css.test.ts` pins that mechanism). What
+    // is checked here is that the merge takes the width and nothing else: the
+    // floor has to survive the one call site that overrides anything.
+    const { container } = render(
+      <Select aria-label="Class" className="w-auto flex-none max-w-full" defaultValue="">
+        <option value="">Coordinator row</option>
+      </Select>,
+    );
+    const el = container.querySelector('select');
+    expect(el).toHaveClass('w-auto');
+    expect(el).not.toHaveClass('w-full');
+    expect(el, 'the tap floor did not survive the width override').toHaveClass('min-h-tap');
   });
 
   it('is the class the rendered title field actually carries', async () => {

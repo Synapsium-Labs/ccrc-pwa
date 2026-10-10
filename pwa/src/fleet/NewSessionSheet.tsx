@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { Button, Sheet, toast } from '@ccrc/ui';
+import { Button, Select, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText, failedTo } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
@@ -89,9 +89,9 @@ function RouteField(
   return (
     <label className="route-field">
       <span className="route-field-label">{label}</span>
-      <select className="route-select" value={value} onChange={(e) => onChange(e.target.value)}>
+      <Select value={value} onChange={(e) => onChange(e.target.value)}>
         {children}
-      </select>
+      </Select>
     </label>
   );
 }
