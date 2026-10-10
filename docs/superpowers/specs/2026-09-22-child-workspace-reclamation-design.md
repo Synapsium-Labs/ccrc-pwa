@@ -1171,10 +1171,13 @@ by `mkdir -m 0700` when it is proven absent and then `chmod g-s` on the director
 answers unmeasured. The `chmod g-s` departs from a plain `mkdir -m 0700` (`quarantine-made-without-setgid`): on a
 setgid `~/.cc-tmp` the bare `mkdir` is born 2700, which the mode check refuses for ever. A quarantine that already
 stands at 2700 stays unmeasured and is the operator's to fix, and a `mkdir` lost to another maker is never chmod-ed.
-The audit and the resume's audit ask the same question read-only (`audit-asks-the-quarantine-question`): a real
-directory, not a link, of this uid, at mode exactly 0700, or PROVEN absent. They make and write nothing, so an audit
-with no quarantine leaves none behind and still mints its token, and a link, a non-directory, another uid's directory,
-any other mode or an absence that cannot be proven exits 1 unmeasured, naming `quarantine`. A slot is `slot.<id>.<ns>.<pid>`
+The audit beside a present leaf, and the resume's audit, ask the same question read-only
+(`audit-asks-the-quarantine-question`): a real directory, not a link, of this uid, at mode exactly 0700, or PROVEN
+absent. They make and write nothing, so an audit with no quarantine leaves none behind and still mints its token, and
+there a link, a non-directory, another uid's directory, any other mode or an absence that cannot be proven exits 1
+unmeasured, naming `quarantine`. Beside an absent leaf the audit only lists the quarantine's slots, so a link, a
+non-directory or slots that cannot be listed exit 1 unmeasured there, naming `quarantine`; it does not ask the uid and
+mode half, because the witness-only drop moves nothing into the quarantine. A slot is `slot.<id>.<ns>.<pid>`
 inside it; the `slot.` prefix keeps it clear of any rule keyed on a leaf's own name (the box's `cdk-out-sweep`
 matches `cdk.out*` at that depth), and a slot name that already stands is never reused. The move is `mv -T -n
 --no-copy`, one `renameat2(RENAME_NOREPLACE)`, inline in the collector's Linux-only region and never a shared
@@ -1272,7 +1275,7 @@ holds on a box whose `mv` has no `--no-copy`, and where `flock` is unavailable. 
 `tmproots/` that is a link; quarantine records that cannot be listed; a registry that cannot be listed or a row that
 cannot be placed; a floor knob that is not a number (on a fresh audit; a resume decides nothing from the floor); a walk that timed out, hit the cap or met an unreadable entry; a
 clock that cannot be read; a probe that cannot look; a checkout question that could not be answered; a quarantine that
-is not a real directory of this uid at mode 0700, or quarantine slots that cannot be listed, beside a present leaf or an absent one; a
+is not a real directory of this uid at mode 0700, beside a present leaf, and on a resume; quarantine slots that cannot be listed, beside a present leaf or an absent one; a
 leaf whose own mode lacks owner write, or cannot be read (`mode`); a physical `~/.cc-tmp` that is off the device a
 witness or a record carries, or whose device or path cannot be read, before an absence is believed (`device`); a leaf
 or slot whose absence cannot be proven; and a token that cannot be minted. The audit exits 1 on each and journals nothing; the verb prints `probe-unmeasured`, journaled

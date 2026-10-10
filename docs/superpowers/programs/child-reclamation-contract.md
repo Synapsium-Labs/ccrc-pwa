@@ -2213,10 +2213,13 @@ wave cites is the new §5.10 of the design spec, with edits to §5.2, §5.5, §5
   made, because on a setgid `~/.cc-tmp` a bare `mkdir` is born 2700 and the mode check refuses it for ever; a quarantine
   that already stands at 2700 stays unmeasured and is the operator's to fix, and a `mkdir` lost to another maker is
   never chmod-ed.
-- `audit-asks-the-quarantine-question`: the fresh and the resume audit ask a read-only check of the quarantine (a real
-  directory, not a link, of this uid, mode exactly 0700, or proven absent) and make and write nothing; the verb alone
-  asks the maker. Anything else answers unmeasured `quarantine`, exit 1, so a bad quarantine no longer licenses a move
-  that the verb would refuse on every pass.
+- `audit-asks-the-quarantine-question`: the fresh audit beside a present leaf, and the resume audit, ask a read-only
+  check of the quarantine (a real directory, not a link, of this uid, mode exactly 0700, or proven absent) and make and
+  write nothing; the verb alone asks the maker. There anything else answers unmeasured `quarantine`, exit 1, so a bad
+  quarantine no longer licenses a move that the verb would refuse on every pass. Beside an absent leaf the audit only
+  lists the quarantine's slots, so a link, a non-directory or slots that cannot be listed answer unmeasured
+  `quarantine` there; it does not ask the uid and mode half, because the witness-only drop moves nothing into the
+  quarantine.
 - `alias-refusal-ends-at-the-putback`: a stated residual, carried to the path-identity programme. The alias refuses an
   outside back-link that a recycled admin name carries only while the leaf is in its slot; once the putback restores the
   leaf, the pre-existing un-aliased rule decides, as it did before this wave, and the wave adds no deletion class.
