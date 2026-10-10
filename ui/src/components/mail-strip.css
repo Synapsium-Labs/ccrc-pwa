@@ -29,18 +29,10 @@
     border-color: var(--edge-strong);
   }
 
+  /* The head is `<BareRow>` now — three strip heads, in three stylesheets,
+     declared the same ten declarations. What stays is its ink. */
   .mail-strip .mail-strip-head {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    width: 100%;
-    min-height: var(--tap-min);
-    padding: var(--sp-2) var(--sp-3);
-    background: none;
-    border: 0;
-    text-align: left;
     color: var(--ink-primary);
-    cursor: pointer;
   }
   .mail-strip-head:active {
     background: var(--bg-raised);

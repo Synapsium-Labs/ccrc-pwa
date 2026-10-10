@@ -14,7 +14,7 @@
 // without touching localStorage.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import { Button } from '@ccrc/ui';
+import { BareRow, Button } from '@ccrc/ui';
 import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RosterWire, RunSummary } from '../../../shared/api';
 import { repoLabel } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
@@ -666,8 +666,7 @@ export function ProjectCard({
         /* Workspace lifecycle spec §5.1: the transition zone. A programme is done with these rows; they wait
            here to be archived. Folded, never hidden, and above `Archived (N)`, which is where they go next. */
         <div className="proj-released">
-          <button
-            type="button"
+          <BareRow
             className="proj-released-toggle"
             aria-expanded={releasedShown}
             disabled={selectionInReleased}
@@ -675,7 +674,7 @@ export function ProjectCard({
           >
             <span className="proj-card-chevron" aria-hidden="true">{releasedShown ? '▾' : '▸'}</span>
             Released ({group.released.length})
-          </button>
+          </BareRow>
           {releasedShown && (
             <div className="proj-released-body">
               {releasedByProgramme(group.released).map((p) => (
@@ -718,15 +717,14 @@ export function ProjectCard({
               a card that omitted these would leave them reachable only by a
               URL nobody has. Collapsed by default — archived rows are context,
               not the fleet. */}
-          <button
-            type="button"
+          <BareRow
             className="proj-archived-toggle"
             aria-expanded={archivedOpen}
             onClick={() => onToggle?.(`${group.project}::archived`)}
           >
             <span className="proj-card-chevron" aria-hidden="true">{archivedOpen ? '▾' : '▸'}</span>
             Archived ({group.archived.length})
-          </button>
+          </BareRow>
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (

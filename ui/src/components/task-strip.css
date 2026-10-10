@@ -29,18 +29,10 @@
      criterion, on the control that opens the plan. Nothing pinned it, because
      the tap guard covered named controls rather than this shape; it now covers
      all three heads together. */
+  /* The head is `<BareRow>` now — three strip heads, in three stylesheets,
+     declared the same ten declarations. What stays is its ink. */
   .task-head {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    width: 100%;
-    min-height: var(--tap-min);
-    padding: var(--sp-2) var(--sp-3);
-    background: none;
-    border: 0;
-    text-align: left;
     color: var(--ink-primary);
-    cursor: pointer;
   }
   .task-head:active {
     background: var(--bg-raised);

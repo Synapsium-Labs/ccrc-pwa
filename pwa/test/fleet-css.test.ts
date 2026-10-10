@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { CONTROL_ROW, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+import { BARE_ROW, CONTROL_ROW, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 
 /** The quiet control's shipped class string. FOUR rules in this stylesheet
  *  declared these eleven declarations; they are one cva variant now, so the
@@ -691,7 +691,13 @@ describe('shell-nav overflow backstop', () => {
 
 describe('archived sub-fold (Task 18)', () => {
   it('keeps the 44px thumb target on the toggle, same as every other tap row', () => {
-    expect(ruleFor('.proj-archived-toggle')).toContain('min-height: var(--tap-min)');
+    // The floor is `<BareRow>`'s now — five rules in this sheet declared the
+    // same six declarations and it is one component.
+    expect(BARE_ROW).toContain('min-h-tap');
+    expect(BARE_ROW).not.toContain('44px');
+    // The render half stays: the hook class is still on the element, which is
+    // what proves the floor reaches real markup rather than only a constant.
+    expect(stripComments(css)).toContain('.proj-archived-toggle');
   });
 });
 
@@ -1296,33 +1302,26 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     expect(screen).toContain('<div className="fleet-runs-line">');
   });
 
-  it("makes the runs door yield the row, by specificity — it declares width: 100% too", () => {
+  it('makes the runs door yield the row — now by LAYER, not by specificity', () => {
     // The same cascade trap as the chooser's own override, one row over, and
-    // worth its own assertion because it is the trap this codebase has now
-    // walked into twice. `.fleet-runs-row` is a full-width button; inside the
-    // flex line it must become a flex item that yields. A single-class
-    // restatement could not do it — `.fleet-runs-row` is declared LATER in
-    // this file than the line rule — so the override is the descendant form,
-    // (0,2,0) against (0,1,0), which wins from any position.
-    const spec = (sel: string): number =>
-      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
-    const scrubbed = stripComments(css);
-    const baseAt = scrubbed.search(/\.fleet-runs-row\s*\{/);
-    const overrideAt = scrubbed.search(/\.fleet-runs-line\s+\.fleet-runs-row\s*\{/);
+    // worth its own assertion because it is the trap this codebase has walked
+    // into twice. The row is a full-width button; inside the flex line it must
+    // become a flex item that yields.
+    //
+    // THE MECHANISM MOVED WITH THE SHAPE. `.fleet-runs-row` used to declare
+    // `width: 100%` itself, and the override had to be the descendant form —
+    // (0,2,0) against (0,1,0) — because the base rule was declared LATER in
+    // this file. The width is `<BareRow>`'s `w-full` utility now, and this
+    // sheet is UNLAYERED: an unlayered rule beats every layer regardless of
+    // specificity or position, so the override wins by a stronger argument
+    // than the one it used to need. That inversion is the app's override
+    // capability, stated in theme.css's header, and this is the one place in
+    // the suite that exercises it on a real pair.
+    expect(BARE_ROW, 'nothing claims the full width, so there is nothing to override')
+      .toContain('w-full');
+    expect(stripComments(css), 'fleet.css is layered now — the override is no longer guaranteed')
+      .not.toContain('@layer');
 
-    expect(overrideAt, 'the descendant override is gone — the runs door claims the whole row again')
-      .toBeGreaterThan(-1);
-    // Non-vacuity, both directions: there must be a `width` to beat, and it
-    // must be declared later, or source order alone would already settle it.
-    expect(declValue(ruleFor('.fleet-runs-row'), 'width'),
-      '.fleet-runs-row no longer claims the full width, so there is nothing to override')
-      .toBe('100%');
-    expect(baseAt,
-      '.fleet-runs-row now PRECEDES the override, so this test no longer proves anything')
-      .toBeGreaterThan(overrideAt);
-
-    expect(spec('.fleet-runs-line .fleet-runs-row'))
-      .toBeGreaterThan(spec('.fleet-runs-row'));
     const override = ruleFor('.fleet-runs-line .fleet-runs-row');
     expect(declValue(override, 'flex')).toBe('1 1 0');
     expect(declValue(override, 'min-width')).toBe('0');

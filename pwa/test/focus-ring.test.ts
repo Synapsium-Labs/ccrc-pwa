@@ -24,7 +24,12 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { loadThemes, ratio } from '../design/audit.mjs';
-import { FOCUS_RING } from '@ccrc/ui';
+import { BACK_BUTTON, BARE_ROW, DOOR, FOCUS_RING, LIST_ROW, TEXT_INPUT } from '@ccrc/ui';
+
+/** The ring, by any of its names. `FOCUS_RING` itself, or one of the shared
+ *  class strings built from it — each of which is asserted to contain it
+ *  below, so this list cannot drift into naming something that does not ring. */
+const RINGED = /\b(FOCUS_RING|BARE_ROW|LIST_ROW|TEXT_INPUT|BACK_BUTTON|DOOR)\b/g;
 
 const UI_SRC = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
 const BASE_CSS = readFileSync(
@@ -63,6 +68,18 @@ describe('every focusable control in @ccrc/ui carries the ring', () => {
     expect(controls.length).toBeGreaterThanOrEqual(12);
   });
 
+  it('every carrier this census accepts really does carry the ring', () => {
+    // Without this the regex above is a list of words. Each one must resolve
+    // to a class string that contains the ring, or a component could join the
+    // census by being named rather than by ringing anything.
+    for (const [name, value] of Object.entries({
+      BARE_ROW, LIST_ROW, TEXT_INPUT, BACK_BUTTON, DOOR,
+    })) {
+      expect(value, name).toContain('focus-visible:outline-2');
+      expect(value, name).toContain('focus-visible:outline-accent');
+    }
+  });
+
   it('carries one FOCUS_RING per control, not one per FILE', () => {
     // PER CONTROL, and that distinction was measured rather than assumed. The
     // first spelling of this test asked only whether the file MENTIONED
@@ -80,8 +97,22 @@ describe('every focusable control in @ccrc/ui carries the ring', () => {
         const controls = [...f.code.matchAll(/<(button|input|textarea)\b[^>]*>/g)]
           .filter((m) => !/tabIndex=\{-1\}|tabindex="-1"|type="hidden"/.test(m[0])).length;
         // Uses, not mentions: the import line names it once and rings nothing.
-        const uses = [...f.code.matchAll(/\bFOCUS_RING\b/g)].length
-          - (/import \{[^}]*\bFOCUS_RING\b[^}]*\} from/.test(f.code) ? 1 : 0);
+        // A control is ringed by naming FOCUS_RING, or by wearing a shared
+        // class string that already carries it. The second arm arrived with
+        // `CollapsibleStrip`, whose head became `<BareRow>`'s six utilities —
+        // the ring among them — so the component stopped importing FOCUS_RING
+        // and this census went red on a control that is in fact ringed. The
+        // fix is to count the carriers, not to re-import a constant for the
+        // census's benefit: a second spelling of the ring on one element is
+        // the duplication the whole wave is removing.
+        // An IMPORT is not a use. The subtraction used to name FOCUS_RING
+        // alone, so when `CollapsibleStrip` switched to `BARE_ROW` its import
+        // line counted as the ring — and a mutation that removed the constant
+        // from the className while leaving the import kept this census green.
+        // Measured. Every carrier is discounted the same way now.
+        const imported = [...f.code.matchAll(/import \{([^}]*)\} from/g)]
+          .flatMap((m) => [...(m[1] ?? '').matchAll(RINGED)]).length;
+        const uses = [...f.code.matchAll(RINGED)].length - imported;
         return { rel: f.rel, controls, uses };
       })
       .filter((f) => f.controls > 0 && f.uses < f.controls)

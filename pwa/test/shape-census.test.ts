@@ -39,7 +39,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  CONTROL_ROW, COVER_SCREEN, LIST_ROW, TEXT_INPUT, TEXT_INPUT_INLINE, buttonVariants,
+  BARE_ROW, CONTROL_ROW, COVER_SCREEN, LIST_ROW, TEXT_INPUT, TEXT_INPUT_INLINE, buttonVariants,
 } from '@ccrc/ui';
 
 const read = (...seg: string[]): string =>
@@ -150,14 +150,6 @@ const REGISTERED: Record<string, string> = {
     + 'note that wraps to its own line INSIDE a `<ControlRow>` — '
     + '`flex-basis: 100%`, no margin, `--fs-2xs`, dead ink. A slot on the row, '
     + 'not a component of its own.',
-  'fleet.css .fleet-archived-row + fleet.css .fleet-runs-row':
-    'NEXT. Two full-width bare row buttons, ten declarations each, identical: '
-    + 'no chrome, left-aligned, mono, at the tap floor. One shape with the '
-    + 'pair below it.',
-  'fleet.css .proj-archived-toggle + fleet.css .proj-released-toggle':
-    'NEXT, with the pair above. The same bare row button one font step down '
-    + 'with a flex gap — thirteen declarations twice. Four rules, two shapes, '
-    + 'one component.',
   'chat.css .reap-ignored + chat.css .reap-size + fleet.css .hotfiles-path':
     'NEXT. A path that may be long: block, mono at `--fs-xs`, secondary ink, '
     + '`word-break: break-word`. THREE copies across two stylesheets, which is '
@@ -302,6 +294,13 @@ const MIGRATED: Record<string, string[]> = {
     'justify-content: center',
     'padding: var(--sp-6)',
   ],
+  '<BareRow>': [
+    'width: 100%',
+    'background: none',
+    'border: 0',
+    'cursor: pointer',
+    'text-align: left',
+  ],
   '<TextInput>': [
     'min-height: var(--tap-min)',
     'background: var(--bg-raised)',
@@ -359,6 +358,9 @@ describe('no app rule re-implements a shape that has already migrated', () => {
     // above everything, and it fills the viewport. Drop any one and the screen
     // behind it becomes reachable, which is the only thing a cover does.
     for (const u of ['fixed', 'inset-0', 'z-block']) expect(COVER_SCREEN, u).toContain(u);
+    for (const u of ['w-full', 'min-h-tap', 'border-0', 'bg-transparent', 'text-left']) {
+      expect(BARE_ROW, u).toContain(u);
+    }
   });
 
   it('names no rule carrying a migrated signature that this registry has not seen', () => {

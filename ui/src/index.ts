@@ -25,6 +25,7 @@ export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
 export { ControlRow, CONTROL_ROW, type ControlRowProps } from './primitives/control-row';
 export { ListRow, LIST_ROW, type ListRowProps } from './primitives/list-row';
 export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/cover-screen';
+export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,

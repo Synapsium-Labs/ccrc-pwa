@@ -22,7 +22,8 @@
 // pinned only through whichever domain strip happens to render it.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { FOCUS_RING } from '../lib/focus';
+import { BARE_ROW } from './bare-row';
+import { cn } from '../lib/cn';
 
 export interface CollapsibleStripProps {
   /** The root class, e.g. `mail-strip`. Gains `--open` while expanded. */
@@ -74,7 +75,17 @@ export function CollapsibleStrip({
     <section className={open ? `${root} ${root}--open` : root} aria-label={label}>
       <button
         type="button"
-        className={`${part}-head ${FOCUS_RING}`}
+        /* THE HEAD'S CHROME WAS WRITTEN THREE TIMES — `.mail-strip-head` and
+           `.task-head` here in the design system, `.hotfiles-head` over in
+           fleet.css — and all three agreed on ten declarations. That is the
+           drift this component's own header describes finding in the
+           STRUCTURE (`.task-head` stood at `--sp-8` where the other two stood
+           at the tap floor); the chrome had drifted the same way and nobody
+           had looked. `BARE_ROW` is the six those rules shared with five other
+           app rows, and the four beside it are the head's own — a row of
+           children with a gap, padded, which is what makes it a head rather
+           than a line. Each sheet keeps only its ink. */
+        className={cn(BARE_ROW, 'flex items-center gap-2 px-3 py-2', `${part}-head`)}
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
       >

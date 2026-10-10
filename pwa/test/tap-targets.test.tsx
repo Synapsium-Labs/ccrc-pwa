@@ -31,7 +31,7 @@ import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
-import { CONTROL_ROW, MailStrip, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
+import { BARE_ROW, CONTROL_ROW, MailStrip, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
@@ -145,9 +145,19 @@ describe('the tap-target token', () => {
 
 // — the four rules the gates review found uncovered —
 
+// AND SO DID FIVE BARE ROWS. `.fleet-archived-row`, `.fleet-runs-row`,
+// `.proj-released-toggle`, `.proj-archived-toggle` and `.archive-row`
+// declared the same six declarations — a full-width left-aligned tap target
+// with no chrome at all — and are `<BareRow>` now. Each render half below is
+// untouched.
+function expectBareRowIsATarget(): void {
+  expect(BARE_ROW).toContain('min-h-tap');
+  expect(BARE_ROW).not.toContain('44px');
+}
+
 describe('.fleet-archived-row — the fleet footer route into the archive', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.fleet-archived-row'), 'min-height')).toBe('var(--tap-min)');
+    expectBareRowIsATarget();
   });
 
   it('is the class the rendered footer row actually carries', () => {
@@ -167,7 +177,7 @@ describe('.fleet-archived-row — the fleet footer route into the archive', () =
 
 describe('.archive-row — every row on the archive screen', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.archive-row'), 'min-height')).toBe('var(--tap-min)');
+    expectBareRowIsATarget();
   });
 
   it('is the class every rendered archive row actually carries', () => {
@@ -283,15 +293,12 @@ describe('the two rules that were already scraped still reach a real element', (
     // "every floored rule stays on the token" is checked, not a second copy
     // of the assertion per branch.
     for (const rule of [
-      ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
-      ruleIn(fleetCss, '.proj-archived-toggle'),       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
+       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
       ruleIn(fleetCss, '.mail-badge'),
-      ruleIn(fleetCss, '.fleet-runs-row'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
-      ruleIn(mailStripCss, '.mail-strip .mail-strip-head'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
       ruleIn(fleetCss, '.caps-input'), ruleIn(fleetCss, '.mail-chip'),
-      ruleIn(fleetCss, '.proj-released-toggle'), ruleIn(fleetCss, '.proj-released-archive'),
+      ruleIn(fleetCss, '.proj-released-archive'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -396,7 +403,7 @@ describe('.mail-chip — the feed’s programme filter', () => {
 
 describe('.fleet-runs-row — the only door to /runs', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.fleet-runs-row'), 'min-height')).toBe('var(--tap-min)');
+    expectBareRowIsATarget();
   });
   it('is the class the rendered footer row actually carries, once a runs frame has landed', () => {
     const store = makeStore();
@@ -481,7 +488,7 @@ describe('.coord-toggle — the pause banner’s own toggle', () => {
 
 describe('.mail-strip-head — the session mail strip’s door to its rows', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(mailStripCss, '.mail-strip .mail-strip-head'), 'min-height')).toBe('var(--tap-min)');
+    expectBareRowIsATarget();
   });
   it('is the class the rendered head control actually carries', () => {
     render(<MailStrip mail={[mailItem()]} />);
@@ -565,11 +572,33 @@ describe('every strip head clears the tap floor — the whole chrome, not one co
     ['fleet.css', '.hotfiles-head', fleetCss],
   ];
 
+  // THE FLOOR MOVED FROM THREE RULES TO ONE COMPONENT. All three heads
+  // declared the same ten declarations — two of them inside the design system
+  // itself — and `CollapsibleStrip` builds its head from `BARE_ROW` now. Each
+  // sheet keeps only its ink, so there is no `min-height` left to scrape; what
+  // each rule still proves is that the head's hook class reaches real markup,
+  // which is the half a constant cannot show.
+  it('floors at var(--tap-min), once, in the component all three share', () => {
+    expect(BARE_ROW).toContain('min-h-tap');
+    expect(BARE_ROW).not.toContain('44px');
+    // AND THE COMPONENT ACTUALLY WEARS IT. Asserting the constant alone left
+    // a measured hole: a mutation that stopped `CollapsibleStrip` composing
+    // `BARE_ROW` kept every head's flex and padding, lost the floor, the
+    // left-align and the ring, and nothing went red. The constant is half the
+    // claim; this is the other half.
+    const strip = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'collapsible-strip.tsx'),
+      'utf8');
+    expect(strip).toMatch(/cn\(\s*BARE_ROW/);
+  });
+
   for (const [sheet, selector, css] of HEADS) {
-    it(`${sheet} ${selector} floors at var(--tap-min)`, () => {
+    it(`${sheet} ${selector} is still a rule, carrying this strip's own voice`, () => {
       const rule = ruleIn(css, selector);
       expect(rule, `${selector} has no rule in ${sheet}`).not.toBeNull();
-      expect(declValue(rule!, 'min-height')).toBe('var(--tap-min)');
+      // Its ink, or its refusal to set one — `.hotfiles-head` says `inherit`
+      // twice where the other two name `--ink-primary`.
+      expect(rule!).toMatch(/color:/);
     });
   }
 

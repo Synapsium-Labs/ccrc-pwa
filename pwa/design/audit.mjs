@@ -793,9 +793,9 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
   },
-  'fleet.css .proj-released-toggle': {
+  'fleet.css .proj-released-toggle, .proj-archived-toggle': {
     under: ['var(--bg-surface)'],
-    why: "the Released (N) fold's toggle (workspace lifecycle spec §5.1), a sibling of .proj-card-body inside the card, on the card's own ground, with the Archived fold toggle's ink. It sets no background of its own and its selector names no ancestor, so no route could ground it",
+    why: "the card's two fold toggles (workspace lifecycle spec §5.1), siblings of .proj-card-body inside the card, on the card's own ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
   },
   'fleet.css .proj-released-heading, .proj-released-note': {
     under: ['var(--bg-surface)'],

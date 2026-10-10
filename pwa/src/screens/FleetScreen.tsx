@@ -5,7 +5,7 @@
 // the NewSessionSheet.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { BuildLine, Button, Door, QuickConfirm, Skeleton, toast, useNow } from '@ccrc/ui';
+import { BareRow, BuildLine, Button, Door, QuickConfirm, Skeleton, toast, useNow } from '@ccrc/ui';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
@@ -719,14 +719,13 @@ export function FleetScreen({
           D-2's rule that the only door must never render nothing, so it is
           the one sibling on this screen guaranteed to be there. */}
       <div className="fleet-runs-line">
-        <button
-          type="button"
+        <BareRow
           className="fleet-runs-row"
           aria-label={`Runs · ${runsLabel}`}
           onClick={() => navigate('/runs')}
         >
           Runs · {runsLabel}
-        </button>
+        </BareRow>
         {/* The class chooser (routing spec, slice 5, Task 6): forecasts
             EVERY card's placement for one class at a time, the same
             `GET /api/projects?class=` this build has carried since slice 4
@@ -969,9 +968,9 @@ export function FleetScreen({
                it put a third number under a noun the chip and the per-project
                fold were already using for a strictly smaller set. Same set as
                `/archive`, which is where this goes. */
-            <button type="button" className="fleet-archived-row" onClick={() => navigate('/archive')}>
+            <BareRow className="fleet-archived-row" onClick={() => navigate('/archive')}>
               {`Archived on disk · ${archived.count} · ${archivedSizeText(archived)}`}
-            </button>
+            </BareRow>
           )}
         </>
       )}
