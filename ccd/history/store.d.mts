@@ -50,3 +50,7 @@ export const BR_QUALITY: 5;
 export function compressFdRange(fd: number, start: number, end: number): Promise<{ sha: Buffer; z: Buffer; rawLen: number } | null>;
 export const FTS_DDL: readonly string[];
 export function createFtsTables(db: import('node:sqlite').DatabaseSync): void;
+
+
+export function getStep(db: DatabaseSync, step: string, version: number): { cursor: string | null; completedMs: number | null } | null;
+export function setStep(db: DatabaseSync, step: string, version: number, cursor: string | null, completedMs?: number | null): void;

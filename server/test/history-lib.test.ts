@@ -94,6 +94,8 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
     'store.mjs': { ring: 'L3', forbids: (s) => s === './sweep.mjs' || s === './cli.mjs' || s.startsWith('../') },
     'sweep.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
     'cli.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' },
+    // W1-B2 Task 8: node derivation, L4. sweep.mjs imports it, so it imports nothing of the sweep or the CLI back (§6.4).
+    'derive.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' },
   };
   /**
    * - A preload is a seam from outside (D-4247). It imports only node builtins, never the module graph it patches, with ONE allowance
@@ -144,7 +146,14 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
     expect(compactCardForms("// export { X } from '../compact-card.mjs';")).toEqual([]);
   });
 
-  it('only L4 imports ../compact-card.mjs, and at most isBoundaryLine', () => {
+  /** What each module may take from ../compact-card.mjs, exactly, one entry per import or export-from form; a module not named
+   *  here may take nothing. W1-B2 Task 8: derive.mjs takes the card's heading rules and token miner and injects them into lib (§6.4). */
+  const CARD_FORMS: Record<string, readonly string[]> = {
+    'sweep.mjs': ['{ isBoundaryLine }'],
+    'derive.mjs': ['{ HEADING_RE, fencedRanges, mineTokens }'],
+  };
+
+  it('only L4 imports ../compact-card.mjs, and only the forms CARD_FORMS names', () => {
     let seen = 0;
     for (const m of Object.keys(RINGS)) {
       const src = readFileSync(join(HIST, m), 'utf8');
@@ -153,7 +162,7 @@ describe('every ccd/history module and history test fixture keeps its ring (spec
       expect(RINGS[m]!.ring, m).toBe('L4');
       const imports = compactCardForms(src);
       expect(imports.length, `${m}: the import form was not read`).toBeGreaterThan(0);
-      for (const i of imports) expect(i, m).toBe('{ isBoundaryLine }');
+      expect(imports, m).toEqual(CARD_FORMS[m] ?? []);
     }
     expect(seen, 'no module imports compact-card: the scan is vacuous').toBeGreaterThan(0);
   });

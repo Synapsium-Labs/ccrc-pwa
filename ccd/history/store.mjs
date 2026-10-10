@@ -979,3 +979,27 @@ export const FTS_DDL = Object.freeze([
 export function createFtsTables(db) {
   for (const sql of FTS_DDL) db.exec(sql);
 }
+
+
+// ── W1-B2 Task 8: derivation_state steps by name (§6.2 `derivation_state`) ─────────────────────────────────────
+
+/** One derivation step's row: its cursor (TEXT, as the step wrote it) and when it completed; null when the step
+ *  has no row. */
+export function getStep(db, step, version) {
+  const r = db.prepare('SELECT cursor, completed_ms FROM derivation_state WHERE step = ? AND version = ?').get(step, version);
+  if (r === undefined) return null;
+  return { cursor: r.cursor === null ? null : String(r.cursor), completedMs: r.completed_ms === null ? null : Number(r.completed_ms) };
+}
+
+/** Upsert one derivation step's row; the caller holds the transaction. An omitted `completedMs` leaves an
+ *  existing completed_ms as it is (a new row gets NULL); a number or null sets it. */
+export function setStep(db, step, version, cursor, completedMs) {
+  if (completedMs === undefined) {
+    db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, ?, ?, NULL)
+      ON CONFLICT (step, version) DO UPDATE SET cursor = excluded.cursor`).run(step, version, cursor);
+    return;
+  }
+  db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, ?, ?, ?)
+    ON CONFLICT (step, version) DO UPDATE SET cursor = excluded.cursor, completed_ms = excluded.completed_ms`)
+    .run(step, version, cursor, completedMs);
+}

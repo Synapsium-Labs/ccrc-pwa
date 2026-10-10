@@ -237,7 +237,9 @@ export const WRITER_RE = /^[0-9a-f]{8}$/;
 // ── vocabularies (O14: each declared here and nowhere else) ───────────────
 export const NODE_KINDS = Object.freeze(['steered_leaf', 'native_leaf', 'raw_leaf', 'condensed']);
 /** `nodes.status` (§6.2). */
-export const PARSE_STATUS = Object.freeze(['ok', 'degraded', 'invalid', 'absent', 'not-requested']);
+/** `parse-failed` (W1-B2, RB5): a leaf whose node parser threw, written with its id, span and sources and re-derived
+ *  only by reparse. D-4706 (history-parser-crash-recorded) */
+export const PARSE_STATUS = Object.freeze(['ok', 'degraded', 'invalid', 'absent', 'not-requested', 'parse-failed']);
 /** `entries.parse_state` (§6.2, §9.2 step 4). */
 export const ENTRY_PARSE_STATES = Object.freeze(['ok', 'raw-only']);
 export const PROVENANCE = Object.freeze(['operator', 'model', 'tool', 'summary', 'harness', 'ccrc-injected', 'recall-echo']);
@@ -5617,5 +5619,75 @@ export function nodeIndexTexts(fields, idx) {
     gist: fields.gist === null || fields.gist === undefined ? '' : one(fields.gist),
     topics: (fields.topics ?? []).map(one).join('\n'),
     refs: (fields.refs ?? []).map(one).join('\n'),
+  };
+}
+
+
+// ===========================================================================
+// Leaf helpers derive.mjs composes (spec §6.1 "The copy", §7.4 items 2-8;
+// W1-B2 Task 8). Pure.
+// ===========================================================================
+
+/** A summary row's `summarizeMetadata.direction` (§7.4 item 8): `from` or `up_to`, else null. derive.mjs reads
+ *  the row from the line it came from, because the store keeps a summary row's message only.
+ *  D-4704 (history-summary-direction-from-source-line) */
+export function directionOfSummaryRow(row) {
+  const meta = row !== null && typeof row === 'object' && !Array.isArray(row) ? row.summarizeMetadata : undefined;
+  const d = meta !== null && typeof meta === 'object' ? meta.direction : undefined;
+  return d === 'from' || d === 'up_to' ? d : null;
+}
+
+/** A selected block's stored fields (§7.4 items 3, 6, 7). The block was parsed from REDACTED text, so every cut
+ *  below lands on redacted text (§8.3, SE1):
+ *  - the gist, trimmed, cut at GIST_MAX by Task 4's capText, then trimmed at its end again: the form Task 4's
+ *    gistSha hashes, so a later block carrying this gist word for word is a carried copy even past the cap; empty
+ *    is null;
+ *  - topics: the `Expand for details about:` field split on commas, through capTopics (each once, at most
+ *    TOPICS_MAX of at most TOPIC_CHARS);
+ *  - refs: the `refs:` values classifyRef recognises, origin `model` (capRefs runs over the leaf's union).
+ *  Both cuts are surrogate-safe. A cut sets `capped`; no marker is ever inserted. */
+export function blockFields(block) {
+  const gist = capText(typeof block.gist === 'string' ? block.gist.trim() : '', GIST_MAX);
+  const topics = capTopics((typeof block.expand === 'string' ? block.expand : '').split(','));
+  const refs = [];
+  for (const v of Array.isArray(block.refs) ? block.refs : []) {
+    const kind = typeof v === 'string' ? classifyRef(v) : null;
+    if (kind !== null) refs.push({ kind, value: v, origin: 'model' });
+  }
+  const text = gist.text.trimEnd();
+  return { gist: text === '' ? null : text, topics: topics.topics, refs, capped: gist.capped || topics.capped };
+}
+
+/** The steer receipt a leaf's span carries (§7.4 item 2): the receipt naming this leaf's id, else a generic one
+ *  (leafId '') received after the previous boundary and no later than this one; null when neither. An epoch's
+ *  first leaf has no lower bound. D-4685 (history-steer-receipt) */
+export function pickReceipt(receipts, { id, afterMs, uptoMs }) {
+  const exact = receipts.find((r) => r.leafId === id);
+  if (exact !== undefined) return exact;
+  return receipts.find((r) => r.leafId === '' && (afterMs === null || r.tsMs > afterMs) && (uptoMs === null || r.tsMs <= uptoMs)) ?? null;
+}
+
+/** The copy that holds a boundary (§6.1 "The copy"): among a transcript's files that have the boundary row as a
+ *  member, a live one (source_key '') before a retired or exported one, then the smallest file_id; null when no file
+ *  holds it. derive.mjs measures `live` and `holds`; Task 9's fan-in splits its slots by this same answer.
+ *  D-4688 (history-span-per-boundary-copy) */
+export function pickHoldingCopy(files) {
+  let best = null;
+  for (const f of files) {
+    if (!f.holds) continue;
+    if (best === null || (f.live && !best.live) || (f.live === best.live && f.fileId < best.fileId)) best = f;
+  }
+  return best === null ? null : best.fileId;
+}
+
+/** A main transcript's fork counts (§6.1), from what derive.mjs measured over its LIVE copies: each copy's row
+ *  count, the rows in any of them, the rows in a copy that holds one of its leaves' boundaries, and how many copies
+ *  hold one. `unspanned` is how many rows no holding copy has: they join no leaf (none while no copy holds a leaf,
+ *  when every row is still live tail). `forked` is true when two or more live copies exist and none holds every row
+ *  (no uuid-superset). */
+export function forkCounts({ liveSizes, unionSize, coveredSize, holdingCopies }) {
+  return {
+    unspanned: holdingCopies === 0 ? 0 : Math.max(0, unionSize - coveredSize),
+    forked: liveSizes.length > 1 && !liveSizes.some((n) => n === unionSize),
   };
 }

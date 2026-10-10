@@ -12,6 +12,7 @@ import { HEADING_RE, fencedRanges } from '../../ccd/compact-card.mjs';
 import { FULL_SECTIONS, UP_TO_SECTIONS, summaryText, steeredBlock } from './historyFixtures.js';
 import * as libSpan from '../../ccd/history/lib.mjs';
 import { compactionSequence } from './historyFixtures.js';
+import * as libLeaf from '../../ccd/history/lib.mjs';
 
 const KIT: parse.GistKit = { HEADING_RE, fencedRanges };
 const NO_PAIRS = parse.makePairIndex([]);
@@ -619,5 +620,92 @@ describe('parentRollup: a parent is deterministic and rebuildable from its child
     ]);
     expect({ e: r.earliestMs, l: r.latestMs, src: r.srcChars, n: r.descCount, chars: r.descChars })
       .toEqual({ e: 50, l: 300, src: 16, n: 5, chars: 37 });
+  });
+});
+
+
+// ===========================================================================
+// W1-B2 Task 8: the five small helpers derive.mjs composes (spec §6.1, §7.4).
+// ===========================================================================
+describe('the leaf helpers derive.mjs composes: direction, block fields, receipts, holding copy, fork counts (spec 6.1, 7.4)', () => {
+  it('directionOfSummaryRow reads summarizeMetadata.direction, from or up_to only', () => {
+    expect(libLeaf.directionOfSummaryRow({ summarizeMetadata: { direction: 'up_to' } })).toBe('up_to');
+    expect(libLeaf.directionOfSummaryRow({ summarizeMetadata: { direction: 'from' } })).toBe('from');
+    for (const r of [{}, { summarizeMetadata: null }, { summarizeMetadata: { direction: 'sideways' } }, null, 'x', [1]]) {
+      expect(libLeaf.directionOfSummaryRow(r), JSON.stringify(r)).toBeNull();
+    }
+  });
+
+  it('blockFields cuts the gist at GIST_MAX and the topics at TOPICS_MAX of TOPIC_CHARS, setting capped, never marking the text', () => {
+    const block: libLeaf.Block = {
+      kind: 'leaf', attrs: {}, gist: `  ${'g'.repeat(libLeaf.GIST_MAX + 300)}  `,
+      expand: Array.from({ length: 20 }, (_, i) => `topic-${i}`).join(', '), refs: null, refsNone: true, inAnalysis: false,
+    };
+    const cut = libLeaf.blockFields(block);
+    expect(cut.gist).toBe('g'.repeat(libLeaf.GIST_MAX));
+    expect(cut.topics).toHaveLength(libLeaf.TOPICS_MAX);
+    expect(cut.capped).toBe(true);
+    expect(cut.gist).not.toMatch(/\[|…/);
+    const long = libLeaf.blockFields({ ...block, gist: 'A gist of ordinary length that stays whole.', expand: `short, ${'t'.repeat(libLeaf.TOPIC_CHARS + 20)}` });
+    expect(long.gist).toBe('A gist of ordinary length that stays whole.');
+    expect(long.topics).toEqual(['short', 't'.repeat(libLeaf.TOPIC_CHARS)]);
+    expect(long.capped).toBe(true);
+    expect(libLeaf.blockFields({ ...block, gist: 'Whole.', expand: 'a, , b ,c' })).toEqual({ gist: 'Whole.', topics: ['a', 'b', 'c'], refs: [], capped: false });
+    expect(libLeaf.blockFields({ ...block, gist: '   ', expand: null }).gist).toBeNull();
+    // The cuts are Task 4's capText and capTopics: a surrogate pair straddling a cap goes whole, never half.
+    const pair = String.fromCodePoint(0x1f600);
+    const cutAt = libLeaf.blockFields({ ...block, gist: `${'g'.repeat(libLeaf.GIST_MAX - 1)}${pair}`, expand: `${'t'.repeat(libLeaf.TOPIC_CHARS - 1)}${pair}` });
+    expect(cutAt.gist).toBe('g'.repeat(libLeaf.GIST_MAX - 1));
+    expect(cutAt.topics).toEqual(['t'.repeat(libLeaf.TOPIC_CHARS - 1)]);
+    expect(cutAt.capped).toBe(true);
+  });
+
+  it('a stored gist hashes as its block did: gistSha(stored) is gistSha(block gist) for a gist longer than the cap (IN-6)', () => {
+    const fieldsOf = (gist: string) => libLeaf.blockFields({ kind: 'leaf', attrs: {}, gist, expand: 'x', refs: null, refsNone: true, inAnalysis: false });
+    const long = ` ${'carried words '.repeat(120)}`;
+    expect(long.trim().length, 'CONTROL: longer than GIST_MAX').toBeGreaterThan(libLeaf.GIST_MAX);
+    const stored = fieldsOf(long).gist!;
+    expect(stored).toHaveLength(libLeaf.GIST_MAX);
+    expect(libLeaf.gistSha(stored)).toBe(libLeaf.gistSha(long));
+    // A cut that lands just after a space: the stored form drops it, and the hash of the block's gist must too.
+    const atSpace = `${'x'.repeat(libLeaf.GIST_MAX - 1)} and the rest of a long gist.`;
+    expect(fieldsOf(atSpace).gist).toBe('x'.repeat(libLeaf.GIST_MAX - 1));
+    expect(libLeaf.gistSha(fieldsOf(atSpace).gist!)).toBe(libLeaf.gistSha(atSpace));
+  });
+
+  it('pickHoldingCopy: among the files holding the boundary, a live one before a retired one, then the smallest file_id (spec 6.1 "The copy")', () => {
+    const f = (fileId: number, live: boolean, holds: boolean) => ({ fileId, live, holds });
+    expect(libLeaf.pickHoldingCopy([f(3, true, true), f(1, false, true), f(2, true, true)])).toBe(2);
+    expect(libLeaf.pickHoldingCopy([f(1, false, true), f(3, true, true)]), 'a live copy before a retired one with a smaller id').toBe(3);
+    expect(libLeaf.pickHoldingCopy([f(2, false, true), f(1, false, true)])).toBe(1);
+    expect(libLeaf.pickHoldingCopy([f(1, true, false), f(2, false, true)]), 'a live copy that lacks the boundary never holds it').toBe(2);
+    expect(libLeaf.pickHoldingCopy([f(1, true, false)])).toBeNull();
+    expect(libLeaf.pickHoldingCopy([])).toBeNull();
+  });
+
+  it('forkCounts: rows no holding copy has are unspanned; two live copies with no superset are forked (spec 6.1)', () => {
+    expect(libLeaf.forkCounts({ liveSizes: [30, 45], unionSize: 50, coveredSize: 30, holdingCopies: 1 })).toEqual({ unspanned: 20, forked: true });
+    expect(libLeaf.forkCounts({ liveSizes: [30, 50], unionSize: 50, coveredSize: 50, holdingCopies: 1 }), 'one copy is a superset').toEqual({ unspanned: 0, forked: false });
+    expect(libLeaf.forkCounts({ liveSizes: [30, 45], unionSize: 50, coveredSize: 0, holdingCopies: 0 }), 'no leaf yet: every row is still live tail')
+      .toEqual({ unspanned: 0, forked: true });
+    expect(libLeaf.forkCounts({ liveSizes: [40], unionSize: 40, coveredSize: 40, holdingCopies: 1 })).toEqual({ unspanned: 0, forked: false });
+  });
+
+  it('blockFields keeps the refs classifyRef recognises, origin model', () => {
+    const values = ['server/src/coord/store.ts', 'a0860d1f', 'not a ref at all ???'];
+    expect(libLeaf.classifyRef('server/src/coord/store.ts'), 'CONTROL: a repo path is a ref').not.toBeNull();
+    const f = libLeaf.blockFields({ kind: 'leaf', attrs: {}, gist: 'x', expand: null, refs: values, refsNone: false, inAnalysis: false });
+    expect(f.refs).toEqual(values.filter((v) => libLeaf.classifyRef(v) !== null).map((v) => ({ kind: libLeaf.classifyRef(v), value: v, origin: 'model' })));
+  });
+
+  it('pickReceipt: the receipt naming the id first; else a generic one inside (previous boundary, this boundary]', () => {
+    const r = (leafId: string, tsMs: number): libLeaf.SteerReceipt => ({ leafId, tsMs });
+    const ID = 'L0123456789abcdef0123';
+    expect(libLeaf.pickReceipt([r('', 150), r(ID, 900)], { id: ID, afterMs: 100, uptoMs: 200 })).toEqual(r(ID, 900));
+    expect(libLeaf.pickReceipt([r('', 100), r('', 150)], { id: ID, afterMs: 100, uptoMs: 200 })).toEqual(r('', 150));
+    expect(libLeaf.pickReceipt([r('', 200)], { id: ID, afterMs: 100, uptoMs: 200 }), 'the window is closed at its end').toEqual(r('', 200));
+    expect(libLeaf.pickReceipt([r('', 100), r('', 201)], { id: ID, afterMs: 100, uptoMs: 200 })).toBeNull();
+    expect(libLeaf.pickReceipt([r('L9999999999999999999', 150)], { id: ID, afterMs: 100, uptoMs: 200 }), "another leaf's receipt is not this one's").toBeNull();
+    expect(libLeaf.pickReceipt([r('', 5)], { id: ID, afterMs: null, uptoMs: 200 }), "an epoch's first leaf has no lower bound").toEqual(r('', 5));
   });
 });

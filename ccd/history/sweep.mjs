@@ -64,6 +64,7 @@ import {
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
+import { deriveNodes } from './derive.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
 
@@ -1180,6 +1181,16 @@ export function drainSpool(db, c) {
   // D-4338 (history-sidecar-write-failure-holds): a failed observation of this tick's renames is the same hold,
   // counted once for the tick; the renamed files wait without a sidecar and are observed at their next journaling.
   const renamed = renameAndObserve(c.home, tickMs, c.now());
+  // Every remaining file is intentionally unread (newly renamed or held), so it may carry a steer receipt. Carry
+  // its bounded session UUID candidates into derivation rather than parsing the file before the next drain.
+  c.pendingReceiptSessionUuids = new Set();
+  const receiptEpochStmts = tickStmts(db);
+  for (const name of listDraining(c.home)) {
+    const id = idOfDrainingName(name);
+    for (const { u } of receiptEpochStmts.epochsOfId.all(id)) c.pendingReceiptSessionUuids.add(u);
+    const current = readRegUuid(c.home, id);
+    if (current !== null) c.pendingReceiptSessionUuids.add(current);
+  }
   if (renamed.failed && !failedCounted) countOutside(db, 'journal_write_failed');
   // D-4418 (history-spool-append-regular-file-only), FR2c (review 344 F3): each node the hook refuses at spool/<id>.jsonl,
   // counted once per drain whose loop ends without throwing (a `break` included) and whose renameAndObserve returned, as
@@ -1947,9 +1958,12 @@ export function discoverAndPlan(db, c, uuids) {
  * 12. `resetFtsPending`: blobs this tick wrote but could not index re-open the completed FTS backfill;
  * 13. `deriveFts`: §9.1 derivation ('fts', 1)'s backfill within what is left of the budget, held with the ingest
  *     (D-4242) and when Task 19's per-chunk floor stopped it;
- * 14. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
- * 15. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
- * 16. `markScan`: a due scan is marked done, unless the roster was unreadable.
+ * 14. `deriveNodes`: the leaves from the boundaries stored so far (§9.2 step 6; W1-B2 Task 8), held with the ingest
+ *     and the FTS backfill (a node grows db/, §9.3) and run after the backfill, so a new node's nodes_fts row is
+ *     written in a tick whose tables exist;
+ * 15. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
+ * 16. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
+ * 17. `markScan`: a due scan is marked done, unless the roster was unreadable.
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
  *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
  *  `periodicCensus` after the tick. `bump` and `countOutside` are counters, not steps. */
@@ -2021,6 +2035,12 @@ export async function tick(db, ctx) {
   // §9.1 derivation ('fts', 1)'s backfill, within what is left of the ONE budget. It grows db/, so a cap or floor
   // pause, or the per-chunk floor that stopped this run's ingest, holds it (D-4242).
   if (ctx.ingest && !(ing !== null && ing.paused)) await deriveFts(db, ictx, ctx.budget);
+  // Derive, nodes (W1-B2 Task 8): leaves from the boundaries stored so far, under the FTS backfill's gate, because a
+  // node grows db/ (§9.3), and after it, so a new node's nodes_fts row is written in a tick whose tables exist.
+  // A receipt file newly renamed in this tick is deliberately not read until the next one; its bounded session UUID
+  // candidates identify affected leaves so another session's native leaves remain final. deriveNodes is synchronous. D-4224
+  ictx.pendingReceiptSessionUuids = ctx.pendingReceiptSessionUuids;
+  if (ctx.ingest && !(ing !== null && ing.paused)) deriveNodes(db, ictx, ctx.budget);
   // §6.2's merge steps run under any pause (§9.2: only ingest pauses): they purge a late pair's deleted bytes and
   // free space rather than take it.
   mergeSteps(db, ictx, ctx.budget);
@@ -2919,10 +2939,10 @@ export function floorProbeFor(dir, statfs) {
  *  binding's ids, and the injected parts a test may replace in-process: the boundary test from
  *  compact-card.mjs, the history-off probe, the parser, the free-space floor probe. pairIdx is this tick's
  *  redaction index; secretsStep's answer replaces the empty default. fts says whether this tick may index
- *  (ftsPrepare's tables). */
+ *  (ftsPrepare's tables). admitFile, budgetLeft and isBusy are this module's own, handed to derive.mjs, which imports nothing of the sweep (W1-B2 Task 8). */
 export function makeIngestCtx(home, homes, nowMs, ids, floorProbe = FLOOR_ALWAYS_OK) {
   const off = historyPaths(home).off;
-  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false };
+  return { home, homes, nowMs, ids, isBoundaryLine, prepareLines, historyOff: () => existsSync(off), floorProbe, pairIdx: makePairIndex([]), fts: false, admitFile, budgetLeft, isBusy };
 }
 
 // ---------------------------------------------------------------------------------------------

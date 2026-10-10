@@ -77,7 +77,7 @@ export const UUID_RE: RegExp;
 export const WRITER_RE: RegExp;
 
 export const NODE_KINDS: readonly ['steered_leaf', 'native_leaf', 'raw_leaf', 'condensed'];
-export const PARSE_STATUS: readonly ['ok', 'degraded', 'invalid', 'absent', 'not-requested'];
+export const PARSE_STATUS: readonly ['ok', 'degraded', 'invalid', 'absent', 'not-requested', 'parse-failed'];
 export const ENTRY_PARSE_STATES: readonly ['ok', 'raw-only'];
 export type Provenance = 'operator' | 'model' | 'tool' | 'summary' | 'harness' | 'ccrc-injected' | 'recall-echo';
 export const PROVENANCE: readonly Provenance[];
@@ -706,3 +706,12 @@ export const DISPLAY_READINGS_MAX: number;
 export function redactForDisplay(text: string, idx: PairIndex): string;
 export function nodeIndexTexts(fields: { gist: string | null; topics: readonly string[] | null; refs: readonly string[] }, idx: PairIndex):
   { gist: string; topics: string; refs: string };
+
+
+// --- W1-B2 Task 8: leaf helpers derive.mjs composes (spec §6.1, §7.4)
+export function directionOfSummaryRow(row: unknown): 'from' | 'up_to' | null;
+export function blockFields(block: Block): { gist: string | null; topics: string[]; refs: { kind: string; value: string; origin: 'model' }[]; capped: boolean };
+export interface SteerReceipt { readonly leafId: string; readonly tsMs: number }
+export function pickReceipt(receipts: readonly SteerReceipt[], w: { id: string; afterMs: number | null; uptoMs: number | null }): SteerReceipt | null;
+export function pickHoldingCopy(files: readonly { fileId: number; live: boolean; holds: boolean }[]): number | null;
+export function forkCounts(i: { liveSizes: readonly number[]; unionSize: number; coveredSize: number; holdingCopies: number }): { unspanned: number; forked: boolean };
