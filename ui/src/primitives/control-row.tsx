@@ -45,6 +45,20 @@ export const CONTROL_ROW =
   + ' rounded-md border border-edge-subtle'
   + ' font-mono text-xs font-regular leading-normal not-italic normal-nums';
 
+/** The line a control row WRAPS ONTO — an error, or a note about a write
+ *  whose answer could not be read.
+ *
+ *  `.coord-banner .coord-error` and `.caps-control .caps-note` declared these
+ *  three identically, and `.child-reclaim-banner .child-reclaim-error` two of
+ *  the three. All three live inside a `<ControlRow>`, which is why this sits
+ *  here rather than in a file of its own: `basis-full` is meaningless outside
+ *  a wrapping flex row, and the row is the only thing that supplies one.
+ *
+ *  The INK is not here, deliberately. Two of the three are `--status-dead-text`
+ *  and the third is `--ink-secondary` — a refusal is louder than a note — and
+ *  each is what `design/audit.mjs` measures that rule through. */
+export const CONTROL_ROW_NOTE = 'basis-full m-0 text-2xs';
+
 export interface ControlRowProps extends HTMLAttributes<HTMLDivElement> {
   /** The hook class, always. Every consumer keeps the class its own
    *  stylesheet grounds it through and its tests select on — passing none

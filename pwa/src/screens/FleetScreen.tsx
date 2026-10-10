@@ -5,7 +5,10 @@
 // the NewSessionSheet.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, BuildLine, Button, Door, QuickConfirm, Skeleton, toast, useNow } from '@ccrc/ui';
+import {
+  ATTENTION_DOT, BareRow, BuildLine, Button, CountBadge, Door, QuickConfirm, Skeleton,
+  toast, useNow,
+} from '@ccrc/ui';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
@@ -651,7 +654,7 @@ export function FleetScreen({
       <SubstrateBanner store={useStore} />
 
       {conn === 'down' && (
-        <div className="offline-banner" role="status">
+        <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
           Reconnecting…
         </div>
       )}
@@ -659,7 +662,7 @@ export function FleetScreen({
       {conn === 'connecting' && sessions.length > 0 && (
         // Cold start hydrated from the offline snapshot (lib/offline.ts):
         // cards render instantly, clearly marked stale until the socket opens.
-        <div className="offline-banner" role="status">
+        <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
           Last known state — connecting…
         </div>
       )}
@@ -834,9 +837,9 @@ export function FleetScreen({
                   <span className="bucket-head-count">{inBucket.length}</span>
                   {unseenCount > 0 && (
                     <>
-                      <span className="bucket-head-unseen" aria-label={`${unseenCount} unseen`}>
+                      <CountBadge className="bucket-head-unseen" aria-label={`${unseenCount} unseen`}>
                         {unseenCount}
-                      </span>
+                      </CountBadge>
                       <button
                         type="button"
                         className="bucket-head-seen"

@@ -258,8 +258,9 @@ button.metachip:active {
    because there is no override. */
 .reap-refusal { color: var(--status-attention-text); font-size: var(--fs-sm); line-height: var(--lh-normal); }
 .reap-sensitive { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
-.reap-size { display: block; font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
-.reap-ignored { display: block; font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); word-break: break-word; }
+/* `.reap-size`, `.reap-ignored` and fleet.css's `.hotfiles-path` declared the
+   same four — a path that may be long. All three are `MONO_PATH` now, and the
+   two that lacked `word-break` inherit the one that had it. */
 /* D4: nested checkouts, named — same look as `.reap-sensitive` (mono, xs,
    no bullets) since both are a plain list of paths, but ink-secondary rather
    than the danger color: a nested checkout is information, not a threat.
@@ -321,13 +322,7 @@ button.metachip:active {
   font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   letter-spacing: var(--ls-caps);
 }
-.chat-banner--offline::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: var(--r-full);
-  background: var(--status-attention);
-}
+/* The 6px dot is `ATTENTION_DOT` — see fleet.css's `.offline-banner::before`. */
 .chat-banner--dead {
   border-color: color-mix(in srgb, var(--status-dead) 35%, var(--edge-subtle));
   /* --status-dead-tint is 12% alpha and tokens.css prices it over a CARD
@@ -1111,7 +1106,13 @@ button.metachip:active {
   display: grid;
   gap: var(--sp-2);
 }
-.draft-cancel {
+/* The quiet way out of a sheet, and ONE rule rather than two: `.draft-cancel`
+   (the composer's conflict sheet) and `.dlg-later` (every dialog sheet)
+   declared these seven identically, because they are the same control saying
+   the same thing in two places. Two selectors is what that looks like when it
+   really is the same; a second copy is what it looked like before. */
+.draft-cancel,
+.dlg-later {
   min-height: var(--tap-min);
   border: none;
   background: none;
@@ -1120,7 +1121,8 @@ button.metachip:active {
   cursor: pointer;
   transition: color var(--dur-fast) var(--curve-swift);
 }
-.draft-cancel:active {
+.draft-cancel:active,
+.dlg-later:active {
   color: var(--ink-primary);
 }
 
@@ -1294,18 +1296,6 @@ button.metachip:active {
 .dlg-actions {
   display: grid;
   gap: var(--sp-2);
-}
-.dlg-later {
-  min-height: var(--tap-min);
-  border: none;
-  background: none;
-  color: var(--ink-secondary);
-  font: var(--weight-medium) var(--fs-base) / 1 var(--family-ui);
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--curve-swift);
-}
-.dlg-later:active {
-  color: var(--ink-primary);
 }
 
 /* The hook envelope (EnvelopeSheet in DialogSheet.tsx) — I3: carried no

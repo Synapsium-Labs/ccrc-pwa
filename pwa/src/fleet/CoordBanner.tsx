@@ -22,7 +22,7 @@ import type { ReactNode } from 'react';
 import type { MarkerState } from '../../../shared/api';
 import { COORD_CONFIRM_MS, MARKER_GLYPH, MARKER_WORD, markerState } from './coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../lib/api';
-import { Button, ControlRow, toast } from '@ccrc/ui';
+import { Button, ControlRow, CONTROL_ROW_NOTE, toast } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
@@ -172,7 +172,7 @@ export function CoordBanner({
       <Button variant="quiet" size="fit" className="coord-toggle flex-none" disabled={busy} onClick={onToggle}>
         {toggleLabel}
       </Button>
-      {error !== null && <p className="coord-error">{error}</p>}
+      {error !== null && <p className={`coord-error ${CONTROL_ROW_NOTE}`}>{error}</p>}
     </ControlRow>
   );
 }

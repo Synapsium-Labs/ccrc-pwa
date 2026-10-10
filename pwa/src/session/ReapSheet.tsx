@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ReapResult, WsAudit, WsAuditChild } from '../../../shared/api';
-import { Button, Sheet, toast } from '@ccrc/ui';
+import { Button, MONO_PATH, Sheet, toast } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 // Pre-merge fix round, finding 6: byte-for-byte identical to the local
 // `bytes()` this file used to define — one shared formatter, imported,
@@ -336,7 +336,7 @@ export function ReapSheet({
                     to answer. `null` says "unknown" rather than guess. The
                     ternary is `sizeText` now — one refusal, shared with the
                     not-in-git total below, rather than two spellings of it. */}
-                <span className="reap-size">{sizeText(shown.worktreeBytes)}</span>
+                <span className={`reap-size ${MONO_PATH}`}>{sizeText(shown.worktreeBytes)}</span>
               </dd>
 
               {/* F3. `dirty` is `string[] | null`, and the null is the whole
@@ -372,7 +372,7 @@ export function ReapSheet({
                   ? NOT_SCANNED
                   : `${shown.ignoredCount} entries, ${sizeText(shown.ignoredBytes, 'size unknown')}`}
                 {shown.ignored !== null && shown.ignored.length > 0 && (
-                  <span className="reap-ignored">
+                  <span className={`reap-ignored ${MONO_PATH}`}>
                     {(expanded ? shown.ignored : shown.ignored.slice(0, 3)).map((e) => e.path).join(' · ')}
                   </span>
                 )}

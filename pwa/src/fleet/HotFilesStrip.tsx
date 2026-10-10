@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ClaimSummary } from '../../../shared/api';
 import { api } from '../lib/api';
-import { CollapsibleStrip, useNow } from '@ccrc/ui';
+import { CollapsibleStrip, MONO_PATH, useNow } from '@ccrc/ui';
 import './fleet.css';
 
 export const CLAIMS_POLL_MS = 30_000;
@@ -79,7 +79,7 @@ export function HotFilesStrip(): ReactNode {
               fleet names half a fact. */}
           <ul className="hotfiles-paths">
             {c.paths.map((p) => (
-              <li key={p} className="hotfiles-path">{c.project}/{p}</li>
+              <li key={p} className={`hotfiles-path ${MONO_PATH}`}>{c.project}/{p}</li>
             ))}
           </ul>
         </li>

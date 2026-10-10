@@ -179,13 +179,11 @@
 /* Same tokens as the "waiting on you" badge elsewhere on this screen
    (--status-attention-text on --status-attention-tint) — reused, not
    reinvented, and already in contrast-check.mjs's standing pairs. */
+/* `.bucket-head-unseen` and `.mail-badge-count` declared the same six
+   declarations — one pill, one number, two headers. Both are `<CountBadge>`. */
 .bucket-head-unseen {
-  background: var(--status-attention-tint);
-  color: var(--status-attention-text);
-  border-radius: var(--r-full);
-  padding: 0 6px;
-  font: var(--weight-semibold) var(--fs-2xs) / 1.6 var(--family-mono);
-  font-variant-numeric: tabular-nums;
+  /* Placement only: the pill itself is `<CountBadge>`. */
+  flex: none;
 }
 /* The chip's label doubles as the focus target after an ack (FleetScreen's
    `markSeen`) — tabIndex -1, so it takes focus programmatically and is never
@@ -281,13 +279,8 @@
   font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   letter-spacing: var(--ls-caps);
 }
-.offline-banner::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: var(--r-full);
-  background: var(--status-attention);
-}
+/* The 6px dot is `ATTENTION_DOT` — the same five declarations
+   `.chat-banner--offline::before` spelled a stylesheet away. */
 
 /* The fleet host banner and the substrate banner are @ccrc/ui's `Banner` now
    (primitives/banner.tsx) — shadcn's Alert shape on ccrc tokens, tone `dead`
@@ -2244,10 +2237,8 @@ button.proj-card-pool::before {
 .mail-badge:active { transform: scale(0.88); color: var(--ink-primary); }
 .mail-badge[data-unread='true'] { color: var(--ink-primary); }
 .mail-badge-count {
-  background: var(--status-attention-tint); color: var(--status-attention-text);
-  border-radius: var(--r-full); padding: 0 6px;
-  font: var(--weight-semibold) var(--fs-2xs) / 1.6 var(--family-mono);
-  font-variant-numeric: tabular-nums;
+  /* Placement only — see `.bucket-head-unseen`. */
+  flex: none;
 }
 /* — The durable door to /accounts (D-161) —
    A separate rule rather than joining `.mail-badge`'s group, for the reason
@@ -2581,7 +2572,10 @@ button.proj-card-pool::before {
 .child-reclaim-banner .child-reclaim-glyph { color: var(--ink-tertiary); flex: none; }
 .child-reclaim-word { flex: 1; min-width: 0; }
 /* `.child-reclaim-toggle` is `<Button variant="quiet">` — see `.coord-toggle`. */
-.child-reclaim-banner .child-reclaim-error { flex-basis: 100%; margin: 0; color: var(--ink-secondary); }
+/* Ink only — see `.coord-error`. A note is quieter than a refusal. */
+.child-reclaim-banner .child-reclaim-error {
+  color: var(--ink-secondary);
+}
 .child-reclaim-banner .child-reclaim-attention {
   flex-basis: 100%;
   display: flex;
@@ -2642,10 +2636,8 @@ button.proj-card-pool::before {
    0.97 press rides at the call site, since the variant carries 0.96. */
 
 /* Named-ancestor descendant for the same reason `.coord-error` is one. */
+/* Ink only — see `.coord-error`. */
 .caps-control .caps-note {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: var(--fs-2xs);
   color: var(--status-dead-text);
 }
 
@@ -2677,10 +2669,9 @@ button.proj-card-pool::before {
    ancestor). It stays directly beside `.coord-banner .coord-error` below —
    not under `.child-reclaim-who`, where it would read as that rule's own
    docstring instead. */
+/* The note a control row wraps onto is `CONTROL_ROW_NOTE`; what stays here
+   is the ink, which is what `design/audit.mjs` measures this rule through. */
 .coord-banner .coord-error {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: var(--fs-2xs);
   color: var(--status-dead-text);
 }
 
@@ -2837,7 +2828,6 @@ button.proj-card-pool::before {
 .hotfiles-expiry { margin-left: auto; color: var(--ink-tertiary); font-size: var(--fs-xs); }
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
-.hotfiles-path { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); word-break: break-word; }
 
 /* — centralised update management W3: SettingsScreen (design 2026-09-20 §13) —
    The AccountsScreen skeleton, class for class. `.settings-screen` paints NO

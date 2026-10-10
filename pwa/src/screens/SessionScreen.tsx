@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
-import { Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
+import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@ccrc/ui';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
@@ -469,7 +469,7 @@ export function SessionScreen({
       />
 
       {conn === 'down' && (
-        <div className="chat-banner chat-banner--offline" role="status">
+        <div className={`chat-banner chat-banner--offline ${ATTENTION_DOT}`} role="status">
           Reconnecting…
         </div>
       )}

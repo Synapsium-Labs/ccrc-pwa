@@ -39,7 +39,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  BARE_ROW, CONTROL_ROW, COVER_SCREEN, LIST_ROW, TEXT_INPUT, TEXT_INPUT_INLINE, buttonVariants,
+  ATTENTION_DOT, BARE_ROW, CONTROL_ROW, CONTROL_ROW_NOTE, COUNT_BADGE, COVER_SCREEN,
+  LIST_ROW, MONO_PATH, TEXT_INPUT, TEXT_INPUT_INLINE, buttonVariants,
 } from '@ccrc/ui';
 
 const read = (...seg: string[]): string =>
@@ -136,29 +137,6 @@ const keyOf = (g: Rule[]): string =>
  *  what it is not is silent. */
 const REGISTERED: Record<string, string> = {
   // ── NEXT: one shape, written twice, and nothing stopping the fold ───────
-  'chat.css .dlg-later + chat.css .draft-cancel':
-    'NEXT. The quiet way out of a sheet — transparent, ink-secondary, UI type '
-    + 'at the tap floor, with a colour transition. Seven declarations twice. A '
-    + '`Button` tone, not a new component; see the quiet variant for the shape '
-    + 'of that argument.',
-  'fleet.css .bucket-head-unseen + fleet.css .mail-badge-count':
-    'NEXT. A count pill in attention ink, six declarations twice. '
-    + '`.settings-badge` is a third carrier of the same idea in a quieter '
-    + 'tone, so the fold is a `CountBadge` with a tone axis, not a copy.',
-  'fleet.css .caps-control .caps-note + fleet.css .coord-banner .coord-error':
-    'NEXT, and it belongs to a component that already exists: both are the '
-    + 'note that wraps to its own line INSIDE a `<ControlRow>` — '
-    + '`flex-basis: 100%`, no margin, `--fs-2xs`, dead ink. A slot on the row, '
-    + 'not a component of its own.',
-  'chat.css .reap-ignored + chat.css .reap-size + fleet.css .hotfiles-path':
-    'NEXT. A path that may be long: block, mono at `--fs-xs`, secondary ink, '
-    + '`word-break: break-word`. THREE copies across two stylesheets, which is '
-    + 'one more than it takes to call something a shape.',
-  'chat.css .chat-banner--offline::before + fleet.css .offline-banner::before':
-    'NEXT, and the pseudo-element is the tell: two offline strips each draw '
-    + 'their own 6px attention dot the same way. banner.tsx already names the '
-    + 'strip as the thing that "stays its own rule until it earns a component" '
-    + '— two copies of its dot is it earning one.',
 
   // ── DIFFERENT THINGS: these rules agree and will keep agreeing ──────────
   ['chat.css .chat-meta + fleet.css .settings-node-actions '
@@ -301,6 +279,29 @@ const MIGRATED: Record<string, string[]> = {
     'cursor: pointer',
     'text-align: left',
   ],
+  '<CountBadge>': [
+    'background: var(--status-attention-tint)',
+    'color: var(--status-attention-text)',
+    'border-radius: var(--r-full)',
+    'padding: 0 6px',
+  ],
+  'CONTROL_ROW_NOTE': [
+    'flex-basis: 100%',
+    'margin: 0',
+    'font-size: var(--fs-2xs)',
+  ],
+  'MONO_PATH': [
+    'display: block',
+    'font-family: var(--family-mono)',
+    'font-size: var(--fs-xs)',
+    'color: var(--ink-secondary)',
+  ],
+  'ATTENTION_DOT': [
+    "content: ''",
+    'width: 6px',
+    'height: 6px',
+    'background: var(--status-attention)',
+  ],
   '<TextInput>': [
     'min-height: var(--tap-min)',
     'background: var(--bg-raised)',
@@ -360,6 +361,21 @@ describe('no app rule re-implements a shape that has already migrated', () => {
     for (const u of ['fixed', 'inset-0', 'z-block']) expect(COVER_SCREEN, u).toContain(u);
     for (const u of ['w-full', 'min-h-tap', 'border-0', 'bg-transparent', 'text-left']) {
       expect(BARE_ROW, u).toContain(u);
+    }
+    // The count badge's pair is the loudest thing on the screen and the only
+    // one saying something is waiting; both halves of it live here.
+    for (const u of ['bg-status-attention-tint', 'text-status-attention-text', 'rounded-full',
+      'tabular-nums']) {
+      expect(COUNT_BADGE, u).toContain(u);
+    }
+    // `basis-full` is the whole of what the note does — without it the line
+    // does not wrap onto its own row and squeezes the control instead.
+    expect(CONTROL_ROW_NOTE).toContain('basis-full');
+    // `break-all` is the declaration that makes a long path a shape rather
+    // than a type ramp; two of the three rules that merged here lacked it.
+    expect(MONO_PATH).toContain('break-all');
+    for (const u of ["before:content-['']", 'before:size-[6px]', 'before:bg-status-attention']) {
+      expect(ATTENTION_DOT, u).toContain(u);
     }
   });
 

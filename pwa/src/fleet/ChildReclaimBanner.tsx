@@ -33,7 +33,7 @@ import { inlinePauseError } from './CoordBanner';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
 import { api, apiErrorText } from '../lib/api';
-import { Button, ControlRow, toast } from '@ccrc/ui';
+import { Button, ControlRow, CONTROL_ROW_NOTE, toast } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
@@ -133,7 +133,7 @@ export function ChildReclaimBanner({
         <Button variant="quiet" size="fit" className="child-reclaim-toggle flex-none" disabled={busy} onClick={onToggle}>
           {toggleLabel}
         </Button>
-        {error !== null && <p className="child-reclaim-error">{error}</p>}
+        {error !== null && <p className={`child-reclaim-error ${CONTROL_ROW_NOTE}`}>{error}</p>}
       </div>
       {attention.length > 0 && (
         <ul className="child-reclaim-attention" aria-label="children reclamation could not clean up">

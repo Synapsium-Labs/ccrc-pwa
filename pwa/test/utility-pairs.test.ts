@@ -170,8 +170,9 @@ describe('every self-grounded utility pair a component renders is measured', () 
     // instead of red. Measured 3 pairs across 2 files today — few, because
     // most ui components inherit their ground rather than painting one, and
     // those stay with audit.mjs's INHERITED_GROUNDS machinery by design.
-    // Four since the quiet variant arrived with a ground of its own.
-    expect(pairs.length).toBeGreaterThanOrEqual(4);
+    // Five since the quiet variant and the count badge arrived with grounds
+    // of their own.
+    expect(pairs.length).toBeGreaterThanOrEqual(5);
     expect(new Set(pairs.map((p) => p.file)).size).toBeGreaterThanOrEqual(2);
   });
 
@@ -235,6 +236,21 @@ describe('every self-grounded utility pair a component renders is measured', () 
       state: '',
       ink: 'var(--ink-primary)',
       ground: 'var(--bg-raised)',
+    });
+  });
+
+  it('includes the count badge, whose two rules the gate used to measure', () => {
+    // `.bucket-head-unseen` and `.mail-badge-count` each declared
+    // `--status-attention-text` over `--status-attention-tint` and were
+    // measured across twelve palettes — twenty-four checks, which is exactly
+    // what the gate fell by (3480 -> 3456) when both became `<CountBadge>`.
+    // The attention pair is the one that matters most to get right: it is the
+    // only thing on the screen saying something is waiting.
+    expect(pairs).toContainEqual({
+      file: 'count-badge.tsx',
+      state: '',
+      ink: 'var(--status-attention-text)',
+      ground: 'var(--status-attention-tint)',
     });
   });
 

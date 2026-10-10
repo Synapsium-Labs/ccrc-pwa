@@ -22,10 +22,17 @@ export { BackButton, BACK_BUTTON, type BackButtonProps } from './primitives/back
 export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
 export { Well, WELL, type WellProps } from './primitives/well';
 export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
-export { ControlRow, CONTROL_ROW, type ControlRowProps } from './primitives/control-row';
+export {
+  ControlRow, CONTROL_ROW, CONTROL_ROW_NOTE, type ControlRowProps,
+} from './primitives/control-row';
 export { ListRow, LIST_ROW, type ListRowProps } from './primitives/list-row';
 export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/cover-screen';
 export { BareRow, BARE_ROW, type BareRowProps } from './primitives/bare-row';
+export { CountBadge, COUNT_BADGE, type CountBadgeProps } from './primitives/count-badge';
+// Two constants with no component of their own: each is a handful of
+// utilities that two or three app rules spelled identically, and wrapping
+// either in a `<span>` would add an element nobody asked for.
+export { MONO_PATH, ATTENTION_DOT } from './lib/text';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,

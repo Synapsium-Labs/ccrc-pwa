@@ -28,7 +28,7 @@
 // renders `null`.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, ControlRow } from '@ccrc/ui';
+import { Button, ControlRow, CONTROL_ROW_NOTE } from '@ccrc/ui';
 import type { CoordCaps, CoordCapsView } from '../../../shared/api';
 import { ApiError, api, apiErrorText } from '../lib/api';
 import './fleet.css';
@@ -208,7 +208,7 @@ export function CapsControl({
           control's feedback — no toast, no banner, and a successful write just
           re-renders numbers — so outside a live region a screen-reader user
           learns nothing at the one moment they have just committed to a save. */}
-      <p className="caps-note" role="status">
+      <p className={`caps-note ${CONTROL_ROW_NOTE}`} role="status">
         {note.kind === 'refused' ? note.text
           : note.kind === 'unconfirmed'
             ? 'unconfirmed — the answer could not be read; reload to see what was stored'
