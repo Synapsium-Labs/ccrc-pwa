@@ -12,7 +12,7 @@ import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
 import { Button, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
-import { api, apiErrorText } from '../lib/api';
+import { api, apiErrorText, failedTo } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
 import { poolSide } from '../lib/pools';
 import { declaredAccountPool } from '../../../shared/poolrule';
@@ -281,7 +281,7 @@ export function NewSessionSheet({
       toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
       onClose();
     } catch (err) {
-      toast(`Couldn't start — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('start', err), 'error');
     } finally {
       setStarting(false);
     }

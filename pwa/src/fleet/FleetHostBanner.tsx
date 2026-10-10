@@ -35,7 +35,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, NodeWire, UpdateIntentWire } from '../../../shared/api';
-import { api, apiErrorText } from '../lib/api';
+import { api, failedTo } from '../lib/api';
 import { Banner, Button, elapsedWords, QuickConfirm, toast, useNow } from '@ccrc/ui';
 import { useFleetHealth } from './useFleetHealth';
 import { remoteSides, statedOf } from '../../../shared/update-summary';
@@ -137,7 +137,7 @@ export function FleetHostBanner(
     void api
       .rebootFleet()
       .then(() => toast('Reboot requested — the fleet host is restarting.'))
-      .catch((err: unknown) => toast(`Couldn't reboot — ${apiErrorText(err)}`, 'error'))
+      .catch((err: unknown) => toast(failedTo('reboot', err), 'error'))
       .finally(() => setRebooting(false));
   };
 

@@ -15,7 +15,7 @@ import type { ReactNode } from 'react';
 import type { FleetSession } from '../../../shared/api';
 import { QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool } from '../lib/accounts';
-import { api, apiErrorText } from '../lib/api';
+import { api, failedTo } from '../lib/api';
 import { projectPoolOf, splitByPool } from '../lib/pools';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useAccountUsage } from './useProjectedHome';
@@ -173,7 +173,7 @@ export function SwapSheet({
           : api.swap(session.id, wrapper));
         toast(`Moving ${session.project} to ${accountLabel(roster, wrapper)}…`);
       } catch (err) {
-        toast(`Couldn't move — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('move', err), 'error');
       }
     })();
     onClose();

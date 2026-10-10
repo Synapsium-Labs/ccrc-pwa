@@ -113,6 +113,26 @@ const UPLOAD_ERROR_TEXT: Record<string, string> = {
 
 export const uploadErrorText = (code: string): string => UPLOAD_ERROR_TEXT[code] ?? code;
 
+/**
+ * THE APP'S ONE SENTENCE FOR A WRITE THAT DID NOT GO THROUGH, written out
+ * thirteen times across seven files before this.
+ *
+ * It sat under every census's floor: `literal-census` reads strings of 25+
+ * characters and `Couldn't stop — ` is sixteen, so nothing could see that the
+ * app's whole failure voice was being re-typed per call site. One reword, or
+ * one call site that said "failed to" instead, and the voice drifts with no
+ * suite between.
+ *
+ * `apiErrorText`, never `err.message`: the runCcd routes fail as
+ * 502 `{ok, stderr}` with no `error` key, so `err.message` yields the generic
+ * "request failed (502)" and ccd's own refusal never reaches anyone.
+ *
+ * The VERB is the caller's and stays at the call site — it is the one half of
+ * the sentence that is about what the operator just tried to do.
+ */
+export const failedTo = (verb: string, err: unknown): string =>
+  `Couldn't ${verb} — ${apiErrorText(err)}`;
+
 /** Origin-qualified on purpose: MessageBubble's `absolute()` turns a bare
  *  `/api/...` into `https:///api/...` (empty host), so a root-relative href
  *  would make every thumbnail tap dead. `/api/` is in navigateFallbackDenylist,

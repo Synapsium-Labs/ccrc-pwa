@@ -109,7 +109,7 @@ import type { ReactNode } from 'react';
 import type { Dialog, HookAsk } from '../../../shared/api';
 import { EYEBROW, OptionRow, Sheet, Well, toast } from '@ccrc/ui';
 import { EnvelopeSheet, TerminalCta } from './EnvelopeSheet';
-import { api, ApiError, apiErrorText } from '../lib/api';
+import { api, ApiError, failedTo } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
 
@@ -270,7 +270,7 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
       hide();
       await useStore.getState().send(text);
     } catch (err) {
-      toast(`Couldn't send — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('send', err), 'error');
     } finally {
       setAnswering(null);
     }

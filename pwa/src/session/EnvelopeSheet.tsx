@@ -19,7 +19,7 @@ import { Fragment, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk, HookAskQuestion } from '../../../shared/api';
 import { Button, EYEBROW, OptionRow, Sheet, toast } from '@ccrc/ui';
-import { api, ApiError, apiErrorText } from '../lib/api';
+import { api, ApiError, failedTo } from '../lib/api';
 import './chat.css';
 
 /** The way out of a question this app cannot render: open the terminal, or
@@ -201,7 +201,7 @@ export function EnvelopeSheet({
         // the response can't tell them apart, so the copy doesn't pretend to.
         toast("Couldn't stop — the session may be idle or the request already resolved");
       } else {
-        toast(`Couldn't decline — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('decline', err), 'error');
       }
     } finally {
       setDenying(false);

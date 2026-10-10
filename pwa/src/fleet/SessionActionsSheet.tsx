@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
-import { api, apiErrorText } from '../lib/api';
+import { api, failedTo } from '../lib/api';
 
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
@@ -155,7 +155,7 @@ export function SessionActionsSheet({
       // apiErrorText, never err.message: the runCcd routes fail as
       // 502 { ok, stderr } with no `error` key, so err.message yields the
       // generic "request failed (502)" and ccd's refusal never reaches anyone.
-      toast(`Couldn't restart — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('restart', err), 'error');
     } finally {
       setRestarting(false);
     }
@@ -171,7 +171,7 @@ export function SessionActionsSheet({
       await restoreSession(session);
       onClose();
     } catch (err) {
-      toast(`Couldn't restore — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('restore', err), 'error');
     } finally {
       setArchBusy(false);
     }
@@ -192,7 +192,7 @@ export function SessionActionsSheet({
       try {
         await api.stop(id);
       } catch (err) {
-        toast(`Couldn't stop — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('stop', err), 'error');
       }
     })();
     onClose();
@@ -207,7 +207,7 @@ export function SessionActionsSheet({
       try {
         await api.release(session.id);
       } catch (err) {
-        toast(`Couldn't release — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('release', err), 'error');
       }
     })();
     onClose();
@@ -224,7 +224,7 @@ export function SessionActionsSheet({
       try {
         await api.forget(session.id);
       } catch (err) {
-        toast(`Couldn't forget — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('forget', err), 'error');
       }
     })();
     onClose();

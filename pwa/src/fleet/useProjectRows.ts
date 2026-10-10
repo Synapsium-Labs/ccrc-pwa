@@ -24,7 +24,7 @@ import type {
   ProjectPoolsWire, ProjectPoolWire, ProjectRepoWire, ProjectRow,
 } from '../../../shared/api';
 import type { ModelClass } from '../../../shared/models';
-import { api, apiErrorText } from '../lib/api';
+import { api, failedTo } from '../lib/api';
 import { poolOfPlacement, type ProjectPlacementRead } from './placementWords';
 
 /** The pools frame reduced to one comparable string. Key ORDER is not
@@ -299,7 +299,7 @@ export function useProjectRows(
         : api.workspaceAdd(project, { class: classFilter }));
       void refreshProjects();
     } catch (err) {
-      toast(`Couldn't create workspace — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('create workspace', err), 'error');
     } finally {
       // finally, not the try tail: a refusal must re-arm the button, or ccd
       // saying no leaves a `+` that can never be pressed again.

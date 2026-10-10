@@ -11,7 +11,7 @@ import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, toast } from '@c
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
-import { api, ApiError, apiErrorText } from '../lib/api';
+import { api, ApiError, failedTo } from '../lib/api';
 import { useKeyboardInset } from '../lib/keyboard';
 import { navigate } from '../lib/router';
 import { ack } from '../lib/seen';
@@ -297,7 +297,7 @@ export function SessionScreen({
       }
     } catch (err) {
       queued.clear();
-      toast(`Couldn't apply that — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('apply that', err), 'error');
     }
   };
 
@@ -309,7 +309,7 @@ export function SessionScreen({
     try {
       await restoreSession(live);
     } catch (err) {
-      toast(`Couldn't restore — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('restore', err), 'error');
     }
   };
 
