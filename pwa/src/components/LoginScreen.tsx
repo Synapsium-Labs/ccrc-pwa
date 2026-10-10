@@ -26,7 +26,7 @@ import type { AuthStatus, AuthVerdict } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { clearAuthLost, readAuthStatus, useAuthLost, verdictOf } from '../lib/auth';
 import { PasskeyCeremonyError, assertPasskey, passkeyLoginSupported } from '../lib/passkey';
-import { Button, TextInput } from '@ccrc/ui';
+import { Button, CoverScreen, TextInput } from '@ccrc/ui';
 
 /**
  * One sentence per verdict — the whole point of `AuthVerdict` being a six-member
@@ -299,7 +299,7 @@ export function LoginScreen(): ReactNode {
               : VERDICT_TEXT['no-session'];
 
   return (
-    <div className="login-screen" role="dialog" aria-modal="true" aria-labelledby="login-title">
+    <CoverScreen className="login-screen" role="dialog" aria-modal="true" aria-labelledby="login-title">
       <h1 className="login-title" id="login-title">
         ccrc
       </h1>
@@ -334,6 +334,6 @@ export function LoginScreen(): ReactNode {
           {busy ? 'Signing in…' : 'Sign in'}
         </Button>
       </form>
-    </div>
+    </CoverScreen>
   );
 }

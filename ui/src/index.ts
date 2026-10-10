@@ -23,6 +23,8 @@ export { Door, DOOR, DOOR_GLYPH, type DoorProps } from './primitives/door';
 export { Well, WELL, type WellProps } from './primitives/well';
 export { Chip, CHIP, CHIP_DOT, type ChipProps } from './primitives/chip';
 export { ControlRow, CONTROL_ROW, type ControlRowProps } from './primitives/control-row';
+export { ListRow, LIST_ROW, type ListRowProps } from './primitives/list-row';
+export { CoverScreen, COVER_SCREEN, type CoverScreenProps } from './primitives/cover-screen';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,

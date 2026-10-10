@@ -52,17 +52,6 @@ const SITES = [
   { file: ['fleet', 'StartProgramSheet.tsx'], hook: 'program-start-go', flex: false, uses: 3 },
 ] as const;
 
-/** Rules that legitimately carry the same four tokens and are NOT this
- *  control. Registered rather than excluded by a cleverer pattern, because
- *  the pattern is the point: a rule that looks like a quiet button has to be
- *  named here, with the reason it is not one. */
-const NOT_A_BUTTON: Record<string, string> = {
-  '.offline-banner':
-    'a sticky status strip, not a control — no cursor, no press, --sp-8 tall rather than the tap floor',
-  '.settings-badge':
-    'a pill READOUT — r-full rather than r-md, 1.4 leading, no cursor and no press',
-};
-
 describe('the quiet control — one variant where four rules were', () => {
   it('carries the chrome those eleven declarations spelled out', () => {
     // Token for token, as every one of the four rules declared it. `font:` is
@@ -122,19 +111,10 @@ describe('the quiet control — one variant where four rules were', () => {
     }
   });
 
-  it('left no copy of its chrome behind in fleet.css', () => {
-    // The point of the fold. A fifth copy appearing in the stylesheet is the
-    // drift this replaces, and it looks exactly like the four did.
-    const css = src('fleet', 'fleet.css').replace(/\/\*[\s\S]*?\*\//g, '');
-    const copies = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => {
-      const body = m[2] ?? '';
-      return body.includes('background: var(--bg-raised)')
-        && body.includes('border: 1px solid var(--edge-subtle)')
-        && body.includes('color: var(--ink-secondary)')
-        && body.includes('var(--family-mono)');
-    }).map((m) => (m[1] ?? '').trim().replace(/\s+/g, ' '));
-    expect(copies.filter((sel) => !(sel in NOT_A_BUTTON))).toEqual([]);
-    // Not vacuous: the registry's entries are rules that really are there.
-    for (const sel of Object.keys(NOT_A_BUTTON)) expect(copies, sel).toContain(sel);
-  });
+  // The "no copy left behind" assertion that used to live here is
+  // `shape-census.test.ts`'s signature check now, generalised: it runs the
+  // same scan for every migrated shape, in every app stylesheet, and carries
+  // the registry of legitimate carriers (`.offline-banner`, `.settings-badge`)
+  // beside the ones for the other three components. One mechanism, four
+  // shapes, rather than this file growing a copy of it per wave.
 });

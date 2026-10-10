@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { Button, Sheet, Skeleton, TextInput, toast } from '@ccrc/ui';
+import { Button, ListRow, Sheet, Skeleton, TextInput, toast } from '@ccrc/ui';
 import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
@@ -35,8 +35,7 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
 }): ReactNode {
   const poolLabel = `pool · ${pool ?? ''}`;
   return (
-    <button
-      type="button"
+    <ListRow
       className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
       onClick={() => onPick(row)}
     >
@@ -48,7 +47,7 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
         </span>
       )}
       <span className="proj-dir">{row.workdir}</span>
-    </button>
+    </ListRow>
   );
 }
 

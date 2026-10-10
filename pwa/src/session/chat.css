@@ -277,24 +277,14 @@ button.metachip:active {
 .menu {
   border-top: 1px solid var(--edge-subtle);
 }
+/* `.menu-item` is `<ListRow>` — twelve declarations it shared, to the token,
+   with `.acct-list .acct-row` a stylesheet away. What stays is the menu's own
+   VOICE: UI type at base size on tight leading, in primary ink. The ink is
+   also what `design/audit.mjs` measures this row through, so it is not
+   decoration to tidy away. */
 .menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  width: 100%;
-  min-height: 52px;
-  padding: var(--sp-2) var(--sp-1);
-  border: none;
-  border-bottom: 1px solid var(--edge-subtle);
-  background: none;
-  text-align: left;
   font: var(--weight-regular) var(--fs-base) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.menu-item:active {
-  transform: scale(0.97);
 }
 .menu-label {
   flex: 1;
@@ -1581,8 +1571,7 @@ button.metachip:active {
   .chat-head .keycap,
   .term-keys .keycap,
   .pending-actions button,
-  .opt,
-  .menu-item {
+  .opt {
     transition: none;
   }
   /* The attach word holds steady at mid-intensity — nothing strobes. */

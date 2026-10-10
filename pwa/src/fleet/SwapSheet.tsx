@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { AccountUsage, FleetSession, RosterWire } from '../../../shared/api';
-import { Chip, LIMIT_TRACK, QuickConfirm, Sheet, fillVariants, limitBand, toast } from '@ccrc/ui';
+import { Chip, LIMIT_TRACK, ListRow, QuickConfirm, Sheet, fillVariants, limitBand, toast } from '@ccrc/ui';
 import { accountHue, accountLabel, accountPool, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { projectPoolOf, splitByPool } from '../lib/pools';
@@ -342,8 +342,7 @@ export function AccountRow({
   const off = condemned(facts);
   const poolLabel = `pool · ${poolChip ?? ''}`;
   return (
-    <button
-      type="button"
+    <ListRow
       className="acct-row"
       data-disabled={off ? 'true' : 'false'}
       onClick={() => onPick(wrapper)}
@@ -378,7 +377,7 @@ export function AccountRow({
       <span className="acct-chev" aria-hidden="true">
         ›
       </span>
-    </button>
+    </ListRow>
   );
 }
 

@@ -42,7 +42,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
-import { Button, Sheet, Skeleton, TextInput } from '@ccrc/ui';
+import { Button, ListRow, Sheet, Skeleton, TextInput } from '@ccrc/ui';
 
 /** The sheet's confirm control. It was the FIFTH copy of the quiet control's
  *  eleven declarations — `quiet-control.test.ts` found it the day the other
@@ -868,9 +868,8 @@ export function StartProgramSheet({
             {filtered.map((p) => {
               const selected = p.workdir === project?.workdir;
               return (
-                <button
+                <ListRow
                   key={p.workdir}
-                  type="button"
                   className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
                   onClick={() => setProject(p)}
                 >
@@ -907,7 +906,7 @@ export function StartProgramSheet({
                       {missingPreconditions(p.readiness).join(' · ')}
                     </span>
                   )}
-                </button>
+                </ListRow>
               );
             })}
             {filtered.length === 0 && <p className="proj-none">No project matches "{query}"</p>}

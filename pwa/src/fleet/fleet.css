@@ -459,23 +459,13 @@
    with it. The picker rows are always inside `.acct-list` (SwapSheet, and
    NewSessionSheet via the same list), so scoping here fixes it at the source and
    costs the readout nothing. */
-.acct-list .acct-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  width: 100%;
-  min-height: 52px;
-  padding: var(--sp-2) var(--sp-1);
-  border: none;
-  border-bottom: 1px solid var(--edge-subtle);
-  background: none;
-  text-align: left;
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.acct-list .acct-row:active {
-  transform: scale(0.97);
-}
+/* `.acct-list .acct-row` is `<ListRow>`. It declared the same twelve as
+   chat.css's `.menu-item`, and the DESCENDANT selector was doing a second job
+   shell.css still describes: containing the collision with
+   `AccountMeterRow`'s own `.acct-row`, a mono gauge line that must never
+   inherit a 52px touch target. A component cannot collide with a class name,
+   so the containment is no longer needed — what is left here is the picker
+   row's own data-state rule below. */
 .acct-suggested {
   flex: none;
   font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
@@ -575,24 +565,20 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* `.proj-row` is `<ListRow>` — the THIRD copy of those declarations, and the
+   one the clustering missed: it lays its children out as a three-column grid
+   where the other two used flex, which is enough disagreement to fall under
+   the census's 72% and enough agreement to be the same row. The signature
+   check found it instead.
+   WHAT IS LEFT IS THE GRID, and it is load-bearing in two directions: an app
+   sheet is UNLAYERED, so these four declarations beat the component's own
+   `flex` and `gap` utilities — which is exactly the override capability the
+   one-way layer order exists to give the app. */
 .proj-row {
   display: grid;
   grid-template-columns: 14px 1fr auto;
   column-gap: var(--sp-2);
   row-gap: 2px;
-  align-items: center;
-  width: 100%;
-  min-height: 52px;
-  padding: var(--sp-2) var(--sp-1);
-  border: none;
-  border-bottom: 1px solid var(--edge-subtle);
-  background: none;
-  text-align: left;
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--curve-swift);
-}
-.proj-row:active {
-  transform: scale(0.97);
 }
 .proj-row--selected {
   background: var(--accent-tint);
@@ -718,9 +704,7 @@
   .fab,
   .card,
   .notice-x,
-  .acct-change,
-  .acct-list .acct-row,
-  .proj-row {
+  .acct-change {
     transition: none;
   }
 }

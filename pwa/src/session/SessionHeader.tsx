@@ -14,7 +14,7 @@ import {
   substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
-import { BackButton, Chip, Sheet, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
+import { BackButton, Chip, ListRow, Sheet, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -365,26 +365,25 @@ export function SessionHeader({
 
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
         <div className="menu">
-          <button type="button" className="menu-item" onClick={() => menuAct(onChangeModel)}>
+          <ListRow className="menu-item" onClick={() => menuAct(onChangeModel)}>
             <span className="menu-label">Change model</span>
             <span className="menu-hint" aria-hidden="true">
               /model
             </span>
-          </button>
-          <button type="button" className="menu-item" onClick={() => menuAct(onChangeEffort)}>
+          </ListRow>
+          <ListRow className="menu-item" onClick={() => menuAct(onChangeEffort)}>
             <span className="menu-label">Change effort</span>
             <span className="menu-hint" aria-hidden="true">
               /effort
             </span>
-          </button>
-          <button type="button" className="menu-item" onClick={() => menuAct(onOpenHistory)}>
+          </ListRow>
+          <ListRow className="menu-item" onClick={() => menuAct(onOpenHistory)}>
             <span className="menu-label">History</span>
             <span className="menu-hint" aria-hidden="true">
               journal
             </span>
-          </button>
-          <button
-            type="button"
+          </ListRow>
+          <ListRow
             className="menu-item"
             disabled={fault !== null}
             title={faultTitle}
@@ -395,32 +394,30 @@ export function SessionHeader({
                 confirm fires api.swap with no substrate check of its own — so
                 an ungated door here was a swap reachable with no gate anywhere. */}
             <span className="menu-label">Move to another account</span>
-          </button>
+          </ListRow>
           {/* Archive for every session, Restore for one already put away (workspace lifecycle §5.2) — never both.
               Archive is gated like Move above: it ends the pane. It needs the row to choose its words, so a deep
               link that has not seen its first frame yet offers it disabled. Restore is gated exactly where it IS
               Restart's request (`restoreReachesEnsure`: a main checkout posts `/ensure`); a workspace's `ws-restore`
               is a different verb and stays ungated, as in the actions sheet. */}
           {session !== null && isPutAway(session) ? (
-            <button
-              type="button"
+            <ListRow
               className="menu-item"
               disabled={fault !== null && restoreReachesEnsure(session)}
               title={restoreReachesEnsure(session) ? faultTitle : undefined}
               onClick={() => menuAct(onRestore)}
             >
               <span className="menu-label">Restore</span>
-            </button>
+            </ListRow>
           ) : (
-            <button
-              type="button"
+            <ListRow
               className="menu-item menu-item--danger"
               disabled={fault !== null || session === null}
               title={faultTitle}
               onClick={() => menuAct(onArchive)}
             >
               <span className="menu-label">Archive</span>
-            </button>
+            </ListRow>
           )}
         </div>
       </Sheet>

@@ -263,19 +263,14 @@
    --z-block (above --z-toast) is what actually does the covering; the DOM
    position is what keeps it out of any container that might clip or
    transform its own descendants. */
+/* `.block-screen` is `<CoverScreen>`. Nine of its twelve declarations are the
+   component's now; what stays is the GROUND — which four descendant rules
+   across the two covers are measured against — and the `gap`, the one
+   declaration the two screens disagreed on. */
 .block-screen {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-block);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   gap: var(--sp-5);
-  padding: var(--sp-6);
   background: var(--bg-page);
   color: var(--ink-primary);
-  text-align: center;
 }
 .block-screen-copy {
   max-width: 40ch;
@@ -302,19 +297,14 @@
    border, bg-raised, ink-primary) — same tokens, no new pair for the contrast
    gate to measure. The copy and the label set NO colour and inherit the
    container's ink. */
+/* The ground and the gap — see `.block-screen`. The shared `--z-block` moved
+   into the component with the rest of the cover, and the ordering argument
+   above is unchanged: app.tsx renders this one first, so at equal z the block
+   screen paints on top. */
 .login-screen {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-block);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   gap: var(--sp-4);
-  padding: var(--sp-6);
   background: var(--bg-page);
   color: var(--ink-primary);
-  text-align: center;
 }
 .login-title {
   font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-mono);

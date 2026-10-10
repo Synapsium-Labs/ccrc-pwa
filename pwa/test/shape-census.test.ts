@@ -38,6 +38,9 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import {
+  CONTROL_ROW, COVER_SCREEN, LIST_ROW, TEXT_INPUT, TEXT_INPUT_INLINE, buttonVariants,
+} from '@ccrc/ui';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
@@ -138,10 +141,6 @@ const REGISTERED: Record<string, string> = {
     + 'at the tap floor, with a colour transition. Seven declarations twice. A '
     + '`Button` tone, not a new component; see the quiet variant for the shape '
     + 'of that argument.',
-  'chat.css .menu-item + fleet.css .acct-list .acct-row':
-    'NEXT, and the biggest left: FOURTEEN declarations, identical, in two '
-    + 'different stylesheets. A pressable list row with a bottom hairline. '
-    + 'Living in two files is how it escaped every wave that read one.',
   'fleet.css .bucket-head-unseen + fleet.css .mail-badge-count':
     'NEXT. A count pill in attention ink, six declarations twice. '
     + '`.settings-badge` is a third carrier of the same idea in a quieter '
@@ -168,11 +167,6 @@ const REGISTERED: Record<string, string> = {
     + 'their own 6px attention dot the same way. banner.tsx already names the '
     + 'strip as the thing that "stays its own rule until it earns a component" '
     + '— two copies of its dot is it earning one.',
-  'shell.css .block-screen + shell.css .login-screen':
-    'NEXT. Two full-viewport covers, twelve declarations each, both at '
-    + '`--z-block`. One `CoverScreen` — and the shared z-index is deliberate, '
-    + 'not drift: shell.css argues that at equal z the block screen paints on '
-    + 'top, which is the right order.',
 
   // ── DIFFERENT THINGS: these rules agree and will keep agreeing ──────────
   ['chat.css .chat-meta + fleet.css .settings-node-actions '
@@ -263,5 +257,122 @@ describe('every duplicated shape in the app stylesheets is registered', () => {
       expect(why.startsWith('NEXT') || why.startsWith('DIFFERENT THINGS'), k).toBe(true);
       expect(why.length, k).toBeGreaterThan(60);
     }
+  });
+});
+
+
+// ── THE OTHER DIRECTION ──────────────────────────────────────────────────
+//
+// Clustering finds a shape written TWICE. It cannot find a shape written once
+// — and a rule that re-implements a component that has already migrated is
+// exactly that: a singleton, with no partner left in any stylesheet to pair
+// with. Measured, and it is not hypothetical: a `.new-row` carrying all twelve
+// of `<ListRow>`'s declarations was injected into chat.css and the census
+// above stayed GREEN, because the two rules it would have matched are gone.
+//
+// So each migrated shape leaves a SIGNATURE behind: the handful of
+// declarations that, together, mean "this is that component again". Any app
+// rule carrying all of them must be a registered carrier or this reds. The
+// signature is deliberately short — four or five declarations, not twelve — so
+// that a near-copy is caught too, which is the one the fifth quiet control
+// taught this project to look for.
+const MIGRATED: Record<string, string[]> = {
+  '<Button variant="quiet">': [
+    'background: var(--bg-raised)',
+    'border: 1px solid var(--edge-subtle)',
+    'color: var(--ink-secondary)',
+    'var(--family-mono)',
+  ],
+  '<ControlRow>': [
+    'flex-wrap: wrap',
+    'min-height: var(--tap-min)',
+    'padding: var(--sp-1) var(--sp-3)',
+    'border-radius: var(--r-md)',
+  ],
+  '<ListRow>': [
+    'min-height: 52px',
+    'border-bottom: 1px solid var(--edge-subtle)',
+    'background: none',
+    'cursor: pointer',
+  ],
+  '<CoverScreen>': [
+    'position: fixed',
+    'inset: 0',
+    'z-index: var(--z-block)',
+    'justify-content: center',
+    'padding: var(--sp-6)',
+  ],
+  '<TextInput>': [
+    'min-height: var(--tap-min)',
+    'background: var(--bg-raised)',
+    'border: 1px solid var(--edge-strong)',
+    'font-size: var(--fs-input)',
+  ],
+};
+
+/** Rules that legitimately carry a signature and are NOT that component.
+ *  Registered rather than excluded by a cleverer pattern: the pattern IS the
+ *  point, so a rule that looks like a migrated shape has to be named here with
+ *  the reason it is not one. */
+const CARRIERS: Record<string, string> = {
+  '<Button variant="quiet"> fleet.css .offline-banner':
+    'a sticky status strip, not a control — no cursor, no press, --sp-8 tall '
+    + 'rather than the tap floor',
+  '<Button variant="quiet"> fleet.css .settings-badge':
+    'a pill READOUT — r-full rather than r-md, 1.4 leading, no cursor and no press',
+};
+
+describe('no app rule re-implements a shape that has already migrated', () => {
+  const appRules = rules();
+
+  it('has rules to scan — the signature check is not vacuously empty', () => {
+    expect(appRules.length).toBeGreaterThanOrEqual(200);
+  });
+
+  it('every component this registry names still exists, carrying what it absorbed', () => {
+    // A signature is only a mechanism while the component it describes is
+    // still the thing shipping those declarations. These four assertions are
+    // what reds if a migration is QUIETLY REVERSED inside the design system —
+    // the hairline dropped from the list row, the ground dropped from the
+    // quiet control — which no stylesheet scan can see, because by then there
+    // is no stylesheet rule left to scan.
+    const quiet = buttonVariants({ variant: 'quiet', size: 'fit' });
+    for (const u of ['bg-raised', 'border-edge-subtle', 'text-ink-secondary', 'font-mono']) {
+      expect(quiet, u).toContain(u);
+    }
+    for (const u of ['flex-wrap', 'min-h-tap', 'px-3', 'py-1', 'rounded-md', 'border-edge-subtle']) {
+      expect(CONTROL_ROW, u).toContain(u);
+    }
+    // The list row's two defining numbers: a hairline UNDER it, and 52px —
+    // eight above the tap floor, which is what separates neighbours a thumb is
+    // dragging over. Both were in both original rules; neither had a guard
+    // until a mutation removed each in turn and nothing went red.
+    for (const u of ['min-h-[52px]', 'border-b', 'border-edge-subtle', 'bg-transparent']) {
+      expect(LIST_ROW, u).toContain(u);
+    }
+    expect(LIST_ROW).not.toContain('min-h-tap');
+    for (const u of ['min-h-tap', 'bg-raised', 'text-input']) expect(TEXT_INPUT, u).toContain(u);
+    for (const u of ['rounded-sm', 'border-edge-strong', 'px-2']) {
+      expect(TEXT_INPUT_INLINE, u).toContain(u);
+    }
+    // The cover's three load-bearing declarations: it is OUT of flow, it is
+    // above everything, and it fills the viewport. Drop any one and the screen
+    // behind it becomes reachable, which is the only thing a cover does.
+    for (const u of ['fixed', 'inset-0', 'z-block']) expect(COVER_SCREEN, u).toContain(u);
+  });
+
+  it('names no rule carrying a migrated signature that this registry has not seen', () => {
+    const found: string[] = [];
+    for (const [component, signature] of Object.entries(MIGRATED)) {
+      for (const rule of appRules) {
+        const body = rule.decls.join('; ');
+        if (signature.every((d) => body.includes(d))) {
+          found.push(`${component} ${rule.sheet} ${rule.sel}`);
+        }
+      }
+    }
+    expect(found.filter((k) => CARRIERS[k] === undefined)).toEqual([]);
+    // Not vacuous: every registered carrier is a rule that really is there.
+    for (const k of Object.keys(CARRIERS)) expect(found, k).toContain(k);
   });
 });

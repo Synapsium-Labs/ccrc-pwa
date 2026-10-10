@@ -13,15 +13,15 @@
 // for no reason when app.tsx already owns shell.css and mounts this beside
 // it. The accent button is `<Button>` from @ccrc/ui, already in the bundle.
 import type { ReactNode } from 'react';
-import { Button } from '@ccrc/ui';
+import { Button, CoverScreen } from '@ccrc/ui';
 
 export function BlockScreen(): ReactNode {
   return (
-    <div className="block-screen" role="alert">
+    <CoverScreen className="block-screen" role="alert">
       <p className="block-screen-copy">This app build is too old for the fleet server. Updating…</p>
       <Button variant="primary" onClick={() => location.reload()}>
         Reload
       </Button>
-    </div>
+    </CoverScreen>
   );
 }
