@@ -88,6 +88,23 @@ describe('FleetHostBanner', () => {
     render(<FleetHostBanner />);
     expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reboot' })).toBeInTheDocument();
+    // THE WIDTH, which is the half this banner was missing. `Button`'s
+    // default size is `full` (`w-full`), so `flex-none` alone left the button
+    // at the row's full width — it claimed the row and collapsed the message
+    // beside it to `min-width: 0`. `size="fit"` is the axis the design system
+    // already had, and the three sibling banners all use it.
+    //
+    // ASSERTED ON THE CLASS, not on a computed width: vitest runs with
+    // `css: false`, so no test here can measure a box. The class is what the
+    // design system emits for the fitted size, and `utility-pairs`/the
+    // compiled bundle are where `w-auto` is proved to exist.
+    expect(screen.getByRole('button', { name: 'Reboot' }).className).toContain('w-auto');
+    expect(screen.getByRole('button', { name: 'Reboot' }).className).not.toContain('w-full');
+    // BOTH HALVES, because the pair is the shape and the three sibling
+    // banners all write both: `fit` sets the width to the content, and
+    // `flex-none` stops the flex row shrinking it again. Measured — with only
+    // the `w-auto` assertion, deleting `flex-none` left all 27 green.
+    expect(screen.getByRole('button', { name: 'Reboot' }).className).toContain('flex-none');
   });
 
   it('warns when the host is UP but the two boxes disagree about the roster', async () => {

@@ -149,15 +149,21 @@ export function FleetHostBanner(
         action={(
           <Button
             variant="primary"
-            // `flex-none` ALONE, which is exactly what `.fleet-host-banner
-            // .btn-primary` set — and Button's base is `w-full`, so this
-            // button claims the row and collapses the message to its
-            // `min-width: 0`. PRESERVED rather than corrected: adding
-            // `w-auto` would be a visual change, and this wave changes no
-            // visual output. Its sibling `.update-banner-actions` sets BOTH
-            // `flex: none` and `width: auto`, which is almost certainly the
-            // shape this one wants. Flagged, not fixed — and no test could
-            // have caught it, because vitest runs with `css: false`.
+            // `size="fit"` IS THE FIX, and it is the axis the design system
+            // already had. `Button`'s default size is `full` (`w-full`), so
+            // `flex-none` alone kept this button at the row's full width: it
+            // claimed the row and collapsed the message to its `min-width:
+            // 0`. The three sibling banners — halt, update, coord,
+            // child-reclaim — all write `size="fit" className="flex-none"`,
+            // which is the same shape `.update-banner-actions` reached for
+            // with `flex: none` and `width: auto`. This one had the first
+            // half and not the second.
+            //
+            // Flagged for a wave, then fixed: it IS a visual change, which is
+            // why it waited for the operator rather than slipping in under a
+            // refactor. `fit` brings `px-3` with it, which a fitted button
+            // needs and a full-width one did not.
+            size="fit"
             className="flex-none"
             disabled={rebooting}
             onClick={() => setConfirmOpen(true)}
