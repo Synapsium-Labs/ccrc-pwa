@@ -222,7 +222,9 @@ describe('the shipped comments say what F1 measured', () => {
    *  helper stripped only `//`. A ` * ` leader is left sitting mid-sentence by a
    *  whitespace flatten, so the wrapped claim survives as `tmux never * reflows`
    *  and the scan reads past it — measured, and the file it mattered for is
-   *  `TerminalDrawer.tsx`, which carries F1's correction in exactly that block.
+   *  `terminalFactory.ts`, which carries F1's correction in exactly that block
+   *  (it was `TerminalDrawer.tsx` until the drawer's halves were separated;
+   *  the measurement travelled with `defaultMakeHistoryTerm`).
    *  Both syntaxes are pinned below against FIXTURES rather than against a
    *  shipped file, because a scanner proved only by the files it currently
    *  passes is a scanner proved by nothing. */
