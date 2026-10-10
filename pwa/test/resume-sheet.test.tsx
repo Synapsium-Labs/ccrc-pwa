@@ -163,6 +163,74 @@ describe('ResumeSheet — the three doors, in order', () => {
 // Each refusal renders its OWN sentence INLINE and the sheet stays open: the
 // shape `AbandonSheet` was moved off `QuickConfirm` to get (`AbandonSheet.tsx`
 // — `QuickConfirm` closes on every tap, win or lose).
+describe('the OTHER two doors\' refusals — the ones no table covered', () => {
+  // The reclaim door's refusals have a table above, one case per status. The
+  // revive and re-kickoff doors have none, and their failure arms were the
+  // last uncovered statements in this file (measured: 18 at 82.52%). Each
+  // answers through a DIFFERENT translator, and that is the whole point of
+  // asserting them separately.
+
+  it('a revive that fails says what ccd said, and still reveals the third door', async () => {
+    // `apiErrorText`, not this sheet's own map: `/ensure` is an ordinary
+    // lifecycle route that fails as 502 `{stderr}`, and ccd's own words are
+    // more specific than anything this component could invent. The reveal is
+    // the half that matters — a revive that failed is exactly when the
+    // operator needs the next door already in front of them.
+    render(<ResumeSheet run={run()} onClose={() => {}} {...noop}
+                       ensure={vi.fn().mockRejectedValue(
+                         new ApiError(502, { ok: false, error: 'ccd-failed', stderr: 'tmux: no server running' }))} />);
+    fireEvent.click(screen.getByRole('button', { name: /^revive/i }));
+    expect(await screen.findByText(/tmux: no server running/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/hand run 3/i),
+      'a failed revive must leave the reclaim field revealed, not hidden').toBeInTheDocument();
+  });
+
+  it('a re-kickoff that fails goes through the KICKOFF translator, not the plain one', async () => {
+    // `kickoffErrorText(apiErrorText(err))` — the composition wave 4 shipped
+    // for this one route, reused rather than a fifth per-surface map. An
+    // oversize brief is the case that proves which translator ran: the plain
+    // one has no entry for it and would print the bare slug.
+    render(<ResumeSheet run={run()} onClose={() => {}} {...noop}
+                       kickoff={vi.fn().mockRejectedValue(
+                         new ApiError(413, { ok: false, error: 'oversize', limit: 2048 }))} />);
+    fireEvent.click(screen.getByRole('button', { name: /^re-kickoff$/i }));
+    const said = await screen.findByText(/too long|oversize/i);
+    expect(said.textContent, 'the bare slug would mean the plain translator ran')
+      .not.toBe('oversize');
+  });
+
+  it('a revive left in flight cannot write into a DIFFERENT run\'s sheet', async () => {
+    // The generation guard on the revive arm, the twin of the one the reclaim
+    // door already has two tables down. Without it a slow `/ensure` for run 3
+    // lands its note on run 9's open sheet — a sentence naming a coordinator
+    // the reader is not looking at.
+    let release!: () => void;
+    const ensure = vi.fn(() => new Promise<void>((res) => { release = () => res(); }));
+    const Harness = (): ReactNode => {
+      const [r, setR] = useState(run());
+      return (
+        <>
+          {/* `data-testid`, not a role query: the open Sheet marks its
+              siblings `aria-hidden`, so `getByRole` cannot see a control
+              outside it — the same reason this file's other superseded case
+              dismisses through `sheet-overlay` by test id. */}
+          <button type="button" data-testid="switch-run"
+                  onClick={() => setR(run({ id: 9, wave: 1, claimedBy: 'ccrc-pwa-other' }))}>
+            switch
+          </button>
+          <ResumeSheet run={r} onClose={() => {}} {...noop} ensure={ensure} />
+        </>
+      );
+    };
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: /^revive ccrc-pwa-coordinator$/i }));
+    fireEvent.click(screen.getByTestId('switch-run'));
+    await act(async () => { release(); await Promise.resolve(); });
+    expect(screen.queryByText(/Asked the fleet to bring ccrc-pwa-coordinator back/),
+      "the superseded revive's note cannot land on another run's sheet").toBeNull();
+  });
+});
+
 describe('ResumeSheet — the reclaim refusals, each with its own sentence', () => {
   const reclaimFailing = (err: unknown) => {
     const onClose = vi.fn();
