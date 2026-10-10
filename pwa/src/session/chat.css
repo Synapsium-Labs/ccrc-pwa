@@ -808,8 +808,10 @@ button.metachip:active {
   color: var(--ink-disabled);
 }
 
-/* Draft-conflict sheet body. */
-.draft-copy {
+/* Draft-conflict sheet body — and the unparsed dialog's, which is the same
+   four declarations of the type ramp for the same kind of sentence. */
+.draft-copy,
+.dlg-copy {
   font-size: var(--fs-base);
   line-height: var(--lh-normal);
   color: var(--ink-secondary);
@@ -1003,12 +1005,6 @@ button.metachip:active {
 .dlg-details-toggle:hover { color: var(--accent); }
 
 /* Unparsed dialog — the raw pane in a well plus the terminal escape hatch. */
-.dlg-copy {
-  font-size: var(--fs-base);
-  line-height: var(--lh-normal);
-  color: var(--ink-secondary);
-  margin-bottom: var(--sp-3);
-}
 .dlg-raw {
   margin-bottom: var(--sp-4);
 }

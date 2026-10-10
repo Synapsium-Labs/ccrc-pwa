@@ -795,17 +795,13 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the two "we do not know" verdicts, and a narrow spawn whose pane is measured wide again (`was narrow`), drop to --ink-tertiary, and an attribute variant recovers no ground from its selector any more than the base rule does — so grounding only the base would leave HALF a new cell measured. Same project-card ground, same unselected row; the selected row is again the achromatic group, which carries the [data-spawn] member for exactly this rule',
   },
-  '.proj-crossing': {
+  '.proj-crossing, .proj-abroad-line': {
     under: ['var(--bg-surface)'],
-    why: "the rule-3 orphan's programme note (F4, cross-repo wave 2) sits directly on .proj-card-body's own ground, same register .proj-nest-bracket and .proj-pending-program already use here. It sets no background of its own and its selector names no ancestor, so no route could ground it",
+    why: "the rule-3 orphan's programme note (F4, cross-repo wave 2) and the home card's sentence about a wave running in another repo, now ONE rule: the same six declarations on the same ground, in the same card's quietest register (.proj-nest-bracket and .proj-pending-program use it too). Neither sets a background of its own and neither selector names an ancestor, so no route could ground either. The crossing's indent is its own one-line rule and sets no colour",
   },
   '.proj-crossing-glyph': {
     under: ['var(--bg-surface)'],
     why: 'the same marker\'s glyph. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the glyph half of the marker unmeasured while the report looked complete',
-  },
-  '.proj-abroad-line': {
-    under: ['var(--bg-surface)'],
-    why: "the home card's own sentence about a wave running in another repo (F4, cross-repo wave 2), same ground and register as .proj-crossing above. Its selector names no ancestor, so no route could ground it",
   },
   '.proj-abroad-glyph': {
     under: ['var(--bg-surface)'],

@@ -539,7 +539,12 @@
    `pickerEmptiness`), rather than rendering a bare empty list under "Pick where
    it should live meanwhile". Same treatment as `.proj-none`, the sibling
    already doing this for the project step of the very same sheet. */
-.acct-none {
+/* ONE EMPTY-STATE PARAGRAPH, three places: this picker's, the project
+   picker's, and the project error. Four declarations of the type ramp, which is
+   the tokens working rather than a shape — so it is grouped, not extracted. */
+.acct-none,
+.proj-none,
+.proj-error {
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
   color: var(--ink-secondary);
@@ -652,19 +657,22 @@
 .sheet-panel .proj-ready[data-verdict='ready'] { color: var(--status-busy-text); }
 .sheet-panel .proj-ready[data-verdict='blocked'] { color: var(--status-dead-text); }
 
+/* NOT grouped with `.sheet-panel .proj-ready-why`, which declares the
+   identical four. They sit on DIFFERENT GROUNDS — this one on the project
+   card's --bg-surface, the reason line on the sheet's --bg-sheet — and
+   INHERITED_GROUNDS keys one ground per rule, so one grouped rule would be
+   measured against a ground half of it never sits on. That is a worse answer
+   than two rules: a false PASS instead of a duplicate. The ramp is what they
+   share, and the ramp is already one token set. */
 .proj-dir {
   grid-column: 2;   /* see .proj-name above */
   font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
   color: var(--ink-tertiary);
   overflow-wrap: anywhere;
 }
-.proj-none,
-.proj-error {
-  font-size: var(--fs-sm);
-  line-height: var(--lh-normal);
-  color: var(--ink-secondary);
-  padding: var(--sp-4) var(--sp-1);
-}
+/* `.proj-none` / `.proj-error` are grouped with `.acct-none` above — one
+   empty-state paragraph, three places that say nothing is here. `.proj-error`
+   keeps its own ink below, which is the whole of what makes it the error one. */
 .proj-error {
   color: var(--status-dead-text);
 }
@@ -1410,14 +1418,26 @@
    what takes these cells out of .sess-meta's inheritance, so each one also
    has to be named in .sess-line--active's achromatic group above — see the
    comment on that rule for the ratios this cost while they were not. */
+/* ONE TRUNCATING MONO CELL, six slots of the session line. The four
+   declarations under the colour are the same four `.sess-stranded` and
+   `.sess-acct` each declared for themselves — siblings in one component, so
+   they are written once here and each slot keeps only the ink that makes it
+   what it is. `.sess-acct` keeps none: its hue comes from the account chip. */
 .sess-held,
 .sess-lifecycle,
 .sess-swapblocked,
-.sess-ask-state {
+.sess-ask-state,
+.sess-stranded,
+.sess-acct {
   font-family: var(--family-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.sess-held,
+.sess-lifecycle,
+.sess-swapblocked,
+.sess-ask-state {
   color: var(--ink-tertiary);
 }
 
@@ -1447,13 +1467,7 @@
 
 /* A strand is deliberately louder than the neighbouring durable markers.
    Like them, it truncates while its title preserves the complete reason. */
-.sess-stranded {
-  font-family: var(--family-mono);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--status-attention-text);
-}
+.sess-stranded { color: var(--status-attention-text); }
 
 .sess-offpool {
   flex: none;
@@ -1504,12 +1518,6 @@ button.sess-held {
   cursor: pointer;
 }
 
-.sess-acct {
-  font-family: var(--family-mono);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 /* The arrow, not a colour change: the chip's colour already encodes WHICH
    account, and overloading it with "and it is the wrong one" would lose that. */
 .sess-acct-away { margin-left: 2px; color: var(--status-attention-text); }
@@ -2004,29 +2012,10 @@ button.proj-card-pool::before {
    `--ink-tertiary` on `.proj-card-body`'s own ground, the register
    `.proj-nest-bracket` and `.proj-pending-program` already use here: the
    quietest thing on the card, because the row above it carries the fact. */
-.proj-crossing {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-1);
-  min-width: 0;
-  padding-left: var(--sp-3);
-  font-size: var(--fs-2xs);
-  color: var(--ink-tertiary);
-}
-.proj-crossing-glyph { flex: none; color: var(--ink-tertiary); }
-
-/* F4 (cross-repo): the home card's own sentence about a wave that is running in
-   another repo. Same register and same ground as `.proj-crossing` above — this
-   card's body — and a top border, because it is about a row that is NOT on this
-   card and must not read as one more session. */
-.proj-abroad {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  margin-top: var(--sp-1);
-  padding-top: var(--sp-1);
-  border-top: 1px solid var(--edge-subtle);
-}
+/* …and `.proj-abroad-line`, which is the same six declarations for the same
+   kind of line: an inline meta row in the card's quietest ink. Only the indent
+   is the crossing's own, so only the indent is written twice. */
+.proj-crossing,
 .proj-abroad-line {
   display: flex;
   align-items: baseline;
@@ -2035,11 +2024,18 @@ button.proj-card-pool::before {
   font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
-.proj-abroad-glyph { flex: none; color: var(--ink-tertiary); }
+.proj-crossing { padding-left: var(--sp-3); }
+.proj-crossing-glyph { flex: none; color: var(--ink-tertiary); }
 
-/* Wave 2 (board placement): the emptied card's sentence about where its own
-   workspaces render now. Same register and ground as `.proj-abroad` — about
-   rows that are NOT on this card — and never a tap surface (R2). */
+/* F4 (cross-repo): the home card's own sentence about a wave that is running in
+   another repo. Same register and same ground as `.proj-crossing` above — this
+   card's body — and a top border, because it is about a row that is NOT on this
+   card and must not read as one more session. */
+/* `.proj-elsewhere` (wave 2, board placement: where the emptied card's own
+   workspaces render now) is the same six declarations about the same kind of
+   fact — rows that are NOT on this card — so it is grouped here rather than
+   written twice. Neither is ever a tap surface (R2). */
+.proj-abroad,
 .proj-elsewhere {
   display: flex;
   flex-direction: column;
@@ -2048,6 +2044,8 @@ button.proj-card-pool::before {
   padding-top: var(--sp-1);
   border-top: 1px solid var(--edge-subtle);
 }
+.proj-abroad-glyph { flex: none; color: var(--ink-tertiary); }
+
 .proj-elsewhere-line {
   min-width: 0;
   font-size: var(--fs-2xs);
@@ -2151,7 +2149,13 @@ button.proj-card-pool::before {
 }
 .accounts-projection { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
 .accounts-list { display: grid; gap: var(--sp-3); }
-.accounts-row {
+/* ONE CARD IDIOM, two places. `.auth-block` (the passkey block, further down
+   this sheet) declared the identical six. Both are SELF-GROUNDED, which is what
+   lets design/audit.mjs recover a ground for their descendants, and grouping
+   keeps that recovery ONE measured rule instead of two that drift — the
+   argument `.abandon-sheet, .archive-conflict-sheet` already makes below. */
+.accounts-row,
+.auth-block {
   display: grid;
   gap: 4px;
   padding: var(--sp-2) var(--sp-3);
@@ -2201,14 +2205,6 @@ button.proj-card-pool::before {
    `design/audit.mjs`'s INHERITED_GROUNDS now carries an entry for each
    (`--ink-primary` 15.68 dark / 16.58 light, `--ink-tertiary` 5.77 / 5.70 on
    this card), pinned by contrast.test.ts. */
-.auth-block {
-  display: grid;
-  gap: 4px;
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--bg-surface);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-}
 .auth-block-head { display: flex; align-items: center; gap: var(--sp-2); }
 .auth-block-title {
   font: var(--weight-semibold) var(--fs-sm) / var(--lh-tight) var(--family-ui);
@@ -2412,19 +2408,22 @@ button.proj-card-pool::before {
    the marker takes `--ink-secondary`, one step up, because it is the rarer fact
    — and it is told apart by its GLYPH and its WORD, never by a hue. */
 .run-row .run-project { font-size: var(--fs-2xs); color: var(--ink-tertiary); }
-.run-row .run-crossing {
+/* ONE INLINE META SLOT, and this row draws four of them — the crossing, the
+   kind, the dispatch and the child-reclaim chip. They agree because they are
+   siblings in one component, which is a reason to write them ONCE, not four
+   times; the dispatch keeps its own `tabular-nums` below, because it is the one
+   carrying a number. Each one's glyph stays `--ink-tertiary` beside it, and a
+   refusal is still told apart by its WORD and its glyph, never by a hue. */
+.run-row .run-crossing,
+.run-row .run-kind,
+.run-row .run-dispatch,
+.run-row .run-child-reclaim {
   display: inline-flex; align-items: baseline; gap: var(--sp-1);
   min-width: 0;
   font-size: var(--fs-2xs);
   color: var(--ink-secondary);
 }
 .run-row .run-crossing-glyph { color: var(--ink-tertiary); }
-.run-row .run-kind {
-  display: inline-flex; align-items: baseline; gap: var(--sp-1);
-  min-width: 0;
-  font-size: var(--fs-2xs);
-  color: var(--ink-secondary);
-}
 .run-row .run-kind-glyph { color: var(--ink-tertiary); }
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
@@ -2440,12 +2439,7 @@ button.proj-card-pool::before {
    uses. A run row is a record of a lifecycle position, not a living pane, so
    this gets no --glow/animation/box-shadow either — the same "runs are not
    living panes" rule `.run-row .run-abandon` below is held to. */
-.run-row .run-dispatch {
-  display: inline-flex; align-items: baseline; gap: var(--sp-1);
-  min-width: 0;
-  font-size: var(--fs-2xs); font-variant-numeric: tabular-nums;
-  color: var(--ink-secondary);
-}
+.run-row .run-dispatch { font-variant-numeric: tabular-nums; }
 .run-row .run-dispatch-glyph { color: var(--ink-tertiary); }
 /* Task 5 (spawn visibility): the resume D-1 has always recorded. Grouped with
    `.run-tally`/`.run-when`'s ink rather than given one of its own — a resumed
@@ -2497,12 +2491,6 @@ button.proj-card-pool::before {
    already prices (`--status-attention-text`), because a terminal refusal is the
    one word here the operator may need to read in full. NO --glow, NO animation,
    NO box-shadow: runs are not living panes (`fleet-css.test.ts`). */
-.run-row .run-child-reclaim {
-  display: inline-flex; align-items: baseline; gap: var(--sp-1);
-  min-width: 0;
-  font-size: var(--fs-2xs);
-  color: var(--ink-secondary);
-}
 .run-row .run-child-reclaim-glyph { color: var(--ink-tertiary); }
 .run-row .run-child-reclaim-sentence {
   flex: 1 0 100%;
@@ -2719,8 +2707,11 @@ button.proj-card-pool::before {
    and it renders the identical `.abandon-error` descendant. Grouping is what
    keeps that descendant a MEASURED pair under both ancestors instead of one
    grounded rule and one copy that drifts. */
+/* `.update-move-sheet` is the third body with these six (programme wave 5's
+   move sheet), grouped here for the reason the first two already were. */
 .abandon-sheet,
-.archive-conflict-sheet {
+.archive-conflict-sheet,
+.update-move-sheet {
   display: grid;
   gap: var(--sp-3);
   color: var(--ink-primary);
@@ -2999,7 +2990,11 @@ button.proj-card-pool::before {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.settings-release-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+/* The three wrapping action rows this screen draws — a release row's, a node
+   row's and the update banner's — are one row, written once. */
+.settings-release-actions,
+.settings-node-actions,
+.update-banner-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 /* Wave 8 item F2 (D-3591): the running row's words, in place of a button — quiet, not a badge or a warning. */
 .settings-release-running { font-size: var(--fs-xs); color: var(--ink-tertiary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
@@ -3047,7 +3042,6 @@ button.proj-card-pool::before {
    (primitives.css) supplies the tap floor, the border and the disabled ink,
    and Task 8's compound .btn-ghost.settings-move already stops it filling the
    row — so no second override is written here. */
-.settings-node-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 
 /* — centralised update management W3, Task 10: Notifications + the unarmed banner —
    .settings-unarmed is the §12 red sentence: the gate is off and this page
@@ -3117,12 +3111,6 @@ button.proj-card-pool::before {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.update-banner-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-}
 
 /* — centralised update management, programme wave 5 Task 8: the move sheet —
    The ONE confirm sheet every move control opens (UpdateMoveSheet.tsx): the
@@ -3133,14 +3121,6 @@ button.proj-card-pool::before {
    INHERITED_GROUNDS entry. The number is in each line's text (movePlan's
    moveLines), so the list draws no marker of its own; the lines are
    same-user text (labels) and wrap inside the phone width. */
-.update-move-sheet {
-  display: grid;
-  gap: var(--sp-3);
-  color: var(--ink-primary);
-  background: var(--bg-surface);
-  border-radius: var(--r-md);
-  padding: var(--sp-3);
-}
 .update-move-sheet .update-move-list {
   gap: var(--sp-1);
 }
