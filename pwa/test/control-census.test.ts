@@ -150,7 +150,7 @@ const CONTROLS: Record<string, string> = {
   'fleet/ProjectCard.tsx proj-card-pool': "TOKEN. The card's pool tag.",
   'fleet/ProjectCard.tsx proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
   'fleet/SessionLine.tsx sess-actions': 'TOKEN, and OVERLAY below.',
-  'fleet/SessionLine.tsx sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
+  'fleet/SessionMeta.tsx sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
   'fleet/SwapSheet.tsx acct-disclosure': "TOKEN. NewSessionSheet's disclosure rule, same class.",
   'screens/AccountsScreen.tsx accounts-session': 'TOKEN. A session row on the accounts screen.',
   'screens/AccountsScreen.tsx proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
@@ -176,7 +176,7 @@ const CONTROLS: Record<string, string> = {
     + '`.settings-bell-row .bell` declares both floors — so the one in the FLEET '
     + 'HEADER is the copy that is under it, and the two have drifted. Found by '
     + 'this census. Not changed: growing the header bell moves the header.',
-  'fleet/SessionLine.tsx sess-held':
+  'fleet/SessionMeta.tsx sess-held':
     "SELECTOR .sess-line. Inline text in the row's meta line, not a box of its "
     + 'own: what gets tapped is the ROW, and the row declares the floor. Its own '
     + 'rule sets type and truncation and no geometry at all.',

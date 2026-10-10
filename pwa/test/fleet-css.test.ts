@@ -2,7 +2,7 @@
 // render. Each one below fixes a defect MEASURED on the live page; reading the
 // stylesheet as text is what stops them regressing silently.
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { BARE_ROW, CONTROL_ROW, TEXT_INPUT, buttonVariants } from '@ccrc/ui';
 
@@ -587,8 +587,25 @@ describe('selection is polarity, status is hue', () => {
   // exactly that reason (SessionLine.tsx's `acctStyle`). That one is a TSX
   // decision and stays pinned there.
   it('leaves no coloured cell on the row without an answer on the slab', () => {
-    const tsx = readFileSync(
-      path.join(import.meta.dirname, '..', 'src', 'fleet', 'SessionLine.tsx'), 'utf8');
+    // THE ROW'S OWN FILES, followed rather than named: `SessionLine.tsx` plus
+    // the local components it renders. This read was one named file until the
+    // meta line moved to `SessionMeta.tsx`, at which point the census saw 11
+    // cells instead of 26 and its own `> 15` tripwire below caught it.
+    //
+    // Following imports rather than walking `src/` is deliberate and was also
+    // measured: a whole-tree walk picks up `sess-hold-error` and
+    // `sess-sheet-note`, which are rendered by the actions SHEET. Those are
+    // not cells on the slab, and the rule this test enforces — every coloured
+    // cell has an answer under `.sess-line--active` — is about the slab.
+    const dir = path.join(import.meta.dirname, '..', 'src', 'fleet');
+    const rowFiles = ['SessionLine.tsx'];
+    for (const m of readFileSync(path.join(dir, 'SessionLine.tsx'), 'utf8')
+      .matchAll(/from '\.\/([A-Za-z]+)'/g)) {
+      const f = `${m[1] ?? ''}.tsx`;
+      if (existsSync(path.join(dir, f))) rowFiles.push(f);
+    }
+    expect(rowFiles.length, 'the row is at least SessionLine and its meta').toBeGreaterThan(1);
+    const tsx = rowFiles.map((f) => readFileSync(path.join(dir, f), 'utf8')).join('\n');
 
     // `className="a b"` and `` className={`a b--${x}`} `` alike; the
     // interpolation is stripped, leaving the `sess-state--` PREFIX, which is
