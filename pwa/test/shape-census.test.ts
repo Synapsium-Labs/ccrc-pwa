@@ -186,7 +186,13 @@ const REGISTERED: Record<string, string> = {
     'DIFFERENT THINGS. Five declarations — flex, centred, wrapping, one gap '
     + 'token, one row-gap — which is the most common five in the tree. This is '
     + 'a utility that these elements write as a rule because they already have '
-    + 'classes for other reasons.',
+    + 'classes for other reasons. '
+    + 'AND IT IS THE LINE AGAINST `RESET_LIST`, which went the other way in '
+    + 'the same wave: that one is a SEMANTIC reset — a `<ul>` that must not '
+    + 'look like a list, a decision about what the element IS — while this is '
+    + 'layout glue that means nothing beyond itself. A constant for every '
+    + 'common quadruple of utilities is a second spelling of Tailwind, and '
+    + 'the registry would stop being able to tell the two apart.',
   'chat.css .compaction--sys .compaction-label + fleet.css .sess-subagent-name':
     'DIFFERENT THINGS. Four declarations that spell `truncate`: min-width 0, '
     + 'hidden, ellipsis, nowrap. A component here would be a `<span>` with a '
