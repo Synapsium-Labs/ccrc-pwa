@@ -100,6 +100,8 @@ esac
 # guard sits here, after the address, so the token-extraction lines above stay
 # one slice `coord-token.test.ts` can run on their own. curl's stdin is always
 # this pipe, never the stdin ccd hands the hook.
+# The unedited shipped placeholder is no token either (PLACEHOLDER_TOKEN, server/src/coord/token.ts, is the authority).
+[ "$tok" != 'REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32' ] || exit 0
 [ -n "$tok" ] || exit 0
 printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" |
 curl -fsS -m 5 -X POST "$BASE/api/notify" -K - \
