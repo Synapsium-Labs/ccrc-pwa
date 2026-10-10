@@ -1272,7 +1272,7 @@ holds on a box whose `mv` has no `--no-copy`, and where `flock` is unavailable. 
 `tmproots/` that is a link; quarantine records that cannot be listed; a registry that cannot be listed or a row that
 cannot be placed; a floor knob that is not a number (on a fresh audit; a resume decides nothing from the floor); a walk that timed out, hit the cap or met an unreadable entry; a
 clock that cannot be read; a probe that cannot look; a checkout question that could not be answered; a quarantine that
-is not a real directory of this uid at mode 0700, or quarantine slots that cannot be listed beside a present leaf; a
+is not a real directory of this uid at mode 0700, or quarantine slots that cannot be listed, beside a present leaf or an absent one; a
 leaf whose own mode lacks owner write, or cannot be read (`mode`); a physical `~/.cc-tmp` that is off the device a
 witness or a record carries, or whose device or path cannot be read, before an absence is believed (`device`); a leaf
 or slot whose absence cannot be proven; and a token that cannot be minted. The audit exits 1 on each and journals nothing; the verb prints `probe-unmeasured`, journaled
