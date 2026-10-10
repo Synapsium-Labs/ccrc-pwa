@@ -225,13 +225,20 @@
     margin: 0;
     overflow: hidden;
   }
-  .shell-detail .chat-back {
-    display: none;
-  }
-  /* AccountsScreen's own back chevron (Task 6, Build 3 PR G) — same reasoning
-     as .chat-back just above: the fleet sidebar is always visible on desktop,
-     so an explicit way back out of the detail pane is redundant there. */
-  .shell-detail .accounts-back {
+  /* EVERY back chevron in the detail pane, by the component's own class.
+     The fleet sidebar is always visible on desktop, so an explicit way back
+     out of the detail pane is redundant there — and `app.tsx` renders all six
+     detail screens inside this node, so the rule applies exactly where that
+     reason holds and nowhere else.
+
+     IT NAMED TWO HOOK CLASSES UNTIL THIS WAVE (`.chat-back` and
+     `.accounts-back`), while `.mail-back`, `.runs-back` and `.settings-back`
+     were not hidden: three chevrons rendered on desktop against this rule's
+     own argument. The drift was invisible from any one of the five per-screen
+     rules and became legible only when `BackButton` collected them
+     (`ui/src/primitives/back-button.tsx` records both halves). Naming the
+     COMPONENT cannot drift that way. */
+  .shell-detail .back-btn {
     display: none;
   }
 

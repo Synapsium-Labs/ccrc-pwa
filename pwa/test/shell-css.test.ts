@@ -41,6 +41,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { BACK_BUTTON } from '@ccrc/ui';
 import { atBlock, declaredValues } from './cssRule';
 
 const shellCss = readFileSync(
@@ -163,5 +164,43 @@ describe('the desktop detail pane scrolls by default (D-161)', () => {
     for (const prop of ['min-height', 'min-width'] as const) {
       for (const v of values('.shell-detail', prop)) expect(v, prop).toBe('0');
     }
+  });
+  it('hides every back chevron in the detail pane by the component class', () => {
+    // THE ASYMMETRY THIS ANSWERS. The desktop block hid
+    // `.shell-detail .chat-back` and `.shell-detail .accounts-back` and
+    // nothing else, while `.mail-back`, `.runs-back` and `.settings-back`
+    // rendered — three chevrons against this rule's own argument, which is
+    // about the SHELL (the fleet sidebar is always visible, so a way back out
+    // of the detail pane is redundant) and not about two screens.
+    //
+    // It names `BackButton`'s own `back-btn` now, so the next screen with a
+    // chevron inherits the behaviour instead of being the fourth omission.
+    // Asserted in BOTH directions: the component class is hidden, and no
+    // per-screen back class is hidden on its own — a rule that rots back into
+    // a list of names reds here.
+    // BOTH SIDES OF THE SEAM. The rule selects a class `@ccrc/ui` emits, so
+    // the rule alone is not the guarantee — measured: deleting `back-btn` from
+    // `BACK_BUTTON` left the rule in place matching nothing, every chevron
+    // back on desktop, and sixteen tests green. The constant is asserted here,
+    // beside the rule that depends on it.
+    expect(BACK_BUTTON, 'the rule below selects this class').toContain('back-btn');
+    const desktop = atBlock(shellCss, `@media (min-width: ${BREAKPOINT}px)`);
+    expect(declaredValues(desktop, '.shell-detail .back-btn', 'display')).toContain('none');
+    // `declaredValues` THROWS when no rule targets the selector, which is the
+    // answer this half wants — so the absence is read through the throw rather
+    // than through an empty array.
+    const hiddenByName = (per: string): boolean => {
+      try {
+        return declaredValues(desktop, `.shell-detail .${per}`, 'display').includes('none');
+      } catch {
+        return false;
+      }
+    };
+    const named = ['chat-back', 'accounts-back', 'mail-back', 'runs-back', 'settings-back']
+      .filter(hiddenByName);
+    expect(
+      named,
+      'hidden by its own name — the component class is what this rule should say',
+    ).toEqual([]);
   });
 });

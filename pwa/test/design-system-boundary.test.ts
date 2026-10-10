@@ -97,6 +97,12 @@ export const OWNED = [
   'well',                                                        // Well / WELL
   'chip',                                                        // Chip / CHIP (the dot is an <i>, not a class)
   'keycap',                                                      // Keycap / KEYCAP
+  // BackButton / BACK_BUTTON. The one app rule that selects it is
+  // `shell.css`'s desktop hide of every chevron inside `.shell-detail` —
+  // which is the whole reason the class exists: the rule used to name two of
+  // the five per-screen hook classes and three chevrons rendered against its
+  // own argument.
+  'back-btn',
   'msg-assist',                                                  // Prose / PROSE
   // THE ELEVEN THE LIST HAD MISSED, found by the derivation below rather than
   // by a reader. Every one is emitted by the composite named beside it and

@@ -31,11 +31,20 @@
 // choice, and shipping four controls that ignore it is not a design decision
 // worth preserving.
 //
-// Drift 1 is NOT fixed. Hiding three more controls on desktop is a visible
-// change to three screens and is the operator's call, not a refactor's — so
-// the per-screen hook class stays on every call site and `shell.css`'s two
-// rules keep matching exactly what they matched before. The asymmetry is now
-// legible in one place instead of being spread across two stylesheets.
+// Drift 1 is FIXED NOW, one wave later and on the operator's word, because
+// hiding three more controls on desktop is a visible change to three screens
+// and was not a refactor's call to make.
+//
+// WHAT MADE IT SAFE WAS ALREADY TRUE: `shell.css`'s rule is scoped to
+// `.shell-detail`, and `app.tsx` renders EVERY one of these screens inside
+// that node on desktop — session, archive, accounts, mail, runs, settings —
+// with `.shell-nav`'s fleet sidebar always mounted beside it. So the hide
+// cannot strand anybody: it only applies where the fleet is already on
+// screen, which is the shell's own stated reason.
+//
+// AND IT IS ONE RULE, not five. The two rules named two hook classes; naming
+// `back-btn` — this component's own class, above — means the next screen with
+// a chevron inherits the behaviour instead of being the fourth omission.
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
@@ -52,7 +61,15 @@ import { FOCUS_RING } from '../lib/focus';
 // effect, and reset.css:234 already sets `background-color: transparent` on
 // every button, so this declaration is explicit rather than load-bearing.
 export const BACK_BUTTON =
-  'flex-none min-w-tap min-h-tap border-none bg-transparent rounded-sm'
+  // `back-btn` IS A HOOK CLASS, and the one rule in shell.css that needs it is
+  // why it exists. The desktop shell hides the chevron inside `.shell-detail`
+  // — the fleet sidebar is always visible there, so an explicit way back out
+  // of the detail pane is redundant — and that rule used to name two of the
+  // five hook classes the call sites pass, so three chevrons rendered where
+  // the shell's own argument said they should not. A rule naming the COMPONENT
+  // cannot drift that way, and a sixth screen gets the behaviour for free.
+  'back-btn'
+  + ' flex-none min-w-tap min-h-tap border-none bg-transparent rounded-sm'
   + ' font-ui text-[26px] font-regular leading-none text-ink-secondary cursor-pointer'
   + ' [transition:transform_var(--dur-press)_var(--curve-swift),color_var(--dur-fast)_var(--curve-swift)]'
   + ' motion-reduce:transition-none'
