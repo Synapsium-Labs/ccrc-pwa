@@ -84,7 +84,25 @@ export function HistoryTab({ id, open, onClose }: {
     let live = true;
     setError(null);
     api.lifecycle(id)
-      .then((r) => { if (live) setResult(r); })
+      .then((r) => {
+        if (!live) return;
+        // CAST, NOT REVIVED. `api.lifecycle` is a bare `getJson<…>`, so what
+        // lands here is whatever the box sent: a build whose journal predates
+        // `gaps`, or a proxy answering `{}` with a 200, reaches this body
+        // without the arrays every branch below reads `.length` off — which
+        // is a white screen inside the sheet, thrown out of a `.then` nothing
+        // catches.
+        //
+        // And the answer is the ERROR arm, not an empty result: this
+        // component's own rule is that an unmeasured absence is not an empty
+        // history, and `{events: [], gaps: []}` would tell the reader this
+        // session has no journal rows — a claim nothing measured.
+        if (!Array.isArray(r?.events) || !Array.isArray(r?.gaps)) {
+          setError('the box answered in a shape this build cannot read');
+          return;
+        }
+        setResult(r);
+      })
       .catch((err: unknown) => { if (live) setError(apiErrorText(err)); });
     return () => { live = false; };
   }, [open, id]);

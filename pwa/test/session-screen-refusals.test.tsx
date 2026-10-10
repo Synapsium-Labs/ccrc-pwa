@@ -237,3 +237,115 @@ describe('the screen\'s own wiring — each prop is the store\'s act, not a copy
       'cleared on unmount, so the fleet screen keeps the plain offset').toBe('');
   });
 });
+
+// EVERY DOOR THIS SCREEN OPENS, IT CAN ALSO CLOSE.
+//
+// Six sheets hang off `SessionScreen`, each with its own `open` flag and its
+// own `onClose`, and the suite opened none of them: the six close callbacks
+// were uncovered functions (measured: 521, 551, 569, 592, 597, 598 and
+// `openTerminal` at 331, with this file 11/11 green). A sheet whose `onClose`
+// does not clear its flag cannot be dismissed at all — the scrim fades, vaul
+// unmounts the content, and the next render puts it straight back up, which
+// is the one failure a reader cannot work around.
+describe('the screen’s six sheets each close the flag that opened them', () => {
+  const openMenu = (): void => {
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+  };
+  /** vaul's dismissal is not always synchronous with the click, so the
+   *  assertion waits for the content to actually go (the same jsdom/vaul
+   *  timing note `abandon-sheet.test.tsx` carries). */
+  const dismiss = async (): Promise<void> => {
+    const scrims = screen.getAllByTestId('sheet-overlay');
+    fireEvent.click(scrims[scrims.length - 1]!);
+    await waitFor(() => expect(screen.queryAllByTestId('sheet-overlay').length)
+      .toBeLessThan(scrims.length));
+  };
+
+  it('the model picker opens from the menu and closes on the scrim', async () => {
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('Change model'));
+    expect(await screen.findByText('Choose a model')).toBeInTheDocument();
+    await dismiss();
+    await waitFor(() => expect(screen.queryByText('Choose a model')).toBeNull());
+  });
+
+  it('the effort picker is a SECOND sheet on the same flag, and closes the same way', async () => {
+    // One `picker` state, two sheets — so a close that cleared only the model
+    // arm would leave the effort sheet permanently up.
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('Change effort'));
+    expect(await screen.findByText('Reasoning effort')).toBeInTheDocument();
+    await dismiss();
+    await waitFor(() => expect(screen.queryByText('Reasoning effort')).toBeNull());
+  });
+
+  it('the swap sheet opens from the menu and closes', async () => {
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('Move to another account'));
+    const swap = await screen.findByText(/another account/i, { selector: '.sheet-title, h2, p' });
+    expect(swap).toBeInTheDocument();
+    await dismiss();
+  });
+
+  it('the archive sheet opens from the menu and closes', async () => {
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('Archive'));
+    await waitFor(() => expect(screen.queryByText('Change model')).toBeNull());
+    await dismiss();
+  });
+
+  it('the history tab opens from the menu and closes', async () => {
+    // Its own body, because this sheet FETCHES on open and the suite's
+    // blanket `{}` is a shape it refuses (see the case below).
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, events: [], gaps: [] }), { status: 200 })));
+    renderScreen();
+    openMenu();
+    fireEvent.click(await screen.findByText('History'));
+    // Its own title, not a scrim count: the menu and the tab are two sheets
+    // on one stack, and the menu's dismissal races the tab's mount — so the
+    // claim is that the TAB is up, and then that it is gone.
+    expect(await screen.findByText('What happened here')).toBeInTheDocument();
+    const scrims = screen.getAllByTestId('sheet-overlay');
+    fireEvent.click(scrims[scrims.length - 1]!);
+    await waitFor(() => expect(screen.queryByText('What happened here')).toBeNull());
+  });
+
+  it('the terminal drawer opens from its OWN keycap, not the menu, and closes', async () => {
+    // `openTerminal` is passed twice — to the header's keycap and to
+    // `DialogSheet`, which raises the terminal when a dialog needs the pane.
+    // One function, two call sites, and neither had a case.
+    renderScreen();
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
+    await waitFor(() => expect(screen.getAllByTestId('sheet-overlay').length).toBeGreaterThan(0));
+    await dismiss();
+  });
+});
+
+// A FOUND DEFECT, and the fix measured here. `api.lifecycle` is a bare
+// `getJson<LifecycleQueryResult>` — a CAST, not a revive — so what reaches
+// `HistoryTab` is whatever the box sent. A build whose journal predates
+// `gaps`, or a proxy answering `{}` with a 200, arrives without the arrays
+// every render branch reads `.length` off, and the throw comes out of a
+// `.then` nothing catches: a white screen inside the sheet. (Measured: before
+// the guard, the close case above failed with "An error occurred in the
+// <HistoryTab> component".)
+//
+// The answer is the ERROR arm rather than an empty result, because this
+// component's own rule — SessionScreen's `searchComplete` rule applied to the
+// journal — is that an unmeasured absence is not an empty history: rendering
+// "No journal rows for this session" would state a fact nothing measured.
+it('a lifecycle body with no arrays is reported, not rendered as an empty journal', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+  renderScreen();
+  fireEvent.click(screen.getByRole('button', { name: 'More' }));
+  fireEvent.click(await screen.findByText('History'));
+
+  expect(await screen.findByText(/shape this build cannot read/)).toBeInTheDocument();
+  expect(screen.queryByText(/No journal rows for this session/),
+    'an unmeasured absence was rendered as an empty history').toBeNull();
+});
