@@ -213,7 +213,7 @@ const CONTROLS: Record<string, string> = {
   'session/Composer.tsx <button> send-btn': 'TOKEN. Send.',
   'session/Composer.tsx <button> slash-item': 'TOKEN. A slash-command row — one of the six floors this wave converted from a literal.',
   'session/DialogSheet.tsx <button> dlg-details-toggle': 'TOKEN. The details disclosure.',
-  'session/DialogSheet.tsx <button> dlg-later': 'TOKEN. Both "Not now" rows, now rendered by TerminalCta.',
+  'session/EnvelopeSheet.tsx <button> dlg-later': 'TOKEN. Both "Not now" rows, rendered by TerminalCta — which lives beside the envelope sheet and is imported back by the controller.',
   'session/DialogSheet.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the reply field.',
   'session/DialogSheet.tsx <button> opt-preview-toggle': 'TOKEN. The option preview disclosure.',
 
