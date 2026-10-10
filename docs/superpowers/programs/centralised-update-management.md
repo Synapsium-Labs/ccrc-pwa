@@ -1194,6 +1194,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         and `server/test/macos-platform.test.ts`. Claim 1141 (ccrc-history's wave 3, run 354) holds `ccd/ccrc`.
       - STATUS: fleet and server v0.0.139, newest v0.0.140, backups fleet 148M/server 621M, disk free fleet 215G/work
         volume 247G/server 33G, no anomalies.
+    - **2026-10-10 21:42 UTC: v0.0.140, v0.0.141 and v0.0.142 converged.** No action was taken.
+      - v0.0.140 (#341) moved the fleet at 21:00 and the server at 21:02, 20 minutes after it was published. The
+        box-token programme's first live rotation followed at 21:04 and caused no 401.
+      - v0.0.141 (#340, docs) and v0.0.142 (#345, docs) were published at 21:11 and 21:12. The fleet moved straight
+        to v0.0.142 at 21:33 and the server at 21:35.
+      - Both boxes' `update.json` read `from: pwa`, the dispatcher's word for a console move. Its 21-minute lag
+        matches v0.0.140's auto move, but this check cannot tell a tap from auto.
+      - Across the server's restart the box token stayed on generation 3: doctor reads `PASS`, with no hold and no
+        failure.
+      - Wave 15 (run 300) is still held, by claims 1142 (`ccd/ccd`, `macos-platform.test.ts`) and 1141 (`ccd/ccrc`).
+      - STATUS: fleet and server v0.0.142, newest v0.0.142, backups fleet 164M/server 624M, disk free fleet 215G/work
+        volume 254G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
