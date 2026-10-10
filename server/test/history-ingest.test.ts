@@ -3371,3 +3371,348 @@ describe('FR2-e (D-4341): a numeric row timestamp beyond the Date range is NULL,
     } finally { db.close(); }
   });
 });
+
+
+// ── W1-B2 Task 7B: the substring belt in the index (spec §6.2 "The belt", §8.3 layer 4; rev 3.5; O59 store half) ──
+// The shapes B1 measured (review 351; fr2's "For the coordinator" items 1-2), through the real sweep: a stray ESC[ that
+// took a value's second character behind a mid-span ESC[0m (31 of 32 characters one term at 561609adc; 27 with a closing
+// sequence), and the value glued by `_`, `-` and letters. Terms are read through fts5vocab, so a value inside a longer
+// term is seen too. Each value ends in a digit, so the porter stemmer never rewrites the term that holds it.
+describe('O59 (W1-B2 Task 7B): the substring belt in the index (spec §6.2, §8.3 layer 4)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const E = String.fromCharCode(27);
+  const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const alnum = (n: number): string => Array.from(randomBytes(n), (b) => AL[b % 62]!).join('');
+  const mint = (): string => `QP${alnum(29)}7`;
+  const btSecret = (box: HistoryBox, name: string, body: string): string => {
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    const p = path.join(box.home, '.cc-secrets', name);
+    fs.writeFileSync(p, body, { mode: 0o600 });
+    return p;
+  };
+  const btMeta = (db: DatabaseSync, k: string): string | undefined =>
+    (db.prepare('SELECT v FROM meta WHERE k = ?').get(k) as { v: string } | undefined)?.v;
+  const btMatch = (db: DatabaseSync, q: string): number =>
+    (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(q) as { n: number }).n;
+  /** The longest stretch any blobs_fts term shares with `v` (terms are stored folded, so `v` is folded too). */
+  const btShared = (db: DatabaseSync, v: string): number => {
+    db.exec("CREATE VIRTUAL TABLE IF NOT EXISTS temp.btv USING fts5vocab(main, blobs_fts, 'row')");
+    const terms = (db.prepare('SELECT term FROM temp.btv').all() as { term: string }[]).map((r) => r.term);
+    const w = v.toLowerCase();
+    let best = 0;
+    for (const t of terms) for (let i = 0; i < w.length; i += 1) for (let j = i + best + 1; j <= w.length && t.includes(w.slice(i, j)); j += 1) best = j - i;
+    return best;
+  };
+  const btRows = (v: string): IxRow[] => [
+    IX.user(IX.uuidN(1), null, `zqbelt one w ${v[0]}${E}[0m${E}[${v.slice(1)} y`, 1),
+    IX.user(IX.uuidN(2), IX.uuidN(1), `zqbelt two w ${v[0]}${E}[0m${E}[${v.slice(1, 28)}${E}[0m${v.slice(28)} y`, 2),
+    IX.user(IX.uuidN(3), IX.uuidN(2), `zqbelt three ab_${v} end`, 3),
+    IX.user(IX.uuidN(4), IX.uuidN(3), `zqbelt four ab-${v}-tail end`, 4),
+    IX.user(IX.uuidN(5), IX.uuidN(4), `zqbelt five abP${v}x end`, 5),
+  ];
+  const btHint = (box: HistoryBox): void => {
+    fs.mkdirSync(path.join(box.root, 'spool'), { recursive: true });
+    spoolLine(box, IX.ID, { v: 1, ev: 'Stop', id: IX.ID });
+  };
+
+  it('a value known before its text is indexed: no term holds its width, the remnant is no MATCH, the blobs keep it, no meta row holds it, and every pass ends witnessed', async () => {
+    const { lib, sweep } = await IX.api();
+    const W = sweep as unknown as { beltWitness(db: DatabaseSync): string };
+    const box = IX.newBox('ccrc-hist-belt-a-');
+    try {
+      const v = mint();
+      btSecret(box, 'belt.env', `ZQ_BELT=${v}\n`);
+      const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try {
+        expect(btMatch(db, 'zqbelt'), 'CONTROL: the five rows are indexed').toBe(5);
+        expect(btShared(db, v)).toBeLessThan(lib.beltWidth(v));
+        expect(btMatch(db, `"${v.slice(1)}"`), 'the 31 characters the stray CSI left').toBe(0);
+        expect(IX.blobsHold(db, v.slice(1)), 'the store stays lossless').toBe(true);
+        expect(lib.parseBeltState(btMeta(db, lib.BELT_META))?.v, 'the belt state names this version').toBe(lib.BELT_VERSION);
+        for (const k of [lib.BELT_META, lib.REDACT_SOURCES_META, 'fts_rederive']) expect(btMeta(db, k) ?? '', k).not.toContain(v.slice(2, 10));
+      } finally { db.close(); }
+      // R-rollback's stamp: a tick that ingests after its re-derivation step still ends with its own writes witnessed,
+      // so the next tick reads no other build's hand in them.
+      fs.appendFileSync(p, IX.jsonl([IX.user(IX.uuidN(6), IX.uuidN(5), 'zqbelt six plain', 6)]));
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btMatch(db, 'zqbelt'), 'CONTROL: the tick ingested a row after its re-derivation step').toBe(6);
+        expect(lib.parseBeltState(btMeta(db, lib.BELT_META))?.w, 'the pass ends with its own writes witnessed').toBe(W.beltWitness(db));
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a value learned after its text was indexed: the generation rewrites every shape, the letter-glued one too, and the mark advances', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-b-');
+    try {
+      const v = mint();
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      let db = openStoreRO(box);
+      try { expect(btShared(db, v), 'CONTROL: indexed in clear, the value not known yet').toBe(32); } finally { db.close(); }
+      btSecret(box, 'late.env', `ZQ_LATE=${v}\n`);
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v)).toBeLessThan(lib.beltWidth(v));
+        expect(btMeta(db, 'fts_reindex_rid')).toBe(String((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r));
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a store a build without the belt wrote after B2 (a rollback to B1, then forward): the moved witness opens a belt generation, which rewrites its rows', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as { ftsTextOfBlob(z: Uint8Array, s: boolean, i: unknown, n: number): Promise<{ text: string | null }> };
+    const box = IX.newBox('ccrc-hist-belt-c-');
+    try {
+      const v = mint();
+      btSecret(box, 'belt.env', `ZQ_BELT=${v}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      let covered = '';
+      const w = store.openWriter(lib.historyPaths(box.home).dbFile);
+      try {
+        covered = (w.prepare('SELECT v FROM meta WHERE k = ?').get(lib.BELT_META) as { v: string }).v;
+        // What one B1 tick leaves (finding R22's interleave): its ingest wrote a blob and indexed it with the three
+        // layers alone, and its re-derivation rewrote an older row the same way. B1 never reads or writes fts_belt.
+        const bare = lib.makePairIndex((w.prepare('SELECT len, sha256 FROM redact_hashes').all() as { len: number; sha256: Uint8Array }[])
+          .map((p) => ({ len: Number(p.len), sha256: Buffer.from(p.sha256).toString('hex') })));
+        const first = Number((w.prepare('SELECT min(blob_id) AS b FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL').get() as { b: number }).b);
+        w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed) SELECT ?, codec, z, raw_len, 1 FROM blobs WHERE blob_id = ?')
+          .run(randomBytes(32), first);
+        const added = Number((w.prepare('SELECT max(blob_id) AS b FROM blobs').get() as { b: number }).b);
+        for (const id of [first, added]) {
+          const b = w.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?').get(id) as { z: Uint8Array; raw_len: number };
+          const t = await S.ftsTextOfBlob(b.z, false, bare, Number(b.raw_len));
+          w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(id);
+          if (t.text !== null) w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(id, lib.entryIndexText(t.text, bare));
+        }
+      } finally { w.close(); }
+      let db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'CONTROL: the rows the other build indexed hold the value').toBeGreaterThanOrEqual(lib.beltWidth(v));
+        expect(btMeta(db, lib.BELT_META), 'CONTROL: fts_belt still records every row covered').toBe(covered);
+        expect(lib.parseBeltState(covered)?.v, 'CONTROL: at this version').toBe(lib.BELT_VERSION);
+      } finally { db.close(); }
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v)).toBeLessThan(lib.beltWidth(v));
+        expect(lib.parseBeltState(btMeta(db, lib.BELT_META))?.v).toBe(lib.BELT_VERSION);
+        expect(lib.parseRederiveState(btMeta(db, 'fts_rederive'))?.belt, 'the completed belt generation is closed').toBeUndefined();
+        expect((db.prepare('SELECT n FROM counters WHERE name = ?').get(lib.BELT_COUNTERS.generations) as { n: number } | undefined)?.n,
+          'a due record (v: 0) is no event').toBeUndefined();
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a B1 store whose pair generation is open at upgrade: the first tick restarts it from cursor 0 as a belt generation, and that first belt generation is no event', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as { ftsTextOfBlob(z: Uint8Array, s: boolean, i: unknown, n: number): Promise<{ text: string | null }> };
+    const box = IX.newBox('ccrc-hist-belt-e-');
+    try {
+      const v = mint();
+      btSecret(box, 'belt.env', `ZQ_BELT=${v}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      const w = store.openWriter(lib.historyPaths(box.home).dbFile);
+      try {
+        // A B1 store (finding R15): every row as the three layers alone index it, no fts_belt, and B1's pair generation
+        // open past its first blob (`<top> <first> <end>` above a mark of 0, B1's grammar).
+        const bare = lib.makePairIndex((w.prepare('SELECT len, sha256 FROM redact_hashes').all() as { len: number; sha256: Uint8Array }[])
+          .map((p) => ({ len: Number(p.len), sha256: Buffer.from(p.sha256).toString('hex') })));
+        const rows = w.prepare('SELECT blob_id, z, raw_len FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL ORDER BY blob_id').all() as { blob_id: number; z: Uint8Array; raw_len: number }[];
+        for (const b of rows) {
+          const t = await S.ftsTextOfBlob(b.z, false, bare, Number(b.raw_len));
+          w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(b.blob_id);
+          if (t.text !== null) w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(b.blob_id, lib.entryIndexText(t.text, bare));
+        }
+        const top = Number((w.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r);
+        const end = Number((w.prepare('SELECT max(blob_id) AS b FROM blobs').get() as { b: number }).b);
+        w.prepare('DELETE FROM meta WHERE k = ?').run(lib.BELT_META);
+        const upsert = w.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v');
+        upsert.run('fts_reindex_rid', '0');
+        upsert.run('fts_rederive', `${top} ${rows[0]!.blob_id} ${end}`);
+      } finally { w.close(); }
+      let db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'CONTROL: the escape and letter shapes are terms again').toBe(32);
+        expect(lib.parseRederiveState(btMeta(db, 'fts_rederive'))?.cursor, 'CONTROL: B1\'s generation is open past the first blob').toBeGreaterThan(0);
+      } finally { db.close(); }
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'the first blob too: the walk began again at cursor 0').toBeLessThan(lib.beltWidth(v));
+        expect(lib.parseBeltState(btMeta(db, lib.BELT_META))?.v).toBe(lib.BELT_VERSION);
+        expect(lib.parseRederiveState(btMeta(db, 'fts_rederive'))?.belt, 'the completed belt generation is closed').toBeUndefined();
+        expect(btMeta(db, 'fts_reindex_rid'), 'its completion moved the mark').toBe(String((db.prepare('SELECT max(rowid) AS r FROM redact_hashes').get() as { r: number }).r));
+        expect((db.prepare('SELECT n FROM counters WHERE name = ?').get(lib.BELT_COUNTERS.generations) as { n: number } | undefined)?.n,
+          'a store with no state is no event').toBeUndefined();
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a value whose file was unreadable while a row was indexed is no longer covered, and its return opens a belt generation that rewrites that row', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-d-');
+    try {
+      const v = mint();
+      const file = btSecret(box, 'ret.env', `ZQ_RET=${v}\n`);
+      const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqbelt before the gap', 1)]));
+      IX.sweepTwice(box);
+      fs.chmodSync(file, 0o000);
+      try {
+        fs.appendFileSync(p, IX.jsonl([IX.user(IX.uuidN(2), IX.uuidN(1), `zqbelt gap abP${v}x end`, 2)]));
+        btHint(box);
+        const r = runSweep(box);
+        expect(r.code, r.stderr).toBe(0);
+      } finally { fs.chmodSync(file, 0o600); }
+      let db = openStoreRO(box);
+      try { expect(btShared(db, v), 'CONTROL: glued by letters, the row indexed in the gap holds the value').toBe(32); } finally { db.close(); }
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v)).toBeLessThan(lib.beltWidth(v));
+        expect((db.prepare('SELECT n FROM counters WHERE name = ?').get(lib.BELT_COUNTERS.generations) as { n: number } | undefined)?.n,
+          'the return is counted').toBe(1);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('a belt past BELT_GRAMS_MAX counts the units it left to layer 1 in redact_belt_overflow', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-f-');
+    try {
+      // 3000 forty-character values: 27 grams each at width 14, 81,000 in all, past BELT_GRAMS_MAX (65,536).
+      btSecret(box, 'many.env', Array.from({ length: 3000 }, (_, i) => `ZQ_MANY_${i}=QP${alnum(37)}7\n`).join(''));
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqbelt many', 1)]));
+      IX.sweepTwice(box);
+      const db = openStoreRO(box);
+      try {
+        expect((db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as { n: number }).n, 'CONTROL: the values were loaded').toBeGreaterThanOrEqual(3000);
+        expect((db.prepare('SELECT n FROM counters WHERE name = ?').get(lib.BELT_COUNTERS.overflow) as { n: number } | undefined)?.n ?? 0,
+          'the units past the bound are counted').toBeGreaterThan(0);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  // Finding V13: B1's writeChunk and sidecar path index a blob ALREADY stored whose fts_indexed is 0 (a row of
+  // non-searchable provenance stored it first, or the backfill passed over it, B1's D-4346), moving no id or meta.
+  it('a build without the belt that indexes a blob already stored moves only the index witness, and the next pass rewrites that row', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as {
+      ftsTextOfBlob(z: Uint8Array, s: boolean, i: unknown, n: number): Promise<{ text: string | null }>;
+      beltWitness(db: DatabaseSync): string;
+      stampBeltWitness(db: DatabaseSync): void;
+    };
+    const box = IX.newBox('ccrc-hist-belt-g-');
+    try {
+      const v = mint();
+      btSecret(box, 'belt.env', `ZQ_BELT=${v}\n`);
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(btRows(v)));
+      IX.sweepTwice(box);
+      let before = '';
+      const w = store.openWriter(lib.historyPaths(box.home).dbFile);
+      try {
+        // The state such a blob is in when B2 last stamped the store: stored, fts_indexed 0, no index row.
+        const first = Number((w.prepare('SELECT min(blob_id) AS b FROM blobs WHERE fts_indexed = 1 AND z IS NOT NULL').get() as { b: number }).b);
+        w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(first);
+        w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(first);
+        S.stampBeltWitness(w);
+        before = S.beltWitness(w);
+        // What B1's indexBlob then does, with the three layers alone: one index row, and fts_indexed 1.
+        const bare = lib.makePairIndex((w.prepare('SELECT len, sha256 FROM redact_hashes').all() as { len: number; sha256: Uint8Array }[])
+          .map((p) => ({ len: Number(p.len), sha256: Buffer.from(p.sha256).toString('hex') })));
+        const b = w.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?').get(first) as { z: Uint8Array; raw_len: number };
+        const t = await S.ftsTextOfBlob(b.z, false, bare, Number(b.raw_len));
+        expect(t.text, 'CONTROL: the blob decodes').not.toBeNull();
+        w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(first, lib.entryIndexText(t.text!, bare));
+        w.prepare('UPDATE blobs SET fts_indexed = 1 WHERE blob_id = ?').run(first);
+      } finally { w.close(); }
+      let db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'CONTROL: the row the other build indexed holds the value').toBeGreaterThanOrEqual(lib.beltWidth(v));
+        expect((JSON.parse(S.beltWitness(db)) as unknown[]).slice(0, 5), 'CONTROL: no blob id, pair, mark, re-derivation state or backfill step moved')
+          .toEqual((JSON.parse(before) as unknown[]).slice(0, 5));
+      } finally { db.close(); }
+      btHint(box);
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(btShared(db, v), 'the moved index witness opened a belt generation, which rewrote the row').toBeLessThan(lib.beltWidth(v));
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  // Finding V14: each part of the witness is pinned by the write that moves only it.
+  it('the witness moves with each value a build without the belt writes: a blob, a pair, the mark, the re-derivation state, the backfill step and an index row', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const W = sweep as unknown as { beltWitness(db: DatabaseSync): string };
+    const box = IX.newBox('ccrc-hist-belt-h-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqbelt witness parts', 1)]));
+      IX.sweepTwice(box);
+      const w = store.openWriter(lib.historyPaths(box.home).dbFile);
+      try {
+        const upsert = w.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v');
+        const first = Number((w.prepare('SELECT min(blob_id) AS b FROM blobs WHERE z IS NOT NULL').get() as { b: number }).b);
+        let added = 0;
+        const moves: [string, () => number][] = [
+          ['a blob it stores, unindexed', () => {
+            const n = Number(w.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed) SELECT ?, codec, z, raw_len, 0 FROM blobs WHERE blob_id = ?')
+              .run(randomBytes(32), first).changes);
+            added = Number((w.prepare('SELECT max(blob_id) AS b FROM blobs').get() as { b: number }).b);
+            return n;
+          }],
+          ['a pair it records', () => Number(w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?)').run(40, randomBytes(32), 1).changes)],
+          ['the mark its re-derivation moves', () => Number(upsert.run('fts_reindex_rid', '987654').changes)],
+          ['its re-derivation state', () => Number(upsert.run('fts_rederive', '987654 1 2').changes)],
+          ["its backfill's cursor", () => Number(w.prepare("UPDATE derivation_state SET cursor = '987654' WHERE step = 'fts' AND version = 1").run().changes)],
+          ['an index row for a blob already stored', () => Number(w.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(added, 'zqwitness parts').changes)],
+        ];
+        for (const [what, move] of moves) {
+          const was = W.beltWitness(w);
+          expect(move(), `CONTROL: ${what} was written`).toBe(1);
+          expect(W.beltWitness(w), what).not.toBe(was);
+        }
+      } finally { w.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  it('keeps redact_sources when the shim passes no paths after a roster-unreadable pass', async () => {
+    const { lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-belt-sources-');
+    try {
+      const p = btSecret(box, 'declared.env', `ZQ_DECLARED=${mint()}\n`);
+      expect(runSweep(box, [], { secrets: [p] }).code).toBe(0);
+      expect(runSweep(box, [], { secrets: [p] }).code).toBe(0);
+      let db = openStoreRO(box);
+      try {
+        expect(lib.parseRedactSources(btMeta(db, lib.REDACT_SOURCES_META)), 'CONTROL: declared source paths are recorded')
+          .toEqual([p]);
+      } finally { db.close(); }
+      const r = runSweep(box, ['--roster-unreadable'], { secrets: [], homes: [] });
+      expect(r.code, r.stderr).toBe(0);
+      db = openStoreRO(box);
+      try {
+        expect(lib.parseRedactSources(btMeta(db, lib.REDACT_SOURCES_META))).toEqual([p]);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+});

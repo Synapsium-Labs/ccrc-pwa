@@ -51,6 +51,8 @@ import {
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
   SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, entryIndexText, HEALTH_COUNTERS, RETENTION_STATE_META,
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
+  makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, parseBeltState, formatBeltState,
+  decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
@@ -3203,6 +3205,7 @@ export function recordTick(db, ctx, ing) {
     const behind = behindStats(db, ctx.homes);
     t.tickIns.run(ctx.nowMs, lagMs, ing === null ? 0 : ing.bytes, behind.files, behind.bytes);
     if (behind.files === 0) setMeta(db, 'last_zero_behind_ms', String(ctx.nowMs));
+    stampBeltWitness(db);   // W1-B2 Task 7B (R-rollback): the pass ends with every one of its own writes witnessed
   });
   try {
     appendJournal(ctx.home, ctx.ids, [journalRecord('tick', ctx.nowMs, { lag_ms: lagMs })], ctx.nowMs);
@@ -3473,6 +3476,8 @@ function secretStmts(db) {
     redactIns: db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?) ON CONFLICT(len, sha256) DO NOTHING'),
     outboxIns: db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)'),
     allPairs: db.prepare('SELECT len, sha256 FROM redact_hashes'),
+    restartStep: db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, 1, NULL, NULL)
+      ON CONFLICT(step, version) DO UPDATE SET cursor = NULL, completed_ms = NULL`),
   };
   SECRET_STMTS.set(db, q);
   return q;
@@ -3587,16 +3592,27 @@ export function recordPairs(db, home, ids, pairs, nowMs) {
  *  searched at the next tick no generation is open, and re-derived by the generation whose target covers
  *  it. The caller drops the values when the tick ends. */
 export function secretsStep(db, ctx, secretFiles) {
+  // §6.2 "The belt" (ruling R-rollback): record a due belt before this pass writes a witnessed value.
+  withTx(db, 'NORMAL', () => { recordBeltDueIfWitnessMoved(db); });
   const loaded = loadSecrets(ctx.home, secretFiles);
   const fresh = new Set(recordPairs(db, ctx.home, ctx.ids, loaded.pairs, ctx.nowMs).map((p) => `${p.len}:${p.sha256}`));
   const newValues = loaded.values.filter((v) => secretPairs([v]).pairs.some((p) => fresh.has(`${p.len}:${p.sha256}`)));
+  // §8.3 layer 4: the belt over every unit this tick loaded, held in memory only.
+  const belt = makeBelt(beltUnits(loaded.values));
   withTx(db, 'NORMAL', () => {
     if (loaded.unreadable.length > 0) bump(db, 'redact_source_unreadable', loaded.unreadable.length);
     if (loaded.unsegmentable > 0) bump(db, 'redact_value_unsegmentable', loaded.unsegmentable);
+    if (belt.overflow > 0) bump(db, BELT_COUNTERS.overflow, belt.overflow);
     setMeta(db, 'redact_unreadable', JSON.stringify(loaded.unreadable));
+    // A pass handed no declared paths keeps the last list: a stale path can only mask more.
+    if (secretFiles.length > 0) setMeta(db, REDACT_SOURCES_META, JSON.stringify([...secretFiles]));
   });
+  // The redact_hashes rowids of the belt's units: the belt state's live set (§6.2 "The belt").
+  const rid = derivStmts(db).pairRid;
+  const live = [...new Set(belt.texts.map((u) => Number(rid.get(u.length, Buffer.from(sha256Hex(u), 'hex'))?.rid ?? 0)).filter((r) => r > 0))]
+    .sort((a, b) => a - b);
   const all = secretStmts(db).allPairs.all().map((r) => ({ len: r.len, sha256: Buffer.from(r.sha256).toString('hex') }));
-  return { pairIdx: makePairIndex(all), newValues, values: loaded.values };
+  return { pairIdx: { ...makePairIndex(all, belt), beltLive: live }, newValues, values: loaded.values };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3897,6 +3913,44 @@ function rederiveSlice(budget) {
   return newBudget(budget.now, { maxMs: REDERIVE_SLICE_MS, maxBytes: REDERIVE_SLICE_BYTES });
 }
 
+/** The store's witness for the belt (§6.2 "The belt", ruling R-rollback): values a B1 build moves whenever it
+ * writes index state, including FTS5's bookkeeping for a row indexed after its blob was already stored. */
+export function beltWitness(db) {
+  const d = derivStmts(db);
+  const fts = d.sel.get(FTS_STEP, 1);
+  return JSON.stringify([
+    d.maxBlob.get().id ?? 0,  // witness (blob): its ingest stores a blob
+    d.pairTop.get().rid ?? 0,  // witness (pair): it records a pair, and only then does its phrase path write
+    getMeta(db, REINDEX_META) ?? '',  // witness (mark): its re-derivation completes
+    getMeta(db, REDERIVE_META) ?? '',  // witness (rederive): its re-derivation's cursor, or a generation of its own
+    fts === undefined ? null : [fts.cursor ?? null, fts.completed_ms ?? null],  // witness (backfill): ('fts', 1)
+    ftsIndexWitness(db),  // witness (index): every committed blobs_fts write
+  ]);
+}
+
+/** The FTS5 component of beltWitness. The averages and structure records change with committed index writes. */
+function ftsIndexWitness(db) {
+  if (db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts_data'").get() === undefined) return null;
+  const h = createHash('sha256');
+  for (const r of db.prepare('SELECT id, block FROM blobs_fts_data WHERE id IN (1, 10) ORDER BY id').all()) h.update(`${r.id}:`).update(r.block);
+  return h.digest('hex');
+}
+
+/** Stamp a parseable belt state after a pass has checked the previous witness and completed its writes. */
+export function stampBeltWitness(db) {
+  const s = parseBeltState(getMeta(db, BELT_META));
+  if (s === null) return;
+  const next = formatBeltState({ ...s, w: beltWitness(db) });
+  if (next !== getMeta(db, BELT_META)) setMeta(db, BELT_META, next);
+}
+
+/** Inside the caller's transaction, record a due belt before any witnessed write when another build moved its witness. */
+export function recordBeltDueIfWitnessMoved(db) {
+  const moved = beltWitnessMoved(parseBeltState(getMeta(db, BELT_META)), beltWitness(db));
+  if (moved) setMeta(db, BELT_META, formatBeltState({ v: 0, rids: [], gen: null }));
+  return moved;
+}
+
 /** The hash re-derivation that moves the re-index mark (§6.2 "A pair learned after its text was indexed", D-4344,
  *  history-reindex-mark-by-rederivation). A generation re-derives every FTS-indexed blob, in blob_id order, with the
  *  redaction's OWN code (`entryIndexText` over `ftsTextOfBlob`'s text, exactly as indexBlob does) through a probe
@@ -3921,10 +3975,31 @@ export async function rederiveFts(db, ctx, budget, slice = rederiveSlice(budget)
   if (ctx.fts !== true) return { state: 'idle', reindexed: 0 };
   const d = derivStmts(db);
   const mark = Number(getMeta(db, REINDEX_META) ?? 0);
-  const plan = rederivePlan(mark, d.pairTop.get().rid ?? 0, d.maxBlob.get().id ?? 0, parseRederiveState(getMeta(db, REDERIVE_META)));
-  if (plan === null) return { state: 'idle', reindexed: 0 };
-  // Built per call: pairs can grow between calls.
-  const idx = makeProbeIndex(d.pairRows.all().map((r) => ({ rid: r.rid, len: r.len, sha256: Buffer.from(r.sha256).toString('hex') })), mark);
+  // §6.2 "The belt": open a belt generation with no new pair, or restart one that lacks its versioned live set.
+  const live = ctx.pairIdx?.beltLive ?? [];
+  const beltNow = getMeta(db, BELT_META);
+  const stored = parseBeltState(beltNow);
+  const belt = decideBelt(stored, live, mark);
+  const prior = parseRederiveState(getMeta(db, REDERIVE_META));
+  const plan = rederivePlan(mark, d.pairTop.get().rid ?? 0, d.maxBlob.get().id ?? 0, prior, belt.due, belt.restart);
+  if (plan === null) {
+    const kept = formatBeltState({ ...belt.next, w: beltWitness(db) });
+    if (kept !== beltNow) withTx(db, 'NORMAL', () => { setMeta(db, BELT_META, kept); });
+    return { state: 'idle', reindexed: 0 };
+  }
+  // A generation records the live units at its open and makes the node belt step due (Task 29).
+  const opened = plan !== prior;
+  const next = opened ? { ...belt.next, gen: [...live], gv: BELT_VERSION } : belt.next;
+  if (opened) {
+    withTx(db, 'NORMAL', () => {
+      secretStmts(db).restartStep.run(BELT_NODES_STEP);
+      // A first generation and a v:0 due record are not flapping-file events (finding R15).
+      if (plan.belt === true && stored !== null && stored.v !== 0) bump(db, BELT_COUNTERS.generations);
+    });
+  }
+  // Built per call: pairs can grow between calls. Every layer-4 and glue-window hit counts as owed.
+  const idx = makeProbeIndex(d.pairRows.all().map((r) => ({ rid: r.rid, len: r.len, sha256: Buffer.from(r.sha256).toString('hex') })), mark,
+    { belt: ctx.pairIdx?.belt ?? null, beltAll: true });
   const f = ftsStmts(db);
   let cursor = plan.cursor;
   let reindexed = 0;
@@ -3944,8 +4019,10 @@ export async function rederiveFts(db, ctx, budget, slice = rederiveSlice(budget)
       // Only a group in which a row was removed or inserted reopens the merge step and counts as re-indexed: an undecodable
       // or over-cap blob keeps fts_indexed = 1, so every later generation pushes it again for a delete that answers 0 (M10, FU2).
       if (changed > 0) d.pending.run(MERGE_STEP, 1);
-      setMeta(db, REDERIVE_META, formatRederiveState({ ...plan, cursor }));
+      setMeta(db, REDERIVE_META, formatRederiveState(completed ? { target: plan.target, cursor, end: plan.end } : { ...plan, cursor }));
       if (completed) setMeta(db, REINDEX_META, String(plan.target));
+      // Measured after this transaction's own meta writes: never ahead of an index write, only behind or exact.
+      setMeta(db, BELT_META, formatBeltState({ ...(completed ? beltAfterGeneration(next) : next), w: beltWitness(db) }));
     });
     reindexed += changed;
     group = [];
