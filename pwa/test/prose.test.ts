@@ -19,11 +19,37 @@
 // `layer(components)` and also beats it) — so the computed value is `none`
 // either way, and was before this wave started.
 //
-// IT IS PRESERVED RATHER THAN FIXED because restoring the markers is a VISUAL
-// CHANGE, and this wave has none: every migration in it was measured to move
-// no pixel. Putting a disc back on every bullet in every assistant turn is a
-// design decision, and this is where it gets made deliberately instead of
-// slipping in under a refactor.
+// IT WAS PRESERVED FOR ONE WAVE AND IS NOW FIXED. Restoring the markers is a
+// visual change, and the wave that found it had none — every migration in it
+// was measured to move no pixel — so the decision was left to the operator
+// instead of slipping in under a refactor. The operator took it.
+//
+// WHAT WENT BACK: `list-style: disc outside` on `ul`, `decimal outside` on
+// `ol`, and the `circle`/`square` depth variants a UA stylesheet would have
+// supplied, so a nested list is distinguishable by its marker as well as by
+// its indent. In SEPARATE rules, because the `ul, ol` rule above carries
+// `color` and the contrast gate keys a rule by `<basename> <selector>`:
+// splitting that one in two would rekey every entry it owns for a change
+// that moves no colour. The gate stayed at 3456.
+//
+// ONE THEORY WAS WRONG AND THIS FILE IS WHY. The `ul, ol` rule is
+// `display: grid`, and a grid item is blockified — so the obvious second
+// cause was that the `li` had lost its marker BOX and `list-style` alone
+// would not bring it back. The browser measurement recorded above says
+// otherwise: `.msg-assist li` computes `display: list-item`, because
+// blockification maps `list-item` to itself. Measured beats reasoned, which
+// is the whole reason that measurement is in this header.
+// MEASURED, four mutations (baseline 6 passed):
+//
+//   | `list-style: disc outside` removed again            | 1 red |
+//   | the task list loses its `list-style: none`          | 1 red |
+//   | the `::marker` hue deleted                          | 1 red |
+//   | `list-style` added to the gate-keyed `ul, ol` rule  | 1 red |
+//
+// The fourth is the one that keeps the restoration where it belongs: putting
+// those declarations on the rule that carries `color` would rekey its
+// contrast-gate entries, so the guard refuses it even though the rendering
+// would be identical.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -53,33 +79,49 @@ describe('the reading measure is the rule that makes prose prose', () => {
   });
 });
 
-describe('markdown lists render without markers — preserved, not fixed', () => {
-  it('the preflight takes the markers away', () => {
+describe('markdown lists render their markers', () => {
+  it('the preflight still takes them away — that is the thing being answered', () => {
     const stripped = reset.replace(/\/\*[\s\S]*?\*\//g, '');
     expect(stripped).toMatch(/\bol,[\s\S]{0,40}\bul\b[\s\S]{0,80}list-style:\s*none/);
   });
 
-  it('and the prose rules never put them back', () => {
+  it('and the prose rules put them back, outside, with the depth variants', () => {
     const stripped = prose.replace(/\/\*[\s\S]*?\*\//g, '');
-    // The ONE `list-style` in this file is the task list's, which wants none:
-    // remark-gfm emits a checkbox and a disc beside it would be two markers.
-    const uses = [...stripped.matchAll(/list-style[^;]*;/g)].map((m) => m[0].trim());
-    expect(uses).toEqual(['list-style: none;']);
-    expect(stripped).toMatch(/\.contains-task-list \{[^}]*list-style: none/);
+    expect(stripped).toMatch(
+      /\.msg-assist ul \{ list-style-type: disc; list-style-position: outside; \}/);
+    expect(stripped).toMatch(
+      /\.msg-assist ol \{ list-style-type: decimal; list-style-position: outside; \}/);
+    // LONGHANDS, not the shorthand: written `list-style: disc outside` the
+    // minifier emitted `list-style: outside`, dropping `disc` as the initial
+    // value — correct, because the shorthand resets it to that same initial,
+    // but the declaration doing the work then cannot be found in the bundle.
+    expect(stripped).not.toMatch(/list-style: disc/);
+    expect(stripped).toMatch(/\.msg-assist ul ul \{ list-style-type: circle; \}/);
+    expect(stripped).toMatch(/\.msg-assist ul ul ul \{ list-style-type: square; \}/);
   });
 
-  it('while the stylesheet still tunes the colour of a marker nobody sees', () => {
-    // THE OTHER DIRECTION. If someone restores the markers, this assertion is
-    // what tells them the preserved defect is gone and this file should go
-    // with it — and if someone deletes this rule instead, the evidence that
-    // markers were intended goes with it, which is worse.
+  it('leaves the GFM task list markerless, and still wins on specificity', () => {
+    // remark-gfm emits a checkbox; a disc beside it would be two markers. The
+    // task-list rule is two classes (0,2,0) against `.msg-assist ul`'s one
+    // class and one element (0,1,1), so it wins wherever it applies — the
+    // restoration above cannot reach it. Both halves pinned: the rule, and
+    // the fact that it is the ONLY `list-style: none` left in the file.
+    const stripped = prose.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(stripped).toMatch(/\.contains-task-list \{[^}]*list-style: none/);
+    expect([...stripped.matchAll(/list-style:\s*none/g)]).toHaveLength(1);
+  });
+
+  it('keeps the marker hue the stylesheet always asked for', () => {
+    // THE EVIDENCE THE MARKERS WERE INTENDED, and now the rule that actually
+    // paints something. If it is ever deleted, the restoration above becomes
+    // a disc in the body ink, which is not what this palette asked for.
     expect(prose).toMatch(/\.msg-assist li::marker \{ color: var\(--ink-tertiary\); \}/);
   });
 
-  it('the move did not cause it — chat.css did not set list-style either', () => {
-    // Pinned against the shape of the old rule rather than against git: the
-    // list rule travelled verbatim, so the four declarations it DID carry are
-    // still exactly these, and `list-style` is still not among them.
+  it('did not disturb the rule the gate keys on', () => {
+    // The `ul, ol` rule is UNCHANGED, declaration for declaration — the
+    // restoration went into rules of its own precisely so this one keeps its
+    // selector, its `color`, and therefore its contrast-gate entries.
     expect(prose).toMatch(
       /\.msg-assist ul, \.msg-assist ol \{\s*padding-left: var\(--sp-5\);\s*display: grid;\s*gap: var\(--sp-2\);\s*color: var\(--ink-primary\);\s*\}/,
     );

@@ -88,6 +88,37 @@
     gap: var(--sp-2);
     color: var(--ink-primary);
   }
+  /* THE MARKERS, PUT BACK. The vendored preflight sets `ol, ul { list-style:
+     none }` and nothing here ever restored it, so the `::marker` rule below
+     has been colouring a marker that never rendered — measured in the browser
+     the first time Storybook drew these stories, and pinned in
+     `pwa/test/prose.test.ts` in both directions. Nobody tunes the hue of
+     something they meant to delete, which is why this is a repair and not a
+     redesign.
+
+     SEPARATE RULES, deliberately, rather than two more declarations on the
+     `ul, ol` rule above: that rule carries `color`, and the contrast gate
+     keys a rule by `<basename> <selector>` — splitting it in two would rekey
+     every entry it owns for a change that moves no colour at all. These carry
+     none, so the gate does not move.
+
+     `outside`, so the marker sits in the `--sp-5` padding the list already
+     has rather than eating into the text column. The depth variants are the
+     ones a UA stylesheet would have supplied; restoring them here keeps a
+     nested list distinguishable by its marker as well as by its indent.
+
+     LONGHANDS, NOT THE SHORTHAND, and the bundle is why. Written as
+     `list-style: disc outside` the minifier emitted `list-style: outside` —
+     it dropped `disc` as the initial value of `list-style-type`, which is
+     correct only because the SHORTHAND resets the omitted longhand to that
+     same initial. It works, but the declaration that does the work is then
+     invisible in the bundle and in any grep of it. The longhands survive
+     verbatim, which is what `pwa/test/prose.test.ts` reads and what a reader
+     chasing a missing bullet will find. */
+  .msg-assist ul { list-style-type: disc; list-style-position: outside; }
+  .msg-assist ol { list-style-type: decimal; list-style-position: outside; }
+  .msg-assist ul ul { list-style-type: circle; }
+  .msg-assist ul ul ul { list-style-type: square; }
   .msg-assist li::marker { color: var(--ink-tertiary); }
   .msg-assist li > ul, .msg-assist li > ol { margin-top: var(--sp-2); padding-left: var(--sp-4); }
 
