@@ -16,7 +16,7 @@ import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWi
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel, rollbackTargetRefusal, settledDoneDetail } from '../../../shared/api';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
-import { BackButton, Button, PHOSPHOR, SYSTEM, Skeleton, THEMES, elapsedWords, toast, type ThemeChoice, useNow } from '@ccrc/ui';
+import { BackButton, Button, PHOSPHOR, SYSTEM, Skeleton, THEMES, elapsedWords, toast, useNow } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { isManagedNode, planMove, rollbackBlockers, type MoveIntent, type PlannedMove, type RollbackBlocker } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
