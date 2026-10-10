@@ -146,9 +146,9 @@ const CONTROLS: Record<string, string> = {
   'fleet/NewSessionSheet.tsx acct-disclosure': 'TOKEN. The routing row disclosure.',
   'fleet/PasskeyNotice.tsx passkey-notice': 'TOKEN. A standing fact about the box, tappable to act on it.',
   'fleet/PoolList.tsx pool-row': 'TOKEN. Both rows of the pool picker.',
-  'fleet/ProjectCard.tsx proj-card-add': 'TOKEN, and OVERLAY below: the rule carries the token and the ::before carries the hit area.',
-  'fleet/ProjectCard.tsx proj-card-pool': "TOKEN. The card's pool tag.",
-  'fleet/ProjectCard.tsx proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
+  'fleet/ProjectCardHead.tsx proj-card-add': 'TOKEN, and OVERLAY below: the rule carries the token and the ::before carries the hit area.',
+  'fleet/ProjectCardHead.tsx proj-card-pool': "TOKEN. The card's pool tag.",
+  'fleet/ProjectCardHead.tsx proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
   'fleet/SessionLine.tsx sess-actions': 'TOKEN, and OVERLAY below.',
   'fleet/SessionMeta.tsx sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
   'fleet/SwapSheet.tsx acct-disclosure': "TOKEN. NewSessionSheet's disclosure rule, same class.",
@@ -225,7 +225,7 @@ const CONTROLS: Record<string, string> = {
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */
 const OVERLAYS: Record<string, string> = {
-  'fleet/ProjectCard.tsx proj-card-add': '.proj-card-add::before',
+  'fleet/ProjectCardHead.tsx proj-card-add': '.proj-card-add::before',
   'fleet/SessionLine.tsx sess-actions': '.sess-actions::before',
 };
 

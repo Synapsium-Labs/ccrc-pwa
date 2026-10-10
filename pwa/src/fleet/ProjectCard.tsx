@@ -17,14 +17,15 @@ import type { ReactNode } from 'react';
 import { BareRow, Button } from '@ccrc/ui';
 import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RosterWire, RunSummary } from '../../../shared/api';
 import { repoLabel } from '../../../shared/api';
-import { accountColorVar, accountLabel } from '../lib/accounts';
+import { accountLabel } from '../lib/accounts';
 import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
 import { coordPresence, type CoordPresence } from './coordWords';
 import { formatElapsed } from './formatReset';
-import { releasedByProgramme, type FleetGroup, type FleetPin } from './groupFleet';
+import { releasedByProgramme, type FleetGroup } from './groupFleet';
 import { archivableReleased } from './archiveReleased';
 import { nestFleet, type FleetRow } from './nestFleet';
+import { ProjectCardHead } from './ProjectCardHead';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, crossingNote, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
 import './fleet.css';
@@ -76,58 +77,6 @@ export type ProjectPlacementRead =
 export const poolOfPlacement = (read: ProjectPlacementRead): ProjectPoolWire | null =>
   read.kind === 'measured' ? read.pool : null;
 
-/** The project's measured route pool as one chip. A non-measured read yields
- *  no pool and therefore no chip. Unrecognised residue means this app is older
- *  than the fleet, not a tag that can be diagnosed as unreadable or malformed. */
-function PoolChip({ pool, project, dim, onTap }: {
-  pool: ProjectPoolWire;
-  project: string;
-  dim: boolean;
-  onTap: ((project: string) => void) | undefined;
-}): ReactNode {
-  const path = `~/.cc-sessions/pools/${project}`;
-  const unrecognised = !['tagged', 'untagged', 'malformed', 'unreadable'].includes(pool.state);
-  const word =
-    pool.state === 'tagged' ? pool.name
-    : pool.state === 'untagged' ? 'no pool'
-    : pool.state === 'malformed' ? 'pool malformed'
-    : pool.state === 'unreadable' ? 'pool unreadable'
-    : 'app older than fleet; reload';
-  const label =
-    pool.state === 'tagged' ? `project pool ${pool.name}`
-    : pool.state === 'untagged' ? 'no project pool — any account may serve this project'
-    : pool.state === 'malformed' ? `project pool tag is malformed — rewrite ${path} as one pool name`
-    : pool.state === 'unreadable' ? `project pool tag could not be read — check permissions on ${path}`
-    : 'app bundle is older than the fleet; reload to understand this project pool';
-  const dataPool = unrecognised ? 'unrecognised' : pool.state;
-  // A span when there is nowhere to go: no handler, a fleet whose ccd would
-  // answer 501, or a newer fleet state this app cannot safely edit.
-  if (dim || onTap === undefined || unrecognised) {
-    return (
-      <span
-        className="proj-card-pool"
-        data-pool={dataPool}
-        data-dim={dim || undefined}
-        aria-label={label}
-        title={dim ? POOL_UNAVAILABLE_TEXT : label}
-      >
-        {word}
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      className="proj-card-pool"
-      data-pool={dataPool}
-      aria-label={label}
-      title={label}
-      onClick={() => onTap(project)}
-    >
-      {word}
-    </button>
-  );
-}
 
 function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): ReactNode {
   const spawn = dispatchWindow(run, nowMs);
@@ -151,25 +100,6 @@ function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): React
   );
 }
 
-/** The header's pin chip. Nothing at all on an empty card: `mixed` is a claim
- *  about disagreement, and zero sessions do not disagree (D-3010). */
-function PinChip({ pin, roster }: { pin: FleetPin; roster: readonly RosterWire[] }): ReactNode {
-  if (pin.state === 'empty') return null;
-  if (pin.state === 'mixed') {
-    return (
-      <span className="proj-card-pin" data-mixed aria-label="pinned accounts differ">mixed</span>
-    );
-  }
-  return (
-    <span
-      className="proj-card-pin"
-      aria-label={`pinned to ${accountLabel(roster, pin.home)}`}
-      style={{ color: `var(${accountColorVar(roster, pin.home)})` }}
-    >
-      {accountLabel(roster, pin.home)}
-    </span>
-  );
-}
 
 export function ProjectCard({
   group,
@@ -513,21 +443,26 @@ export function ProjectCard({
     return own !== null && cardRepo !== null && own !== cardRepo ? own : null;
   };
 
+  /** ONE spelling of this card's eight-prop `SessionLine` call. It was
+   *  written out three times — here, in the released fold and in the archived
+   *  fold — which is three places that have to agree about what a row on THIS
+   *  card knows: its pool, its run door and whether its repo needs saying. */
+  const line = (s: FleetSession): ReactNode => (
+    <SessionLine
+      key={s.id}
+      session={s}
+      onOpen={onOpen}
+      selected={s.id === selectedId}
+      onActions={onActions}
+      roster={roster}
+      projectPool={poolOf(s)}
+      onOpenRun={openRunFor(s)}
+      repo={repoOf(s)}
+    />
+  );
+
   const rowBody = (row: FleetRow): ReactNode =>
-    row.kind === 'session' ? (
-      <SessionLine
-        session={row.session}
-        onOpen={onOpen}
-        selected={row.session.id === selectedId}
-        onActions={onActions}
-        roster={roster}
-        projectPool={poolOf(row.session)}
-        onOpenRun={openRunFor(row.session)}
-        repo={repoOf(row.session)}
-      />
-    ) : (
-      <PendingSpawn run={row.run} nowMs={nowMs} />
-    );
+    row.kind === 'session' ? line(row.session) : <PendingSpawn run={row.run} nowMs={nowMs} />;
 
   return (
     <section
@@ -535,74 +470,18 @@ export function ProjectCard({
       data-collapsed={collapsed || undefined}
       data-holds-selection={holdsSelection || undefined}
     >
-      <div className="proj-card-head">
-        <button
-          type="button"
-          className="proj-card-toggle"
-          aria-expanded={!collapsed}
-          onClick={() => onToggle?.(group.project)}
-        >
-          <span className="proj-card-chevron" aria-hidden="true">
-            {collapsed ? '▸' : '▾'}
-          </span>
-          <span className="proj-card-name">{group.project}</span>
-          {/* A badge that reads `1` on every card carries no information. Every
-              project on the live fleet holds exactly one session. */}
-          {group.sessions.length > 1 && (
-            <span className="proj-card-count">{group.sessions.length}</span>
-          )}
-          {/* The account this project is PINNED to (ccd `home`), which is not
-              necessarily where any of its sessions is running — that is on the
-              line. `mixed` when the sessions disagree: a header asserting one
-              account while two lines show two different ones would be a lie,
-              and divergent pins across one project is worth noticing. */}
-          <PinChip pin={group.pin} roster={roster} />
-          {/* A fold must not hide a session stranded with no valid destination. */}
-          {group.stranded > 0 && (
-            <span className="proj-card-stranded">{group.stranded} stranded</span>
-          )}
-          {/* Collapsed or not: a fold must never be able to hide a pending
-              dialog, which is the one thing this screen exists to surface. */}
-          {group.attention && (
-            <span className="proj-card-attn" aria-label="waiting on you" role="img">
-              ●
-            </span>
-          )}
-          {/* Attention is an interrupt and shows folded or not; busy is ambient
-              and shows only when the fold has hidden the rows that carry it.
-              A WORD, never a second dot — two ● glyphs differing only in hue
-              sit at 1.06:1 luminance and would make "quietly working, ignore"
-              and "blocked, waiting on you" indistinguishable in greyscale. */}
-          {collapsed && group.busy > 0 && (
-            <span className="proj-card-busy">
-              {group.busy > 1 ? `${group.busy} working` : 'working'}
-            </span>
-          )}
-        </button>
-
-        {/* A sibling, never a descendant of the project fold button: nested
-            controls are invalid and inaccessible to Safari/VoiceOver. */}
-        {pool !== null && (
-          <PoolChip pool={pool} project={group.project} dim={poolDim} onTap={onPool} />
-        )}
-
-        {onAddWorkspace && (
-          <button
-            type="button"
-            className="proj-card-add"
-            /* The project-specific forecast lives in the accessible name and
-               tooltip, not in the layout: its visible form took 41% of this
-               header and clipped in the desktop sidebar. The accounts strip
-               above already shows headroom for every account in more detail. */
-            aria-label={addLabel}
-            title={addLabel}
-            onClick={() => onAddWorkspace(group.project)}
-            disabled={adding}
-          >
-            <span aria-hidden="true">+</span>
-          </button>
-        )}
-      </div>
+        <ProjectCardHead
+          group={group}
+          collapsed={collapsed}
+          onToggle={onToggle}
+          roster={roster}
+          pool={pool}
+          poolDim={poolDim}
+          onPool={onPool}
+          onAddWorkspace={onAddWorkspace}
+          addLabel={addLabel}
+          adding={adding}
+        />
 
       {!collapsed && (
         <div className="proj-card-body">
@@ -682,9 +561,7 @@ export function ProjectCard({
                   <div className="proj-released-heading">
                     {p.title !== null && p.title !== p.program ? `${p.program} · ${p.title}` : p.program}
                   </div>
-                  {p.sessions.map((s) => (
-                    <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={poolOf(s)} onOpenRun={openRunFor(s)} repo={repoOf(s)} />
-                  ))}
+                  {p.sessions.map(line)}
                 </div>
               ))}
               {onArchiveReleased !== undefined && releasedArchivable > 0 && (
@@ -727,9 +604,7 @@ export function ProjectCard({
           </BareRow>
           {archivedOpen && (
             <div className="proj-archived-body">
-              {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={poolOf(s)} onOpenRun={openRunFor(s)} repo={repoOf(s)} />
-              ))}
+              {group.archived.map(line)}
             </div>
           )}
         </div>
