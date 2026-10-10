@@ -167,6 +167,32 @@ describe.skipIf(!LINUX)('a witness whose leaf is gone, beside a quarantine slot 
   });
 });
 
+describe.skipIf(!LINUX)('a PRESENT leaf beside a quarantine slot of its id that NO record names (departure fresh-collect-refuses-beside-a-standing-slot)', () => {
+  // The slot may hold an earlier leaf of the id. Collecting the present one would drop the witness and take the id out
+  // of the population, leaving that slot for no audit to list again: the fresh arm refuses, TERMINAL.
+  const slotFor = (id: string): string => path.join(quarantineOf(h), `slot.${id}.1791000000000000000.4242`);
+
+  it('refused quarantine-kept at the audit and at the verb — the witness, the slot and the present leaf as they were', () => {
+    const o = makeOrphan(h);
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    fs.mkdirSync(path.join(slotFor(COL_ID), 'leaf'), { recursive: true, mode: 0o700 });
+    const earlier = inoAt(path.join(slotFor(COL_ID), 'leaf'));
+    expect(auditDoc()['verdict'], 'the audit').toBe('quarantine-kept');
+    const r = collectVerb(h, WRONG_TOKEN, { pre: GAP_LOG });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const doc = docOf(r.stdout);
+    expect(doc['refused']).toBe('quarantine-kept');
+    expect(String(doc['detail'])).toMatch(/^kept as it stands, listed for the operator, and the witness of demo-quiet-reef stays: /);
+    expect(gaps(h), 'refused at the verdict point').toEqual(['locked']);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness, kept').toBe(o.witness);
+    expect(inoAt(path.join(slotFor(COL_ID), 'leaf')), 'the slot and what it holds, untouched').toBe(earlier);
+    expect(inoAt(o.leaf), 'the present leaf, where it was').toBe(o.ino);
+    expect(records(h), 'no record was written').toEqual([]);
+    expect(slots(h), 'no slot was made').toEqual([path.basename(slotFor(COL_ID))]);
+    expect(rows(), 'the audit’s and the verb’s refusal').toEqual([['refused', 'quarantine-kept'], ['refused', 'quarantine-kept']]);
+  });
+});
+
 describe.skipIf(!LINUX)('the stop arms before the move', () => {
   it.skipIf(ROOT)('a witness-only drop whose compare-and-drop cannot move the witness aside: failed probe-unmeasured — nothing removed, the witness kept', () => {
     const o = makeOrphan(h);

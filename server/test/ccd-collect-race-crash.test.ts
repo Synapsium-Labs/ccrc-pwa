@@ -2,7 +2,9 @@
 // written FIRST and dropped LAST, so a crash at any point leaves it, and it — not the witness, not the journal — is the
 // authority the next audit resumes from. Each case kills the verb at one point, checks the invariants at the instant
 // of death (no slot without its record; the leaf's inode in exactly one place), then runs "the next audit and verb" to
-// quiescence: the job is finished, and nothing but the record's own inode was removed. Then the witness is rewritten,
+// quiescence: the job is finished, and nothing but the record's own inode was removed. A kill before the move leaves
+// the leaf at its id, so a pass there is a fresh collection, which a forged slot of the id that no record names holds
+// at `quarantine-kept` until the operator clears it (fresh-collect-refuses-beside-a-standing-slot). Then the witness is rewritten,
 // dropped and deleted under a standing record: the record is found whatever the witness says. And the record itself is
 // lost out of band while its slot stands: the slot is the operator's, listed on every audit, never dropped in silence.
 // Last, one stated residual is pinned as it stands: a crash at `moved` after a recycled spawn adopted the leaf.
@@ -28,23 +30,25 @@ const ours = (): string[] => slotsOf(h).filter((s) => s !== DECOY);
 const at = (p: (typeof POINTS)[number]): number => POINTS.indexOf(p);
 
 /** What a resume must never touch: another id's witnessed orphan, and a slot carrying THIS id's own name that no
- *  record names — a slot with no record is never visited. */
-const plantDecoys = (): { other: Orphan; forged: string } => {
-  const other = orphanLeaf(h, OTHER);
+ *  record names — a slot with no record is never visited. The forged slot is planted AFTER the kill: beside a present
+ *  leaf it stops a FRESH collection (departure fresh-collect-refuses-beside-a-standing-slot), so with it standing first
+ *  the audit would mint no token to kill a verb with. */
+const plantForged = (): string => {
   const forged = path.join(quarantineOf(h), DECOY, 'leaf');
   fs.mkdirSync(forged, { recursive: true });
   fs.chmodSync(quarantineOf(h), 0o700);
   fs.writeFileSync(path.join(forged, 'keep'), 'not the record\'s\n');
-  return { other, forged };
+  return forged;
 };
 
 describe.skipIf(!LINUX || !NO_COPY)('killed after each step: the next audit finds the record and finishes — removing only its inode', () => {
   it.each(POINTS.map((p, i) => [p, i] as const))('killed at `%s`', (point, i) => {
     const o = orphanLeaf(h);
-    const d = plantDecoys();
+    const other = orphanLeaf(h, OTHER);
     const r = collectVerb(h, tokenOf(h), COL_ID, crashAt(point));
     expect(crashedAt(h), 'the CONTROL: the kill fired where it was aimed').toBe(point);
     expect(docOf(r.stdout)['collected'], 'a killed verb reports nothing').toBeUndefined();
+    const forged = plantForged();
 
     // AT THE INSTANT OF DEATH.
     custodyHolds(h, COL_ID, [DECOY]);
@@ -61,6 +65,20 @@ describe.skipIf(!LINUX || !NO_COPY)('killed after each step: the next audit find
     const first = collectAudit(h);
     if (recorded) expect(docOf(first.stdout)['verdict'], 'a standing record is never "nothing to collect"').not.toBe('not-witnessed');
     expect(fs.existsSync(witnessOf(h)), 'the audit writes nothing').toBe(i < at('witnessed'));
+    if (i < at('moved')) {
+      // THE LEAF NEVER LEFT ITS ID: with no record, or once an `unmoved` resume has cleared its record and slot, the
+      // next pass is a FRESH collection, and the forged slot of this id stands beside the leaf — so it refuses
+      // `quarantine-kept`, listed, and takes nothing. Once the operator clears that slot, the pass finishes.
+      const held = settle(h);
+      expect(held.map((x) => verdictOf(x)), shownRounds(held))
+        .toEqual(recorded ? ['collectable', 'quarantine-kept'] : ['quarantine-kept']);
+      expect(devinoOf(o.leaf), 'the leaf stands at its id').toBe(o.devino);
+      expect(fs.existsSync(witnessOf(h)), 'and its witness').toBe(true);
+      expect(recordsOf(h), 'no record').toEqual([]);
+      expect(ours(), 'no slot of the collector’s').toEqual([]);
+      expect(fs.readFileSync(path.join(forged, 'keep'), 'utf8'), 'a slot no record names is never visited').toBe('not the record\'s\n');
+      fs.rmSync(path.dirname(forged), { recursive: true });
+    }
     const rounds = settle(h);
     expect(lastVerdict(rounds), shownRounds(rounds)).toBe('not-witnessed');
     expect(devinoOf(o.leaf), 'collected').toBeNull();
@@ -69,8 +87,10 @@ describe.skipIf(!LINUX || !NO_COPY)('killed after each step: the next audit find
     expect(fs.existsSync(witnessOf(h)), 'no witness').toBe(false);
 
     // NOTHING BUT THE RECORD'S INODE WAS REMOVED.
-    expect(fs.readFileSync(path.join(d.forged, 'keep'), 'utf8'), 'a slot no record names is never visited').toBe('not the record\'s\n');
-    expect(devinoOf(d.other.leaf), 'another id\'s orphan is untouched').toBe(d.other.devino);
+    if (i >= at('moved')) {
+      expect(fs.readFileSync(path.join(forged, 'keep'), 'utf8'), 'a slot no record names is never visited').toBe('not the record\'s\n');
+    }
+    expect(devinoOf(other.leaf), 'another id\'s orphan is untouched').toBe(other.devino);
     expect(witnessField(h, 'run', OTHER), 'and so is its witness').toBe(DEAD_RUN);
   }, 240_000);
 });

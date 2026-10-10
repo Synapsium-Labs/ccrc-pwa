@@ -1,8 +1,8 @@
 // `ws-audit --collect`'s FRESH rungs, one by one and in order (the temp-root collector, spec §5.10): registered,
-// witness-mismatch, changed-recently, in-use, containment-unproven, paused. The first that does not pass ends the
-// evaluation, and a probe that cannot answer ends it as unmeasured, naming itself. A witness whose leaf is proven
-// gone is its own answer. FIXTURE HOME ONLY (`collectFixture.ts`). Linux only: the collector measures nothing
-// elsewhere, and the in-use cases run real processes.
+// quarantine-kept (a slot of the id that no record names), witness-mismatch, changed-recently, in-use,
+// containment-unproven, paused. The first that does not pass ends the evaluation, and a probe that cannot answer ends
+// it as unmeasured, naming itself. A witness whose leaf is proven gone is its own answer. FIXTURE HOME ONLY
+// (`collectFixture.ts`). Linux only: the collector measures nothing elsewhere, and the in-use cases run real processes.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -246,6 +246,59 @@ describe.skipIf(!LINUX)('the quarantine: the audit asks what the verb refuses on
       + ' _orig_absent "$@"; };';
     expectUnmeasured(collectAudit(h, { pre: `${AGED} ${seam}` }), 'whether the quarantine stands was never asked');
     expect(fs.existsSync(quarantineOf(h))).toBe(false);
+  }, 60_000);
+});
+
+// A RECORDLESS SLOT BESIDE A PRESENT LEAF (spec §5.10, departure fresh-collect-refuses-beside-a-standing-slot): a slot
+// of the id that no record names may hold an earlier leaf of it. Collecting the present leaf would drop the witness,
+// the id would leave the population, and that slot would never be listed again — so the fresh arm refuses, TERMINAL,
+// and the witness stays beside it. Asked right after the quarantine question, before the leaf's own words.
+describe.skipIf(!LINUX)('quarantine-kept: a present leaf beside a slot of its id that no record names', () => {
+  const slotFor = (id: string): string => path.join(quarantineOf(h), `slot.${id}.1791000000000000000.4242`);
+
+  it('refused quarantine-kept: TERMINAL, journaled, the slot named — the witness, the slot and the leaf as they were', () => {
+    const { leaf } = makeOrphan(h);
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    fs.mkdirSync(path.join(slotFor(COL_ID), 'leaf'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(slotFor(COL_ID), 'leaf', 'earlier.txt'), 'an earlier leaf of the id\n');
+    const witness = fs.readFileSync(witnessOf(h), 'utf8');
+    const a = collectAudit(h, { pre: AGED });
+    expect(a.code, a.stderr).toBe(0);
+    expect(verdictOf(a)).toBe('quarantine-kept');
+    expect(String(a.doc!['detail'])).toBe(`kept as it stands, listed for the operator, and the witness of ${COL_ID} stays:`
+      + ` the quarantine slot ${path.basename(slotFor(COL_ID))} stands with no record naming it, and the leaf at ${leaf}`
+      + ' is not collected beside it');
+    expect(a.doc!['token']).toBeUndefined();
+    expect(refusalsOf(h.home)).toEqual([{ act: 'collect', token: 'quarantine-kept' }]);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'the witness').toBe(witness);
+    expect(fs.readFileSync(path.join(slotFor(COL_ID), 'leaf', 'earlier.txt'), 'utf8')).toBe('an earlier leaf of the id\n');
+    expect(fs.existsSync(path.join(leaf, 'cdk.out', 'manifest.json')), 'the leaf').toBe(true);
+  }, 60_000);
+
+  it('it outranks the leaf’s own words: a recordless slot beside a REPLACED leaf is quarantine-kept, not witness-mismatch', () => {
+    makeOrphan(h);
+    replaceLeaf(h);
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    fs.mkdirSync(slotFor(COL_ID), { mode: 0o700 });
+    expect(verdictOf(collectAudit(h, { pre: AGED }))).toBe('quarantine-kept');
+  }, 60_000);
+
+  it('a NESTED id’s slot is another id’s: not counted — the present leaf is collectable', () => {
+    makeOrphan(h);
+    fs.mkdirSync(quarantineOf(h), { mode: 0o700 });
+    fs.mkdirSync(slotFor(`${COL_ID}.v2-quiet-river`), { mode: 0o700 });
+    expect(verdictOf(collectAudit(h, { pre: AGED }))).toBe('collectable');
+  }, 60_000);
+
+  it('slots that cannot be listed: unmeasured `quarantine`, never "no slot"', () => {
+    makeOrphan(h);
+    const a = collectAudit(h, { pre: `${AGED} _ws_collect_slots_of() { _WS_QSLOTS=(); _WS_QSLOTS_WHY='stub: the quarantine could not be listed'; return 2; };` });
+    expect(a.code, a.stderr).toBe(1);
+    expect(verdictOf(a)).toBe('unmeasured');
+    expect(collectOf(a)['unmeasured']).toBe('quarantine');
+    expect(String(a.doc!['detail'])).toContain('stub: the quarantine could not be listed');
+    expect(a.doc!['token']).toBeUndefined();
+    expect(readJournal(h.home)).toEqual([]);
   }, 60_000);
 });
 

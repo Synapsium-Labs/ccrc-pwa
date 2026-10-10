@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8a60e0b2d752df27b41f10f1d609c70e093409a8cdbd0ce78ed2e144c9d20b52
+# ccrc:generated 1 sha256=159a56a7036f63ed72a1de5a0a5479757ee8c23eacc6b6135f3d19aef5dac0ae
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32946,6 +32946,15 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   # from what it holds (spec §5.10).
   _ws_collect_qcheck \
     || { _ws_collect_unmeasured quarantine "$_WS_Q_WHY — no leaf is licensed to move into it, and the next pass asks again"; return 1; }
+  # A SLOT OF THE ID THAT NO RECORD NAMES (the fork found none) may hold an
+  # earlier leaf of it. Collecting this one would drop the witness and take
+  # the id out of the population, and that slot would be listed by no audit
+  # again: TERMINAL, as on the absent arm, and asked before the leaf's own
+  # words, so the slot is never orphaned by the collector in silence.
+  _ws_collect_slots_of "$id"; rc=$?
+  (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
+  (( ${#_WS_QSLOTS[@]} == 0 )) \
+    || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
   [[ -d "$leaf" && ! -L "$leaf" ]] \
     || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory its witness names; it is offered to the operator"; return 1; }
   _ws_collect_ident "$leaf" "$_WS_WIT_DEV:$_WS_WIT_INO" "$_WS_WIT_BTIME"; rc=$?

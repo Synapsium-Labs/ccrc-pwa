@@ -94,16 +94,23 @@ describe.skipIf(!LINUX || !NO_COPY)('a forged record or slot is never taken — 
     expect(keptListed()).toBeGreaterThanOrEqual(1);
   }, 180_000);
 
-  it('a FORGED SLOT with no record — a directory named like this id\'s slot: never visited; the id\'s own leaf is collected around it', () => {
+  // A slot no record names may hold an earlier leaf of the id, so the present leaf is never collected beside it
+  // (departure fresh-collect-refuses-beside-a-standing-slot): collecting it would drop the witness, the id would leave
+  // the population, and the slot would be listed by no audit again.
+  it('a FORGED SLOT with no record — a directory named like this id\'s slot: never visited, and the id\'s own leaf is not collected beside it: `quarantine-kept`, listed', () => {
     const o = orphanLeaf(h);
     const forged = path.join(quarantineOf(h), `slot.${COL_ID}.1.1`, 'leaf');
     fs.mkdirSync(forged, { recursive: true });
     fs.chmodSync(quarantineOf(h), 0o700);
     fs.writeFileSync(path.join(forged, 'precious.txt'), 'planted\n');
+    const witness = fs.readFileSync(witnessOf(h), 'utf8');
     const rounds = settle(h);
-    expect(lastVerdict(rounds), shownRounds(rounds)).toBe('not-witnessed');
-    expect(devinoOf(o.leaf), 'the witnessed leaf was collected').toBeNull();
+    expect(verdictOf(rounds[0]), shownRounds(rounds)).toBe('quarantine-kept');
+    expect(rounds, 'no token: nothing was ever spent').toHaveLength(1);
+    expect(devinoOf(o.leaf), 'the witnessed leaf stands').toBe(o.devino);
+    expect(fs.readFileSync(witnessOf(h), 'utf8'), 'its witness stays').toBe(witness);
     expect(fs.readFileSync(path.join(forged, 'precious.txt'), 'utf8'), 'the unrecorded slot is untouched').toBe('planted\n');
+    expect(keptListed(), 'listed: journaled at the audit').toBeGreaterThanOrEqual(1);
   }, 180_000);
 });
 
