@@ -40,6 +40,9 @@ import * as libSearch from '../../ccd/history/lib.mjs';
 import { DatabaseSync as FtsDb } from 'node:sqlite';
 import * as libOut from '../../ccd/history/lib.mjs';
 import * as libOps from '../../ccd/history/lib.mjs';
+import * as libReplay from '../../ccd/history/lib.mjs';
+import * as replayStore from '../../ccd/history/store.mjs';
+import { DatabaseSync as ReplaySqlite } from 'node:sqlite';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -4270,5 +4273,323 @@ describe('decideReparse: the preflight limits (spec 8.4, 11 L8; DM21, C62 pure h
     expect(libOps.decideReparse({ targets: 0, prunedSpans: 0 })).toEqual({ ok: true });
     expect(libOps.decideReparse({ targets: libOps.REPARSE_MAX_TARGETS + 1, prunedSpans: 0 })).toEqual({ ok: false, reason: 'reparse-too-many' });
     expect(libOps.decideReparse({ targets: 1, prunedSpans: 1 })).toEqual({ ok: false, reason: 'span-pruned' });
+  });
+});
+
+// ===========================================================================
+// W1-B2 Task 7: the recovery and repair decisions (spec §9.14, §9.6, §8.4
+// doctor --repair; O56's planReplay half). Pure, on lib.mjs alone, except two
+// cases that measure SQLite's own shadow tables and foreign_key_check rows on
+// an in-memory database.
+// ===========================================================================
+const RP_STORE = '0189abcd-1234-4678-9abc-0000000000c1';
+const RP_OTHER = '0189abcd-1234-4678-9abc-0000000000c2';
+const RP_ID = 'claude-demo';
+const RP_G = '0189abcd-1234-4678-9abc-0000000000c3';
+const RP_S1 = '0189abcd-1234-4678-9abc-0000000000d1';   // a startup line's sid
+const RP_C1 = '0189abcd-1234-4678-9abc-0000000000d2';   // a clear line's sid
+const RP_S3 = '0189abcd-1234-4678-9abc-0000000000d3';   // a later-tick confirmation's sid
+const RP_D1 = `${RP_ID}.1759312800000.4242.jsonl`;     // drained
+const RP_D2 = `${RP_ID}.1759312900000.4242.jsonl`;     // held: no drained record
+const RP_D3 = `${RP_ID}.1759313000000.4242.jsonl`;     // drained
+const rpLine = (k: libReplay.JournalKind, t: number, f: Record<string, unknown>): string => libReplay.journalRecord(k, t, f);
+const rpRec = (line: string): libReplay.JournalRecord => {
+  const r = libReplay.parseJournalRecord(line);
+  if (r.kind !== 'record') throw new Error(`fixture line reads back as ${r.kind}`);
+  return r.rec;
+};
+const rpHead = (t: number, writer = '0a1b2c3d', store = RP_STORE): string => rpLine('head', t, { store_id: store, month: '2026-10', writer });
+const rpStartup = { v: 1, ev: 'SessionStart', id: RP_ID, sid: RP_S1, src: 'startup', reg: RP_S1, gen: RP_G };
+const rpClear = { v: 1, ev: 'SessionStart', id: RP_ID, sid: RP_C1, src: 'clear', gen: RP_G };
+const rpRecall = { v: 1, ev: 'recall', id: RP_ID, cmd: 'grep', rc: 0, ms: 40 };
+const rpFile = (name: string, lines: string[]) => ({ name, month: name.slice(0, 7), writer: name.slice(8, 16), lines });
+
+/** One writer's month: a drained file holding a startup line S then a clear line C, both decided at drain; a
+ *  held file (journaled, never drained); a tick before the step's start; a later-tick confirmation; a drained
+ *  file holding a recall line; a redact record; a tick after the step's start; a bind. */
+function rpJournal() {
+  const kS = libReplay.eventKey(RP_D1, 1);
+  const kC = libReplay.eventKey(RP_D1, 2);
+  const kR = libReplay.eventKey(RP_D3, 1);
+  const l = {
+    head: rpHead(1000),
+    fileD1: rpLine('file', 2000, { name: RP_D1 }),
+    spS: rpLine('spool', 2000, { ord: 1, rec: rpStartup }),
+    spC: rpLine('spool', 2000, { ord: 2, rec: rpClear }),
+    vFamily: rpLine('verdict', 2100, { event_key: kS, kind: 'family', ccrc_id: RP_ID, generation: RP_G, project: 'demo', first_seen_ms: 2100 }),
+    vConfS: rpLine('verdict', 2100, { event_key: kS, kind: 'epoch-confirmed', ccrc_id: RP_ID, generation: RP_G, cc_session_uuid: RP_S1, cause: 'startup', declared_by: 'hook', by: 'reg' }),
+    vChainC: rpLine('verdict', 2100, { event_key: kC, kind: 'epoch-chained', ccrc_id: RP_ID, generation: RP_G, cc_session_uuid: RP_C1, cause: 'clear' }),
+    vDrained1: rpLine('verdict', 2100, { event_key: 'none', kind: 'drained', file: RP_D1 }),
+    fileD2: rpLine('file', 2500, { name: RP_D2 }),
+    spHeld: rpLine('spool', 2500, { ord: 1, rec: { v: 1, ev: 'Stop', id: RP_ID } }),
+    tickOld: rpLine('tick', 2900, { lag_ms: 800 }),
+    vLater: rpLine('verdict', 3000, { event_key: 'none', kind: 'epoch-confirmed', ccrc_id: RP_ID, generation: RP_G, cc_session_uuid: RP_S3, cause: 'resume', declared_by: 'hook', by: 'later-tick' }),
+    fileD3: rpLine('file', 3500, { name: RP_D3 }),
+    spD3: rpLine('spool', 3500, { ord: 1, rec: rpRecall }),
+    vDrained3: rpLine('verdict', 3600, { event_key: 'none', kind: 'drained', file: RP_D3 }),
+    redact: rpLine('redact', 3700, { len: 40, sha256: 'a'.repeat(64) }),
+    tickNew: rpLine('tick', 3800, { lag_ms: 1200 }),
+    vBind: rpLine('verdict', 3900, { event_key: 'none', kind: 'bind', bind: 'restore', writer: '0a1b2c3d' }),
+  };
+  return { l, kS, kC, kR };
+}
+
+describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds export phases)', () => {
+  it('RECOVER_PHASES is index, apply, reindex, frozen', () => {
+    expect([...libReplay.RECOVER_PHASES]).toEqual(['index', 'apply', 'reindex']);
+    expect(Object.isFrozen(libReplay.RECOVER_PHASES)).toBe(true);
+  });
+  it("round-trips each phase's form, with and without +pairs", () => {
+    for (const s of ['index', 'index:2026-10.0a1b2c3d.jsonl:4096', 'apply:2026-09.0a1b2c3d.jsonl:0+pairs', 'apply+pairs', 'reindex', 'reindex:812', 'reindex:812+pairs']) {
+      const c = libReplay.parseRecoverCursor(s);
+      expect(c, s).not.toBeNull();
+      expect(libReplay.formatRecoverCursor(c!), s).toBe(s);
+    }
+    expect(libReplay.parseRecoverCursor('apply:2026-10.0a1b2c3d.jsonl:96+pairs'))
+      .toEqual({ phase: 'apply', file: '2026-10.0a1b2c3d.jsonl', offset: 96, blobId: null, pairsAdded: true });
+  });
+  it("a NULL cursor is the step's start", () => {
+    expect(libReplay.parseRecoverCursor(null)).toEqual({ phase: 'index', file: null, offset: 0, blobId: null, pairsAdded: false });
+  });
+  it('anything else is null, never a guess', () => {
+    for (const s of ['journal:120', 'index:2026-13.0a1b2c3d.jsonl:1', 'index:notes.jsonl:1', 'apply:2026-10.0a1b2c3d.jsonl:01', 'reindex:-1', 'export-blobs', '', 'index:2026-10.0a1b2c3d.jsonl:99999999999999999']) {
+      expect(libReplay.parseRecoverCursor(s), s).toBeNull();
+    }
+    expect(() => libReplay.formatRecoverCursor({ phase: 'export-blobs', file: null, offset: 0, blobId: null, pairsAdded: false })).toThrow(TypeError);
+  });
+});
+
+describe('orderJournalFiles: month, then head time, then name; overlapping files of one month merge (O56; spec 9.14)', () => {
+  const f = (name: string, headT: number | null, lastT: number | null): libReplay.JournalFileFacts =>
+    ({ name, month: name.slice(0, 7), writer: name.slice(8, 16), headT, lastT });
+  it('O56 CONTROL: months in order, then head times; never the lexical order of the writer token', () => {
+    expect(libReplay.orderJournalFiles([
+      f('2026-10.00000000.jsonl', 5000, 6000), f('2026-10.ffffffff.jsonl', 1000, 1500), f('2026-09.77777777.jsonl', 10, 900),
+    ])).toEqual([['2026-09.77777777.jsonl'], ['2026-10.ffffffff.jsonl'], ['2026-10.00000000.jsonl']]);
+  });
+  it('two writers whose time ranges overlap in one month are one group, the earlier head first', () => {
+    expect(libReplay.orderJournalFiles([f('2026-10.0000000b.jsonl', 2000, 4000), f('2026-10.0000000a.jsonl', 1000, 3000)]))
+      .toEqual([['2026-10.0000000a.jsonl', '2026-10.0000000b.jsonl']]);
+  });
+  it('a file with no head sorts last in its month, alone; another month never merges', () => {
+    expect(libReplay.orderJournalFiles([f('2026-10.0000000c.jsonl', null, null), f('2026-10.0000000a.jsonl', 1000, 9000), f('2026-11.0000000a.jsonl', 100, 200)]))
+      .toEqual([['2026-10.0000000a.jsonl'], ['2026-10.0000000c.jsonl'], ['2026-11.0000000a.jsonl']]);
+  });
+});
+
+describe('planReplay: the journal apply order (O56 planReplay half; O48 order; spec 9.14)', () => {
+  it('O56: S then C in one drained file replay in that order, each with its drain-time verdicts; a held file is skipped; a later-tick confirmation applies at its own position; redaction first', () => {
+    const { l, kS, kC, kR } = rpJournal();
+    const actions = libReplay.planReplay({ storeId: RP_STORE, files: [rpFile('2026-10.0a1b2c3d.jsonl', Object.values(l))], ticksAfter: 3000, ticksBefore: 3900 });
+    expect(actions).toEqual([
+      { do: 'redact', len: 40, sha256: 'a'.repeat(64), t: 3700 },
+      { do: 'file', name: RP_D1, t: 2000 },
+      { do: 'receipt', key: kS, ord: 1, rec: rpStartup, recvMs: 2000, verdicts: [rpRec(l.vFamily), rpRec(l.vConfS)] },
+      { do: 'receipt', key: kC, ord: 2, rec: rpClear, recvMs: 2000, verdicts: [rpRec(l.vChainC)] },
+      { do: 'file', name: RP_D2, t: 2500 },
+      { do: 'skip-undrained', file: RP_D2 },
+      { do: 'verdict', rec: rpRec(l.vLater) },
+      { do: 'file', name: RP_D3, t: 3500 },
+      { do: 'receipt', key: kR, ord: 1, rec: rpRecall, recvMs: 3500, verdicts: [] },
+      { do: 'tick', t: 3800, lagMs: 1200 },
+    ]);
+  });
+
+  it('O56: two writers of one month apply the earlier head first, and a tie in time goes to that file', () => {
+    const DA = `${RP_ID}.1759313100000.4242.jsonl`;
+    const DB = `${RP_ID}.1759313200000.4242.jsonl`;
+    const a = rpFile('2026-10.ffffffff.jsonl', [
+      rpHead(1000, 'ffffffff'), rpLine('file', 5000, { name: DA }), rpLine('spool', 5000, { ord: 1, rec: rpRecall }),
+      rpLine('verdict', 5000, { event_key: 'none', kind: 'drained', file: DA }),
+    ]);
+    const b = rpFile('2026-10.00000000.jsonl', [
+      rpHead(5000, '00000000'), rpLine('file', 5000, { name: DB }), rpLine('spool', 5000, { ord: 1, rec: rpRecall }),
+      rpLine('verdict', 5000, { event_key: 'none', kind: 'drained', file: DB }),
+    ]);
+    const order = libReplay.planReplay({ storeId: RP_STORE, files: [b, a], ticksAfter: 0 })
+      .flatMap((x) => (x.do === 'file' ? [`file ${x.name}`] : x.do === 'receipt' ? [`receipt ${x.key}`] : []));
+    expect(order).toEqual([`file ${DA}`, `receipt ${libReplay.eventKey(DA, 1)}`, `file ${DB}`, `receipt ${libReplay.eventKey(DB, 1)}`]);
+  });
+
+  it('two writers whose times overlap merge by record time, each file in its own order', () => {
+    const X1 = `${RP_ID}.1759313300000.4242.jsonl`;
+    const X2 = `${RP_ID}.1759313400000.4242.jsonl`;
+    const Y = `${RP_ID}.1759313500000.4242.jsonl`;
+    const block = (name: string, t: number): string[] => [
+      rpLine('file', t, { name }), rpLine('spool', t, { ord: 1, rec: rpRecall }), rpLine('verdict', t + 50, { event_key: 'none', kind: 'drained', file: name }),
+    ];
+    const x = rpFile('2026-10.0000000a.jsonl', [rpHead(1000, '0000000a'), ...block(X1, 1100), ...block(X2, 3100)]);
+    const y = rpFile('2026-10.0000000b.jsonl', [rpHead(2000, '0000000b'), ...block(Y, 2100)]);
+    const files = libReplay.planReplay({ storeId: RP_STORE, files: [x, y], ticksAfter: 0 })
+      .filter((v): v is Extract<libReplay.ReplayAction, { do: 'file' }> => v.do === 'file').map((v) => v.name);
+    expect(files).toEqual([X1, Y, X2]);
+  });
+
+  it('a file whose head names another store is skipped whole, counted once', () => {
+    const foreign = rpFile('2026-10.0b0b0b0b.jsonl', [
+      rpHead(1000, '0b0b0b0b', RP_OTHER), rpLine('redact', 1100, { len: 40, sha256: 'b'.repeat(64) }), rpLine('tick', 1200, { lag_ms: 5 }),
+    ]);
+    expect(libReplay.planReplay({ storeId: RP_STORE, files: [foreign], ticksAfter: 0 })).toEqual([{ do: 'skip', counter: 'journal_head_mismatch' }]);
+  });
+
+  it('a torn line, an unknown k and a v of 2 are skipped and counted; replay never throws', () => {
+    const f = rpFile('2026-10.0a1b2c3d.jsonl', [rpHead(1000), '{"v":1,"k":"tick"', '{"v":1,"k":"nope","t":5}', '{"v":2,"k":"tick","t":5,"lag_ms":null}', '']);
+    expect(libReplay.planReplay({ storeId: RP_STORE, files: [f], ticksAfter: 0 })).toEqual([
+      { do: 'skip', counter: 'journal_line_malformed' },
+      { do: 'skip', counter: 'journal_record_unknown' },
+      { do: 'skip', counter: 'journal_line_malformed' },
+    ]);
+  });
+
+  it("a tick at or after ticksBefore (the step's bind ms) is a recovery pass's own record: never applied (NEW history-replay-skips-post-bind-ticks)", () => {
+    const { l } = rpJournal();
+    const ticks = (ticksBefore: number | null) => libReplay.planReplay({ storeId: RP_STORE, files: [rpFile('2026-10.0a1b2c3d.jsonl', Object.values(l))], ticksAfter: 3000, ticksBefore })
+      .filter((x) => x.do === 'tick');
+    expect(ticks(3801)).toEqual([{ do: 'tick', t: 3800, lagMs: 1200 }]);
+    expect(ticks(3800)).toEqual([]);
+    expect(ticks(null), 'null sets no upper bound').toEqual([{ do: 'tick', t: 3800, lagMs: 1200 }]);
+  });
+
+  it('a block journaled twice gives two receipts with one key, and a re-appended verdict is indexed once', () => {
+    const { l, kS } = rpJournal();
+    const f = rpFile('2026-10.0a1b2c3d.jsonl', [l.head, l.fileD1, l.spS, l.fileD1, l.spS, l.vConfS, l.vConfS, l.vDrained1]);
+    const receipts = libReplay.planReplay({ storeId: RP_STORE, files: [f], ticksAfter: 0 }).filter((x) => x.do === 'receipt');
+    expect(receipts).toHaveLength(2);
+    for (const r of receipts) expect(r).toMatchObject({ key: kS, verdicts: [rpRec(l.vConfS)] });
+  });
+});
+
+describe('replayStep: one journal line, one decision, never a throw (spec 9.14 "Unknown records")', () => {
+  const state = (o: Partial<libReplay.ReplayState> = {}): libReplay.ReplayState =>
+    ({ storeId: RP_STORE, file: null, recvMs: 0, drained: new Set([RP_D1]), verdictsByKey: new Map(), ticksAfter: 0, ticksBefore: null, ...o });
+  const read = (line: string): libReplay.JournalRead => libReplay.parseJournalRecord(line);
+
+  it('a torn line or a newer v counts journal_line_malformed; an unknown k journal_record_unknown', () => {
+    expect(libReplay.replayStep(state(), read('{"v":1,"k":"tick"')).actions).toEqual([{ do: 'skip', counter: 'journal_line_malformed' }]);
+    expect(libReplay.replayStep(state(), read('{"v":2,"k":"tick","t":5,"lag_ms":null}')).actions).toEqual([{ do: 'skip', counter: 'journal_line_malformed' }]);
+    expect(libReplay.replayStep(state(), read('{"v":1,"k":"nope","t":5}')).actions).toEqual([{ do: 'skip', counter: 'journal_record_unknown' }]);
+  });
+  it('a head naming another store counts journal_head_mismatch; any head clears the draining file', () => {
+    expect(libReplay.replayStep(state({ file: RP_D1 }), read(rpHead(1, '0a1b2c3d', RP_OTHER))))
+      .toEqual({ state: state({ file: null }), actions: [{ do: 'skip', counter: 'journal_head_mismatch' }] });
+    expect(libReplay.replayStep(state({ file: RP_D1 }), read(rpHead(1)))).toEqual({ state: state({ file: null }), actions: [] });
+  });
+  it('a file record sets the draining name and its receive time', () => {
+    const r = libReplay.replayStep(state(), read(rpLine('file', 2000, { name: RP_D1 })));
+    expect(r.state).toMatchObject({ file: RP_D1, recvMs: 2000 });
+    expect(r.actions).toEqual([{ do: 'file', name: RP_D1, t: 2000 }]);
+  });
+  it('a spool record of a drained file is a receipt with its drain-time verdicts in journal order; of an undrained file, skip-undrained; with no file before it, malformed', () => {
+    const { l, kS } = rpJournal();
+    const vs = [rpRec(l.vFamily), rpRec(l.vConfS)];
+    const s = state({ file: RP_D1, recvMs: 2000, verdictsByKey: new Map([[kS, vs]]) });
+    expect(libReplay.replayStep(s, read(l.spS)).actions).toEqual([{ do: 'receipt', key: kS, ord: 1, rec: rpStartup, recvMs: 2000, verdicts: vs }]);
+    expect(libReplay.replayStep(state({ file: RP_D2 }), read(l.spHeld)).actions).toEqual([{ do: 'skip-undrained', file: RP_D2 }]);
+    expect(libReplay.replayStep(state(), read(l.spS)).actions).toEqual([{ do: 'skip', counter: 'journal_line_malformed' }]);
+  });
+  it('bind and drained verdicts apply nothing; a verdict keyed to a line waits for it; a verdict keyed none applies here', () => {
+    const { l } = rpJournal();
+    expect(libReplay.replayStep(state(), read(l.vBind)).actions).toEqual([]);
+    expect(libReplay.replayStep(state(), read(l.vDrained1)).actions).toEqual([]);
+    expect(libReplay.replayStep(state(), read(l.vConfS)).actions).toEqual([]);
+    expect(libReplay.replayStep(state(), read(l.vLater)).actions).toEqual([{ do: 'verdict', rec: rpRec(l.vLater) }]);
+    expect(libReplay.replayStep(state(), read(l.redact)).actions).toEqual([]);
+  });
+  it('a tick at or before ticksAfter is already in the store; a later one is applied', () => {
+    const { l } = rpJournal();
+    expect(libReplay.replayStep(state({ ticksAfter: 2900 }), read(l.tickOld)).actions).toEqual([]);
+    expect(libReplay.replayStep(state({ ticksAfter: 2899 }), read(l.tickOld)).actions).toEqual([{ do: 'tick', t: 2900, lagMs: 800 }]);
+  });
+  it("a tick at or after ticksBefore is the recovery pass's own; one before it is applied", () => {
+    const { l } = rpJournal();
+    expect(libReplay.replayStep(state({ ticksBefore: 2900 }), read(l.tickOld)).actions).toEqual([]);
+    expect(libReplay.replayStep(state({ ticksBefore: 2901 }), read(l.tickOld)).actions).toEqual([{ do: 'tick', t: 2900, lagMs: 800 }]);
+    expect(libReplay.replayStep(state({ ticksBefore: undefined }), read(l.tickOld)).actions, 'an absent bound bounds nothing')
+      .toEqual([{ do: 'tick', t: 2900, lagMs: 800 }]);
+  });
+});
+
+describe('indexRecord: the first pass indexes redact pairs, drain-time verdicts and drained files (spec 9.14)', () => {
+  it('answers only for those three', () => {
+    const { l, kS } = rpJournal();
+    const read = (line: string): libReplay.JournalRead => libReplay.parseJournalRecord(line);
+    expect(libReplay.indexRecord(read(l.redact))).toEqual({ redact: { len: 40, sha256: 'a'.repeat(64), t: 3700 } });
+    expect(libReplay.indexRecord(read(l.vDrained1))).toEqual({ drainedFile: RP_D1 });
+    expect(libReplay.indexRecord(read(l.vFamily))).toEqual({ verdictKey: kS });
+    for (const x of [l.vLater, l.vBind, l.spS, l.fileD1, l.head, l.tickNew, '{"v":1']) expect(libReplay.indexRecord(read(x)), x).toEqual({});
+  });
+});
+
+describe('nextUnmovedTicks: what recovery-stalled counts (spec 9.6, 9.14)', () => {
+  it('a moved cursor resets; a hold (the floor, history-off) keeps the count; otherwise one more', () => {
+    expect(libReplay.nextUnmovedTicks({ prev: 14, moved: true, held: false })).toBe(0);
+    expect(libReplay.nextUnmovedTicks({ prev: 14, moved: false, held: true })).toBe(14);
+    expect(libReplay.nextUnmovedTicks({ prev: 14, moved: false, held: false })).toBe(15);
+  });
+});
+
+describe('diffForeignKeys: a repair refuses NEW violations only (spec 8.4 doctor --repair; P21; C61 pure half)', () => {
+  const row = (table: string, rowid: number | null, parent = 'p', fkid = 0): libReplay.FkRow => ({ table, rowid, parent, fkid });
+  it('rows in the baseline are pre-existing; rows outside it are new', () => {
+    expect(libReplay.diffForeignKeys([row('c', 1)], [row('c', 1), row('c', 2)])).toEqual({ newViolations: [row('c', 2)], preExisting: 1 });
+    expect(libReplay.diffForeignKeys([row('c', 1)], [row('c', 1)])).toEqual({ newViolations: [], preExisting: 1 });
+    expect(libReplay.diffForeignKeys([], [])).toEqual({ newViolations: [], preExisting: 0 });
+  });
+  it('the key is (table, rowid, parent, fkid): any part differing is a different violation', () => {
+    expect(libReplay.diffForeignKeys([row('c', 1)], [row('c', 1, 'q')]).newViolations).toHaveLength(1);
+    expect(libReplay.diffForeignKeys([row('c', 1)], [row('c', 1, 'p', 1)]).newViolations).toHaveLength(1);
+    expect(libReplay.diffForeignKeys([row('c', null)], [row('c', null)]).newViolations).toHaveLength(0);
+  });
+  it("SQLite's foreign_key_check rows have FkRow's shape, and the diff reads them", () => {
+    const db = new ReplaySqlite(':memory:');
+    try {
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec('CREATE TABLE p (id INTEGER PRIMARY KEY); CREATE TABLE c (id INTEGER PRIMARY KEY, p INTEGER REFERENCES p(id))');
+      db.exec('INSERT INTO c (id, p) VALUES (1, 7)');
+      const before = db.prepare('PRAGMA foreign_key_check').all() as unknown as libReplay.FkRow[];
+      expect(before).toEqual([row('c', 1)]);
+      db.exec('INSERT INTO c (id, p) VALUES (2, 8)');
+      const after = db.prepare('PRAGMA foreign_key_check').all() as unknown as libReplay.FkRow[];
+      expect(libReplay.diffForeignKeys(before, after)).toEqual({ newViolations: [row('c', 2)], preExisting: 1 });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('FTS self-heal checks: ftsTablesHealthy over per-table shadows (spec 8.4 doctor --repair; P24)', () => {
+  const measure = (db: InstanceType<typeof ReplaySqlite>) => {
+    const tables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as unknown as { name: string }[]).map((r) => r.name));
+    const cols = (t: string): string[] => (db.prepare('SELECT name FROM pragma_table_info(?)').all(t) as unknown as { name: string }[]).map((r) => r.name);
+    return { tables, columns: { blobs_fts: tables.has('blobs_fts') ? cols('blobs_fts') : [], nodes_fts: tables.has('nodes_fts') ? cols('nodes_fts') : [] } };
+  };
+  it("the per-table shadow list is exactly what SQLite makes for B1's FTS_DDL: the contentless blobs_fts has no _content", () => {
+    const db = new ReplaySqlite(':memory:');
+    try {
+      for (const sql of replayStore.FTS_DDL) db.exec(sql);
+      const m = measure(db);
+      for (const t of ['blobs_fts', 'nodes_fts'] as const) {
+        expect([...m.tables].filter((n) => n.startsWith(`${t}_`)).sort(), t).toEqual([...libReplay.FTS_SHADOWS[t]].sort());
+      }
+      expect(libReplay.FTS_SHADOWS.blobs_fts).not.toContain('blobs_fts_content');
+      expect(libReplay.ftsTablesHealthy(m)).toEqual({ blobs: true, nodes: true });
+    } finally {
+      db.close();
+    }
+  });
+  it('a missing table, a missing shadow or a missing column reads broken, table by table', () => {
+    const db = new ReplaySqlite(':memory:');
+    try {
+      for (const sql of replayStore.FTS_DDL) db.exec(sql);
+      const m = measure(db);
+      const without = (name: string) => ({ ...m, tables: new Set([...m.tables].filter((n) => n !== name)) });
+      expect(libReplay.ftsTablesHealthy(without('blobs_fts'))).toEqual({ blobs: false, nodes: true });
+      expect(libReplay.ftsTablesHealthy(without('blobs_fts_idx'))).toEqual({ blobs: false, nodes: true });
+      expect(libReplay.ftsTablesHealthy(without('nodes_fts_content'))).toEqual({ blobs: true, nodes: false });
+      expect(libReplay.ftsTablesHealthy({ ...m, columns: { ...m.columns, nodes_fts: ['gist', 'topics'] } })).toEqual({ blobs: true, nodes: false });
+      expect(libReplay.ftsTablesHealthy({ tables: new Set(), columns: {} })).toEqual({ blobs: false, nodes: false });
+    } finally {
+      db.close();
+    }
   });
 });

@@ -4765,3 +4765,277 @@ export function decideReparse({ targets, prunedSpans }) {
   if (prunedSpans > 0) return { ok: false, reason: 'span-pruned' };
   return { ok: true };
 }
+
+// ===========================================================================
+// Recovery and repair decisions (spec §9.14 "Recovery", "Journal replay",
+// "Only drained files replay", "Unknown records"; §9.6 recovery-stalled;
+// §8.4 doctor --repair; §11 P21, P24; W1-B2 Task 7). Pure: the sweep's
+// recovery step (Task 25) streams the journal and applies every action
+// replayStep answers, deciding nothing of its own (the tick bounds included);
+// planReplay is the same order over a whole journal in memory, which O56 pins;
+// Task 25's tests pin the executor's agreement with it over the cases they
+// name.
+// D-4699 (history-recovery-replay) D-4230
+// D-4241 D-4190
+// D-4701 (history-replay-skips-post-bind-ticks)
+// ===========================================================================
+
+/** The recovery step's phases, in order (§9.14). `index` applies the redact records and indexes drain-time
+ *  verdicts and drained files; `apply` replays the journal; `reindex` re-runs the FTS derivation when the index
+ *  pass learned a pair the store lacked. B4 inserts its export phases between `apply` and `reindex` (§9.14
+ *  "Export replay"): this list is that seam. D-4700 (history-b4-after-b2) */
+export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'reindex']);
+
+const RECOVER_JOURNAL_CURSOR_RE = /^(index|apply)(?::([0-9]{4}-(?:0[1-9]|1[0-2])\.[0-9a-f]{8}\.jsonl):(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
+const RECOVER_REINDEX_CURSOR_RE = /^reindex(?::(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
+
+/** The recovery step's cursor as derivation_state ('recover', <bind ms>) keeps it and status prints it (§9.14):
+ *  `<phase>` at a phase's start, `index:<YYYY-MM>.<writer>.jsonl:<byte offset>` or `apply:…` inside the journal,
+ *  `reindex:<blob_id>` inside the FTS re-derivation, then `+pairs` once the index pass learned a pair the store
+ *  lacked. It is advanced in the same transaction as the records it applies. */
+export function formatRecoverCursor(c) {
+  if (!RECOVER_PHASES.includes(c.phase)) throw new TypeError(`formatRecoverCursor: phase outside RECOVER_PHASES: ${String(c.phase)}`);
+  let s = c.phase;
+  if (c.phase === 'reindex') {
+    if (c.blobId !== null) s += `:${c.blobId}`;
+  } else if (c.file !== null) {
+    s += `:${c.file}:${c.offset}`;
+  }
+  return c.pairsAdded ? `${s}+pairs` : s;
+}
+
+/** The cursor back, or null when it is not one: never a guess at where to resume. A NULL column (a step just
+ *  registered by a binding verb) is the step's start. */
+export function parseRecoverCursor(s) {
+  if (s === null) return { phase: RECOVER_PHASES[0], file: null, offset: 0, blobId: null, pairsAdded: false };
+  if (typeof s !== 'string') return null;
+  const j = RECOVER_JOURNAL_CURSOR_RE.exec(s);
+  if (j !== null) {
+    const offset = j[3] === undefined ? 0 : Number(j[3]);
+    if (!Number.isSafeInteger(offset)) return null;
+    return { phase: j[1], file: j[2] ?? null, offset, blobId: null, pairsAdded: j[4] !== undefined };
+  }
+  const r = RECOVER_REINDEX_CURSOR_RE.exec(s);
+  if (r !== null) {
+    const blobId = r[1] === undefined ? null : Number(r[1]);
+    if (blobId !== null && !Number.isSafeInteger(blobId)) return null;
+    return { phase: 'reindex', file: null, offset: 0, blobId, pairsAdded: r[2] !== undefined };
+  }
+  return null;
+}
+
+const journalCmpText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const journalCmpHead = (a, b) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a - b);
+const journalFileOrder = (a, b) => journalCmpText(a.month, b.month) || journalCmpHead(a.headT, b.headT) || journalCmpText(a.name, b.name);
+
+/** The journal files' apply order (§9.14 "Journal replay"): by the month in the name, then by the head
+ *  record's time, then by name (code-unit order, never the locale's: DM8). Files of one month whose
+ *  [headT, lastT] ranges overlap (a store run on two boxes at once, against §6.9's rule) form ONE group, which
+ *  the caller merges by record time. A file with no readable head sorts last in its month, alone. */
+export function orderJournalFiles(files) {
+  const groups = [];
+  let cur = null;
+  for (const f of [...files].sort(journalFileOrder)) {
+    const hi = f.lastT ?? f.headT;
+    if (cur !== null && cur.month === f.month && f.headT !== null && cur.hi !== null && f.headT <= cur.hi) {
+      cur.names.push(f.name);
+      if (hi !== null && hi > cur.hi) cur.hi = hi;
+      continue;
+    }
+    cur = { month: f.month, hi, names: [f.name] };
+    groups.push(cur);
+  }
+  return groups.map((g) => g.names);
+}
+
+/** The first pass over one record (§9.14): a `redact` pair, a drain-time verdict (one keyed to its spool line's
+ *  event_key) to apply at that line, or a `drained` record naming a file whose spool records may replay. */
+export function indexRecord(r) {
+  if (r.kind !== 'record') return {};
+  const rec = r.rec;
+  if (rec.k === 'redact') return { redact: { len: rec.len, sha256: rec.sha256, t: rec.t } };
+  if (rec.k !== 'verdict') return {};
+  if (rec.kind === 'drained') return { drainedFile: rec.file };
+  if (rec.kind === 'bind' || rec.event_key === 'none') return {};
+  return { verdictKey: rec.event_key };
+}
+
+/** The second pass over one record (§9.14). It never reads $REG and never re-decides: a spool record of a
+ *  drained file becomes a receipt carrying the verdicts the drain took from it, in journal order, which the
+ *  executor applies through decideEpochLine and the drain's own receipt functions; a verdict keyed to a line
+ *  waits for that line; a verdict keyed `none` (a later confirmation, a backfill mapping, an operator's import)
+ *  applies at its own position. A spool record whose file has no `drained` record is skipped: the file is still
+ *  in .draining/ with its sidecar, and the live drain decides it after the step, or B1 set it aside after journaling
+ *  it, into .draining/rejected/ or .draining/planted/<area>/, where nothing drains it; either way the lost store held
+ *  none of its lines (the executor, Task 25's undrainedFileKept, tells a kept file from a gone one). A tick at or before the newest
+ *  tick the store held when the step began (`ticksAfter`) is already there; one at or after the step's bind ms
+ *  (`ticksBefore`, when it is a number) is a recovery pass's own record, journaled after the bind
+ *  D-4701 (history-replay-skips-post-bind-ticks). A line that does not parse, or a `v` newer than
+ *  this build, counts journal_line_malformed; an unknown kind journal_record_unknown; a head naming another
+ *  store journal_head_mismatch. Nothing here throws on a record. */
+export function replayStep(state, r) {
+  if (r.kind === 'malformed' || r.kind === 'newer') return { state, actions: [{ do: 'skip', counter: 'journal_line_malformed' }] };
+  if (r.kind === 'unknown') return { state, actions: [{ do: 'skip', counter: 'journal_record_unknown' }] };
+  const rec = r.rec;
+  switch (rec.k) {
+    case 'head':
+      if (rec.store_id !== state.storeId) return { state: { ...state, file: null }, actions: [{ do: 'skip', counter: 'journal_head_mismatch' }] };
+      return { state: { ...state, file: null }, actions: [] };
+    case 'file':
+      return { state: { ...state, file: rec.name, recvMs: rec.t }, actions: [{ do: 'file', name: rec.name, t: rec.t }] };
+    case 'spool': {
+      if (state.file === null) return { state, actions: [{ do: 'skip', counter: 'journal_line_malformed' }] };
+      if (!state.drained.has(state.file)) return { state, actions: [{ do: 'skip-undrained', file: state.file }] };
+      const key = eventKey(state.file, rec.ord);
+      return { state, actions: [{ do: 'receipt', key, ord: rec.ord, rec: rec.rec, recvMs: state.recvMs, verdicts: [...(state.verdictsByKey.get(key) ?? [])] }] };
+    }
+    case 'verdict':
+      if (rec.kind === 'bind' || rec.kind === 'drained') return { state, actions: [] };
+      if (rec.event_key !== 'none') return { state, actions: [] };
+      return { state, actions: [{ do: 'verdict', rec }] };
+    case 'redact':
+      return { state, actions: [] };
+    case 'tick': {
+      const before = typeof state.ticksBefore !== 'number' || rec.t < state.ticksBefore;
+      return { state, actions: rec.t > state.ticksAfter && before ? [{ do: 'tick', t: rec.t, lagMs: rec.lag_ms }] : [] };
+    }
+    default:
+      return { state, actions: [{ do: 'skip', counter: 'journal_record_unknown' }] };
+  }
+}
+
+/** One merge group's records by record time, each file's own order kept, a tie to the earlier file in the group.
+ *  A journal block (a `file` record and its `spool` records) shares one `t`, so a block is never split. */
+function mergeJournalByTime(files) {
+  const pos = files.map(() => 0);
+  const out = [];
+  for (;;) {
+    let pick = -1;
+    for (let f = 0; f < files.length; f += 1) {
+      if (pos[f] >= files[f].recs.length) continue;
+      if (pick < 0 || files[f].recs[pos[f]].t < files[pick].recs[pos[pick]].t) pick = f;
+    }
+    if (pick < 0) return out;
+    out.push(files[pick].recs[pos[pick]].read);
+    pos[pick] += 1;
+  }
+}
+
+/** The whole replay of one store's journal, in memory (§9.14; the O56 pin). A file whose head names another
+ *  store is dropped, counted once. The rest run in orderJournalFiles' order, each group merged by record time. A
+ *  first pass indexes every redact pair (applied before anything else: "Redaction first"), every drain-time
+ *  verdict by event_key (an identical re-appended verdict once) and every drained file; the second runs
+ *  replayStep over the same stream. Duplicate receipts are left to the executor's receipt upsert. `ticksBefore`
+ *  (the step's bind ms) defaults to null, no upper tick bound. */
+export function planReplay({ storeId, files, ticksAfter, ticksBefore = null }) {
+  const skips = [];
+  const kept = [];
+  for (const f of files) {
+    const recs = [];
+    let headT = null;
+    let lastT = null;
+    let foreign = false;
+    for (const line of f.lines) {
+      if (line === '') continue;
+      const read = parseJournalRecord(line);
+      if (recs.length === 0 && read.kind === 'record' && read.rec.k === 'head') {
+        if (read.rec.store_id !== storeId) { foreign = true; break; }
+        headT = read.rec.t;
+      }
+      const t = read.kind === 'record' ? read.rec.t : (lastT ?? headT ?? 0);
+      if (read.kind === 'record') lastT = lastT === null ? t : Math.max(lastT, t);
+      recs.push({ read, t });
+    }
+    if (foreign) {
+      skips.push({ do: 'skip', counter: 'journal_head_mismatch' });
+      continue;
+    }
+    kept.push({ name: f.name, month: f.month, writer: f.writer, headT, lastT, recs });
+  }
+  const byName = new Map(kept.map((f) => [f.name, f]));
+  const stream = orderJournalFiles(kept).flatMap((g) => mergeJournalByTime(g.map((n) => byName.get(n))));
+  const redacts = [];
+  const seenPairs = new Set();
+  const seenVerdicts = new Set();
+  const verdictsByKey = new Map();
+  const drained = new Set();
+  for (const read of stream) {
+    const ix = indexRecord(read);
+    if (ix.redact !== undefined) {
+      const pair = `${ix.redact.len}:${ix.redact.sha256}`;
+      if (!seenPairs.has(pair)) {
+        seenPairs.add(pair);
+        redacts.push({ do: 'redact', ...ix.redact });
+      }
+    }
+    if (ix.drainedFile !== undefined) drained.add(ix.drainedFile);
+    if (ix.verdictKey !== undefined) {
+      const same = canonicalJson(read.rec);
+      if (!seenVerdicts.has(same)) {
+        seenVerdicts.add(same);
+        const list = verdictsByKey.get(ix.verdictKey) ?? [];
+        list.push(read.rec);
+        verdictsByKey.set(ix.verdictKey, list);
+      }
+    }
+  }
+  let state = { storeId, file: null, recvMs: 0, drained, verdictsByKey, ticksAfter, ticksBefore };
+  const applied = [];
+  for (const read of stream) {
+    const step = replayStep(state, read);
+    state = step.state;
+    applied.push(...step.actions);
+  }
+  return [...skips, ...redacts, ...applied];
+}
+
+/** The recovery step's unmoved-tick count, kept in meta HEALTH_META.recoverUnmovedTicks (§9.6: FAIL
+ *  recovery-stalled at RECOVERY_STALL_TICKS). A moved cursor resets it; a tick the floor or history-off held
+ *  leaves it; any other tick adds one. */
+export function nextUnmovedTicks({ prev, moved, held }) {
+  if (moved) return 0;
+  return held ? prev : prev + 1;
+}
+
+// derived from lossless-claw src/plugin/lcm-doctor-rollover-splits.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+const foreignKeyKey = (row) => [row.table ?? '', row.rowid ?? '', row.parent ?? '', row.fkid ?? ''].join('\0');
+
+/** doctor --repair's foreign-key proof (§8.4, P21): the violations `PRAGMA foreign_key_check` reports at the
+ *  repair's completion, against the baseline taken ONCE before its first chunk and persisted with its resumable
+ *  cursor, so a resumed repair diffs against the original baseline (RB7; Task 23 runs the check twice per repair,
+ *  never per chunk). A violation is keyed by (table, rowid, parent, fkid); one
+ *  outside the baseline is NEW, and a repair that made one is refused. No v1 table is WITHOUT ROWID, so rowid is
+ *  never NULL for a v1 row. */
+export function diffForeignKeys(baseline, current) {
+  const base = new Set(baseline.map(foreignKeyKey));
+  const newViolations = [];
+  let preExisting = 0;
+  for (const row of current) {
+    if (base.has(foreignKeyKey(row))) preExisting += 1;
+    else newViolations.push(row);
+  }
+  return { newViolations, preExisting };
+}
+
+// derived from lossless-claw src/db/migration.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
+/** Each FTS table's shadow tables, listed per table (P24): the contentless blobs_fts (content='',
+ *  contentless_delete=1) has no `_content` shadow, so a list naming one for every table would read a healthy
+ *  index as broken and rebuild it on every repair. */
+export const FTS_SHADOWS = Object.freeze({
+  blobs_fts: Object.freeze(['blobs_fts_config', 'blobs_fts_data', 'blobs_fts_docsize', 'blobs_fts_idx']),
+  nodes_fts: Object.freeze(['nodes_fts_config', 'nodes_fts_content', 'nodes_fts_data', 'nodes_fts_docsize', 'nodes_fts_idx']),
+});
+/** Each FTS table's columns, as B1's FTS_DDL creates them. */
+export const FTS_COLUMNS = Object.freeze({
+  blobs_fts: Object.freeze(['body']),
+  nodes_fts: Object.freeze(['gist', 'topics', 'refs']),
+});
+
+/** Whether each FTS table is whole (§8.4 doctor --repair's self-heal, P24): the table, every shadow it should
+ *  have, and every column. The store adapter measures `tables` (sqlite_master) and `columns` (pragma_table_info);
+ *  the repair rebuilds a table this answers false for. */
+export function ftsTablesHealthy({ tables, columns }) {
+  const healthy = (t) => tables.has(t) && FTS_SHADOWS[t].every((s) => tables.has(s))
+    && FTS_COLUMNS[t].every((c) => (columns[t] ?? []).includes(c));
+  return { blobs: healthy('blobs_fts'), nodes: healthy('nodes_fts') };
+}

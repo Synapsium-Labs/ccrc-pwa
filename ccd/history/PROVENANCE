@@ -130,3 +130,17 @@ upstream: src/prune.ts
 commit: e05d8d3
 upstream-sha256: d443f116d8e13d4ef215dd645058259aa6dea1650c6653eac40417d6cf385d4f
 changed: JavaScript without the TypeScript annotations; parseDuration and its unit table (upstream lines 12-47) are kept line for line, the regex and table renamed PRUNE_DURATION_RE and PRUNE_UNIT_DAYS; ccrc adds a 30-day floor and the older-than-floor refusal around it
+
+item: foreign-key baseline diff (P21)
+ours: ccd/history/lib.mjs
+upstream: src/plugin/lcm-doctor-rollover-splits.ts
+commit: e05d8d3
+upstream-sha256: 35f872f704e92b363e7913f7fd09119adaa0f500c4365dd683e773f6c54eb95c
+changed: JavaScript; the violation key (table, rowid, parent, fkid joined with NUL) and the baseline diff (upstream lines 692-718) are kept, but the result is structured ({newViolations, preExisting}) instead of a status string parsed by prefix, and the store adapter, not this function, runs foreign_key_check
+
+item: FTS table self-heal checks (P24)
+ours: ccd/history/lib.mjs
+upstream: src/db/migration.ts
+commit: e05d8d3
+upstream-sha256: 0a272a2d4b29ce79954003cdb8b5db4152f8b6001401938713b2987417a856f1
+changed: JavaScript; the missing-table, missing-shadow and missing-column tests (upstream lines 1079-1127) are kept as a pure decision over measured names, but the shadow list is per table (a contentless table has no _content shadow) and the stale-schema SQL test is not carried over; the repair that acts on the answer is a resumable backfill, not an in-transaction drop, create and seed

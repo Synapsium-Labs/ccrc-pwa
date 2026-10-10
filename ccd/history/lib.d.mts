@@ -630,3 +630,36 @@ export interface BindFacts extends StoreFacts {
 export function decideBind(kind: 'adopt' | 'restore' | 'rebuild', f: BindFacts):
   { ok: true; storeId: string } | { ok: false; rc: 2 | 5; reason: string; detail: string };
 export function decideReparse(i: { targets: number; prunedSpans: number }): { ok: true } | { ok: false; reason: 'reparse-too-many' | 'span-pruned' };
+
+// --- W1-B2 Task 7: recovery and repair decisions (spec §9.14, §9.6, §8.4 doctor --repair)
+export const RECOVER_PHASES: readonly string[];
+export interface RecoverCursor { phase: string; file: string | null; offset: number; blobId: number | null; pairsAdded: boolean }
+export function formatRecoverCursor(c: RecoverCursor): string;
+export function parseRecoverCursor(s: string | null): RecoverCursor | null;
+export interface JournalFileFacts { name: string; month: string; writer: string; headT: number | null; lastT: number | null }
+export function orderJournalFiles(files: readonly JournalFileFacts[]): string[][];
+export type ReplayAction =
+  | { do: 'file'; name: string; t: number }
+  | { do: 'receipt'; key: string; ord: number; rec: Record<string, unknown>; recvMs: number; verdicts: JournalRecord[] }
+  | { do: 'skip-undrained'; file: string }
+  | { do: 'verdict'; rec: JournalRecord }
+  | { do: 'redact'; len: number; sha256: string; t: number }
+  | { do: 'tick'; t: number; lagMs: number | null }
+  | { do: 'skip'; counter: 'journal_line_malformed' | 'journal_record_unknown' | 'journal_head_mismatch' };
+export interface ReplayState {
+  storeId: string; file: string | null; recvMs: number;
+  drained: ReadonlySet<string>; verdictsByKey: ReadonlyMap<string, readonly JournalRecord[]>; ticksAfter: number;
+  ticksBefore?: number | null;
+}
+export function indexRecord(r: JournalRead): { redact?: { len: number; sha256: string; t: number }; verdictKey?: string; drainedFile?: string };
+export function replayStep(state: ReplayState, r: JournalRead): { state: ReplayState; actions: ReplayAction[] };
+export function planReplay(i: {
+  storeId: string; files: readonly { name: string; month: string; writer: string; lines: readonly string[] }[]; ticksAfter: number;
+  ticksBefore?: number | null;
+}): ReplayAction[];
+export function nextUnmovedTicks(i: { prev: number; moved: boolean; held: boolean }): number;
+export interface FkRow { table: string | null; rowid: number | null; parent: string | null; fkid: number | null }
+export function diffForeignKeys(baseline: readonly FkRow[], current: readonly FkRow[]): { newViolations: FkRow[]; preExisting: number };
+export const FTS_SHADOWS: Readonly<{ blobs_fts: readonly string[]; nodes_fts: readonly string[] }>;
+export const FTS_COLUMNS: Readonly<{ blobs_fts: readonly string[]; nodes_fts: readonly string[] }>;
+export function ftsTablesHealthy(m: { tables: ReadonlySet<string>; columns: Readonly<Record<string, readonly string[]>> }): { blobs: boolean; nodes: boolean };
