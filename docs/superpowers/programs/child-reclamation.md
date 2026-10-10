@@ -47,6 +47,20 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-10 01:47 — review 369 is wave 7's review (brisk-prairie's 4157), closed `done` with its own report.**
+  - **How it ran.** On `claude-dev1` with no swap, on Opus 5.5: the held-out panel, the plan's four lenses with
+    models literal (SAFETY as four Opus·xhigh parts), 3 Sonnet refuters per finding, and the leads from 4153 and
+    4156 in a workflow of their own. 239 agents ran, with no error.
+  - **The suites at the tip are green,** except the three main-reds (boot, ccd-review-335-pins, tmp-sweep, each red
+    identically on `5c922c866`) and two load reds that are green alone.
+  - **The findings.** 46 were confirmed and 14 refuted, consolidated to 4 class (a) (F1–F4), 12 class (b) (F5–F16)
+    and 13 record items. It asks for rulings on F1, F2, F7, F8, F9 and C13.
+  - **The questions it settled.** Review 368's F1 (the 90 s row) is refuted 3–0, with a worst case of about 73–78 s,
+    one kill grace at most. R-k is closed on both arms and both verbs, R72 holds, and the boundary is exactly
+    4060's two numerals.
+  - **The drafted rulings** are `wave7/fix-round-1-rulings-draft.md`, under attack by workflow `wf_568e4e8b-074`
+    before the fix round goes out.
+
 - **2026-10-09 22:40 — review 368's reviewer withdrew its own report (calm-cove's 4152), which agrees with this programme's
   not accepting it.**
   - **Why it was withdrawn.** A sub-agent sent the report before the panel and the suites finished.
