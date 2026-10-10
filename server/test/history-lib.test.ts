@@ -4636,6 +4636,12 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
   const beltIdx = (values: string[]): libRedact.PairIndex =>
     libRedact.makePairIndex(libRedact.secretPairs(values).pairs, libRedact.makeBelt(libRedact.beltUnits(values)));
   const pairIdx = (values: string[]): libRedact.PairIndex => libRedact.makePairIndex(libRedact.secretPairs(values).pairs);
+  // Each 14-character filler supplies exactly one seeded gram, and lexical order agrees with its padded base-36 suffix.
+  const fillBelt = (n: number): string[] => Array.from({ length: n }, (_, i) => `aB1cD${i.toString(36).padStart(9, '0')}`);
+  const repeatedCandidate = () => {
+    const cycle = 'zZ1aB2cD3eF4';
+    return `${cycle}${cycle}${cycle}${cycle[0]}`;
+  };
 
   it('CONTROL: with pairs alone, the measured shapes still leak 31, 27, 32 and 32 characters', () => {
     const v = mint();
@@ -4726,6 +4732,60 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
     expect(libRedact.beltWidth(`${historyCrypto.randomBytes(27).toString('base64url')}0_-`)).toBe(14);
     expect(libRedact.beltWidth('7771234567890123456789')).toBe(21);
     expect(libRedact.beltWidth(alnum(12))).toBe(12);
+  });
+
+  it('publishes the exact frozen belt contract Task 7B and Task 14 consume', () => {
+    expect(libRedact.BELT_VERSION).toBe(1);
+    expect(libRedact.BELT_BITS).toBe(72);
+    expect(libRedact.BELT_K_LADDER).toEqual([12, 14, 16, 18, 21]);
+    expect(libRedact.BELT_GRAMS_MAX).toBe(65536);
+    expect(libRedact.BELT_META).toBe('fts_belt');
+    expect(libRedact.BELT_NODES_STEP).toBe('nodes-belt');
+    expect(libRedact.REDACT_SOURCES_META).toBe('redact_sources');
+    expect(libRedact.BELT_COUNTERS).toEqual({ overflow: 'redact_belt_overflow', generations: 'redact_belt_generations' });
+    expect(Object.isFrozen(libRedact.BELT_K_LADDER)).toBe(true);
+    expect(Object.isFrozen(libRedact.BELT_COUNTERS)).toBe(true);
+  });
+
+  it('makeBelt gives Task 14 sorted, deduplicated admitted texts and excludes a unit that overflowed', () => {
+    const admitted = fillBelt(libRedact.BELT_GRAMS_MAX);
+    const overflowed = `zZ1aB2cD${'0'.repeat(6)}`;
+    const belt = libRedact.makeBelt([overflowed, admitted[2]!, ...admitted, admitted[2]!]);
+    expect(belt.grams).toBe(libRedact.BELT_GRAMS_MAX);
+    expect(belt.overflow).toBe(1);
+    expect(belt.texts).toEqual(admitted);
+  });
+
+  it('counts stored seed grams at the cap, admitting a repeated unit whose 24 windows add only 12 grams', () => {
+    const candidate = repeatedCandidate();
+    const single = libRedact.makeBelt([candidate]);
+    expect(candidate.length - libRedact.beltWidth(candidate) + 1, 'the possible windows').toBe(24);
+    expect(single.grams, 'the stored seed grams').toBe(12);
+    const filler = fillBelt(libRedact.BELT_GRAMS_MAX - 15);
+    const belt = libRedact.makeBelt([...filler, candidate]);
+    expect(belt.grams).toBe(libRedact.BELT_GRAMS_MAX - 3);
+    expect(belt.overflow).toBe(0);
+    expect(belt.texts).toContain(candidate);
+    const idx = libRedact.makePairIndex(libRedact.secretPairs([candidate]).pairs, belt);
+    expect(libRedact.redactField(`note ab${candidate}cd end`, idx)).toBe(`note ${libRedact.REDACTED_MARK} end`);
+  });
+
+  it('fails closed for a belt RangeError and lets a non-RangeError belt defect escape', () => {
+    const belt = libRedact.makeBelt([repeatedCandidate()]);
+    const idx = libRedact.makePairIndex([], belt);
+    const field = 'unrelated-public-field';
+    vi.stubGlobal('Int32Array', class { constructor() { throw new RangeError('belt allocation'); } });
+    try {
+      expect(libRedact.redactField(field, idx)).toBe(libRedact.REDACTED_MARK);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    vi.stubGlobal('Int32Array', class { constructor() { throw new Error('belt defect'); } });
+    try {
+      expect(() => libRedact.redactField(field, idx)).toThrow('belt defect');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('the seed rule: a wordy unit and a padding run seed nothing, so ordinary words stay; layer 1 still takes the whole value', () => {

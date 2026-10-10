@@ -2179,8 +2179,16 @@ function markSpansAt(plain, offsets) {
  *  mark. `ANSI_ESCAPE_RE` therefore never takes a mark's first character as
  *  any of them.
  *  D-4307 (history-redaction-csi-joined-belt, amended: review 316 F1 and M1, security reviews of ee55098c2 and 2a8c791bf) */
+/** The complete field redaction. Layer 4 allocates per-field buffers too, so its RangeError shares layers 1-3's
+ * fail-closed contract while non-RangeError defects remain visible. */
 export function redactField(text, idx) {
-  return beltMask(redactLayered(text, idx), idx.belt, true, beltHit(idx));
+  const layered = redactLayered(text, idx);
+  try {
+    return beltMask(layered, idx.belt, true, beltHit(idx));
+  } catch (e) {
+    if (e instanceof RangeError) return REDACTED_MARK;
+    throw e;
+  }
 }
 
 /** redactField's three layers over its readings, before the belt: B1's redactField body, unchanged. */
@@ -5197,31 +5205,39 @@ export function makeBelt(units) {
     const w = beltWidth(unit);
     const n = unit.length - w + 1;
     if (n < 1 || !/^[A-Za-z0-9_-]+$/.test(unit)) continue;
-    if (grams + n > BELT_GRAMS_MAX) { overflow += 1; continue; }
     const codes = new Uint8Array(unit.length);
     for (let i = 0; i < unit.length; i += 1) codes[i] = BELT_CODE[unit.charCodeAt(i)];
-    const at = codesOf.length;
-    codesOf.push(codes);
-    texts.push(unit);
-    let t = byWidth.get(w);
-    if (t === undefined) {
-      t = { w, pw: beltPow(w - 1), table: new Map() };
-      byWidth.set(w, t);
-    }
+    const existing = byWidth.get(w);
+    const pw = existing === undefined ? beltPow(w - 1) : existing.pw;
+    const staged = [];
     let h = 0;
     for (let i = 0; i < unit.length; i += 1) {
-      if (i >= w) h = (h - Math.imul(codes[i - w], t.pw)) | 0;
+      if (i >= w) h = (h - Math.imul(codes[i - w], pw)) | 0;
       h = (Math.imul(h, BELT_BASE) + codes[i]) | 0;
       if (i < w - 1) continue;
       const off = i - w + 1;
       if (!beltSeeds(unit, off, w)) continue;
       const key = h >>> 2;
+      const prior = existing?.table.get(key);
+      if (prior !== undefined && prior.some((g) => beltSame(codesOf[g.unit], g.off, codes, off, w))) continue;
+      if (staged.some((g) => g.key === key && beltSame(codes, g.off, codes, off, w))) continue;
+      staged.push({ key, off });
+    }
+    if (grams + staged.length > BELT_GRAMS_MAX) { overflow += 1; continue; }
+    const at = codesOf.length;
+    codesOf.push(codes);
+    texts.push(unit);
+    let t = existing;
+    if (t === undefined) {
+      t = { w, pw, table: new Map() };
+      byWidth.set(w, t);
+    }
+    for (const { key, off } of staged) {
       const list = t.table.get(key);
-      if (list !== undefined && list.some((g) => beltSame(codesOf[g.unit], g.off, codes, off, w))) continue;
       if (list === undefined) t.table.set(key, [{ unit: at, off }]);
       else list.push({ unit: at, off });
-      grams += 1;
     }
+    grams += staged.length;
   }
   return { units: codesOf, texts, widths: [...byWidth.values()].sort((a, b) => a.w - b.w), grams, overflow };
 }
