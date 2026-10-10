@@ -1,10 +1,18 @@
-// THE RECYCLED SLUG, FORCED AT EVERY STEP BOUNDARY (child-workspace reclamation wave 7, spec 2026-09-22 §5.10).
-// The collector's argument: every hand-out of `~/.cc-tmp/<id>` goes through `_child_tmpdir`, which needs `.child`. So
-// a spawn on a recycled slug BEFORE the move is seen by step 5's direct lookup and the leaf goes back to it; a spawn
-// AFTER the move gets a NEW inode from `mkdir -p`, which step 6 never touches, because it removes only the slot's
-// inode, dev:ino-checked. Here a real `_child_tmpdir` runs at each boundary, and each case asserts that the new child's
-// leaf stands — restored, kept beside a kept record, or never touched. Never removed. And a straggler that re-creates
-// the leaf after the move makes a new, unwitnessed inode that is never taken.
+// THE RECYCLED SLUG, FORCED AT THE STEP BOUNDARIES NAMED BELOW (child-workspace reclamation wave 7, spec 2026-09-22
+// §5.10). The collector's argument: every hand-out of `~/.cc-tmp/<id>` goes through `_child_tmpdir`, which needs
+// `.child`. So a spawn on a recycled slug BEFORE the move is seen by step 5's direct lookup and the leaf goes back to
+// it; a spawn AFTER the move gets a NEW inode from `mkdir -p`, which step 6 never touches, because it removes only the
+// slot's inode, dev:ino-checked. A real `_child_tmpdir` runs at each boundary this file forces, and each case asserts
+// that the new child's leaf stands — restored, kept beside a kept record, or never touched. Never removed. And a
+// straggler that re-creates the leaf after the move makes a new, unwitnessed inode that is never taken.
+// WHICH BOUNDARIES (review 369's F15). A FRESH collection passes ten seam points (`POINTS`). This file forces a recycled
+// spawn at seven of them: `locked`, `consented`, `recorded` and `slotted` (before the move, where the spawn adopts the
+// leaf), `moved` (after it, where the spawn makes a new inode), and `proven` and `removed` (step 6 removes the slot's
+// inode alone). It also forces the SPLIT (`.child` written at `slotted`, the `mkdir -p` at `moved`) and a straggler at
+// `moved`. It forces NOTHING at `emptied`, `witnessed` or `dropped`, at the putback's `restoring`, at the witness-only
+// path's `witnessed`, or at any boundary of a RESUME: none of those is pinned here. Review 369's C1 built each of them
+// through the verb and measured it safe, and its resume-boundary pins are carried to wave 9's pre-flight list. The
+// seam case photographs all ten points, with no spawn.
 // FIXTURE HOME ONLY (`collectRaceFixture.ts`). Linux only, and only where `mv --no-copy` exists (spec §5.10).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -70,6 +78,10 @@ describe.skipIf(!LINUX || !NO_COPY)('a recycled spawn that ADOPTS the old leaf b
         // for its own run, and the verb re-reads the witness directly before it writes the record, then reads the record
         // back against what the consent bound. The run differs, so the record is dropped before any slot is made:
         // `failed probe-unmeasured`, a retry, and nothing was moved. The next audit then sees the row.
+        // SCOPED (review 369's F7 (ii)): this holds for a spawn whose witness write CHANGES the witness. A recycled child
+        // minted for the SAME run (dev, ino, btime and run all match, so its write writes nothing), or one whose witness
+        // write failed (only warned), passes this read-back, and adoption opens at the fork's registry read instead —
+        // the widened residual `crash-at-moved-after-a-spawn-keeps-the-leaf-in-its-slot` (the crash suite) states it.
         expect(r.code, r.stdout + r.stderr).toBe(1);
         expect(d['failed'], r.stdout).toBe('probe-unmeasured');
         expect(String(d['detail']), 'stopped by the read-back, not by a later proof').toContain('its witness is not the one the consent bound');
@@ -144,7 +156,16 @@ describe.skipIf(!LINUX || !NO_COPY)('a recycled spawn AFTER the move: a new inod
       expect(r.code, r.stdout + r.stderr).toBe(0);
       expect(docOf(r.stdout)['collected'], r.stdout).toBe(COL_ID);
       const g2 = fs.lstatSync(o.leaf, { bigint: true });
-      expect(`${g2.dev}:${g2.ino}`, 'a NEW inode at the id').not.toBe(o.devino);
+      // A NEW DIRECTORY at the id, told apart by dev:ino OR by its NANOSECOND birth time. At `removed` the orphan's
+      // inode is already freed, and ext4 can hand it straight back to the spawn's `mkdir -p`, so dev:ino alone may
+      // match; ccd's whole-second btime may match too. A birth time of zero (no statx btime) could hide a reused inode,
+      // so it is refused first, never read as "differs" (the collector refuses a leaf with no birth time anyway).
+      expect(o.birthtimeNs, 'the CONTROL: this file system reports the orphan’s birth time').not.toBe(0n);
+      expect(g2.birthtimeNs, 'the CONTROL: and the new leaf’s').not.toBe(0n);
+      const newDevIno = `${g2.dev}:${g2.ino}`;
+      expect(newDevIno !== o.devino || g2.birthtimeNs !== o.birthtimeNs,
+        `a NEW directory at the id: ${newDevIno} born ${g2.birthtimeNs} ns, the orphan ${o.devino} born ${o.birthtimeNs} ns`)
+        .toBe(true);
       expect(fs.readFileSync(path.join(o.leaf, 'g2.txt'), 'utf8'), 'the new child\'s scratch survives').toBe('g2 scratch\n');
       expect(witnessField(h, 'run'), 'the new child\'s witness stands').toBe(G2_RUN);
       expect(witnessField(h, 'ino'), 'naming the new inode').toBe(String(g2.ino));

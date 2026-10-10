@@ -36,10 +36,13 @@ export const TOKEN = /^[0-9a-f]{64}$/;
  *  `recorded` the record written · `slotted` the slot made, before the move · `moved` the move PROVEN ·
  *  `proven` step 5's re-proofs passed · `removed` the slot's leaf proven absent · `emptied` the slot rmdir'd ·
  *  `witnessed` the witness compared-and-dropped · `dropped` the record dropped, before the verb answers. Task 6's
- *  `restoring` (before a move back) is no fresh collection's, so it is not listed. */
+ *  `restoring` (before a move back) is no fresh collection's, so it is not listed; a crash case can still aim
+ *  `crashAt` at it (`KillPoint`). */
 export const POINTS = ['locked', 'consented', 'recorded', 'slotted', 'moved', 'proven', 'removed', 'emptied',
   'witnessed', 'dropped'] as const;
 export type Point = (typeof POINTS)[number];
+/** Where `crashAt` can kill: any point a fresh collection passes, or the putback's `restoring`, before its rename. */
+export type KillPoint = Point | 'restoring';
 
 /** The idle floor at 0 s, so every leaf a case makes is past it at once. Ruling G4: `_ws_collect_floor_s` is the ONE
  *  floor definition, and redefining it in the sourced harness is the only test seam that lowers it, never the
@@ -90,7 +93,9 @@ export const witnessField = (h: PrHarness, key: string, id = COL_ID): string | n
   } catch { return null; }
 };
 
-export interface Orphan { id: string; leaf: string; devino: string }
+/** `birthtimeNs` is the leaf's NANOSECOND birth time (statx), so a case can tell a new directory from the orphan even
+ *  when the kernel hands the freed inode straight back: ccd's whole-second btime cannot. */
+export interface Orphan { id: string; leaf: string; devino: string; birthtimeNs: bigint }
 /** A WITNESSED ORPHAN, the collector's whole population: a child minted for run 7 asked `_child_tmpdir` for its temp
  *  root (which wrote the witness), left scratch in it, and is gone — its marker removed, the leaf and the witness left
  *  behind, as a tail that KEPT the leaf leaves them (spec §5.2). */
@@ -102,7 +107,7 @@ export function orphanLeaf(h: PrHarness, id = COL_ID): Orphan {
   expect(witnessField(h, 'run', id), 'the CONTROL: and witnessed it for the dead run').toBe(DEAD_RUN);
   const devino = devinoOf(leaf);
   expect(devino, 'the CONTROL: the leaf stands').not.toBeNull();
-  return { id, leaf, devino: devino! };
+  return { id, leaf, devino: devino!, birthtimeNs: fs.lstatSync(leaf, { bigint: true }).birthtimeNs };
 }
 
 /** A RECYCLED-SLUG SPAWN's registry half, as `ws-add` writes it: the row, then the `.child` marker (its one writer). */
@@ -138,7 +143,7 @@ export const gapErrorsOf = (h: PrHarness): string[] => linesOf(path.join(h.home,
  *  ancestors first and itself last, so no shell between them returns into the verb and carries on. A kill, not an exit:
  *  no trap runs, nothing is cleaned up. `$HOME/crashed-at` says it fired. Linux (`/proc/<pid>/stat`). `acts` run at
  *  EARLIER points exactly as `gapAt`'s do, so a race and a crash can meet in one run. */
-export const crashAt = (point: Point, acts: Partial<Record<Point, string>> = {}): string =>
+export const crashAt = (point: KillPoint, acts: Partial<Record<Point, string>> = {}): string =>
   `_ws_collect_gap() { echo "$1" >> "$HOME/gaps"; case "$1" in ${armsOf(acts)} esac; [[ "$1" == ${point} ]] || return 0;`
   + ' printf \'%s\' "$1" > "$HOME/crashed-at"; local p=$BASHPID pp; local -a chain=();'
   + ' while [[ "$p" != "$$" ]]; do chain=("$p" ${chain[@]+"${chain[@]}"});'
