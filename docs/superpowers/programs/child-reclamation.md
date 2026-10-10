@@ -47,6 +47,26 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-10 02:07 — wave 7 fix round 1 is RULED and sent (mail 4158); run 347 is back at `working`.**
+  - **The rulings** are `wave7/fix-round-1-rulings.md` in the evidence archive. The attack, workflow
+    `wf_568e4e8b-074` (three Opus lenses, two Sonnet refuters per finding, 54 agents), had 12 of its 25 findings
+    survive, and they changed four rulings.
+  - **Code fixes, each with a mutation row:**
+    - F2: an absence needs the recorded device.
+    - F3: the audits ask a read-only quarantine check, split from the maker, and the maker clears setgid.
+    - F4: the audit asks owner write.
+    - F8: the fresh arm refuses beside an unrecorded slot.
+    - C13: an empty gitdir is unreadable.
+    - C8: the floor knob strips zeros before its length clamp.
+  - **Prose:** F1, F5, F6, F7, F9 to F16, C6, C7, C9 and C12.
+  - **F7 is reversed from the draft.** The retaken-path arm stays above the registry (T8 OPEN4, R-e, R66), and the
+    residual is widened instead.
+  - **Carried.** The pre-existing `rec == f` recycled-admin rule (F1's root) and the NUL back-link corner go to the
+    path-identity programme. C1's resume-boundary spawn pins, C5, `tail-drop-ignores-a-recordless-slot` and
+    `tail-drop-believes-an-absent-leaf` go to wave 9's pre-flight list.
+  - **Numbers.** 30 of run 347's block are assigned singly in the rulings file: 23 substantive, and one shared number
+    for each of Tasks 2, 4, 5, 6, 7, 8 and 9. 4532 and 4533 are in reserve.
+
 - **2026-10-10 01:47 — review 369 is wave 7's review (brisk-prairie's 4157), closed `done` with its own report.**
   - **How it ran.** On `claude-dev1` with no swap, on Opus 5.5: the held-out panel, the plan's four lenses with
     models literal (SAFETY as four Opus·xhigh parts), 3 Sonnet refuters per finding, and the leads from 4153 and
