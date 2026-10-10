@@ -21,11 +21,37 @@ import type {
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_GATE_CAP } from '../../shared/api';
 import { LOOPBACK_HOSTS } from '../../shared/base-url';
 import {
-  ACK_UNREADABLE_TEXT, AUTO_LABELS, CHANNEL_SENTENCES, MACOS_UNMANAGED_TEXT, NOTIFY_LABELS, SettingsScreen,
-  UNARMED_EXPOSURE_TEXT, UNCONFIRMED_TEXT, autoGateMissing, canAck, catalogueLine, catalogueReasonText, clockTime,
-  currentIsAmber, currentText, dayClock, finishedLine, nodeStateLine, reachabilityLine, refusedLine, releaseDate,
-  releaseDirection, releaseRunningText, requestLine, resolveDetailLine, sortReleases, unarmedExposure, verifiedAt,
+  AUTO_LABELS,
+  autoGateMissing,
+  CHANNEL_SENTENCES,
+  NOTIFY_LABELS,
+  SettingsScreen,
+  UNARMED_EXPOSURE_TEXT,
+  unarmedExposure,
+  UNCONFIRMED_TEXT,
 } from '../src/screens/SettingsScreen';
+import {
+  ACK_UNREADABLE_TEXT,
+  canAck,
+  catalogueLine,
+  catalogueReasonText,
+  clockTime,
+  currentIsAmber,
+  currentText,
+  dayClock,
+  finishedLine,
+  MACOS_UNMANAGED_TEXT,
+  nodeStateLine,
+  reachabilityLine,
+  refusedLine,
+  releaseDate,
+  releaseDirection,
+  releaseRunningText,
+  requestLine,
+  resolveDetailLine,
+  sortReleases,
+  verifiedAt,
+} from '../src/screens/updates';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';

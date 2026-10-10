@@ -17,11 +17,14 @@ import { buttonVariants, ToastHost } from '@ccrc/ui';
 import { HALT_LEAD_TEXT, HaltBanner } from '../src/fleet/HaltBanner';
 import { useUpdatesView } from '../src/fleet/useUpdatesView';
 import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../src/fleet/updateAck';
-import * as settings from '../src/screens/SettingsScreen';
+import * as updates from '../src/screens/updates';
 import { declValue, ruleIn } from './cssRule';
 
 // canAck through a pass-through spy, so ONE case can drive the rendered gate (T4-1) while every other case runs the
-// real function. SettingsScreen re-exports from the same module, so `settings.canAck === canAck` still holds.
+// real function. `screens/updates.tsx` re-exports from the same module, so
+// `updates.canAck === canAck` still holds — the assertion is about the
+// IDENTITY, not about which file carries the re-export (it moved out of
+// SettingsScreen with `NodeItem`, its consumer).
 vi.mock('../src/fleet/updateAck', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/fleet/updateAck')>();
   return { ...actual, canAck: vi.fn(actual.canAck) };
@@ -30,7 +33,14 @@ vi.mock('../src/fleet/updateAck', async (importOriginal) => {
 const SRC = path.join(import.meta.dirname, '..', 'src');
 const haltCss = readFileSync(path.join(SRC, 'fleet', 'fleet.css'), 'utf8');
 const bannerSrc = readFileSync(path.join(SRC, 'fleet', 'HaltBanner.tsx'), 'utf8');
-const settingsSrc = readFileSync(path.join(SRC, 'screens', 'SettingsScreen.tsx'), 'utf8');
+// `screens/updates.tsx`, not SettingsScreen: the node inventory — and so
+// `NodeItem`, the Ack's one caller — moved to a file of its own when
+// SettingsScreen was split. D-4267's claim is unchanged (Settings holds no
+// COPY of canAck/ackUpdateNode and calls the shared `sendAck`); what moved is
+// which file carries it, so both files are read and the claim is made of the
+// pair.
+const settingsSrc = readFileSync(path.join(SRC, 'screens', 'SettingsScreen.tsx'), 'utf8')
+  + readFileSync(path.join(SRC, 'screens', 'updates.tsx'), 'utf8');
 
 afterEach(() => {
   cleanup();
@@ -165,8 +175,8 @@ describe('HaltBanner — the Ack in place is the Settings Ack', () => {
   });
 
   it('Settings re-exports the same function and text, and holds no copy of either (D-4267)', () => {
-    expect(settings.canAck).toBe(canAck);
-    expect(settings.ACK_UNREADABLE_TEXT).toBe(ACK_UNREADABLE_TEXT);
+    expect(updates.canAck).toBe(canAck);
+    expect(updates.ACK_UNREADABLE_TEXT).toBe(ACK_UNREADABLE_TEXT);
     expect(settingsSrc).not.toMatch(/function canAck\b/);
     expect(settingsSrc).not.toMatch(/api\.ackUpdateNode\(/);
     expect(settingsSrc).toMatch(/void sendAck\(n\.nodeId\)/);
