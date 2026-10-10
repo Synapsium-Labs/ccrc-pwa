@@ -22,6 +22,7 @@ import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { PickSheet } from '../session/PickSheet';
 import { ReapSheet } from '../session/ReapSheet';
+import { useQueuedRoute } from '../session/useQueuedRoute';
 import { SessionHeader } from '../session/SessionHeader';
 import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
@@ -88,38 +89,11 @@ export function SessionScreen({
   const [reapOpen, setReapOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
-  // A routing write in flight, until the fleet frame reads it back — or 60s
-  // pass with no confirmation (routing spec §5.3, slice 4, Task 5). `readback`
-  // rides along so the read-back effect below never has to re-derive the
-  // option list that produced this write.
-  const [queued, setQueued] = useState<{ field: RouteField; value: string; readback: string } | null>(null);
-  const queuedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clearQueuedTimer = (): void => {
-    if (queuedTimer.current !== null) {
-      clearTimeout(queuedTimer.current);
-      queuedTimer.current = null;
-    }
-  };
-  useEffect(() => clearQueuedTimer, []);
-
-  // The read-back half: a fleet frame that agrees with a queued write clears
-  // it (and the timeout that would otherwise clear it at 60s with the
-  // unconfirmed toast). `effort` compares the live level directly (or
-  // `live.ultracode` for the `ultracode` value, since that is a separate
-  // boolean on the wire, not an effort string); `class` compares the queued
-  // row's `readback` key against the live model string the same loose way
-  // `modelOptions`' own `active` highlight already does.
-  useEffect(() => {
-    if (queued === null) return;
-    const agrees = queued.field === 'effort'
-      ? (queued.value === 'ultracode' ? live?.ultracode === true : live?.effort === queued.value)
-      : (live?.model ?? '').toLowerCase().includes(queued.readback);
-    if (agrees) {
-      clearQueuedTimer();
-      setQueued(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queued, live?.effort, live?.ultracode, live?.model]);
+  // A routing write in flight, until the fleet frame reads it back — the
+  // badge, its 60s timer and every carve-out that cancels it live in
+  // `useQueuedRoute`. `live` is read below; `routeInfo` is read further down,
+  // so the hook takes the same question in its own words.
+  const queued = useQueuedRoute(live, (live?.route ?? null) !== null);
 
   useEffect(() => {
     // Session sockets live with the screen: resume rides `?since=` on return.
@@ -209,21 +183,6 @@ export function SessionScreen({
   const routeUnreadable = routeInfo?.unreadable ?? [];
   const classUnreadable = routeUnreadable.includes('class');
   const effortUnreadable = routeUnreadable.includes('effort');
-  // Fix wave #4: `pick()` decides the local-timer carve-out from `routeInfo`
-  // at TAP TIME — a tap on a session that had never been routed yet
-  // (`route: null`) arms the 60s "not confirmed" toast below, same as
-  // always. Once the FIRST routing record for this session lands on any
-  // later fleet frame, `queuedField` below hands the badge to the wire for
-  // good, but nothing disarmed that already-running local timer — left
-  // alone it still fires 60s after the tap and pops a false "not confirmed"
-  // toast for a write the wire has since taken over entirely. This clears
-  // both the moment `routeInfo` stops being null.
-  useEffect(() => {
-    if (routeInfo === null) return;
-    clearQueuedTimer();
-    setQueued(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeInfo !== null]);
   // The intended value's readback vs. the live read-back: `live.effort`
   // directly for effort (`ultracode` is its own boolean, not an effort
   // string — the same split `pick`'s own read-back effect already makes),
@@ -290,7 +249,7 @@ export function SessionScreen({
   // Exclusively one source or the other, never both: with `route` present the
   // wire is the sole answer (a stale local write must not re-light a badge
   // the wire already cleared); with `route: null`, today's local state.
-  const queuedField: RouteField | null = routeInfo !== null ? wireQueuedField : (queued?.field ?? null);
+  const queuedField: RouteField | null = routeInfo !== null ? wireQueuedField : queued.field;
   // A direct roster lookup, not a re-parse of a colour-token NAME: this used
   // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
   // return value, which worked only for a wrapper whose colour happened to be
@@ -377,7 +336,7 @@ export function SessionScreen({
   const changeEffort = (): void => setPicker('effort');
   const pick = async (o: PickOption): Promise<void> => {
     setPicker(null);
-    clearQueuedTimer();
+    queued.clear();
     // Fix round 2, finding 2: once `route` rides the wire (`routeInfo !==
     // null`), it is the WHOLE STORY for this field — `queuedField` above
     // already derives straight from it, never from this local `queued`
@@ -401,13 +360,7 @@ export function SessionScreen({
     // leading `clearQueuedTimer()` always cancels a PRIOR pick's real timer,
     // never a not-yet-installed one, so a fast second tap can no longer leak
     // the first pick's handle.
-    if (routeInfo === null) {
-      setQueued({ field: o.route.field, value: o.route.value, readback: o.readback });
-      queuedTimer.current = setTimeout(() => {
-        setQueued(null);
-        toast('Routing queued; the pane has not confirmed it yet');
-      }, 60_000);
-    }
+    if (routeInfo === null) queued.arm(o.route.field, o.route.value, o.readback);
     try {
       await api.route(id, o.route.field, o.route.value);
       // Neither value leaves a mark the pane can read back — `auto` clears no
@@ -419,12 +372,10 @@ export function SessionScreen({
       // `routeInfo !== null` never armed one in the first place.
       if ((o.route.field === 'effort' && o.route.value === 'auto')
           || (o.route.field === 'class' && o.route.value === 'default')) {
-        clearQueuedTimer();
-        setQueued(null);
+        queued.clear();
       }
     } catch (err) {
-      clearQueuedTimer();
-      setQueued(null);
+      queued.clear();
       toast(`Couldn't apply that — ${apiErrorText(err)}`, 'error');
     }
   };
