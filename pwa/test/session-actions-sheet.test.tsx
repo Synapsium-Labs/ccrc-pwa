@@ -810,3 +810,73 @@ describe('the spawn-state note (§1.6b)', () => {
     expect(t).not.toContain('Nothing is watching');
   });
 });
+
+// — the refusals the three fire-and-forget doors say, and the swap's own exit —
+describe('a door that fails still says so, in ccd’s own words', () => {
+  it('Restore reports ccd’s refusal rather than closing in silence', async () => {
+    // `restoreNow`'s catch, and the sheet stays open: a restore that failed
+    // leaves the row exactly as it was, so closing would read as success.
+    // 502 `{stderr}` with no `error` key is the REAL shape every runCcd route
+    // fails as, which is why `apiErrorText` and not `err.message`.
+    stubFetch({ ok: false, stderr: 'ws-restore: worktree is gone' });
+    renderSheet(s({ status: 'dead', archivedAt: 1785300000, bucket: 'archived' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByText(/ws-restore: worktree is gone/)).toBeInTheDocument();
+  });
+
+  it('“Stop only” reports a /stop that failed, after the sheet has already closed', async () => {
+    // Fire-and-forget by design — QuickConfirm already ran the consequence
+    // past the operator — so the toast is the ONLY thing left that can carry
+    // a failure. Without it a stop that never landed looks like one that did.
+    const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'worktree-gone' }));
+    renderSheet(workspaceSession(), { archive: archive as unknown as typeof api.archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(document.querySelector('.archive-conflict-sheet .btn-primary')).not.toBeNull());
+    fireEvent.click(document.querySelector('.archive-conflict-sheet .btn-primary')!);
+    const stopOnly = await screen.findByRole('button', { name: 'Stop only' });
+
+    // Only now make the box refuse, so the archive path above is unaffected.
+    stubFetch({ ok: false, stderr: 'tmux: no server running' });
+    fireEvent.click(stopOnly);
+    expect(await screen.findByText(/tmux: no server running/)).toBeInTheDocument();
+  });
+
+  it('Release reports a /release that failed the same way', async () => {
+    // The third fire-and-forget door. A held session whose release 502s is
+    // still held, and the board will show it — but the operator tapped a
+    // button, and a button that reports nothing is a button that lied.
+    stubFetch({ ok: false, stderr: 'hold: file is gone' });
+    renderSheet(heldSession());
+    fireEvent.click(screen.getByRole('button', { name: /release/i }));
+    const confirm = document.querySelector('.qc-actions .btn-primary');
+    if (!(confirm instanceof HTMLElement)) throw new Error('no release confirm');
+    fireEvent.click(confirm);
+    expect(await screen.findByText(/hold: file is gone/)).toBeInTheDocument();
+  });
+});
+
+describe('the swap sheet this one mounts', () => {
+  it('opens from Swap account and closes on its own scrim', async () => {
+    // `onClose` was an uncovered function: every case that opens the swap
+    // sheet leaves it open. A sheet that cannot be dismissed covers the
+    // actions sheet that raised it.
+    renderSheet(workspaceSession());
+    fireEvent.click(screen.getByRole('button', { name: /swap account/i }));
+    await waitFor(() => expect(screen.queryAllByTestId('sheet-overlay').length).toBeGreaterThan(1));
+
+    const scrims = screen.getAllByTestId('sheet-overlay');
+    fireEvent.click(scrims[scrims.length - 1]!);
+    await waitFor(() => expect(screen.queryAllByTestId('sheet-overlay').length).toBe(1));
+  });
+});
+
+describe('the spawn notes, one per state', () => {
+  it('a VANISHED pane says the conversation is resumed from the transcript', () => {
+    // The third of three spawn-state notes and the only one with no case. It
+    // is the one that answers the reader's actual question — the pane is gone,
+    // so is my work? — and silence there is the worst of the three.
+    renderSheet(s({ spawnState: 'vanished', status: 'dead', bucket: 'dead' }));
+    expect(screen.getByText(/tmux session disappeared/)).toBeInTheDocument();
+    expect(screen.getByText(/resumed\s+from the transcript, not from that pane/)).toBeInTheDocument();
+  });
+});
