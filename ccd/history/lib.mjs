@@ -4081,7 +4081,9 @@ export function parseBlocks(text) {
   const out = [];
   for (const m of s.matchAll(new RegExp(BLOCK_RE_SOURCE, 'g'))) {
     const attrs = {};
-    for (const a of m[2].matchAll(BLOCK_ATTR_RE)) attrs[a[1]] = a[2];
+    let attrCount = 0;
+    for (const a of m[2].matchAll(BLOCK_ATTR_RE)) { attrs[a[1]] = a[2]; attrCount += 1; }
+    if (attrCount === 0) continue;
     const fields = { gist: null, expand: null, refs: null };
     let current = null;
     for (const line of m[3].split('\n')) {

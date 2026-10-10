@@ -110,6 +110,14 @@ describe('selectBlock and blockStatus: which block counts, and its status (spec 
     expect(statusOf(`${good}\n${generic}`, { generic: true })).toMatchObject({ status: 'ok', block: { attrs: { v: '1' } } });
     expect(statusOf(good, { generic: true })).toMatchObject({ status: 'degraded', reason: 'id-mismatch' });
   });
+  it('requires one quoted attribute: malformed tag-like text is absent with a receipt', () => {
+    const body = `gist: ${GIST}\nExpand for details about: recovery\nrefs: none`;
+    for (const attrs of ['', '   ', 'garbage', 'id=x', '="x"']) {
+      const text = `<ccrc-leaf ${attrs}>\n${body}\n</ccrc-leaf>`;
+      expect(parse.parseBlocks(text), attrs).toEqual([]);
+      expect(statusOf(text), attrs).toMatchObject({ status: 'absent', reason: 'no-block', block: null });
+    }
+  });
 });
 
 describe('summaryRowFor: the summary via anchorUuid, never the next row, never the echo (spec 7.4 item 1; PX1, PX2 pure halves)', () => {
