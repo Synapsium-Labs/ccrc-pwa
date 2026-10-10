@@ -77,3 +77,34 @@ export const EYEBROW =
  *  shape's. NO GROUND either — nothing here paints, so unlike a card shell
  *  this one can move without taking a contrast-gate key with it. */
 export const RESET_LIST = 'list-none m-0 p-0 grid';
+
+// ---------------------------------------------------------------------------
+// GLYPHS THAT CARRY MEANING, and the one blind spot every census shares.
+//
+// A single-character literal is under `literal-census`'s 25-character floor AND
+// carries no space, so that census is structurally blind to a glyph written
+// twice; `markup-census` reads class literals and attribute counts, not text
+// nodes; `shape-census` reads stylesheets. Nothing in the repo could see that
+// three production call sites in TWO packages each typed `✉` for the same idea.
+//
+// These join the `*_GLYPH` vocabulary the app already keeps per state
+// (`RUN_GLYPH`, `MARKER_GLYPH`, `READY_GLYPH`, `DISPATCH_GLYPH`, `DOOR_GLYPH`,
+// `ASK_GLYPH`, `CROSSING_GLYPH`…). Those are keyed BY STATE because the rule
+// there is that a state is never read out of colour alone. These three are not
+// per-state: they are one idea with one spelling, and the reason they are here
+// rather than in a `Record` is that both packages draw them.
+// ---------------------------------------------------------------------------
+
+/** Mail. Drawn by `MailBadge` (app), `MailCard` and `MailStrip` (this
+ *  package) — three production sites across the two packages, each with its own
+ *  copy of the character before this. */
+export const MAIL_GLYPH = '✉';
+
+/** A warning the surface has no room to spell out. `SessionLine`'s own header
+ *  carries the argument: on a phone the sentence becomes this mark, and the
+ *  full text lives in the actions sheet where there is room for it. Also
+ *  `DISPATCH_GLYPH.stalled`. */
+export const WARN_GLYPH = '⚠';
+
+/** Settings — the door's glyph, and the feed's word for a coordination event. */
+export const SETTINGS_GLYPH = '⚙';

@@ -27,6 +27,7 @@ import {
 } from '../../../shared/api';
 import { useNow } from '../lib/use-now';
 import { elapsedWords } from '../lib/elapsed';
+import { MAIL_GLYPH } from '../lib/text';
 import './mail-strip.css';
 
 const PLURAL: Record<MailSummary['kind'], [string, string]> = {
@@ -282,7 +283,7 @@ export function MailStrip({ mail, now: nowProp }: { mail: MailSummary[]; now?: n
       root="mail-strip"
       part="mail-strip"
       label="Mail"
-      mark="✉"
+      mark={MAIL_GLYPH}
       headline={newest.subject}
       count={mail.length}
       summary={summarizeMail(mail)}

@@ -7,7 +7,7 @@
 // the bell — and, being the only door, it is always rendered, exactly as
 // AccountsStrip must always render for /accounts (AccountsStrip.tsx:9-15).
 import type { ReactNode } from 'react';
-import { CountBadge } from '@ccrc/ui';
+import { CountBadge, MAIL_GLYPH } from '@ccrc/ui';
 import { navigate } from '../lib/router';
 import './fleet.css';
 
@@ -25,7 +25,7 @@ export function MailBadge({ unread }: { unread: number }): ReactNode {
       aria-label={unread > 0 ? `Mail — ${unread} unread` : 'Mail — nothing unread'}
       onClick={() => navigate('/mail')}
     >
-      <span className="mail-badge-glyph" aria-hidden="true">✉</span>
+      <span className="mail-badge-glyph" aria-hidden="true">{MAIL_GLYPH}</span>
       {unread > 0 && (
         <CountBadge className="mail-badge-count">{unread > PRINT_CAP ? `${PRINT_CAP}+` : unread}</CountBadge>
       )}

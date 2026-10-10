@@ -31,7 +31,7 @@
 // from the PWA is a stated non-goal. A control here would be a second door on
 // one act — the same reasoning that keeps `Answer` in `ToolCard` from
 // answering anything.
-import { RESET_LIST } from '../lib/text';
+import { MAIL_GLYPH, RESET_LIST } from '../lib/text';
 import type { ReactNode } from 'react';
 import type { MailEnvelope } from '../../../shared/api';
 import { Well } from '../primitives/well';
@@ -56,7 +56,7 @@ export function MailCard({ envelope }: { envelope: MailEnvelope }): ReactNode {
   return (
     <article className="mail-card">
       <p className="mail-card-from">
-        <span className="mail-card-glyph" aria-hidden="true">✉</span>
+        <span className="mail-card-glyph" aria-hidden="true">{MAIL_GLYPH}</span>
         <span className="mail-card-sender">{envelope.fromId}</span>
         <span className="mail-card-arrow" aria-hidden="true">→</span>
         <span className="mail-card-recipient">{envelope.toId}</span>

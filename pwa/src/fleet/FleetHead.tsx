@@ -12,7 +12,7 @@
 // rather than a fragment inlined in a screen: a reader looking for "how do I
 // reach settings" should land in a file that is only about that.
 import type { ReactNode } from 'react';
-import { Door } from '@ccrc/ui';
+import { Door, SETTINGS_GLYPH } from '@ccrc/ui';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { navigate } from '../lib/router';
@@ -76,7 +76,7 @@ export function FleetHead(
               (fleet.css, D-3303). */}
           <Door
             className="settings-door"
-            glyph="⚙"
+            glyph={SETTINGS_GLYPH}
             aria-label="Settings — updates and notifications"
             onClick={() => navigate('/settings')}
           >

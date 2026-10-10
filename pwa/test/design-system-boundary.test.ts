@@ -321,3 +321,123 @@ describe('the owned vocabulary keeps up with the package', () => {
     expect(selected.size).toBeGreaterThan(hooks.length);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SECOND API SURFACE, one level up from the class names above.
+//
+// `OWNED` guards what a call site WRITES. It cannot see what a call site
+// IMPORTS: `@ccrc/ui` also exports ~20 class-string constants, and a file that
+// imports `TEXT_INPUT` or `CHIP` and spreads it onto a raw element has forked
+// the component exactly as surely as typing `btn-primary` by hand — the drift
+// this file was written after, re-arriving through a named import that every
+// matcher above reads as an identifier rather than a class.
+//
+// THE OWNERSHIP IS DERIVED, NOT TYPED. `ui/src/index.ts` exports each
+// primitive's constants in the SAME statement as the primitive, so the owner
+// is the first non-type PascalCase name beside them. A new primitive and its
+// new constant are covered on the day they land, with nothing to keep in step
+// by hand — which is the half of `OWNED` that went stale once already.
+//
+// `lib/text`, `lib/press`, `lib/focus` and `styles/themes` export no component
+// at all, so their constants fall out of this automatically. That is correct
+// and is `lib/text.ts`'s own stated reason for existing: those shapes are
+// meant to be worn by whatever element a call site already renders.
+// ---------------------------------------------------------------------------
+
+/** Constants that travel WITHOUT their primitive, each with the measurement.
+ *  Registered rather than pattern-matched, for `NOT_VOCABULARY`'s reason: the
+ *  derivation is structural, so what it cannot tell apart is said out loud. */
+export const NOT_A_SKIN: Record<string, string> = {
+  LIMIT_TRACK:
+    "AccountRow builds its gauge from the track plus `fillVariants` because the row must be "
+    + "SPANS ONLY — it sits inside the account button, and `<LimitBar>` renders a block. Both "
+    + "parts are the design system's; only the assembly is the app's.",
+  DOOR_GLYPH: 'a glyph, not a class.',
+  ASK_GLYPH: 'a glyph, not a class.',
+  ASK_WORD: 'a word table, not a class.',
+  TYPE_MS: 'a duration in milliseconds.',
+  CONTROL_ROW_NOTE:
+    "the NOTE beside a control row, worn by the `<p>` the call site already renders — three "
+    + 'banners do exactly that. It is not the row.',
+  QC_CONSEQUENCE:
+    'a hook class the SHEETS carry, not the primitive — `QuickConfirm` is one way to build a '
+    + 'confirm, and the three sheets that roll their own still want the same hooks for tests '
+    + 'and for scoped rules (this file\'s own header says so).',
+  QC_ACTIONS: 'the same hook, same reason as QC_CONSEQUENCE.',
+};
+
+/** `{CONSTANT: owning component}` for every class-string constant `@ccrc/ui`
+ *  exports beside a primitive, read off the export statements. */
+export function skinConstants(indexSource: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of indexSource.matchAll(/export\s*\{([^}]*)\}\s*from\s*'([^']*)'/g)) {
+    const names = (m[1] ?? '').split(',').map((n) => n.trim()).filter(Boolean);
+    // `type X` is erased at runtime and owns nothing; `X as Y` is exported as Y.
+    const values = names.filter((n) => !n.startsWith('type ')).map((n) => n.split(/\s+as\s+/).pop()!);
+    const owner = values.find((n) => /^[A-Z][a-z]/.test(n));
+    if (owner === undefined) continue;
+    for (const n of values) if (/^[A-Z][A-Z0-9_]+$/.test(n) && !(n in NOT_A_SKIN)) out[n] = owner;
+  }
+  return out;
+}
+
+/** The names a file pulls out of `@ccrc/ui`. */
+export function uiImports(source: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*'@ccrc\/ui'/g)) {
+    for (const n of (m[1] ?? '').split(',')) {
+      const t = n.trim().replace(/^type\s+/, '');
+      if (t !== '') out.add(t);
+    }
+  }
+  return out;
+}
+
+describe("the design system's class-string constants", () => {
+  const SKINS = skinConstants(readFileSync(path.join(UI_SRC, 'index.ts'), 'utf8'));
+
+  it('never reaches a file without the primitive it is the skin of', () => {
+    const offenders: string[] = [];
+    for (const f of tsxFiles(SRC)) {
+      const names = uiImports(readFileSync(f, 'utf8'));
+      for (const [constant, owner] of Object.entries(SKINS)) {
+        if (names.has(constant) && !names.has(owner)) {
+          offenders.push(`${path.relative(SRC, f)}: ${constant} without <${owner}>`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      'import the primitive and pass the constant through its className, or register the '
+      + 'decomposition in NOT_A_SKIN with the measurement',
+    ).toEqual([]);
+  });
+
+  // Guards the guard, twice: a derivation that finds nothing passes vacuously,
+  // and a matcher that matches nothing is how the first drift survived.
+  it('derives a real ownership map off the real index', () => {
+    expect(SKINS.TEXT_INPUT_STACKED).toBe('TextInput');
+    expect(SKINS.CHIP).toBe('Chip');
+    expect(SKINS.KEYCAP).toBe('Keycap');
+    expect(Object.keys(SKINS).length).toBeGreaterThanOrEqual(12);
+    // the exemptions really are exempt, and `lib/*` really does own nothing
+    expect(SKINS.LIMIT_TRACK).toBeUndefined();
+    expect(SKINS.EYEBROW).toBeUndefined();
+    expect(SKINS.FOCUS_RING).toBeUndefined();
+  });
+
+  it('reds on the shape it exists to refuse, and not on the sanctioned one', () => {
+    const bare = "import { CHIP } from '@ccrc/ui';";
+    const whole = "import { Chip, CHIP } from '@ccrc/ui';";
+    expect(uiImports(bare).has('Chip')).toBe(false);
+    expect(uiImports(whole).has('Chip')).toBe(true);
+    expect(uiImports("import { TextInput, TEXT_INPUT_INLINE } from '@ccrc/ui';"))
+      .toEqual(new Set(['TextInput', 'TEXT_INPUT_INLINE']));
+  });
+
+  it('every registered exemption carries a reason', () => {
+    for (const [name, why] of Object.entries(NOT_A_SKIN)) {
+      expect(why.length, `${name} is registered with no measurement`).toBeGreaterThan(20);
+    }
+  });
+});

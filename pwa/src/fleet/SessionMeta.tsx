@@ -35,7 +35,7 @@ import {
   type FleetSession, type ProjectPoolWire, type RosterWire,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
-import { elapsedWords, useNow } from '@ccrc/ui';
+import { elapsedWords, useNow, WARN_GLYPH } from '@ccrc/ui';
 import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { childOfRunLabel } from './runWords';
@@ -574,7 +574,7 @@ export function SessionMeta({
 
           {critical && (
             <span className="sess-warn" role="img" aria-label="account limit near">
-              ⚠
+              {WARN_GLYPH}
             </span>
           )}
 
