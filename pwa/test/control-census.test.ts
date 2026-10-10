@@ -185,7 +185,7 @@ const CONTROLS: Record<string, string> = {
     + "`.sess-body`, the block the row's click forwarder is on, and "
     + '`fleet-css.test.ts` asserts `.sess-open` must NOT regain a `min-height`. '
     + 'It is the label LINE inside the tap surface, not the surface.',
-  'screens/FleetScreen.tsx bucket-head-seen':
+  'fleet/BucketBar.tsx bucket-head-seen':
     'UNDER, 24px by `--sp-6`, and ARGUED in the stylesheet at length: WCAG 2.2 '
     + "SC 2.5.8's floor, chosen because the `::before` overlay the two OVERLAY "
     + 'entries use would overhang neighbours that are INERT, turning a near-miss '

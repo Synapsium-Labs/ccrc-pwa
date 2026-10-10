@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { CHILD_RECLAIM_TOKEN_KIND } from '../src/coord/childReclaim.js';
 import { CHILD_RECLAIM_SKIP } from '../src/childReclaimSweep.js';
 import { CHILD_RECLAIM_WORDS, LC_REFUSAL_WORD } from '../../shared/api.js';
-import { codeOnly } from './sourceScan.js';
+import { codeOnly, componentFamily } from './sourceScan.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FILES = [
@@ -66,7 +66,9 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
 
   it('reads the files that render the chip, and they do render it', () => {
     expect(read('pwa/src/fleet/runWords.ts')).toContain('export const childReclaimChip');
-    expect(read('pwa/src/screens/RunsScreen.tsx')).toContain('run-child-reclaim');
+    // The board is a screen AND its row, so this reads the family rather than
+    // a path — see `componentFamily`.
+    expect(componentFamily(root, 'pwa/src/screens/RunsScreen.tsx')).toContain('run-child-reclaim');
     expect(read('pwa/src/fleet/childReclaimWords.ts')).toContain('export function childReclaimAttentionOf');
     expect(read('pwa/src/fleet/ChildReclaimBanner.tsx')).toContain('export function ChildReclaimBanner');
     expect(read('pwa/src/fleet/AbandonSheet.tsx')).toContain('export function AbandonSheet');

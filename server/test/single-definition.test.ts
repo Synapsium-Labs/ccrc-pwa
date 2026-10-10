@@ -18,6 +18,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { componentFamily } from './sourceScan.js';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
@@ -2701,7 +2702,14 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
       // deliberately not scanned: those members answer "who sent this", a
       // different question from "who pressed the key".
       expect(read('server/src/server.ts')).not.toMatch(/'operator'/);
-      expect(read('pwa/src/fleet/SessionLine.tsx')).not.toMatch(/'operator'/);
+      // THE ROW'S FAMILY, not one path. This was `read('…/SessionLine.tsx')`
+      // until the row's meta line — the half that renders the ask chip and so
+      // the half this negative is about — moved to `SessionMeta.tsx`. A
+      // negative assertion against a file the code has left does not go red;
+      // it goes VACUOUS, which is worse. `componentFamily` follows what the
+      // row renders.
+      expect(componentFamily(ccrcRoot, 'pwa/src/fleet/SessionLine.tsx'))
+        .not.toMatch(/'operator'/);
     });
   });
 });
