@@ -339,3 +339,84 @@ it('a lifecycle body with no arrays is reported, not rendered as an empty journa
   expect(screen.queryByText(/No journal rows for this session/),
     'an unmeasured absence was rendered as an empty history').toBeNull();
 });
+
+// — the screen before any frame, and the facts it derives from the id alone —
+describe('a deep link whose session the fleet has not reported yet', () => {
+  /** No fleet row at all: the store is live, the board is not. */
+  const deepLink = (id: string) => {
+    const store = createSessionStore(id, { makeSocket: fakeSocket, api: { prompt } });
+    const fleet = createFleetStore();
+    act(() => { fleet.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [] }); });
+    render(<><SessionScreen id={id} store={store} fleet={fleet} /><ToastHost /></>);
+    act(() => { store.setState({ uuid: 'u1', status: 'idle' }); });
+    return { store, fleet };
+  };
+
+  it('names the project out of the id, past the account prefix', () => {
+    // `live?.project ?? id.slice(wrapperFromId.length + 1)`. The composer's
+    // placeholder says "Message <project>", and before the first frame the id
+    // is the only thing that knows what that is.
+    deepLink('claude:OpenClawHetzner');
+    expect(screen.getByPlaceholderText('Message OpenClawHetzner')).toBeInTheDocument();
+  });
+
+  it('falls back to the whole id when there is no prefix to strip', () => {
+    // A workspace id is `<project>-<slug>` with no colon, so slicing past a
+    // prefix that is not there would leave an empty string — and a composer
+    // reading "Message " is the shape this `|| id` prevents.
+    deepLink('demo-quiet-basin');
+    expect(screen.getByPlaceholderText('Message demo-quiet-basin')).toBeInTheDocument();
+  });
+
+  it('Restore does nothing without a row to restore', () => {
+    // `restoreNow` reads the LIVE row to decide which verb a restore is — a
+    // workspace is `ws-restore`, a main checkout is `/ensure`. With no row
+    // there is nothing to decide from, so it must not guess.
+    //
+    // A PROPERTY, not a killer, and measured as such: the header renders no
+    // Restore control without a row, so deleting the handler's own guard
+    // leaves this green. What it pins is the outcome the two share.
+    deepLink('demo-quiet-basin');
+    expect(restore).not.toHaveBeenCalled();
+    expect(ensure).not.toHaveBeenCalled();
+  });
+});
+
+describe('the keyboard, and the transcript banner with no path', () => {
+  it('pads the chat by the keyboard overlap and stamps it for the stylesheet', () => {
+    // `data-kb` is what the sheet reads; the padding is what keeps the
+    // composer above the keys. Both arms are one condition, and neither had
+    // a case.
+    const vv = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0 });
+    Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+    try {
+      renderScreen();
+      const chat = document.querySelector('.chat');
+      if (!(chat instanceof HTMLElement)) throw new Error('no .chat');
+      expect(chat.getAttribute('data-kb'), 'a closed keyboard stamps nothing').toBeNull();
+
+      act(() => {
+        vv.height = window.innerHeight - 280;
+        vv.dispatchEvent(new Event('resize'));
+      });
+      expect(chat.getAttribute('data-kb')).toBe('true');
+      expect(chat.style.paddingBottom).toBe('280px');
+    } finally {
+      Reflect.deleteProperty(window, 'visualViewport');
+    }
+  });
+
+  it('a transcript nobody could MEASURE says so, and names no path it does not have', () => {
+    // The fourth combination the banner's own comment enumerates: no
+    // `missingFile`, `missing: false`, and `fileMeasured: false` — a present
+    // transcript whose bytes could not be read. There is no path to print,
+    // and printing `undefined` or `null` there is the failure the `?? ''` ends.
+    const { store } = renderScreen();
+    act(() => {
+      store.setState({ missingFile: null, file: null, fileMeasured: false, searchComplete: true });
+    });
+    expect(screen.getByText("Can't read the fleet host right now")).toBeInTheDocument();
+    const path = document.querySelector('.banner-path');
+    expect(path?.textContent, 'a path was invented for a transcript nothing measured').toBe('');
+  });
+});
