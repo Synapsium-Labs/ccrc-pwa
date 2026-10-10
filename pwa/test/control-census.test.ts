@@ -50,6 +50,10 @@
 //   | a SELECTOR citation pointing at no rule              | 1 red  |
 //   | an UNDER control quietly gaining `--tap-min`         | 1 red  |
 //   | the control walk returns nothing                     | 2 red  |
+//   | a new `<a href>` with its own class appears          | 1 red  |
+//   | a `<select>`'s rule loses `--tap-min`                | 1 red  |
+//   | an INLINE prose link GAINS `--tap-min`               | 1 red  |
+//   | `buttonVariants` loses `min-h-tap`                   | 1 red  |
 //
 // The fifth and sixth are what make the registry evidence rather than claims:
 // an entry cannot say TOKEN about a rule that has stopped declaring the floor,
@@ -58,12 +62,19 @@
 // the next reader believes.
 //
 // One mutation came back GREEN first and was the census being right: adding an
-// attribute to an EXISTING button changes no key, because the key is the file
-// and the class. Re-run with a button carrying a new class, it reds.
+// attribute to an EXISTING button changes no key, because the key is the file,
+// the tag and the class.
+//
+// The last four are the arms the first spelling of this file did not have. The
+// fourth is the one worth pointing at: three anchors take their floor from
+// `buttonVariants()` rather than from any stylesheet rule, so the VARIANT arm
+// reads that class string — and a floor removed INSIDE `@ccrc/ui` reds a
+// census in `pwa`. Re-run with a button carrying a new class, it reds.
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { buttonVariants } from '@ccrc/ui';
 
 const PKG = path.join(import.meta.dirname, '..', '..');
 const APP_SRC = path.join(PKG, 'pwa', 'src');
@@ -100,7 +111,22 @@ const classHasFloor = (cls: string): boolean =>
 const selectorHasFloor = (sel: string): boolean =>
   RULES.some((r) => r.sel === sel && /--tap-min/.test(r.body));
 
-/** Every hand-drawn `<button>`, keyed by file and class. */
+/** Every hand-drawn CONTROL, keyed by file and class.
+ *
+ *  NOT JUST `<button>`, which is what this census covered for one commit and
+ *  is the blind spot that commit left: the app draws SEVENTEEN interactive
+ *  elements that are not buttons — a `role="link"` strip, two `<select>`s,
+ *  two `<textarea>`s, two radios, a `<div onClick>` and eight `<a>`s — and a
+ *  census that says "every hand-drawn control" while reading one tag name is
+ *  making a claim it does not check.
+ *
+ *  WHAT COUNTS AS ONE. A `<button>`; an `<a>` with an `href` or an `onClick`;
+ *  `<select>` and `<textarea>`; a checkbox or radio `<input>`; anything
+ *  carrying `role="button"`, `"link"` or `"switch"`; and a lowercase element
+ *  with an `onClick` of its own. What does NOT count is `tabIndex={-1}`
+ *  without a handler: `.bucket-head-label` is a programmatic focus target,
+ *  not a control, and treating it as one would ask a `<span>` to be 44px for
+ *  nobody's benefit. */
 function controls(): Map<string, number[]> {
   const found = new Map<string, number[]>();
   const walk = (dir: string): string[] => {
@@ -118,15 +144,34 @@ function controls(): Map<string, number[]> {
     const visit = (n: ts.Node): void => {
       if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) {
         const open = ts.isJsxElement(n) ? n.openingElement : n;
-        if (open.tagName.getText() === 'button') {
-          let cls = '(none)';
-          for (const a of open.attributes.properties) {
-            if (!ts.isJsxAttribute(a) || a.name.getText() !== 'className') continue;
-            const init = a.initializer;
-            cls = init !== undefined && ts.isStringLiteral(init) ? init.text : '(computed)';
-          }
+        const tag = open.tagName.getText();
+        let cls = '(none)';
+        let role: string | null = null;
+        let type: string | null = null;
+        let onClick = false;
+        let href = false;
+        for (const a of open.attributes.properties) {
+          if (!ts.isJsxAttribute(a)) continue;
+          const name = a.name.getText();
+          const init = a.initializer;
+          const lit = init !== undefined && ts.isStringLiteral(init) ? init.text : null;
+          if (name === 'className') cls = lit ?? (init === undefined ? '(none)' : '(computed)');
+          if (name === 'role') role = lit;
+          if (name === 'type') type = lit;
+          if (name === 'onClick') onClick = true;
+          if (name === 'href') href = true;
+        }
+        const lower = tag[0] === tag[0]?.toLowerCase();
+        const interactive =
+          tag === 'button'
+          || (tag === 'a' && (href || onClick))
+          || tag === 'select' || tag === 'textarea'
+          || (tag === 'input' && (type === 'checkbox' || type === 'radio'))
+          || role === 'button' || role === 'link' || role === 'switch'
+          || (onClick && lower && tag !== 'button' && tag !== 'a');
+        if (interactive) {
           const line = src.getLineAndCharacterOfPosition(n.getStart()).line + 1;
-          const key = `${path.relative(APP_SRC, file)} ${cls}`;
+          const key = `${path.relative(APP_SRC, file)} <${tag}> ${cls}`;
           const prev = found.get(key);
           if (prev === undefined) found.set(key, [line]); else prev.push(line);
         }
@@ -141,81 +186,131 @@ function controls(): Map<string, number[]> {
 /** Every hand-drawn control, with the way it reaches a thumb. */
 const CONTROLS: Record<string, string> = {
   // ── TOKEN: the control's own rule declares the floor ─────────────────────
-  'fleet/MailBadge.tsx mail-badge': 'TOKEN. The mail door in the fleet header.',
-  'fleet/NewSessionSheet.tsx acct-change': 'TOKEN. The change-account line above the project list.',
-  'fleet/NewSessionSheet.tsx acct-disclosure': 'TOKEN. The routing row disclosure.',
-  'fleet/PasskeyNotice.tsx passkey-notice': 'TOKEN. A standing fact about the box, tappable to act on it.',
-  'fleet/PoolList.tsx pool-row': 'TOKEN. Both rows of the pool picker.',
-  'fleet/ProjectCardHead.tsx proj-card-add': 'TOKEN, and OVERLAY below: the rule carries the token and the ::before carries the hit area.',
-  'fleet/ProjectCardHead.tsx proj-card-pool': "TOKEN. The card's pool tag.",
-  'fleet/ProjectCardHead.tsx proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
-  'fleet/SessionLine.tsx sess-actions': 'TOKEN, and OVERLAY below.',
-  'fleet/SessionMeta.tsx sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
-  'fleet/SwapSheet.tsx acct-disclosure': "TOKEN. NewSessionSheet's disclosure rule, same class.",
-  'screens/AccountsScreen.tsx accounts-session': 'TOKEN. A session row on the accounts screen.',
-  'screens/AccountsScreen.tsx proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
-  'screens/FleetScreen.tsx fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
-  'screens/FleetScreen.tsx notice-x': 'TOKEN. The notice dismiss.',
-  'screens/MailScreen.tsx mail-chip': 'TOKEN. Both filter chips.',
-  'screens/RunRow.tsx run-abandon': 'TOKEN. The abandon door.',
-  'screens/RunRow.tsx run-open': 'TOKEN. The open door.',
-  'screens/RunRow.tsx run-resume': 'TOKEN. The resume door.',
-  'session/ChatList.tsx jump-latest': 'TOKEN. The jump-to-latest affordance.',
-  'session/Composer.tsx draft-cancel': 'TOKEN. The draft cancel.',
-  'session/Composer.tsx send-btn': 'TOKEN. Send.',
-  'session/Composer.tsx slash-item': 'TOKEN. A slash-command row — one of the six floors this wave converted from a literal.',
-  'session/DialogSheet.tsx dlg-details-toggle': 'TOKEN. The details disclosure.',
-  'session/DialogSheet.tsx dlg-later': 'TOKEN. Both "Not now" rows, now rendered by TerminalCta.',
-  'session/DialogSheet.tsx dlg-reply-send': 'TOKEN. Send, beside the reply field.',
-  'session/DialogSheet.tsx opt-preview-toggle': 'TOKEN. The option preview disclosure.',
+  'fleet/MailBadge.tsx <button> mail-badge': 'TOKEN. The mail door in the fleet header.',
+  'fleet/NewSessionSheet.tsx <button> acct-change': 'TOKEN. The change-account line above the project list.',
+  'fleet/NewSessionSheet.tsx <button> acct-disclosure': 'TOKEN. The routing row disclosure.',
+  'fleet/PasskeyNotice.tsx <button> passkey-notice': 'TOKEN. A standing fact about the box, tappable to act on it.',
+  'fleet/PoolList.tsx <button> pool-row': 'TOKEN. Both rows of the pool picker.',
+  'fleet/ProjectCardHead.tsx <button> proj-card-add': 'TOKEN, and OVERLAY below: the rule carries the token and the ::before carries the hit area.',
+  'fleet/ProjectCardHead.tsx <button> proj-card-pool': "TOKEN. The card's pool tag.",
+  'fleet/ProjectCardHead.tsx <button> proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
+  'fleet/SessionLine.tsx <button> sess-actions': 'TOKEN, and OVERLAY below.',
+  'fleet/SessionMeta.tsx <button> sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
+  'fleet/SwapSheet.tsx <button> acct-disclosure': "TOKEN. NewSessionSheet's disclosure rule, same class.",
+  'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
+  'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
+  'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
+  'screens/FleetScreen.tsx <button> notice-x': 'TOKEN. The notice dismiss.',
+  'screens/MailScreen.tsx <button> mail-chip': 'TOKEN. Both filter chips.',
+  'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
+  'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',
+  'screens/RunRow.tsx <button> run-resume': 'TOKEN. The resume door.',
+  'session/ChatList.tsx <button> jump-latest': 'TOKEN. The jump-to-latest affordance.',
+  'session/Composer.tsx <button> draft-cancel': 'TOKEN. The draft cancel.',
+  'session/Composer.tsx <button> send-btn': 'TOKEN. Send.',
+  'session/Composer.tsx <button> slash-item': 'TOKEN. A slash-command row — one of the six floors this wave converted from a literal.',
+  'session/DialogSheet.tsx <button> dlg-details-toggle': 'TOKEN. The details disclosure.',
+  'session/DialogSheet.tsx <button> dlg-later': 'TOKEN. Both "Not now" rows, now rendered by TerminalCta.',
+  'session/DialogSheet.tsx <button> dlg-reply-send': 'TOKEN. Send, beside the reply field.',
+  'session/DialogSheet.tsx <button> opt-preview-toggle': 'TOKEN. The option preview disclosure.',
+
+  // ── not buttons: the seventeen the first spelling of this census missed ──
+  'fleet/AccountsStrip.tsx <div> accounts-strip':
+    'TOKEN. A `role="link"` div with `tabIndex={0}` and a keydown handler — '
+    + 'the strip D-161 calls the only door to /accounts. `.accounts-strip` '
+    + 'declares the floor.',
+  'fleet/NewSessionSheet.tsx <select> route-select':
+    'TOKEN. `.route-select` declares the floor; all three routing fields wear '
+    + 'it through `RouteField`.',
+  'screens/FleetScreen.tsx <select> route-select fleet-class-select':
+    'TOKEN. The same rule, with the head\'s own width modifier beside it.',
+  'fleet/SessionLine.tsx <div> sess-body':
+    'TOKEN. Not a control so much as the row\'s convenience forwarder for the '
+    + 'dead space between cells — its own comment argues at length why it is a '
+    + 'div and not a button. It declares the floor anyway, because it IS what '
+    + 'a thumb lands on, and one of the six literals this branch converted was '
+    + 'this rule.',
+  'screens/SettingsScreen.tsx <input> (none)':
+    'SELECTOR .settings-option. The radios are 18px by design — a radio IS '
+    + 'small — and the hit area is the LABEL that wraps each one, which '
+    + 'declares the floor. Both call sites (the notification/channel/auto '
+    + 'groups through `RadioFieldset`, and the theme picker through '
+    + '`ThemeRow`) render the input inside that label.',
+  'session/Composer.tsx <textarea> composer-input':
+    'TOKEN by VALUE — see FLOOR_BY_VALUE. `padding: 10px 0` around '
+    + '`--fs-input` (16px) at `--lh-normal` (1.5) is 10 + 24 + 10 = 44 exactly, '
+    + 'and the rule\'s own comment reads "1 → 6 lines, then inner scroll". The '
+    + 'single-line state IS the floor; `var(--tap-min)` here would fight the '
+    + 'line-box arithmetic rather than express it.',
+  'session/PrSheet.tsx <a> (computed)':
+    'VARIANT buttonVariants. Three "Open on GitHub" anchors wearing the design '
+    + 'system\'s own ghost button — `buttonVariants()` carries `min-h-tap` in '
+    + 'its base, which this census checks rather than trusts. An anchor, not a '
+    + 'button, because it navigates to GitHub; the styling is the button\'s.',
+  'session/MessageBubble.tsx <a> (none)':
+    'INLINE. Links inside a sentence — react-markdown\'s `a` mapping and the '
+    + 'bare-URL splitter. WCAG 2.2 SC 2.5.8 exempts a target that is "in a '
+    + 'sentence or block of text", and it has to: giving a link in prose a '
+    + '44px box would reflow the prose around every link.',
+  'session/MessageBubble.tsx <a> msg-img-link':
+    'INLINE, with a different reason: the anchor wraps an IMAGE and '
+    + '`.msg-img-link` is `height: auto`, so the target is whatever the image '
+    + 'measures. An attachment thumbnail is already far above the floor; a '
+    + 'min-height here would letterbox a wide one.',
+  'session/PrSheet.tsx <textarea> pr-body-preview':
+    'UNDER, 40px in its one-line state: `--sp-2` (8px) around '
+    + '`--fs-input` at `--lh-normal`. It is a BODY PREVIEW — `max-height: '
+    + '40vh` with its own scroll — so one line is not a state it is ever in '
+    + 'with content; the measurement is recorded rather than the claim that it '
+    + 'cannot happen.',
 
   // ── the rest, argued one at a time ───────────────────────────────────────
-  'fleet/NotificationBell.tsx (computed)':
+  'fleet/NotificationBell.tsx <button> (computed)':
     'UNDER, about 25px: `.bell` is `padding: 4px` around `--fs-lg` (17px) at '
     + 'line-height 1. The SETTINGS copy of the same component is fine — '
     + '`.settings-bell-row .bell` declares both floors — so the one in the FLEET '
     + 'HEADER is the copy that is under it, and the two have drifted. Found by '
     + 'this census. Not changed: growing the header bell moves the header.',
-  'fleet/SessionMeta.tsx sess-held':
+  'fleet/SessionMeta.tsx <button> sess-held':
     "SELECTOR .sess-line. Inline text in the row's meta line, not a box of its "
     + 'own: what gets tapped is the ROW, and the row declares the floor. Its own '
     + 'rule sets type and truncation and no geometry at all.',
-  'fleet/SessionLine.tsx sess-open':
+  'fleet/SessionLine.tsx <button> sess-open':
     'SELECTOR .sess-body. Documented and separately tested: the floor lives on '
     + "`.sess-body`, the block the row's click forwarder is on, and "
     + '`fleet-css.test.ts` asserts `.sess-open` must NOT regain a `min-height`. '
     + 'It is the label LINE inside the tap surface, not the surface.',
-  'fleet/BucketBar.tsx bucket-head-seen':
+  'fleet/BucketBar.tsx <button> bucket-head-seen':
     'UNDER, 24px by `--sp-6`, and ARGUED in the stylesheet at length: WCAG 2.2 '
     + "SC 2.5.8's floor, chosen because the `::before` overlay the two OVERLAY "
     + 'entries use would overhang neighbours that are INERT, turning a near-miss '
     + 'that does nothing today into an irreversible activation. The only safe '
     + 'direction here is growing the visible box, which is a design change.',
-  'session/ChatList.tsx (none)':
+  'session/ChatList.tsx <button> (none)':
     'SELECTOR .pending-actions button. The `Discard` button, with no class at '
     + 'all — and covered anyway, because the floor is on an ELEMENT selector. '
     + 'This is the entry that argues for the SELECTOR arm: a census keyed on '
     + 'classes alone would have had nothing to say about it.',
-  'session/ChatList.tsx pending-retry':
+  'session/ChatList.tsx <button> pending-retry':
     'SELECTOR .pending-actions button. The same rule.',
-  'session/ChatList.tsx pending-send-it':
+  'session/ChatList.tsx <button> pending-send-it':
     'SELECTOR .pending-actions button. The same rule, and chat.css says so in '
     + 'its own words: it inherits min-height from `.pending-actions button`, so '
     + 'the tap target is the shared token.',
-  'session/MessageBubble.tsx code-block-copy':
+  'session/MessageBubble.tsx <button> code-block-copy':
     'UNDER, 32px by `--sp-8`, declared in `ui/src/components/prose.css`. A '
     + 'deliberate token rather than an oversight, but it is not the floor, and '
     + 'the rule says nothing about why 32 is enough here. Unchanged: the copy '
     + "button sits on the code well's bar beside the language label, and a 44px "
     + 'bar is a different code block.',
-  'session/MessageBubble.tsx compaction-head':
+  'session/MessageBubble.tsx <button> compaction-head':
     'UNDER, about 29px: `--sp-2` (8px) above and below `--fs-sm` (13px) at '
     + 'line-height 1. A full-width disclosure — easy to hit horizontally, short '
     + 'vertically.',
-  'session/SessionHeader.tsx (computed)':
+  'session/SessionHeader.tsx <button> (computed)':
     'UNDER, about 19px. The effort chip — `metachip` or `metachip--ultra` — on '
     + 'the same rule as the model chip below.',
-  'session/SessionHeader.tsx metachip metachip--model':
+  'session/SessionHeader.tsx <button> metachip metachip--model':
     'UNDER, about 19px: `padding: 3px 9px` around `--fs-2xs` (11px) at '
     + 'line-height 1, plus a hairline. The model and effort chips are TAPPABLE '
     + "(they open their choosers) and chat.css's own comment says so, which is "
@@ -225,17 +320,22 @@ const CONTROLS: Record<string, string> = {
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */
 const OVERLAYS: Record<string, string> = {
-  'fleet/ProjectCardHead.tsx proj-card-add': '.proj-card-add::before',
-  'fleet/SessionLine.tsx sess-actions': '.sess-actions::before',
+  'fleet/ProjectCardHead.tsx <button> proj-card-add': '.proj-card-add::before',
+  'fleet/SessionLine.tsx <button> sess-actions': '.sess-actions::before',
 };
 
-/** The one TOKEN entry that reaches the floor by VALUE rather than by name:
+/** The TOKEN entries that reach the floor by VALUE rather than by name.
+ *
  *  `.fab` is `height: 56px`, twelve pixels ABOVE it, because a floating action
- *  button is the one control sized for the thumb that is already moving.
- *  `var(--tap-min)` there would SHRINK it. */
-const FLOOR_BY_VALUE = ['fab'];
+ *  button is the one control sized for the thumb that is already moving;
+ *  `var(--tap-min)` there would SHRINK it. `.composer-input` is `padding: 10px
+ *  0` around `--fs-input` at `--lh-normal` — 10 + 24 + 10 = 44 exactly — and
+ *  the token there would fight the line-box arithmetic instead of expressing
+ *  it. Both say so in their own entries. */
+const FLOOR_BY_VALUE = ['fab', 'composer-input'];
 
-const classOfKey = (key: string): string => key.slice(key.indexOf(' ') + 1);
+/** The class half of a key — past the file and past the `<tag>`. */
+const classOfKey = (key: string): string => key.slice(key.indexOf('> ') + 2);
 
 describe('hand-drawn controls', () => {
   it('registers every one', () => {
@@ -300,7 +400,33 @@ describe('hand-drawn controls', () => {
     expect(
       Object.values(CONTROLS).filter((v) => v.startsWith('UNDER')).length,
       'the UNDER arm still records every control below the floor',
-    ).toBe(6);
+    ).toBe(7);
+  });
+
+
+  it('verifies every VARIANT claim against the design system itself', () => {
+    // The anchors wearing `buttonVariants()` get their floor from @ccrc/ui's
+    // own class string, not from a stylesheet rule — so this reads the string.
+    const cited = Object.entries(CONTROLS).filter(([, v]) => v.startsWith('VARIANT'));
+    expect(cited.length, 'the VARIANT arm has entries').toBeGreaterThan(0);
+    for (const [k, v] of cited) {
+      expect(v, k).toContain('buttonVariants');
+      expect(buttonVariants({ variant: 'ghost' }), k).toContain('min-h-tap');
+    }
+  });
+
+  it('keeps every INLINE control genuinely inline', () => {
+    // WCAG 2.2 SC 2.5.8 exempts a target in a sentence or block of text. The
+    // check that keeps this arm honest is the negative: an INLINE entry whose
+    // class GAINS a floor is no longer inline prose, and the entry is wrong.
+    const grown = Object.entries(CONTROLS)
+      .filter(([, v]) => v.startsWith('INLINE'))
+      .filter(([k]) => {
+        const cls = classOfKey(k);
+        return !cls.startsWith('(') && cls.split(/\s+/).some(classHasFloor);
+      })
+      .map(([k]) => k).sort();
+    expect(grown, 'this now declares --tap-min — it is not an inline target').toEqual([]);
   });
 
   it('reads the app and the stylesheets at all', () => {
