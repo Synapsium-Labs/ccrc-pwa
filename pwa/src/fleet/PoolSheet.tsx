@@ -10,6 +10,7 @@ import { api, apiErrorText } from '../lib/api';
 import { poolOptions, projectPoolOf } from '../lib/pools';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
+import { poolAppOlder, poolCleared, poolWriteFailed } from './poolWords';
 
 export interface PoolSheetProps {
   /** `null` while no project card has been selected. */
@@ -49,12 +50,12 @@ const measuredToast = (project: string, pool: ProjectPoolWire): string =>
   pool.state === 'tagged'
     ? `${project} is in pool ${pool.name}.`
     : pool.state === 'untagged'
-      ? `${project} is no longer in a pool.`
+      ? poolCleared(project)
       : pool.state === 'malformed'
         ? `${project}'s pool tag is malformed.`
         : pool.state === 'unreadable'
           ? `${project}'s pool tag could not be read.`
-          : `This app is older than the fleet; reload to understand ${project}'s pool.`;
+          : poolAppOlder(project);
 
 /** A sheet whose request and frame relevance are both governed by ONE monotonically
  * increasing generation. Every write and every scope transition invalidates work
@@ -164,7 +165,7 @@ export function PoolSheet({
       },
       (error: unknown) => {
         if (!stillRelevant()) return;
-        toast(`Couldn't set the pool — ${apiErrorText(error)}`, 'error');
+        toast(poolWriteFailed(apiErrorText(error)), 'error');
       },
     ).finally(() => {
       // This same generation guard prevents a stale request clearing its successor's spinner.
@@ -189,7 +190,7 @@ export function PoolSheet({
             ? `The pool tag for ${project} is malformed: ${path} holds something that is not a pool name.`
             : current.state === 'unreadable'
               ? `The pool tag for ${project} could not be read: ${path}.`
-              : `This app is older than the fleet; reload to understand ${project}'s pool.`;
+              : poolAppOlder(project);
 
   return (
     <Sheet open={open} onClose={onClose} eyebrow="project pool" title="Which pool runs this project?">

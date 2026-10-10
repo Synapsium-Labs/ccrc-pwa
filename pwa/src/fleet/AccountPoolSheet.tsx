@@ -28,6 +28,7 @@ import { Button, Sheet, TextInput, TEXT_INPUT_INLINE } from '@ccrc/ui';
 import { PoolList } from './PoolList';
 import { poolOptions } from '../lib/pools';
 import './fleet.css';
+import { poolAppOlder } from './poolWords';
 
 export interface AccountPoolSheetProps {
   /** `null` while no account row has been selected. */
@@ -86,7 +87,7 @@ const currentCopy = (account: string, current: AccountPoolWire | undefined): str
     default: {
       const unhandled: never = current;
       void unhandled;
-      return `This app is older than the fleet; reload to understand ${account}'s pool.`;
+      return poolAppOlder(account);
     }
   }
 };

@@ -36,6 +36,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
+import { PRESS_TRANSFORM } from '../lib/press';
 
 /** The ten, token for token as both rules declared them.
  *
@@ -45,8 +46,7 @@ import { FOCUS_RING } from '../lib/focus';
 export const KEYCAP =
   'keycap grid min-w-tap min-h-tap place-items-center rounded-sm border border-b-2'
   + ' font-mono text-xs font-medium leading-none tracking-caps not-italic normal-nums'
-  + ' cursor-pointer transition-transform duration-press ease-swift'
-  + ' motion-reduce:transition-none enabled:active:translate-y-px'
+  + ` ${PRESS_TRANSFORM} enabled:active:translate-y-px`
   + ` ${FOCUS_RING}`;
 
 export interface KeycapProps extends ButtonHTMLAttributes<HTMLButtonElement> {

@@ -10,7 +10,7 @@
 // itself. Import that and nothing else — see the header of that file for why
 // the order is load-bearing.
 export { Button, buttonVariants, type ButtonProps } from './primitives/button';
-export { StatusDot, dotVariants, type StatusDotProps } from './primitives/status-dot';
+export { StatusDot, dotVariants, type StatusDotProps, statusLabel } from './primitives/status-dot';
 export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand, type LimitBarProps } from './primitives/limit-bar';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
@@ -36,7 +36,7 @@ export { Keycap, KEYCAP, type KeycapProps } from './primitives/keycap';
 // utilities that two or three app rules spelled identically, and wrapping
 // either in a `<span>` would add an element nobody asked for.
 export { MONO_PATH, ATTENTION_DOT, EYEBROW, RESET_LIST } from './lib/text';
-export { PRESS_FEEDBACK } from './lib/press';
+export { PRESS_FEEDBACK, PRESS_TRANSFORM } from './lib/press';
 export { QuickConfirm, QC_CONSEQUENCE, QC_ACTIONS, type QuickConfirmProps } from './primitives/confirm';
 export {
   toast,
@@ -90,3 +90,4 @@ export { FOCUS_RING } from './lib/focus';
 // `single-definition.test.ts` exists to stop.
 export { useNow } from './lib/use-now';
 export { elapsedWords, elapsedShort } from './lib/elapsed';
+export { prefersReducedMotion } from './lib/use-reduced-motion';

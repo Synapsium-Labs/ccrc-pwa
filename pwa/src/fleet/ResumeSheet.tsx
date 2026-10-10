@@ -21,7 +21,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, TextInput } from '@ccrc/ui';
-import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
+import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -42,7 +42,7 @@ export const RECLAIM_COPY: Record<
   | 'unknown-run' | 'unknown-session' | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
   string
 > = {
-  'unknown-run': 'that run is gone — the board will catch up',
+  'unknown-run': UNKNOWN_RUN_TEXT,
   // NOT folded with `unknown-run` even though both arrive at 404: the two have
   // opposite remedies (wait for the board vs. type a different id), and the id
   // in question is one the operator just typed.

@@ -40,7 +40,7 @@ import { humanBytes } from '../screens/ArchiveScreen';
 import { lifecycleQualifier } from './lifecycleWords';
 import { childOfRunLabel } from './runWords';
 import { spawnChip } from './spawnWords';
-import { LastSpawnChip, UnmeasuredChip } from './chips';
+import { GraphChip, LastSpawnChip, UnmeasuredChip } from './chips';
 import './fleet.css';
 import { substrateFaultText } from './substrateWords';
 
@@ -512,18 +512,7 @@ export function SessionMeta({
               queries, and two cells would let a row show one without the
               other. See `graphGated` above for why the suffix is `> 0` while
               the chip itself is `!== null`. */}
-          {!dead && graphReads !== null && (
-            <span
-              className="sess-graph"
-              title={
-                graphGated === null
-                  ? `${graphReads} graphify read(s) this session`
-                  : `${graphReads} graphify read(s) this session · ${graphGated} search call(s) denied by the graphify gate`
-              }
-            >
-              graph {graphReads}{graphGated === null ? '' : ` · gated ${graphGated}`}
-            </span>
-          )}
+          {!dead && <GraphChip reads={graphReads} gated={graphGated} />}
 
           {/* The subagent tally, now a disclosure — see `subagentList` above
               for the null-vs-empty-array discipline. Tapping it opens

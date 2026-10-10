@@ -69,3 +69,34 @@ export function OtherPoolsDisclosure({ count, shown, onToggle }: {
     </button>
   );
 }
+
+/** The graphify counter — reads this session, and the search calls the gate
+ *  denied when a row has that second number.
+ *
+ *  TWO SURFACES, ONE SENTENCE. `SessionMeta` and `RunRow` each spelled
+ *  `${reads} graphify read(s) this session`, and `SessionMeta` added the gate
+ *  clause to both the title and the body. The leaf half of the markup census
+ *  could not see it (one attribute beyond the class, where its floor is two)
+ *  and the literal half could not either (a `title=` takes a string, not a
+ *  class); the literal census that reads string literals wherever they appear
+ *  is what found it.
+ *
+ *  `reads === null` renders nothing: the frame is cast, not revived, so an
+ *  older server's row omits this ADDITIVE key and a raw `!== null` on the
+ *  reader would paint `graph ` with no number (D-1251). The CALLER still
+ *  decides whether a row may show it at all — `SessionMeta` hides it on a
+ *  dead row. */
+export function GraphChip({ reads, gated }: {
+  reads: number | null;
+  gated: number | null;
+}): ReactNode {
+  if (reads === null) return null;
+  const title = gated === null
+    ? `${reads} graphify read(s) this session`
+    : `${reads} graphify read(s) this session · ${gated} search call(s) denied by the graphify gate`;
+  return (
+    <span className="sess-graph" title={title}>
+      graph {reads}{gated === null ? '' : ` · gated ${gated}`}
+    </span>
+  );
+}

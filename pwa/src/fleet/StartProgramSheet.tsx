@@ -42,7 +42,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
-import { Button, ListRow, Sheet, TEXT_INPUT_STACKED, TextInput } from '@ccrc/ui';
+import { Button, Sheet, TEXT_INPUT_STACKED, TextInput } from '@ccrc/ui';
 
 /** The sheet's confirm control. It was the FIFTH copy of the quiet control's
  *  eleven declarations — `quiet-control.test.ts` found it the day the other
@@ -64,6 +64,7 @@ import {
   READY_GLYPH, READY_PENDING_GLYPH, missingPreconditions, readinessTitle, readinessWord,
 } from './readinessWords';
 import { ProjectPicker } from './ProjectPicker';
+import { ProjectRowShell } from './ProjectRowShell';
 import {
   START_PROGRAM_WAIT_MS, liveIdsIn, liveMainCheckoutIn, openRunVerdict,
   startErrorText, startProgramPlacement, startedSessionFor,
@@ -650,13 +651,12 @@ export function StartProgramSheet({
             {filtered.map((p) => {
               const selected = p.workdir === project?.workdir;
               return (
-                <ListRow
+                <ProjectRowShell
                   key={p.workdir}
-                  className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
-                  onClick={() => setProject(p)}
+                  selected={selected}
+                  name={p.name}
+                  onPick={() => setProject(p)}
                 >
-                  <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
-                  <span className="proj-name">{p.name}</span>
                   <span className="proj-dir">{p.workdir}</span>
                   {/* F3 — THREE arms, because the wire has three
                       (`ProjectRow` in shared/api.ts): the key ABSENT is a
@@ -688,7 +688,7 @@ export function StartProgramSheet({
                       {missingPreconditions(p.readiness).join(' · ')}
                     </span>
                   )}
-                </ListRow>
+                </ProjectRowShell>
               );
             })}
         </ProjectPicker>

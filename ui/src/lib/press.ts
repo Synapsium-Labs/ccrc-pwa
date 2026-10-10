@@ -24,3 +24,18 @@ export const PRESS_FEEDBACK =
   '[transition:transform_var(--dur-press)_var(--curve-swift),color_var(--dur-fast)_var(--curve-swift)]'
   + ' motion-reduce:transition-none'
   + ' active:scale-[0.88] active:text-ink-primary';
+
+/** The SINGLE-property press: a transform transition at the press duration,
+ *  with the reduced-motion escape beside it.
+ *
+ *  TWO CONSTANTS, TWO LINES EACH — `KEYCAP` and `LIST_ROW` carried these
+ *  verbatim while pressing to two different places (a keycap sinks a pixel, a
+ *  row scales to 0.97), so the TRANSITION is shared and the active transform
+ *  stays each control's. Distinct from `PRESS_FEEDBACK` above, which also
+ *  moves `color` and therefore needs the arbitrary two-duration property.
+ *
+ *  Found by the literal census: a class string living in a CONSTANT is
+ *  invisible to a census that reads `className=` attributes. */
+export const PRESS_TRANSFORM =
+  'cursor-pointer transition-transform duration-press ease-swift'
+  + ' motion-reduce:transition-none';

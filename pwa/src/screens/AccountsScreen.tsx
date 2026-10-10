@@ -20,12 +20,13 @@ import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds, warnNonArrayRoster } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useFleetStore } from '../stores/fleet';
 import { AuthSection } from './AuthSection';
 import '../fleet/fleet.css';
+import { poolCleared, poolWriteFailed } from '../fleet/poolWords';
 
 /** The chip's short text, accessible name and `data-pool`/`data-origin` for
  *  EVERY `AccountPoolWire` state — review round 1, I4. `malformed`,
@@ -147,7 +148,7 @@ function useAccountsPoll(): AccountsPoll {
           // (finding 6).
           setState((prev) => {
             if (Array.isArray(r.roster)) return { accounts: r.accounts, projected: r.projected, roster: r.roster };
-            console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
+            warnNonArrayRoster(r);
             return { accounts: r.accounts, projected: r.projected, roster: prev.roster };
           });
         })
@@ -220,10 +221,10 @@ export function AccountsScreen(): ReactNode {
             'error',
           );
         } else {
-          toast(pools.length > 0 ? `${accountId} is now in pool ${pools[0]}.` : `${accountId} is no longer in a pool.`);
+          toast(pools.length > 0 ? `${accountId} is now in pool ${pools[0]}.` : poolCleared(accountId));
         }
       },
-      (error: unknown) => toast(`Couldn't set the pool — ${apiErrorText(error)}`, 'error'),
+      (error: unknown) => toast(poolWriteFailed(apiErrorText(error)), 'error'),
     );
     setPoolSheetOpen(false);
   };

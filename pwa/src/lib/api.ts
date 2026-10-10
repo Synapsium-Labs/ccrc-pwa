@@ -171,6 +171,23 @@ export const UNSUPPORTED_VERB_TEXT =
 export const COORD_UNSUPPORTED_TEXT = 'the fleet host needs the newer ccd';
 
 /**
+ * The 404 both the abandon and the reclaim doors answer with: the run the tap
+ * named is not on the board any more.
+ *
+ * TWO MAPS, ONE SENTENCE. `ABANDON_COPY` and `RECLAIM_COPY` each spelled it,
+ * and the literal census is what found them — a copy inside a `Record` is
+ * invisible to a census that reads `className=` attributes or JSX trees.
+ * Those two maps stay separate and SHOULD: every other member differs, and
+ * `RECLAIM_COPY`'s own comment argues one of the differences. This is the one
+ * member they agree on, and it agrees for a reason — the same 404, about the
+ * same board, with the same remedy (wait).
+ *
+ * Lower-case and un-terminated, `COORD_UNSUPPORTED_TEXT`'s rule: both sites
+ * render it as inline refusal copy inside their own surface.
+ */
+export const UNKNOWN_RUN_TEXT = 'that run is gone — the board will catch up';
+
+/**
  * ccd's own refusal for an empty hold reason (`cmd_ws_hold`, `ccd/ccd`),
  * verbatim: "empty reason — say which program holds this". The server's
  * `/hold` route refuses the identical input before building any argv (400

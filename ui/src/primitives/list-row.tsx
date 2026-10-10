@@ -32,6 +32,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
+import { PRESS_TRANSFORM } from '../lib/press';
 
 /** The shared row, token for token as both rules declared it.
  *
@@ -42,8 +43,7 @@ import { FOCUS_RING } from '../lib/focus';
 export const LIST_ROW =
   'flex w-full items-center gap-3 min-h-[52px] px-1 py-2'
   + ' border-x-0 border-t-0 border-b border-edge-subtle bg-transparent text-left'
-  + ' cursor-pointer transition-transform duration-press ease-swift'
-  + ' motion-reduce:transition-none active:scale-[0.97]'
+  + ` ${PRESS_TRANSFORM} active:scale-[0.97]`
   + ` ${FOCUS_RING}`;
 
 export interface ListRowProps extends ButtonHTMLAttributes<HTMLButtonElement> {

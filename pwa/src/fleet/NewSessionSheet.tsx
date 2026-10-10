@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { Button, ListRow, Sheet, toast } from '@ccrc/ui';
+import { Button, Sheet, toast } from '@ccrc/ui';
 import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
@@ -19,6 +19,7 @@ import { declaredAccountPool } from '../../../shared/poolrule';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { AccountRow } from './AccountRow';
 import { PoolTag } from './PoolTag';
+import { ProjectRowShell } from './ProjectRowShell';
 import { OtherPoolsDisclosure } from './chips';
 import {
   disabledWrappers,
@@ -37,15 +38,10 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
   onPick: (project: ProjectRow) => void;
 }): ReactNode {
   return (
-    <ListRow
-      className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
-      onClick={() => onPick(row)}
-    >
-      <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
-      <span className="proj-name">{row.name}</span>
+    <ProjectRowShell selected={selected} name={row.name} onPick={() => onPick(row)}>
       <PoolTag pool={pool} />
       <span className="proj-dir">{row.workdir}</span>
-    </ListRow>
+    </ProjectRowShell>
   );
 }
 

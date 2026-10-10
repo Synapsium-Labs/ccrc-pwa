@@ -30,7 +30,7 @@ const QUERY = '(prefers-reduced-motion: reduce)';
  *  animation plays, rather than every animated component silently going still
  *  on a platform that simply could not answer. */
 export function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(() => read());
+  const [reduced, setReduced] = useState(() => prefersReducedMotion());
 
   useEffect(() => {
     const mql = typeof window !== 'undefined' && window.matchMedia?.(QUERY);
@@ -52,7 +52,16 @@ export function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-function read(): boolean {
+/** THE ONE-SHOT READ, exported because a non-component needs it too: the
+ *  app's router asks the same question before it starts a view transition,
+ *  and it spelled the media query for itself until the literal census found
+ *  the second copy. A hook is the wrong shape there — the router is a
+ *  function, and it wants the answer once, at the moment of the navigation.
+ *
+ *  `false` where `matchMedia` is absent (SSR, an old jsdom), which is the safe
+ *  default in both places: the animation plays, rather than everything
+ *  silently going still on a platform that simply could not answer. */
+export function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined') return false;
   return window.matchMedia?.(QUERY)?.matches ?? false;
 }

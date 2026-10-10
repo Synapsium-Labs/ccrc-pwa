@@ -2,6 +2,7 @@
 // app.tsx so screens can navigate without importing the shell (no cycles).
 import { useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
+import { prefersReducedMotion } from '@ccrc/ui';
 
 /** document.startViewTransition, where the platform has it. */
 type DocWithVT = Document & {
@@ -24,9 +25,10 @@ export function navigate(path: string): void {
     });
   };
   const vt = (document as DocWithVT).startViewTransition?.bind(document);
-  const reduced =
-    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (vt && !reduced) vt(go);
+  // `prefersReducedMotion` (@ccrc/ui), not a second spelling of the media
+  // query: the design system already owns this question for its own
+  // components, and the literal census found the copy that used to sit here.
+  if (vt && !prefersReducedMotion()) vt(go);
   else go();
 }
 

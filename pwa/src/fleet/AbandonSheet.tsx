@@ -36,7 +36,7 @@ import type { ReactNode } from 'react';
 import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';
 import { RUN_WORD, childMarkOf } from './runWords';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
-import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
+import { ApiError, COORD_UNSUPPORTED_TEXT, UNKNOWN_RUN_TEXT, api } from '../lib/api';
 import './fleet.css';
 
 /** The refusal vocabulary this sheet renders its OWN sentence for. A total
@@ -53,7 +53,7 @@ export const ABANDON_COPY: Record<
   'unknown-run' | 'bad-transition' | 'unsupported' | 'fleet-failed' | 'unknown',
   string
 > = {
-  'unknown-run': 'that run is gone — the board will catch up',
+  'unknown-run': UNKNOWN_RUN_TEXT,
   'bad-transition': 'this run already closed',
   // Review, M2: this used to be a byte-identical literal of `CoordBanner`'s
   // own 501 arm. One box, one skew, one sentence — see the constant's own

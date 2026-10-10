@@ -14,9 +14,7 @@ import {
   substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
-import {
-  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, useNow,
-} from '@ccrc/ui';
+import { BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, statusLabel, useNow } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -243,13 +241,15 @@ export function SessionHeader({
             ? rel
               ? `idle · ${rel} ago`
               : 'idle'
-            : bucket === 'cleanup'
-              ? 'merged, ready to clean up'
-              : bucket === 'archived'
-                ? 'archived'
-                : bucket === 'dead'
-                  ? 'not running'
-                  : '';
+            // THE THREE THAT ARE NOT COMPOSED take `StatusDot`'s own word
+            // (`statusLabel`, @ccrc/ui) rather than a second copy of it: the
+            // literal census found `merged, ready to clean up` written out
+            // here AND in the lamp's map. `done` and `idle` above stay spelled
+            // here, because this header composes them with an age the lamp
+            // knows nothing about.
+            : bucket === 'cleanup' || bucket === 'archived' || bucket === 'dead'
+              ? statusLabel(bucket)
+              : '';
   // Four tints for seven buckets, on purpose: `status-line--*` is the existing,
   // contrast-verified set (chat.css) and the glyph already carries the
   // distinction colour must not carry alone. done/cleanup/archived take idle's

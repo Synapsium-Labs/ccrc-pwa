@@ -140,6 +140,12 @@ export const claimedSentence = (named: readonly ArchiveConflictRun[] | null): st
       ? `${runPhrase(named[0]!)} is still open on this workspace.`
       : `${named.map(runPhrase).join('; ')} are still open on this workspace.`;
 
+/** The sheet's own title, and the one the archive sheet gives the same
+ *  refusal when it renders it in place. TWO SURFACES, ONE CLAIM — the literal
+ *  census found the second copy, which neither the markup nor the shape
+ *  census could see: a `title=` prop takes a string, not a class. */
+export const CLAIMED_TITLE = 'This workspace is claimed';
+
 export const CLAIMED_CONSEQUENCE =
   'Archiving stops the session and puts the worktree away. Nothing is deleted, but the run loses the workspace it is working in.';
 
@@ -189,7 +195,7 @@ export function ArchiveConflictSheet({
   };
 
   return (
-    <Sheet open onClose={onClose} title="This workspace is claimed">
+    <Sheet open onClose={onClose} title={CLAIMED_TITLE}>
       <div className="archive-conflict-sheet">
         {/* MERGE NOTE: main moved both sentences behind `claimedSentence` and
             `CLAIMED_CONSEQUENCE`, which is a single-source-of-truth win this

@@ -21,7 +21,7 @@
 import { useEffect, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
-import { accountLabel, accountColorVar } from '../lib/accounts';
+import { accountColorVar, accountLabel, warnNonArrayRoster } from '../lib/accounts';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useNow } from '@ccrc/ui';
@@ -59,7 +59,7 @@ export function AccountsStrip(): ReactNode {
         if (Array.isArray(r.roster)) {
           setRoster(r.roster);
         } else {
-          console.warn('ccrc: GET /api/accounts answered with a non-array roster; keeping the last known one.', r);
+          warnNonArrayRoster(r);
         }
       }).catch(() => {});
     };

@@ -21,7 +21,7 @@ import {
   resumeNote, runKindChip, runWarnings, runItems, runState,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
-import { LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
+import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
 import { coordPresence } from '../fleet/coordWords';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
@@ -195,11 +195,7 @@ export function RunRow({
           `unmeasuredFields` is used two lines up: the live frame is cast, not
           revived, so an older server's row omits this ADDITIVE key and a raw
           `!== null` paints `graph ` with no number (D-1251). */}
-      {graphReads !== null && (
-        <span className="sess-graph" title={`${graphReads} graphify read(s) this session`}>
-          graph {graphReads}
-        </span>
-      )}
+      <GraphChip reads={graphReads} gated={null} />
       {/* D-1, finally on screen. `data-cleared` carries the half the word
           alone cannot: the two branches are two different facts, and a test
           that could only read the string would be pinning prose. */}

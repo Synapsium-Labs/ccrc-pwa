@@ -42,6 +42,13 @@ const dotVariants = cva(
   },
 );
 
+/** The bucket's own word, for a surface that renders the LABEL without the
+ *  lamp. `SessionHeader` composes three of its states ("idle · 3h ago") and
+ *  states three outright, and those three were byte-identical copies of the
+ *  labels below — the literal census found `merged, ready to clean up` in two
+ *  files. A reader, not a second map: the vocabulary stays `DOT`'s. */
+export const statusLabel = (status: SessionBucket): string => DOT[status].label;
+
 const DOT: Record<
   SessionBucket,
   { tone: NonNullable<VariantProps<typeof dotVariants>['tone']>; label: string; glyph: string }

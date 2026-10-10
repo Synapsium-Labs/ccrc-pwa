@@ -31,7 +31,8 @@ import { Button, Sheet, toast } from '@ccrc/ui';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
-  CLAIMED_CONSEQUENCE, claimedSentence, isArchiveConflictRun, runPhrase, type ArchiveConflictRun,
+  CLAIMED_CONSEQUENCE, CLAIMED_TITLE, claimedSentence, isArchiveConflictRun, runPhrase,
+  type ArchiveConflictRun,
 } from './ArchiveConflictSheet';
 import './fleet.css';
 import { substrateFaultText } from './substrateWords';
@@ -245,7 +246,7 @@ export function ArchiveSheet({
       primary = { label: 'End programme and archive', next: { ...consent, programme: true } };
       break;
     case 'claimed':
-      title = 'This workspace is claimed';
+      title = CLAIMED_TITLE;
       body = (
         <>
           <p className="qc-consequence">{claimedSentence(ask.runs.length > 0 ? ask.runs : null)}</p>
