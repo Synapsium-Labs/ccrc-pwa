@@ -54,6 +54,9 @@
 //   | a `<select>`'s rule loses `--tap-min`                | 1 red  |
 //   | an INLINE prose link GAINS `--tap-min`               | 1 red  |
 //   | `buttonVariants` loses `min-h-tap`                   | 1 red  |
+//   | the bell loses its floors, entry still SELECTOR      | 1 red  |
+//   | an UNDER entry for a computed class drops its cite   | 1 red  |
+//   | `.metachip` gains the floor, entry still UNDER        | 2 red  |
 //
 // The fifth and sixth are what make the registry evidence rather than claims:
 // an entry cannot say TOKEN about a rule that has stopped declaring the floor,
@@ -266,11 +269,13 @@ const CONTROLS: Record<string, string> = {
 
   // ── the rest, argued one at a time ───────────────────────────────────────
   'fleet/NotificationBell.tsx <button> (computed)':
-    'UNDER, about 25px: `.bell` is `padding: 4px` around `--fs-lg` (17px) at '
-    + 'line-height 1. The SETTINGS copy of the same component is fine — '
-    + '`.settings-bell-row .bell` declares both floors — so the one in the FLEET '
-    + 'HEADER is the copy that is under it, and the two have drifted. Found by '
-    + 'this census. Not changed: growing the header bell moves the header.',
+    'SELECTOR .bell. It was UNDER at about 25px — 4px of padding around '
+    + '`--fs-lg` at line-height 1 — while `.settings-bell-row .bell`, the SAME '
+    + 'component in Settings, declared both floors. Two copies of one '
+    + 'component, drifted; this census found it. The header copy now carries '
+    + 'the floors too, measured to fit: the head\'s right group needs 244px of '
+    + 'min-content with 294px at 390px, this adds 19px, and the group wraps '
+    + 'anyway (D-3303).',
   'fleet/SessionMeta.tsx <button> sess-held':
     "SELECTOR .sess-line. Inline text in the row's meta line, not a box of its "
     + 'own: what gets tapped is the ROW, and the row declares the floor. Its own '
@@ -308,8 +313,10 @@ const CONTROLS: Record<string, string> = {
     + 'line-height 1. A full-width disclosure — easy to hit horizontally, short '
     + 'vertically.',
   'session/SessionHeader.tsx <button> (computed)':
-    'UNDER, about 19px. The effort chip — `metachip` or `metachip--ultra` — on '
-    + 'the same rule as the model chip below.',
+    'UNDER .metachip, about 19px. The effort chip — `metachip` or '
+    + '`metachip--ultra` — on the same rule as the model chip below. The '
+    + 'citation is REQUIRED because the class is computed: see '
+    + 'CITES_A_RULE.',
   'session/SessionHeader.tsx <button> metachip metachip--model':
     'UNDER, about 19px: `padding: 3px 9px` around `--fs-2xs` (11px) at '
     + 'line-height 1, plus a hairline. The model and effort chips are TAPPABLE '
@@ -400,7 +407,7 @@ describe('hand-drawn controls', () => {
     expect(
       Object.values(CONTROLS).filter((v) => v.startsWith('UNDER')).length,
       'the UNDER arm still records every control below the floor',
-    ).toBe(7);
+    ).toBe(6);
   });
 
 
@@ -427,6 +434,37 @@ describe('hand-drawn controls', () => {
       })
       .map(([k]) => k).sort();
     expect(grown, 'this now declares --tap-min — it is not an inline target').toEqual([]);
+  });
+
+
+  it('makes a control with a computed or absent class cite the rule that answers for it', () => {
+    // THE HOLE THIS CLOSES, measured. `.bell` gained both floors and this
+    // census stayed green: its key's class is `(computed)`, the TOKEN check
+    // skips such a key as unverifiable and the UNDER negative skipped it too
+    // — so an entry saying "UNDER, about 25px" survived the control no longer
+    // being under anything. A verdict nothing can check is a comment.
+    //
+    // So a key with no literal class must name a selector after its verdict,
+    // and the arms above verify that selector: TOKEN and SELECTOR require it
+    // to declare the floor, UNDER requires it NOT to. INLINE and VARIANT have
+    // their own evidence and need none.
+    const needsCite = Object.entries(CONTROLS)
+      .filter(([k]) => classOfKey(k).startsWith('('))
+      .filter(([, v]) => !v.startsWith('INLINE') && !v.startsWith('VARIANT'));
+    expect(needsCite.length, 'there are computed-class controls to check').toBeGreaterThan(2);
+    const bare = needsCite
+      .filter(([, v]) => /^[A-Z]+[.,]/.test(v) || !/^[A-Z]+ \S/.test(v))
+      .map(([k]) => k).sort();
+    expect(bare, 'this class is computed or absent — name the rule that answers for it').toEqual([]);
+    const wrong = needsCite.filter(([, v]) => {
+      const sel = /^[A-Z]+ (.+?)[.,](?:\s|$)/.exec(v)?.[1] ?? '';
+      if (sel === '') return true;
+      const floored = selectorHasFloor(sel) || sel.split(/\s+/).every((p) => !p.startsWith('.'))
+        ? selectorHasFloor(sel)
+        : classHasFloor(sel.replace(/^\./, ''));
+      return v.startsWith('UNDER') ? floored : !floored;
+    }).map(([k]) => k).sort();
+    expect(wrong, 'the cited rule does not say what the verdict claims').toEqual([]);
   });
 
   it('reads the app and the stylesheets at all', () => {

@@ -120,11 +120,33 @@
   flex: none;
   max-width: 100%;
 }
-/* Notification toggle — a quiet bell; lit when push is on. */
+/* Notification toggle — a quiet bell; lit when push is on.
+ *
+ * THE TAP FLOOR, which this copy did not have and its twin did. The settings
+ * copy below (`.settings-bell-row .bell`) declares both floors with the note
+ * "the settings section's primary mobile control gets a real hit area"; the
+ * SAME component in the fleet header had neither, so the bell measured about
+ * 25px there (4px padding around --fs-lg at line-height 1) and 44 in
+ * Settings. Two copies of one component, drifted — found by
+ * `control-census.test.ts`, which is why that file reads both and not one.
+ *
+ * IT FITS, measured rather than hoped: the width note above `.fleet-runs-line`
+ * records the head's right group at 244px of min-content with 294px available
+ * at 390px, and this adds 19px to the bell for 263px. The group wraps anyway
+ * (D-3303), so the escape was already there.
+ *
+ * `min-width` as well as `min-height`, exactly as the twin does: the glyph is
+ * one character and the horizontal miss is the easier one. Layout only, no
+ * colour — the twin's own comment makes the point that this needs no
+ * INHERITED_GROUNDS registration, and the gate is unmoved. */
 .bell {
   border: none;
   background: none;
   cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
   padding: 4px;
   font-size: var(--fs-lg);
   line-height: 1;
