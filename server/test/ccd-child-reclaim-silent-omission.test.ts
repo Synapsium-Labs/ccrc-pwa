@@ -2,9 +2,11 @@
 // rung 8's rule: a read that failed measured nothing). `git worktree list
 // --porcelain` exits 0 and OMITS the stanza of a record whose admin `gitdir` it
 // cannot read — and every linked stanza when `worktrees/` cannot be listed,
-// and the stanza of an entry whose `gitdir` is empty (measured, git 2.43). So the ladder's "no record" proves nothing until git's
-// admin entries are read whole, through `_ws_reclaim_log_of`'s own walk:
-//   - an entry that could not be read, or reads empty -> unmeasured (retried);
+// and the stanza of an entry whose `gitdir` is empty; one whose `gitdir` is
+// blank it lists at no path (measured, git 2.43). So the ladder's "no record"
+// proves nothing until git's admin entries are read whole, through
+// `_ws_reclaim_log_of`'s own walk:
+//   - an entry unreadable, or naming no path     -> unmeasured (retried);
 //   - an entry that names the tree git omitted   -> unmeasured (retried);
 //   - no entry names it, every entry read        -> no-worktree-record (TERMINAL), as before.
 // The ladder is SHARED: the change reaches `ws-expire` too (a case below). And
@@ -40,12 +42,16 @@ const withMode = <T>(p: string, mode: number, body: () => T): T => {
 };
 /** git's list omits the record although every admin entry reads: the shape no chmod makes, stubbed at its one reader. */
 const LIST_OMITS = '_ws_reclaim_record() { RECLAIM_REC_BRANCH=; RECLAIM_REC_HEAD=; RECLAIM_REC_MAIN=0; RECLAIM_REC_PRUNABLE=0; return 1; };';
-/** An admin `gitdir` that reads EMPTY (after the matcher's first-line cut). git 2.43 omits the stanza of a truly
- *  empty one with exit 0, as it omits an unreadable one (measured); a lone newline it lists with an empty path. */
+/** An admin `gitdir` whose first line names NO PATH: empty or blank. git 2.43 right-trims it, omits the stanza of an
+ *  empty one with exit 0, as it omits an unreadable one, and lists a blank one at an empty path (measured). */
 const emptyGitdir = (main: string, slug: string, body = ''): void => {
   fs.writeFileSync(path.join(adminOf(main, slug), 'gitdir'), body);
 };
-const EMPTY_BODIES: [string, string][] = [['empty (`: >`)', ''], ['a lone newline', '\n']];
+const EMPTY_BODIES: [string, string][] = [
+  ['empty (`: >`)', ''], ['a lone newline', '\n'], ['a space and a newline', ' \n'], ['a tab', '\t'],
+  ['a blank first line over a second', '\nnot-a-path\n'],
+];
+const NAMES_NO_PATH = 'gitdir names no path on its first line';
 
 describe('the ladder’s record check, over a STANDING tree', () => {
   it('the CONTROL: git lists the record, so the child is reclaimable', () => {
@@ -67,7 +73,7 @@ describe('the ladder’s record check, over a STANDING tree', () => {
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.token).toBe('');
-    expect(r.detail).toContain('gitdir is empty, and git');
+    expect(r.detail).toContain(NAMES_NO_PATH);
   }, 60_000);
 
   it('worktrees/ cannot be listed: git omits every linked record, and the ladder answers unmeasured', () => {
@@ -128,14 +134,14 @@ describe('the vanished arm: "no record" proceeds there, so it takes the same ask
     expect(r.token).toBe('');
   }, 60_000);
 
-  it('a gone tree whose admin gitdir reads EMPTY: unmeasured, and no token is minted — head=\'\' is never bound', () => {
+  it.each(EMPTY_BODIES)('a gone tree whose admin gitdir reads %s: unmeasured, and no token is minted — head=\'\' is never bound', (_label, body) => {
     const { main, wt } = makeChild(h);
     fs.rmSync(wt, { recursive: true, force: true });
-    emptyGitdir(main, 'quiet-basin');
+    emptyGitdir(main, 'quiet-basin', body);
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.token).toBe('');
-    expect(r.detail).toContain('gitdir is empty');
+    expect(r.detail).toContain(NAMES_NO_PATH);
     const a = h.run(`${CHILD_STUBS} _session_verdict() { echo gone; }; cmd_ws_audit --session ${CHILD_ID} --reclaim`);
     expect(a.code, a.stdout + a.stderr).toBe(1);
     const doc = JSON.parse(a.stdout) as Record<string, unknown>;
@@ -187,14 +193,14 @@ describe('`_ws_reclaim_log_of`’s gone arm asks the SAME walk it always did', (
     expect(out).toBe('1');
   }, 60_000);
 
-  it('a gone checkout whose admin gitdir reads EMPTY fails to locate its reflog too (rc 1): the ONE matcher', () => {
+  it.each(EMPTY_BODIES)('a gone checkout whose admin gitdir reads %s fails to locate its reflog too (rc 1): the ONE matcher', (_label, body) => {
     const { main, wt } = makeChild(h);
     fs.rmSync(wt, { recursive: true, force: true });
-    emptyGitdir(main, 'quiet-basin');
+    emptyGitdir(main, 'quiet-basin', body);
     const [rc = '', why = ''] = h.sh(`_WS_LOGS=(); _ws_reclaim_log_of "${main}" tree "${wt}" 0; printf '%s\\x1f%s' "$?" "$_WS_KEEP_WHY"`)
       .split('\x1f');
     expect(rc).toBe('1');
-    expect(why).toContain('gitdir is empty');
+    expect(why).toContain(NAMES_NO_PATH);
   }, 60_000);
 });
 
@@ -215,7 +221,7 @@ describe('ws-expire runs the same ladder, so it answers the same', () => {
     emptyGitdir(main, 'quiet-dune');
     const r = expireEvalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
-    expect(r.detail).toContain('gitdir is empty');
+    expect(r.detail).toContain(NAMES_NO_PATH);
     const a = expireAudit(h);
     expect(a.code, a.stdout).toBe(1);
     expect((JSON.parse(a.stdout) as Record<string, unknown>)['verdict']).toBe('unmeasured');

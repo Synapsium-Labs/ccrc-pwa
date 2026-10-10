@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=03eddae3e575908d2a95b2a41627063a69467875491e521d13c09e4ac9a0072d
+# ccrc:generated 1 sha256=c5c5b86e7fb7e680b0d88e5a411ead01a83710fd27873e4d3ba77891e44009b3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -28751,7 +28751,7 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
 _ws_reclaim_admin_entries() {   # common path recorded -> 0 with `<d>/logs/HEAD` and `gitdir:<d>` appended to
   #                                  _WS_LOGS for every <common>/worktrees/<d> whose `gitdir` names <path>/.git (as
   #                                  given, or resolved); 1 (_WS_KEEP_WHY) when `worktrees/` or an entry could not
-  #                                  be read, an entry's `gitdir` reads empty, or `recorded` is 1 and no entry names it
+  #                                  be read, an entry's `gitdir` names no path, or `recorded` is 1 and no entry names it
   # GIT'S ADMIN ENTRIES, READ WHOLE — `_ws_reclaim_log_of`'s walk of a gone
   # checkout, and the ONE matcher of an entry to a path: the ladder asks it
   # too, of a STANDING tree git's list printed no record of
@@ -28776,11 +28776,14 @@ _ws_reclaim_admin_entries() {   # common path recorded -> 0 with `<d>/logs/HEAD`
     g=$(cat -- "$d/gitdir" 2>/dev/null) \
       || { _WS_KEEP_WHY="$d/gitdir cannot be read — whether $d is git's record of $arg was never asked"; return 1; }
     g="${g%%$'\n'*}"
-    # AN EMPTY `gitdir` MEASURED NOTHING (spec §5.5, rung 8's rule): git's list
-    # leaves such a record out with exit 0, as it leaves out an unreadable one
-    # (measured, git 2.43), so "names something else" was never read off it.
-    [[ -n "$g" ]] \
-      || { _WS_KEEP_WHY="$d/gitdir is empty, and git's worktree list leaves out such a record — whether $d is git's record of $arg was never asked"; return 1; }
+    # A `gitdir` THAT NAMES NO PATH MEASURED NOTHING (spec §5.5, rung 8's rule):
+    # git right-trims it, and with exit 0 its list leaves out an empty one, as
+    # it leaves out an unreadable one, and lists a blank one (a lone newline,
+    # spaces, a tab) at no path (measured, git 2.43). A first line that is
+    # empty or blank, whatever follows it, names no path to compare, so "names
+    # something else" was never read off it.
+    [[ "$g" == *[![:space:]]* ]] \
+      || { _WS_KEEP_WHY="$d/gitdir names no path on its first line — git's list leaves out an empty one and lists a blank one at no path, so whether $d is git's record of $arg was never asked"; return 1; }
     [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] || continue
     [[ -d "$d" && ! -L "$d" ]] \
       || { _WS_KEEP_WHY="$d, git's record of $arg, is not a directory — what it names was never read"; return 1; }
@@ -28809,7 +28812,7 @@ _ws_reclaim_no_record() {   # common workdir -> 0 when NO admin entry of the rep
   local _WS_KEEP_WHY=''
   _WS_NOREC_WHY=''
   _ws_reclaim_admin_entries "$common" "$w" 0 \
-    || { _WS_NOREC_WHY="$_WS_KEEP_WHY — git's worktree list leaves out a record it cannot read, so its silence about $w measured nothing"; return 2; }
+    || { _WS_NOREC_WHY="$_WS_KEEP_WHY — git's worktree list prints no path for a record whose gitdir it cannot read or that names none, so its silence about $w measured nothing"; return 2; }
   for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
     [[ "$e" == gitdir:* ]] || continue
     _WS_NOREC_WHY="git's worktree list omitted a record that exists: it printed no record of $w, but ${e#gitdir:} names $w/.git"
