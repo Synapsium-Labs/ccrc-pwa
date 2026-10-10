@@ -440,3 +440,129 @@ describe('per-target state — the two bugs AbandonSheet measured, on this sheet
     expect(screen.getByRole('button', { name: /^re-kickoff$/i })).not.toBeDisabled();
   });
 });
+
+// THE THREE REMAINING GENERATION GUARDS. The two cases above kill the
+// reclaim door's pair and one case upstream kills revive's RESOLVE arm; the
+// other three arms — revive's REJECT, and BOTH of re-kickoff's — had no
+// killer at all (measured: statements 217, 237 and 250 of `ResumeSheet.tsx`
+// uncovered with this file 33/33 green). They are four separate `if`s
+// precisely because a promise can be superseded on either arm, and the arm
+// that writes an ERROR is the damaging one: a sentence about run 3's ccd
+// failure appearing under run 9's still-alive coordinator reads as run 9's.
+describe('the superseded arms no case reached — revive’s refusal, and both of re-kickoff’s', () => {
+  /** The two-run switcher the superseded cases need, parameterised by which
+   *  door's api function is the slow one. `run(9)` names a DIFFERENT
+   *  coordinator, so a leaked sentence is identifiable by name rather than by
+   *  absence. */
+  // Both defaulted to `noop`'s own members, never left `undefined`: the
+  // component defaults an omitted injection to the REAL api method, so
+  // `ensure={undefined}` would reach across the wire from a unit test.
+  const Switcher = ({ ensure = noop.ensure, kickoff = noop.kickoff }: {
+    ensure?: (id: string) => Promise<void>;
+    kickoff?: (id: string, b: { slug: string; title: string; runId?: number; wave?: number })
+      => Promise<{ queued: boolean }>;
+  }): ReactNode => {
+    const [r, setR] = useState(run());
+    return (
+      <>
+        <button type="button" data-testid="switch-run"
+                onClick={() => setR(run({ id: 9, wave: 1, claimedBy: 'ccrc-pwa-other' }))}>
+          switch
+        </button>
+        <ResumeSheet run={r} onClose={() => {}} reclaimRun={noop.reclaimRun}
+                     ensure={ensure} kickoff={kickoff} />
+      </>
+    );
+  };
+
+  it("a superseded revive's FAILURE cannot write ccd's words into another run's sheet", async () => {
+    let fail!: () => void;
+    const ensure = vi.fn(() => new Promise<void>((_res, rej) => {
+      fail = () => rej(new ApiError(502, { ok: false, error: 'ccd-failed', stderr: 'tmux: no server running' }));
+    }));
+    render(<Switcher ensure={ensure} />);
+    fireEvent.click(screen.getByRole('button', { name: /^revive ccrc-pwa-coordinator$/i }));
+    fireEvent.click(screen.getByTestId('switch-run'));
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(screen.queryByText(/tmux: no server running/),
+      "run 3's ccd failure cannot surface under run 9's live coordinator").toBeNull();
+    // And the reveal is state too: a superseded failure must not unlock the
+    // irreversible door on a sheet whose operator never tried anything.
+    expect(screen.queryByLabelText(/hand run 9/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^revive ccrc-pwa-other$/i })).not.toBeDisabled();
+  });
+
+  it("a superseded re-kickoff's SUCCESS cannot claim run 9's wave was queued", async () => {
+    let land!: () => void;
+    const kickoff = vi.fn(() => new Promise<{ queued: boolean }>((res) => {
+      land = () => res({ queued: true });
+    }));
+    render(<Switcher kickoff={kickoff} />);
+    fireEvent.click(screen.getByRole('button', { name: /^re-kickoff$/i }));
+    fireEvent.click(screen.getByTestId('switch-run'));
+    await act(async () => { land(); await Promise.resolve(); await Promise.resolve(); });
+
+    // The note names run and wave, which is exactly what makes a leak a lie:
+    // run 3 at wave 3 queued, printed under run 9 at wave 1.
+    expect(screen.queryByText(/names run 3 at wave 3/)).toBeNull();
+    expect(screen.getByRole('button', { name: /^re-kickoff$/i })).not.toBeDisabled();
+  });
+
+  it("a superseded re-kickoff's REFUSAL cannot write into run 9's sheet either", async () => {
+    let fail!: () => void;
+    const kickoff = vi.fn(() => new Promise<{ queued: boolean }>((_res, rej) => {
+      fail = () => rej(new ApiError(413, { ok: false, error: 'oversize', limit: 2048 }));
+    }));
+    render(<Switcher kickoff={kickoff} />);
+    fireEvent.click(screen.getByRole('button', { name: /^re-kickoff$/i }));
+    fireEvent.click(screen.getByTestId('switch-run'));
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(screen.queryByText(/too long|oversize/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^re-kickoff$/i })).not.toBeDisabled();
+  });
+});
+
+describe('the two refusal shapes the status table could not express', () => {
+  const reclaimFailingWith = (err: unknown): void => {
+    render(<ResumeSheet run={run()} onClose={() => {}} {...noop}
+                        reclaimRun={vi.fn().mockRejectedValue(err)} />);
+    fireEvent.click(screen.getByRole('button', { name: /cannot be revived/i }));
+    fireEvent.change(screen.getByLabelText(/hand run 3/i), { target: { value: 'ccrc-pwa-far-mesa' } });
+    fireEvent.click(screen.getByRole('button', { name: /^reclaim$/i }));
+  };
+
+  // NOT the 418 case one table up. That one is an unknown STATUS, which falls
+  // off the end of the dispatch; this is a 409 — a status the sheet handles,
+  // carrying a refusal word neither key recognises. The two reach
+  // `RECLAIM_COPY.unknown` by different routes, and only this one proves the
+  // 409 arm cannot fall through to an empty sheet.
+  it('a 409 whose refusal word is in neither key still says something', async () => {
+    reclaimFailingWith(new ApiError(409, { ok: false, refused: 'moon-phase-wrong' }));
+    expect(await screen.findByText(/this build does not recognise/i)).toBeInTheDocument();
+  });
+
+  // The transport arm. `reclaimRun` can reject with something that is not an
+  // `ApiError` at all — a `TypeError` from `fetch` when the box went away
+  // mid-request is the ordinary producer — and the sheet has no toast to
+  // defer to, so a silent sheet would be the whole failure.
+  it('a rejection that is not an ApiError at all is still a sentence', async () => {
+    reclaimFailingWith(new TypeError('Failed to fetch'));
+    expect(await screen.findByText(/this build does not recognise/i)).toBeInTheDocument();
+  });
+});
+
+// The run that names NOBODY. Unreachable from the board — the row's gate needs
+// a claimant to measure — and rendered anyway rather than collapsed into
+// `return null`, because "no run" and "a run nobody claims" are two conditions
+// and one render for both is the overloaded seam this repo bans. The assertion
+// that matters is the second: with no claimant there is nothing to revive, so
+// the sheet must offer no door at all, not a `Revive null`.
+it('a run with no claimant says so, and offers no door', () => {
+  render(<ResumeSheet run={run({ claimedBy: null })} onClose={() => {}} {...noop} />);
+  expect(screen.getByText(/names no coordinator/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^revive/i })).toBeNull();
+  expect(screen.queryByRole('button', { name: /^re-kickoff$/i })).toBeNull();
+  expect(screen.queryByRole('button', { name: /cannot be revived/i })).toBeNull();
+});
