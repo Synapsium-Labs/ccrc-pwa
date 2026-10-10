@@ -443,6 +443,46 @@ describe('hold and release', () => {
     expect(heldCalls).toHaveLength(0);   // typing is not sending
   });
 
+  // THE RESET HAD A LONG COMMENT AND NO TEST — measured: deleting the effect
+  // that clears the composer left all 60 tests in this file green. The sheet
+  // is mounted at screen level and never unmounts on close, and
+  // `FleetScreen`'s `openActionsFor` retargets it while `open` stays true, so
+  // nothing else clears a half-typed reason. Both halves of the reset key get
+  // their own case below.
+  it('a reason half-typed for session A does NOT follow a retarget to session B', () => {
+    const a = f({ id: 'demo-quiet-mesa', held: null });
+    const b = f({ id: 'demo-still-ridge', workspace: 'still-ridge', held: null });
+    const { rerender } = render(<SessionActionsSheet session={a} {...sheetProps} />);
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:a wave:1/4' } });
+
+    rerender(<SessionActionsSheet session={b} {...sheetProps} />);
+    // Back to the opener: session B's operator is not handed A's sentence,
+    // and cannot send it by tapping Confirm.
+    expect(screen.getByRole('button', { name: /^hold$/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Hold reason')).toBeNull();
+    expect(heldCalls).toHaveLength(0);
+  });
+
+  // THE BEHAVIOUR, NOT THE MECHANISM — said out loud because the measurement
+  // says so: with the reset effect deleted entirely this case stays GREEN,
+  // because `Sheet open={false}` unmounts the composer and the state dies
+  // with it. It is kept as the behavioural claim (a closed-and-reopened sheet
+  // offers an empty box, however that is achieved); the retarget case above
+  // is the one that pins the effect, and it is the only one that reds.
+  it('a reason half-typed survives nothing on a close either', () => {
+    const session = f({ held: null });
+    const props = { onClose: () => {}, onReap: () => {} };
+    const { rerender } = render(<SessionActionsSheet session={session} open {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /^hold$/i }));
+    fireEvent.change(screen.getByLabelText('Hold reason'), { target: { value: 'program:a' } });
+
+    rerender(<SessionActionsSheet session={session} open={false} {...props} />);
+    rerender(<SessionActionsSheet session={session} open {...props} />);
+    expect(screen.getByRole('button', { name: /^hold$/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Hold reason')).toBeNull();
+  });
+
   it('Hold sends the typed reason and closes the sheet on success', async () => {
     const onClose = vi.fn();
     render(<SessionActionsSheet session={f({ held: null })} open onClose={onClose} onReap={() => {}} />);

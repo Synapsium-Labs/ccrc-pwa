@@ -15,31 +15,14 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
-import { Button, QuickConfirm, Sheet, TextInput, toast } from '@ccrc/ui';
-import { api, ApiError, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
+import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { api, apiErrorText } from '../lib/api';
 
-/**
- * D-2731. The hold route is the one caller here whose refusal carries a sentence
- * the operator can ACT on: `oversize` arrives with `limit` and a `detail` saying
- * the reason is written verbatim and refused rather than shortened.
- * `apiErrorText` has no entry for `oversize` — and must not grow one, since the
- * kickoff translator already owns that slug with a different sentence — so
- * without this reader the toast read `Couldn't hold — oversize`, which narrows a
- * distinction the server took care to send. Surface-local for exactly that
- * reason: the same slug means two things at two seams.
- */
-const holdErrorText = (err: unknown): string => {
-  const body: unknown = err instanceof ApiError ? err.body : null;
-  if (body !== null && typeof body === 'object') {
-    const { error, detail } = body as { error?: unknown; detail?: unknown };
-    if (error === 'oversize' && typeof detail === 'string') return detail;
-  }
-  return apiErrorText(err);
-};
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
 import { SwapSheet } from './SwapSheet';
+import { HoldControl } from './HoldControl';
 import { ArchiveSheet, isPutAway, restoreReachesEnsure, restoreSession } from './ArchiveSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
@@ -99,16 +82,8 @@ export function SessionActionsSheet({
   /** The one Archive's sheet (workspace lifecycle §5.2) is open over this one. It hosts every refusal the archive
    *  door can answer — the `run-open` claim this sheet used to hold as `conflict` among them. */
   const [archiveOpen, setArchiveOpen] = useState(false);
-  // Hold's reason composer — open/closed, the typed text, and a refusal the
-  // empty-reason check leaves behind. `holdBusy` is separate from `archBusy`:
-  // the two actions are mutually exclusive on screen (never-both, see the
-  // buttons below) but nothing enforces that FOR the busy flags themselves,
-  // and sharing one would freeze Hold's own disabled state on an unrelated
-  // Restore in flight (`archBusy` covers Restore only now; Archive's busy state lives in `ArchiveSheet`).
-  const [holdOpen, setHoldOpen] = useState(false);
-  const [holdReason, setHoldReason] = useState('');
-  const [holdError, setHoldError] = useState<string | null>(null);
-  const [holdBusy, setHoldBusy] = useState(false);
+  // Hold's composer is `HoldControl`'s own — state, send and refusal reader
+  // together, including the reset this effect used to carry for it.
   // Release's consequence confirm — a QuickConfirm sibling, same shape as
   // SwapSheet's `target`, open only once Release names what it does. No busy
   // flag: like SwapSheet's `move()`, the confirm tap already WAS the
@@ -150,9 +125,6 @@ export function SessionActionsSheet({
   // Workspace lifecycle §5.2 moved that claim into `ArchiveSheet`, which resets
   // itself on the same two changes; `archiveOpen` takes its place here.
   useEffect(() => {
-    setHoldOpen(false);
-    setHoldReason('');
-    setHoldError(null);
     setReleaseConfirmOpen(false);
     setForgetConfirmOpen(false);
     setArchiveOpen(false);
@@ -223,33 +195,6 @@ export function SessionActionsSheet({
       }
     })();
     onClose();
-  };
-
-  // Empty reason refuses CLIENT-SIDE, before `api.hold` is ever called —
-  // ccd's own sentence (`HOLD_EMPTY_REASON_TEXT`), inline in the composer
-  // rather than a toast, so it reads next to the box that needs fixing
-  // instead of a separate surface the operator has to correlate back to it.
-  // The server re-checks the identical rule (a client is not where trust
-  // ends), so this is a UX shortcut, not the enforcement.
-  const confirmHold = async (): Promise<void> => {
-    const reason = holdReason.trim();
-    if (reason === '') {
-      setHoldError(HOLD_EMPTY_REASON_TEXT);
-      return;
-    }
-    if (holdBusy) return;
-    setHoldBusy(true);
-    setHoldError(null);
-    try {
-      await api.hold(session.id, reason);
-      setHoldOpen(false);
-      setHoldReason('');
-      onClose();
-    } catch (err) {
-      toast(`Couldn't hold — ${holdErrorText(err)}`, 'error');
-    } finally {
-      setHoldBusy(false);
-    }
   };
 
   // Fire-and-forget, same shape as SwapSheet's `move()`: QuickConfirm's own
@@ -447,42 +392,8 @@ export function SessionActionsSheet({
               ever on screen for this row, "tap Hold, submit empty" needs no
               disambiguation between two same-named buttons. */}
           {session.workspace !== null && session.archivedAt === null
-            && session.held === null && !holdOpen && (
-            <Button variant="ghost"
-                    onClick={() => { setHoldOpen(true); setHoldError(null); }}>
-              Hold
-            </Button>
-          )}
-          {session.workspace !== null && session.archivedAt === null
-            && session.held === null && holdOpen && (
-            <div className="sess-hold-form">
-              <TextInput
-                placeholder="program:name wave:2/4"
-                aria-label="Hold reason"
-                value={holdReason}
-                /* The refusal clears on the FIRST keystroke, not on the next
-                   Confirm: it was only ever cleared inside `confirmHold`
-                   AFTER the non-empty check passed, so "empty reason — say
-                   which program holds this" sat under a box with a perfectly
-                   good reason typed into it until the operator submitted
-                   again. An error that outlives its cause reads as a refusal
-                   of what is on screen now. */
-                onChange={(e) => { setHoldReason(e.target.value); setHoldError(null); }}
-                autoFocus
-              />
-              {/* Client-side refusal, ccd's own sentence — see `confirmHold`. */}
-              {holdError !== null && <p className="sess-hold-error">{holdError}</p>}
-              <div className="sess-hold-actions">
-                <Button variant="primary" disabled={holdBusy}
-                        onClick={() => void confirmHold()}>
-                  {holdBusy ? 'Holding…' : 'Confirm'}
-                </Button>
-                <Button variant="ghost"
-                        onClick={() => { setHoldOpen(false); setHoldReason(''); setHoldError(null); }}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
+            && session.held === null && (
+            <HoldControl session={session} sheetOpen={open} onHeld={onClose} />
           )}
 
           {session.held !== null && (
