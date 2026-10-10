@@ -660,12 +660,22 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
 
   interface WriterLog { k: string; p?: string; a?: string; b?: string; w?: boolean }
   /** Run a writer body on a fixture claim answer; return what it did and its verdict. */
-  function runWriter(body: string): { events: WriterLog[]; dest: string; tmp: string; stdout: string; stderr: string } {
+  // `existing` is written to the destination (mode 0600) before the run, the live box's path, and `preIno` is its inode
+  // as it stood then. `tmpDir` is a directory NAME made under the run's own dir, and the temp goes there, not beside
+  // the destination.
+  function runWriter(body: string, o: { existing?: string; tmpDir?: string } = {}): {
+    events: WriterLog[]; dir: string; dest: string; tmp: string; preIno: number | null; stdout: string; stderr: string;
+  } {
     const dir = mkTmp('tok-writer-');
     const secrets = join(dir, 'secrets'); const cwd = join(dir, 'cwd');
     mkdirSync(secrets, { mode: 0o700 }); mkdirSync(cwd);
-    const dest = join(secrets, 'ccrc-mail.token'); const tmp = join(secrets, '.ccrc-token-sync.AAAAAA');
+    const dest = join(secrets, 'ccrc-mail.token');
+    let tmpHome = secrets;
+    if (o.tmpDir !== undefined) { tmpHome = join(dir, o.tmpDir); mkdirSync(tmpHome, { mode: 0o700 }); }
+    const tmp = join(tmpHome, '.ccrc-token-sync.AAAAAA');
     writeFileSync(tmp, '', { mode: 0o600 });
+    let preIno: number | null = null;
+    if (o.existing !== undefined) { writeFileSync(dest, o.existing, { mode: 0o600 }); preIno = statSync(dest).ino; }
     writeFileSync(join(dir, 'answer.json'), JSON.stringify({ ok: true, value: VALUE, generation: GEN }));
     writeFileSync(join(dir, 'wrapper.py'), WRAPPER); writeFileSync(join(dir, 'body.py'), body);
     // cwd is NOT the destination's directory, so a directory fsync aimed at the cwd is distinguishable.
@@ -673,7 +683,7 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
       join(dir, 'answer.json'), dest, tmp, FLEET_TOKEN_FILE_COMMENT, TOKEN_VALUE_RE.source, GENERATION_ID_RE.source, '4096'],
     { encoding: 'utf8', cwd });
     const events = JSON.parse(readFileSync(join(dir, 'log.json'), 'utf8')) as WriterLog[];
-    return { events, dest, tmp, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    return { events, dir, dest, tmp, preIno, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   }
 
   /** Every way the log departs from: write+fsync the temp, rename it onto dest, fsync dest's directory. */
@@ -706,6 +716,27 @@ describe('ccrc token sync: the fleet file write is temp-then-rename, file-fsynce
     expect(readFileSync(w.dest, 'utf8')).toBe(`${FLEET_TOKEN_FILE_COMMENT}\n${VALUE}\n`);
     // The verb hands this very body to the isolated interpreter (so the body judged is the body that runs).
     expect(readFileSync(VERB, 'utf8')).toContain('python3 -I -c "$_TS_WRITE_PY" "$T_RESP" "$TOKEN_FILE" "$T_TOKEN"');
+  });
+
+  // R1 (review 365): `runWriter` used to create the temp and never the destination, so the writer's existing-destination
+  // branch (the one that keeps the preamble) never ran under the wrapper, and a writer that rewrote the old file in place
+  // read green. An existing destination is exactly the live box's path.
+  const EXISTING = '# a note kept from the operator\n' + FLEET_TOKEN_FILE_COMMENT + '\n' + OLD + '\n';
+  it('an existing destination (a preamble plus the old value) is replaced by rename, never rewritten in place (R1, review 365)', () => {
+    const w = runWriter(writerBody(), { existing: EXISTING });
+    expect(w.stdout, w.stderr).toBe(`ok ${GEN}\n`);
+    expect.soft(violations(w)).toEqual([]);
+    expect.soft(statSync(w.dest).ino).not.toBe(w.preIno);   // a rename gives the destination a new inode
+    const after = readFileSync(w.dest, 'utf8');
+    expect(after).toBe('# a note kept from the operator\n' + FLEET_TOKEN_FILE_COMMENT + '\n' + VALUE + '\n');
+    expect(after).not.toContain(OLD);
+  });
+
+  it('a temp that is not beside the destination is refused, and the destination is unchanged', () => {
+    const w = runWriter(writerBody(), { existing: EXISTING, tmpDir: 'elsewhere' });
+    expect(w.stdout, w.stderr).toBe('fail the temp file is not beside the token file\n');
+    expect(readFileSync(w.dest, 'utf8')).toBe(EXISTING);
+    expect(statSync(w.dest).ino).toBe(w.preIno);
   });
 
   // CONTROL: the judge is not vacuous. Each row is a mutation of the real body that the review ran against the old pin
