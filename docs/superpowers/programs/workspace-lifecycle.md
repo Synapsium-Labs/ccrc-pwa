@@ -1331,6 +1331,16 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - **CCR-15 consents (4215), relayed to the worker:** replace that one bullet with the plan's wording, keeping the
       three pre-breadcrumb word names. Comment only, every other header line byte for byte, and it must agree with the
       ccd comment.
+- **2026-10-11 12:15 — CCR-15 wave 8 MERGED (#349 → `d0c2b7803`, mail 4223), so run 358 lands second. Relayed in 4224.**
+  - Run 358's merge of `main` applies the conditional from 4209 in `containment-refuted-word.test.ts`:
+    - the shared describe becomes reclaim-only;
+    - the header's expiry sentence says both parsers class the word stuck, and wave 8's sentence is kept;
+    - the two stuck words are held equal (`EXPIRE_STUCK_WORD` against `CHILD_RECLAIM_STUCK_TOKENS`);
+    - any resumable expectation flips to stuck.
+  - What else the merge meets: `leafKeptWord` is now in L0; two child-reclaim sentences in `watch.ts`; and CLAUDE.md's
+    README figure (~6000, with README at 6002), which pools-prose re-measures after Task 11.
+  - **Progress, measured read-only:** `ws/plain-ridge` has 11 local commits, Tasks 1–11 (09:24–10:16), not pushed yet.
+    Task 12, the whole branch and the PR, is in progress.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
