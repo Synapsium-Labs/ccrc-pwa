@@ -402,9 +402,10 @@ describe('ccrc: adopt', () => {
     // `cmd_token` execs `ccrc-token-sync` beside `ccrc`. A box whose copy of
     // `ccrc` lacks that sibling cannot do the verb, and the server must read
     // that as the named hold D-4395 gives an older ccrc, not as a failure.
-    // The agent folds the spawned child's first stderr line through
-    // `isTokenVerbMissing` (`TOKEN_VERB_MISSING_PREFIXES`, imported, never
-    // copied), so the refusal's first line must start with one of them.
+    // The agent only relays the spawned child's first stderr line; the SERVER
+    // folds it through `isTokenVerbMissing` (`TOKEN_VERB_MISSING_PREFIXES`,
+    // imported, never copied) into the `verb-missing` hold, so the refusal's
+    // first line must start with one of them.
     // Red before the change: the line read `ccrc: token's script is missing`.
     const lone = join(mkTmp('ccrc-cli-token-lonely-'), 'ccrc');
     writeFileSync(lone, readFileSync(CCRC, 'utf8'), { mode: 0o755 });

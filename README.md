@@ -541,8 +541,8 @@ single box whose role is only derived as `both` (placed by `deploy.sh`, or a dev
 nothing and `ccrc-api` answers `no-token`; the server warns at boot, and the remedy is to record
 `CCRC_ROLE=both` in `~/.ccrc/ccrc.env` and then restart `ccrc.service` (the role is read only at boot).
 A `deploy.sh` box re-ships a local `deploy/ccrc.env` over that file, so record the role there too.
-A two-box fleet placed by `deploy.sh` alone has no `~/.ccrc/node-id`, so the rotation gate holds
-`node-id-unmeasured` and no rotation runs; `ccrc install` (or `ccrc update`) mints the node id.
+A two-box fleet placed by `deploy.sh` alone has no `~/.ccrc/node-id` on the fleet box, so the rotation gate holds
+`node-id-unmeasured` and no rotation runs; `ccrc install` (or `ccrc update`) on that fleet box mints it.
 
 The block below is the single-box form of the two steps:
 

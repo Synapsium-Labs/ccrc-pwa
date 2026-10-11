@@ -5271,7 +5271,8 @@ cmd_adopt() {
 cmd_token() {
   local body="$CCRC_HERE/ccrc-token-sync"
   # The refusal's first words are `unknown argument: token` on purpose: the
-  # agent classes that line as `verb-missing` (D-4395), the named hold.
+  # agent only relays the first stderr line, and the SERVER classes it
+  # (`isTokenVerbMissing`, D-4395) as the `verb-missing` hold.
   [[ -f "$body" ]] \
     || _ccrc_die "unknown argument: token — its script is missing: $body; is this a complete ccrc install?"
   exec "$BASH" "$body" "$@"

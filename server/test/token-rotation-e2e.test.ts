@@ -1804,6 +1804,7 @@ describe('a retired presentation on a box-token lane owes one forward rotation, 
       r2.clock.offset = r.clock.offset + 1000;                           // the same driver clock the stamp was taken on
       await r2.driver.tick();
       expect(r2.agent.calls, 'one rotation, at once: a restart loses retiredOwedAt').toBe(1);
+      expect(r2.printed.some((l) => l.includes('a retired presentation is still unanswered')), 'owed for the retired presentation, not for another word').toBe(true);
       await r2.driver.tick();
       await r2.driver.tick();
       expect(r2.agent.calls).toBe(1);
