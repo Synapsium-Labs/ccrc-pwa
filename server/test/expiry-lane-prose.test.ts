@@ -39,10 +39,13 @@ describe('README: what happens to an archived workspace now', () => {
     const at = readme.indexOf('**Archived workspaces are cleaned up after seven days**');
     const para = readme.slice(at, at + 5200);
     // Review 381, F5 (ruling (m)): the stuck entry has an end rule of its own, and an answer that ccd stopped before an attempt began is not it.
-    expect(para).toContain('One that met `containment-refuted` is listed at once on that cadence, and ccd’s stopping before an attempt began does not end it (an attempt completing, a verdict stopping it, or a fresh archive does);');
+    expect(para).toContain('One that met `containment-refuted` is listed at once on that cadence, and ccd\'s stopping before an attempt began does not end it (an attempt completing, a verdict stopping it, or a fresh archive does);');
     expect(para).toContain('one ccd stopped before it began is audited afresh, and listed after an hour if that recurs;');
     expect(para).toContain('a box with no `flock` gets no cleanup at all until the server restarts.');
     expect(para).not.toContain('a restart does not end it');
+    // Review 381, F3 extended: the per-pass words are the §12 ones.
+    expect(para).toContain('is refused `in-use` each time it is asked');
+    expect(para).not.toContain('is refused `in-use` on every pass');
     expect(para).toContain('The spec\'s §12 lists what to know before arming this lane or the next.');
     expect(para).not.toContain('asked again every four hours');
   });

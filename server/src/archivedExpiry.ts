@@ -792,10 +792,11 @@ const isoMs = (ms: number): string => iso(Math.floor(ms / 1000));
 
 /** WHEN A STANDING ENTRY IS ASKED AGAIN, in words that hold (wave 6; the worker's residual from wave 5): the cadence is
  *  the wait after a FAILED attempt. An answer that ends no attempt asks sooner (a deferral, the next pass), and a hold
- *  keeps the row from being asked at all while it stands. (A box that answered flock-unavailable is asked nothing, by
- *  any row, until the server restarts. The row that met it says so in its own report, unless a standing entry kept its
- *  place; and every OTHER standing row's attention sentence says so while the halt stands — `expiryAttention`'s `halted`
- *  (review 381, F3) — since this cadence is then not true of it.) */
+ *  keeps the row from being asked at all while it stands. (A box that answered flock-unavailable has no cleanup
+ *  composed for any row until the server restarts — learn audits still run. The row that met it says so in its own
+ *  report, unless a standing entry kept its place; and every row whose sentence promises another ask says so while the
+ *  halt stands, the row that met it included — `expiryAttention`'s `halted` (review 381, F3) — since this cadence is
+ *  then not true of it.) */
 export const EXPIRE_ASKS_AGAIN_CADENCE = `${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours after each failed attempt — sooner `
   + 'after an answer that ends no attempt, never while the workspace is held';
 // The ONE place the persistent tier's hours and its cadence phrase are written: the standing sentences below and the stuck
@@ -877,16 +878,17 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
   }
 }
 
-/** The two reports whose sentence promises that the lane asks again (a stuck entry, and the persistent tier's `failing`
- *  with `attempts`): the ones a halted box makes untrue. A final report says it is not asked again; the halted report
- *  says the halt itself. */
-const promisesAnotherAsk = (r: ExpiryReport): boolean => r.kind === 'stuck' || (r.kind === 'failing' && r.attempts !== undefined);
+/** The reports whose sentence promises that the lane asks again — a stuck entry, the persistent tier's `failing` with
+ *  `attempts`, and the hourly ladder's own non-final `failing` ("It is retried, backing off in between"): the ones a
+ *  halted box makes untrue. A final report says it is not asked again; the halted report says the halt itself. */
+const promisesAnotherAsk = (r: ExpiryReport): boolean =>
+  r.kind === 'stuck' || (r.kind === 'failing' && r.final !== true && r.halted !== true);
 
 /** THE ATTENTION LIST, derived from the lane's memory alone, newest first. A row in memory with a report is listed;
  *  a held row past its instant is listed by the lane as a `held` report. `halted` is the process-wide halt a
- *  `flock-unavailable` answer sets (`watch.ts`'s `archivedExpiryBoxRefused`, review 381, F3): while it stands, a standing
- *  row's sentence says so, because its own "asks again" is not true of a lane that composes nothing on that box. The
- *  sentence only — no report kind, no wire word. */
+ *  `flock-unavailable` answer sets (`watch.ts`'s `archivedExpiryBoxRefused`, review 381, F3): while it stands, every row
+ *  whose sentence promises another ask says so, because its own "asks again" is not true of a lane that composes
+ *  nothing on that box. The sentence only — no report kind, no wire word. */
 export function expiryAttention(
   entries: ReadonlyMap<string, ArchivedExpiryEntry>,
   halted = false,

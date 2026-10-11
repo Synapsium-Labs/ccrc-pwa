@@ -16,7 +16,7 @@ import {
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
   EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
-  type ArchivedExpiryEntry, type ArchivedExpiryInput,
+  type ArchivedExpiryEntry, type ArchivedExpiryInput, type ExpiryReport,
 } from '../src/archivedExpiry.js';
 
 const ID = 'demo-quiet-dune';
@@ -910,12 +910,22 @@ describe('the lane’s memory of one row', () => {
     expect(again.nextAskAt).toBe(x.nextAskAt + EXPIRE_PERSISTENT_RETRY_MS);
   });
 
-  it('the halt is said by a STANDING row only: a row that already says it, or that stands for nothing, is read as it was (review 381, F3)', () => {
+  it('the halt is said by every row that promises another ask; a row that already says it, or promises nothing, is read as it was (review 381, F3)', () => {
     const t = NOW;
     const flock = { kind: 'box', word: 'flock-unavailable', detail: 'flock (util-linux) is unavailable' } as const;
     const halted = archivedExpiryNextEntry(e(), flock, t, PASS)!;
     expect(expiryAttention(new Map([[ID, halted]]), true)[0]!.sentence, 'the halted report says it itself, once')
       .toBe(expiryAttention(new Map([[ID, halted]]), false)[0]!.sentence);
+    // The hourly ladder's own report promises another ask too ("It is retried, backing off in between"); a halted box makes it untrue.
+    const ladder: ExpiryReport = { kind: 'failing', at: t, detail: 'worktree-remove-failed: busy' };
+    const ladderEntry = { ...e(), report: ladder };
+    expect(expiryAttention(new Map([[ID, ladderEntry]]), false)[0]!.sentence).toContain('It is retried, backing off in between.');
+    expect(expiryAttention(new Map([[ID, ladderEntry]]), true)[0]!.sentence, 'a non-final failing report says the halt too (review 381, F3 extended)')
+      .toBe(`${expiryReportSentence(ladder, null)} The fleet box has since refused to serialise a cleanup (flock-unavailable). `
+        + 'The lane composes no cleanup on that box, for any archived workspace, until the server restarts.');
+    const final: ExpiryReport = { kind: 'failing', at: t, detail: 'it will not resume', final: true };
+    expect(expiryAttention(new Map([[ID, { ...e(), report: final }]]), true)[0]!.sentence, 'a final report says it is not asked again')
+      .toBe(expiryReportSentence(final, null));
     const shadow = archivedExpiryNextEntry(e(), { kind: 'would-expire', sensitive: 0 }, t, PASS)!;
     expect(expiryAttention(new Map([[ID, shadow]]), true)[0]!.sentence, 'a row that stands for nothing is read as it was')
       .toBe(expiryAttention(new Map([[ID, shadow]]), false)[0]!.sentence);
