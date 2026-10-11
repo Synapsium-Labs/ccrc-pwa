@@ -47,6 +47,31 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 16:11 — the plan attack is back (`wf_1f046ac4-d37`, 71 agents, 0 errors): 33 findings, 32 survived the refuters, 17 important. The fix runs.**
+  - **What it caught, mostly by building Tasks 1 to 7 on a scratch copy and running them:**
+    - Tasks 5 and 7 would not compile as written (two type errors);
+    - the lane rig's `settled()` resolved before a released job had run, so one case could never go green, and a
+      mutation stayed masked;
+    - the pass's pause and capability gate had no red, because no learning audit was due in the case that pinned it (a
+      SAFETY gate shipped without a mechanism);
+    - the `held` fold, the pass-scoped box lines' publication and the phase reset had no pin (H13 ruled them added; the
+      text had not caught up);
+    - a hold vocabulary literal (`run-open`) reds single-definition, and the executor's new kebab words red
+      mail-routes' scanner (Tasks 4 and 6 now register them);
+    - an act job whose own call never settles was listed as "a call", never as the held act slot: a silent wedge of
+      every collection;
+    - Task 0's log-grep probe for workspace-lifecycle wave 6 matches main's own docs-plan commit. It would have lifted
+      R91's off-limits regions while run 358 is still unmerged; it becomes a content probe.
+  - **Smaller items:**
+    - the box-wide labels now hold a `/`, because registry ids need no shape and a planted `<label>.uuid` could otherwise
+      collide with one;
+    - an unknown probe word gets its own hostile-word pin;
+    - the population cap's "frame" claim is restated as a residual;
+    - spec §7 gains the wave's residuals;
+    - the as-built note names H13's slugs.
+  - **The fix.** Workflow `wf_851b1bfb-8dd`: six Opus agents, one per non-overlapping plan region, returning exact edits.
+    It also folds 4234's spec sentence into Task 9.
+
 - **2026-10-11 15:59 — quiet-river's FYI (4234): one spec sentence of ours goes stale when workspace-lifecycle wave 6 (#351) lands.**
   - **The sentence.** Spec `:728-732` says `ws-expire`'s pre-breadcrumb documents and its resumed `probe-unmeasured`
     "carry no key", because `_ws_expire_locked` is left alone. Once #351 merges, `_ws_expire_locked` sets `crumb`: true on
