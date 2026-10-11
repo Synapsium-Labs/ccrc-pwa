@@ -599,7 +599,7 @@ function parentStmts(db) {
   if (s === undefined) {
     s = {
       maxRow: db.prepare('SELECT max(rowid) AS r FROM nodes'),
-      touched: db.prepare('SELECT DISTINCT session_pk, epoch_seq FROM nodes WHERE rowid > ?'),
+      touched: db.prepare('SELECT session_pk, epoch_seq, max(rowid) AS leaf_top FROM nodes WHERE depth = 0 AND rowid > ? AND rowid <= ? GROUP BY session_pk, epoch_seq ORDER BY leaf_top, session_pk, epoch_seq'),
       epochTranscripts: db.prepare('SELECT t.transcript_pk AS transcript_pk FROM epochs e JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid '
         + "WHERE e.session_pk = ? AND e.seq = ? AND t.agent_id = '' ORDER BY t.transcript_pk"),
       bounds: db.prepare('SELECT entry_id, transcript_pk FROM boundaries WHERE transcript_pk = ? ORDER BY ord'),
@@ -730,7 +730,8 @@ function deriveEpochParents(db, ictx, sessionPk, epochSeq, budget) {
   return { made, complete: true };
 }
 
-/** Fan-in for every epoch that gained a node since the cursor (§6.3). Returns how many parents it made. */
+/** Fan-in for every epoch with a new leaf trigger (§6.3). Each completed epoch moves the decimal cursor to its
+ * highest triggering leaf row, so equal budgets resume at later epochs rather than rewalking completed ones. */
 export function deriveParents(db, ictx, budget) {
   const s = parentStmts(db);
   const step = getStep(db, PARENTS_STEP, NODE_PARSER_VERSION);
@@ -738,11 +739,12 @@ export function deriveParents(db, ictx, budget) {
   const top = s.maxRow.get().r;
   if (top === null || Number(top) <= from) return 0;
   let made = 0;
-  for (const e of s.touched.all(from)) {
+  for (const e of s.touched.all(from, top)) {
     if (!parentsBudgetLeft(budget)) return made;
     const r = deriveEpochParents(db, ictx, e.session_pk, e.epoch_seq, budget);
     made += r.made;
     if (!r.complete) return made;
+    setStep(db, PARENTS_STEP, NODE_PARSER_VERSION, String(e.leaf_top), null);
   }
   setStep(db, PARENTS_STEP, NODE_PARSER_VERSION, String(top), null);
   return made;
