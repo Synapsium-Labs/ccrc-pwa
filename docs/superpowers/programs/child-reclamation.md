@@ -47,6 +47,18 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 11:53 — wave 8 fix round 1's wave-done is verified (4220); run 348 is at `awaiting-review`, and scoped review run 379 is opened.**
+  - **Re-measured.** The tip is `4b5a94ac1`, as claimed, and PR #349 is open at it. The range `0511d5370..4b5a94ac1` is
+    three commits and twelve files, with no merge. The merge-tree against `origin/main` (`cc33c8d51`) is clean.
+  - **What the round says it did.** F1 is line-neutral (20/20 lines in `shared/api.ts`). F7 was WIDENED: `holders` stays
+    `['shared/api.ts']`, and the `EXPIRY_KEPT_TABLE` scratch mutation reds it, so `leaf-kept-census-misses-renamed-tables`
+    is not named. F6's derived list drives the sweep-policy loop over twelve words, where the hand-kept list had eight.
+    All 36 numbers are defined singly, and there is no new substantive departure.
+  - **The 4209 conditional did not apply.** Run 358 is not on main. I re-measure main before #349 merges.
+  - **The worker's own re-review left two notes**, which review 379 judges: the census title's literal "no other file"
+    claim, and the `runId` sentence at `shared/api.ts:3832-3834`, which does not hold for a leaf-kept item.
+  - **CI** is my re-measure, and it was still running at the advance.
+
 - **2026-10-11 11:32 — review 378 is accepted and closed `done`, and wave 8 fix round 1 is sent (4218). Run 348 is back at `working`.**
   - **How it ran.** soft-meadow, on an Anthropic account with no swap: the held-out panel plus the plan's four lenses,
     models literal. 108 agents, 0 errors, 132 mutation rows. SAFETY (Opus xhigh) found no path that acts on a
