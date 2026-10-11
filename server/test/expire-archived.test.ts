@@ -198,6 +198,10 @@ describe('the one executor', () => {
     expect(ev[0]!.body).toContain('ccd stopped part-way (containment-refuted: a row outside the tree) — the session was stopped and '
       + 'nothing further was deleted. It is listed at once, and asked again 4 hours after each failed attempt');
     expect(ev[0]!.body, 'never the cadence the standing words retired (wave 6)').not.toContain('every four hours');
+    // Whole-branch review, item 4: the row says the cadence in the standing sentences' own words, from one place.
+    expect(ev[0]!.body, 'sooner after an answer that ends no attempt, never while held (whole-branch review, item 4)')
+      .toContain('asked again 4 hours after each failed attempt — sooner after an answer that ends no attempt, never while the workspace is held, '
+        + 'until an attempt completes or the workspace is archived again.');
   });
 
   it('a refusal at audit carries its word — in-use with the processes; a GONE word is gone', async () => {

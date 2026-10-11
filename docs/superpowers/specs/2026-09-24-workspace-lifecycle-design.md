@@ -495,7 +495,7 @@ each item is a departure named there).
     tombstone and the breadcrumb, so nothing started. As on the reclaim side, "not resumable" means start over, not
     final: the lane forgets the instant it learned and its sightings and returns to learning, so a later pass's audit
     mints a fresh token over what stands, and the row is asked again only once seen eligible twice past its instant. A
-    feed row records it, and nothing is listed. `probe-unmeasured` is still read as final, but ccd prints it on a
+    feed row records it, and nothing is listed. `probe-unmeasured` was read as final (and still is from a ccd that prints no `crumb`), but ccd prints it on a
     resumed expiry too, after an earlier attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not
     answer), so there it could stop the lane on a part-expired archive until a restart. That was a known gap and an
     arming blocker for the lane; wave 6 closes it with CCR-15 wave 7's `crumb` field (below). Without `crumb` (an older
@@ -830,7 +830,10 @@ collects them.
 - **The recommended order.** Arm the expiry lane first, once this release is deployed and its shadow list has been read;
   then the dead-coordinator lane, after its own shadow list has been read and any breaker trip worked through.
 - **Their memory is in memory.** A server restart re-learns every instant, sighting, run of failures and attention
-  entry. That can delay an act and never cause one; a kept-leaf entry is lost with it (question (i)).
+  entry. So a restart forgets the lane's memory, so it can delay an act and can ask again a row the lane had stopped
+  asking (a halted box, a failure the box said will not resume, the unreadable-breadcrumb row below), always behind a
+  fresh audit whose token ccd proves again inside its lock; it never acts without one. A kept-leaf entry is lost with
+  it (question (i)).
 - **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
 
 **The expiry lane (`$REG/expire-lane-live`).**

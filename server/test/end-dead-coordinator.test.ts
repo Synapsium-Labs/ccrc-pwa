@@ -358,7 +358,11 @@ describe('the journal’s trust is READ AGAIN after the claimant’s measure (wa
     const noFleetAct = between.indexOf('    } else if (sweep !== undefined) {\n');
     expect(noFleetAct, 'the arm with no fleet act').toBeGreaterThan(-1);
     expect(between.slice(0, noFleetAct), 'nothing awaits after the re-measure').not.toMatch(/\bawait\b/);
-    expect(between.slice(between.indexOf('\n    }\n', noFleetAct)), 'nor after that arm, up to the commit').not.toMatch(/\bawait\b/);
+    // Whole-branch review, item 2: an absent closing line would make `indexOf` -1 and the slice the last character, so the
+    // assertion below would pass over nothing. The closing line must be found AFTER the arm's opening.
+    const armEnd = between.indexOf('\n    }\n', noFleetAct);
+    expect(armEnd, 'the closing line of the arm with no fleet act, after its opening').toBeGreaterThan(noFleetAct);
+    expect(between.slice(armEnd), 'nor after that arm, up to the commit').not.toMatch(/\bawait\b/);
   });
 });
 

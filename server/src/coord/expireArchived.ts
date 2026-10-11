@@ -8,7 +8,7 @@ import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  EXPIRE_LANE_LIVE_MARKER, EXPIRE_PERSISTENT_RETRY_MS, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
+  EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
   parseExpireResult, reviewKeeps,
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
@@ -265,7 +265,7 @@ export function expireFeedBody(r: ExpireArchivedResult, standing = false): strin
     case 'restart': return `${who}: ccd stopped before this attempt started anything (${r.detail}) — nothing was deleted, `
       + 'and the lane audits it afresh.';
     case 'stuck': return `${who}: ccd stopped part-way (${r.detail}) — the session was stopped and nothing further was `
-      + `deleted. It is listed at once, and asked again ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours after each failed attempt, `
+      + `deleted. It is listed at once, and asked again ${EXPIRE_ASKS_AGAIN_CADENCE}, `
       + 'until an attempt completes or the workspace is archived again.';
     // `flock-unavailable` halts the lane on that box until the server restarts (`watch.ts`): the row says so, whatever the
     // row's own attention entry says (a standing one stands through it; wave 6).

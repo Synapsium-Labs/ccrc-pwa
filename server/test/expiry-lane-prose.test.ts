@@ -150,9 +150,15 @@ describe('the specs', () => {
       'after its own shadow list has been read and any breaker trip worked through',
       'the feed shows the dead-coordinator lane\'s shadow rows', 'and a fresh one\'s is audited afresh, counted',
       '**One residual of question (k).**', 'leaves `crumb` unsaid, as on the reclaim side, so that `probe-unmeasured` is read by its word',
+      // Whole-branch review, item 3: the restart sentence and the residual's own restart clause.
+      'a restart forgets the lane\'s memory, so it can delay an act and can ask again a row the lane had stopped asking',
+      'always behind a fresh audit whose token ccd proves again inside its lock; it never acts without one',
+      'listed at once and not asked again for that archive until the server restarts',
       '**One archived tree holds a leaked test tmux server**', 'unless a standing entry stands there',
       '**Questions still open**', '(b) The archive-confirm copy', '(i) A kept-leaf entry lives until a server restart',
       '(j) `ws-expire` refuses a branch made inside the lock as well as one deleted', 'Wave 2\'s three:']) expect(b).toContain(item);
+    expect(b.slice(0, b.indexOf('**The expiry lane (`$REG/expire-lane-live`).**')),
+      'a restart also asks again what the lane had stopped asking (whole-branch review, item 3)').not.toContain('never cause one');
     expect(b, 'never a destructive verb as advice').not.toMatch(/run `ccd ws-(reap|expire|reclaim|rm)/);
   });
 });

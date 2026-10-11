@@ -422,9 +422,11 @@ export const reviewKeeps = (reviewed: { readonly kind: 'run'; readonly state: Ru
 
 // ── the lane's memory of one row ─────────────────────────────────────────────
 
-/** IN MEMORY ONLY: a restart loses it, and losing it can only DELAY an expiry (the instant is learned again, and
- *  eligibility must be seen twice again) — never cause one. Keyed by the ARCHIVE: a row whose `archivedAt` changes
- *  (returned and archived again) starts a fresh entry, so nothing learned about one archive is applied to another. */
+/** IN MEMORY ONLY: a restart loses it, so it can DELAY an expiry (the instant is learned again, and eligibility must be
+ *  seen twice again) and can ask again a row the lane had stopped asking (a halted box, a failure the box said will not
+ *  resume, an unreadable breadcrumb) — always behind a fresh audit whose token ccd proves again inside its lock; it never
+ *  acts without one (whole-branch review, item 3). Keyed by the ARCHIVE: a row whose `archivedAt` changes (returned and
+ *  archived again) starts a fresh entry, so nothing learned about one archive is applied to another. */
 export interface ArchivedExpiryEntry {
   readonly archivedAt: number;
   /** ccd's instant for THIS archive (seconds), once an audit read one. */
@@ -434,7 +436,9 @@ export interface ArchivedExpiryEntry {
   /** The first pass of the current unbroken run of eligible verdicts (ms), or null. */
   readonly eligibleSince: number | null;
   /** The previous attempt's outcome key (`kind` or `kind:word`), so a feed row is written when it CHANGES, not every
-   *  pass a standing refusal is met again. */
+   *  pass a standing refusal is met again. Since wave 6 (ruling C) it also decides whether the learn after a restart
+   *  carries the shared failure run (`archivedExpiryLearned`: only after `restart`), so a learn arm must never write it —
+   *  that would make a recurring restart act faster again (whole-branch review, item 5). */
   readonly lastOutcome: string | null;
   /** Consecutive `in-use` answers, and the latest one's processes. */
   readonly inUseRun: number;
@@ -800,8 +804,11 @@ const isoMs = (ms: number): string => iso(Math.floor(ms / 1000));
  *  the wait after a FAILED attempt. An answer that ends no attempt asks sooner (a deferral, the next pass), and a hold
  *  keeps the row from being asked at all while it stands. (A box that answered flock-unavailable is asked nothing, by
  *  any row, until the server restarts — that row's own report says so.) */
-const STANDING_ASKS_AGAIN = `The lane asks again ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours after each failed attempt — sooner `
-  + 'after an answer that ends no attempt, never while the workspace is held —';
+export const EXPIRE_ASKS_AGAIN_CADENCE = `${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours after each failed attempt — sooner `
+  + 'after an answer that ends no attempt, never while the workspace is held';
+// The ONE place the persistent tier's hours and its cadence phrase are written: the standing sentences below and the stuck
+// feed row (`expireFeedBody`) both say it from here (whole-branch review, item 4).
+const STANDING_ASKS_AGAIN = `The lane asks again ${EXPIRE_ASKS_AGAIN_CADENCE} —`;
 
 /** WHAT A PROCESS IS, before anything suggests ending it (the coordinator's ruling (G)): the fleet's own tmux server
  *  is a `tmux: server` too, and ending THAT ends every session on the box. So the sentence names the pid AND its

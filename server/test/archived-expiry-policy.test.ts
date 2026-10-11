@@ -918,6 +918,16 @@ describe('the lane’s memory of one row', () => {
     expect(archivedExpiryEntryFor(x, x.archivedAt + 60).report, 'a new archive').toBeNull();
     expect(archivedExpiryNextEntry(x, { kind: 'refused', token: 'containment-unproven', detail: 'd', inUse: [] }, t + PASS, PASS)!.report,
       'a terminal refusal (CCR-15’s R77: terminal outranks stuck)').toMatchObject({ kind: 'refused' });
+    // Whole-branch review, item 1: the other two verdicts that end the row for this archive outrank a stuck entry too —
+    // a failure the box says will not resume, and a call ccd rejected as composed. Final, and never asked again.
+    const noResume = archivedExpiryNextEntry(x, { kind: 'failed', resumable: false, detail: 'd' }, t + PASS, PASS)!;
+    expect(noResume.report, 'a non-resumable failure outranks stuck (whole-branch review, item 1)')
+      .toEqual({ kind: 'failing', at: t + PASS, detail: 'd', final: true });
+    expect(noResume.nextAskAt, 'and ends the asking').toBe(Number.POSITIVE_INFINITY);
+    const composed = archivedExpiryNextEntry(x, { kind: 'composition', detail: 'bad token' }, t + PASS, PASS)!;
+    expect(composed.report, 'a composition error outranks stuck (whole-branch review, item 1)')
+      .toEqual({ kind: 'failing', at: t + PASS, detail: 'the server composed a call ccd rejected: bad token', final: true });
+    expect(composed.nextAskAt, 'and ends the asking').toBe(Number.POSITIVE_INFINITY);
   });
 
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
