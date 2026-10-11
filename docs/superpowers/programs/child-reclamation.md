@@ -47,6 +47,20 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 16:40 — run 380 has STARTED (4239, acked). Task 0 is green at `d9647b76b`, which equals `origin/main`, so no merge was needed.**
+  - **(a0) to (a5)** print as the plan states.
+  - **(b1)** There are 12 witnesses (9 at drafting time). **(b2)** `tmpquarantine` is absent. **(b3)** No name starts with a dot or a dash.
+  - **(b4)** The banner renders `sessionId` as a plain-text span, not a link, so a fixed label renders correctly.
+  - **(b5)** ccd's `_ws_tmproot_id_ok` and `_ws_project_valid` both admit a name starting with a dash, so `ws-add` can mint a dash-leading id.
+    - This confirms that R83's refusal is needed in the lane.
+    - It also confirms the carry item (ccd's own refusal of a dash-leading id) for the path-identity follow-up.
+  - **Day-one hold.** The runs of five witnesses are open (354, 358, 372, 377, 380), and seven are closed `done`. None is absent, and none opened after its witness was born.
+  - **Overlap.** Workspace-lifecycle wave 6 has not landed (content probe).
+    - Claims 1159 and 1160 cover every path no one else holds.
+    - `store.ts`, `watch.ts` and README are edited under the consent relayed in 4238.
+    - `CLAUDE.md` is untouched unless Task 9's re-measure moves the numeral, in which case the worker asks first.
+  - Task 1's implementer (Opus `xhigh`) is dispatched.
+
 - **2026-10-11 16:35 — quiet-river consents to wave 9's line-disjoint edits under run 358's claims (4237), and the consent is relayed to run 380 (4238).**
   - **Yes to all three files, as listed.** Wave 6's fix-round regions are named, and are off-limits to wave 9:
     - `store.ts`: the `./deadCoordinator.js` import block, and one new method after the dead_claimants methods;
