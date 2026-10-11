@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a9a55573ce80cbe58c1ee16e84aef4fc79aa10cba2f601009dd6c9ad2b4885f4
+# ccrc:generated 1 sha256=63d6dcc94d35add35cbc65f8c7a0c26d47014af3df33eab0459f0be52eea21c4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -29339,10 +29339,10 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
 # the row and its `.reaping` file. '' prints NO key: a reader takes
 # that absence as unmeasured, never as either value. Set by `_ws_reclaim_locked`
 # and by the shared tail; `cmd_ws_collect` shadows it to '' with `local` (a
-# collection has no breadcrumb). So `ws-expire`'s own pre-breadcrumb documents,
-# its resumed arm's `probe-unmeasured` (printed while its `expire:` breadcrumb
-# stands), and every `ws-collect` document, carry no key. Assigned here, when
-# ccd is read, so an exported value can never reach a document.
+# collection has no breadcrumb). `_ws_expire_locked` sets it too (wave 6):
+# `true` on its resumed arm, '' over a breadcrumb that stands but cannot be
+# read, `false` on its fresh arm. Assigned here, when ccd is read, so an
+# exported value can never reach a document.
 _WS_RCL_CRUMB=''
 _ws_reclaim_failed_json() {   # token detail -> the post-start failure document on stdout, with
   #                                `"crumb":true|false` only when _WS_RCL_CRUMB says one
@@ -31906,6 +31906,15 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   [[ "$surface" == none ]] || declared="$surface"
   _ws_expire_fork "$id"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
+  # `crumb` (CCR-15 spec §5.6), said as ws-reclaim says it (workspace lifecycle
+  # wave 6, question (k)): a resumed arm's breadcrumb already stands (`true`),
+  # so its `probe-unmeasured` below is printed past it and the server reads it
+  # resumable; a fresh arm's is not written yet (`false`: nothing started, so a
+  # retry audits afresh) until the tail, which says `true` once it is; a
+  # breadcrumb that stands but could not be read leaves it unsaid.
+  if [[ -n "$phase" ]]; then _WS_RCL_CRUMB=true
+  elif [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then _WS_RCL_CRUMB=''
+  else _WS_RCL_CRUMB=false; fi
   # The consent IS the fingerprint, recomputed HERE, inside the lock.
   if [[ "$REAP_VERDICT" == expirable && "$token" != "$REAP_TOKEN" ]]; then
     _reap_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :

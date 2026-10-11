@@ -80,8 +80,10 @@ describe.skipIf(!MODERN_GIT)('ws-expire: the consent binds the branch (wave 5)',
     const token = expireEvalOf(h).token;              // minted over branchState=present
     const r = expireVerb(h, token, { pre: IN_THE_WINDOW(`git -C "$1" update-ref -d "refs/heads/$2" >/dev/null 2>&1`) });
     expect(r.code, r.stdout + r.stderr).toBe(1);
-    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string; crumb?: unknown };
     expect(o.failed).toBe('state-changed');
+    // Printed before the breadcrumb, so it says crumb false (workspace lifecycle wave 6, question (k)).
+    expect(o.crumb, 'printed before the breadcrumb: crumb false').toBe(false);
     expect(fs.readFileSync(path.join(h.home, 'bs-reads'), 'utf8').trim(), 'the recompute read, then the pin, and nothing after').toBe('2');
     expect(o.detail).toMatch(new RegExp(`${EXP_BRANCH} read present when the token was checked inside the lock, but absent when the pin read it again`));
     expect(eventsOf(h.home, 'expire').map((e) => e['outcome']), 'one act: its intent, then its failure').toEqual(['intent', 'failed']);
