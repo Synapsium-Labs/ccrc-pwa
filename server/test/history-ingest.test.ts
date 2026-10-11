@@ -3446,6 +3446,82 @@ describe('history ingest: the FTS index (plan task 23)', () => {
       expect((await S.ftsTextOfBlob(small, false, idx, 1000)).text).toBe('zqoversentinel');   // CONTROL
     });
 
+    describe('F5 blobPlainText: the synchronous read verbs\' plain text of a stored blob, direct (Task 12 fix round 1)', () => {
+      const entryBytes = (t: string): Buffer => Buffer.from(JSON.stringify([{ type: 'text', text: t }]));
+
+      it('F5 blobPlainText sidecar cap: a sidecar whose stored rawLen is over SIDECAR_WHOLE_MAX answers empty without decoding; the same bytes within the cap give their indexed text', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const sc = Buffer.from('zqsidehead\nzqsideend\n');
+        const z = q5(sc);
+        expect(store.blobPlainText(z, true, idx, lib.SIDECAR_WHOLE_MAX + 1)).toBe('');
+        expect(store.blobPlainText(z, true, idx, lib.SIDECAR_WHOLE_MAX)).toBe(lib.sidecarIndexText(sc, idx));   // CONTROL: at the cap
+        expect(store.blobPlainText(z, true, idx, sc.length)).toContain('zqsidehead');                          // CONTROL: its true length
+      });
+
+      it('F5 blobPlainText entry cap: an entry whose stored rawLen is BLOB_DECODE_MAX + 1 answers empty; the same bytes at their true length give their text', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const body = entryBytes('zqentrysentinel');
+        const z = q5(body);
+        expect(store.blobPlainText(z, false, idx, lib.BLOB_DECODE_MAX + 1)).toBe('');
+        expect(store.blobPlainText(z, false, idx, body.length)).toBe('zqentrysentinel');   // CONTROL
+      });
+
+      it('F5 blobPlainText structure bound: a valid entry over JSON_NODES_MAX answers empty before any parse; a nearby valid entry gives its text', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const over = Buffer.from(JSON.stringify([{ type: 'text', text: 'zqstructsentinel' }]).slice(0, -1) + ',0'.repeat(lib.JSON_NODES_MAX) + ']');
+        expect(over.length, 'CONTROL: the over-structure body is within the decode cap').toBeLessThanOrEqual(lib.BLOB_DECODE_MAX);
+        expect(lib.jsonWithinStructureBound(over), 'CONTROL: it is over the structure bound').toBe(false);
+        expect(() => JSON.parse(over.toString('utf8')), 'CONTROL: it is valid JSON').not.toThrow();
+        const ok = entryBytes('zqstructsentinel');
+        expect(store.blobPlainText(q5(over), false, idx, over.length)).toBe('');
+        expect(store.blobPlainText(q5(ok), false, idx, ok.length)).toBe('zqstructsentinel');   // CONTROL
+      });
+
+      it('F5 blobPlainText malformed brotli: garbage and truncated bytes answer empty in both arms and never throw', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const good = q5(entryBytes('zqbrotlisentinel'));
+        const truncated = good.subarray(0, Math.floor(good.length / 2));
+        expect(store.blobPlainText(good, false, idx, 1000), 'CONTROL: the whole blob decodes').toBe('zqbrotlisentinel');
+        for (const isSidecar of [false, true]) {
+          for (const z of [Buffer.from('zq-not-brotli'), truncated]) {
+            expect(() => store.blobPlainText(z, isSidecar, idx, 1000)).not.toThrow();
+            expect(store.blobPlainText(z, isSidecar, idx, 1000), `${isSidecar} ${z.length}`).toBe('');
+          }
+        }
+      });
+
+      it('F5 blobPlainText malformed json: a brotli-valid entry whose in-bound JSON does not parse answers empty and never throws', async () => {
+        const { store, lib } = await IX.api();
+        const idx = lib.makePairIndex([]);
+        const bad = Buffer.from('[{"type":"text","text":"zqjsonsentinel"');   // truncated: never closed
+        expect(lib.jsonWithinStructureBound(bad), 'CONTROL: it passes the structure bound, so the parse is what refuses it').toBe(true);
+        expect(() => JSON.parse(bad.toString('utf8')), 'CONTROL: it does not parse').toThrow(SyntaxError);
+        expect(() => store.blobPlainText(q5(bad), false, idx, bad.length)).not.toThrow();
+        expect(store.blobPlainText(q5(bad), false, idx, bad.length)).toBe('');
+        const ok = Buffer.from(bad.toString('utf8') + '}]');
+        expect(store.blobPlainText(q5(ok), false, idx, ok.length)).toBe('zqjsonsentinel');   // CONTROL: closed, it parses
+      });
+
+      it('F5 blobPlainText sidecar extraction: a compressed JSON sidecar is unescaped and redacted through sidecarIndexText, agreeing with it on the raw bytes', async () => {
+        const { store, lib } = await IX.api();
+        const tok = randomBytes(24).toString('hex');
+        const idx = lib.makePairIndex(lib.secretPairs([tok]).pairs);
+        const sc = Buffer.from(JSON.stringify([{ type: 'text', text: `zqpubhead\n${tok}\nzqpubend` }]));
+        expect(sc.toString('utf8').includes(tok), 'CONTROL: the raw bytes carry the fixture secret').toBe(true);
+        const got = store.blobPlainText(q5(sc), true, idx, sc.length);
+        expect(got).toBe(lib.sidecarIndexText(sc, idx));
+        expect(got).toContain('zqpubhead');
+        expect(got).toContain('zqpubend');
+        expect(got.includes(tok.slice(0, 12))).toBe(false);
+        expect(got, 'the JSON newline escape is undone').toContain('zqpubhead\n');
+        expect(got.includes('\\n')).toBe(false);
+      });
+    });
+
     it('F7 sibling (D-4346): a row whose canonical body is over BLOB_DECODE_MAX while its line is within LINE_MAX is stored and indexes nothing at ingest, as the backfill and the re-derivation index it', async () => {
       const { lib } = await IX.api();
       const box = IX.newBox('ccrc-hist-f7-sib-');
