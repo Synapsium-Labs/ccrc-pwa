@@ -212,7 +212,7 @@ describe('the verb’s answer — box words told apart from composition errors (
     }
   });
 
-  it('THE CENSUS: every site of either word in ccd/ccd is placed, and the expiry’s failed state-changed is on its FRESH arm, before the breadcrumb (wave 5)', () => {
+  it('THE CENSUS: every site of either word in ccd/ccd is placed, and the expiry’s failed state-changed is on its FRESH arm, before the tombstone (wave 5; bounded at the tombstone since wave 6)', () => {
     // A STOPPING LINE, not a spelling. EVERY non-comment occurrence of either word anywhere in ccd/ccd is placed: by the
     // function that holds it, and by what the line does with it — `failed` (`_ws_reclaim_fail "<id>" "<lctx>" <word>`
     // or `_ws_reclaim_failed_json <word>`), `refused` (`_reap_refuse <word>`, or a `{"refused":"<word>"` printf) or
@@ -222,11 +222,12 @@ describe('the verb’s answer — box words told apart from composition errors (
     // shared tail, a pin, a helper an expiry calls). The one shape no text scan sees is a word assembled at run time
     // from parts; ccd has none. `_ws_reclaim_locked` is ws-reclaim's own verb, which an expiry never reaches.
     //   `_ws_expire_locked`'s failed `state-changed` must lie on its FRESH arm — after `if [[ -z "$phase" ]]` and
-    // before the `expire:` breadcrumb write — so nothing this verb started stands when it prints. Its
+    // before the tombstone write, `_ws_tombstone`, which the `expire:` breadcrumb follows (the bound is the tombstone
+    // since wave 6, where wave 5 drew it at the breadcrumb) — so nothing this verb started stands when it prints. Its
     // `probe-unmeasured` prints at the verdict point, on EVERY arm: on a fresh expiry before anything, and on a
-    // RESUMED one after an earlier attempt's breadcrumb (`_ws_expire_resume_eval`'s unmeasured exits). That is main's
-    // reading, a known gap routed to this programme's wave 6 (an arming blocker until then), and this census records it
-    // rather than hides it.
+    // RESUMED one after an earlier attempt's breadcrumb (`_ws_expire_resume_eval`'s unmeasured exits). The word alone
+    // cannot tell those apart, which is why ccd says `crumb` there since wave 6 (`true` on the resumed arm) and the
+    // server reads it first; this census still records the word's two arms rather than hides them.
     //   THE COLLECTOR'S OWN FAMILY (child reclamation spec §5.10). Every site inside the COLLECT region is placed in
     // its own list, held exactly as the one above is: `ws-collect` journals both words through the shared tail's
     // `_ws_reclaim_fail`, refuses through its ONE `_ws_collect_refused "<id>" "<tx>" <word>`, and sets `REAP_VERDICT`
@@ -237,9 +238,11 @@ describe('the verb’s answer — box words told apart from composition errors (
     const lockedAt = ccd.indexOf('\n_ws_expire_locked() {');
     const freshAt = ccd.indexOf('\n  if [[ -z "$phase" ]]; then', lockedAt);
     const crumbAt = ccd.indexOf('_reg_set "$id" reaping "expire:$start"', lockedAt);
+    const tombAt = ccd.indexOf('_ws_tombstone "$id"', freshAt);
     expect(lockedAt, 'the expiry\'s locked body').toBeGreaterThan(-1);
     expect(freshAt, 'its fresh arm').toBeGreaterThan(lockedAt);
-    expect(crumbAt, 'its breadcrumb write, on that arm').toBeGreaterThan(freshAt);
+    expect(tombAt, 'its tombstone write, on that arm').toBeGreaterThan(freshAt);
+    expect(crumbAt, 'its breadcrumb write, after the tombstone').toBeGreaterThan(tombAt);
     const collectBegin = ccd.indexOf('COLLECT-BEGIN');
     const collectEnd = ccd.indexOf('COLLECT-END');
     expect(collectBegin, 'the COLLECT region').toBeGreaterThan(crumbAt);
@@ -264,7 +267,7 @@ describe('the verb’s answer — box words told apart from composition errors (
           const kind = shape(w, l.slice(0, m.index! + w.length), inCollect(where));
           if (fn === '_ws_expire_locked' && kind === 'failed' && w === 'state-changed') {
             expect(where, 'state-changed in _ws_expire_locked is not on its fresh arm').toBeGreaterThan(freshAt);
-            expect(where, 'state-changed in _ws_expire_locked prints after the breadcrumb').toBeLessThan(crumbAt);
+            expect(where, 'state-changed in _ws_expire_locked prints after the tombstone').toBeLessThan(tombAt);
           }
           (inCollect(where) ? collected : placed).push(`${fn} ${kind} ${w}`);
         }
