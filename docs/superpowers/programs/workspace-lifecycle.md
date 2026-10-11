@@ -1310,6 +1310,19 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **The brief for run 358 is ready** (5.7 KB, 12 items, the worker row). It sends numbers 4617–4632 to the 16 slugs
     in order. It names the claims of run 354 and run 348, and allows for #349 landing first.
   - **Next:** once #350's required checks pass, the merge and a re-read of the claims. Then run 358 is dispatched.
+- **2026-10-11 08:55 — wave 6's plan merged (#350 → `cc33c8d51`), and run 358 is dispatched.**
+  - #350's required checks all passed at head `c8a8fd900` (`test (server)` included; the macOS legs are advisory). It
+    merged at 08:58 with `--admin --match-head-commit`.
+  - **Run 358 dispatched** to `ccrc-pwa-plain-ridge` on the first try (`skillState: present`). It has 12 items, one
+    per task, and the worker row's routing: Opus · high, workflow off, compact 40, with Sonnet · high implementers, an
+    Opus · high per-task reviewer holding the act-safety lens, and Haiku scouts. The brief carries CCR-15's two
+    consents word for word (4208), the numbers 4617–4632 in slug order, and the overlap rules.
+  - **Claims at dispatch:** run 354's claims 1140 and 1141 have lapsed. Run 348's claim 1145 (quiet-prairie, hard cap
+    09:01) holds `shared/api.ts`, `archivedExpiry.ts`, `archived-expiry-policy.test.ts`, `close.ts`, `watch.ts` and
+    `containment-refuted-word.test.ts`. The worker claims per task and asks for a region split on a 409. Task 1
+    (`ccd/ccd` and the crumb test) is uncontested.
+  - **CCR-15 (mail 4210):** wave 8 (#349) is in review (run 378), and a fix round will follow. Its rulings carry the
+    second-lander note as a conditional. #349 will probably land first, and then run 358 does that note in its merge.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -1412,7 +1425,7 @@ operator creates `$REG/expire-lane-live` by hand. The dead-coordinator lane reco
 the operator creates `$REG/dead-coordinator-lane-live` by hand.
 
 **Wave 6 is run 358**, opened 2026-10-09 08:20 (planned; the run's wave 7 of 7), with numbers 4617–4632, written
-bare. CCR-15 wave 7 merged as #344 (`7609221a4`), so it is unblocked, and its plan is being drafted from the wave 6 bullet
+bare. Its plan merged as #350 (`cc33c8d51`), and it is DISPATCHED to `ccrc-pwa-plain-ridge` (the 10-11 08:55 entries). It was drafted from the wave 6 bullet
 below, the carried items in the 10-09 entries and the 10-11 01:00 entry (workflow wf_2172eb2d-87f). Wave 5 (run 345) merged as #335 (`6fc7ef115`, the 10-09 08:20
 entry). Its evidence and reviews 355–357 are in `.superpowers/sdd/coordinator-evidence/run345/`.
 - **Wave 5 deploys AGENT-FIRST through ccrc's updater** (the operator applies it from the console). Afterwards, check
