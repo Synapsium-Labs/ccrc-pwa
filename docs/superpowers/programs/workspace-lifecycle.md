@@ -1448,6 +1448,30 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - the numbers and the scope;
     - M1–M6 plus the F3 and prose rows.
     Dispatched at 16:44 to `ccrc-pwa-amber-canyon` on the first try (`skillState: present`), with workflow on.
+- **2026-10-11 17:20 — review 382 accepted and ruled (amber-canyon's 4242). Run 358 is back at `working`; fix round 2 is sent
+  (mail 4243).**
+  - **The review:** report `.superpowers/sdd/coordinator-evidence/run358/review-382-6fe19071.md`, at `6fe190710`.
+    - The held-out panel ran in full: 51 agents, 0 unverified, 0 unexamined. 13 of 16 findings survived, 10 after
+      duplicates; 3 were refuted.
+    - No act-safety defect: nothing ends a live or restarting coordinator's runs, or deletes a workspace, that the
+      pre-round code would not.
+    - F1's invariant holds. M1–M6 are red. No schema change.
+    - Every `run_events` reader was checked; none misreads the observation row, and the PWA has no reader.
+    - The latest row wins by autoincrement id, so clock skew cannot reorder it.
+    - CI is green. Review run 382 closed `done`.
+  - **Rulings** (`fix-round-2-rulings.md`; numbers 4822 and 4823, left from round 1):
+    - **R1 (important):** a leading-BOM id is written but cannot be read back (`TextDecoder` strips the BOM). Fixed
+      with `ignoreBOM: true` and a case, under 4820.
+    - **R2 (4822):** an unreadable latest held-set row stopped the lane for good, because only step six writes a newer
+      row. Now a CONSERVATIVE fallback seed holds every claimant in the population that this pass does not release,
+      at the pass's instant. That is a superset of any real hold. Step six then writes a readable row that supersedes
+      the bad one. There is a warn and a feed line, and it is red-first.
+    - **R3 (4823):** no act on a pass where the durable held set does not match the in-memory one: record first, and
+      act only if the write landed. This closes the restart window after a failed write.
+    - **R4:** the seeded `firstDeadAt` is pinned.
+    - **R6–R10:** words. The expiry lane's lost backoff; F9's learned and unlearned shapes; README's end rule and its
+      antecedent; the spec's halted-row set.
+    - **R5 (pre-existing clustering corner):** out of scope. §12 states it as a known residual before arming.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
