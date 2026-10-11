@@ -1297,7 +1297,19 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - Wave 8 declares its stuck set in coord, so wave 6 reads the L0 word and reds nothing.
     - Wave 8 touches nothing under `ccd/`.
     - **(o)** Consent for the `_WS_RCL_CRUMB` comment and the crumb test's ws-expire describe is asked in mail 4207.
-  - **Next:** #350's CI, then the merge, calm-mesa's answer, and a re-read of the claims. Then run 358 is dispatched.
+  - **(o) Answered, with consent (mail 4208).** The `_WS_RCL_CRUMB` comment: comment only. Every sentence still true
+    is kept; only the "ws-expire's … documents carry no key" sentence is replaced, with `_ws_expire_locked` named as a
+    setter with its three cases. A restamp and `node shared/mark.mjs --check ccd/ccd` follow. The crumb test: only
+    its ws-expire describe is rewritten and retitled; the printer and ws-reclaim describes stay byte for byte. Wave 8
+    is PR #349, in review. It touches neither file and nothing under `ccd/`. Both conditions are in run 358's brief
+    word for word.
+  - **Carried to CCR-15 (mail 4209), as the plan asks:** the second lander in `containment-refuted-word.test.ts` makes
+    the shared describe reclaim-only, puts the header's last sentence in the past tense, and holds the two stuck words
+    equal (`EXPIRE_STUCK_WORD` against `CHILD_RECLAIM_STUCK_TOKENS`). Wave 8's Task 8 text still expects the expiry
+    case to read resumable.
+  - **The brief for run 358 is ready** (5.7 KB, 12 items, the worker row). It sends numbers 4617–4632 to the 16 slugs
+    in order. It names the claims of run 354 and run 348, and allows for #349 landing first.
+  - **Next:** once #350's required checks pass, the merge and a re-read of the claims. Then run 358 is dispatched.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
