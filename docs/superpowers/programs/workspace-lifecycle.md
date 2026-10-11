@@ -1373,6 +1373,36 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     conditions; (B)–(F) with rulings (l) and (n); §12's completeness; the left sentences and the ledger-scan finding for
     classification; the merge; the scope; and sixteen-plus mutation rows.
     Dispatched at 14:57 to `ccrc-pwa-keen-meadow` on the first try (`skillState: present`), with workflow on.
+- **2026-10-11 15:50 — review 381 accepted and ruled (keen-meadow's 4232). Run 358 is back at `working`; fix round 1 is sent
+  (mail 4233).**
+  - **The review:** report `.superpowers/sdd/coordinator-evidence/run358/review-381-6062388b.md`, at `6062388ba`.
+    - The held-out panel ran in full: 0 unverified, 0 unexamined. A refute pass also ran on the 4 findings the
+      reviewer raised itself.
+    - 21 mutation rows, every one red. The reproduce lens re-ran all 44 plan rows red. Every suite, guard, the
+      cite-remeasure and both tsc are green. CI is green, with macOS pending.
+    - No act-safety defect on this shadowed tree. Nothing arms.
+    - The crumb's skew is safe both ways. The absent key is read byte for byte as `main` reads it. Stuck is one class
+      with two carriers, held equal by a test.
+    - Review run 381 closed `done` with the reviewer's own `{reviewedTip, report}`.
+  - **Rulings** (`fix-round-1-rulings.md`; numbers **4820–4823** allocated for the round, since the wave's block is
+    fully used):
+    - **F1 (important; fix before arming, fixed now).** The dead-coordinator breaker's held cluster is memory only. A
+      restart can let an ARMED lane end a claimant the breaker was holding. This was pre-existing in waves 4–5; §12
+      asserted the opposite. The held set is now seeded at restart from durable state the lane already writes (the
+      breaker's own record, made additive). It is red-first with a restart case, and uses NO schema migration: if one
+      is needed, the worker stops and reports. No doubt counts toward an hour, and releases are unchanged. §12 and
+      §5.4 are made true.
+    - **F3–F7, F9 and F10, fixed now (words, plus F3's attention sentence on a halted process):** the stuck sentence's
+      end conditions; README's stuck end rule; spec :517; 4617's narrowing clause; the unreadable-breadcrumb residual
+      narrowed to its window (the audit-time shape is `audit-failed`, never final); the two "a restart can only delay"
+      comments. §12's observations are adopted: (m), (f)'s mail consequence, (p) open, the halt gating only the act,
+      and one act per pass fleet-wide.
+    - **F2 (important, not this programme's guard).** `ledger.ts`'s DEFINITION misses `- **D-N** \`slug\``: 174 entry
+      lines in 10 plans on `main` (numbers 3836–4501). A cross-branch collision in which either definition uses that
+      shape passes silently. CARRIED TO THE OPERATOR as its own follow-up; it is not edited in this wave.
+    - **F8 (CCR-15's spec :728-732, now stale).** Carried to calm-mesa (mail 4234) for their next spec PR.
+  - **Next:** the fix round's wave-done, then a NEW scoped review run, then the merge. This is the programme's last
+    wave.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
