@@ -17,8 +17,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -841,7 +840,7 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
   it('counter writer belts: no-follow rejects a swapped link, the pre-open file check stops before its hook, and post-open fstat rejects a swapped FIFO descriptor', async () => {
     const cli11 = await import('../../ccd/history/cli.mjs') as unknown as {
       recallLine(i: object): string | null;
-      writeRecallLine(home: string, id: string, line: string, afterPrecheck?: ((p: string) => void) | null): void;
+      writeRecallLine(home: string, id: string, line: string, afterPrecheck?: ((p: string) => void) | null, afterOpen?: ((fd: number, flags: number) => void) | null): void;
     };
     const line = cli11.recallLine({ id: ID, gen: G1, cmd: 'tree', rc: 0, ms: 1, ts: T0 });
     expect(line).not.toBeNull();
@@ -883,26 +882,24 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
     }
   });
 
-  it('counter writer opens a FIFO nonblocking even when it replaces a regular leaf after lstat', async () => {
+  it('counter writer opens a regular leaf with O_NONBLOCK, observed by a post-open fixture seam without a timeout', async () => {
+    const cli11 = await import('../../ccd/history/cli.mjs') as unknown as {
+      recallLine(i: object): string | null;
+      writeRecallLine(home: string, id: string, line: string, afterPrecheck?: ((p: string) => void) | null, afterOpen?: ((fd: number, flags: number) => void) | null): void;
+    };
     const box = makeHistoryBox('ccrc-hist-rcl-c40-nonblock-');
-    const fifoPath = spoolOf11(box);
-    fs.mkdirSync(path.dirname(fifoPath), { recursive: true });
-    const child = spawn(process.execPath, ['--input-type=module', '--eval', [
-      "import fs from 'node:fs';",
-      "import { spawnSync } from 'node:child_process';",
-      `import { writeRecallLine } from ${JSON.stringify(pathToFileURL(path.join(REPO, 'ccd', 'history', 'cli.mjs')).href)};`,
-      `const p = ${JSON.stringify(fifoPath)};`,
-      "fs.writeFileSync(p, 'leaf');",
-      "writeRecallLine(process.env.HOME, 'claude-a-demo', '{\"v\":1,\"ev\":\"recall\",\"id\":\"claude-a-demo\",\"cmd\":\"tree\",\"rc\":0,\"ms\":1,\"ts\":0}', (q) => { fs.rmSync(q); if (spawnSync('mkfifo', [q]).status !== 0) process.exitCode = 99; });",
-    ].join('\n')], { env: { ...process.env, HOME: box.home }, stdio: 'ignore' });
-    const timed = new Promise<{ timed: true }>((resolve) => setTimeout(() => resolve({ timed: true }), 1_000));
-    const exited = once(child, 'exit').then(([code, signal]) => ({ timed: false as const, code, signal }));
-    const result = await Promise.race([exited, timed]);
-    if ('timed' in result && result.timed) {
-      child.kill('SIGTERM');
-      await once(child, 'exit');
-    }
-    expect(result, 'O_NONBLOCK returns instead of waiting for a FIFO reader').toMatchObject({ timed: false, code: 0, signal: null });
+    const leaf = spoolOf11(box);
+    fs.mkdirSync(path.dirname(leaf), { recursive: true });
+    fs.writeFileSync(leaf, 'leaf');
+    const line = cli11.recallLine({ id: ID, gen: G1, cmd: 'tree', rc: 0, ms: 1, ts: T0 });
+    expect(line).not.toBeNull();
+    let openedFlags: number | null = null;
+    cli11.writeRecallLine(box.home, ID, line!, null, (fd, flags) => {
+      expect(fs.fstatSync(fd).isFile(), 'the seam runs after opening the fixture regular leaf').toBe(true);
+      openedFlags = flags;
+    });
+    expect(openedFlags, 'the fixture observes the flags used for its opened descriptor').not.toBeNull();
+    expect(openedFlags! & fs.constants.O_NONBLOCK, 'the recall writer opens that descriptor nonblocking').toBe(fs.constants.O_NONBLOCK);
   });
 
   it('C68 (CLI half): recall-off/<id> naming this generation answers 8, counted; one naming another generation reads, and the drain counts recall_off_stale', () => {
