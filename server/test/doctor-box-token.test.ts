@@ -243,7 +243,15 @@ const ROWS: Row[] = [
   }) },
   { arm: 'server', word: 'retiring-unlanded:45', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.retiring = [{ sha256: 'ab'.repeat(32), at: now() - 45 * MIN }]; }) },
   { arm: 'server', word: 'recovered', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.lastBootRecovery = { at: now() - MIN, source: 'previous' }; }) },
-  { arm: 'server', word: 'retired-presented', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.counters.retiredPresented = 2; }) },
+  // 4552 (Option A): a retired presentation is a finding only while it is unanswered, newer than the last rotation.
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (unanswered: newer than the last rotation)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 2, retiredPresentedAt: s.lastRotationAt! + MIN }; }) },
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (a state from before 4552: a count, no stamp)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 2 }; }) },
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (after a restart: count 0, the stamp unanswered)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: s.lastRotationAt! + MIN }; }) },
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (a count with a null stamp)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 1, retiredPresentedAt: null }; }) },
   { arm: 'server', word: 'fleet-behind', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.fleetConfirmed = ID_OLD; }) },
   // Added at plan assembly (review findings):
   { arm: 'server', word: 'fleet-unconfirmed', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.current.id = null; s.fleetConfirmed = null; }) },
@@ -278,6 +286,89 @@ describe('doctor box-token: every armed-later state is SKIP with its reason word
       expect(r.stderr).toBe('');
     });
   }
+});
+
+// ── a rotation answers a retired presentation (4552, Decision 1 Option A) ──
+
+describe('doctor box-token: a rotation answers a retired presentation (4552)', () => {
+  const plantCounters = (b: Box, f: (lr: number) => { retiredPresented: number; retiredPresentedAt?: number | null }): void =>
+    editState(b, (s) => { s.counters = { previousPresented: 0, ...f(s.lastRotationAt!) }; });
+  const finding = (b: Box, checks: string): string => {
+    const r = runCheck(b, checks);
+    const lines = r.stdout.split('\n').filter(Boolean);
+    return lines[0] ?? '';
+  };
+
+  for (const [name, checks] of [['shipped', CHECKS_SRC], ['armed', armed()]] as const) {
+    describe(name, () => {
+      const wantFinding = (line: string): void => {
+        if (checks === CHECKS_SRC) expect(line).toMatch(/^SKIP box-token: /);
+        else expect(line).toMatch(/^FAIL box-token: /);
+        expect(line).toContain('server: retired-presented — ');
+      };
+      const wantPass = (b: Box): void => {
+        const r = runCheck(b, checks);
+        expect(r.stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
+        expect(r.code).toBe(0);
+      };
+
+      it('a stamp older than the last rotation, with a count, is answered: PASS', () => {
+        const b = box({ role: 'server' });
+        plantCounters(b, (lr) => ({ retiredPresented: 2, retiredPresentedAt: lr - 10 * MIN }));
+        wantPass(b);
+      });
+
+      it('a null stamp with count 0 is PASS, and so is an absent key with count 0', () => {
+        const b = box({ role: 'server' });
+        plantCounters(b, () => ({ retiredPresented: 0, retiredPresentedAt: null }));
+        wantPass(b);
+        plantCounters(b, () => ({ retiredPresented: 0 }));
+        wantPass(b);
+      });
+
+      it('edge: a stamp 30 s before the last rotation is PASS, 30 s after it is a finding', () => {
+        const b = box({ role: 'server' });
+        plantCounters(b, (lr) => ({ retiredPresented: 0, retiredPresentedAt: lr - 30_000 }));
+        wantPass(b);
+        plantCounters(b, (lr) => ({ retiredPresented: 0, retiredPresentedAt: lr + 30_000 }));
+        wantFinding(finding(b, checks));
+      });
+
+      // 'x' alone would also red with the validator gone (a str-int comparison crashes the reader into the same
+      // word), so the values that compare quietly are the pin: true, a negative, a float.
+      it("a stamp that is not a non-negative integer or null is 'server: state-unreadable'", () => {
+        for (const bad of ['x', true, -5, 1.5]) {
+          const b = box({ role: 'server' });
+          editState(b, (s) => { (s.counters as unknown as Record<string, unknown>).retiredPresentedAt = bad; });
+          const line = finding(b, checks);
+          expect(line, String(bad)).toContain('server: state-unreadable — ');
+          expect(line, String(bad)).not.toContain('retired-presented');
+        }
+      });
+    });
+  }
+
+  it('the armed sentence: a stamped finding says how long ago and that no rotation has completed; a stampless one says it records no time', () => {
+    const stamped = box({ role: 'server' });
+    plantCounters(stamped, (lr) => ({ retiredPresented: 2, retiredPresentedAt: lr + MIN }));
+    const a = runCheck(stamped, armed());
+    expect(a.stdout).toContain('ago and no rotation has completed since');
+    expect(a.stdout).toContain('(2 since the server started)');
+    const legacy = box({ role: 'server' });
+    plantCounters(legacy, () => ({ retiredPresented: 2 }));
+    expect(runCheck(legacy, armed()).stdout).toContain('records no time for it');
+    const nul = box({ role: 'server' });
+    plantCounters(nul, () => ({ retiredPresented: 1, retiredPresentedAt: null }));
+    expect(runCheck(nul, armed()).stdout).toContain('records no time for it');
+  });
+
+  it('the remedy names no hand rotation and says what clears the line', () => {
+    const b = box({ role: 'server' });
+    plantCounters(b, (lr) => ({ retiredPresented: 2, retiredPresentedAt: lr + MIN }));
+    const r = runCheck(b, armed());
+    expect(r.stdout).toMatch(/remedy: .*this line clears when that rotation completes/);
+    expect(r.stdout).not.toMatch(/resync that box/);
+  });
 });
 
 describe('doctor box-token: the FAIL and WARN arms are compiled in (the constant flipped in a copy)', () => {

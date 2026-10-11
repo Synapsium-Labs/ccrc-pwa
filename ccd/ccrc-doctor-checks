@@ -7486,6 +7486,7 @@ try:
         and opt(s["hold"], lambda w: w in holds) and opt(s["holdNode"], lambda w: type(w) is str)
         and opt(ls, lambda x: d(x) and n(x["at"]) and type(x["word"]) is str)
         and d(k) and n(k["previousPresented"]) and n(k["retiredPresented"])
+        and ("retiredPresentedAt" not in k or on(k["retiredPresentedAt"]))
         and on(s["mintFailedAt"]) and opt(br, lambda x: d(x) and n(x["at"]))
         and on(s["retiredRefusedAt"])
         and opt(fp, lambda x: d(x) and n(x["at"]) and x["file"] in ("current", "pending", "previous") and x["word"] in fileprobs)
@@ -7528,8 +7529,17 @@ if ls is not None and ls["word"] == "proof-unmeasured" and not (f > 0 and lf == 
     say("finding", "proof-unmeasured", age(ls["at"]))
 if br is not None and (lr is None or lr < br["at"]):
     say("finding", "recovered", age(br["at"]))
-if k["retiredPresented"] > 0:
-    say("finding", "retired-presented", k["retiredPresented"])
+# 4552: a retired presentation is a finding while it is UNANSWERED, newer than the last completed rotation. The
+# stamp is on the driver clock, the same one lastRotationAt is on. Presence first, then null: an absent key is a state
+# written before 4552 (a count with no stamp reads unanswered), null is "no presentation recorded".
+if "retiredPresentedAt" in k:
+    rp = k["retiredPresentedAt"]
+    if rp is not None and (lr is None or rp > lr):
+        say("finding", "retired-presented", k["retiredPresented"], age(rp))
+    elif rp is None and k["retiredPresented"] > 0:
+        say("finding", "retired-presented", k["retiredPresented"], "-")
+elif k["retiredPresented"] > 0:
+    say("finding", "retired-presented", k["retiredPresented"], "-")
 if fp is not None:
     say("finding", "file:" + fp["word"], age(fp["at"]), fp["file"])
 if c["id"] is not None and s["fleetConfirmed"] != c["id"]:
@@ -7686,8 +7696,9 @@ _bt_find() {
       say="a retired value's digest has waited $a min to be appended to box-token-retired.json, and box-token.json is its only durable copy"
       fix="look at box-token-retired.json beside box-token.json without printing it (ls -l); the driver retries the append each tick, and an unusable file there is set aside at the next restart" ;;
     server:retired-presented) cls=FAIL
-      say="a retired value was presented $a time(s) since the server started"
-      fix="something still holds a retired value: read the server's log for the lane that presented it, then resync that box ($card)" ;;
+      if [ "$b" = - ]; then say="a retired value was presented $a time(s) since the server started, and this state records no time for it"
+      else say="a retired value was presented $(_bt_age "$b") ago and no rotation has completed since ($a since the server started)"; fi
+      fix="the server owes a forward rotation for it, at most one an hour, and this line clears when that rotation completes; if it stays past an hour, read the server's log for the lane that presented it" ;;
     server:fleet-behind)
       say="the fleet has not confirmed the current generation"
       fix="run ccrc doctor on the fleet box; $card resyncs it" ;;
@@ -7745,7 +7756,8 @@ _bt_server_arm() {   # <token path> <state path>
       refused) [ "$w" = 1 ] && refused=1 ;;
       finding)
         case "$w" in
-          mint-failed|pending-overdue|proof-unmeasured|recovered|retired-presented) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
+          retired-presented) if _bt_num "$n" && { [ "$node" = - ] || _bt_num "$node"; }; then _bt_find server "$w" "$n" "$node"; else bad=1; fi ;;
+          mint-failed|pending-overdue|proof-unmeasured|recovered) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
           retire-overdue|retiring-unlanded) _bt_num "$n" && _bt_find server "$w:$n" "$n" || bad=1 ;;
           fleet-behind|fleet-unconfirmed) _bt_find server "$w" ;;
           file:*) if _bt_member "${w#file:}" "${_BT_FILE_PROBLEMS[@]}" && _bt_num "$n" && [[ "$node" =~ ^(current|pending|previous)$ ]]; then
