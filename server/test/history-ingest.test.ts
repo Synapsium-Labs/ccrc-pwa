@@ -1837,6 +1837,7 @@ describe('history ingest: sidecars (plan task 21)', () => {
 interface IxSweep {
   ftsPrepare(db: DatabaseSync, nowMs: number): { state: string; tables: boolean };
   deriveFts(db: DatabaseSync, ctx: IxCtx, budget: IxBudget): Promise<void>;
+  resetFtsPending(db: DatabaseSync): void;
   storedBody(s: { blobZ: { get(id: number): unknown } }, blobId: number): unknown;
   pairedFromStore(db: DatabaseSync, toolUseId: string, parentUuid: string | null): { id: string } | null;
   ftsTextOfBlob(z: Uint8Array, isSidecar: boolean, pairIdx: unknown, rawLen: number): Promise<{ text: string; decoded: number; undecodable: false; overCap?: true } | { text: null; decoded: number; undecodable: true }>;
@@ -2257,6 +2258,97 @@ describe('history ingest: the FTS index (plan task 23)', () => {
         expect(matches(db, 'zqoldecho')).toBe(1);
       } finally { db.close(); }
     } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
+  /** The relation-only fixture of the F3 cases: a completed backfill whose cursor passed an OLD harness-only blob, and the
+   *  rollback-era FTS-disabled ingest (a newer same-uuid, same-body copy) that makes that blob a recall echo without allocating one. */
+  const oldEchoStore = async (prefix: string, body: (x: {
+    S: Awaited<ReturnType<typeof IX.api>>['sweep']; db: DatabaseSync; old: number;
+    cycle: (k: number) => Promise<string>; relabel: () => Promise<void>;
+    stamp: () => { completed: number | null; cursor: string | null };
+  }) => Promise<void>): Promise<void> => {
+    const { sweep: S, lib } = await IX.api();
+    const box = IX.newBox(prefix);
+    try {
+      const call = [{ type: 'tool_use', id: 'toolu_01OB', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }];
+      const result = [{ type: 'tool_result', tool_use_id: 'toolu_01OB', content: 'zqoldecho words' }];
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+        IX.user(IX.uuidN(1), null, 'zqopener words', 1),
+        IX.assistant(IX.uuidN(2), IX.uuidN(1), call, 2),
+        IX.user(IX.uuidN(3), IX.uuidN(2), result, 3, { isMeta: true }),   // harness: its blob is not eligible
+        IX.user(IX.uuidN(4), IX.uuidN(3), 'zqlater words', 4),            // a later eligible blob, so the cursor passes the harness one
+      ]));
+      const { db, ids } = await IX.openFixtureStore(box);
+      try {
+        await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick: nothing indexed
+        const cycle = async (k: number): Promise<string> => {
+          const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000 + k * 60_000, ids);
+          const p = S.ftsPrepare(db, c.nowMs);
+          c.fts = p.tables;
+          c.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, c, S.newBudget());
+          return p.state;
+        };
+        const stamp = (): { completed: number | null; cursor: string | null } => {
+          const r = db.prepare("SELECT completed_ms AS c, cursor AS k FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { c: number | null; k: string | null };
+          return { completed: r.c, cursor: r.k };
+        };
+        const entryOf = (n: number): { blob_id: number; provenance: string } =>
+          db.prepare('SELECT blob_id, provenance FROM entries WHERE uuid = ?').get(IX.uuidN(n)) as { blob_id: number; provenance: string };
+        const old = entryOf(3);
+        expect(old.provenance, 'CONTROL: the entry is harness').toBe('harness');
+        await cycle(0);
+        expect(stamp().completed, 'CONTROL: the backfill is complete').not.toBeNull();
+        expect(Number(stamp().cursor), 'CONTROL: the cursor passed the harness blob').toBeGreaterThanOrEqual(old.blob_id);
+        const relabel = async (): Promise<void> => {
+          const blobsBefore = IX.count(db, 'blobs');
+          const second = IX.plantCopy(box.homes[1]!, IX.U, IX.jsonl([
+            IX.assistant(IX.uuidN(2), IX.uuidN(1), call, 2),
+            IX.user(IX.uuidN(3), IX.uuidN(2), result, 3),
+          ]));
+          fs.utimesSync(second, new Date('2099-01-01T00:00:00Z'), new Date('2099-01-01T00:00:00Z'));
+          const r = await S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 90_000, ids), { path: second, uuid: IX.U, home: box.homes[1]! }, S.newBudget());
+          expect(r, 'the second copy was ingested').not.toBeNull();
+          expect(entryOf(3), 'the same entry is now a recall echo on its old blob').toEqual({ blob_id: old.blob_id, provenance: 'recall-echo' });
+          expect(IX.count(db, 'blobs'), 'the body deduplicated').toBe(blobsBefore);
+          expect(IX.count(db, 'blobs', `blob_id = ${old.blob_id} AND fts_indexed = 0`)).toBe(1);
+          expect(hasFtsRow(db, old.blob_id)).toBe(false);
+        };
+        await body({ S, db, old: old.blob_id, cycle, relabel, stamp });
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  };
+
+  it('F3 (reset): an explicit no-index reopen of a COMPLETED store sets the cursor to 0, so the very next prepare/derive cycle indexes an old blob the same ingest made eligible', async () => {
+    await oldEchoStore('ccrc-hist-echo-reset-', async ({ S, db, cycle, relabel, stamp }) => {
+      await relabel();
+      S.resetFtsPending(db);
+      expect(stamp(), 'reopened, from zero').toEqual({ completed: null, cursor: '0' });
+      expect(await cycle(1)).toBe('fts-pending');
+      expect(matches(db, 'zqoldecho'), 'the old echo is indexed by the immediately following cycle').toBe(1);
+      expect(stamp().completed).not.toBeNull();
+      const repaired = stamp();
+      for (let k = 2; k < 4; k += 1) {
+        expect(await cycle(k)).toBe('ready');
+        expect(stamp()).toEqual(repaired);
+      }
+    });
+  });
+
+  it('F3 (reset): an explicit reopen of an already-PENDING store with an advanced cursor also sets the cursor to 0', async () => {
+    await oldEchoStore('ccrc-hist-echo-reset-pending-', async ({ S, db, cycle, relabel, stamp }) => {
+      // A backfill stopped part-way (a spent budget): pending, its cursor past the old blob.
+      const past = stamp().cursor;
+      db.prepare("UPDATE derivation_state SET completed_ms = NULL WHERE step = 'fts' AND version = 1").run();
+      expect(stamp(), 'CONTROL: pending at an advanced cursor').toEqual({ completed: null, cursor: past });
+      expect(Number(past)).toBeGreaterThan(0);
+      await relabel();
+      S.resetFtsPending(db);
+      expect(stamp(), 'a pending row is reset to zero too').toEqual({ completed: null, cursor: '0' });
+      expect(await cycle(1)).toBe('fts-pending');
+      expect(matches(db, 'zqoldecho'), 'the old echo is indexed in that cycle').toBe(1);
+      expect(stamp().completed).not.toBeNull();
+    });
   });
 
   it('DM29 (store half): a sidecar indexes its first 512 KB only; the text past it stays in the blob', () => {

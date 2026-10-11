@@ -3723,7 +3723,8 @@ function derivStmts(db) {
     done: db.prepare('UPDATE derivation_state SET completed_ms = ?, cursor = ? WHERE step = ? AND version = ?'),
     pending: db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, ?, NULL, NULL)
       ON CONFLICT(step, version) DO UPDATE SET completed_ms = NULL`),
-    reopen: db.prepare('UPDATE derivation_state SET completed_ms = NULL WHERE step = ? AND version = ? AND completed_ms IS NOT NULL'),
+    // Any existing row, completed or already pending, goes back to pending at cursor zero (resetFtsPending's only reader).
+    reopen: db.prepare("UPDATE derivation_state SET completed_ms = NULL, cursor = '0' WHERE step = ? AND version = ?"),
     blobZ: db.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?'),
     blobForFts: db.prepare(`SELECT z, raw_len, EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = blobs.blob_id) AS is_sidecar
       FROM blobs WHERE blob_id = ?`),
@@ -3953,12 +3954,14 @@ export async function deriveFts(db, ctx, budget) {
   }
 }
 
-/** Re-open a completed ('fts', 1) backfill, keeping its cursor. Called when blobs were written that
- *  could not be indexed: by a tick whose probe answered fts5-absent or probe-failed while the tables
- *  exist, or by an `--op import --apply` pass, whose ingest context never indexes (Task 25). The
- *  next tick that has FTS backfills them through its full pair index. Blob ids only grow, so every
- *  such new blob lies past the cursor. A store whose tables were never made has no row to re-open:
- *  their first creation backfills from 0. */
+/** Re-open ('fts', 1) from cursor zero: an existing row, completed or already pending, becomes pending at cursor 0.
+ *  Called when blobs were written that could not be indexed: by a tick whose probe answered fts5-absent or
+ *  probe-failed while the tables exist, or by an `--op import --apply` pass, whose ingest context never indexes
+ *  (Task 25). The next tick that has FTS backfills them through its full pair index. The cursor is NOT kept: an
+ *  ingest can make an OLD blob (id at or below the cursor) owed without allocating one, by giving it its first
+ *  eligible referrer (a deduplicated body promoted to a recall echo), so the shared owed relation (FTS_OWED_SQL)
+ *  is rescanned from zero; its failure classification keeps a permanent failure from being retried or recounted.
+ *  A store whose tables were never made has no row to re-open: their first creation backfills from 0. */
 export function resetFtsPending(db) {
   withTx(db, 'NORMAL', () => { derivStmts(db).reopen.run(FTS_STEP, 1); });
 }
@@ -4551,8 +4554,8 @@ async function importApply(db, ctx, P, args) {
     for (const t of all) if (!ev.has(t.uuid)) ctx.out(`unmapped ${t.path}`);
   }
   // §9.1: these blobs were written with fts_indexed = 0, and a completed ('fts', 1) backfill never looks again
-  // (Task 23's deriveFts returns on completed_ms). Task 23's resetFtsPending re-opens it with its cursor kept —
-  // blob ids only grow — so the next scheduled tick's deriveFts indexes them. No ('fts', 1) row (FTS5 absent,
+  // (Task 23's deriveFts returns on completed_ms). Task 23's resetFtsPending re-opens it from cursor zero —
+  // an old blob can become owed too — so the next scheduled tick's deriveFts indexes them. No ('fts', 1) row (FTS5 absent,
   // or not yet probed): nothing to re-open.
   if (ends.some((end) => end !== 'refused')) resetFtsPending(db);
   return { rc: EXIT.OK };
