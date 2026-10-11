@@ -1,0 +1,143 @@
+/* `@layer components` — NOT unlayered; see typed-label.css for the full
+   argument and ../styles/theme.css for the layer declaration. */
+@layer components {
+  /* ------------------------------------------------------------------ *
+   *  Task strip — the TUI's plan widget, pinned under the header.       *
+   *  Collapsed: one live line. Open: the rows, completed folded last.   *
+   * ------------------------------------------------------------------ */
+  /* Sits directly above the composer, as in the terminal. Because it now eats
+     into the conversation rather than the header, it is capped: a plan with many
+     OPEN tasks scrolls inside itself instead of pushing the chat off screen.
+     (The completed pile stays folded, so this bites rarely.) */
+  .task-strip {
+    flex: none;
+    margin: 0 var(--sp-4) var(--sp-2);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+    background: var(--bg-surface);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: min(40vh, 320px);
+  }
+  .task-strip--open {
+    border-color: var(--edge-strong);
+  }
+
+  /* `--tap-min`, not `--sp-8`. This head was 32px while the two strips built
+     from the same chrome floored at 44 — under the spec's touch-target
+     criterion, on the control that opens the plan. Nothing pinned it, because
+     the tap guard covered named controls rather than this shape; it now covers
+     all three heads together. */
+  /* The head is `<BareRow>` now — three strip heads, in three stylesheets,
+     declared the same ten declarations. What stays is its ink. */
+  .task-head {
+    color: var(--ink-primary);
+  }
+  .task-head:active {
+    background: var(--bg-raised);
+  }
+
+  /* The spinner's asterisk. It only breathes while something is actually
+     running — glow means life, here as everywhere. */
+  .task-mark {
+    flex: none;
+    font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+  .task-mark--running {
+    color: var(--status-busy-text);
+    animation: task-breathe var(--breathe-period) var(--curve-breathe) infinite alternate;
+  }
+  @keyframes task-breathe {
+    from { opacity: 0.55; }
+    to   { opacity: 1; }
+  }
+
+  /* `.task-headline` and `.task-count` are in
+     ../primitives/collapsible-strip.css now, written once with the mail
+     strip's. */
+  .task-chevron {
+    flex: none;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+
+  /* The summary's LAYOUT is shared (../primitives/collapsible-strip.css); its
+     ink stays here, because this rule names no self-grounded ancestor and is
+     registered in INHERITED_GROUNDS under this key. Ground stays. */
+  .task-summary {
+    color: var(--ink-tertiary);
+  }
+
+  /* `.task-rows` is shared too — same file. */
+  .task-line {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    width: 100%;
+    padding: var(--sp-2) var(--sp-3);
+    background: none;
+    border: 0;
+    text-align: left;
+    color: var(--ink-primary);
+    font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+    cursor: pointer;
+  }
+  .task-line:disabled {
+    cursor: default;
+  }
+  .task-line:active:not(:disabled) {
+    background: var(--bg-raised);
+  }
+  .task-glyph {
+    flex: none;
+    width: 1em;
+    font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+  }
+  .task-subject {
+    min-width: 0;
+  }
+
+  /* Running rows carry the accent and the weight; done rows are struck receipts.
+     Never element opacity — that would push ink below AA. */
+  .task-row--in_progress .task-glyph {
+    color: var(--status-busy-text);
+  }
+  .task-row--in_progress .task-subject {
+    font-weight: var(--weight-semibold);
+  }
+  .task-row--completed .task-subject {
+    color: var(--ink-tertiary);
+    text-decoration: line-through;
+  }
+  .task-row--completed .task-glyph {
+    color: var(--ink-disabled);
+  }
+
+  .task-detail {
+    padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + 1em + var(--sp-2));
+    font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
+    color: var(--ink-secondary);
+  }
+
+  .task-fold {
+    padding: var(--sp-2) var(--sp-3);
+    background: none;
+    border: 0;
+    font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
+    color: var(--ink-tertiary);
+    cursor: pointer;
+  }
+  .task-fold:active {
+    color: var(--ink-secondary);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .task-mark--running {
+      animation: none;
+      opacity: 0.85;
+    }
+  }
+}

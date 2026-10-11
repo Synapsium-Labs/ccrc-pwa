@@ -53,6 +53,7 @@ import { haltingNodes, updateAllHaltedText } from './updateHalt';
 import { UpdateMoveSheet } from './UpdateMoveSheet';
 import { UPDATES_POLL_MS, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView } from './useUpdatesView';
 import './fleet.css';
+import { Button } from '@ccrc/ui';
 
 /** The release the banner announces: the NEWEST `pendingTag` across the
  *  inventory in semver order (`v0.0.10` above `v0.0.9` — string order has it
@@ -137,18 +138,19 @@ export function UpdateBanner({ updates: injected, health = null, onMoved }: {
           <span className="update-banner-msg">{text}</span>
           {halted !== null && <span className="update-banner-msg" id={haltedId}>{halted}</span>}
           <div className="update-banner-actions">
-            <button
-              type="button"
-              className="btn-ghost"
+            <Button
+              variant="ghost"
+              size="fit"
+              className="flex-none"
               disabled={halted !== null}
               aria-describedby={halted !== null ? haltedId : undefined}
               onClick={() => setMove(planMove(view, { scope: 'fleet', direction: 'update', tag: release.tag }))}
             >
               Update all
-            </button>
-            <button type="button" className="btn-primary" onClick={() => navigate('/settings')}>
+            </Button>
+            <Button variant="primary" size="fit" className="flex-none" onClick={() => navigate('/settings')}>
               {"See what's new"}
-            </button>
+            </Button>
           </div>
         </div>
       )}

@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
+import { fleetSession as baseSession } from './fleetFixture';
 import { FLEET_PROTO } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
-import { applySessionMsg, createSessionStore, type SessionSnapshot } from '../src/stores/session';
+import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
 import { saveFleetSnapshot } from '../src/lib/offline';
@@ -33,21 +34,12 @@ const dialogFixture: Dialog = {
   raw: '❯ 1. Yes\n  2. No',
 };
 
-const fleetSession = (id: string, wrapper: string): FleetSession => ({
-  id,
-  wrapper,
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: null,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-});
+const fleetSession = (id: string, wrapper: string): FleetSession =>
+  baseSession({
+    id, wrapper, home: '/home/rc', project: 'OpenClawHetzner',
+    workdir: '/home/rc/projects/OpenClawHetzner',
+    limits: { five: 10, seven: 40 }, version: '2.1.0',
+  });
 
 const emptySnap = (): SessionSnapshot => ({
   events: [],
@@ -1500,9 +1492,184 @@ describe('Build 4 wave 4 — the wire additions that were refused', () => {
 
   it("the mail ChatItem is a RENDER-MODEL member, not a ChatEvent one", () => {
     // The distinction the whole design rests on: `{kind:'mail'}` exists in
-    // `ChatList.tsx`'s `ChatItem`, which is PWA-local and derived per render,
-    // and nowhere in `shared/api.ts`, which is the wire.
-    expect(sourceOf('pwa', 'src', 'session', 'ChatList.tsx')).toContain("kind: 'mail'");
+    // `ChatItem`, which is PWA-local and derived per render, and nowhere in
+    // `shared/api.ts`, which is the wire. `ChatItem` left `ChatList.tsx` for
+    // `chatItems.ts` — the renderer and the model it renders — so this reads
+    // the model's own file; a read of the list would now pass over markup.
+    expect(sourceOf('pwa', 'src', 'session', 'chatItems.ts')).toContain("kind: 'mail'");
     expect(sourceOf('shared', 'api.ts')).not.toContain("kind: 'mail'");
+  });
+});
+
+// THE GUARDS EVERY HAPPY-PATH CASE WALKS PAST. Each one answers a question
+// about a key or a socket that is no longer what the caller remembers, and
+// each had no case at all (measured: statements 309, 356, 384, 475, 593, 610
+// and branches 192#1, 299#1, 322#1, 324#1, 328#1, 356#1, 405#1, 643#1 of
+// `stores/session.ts` uncovered with the pwa suite green).
+describe('the session store’s guards against a stale key, a second socket and a body it cannot read', () => {
+  /** `api.prompt`'s own signature, not a bare `vi.fn()`: the loose form is
+   *  assignable to nothing the store asks for, and the project-wide
+   *  typecheck (not the per-file one) is where that shows. */
+  type Prompt = (id: string, text: string,
+                 opts?: { replaceDraft?: boolean; attachments?: string[] }) => Promise<void>;
+  const prompt = () => vi.fn<Prompt>().mockResolvedValue(undefined);
+
+  it('the 5 s echo fallback does nothing for a pending that already left', async () => {
+    // `clearConfirmed` removed it when the echo landed, so the timer fires
+    // against a key with no record. Returning `{}` rather than indexing is
+    // what keeps a late timer from resurrecting a cleared bubble.
+    vi.useFakeTimers();
+    const store = createSessionStore('s1', { api: { prompt: prompt() } });
+    await store.getState().send('ship it');
+    store.getState().apply({ type: 'events', uuid: 'u1', events: [user('a', 'ship it')], offset: 50 });
+    expect(store.getState().pending).toEqual([]);
+
+    vi.advanceTimersByTime(6_000);
+    expect(store.getState().pending, 'a fired timer cannot re-add what the echo cleared').toEqual([]);
+  });
+
+  it('a non-user event in the same frame is skipped, not matched against the pending text', async () => {
+    // `clearConfirmed` walks EVERY event in the frame. An assistant message
+    // whose text happens to equal the operator's own — an echo in a summary,
+    // a quoted instruction — must not clear the bubble: only the session's
+    // own `user` event proves the prompt landed.
+    const store = createSessionStore('s1', { api: { prompt: prompt() } });
+    await store.getState().send('ship it');
+    store.getState().apply({ type: 'events', uuid: 'u1',
+      events: [assistant('b', 'ship it'), toolUse('c', 't1')], offset: 50 });
+    expect(store.getState().pending, 'only a user event confirms a send').toHaveLength(1);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', events: [user('a', 'ship it')], offset: 60 });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a rejection that is not an ApiError still marks the pending failed, with its message', async () => {
+    // `fetch` rejecting with a `TypeError` when the box goes away is the
+    // ordinary producer. Without the arm the bubble would stay `sending`
+    // forever — and the 5 s fallback would then DELETE it, so the operator's
+    // text disappears with no refusal and no retry.
+    const store = createSessionStore('s1', { api: { prompt: vi.fn().mockRejectedValue(new TypeError('Failed to fetch')) } });
+    await store.getState().send('ship it');
+    const p = store.getState().pending[0]!;
+    expect(p.state).toBe('failed');
+    expect(p.error).toBe('Failed to fetch');
+    expect(p.code, 'no ApiError means no server token to branch on').toBeUndefined();
+  });
+
+  it('a rejection that is not an Error at all still says something', async () => {
+    const store = createSessionStore('s1', { api: { prompt: vi.fn().mockRejectedValue('nope') } });
+    await store.getState().send('ship it');
+    expect(store.getState().pending[0]!.error).toBe('send failed');
+  });
+
+  it('an ApiError whose body is not an object reads no draft and no flag', async () => {
+    // A proxy answering `text/html` is how a 409 arrives as a string.
+    // `(body as {draft?: unknown}).draft` on it is `undefined`, so the
+    // `typeof` guard is what keeps the rescue from offering a button for a
+    // box nothing measured.
+    const store = createSessionStore('s1', { api: { prompt: vi.fn().mockRejectedValue(new ApiError(409, 'Conflict')) } });
+    await store.getState().send('ship it');
+    const p = store.getState().pending[0]!;
+    expect(p.state).toBe('failed');
+    expect(p.draft).toBeUndefined();
+    expect(p.submittable).toBeUndefined();
+  });
+
+  it('a draft-present whose `draft` is not a string carries the empty box, never the token', async () => {
+    // The conflict sheet renders this straight into a textarea. A number or
+    // an object there would read as the operator's own half-typed thought.
+    const store = createSessionStore('s1', {
+      api: { prompt: vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'draft-present', draft: 7 })) },
+    });
+    await store.getState().send('new text');
+    expect(store.getState().pending[0]!.draft).toBe('');
+  });
+
+  it('retry on a key that is not failed does nothing — and sends nothing', async () => {
+    // Two conditions, one answer: a key the store never had (a second tap
+    // after a discard) and a key whose pending is still `sending` (a double
+    // tap on Retry). Either would otherwise re-POST text the box is already
+    // processing.
+    const call = prompt();
+    const store = createSessionStore('s1', { api: { prompt: call } });
+    await store.getState().send('ship it');
+    const key = store.getState().pending[0]!.key;
+    expect(call).toHaveBeenCalledTimes(1);
+
+    store.getState().retry(key);                       // still `sending`
+    store.getState().retry('a-key-that-never-existed');
+    expect(call, 'neither tap sends a second prompt').toHaveBeenCalledTimes(1);
+    expect(store.getState().pending[0]!.state).toBe('sending');
+  });
+
+  it('resolve on a key the store does not have sends nothing', async () => {
+    const call = prompt();
+    const store = createSessionStore('s1', { api: { prompt: call } });
+    store.getState().resolve('gone', 'the replacement text', { replaceDraft: true });
+    expect(call).not.toHaveBeenCalled();
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('connect() twice opens ONE socket — two would mean two `since` cursors', () => {
+    // The guard that makes `connect()` idempotent. A second socket replays
+    // the transcript from its own cursor, so the screen renders every event
+    // twice and acks two streams. Counted through `makeSocket`, the store's
+    // own injection point: asserting on `conn` cannot see a second socket at
+    // all, since both read `connecting`.
+    const made: string[] = [];
+    const makeSocket = (u: string): WebSocket => {
+      made.push(u);
+      return { readyState: 0, close: () => {}, send: () => {},
+               addEventListener: () => {}, removeEventListener: () => {} } as unknown as WebSocket;
+    };
+    const store = createSessionStore('s1', { api: { prompt: prompt() }, makeSocket });
+    store.getState().connect();
+    store.getState().connect();
+    expect(made, 'the second connect() is a no-op').toHaveLength(1);
+    store.getState().disconnect();
+  });
+
+  it('a backlog that names no file clears the address rather than keeping the old one', () => {
+    // `file` is the address `offset` is measured IN, and the frame is CAST,
+    // not revived — an older server omits it. Keeping the previous file
+    // would have the reconnect ask for an offset inside a different
+    // transcript.
+    // CAST, not revived — which is the whole reason the `?? null` is there.
+    // `file` is REQUIRED on the frame type, so an older server omitting it is
+    // not expressible in TypeScript; it arrives through
+    // `ReconnectingSocket`'s `onMessage`, which casts. The cast here is the
+    // same lie the wire tells, written down.
+    const after = applySessionMsg(
+      { ...emptySnap(), file: '/t/u-old.jsonl', offset: 7 },
+      { type: 'backlog', uuid: 'u1', events: [user('a', 'hi')], offset: 120,
+        missing: false } as unknown as SessionStreamMsg,
+    );
+    expect(after.file).toBeNull();
+  });
+
+  it('discarding a pending revokes its preview URLs — the images die with it', async () => {
+    // Up to four full-size images per send. The leak this closes was measured
+    // on the echo-mismatch path; `discard` follows the same rule, and the spy
+    // is the only way to see it at all.
+    const revoke = vi.fn();
+    const create = vi.fn(() => 'blob:preview-1');
+    vi.stubGlobal('URL', { ...URL, createObjectURL: create, revokeObjectURL: revoke });
+    const store = createSessionStore('s1', { api: { prompt: prompt() } });
+    await store.getState().send('look at this', {
+      attachments: [{ path: '/tmp/a.png', previewUrl: 'blob:preview-1' }],
+    });
+    store.getState().discard(store.getState().pending[0]!.key);
+    expect(revoke).toHaveBeenCalledWith('blob:preview-1');
+    vi.unstubAllGlobals();
+  });
+
+  it('getSessionStore hands the SAME store back for an id it already made', () => {
+    // Two screens for one session share state — that is the whole point of
+    // the map. A second `createSessionStore` would give the second screen an
+    // empty transcript and its own socket.
+    const a = getSessionStore('shared-id');
+    const b = getSessionStore('shared-id');
+    expect(b).toBe(a);
+    expect(getSessionStore('another-id')).not.toBe(a);
   });
 });

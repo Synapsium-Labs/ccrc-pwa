@@ -1,19 +1,20 @@
 import { describe, it, expect, vi } from 'vitest';
 import { archivableReleased, archiveReleased, archiveReleasedSummary } from '../src/fleet/archiveReleased';
 import type { FleetSession, ReleasedFrom } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 
 const rel = (child = false): ReleasedFrom =>
   ({ runId: 1, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 100, child });
 
-const s = (over: Partial<FleetSession>): FleetSession => ({
-  id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
-  workspace: 'w', name: null, status: 'idle', statusUpdatedAt: 0, limits: null,
-  dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: rel(), ...over,
-});
+const s = (over: Partial<FleetSession>): FleetSession =>
+  fleetSession({
+    id: 'x', wrapper: 'claude2', home: 'claude2', project: 'p', workdir: '/p',
+    workspace: 'w', statusUpdatedAt: 0,
+    // THE FIXTURE'S SUBJECT: a row that WAS released, since that is the one
+    // fact every case here reads. The shared default is `null`.
+    releasedFrom: rel(),
+    ...over,
+  });
 
 const deps = (rows: FleetSession[], archive: (id: string) => Promise<unknown> = vi.fn(async () => undefined)) => ({
   current: (id: string) => rows.find((r) => r.id === id),

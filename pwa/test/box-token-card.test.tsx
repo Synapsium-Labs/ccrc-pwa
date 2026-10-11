@@ -16,7 +16,7 @@ import { asUpdatesView } from '../src/fleet/useUpdatesView';
 import { ApiError, api, createApi, readBoxTokenView } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 
 afterEach(() => {
   cleanup();

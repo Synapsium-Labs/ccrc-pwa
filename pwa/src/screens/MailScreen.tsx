@@ -18,7 +18,7 @@ import { eventRunId, recordKey, reviveNotifyEvents } from '../lib/feed';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ack, acksSnapshot, FEED_ACK_KEY, isUnseenAt, subscribeAcks } from '../lib/seen';
-import { useNow } from '../lib/useNow';
+import { BackButton, MAIL_GLYPH, SETTINGS_GLYPH, useNow } from '@ccrc/ui';
 import { formatAge } from '../fleet/formatReset';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -53,7 +53,7 @@ const KIND_WORD: Record<NotifyEvent['kind'], string> = {
   coord: 'config', update: 'update', queue: 'queue', unknown: 'unknown',
 };
 const KIND_GLYPH: Record<NotifyEvent['kind'], string> = {
-  mail: '✉', run: '⟳', ask: '?', done: '✓', merged: '⑂', coord: '⚙', update: '⇡', queue: '⤺', unknown: '·',
+  mail: MAIL_GLYPH, run: '⟳', ask: '?', done: '✓', merged: '⑂', coord: SETTINGS_GLYPH, update: '⇡', queue: '⤺', unknown: '·',
 };
 
 export function MailScreen({
@@ -179,9 +179,9 @@ export function MailScreen({
   return (
     <div className="mail-screen">
       <header className="mail-head">
-        <button type="button" className="mail-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
+        <BackButton className="mail-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
           ‹
-        </button>
+        </BackButton>
         <h1 className="mail-title">Mail</h1>
       </header>
 

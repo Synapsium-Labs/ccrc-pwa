@@ -8696,3 +8696,13 @@ This is the destructive subject alone (R65). Read these at the tip, against `ori
 ## Deviations found
 
 This wave's numbers come from the two blocks the allocator issued for run 348. The coordinator assigns them at the fix round: one per departure, each defined here, singly. A departure the worker finds is named by slug in the wave-done.
+
+## Design
+
+**Posture:** none
+
+The server half of the reclaim lane — licence binding and generation keys. `ChildReclaimBanner` renders the result and keeps its shape.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

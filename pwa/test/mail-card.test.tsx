@@ -18,7 +18,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ChatEvent, SessionStreamMsg } from '../../shared/api';
 import { MAIL_ENVELOPE_FENCE } from '../../shared/api';
-import { buildChatItems, ChatListInner } from '../src/session/ChatList';
+import { ChatListInner } from '../src/session/ChatList';
+import { buildChatItems } from '../src/session/chatItems';
 import { applySessionMsg, type SessionSnapshot } from '../src/stores/session';
 import { norm, stripComments } from './cssRule';
 
@@ -28,8 +29,12 @@ afterEach(() => {
 });
 
 const TS = '2026-08-13T10:00:00.000Z';
-const chatCss = readFileSync(
-  path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8',
+/** The card's own stylesheet, which travelled with the component into
+ *  @ccrc/ui. The no-glow scan below reads THIS file rather than chat.css: a
+ *  `.mail-card` rule left behind in the app sheet would be a split family, and
+ *  this suite is where that shows up as a vacuous loop rather than a failure. */
+const mailCardCss = readFileSync(
+  path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'components', 'mail-card.css'), 'utf8',
 );
 
 /** The envelope text as `server/src/coord/envelope.ts` mints it. Written out
@@ -233,7 +238,7 @@ describe('MailCard', () => {
     // whose selector mentions `.mail-card`, so a sibling added later cannot be
     // missed by forgetting to list it — with a floor so a renamed block cannot
     // make the loop pass vacuously.
-    const rules = [...stripComments(chatCss).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    const rules = [...stripComments(mailCardCss).matchAll(/([^{}]+)\{([^{}]*)\}/g)]
       .filter((m) => (m[1] ?? '').includes('.mail-card'));
     expect(rules.length).toBeGreaterThanOrEqual(5);
     for (const m of rules) {

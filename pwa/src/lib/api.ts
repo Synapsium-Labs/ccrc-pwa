@@ -119,6 +119,26 @@ const UPLOAD_ERROR_TEXT: Record<string, string> = {
 
 export const uploadErrorText = (code: string): string => UPLOAD_ERROR_TEXT[code] ?? code;
 
+/**
+ * THE APP'S ONE SENTENCE FOR A WRITE THAT DID NOT GO THROUGH, written out
+ * thirteen times across seven files before this.
+ *
+ * It sat under every census's floor: `literal-census` reads strings of 25+
+ * characters and `Couldn't stop — ` is sixteen, so nothing could see that the
+ * app's whole failure voice was being re-typed per call site. One reword, or
+ * one call site that said "failed to" instead, and the voice drifts with no
+ * suite between.
+ *
+ * `apiErrorText`, never `err.message`: the runCcd routes fail as
+ * 502 `{ok, stderr}` with no `error` key, so `err.message` yields the generic
+ * "request failed (502)" and ccd's own refusal never reaches anyone.
+ *
+ * The VERB is the caller's and stays at the call site — it is the one half of
+ * the sentence that is about what the operator just tried to do.
+ */
+export const failedTo = (verb: string, err: unknown): string =>
+  `Couldn't ${verb} — ${apiErrorText(err)}`;
+
 /** Origin-qualified on purpose: MessageBubble's `absolute()` turns a bare
  *  `/api/...` into `https:///api/...` (empty host), so a root-relative href
  *  would make every thumbnail tap dead. `/api/` is in navigateFallbackDenylist,
@@ -175,6 +195,23 @@ export const UNSUPPORTED_VERB_TEXT =
  * `UNSUPPORTED_VERB_TEXT` reaches a toast.
  */
 export const COORD_UNSUPPORTED_TEXT = 'the fleet host needs the newer ccd';
+
+/**
+ * The 404 both the abandon and the reclaim doors answer with: the run the tap
+ * named is not on the board any more.
+ *
+ * TWO MAPS, ONE SENTENCE. `ABANDON_COPY` and `RECLAIM_COPY` each spelled it,
+ * and the literal census is what found them — a copy inside a `Record` is
+ * invisible to a census that reads `className=` attributes or JSX trees.
+ * Those two maps stay separate and SHOULD: every other member differs, and
+ * `RECLAIM_COPY`'s own comment argues one of the differences. This is the one
+ * member they agree on, and it agrees for a reason — the same 404, about the
+ * same board, with the same remedy (wait).
+ *
+ * Lower-case and un-terminated, `COORD_UNSUPPORTED_TEXT`'s rule: both sites
+ * render it as inline refusal copy inside their own surface.
+ */
+export const UNKNOWN_RUN_TEXT = 'that run is gone — the board will catch up';
 
 /**
  * ccd's own refusal for an empty hold reason (`cmd_ws_hold`, `ccd/ccd`),

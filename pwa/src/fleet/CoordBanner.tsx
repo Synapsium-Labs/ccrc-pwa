@@ -17,16 +17,14 @@
 // settles only when a LATER `coord` frame actually reports the value the tap
 // asked for — never merely "a frame arrived". `COORD_CONFIRM_MS` names why a
 // timeout beats waiting forever: see coordWords.ts's own docstring.
-import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { MarkerState } from '../../../shared/api';
-import { COORD_CONFIRM_MS, MARKER_GLYPH, MARKER_WORD, markerState } from './coordWords';
+import { MARKER_GLYPH, MARKER_WORD, markerState } from './coordWords';
+import { useMarkerToggle } from './useMarkerToggle';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../lib/api';
-import { toast } from '../components/Toast';
+import { Button, ControlRow, CONTROL_ROW_NOTE } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
-type Phase = 'idle' | 'pausing' | 'resuming' | 'unconfirmed';
 
 /** The 501/502 refusals render INLINE, in the banner itself — spec §4.2's own
  *  words, held once in `COORD_UNSUPPORTED_TEXT` (`lib/api.ts`, review M2:
@@ -66,113 +64,27 @@ export function CoordBanner({
   const coord = store((s) => s.coord);
   const coordFrameSeen = store((s) => s.coordFrameSeen);
 
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [error, setError] = useState<string | null>(null);
-
-  // The marker value that would CONFIRM the outstanding tap — 'set' for a
-  // pause, 'clear' for a resume — or null when nothing is outstanding. A ref,
-  // not state: it is read inside the timer callback and the coord-watching
-  // effect below, never rendered itself.
-  const wantedRef = useRef<MarkerState | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const clearTimer = (): void => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  // Settles the outstanding tap the moment a `coord` frame reports the value
-  // it asked for — and ONLY then. A frame that arrives but still disagrees
-  // (the marker hasn't moved yet) changes nothing here; the timer below is
-  // what eventually gives up on that case. Runs whenever `coord.pause`
-  // actually changes VALUE — not on every `coord` frame (keyed on `marker`,
-  // not on the whole `coord` object, for the same reason the refusal-clearing
-  // effect below is keyed narrowly too) — including
-  // ones that land after "unconfirmed" has already been shown — an operator
-  // staring at "unconfirmed" for a genuinely-late frame deserves to see it
-  // resolve, not stay stale forever.
-  useEffect(() => {
-    // Review, M4: an inline refusal describes the tap that produced it, and a
-    // NEW value for `coord.pause` is a fresh measurement of the very thing
-    // that refusal was about. Cleared only on the next tap, a 501 ("the fleet
-    // host needs the newer ccd") sat under a banner that had since flipped to
-    // "paused" off a real frame — two statements about one fleet that cannot
-    // both be current. Cleared here, the refusal lives exactly as long as the
-    // reading it belongs to.
-    //
-    // Keyed on `coord?.pause`, not on `coord` itself: the frame now also
-    // carries `reclaim` and `childReclaimAttention` (child-reclamation wave
-    // 4) — fields this banner never renders. Keying on the whole `coord`
-    // object meant a fresh reclaim-row tick or attention-list change gave
-    // `coord` a new identity too, which cleared THIS row's refusal though
-    // nothing about `pause` had moved: a refusal disappearing while nothing
-    // it was about changed — the same shape of defect the paragraph above
-    // guards against for the settle effect. Keying on `coord?.pause` alone
-    // keeps that same guarantee for a frame with more than one row's facts
-    // on it. (Safe against the failure path itself:
-    // `coordPause`'s rejection sets `error` in a microtask; this effect runs
-    // only when `coord.pause` actually changes value, never merely because a
-    // tap failed.)
-    setError(null);
-    if (wantedRef.current !== null && coord?.pause === wantedRef.current) {
-      wantedRef.current = null;
-      clearTimer();
-      setPhase('idle');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coord?.pause]);
-
-  useEffect(() => () => clearTimer(), []);
+  // The switch's whole behaviour — the tap, the settle, the bounded wait and
+  // the failure arm — is `useMarkerToggle`'s, shared with the reclaim row.
+  // `markerState` reads the frame BEFORE the early return below, because a
+  // hook may not be called conditionally; an absent frame reads `unmeasurable`
+  // and the row renders nothing anyway.
+  const pauseState = markerState(coord?.pause);
+  const pause = useMarkerToggle(coord === null ? null : pauseState, coordPause);
 
   if (!coordFrameSeen || coord === null) return null;
 
-  const pauseState = markerState(coord.pause);
-
-  const onToggle = (): void => {
-    setError(null);
-    const wantPause = pauseState !== 'set';
-    const wanted: MarkerState = wantPause ? 'set' : 'clear';
-    wantedRef.current = wanted;
-    setPhase(wantPause ? 'pausing' : 'resuming');
-    clearTimer();
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      // Only fires "unconfirmed" if THIS tap is still the outstanding one —
-      // a later tap (or an already-landed confirmation) owns the phase now.
-      if (wantedRef.current === wanted) setPhase('unconfirmed');
-    }, COORD_CONFIRM_MS);
-
-    coordPause(wantPause).catch((err: unknown) => {
-      // The write itself failed — there is nothing left to wait for. Never
-      // optimistic about failure either: drop back to idle immediately
-      // rather than sitting in "pausing…" until a timeout that was never
-      // going to resolve.
-      wantedRef.current = null;
-      clearTimer();
-      setPhase('idle');
-      const inline = inlinePauseError(err);
-      if (inline !== null) { setError(inline); return; }
-      toast(apiErrorText(err), 'error');
-    });
-  };
-
-  const busy = phase === 'pausing' || phase === 'resuming';
-  const toggleLabel =
-    phase === 'pausing' ? 'pausing…'
-    : phase === 'resuming' ? 'resuming…'
-    : phase === 'unconfirmed' ? 'unconfirmed — check /runs'
-    : pauseState === 'set' ? 'Resume' : 'Pause';
-
   return (
-    <div className="coord-banner" role="status">
+    <ControlRow className="coord-banner" role="status">
       <span className="coord-glyph" aria-hidden="true">{MARKER_GLYPH[pauseState]}</span>
       <span className="coord-word">{MARKER_WORD[pauseState]}</span>
-      <button type="button" className="coord-toggle" disabled={busy} onClick={onToggle}>
-        {toggleLabel}
-      </button>
-      {error !== null && <p className="coord-error">{error}</p>}
-    </div>
+      <Button variant="quiet" size="fit" className="coord-toggle flex-none"
+              disabled={pause.busy} onClick={pause.toggle}>
+        {pause.label({ set: 'Resume', clear: 'Pause' })}
+      </Button>
+      {pause.error !== null && (
+        <p className={`coord-error ${CONTROL_ROW_NOTE}`}>{pause.error}</p>
+      )}
+    </ControlRow>
   );
 }

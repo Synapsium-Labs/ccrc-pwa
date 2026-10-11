@@ -6466,3 +6466,13 @@ The five questions this plan asked are ruled; each ruling is applied where the p
 3. **Task 5's copy** STAYS in the plan, self-contained and droppable; the operator may still strike it before merge.
 4. **Departure numbers.** The coordinator issued a second block of four: the brief issues the numbers for all twenty slugs. The plan writes no number.
 5. **The journal-gap trade** is ACCEPTED for this wave: a coordinator whose last successful spawn is not newer than a recorded gap stays unmeasured (listed, never ended) until its next successful spawn; whether a gap should stop counting after some age is carried, for a decision with shadow evidence.
+
+## Design
+
+**Posture:** offer
+
+`DeadCoordinatorAttention` is a new surface, and it shares the fleet screen with the expiry lane's own. Two attention rows arriving in consecutive waves is the case for ruling on them together.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

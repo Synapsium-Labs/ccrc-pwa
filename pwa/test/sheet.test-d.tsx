@@ -3,7 +3,7 @@
 // still has a red test to break, not just a `tsc --noEmit` a reader might skip.
 import { expectTypeOf, test } from 'vitest';
 import type { ReactElement } from 'react';
-import { Sheet, type SheetProps } from '../src/components/Sheet';
+import { Sheet, type SheetProps } from '@ccrc/ui';
 
 test('eyebrow takes a node, so a caller can hang a chip off the kicker', () => {
   // The DialogSheet header badge: copy plus an element, not a bare string.

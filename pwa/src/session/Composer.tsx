@@ -7,10 +7,8 @@
 // keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
-import { Sheet } from '../components/Sheet';
+import { AttachButton, AttachTray, Button, Sheet, Well } from '@ccrc/ui';
 import type { PendingAttachment, PendingSend } from '../stores/session';
-import { AttachButton } from './AttachButton';
-import { AttachTray } from './AttachTray';
 import { clipboardImages, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
 import { useMediaQuery } from '../lib/useMediaQuery';
@@ -315,24 +313,22 @@ export function Composer({
                     + " text in the session's input box. Send both together, or replace it with"
                     + ' your message.'}
               </p>
-              <pre className="well draft-well" data-testid="draft-well">{conflict.draft}</pre>
+              <Well className="draft-well" data-testid="draft-well">{conflict.draft}</Well>
               <div className="draft-actions">
-                <button
-                  type="button"
-                  className="btn-primary"
+                <Button
+                  variant="primary"
                   onClick={() => resolveConflict(conflict.text)}
                 >
                   Replace draft
-                </button>
+                </Button>
                 {/* Byte-identical to what it always was, and correct ONLY
                     because `conflict.draft` is now the whole box. */}
-                <button
-                  type="button"
-                  className="btn-ghost"
+                <Button
+                  variant="ghost"
                   onClick={() => resolveConflict(`${conflict.draft}\n${conflict.text}`)}
                 >
                   Append anyway
-                </button>
+                </Button>
                 <button type="button" className="draft-cancel" onClick={closeConflict}>
                   Cancel
                 </button>

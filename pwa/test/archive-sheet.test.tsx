@@ -2,26 +2,19 @@
 // that ask for it, the server's refusals answered inside the sheet, and "Stop only" where — and only where — the
 // caller asks for it. Rendered directly with an INJECTED `archive` (`ArchiveConflictSheet`'s idiom).
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, RunSummary } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { fleetSession } from './fleetFixture';
+import { ToastHost } from '@ccrc/ui';
 import { ArchiveSheet } from '../src/fleet/ArchiveSheet';
 import { createFleetStore } from '../src/stores/fleet';
 import { ApiError, type api } from '../src/lib/api';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-amber', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w/demo/amber', workspace: 'amber', name: null,
-  status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
-  version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null,
-  ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-amber', workdir: '/w/demo/amber', workspace: 'amber', ...over }));
 const RUN7 = { id: 7, program: 'lifecycle', wave: 1, waveOf: 3 };
 const RUN8 = { id: 8, program: 'lifecycle', wave: 2, waveOf: 3 };
 const claimedRun = (r: typeof RUN7, state: RunSummary['state'] = 'working'): RunSummary =>
@@ -305,5 +298,154 @@ describe('the outcome', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     expect(await screen.findByText('tmux unreachable — x')).toBeInTheDocument();
     expect(archive).not.toHaveBeenCalled();
+  });
+});
+
+// THE DEGRADE ARMS. Every case above sends a body the route promises; these
+// send what a box under load and a proxy in front of it produce — and each
+// had no case (measured: statements 148, 166, 181 and branches 76#1, 83#1,
+// 87#1, 88#1, 91#1, 170#1, 171#0/1, 183#1, 185#1, 252#1 uncovered with this
+// file 34/34 green).
+describe('the shapes a well-formed fixture never sends', () => {
+  it('a `run-open` whose `runs` we could not read still names the condition', () => {
+    // `[]` is the DEGRADE case, not `null`: the sheet opens and says a run is
+    // still open, naming none. Inventing an id would be worse, and sending
+    // this to a toast — which is what a `null` would do — would leave the
+    // operator with a bare slug and no door.
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'run-open', runs: 'not-an-array' })) as unknown as Archive;
+    mount(s(), { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    return waitFor(() => {
+      expect(screen.getByText('A run is still open on this workspace')).toBeInTheDocument();
+      expect(screen.queryByText(/run \d+/), 'an id was invented').toBeNull();
+    });
+  });
+
+  it('a partly-ended body with nothing readable in it still says what did NOT happen', async () => {
+    // Three absences at once: no `closed`, no `notClosed`, no `refusal`. The
+    // one claim that survives is the one that matters — nothing was stopped
+    // or archived — and the sentence must not silently become "Ended: ."
+    const archive = vi.fn().mockRejectedValueOnce(
+      refusal({ error: 'programme-partly-ended' })) as unknown as Archive;
+    mount(s(), { archive, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    expect(await screen.findByText('No run was ended. Nothing was stopped or archived.')).toBeInTheDocument();
+  });
+
+  it('a partly-ended body that is not an object at all is read the same way', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(
+      new ApiError(409, 'programme-partly-ended')) as unknown as Archive;
+    mount(s(), { archive, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    // A body that is not an object carries no `error` either, so there is no
+    // partly-ended sentence to say — and the sheet must stay on its confirm
+    // rather than turn into a titled refusal with an empty body.
+    await waitFor(() =>
+      expect(screen.getByText('It has 1 open run. End its programme too?')).toBeInTheDocument());
+    expect(screen.queryByText('The programme was only partly ended')).toBeNull();
+  });
+
+  it('a partly-ended `refusal` with no id or kind drops the clause, never prints undefined', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({
+      error: 'programme-partly-ended', closed: [RUN7], refusal: { detail: 'something' },
+    })) as unknown as Archive;
+    mount(s(), { archive, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    const said = await screen.findByText(/Ended: run 7/);
+    expect(said.textContent).not.toMatch(/undefined|could not be ended/);
+  });
+
+  it('a partly-ended `refusal` with no detail names the run and the kind alone', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({
+      error: 'programme-partly-ended', notClosed: [RUN8], refusal: { id: 8, kind: 'claimed' },
+    })) as unknown as Archive;
+    mount(s(), { archive, runs: [claimedRun(RUN7)] });
+    fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
+    const said = await screen.findByText(/Still open: run 8/);
+    expect(said.textContent).toContain('Run 8 could not be ended (claimed).');
+    expect(said.textContent).not.toMatch(/undefined/);
+  });
+
+  it('a rejection that is not an ApiError leaves the sheet open, with no invented ended list', async () => {
+    // `fetch` rejecting with a `TypeError` when the box goes away. The two
+    // reads it skips are the refusal CODE and the `ended` runs — and claiming
+    // runs were ended by a request that never arrived is the damaging one.
+    const archive = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')) as unknown as Archive;
+    mount(s(), { archive });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(screen.getByText('Archive this workspace?')).toBeInTheDocument());
+    expect(screen.queryByText(/programme was ended/i)).toBeNull();
+  });
+
+  it('a 2xx `archived: false` with no refusal word and no detail still says it was not archived', async () => {
+    // Two absences on the SUCCESS arm: a partial answer that names neither
+    // the refusal nor a detail. The toast is the only thing the operator
+    // gets — a blank one would read as a successful archive.
+    const archive = vi.fn(async () => ({ ok: true, archived: false })) as unknown as Archive;
+    const onArchived = vi.fn();
+    mount(s(), { archive, onArchived });
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(await screen.findByText(/Stopped, but not archived — the archive was refused\./))
+      .toBeInTheDocument();
+    expect(onArchived, 'a row that was not archived must not be called archived').not.toHaveBeenCalled();
+  });
+
+  it('a second tap while the first is in flight sends nothing', async () => {
+    // The `busy` guard. Both buttons are disabled while sending, but the
+    // scrim is not — and a sheet dismissed and reopened by the row would
+    // otherwise fire a second archive for a request still running.
+    let land!: () => void;
+    const archive = vi.fn(() => new Promise<null>((res) => { land = () => res(null); })) as unknown as Archive;
+    mount(s(), { archive });
+    const button = screen.getByRole('button', { name: 'Archive' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(archive).toHaveBeenCalledTimes(1);
+    await act(async () => { land(); await Promise.resolve(); });
+  });
+});
+
+describe('a superseded archive cannot act on the sheet that is up now', () => {
+  /** The sheet is mounted at screen level and `open=false` renders nothing, so
+   *  a slow archive of one row can land while another row's sheet is up. */
+  const Switcher = ({ archive }: { archive: Archive }): ReactNode => {
+    const [row, setRow] = useState(s());
+    const fleet = createFleetStore();
+    return (
+      <>
+        <button type="button" data-testid="switch"
+                onClick={() => setRow(s({ id: 'demo-other', workspace: 'other' }))}>
+          switch
+        </button>
+        <ArchiveSheet session={row} open onClose={() => {}} archive={archive} fleet={fleet} />
+        <ToastHost />
+      </>
+    );
+  };
+
+  it('its SUCCESS does not toast or close over another row', async () => {
+    let land!: () => void;
+    const archive = vi.fn(() => new Promise<{ ok: true; archived: false }>((res) => {
+      land = () => res({ ok: true, archived: false });
+    })) as unknown as Archive;
+    render(<Switcher archive={archive} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(screen.getByTestId('switch'));
+    await act(async () => { land(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.queryByText(/Stopped, but not archived/),
+      "one row's partial answer surfaced over another row").toBeNull();
+  });
+
+  it('its REFUSAL does not turn the sheet that is up now', async () => {
+    let fail!: () => void;
+    const archive = vi.fn(() => new Promise<null>((_res, rej) => {
+      fail = () => rej(refusal({ error: 'session-busy' }));
+    })) as unknown as Archive;
+    render(<Switcher archive={archive} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(screen.getByTestId('switch'));
+    await act(async () => { fail(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.queryByText("It's working. Archive anyway?"),
+      "one row's refusal turned another row's sheet").toBeNull();
   });
 });

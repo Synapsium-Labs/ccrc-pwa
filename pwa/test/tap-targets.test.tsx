@@ -17,8 +17,9 @@
 //     a rule with no matching element would silently stop doing.
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import type { CoordCapsView } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import type { CoordStatus, FleetSession, MailSummary, NotifyEvent, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, ruleIn, stripComments } from './cssRule';
@@ -31,16 +32,24 @@ import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
-import { MailStrip } from '../src/session/MailStrip';
+import {
+  BARE_ROW, CONTROL_ROW, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
+} from '@ccrc/ui';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
+/** The design system's own stylesheets — tokens.css lives in @ccrc/ui now. */
+const readUi = (...seg: string[]): string =>
+  readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', ...seg), 'utf8');
 const fleetCss = read('fleet', 'fleet.css');
 const chatCss = read('session', 'chat.css');
-const tokensCss = read('styles', 'tokens.css');
+const tokensCss = readUi('styles', 'tokens.css');
+/** The mail strip is the design system's now, and its stylesheet travelled
+ *  with it — the tap floor is asserted where the rule actually lives. */
+const mailStripCss = readUi('components', 'mail-strip.css');
 
 // Fix round 3, verifier P5. These three stylesheets belong to the ui-css lane
 // and are being edited in parallel with this file, so the scrape must survive
@@ -55,15 +64,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 // — fixtures —
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'custom-tools',
-  workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
-  limits: null, dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ project: 'custom-tools', workspace: 'quiet-basin', branch: 'ws/quiet-basin', ...over }));
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
   phase: 'none', number: null, url: null, title: null, checks: null, checkNames: null,
@@ -139,9 +140,19 @@ describe('the tap-target token', () => {
 
 // — the four rules the gates review found uncovered —
 
+// AND SO DID FIVE BARE ROWS. `.fleet-archived-row`, `.fleet-runs-row`,
+// `.proj-released-toggle`, `.proj-archived-toggle` and `.archive-row`
+// declared the same six declarations — a full-width left-aligned tap target
+// with no chrome at all — and are `<BareRow>` now. Each render half below is
+// untouched.
+function expectBareRowIsATarget(): void {
+  expect(BARE_ROW).toContain('min-h-tap');
+  expect(BARE_ROW).not.toContain('44px');
+}
+
 describe('.fleet-archived-row — the fleet footer route into the archive', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.fleet-archived-row'), 'min-height')).toBe('var(--tap-min)');
+    expectBareRowIsATarget();
   });
 
   it('is the class the rendered footer row actually carries', () => {
@@ -161,7 +172,7 @@ describe('.fleet-archived-row — the fleet footer route into the archive', () =
 
 describe('.archive-row — every row on the archive screen', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.archive-row'), 'min-height')).toBe('var(--tap-min)');
+    expectBareRowIsATarget();
   });
 
   it('is the class every rendered archive row actually carries', () => {
@@ -181,7 +192,41 @@ describe('.pr-title-input — the one editable field in the PR composer', () => 
   it('is at least one tap tall, off the shared token', () => {
     // A text input below the floor is worse than a short button: the target
     // has to be hit to place a caret, not merely pressed.
-    expect(declValue(ruleIn(chatCss, '.pr-title-input'), 'min-height')).toBe('var(--tap-min)');
+    //
+    // THE FLOOR MOVED FROM A RULE TO A COMPONENT. This field and
+    // `.pool-new-input` declared the same nine declarations; both are
+    // `<TextInput>` wearing `TEXT_INPUT_INLINE` now, and the floor is the
+    // component's — shared with the three fields that were already its.
+    expect(TEXT_INPUT).toContain('min-h-tap');
+    expect(TEXT_INPUT).not.toContain('44px');
+  });
+
+  it('and so is every dropdown, off the same token in the same package', () => {
+    // The app's two `<select>`s wore `.route-select`, whose `min-height:
+    // var(--tap-min)` `control-census.test.ts` used to verify as a TOKEN claim
+    // against the stylesheet. There is no rule to read any more — the chooser
+    // is `<Select>` — so the floor is read where it now lives. A `<select>`
+    // under the floor is the same defect as a short field: it has to be hit to
+    // open a list, and on a phone that list is a sheet.
+    expect(SELECT).toContain('min-h-tap');
+    expect(SELECT).not.toContain('44px');
+  });
+
+  it('keeps that floor on the chooser that drops the component\'s width', () => {
+    // The fleet head's class chooser passes `w-auto flex-none max-w-full`, and
+    // tailwind-merge REMOVES the component's `w-full` rather than letting it
+    // lose a specificity tie (`fleet-css.test.ts` pins that mechanism). What
+    // is checked here is that the merge takes the width and nothing else: the
+    // floor has to survive the one call site that overrides anything.
+    const { container } = render(
+      <Select aria-label="Class" className="w-auto flex-none max-w-full" defaultValue="">
+        <option value="">Coordinator row</option>
+      </Select>,
+    );
+    const el = container.querySelector('select');
+    expect(el).toHaveClass('w-auto');
+    expect(el).not.toHaveClass('w-full');
+    expect(el, 'the tap floor did not survive the width override').toHaveClass('min-h-tap');
   });
 
   it('is the class the rendered title field actually carries', async () => {
@@ -262,28 +307,21 @@ describe('the two rules that were already scraped still reach a real element', (
     // with it and buys nothing, so it is gone rather than corrected.
     // A literal would not follow `--tap-min` if the acceptance criterion ever
     // moves, and would not be found by the scrapes above either. Build 7 Task
-    // 4 (`.mail-badge`, `.mail-back`), Task 5 (`.fleet-runs-row`,
-    // `.runs-back`, `.run-row`, `.run-open`), Task 6 (`.mail-strip-head`),
-    // Build 4 Task 11 (`.coord-banner`, `.coord-toggle`), Task 12
-    // (`.run-abandon`) and Task 13 (`.program-start-door`, `.program-start-go`)
+    // 4 (`.mail-badge`), Task 5 (`.fleet-runs-row`, `.run-row`, `.run-open`),
+    // Task 6 (`.mail-strip-head`),  — `.mail-back` and `.runs-back` left this
+    // loop with the other three back chevrons when they became `BackButton`;
+    // their floor is asserted against the component below,
+    // Build 4 Task 12 (`.run-abandon`) and Task 13
     // join the same loop rather than getting their own — one place where
     // "every floored rule stays on the token" is checked, not a second copy
     // of the assertion per branch.
     for (const rule of [
-      ruleIn(fleetCss, '.fleet-archived-row'), ruleIn(fleetCss, '.archive-row'),
-      ruleIn(fleetCss, '.proj-archived-toggle'), ruleIn(chatCss, '.pr-title-input'),
-      ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
-      ruleIn(fleetCss, '.mail-badge'), ruleIn(fleetCss, '.mail-back'),
-      ruleIn(fleetCss, '.fleet-runs-row'), ruleIn(fleetCss, '.runs-back'),
+       ruleIn(chatCss, '.reap-go'), ruleIn(chatCss, '.keycap--pr'),
+      ruleIn(fleetCss, '.mail-badge'),
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
-      ruleIn(chatCss, '.mail-strip .mail-strip-head'),
-      ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
-      ruleIn(fleetCss, '.child-reclaim-banner'), ruleIn(fleetCss, '.child-reclaim-toggle'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
-      ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
-      ruleIn(fleetCss, '.caps-control'), ruleIn(fleetCss, '.caps-save'),
       ruleIn(fleetCss, '.caps-input'), ruleIn(fleetCss, '.mail-chip'),
-      ruleIn(fleetCss, '.proj-released-toggle'), ruleIn(fleetCss, '.proj-released-archive'),
+      ruleIn(fleetCss, '.proj-released-archive'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -306,9 +344,53 @@ describe('.mail-badge — the only door to /mail', () => {
   });
 });
 
+// THE BACK CHEVRON'S FLOOR MOVED FROM A RULE TO A COMPONENT. All five
+// `.*-back` rules became @ccrc/ui's `BackButton`, so there is no stylesheet
+// rule left to scrape. The claim is unchanged and the chain is one link
+// longer: `min-w-tap`/`min-h-tap` resolve through theme.css's
+// `--spacing-tap: var(--tap-min)`, which `test/theme-bridge.test.ts` pins —
+// so a utility that silently stopped resolving to the token would red there.
+// The render half of each pair below is untouched: the hook class is still on
+// the element, which is the half that proves the floor reaches real markup.
+const backButton = readUi('primitives', 'back-button.tsx');
+
+// AND SO DID FOUR QUIET CONTROLS. `.coord-toggle`, `.child-reclaim-toggle`,
+// `.caps-save` and `.program-start-door` declared the same eleven
+// declarations — three of them byte-identical — and are one cva variant now.
+// Their floor is asserted against the composed class string rather than four
+// rules, and the render half of each pair below is untouched: the hook class
+// is still on the element, which is the half that proves the floor reaches
+// real markup.
+const QUIET = buttonVariants({ variant: 'quiet', size: 'fit' });
+function expectQuietIsATarget(): void {
+  expect(QUIET).toContain('min-h-tap');
+  expect(QUIET).not.toContain('44px');
+}
+
+// AND SO DID THREE CONTROL ROWS. `.coord-banner`, `.child-reclaim-banner` and
+// `.caps-control` declared the same twelve; what is left of each in fleet.css
+// is the two-declaration ground its descendants are measured against, so the
+// floor is read off `<ControlRow>` instead.
+describe('the control row — one shape where three rules were', () => {
+  it('is at least one tap tall, off the shared token', () => {
+    expect(CONTROL_ROW).toContain('min-h-tap');
+    expect(CONTROL_ROW).not.toContain('44px');
+  });
+  it('supplies no ground of its own — the consumer keeps that, for the audit', () => {
+    // The split this component exists to hold. A `bg-*` creeping in here is
+    // the change that would un-measure nine descendant rules in fleet.css,
+    // silently, with every gate still green.
+    expect(CONTROL_ROW).not.toMatch(/\bbg-/);
+    expect(CONTROL_ROW).not.toMatch(/\btext-ink-/);
+  });
+});
+
 describe('.mail-back — the feed’s back control', () => {
   it('is at least one tap square, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.mail-back'), 'min-height')).toBe('var(--tap-min)');
+    expect(backButton).toContain('min-w-tap');
+    expect(backButton).toContain('min-h-tap');
+    // No bare literal, the same bind the scrape loop above applies to rules.
+    expect(backButton).not.toContain('44px');
   });
   it('is the class the rendered control actually carries', () => {
     render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
@@ -344,7 +426,7 @@ describe('.mail-chip — the feed’s programme filter', () => {
 
 describe('.fleet-runs-row — the only door to /runs', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.fleet-runs-row'), 'min-height')).toBe('var(--tap-min)');
+    expectBareRowIsATarget();
   });
   it('is the class the rendered footer row actually carries, once a runs frame has landed', () => {
     const store = makeStore();
@@ -378,7 +460,7 @@ describe('.fleet-runs-row — the only door to /runs', () => {
 
 describe('.runs-back — the run board’s own back control', () => {
   it('is at least one tap square, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.runs-back'), 'min-height')).toBe('var(--tap-min)');
+    expect(backButton).toContain('min-h-tap');   // the same component .mail-back is
   });
   it('is the class the rendered control actually carries', () => {
     render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
@@ -409,7 +491,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
 
 describe('.coord-toggle — the pause banner’s own toggle', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.coord-toggle'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
   it('is the class the rendered toggle actually carries, once a coord frame has landed', () => {
     const store = makeStore();
@@ -429,7 +511,7 @@ describe('.coord-toggle — the pause banner’s own toggle', () => {
 
 describe('.mail-strip-head — the session mail strip’s door to its rows', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(chatCss, '.mail-strip .mail-strip-head'), 'min-height')).toBe('var(--tap-min)');
+    expectBareRowIsATarget();
   });
   it('is the class the rendered head control actually carries', () => {
     render(<MailStrip mail={[mailItem()]} />);
@@ -465,7 +547,7 @@ describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
 
 describe('.program-start-door — the only door onto a new program', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.program-start-door'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
   it('is the class the rendered footer control actually carries', () => {
     const store = makeStore();
@@ -476,7 +558,7 @@ describe('.program-start-door — the only door onto a new program', () => {
 
 describe('.program-start-go — the sheet’s own confirm control', () => {
   it('is at least one tap tall, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.program-start-go'), 'min-height')).toBe('var(--tap-min)');
+    expectQuietIsATarget();
   });
   it('is the class the rendered confirm button actually carries', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue({
@@ -488,5 +570,193 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
       loadProjects={async () => ({ roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/w' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toHaveClass('program-start-go');
+  });
+});
+
+// THE STRIP CHROME'S HEAD, ALL THREE AT ONCE — and a census rather than a
+// third named control, because naming them one at a time is how two of them
+// came to have no floor.
+//
+// `CollapsibleStrip` gives MailStrip, TaskStrip and HotFilesStrip one shape,
+// and each keeps its own skin — which is cheap (no rule moved, so no gate key
+// moved) and leaves the floor re-stated three times. It had already drifted
+// when the chrome was extracted: `.mail-strip-head` floored at `--tap-min`,
+// `.task-head` at `--sp-8` (32px, under the spec criterion, on the control that
+// opens the plan) and `.hotfiles-head` at nothing at all, sizing to its content.
+// The tests above cover controls one by one, by design, so none of them was in
+// scope for any of it.
+//
+// Derived from one list, so a fourth strip is a one-line addition here and a
+// red suite until it is made — not a silent fourth spelling.
+describe('every strip head clears the tap floor — the whole chrome, not one control', () => {
+  const HEADS: [string, string, string][] = [
+    ['mail-strip.css', '.mail-strip .mail-strip-head', mailStripCss],
+    ['task-strip.css', '.task-head', readUi('components', 'task-strip.css')],
+    ['fleet.css', '.hotfiles-head', fleetCss],
+  ];
+
+  // THE FLOOR MOVED FROM THREE RULES TO ONE COMPONENT. All three heads
+  // declared the same ten declarations — two of them inside the design system
+  // itself — and `CollapsibleStrip` builds its head from `BARE_ROW` now. Each
+  // sheet keeps only its ink, so there is no `min-height` left to scrape; what
+  // each rule still proves is that the head's hook class reaches real markup,
+  // which is the half a constant cannot show.
+  it('floors at var(--tap-min), once, in the component all three share', () => {
+    expect(BARE_ROW).toContain('min-h-tap');
+    expect(BARE_ROW).not.toContain('44px');
+    // AND THE COMPONENT ACTUALLY WEARS IT. Asserting the constant alone left
+    // a measured hole: a mutation that stopped `CollapsibleStrip` composing
+    // `BARE_ROW` kept every head's flex and padding, lost the floor, the
+    // left-align and the ring, and nothing went red. The constant is half the
+    // claim; this is the other half.
+    const strip = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'collapsible-strip.tsx'),
+      'utf8');
+    expect(strip).toMatch(/cn\(\s*BARE_ROW/);
+  });
+
+  for (const [sheet, selector, css] of HEADS) {
+    it(`${sheet} ${selector} is still a rule, carrying this strip's own voice`, () => {
+      const rule = ruleIn(css, selector);
+      expect(rule, `${selector} has no rule in ${sheet}`).not.toBeNull();
+      // Its ink, or its refusal to set one — `.hotfiles-head` says `inherit`
+      // twice where the other two name `--ink-primary`.
+      expect(rule!).toMatch(/color:/);
+    });
+  }
+
+  it('is every strip CollapsibleStrip builds, found by walking both packages', () => {
+    // WALKS the tree rather than reading three named files. The first spelling
+    // of this test read exactly the three consumers it already knew about, so
+    // a fourth strip anywhere else left it green — measured, by planting a
+    // `<CollapsibleStrip` in a fourth file and watching all 43 pass. A census
+    // that cannot see a newcomer is not a census.
+    const walk = (dir: string): string[] => {
+      const out: string[] = [];
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) out.push(...walk(full));
+        else if (e.name.endsWith('.tsx') && !e.name.endsWith('.stories.tsx')) out.push(full);
+      }
+      return out;
+    };
+    const roots = [
+      path.join(import.meta.dirname, '..', 'src'),
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src'),
+    ];
+    const consumers = roots
+      .flatMap(walk)
+      .filter((f) => /<CollapsibleStrip\b/.test(readFileSync(f, 'utf8')))
+      .map((f) => path.basename(f))
+      .sort();
+    expect(consumers).toEqual(['HotFilesStrip.tsx', 'mail-strip.tsx', 'task-strip.tsx']);
+    expect(consumers).toHaveLength(HEADS.length);
+  });
+});
+
+// ── the floor is a token, and nothing may re-type it ───────────────────────
+//
+// This file's own header says the scrape must prove a rule is "written
+// against the shared token rather than a literal `44px` that would not follow
+// the token". SIX DECLARATIONS WERE LITERALS — `.sess-line`'s row floor and
+// its actions column, `.sess-body`, `.sess-sheet .btn-ghost`,
+// `.proj-card-toggle` and `.slash-item` — in rules this file does not scrape,
+// so the drift it was built to stop had already happened five rules away from
+// where it was looking.
+//
+// A LIST OF SCRAPES CANNOT CATCH THIS; a census can. `--tap-min` is 44px
+// today, so every one of those rules rendered correctly and nothing looked
+// wrong — which is exactly why it needed a mechanism rather than a reader:
+// the day the token moves, a literal stays behind and the control silently
+// stops meeting the floor it was written for.
+//
+// SIZE PROPERTIES ONLY. `tokens.css` defines the token itself, and its glow
+// shadows carry a 44px BLUR that has nothing to do with a thumb; scoping to
+// the properties where a tap floor is actually spelled keeps those out
+// without an exemption list that would need maintaining.
+//
+// MEASURED, five mutations against the whole file (baseline 49 passed):
+//
+//   | mutation                                          | result |
+//   |---------------------------------------------------|--------|
+//   | one `var(--tap-min)` typed back as `44px`         | 1 red  |
+//   | a `244px` column width                            | green  |
+//   | `min-height: 44px` inside a COMMENT               | green  |
+//   | the stylesheet walk returns nothing                | 1 red  |
+//   | `grid-template-columns` dropped from SIZE_PROPS    | 1 red  |
+//
+// Rows two and three are the false positives this must NOT have. Rows four
+// and five are holes that were open when this was first written: with
+// `literals()` walking the sheets itself, emptying that walk left all 49
+// green, and the property list could be narrowed past the very declaration
+// the wave fixed. Both are closed by `reads the stylesheets at all`.
+const SIZE_PROPS = [
+  'height', 'min-height', 'max-height',
+  'width', 'min-width', 'max-width',
+  'block-size', 'min-block-size', 'inline-size', 'min-inline-size',
+  'flex-basis', 'grid-template-columns', 'grid-template-rows',
+  'grid-auto-rows', 'grid-auto-columns', 'inset',
+];
+
+describe('the tap floor is spelled as the token', () => {
+  const UI_STYLES = path.join(import.meta.dirname, '..', '..', 'ui', 'src');
+  const SHEETS: [string, string][] = [
+    ['pwa/src/fleet/fleet.css', read('fleet', 'fleet.css')],
+    ['pwa/src/session/chat.css', read('session', 'chat.css')],
+    ['pwa/src/styles/shell.css', read('styles', 'shell.css')],
+    ['pwa/src/styles/base.css', read('styles', 'base.css')],
+    ...readdirSync(UI_STYLES, { recursive: true })
+      .filter((f): f is string => typeof f === 'string' && f.endsWith('.css'))
+      .map((f): [string, string] => [
+        `ui/src/${f}`, readFileSync(path.join(UI_STYLES, f), 'utf8'),
+      ]),
+  ];
+
+  /** EVERY size declaration in every stylesheet, as `file:line prop: value`.
+   *  One walk, so the census and the proof that it walked read the same list —
+   *  measured: with `literals()` doing its own walk, emptying that walk left
+   *  all 49 green. A guard whose evidence comes from a different loop than its
+   *  verdict is a guard that can be switched off without going red. */
+  const sizeDecls = (): string[] => {
+    const out: string[] = [];
+    for (const [name, src] of SHEETS) {
+      stripComments(src).split('\n').forEach((line, i) => {
+        const m = /^\s*([a-z-]+)\s*:\s*([^;]*)/.exec(line);
+        if (m === null) return;
+        const [, prop = '', value = ''] = m;
+        if (!SIZE_PROPS.includes(prop)) return;
+        out.push(`${name}:${i + 1} ${prop}: ${value.trim()}`);
+      });
+    }
+    return out.sort();
+  };
+
+  /** The ones that type the floor out instead of naming it.
+   *  `(?<![\d.])` so `244px` and `144px` are not 44px. */
+  const literals = (): string[] =>
+    sizeDecls().filter((d) => /(?<![\d.])44px/.test(d.slice(d.indexOf(': ') + 2)));
+
+  it('finds no literal 44px in any size declaration', () => {
+    expect(literals(), 'write var(--tap-min); a literal does not follow the token').toEqual([]);
+  });
+
+  it('reads the stylesheets at all', () => {
+    // Without this the test above is green on an empty list for the wrong
+    // reason — a renamed file, a changed path, a comment stripper that ate
+    // everything, or a walk that stopped walking.
+    expect(SHEETS.length).toBeGreaterThan(8);
+    expect(sizeDecls().length).toBeGreaterThan(200);
+    // And it reaches the rules this wave fixed, by PROPERTY as well as by
+    // count — measured: dropping `grid-template-columns` from SIZE_PROPS left
+    // all 49 green, and that property is where `.sess-line`'s actions column
+    // spelled the floor.
+    const named = sizeDecls().filter((d) => d.includes('var(--tap-min)'));
+    expect(named.length).toBeGreaterThan(10);
+    expect(named.filter((d) => d.includes('grid-template-columns:'))).not.toEqual([]);
+    expect(named.filter((d) => d.includes('min-height:')).length).toBeGreaterThan(8);
+    // The token it is asking for still exists, with the value the six
+    // replaced literals were spelling.
+    const tokens = SHEETS.find(([n]) => n.endsWith('tokens.css'))?.[1] ?? '';
+    expect(tokens).toMatch(/--tap-min:\s*44px/);
   });
 });

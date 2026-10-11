@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Dialog, HookAsk } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';
@@ -797,6 +797,60 @@ describe('DialogSheet (hook envelope)', () => {
     ).toBeInTheDocument();
   });
 
+  // — the three envelope arms nothing reached (measured: statements 75, 193
+  // and 204 and branches 75#0, 198#1, 364#1 of `EnvelopeSheet.tsx`) —
+
+  it('a pane with FEWER rows than the envelope asks about is not a correspondence', () => {
+    // THE STRAY ARROW WALK. `answerDialog` walks the pane BY INDEX, so a tap
+    // is only safe when the envelope's rows and the pane's describe the same
+    // question. A pane mid-redraw can show one row where the envelope has
+    // two: every row it DOES show may line up, and answering would still
+    // send an arrow walk past the end of a menu that is not the one on
+    // screen. The length check is what refuses that, and it is the arm the
+    // per-row prefix comparison structurally cannot reach.
+    renderWithAsk(QUESTION_ASK, matchingDialog({ options: [{ index: 1, label: 'Canary first' }] }));
+    // The rows render — the envelope is still what the reader is shown — but
+    // none of them answers.
+    expect(screen.getByText(/Canary first/)).toBeInTheDocument();
+    expect(screen.getByText(
+      "This can't be matched to what's on the terminal pane yet — answer it there, "
+      + 'or wait for it to catch up.')).toBeInTheDocument();
+  });
+
+  it('a read-only SECOND question with no header renders no chip rather than an empty one', () => {
+    // `header` is optional on the wire, and the arm that reads it is in the
+    // `rest` block — the questions this sheet renders read-only, because only
+    // the first ever sends. Measured: a header-less FIRST question does not
+    // reach it at all, so the fixture has to carry two.
+    renderWithAsk(
+      { questions: [
+        { question: 'First: which env?', header: 'Env',
+          options: [{ label: 'Staging' }, { label: 'Prod' }] },
+        { question: 'Second: and the region?',
+          options: [{ label: 'eu-west' }, { label: 'us-east' }] },
+      ] },
+      matchingDialog({ options: [{ index: 1, label: 'Staging' }, { index: 2, label: 'Prod' }] }),
+    );
+    expect(screen.getByText('Second: and the region?')).toBeInTheDocument();
+    const chips = [...document.querySelectorAll('.dlg-header-chip')].map((n) => n.textContent);
+    expect(chips, 'an empty header chip was rendered for the question that has none')
+      .toEqual(['Env']);
+  });
+
+  it('a Deny that fails for any OTHER reason says what went wrong', async () => {
+    // The 409 has its own deliberately ambiguous sentence (the case above).
+    // Every other failure is unambiguous and must say so: a 502 from a box
+    // whose tmux is gone is not "the session may be idle".
+    vi.spyOn(api, 'interrupt').mockRejectedValue(
+      new ApiError(502, { ok: false, stderr: 'tmux: no server running' }));
+    renderWithAsk(APPROVAL_ASK, yesNoDialog());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    expect(await screen.findByText(/Couldn't decline — tmux: no server running/)).toBeInTheDocument();
+    expect(screen.queryByText(/may be idle or the request already resolved/),
+      "the ambiguous sentence was used for an unambiguous failure").toBeNull();
+  });
+
   it('N1: toasts honestly about a 409 on the envelope path — nothing on screen actually changed', async () => {
     vi.spyOn(api, 'answerDialog').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'stale-dialog' }),
@@ -1124,5 +1178,107 @@ describe('DialogSheet (hook envelope)', () => {
       fireEvent.click(deny);
       expect(deny).toHaveAttribute('aria-busy', 'true');
     });
+  });
+});
+
+// — the free-text path's two failures, and the one disclosure nothing opened —
+describe('the free-text reply when the menu does NOT clear', () => {
+  const withChatRow = () =>
+    parsedDialog({
+      options: [
+        { index: 1, label: 'Forward-fill per class (Recommended)' },
+        { index: 2, label: 'Chat about this' },
+      ],
+    });
+
+  it('says the question is still up, and types NOTHING into the pane', async () => {
+    // The escape hatch is a two-step: take the "Chat about this" row, WAIT for
+    // the menu to go, then type. The server refuses to type into a session
+    // with a menu up (`dialog-open`), so sending anyway would be a request
+    // that fails — and the reader would have lost their text to it. Measured
+    // through the poll itself (CLEAR_TRIES × CLEAR_POLL_MS) with a store whose
+    // dialog never clears.
+    vi.useFakeTimers();
+    try {
+      const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
+      const prompt = vi.fn().mockResolvedValue(undefined);
+      const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt } });
+      act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
+      render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
+
+      fireEvent.change(screen.getByLabelText('Answer in your own words'),
+        { target: { value: 'the rates table is the wrong layer' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await vi.waitFor(() => expect(answer).toHaveBeenCalled());
+
+      // Exactly past the last poll (CLEAR_TRIES × CLEAR_POLL_MS = 8 s), and
+      // no further: a toast dismisses itself on a timer of its own, so
+      // advancing "plenty" would run the refusal off the screen before the
+      // assertion reads it (measured — 30 s left nothing to find).
+      await act(async () => { await vi.advanceTimersByTimeAsync(8_400); });
+
+      expect(screen.getByText(/answer it in the terminal/)).toBeInTheDocument();
+      expect(prompt, 'the text was typed into a session with a menu up').not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a refusal on the way in is said in the sheet’s own words, and the box is re-enabled', async () => {
+    // The `catch` and its `finally`: a 502 on the escape-hatch answer must not
+    // leave the sheet reading "answering…" forever, because the one control
+    // the reader has left is the row they would tap again.
+    const answer = vi.spyOn(api, 'answerDialog')
+      .mockRejectedValue(new ApiError(502, { ok: false, stderr: 'tmux: no server running' }));
+    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn() } });
+    act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
+    render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
+
+    fireEvent.change(screen.getByLabelText('Answer in your own words'), { target: { value: 'wait' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/tmux: no server running/)).toBeInTheDocument();
+    expect(answer).toHaveBeenCalled();
+    // The `finally` clears `answering`, so the ROWS are tappable again — which
+    // is the claim. Send itself stays disabled, and correctly: `respond` has
+    // already emptied the box, and an empty box has nothing to send (measured,
+    // because the first version of this case asserted the button).
+    await vi.waitFor(() =>
+      expect(screen.getByRole('button', { name: /Chat about this/ })).not.toBeDisabled());
+  });
+
+  it('an empty box sends nothing at all', async () => {
+    // Trimmed, so whitespace is empty too — and the button is disabled for
+    // the same condition, which is why deleting the handler's own guard
+    // leaves all 61 green: the click never reaches it. Defence in depth, and
+    // what this case pins is the OUTCOME the two share, so the day the button
+    // stops being gated the escape hatch is not taken by an untouched box.
+    const answer = vi.spyOn(api, 'answerDialog').mockResolvedValue(undefined as never);
+    const store = createSessionStore(SESSION_ID, { makeSocket: fakeSocket, api: { prompt: vi.fn() } });
+    act(() => store.getState().apply({ type: 'dialog', dialog: withChatRow() }));
+    render(<><DialogSheet id={SESSION_ID} store={store} /><ToastHost /></>);
+
+    fireEvent.change(screen.getByLabelText('Answer in your own words'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(answer, 'an empty reply took the escape hatch').not.toHaveBeenCalled();
+  });
+});
+
+describe('the full question, behind its own disclosure', () => {
+  it('is hidden until asked for, shows the pane’s RAW text, and hides again', () => {
+    // The sheet renders the parsed question; the raw pane text is what the
+    // reader falls back to when the parse is wrong, and it is the only place
+    // the truth is verbatim. Nothing had ever opened it (measured: its
+    // toggle was an uncovered function).
+    renderWithDialog(parsedDialog({ raw: '❯ 1. Expand–contract\n  2. Something the parse missed' }));
+    expect(screen.queryByText(/Something the parse missed/)).toBeNull();
+
+    const toggle = screen.getByRole('button', { name: 'Show full question' });
+    fireEvent.click(toggle);
+    expect(screen.getByText(/Something the parse missed/)).toBeInTheDocument();
+
+    // The LEGEND names the destination, like every other toggle in this app.
+    fireEvent.click(screen.getByRole('button', { name: 'Hide full question' }));
+    expect(screen.queryByText(/Something the parse missed/)).toBeNull();
   });
 });

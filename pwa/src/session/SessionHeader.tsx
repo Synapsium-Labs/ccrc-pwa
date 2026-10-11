@@ -14,17 +14,20 @@ import {
   substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { StatusDot } from '../components/StatusDot';
+import {
+  BackButton, Chip, Keycap, ListRow, Sheet, StatusDot, TypedLabel, cn, elapsedShort, statusLabel, useNow,
+} from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
-import { useNow } from '../lib/useNow';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { TypedLabel } from '../fleet/TypedLabel';
+// main's TypedLabel import is dropped, not lost: the component lives in
+// @ccrc/ui now and the line above already carries it.
 import { isPutAway, restoreReachesEnsure } from '../fleet/ArchiveSheet';
 import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
+import { substrateFaultText } from '../fleet/substrateWords';
+import { chipTone, metaChipTone } from './chipTones';
 
 export interface SessionHeaderProps {
   session: FleetSession | null;
@@ -83,15 +86,50 @@ function clock(elapsedMs: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
-/** '2m' | '3h' | '5d' — null under a minute (callers phrase that case). */
-function relShort(now: number, then: number | null): string | null {
-  if (then === null) return null;
-  const minutes = Math.floor(Math.max(0, now - then) / 60_000);
-  if (minutes < 1) return null;
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+/** '2m' | '3h' | '5d' — `elapsedShort`'s own ladder, and `null` under a
+ *  minute because this header's sentences phrase that case themselves
+ *  ("working…", "idle"). A FOURTH copy of those four lines lived here: the
+ *  fold that collected `SessionLine`'s, `lifecycleWords`' and `PrKeycap`'s
+ *  missed it, because this one took `(now, then)` rather than a span and so
+ *  matched no signature the census was looking for. */
+const relShort = (now: number, then: number | null): string | null =>
+  then === null ? null : elapsedShort(now - then);
+
+/** One row of the session menu: a label, and — for the three that answer a
+ *  slash command — the command itself, dimmed, read by nobody.
+ *
+ *  SIX CALL SITES in this file and nowhere else, which is why it lives here
+ *  rather than in `@ccrc/ui`: a menu row that knows a hint is a slash command
+ *  is this app's idea, and three of these rows carry a substrate gate whose
+ *  reasons are argued at the call sites below. The markup census named the
+ *  three with hints; the three without are the same row with one child.
+ *
+ *  `aria-hidden` on the hint is deliberate and was already: the label is the
+ *  accessible name, and "/model" read aloud after it is noise. */
+function MenuItem(
+  { label, hint, className, disabled, title, onClick }: {
+    label: string;
+    /** A NODE, not a string, and `server/test/no-routing-keystroke-from-server.test.ts`
+     *  is why. Two of these hints ARE the slash commands, and that census
+     *  refuses a quote immediately before `/effort` or `/model` anywhere under
+     *  `pwa/src` — the record is the arbiter and ccd is the one typer, so a
+     *  routing keystroke must not exist as a string literal in this app even
+     *  as a label. The original markup said them as JSX text; so do the call
+     *  sites below. Measured: as `hint="/model"` the guard went red naming
+     *  both lines. */
+    hint?: ReactNode;
+    className?: string;
+    disabled?: boolean;
+    title?: string;
+    onClick: () => void;
+  },
+): ReactNode {
+  return (
+    <ListRow className={cn('menu-item', className)} disabled={disabled} title={title} onClick={onClick}>
+      <span className="menu-label">{label}</span>
+      {hint !== undefined && <span className="menu-hint" aria-hidden="true">{hint}</span>}
+    </ListRow>
+  );
 }
 
 export function SessionHeader({
@@ -204,13 +242,15 @@ export function SessionHeader({
             ? rel
               ? `idle · ${rel} ago`
               : 'idle'
-            : bucket === 'cleanup'
-              ? 'merged, ready to clean up'
-              : bucket === 'archived'
-                ? 'archived'
-                : bucket === 'dead'
-                  ? 'not running'
-                  : '';
+            // THE THREE THAT ARE NOT COMPOSED take `StatusDot`'s own word
+            // (`statusLabel`, @ccrc/ui) rather than a second copy of it: the
+            // literal census found `merged, ready to clean up` written out
+            // here AND in the lamp's map. `done` and `idle` above stay spelled
+            // here, because this header composes them with an age the lamp
+            // knows nothing about.
+            : bucket === 'cleanup' || bucket === 'archived' || bucket === 'dead'
+              ? statusLabel(bucket)
+              : '';
   // Four tints for seven buckets, on purpose: `status-line--*` is the existing,
   // contrast-verified set (chat.css) and the glyph already carries the
   // distinction colour must not carry alone. done/cleanup/archived take idle's
@@ -221,13 +261,15 @@ export function SessionHeader({
   // The substrate gate (spec §4): under a standing fault the console cannot
   // SEE this session, so Archive (and a main checkout's Restore) — an offer to act on a pane nobody can measure
   // — refuses, disabled with the reason on `title` (the PrSheet idiom; the
-  // string is SessionLine's chip's own `tmux unreachable — <reason>`, never a
-  // second copy). Read through `substrateFault`: the live frame is cast, not
+  // string is `substrateFaultText`, the chip's own `tmux unreachable —
+  // <reason>`. THIS COMMENT USED TO END "never a second copy" over a line that
+  // spelled the sentence out — one of seven that did; the words live in
+  // `substrateWords.ts` now). Read through `substrateFault`: the frame is cast, not
   // revived, so an older server's row lacks the key at runtime. Interrupt
   // (esc) stays ungated — it targets the turn, not the substrate, and is not
   // on the spec's destructive list.
   const fault = session === null ? null : substrateFault(session);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = fault === null ? undefined : substrateFaultText(fault);
 
   // The project is the ground; the second crumb is this particular workspace.
   // Without it, two workspaces of one project produce two identical headers.
@@ -252,9 +294,9 @@ export function SessionHeader({
 
   return (
     <header className="chat-head">
-      <button type="button" className="chat-back" aria-label="Back to fleet" onClick={onBack}>
+      <BackButton className="chat-back" aria-label="Back to fleet" onClick={onBack}>
         ‹
-      </button>
+      </BackButton>
       <div className="chat-title-wrap">
         <h1 className="chat-title">
           {title}
@@ -275,23 +317,22 @@ export function SessionHeader({
             </>
           )}
           {wrapper !== '' && (
-            <span className="chip chip--active">
-              <i aria-hidden="true" />
+            <Chip dot className={chipTone('active')}>
               {accountLabel(roster, wrapper)}
-            </span>
+            </Chip>
           )}
           {repo !== null && (
-            <span className="chip chip--repo" title="repository">
+            <Chip className={chipTone('repo')} title="repository">
               {repo}
-            </span>
+            </Chip>
           )}
           {/* Derived from archivedAt, never from pr.phase — merging archives
               nothing, so a merged PR sits on a live workspace until a human
               archives it, and must not claim the chip meanwhile. */}
           {session?.archivedAt != null && (
-            <span className="chip chip--archived">
+            <Chip className={chipTone('archived')}>
               archived{session.pr?.number != null ? ` · merged #${session.pr.number}` : ''}
-            </span>
+            </Chip>
           )}
           {/* Status, account, model, effort and branch share ONE wrapping row —
               two fixed rows cost a line of chat height on every screen to say
@@ -299,7 +340,7 @@ export function SessionHeader({
           {hasMeta && (
             <>
               {model !== null ? (
-              <button type="button" className="metachip metachip--model" onClick={onChangeModel}>
+              <button type="button" className={metaChipTone('model')} onClick={onChangeModel}>
                 <span className="metachip-glyph" aria-hidden="true">🤖</span>
                 <span className="metachip-text">{model}</span>
                 {queuedField === 'class' && <span className="route-queued">queued</span>}
@@ -315,14 +356,14 @@ export function SessionHeader({
             )}
             <button
               type="button"
-              className={ultracode ? 'metachip metachip--ultra' : 'metachip'}
+              className={metaChipTone(ultracode ? 'ultra' : 'plain')}
               onClick={onChangeEffort}
             >
               <span className="metachip-text">{ultracode ? 'ultracode' : (effort ?? 'set effort')}</span>
               {queuedField === 'effort' && <span className="route-queued">queued</span>}
             </button>
             {branch !== null && !branchDuplicatesCrumb && (
-              <span className="metachip metachip--branch" title={branch}>
+              <span className={metaChipTone('branch')} title={branch}>
                 <span className="metachip-glyph" aria-hidden="true">⎇</span>
                 <span className="metachip-text">{branch}</span>
               </span>
@@ -331,22 +372,12 @@ export function SessionHeader({
           )}
         </div>
       </div>
-      <button
-        type="button"
-        className="keycap keycap--term"
-        aria-label="Terminal"
-        onClick={onOpenTerminal}
-      >
+      <Keycap className="keycap--term" aria-label="Terminal" onClick={onOpenTerminal}>
         <span aria-hidden="true">&gt;_</span>
-      </button>
-      <button
-        type="button"
-        className="keycap keycap--more"
-        aria-label="More"
-        onClick={() => setMenuOpen(true)}
-      >
+      </Keycap>
+      <Keycap className="keycap--more" aria-label="More" onClick={() => setMenuOpen(true)}>
         <span aria-hidden="true">⋯</span>
-      </button>
+      </Keycap>
       {/* Top right, to the right of the ···. `esc` keeps the OUTER edge because
           it is the interrupt and its position is muscle memory; on a fine
           pointer esc is absent and this becomes rightmost naturally. */}
@@ -354,75 +385,46 @@ export function SessionHeader({
         <PrKeycap pr={session.pr} onOpen={() => setPrOpen(true)} />
       )}
       {!finePointer && (
-        <button
-          type="button"
-          className="keycap keycap--esc"
-          aria-label="Stop"
-          disabled={!busy}
-          onClick={onInterrupt}
-        >
+        <Keycap className="keycap--esc" aria-label="Stop" disabled={!busy} onClick={onInterrupt}>
           esc
-        </button>
+        </Keycap>
       )}
 
       <Sheet open={menuOpen} onClose={() => setMenuOpen(false)} eyebrow="session" title={title}>
         <div className="menu">
-          <button type="button" className="menu-item" onClick={() => menuAct(onChangeModel)}>
-            <span className="menu-label">Change model</span>
-            <span className="menu-hint" aria-hidden="true">
-              /model
-            </span>
-          </button>
-          <button type="button" className="menu-item" onClick={() => menuAct(onChangeEffort)}>
-            <span className="menu-label">Change effort</span>
-            <span className="menu-hint" aria-hidden="true">
-              /effort
-            </span>
-          </button>
-          <button type="button" className="menu-item" onClick={() => menuAct(onOpenHistory)}>
-            <span className="menu-label">History</span>
-            <span className="menu-hint" aria-hidden="true">
-              journal
-            </span>
-          </button>
-          <button
-            type="button"
-            className="menu-item"
+          <MenuItem label="Change model" hint={<>/model</>} onClick={() => menuAct(onChangeModel)} />
+          <MenuItem label="Change effort" hint={<>/effort</>} onClick={() => menuAct(onChangeEffort)} />
+          <MenuItem label="History" hint="journal" onClick={() => menuAct(onOpenHistory)} />
+          {/* Gated like Archive below (branch review): this item opens the SAME
+              SwapSheet as the actions sheet's gated opener, and SwapSheet's
+              confirm fires api.swap with no substrate check of its own — so
+              an ungated door here was a swap reachable with no gate anywhere. */}
+          <MenuItem
+            label="Move to another account"
             disabled={fault !== null}
             title={faultTitle}
             onClick={() => menuAct(onMoveAccount)}
-          >
-            {/* Gated like Archive below (branch review): this item opens the SAME
-                SwapSheet as the actions sheet's gated opener, and SwapSheet's
-                confirm fires api.swap with no substrate check of its own — so
-                an ungated door here was a swap reachable with no gate anywhere. */}
-            <span className="menu-label">Move to another account</span>
-          </button>
+          />
           {/* Archive for every session, Restore for one already put away (workspace lifecycle §5.2) — never both.
               Archive is gated like Move above: it ends the pane. It needs the row to choose its words, so a deep
               link that has not seen its first frame yet offers it disabled. Restore is gated exactly where it IS
               Restart's request (`restoreReachesEnsure`: a main checkout posts `/ensure`); a workspace's `ws-restore`
               is a different verb and stays ungated, as in the actions sheet. */}
           {session !== null && isPutAway(session) ? (
-            <button
-              type="button"
-              className="menu-item"
+            <MenuItem
+              label="Restore"
               disabled={fault !== null && restoreReachesEnsure(session)}
               title={restoreReachesEnsure(session) ? faultTitle : undefined}
               onClick={() => menuAct(onRestore)}
-            >
-              <span className="menu-label">Restore</span>
-            </button>
+            />
           ) : (
-            <button
-              type="button"
-              className="menu-item menu-item--danger"
+            <MenuItem
+              label="Archive"
+              className="menu-item--danger"
               disabled={fault !== null || session === null}
               title={faultTitle}
               onClick={() => menuAct(onArchive)}
-            >
-              <span className="menu-label">Archive</span>
-            </button>
+            />
           )}
         </div>
       </Sheet>

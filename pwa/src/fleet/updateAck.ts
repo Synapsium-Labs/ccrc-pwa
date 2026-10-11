@@ -9,7 +9,7 @@
 // updateErrorText's sentence. The caller re-polls either way.
 import type { NodeWire, ReleaseWire } from '../../../shared/api';
 import { SETTLED_UPDATE_STATES } from '../../../shared/api';
-import { toast } from '../components/Toast';
+import { toast } from '@ccrc/ui';
 import { ApiError, api, updateErrorText } from '../lib/api';
 
 export const ACK_UNREADABLE_TEXT = "Acknowledged — the server's answer could not be read; the screen will re-check.";

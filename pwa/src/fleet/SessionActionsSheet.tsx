@@ -15,33 +15,15 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
-import { api, ApiError, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
+import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { api, failedTo } from '../lib/api';
 
-/**
- * D-2731. The hold route is the one caller here whose refusal carries a sentence
- * the operator can ACT on: `oversize` arrives with `limit` and a `detail` saying
- * the reason is written verbatim and refused rather than shortened.
- * `apiErrorText` has no entry for `oversize` — and must not grow one, since the
- * kickoff translator already owns that slug with a different sentence — so
- * without this reader the toast read `Couldn't hold — oversize`, which narrows a
- * distinction the server took care to send. Surface-local for exactly that
- * reason: the same slug means two things at two seams.
- */
-const holdErrorText = (err: unknown): string => {
-  const body: unknown = err instanceof ApiError ? err.body : null;
-  if (body !== null && typeof body === 'object') {
-    const { error, detail } = body as { error?: unknown; detail?: unknown };
-    if (error === 'oversize' && typeof detail === 'string') return detail;
-  }
-  return apiErrorText(err);
-};
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
+import { substrateFaultText, substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
+import { HoldControl } from './HoldControl';
 import { ArchiveSheet, isPutAway, restoreReachesEnsure, restoreSession } from './ArchiveSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
@@ -101,16 +83,8 @@ export function SessionActionsSheet({
   /** The one Archive's sheet (workspace lifecycle §5.2) is open over this one. It hosts every refusal the archive
    *  door can answer — the `run-open` claim this sheet used to hold as `conflict` among them. */
   const [archiveOpen, setArchiveOpen] = useState(false);
-  // Hold's reason composer — open/closed, the typed text, and a refusal the
-  // empty-reason check leaves behind. `holdBusy` is separate from `archBusy`:
-  // the two actions are mutually exclusive on screen (never-both, see the
-  // buttons below) but nothing enforces that FOR the busy flags themselves,
-  // and sharing one would freeze Hold's own disabled state on an unrelated
-  // Restore in flight (`archBusy` covers Restore only now; Archive's busy state lives in `ArchiveSheet`).
-  const [holdOpen, setHoldOpen] = useState(false);
-  const [holdReason, setHoldReason] = useState('');
-  const [holdError, setHoldError] = useState<string | null>(null);
-  const [holdBusy, setHoldBusy] = useState(false);
+  // Hold's composer is `HoldControl`'s own — state, send and refusal reader
+  // together, including the reset this effect used to carry for it.
   // Release's consequence confirm — a QuickConfirm sibling, same shape as
   // SwapSheet's `target`, open only once Release names what it does. No busy
   // flag: like SwapSheet's `move()`, the confirm tap already WAS the
@@ -152,9 +126,6 @@ export function SessionActionsSheet({
   // Workspace lifecycle §5.2 moved that claim into `ArchiveSheet`, which resets
   // itself on the same two changes; `archiveOpen` takes its place here.
   useEffect(() => {
-    setHoldOpen(false);
-    setHoldReason('');
-    setHoldError(null);
     setReleaseConfirmOpen(false);
     setForgetConfirmOpen(false);
     setArchiveOpen(false);
@@ -172,7 +143,7 @@ export function SessionActionsSheet({
   // `faultTitle` is THE chip's own string (`SessionLine`'s `.sess-substrate`),
   // never a second copy of the reason.
   const fault = substrateFault(session);
-  const faultTitle = fault !== null ? `tmux unreachable — ${fault.text}` : undefined;
+  const faultTitle = substrateFaultTitle(session);
 
   const restart = async (): Promise<void> => {
     if (restarting) return;
@@ -184,7 +155,7 @@ export function SessionActionsSheet({
       // apiErrorText, never err.message: the runCcd routes fail as
       // 502 { ok, stderr } with no `error` key, so err.message yields the
       // generic "request failed (502)" and ccd's refusal never reaches anyone.
-      toast(`Couldn't restart — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('restart', err), 'error');
     } finally {
       setRestarting(false);
     }
@@ -200,7 +171,7 @@ export function SessionActionsSheet({
       await restoreSession(session);
       onClose();
     } catch (err) {
-      toast(`Couldn't restore — ${apiErrorText(err)}`, 'error');
+      toast(failedTo('restore', err), 'error');
     } finally {
       setArchBusy(false);
     }
@@ -214,44 +185,17 @@ export function SessionActionsSheet({
     // fleet frame updates live under the open sheets. `ArchiveSheet` disables the button on the same fault.
     const stopFault = substrateFault(session);
     if (stopFault !== null) {
-      toast(`Couldn't stop — tmux unreachable — ${stopFault.text}`, 'error');
+      toast(`Couldn't stop — ${substrateFaultText(stopFault)}`, 'error');
       return;
     }
     void (async () => {
       try {
         await api.stop(id);
       } catch (err) {
-        toast(`Couldn't stop — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('stop', err), 'error');
       }
     })();
     onClose();
-  };
-
-  // Empty reason refuses CLIENT-SIDE, before `api.hold` is ever called —
-  // ccd's own sentence (`HOLD_EMPTY_REASON_TEXT`), inline in the composer
-  // rather than a toast, so it reads next to the box that needs fixing
-  // instead of a separate surface the operator has to correlate back to it.
-  // The server re-checks the identical rule (a client is not where trust
-  // ends), so this is a UX shortcut, not the enforcement.
-  const confirmHold = async (): Promise<void> => {
-    const reason = holdReason.trim();
-    if (reason === '') {
-      setHoldError(HOLD_EMPTY_REASON_TEXT);
-      return;
-    }
-    if (holdBusy) return;
-    setHoldBusy(true);
-    setHoldError(null);
-    try {
-      await api.hold(session.id, reason);
-      setHoldOpen(false);
-      setHoldReason('');
-      onClose();
-    } catch (err) {
-      toast(`Couldn't hold — ${holdErrorText(err)}`, 'error');
-    } finally {
-      setHoldBusy(false);
-    }
   };
 
   // Fire-and-forget, same shape as SwapSheet's `move()`: QuickConfirm's own
@@ -263,7 +207,7 @@ export function SessionActionsSheet({
       try {
         await api.release(session.id);
       } catch (err) {
-        toast(`Couldn't release — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('release', err), 'error');
       }
     })();
     onClose();
@@ -280,7 +224,7 @@ export function SessionActionsSheet({
       try {
         await api.forget(session.id);
       } catch (err) {
-        toast(`Couldn't forget — ${apiErrorText(err)}`, 'error');
+        toast(failedTo('forget', err), 'error');
       }
     })();
     onClose();
@@ -300,10 +244,10 @@ export function SessionActionsSheet({
     <>
       <Sheet open={open} onClose={onClose} title={label} eyebrow={session.project}>
         <div className="sess-sheet">
-          <button type="button" className="btn-ghost" onClick={() => void restart()}
+          <Button variant="ghost" onClick={() => void restart()}
                   disabled={restarting || fault !== null} title={faultTitle}>
             {restarting ? 'Restarting…' : 'Restart session'}
-          </button>
+          </Button>
 
           {/* §4.4: "what would revive it" is a sentence the row can print and
               a button the operator already has. The button above posts
@@ -405,26 +349,33 @@ export function SessionActionsSheet({
             </p>
           )}
 
-          <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}
+          <Button variant="ghost" onClick={() => setSwapOpen(true)}
                   disabled={fault !== null} title={faultTitle}>
             Swap account
-          </button>
+          </Button>
 
           {/* Every session offers Archive (spec §5.2) — a workspace and a main checkout alike; every row the
-              Archived fold holds offers Restore instead. Never both. */}
+              Archived fold holds offers Restore instead. Never both.
+
+              MERGE NOTE: main rewrote this block (the `putAway` fold, the
+              `restoreReachesEnsure` guard on the title, Archive opening a
+              confirm instead of acting). That LOGIC wins wholesale — the
+              design-system branch's only claim on these lines was the
+              primitive swap, so main's conditions are re-expressed through
+              `<Button variant="ghost">` rather than re-argued. */}
           {!putAway && (
-            <button type="button" className="btn-ghost" disabled={fault !== null}
+            <Button variant="ghost" disabled={fault !== null}
                     title={faultTitle} onClick={() => setArchiveOpen(true)}>
               Archive
-            </button>
+            </Button>
           )}
           {putAway && (
-            <button type="button" className="btn-ghost"
+            <Button variant="ghost"
                     disabled={archBusy || (fault !== null && restoreReachesEnsure(session))}
                     title={restoreReachesEnsure(session) ? faultTitle : undefined}
                     onClick={() => void restoreNow()}>
               {archBusy ? 'Restoring…' : 'Restore'}
-            </button>
+            </Button>
           )}
 
           {/* Hold/Release — workspace-only and archived refuses too, the same
@@ -442,51 +393,15 @@ export function SessionActionsSheet({
               ever on screen for this row, "tap Hold, submit empty" needs no
               disambiguation between two same-named buttons. */}
           {session.workspace !== null && session.archivedAt === null
-            && session.held === null && !holdOpen && (
-            <button type="button" className="btn-ghost"
-                    onClick={() => { setHoldOpen(true); setHoldError(null); }}>
-              Hold
-            </button>
-          )}
-          {session.workspace !== null && session.archivedAt === null
-            && session.held === null && holdOpen && (
-            <div className="sess-hold-form">
-              <input
-                type="text"
-                className="sess-hold-input"
-                placeholder="program:name wave:2/4"
-                aria-label="Hold reason"
-                value={holdReason}
-                /* The refusal clears on the FIRST keystroke, not on the next
-                   Confirm: it was only ever cleared inside `confirmHold`
-                   AFTER the non-empty check passed, so "empty reason — say
-                   which program holds this" sat under a box with a perfectly
-                   good reason typed into it until the operator submitted
-                   again. An error that outlives its cause reads as a refusal
-                   of what is on screen now. */
-                onChange={(e) => { setHoldReason(e.target.value); setHoldError(null); }}
-                autoFocus
-              />
-              {/* Client-side refusal, ccd's own sentence — see `confirmHold`. */}
-              {holdError !== null && <p className="sess-hold-error">{holdError}</p>}
-              <div className="sess-hold-actions">
-                <button type="button" className="btn-primary" disabled={holdBusy}
-                        onClick={() => void confirmHold()}>
-                  {holdBusy ? 'Holding…' : 'Confirm'}
-                </button>
-                <button type="button" className="btn-ghost"
-                        onClick={() => { setHoldOpen(false); setHoldReason(''); setHoldError(null); }}>
-                  Cancel
-                </button>
-              </div>
-            </div>
+            && session.held === null && (
+            <HoldControl session={session} sheetOpen={open} onHeld={onClose} />
           )}
 
           {session.held !== null && (
             <>
-              <button type="button" className="btn-ghost" onClick={() => setReleaseConfirmOpen(true)}>
+              <Button variant="ghost" onClick={() => setReleaseConfirmOpen(true)}>
                 Release
-              </button>
+              </Button>
               {/* The reason is already the fleet chip's whole job (SessionLine's
                   `.sess-held`) — repeated here because the actions sheet is
                   where Release's consequence lives, and the reason belongs
@@ -500,11 +415,11 @@ export function SessionActionsSheet({
               this opens refuses `not-archived` anyway — offering it earlier
               would just be a button that always refuses. */}
           {session.workspace !== null && session.archivedAt !== null && (
-            <button type="button" className="btn-ghost sess-sheet-remove"
+            <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => onReap(session.id)}>
               Clean up workspace…
-            </button>
+            </Button>
           )}
 
           {/* The end-of-life a non-workspace session never had: stop leaves
@@ -515,11 +430,11 @@ export function SessionActionsSheet({
               state and goes through the audited sheet above. ccd re-proves
               both gates (and the hold) on the box. */}
           {session.workspace === null && session.status === 'dead' && (
-            <button type="button" className="btn-ghost sess-sheet-remove"
+            <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => setForgetConfirmOpen(true)}>
               Forget session…
-            </button>
+            </Button>
           )}
 
           {session.status !== 'dead' && session.wrapper !== session.home && (

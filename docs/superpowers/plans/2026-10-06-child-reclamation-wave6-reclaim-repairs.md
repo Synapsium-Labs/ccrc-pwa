@@ -9651,3 +9651,13 @@ Numbers are ISSUED, never chosen. Wave 6's block was allocated at run 291's open
     reclaim side's reader is wave 7's collector. Both parsers, `parseChildReclaimResult` and `parseExpireResult`, read
     named keys only, so the keys are safe to ship agent-first. The journal's `meas` keeps its own rule and omits a key
     when nothing was kept.
+
+## Design
+
+**Posture:** none
+
+The wave repairs what a destructive ccd verb deletes. `RunsScreen` renders an existing chip against repaired facts.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

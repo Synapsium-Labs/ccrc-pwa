@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 import { swDenylist } from './src/lib/sw-denylist.js';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -6,6 +7,55 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vite.dev/config/
 export default defineConfig({
+  // ONE REACT, ALWAYS.
+  //
+  // @ccrc/ui is consumed as SOURCE from a sibling folder and keeps its own
+  // react/react-dom/vaul so Storybook can run standalone. Node resolves a bare
+  // import from the IMPORTER outward, so ui/src/primitives/sheet.tsx — and vaul
+  // and radix beneath it — all find ui/node_modules/react long before they
+  // reach this package. Two React instances (19.3.0 there, 19.2.7 here), and
+  // every hook the sheet calls throws "Invalid hook call".
+  //
+  // `dedupe` alone does NOT fix it: dedupe picks one copy among the candidates
+  // the resolver already offers, and ui's copy is simply found first. These
+  // aliases are absolute and unconditional, so there is only ever one
+  // candidate. vaul is aliased too — otherwise it loads from ui's tree and
+  // drags ui's radix, and therefore ui's react, back in behind it.
+  //
+  // react-dom is listed BEFORE react because vite matches alias keys by prefix
+  // in insertion order, and 'react-dom' starts with 'react'.
+  //
+  // EVERY REACT-CALLING PACKAGE ui DEPENDS ON BELONGS IN ALL THREE LISTS
+  // (dedupe, alias, and `test.server.deps.inline` below). framer-motion joined
+  // when the composites migrated: `ToolCard` renders `motion`/`AnimatePresence`,
+  // so it reaches react through framer-motion's copy exactly as the sheet
+  // reaches it through vaul's. (NOT because of reduced motion — ui has its own
+  // `usePrefersReducedMotion` precisely so that branch needs no framer import.)
+  // Adding a ui dependency without adding it here fails only under test, and
+  // fails as "Invalid hook call" — which reads like a bug in the component
+  // rather than a second React.
+  resolve: {
+    dedupe: ['react', 'react-dom', 'vaul', 'framer-motion'],
+    alias: {
+      // `@/…` RESOLVES INTO `@ccrc/ui`'s SOURCE, not into pwa's. shadcn's CLI
+      // writes `@/lib/utils`-style imports into whatever `components.json`
+      // points at, and `components.json` lives in `ui/` because that is where
+      // a pasted component belongs. pwa compiles ui's source directly
+      // (`exports['.']` is `src/index.ts`), so pwa's bundler has to resolve
+      // the alias too or the pasted file builds nowhere.
+      //
+      // ONE MEANING, THREE RESOLVERS: this alias, `ui/vite.config.ts`'s, and
+      // `ui/tsconfig.json`'s `paths`. `pwa/test/shadcn-alias.test.ts` pins
+      // that the three agree — the same seam `shared/models`' twins taught
+      // this branch, where `tsc` and the bundle read different files and the
+      // type check passed on a binding that was `undefined` at runtime.
+      '@': fileURLToPath(new URL('../ui/src', import.meta.url)),
+      'react-dom': fileURLToPath(new URL('./node_modules/react-dom', import.meta.url)),
+      react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
+      vaul: fileURLToPath(new URL('./node_modules/vaul', import.meta.url)),
+      'framer-motion': fileURLToPath(new URL('./node_modules/framer-motion', import.meta.url)),
+    },
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -89,5 +139,12 @@ export default defineConfig({
     // runtime, so without this the only thing that catches a revert is a
     // separate `tsc --noEmit` nobody is obliged to run.
     typecheck: { enabled: true },
+    // Vitest externalises anything under node_modules and lets NODE resolve it,
+    // which walks past `resolve.alias` entirely. vaul then loads
+    // ui/node_modules/react and every sheet test dies on a second React
+    // instance. Inlining routes both through vite's pipeline, where the alias
+    // above applies. The app BUILD never needed this — it bundles everything,
+    // so the alias already held there.
+    server: { deps: { inline: [/node_modules\/(vaul|@radix-ui|framer-motion)\//, '@ccrc/ui'] } },
   },
 });

@@ -25,7 +25,25 @@
 import { audit, contrast, resolveColor } from './audit.mjs';
 
 const report = audit();
-const { DARK, LIGHT } = report.themes;
+const { DARK, LIGHT, byName } = report.themes;
+
+/** EVERY palette, for the token-pair half too.
+ *
+ *  This half used to run for DARK and LIGHT alone while the stylesheet half
+ *  already looped every palette — so the gate's own headline count grew with
+ *  each new theme and looked like coverage. It was not. The token pairs are
+ *  the DEFENSIVE floors: combinations the design system promises to hold
+ *  wherever they are used, including where no rule uses them yet. Skipping
+ *  them for ten palettes meant skipping exactly the checks that have no
+ *  stylesheet to catch them.
+ *
+ *  Measured when this was fixed: three light palettes had shipped
+ *  `--status-busy`, `--status-attention` and `--status-dead` as #000000 —
+ *  pure black status dots, hue gone, the two-cue rule broken — and the gate
+ *  printed ALL PASS, because no rule pairs a raw dot token against the well,
+ *  only this contract does. */
+const ALL_PALETTES = [['DARK ', DARK], ...Object.entries(byName)
+  .map(([n, t]) => [n.toUpperCase(), t])];
 
 /** A token pair is named by its tokens.css custom property; the hex is looked
  *  up per theme, so there is no second copy of the palette to keep in sync. */
@@ -81,6 +99,14 @@ const pairs = (T, name) => [
   // other raised+edge-subtle affordance in this file (.proj-search,
   // .account-gauge, .notice, .acct-list .acct-row) is exempt for the same
   // reason tokens.css gives hairlines: "decorative — no contrast claim".
+  // The back chevron on every detail screen. @ccrc/ui's `BackButton` paints
+  // --ink-secondary and grounds on body's --bg-page, through a .shell-detail /
+  // .*-head / .*-screen chain that paints nothing. FIVE stylesheet rules said
+  // this before; only `.settings-back` was ever measured (an INHERITED_GROUNDS
+  // entry whose own `why:` called the other four "grandfathered debt"), so
+  // stating it once here measures four rules that nothing measured before.
+  // Also `.settings-title`'s <h1> and the `···` glyph, same ink, same ground.
+  [`${name} ink-secondary / page`, T.inkS, T.page, 4.5],
   [`${name} ink-secondary / raised`, T.inkS, T.raised, 4.5],
   [`${name} ink-secondary / sheet`, T.inkS, T.sheet, 4.5],
   [`${name} ink-tertiary / surface`, T.inkT, T.surface, 4.5],
@@ -174,8 +200,15 @@ const pairs = (T, name) => [
   [`${name} limit ok / track (UI 3:1)`, T.lOk, T.track, 3],
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
+  // THE FOURTH BAND IS DELIBERATELY ABSENT FROM THIS CONTRACT. `off` measures
+  // 1.02-1.10 against the track in all twelve palettes — it is not a quiet
+  // fill, it is an invisible one. That is a PRESERVED defect, not an accepted
+  // floor: stating it here as a pair would red the gate for a pixel this
+  // branch is not allowed to change. It is pinned instead by
+  // `pwa/test/limit-off-band.test.ts`, which measures the same numbers and
+  // reds if they move in either direction.
   // The ask sheet's two accent-on-quiet-ground texts. Both are 11px
-  // (--text-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
+  // (--fs-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
   [`${name} ask header chip / accent-tint`, T.accent, T.accentTint, 4.5],
   [`${name} preview toggle / sheet`, T.accent, T.sheet, 4.5],
   [`${name} diff-add / well`, T.diffAdd, T.well, 4.5],
@@ -184,7 +217,7 @@ const pairs = (T, name) => [
   // light one is tuned for paper, so on a well — which is dark in BOTH themes —
   // it read 3.03:1 and shipped that way. --accent-on-well is the well spelling
   // of the accent; both floors are the 4.5 body floor because the label is 11px
-  // (--text-2xs), not a glyph. Two grounds, because the affordance is on the
+  // (--fs-2xs), not a glyph. Two grounds, because the affordance is on the
   // BAR and the bar is on the well.
   [`${name} accent-on-well / well`, T.accentOnWell, T.well, 4.5],
   [`${name} accent focus ring / page (UI 3:1)`, T.accent, T.page, 3],
@@ -200,12 +233,28 @@ const pairs = (T, name) => [
   // would redden the gate for a state that cannot occur — the plate is what
   // they actually sit on.
   [`${name} selected-row meta ink / slab`, T.edgeStrong, T.inkP, 4.5],
+
+  // A GHOST BUTTON'S LABEL ON A TINTED BANNER. Button's ghost variant paints
+  // its own --ink-primary and its background is transparent, so it is neither
+  // self-grounded (utility-pairs.test.ts derives bg+text on ONE element) nor
+  // visible to the stylesheet scan (it writes no rule). Both halves of the gate
+  // look straight past it.
+  //
+  // These two pairs WERE measured, by accident: chat.css carried
+  // `.chat-banner--dead .btn-ghost { color: var(--ink-primary) }` and a twin
+  // one banner over, each registered as an "undo" of the banner's own colour.
+  // They were undoing nothing — an element that declares its own colour never
+  // inherits one — so deleting them cost no pixels and 24 gate checks. Stated
+  // here instead, where the claim is the contract rather than a redundant rule
+  // nobody meant to rely on.
+  [`${name} ink-primary / dead banner tint`, T.inkP, T.deadTintSolid, 4.5],
+  [`${name} ink-primary / attention tint`, T.inkP, T.attTint, 4.5],
 ];
 
 let fail = 0, n = 0;
 
 console.log(`# token pairs — the design system's standing contract`);
-for (const [label, fg, bg, min] of [...pairs(palette(DARK), 'DARK '), ...pairs(palette(LIGHT), 'LIGHT')]) {
+for (const [label, fg, bg, min] of ALL_PALETTES.flatMap(([n, t]) => pairs(palette(t), n))) {
   const r = contrast(fg, bg);
   const ok = r >= min;
   if (!ok) fail++;

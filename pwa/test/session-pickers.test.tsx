@@ -13,8 +13,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession as baseSession } from './fleetFixture';
 import { SessionScreen } from '../src/screens/SessionScreen';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
@@ -68,22 +69,17 @@ const ID = 'claude:OpenClawHetzner';
 const fakeSocket = (): WebSocket =>
   ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket;
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
-  id: ID, wrapper: 'claude', home: 'claude', project: 'OpenClawHetzner',
-  workdir: '/root/projects/OpenClawHetzner', workspace: null, name: null,
-  status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
-  // Non-null model/effort — the header's model/effort chips only render at
-  // all once one of model/branch/effort/ultracode is truthy (`SessionHeader`'s
-  // `hasMeta`), and the `queued` badge for a field rides that field's own
-  // chip. `Sonnet 5`/`medium`, deliberately neither of the values these
-  // tests pick, so a tap is a real change to read back.
-  version: null, model: 'Sonnet 5', effort: 'medium', ultracode: false, branch: null,
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...patch,
-});
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession =>
+  baseSession({
+    id: ID, project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner',
+    // Non-null model/effort — the header's model/effort chips only render at
+    // all once one of model/branch/effort/ultracode is truthy (`SessionHeader`'s
+    // `hasMeta`), and the `queued` badge for a field rides that field's own
+    // chip. `Sonnet 5`/`medium`, deliberately neither of the values these
+    // tests pick, so a tap is a real change to read back.
+    model: 'Sonnet 5', effort: 'medium',
+    ...patch,
+  });
 
 const makeStore = (): SessionStore =>
   createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });

@@ -21,15 +21,41 @@ import type {
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_GATE_CAP } from '../../shared/api';
 import { LOOPBACK_HOSTS } from '../../shared/base-url';
 import {
-  ACK_UNREADABLE_TEXT, AUTO_LABELS, CHANNEL_SENTENCES, MACOS_UNMANAGED_TEXT, NOTIFY_LABELS, SettingsScreen,
-  UNARMED_EXPOSURE_TEXT, UNCONFIRMED_TEXT, autoGateMissing, canAck, catalogueLine, catalogueReasonText, clockTime,
-  currentIsAmber, currentText, dayClock, finishedLine, nodeStateLine, reachabilityLine, refusedLine, releaseDate,
-  releaseDirection, releaseRunningText, requestLine, resolveDetailLine, sortReleases, unarmedExposure, verifiedAt,
+  AUTO_LABELS,
+  autoGateMissing,
+  CHANNEL_SENTENCES,
+  NOTIFY_LABELS,
+  SettingsScreen,
+  UNARMED_EXPOSURE_TEXT,
+  unarmedExposure,
+  UNCONFIRMED_TEXT,
 } from '../src/screens/SettingsScreen';
+import {
+  ACK_UNREADABLE_TEXT,
+  canAck,
+  catalogueLine,
+  catalogueReasonText,
+  clockTime,
+  currentIsAmber,
+  currentText,
+  dayClock,
+  finishedLine,
+  MACOS_UNMANAGED_TEXT,
+  nodeStateLine,
+  reachabilityLine,
+  refusedLine,
+  releaseDate,
+  releaseDirection,
+  releaseRunningText,
+  requestLine,
+  resolveDetailLine,
+  sortReleases,
+  verifiedAt,
+} from '../src/screens/updates';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { ApiError, api, apiErrorText, updateErrorText } from '../src/lib/api';
-import { ToastHost } from '../src/components/Toast';
+import { buttonVariants, DOOR, RADIO_FIELDSET, RADIO_OPTION, ToastHost } from '@ccrc/ui';
 import { declValue, ruleIn } from './cssRule';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
@@ -59,8 +85,14 @@ describe('SettingsScreen — the shell', () => {
 
 describe('SettingsScreen — tap targets and the header door', () => {
   it('.settings-back is at least one tap square, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.settings-back'), 'min-height')).toBe('var(--tap-min)');
-    expect(declValue(ruleIn(fleetCss, '.settings-back'), 'min-width')).toBe('var(--tap-min)');
+    // `BackButton`'s floor, not this stylesheet's: all five back chevrons are
+    // one component, and `min-w-tap`/`min-h-tap` resolve through theme.css's
+    // `--spacing-tap: var(--tap-min)` (pinned by theme-bridge.test.ts).
+    const backButton = readFileSync(
+      path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'back-button.tsx'), 'utf8');
+    expect(backButton).toContain('min-h-tap');
+    expect(backButton).toContain('min-w-tap');
+    expect(backButton).not.toContain('44px');
   });
 
   it('.settings-back is the class the rendered back button carries', () => {
@@ -69,9 +101,13 @@ describe('SettingsScreen — tap targets and the header door', () => {
   });
 
   it('.settings-door is at least one tap tall, off the shared token', () => {
-    // The render half — a real element still carries the class — is the
-    // fleet-screen.test.tsx door case, where the door is mounted.
-    expect(declValue(ruleIn(fleetCss, '.settings-door'), 'min-height')).toBe('var(--tap-min)');
+    // The floor is @ccrc/ui's `Door` now, asserted against the EXPORTED
+    // constant rather than the source file — reading the file let a comment
+    // satisfy the identical guard written for `BackButton`, which the mutation
+    // table caught. The render half — a real element still carries the class —
+    // is the fleet-screen.test.tsx door case, where the door is mounted.
+    expect(DOOR).toContain('min-h-tap');
+    expect(DOOR).not.toContain('44px');
   });
 
   it('.settings-bell-row .bell is at least one tap square, off the shared token — the CONTROL, not just the row (F2)', () => {
@@ -593,9 +629,13 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
   });
 
   it('floors every option row at the tap target, keeps a fieldset shrinkable, and tints the amber line with the attention ink', () => {
+    // The first two moved from this sheet into `@ccrc/ui`'s `Radio`, with the
+    // rest of a skin that turned out to be entirely layout — so they are read
+    // off the component's class strings and the amber line, which PAINTS and
+    // stayed, is still read off the sheet.
     const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
-    expect(declValue(ruleIn(css, '.settings-option'), 'min-height')).toBe('var(--tap-min)');
-    expect(declValue(ruleIn(css, '.settings-fieldset'), 'min-width')).toBe('0');
+    expect(RADIO_OPTION.split(/\s+/)).toContain('min-h-tap');
+    expect(RADIO_FIELDSET.split(/\s+/)).toContain('min-w-0');
     expect(declValue(ruleIn(css, '.settings-catalogue--amber'), 'color')).toBe('var(--status-attention-text)');
   });
 });
@@ -1460,8 +1500,11 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
     expect(declValue(ruleIn(css, '.settings-node-current--amber'), 'color')).toBe('var(--status-attention-text)');
     expect(declValue(ruleIn(css, '.settings-node-label'), 'overflow-wrap')).toBe('anywhere');
-    // The row's three buttons carry Task 8's pair; its compound rule is what keeps them inline.
-    expect(declValue(ruleIn(css, '.btn-ghost.settings-move'), 'width')).toBe('auto');
+    // The row's buttons size to their label. That was `.btn-ghost.settings-move`
+    // in this sheet and is now Button's own `fit`, so the claim moves with it:
+    // asserted through the cva, and the rule is gone from fleet.css.
+    expect(buttonVariants({ variant: 'ghost', size: 'fit' })).toContain('w-auto');
+    expect(() => ruleIn(css, '.btn-ghost.settings-move')).toThrow();
   });
 
   // Wave 8 item F1 (D-3590): a node at its own floor, on the newest eligible release, renders the resolver's own

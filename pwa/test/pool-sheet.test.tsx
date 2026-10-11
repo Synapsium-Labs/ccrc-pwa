@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ProjectPoolWire, ProjectPoolsWire, RosterWire } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { ApiError, api } from '../src/lib/api';
 import { PoolSheet } from '../src/fleet/PoolSheet';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';

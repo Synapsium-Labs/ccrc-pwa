@@ -557,3 +557,68 @@ describe('shared/models.ts is TypeScript-facing over the single models.mjs imple
     expect(src, 'shared/models.mjs must spell MODEL_ID_RE exactly').toContain(`MODEL_ID_RE = ${LITERAL}`);
   });
 });
+
+// ── the twins' export surfaces, so tsc and the bundle cannot disagree ──────
+//
+// `shared/models` IS THREE FILES: `models.mjs` (the runtime), `models.d.mts`
+// (its hand-written types) and `models.ts` (the TypeScript-side module, which
+// re-exports the `.mjs` and declares `CLASSES`/`PROBE_KINDS` itself so
+// `ModelClass` can be a real union type).
+//
+// EVERY EXTENSION-LESS IMPORT RESOLVES DIFFERENTLY ON THE TWO SIDES. The PWA
+// writes `from '../../../shared/models'`; vite's extension order puts `.mjs`
+// before `.ts`, so the BUNDLE reads `models.mjs` — while `tsc` reads
+// `models.ts`. They have agreed so far because every value `models.ts`
+// declares of its own also exists in the `.mjs`.
+//
+// MEASURED, and this guard exists because it happened: a derived
+// `CLASSES_BY_CAPABILITY` was added to `models.ts` alone, to give two pickers
+// one spelling of `[...CLASSES].reverse()`. `tsc --noEmit` passed in both
+// packages. At runtime the binding was `undefined` and five tests died with
+// `Cannot read properties of undefined (reading 'map')` — visible only to the
+// tests that RENDER the two screens, and invisible to every type check,
+// stylesheet guard and census on this branch.
+//
+// So the dedup was reverted: the derivation cannot live in the `.ts` alone,
+// and putting it in all three files would be three copies of the very
+// expression it was deduplicating. What ships instead is this.
+//
+// MEASURED, two mutations (baseline 87 passed):
+//
+//   | that same derived export added to models.ts alone | 1 red, tsc exit 0 |
+//   | the file read returns an empty string             | 1 red             |
+//
+// The first row IS the guard: `tsc --noEmit` exits 0 on the mutation and this
+// goes red. That is the only order in which this seam can be caught before a
+// render.
+describe('shared/models: the .ts declares nothing the .mjs lacks', () => {
+  const read = (f: string): string =>
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared', f), 'utf8');
+
+  /** Value exports DECLARED in a file — `export const|function|class`. A
+   *  `export type`/`export interface` is erased and cannot be read at
+   *  runtime, so it is none of this test's business; a re-export (`export {
+   *  … } from './models.mjs'`) is by construction present in the `.mjs`. */
+  const declared = (src: string): string[] =>
+    [...src.matchAll(/^export (?:const|function|class) ([A-Za-z_$][\w$]*)/gm)]
+      .map((m) => m[1] ?? '').sort();
+
+  it('every value the .ts declares is also an export of the .mjs', () => {
+    const mjs = new Set(declared(read('models.mjs')));
+    const missing = declared(read('models.ts')).filter((n) => !mjs.has(n));
+    expect(
+      missing,
+      'this name exists for tsc and not for the bundle — an extension-less '
+      + "import of `shared/models` reads the .mjs at runtime, so add it there "
+      + '(and to models.d.mts) or do not declare it in the .ts',
+    ).toEqual([]);
+  });
+
+  it('reads both twins at all', () => {
+    // Without this the test above is green on two empty lists.
+    expect(declared(read('models.ts')).length).toBeGreaterThan(1);
+    expect(declared(read('models.mjs')).length).toBeGreaterThan(8);
+    expect(declared(read('models.ts'))).toContain('CLASSES');
+    expect(declared(read('models.mjs'))).toContain('CLASSES');
+  });
+});

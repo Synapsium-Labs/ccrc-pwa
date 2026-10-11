@@ -89,3 +89,19 @@ runs:
       shell: bash
       working-directory: pwa
       run: npm ci
+
+    # AND ui, because installing pwa is not enough. pwa consumes @ccrc/ui as
+    # SOURCE (`exports['.']` points at `src/index.ts`), so the tsc spawned
+    # against pwa/tsconfig.json reads `../ui/src/**` — and Node resolves a
+    # bare specifier from the IMPORTING file's directory, walking up from
+    # `ui/src/primitives/` to `ui/` and never into `pwa/node_modules`.
+    # Without this, every ui file reports "Cannot find module 'react'" and
+    # the assertion blames pwa for type errors it does not have: precisely
+    # the wrong-reason failure the step above was written to prevent, one
+    # package further out. Measured on PR #346, which went red here while a
+    # developer box stayed green — because `ui/node_modules` already existed
+    # there.
+    - name: Install ui dependencies (pwa consumes @ccrc/ui as source)
+      shell: bash
+      working-directory: ui
+      run: npm ci

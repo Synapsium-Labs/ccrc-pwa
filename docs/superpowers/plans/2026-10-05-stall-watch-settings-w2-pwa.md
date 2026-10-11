@@ -3798,3 +3798,13 @@ The release lane carries this wave, and nothing rolls a box by hand from here.
 4. Write nothing from here. Choosing a level or a quiet time is the operator's act, and so is any arming step the
    ledger's gates wait on.
 5. The coordinator records the merge and the release in the ledger, closes W2's run, and closes the programme.
+
+## Design
+
+**Posture:** offer
+
+A NEW Settings section with its own controls. New operator surface is exactly what a canvas is for.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

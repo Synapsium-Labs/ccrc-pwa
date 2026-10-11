@@ -15,7 +15,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Terminal } from '@xterm/xterm';
-import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, historyScrollback, historyFailureSentence, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import {
+  defaultMakeHistoryTerm, historyFailureSentence, historyScrollback, paintLag,
+  type DrawerTerm, type HistoryTerm,
+} from '../src/session/terminalFactory';
 import type { PaneHistoryReply } from '../../shared/api';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -159,7 +163,11 @@ const fakeTermFactory = () => {
  *  test can measure what the drawer does BEFORE the history has landed — which
  *  is the real xterm's behaviour (`write` parses asynchronously) and the shape
  *  the opening scroll got wrong. */
-const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
+const fakeHistoryFactory = (
+  // `rowHeight` is injectable because a terminal that has not painted yet
+  // reports ZERO, and the drag's re-measure is the arm that answers for it.
+  { defer = false, rowHeight }: { defer?: boolean; rowHeight?: () => number } = {},
+) => {
   const write = vi.fn<(data: string) => void>();
   const dispose = vi.fn<() => void>();
   const scrolled: number[] = [];
@@ -203,7 +211,7 @@ const fakeHistoryFactory = ({ defer = false }: { defer?: boolean } = {}) => {
           fits.push(fits.length + 1);
           return { cols: 48, rows: 20 };
         },
-        rowHeight: () => ROW_PX,
+        rowHeight: rowHeight ?? ((): number => ROW_PX),
         offset: (px: number) => {
           offsets.push(px);
         },
@@ -375,7 +383,7 @@ const ARROWS: [string, string][] = [
 /** An opened drawer on scripted doubles, with the socket's frames already
  *  cleared: every assertion below is about what the GESTURE put there, never
  *  about the attach that preceded it. */
-const mountDrawer = (histOpts?: { defer?: boolean; onClose?: () => void }) => {
+const mountDrawer = (histOpts?: { defer?: boolean; onClose?: () => void; rowHeight?: () => number }) => {
   const t = fakeTermFactory();
   const h = fakeHistoryFactory(histOpts);
   const view = render(
@@ -1962,8 +1970,13 @@ describe('a failed read says why, in a sentence', () => {
 // jsdom would pass for the wrong reason. What can go red is the call site
 // itself, and the arithmetic underneath it.
 describe('the transform credits rows that moved', () => {
+  // The FACTORY's file, not the drawer's: `defaultMakeHistoryTerm` and its
+  // `scrollLines` block moved to `terminalFactory.ts` when the drawer's two
+  // halves were separated. The read below throws rather than returning an
+  // empty match when the block is absent, which is how this landed as three
+  // honest reds instead of three silent passes.
   const drawerSrc = (): string =>
-    readFileSync(path.resolve(__dirname, '../src/session/TerminalDrawer.tsx'), 'utf8');
+    readFileSync(path.resolve(__dirname, '../src/session/terminalFactory.ts'), 'utf8');
 
   /** The history terminal's own `scrollLines`, as source. */
   const scrollLinesBody = (): string => {
@@ -2076,5 +2089,385 @@ describe('a read the reader abandoned stays gone', () => {
     await act(async () => { settle(json(200, OK_HISTORY)); await flush(); });
 
     expect(m.h.write, 'a read nobody abandoned failed to paint').toHaveBeenCalled();
+  });
+});
+
+// — the gesture's own guards, which every drag above walks past —
+//
+// Each of these answers a question about a terminal or a finger that is not
+// what the ordinary drag assumes: a row height of ZERO (nothing painted yet),
+// a move with no down (a pointer stream that began somewhere else), a finger
+// that RESTED before lifting, the pointer echo of a touch already counted,
+// and two fingers. Measured: statements 255, 257, 258, 300, 341, 345 and
+// branch 268#1 of `historyPane.ts` uncovered with this file 80/80 green.
+describe('the history drag, when the glass or the finger is not what a drag assumes', () => {
+  const openWith = async (histOpts?: Parameters<typeof mountDrawer>[0]) => {
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const m = mountDrawer(histOpts);
+    act(() => { m.t.wheel(-120); });
+    await waitFor(() => expect(m.h.write).toHaveBeenCalled());
+    return m;
+  };
+
+  it('a terminal that has not painted yet is re-measured on the first move, and the drag lands', async () => {
+    // `begin` reads the row height, and xterm reports 0 until it has laid a
+    // row out — a drawer dragged in the same frame it opened. Caching that
+    // zero would make the history immovable for the rest of the gesture; the
+    // re-measure on the first `step` is what makes the first drag work.
+    let painted = false;
+    const { h, view } = await openWith({ rowHeight: () => (painted ? ROW_PX : 0) });
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.pointerDown(el, { pointerId: 1, clientY: 0, isPrimary: true, button: 0 });
+    painted = true;                                    // xterm laid out a row
+    fireEvent.pointerMove(el, { pointerId: 1, clientY: 3 * ROW_PX, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: 3 * ROW_PX, isPrimary: true });
+
+    expect(h.scrolled, 'the re-measure never happened, so the drag moved nothing').toEqual([-3]);
+  });
+
+  it('a terminal that never reports a row height scrolls nothing, and does not throw', async () => {
+    // The degrade. Dividing by a zero row height is `Infinity` rows, which is
+    // a `scrollLines(Infinity)` into xterm — so the guard returns instead,
+    // leaving the view where it is.
+    const { h, view } = await openWith({ rowHeight: () => 0 });
+    h.scrolled.length = 0;
+
+    drag(histHost(view), 0, 10 * ROW_PX);
+
+    expect(h.scrolled).toEqual([]);
+    expect(h.offsets.filter((px) => !Number.isFinite(px)),
+      'a zero row height reached the transform as Infinity').toEqual([]);
+  });
+
+  it('a move with no down scrolls nothing — the drag belongs to whoever began it', async () => {
+    // TWO FAMILIES, TWO GUARDS, and only one of them is `dragging`. A
+    // `pointermove` for a stream that began elsewhere is turned away by
+    // `active !== ev.pointerId` before it ever reaches the step, so the
+    // pointer pair cannot reach this condition at all. The TOUCH pair can: it
+    // has no id to compare, by design — iOS cancels the pointer stream when
+    // another sheet preventDefaults a touch, so the touch path must follow
+    // whatever finger it is given. A `touchmove` whose `touchstart` landed on
+    // the sheet handle above is exactly that, and without the flag it would
+    // scroll the history by the distance from `lastY`'s initial 0.
+    const { h, view } = await openWith();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.pointerMove(el, { pointerId: 9, clientY: 5 * ROW_PX, isPrimary: true });
+    fireEvent.touchMove(el, { touches: [{ clientY: 5 * ROW_PX, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 5 * ROW_PX, clientX: 0, identifier: 1 }] });
+
+    expect(h.scrolled, 'a move nobody began scrolled the history').toEqual([]);
+  });
+
+  it('the pointer ECHO of a touch is ignored — one finger is counted once', async () => {
+    // A browser fires both families for the same finger. Counted twice, every
+    // touch drag would move the history twice as far as the thumb did, which
+    // is the whole reason the touch path takes ownership for its duration.
+    const { h, view } = await openWith();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.touchStart(el, { touches: [{ clientY: 0, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 0, clientX: 0, identifier: 1 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 3 * ROW_PX, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 3 * ROW_PX, clientX: 0, identifier: 1 }] });
+    // The echo, in full: down, move, up, with the same travel.
+    fireEvent.pointerDown(el, { pointerId: 1, clientY: 0, isPrimary: true, button: 0 });
+    fireEvent.pointerMove(el, { pointerId: 1, clientY: 3 * ROW_PX, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: 3 * ROW_PX, isPrimary: true });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [{ clientX: 0, clientY: 0, identifier: 1 }] });
+
+    expect(h.scrolled.reduce((a, b) => a + b, 0),
+      'the echo was counted, so the history moved twice as far as the finger').toBe(-3);
+
+    // AND THE ECHO MUST NOT OUTLIVE THE TOUCH — a property, not a killer, and
+    // measured as such. Deleting `down`'s own `viaTouch` guard leaves all 86
+    // cases green, because the echo it then adopts is stopped twice more: by
+    // `move`'s `viaTouch` while the finger is down, and by `step`'s
+    // `dragging` once `touchend` has called `finish`. It is defence in depth,
+    // so what this tail pins is the OUTCOME the three guards share; the day
+    // one of the other two is relaxed, this is the case that notices.
+    h.scrolled.length = 0;
+    fireEvent.pointerMove(el, { pointerId: 1, clientY: 6 * ROW_PX, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientY: 6 * ROW_PX, isPrimary: true });
+    expect(h.scrolled, "the echo's tail kept scrolling after the finger lifted").toEqual([]);
+  });
+
+  it('a second finger abandons the drag rather than following one of the two', async () => {
+    // A pinch arrives as a `touchstart` with two touches — on this layer, as a
+    // `touchmove` with two as well, since the second finger can land after the
+    // first. Either way the gesture is not a scroll, and the honest answer is
+    // to stop where the first finger left it.
+    const { h, view } = await openWith();
+    h.scrolled.length = 0;
+    const el = histHost(view);
+
+    fireEvent.touchStart(el, { touches: [{ clientY: 0, clientX: 0, identifier: 1 }, { clientY: 200, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 0, clientX: 0, identifier: 1 }, { clientY: 200, clientX: 0, identifier: 1 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 4 * ROW_PX, clientX: 0, identifier: 1 }, { clientY: 240, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 4 * ROW_PX, clientX: 0, identifier: 1 }, { clientY: 240, clientX: 0, identifier: 1 }] });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [{ clientX: 0, clientY: 0, identifier: 1 }] });
+    expect(h.scrolled, 'a pinch scrolled the history').toEqual([]);
+
+    // A second finger arriving MID-drag: the first finger's travel stands,
+    // and nothing is added for the pinch.
+    fireEvent.touchStart(el, { touches: [{ clientY: 0, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 0, clientX: 0, identifier: 1 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 2 * ROW_PX, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 2 * ROW_PX, clientX: 0, identifier: 1 }] });
+    expect(h.scrolled).toEqual([-2]);
+    fireEvent.touchMove(el, { touches: [{ clientY: 6 * ROW_PX, clientX: 0, identifier: 1 }, { clientY: 300, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 6 * ROW_PX, clientX: 0, identifier: 1 }, { clientY: 300, clientX: 0, identifier: 1 }] });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [{ clientX: 0, clientY: 0, identifier: 1 }] });
+    expect(h.scrolled, 'the pinch kept scrolling what the drag had begun').toEqual([-2]);
+  });
+
+  it('two moves in the SAME millisecond leave the speed alone — no division by zero', async () => {
+    // A phone can deliver two `touchmove`s inside one millisecond, and `dy /
+    // dt` is then `Infinity`. The smoothed speed would carry it to the lift,
+    // and `glide(Infinity)` is a throw with no end: `scrollLines` asked for a
+    // non-finite number of rows, on a view that never settles. The guard
+    // leaves the speed at whatever the last real sample said — here nothing,
+    // so the view is PLACED.
+    //
+    // Measured with a frozen clock rather than a fast one: a real `dt` of 0 is
+    // exactly what cannot be arranged by firing events quickly.
+    let now = 5_000;
+    const frames: Array<(t: number) => void> = [];
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => frames.push(cb));
+    vi.stubGlobal('cancelAnimationFrame', () => { frames.length = 0; });
+
+    const { h, view } = await openWith();
+    h.scrolled.length = 0;
+    h.offsets.length = 0;
+    const el = histHost(view);
+
+    fireEvent.touchStart(el, { touches: [{ clientY: 0, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 0, clientX: 0, identifier: 1 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 2 * ROW_PX, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 2 * ROW_PX, clientX: 0, identifier: 1 }] });
+    fireEvent.touchMove(el, { touches: [{ clientY: 4 * ROW_PX, clientX: 0, identifier: 1 }], changedTouches: [{ clientY: 4 * ROW_PX, clientX: 0, identifier: 1 }] });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [{ clientX: 0, clientY: 0, identifier: 1 }] });
+
+    expect(h.scrolled, 'the drag itself still moves, clock or no clock').toEqual([-2, -2]);
+
+    // The lift is where a speed of Infinity would show: run whatever frames
+    // are queued (the drawer queues its own for the paint latch, so their
+    // presence proves nothing — what they DO does) and the view must not move
+    // another row, nor be asked for a non-finite one.
+    const settled = [...h.scrolled];
+    for (let i = 0; i < 10; i += 1) {
+      const cb = frames.shift();
+      if (cb === undefined) break;
+      now += 1000 / 60;
+      act(() => cb(now));
+    }
+    expect(h.scrolled, 'a speed of Infinity was carried into the lift').toEqual(settled);
+    expect([...h.scrolled, ...h.offsets].filter((n) => !Number.isFinite(n))).toEqual([]);
+  });
+});
+
+// — the LIVE glass's own guards: the reach for history, and the frames it is sent —
+//
+// The drawer has a second gesture, one level above the history layer's drag:
+// a downward swipe across the LIVE pane opens the history. Its guards mirror
+// the drag's, one for one, and none of them had a case (measured: statements
+// 338, 347, 351, 354, 357, 361, 508, 543 and branches 248#1, 447#1 of
+// `TerminalDrawer.tsx` uncovered with this file 86/86 green).
+describe('the reach for history stands down for the mouse, a pinch, and its own echo', () => {
+  // `baseElement`, not `container`: the drawer renders through a portal, the
+  // same reason `histHost` reads it that way. The LIVE host is the one that is
+  // not inside `.term-history`.
+  const liveHost = (view: ReturnType<typeof mountDrawer>['view']): HTMLElement => {
+    const el = view.baseElement.querySelector('.term-screen > .term-host');
+    if (!(el instanceof HTMLElement)) throw new Error('no live host');
+    return el;
+  };
+  /** A downward swipe well past TOUCH_OPEN_PX, and more down than sideways. */
+  const DOWN_PX = OPEN_PX * 4;
+  /** One Touch-shaped member. `changedTouches` is not optional in jsdom: vaul's
+   *  scroll lock reads it on every document-level touch and throws without it. */
+  const one = (y: number): { clientX: number; clientY: number; identifier: number } =>
+    ({ clientX: 0, clientY: y, identifier: 1 });
+
+  it('a pinch across the live glass opens nothing — on the start AND on the move', async () => {
+    // Two fingers landing together, and a second finger arriving mid-swipe.
+    // Either way the gesture is a zoom, and the honest answer is to forget
+    // where it began rather than open a layer over the reader's pane.
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+    const el = liveHost(view);
+
+    fireEvent.touchStart(el, { touches: [one(0), one(200)], changedTouches: [one(0)] });
+    fireEvent.touchMove(el, { touches: [one(DOWN_PX), one(240)], changedTouches: [one(DOWN_PX)] });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [one(DOWN_PX)] });
+    expect(fetchImpl, 'a two-finger start read the pane history').not.toHaveBeenCalled();
+
+    fireEvent.touchStart(el, { touches: [one(0)], changedTouches: [one(0)] });
+    fireEvent.touchMove(el, { touches: [one(DOWN_PX), one(300)], changedTouches: [one(DOWN_PX)] });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [one(DOWN_PX)] });
+    expect(fetchImpl, 'a second finger mid-swipe read the pane history').not.toHaveBeenCalled();
+
+    // A pinch WHOSE SECOND FINGER LIFTS, which is the arm the move guard alone
+    // cannot answer: the start is where `from` would have been written, so
+    // once one finger is gone the remaining travel reads as an ordinary swipe
+    // and opens a layer the reader was zooming, not reaching for.
+    fireEvent.touchStart(el, { touches: [one(0), one(200)], changedTouches: [one(0)] });
+    fireEvent.touchMove(el, { touches: [one(DOWN_PX)], changedTouches: [one(DOWN_PX)] });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [one(DOWN_PX)] });
+    expect(fetchImpl, 'a pinch that lost a finger read the pane history').not.toHaveBeenCalled();
+
+    // AND THE SAME PINCH WITH ITS POINTER ECHO. The echo's `pointerdown`
+    // carries one pointer, so unguarded it writes the start point the pinch
+    // refused to write, and the next one-finger move completes a swipe the
+    // reader never made.
+    fireEvent.touchStart(el, { touches: [one(0), one(200)], changedTouches: [one(0)] });
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 0, clientY: 0, isPrimary: true, button: 0 });
+    fireEvent.touchMove(el, { touches: [one(DOWN_PX)], changedTouches: [one(DOWN_PX)] });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [one(DOWN_PX)] });
+    expect(fetchImpl, "the echo wrote the pinch's start point").not.toHaveBeenCalled();
+
+    // The control: ONE finger, same travel, opens it.
+    fireEvent.touchStart(el, { touches: [one(0)], changedTouches: [one(0)] });
+    fireEvent.touchMove(el, { touches: [one(DOWN_PX)], changedTouches: [one(DOWN_PX)] });
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+  });
+
+  it('the pointer echo of the touch swipe does not open it a second time', async () => {
+    // One finger counted once, the live layer's half of the rule the history
+    // drag states. Both families fire for the same finger, and the echo's
+    // travel is the same travel — so without the ownership flag the reader's
+    // one swipe reads as two, and the second lands on a layer already up.
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+    const el = liveHost(view);
+
+    // FIRST, the echo ALONE. A browser can deliver the echo's `pointermove`
+    // before the `touchmove` it mirrors, and the touch owns the gesture — so
+    // the move that completes it must be the finger's own, not its shadow.
+    fireEvent.touchStart(el, { touches: [one(0)], changedTouches: [one(0)] });
+    fireEvent.pointerMove(el, { pointerId: 1, clientX: 0, clientY: DOWN_PX, isPrimary: true });
+    await act(async () => { await flush(); });
+    expect(fetchImpl, 'the echo completed a gesture the finger had not').not.toHaveBeenCalled();
+
+    // Then the finger's own move lands, and the layer opens — once.
+    fireEvent.touchMove(el, { touches: [one(DOWN_PX)], changedTouches: [one(DOWN_PX)] });
+    fireEvent.pointerMove(el, { pointerId: 1, clientX: 0, clientY: DOWN_PX, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientX: 0, clientY: DOWN_PX, isPrimary: true });
+    fireEvent.touchEnd(el, { touches: [], changedTouches: [one(0)] });
+
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+    expect(fetchImpl, 'the echo read the pane history a second time').toHaveBeenCalledTimes(1);
+  });
+
+  it('a swipe xterm has already claimed — its own scrollbar — opens nothing', async () => {
+    // `defaultPrevented` is the only thing that carries xterm's claim, and it
+    // only carries it in the BUBBLE phase, which is why this pair is bound
+    // there. A reader dragging xterm's scrollbar is placing the view inside
+    // the live pane, not asking for the pane's history.
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+    const el = liveHost(view);
+    document.addEventListener('pointerdown', (e) => e.preventDefault(), { capture: true, once: true });
+
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 0, clientY: 0, isPrimary: true, button: 0 });
+    fireEvent.pointerMove(el, { pointerId: 1, clientX: 0, clientY: DOWN_PX, isPrimary: true });
+    fireEvent.pointerUp(el, { pointerId: 1, clientX: 0, clientY: DOWN_PX, isPrimary: true });
+
+    await act(async () => { await flush(); });
+    expect(fetchImpl, "xterm's own scrollbar drag read the pane history").not.toHaveBeenCalled();
+  });
+
+  it('a lift forgets where the swipe began, so the next move cannot finish it', async () => {
+    // `openEnd`. Without it the start point survives the lift, and a stray
+    // `pointermove` later — a finger resting back on the glass, a mouse
+    // crossing it — completes a swipe nobody made.
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+    const el = liveHost(view);
+
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 0, clientY: 0, isPrimary: true, button: 0 });
+    fireEvent.pointerUp(el, { pointerId: 1, clientX: 0, clientY: 0, isPrimary: true });
+    fireEvent.pointerMove(el, { pointerId: 1, clientX: 0, clientY: DOWN_PX, isPrimary: true });
+
+    await act(async () => { await flush(); });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a touch lift does NOT let the pointer echo reset the swipe mid-gesture', async () => {
+    // `openEnd`'s own ownership check. The browser sends the echo's
+    // `pointerup` before `touchend`, so clearing the start point there would
+    // cancel the touch swipe at the moment it completes.
+    const fetchImpl = jsonFetch(200, OK_HISTORY);
+    vi.stubGlobal('fetch', fetchImpl);
+    const { view } = mountDrawer();
+    const el = liveHost(view);
+
+    fireEvent.touchStart(el, { touches: [one(0)], changedTouches: [one(0)] });
+    fireEvent.pointerUp(el, { pointerId: 1, clientX: 0, clientY: 0, isPrimary: true });
+    fireEvent.touchMove(el, { touches: [one(DOWN_PX)], changedTouches: [one(DOWN_PX)] });
+
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalled());
+  });
+});
+
+describe('the drawer’s other two frames', () => {
+  it('a binary frame is not written to the terminal — the pty speaks utf8 text', async () => {
+    // The socket carries raw pty bytes as TEXT frames. A BINARY frame is
+    // either another protocol or a proxy's own, and `term.write` on an
+    // ArrayBuffer renders its `[object ArrayBuffer]` into the reader's pane.
+    const { t, ws } = mountDrawer();
+    t.write.mockClear();
+
+    act(() => { ws.onmessage?.({ data: new ArrayBuffer(8) }); });
+    expect(t.write, 'a binary frame reached the terminal').not.toHaveBeenCalled();
+
+    act(() => { ws.onmessage?.({ data: 'real output\r\n' }); });
+    expect(t.write).toHaveBeenCalledWith('real output\r\n');
+  });
+
+  it('the quick keys keep focus in the terminal — the press is prevented, the click still types', async () => {
+    // A phone's keyboard closes the moment focus leaves the terminal, and
+    // every one of these caps would take it. `preventDefault` on the press is
+    // what keeps the keyboard up; the CLICK is what sends the sequence, so
+    // preventing the press must not prevent the send.
+    vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
+    const { ws } = mountDrawer();
+    ws.sent.length = 0;
+    const esc = screen.getByRole('button', { name: 'Escape' });
+
+    // `fireEvent` returns false when the handler called `preventDefault`.
+    expect(fireEvent.pointerDown(esc, { pointerId: 1, isPrimary: true, button: 0 }),
+      'the press was not prevented, so the keyboard would close').toBe(false);
+    fireEvent.click(esc);
+    expect(ws.sent, 'the cap sent nothing').toEqual([JSON.stringify({ type: 'input', data: '\x1b' })]);
+
+    // And the history cap, which is an ACTION rather than a sequence — same
+    // rule, and it must not reach the pty at all.
+    // `Scroll back` while the live pane is up; `historyDoor()` finds its other
+    // name (`Back to live`), which only exists once the history is showing.
+    const histCap = screen.getByRole('button', { name: 'Scroll back' });
+    ws.sent.length = 0;
+    expect(fireEvent.pointerDown(histCap, { pointerId: 1, isPrimary: true, button: 0 })).toBe(false);
+    expect(ws.sent).toEqual([]);
+  });
+
+  it('the keyboard sliding up pads the terminal by exactly its overlap', () => {
+    // `visualViewport` is the only thing that reports it, and the padding is
+    // what keeps the quick keys above the keyboard rather than under it.
+    const vv = Object.assign(new EventTarget(), { height: window.innerHeight, offsetTop: 0 });
+    Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+    try {
+      const { view } = mountDrawer();
+      const term = view.baseElement.querySelector('.term');
+      if (!(term instanceof HTMLElement)) throw new Error('no .term');
+      expect(term.style.paddingBottom, 'a closed keyboard pads nothing').toBe('');
+
+      act(() => {
+        vv.height = window.innerHeight - 320;
+        vv.dispatchEvent(new Event('resize'));
+      });
+      expect(term.style.paddingBottom).toBe('320px');
+    } finally {
+      Reflect.deleteProperty(window, 'visualViewport');
+    }
   });
 });

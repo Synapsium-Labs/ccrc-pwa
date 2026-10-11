@@ -3,7 +3,10 @@
 // catalogue line, the release list, the node inventory), the Box token card
 // (box-token lifecycle wave 1, Task B6: age, state, fleet confirmation,
 // transport, *Rotate now*) and Notifications (the bell, release notifications,
-// the unarmed-exposure banner) — all shipped in this file, below the header
+// the unarmed-exposure banner). The update plane's READING surface — the
+// release list, the node inventory and the twenty pure helpers that turn a
+// wire row into a sentence — moved to `screens/updates.tsx`; this file
+// composes it. The sections live below the header
 // (Tasks 7–10 of the W3 plan; fix rounds 1–2 widened several of their
 // guards in place — see the plan's `## Deviations found`, D-3315/D-3316).
 //
@@ -13,24 +16,36 @@
 // `.shell-detail` back at the top on every route change, this one included.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, NotifyMode, ReleaseWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
-import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel, rollbackTargetRefusal, settledDoneDetail } from '../../../shared/api';
+import type {
+  AuthStatus, AutoMode, NodeWire, NotifyMode, UpdateChannel, UpdateRouteError,
+  UpdateRouteRefusal, UpdatesView,
+} from '../../../shared/api';
+import {
+  AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode,
+} from '../../../shared/api';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
-import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import {
+  BackButton, Button, PHOSPHOR, RADIO_FIELDSET, RADIO_LEGEND, Radio, RadioFieldset,
+  SYSTEM, Skeleton, THEMES, toast, useNow,
+} from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
-import { isManagedNode, planMove, rollbackBlockers, type MoveIntent, type PlannedMove, type RollbackBlocker } from '../fleet/movePlan';
+import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
-import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../fleet/updateAck';
-import { isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
-import { ApiError, api, apiErrorText, moveSkipText, noBundleRollbackText, readBoxTokenView, updateErrorText } from '../lib/api';
+import { isPlaceableInstant, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
+import { ApiError, api, apiErrorText, readBoxTokenView, updateErrorText } from '../lib/api';
+// `dayClock` and `elapsedWords` come THROUGH the update plane's reading
+// surface, which is where the twenty wire-row-to-sentence helpers moved: the
+// box-token card landed on main while that move was happening on this branch,
+// and it reads two of the same clocks.
 import type { BoxTokenView, RotateAnswer, TokenHold } from '../../../shared/box-token';
 import { readAuthStatus } from '../lib/auth';
-import { elapsedWords } from '../lib/elapsed';
 import { pushSupported } from '../lib/push';
+import { setTheme, storedTheme } from '../lib/theme';
 import { navigate } from '../lib/router';
-import { useNow } from '../lib/useNow';
+// The update plane's reading surface moved to a file of its own; this screen
+// composes it. `ACK_UNREADABLE_TEXT`/`canAck` come THROUGH it because
+// `NodeItem` is their consumer — see that file's header.
+import { NodeList, ReleaseList, catalogueLine, dayClock, elapsedWords } from './updates';
 import '../fleet/fleet.css';
 
 // ── The Updates section (spec §13; programme wave 3 Task 7) ──────────────────
@@ -91,6 +106,18 @@ export function autoGateMissing(nodes: readonly NodeWire[]): NodeWire[] {
 
 /** The node ids a `409 auto-needs-rollback-gate` names; null for any other failure, and for a 409 naming no id
  *  (the caller then toasts the route's own sentence rather than an empty "not yet on:"). */
+// `RadioFieldset` LEFT THIS FILE — it is `@ccrc/ui`'s now, with the five
+// fleet.css rules that skinned it. The argument that kept it local was "this
+// file is their only consumer, so moving them anywhere would cost three rules
+// and buy nothing", and what it was weighed against has changed: the design
+// system could not render a radio at all, which is a hole a third consumer
+// would have met with no way to reach either half. The move cost nothing a
+// contrast-gate entry names, because every one of those rules was layout.
+//
+// What stays here is the SKIN that paints — `.settings-theme` and its body —
+// passed in as `className`, the same arrangement `CollapsibleStrip` has with
+// the three strips.
+
 function gateRefusalOf(err: unknown): string[] | null {
   if (!(err instanceof ApiError) || err.status !== 409) return null;
   if (typeof err.body !== 'object' || err.body === null) return null;
@@ -108,436 +135,92 @@ function gateRefusalOf(err: unknown): string[] | null {
 // `clockTime`, `dayClock`, `releaseDate` — so there is exactly one place, shared by both surfaces, that
 // decides "this build's Date cannot place it".
 
-export function clockTime(ms: number): string {
-  if (!isPlaceableInstant(ms)) return '—';
-  const d = new Date(ms);
-  const pad = (v: number): string => String(v).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function ThemeRow({ choice, current, onPick, swatch = true }: {
+  /** Structural, not `ThemeChoice`: "Follow system" is not a palette and
+   *  carries no `mode`, but it IS this row — same label over the same note,
+   *  same radio, in the same group. It was written out a second time instead,
+   *  and the markup census found it. */
+  choice: { id: string; label: string; note: string };
+  current: string;
+  onPick: (id: string) => void;
+  /** "Follow system" draws none: there is no single palette to preview, and
+   *  five swatches of whichever one happens to be applied would be a preview
+   *  of the wrong thing. */
+  swatch?: boolean;
+}): ReactNode {
+  const active = current === choice.id;
+  return (
+    <Radio
+      className="settings-theme"
+      data-active={active}
+      name="settings-theme"
+      value={choice.id}
+      checked={active}
+      onChange={() => onPick(choice.id)}
+      bare
+    >
+      <span className="settings-theme-body">
+        <span className="settings-theme-name">{choice.label}</span>
+        <span className="settings-note">{choice.note}</span>
+      </span>
+      {/* `data-theme` on the swatch itself: tokens.css's blocks are plain
+          attribute selectors, so they resolve on ANY element, not just the
+          root. The preview is therefore the real palette rather than a
+          hand-copied approximation of it. `phosphor` carries no block — it is
+          :root — so it deliberately stamps nothing and inherits the default. */}
+      {swatch && (
+        <span
+          className="settings-theme-swatch"
+          aria-hidden="true"
+          {...(choice.id === PHOSPHOR ? {} : { 'data-theme': choice.id })}
+        >
+          <i style={{ background: 'var(--bg-surface)' }} />
+          <i style={{ background: 'var(--ink-primary)' }} />
+          <i style={{ background: 'var(--accent)' }} />
+          <i style={{ background: 'var(--status-attention)' }} />
+          <i style={{ background: 'var(--status-dead)' }} />
+        </span>
+      )}
+    </Radio>
+  );
 }
 
-/** The amber line's clock (D-3306): bare on the viewer's own local day, dated off it, because
- *  lastOkAt freezes at the last success while a failure may recur for days — "since 14:02" alone would read as
- *  today's 14:02 and shrink the outage. The dated shape is the one lib/clock.ts's resetClock and HistoryTab
- *  already print ("14:02 · 22 Sep"); resetClock itself is not reused because it reads epoch SECONDS and has no
- *  '—' arm for an instant Date cannot place. */
-export function dayClock(ms: number, now: number): string {
-  if (!isPlaceableInstant(ms)) return '—';
-  const d = new Date(ms);
-  const n = new Date(now);
-  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
-  return sameDay ? clockTime(ms) : `${clockTime(ms)} · ${d.getDate()} ${d.toLocaleString('en', { month: 'short' })}`;
-}
-
-export interface CatalogueLine { text: string; tone: 'calm' | 'amber' | 'muted' }
-
-export function catalogueLine(c: CatalogueState, now: number): CatalogueLine {
-  // review R-b: a lastOkAt this build's Date cannot place is UNMEASURED, not a
-  // "checked" instant — treated exactly as a null lastOkAt from here down, so
-  // the failure arm's "since" form and the success arm both fall back
-  // correctly (never "since —", never "checked moments ago" off a value that
-  // was never really placeable).
-  const lastOkAt = c.lastOkAt !== null && isPlaceableInstant(c.lastOkAt) ? c.lastOkAt : null;
-  // The failure arm FIRST: a catalogue that answered an hour ago and has failed
-  // since is amber, never the calm "checked 1h ago" it would read as if
-  // lastOkAt were consulted first (W2 clears lastError on the next success).
-  if (c.lastError !== null) {
-    const reason = catalogueReasonText(c.lastError.reason);
-    return lastOkAt !== null
-      ? { text: `couldn't reach GitHub since ${dayClock(lastOkAt, now)} — ${reason}`, tone: 'amber' }
-      : { text: `couldn't reach GitHub (tried ${dayClock(c.lastError.at, now)}) — ${reason}`, tone: 'amber' };
-  }
-  if (lastOkAt !== null) return { text: `checked ${elapsedWords(now - lastOkAt)} ago`, tone: 'calm' };
-  return { text: 'never checked', tone: 'muted' };
-}
-
-/** `CatalogueErrorReason` (W2) in words, keyed by the union less its `http-NNN` family, so a word W2 adds is a
- *  compile error here until it has one. */
-const CATALOGUE_REASON_TEXT: Record<Exclude<CatalogueErrorReason, `http-${number}`>, string> = {
-  'no-egress': 'no network route to GitHub',
-  'rate-limited': 'rate limited',
-  malformed: 'an answer this build could not read',
-  'no-release-source': 'no release source configured',
-  redirect: 'a redirect this build will not follow',
+/** Not a palette, and deliberately not in `THEMES`: the generator writes that
+ *  list and `themes:check` rules on it. This is the row that says "whichever
+ *  of those two the phone is in". */
+const FOLLOW_SYSTEM = {
+  id: SYSTEM,
+  label: 'Follow system',
+  note: 'Phosphor & Ink after dark, Phosphor Daylight otherwise.',
 };
 
-export function catalogueReasonText(reason: string): string {
-  if (Object.hasOwn(CATALOGUE_REASON_TEXT, reason)) {
-    return CATALOGUE_REASON_TEXT[reason as keyof typeof CATALOGUE_REASON_TEXT];
-  }
-  const http = /^http-(\d{3})$/.exec(reason);
-  return http !== null ? `HTTP ${http[1]}` : reason;
-}
+/** Exported for its test. The rest of this screen mounts a `/api/updates`
+ *  poll, and a test of a radio group should not need a control plane. */
+export function AppearanceSection(): ReactNode {
+  const titleId = useId();
+  // Seeded from storage rather than defaulted, so the control opens showing
+  // what is actually applied — including on a reload into a pinned palette.
+  const [current, setCurrent] = useState(() => storedTheme());
+  const pick = (id: string): void => { setTheme(id); setCurrent(id); };
 
-// ── The release list (spec §13; programme wave 3 Task 8) ─────────────────────
-// One row per catalogue release, newest first. Three rules this block exists
-// to keep, each pinned in settings-screen.test.tsx:
-//   * ORDER IS SEMVER. `v0.0.10` sorts below `v0.0.9` as a string; every tag
-//     comparison here goes through shared/semver.ts behind isReleaseTag (the
-//     comparator throws RangeError on a non-tag, so nothing unvalidated reaches it).
-//   * "verified" IS A MEASUREMENT. It appears only when some node's measured
-//     provenance is `verified` while that node runs this tag. `bundleListed` is
-//     the catalogue's claim that a bundle FILE is listed, and renders as
-//     `bundle listed` — verifiedAt takes no release, so it cannot read it (§18).
-//   * NOTES ARE TEXT. Same-user-writable, capped by the poller (W2), and handed
-//     to React as one text child of a <pre>: no markdown pass, no HTML, no link
-//     detection, and no raw-HTML prop anywhere in this file (a source scan
-//     holds that literally).
-// The move button opens the one move sheet (UpdateMoveSheet, programme wave
-// 5): Install asks for the tag on every node it takes forward, Roll back asks
-// for it node by node, and the sheet names those nodes in dispatch order.
-
-export function sortReleases(releases: readonly ReleaseWire[]): ReleaseWire[] {
-  const tagged = releases.filter((r) => isReleaseTag(r.tag));
-  const rest = releases.filter((r) => !isReleaseTag(r.tag));
-  // `filter` returned a fresh array, so the stable in-place sort never reorders
-  // the poll's view; equal versions (v0.0.10 / v0.0.010) keep wire order.
-  tagged.sort((a, b) => compareReleaseTags(b.tag, a.tag));
-  return [...tagged, ...rest];
-}
-
-export function verifiedAt(tag: string, nodes: readonly NodeWire[]): boolean {
-  return nodes.some((n) => n.provenance === 'verified' && nodeVersion(n) === tag);
-}
-
-export function releaseDirection(tag: string, nodes: readonly NodeWire[]): 'install' | 'rollback' | 'running' {
-  // D-3410: over the nodes a move can name — planMove's own filter (isManagedNode), so a Mac lagging behind
-  // never turns a Roll back row into Install while the sheet would move the Linux nodes.
-  const managed = nodes.filter(isManagedNode);
-  if (!isReleaseTag(tag) || managed.length === 0) return 'install';
-  // Wave 8 item F2, D-3591: the release every managed node runs (by last measurement) is a state, not a move.
-  if (managed.every((n) => nodeVersion(n) === tag)) return 'running';
-  return managed.every((n) => {
-    const v = nodeVersion(n);
-    return v !== null && isNewerTag(v, tag);
-  }) ? 'rollback' : 'install';
-}
-
-/** Wave 8 item F2, D-3591: the running row's words, naming the set they measured: the managed nodes, how many of those are
- *  unreachable (their version is the last measurement), and a macOS node on another version (not moved from here). */
-export function releaseRunningText(tag: string, nodes: readonly NodeWire[]): string {
-  const managed = nodes.filter(isManagedNode);
-  const away = managed.filter((n) => n.reachable === false).length;
-  const macOther = nodes.some((n) => !isManagedNode(n) && nodeVersion(n) !== tag);
-  let s = 'Running on every managed node';
-  if (away > 0) s += ` — ${away} of them not reachable, as last measured`;
-  if (macOther) s += ' · macOS nodes are not moved from here';
-  return s;
-}
-
-export function refusedLine(r: ReleaseWire, nodes: readonly NodeWire[]): string | null {
-  const refused: readonly unknown[] = Array.isArray(r.refused) ? r.refused : [];
-  const by = new Set<string>();
-  for (const x of refused) {
-    if (typeof x === 'object' && x !== null && typeof (x as { by?: unknown }).by === 'string') {
-      by.add((x as { by: string }).by);
-    }
-  }
-  if (by.size === 0) return null;
-  const m = nodes.length;
-  return `refused by ${by.size} of ${m} node${m === 1 ? '' : 's'}`;
-}
-
-export function releaseDate(ms: number): string {
-  return typeof ms === 'number' && isPlaceableInstant(ms) ? new Date(ms).toISOString().slice(0, 10) : '—';
-}
-
-/** Wave 8 item C: the reason a Roll back to `tag` is not offered, grouped by word. `no-bundle` is said with the tag
- *  (noBundleRollbackText); any other word through the route's own copy (`moveSkipText` reads `UPDATE_ERROR_TEXT`,
- *  and has a fallback for a word it does not know). */
-export function rollbackBlockedText(blockers: readonly RollbackBlocker[], tag: string): string | null {
-  if (blockers.length === 0) return null;
-  const words = [...new Set(blockers.map((b) => b.word))];
-  return words.map((w) => {
-    const who = blockers.filter((b) => b.word === w).map((b) => b.label).join(', ');
-    return `Roll back not offered for ${who}: ${w === 'no-bundle' ? noBundleRollbackText(tag) : moveSkipText(w)}`;
-  }).join(' ');
-}
-
-function ReleaseItem({ release: r, nodes, onMove }: {
-  release: ReleaseWire; nodes: readonly NodeWire[]; onMove: (intent: MoveIntent) => void;
-}): ReactNode {
-  const refused = refusedLine(r, nodes);
-  const direction = releaseDirection(r.tag, nodes);
-  // Wave 8 item F2: a running row offers no move — nothing to refuse — so neither is computed for it.
-  const blockers = direction === 'rollback' ? rollbackBlockers(nodes, r, r.tag) : [];
-  const blocked = direction === 'running' ? null : rollbackBlockedText(blockers, r.tag);
-  // By DIRECTION (§13): a release every node runs newer than is a rollback to
-  // it, anything else an install of it — the same releaseDirection that
-  // labels the button, so the label and the request cannot disagree.
-  const intent: MoveIntent | null = direction === 'running' ? null : direction === 'rollback'
-    ? { scope: 'fleet', direction: 'rollback', to: r.tag }
-    : { scope: 'fleet', direction: 'update', tag: r.tag };
-  return (
-    <li className="settings-release" data-tag={r.tag}>
-      <div className="settings-release-head">
-        <span className="settings-release-tag">{r.tag}</span>
-        <span className="settings-release-date">{releaseDate(r.publishedAt)}</span>
-        {isUpdateChannel(r.channel) && (
-          <span className={`settings-badge settings-badge--${r.channel}`}>{r.channel}</span>
-        )}
-        {verifiedAt(r.tag, nodes) && <span className="settings-badge settings-badge--verified">verified</span>}
-        {r.bundleListed === true && <span className="settings-badge">bundle listed</span>}
-        {r.yanked === true && <span className="settings-badge">yanked</span>}
-      </div>
-      {refused !== null && <p className="settings-release-refused">{refused}</p>}
-      {typeof r.notes === 'string' && r.notes !== '' && <pre className="settings-release-notes">{r.notes}</pre>}
-      {blocked !== null && <p className="settings-release-refused" data-testid="settings-release-blocked">{blocked}</p>}
-      <div className="settings-release-actions">
-        {direction === 'running'
-          ? <span className="settings-release-running">{releaseRunningText(r.tag, nodes)}</span>
-          : (
-            <button type="button" className="btn-ghost settings-move" disabled={blockers.length > 0} onClick={() => onMove(intent as MoveIntent)}>
-              {direction === 'rollback' ? 'Roll back' : 'Install'}
-            </button>
-          )}
-      </div>
-    </li>
-  );
-}
-
-function ReleaseList({ releases, nodes, onMove }: {
-  releases: readonly ReleaseWire[]; nodes: readonly NodeWire[]; onMove: (intent: MoveIntent) => void;
-}): ReactNode {
-  if (releases.length === 0) return null;
-  return (
-    <ul className="settings-releases" aria-label="Releases">
-      {sortReleases(releases).map((r) => <ReleaseItem key={r.tag} release={r} nodes={nodes} onMove={onMove} />)}
-    </ul>
-  );
-}
-
-// ── The node inventory (spec §13; programme wave 3 Task 9) ───────────────────
-// One row per LIVE node (W2 excludes superseded rows), in the server's order.
-// The rules this block keeps, each pinned in settings-screen.test.tsx:
-//   * THE ARROW IS pendingTag's. A desired tag renders as `→ vX` only when
-//     pendingTag (fleet/useUpdatesView.ts) returns it — measured, on a resolved
-//     channel, with a stamp that was READ, not macOS, and newer by semver. This
-//     row adds no clause of its own, so it cannot disagree with the banner or
-//     BuildLine, which read the same predicate. When the node
-//     has no desired tag or no channel, the resolver's own sentence
-//     (resolveDetail) stands in: no badge, no arrow (§13). Nothing here says
-//     "up to date": a node on the newest eligible tag shows the resolver's own `atNewest` sentence.
-//   * CURRENT SAYS WHAT WAS MEASURED. A node never measured reads `not
-//     measured`, a stamp the sweep could not read reads `stamp <word>`, and
-//     only a stamp that was read and carries no tag reads `unversioned` —
-//     §18 "`stampRead` keeps EACCES from unversioned", on the screen. Anything
-//     the row cannot vouch for is amber, and an unreachable node says so,
-//     because W2 keeps its last measurement.
-//   * TEXT IS TEXT. label, resolveDetail and report.detail are same-user-
-//     writable; each reaches the DOM as a React text child and nothing else.
-//   * macOS IS NOT MANAGED (decision 17). A Darwin row says so in place of its
-//     desired and offers no move (D-3308); its arrow is
-//     already null in pendingTag (D-3309).
-// Update and Roll back open the one move sheet (UpdateMoveSheet, programme
-// wave 5): Update iff pendingTag names a tag, Roll back iff previousVersion
-// is a tag the node runs newer than. Ack is live — its route is W2's — and is
-// offered only on a SETTLED lease, because W2's ackNode acks from nothing
-// else (D-3183; D-3310). The route stays the
-// authority: a row that went busy between the poll and the tap comes back as
-// a 409 `busy`, rendered as updateErrorText's sentence, and the view is
-// re-polled either way.
-
-export const MACOS_UNMANAGED_TEXT = 'macOS: not centrally managed';
-// The Ack's gate and tap live in fleet/updateAck.ts since wave 14 (D-4267): the home screen's halt banner offers the
-// same Ack. Re-exported so this screen's callers and tests keep their import.
-export { ACK_UNREADABLE_TEXT, canAck };
-
-export function currentText(n: NodeWire): string {
-  if (typeof n.measuredAt !== 'number') return 'not measured';
-  if (n.stampRead !== 'ok') return `stamp ${isStampRead(n.stampRead) ? n.stampRead : 'unreadable'}`;
-  return nodeVersion(n) ?? 'unversioned';
-}
-
-export function currentIsAmber(n: NodeWire): boolean {
-  return typeof n.measuredAt !== 'number'
-    || n.stampRead !== 'ok'
-    || nodeVersion(n) === null
-    || n.provenance !== 'verified'
-    || n.installState !== 'complete';
-}
-
-export function requestLine(n: NodeWire, now: number): string | null {
-  const q: unknown = n.request;
-  if (typeof q !== 'object' || q === null) return null;
-  const { tag, kind, at } = q as { tag?: unknown; kind?: unknown; at?: unknown };
-  if (typeof tag !== 'string' || typeof kind !== 'string' || typeof at !== 'number' || !isPlaceableInstant(at)) return null;
-  return `${kind} ${tag} requested ${elapsedWords(now - at)} ago`;
-}
-
-export function nodeStateLine(n: NodeWire): string {
-  const state = typeof n.update?.state === 'string' ? n.update.state : 'unknown';
-  const r: unknown = n.report;
-  if (typeof r !== 'object' || r === null) return state;
-  const { phase, detail } = r as { phase?: unknown; detail?: unknown };
-  if (typeof phase !== 'string') return state;
-  return typeof detail === 'string' && detail !== '' ? `${state} — ${phase}: ${detail}` : `${state} — ${phase}`;
-}
-
-export function reachabilityLine(n: NodeWire, now: number): string | null {
-  // Fix round 2 (review of d5aefc4a, item 5): spelled as the direct question
-  // — "is this node reachable (or not yet known)? then say nothing" — rather
-  // than `!== false`'s double negative, matching `statedOf`/`pendingTag`'s
-  // `=== true` convention. NOT a bare `=== true`, deliberately: `reachable`
-  // is tolerated ABSENT by wire discipline (`asUpdatesView` drops it only
-  // when PRESENT but not a boolean, fix round 2 item 2), and an absent field
-  // must keep claiming NOTHING — the same "absence is unknown, never a
-  // specific claim" rule this codebase holds everywhere else. Only a
-  // CONFIRMED `false` may proceed to say "unreachable"; `true` and `undefined`
-  // both read as "not confirmed unreachable" and stay silent, exactly as
-  // `!== false` always computed for the three values that can reach here.
-  if (n.reachable === true || n.reachable === undefined) return null;
-  return typeof n.unreachableSince === 'number' && isPlaceableInstant(n.unreachableSince)
-    ? `unreachable since ${elapsedWords(now - n.unreachableSince)} ago`
-    : 'unreachable';
-}
-
-/** Wave 8 item F1: a node's resolveDetail, qualified when it cannot be read as current (spec :1144): the catalogue
- *  has not answered since the server started (or its instant cannot be placed — the caller passes null then), or
- *  the node is unreachable. */
-export function resolveDetailLine(detail: string, n: NodeWire, catalogueLastOkAt: number | null): string {
-  if (catalogueLastOkAt === null) return `${detail} (the catalogue has not answered since the server started)`;
-  if (n.reachable === false) return `${detail} (this node is not reachable; last measured)`;
-  return detail;
-}
-
-/** Wave 8 item F4: ONE dated line for a finished move, or null (the row then keeps its two lines). Only when the
- *  lease is settled, the report is a finished phase of a tag that IS the lease's target (identity by tag, D-3405),
- *  and `update.detail` is exactly what the settle wrote for that report: settledDoneDetail(tag) for done,
- *  `report.detail ?? report.phase` for failed/reverted (inventory.ts). Anything else (an ack, a later refusal
- *  note, `met:`, a deadline) keeps its own line. The time is the NODE's clock (report.updatedAt). */
-export function finishedLine(n: NodeWire, now: number): string | null {
-  const state = n.update?.state;
-  if (typeof state !== 'string' || !(SETTLED_UPDATE_STATES as readonly string[]).includes(state)) return null;
-  const r: unknown = n.report;
-  if (typeof r !== 'object' || r === null) return null;
-  const { phase, target, detail, updatedAt } = r as { phase?: unknown; target?: unknown; detail?: unknown; updatedAt?: unknown };
-  if (phase !== 'done' && phase !== 'failed' && phase !== 'reverted') return null;
-  if (!isReleaseTag(target) || target !== n.update.target) return null;
-  const settled = phase === 'done' ? settledDoneDetail(target) : (typeof detail === 'string' ? detail : phase);
-  if (n.update.detail !== settled) return null;
-  const when = typeof updatedAt === 'number' ? dayClock(updatedAt, now) : '—';
-  const said = typeof detail === 'string' && detail !== '' ? ` — ${detail}` : '';
-  const lead = state === phase ? '' : `${state} — `;
-  return `${lead}${phase} ${target} · ${when}${said}`;
-}
-
-function NodeItem({ node: n, releases, now, catalogueLastOkAt, onAcked, onMove }: {
-  node: NodeWire; releases: readonly ReleaseWire[]; now: number; catalogueLastOkAt: number | null; onAcked: () => void;
-  onMove: (intent: MoveIntent) => void;
-}): ReactNode {
-  const [acking, setAcking] = useState(false);
-  const darwin = n.os === 'darwin';
-  const next = pendingTag(n);   // null for a Darwin node too — the predicate's own guard
-  // Roll back needs somewhere to go: the stamp's previous version, when it is a tag this node runs NEWER than
-  // (or the stamp carries no tag to compare it with). A rollback leaves `previous` in place (wave 4's D-3262),
-  // so a node just rolled back reads previousVersion === its running tag: a tap there would be a 202 filed `met`.
-  const v = nodeVersion(n);
-  const previous = isReleaseTag(n.previousVersion) && (v === null || isNewerTag(v, n.previousVersion)) ? n.previousVersion : null;
-  // Wave 8 item C: computed for a managed row only — a Darwin row offers no Roll back at all (decision 17), so a
-  // reason line there would imply a one-tap exists for it.
-  const previousRefusal = darwin || previous === null
-    ? null : rollbackTargetRefusal(releases.find((r) => r.tag === previous), n.provenance);
-  const previousBlocked = previousRefusal === null || previous === null
-    ? null : rollbackBlockedText([{ label: n.label, word: previousRefusal }], previous);
-  const reach = reachabilityLine(n, now);
-  const request = requestLine(n, now);
-  const ackable = canAck(n, releases);
-
-  const ack = (): void => {
-    setAcking(true);
-    void sendAck(n.nodeId).finally(() => {
-      setAcking(false);
-      onAcked();
-    });
-  };
-
-  let desired: ReactNode = null;
-  if (darwin) {
-    desired = <span className="settings-node-detail">{MACOS_UNMANAGED_TEXT}</span>;
-  } else if (next !== null) {
-    // pendingTag returns a tag only for a node whose channel passed
-    // isUpdateChannel; restating that test here would be a SECOND arrow
-    // predicate, so the type is asserted, not re-derived (Task 11's argument).
-    const channel = n.channel as UpdateChannel;
-    desired = (
-      <span className="settings-node-desired">
-        {`→ ${next}`}
-        <span className={`settings-badge settings-badge--${channel}`}>{channel}</span>
-      </span>
-    );
-  } else if (!isReleaseTag(n.desiredTag) || !isUpdateChannel(n.channel)) {
-    desired = typeof n.resolveDetail === 'string' && n.resolveDetail !== ''
-      ? <span className="settings-node-detail">{resolveDetailLine(n.resolveDetail, n, catalogueLastOkAt)}</span>
-      : null;
-  }
-  // Wave 8 item F4: a finished move merges the state and detail lines into one, dated; anything else keeps them apart.
-  const finished = finishedLine(n, now);
+  const dark = THEMES.filter((t) => t.mode === 'dark');
+  const light = THEMES.filter((t) => t.mode === 'light');
 
   return (
-    <li className="settings-node" data-node-id={n.nodeId}>
-      <div className="settings-node-head">
-        <span className="settings-node-label">{n.label}</span>
-        <span className="settings-node-detail">{`${n.role ?? 'unknown role'} · ${typeof n.os === 'string' ? n.os : 'unknown'}`}</span>
-      </div>
-      <p className="settings-node-versions">
-        <span className={currentIsAmber(n) ? 'settings-node-current settings-node-current--amber' : 'settings-node-current'}>
-          {currentText(n)}
-        </span>
-        {desired}
-      </p>
-      {reach !== null && <p className="settings-node-detail">{reach}</p>}
-      {request !== null && <p className="settings-node-detail">{request}</p>}
-      {finished !== null ? (
-        <p className="settings-node-detail" data-testid="settings-node-finished">{finished}</p>
-      ) : (
-        <>
-          <p className="settings-node-detail">{nodeStateLine(n)}</p>
-          {/* The dispatcher's own word for this row (`updateDetail` on the wire): halted, busy — …, a spawn's stderr
-              line, deadline, met: … — one printable line the server already bounds, rendered as a text child. */}
-          {typeof n.update?.detail === 'string' && n.update.detail !== '' && <p className="settings-node-detail">{n.update.detail}</p>}
-        </>
-      )}
-      {previousBlocked !== null && <p className="settings-node-detail">{previousBlocked}</p>}
-      <div className="settings-node-actions">
-        {!darwin && (
-          <>
-            <button
-              type="button"
-              className="btn-ghost settings-move"
-              disabled={next === null}
-              onClick={() => { if (next !== null) onMove({ scope: 'node', direction: 'update', nodeId: n.nodeId, tag: next }); }}
-            >
-              Update
-            </button>
-            <button
-              type="button"
-              className="btn-ghost settings-move"
-              disabled={previous === null || previousRefusal !== null}
-              onClick={() => { if (previous !== null && previousRefusal === null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
-            >
-              Roll back
-            </button>
-          </>
-        )}
-        <button type="button" className="btn-ghost settings-move" disabled={!ackable || acking} onClick={ack}>Ack</button>
-      </div>
-    </li>
-  );
-}
-
-function NodeList({ nodes, releases, now, catalogueLastOkAt, onAcked, onMove }: {
-  nodes: readonly NodeWire[]; releases: readonly ReleaseWire[]; now: number; catalogueLastOkAt: number | null; onAcked: () => void;
-  onMove: (intent: MoveIntent) => void;
-}): ReactNode {
-  if (nodes.length === 0) return null;
-  return (
-    <ul className="settings-nodes" aria-label="Nodes">
-      {nodes.map((n) => (
-        <NodeItem
-          key={n.nodeId} node={n} releases={releases} now={now} catalogueLastOkAt={catalogueLastOkAt} onAcked={onAcked} onMove={onMove}
-        />
-      ))}
-    </ul>
+    <section className="settings-section" aria-labelledby={titleId}>
+      <h2 id={titleId} className="settings-section-title">Appearance</h2>
+      <fieldset className={RADIO_FIELDSET}>
+        <legend className={RADIO_LEGEND}>Theme</legend>
+        <ThemeRow choice={FOLLOW_SYSTEM} current={current} onPick={pick} swatch={false} />
+        {/* Grouped by how the palette reads, because that is the first thing
+            anyone is choosing between — and the ask was light AND dark, not a
+            dark list with one light apology. */}
+        <p className={`${RADIO_LEGEND} settings-theme-group`}>Dark</p>
+        {dark.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
+        <p className={`${RADIO_LEGEND} settings-theme-group`}>Light</p>
+        {light.map((t) => <ThemeRow key={t.id} choice={t} current={current} onPick={pick} />)}
+      </fieldset>
+    </section>
   );
 }
 
@@ -645,21 +328,14 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
         <p className="settings-note">This browser cannot receive Web Push.</p>
       )}
       {view !== null && (
-        <fieldset className="settings-fieldset" disabled={saving}>
-          <legend className="settings-legend">Release notifications</legend>
-          {NOTIFY_MODES.map((m) => (
-            <label key={m} className="settings-option">
-              <input
-                type="radio"
-                name="settings-notify"
-                value={m}
-                checked={checked === m}
-                onChange={() => void choose(m)}
-              />
-              <span className="settings-option-sentence">{NOTIFY_LABELS[m]}</span>
-            </label>
-          ))}
-        </fieldset>
+        <RadioFieldset
+          legend="Release notifications"
+          name="settings-notify"
+          options={NOTIFY_MODES.map((m) => ({ value: m, label: NOTIFY_LABELS[m] }))}
+          value={checked}
+          onPick={(m) => void choose(m)}
+          disabled={saving}
+        />
       )}
     </section>
   );
@@ -792,7 +468,16 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
           <div className="settings-unarmed" role="alert">{alert}</div>
         )}
         {lines.map((l) => <p key={l} className="settings-note">{l}</p>)}
-        <button type="button" className="btn-ghost settings-check" disabled={busy} onClick={rotate}>Rotate now</button>
+        {/* `<Button variant="ghost">`, not a hand-written `btn-ghost`: the
+            class belongs to the primitive, and the SAME screen's *Check now*
+            two sections down is already written this way. The hand-written
+            form arrived with the box-token card on main and this branch's two
+            new guards both named it on the merge — control-census as an
+            unregistered hand-drawn control, and the skin-constant guard as a
+            class the Button primitive owns. */}
+        <Button variant="ghost" className="settings-check" disabled={busy} onClick={rotate}>
+          Rotate now
+        </Button>
         {note !== null && <p className="settings-note" aria-live="polite">{note}</p>}
       </>
     );
@@ -813,12 +498,13 @@ export function SettingsScreen(): ReactNode {
   return (
     <div className="settings-screen">
       <header className="settings-head">
-        <button type="button" className="settings-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
+        <BackButton className="settings-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
           ‹
-        </button>
+        </BackButton>
         <h1 className="settings-title">Settings</h1>
       </header>
       <UnarmedExposureBanner />
+      <AppearanceSection />
       <UpdatesSection poll={poll} now={now} />
       {poll.view !== null && <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />}
       <NotificationsSection view={poll.view} reload={poll.reload} />
@@ -961,49 +647,35 @@ function UpdatesBody({ view, stale, now, reload }: {
   return (
     <>
       {stale && <p className="settings-note">{STALE_TEXT}</p>}
-      <fieldset className="settings-fieldset" disabled={busy}>
-        <legend className="settings-legend">Channel</legend>
-        {UPDATE_CHANNELS.map((c) => (
-          <label key={c} className="settings-option">
-            <input
-              type="radio"
-              name="settings-channel"
-              value={c}
-              checked={fleet !== null && fleet.channel === c}
-              onChange={() => writeIntent({ channel: c })}
-            />
-            <span className="settings-option-sentence">{CHANNEL_SENTENCES[c]}</span>
-          </label>
-        ))}
-      </fieldset>
-      <fieldset
-        className="settings-fieldset"
+      <RadioFieldset
+        legend="Channel"
+        name="settings-channel"
+        options={UPDATE_CHANNELS.map((c) => ({ value: c, label: CHANNEL_SENTENCES[c] }))}
+        value={fleet?.channel ?? null}
+        onPick={(c) => writeIntent({ channel: c })}
         disabled={busy}
-        aria-describedby={gateNote !== null ? gateNoteId : undefined}
-      >
-        <legend className="settings-legend">Auto-install</legend>
-        {AUTO_MODES.map((m) => (
-          <label key={m} className="settings-option">
-            <input
-              type="radio"
-              name="settings-auto"
-              value={m}
-              checked={fleet !== null && fleet.auto === m}
-              // D-3315: only the non-'off' choices are gated on the node caps — the
-              // route accepts `auto: 'off'` unconditionally (server/src/update/routes.ts),
-              // so disabling the whole fieldset would remove the one safe action
-              // exactly when the gate is incomplete.
-              disabled={m !== 'off' && missing.length > 0}
-              onChange={() => writeIntent({ auto: m })}
-            />
-            <span className="settings-option-sentence">{AUTO_LABELS[m]}</span>
-          </label>
-        ))}
-      </fieldset>
+      />
+      <RadioFieldset
+        legend="Auto-install"
+        name="settings-auto"
+        /* D-3315: only the non-'off' choices are gated on the node caps — the
+           route accepts `auto: 'off'` unconditionally (server/src/update/routes.ts),
+           so disabling the whole fieldset would remove the one safe action
+           exactly when the gate is incomplete. */
+        options={AUTO_MODES.map((m) => ({
+          value: m,
+          label: AUTO_LABELS[m],
+          disabled: m !== 'off' && missing.length > 0,
+        }))}
+        value={fleet?.auto ?? null}
+        onPick={(m) => writeIntent({ auto: m })}
+        disabled={busy}
+        describedBy={gateNote !== null ? gateNoteId : undefined}
+      />
       {gateNote !== null && <p id={gateNoteId} className="settings-note">{gateNote}</p>}
-      <button type="button" className="btn-ghost settings-check" disabled={busy} onClick={checkNow}>
+      <Button variant="ghost" className="settings-check" disabled={busy} onClick={checkNow}>
         Check now
-      </button>
+      </Button>
       {refreshNote !== null && <p className="settings-note" aria-live="polite">{refreshNote}</p>}
       <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
         {line.text}

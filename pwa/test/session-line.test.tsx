@@ -5,6 +5,7 @@ import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ASK_OPERATOR_PRINCIPAL, graphGateCount, READER_MIN_COLS, sessionAsk, type AskState, type ChildMark, type FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { childMarkOf, childOfRunLabel, type ChildMarkRead } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
@@ -14,16 +15,7 @@ import { TEST_ROSTER } from './rosterFixture';
 // tests below leak DOM across `it` blocks.
 afterEach(cleanup);
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-mesa', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
-  status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
-  version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'demo-quiet-mesa', workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', ...over }));
 
 describe('label', () => {
   // Spec order: name ?? branch ?? workspace ?? id. Branch outranks the slug

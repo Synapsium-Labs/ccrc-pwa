@@ -12959,3 +12959,13 @@ CLAUDE.md lines that taught minting, copying and shipping it are rewritten.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
+
+## Design
+
+**Posture:** none
+
+Server-side minting, staging and rotation. The Settings screen is named as a reader of the result.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

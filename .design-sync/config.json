@@ -1,0 +1,27 @@
+{
+  "projectId": "e5d552bf-9a8a-45e9-ac2c-44c92f2fb468",
+  "pkg": "@ccrc/ui",
+  "globalName": "CcrcUi",
+  "shape": "storybook",
+  "storybookConfigDir": "ui/.storybook",
+  "buildCmd": "npm run build",
+  "storybookStatic": ".design-sync/sb-reference",
+  "titleMap": {
+    "Toast": "ToastHost"
+  },
+  "overrides": {
+    "Sheet": {
+      "cardMode": "single",
+      "primaryStory": "WithTitle"
+    },
+    "QuickConfirm": {
+      "cardMode": "single",
+      "primaryStory": "Stop"
+    },
+    "ToastHost": {
+      "cardMode": "single",
+      "primaryStory": "WithAction"
+    }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

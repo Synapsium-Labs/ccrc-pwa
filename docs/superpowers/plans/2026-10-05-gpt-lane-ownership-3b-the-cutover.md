@@ -6713,3 +6713,13 @@ The drafting rulings (S1–S2, A-1–A-8, B-1–B-10, F1–F6) and the reconcili
 - **No unit Environment is ever read (R3); `~/.cc-sessions` is read, never written (R2).**
 - **Never roll out by hand (ruling 2026-09-30); the update pause is the operator's (B-6).**
 - **Drafting-time incident (R15):** one drafter ran `ccrc version` against the real HOME once while measuring. It is a pure read and changed nothing; recorded here because the drafting rules forbade it.
+
+## Design
+
+**Posture:** none
+
+A runtime cutover plus a live runbook. `SwapSheet` is named as a lane reader; its shape does not change.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

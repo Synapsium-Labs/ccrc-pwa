@@ -8,7 +8,7 @@ import type { CoordStatus } from '../../shared/api';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { COORD_CONFIRM_MS, MARKER_GLYPH, MARKER_WORD } from '../src/fleet/coordWords';
 import { ApiError } from '../src/lib/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 

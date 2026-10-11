@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "types": ["node", "vite/client"],
+    // `paths` WITHOUT `baseUrl`: TS 6 deprecates `baseUrl` (TS5101), and with
+    // `moduleResolution: "bundler"` a relative path here resolves against this
+    // file. `@/…` is shadcn's import prefix — see `components.json` beside
+    // this file and `pwa/test/shadcn-alias.test.ts`, which pins that this,
+    // `vite.config.ts` and `pwa/vite.config.ts` all agree about it.
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src", ".storybook", "vite.config.ts"]
+}

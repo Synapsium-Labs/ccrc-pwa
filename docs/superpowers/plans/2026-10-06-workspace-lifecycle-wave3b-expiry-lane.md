@@ -5840,3 +5840,13 @@ Not departures, and named so nobody hunts for a number: the cleanup row's widene
 4. **ANSWERED by the coordinator, in mail 3749 to child reclamation (its 3657 and 3666): 3b edits none of the shared tail, containment, ladder, workdir/owned helpers or platform block; `_ws_expire_cwd_users`'s header is wave 6's and its body is 3b's; the second lander merges main and keeps both.** *(The question as asked:)* **For the coordinator, not the operator — two mails in its queue bear on this plan.** Child reclamation's 3657 and 3666 ask whether 3b edits `_ws_reclaim_tail`, `_ws_reclaim_contained`, the ladder or the platform block; `## Re-measure at dispatch` answers: none of them, and the one function both waves touch is `_ws_expire_cwd_users` (wave 6 its header comment, 3b its body). This plan's author read those two mails read-only and acked nothing; its reviser read no mail.
 5. **ANSWERED by the coordinator: ACCEPTED — the sibling pass (`expiry-lane-is-a-sibling-pass`) is ruling (D)'s implementation.** *(The question as asked:)* **For the coordinator: the sibling pass in place of ruling (D)'s words.** Ruling (D) and wave 3's "Wave 3b inherits" say "the second population in `sweepChildReclaim`" / "in the reclaim sweep". This plan builds a SIBLING method on the same tick, sharing that sweep's registry read, cadence and switch and nothing else (Pre-flight finding 7; the departure `expiry-lane-is-a-sibling-pass`): `sweepChildReclaim`'s early returns — the lifecycle mirror unread, `reclaim-v1` or `reclaim-pause-v1` missing — are no reason to stop an expiry, and #290 rewrote that method. The rulings win over the plan's preferences, so: accept the sibling pass as ruling (D)'s implementation, or require the population inside `sweepChildReclaim`?
 6. **ANSWERED — re-anchored onto `8d85c7cf4` (this revision, 2026-10-06; `b27fabc15`, #290, plus #284 and #302–#304).** *(The question as asked:)* **For the coordinator: #290 merged during this revision** (`b27fabc15`). Three of the 117 blocks need a re-anchor there and the shared suites a re-run (`## Re-measure at dispatch` names them); this revision did not rebase onto it, because ruling (I) reserves that re-verification to the coordinator after #290 merges.
+
+## Design
+
+**Posture:** offer
+
+The lane ships shadowed, but it introduces `ExpiryAttention` — a new attention surface on the fleet screen — and gives `ChildReclaimBanner` a second reason to appear.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

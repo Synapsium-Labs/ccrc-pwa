@@ -48,8 +48,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MoveRequestAnswer } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, RESET_LIST, Sheet, toast } from '@ccrc/ui';
 import { ApiError, api, moveSkipText, updateErrorText } from '../lib/api';
 import { moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackHowText, type PlannedMove } from './movePlan';
 import './fleet.css';
@@ -246,24 +245,24 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
     <Sheet open onClose={onClose} title={headline}>
       <div className="update-move-sheet">
         {lines.length === 0 ? (
-          <p className="qc-consequence">{moveEmptyText(plan.intent)}</p>
+          <p className={QC_CONSEQUENCE}>{moveEmptyText(plan.intent)}</p>
         ) : (
-          <ol className="update-move-list" role="list" aria-label="Nodes this moves, in order">
+          <ol className={`update-move-list ${RESET_LIST}`} role="list" aria-label="Nodes this moves, in order">
             {plan.nodes.map((n, i) => <li key={n.nodeId} className="update-move-node">{lines[i]}</li>)}
           </ol>
         )}
         {plan.intent.direction === 'rollback' && lines.length > 0 && (
           <p className="qc-consequence">{rollbackHowText(plan.intent.to)}</p>
         )}
-        <div className="qc-actions">
+        <div className={QC_ACTIONS}>
           {lines.length > 0 && !answered && (
-            <button type="button" className="btn-primary" disabled={busy} onClick={confirm}>
+            <Button variant="primary" disabled={busy} onClick={confirm}>
               {busy ? 'Sending…' : headline}
-            </button>
+            </Button>
           )}
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             {answered ? 'Close' : 'Cancel'}
-          </button>
+          </Button>
         </div>
         {error !== null && <p className="update-move-error" role="alert">{error}</p>}
       </div>

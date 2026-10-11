@@ -17,8 +17,8 @@
 // not mean is that work was lost.
 import type { ReactNode } from 'react';
 import { substrateFault } from '../../../shared/api';
+import { Banner } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import './fleet.css';
 
 export function SubstrateBanner({
   store = useFleetStore,
@@ -71,12 +71,20 @@ export function SubstrateBanner({
 
   const n = watched.length;
   return (
-    <div className="substrate-banner" role="status">
-      <span className="substrate-banner-msg">
-        tmux unreachable on the fleet host — {n} {n === 1 ? 'session reports' : 'sessions report'} it
-        {' '}(<code className="substrate-banner-reason">{commonest}</code>);
-        sessions are still running unattached. Remedy: restart tmux or reboot.
-      </span>
-    </div>
+    // `tone="attention"` and not sticky, which is what the old rule set: the
+    // sessions are still RUNNING, unattached, and recovery is a human at a
+    // terminal (spec §1), so there is no action here to keep in reach while
+    // scrolling. The <code> drops to mono from Banner's base — the
+    // `substrate-banner-reason` class said the same two declarations.
+    // `substrate-banner` carries NO styling — it is a hook class, the same
+    // device `btn-primary` and `sheet-panel` are: a stable selector that says
+    // WHICH banner this is. `Banner`'s own base class cannot, since the host
+    // banner wears it too, and substrate-banner.test.tsx exists to tell the
+    // two apart on a screen that renders both.
+    <Banner tone="attention" className="substrate-banner">
+      tmux unreachable on the fleet host — {n} {n === 1 ? 'session reports' : 'sessions report'} it
+      {' '}(<code>{commonest}</code>);
+      sessions are still running unattached. Remedy: restart tmux or reboot.
+    </Banner>
   );
 }

@@ -32,23 +32,22 @@
 // a DIFFERENT type), and `items` carries only `{done,total}` — no
 // `failed`/`blocked` columns exist anywhere yet. This file renders exactly
 // what PR I actually shipped, not the plan's historical sample.
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimDoneRefreshDue, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, childRunsSeen, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
-import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
-import { spawnVerdictChip } from '../fleet/spawnWords';
+import { type CoordCapsView, type RunSummary } from '../../../shared/api';
+import {
+  anyDispatchPending, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
+  runsByProgram, waveLabel,
+} from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
 import { CapsControl } from '../fleet/CapsControl';
-import { coordPresence } from '../fleet/coordWords';
 import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
-import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
-import { useNow } from '../lib/useNow';
+import { BackButton, Button, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -78,340 +77,9 @@ const loadRunsDefault = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
  *  re-render. */
 const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
 
-function RunRow({
-  run,
-  nowMs,
-  session,
-  coordSession,
-  frameSeen,
-  programHasOpenRun,
-  onAbandon,
-  onResume,
-}: {
-  run: RunSummary;
-  /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
-   *  `nowSec` below; it does not receive one. The dispatch window's boundary
-   *  is `SPAWN_STALL_MS` — a millisecond constant — so a tick already floored
-   *  to seconds upstream could not state which side of it a row is on, by up
-   *  to 999 ms — which is a claim a red suite holds, not this comment: the
-   *  suite's `FROZEN` carries a sub-second remainder precisely so flooring
-   *  here reds. One clock, in the unit every wire timestamp already uses. */
-  nowMs: number;
-  /** The run's session, as the live fleet snapshot currently has it — or
-   *  `null` when there is none (no session, or the fleet frame hasn't named
-   *  it yet). Looked up by the caller so this component stays a pure
-   *  renderer of the one row it owns. */
-  session: FleetSession | null;
-  /** The run's CLAIMANT as the live fleet snapshot has it — a different
-   *  lookup from `session` above, which is the run's WORKER. Both come off
-   *  `sessionById`, and conflating them would put the resume door on a row
-   *  whose worker died while its coordinator is fine. */
-  coordSession: FleetSession | null;
-  /** Has a `{type:'fleet'}` frame ever landed. Passed rather than inferred
-   *  from `coordSession !== null`: absence from a snapshot that never arrived
-   *  and absence from one that did are opposite facts, and only the second is
-   *  evidence of anything (D-1138). */
-  frameSeen: boolean;
-  /** Does this row's PROGRAM still have a run that can move, as the board
-   *  currently measures it (D-1146)? The row's own `state` cannot answer that
-   *  — it is a fact about the other rows — so the caller derives it once from
-   *  the same `active` slice it renders and hands each row the single bit it
-   *  needs, the same shape `session`/`coordSession` above are looked up in. */
-  programHasOpenRun: boolean;
-  /** Opens the AbandonSheet for this row (Task 12, spec §4.3, D-287 (was D-B4-14)). */
-  onAbandon: (run: RunSummary) => void;
-  /** Opens the ResumeSheet for this row (spec §7.3). */
-  onResume: (run: RunSummary) => void;
-}): ReactNode {
-  // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
-  // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
-  // for the identical meaning): this row's session could not be fully
-  // measured its last pass, so fields the fleet screen shows for it may be
-  // frozen at a fallback. `unmeasuredFields`, never `session.unmeasured`
-  // directly, for the same reason `SessionLine.tsx` gives — a live frame can
-  // omit the key entirely at runtime even though the type says required.
-  const degradedFields = session === null ? [] : unmeasuredFields(session);
-  // Same discipline, same reason — the ONE reader for the count (D-1251).
-  const graphReads = session === null ? null : graphReadCount(session);
-  // Total lookup, never a raw index (finding 2): `state` degrades a token
-  // this build's vocabulary has no key for to the designated `unknown`
-  // member, and `items` defaults a row that reached this renderer without
-  // one rather than throwing mid-render.
-  const state = runState(run);
-  const items = runItems(run);
-  const nowSec = Math.floor(nowMs / 1000);
-  // Task 3, the dispatch window. The DECISION is `dispatchWindow`'s (three
-  // conditions, one place); this component only picks the words. `none` is
-  // both "no fresh-spawn dispatch has started" and "the run has moved off
-  // `planned`" — either way there is no spawn to narrate, and the row renders
-  // byte-identically to how it read before the column existed, which is the
-  // no-regression half of this branch.
-  const spawn = dispatchWindow(run, nowMs);
-  // Task 5, both of them facts this board already held and did not read.
-  //
-  // The spawn verdict comes off the SESSION this row links to — the same
-  // `FleetSession` the degrade note above is read from — through the one table
-  // (`spawnWords.ts`), which is where it moved when this became its second
-  // surface. A row with no session says nothing: there is no pane to have a
-  // last spawn.
-  //
-  // `spawnVerdictChip`, NOT `spawnChip`: the two are one arm apart and the
-  // board asks the narrower one BY NAME, never by re-deriving a condition here.
-  // The wider one adds `unstarted` for a session that recorded no verdict — a
-  // word §Design opens by complaining about, which on this surface would be
-  // reporting an UNREADABLE `.started` as a claim that was never made (the full
-  // argument, with the ccd and registry anchors, is on `spawnChip`'s docstring;
-  // both halves are pinned in `runs-screen.test.tsx`).
-  //
-  // The resume is the run's OWN fact and has ridden `RunSummary` since Build 4
-  // with nothing in `pwa/src` ever rendering it. `resumeNote` decides; this
-  // picks no words.
-  const verdict = session === null ? null : spawnVerdictChip(session);
-  const resume = resumeNote(run, nowSec);
-  // F4. TWO facts, and only one of them is conditional: the run's own project is
-  // rendered on every row (a badge that appears only sometimes teaches nothing),
-  // while the crossing marker is `crossingNote`'s single answer — silent when the
-  // home is unknown, silent when the home IS this project, two cues when it is
-  // neither. This component compares nothing.
-  const crossing = crossingNote(run);
-  const kindChip = runKindChip(run);
-  // F7. The DECISION is `runWarnings`' — five conditions, one place, tolerant of
-  // a server that has never heard of `health`. This component picks no words and
-  // compares no thresholds; it lays out what it was handed.
-  const warnings = runWarnings(run, nowMs);
-  // Child-reclamation wave 5 (spec §5.9): what became of this run's CHILD
-  // workspace. `childReclaimChip` is the one reader. The word and the sentence
-  // are the server's, and this component picks neither.
-  const reclaim = childReclaimChip(run);
-  const body = (
-    <>
-      <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
-      <span className="run-state">{RUN_WORD[state]}</span>
-      <span className="run-ws">{run.workspace ?? run.branch ?? String(run.id)}</span>
-      <span className="run-project">{run.project}</span>
-      {crossing !== null && (
-        <span className="run-crossing" data-home={crossing.home} title={crossing.title}>
-          <span className="run-crossing-glyph" aria-hidden="true">{crossing.glyph}</span>
-          {crossing.word}
-        </span>
-      )}
-      {kindChip !== null && (
-        <span className="run-kind" title={kindChip.title}>
-          <span className="run-kind-glyph" aria-hidden="true">{kindChip.glyph}</span>
-          {kindChip.word}
-        </span>
-      )}
-      <span className="run-tally">{itemTallyLabel(items)}</span>
-      <span className="run-when">
-        {run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}
-      </span>
-      {/* Two cues on both branches — a word and a glyph — the same rule every
-          other state cell on this board follows: nothing here may be read out
-          of colour alone. The in-flight line is an ordinary progress
-          statement; the stalled one is the state `dispatch.ts` says "no verb
-          names", and it is deliberately worded as what the OPERATOR now has
-          to deal with (a workspace may exist) rather than as an error code. */}
-      {spawn.phase === 'in-flight' && (
-        <span className="run-dispatch" data-phase="in-flight">
-          {/* The glyph comes from `DISPATCH_GLYPH` (Task 4), not a literal:
-              the fleet card draws the same window now, and two surfaces
-              spelling one vocabulary twice is the drift this repo's tables
-              exist to prevent. */}
-          <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH['in-flight']}</span>
-          {'dispatching… '}{formatElapsed(spawn.elapsedMs)}
-        </span>
-      )}
-      {spawn.phase === 'stalled' && (
-        <span
-          className="run-dispatch"
-          data-phase="stalled"
-          title={`the dispatch began ${formatElapsed(spawn.elapsedMs)} ago and the run is still planned`}
-        >
-          <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH.stalled}</span>
-          {'dispatch never completed — a workspace may exist'}
-        </span>
-      )}
-      {/* The linked session's spawn verdict, in `SessionLine`'s own class and
-          `SessionLine`'s own word — the identical reuse this row already makes
-          of `.sess-unmeasured` next door, and for the identical reason: a
-          second `.run-…` class for one meaning is two vocabularies over one
-          field. `.sess-line` and `.run-row` both sit on `--bg-surface`, so the
-          chip's ink brings no new contrast pair with it. */}
-      {verdict !== null && (
-        <span className="sess-spawn" data-spawn={verdict.data} title={`last spawn: ${verdict.data}`}>
-          {verdict.word}
-        </span>
-      )}
-      {/* The worker's read counter, in the fleet card's own class — the same
-          reuse this row already makes of `.sess-spawn` and `.sess-unmeasured`
-          next door, and for the same reason: a second `.run-…` class for one
-          meaning is two vocabularies over one field. Read through
-          `graphReadCount`, never `session.graphQueries`, for the reason
-          `unmeasuredFields` is used two lines up: the live frame is cast, not
-          revived, so an older server's row omits this ADDITIVE key and a raw
-          `!== null` paints `graph ` with no number (D-1251). */}
-      {graphReads !== null && (
-        <span className="sess-graph" title={`${graphReads} graphify read(s) this session`}>
-          graph {graphReads}
-        </span>
-      )}
-      {/* D-1, finally on screen. `data-cleared` carries the half the word
-          alone cannot: the two branches are two different facts, and a test
-          that could only read the string would be pinning prose. */}
-      {resume !== null && (
-        <span className="run-resumed" data-cleared={String(resume.cleared)} title={resume.title}>
-          {resume.word}
-        </span>
-      )}
-      {/* Wave 5: the reclaim chip, `.run-kind`'s shape (glyph + word, the long
-          form in `title`). Informational, so it lives inside `body` and
-          therefore inside `.run-open`, like `.run-warn`: the sibling rule
-          binds controls, and this is prose. */}
-      {reclaim !== null && (
-        <span className="run-child-reclaim" data-child-reclaim={reclaim.word}
-          title={childReclaimTitle(reclaim, nowSec)}>
-          <span className="run-child-reclaim-glyph" aria-hidden="true">{reclaim.glyph}</span>
-          {reclaim.label}
-        </span>
-      )}
-      {/* A refusal's sentence on its own wrapped line (`flex-basis: 100%`,
-          `.run-warn`'s idiom). The chip decides when there is one; this lays
-          out what it was handed. */}
-      {reclaim !== null && reclaim.line !== null && (
-        <span className="run-child-reclaim-sentence">{reclaim.line}</span>
-      )}
-      {degradedFields.length > 0 && (
-        <span
-          className="sess-unmeasured"
-          data-unmeasured="true"
-          title={`registry ${degradedFields.join('/')} temporarily unreadable — retrying`}
-        >
-          unreadable
-        </span>
-      )}
-      {warnings.length > 0 && (
-        // Its own wrapped LINE, not another inline cell: `.run-row` is
-        // `flex-wrap: wrap`, so a `flex-basis: 100%` child becomes a sub-row
-        // inside the existing <li> without a second list element and without a
-        // fourth `flex: none` control competing for phone width. Not tappable, so
-        // it may live inside `body` (and therefore inside `.run-open`) — D-287's
-        // sibling rule binds controls, and this is prose.
-        <span className="run-warn">
-          {warnings.map((w) => (
-            <span key={w.word} className="run-warn-item" title={w.title}>
-              <span className="run-warn-glyph" aria-hidden="true">{w.glyph}</span>
-              {' '}{w.word}
-            </span>
-          ))}
-        </span>
-      )}
-    </>
-  );
-  // The abandon control, D-287: a SIBLING of `.run-open` inside the `<li>`,
-  // never nested inside it — `RunsScreen.tsx:118-122` (pre-fix) wrapped the
-  // whole row body in `<button className="run-open">`, and a `<button>`
-  // inside a `<button>` is invalid HTML and unreachable to a screen reader.
-  // It renders on EVERY row, including the inert (no-session) one just below
-  // — an inert row is exactly the wedge shape (`ambiguous-dispatch`, a
-  // `planned` run with no session) this control exists to release
-  // (`abandon-sheet.test.tsx`'s own pin on that case).
-  const abandonButton = (
-    <button
-      type="button"
-      className="run-abandon"
-      aria-label={`Abandon run ${run.id}`}
-      onClick={() => onAbandon(run)}
-    >
-      Abandon
-    </button>
-  );
+import { RunRow } from './RunRow';
+import { useColdRuns } from './useColdRuns';
 
-  // The resume door. `coordPresence` decides the FIRST half — three answers,
-  // and only `dead` opens it: `unknown` is what a substrate fault, a missing
-  // row and an unarrived frame all read as, and each of those would otherwise
-  // offer to hand a live coordinator's program to somebody else (D-309's
-  // collapse, quoted on `coordPresence`'s own docstring; D-1129). D-1146 does
-  // not touch that half and it must stay exactly this strong: widening the
-  // second term below is only safe because the first one still refuses to act
-  // on doubt.
-  //
-  // THE SECOND HALF IS THE PROGRAM'S FACT, NOT THE ROW'S (D-1146, review
-  // MAJOR 2). It was `!isRunClosed(run)` alone, on the argument that "a done
-  // wave's coordinator being dead is the ORDINARY end state, not a wedge" —
-  // which is true of a finished wave sitting BESIDE one that can still move,
-  // and false of exactly the case that needs this door most. `closeRun`
-  // retires a program at zero open runs, and between closing wave N and
-  // opening wave N+1 a program has no open run at all — the close-then-open
-  // window ruling R1 names. There, every row is terminal, `ResumeSheet` has
-  // ONE opener (this button), and the wave shipped no `ccrc-api` verb on
-  // purpose, so the board rendered no control anywhere while the server half
-  // worked perfectly: measured live, wave N+1's `POST /api/runs` refuses
-  // `claimed-by-another by:<dead id>` and a reclaim is what makes it answer
-  // ok. `Abandon` on the last open run reached the same dead end from the
-  // other side, by removing the only Resume the program had.
-  //
-  // So: this run is open, OR its program has nothing open. A terminal row
-  // whose program is still running keeps the old answer — the door belongs on
-  // the wave that can move, not on the archive underneath it.
-  //
-  // The door is per ROW while the reclaim is per PROGRAM (contract R1 rewrites
-  // `claimedBy` on every run of the program, terminal ones included), so an
-  // all-terminal program with several waves offers the same door several
-  // times — one action repeated, never two different ones. Electing a single
-  // row to carry it would be this renderer deciding which wave represents a
-  // program, and `programWave`'s own docstring records what that guess cost
-  // the last time it was made here.
-  //
-  // D-1147, RECORDED AND DELIBERATELY NOT FIXED HERE: reclaiming an
-  // all-terminal program does not make runId-less `toId:'coordinator'` mail
-  // resolvable again. The close route retires the program
-  // (`setProgramState('done')` once `programOpenRunCount` reads zero) and
-  // `resolveCoordinator(null)` refuses on its single-active-program guard
-  // BEFORE it ever reads `claimedBy` — so the column this door rewrites is not
-  // the one that arm is stuck on. Mail naming an explicit `runId` resolves
-  // through a direct row read and is unaffected, which is the path the
-  // coordinator corpus already sends a resumed coordinator down.
-  const presence = coordPresence(run.claimedBy, coordSession, frameSeen);
-  const resumeButton = presence === 'dead' && (!isRunClosed(run) || !programHasOpenRun) ? (
-    <button
-      type="button"
-      className="run-resume"
-      aria-label={`Resume run ${run.id}`}
-      onClick={() => onResume(run)}
-    >
-      Resume
-    </button>
-  ) : null;
-
-  // A run with no session has nothing to open. An inert row says that; a
-  // button that navigates to a session that does not exist says something
-  // false.
-  //
-  // Task 3: `data-inert` is about the TAP and nothing else, and it stays
-  // exactly as it was — the in-flight row is the ONE row that is inert and
-  // has something to say, and the two are not in tension. `body` renders
-  // inside the inert `<li>` just as it does inside `.run-open`, and nothing
-  // in `fleet.css` selects `[data-inert]` at all (measured), so no rule dims
-  // or hides what the row now says while the spawn is under way. Making the
-  // row tappable to let the affordance through would have traded a true
-  // sentence for a dead tap onto a session id that does not exist yet.
-  //
-  // A reclaimed child's session no longer exists either (spec §5.9: the row
-  // "stops offering to open its session"). It gets the same inert row, for the
-  // same reason. `resumeButton` and `abandonButton` keep their place: neither
-  // is about the worker's session.
-  return run.sessionId === null || childReclaimGone(reclaim)
-    ? <li className="run-row" data-inert="true">{body}{resumeButton}{abandonButton}</li>
-    : (
-      <li className="run-row">
-        <button type="button" className="run-open" onClick={() => navigate(`/s/${encodeURIComponent(run.sessionId!)}`)}>
-          {body}
-        </button>
-        {resumeButton}
-        {abandonButton}
-      </li>
-    );
-}
 
 export function RunsScreen({
   store = useFleetStore,
@@ -434,19 +102,6 @@ export function RunsScreen({
   const sessions = store((s) => s.sessions);
   const fleetFrameSeen = store((s) => s.fleetFrameSeen);
   const conn = store((s) => s.conn);
-  const coordFrame = store((s) => s.coord);
-  const coordFrameSeen = store((s) => s.coordFrameSeen);
-  const [cold, setCold] = useState<RunSummary[] | null>(null);
-  // Review finding 19: `cold`'s own `null` used to mean BOTH "still loading"
-  // and "every attempt has failed" — the same collapse `MailScreen`'s `feed`
-  // had, and the one `AccountsScreen`'s `!accounts` branch was written
-  // specifically to avoid ("'never asked' reads as 'never landed' to whoever
-  // is looking"). A three-state read, so a read failure can render its own
-  // honest message instead of falling through to "No runs." — a POSITIVE
-  // claim about the program's whole history that a failed read has no
-  // standing to make.
-  const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
-
   // Task 12, spec §4.3: which run's AbandonSheet is open, or `null`. ONE
   // sheet at screen level, reused across rows — the same shape
   // `SessionActionsSheet`'s single actions sheet uses rather than mounting
@@ -463,151 +118,10 @@ export function RunsScreen({
   // screen over.
   const [startOpen, setStartOpen] = useState(false);
 
-  // Held in a ref, not the effect's own dependency array — the same fix
-  // `MailScreen` already applies to `loadFeed`: "once per mount" has to hold
-  // regardless of the CALLER's identity discipline, not only the hoisted
-  // default's. The ref always reads the LATEST `loadRuns` without ever being
-  // a reason for the effect to re-run.
-  const loadRunsRef = useRef(loadRuns);
-  loadRunsRef.current = loadRuns;
-
-  // Never fires a `set*` after this instance has unmounted — shared by the
-  // mount-time read below and the transition-triggered re-read (finding 22),
-  // the one this screen fires on its own initiative, mid-lifetime.
-  //
-  // RE-ARMED as the effect's OWN first statement, not left to the `useRef(true)`
-  // initialiser alone (I1, regression, measured): React 18 StrictMode (dev
-  // only) runs every effect as mount -> cleanup -> mount, on the SAME
-  // component instance, so `aliveRef` survives the whole sequence rather than
-  // being re-created. With no re-arm, the simulated cleanup's `= false` was
-  // never undone by the simulated second mount — `aliveRef.current` stayed
-  // `false` for the rest of the component's real life, so every `loadCold()`
-  // below (`if (aliveRef.current) { setCold(...); setColdState(...) }`)
-  // silently dropped its own resolution and the board hung on "Loading…"
-  // forever under StrictMode. Setting it `true` here, every time the effect
-  // body runs (both the StrictMode-simulated second mount and the one real
-  // mount in production, where this effect only ever runs once), is what
-  // makes the ref correct across both.
-  const aliveRef = useRef(true);
-  useEffect(() => {
-    aliveRef.current = true;
-    return () => { aliveRef.current = false; };
-  }, []);
-
-  // THE RACE, AND ITS GUARD (spec §5.9). A reclaim now puts two archive reads in
-  // flight a tick or two apart: the vanish read (the child's session leaving the
-  // fleet frame) and the board's second trigger (the coord frame's newest reclaim
-  // end). Responses can arrive in any order, and `loadCold` used to apply
-  // whichever landed last, so a slow older read overwrote a newer one and the
-  // row showed the stale "workspace pending" chip again. Each call takes a
-  // sequence number from `issued`; a read may set `cold` only when it is NEWER
-  // than the last one applied (`applied`, the high-water mark). The `catch` is
-  // held to the same mark, so a rejection from a read older than an applied one
-  // cannot set `error` over the newer answer. A rejection does NOT advance the
-  // mark: it carries no reading to be newer than, so a newer success still wins
-  // over an older error in either arrival order, and an older success still
-  // lands after a newer failure (the freshest answer there is).
-  const issued = useRef(0);
-  const applied = useRef(0);
-  const loadCold = (): Promise<void> => {
-    const seq = ++issued.current;
-    return loadRunsRef.current()
-      .then((r) => {
-        // The body is read BEFORE the mark moves: a success whose body cannot be
-        // read (a `null` answer) throws here, reaches the `catch` below as an
-        // error for this same `seq`, and so cannot advance the mark first.
-        const rows = r.runs;
-        if (aliveRef.current && seq > applied.current) { applied.current = seq; setCold(rows); setColdState('ok'); }
-      })
-      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); });
-  };
-
-  useEffect(() => {
-    // UNCONDITIONAL — the earlier gate (`if (store.getState().runs.length >
-    // 0) return`) meant this only ever ran when the live slice was already
-    // empty, so on the ordinary door path (FleetScreen -> here, with at
-    // least one active run) the cold read — the ONLY carrier of a finished
-    // run — was never issued at all, and the Finished group stayed
-    // unreachable forever (fix round 1, task 5, finding 1). `?closed=1`
-    // returns active AND finished rows, but only its FINISHED half is ever
-    // read below; the active half never races `live` for the same answer
-    // because the two feed separate slices, not one.
-    void loadCold();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store]);
-
-  // Review finding 22: a run that closes while this screen is already open
-  // must not simply vanish. The live frame is active-only BY CONSTRUCTION
-  // (see the file header) — it can never itself carry the now-closed row —
-  // so the only way `finished` learns about it is a fresh archive read,
-  // fired exactly when a run id that WAS in the live active set stops being
-  // there (a close, or a run leaving this box's view some other way). Not a
-  // poll: a diff against the PREVIOUS live frame, so it fires only on a real
-  // transition, never on an unrelated re-render.
-  const prevLiveIdsRef = useRef<Set<number> | null>(null);
-  useEffect(() => {
-    if (!runsFrameSeen) return;
-    const ids = new Set(live.map((r) => r.id));
-    const prev = prevLiveIdsRef.current;
-    if (prev !== null) {
-      let vanished = false;
-      for (const id of prev) if (!ids.has(id)) { vanished = true; break; }
-      if (vanished) void loadCold();
-    }
-    prevLiveIdsRef.current = ids;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, runsFrameSeen]);
-
-  // Child-reclamation wave 5 (spec §5.9): a finished row's reclaim chip changes
-  // AFTER its run closed (pending → reclaimed), and `finished` has one source,
-  // the cold read. A reclaim purges the child's registry row, so its session
-  // leaves the next fleet frame. That vanish is the trigger: a diff against the
-  // PREVIOUS fleet frame, exactly like the run-id diff above. It is not a poll:
-  // it fires only on a real transition. The decision is `childReclaimRefreshDue`'s.
-  // The dependencies are the fleet frame's, deliberately: a cold read landing is
-  // not a transition of the fleet, and re-running on it would compare a frame
-  // with itself. A re-read changes `cold`, never `sessions`, so it cannot loop.
-  const prevSessionIdsRef = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    if (!fleetFrameSeen) return;
-    const ids = new Set(sessions.map((s) => s.id));
-    const prev = prevSessionIdsRef.current;
-    prevSessionIdsRef.current = ids;
-    if (prev !== null && childReclaimRefreshDue(cold ?? [], prev, ids)) void loadCold();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, fleetFrameSeen]);
-
-  // Child-reclamation wave 6 (spec §5.9): the SECOND trigger. ccd purges a
-  // reclaimed child's registry row before it journals the reclaim's end, and
-  // the server's journal mirror is never awaited, so the vanish read above
-  // usually lands first and the row comes back with no chip. The coord frame
-  // carries the newest reclaim end the mirror has committed. When THAT changes,
-  // and a finished row is still unsettled, the board reads its archive once.
-  // It is not a poll: it fires once per change of a value the server measured.
-  // A null (a restarted server, or one older than the field) is never a reason
-  // to read, and the first value this board sees is its baseline, not a change.
-  //
-  // Which runs had a child is remembered across frames (`childRunsSeen`). This
-  // effect is declared first, so it runs first in a commit that changes both.
-  const childRunsRef = useRef<ReadonlySet<number>>(new Set<number>());
-  useEffect(() => {
-    childRunsRef.current = childRunsSeen(childRunsRef.current, sessions, cold ?? []);
-  }, [sessions, cold]);
-  // `undefined` = no coord frame seen yet by this board; null = seen, no value.
-  const prevDoneAtRef = useRef<number | null | undefined>(undefined);
-  useEffect(() => {
-    if (!coordFrameSeen) return;
-    const after = childReclaimDoneAtOf(coordFrame);
-    const before = prevDoneAtRef.current;
-    prevDoneAtRef.current = after;
-    if (before !== undefined && childReclaimDoneRefreshDue(cold ?? [], childRunsRef.current, before, after)) {
-      void loadCold();
-    }
-    // The coord frame's dependencies only, as wave 5's effect takes the fleet
-    // frame's: a cold read landing is not a change of the value, and a re-read
-    // changes `cold`, never `coordFrame`, so it cannot loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coordFrame, coordFrameSeen]);
+  // The archive read — the only carrier of a finished run — with its race
+  // guard and the four transitions that re-fire it: `useColdRuns`. 170 lines,
+  // none of which rendered anything.
+  const { cold, state: coldState, reload: loadCold } = useColdRuns(store, loadRuns);
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
   // CCR-15 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
@@ -749,9 +263,9 @@ export function RunsScreen({
   return (
     <div className="runs-screen" data-conn={conn}>
       <header className="runs-head">
-        <button type="button" className="runs-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
+        <BackButton className="runs-back" aria-label="Back to fleet" onClick={() => navigate('/')}>
           ‹
-        </button>
+        </BackButton>
         <h1 className="runs-title">Runs</h1>
       </header>
 
@@ -787,9 +301,9 @@ export function RunsScreen({
       {/* Task 13, spec §4.4: ONE door, rendered here regardless of the
           board's own state below — a program starts before any run exists
           to show. */}
-      <button type="button" className="program-start-door" onClick={() => setStartOpen(true)}>
+      <Button variant="quiet" size="fit" className="program-start-door text-xs" onClick={() => setStartOpen(true)}>
         Start a program
-      </button>
+      </Button>
 
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not

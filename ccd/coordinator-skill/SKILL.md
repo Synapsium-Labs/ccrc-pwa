@@ -275,6 +275,24 @@ not after.
    execution skill is not optional: the worker's clause 6 invokes "the
    execution skill the brief names", so an unnamed one is a clause pointing at
    nothing (`references/wave-lifecycle.md` §2).
+
+   **Read the plan's `## Design` posture before this call.** A plan that names a
+   path under `ui/src/` or a `.tsx` under `pwa/src/` carries a `## Design`
+   section whose `**Posture:**` line is one of three words, and
+   `server/test/design-declaration.test.ts` reds a plan that does not — so the
+   answer is always there to read, and it is never this session's to invent.
+   `required` puts the brief path from that section INTO the wave brief, where
+   the worker's clause 6 already makes it a requirement alongside the plan.
+   `offer` asks — with the AskUserQuestion tool, the structured ask the session
+   hook captures, the same lane the worker's clause 5 names — and WAITS for the
+   answer before dispatching. That lane deliberately, not a note in the brief:
+   an ask reaches the operator's phone and is answered from it, and answering
+   it needs no box token, so a design gate cannot become the wedge that has no
+   door. `none` is a complete answer; dispatch says nothing about design.
+   The canvas the worker produces is registered in `docs/design/CANVASES.md`
+   with the commit sha it matched — a canvas without that sha cannot be told,
+   later, from one the code has already left behind.
+
    **One sentence from that protocol still goes in every brief anyway: commit on
    this workspace's own branch, never a separate feature branch** — the
    done-fingerprint (step 4) re-measures the workspace branch, a feature branch

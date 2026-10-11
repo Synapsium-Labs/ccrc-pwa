@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { TEST_ROSTER } from './rosterFixture';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
@@ -77,23 +78,7 @@ const accountsRoute = (): Response =>
     status: 200, headers: { 'content-type': 'application/json' },
   });
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:OpenClawHetzner',
-  wrapper: 'claude',
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/home/rc/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: Date.now() - 2 * MIN,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  version: '2.1.0',
-  ...over,
-});
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 /** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
 const makeStore = (): FleetStore =>
@@ -2978,8 +2963,13 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     await waitFor(() => expect(screen.getByText(/run different builds/i)).toHaveTextContent('Nothing moves until fleet is acknowledged — tap Ack on it in the halt banner; auto-install then moves the lagging box.'));
     expect(document.body.textContent).not.toContain('ccrc rollout');
     // The banners' order on the screen: the sticky host banner, then the halt, then the release line.
-    const order = [...document.querySelectorAll('.fleet-host-banner, .halt-banner, .update-banner')].map((e) => e.className);
-    expect(order).toEqual(['fleet-host-banner fleet-host-banner--warn', 'halt-banner', 'update-banner']);
+    // Identified by hook class, not by the whole className: the host banner is
+    // the Banner primitive now, so its class string is a cva's output and
+    // asserting it verbatim would pin utilities this test has no claim on.
+    // The claim is the ORDER of the three.
+    const order = [...document.querySelectorAll('.banner, .halt-banner, .update-banner')]
+      .map((e) => ['halt-banner', 'update-banner'].find((c) => e.classList.contains(c)) ?? 'banner');
+    expect(order).toEqual(['banner', 'halt-banner', 'update-banner']);
     expect(updates, 'one poll for the whole screen').toHaveBeenCalledTimes(1);
     fireEvent.click(ackButton);
     await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));

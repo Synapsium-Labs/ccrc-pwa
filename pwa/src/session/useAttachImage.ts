@@ -5,7 +5,7 @@
 // that typed the upload's path straight into the textarea; the tray replaced
 // it — see git history around the attachment-tray feature for that path.)
 import { useEffect, useRef, useState } from 'react';
-import { toast } from '../components/Toast';
+import { toast, type StagedImage } from '@ccrc/ui';
 import { api, apiErrorText, uploadErrorText } from '../lib/api';
 
 /** PNGs under this size upload untouched — lossless screenshots stay lossless. */
@@ -75,17 +75,6 @@ export function clipboardImages(data: DataTransfer | null): File[] {
 }
 
 export const MAX_IMAGES = 4;
-
-export interface StagedImage {
-  key: string;
-  file: File;
-  previewUrl: string;
-  state: 'uploading' | 'staged' | 'failed';
-  path?: string;
-  width?: number;
-  height?: number;
-  error?: string;
-}
 
 export interface StagedImages {
   images: StagedImage[];

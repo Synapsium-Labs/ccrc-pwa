@@ -8544,7 +8544,29 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // measured rather than fixed. UP needs no argument beyond the numbers,
       // and this is the standing rule S6-R11 applied to two more instances its
       // own list could not name: no rule changed, so no D-number.
-      'server/test/single-definition.test.ts': 8,
+      // RE-MEASURED at the design-system wave (base `5c922c86` = origin/main,
+      // tip = this branch), BY THE INSTRUMENT: `cite-remeasure.py` with
+      // `--files server/test/single-definition.test.ts` prints
+      // `stated 8  base 8  tree 13`, total `197 -> 202`, five ENTERED and
+      // nothing LEFT, every other key equal at both trees, and the row and
+      // site arrays unmoved (54 and 35 at both).
+      // ALL FIVE ARE ONE SINGLE-LINE SHIFT, measured rather than assumed: this
+      // branch adds ONE import line (`componentFamily` from `./sourceScan.js`)
+      // at the top of the cited file, and the two anchors the frozen documents
+      // name below it each move by exactly one — main's `:32-37` is the tip's
+      // `:33-38`, main's `:1319-1323` is the tip's `:1320-1324`, byte for byte
+      // at both trees. Entered: `plan:2747 :32-37`, `plan:3236 :32-37`,
+      // `plan:3236 :1319-1323`, `spec:1347 :32-37`, `spec:1347 :1319-1323`.
+      // BOTH CORPUS DOCUMENTS ARE BYTE-IDENTICAL to origin/main at this tree,
+      // and so is README (`git diff --quiet origin/main HEAD --` on each), so
+      // nothing was re-pointed, nothing is repairable here and no rule
+      // changed — the standing S6-R11 case, UP, which needs no argument beyond
+      // the numbers. Task 11 still owns the debt. No D-number.
+      //
+      // THE NEW GUARD THIS WAVE ADDS TO THAT FILE SITS AT ITS END for this
+      // reason: appended, it shifts no anchor at all. The five above are the
+      // import line's, and the import is what a shared helper costs.
+      'server/test/single-definition.test.ts': 13,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
@@ -8663,8 +8685,19 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // moved (argued beside the map, above the `'ccd/ccd'` entry).
     // 197 -> 197 on the merge of `origin/main` at `77c11245` into docs W1: stated 197, base 197, tree 197,
     // measured by `cite-remeasure.py` against `origin/main`; no key moved (argued beside the map).
-    // 197 -> 196 at box-token-lifecycle wave 2 B7: `'deploy/deploy.sh'` 4 -> 3 and nothing else moved (argued beside the map).
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
+    // 197 -> 202 at the design-system wave: the five the
+    // `single-definition.test.ts` entry above accounts for, each a one-line
+    // shift under a frozen anchor, measured by `cite-remeasure.py` against
+    // `origin/main` (`total stated 197  base 197  tree 202`); no other key
+    // moved.
+    // 202 -> 201 on the merge of `origin/main` at `562ef658` into the
+    // design-system wave: main's own `197 -> 196` moved ONE key in the other
+    // direction (`'deploy/deploy.sh'` 4 -> 3, argued beside the map), and the
+    // two deltas are disjoint — this branch's five are all in
+    // `single-definition.test.ts`, main's one is in `deploy/deploy.sh`. The
+    // headline is the SUM of the merged map, which is the point of it being a
+    // mechanism rather than a second number: 202 - 1.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8847,6 +8880,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // **Files:** 19 -> 18. Left: `ccd/ccd:3940-3951` (`plan:2747`), a coincidental pass on the shift, not a
     // repaired anchor. Nothing entered. Measured by diffing the dumped failure sets of the two trees, never
     // retyped. No D-number.
+    // RE-MEASURED at the design-system wave (base `5c922c86` = origin/main, tip = this branch). **Files:**
+    // 18 -> 19. Entered: `server/test/single-definition.test.ts:32-37`, the `plan:2747` reference whose
+    // clause quotes that range — one of the five the census entry above accounts for, and the same single
+    // cause: ONE import line (`componentFamily`) added at the top of the cited file shifts the range by one
+    // (main's `:32-37` is the tip's `:33-38`, byte for byte). Nothing left. The `:1319-1323` pair that
+    // entered the census is NOT in this set — those two citations are not **Files:** references. Both corpus
+    // documents and README are byte-identical to origin/main, measured, so nothing was re-pointed.
+    // Measured by `cite-remeasure.py` against `origin/main`, never retyped. No D-number.
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
         // RE-MEASURED at the tree this ships in (fix round 4). The citation
@@ -8874,6 +8915,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:1330-1333',
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
+        // ENTERS at the design-system wave, on this branch's one added import
+        // line in the cited file — see the note above this assertion.
+        'server/test/single-definition.test.ts:32-37',
         'deploy/deploy.sh:560',
         // LEFT at box-token-lifecycle wave 2 B7 (removed `ship_secret` from deploy.sh): `deploy/deploy.sh:629` now holds
         // a comment naming `install_atomic`, which its clause quotes. Coincidence, not repair; see D2849_INVISIBLE_SINCE_PR136.

@@ -14,6 +14,7 @@ import { resetAcks } from '../src/lib/seen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { TEST_ROSTER } from './rosterFixture';
 import type { FleetSession } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -28,23 +29,7 @@ afterEach(() => {
 
 const MIN = 60_000;
 
-const session = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:alpha',
-  wrapper: 'claude',
-  home: '/home/rc',
-  project: 'alpha',
-  workdir: '/home/rc/projects/alpha',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: Date.now() - 2 * MIN,
-  limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  version: '2.1.0',
-  ...over,
-});
+const session = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'claude:alpha', home: '/home/rc', project: 'alpha', workdir: '/home/rc/projects/alpha', statusUpdatedAt: Date.now() - 2 * MIN, limits: { five: 10, seven: 40 }, version: '2.1.0', ...over }));
 
 /** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
 const makeStore = (): FleetStore =>

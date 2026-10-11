@@ -14,7 +14,7 @@ import { EXPIRY_KIND_WORD, expiryAttentionOf } from '../src/fleet/expiryWords';
 import { DEAD_COORDINATOR_KIND_WORD, deadCoordinatorAttentionOf } from '../src/fleet/deadCoordinatorWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT } from '../src/lib/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';

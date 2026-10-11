@@ -6818,3 +6818,13 @@ and `GET /api/updates` (session-gated: the PWA's own updates view reads it) for 
 state and resolved desired tag.
 
 Expected: both boxes on the release carrying this merge within the mechanism's own cadence; the PWA's `BuildLine` shows it. A box that does not converge is reported with its `update --check` line, not moved by hand.
+
+## Design
+
+**Posture:** offer
+
+Stop and Archive become one feature: every session's menu and actions sheet change, the header loses "Stop session", and a confirm reads by case. A canvas would have been worth offering for the four confirm cases before they were written.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

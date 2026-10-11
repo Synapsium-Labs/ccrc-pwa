@@ -28,22 +28,6 @@
   border-bottom: 1px solid var(--edge-subtle);
   background: var(--bg-surface);
 }
-.chat-back {
-  flex: none;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
-  border: none;
-  background: none;
-  border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--font-ui);
-  color: var(--ink-secondary);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
-}
-.chat-back:active {
-  transform: scale(0.88);
-  color: var(--ink-primary);
-}
 .chat-title-wrap {
   flex: 1;
   min-width: 0;
@@ -51,7 +35,7 @@
   gap: var(--sp-1);
 }
 .chat-title {
-  font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -85,7 +69,7 @@
   height: 6px;
 }
 .chat-meta .status-line {
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
 .chat .status-line--busy {
@@ -103,9 +87,26 @@
 /* Model / effort / ultracode / branch chips, from the pane statusline. The
    model + effort chips are tappable (open their choosers). They share the one
    .chat-meta row above. */
+/* 24px HERE IS THE LABEL'S FLOOR, and only the label's.
+   These chips measured about 19px — `padding: 3px 9px` around `--fs-2xs` at
+   line-height 1, plus a hairline — the smallest controls in the app, found by
+   `control-census.test.ts` and not by a reader. They went to `--sp-6` (24px,
+   WCAG 2.2 SC 2.5.8) for one wave while the operator weighed the visual cost,
+   and this rule keeps that number for the one chip that is NOT a control:
+   `.metachip--branch` is a `<span>`, a read-only statement of the branch, and
+   a 44px pill for a label is height spent on nothing.
+
+   THE TWO LIVE CHIPS TAKE `--tap-min` BELOW (V1, operator's ruling). They open
+   the model and the effort chooser, and the overlay the rest of the app uses to
+   reach the floor is barred here for a measured reason: a `::before` on either
+   chip overhangs the OTHER, and an overhang between two live choosers turns a
+   near-miss into opening the wrong one. Growing the visible box was always the
+   only safe direction; what it costs is ~20px on one meta row, which the
+   operator weighed against two choosers nobody can reliably hit. */
 .metachip {
   display: inline-flex;
   align-items: center;
+  min-height: var(--sp-6);
   gap: 5px;
   max-width: 100%;
   min-width: 0;
@@ -113,12 +114,16 @@
   background: var(--bg-surface);
   border-radius: var(--r-full);
   padding: 3px 9px;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-secondary);
 }
+/* V1: the floor is on the BUTTON selector, not on `.metachip`, which is the
+   whole of why this is safe to do at all — `.metachip--branch` is a span and
+   keeps the 24px box above. A control gets the target; a label does not. */
 button.metachip {
+  min-height: var(--tap-min);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), border-color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
 button.metachip:active {
   transform: scale(0.94);
@@ -126,7 +131,7 @@ button.metachip:active {
 }
 .metachip-glyph {
   flex: none;
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   line-height: 1;
 }
 .metachip-text {
@@ -159,25 +164,17 @@ button.metachip:active {
   background: var(--accent-tint);
   border-radius: var(--r-full);
   padding: 1px 6px;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
 }
 
 /* Account chip — mono name first, hue second, against the screen-scoped
-   account accent (the [data-acct] rebinding in tokens.css). */
-.chat .chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  padding: var(--sp-1) 9px;
-  border-radius: var(--r-full);
-}
-.chat .chip i {
-  width: 5px;
-  height: 5px;
-  border-radius: var(--r-full);
-  background: currentColor;
-}
+   account accent (the [data-acct] rebinding in tokens.css).
+   THE SHAPE IS fleet.css's `.chip`, not a copy of it. This sheet carried a
+   byte-identical `.chat .chip` and `.chat .chip i`; the extra `.chat` bought
+   specificity over nothing, since the two rules set the same declarations and
+   the only other chip rules here (`--active`, `--archived`, `--repo`) set
+   colour and family, which these never touched. Both deleted. What stays are
+   the three MODIFIERS below, which is the half that is actually about chat. */
 .chip--active {
   color: var(--acct-active);
   background: var(--acct-active-tint);
@@ -190,30 +187,21 @@ button.metachip:active {
   color: var(--ink-tertiary);
   background: var(--bg-raised);
 }
-.chip--repo { font-family: var(--font-mono); }
+.chip--repo { font-family: var(--family-mono); }
 /* Keycaps — the machine's keys surfacing in the chrome (DIRECTION: the
    interrupt is "a keycap, not an icon"). Raised caps with a heavier bottom
    edge, mono legends, 44px targets; pressing compresses like a key. `esc`
    is enabled only while the session is busy — otherwise it sits greyed,
    a dead key on the board. */
+/* `<Keycap>` carries the ten declarations this rule shared with
+   `.term-keys .keycap` below — the grid, the mono caps, the heavier bottom
+   border, the `--r-sm` corner and the 1px press. What stays is the GROUND:
+   chrome fill, strong hairline, primary ink, and the stand-down. */
 .chat-head .keycap {
   flex: none;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
-  display: grid;
-  place-items: center;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
   color: var(--ink-primary);
   background: var(--bg-raised);
-  border: 1px solid var(--edge-strong);
-  border-bottom-width: 2px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
-}
-.chat-head .keycap:active:not(:disabled) {
-  transform: translateY(1px);
+  border-color: var(--edge-strong);
 }
 .chat-head .keycap:disabled {
   color: var(--ink-disabled);
@@ -225,8 +213,8 @@ button.metachip:active {
 /* The PR cap. It must NOT be the one sub-44px control in the header, so the
    min-width stays at the tap floor and only the inline padding tightens. */
 .keycap--pr { min-width: var(--tap-min); padding-inline: 6px; gap: 3px; }
-.keycap--pr .pr-legend { font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono); }
-.keycap--pr .pr-glyph  { font-size: var(--text-2xs); }
+.keycap--pr .pr-legend { font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono); }
+.keycap--pr .pr-glyph  { font-size: var(--fs-2xs); }
 .keycap--pr .pr-dot {
   width: 6px; height: 6px; border-radius: var(--r-full);
   border: 1px solid currentColor; background: currentColor;
@@ -246,20 +234,18 @@ button.metachip:active {
 .keycap--pr[data-checks='pending'] .pr-dot { color: var(--status-attention); }
 
 .pr-sheet { display: grid; gap: var(--sp-3); }
-.pr-lede { color: var(--ink-primary); font-size: var(--text-base); line-height: var(--leading-normal); }
-.pr-facts { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
-.pr-warn { color: var(--status-attention-text); font-size: var(--text-sm); }
-.pr-title-input {
-  width: 100%; min-height: var(--tap-min); padding: 0 var(--sp-2);
-  font-size: var(--text-input); color: var(--ink-primary);
-  background: var(--bg-raised); border: 1px solid var(--edge-strong); border-radius: var(--r-sm);
-}
+.pr-lede { color: var(--ink-primary); font-size: var(--fs-base); line-height: var(--lh-normal); }
+.pr-facts { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pr-warn { color: var(--status-attention-text); font-size: var(--fs-sm); }
+/* `.pr-title-input` is `<TextInput>` wearing `TEXT_INPUT_INLINE`: nine
+   declarations that `.pool-new-input` in fleet.css spelled out identically.
+   The class stays as a hook — the sheet's own tests select on it. */
 /* A read-only preview, not an editor: a multi-line editor in a bottom sheet is
    a bad surface, and the body is fully regenerable — prose edits happen on
    GitHub, one tap away via this sheet's own link. */
 .pr-body-preview {
   width: 100%; max-height: 40vh; overflow: auto; resize: none;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
   /* --ink-on-well, NOT --ink-secondary. Wells stay dark in the light theme
      (tokens.css: "deliberately dark in light theme"), so every ink tuned for
      paper dies on the glass: --ink-secondary is #4E5850 in light and measured
@@ -269,23 +255,24 @@ button.metachip:active {
   color: var(--ink-on-well); background: var(--bg-well);
   border: 1px solid var(--edge-subtle); border-radius: var(--r-sm); padding: var(--sp-2);
 }
-.pr-check-names { color: var(--status-dead-text); font-size: var(--text-sm); word-break: break-word; }
-.pr-label { font-size: var(--text-xs); color: var(--ink-tertiary); }
-.pr-title { font-size: var(--text-base); color: var(--ink-primary); }
-.pr-checkline { font-size: var(--text-sm); color: var(--ink-secondary); }
-.pr-note { font-size: var(--text-sm); color: var(--ink-secondary); line-height: var(--leading-normal); }
+.pr-check-names { color: var(--status-dead-text); font-size: var(--fs-sm); word-break: break-word; }
+.pr-label { font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.pr-title { font-size: var(--fs-base); color: var(--ink-primary); }
+.pr-checkline { font-size: var(--fs-sm); color: var(--ink-secondary); }
+.pr-note { font-size: var(--fs-sm); color: var(--ink-secondary); line-height: var(--lh-normal); }
 
 .reap-sheet { display: grid; gap: var(--sp-3); }
 .reap-rows { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }
-.reap-rows dt { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary); }
-.reap-rows dd { font-size: var(--text-sm); color: var(--ink-primary); margin: 0; word-break: break-word; }
-.reap-note { font-size: var(--text-xs); color: var(--ink-secondary); }
+.reap-rows dt { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.reap-rows dd { font-size: var(--fs-sm); color: var(--ink-primary); margin: 0; word-break: break-word; }
+.reap-note { font-size: var(--fs-xs); color: var(--ink-secondary); }
 /* The refusal is the whole content when there is one: no button sits beside it,
    because there is no override. */
-.reap-refusal { color: var(--status-attention-text); font-size: var(--text-sm); line-height: var(--leading-normal); }
-.reap-sensitive { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
-.reap-size { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
-.reap-ignored { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
+.reap-refusal { color: var(--status-attention-text); font-size: var(--fs-sm); line-height: var(--lh-normal); }
+.reap-sensitive { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
+/* `.reap-size`, `.reap-ignored` and fleet.css's `.hotfiles-path` declared the
+   same four — a path that may be long. All three are `MONO_PATH` now, and the
+   two that lacked `word-break` inherit the one that had it. */
 /* D4: nested checkouts, named — same look as `.reap-sensitive` (mono, xs,
    no bullets) since both are a plain list of paths, but ink-secondary rather
    than the danger color: a nested checkout is information, not a threat.
@@ -293,7 +280,7 @@ button.metachip:active {
    naming what happens to these checkouts), `.reap-children-list` carries the
    look the plain `<ul>` used to carry alone. */
 .reap-children { display: grid; gap: var(--sp-1); }
-.reap-children-list { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
+.reap-children-list { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
 .reap-child { word-break: break-word; }
 .reap-go { min-height: var(--tap-min); }
 
@@ -303,24 +290,14 @@ button.metachip:active {
 .menu {
   border-top: 1px solid var(--edge-subtle);
 }
+/* `.menu-item` is `<ListRow>` — twelve declarations it shared, to the token,
+   with `.acct-list .acct-row` a stylesheet away. What stays is the menu's own
+   VOICE: UI type at base size on tight leading, in primary ink. The ink is
+   also what `design/audit.mjs` measures this row through, so it is not
+   decoration to tidy away. */
 .menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  width: 100%;
-  min-height: 52px;
-  padding: var(--sp-2) var(--sp-1);
-  border: none;
-  border-bottom: 1px solid var(--edge-subtle);
-  background: none;
-  text-align: left;
-  font: var(--weight-regular) var(--text-base) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-regular) var(--fs-base) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
-}
-.menu-item:active {
-  transform: scale(0.97);
 }
 .menu-label {
   flex: 1;
@@ -328,7 +305,7 @@ button.metachip:active {
 }
 .menu-hint {
   flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .menu-item--danger .menu-label {
@@ -348,22 +325,16 @@ button.metachip:active {
   border-radius: var(--r-md);
   background: var(--bg-raised);
   padding: var(--sp-2) var(--sp-3);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   color: var(--ink-secondary);
 }
 .chat-banner--offline {
   justify-content: center;
   min-height: var(--sp-8);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
 }
-.chat-banner--offline::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: var(--r-full);
-  background: var(--status-attention);
-}
+/* The 6px dot is `ATTENTION_DOT` — see fleet.css's `.offline-banner::before`. */
 .chat-banner--dead {
   border-color: color-mix(in srgb, var(--status-dead) 35%, var(--edge-subtle));
   /* --status-dead-tint is 12% alpha and tokens.css prices it over a CARD
@@ -382,12 +353,6 @@ button.metachip:active {
   flex: 1;
   min-width: 0;
 }
-.chat-banner--dead .btn-ghost {
-  width: auto;
-  flex: none;
-  padding: 0 var(--sp-3);
-  color: var(--ink-primary);
-}
 .chat-banner--missing {
   align-items: flex-start;
   flex-direction: column;
@@ -397,357 +362,9 @@ button.metachip:active {
   color: var(--status-attention-text);
 }
 .chat-banner--missing .banner-path {
-  font: var(--weight-regular) var(--text-xs) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-mono) var(--family-mono);
   color: var(--ink-secondary);
   overflow-wrap: anywhere;
-}
-.chat-banner--missing .btn-ghost {
-  width: auto;
-  padding: 0 var(--sp-3);
-  color: var(--ink-primary);
-}
-
-/* ------------------------------------------------------------------ *
- *  Task strip — the TUI's plan widget, pinned under the header.       *
- *  Collapsed: one live line. Open: the rows, completed folded last.   *
- * ------------------------------------------------------------------ */
-/* Sits directly above the composer, as in the terminal. Because it now eats
-   into the conversation rather than the header, it is capped: a plan with many
-   OPEN tasks scrolls inside itself instead of pushing the chat off screen.
-   (The completed pile stays folded, so this bites rarely.) */
-.task-strip {
-  flex: none;
-  margin: 0 var(--sp-4) var(--sp-2);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  background: var(--bg-surface);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  max-height: min(40vh, 320px);
-}
-.task-strip--open {
-  border-color: var(--edge-strong);
-}
-
-.task-head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  width: 100%;
-  min-height: var(--sp-8);
-  padding: var(--sp-2) var(--sp-3);
-  background: none;
-  border: 0;
-  text-align: left;
-  color: var(--ink-primary);
-  cursor: pointer;
-}
-.task-head:active {
-  background: var(--bg-raised);
-}
-
-/* The spinner's asterisk. It only breathes while something is actually
-   running — glow means life, here as everywhere. */
-.task-mark {
-  flex: none;
-  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-}
-.task-mark--running {
-  color: var(--status-busy-text);
-  animation: task-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
-}
-@keyframes task-breathe {
-  from { opacity: 0.55; }
-  to   { opacity: 1; }
-}
-
-.task-headline {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui);
-}
-.task-count {
-  flex: none;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-secondary);
-  background: var(--bg-raised);
-  border-radius: var(--r-full);
-  padding: var(--sp-1) 9px;
-}
-.task-chevron {
-  flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-}
-
-.task-summary {
-  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-tertiary);
-}
-
-.task-rows {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 var(--sp-2);
-  border-top: 1px solid var(--edge-subtle);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  min-height: 0;
-}
-.task-line {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  width: 100%;
-  padding: var(--sp-2) var(--sp-3);
-  background: none;
-  border: 0;
-  text-align: left;
-  color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
-  cursor: pointer;
-}
-.task-line:disabled {
-  cursor: default;
-}
-.task-line:active:not(:disabled) {
-  background: var(--bg-raised);
-}
-.task-glyph {
-  flex: none;
-  width: 1em;
-  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-}
-.task-subject {
-  min-width: 0;
-}
-
-/* Running rows carry the accent and the weight; done rows are struck receipts.
-   Never element opacity — that would push ink below AA. */
-.task-row--in_progress .task-glyph {
-  color: var(--status-busy-text);
-}
-.task-row--in_progress .task-subject {
-  font-weight: var(--weight-semibold);
-}
-.task-row--completed .task-subject {
-  color: var(--ink-tertiary);
-  text-decoration: line-through;
-}
-.task-row--completed .task-glyph {
-  color: var(--ink-disabled);
-}
-
-.task-detail {
-  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + 1em + var(--sp-2));
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-ui);
-  color: var(--ink-secondary);
-}
-
-.task-fold {
-  padding: var(--sp-2) var(--sp-3);
-  background: none;
-  border: 0;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-  cursor: pointer;
-}
-.task-fold:active {
-  color: var(--ink-secondary);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .task-mark--running {
-    animation: none;
-    opacity: 0.85;
-  }
-}
-
-/* ------------------------------------------------------------------ *
- *  Mail strip — outstanding mail for THIS session, one row above the  *
- *  plan. Same tokens as .task-strip above (well, radius, head height) *
- *  so the two strips read as one stack rather than two designs.       *
- * ------------------------------------------------------------------ */
-/* `color` here is load-bearing for the contrast audit, not the rendering — no
-   child renders a direct text node of `.mail-strip` itself, every one below
-   sets its own explicit colour. It makes `.mail-strip` self-grounded
-   (background + colour together, `design/audit.mjs` route 1), which is what
-   lets its descendants below be scoped `.mail-strip .foo` and measured
-   through route 2b (named-ancestor descendants) rather than sitting in the
-   uncovered census (Task 8 fix round 1, finding 2). */
-.mail-strip {
-  flex: none;
-  margin: 0 var(--sp-4) var(--sp-2);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  background: var(--bg-surface);
-  color: var(--ink-primary);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  max-height: min(40vh, 320px);
-}
-.mail-strip--open {
-  border-color: var(--edge-strong);
-}
-
-.mail-strip .mail-strip-head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  width: 100%;
-  min-height: var(--tap-min);
-  padding: var(--sp-2) var(--sp-3);
-  background: none;
-  border: 0;
-  text-align: left;
-  color: var(--ink-primary);
-  cursor: pointer;
-}
-.mail-strip-head:active {
-  background: var(--bg-raised);
-}
-
-.mail-strip .mail-strip-mark {
-  flex: none;
-  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-}
-
-.mail-strip-headline {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui);
-}
-.mail-strip-count {
-  flex: none;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-secondary);
-  background: var(--bg-raised);
-  border-radius: var(--r-full);
-  padding: var(--sp-1) 9px;
-}
-.mail-strip .mail-strip-chevron {
-  flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-}
-
-.mail-strip .mail-strip-summary {
-  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-tertiary);
-}
-
-.mail-strip-rows {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 var(--sp-2);
-  border-top: 1px solid var(--edge-subtle);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  min-height: 0;
-}
-.mail-strip-row {
-  padding: var(--sp-2) var(--sp-3);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--sp-2);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
-}
-.mail-strip-row + .mail-strip-row {
-  border-top: 1px solid var(--edge-subtle);
-}
-.mail-strip .mail-strip-from {
-  font-weight: var(--weight-semibold);
-  color: var(--ink-primary);
-}
-.mail-strip .mail-strip-kind {
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ink-tertiary);
-}
-.mail-strip .mail-strip-subject {
-  flex-basis: 100%;
-  color: var(--ink-secondary);
-}
-/* Review finding 2: a delivery the lane gave up retrying, past its own
-   replay ceiling, never acked — distinct from an ordinary pending row so it
-   does not read as "still being delivered". */
-.mail-strip .mail-strip-abandoned {
-  flex-basis: 100%;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--status-attention-text);
-}
-/* Build 8 §4.5: a delivery the lane is still retrying but cannot hand over,
-   because THIS session's own input box holds unsent text. Same shape as
-   `.mail-strip-abandoned` above — a `flex-basis: 100%` span inside the same
-   `<li>`, never a second row — and the same already-measured token, so the
-   contrast gate needs nothing new. Scoped `.mail-strip .foo` like every other
-   descendant here, so `design/audit.mjs` measures it through route 2b rather
-   than stranding it in the uncovered census. */
-.mail-strip .mail-strip-blocked {
-  flex-basis: 100%;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--status-attention-text);
-}
-/* The collapsed head's copy of the same signal: `flex: none` rather than a
-   full-width break, because the head is one line and this sits beside the
-   count. */
-.mail-strip .mail-strip-blocked-mark {
-  flex: none;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--status-attention-text);
-}
-/* D-792: one gate has been holding this delivery a while. NOTHING HAS FAILED,
-   and the colour says so — `--ink-tertiary`, the informational register this
-   strip already uses for artifact paths, NOT the `--status-attention-text` the
-   two rules above use. Those two are fates (abandoned, blocked); this is a
-   description of a lane that is still working, and painting it as attention
-   would re-introduce on this surface the exact "a busy worker is a fault" lie
-   the deviation was written against. Already-measured token, scoped
-   `.mail-strip .foo` like every other descendant here, so `design/audit.mjs`
-   reaches it through route 2b. */
-.mail-strip .mail-strip-held {
-  flex-basis: 100%;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-}
-/* The collapsed head's copy, `flex: none` beside the count — the
-   `.mail-strip-blocked-mark` shape one rule up, in this line's own register. */
-.mail-strip .mail-strip-held-mark {
-  flex: none;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-}
-.mail-strip .mail-strip-artifacts {
-  flex-basis: 100%;
-  margin: 0;
-  padding: 0 0 0 var(--sp-4);
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
-  color: var(--ink-tertiary);
 }
 
 /* ------------------------------------------------------------------ *
@@ -790,12 +407,12 @@ button.metachip:active {
   border-radius: var(--r-full);
   background: var(--bg-raised);
   color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
   padding: 0 var(--sp-4);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--elev-card);
   cursor: pointer;
-  animation: jump-in var(--dur-fast) var(--ease-swift);
-  transition: transform var(--dur-press) var(--ease-swift);
+  animation: jump-in var(--dur-fast) var(--curve-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .jump-latest:active {
   transform: translateX(-50%) scale(0.95);
@@ -813,16 +430,16 @@ button.metachip:active {
 .ts-divider {
   justify-self: center;
   text-align: center;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-tertiary);
   padding: var(--sp-1) 0;
 }
 .sys-divider {
   justify-self: center;
   text-align: center;
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-tertiary);
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
@@ -850,8 +467,8 @@ button.metachip:active {
   background: var(--bg-raised);
   border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
   padding: 10px 14px;
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -861,7 +478,7 @@ button.metachip:active {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -878,7 +495,7 @@ button.metachip:active {
 }
 .pending-error {
   justify-self: end;
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
   color: var(--status-dead-text);
   text-align: right;
   overflow-wrap: anywhere;
@@ -894,10 +511,10 @@ button.metachip:active {
   border-radius: var(--r-md);
   background: transparent;
   color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
   padding: 0 var(--sp-3);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .pending-actions button:active {
   transform: scale(0.97);
@@ -907,7 +524,7 @@ button.metachip:active {
   color: var(--accent);
 }
 /* `Send it` outranks Retry, and only appears beside it — so it is the FILLED
- * one, reusing .btn-primary's accent-on-accent pair rather than a third
+ * one, reusing the primary button's accent-on-accent pair rather than a third
  * treatment. The hierarchy is the message: on an `enter-ignored` the text is
  * already in the box, so retyping it is the wrong move and pressing one more
  * Enter is the right one. Inherits min-height from `.pending-actions button`,
@@ -922,299 +539,13 @@ button.metachip:active {
   cursor: default;
 }
 
-/* ------------------------------------------------------------------ *
- *  Assistant turns — output: flush markdown prose, wells for code.    *
- * ------------------------------------------------------------------ */
-.msg-assist {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);   /* 0 min: long tokens scroll, don't push */
-  gap: var(--sp-3);
-  font-size: var(--text-base);
-  line-height: var(--leading-prose);
-  color: var(--ink-primary);
-  overflow-wrap: anywhere;
-}
-.msg-assist > * { min-width: 0; }
-
-/* Own the vertical rhythm — zero UA block margins; spacing is grid gap + the
-   asymmetric heading top-margins below. */
-.msg-assist > :where(p, ul, ol, blockquote, pre, table, h1, h2, h3, h4, hr,
-                     .callout, .code-block, .md-table-wrap) { margin: 0; }
-.msg-assist > :first-child { margin-top: 0; }
-
-/* READING MEASURE — prose only; code/tables/images excluded so data keeps the
-   full pane. Direct children only, so max-width shrinks the stretched grid item
-   to the start edge. Inert on the <640px column. */
-.msg-assist > :is(p, ul, ol, blockquote, h1, h2, h3, h4, hr, .callout) {
-  max-width: var(--measure-prose);
-}
-
-/* HEADINGS — true 4-step scale (was h1==h2, h3==h4), asymmetric top margin so a
-   heading binds to what follows. */
-.msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4 {
-  font-family: var(--font-ui);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-tight);
-  color: var(--ink-primary);
-}
-.msg-assist h1 { font-size: var(--text-xl); margin-top: var(--sp-4); }
-.msg-assist h2 {
-  font-size: var(--text-lg);
-  margin-top: var(--sp-4);
-  padding-bottom: var(--sp-1);
-  border-bottom: 1px solid var(--edge-subtle);   /* hairline section rule */
-}
-.msg-assist h3 { font-size: var(--text-base); margin-top: var(--sp-3); }
-.msg-assist h4 { font-size: var(--text-sm); color: var(--ink-secondary); margin-top: var(--sp-3); }
-
-/* EMPHASIS */
-.msg-assist strong { font-weight: var(--weight-semibold); color: var(--ink-primary); }
-.msg-assist em { font-style: italic; }
-
-/* LISTS — body promoted to primary ink (was --ink-secondary), quieter marker,
-   looser item gap, indented+aired nesting. */
-.msg-assist ul, .msg-assist ol {
-  padding-left: var(--sp-5);
-  display: grid;
-  gap: var(--sp-2);
-  color: var(--ink-primary);
-}
-.msg-assist li::marker { color: var(--ink-tertiary); }
-.msg-assist li > ul, .msg-assist li > ol { margin-top: var(--sp-2); padding-left: var(--sp-4); }
-
-/* GFM task lists — terminal cells, not OS checkboxes. remark-gfm emits the
-   markup; this repaints it. Must follow the ul/ol rule to win padding. */
-.msg-assist .contains-task-list { padding-left: 0; list-style: none; }
-.msg-assist .task-list-item { display: flex; align-items: baseline; gap: var(--sp-2); }
-.msg-assist .task-list-item input[type='checkbox'] {
-  appearance: none; -webkit-appearance: none;
-  flex: none; width: 15px; height: 15px; margin: 0; translate: 0 2px;
-  border: 1px solid var(--edge-strong);
-  border-radius: var(--r-sm);
-  background: var(--bg-well);
-  cursor: default; position: relative;
-}
-.msg-assist .task-list-item input[type='checkbox']:checked {
-  border-color: var(--accent); background: var(--accent-tint);
-}
-.msg-assist .task-list-item input[type='checkbox']:checked::after {
-  content: '✓'; position: absolute; inset: 0;
-  display: grid; place-items: center;
-  font: var(--weight-semibold) 11px / 1 var(--font-mono);
-  color: var(--accent);
-}
-.msg-assist .task-list-item:has(input:checked) {   /* progressive; degrades to no-dim */
-  color: var(--ink-tertiary);
-  text-decoration: line-through;
-  text-decoration-color: var(--edge-strong);
-}
-
-/* LINKS — accent with a restrained underline that firms on hover. */
-.msg-assist a {
-  color: var(--accent);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  text-underline-offset: 3px;
-}
-.msg-assist a:hover { text-decoration-color: var(--accent); }
-
-/* QUOTE — a quiet card with a bar, distinct from the tinted callouts. */
-.msg-assist blockquote {
-  padding: var(--sp-2) var(--sp-3);
-  border-left: 2px solid var(--edge-strong);
-  border-radius: 0 var(--r-md) var(--r-md) 0;
-  background: var(--bg-surface);
-  color: var(--ink-secondary);
-}
-.msg-assist blockquote > :first-child { margin-top: 0; }
-.msg-assist blockquote > :last-child { margin-bottom: 0; }
-
-/* SECTION RULE — hairline fading at both ends. */
-.msg-assist hr {
-  height: 1px; border: none; margin: var(--sp-3) 0;
-  background: linear-gradient(to right, transparent,
-    var(--edge-strong) 15%, var(--edge-strong) 85%, transparent);
-}
-
-/* INLINE CODE — a defined chip (replaces the old .msg-assist code element rule).
-   Explicit ink-primary keeps it legible inside lists. */
-.msg-assist .md-code {
-  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
-  color: var(--ink-primary);
-  background: var(--bg-raised);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-sm);
-  padding: 1px 5px;
-  overflow-wrap: anywhere;
-}
-/* KEYCAPS — echoes the chrome .keycap language, sized to sit inline. */
-.msg-assist .kbd-combo { display: inline-flex; align-items: center; gap: 3px; vertical-align: baseline; }
-.msg-assist kbd {
-  display: inline-block; min-width: 1.5em; padding: 1px 6px;
-  font: var(--weight-medium) var(--text-xs) / 1.4 var(--font-mono);
-  text-align: center; color: var(--ink-primary);
-  background: var(--bg-raised);
-  border: 1px solid var(--edge-strong); border-bottom-width: 2px;
-  border-radius: var(--r-sm); box-shadow: var(--shadow-card);
-}
-.msg-assist .kbd-plus { font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono); color: var(--ink-tertiary); }
-
-/* CODE BLOCKS — wells, dark in both themes, scrolling inside the glass.
-   Kept on --leading-mono; excluded from the reading measure. */
-.msg-assist pre {
-  background: var(--bg-well);
-  color: var(--ink-on-well);
-  border-radius: var(--r-md);
-  padding: 10px var(--sp-3);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
-  overflow-x: auto;
-  max-height: var(--well-max);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.msg-assist pre code { background: none; border-radius: 0; padding: 0; color: inherit; font: inherit; }
-
-/* TABLES — wrapper scroller (div, via TableWrap): zebra body, eyebrow header,
-   CSS-only edge-fade scroll affordance (Lea Verou technique). */
-.md-table-wrap {
-  max-width: 100%;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  border-radius: var(--r-md);
-  background:
-    linear-gradient(to right, var(--bg-page) 30%, transparent) 0 0,
-    linear-gradient(to left,  var(--bg-page) 30%, transparent) 100% 0,
-    radial-gradient(farthest-side at 0 50%,   rgba(0,0,0,.28), transparent) 0 0,
-    radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.28), transparent) 100% 0;
-  background-repeat: no-repeat;
-  background-size: 32px 100%, 32px 100%, 14px 100%, 14px 100%;
-  background-attachment: local, local, scroll, scroll;
-}
-.msg-assist table {
-  width: max-content; min-width: 100%;
-  border-collapse: collapse;
-  background: transparent;              /* let the wrap's shadows read through */
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-}
-.msg-assist th, .msg-assist td {
-  border: 1px solid var(--edge-subtle);
-  padding: var(--sp-2) var(--sp-3);
-  text-align: left;
-}
-.msg-assist thead th {
-  background: color-mix(in srgb, var(--ink-primary) 8%, transparent);
-  color: var(--ink-primary);
-  font: var(--weight-semibold) var(--text-xs) / var(--leading-tight) var(--font-ui);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  border-bottom: 2px solid var(--edge-strong);
-}
-.msg-assist tbody tr:nth-child(even) td {
-  background: color-mix(in srgb, var(--ink-primary) 5%, transparent);
-}
-
-/* GFM ALERT CALLOUTS — remarkAlerts retags `> [!NOTE]` blockquotes as
-   <div class="callout" data-callout="…">. Hue lives in the left rule + mono
-   label only (never body ink), so contrast holds in both themes. */
-.msg-assist .callout {
-  --callout-hue: var(--ink-secondary);
-  --callout-tint: var(--bg-surface);
-  display: grid; gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid color-mix(in srgb, var(--callout-hue) 30%, var(--edge-subtle));
-  border-left: 3px solid var(--callout-hue);
-  border-radius: var(--r-md);
-  background: var(--callout-tint);
-  color: var(--ink-secondary);
-}
-.msg-assist .callout > :first-child { margin-top: 0; }
-.msg-assist .callout > :last-child { margin-bottom: 0; }
-.msg-assist .callout strong { color: var(--ink-primary); }
-.msg-assist .callout::before {
-  font: var(--weight-semibold) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  color: var(--callout-hue);
-}
-.msg-assist .callout[data-callout='note']      { --callout-hue: var(--acct-blue);            --callout-tint: var(--acct-blue-tint); }
-.msg-assist .callout[data-callout='tip']       { --callout-hue: var(--status-busy-text);     --callout-tint: var(--accent-tint); }
-.msg-assist .callout[data-callout='important'] { --callout-hue: var(--acct-violet);           --callout-tint: var(--acct-violet-tint); }
-.msg-assist .callout[data-callout='warning']   { --callout-hue: var(--status-attention-text); --callout-tint: var(--status-attention-tint); }
-/* caution's tint is the ONE alpha value in the five (--status-dead-tint, 12%),
-   so it alone let the page ground through and its ::before label measured 4.44
-   in light where the other four sit at 4.94-5.73. Mixed over --bg-surface it
-   becomes opaque like its siblings and reads 5.88 / 4.81. */
-.msg-assist .callout[data-callout='caution']   { --callout-hue: var(--status-dead-text);      --callout-tint: var(--status-dead-tint-solid); }
-.msg-assist .callout[data-callout='note']::before      { content: '● NOTE'; }
-.msg-assist .callout[data-callout='tip']::before       { content: '★ TIP'; }
-.msg-assist .callout[data-callout='important']::before { content: '◆ IMPORTANT'; }
-.msg-assist .callout[data-callout='warning']::before   { content: '▲ WARNING'; }
-.msg-assist .callout[data-callout='caution']::before   { content: '■ CAUTION'; }
-
-/* ── Code-block chrome: language label + copy, above the scrolling well ── */
-.code-block {
-  border-radius: var(--r-md);
-  overflow: hidden;
-  background: var(--bg-well);
-  border: 1px solid var(--edge-subtle);
-}
-.code-block-bar {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
-  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
-  background: var(--well-bar-bg);
-  border-bottom: 1px solid var(--well-bar-hair);
-}
-.code-block-lang {
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps); text-transform: uppercase;
-  color: var(--syn-comment);
-}
-.code-block-copy {
-  appearance: none; border: 1px solid transparent; border-radius: var(--r-sm);
-  background: transparent; color: var(--ink-on-well);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps); text-transform: uppercase;
-  padding: var(--sp-1) var(--sp-2); min-height: var(--sp-8);
-  cursor: pointer; -webkit-tap-highlight-color: transparent;
-  transition: color var(--dur-fast) var(--ease-swift), border-color var(--dur-fast) var(--ease-swift);
-}
-/* --accent-on-well, not --accent: this label sits on the code well's bar, which
-   is dark in BOTH themes, and the light-theme --accent (#0E7B3F) is tuned for
-   paper — it read 3.03:1 here, under the 4.5 floor this 11px uppercase mono
-   text needs. [data-copied] is not a hover-only state: MessageBubble.tsx holds
-   it for 1600ms after every copy, and it is the state that renders "Copied". */
-.code-block-copy:hover, .code-block-copy[data-copied] {
-  color: var(--accent-on-well);
-  border-color: color-mix(in srgb, var(--accent-on-well) 40%, transparent);
-}
-.code-block-copy:active { transform: scale(0.96); }
-.code-block-copy:focus-visible { outline: 2px solid var(--accent-on-well); outline-offset: 2px; }
-.code-block pre { margin: 0; border-radius: 0; }   /* wrapper owns corners + bg */
-
-/* ── Syntax spans — ONE dark palette (wells are dark in both themes).
-   .msg-assist .hljs-x (0,2,0) outranks .msg-assist pre code (0,1,2). ── */
-.msg-assist .hljs-comment, .msg-assist .hljs-quote        { color: var(--syn-comment); font-style: italic; }
-.msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag,
-.msg-assist .hljs-section, .msg-assist .hljs-literal      { color: var(--syn-keyword); }
-.msg-assist .hljs-string, .msg-assist .hljs-regexp        { color: var(--syn-string); }
-.msg-assist .hljs-number, .msg-assist .hljs-symbol,
-.msg-assist .hljs-bullet                                  { color: var(--syn-number); }
-.msg-assist .hljs-title, .msg-assist .hljs-title.function_,
-.msg-assist .hljs-function .hljs-title                    { color: var(--syn-function); }
-.msg-assist .hljs-type, .msg-assist .hljs-built_in,
-.msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title { color: var(--syn-type); }
-.msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property,
-.msg-assist .hljs-variable, .msg-assist .hljs-template-variable,
-.msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id { color: var(--syn-attr); }
-.msg-assist .hljs-tag                                     { color: var(--syn-punct); }
-.msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name  { color: var(--syn-tag); }
-.msg-assist .hljs-meta                                    { color: var(--syn-comment); }
-.msg-assist .hljs-deletion                                { color: var(--syn-deleted); }
-.msg-assist .hljs-addition                                { color: var(--syn-inserted); }
-.msg-assist .hljs-link  { color: var(--syn-function); text-decoration: underline; }
-.msg-assist .hljs-emphasis { font-style: italic; }
-.msg-assist .hljs-strong   { font-weight: var(--weight-semibold); }
+/* Assistant turns — output: flush markdown prose, wells for code.
+   SEVENTY-SIX RULES LEFT FOR `@ccrc/ui`'s prose.css, verbatim and in one
+   piece: nothing outside them named `msg-assist`, `code-block`,
+   `md-table-wrap` or `hljs`, so the move could not change a cascade. The
+   component is `<Prose>`; MessageBubble still owns the react-markdown
+   component map, because WHICH element a token becomes is this app's
+   business and how it LOOKS is the design system's. */
 
 /* COMPACTION CARD — a /compact recap ("This session is being continued…")
    folded to a quiet, expandable card so it doesn't bury the conversation. */
@@ -1224,17 +555,26 @@ button.metachip:active {
   background: var(--bg-surface);
   overflow: hidden;
 }
+/* V2 (operator's ruling): `--tap-min`, up from the ~29px `--sp-2` around
+   `--fs-sm` at line-height 1 produced. It already cleared SC 2.5.8's 24 and the
+   last wave left it alone for a measured reason — 44 adds about 15px to EVERY
+   compaction marker in a transcript, which is real reading cost on a phone. The
+   ruling went the other way: it is a full-width disclosure, so it was easy to
+   hit horizontally and short only vertically, and "short only vertically" is
+   still the axis a thumb misses on. The padding is unchanged; the floor does
+   the growing, so a marker with a long label still wraps the way it did. */
 .compaction-head {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
+  min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-3);
   background: transparent;
   border: none;
   cursor: pointer;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
   text-align: left;
   -webkit-tap-highlight-color: transparent;
 }
@@ -1242,8 +582,8 @@ button.metachip:active {
 .compaction-label { flex: 1; }
 .compaction-hint {
   color: var(--ink-tertiary);
-  font-size: var(--text-2xs);
-  letter-spacing: var(--tracking-caps);
+  font-size: var(--fs-2xs);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 .compaction-head:hover .compaction-hint { color: var(--accent); }
@@ -1269,97 +609,10 @@ button.metachip:active {
    the line structure the pill destroyed. */
 .compaction-raw {
   margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-/* ------------------------------------------------------------------ *
- *  Task card — the harness's report of a finished background task.    *
- *  Mirrors .mail-card's shell deliberately: both are a machine's own  *
- *  structured record, and a reader should recognise the genus before  *
- *  reading a word. The left rule is the phosphor rather than          *
- *  --edge-strong, which is what separates "the fleet did something"   *
- *  from "another session said something".                             *
- * ------------------------------------------------------------------ */
-.task-card {
-  background: var(--bg-surface);
-  color: var(--ink-primary);
-  border: 1px solid var(--edge-subtle);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-md);
-  padding: var(--sp-2) var(--sp-3);
-  display: grid;
-  gap: var(--sp-2);
-  min-width: 0;
-}
-.task-card-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  margin: 0;
-  min-width: 0;
-}
-.task-card-glyph { color: var(--ink-tertiary); flex: none; }
-/* The summary runs to 209 bytes at its longest and is the one line worth
-   reading, so it WRAPS rather than clipping — the status chip beside it is
-   what must never be pushed out, hence flex:none there and min-width:0 here. */
-.task-card-summary {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  overflow-wrap: anywhere;
-}
-.task-card-status {
-  flex: none;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  color: var(--ink-tertiary);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-full);
-  padding: 3px var(--sp-2);
-}
-.task-card-status--ok  { color: var(--status-busy-text); border-color: var(--status-busy); }
-.task-card-status--bad { color: var(--status-dead-text); border-color: var(--status-dead); }
-.task-card-toggle {
-  justify-self: start;
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  color: var(--ink-tertiary);
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-}
-.task-card-toggle:hover { color: var(--accent); }
-/* The machinery: ids, paths, the result payload. A definition list because
-   that is what it is — every member keeps its own name beside its value. */
-.task-card-fields {
-  margin: 0;
-  display: grid;
-  gap: var(--sp-2);
-  border-top: 1px solid var(--edge-subtle);
-  padding-top: var(--sp-2);
-}
-.task-card-field { display: grid; gap: 2px; min-width: 0; }
-.task-card-field dt {
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  color: var(--ink-tertiary);
-}
-.task-card-field dd {
-  margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
-  color: var(--ink-secondary);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 220px;
-  overflow: auto;
 }
 
 /* Streaming caret — the blinking block that means "still talking". */
@@ -1390,9 +643,9 @@ button.metachip:active {
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-1) 0;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
-  letter-spacing: var(--tracking-caps);
+  letter-spacing: var(--ls-caps);
 }
 .msg-working-glyph {
   color: var(--accent);
@@ -1448,45 +701,11 @@ button.metachip:active {
   }
 }
 
-/* ------------------------------------------------------------------ *
- *  Tool card — the machine's work, filed neatly.                      *
- * ------------------------------------------------------------------ */
-.toolcard {
-  background: var(--bg-surface);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-  overflow: hidden;
-}
-.tool-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: var(--tap-min);
-  padding: 0 var(--sp-3);
-  border: none;
-  background: none;
-  text-align: left;
-  cursor: pointer;
-  color: inherit;
-}
-.tool-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--r-full);
-  flex: none;
-}
-.tool-dot--ok {
-  background: var(--status-busy);
-}
-.tool-dot--err {
-  background: var(--status-dead);
-}
-.tool-dot--run {
-  background: var(--status-busy);
-  box-shadow: var(--glow-dot-busy);
-  animation: tool-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
-}
+/* The running tool dot's breathe, which the terminal drawer's "attaching"
+   word animates with too (`.term-overlay--connecting .term-overlay-word`,
+   below). The dot itself is @ccrc/ui's `.tool-dot--run` now; this keyframe
+   stayed because its OTHER consumer did, and one motion gets one
+   definition. */
 @keyframes tool-breathe {
   from {
     opacity: 0.55;
@@ -1495,318 +714,23 @@ button.metachip:active {
     opacity: 1;
   }
 }
-.tool-name {
-  flex: none;
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
-  color: var(--ink-primary);
-}
-.tool-sum {
-  flex: 1;
-  min-width: 0;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.tool-dur {
-  flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-tertiary);
-}
-.tool-chev {
-  flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-  transition: transform var(--dur-base) var(--ease-swift);
-}
-.tool-row[aria-expanded='true'] .tool-chev {
-  transform: rotate(90deg);
-}
-.tool-body-wrap {
-  overflow: hidden;
-}
-.tool-body {
-  border-top: 1px solid var(--edge-subtle);
-  padding: var(--sp-3);
-  display: grid;
-  gap: var(--sp-2);
-}
-.tool-eyebrow {
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  color: var(--ink-tertiary);
-}
-.well {
-  background: var(--bg-well);
-  color: var(--ink-on-well);
-  border-radius: var(--r-md);
-  padding: 10px var(--sp-3);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
-  overflow-x: auto;
-  max-height: var(--well-max);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin: 0;
-}
-.tool-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  font: var(--weight-regular) var(--text-2xs) / 1.5 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-tertiary);
-}
-/* The truncation cue (Build 4 Task 16) — sits directly under the well whose
-   text it describes, so "what was cut" is read against the fragment rather
-   than as a property of the card. STILL: a truncation note is a record, so no
-   glow, no animation, no box-shadow. */
-.tool-cut {
-  margin-top: calc(var(--sp-1) * -1);
-  font: var(--weight-regular) var(--text-2xs) / 1.5 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-tertiary);
-}
-.exit-badge {
-  font: var(--weight-semibold) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  color: var(--status-dead-text);
-  background: var(--status-dead-tint);
-  padding: 3px 7px;
-  border-radius: var(--r-sm);
-}
 
 /* ------------------------------------------------------------------ *
- *  Asked question — the one tool call that is prose, not machine work. *
- *  One block per question the ask put: glyph + question, then that     *
- *  question's own answer beneath it as a phosphor-tinted chip. An ask  *
- *  that came back with no answer gets a tappable outcome row instead,  *
- *  in the failure tokens — see .tool-ask-out.                          *
- * ------------------------------------------------------------------ */
-.tool-ask {
-  display: grid;
-  gap: var(--sp-2);
-  padding: 10px var(--sp-3);
-  background: var(--bg-surface);
-  border: 1px solid var(--edge-subtle);
-  border-radius: var(--r-md);
-}
-.tool-ask-qa {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--sp-1) var(--sp-2);
-}
-.tool-ask-glyph {
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-}
-.tool-ask-q {
-  font: var(--weight-medium) var(--text-base) / var(--leading-normal) var(--font-ui);
-  color: var(--ink-primary);
-  overflow-wrap: anywhere;
-}
-.tool-ask-a {
-  grid-column: 2;
-  justify-self: start;
-  max-width: 100%;
-  padding: 3px var(--sp-2);
-  border-radius: var(--r-sm);
-  /* accent-tint / ink-primary is a gated pair in both themes (13.43:1 dark,
-     14.19:1 light) — the answer reads as the choice that was made. Only a
-     parsed answer is ever painted with it. */
-  background: var(--accent-tint);
-  color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
-  overflow-wrap: anywhere;
-  /* Only the reader's own words land here now (the longest real one is 480
-     chars of typed reply), but the chip caps and scrolls like a well rather
-     than growing without limit. */
-  max-height: var(--well-max);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-/* No answer came back — declined, interrupted, timed out. The result text is
-   the harness briefing the model (the decline preamble alone runs past 1 kB,
-   newlines and all), so it stays behind a tap in a --well-max well rather than
-   unrolling down the transcript, and it is never tinted as a choice. */
-.tool-ask-out {
-  display: grid;
-  border-top: 1px solid var(--edge-subtle);
-}
-.tool-ask-outrow {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  width: 100%;
-  min-height: var(--tap-min);
-  padding: 0;
-  border: none;
-  background: none;
-  text-align: left;
-  cursor: pointer;
-  color: inherit;
-}
-.tool-ask-outlabel {
-  flex: 1;
-  min-width: 0;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-  color: var(--ink-tertiary);
-}
-.tool-ask-outrow[aria-expanded='true'] .tool-chev {
-  transform: rotate(90deg);
-}
-.tool-ask-well {
-  margin-bottom: var(--sp-2);
-}
-
-/* ------------------------------------------------------------------ *
- *  The ask card's state row (Build 4 Task 18, spec §2.3).             *
+ *  Wells — the terminal peeking through, wherever it peeks.           *
  * ------------------------------------------------------------------ *
- * NO-GLOW GOVERNANCE WITH ONE NAMED EXCEPTION — the
- * `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `.ask-live` is the
- * ONE rule under this prefix permitted a live cue, because it is the one
- * state that IS live: the agent is blocked on this question right now.
- * `.ask-unanswered` is a record of something that never happened and goes
- * still, and `ask-live.test.tsx` scans every `.ask-` rule to keep the
- * exception exactly one rule wide. */
-.ask-state {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin: var(--sp-1) 0 0;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
-}
-.ask-state .ask-glyph {
-  flex: none;
-}
-.ask-state.ask-live {
-  color: var(--status-attention-text);
-  /* The one live cue in this stylesheet, and the reason it is allowed: a
-     question the agent is blocked on is a LIVING state, not a record. */
-  text-shadow: var(--glow-attention);
-}
-.ask-state.ask-unanswered {
-  color: var(--ink-tertiary);
-}
-/* NOT a send. This button raises `EnvelopeSheet` — the one hardened answer
-   path — and does nothing else; see ToolCard.tsx's own comment at the
-   control. A real target, so it clears the tap floor. */
-.ask-answer {
-  margin-left: auto;
-  min-height: var(--tap-min);
-  padding: 0 var(--sp-3);
-  border: 1px solid var(--edge-strong);
-  border-radius: var(--r-full);
-  background: var(--bg-raised);
-  color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-ui);
-  letter-spacing: normal;
-  text-transform: none;
-  cursor: pointer;
-}
-.ask-answer:active {
-  background: var(--bg-surface);
-}
-
-/* ------------------------------------------------------------------ *
- *  Mail card — the machine's words, attributed (Build 4 Task 17).     *
- * ------------------------------------------------------------------ *
- * NO-GLOW GOVERNANCE, EXTENDED (spec §2.3): `/runs` banned --glow /
- * animation / box-shadow on `.run-*` because a run is a RECORD, not a
- * living pane. A mail card is a record of something that was said — it
- * goes still, and `mail-card.test.tsx` scans every rule whose selector
- * mentions `.mail-card` to keep it that way.
+ * MOVED to @ccrc/ui as the `Well` primitive. The comment that stood
+ * here argued it should stay — a shared surface with four consumers,
+ * two of them already in that package — and then named the cost of
+ * staying: "their Storybook stories render that <pre> unwelled, which
+ * is the visible cost of the split not being made."
  *
- * Self-grounded (background + colour together, `design/audit.mjs` route
- * 1) so every descendant below can be scoped `.mail-card .foo` and
- * measured through route 2b, exactly as `.mail-strip` above is. */
-.mail-card {
-  background: var(--bg-surface);
-  color: var(--ink-primary);
-  border: 1px solid var(--edge-subtle);
-  border-left: 3px solid var(--edge-strong);
-  border-radius: var(--r-md);
-  padding: var(--sp-2) var(--sp-3);
-  display: grid;
-  gap: var(--sp-2);
-}
-/* The attribution line — the reason this card exists. Sender and
-   recipient are both named, because "who said this to whom" is the fact
-   a "you" bubble destroyed. */
-.mail-card .mail-card-from {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-  margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-ui);
-}
-.mail-card .mail-card-glyph,
-.mail-card .mail-card-arrow {
-  flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-}
-.mail-card .mail-card-sender {
-  font-weight: var(--weight-semibold);
-  color: var(--ink-primary);
-  overflow-wrap: anywhere;
-}
-.mail-card .mail-card-recipient {
-  color: var(--ink-secondary);
-  overflow-wrap: anywhere;
-}
-.mail-card .mail-card-meta {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-  margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
-}
-.mail-card .mail-card-kind {
-  flex: none;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ink-tertiary);
-}
-.mail-card .mail-card-subject {
-  font-weight: var(--weight-medium);
-  color: var(--ink-primary);
-  overflow-wrap: anywhere;
-}
-.mail-card .mail-card-run {
-  flex: none;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-tertiary);
-}
-/* PATHS, never payloads — and never links: nothing on this card fetches
-   anything, so nothing on it may look tappable. */
-.mail-card .mail-card-artifacts {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--sp-1);
-}
-.mail-card .mail-card-artifact {
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
-  color: var(--ink-tertiary);
-  overflow-wrap: anywhere;
-}
-.mail-card .mail-card-body {
-  margin: 0;
-}
+ * That cost was the argument. A design system whose own ToolCard and
+ * MailCard cannot render their primary surface in its own Storybook is
+ * not documenting them. The objection did not survive either: the
+ * three app consumers render a COMPONENT now, not a base class, which
+ * is the ordinary direction, and there is still exactly one
+ * definition of the surface.
+ * ------------------------------------------------------------------ */
 
 /* ------------------------------------------------------------------ *
  *  Composer — the prompt line, docked above the keyboard.             *
@@ -1834,7 +758,7 @@ button.metachip:active {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-xl);
   padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4);
-  transition: border-color var(--dur-fast) var(--ease-swift);
+  transition: border-color var(--dur-fast) var(--curve-swift);
 }
 .inputbar:focus-within {
   border-color: var(--accent);
@@ -1843,7 +767,7 @@ button.metachip:active {
   flex: none;
   /* Match the textarea's first-line box (size / leading / vertical padding) so
      the glyph sits on the text baseline instead of floating above it. */
-  font: var(--weight-semibold) var(--text-input) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-semibold) var(--fs-input) / var(--lh-normal) var(--family-mono);
   color: var(--accent);
   padding: 10px 0;
 }
@@ -1855,62 +779,16 @@ button.metachip:active {
   outline: none;
   resize: none;
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
   padding: 10px 0;
   /* 1 → 6 lines, then inner scroll (6 × 16px × 1.5 = calc below). */
-  max-height: calc(var(--text-input) * 9);
+  max-height: calc(var(--fs-input) * 9);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 .composer-input::placeholder {
   color: var(--ink-tertiary);
 }
-/* Attach — the image lane: a ghost "+" beside the send circle, its hidden
-   file input off-tree. While the upload runs the button wears an
-   indeterminate phosphor ring (the caret's tempo — the machine is working). */
-.attach-input {
-  display: none;
-}
-.attach-btn {
-  position: relative;
-  flex: none;
-  width: var(--tap-min);
-  height: var(--tap-min);
-  border: none;
-  background: none;
-  border-radius: var(--r-full);
-  color: var(--ink-secondary);
-  font: var(--weight-regular) 24px / 1 var(--font-ui);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
-}
-.attach-btn:active:not(:disabled) {
-  transform: scale(0.92);
-}
-.attach-btn:disabled {
-  color: var(--ink-disabled);
-  cursor: default;
-}
-.attach-btn[aria-busy='true'] {
-  color: var(--accent);
-}
-.attach-btn[aria-busy='true']::before {
-  content: '';
-  position: absolute;
-  inset: var(--sp-1);
-  border-radius: var(--r-full);
-  border: 2px solid var(--accent-tint);
-  border-top-color: var(--accent);
-  animation: attach-spin var(--caret-period) linear infinite;
-}
-@keyframes attach-spin {
-  to {
-    transform: rotate(1turn);
-  }
-}
-
 .send-btn {
   flex: none;
   width: var(--tap-min);
@@ -1919,11 +797,11 @@ button.metachip:active {
   border-radius: var(--r-full);
   background: var(--accent);
   color: var(--ink-on-accent);
-  font: var(--weight-semibold) 18px / 1 var(--font-ui);
+  font: var(--weight-semibold) 18px / 1 var(--family-ui);
   display: grid;
   place-items: center;
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), background var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), background var(--dur-fast) var(--curve-swift);
 }
 .send-btn:active {
   transform: scale(0.92);
@@ -1943,10 +821,12 @@ button.metachip:active {
   color: var(--ink-disabled);
 }
 
-/* Draft-conflict sheet body. */
-.draft-copy {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+/* Draft-conflict sheet body — and the unparsed dialog's, which is the same
+   four declarations of the type ramp for the same kind of sentence. */
+.draft-copy,
+.dlg-copy {
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-3);
 }
@@ -1963,16 +843,23 @@ button.metachip:active {
   display: grid;
   gap: var(--sp-2);
 }
-.draft-cancel {
+/* The quiet way out of a sheet, and ONE rule rather than two: `.draft-cancel`
+   (the composer's conflict sheet) and `.dlg-later` (every dialog sheet)
+   declared these seven identically, because they are the same control saying
+   the same thing in two places. Two selectors is what that looks like when it
+   really is the same; a second copy is what it looked like before. */
+.draft-cancel,
+.dlg-later {
   min-height: var(--tap-min);
   border: none;
   background: none;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-base) / 1 var(--family-ui);
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift);
 }
-.draft-cancel:active {
+.draft-cancel:active,
+.dlg-later:active {
   color: var(--ink-primary);
 }
 
@@ -1981,93 +868,20 @@ button.metachip:active {
  *  same mono index digits ccd's menu answers to; the preselected row  *
  *  wears the ❯ cursor on the accent tint plus a right-aligned ↵ hint. *
  *  Treatments ported from the approved design/mockup.html.            *
+ *                                                                     *
+ *  THE ROW ITSELF IS NOT HERE ANY MORE. `.opt`, `.opt--selected`,     *
+ *  `.opt-glyph`, `.opt-idx`, `.opt-body`, `.opt-label`, `.opt-desc`   *
+ *  and `.opt-enter` are emitted by `OptionRow` in @ccrc/ui and styled  *
+ *  by ui/src/primitives/option-row.css — two components were           *
+ *  hand-writing them, which is a vocabulary with no single definition. *
+ *  What stays below is this package's own: the list container, the     *
+ *  folded preview, and the three ccd routing markers the row carries   *
+ *  through its trailing/body slots (`.opt-inert`, `.opt-degraded`,     *
+ *  `.opt-wait` — and `.opt-wait` is also worn by the approval sheet's  *
+ *  Allow/Deny buttons, which are not option rows at all).              *
  * ------------------------------------------------------------------ */
 .opts {
   border-top: 1px solid var(--edge-subtle);
-}
-.opt {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  width: 100%;
-  min-height: 52px; /* DIRECTION: dialog option rows run 52+ */
-  padding: var(--sp-2) var(--sp-2);
-  border: none;
-  border-bottom: 1px solid var(--edge-subtle);
-  background: none;
-  text-align: left;
-  font: var(--weight-regular) var(--text-base) / var(--leading-tight) var(--font-ui);
-  color: var(--ink-primary);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
-}
-.opt:active:not(:disabled) {
-  transform: scale(0.97);
-}
-.opt:disabled,
-.opt[aria-disabled='true'] {
-  cursor: default;
-}
-/* While one row answers, its siblings recede; the answering row keeps ink.
-   I3: `.opt[aria-disabled='true']` covers the hook envelope's read-only
-   "rest" questions (DialogSheet.tsx's `.ask-envelope-more`) — plain divs,
-   so `:disabled` (a pseudo-class only a real form control can match) never
-   fires for them, and without this they painted identically to the live
-   rows above them. There's no aria-busy equivalent for a div that never
-   sends anything, so that half doesn't need a `:not([aria-busy='true'])`
-   qualifier the way the button rule does. */
-.opt:disabled:not([aria-busy='true']),
-.opt[aria-disabled='true'] {
-  color: var(--ink-disabled);
-}
-.opt:disabled:not([aria-busy='true']) .opt-glyph,
-.opt:disabled:not([aria-busy='true']) .opt-idx,
-.opt:disabled:not([aria-busy='true']) .opt-enter,
-.opt[aria-disabled='true'] .opt-glyph,
-.opt[aria-disabled='true'] .opt-idx,
-.opt[aria-disabled='true'] .opt-enter {
-  color: var(--ink-disabled);
-}
-.opt--selected {
-  background: var(--accent-tint);
-  border-radius: var(--r-md);
-  border-bottom-color: transparent;
-}
-.opt-glyph {
-  width: 14px;
-  font: var(--weight-semibold) var(--text-base) / 1 var(--font-mono);
-  color: var(--accent);
-  flex: none;
-}
-/* Mono index — mirrors ccd's numbered TUI menu. */
-.opt-idx {
-  width: 14px;
-  text-align: center;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  color: var(--ink-tertiary);
-  flex: none;
-}
-.opt-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.opt-label {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-/* The option's sub-text — the fix for choosing options blind. Reads as body
-   copy, not as meta: when Dialog.ask lands this is the transcript's own
-   description, the sentence the 3-line TUI box had to throw away. */
-.opt-desc {
-  display: block;
-  margin-top: 2px;
-  color: var(--ink-secondary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 /* Which AskUserQuestion this is ("Revised fix") — rides the sheet eyebrow. */
 .dlg-header-chip {
@@ -2077,8 +891,8 @@ button.metachip:active {
   border-radius: var(--r-full);
   background: var(--accent-tint);
   color: var(--accent);
-  font: var(--weight-medium) var(--text-2xs) / 1.4 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1.4 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 /* An option's worked example, folded under its row (open on the preselected
@@ -2093,8 +907,8 @@ button.metachip:active {
   background: none;
   padding: var(--sp-1) 0;
   color: var(--accent);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-align: left;
   cursor: pointer;
 }
@@ -2103,7 +917,7 @@ button.metachip:active {
   overflow: auto;
   white-space: pre;               /* ASCII art scrolls; it must not reflow */
   overflow-wrap: normal;
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-mono) var(--family-mono);
 }
 /* The full question / preamble above the options. Scrolls if long so the
    options stay reachable. */
@@ -2111,15 +925,10 @@ button.metachip:active {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--ink-secondary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   padding: var(--sp-1) var(--sp-1) var(--sp-3);
   max-height: 38vh;
   overflow-y: auto;
-}
-.opt-enter {
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
-  color: var(--accent);
-  flex: none;
 }
 /* Routing slice 6, Task 4: the active row on a field ccd's `.inert` names for
    this lane — the intended value still renders, but there is nothing a
@@ -2127,7 +936,7 @@ button.metachip:active {
    joining it. Muted tertiary ink, not the accent: this is a fact about the
    lane, not a pending action. */
 .opt-inert {
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   flex: none;
 }
@@ -2139,17 +948,17 @@ button.metachip:active {
    this rule instead of adding it to the uncovered census the way an
    unmeasurable `--status-*` token would. */
 .opt-degraded {
-  font: var(--weight-regular) var(--text-2xs) / 1.3 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1.3 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .opt-wait {
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--status-busy-text);
   flex: none;
 }
 .sheet-foot {
   text-align: center;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   padding-top: var(--sp-3);
 }
@@ -2174,7 +983,7 @@ button.metachip:active {
      on a #141715 well — 1.09:1, i.e. black on black. What you have typed is
      invisible. --ink-on-well reads 15.52 / 13.98. */
   color: var(--ink-on-well);
-  font: var(--weight-regular) var(--text-base) / 1.3 var(--font-ui);
+  font: var(--weight-regular) var(--fs-base) / 1.3 var(--family-ui);
 }
 /* --syn-comment, not --ink-tertiary: the syntax palette is declared once in
    :root and never re-declared for light precisely because it renders on the
@@ -2190,9 +999,9 @@ button.metachip:active {
   border-radius: var(--r-md);
   background: var(--bg-raised);
   color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift), border-color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
 .dlg-reply-send:disabled { color: var(--ink-tertiary); cursor: default; }
 .dlg-reply-send:not(:disabled):hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
@@ -2203,39 +1012,18 @@ button.metachip:active {
   border: none;
   background: none;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift);
 }
 .dlg-details-toggle:hover { color: var(--accent); }
 
 /* Unparsed dialog — the raw pane in a well plus the terminal escape hatch. */
-.dlg-copy {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
-  color: var(--ink-secondary);
-  margin-bottom: var(--sp-3);
-}
 .dlg-raw {
   margin-bottom: var(--sp-4);
 }
 .dlg-actions {
   display: grid;
   gap: var(--sp-2);
-}
-.dlg-later {
-  min-height: var(--tap-min);
-  border: none;
-  background: none;
-  color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift);
-}
-.dlg-later:active {
-  color: var(--ink-primary);
 }
 
 /* The hook envelope (EnvelopeSheet in DialogSheet.tsx) — I3: carried no
@@ -2258,9 +1046,6 @@ button.metachip:active {
 .ask-envelope-more-heading {
   margin: 0 0 var(--sp-2);
   color: var(--ink-tertiary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
-  text-transform: uppercase;
 }
 
 /* ------------------------------------------------------------------ *
@@ -2291,16 +1076,16 @@ button.metachip:active {
   padding: var(--sp-8) var(--sp-4);
 }
 .chat-empty-mark {
-  font: var(--weight-medium) var(--text-2xl) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xl) / 1 var(--family-mono);
   color: var(--accent);
 }
 .chat-empty-title {
-  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
 }
 .chat-empty-copy {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   max-width: 32ch;
 }
@@ -2363,8 +1148,8 @@ button.metachip:active {
   background: color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well));
 }
 .term-histbar-word {
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-on-well);
   white-space: nowrap;
 }
@@ -2381,12 +1166,12 @@ button.metachip:active {
   background: color-mix(in srgb, var(--bg-well) 78%, transparent);
 }
 .term-overlay-word {
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-on-well);
 }
 .term-overlay--connecting .term-overlay-word {
-  animation: tool-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+  animation: tool-breathe var(--breathe-period) var(--curve-breathe) infinite alternate;
 }
 .term-overlay-word--lost {
   color: var(--status-dead-text);
@@ -2433,25 +1218,18 @@ button.metachip:active {
 .term-keys-seq::-webkit-scrollbar {
   display: none;
 }
+/* The ground only — see `.chat-head .keycap`. Every colour here is a
+   `color-mix` over `--ink-on-well`, which is exactly why it did not travel
+   into the component: `utility-pairs.test.ts` resolves a utility back to a
+   token through theme.css's `@theme` block, and an arbitrary
+   `bg-[color-mix(…)]` has no stem there to resolve. Moved, the pair would be
+   measured by neither half of the gate. */
 .term-keys .keycap {
   flex: 1 0 auto;
-  min-width: var(--tap-min);
-  min-height: var(--tap-min);
-  display: grid;
-  place-items: center;
   padding: 0 var(--sp-2);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
   color: var(--ink-on-well);
   background: color-mix(in srgb, var(--ink-on-well) 9%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ink-on-well) 22%, transparent);
-  border-bottom-width: 2px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
-}
-.term-keys .keycap:active {
-  transform: translateY(1px);
+  border-color: color-mix(in srgb, var(--ink-on-well) 22%, transparent);
 }
 
 /* The history door. Cut from the same ink as the keys deliberately: --accent
@@ -2481,10 +1259,6 @@ button.metachip:active {
  *  caret holds solid (1ms duration overrides cover the transitions).  *
  * ------------------------------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {
-  .tool-dot--run {
-    animation: none;
-    opacity: 0.8;
-  }
   .stream-caret {
     animation: none;
     opacity: 1;
@@ -2492,31 +1266,24 @@ button.metachip:active {
   .jump-latest {
     animation: none;
   }
-  .tool-chev,
   .send-btn,
-  .attach-btn,
   .inputbar,
-  .chat-back,
+  /* a press transform like its neighbours — it was simply missed */
+  button.metachip,
+  /* `.chat-back` left this list when the five back chevrons became @ccrc/ui's
+     `BackButton`, which carries `motion-reduce:transition-none` itself — and
+     carries it for all five, where this rule only ever covered one of them. */
   .jump-latest,
   .draft-cancel,
   .dlg-later,
-  .chat-head .keycap,
-  .term-keys .keycap,
   .pending-actions button,
-  .opt,
-  .menu-item {
+  .opt {
     transition: none;
   }
   /* The attach word holds steady at mid-intensity — nothing strobes. */
   .term-overlay--connecting .term-overlay-word {
     animation: none;
     opacity: 0.8;
-  }
-  /* The upload ring stops spinning and holds solid — still reads "working"
-     next to the disabled button, nothing strobes. */
-  .attach-btn[aria-busy='true']::before {
-    animation: none;
-    border-color: var(--accent);
   }
 }
 
@@ -2531,21 +1298,21 @@ button.metachip:active {
   background: var(--bg-raised);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--elev-card);
 }
 .slash-item {
   display: flex;
   flex-direction: column;
   gap: 2px;
   width: 100%;
-  min-height: 44px;
+  min-height: var(--tap-min);
   padding: var(--sp-2) var(--sp-3);
   text-align: left;
   background: transparent;
   border: none;
   border-radius: var(--r-md);
   cursor: pointer;
-  transition: background var(--dur-press) var(--ease-swift);
+  transition: background var(--dur-press) var(--curve-swift);
 }
 .slash-item:hover,
 .slash-item:focus-visible {
@@ -2557,13 +1324,13 @@ button.metachip:active {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
   color: var(--accent);
 }
 .slash-badge {
-  font-family: var(--font-ui);
-  font-size: var(--text-2xs);
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-sm);
@@ -2571,10 +1338,10 @@ button.metachip:active {
   line-height: 1.5;
 }
 .slash-desc {
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
+  font-family: var(--family-ui);
+  font-size: var(--fs-xs);
   color: var(--ink-secondary);
-  line-height: var(--leading-tight);
+  line-height: var(--lh-tight);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2620,7 +1387,7 @@ button.metachip:active {
 /* A clip deleted off disk degrades to its filename, never a broken-image box. */
 .msg-attach-gone {
   display: block;
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
   /* Third instance of the well trap: --ink-tertiary is paper ink and measures
      3.17:1 on the light-theme well. --syn-comment is the well's own muted ink
      (6.41 / 5.77) and keeps this quieter than --ink-on-well, which is what the
@@ -2633,140 +1400,11 @@ button.metachip:active {
   overflow-wrap: anywhere;
 }
 
-/* Attachment tray — the chips ARE the confirmation that an image is attached,
-   which is why the old "Image attached…" toast is gone. */
-.attach-tray {
-  display: flex;
-  gap: var(--sp-2);
-  margin: 0 0 var(--sp-2);
-  padding: 0;
-  list-style: none;
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-}
-.attach-chip {
-  position: relative;
-  flex: none;
-  width: 72px;
-  height: 72px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--edge-subtle);
-  background: var(--bg-well);
-  scroll-snap-align: start;
-}
-.attach-chip[data-state='failed'] { border-color: var(--status-dead); }
-/* The thumbnail's rounded-corner clip lives here, not on .attach-chip — the
-   chip itself must stay unclipped so .attach-remove's 44px hit area (below)
-   isn't cut off. On a failed chip the media is inert (no button) — retry
-   lives in the strip below, not spread across the whole thumbnail, so its
-   tap target can never overlap .attach-remove's. */
-.attach-chip-media {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  border-radius: inherit;
-}
-.attach-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
-.attach-chip[data-state='uploading'] .attach-thumb { opacity: 0.55; }
-.attach-chip[data-state='uploading']::before {
-  content: '';
-  position: absolute;
-  inset: 24px;
-  border-radius: var(--r-full);
-  border: 2px solid var(--accent-tint);
-  border-top-color: var(--accent);
-  animation: attach-spin var(--caret-period) linear infinite;
-  z-index: 1;
-}
-.attach-strip {
-  position: absolute;
-  inset: auto 0 0 0;
-  padding: 2px 4px;
-  background: linear-gradient(transparent, rgba(4, 6, 5, 0.72));
-  color: var(--ink-on-well);
-  font: var(--weight-regular) var(--text-2xs) / 1.2 var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-/* On a failed chip, retry replaces the strip (shares its look via the
-   .attach-strip class on the same element) instead of wrapping the whole
-   72px thumbnail — a whole-chip retry button used to overlap .attach-remove's
-   hit area with no way to tell the two apart. Its own tap target extends
-   past its visible box via ::after, same pattern as .attach-remove, but the
-   two controls compete for the SAME 72px of vertical room (.attach-tray's
-   clip — see the note on .attach-remove below), so retry claims the larger
-   share on purpose: a mis-tap here just retries an upload (idempotent,
-   recoverable), where a mis-tap on .attach-remove silently drops the
-   attachment. Measured (real Chromium, built CSS): 70×46.19px — clears the
-   44px floor in both dimensions. See the task-10 report for the full
-   grid-verified geometry. */
-.attach-chip-retry {
-  border: 0;
-  margin: 0;
-  cursor: pointer;
-  z-index: 2;
-  /* Sitting outside .attach-chip-media's clip (on purpose — see above), this
-     button's own bottom corners would otherwise square off past the chip's
-     rounded ones now that .attach-chip itself no longer clips either. */
-  border-bottom-left-radius: inherit;
-  border-bottom-right-radius: inherit;
-}
-.attach-chip-retry::after { content: ''; position: absolute; inset: -28px 0 -4px 0; }
-.attach-remove {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 20px;
-  height: 20px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--r-full);
-  border: 1px solid var(--edge-strong);
-  background: var(--bg-sheet);
-  color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  cursor: pointer;
-  z-index: 2;
-}
-/* Hit area without a 44px box. Reaches the 44px floor in WIDTH (the
-   containing block for this inset is .attach-remove's PADDING edge, not its
-   border edge — its 1px border shrinks it by 2px, so -5/…/-21 on the
-   right/left, not -4/…/-20, to land on 44 there). HEIGHT can't reach 44 on
-   a failed chip only (see the scoped rule below) — everywhere else there is
-   nothing competing for the vertical budget, so the full floor applies.
-   .attach-chip's parent, .attach-tray, has overflow-x:auto, which per the
-   CSS overflow spec forces overflow-y to compute to 'auto' too (never
-   'visible') — confirmed in real Chromium that this clips ANY child content
-   above y=0 or below y=72 (the chip's own 72px), full stop, so there is no
-   "extend outward" escape the way the width has (sideways, past the chip,
-   is the direction .attach-tray leaves open for scrolling). Measured
-   (real Chromium, built CSS): 44×43px on staged/uploading (1px short of the
-   floor purely from that same y=0 clip eating the top of the on-paper -5px
-   inset — not a competing control, just the same clip). See the task-10
-   report for the full grid-verified numbers. */
-.attach-remove::after { content: ''; position: absolute; inset: -5px -5px -21px -21px; }
-/* On a failed chip only, .attach-chip-retry (above) competes for the same
-   72px of vertical room — see its comment for why it gets the larger
-   share. Scoped so staged/uploading chips (the common case, with no retry
-   button to share space with) keep the uncontested inset above; ordered
-   after the general rule, and qualified by [data-state='failed'] (higher
-   specificity than the bare .attach-remove::after), so this wins only
-   where it applies. Measured: 44×24px. */
-.attach-chip[data-state='failed'] .attach-remove::after { inset: -5px -5px -2px -21px; }
-
 /* Desktop drop target. */
 .composer[data-drop='true'] .inputbar {
   border-color: var(--accent);
   border-style: dashed;
   background: var(--accent-tint);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .attach-chip[data-state='uploading']::before {
-    animation: none;
-    border-top-color: var(--accent-tint);
-  }
 }
 
 /* ── HistoryTab (Build 9 wave 9) ─────────────────────────────────────────
@@ -2777,15 +1415,16 @@ button.metachip:active {
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   padding: var(--sp-2) 0; border-top: 1px solid var(--edge-subtle);
 }
-.history-when { color: var(--ink-tertiary); font-variant-numeric: tabular-nums; font-size: var(--text-xs); }
+.history-when { color: var(--ink-tertiary); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); }
 .history-act { color: var(--ink-primary); }
 .history-verb { color: var(--ink-tertiary); }
-.history-outcome { color: var(--ink-secondary); font-size: var(--text-xs); }
-.history-obs, .history-dec { flex-basis: 47%; color: var(--ink-secondary); font-family: var(--font-mono); font-size: var(--text-xs); }
-.history-corr { color: var(--ink-tertiary); font-size: var(--text-xs); border-radius: var(--r-sm); padding: 0 var(--sp-1); }
+.history-outcome { color: var(--ink-secondary); font-size: var(--fs-xs); }
+.history-obs, .history-dec { flex-basis: 47%; color: var(--ink-secondary); font-family: var(--family-mono); font-size: var(--fs-xs); }
+.history-corr { color: var(--ink-tertiary); font-size: var(--fs-xs); border-radius: var(--r-sm); padding: 0 var(--sp-1); }
 /* `disagrees` in its own colour (spec §2) — the attention pair, because a
    provenance mismatch is a fact for a human to read, not an error state. */
 .history-corr[data-corr='disagrees'] { color: var(--status-attention-text); background: var(--status-attention-tint); }
-.history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--text-xs); }
-.history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--text-xs); }
+.history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--fs-xs); }
+.history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--fs-xs); }
 .history-loading, .history-empty, .history-error { color: var(--ink-secondary); padding: var(--sp-3) 0; }
+

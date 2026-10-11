@@ -5,10 +5,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { AttachTray } from '../src/session/AttachTray';
-import type { StagedImage } from '../src/session/useAttachImage';
+import { AttachTray, type StagedImage } from '@ccrc/ui';
 // Shared rule reader (test/cssRule.ts), not two more hand-rolled copies — fix
-// round 4, controller item 1. Both scrapes below read src/session/chat.css,
+// round 4, controller item 1. Both scrapes below read the tray's own
+// stylesheet, which travelled with the component into @ccrc/ui,
 // which the ui-css lane owns and is editing in parallel: they must break on a
 // changed declaration and never on a changed indent, a regrouped selector or
 // prettier flipping `[data-state='failed']` to double quotes.
@@ -75,7 +75,7 @@ describe('AttachTray', () => {
   // retry button. Guard the source directly: whatever the rule contains, it
   // must not reset `all`.
   it('does not reset `all` on the retry button (that silently strips outline/:focus-visible)', () => {
-    const cssPath = path.resolve(process.cwd(), 'src/session/chat.css');
+    const cssPath = path.resolve(process.cwd(), '../ui/src/components/attach-tray.css');
     const css = readFileSync(cssPath, 'utf8');
     // Stricter than the regex this replaces, deliberately: `all: revert` and
     // `all: initial` strip the outline just as `unset` did, so the assertion
@@ -137,7 +137,7 @@ describe('AttachTray', () => {
   // the scoped selector must exist, so a later "simplify this CSS" pass
   // can't quietly flatten it back to one unscoped rule.
   it('scopes the shrunk remove hit-area to failed chips only', () => {
-    const cssPath = path.resolve(process.cwd(), 'src/session/chat.css');
+    const cssPath = path.resolve(process.cwd(), '../ui/src/components/attach-tray.css');
     const css = readFileSync(cssPath, 'utf8');
     // `ruleIn` throws when the scoped rule is gone — a flattened-back
     // stylesheet fails here rather than passing on a missing match — and the

@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { fleetSession as baseSession } from './fleetFixture';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
 import { SessionScreen, useKeyboardInsets } from '../src/screens/SessionScreen';
@@ -50,23 +51,7 @@ const fakeSocket = (): WebSocket =>
  *  server can actually serve (fix round 3, verifier P4). */
 const WS_ID = 'OpenClawHetzner-quiet-basin';
 
-const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'claude:OpenClawHetzner',
-  wrapper: 'claude',
-  home: '/home/rc',
-  project: 'OpenClawHetzner',
-  workdir: '/root/projects/OpenClawHetzner',
-  workspace: null,
-  name: null,
-  status: 'idle',
-  statusUpdatedAt: null,
-  limits: null,
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null,
-  version: null,
-  ...patch,
-});
+const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => (baseSession({ id: 'claude:OpenClawHetzner', home: '/home/rc', project: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', ...patch }));
 
 /** Full SessionHeaderProps with no-op callbacks — build it, don't render it,
  *  so tests that need to compose SessionHeader alongside sibling elements
@@ -929,5 +914,74 @@ describe('the substrate gate — the Move (swap) door refuses too (branch review
     expect(move).toBeEnabled();
     fireEvent.click(move);
     expect(p.onMoveAccount).toHaveBeenCalledOnce();
+  });
+});
+
+// — the header with no frame yet, the hour-long turn, and the menu's own exit —
+describe('the header before the first fleet frame lands', () => {
+  it('shows the caller’s fallback title and account rather than an empty crumb', () => {
+    // A deep link renders this header before any frame has arrived.
+    // `SessionScreen` passes `fallback={{ title: project, wrapper }}` — both
+    // derived from the id — and those arms had no case: the title would read
+    // `…` and the account accent would be blank on a screen that knows both.
+    renderHeader({ session: null, fallback: { title: 'OpenClawHetzner', wrapper: 'claude' } });
+    expect(screen.getByText('OpenClawHetzner')).toBeInTheDocument();
+  });
+
+  it('and `…` when the caller has no fallback either', () => {
+    // The last resort. An empty string here collapses the crumb row and the
+    // header jumps when the frame lands.
+    renderHeader({ session: null, fallback: undefined });
+    expect(screen.getByText('…')).toBeInTheDocument();
+  });
+});
+
+describe('a turn that has been running for over an hour', () => {
+  it('counts hours, not 90 minutes', () => {
+    // `clock`'s h arm. A turn this long is exactly the one an operator is
+    // deciding whether to interrupt, and `90:12` reads as a minute count
+    // nobody can place.
+    const at = Date.now() - (3600_000 + 12 * 60_000 + 7_000);
+    renderHeader({ status: 'busy', statusUpdatedAt: at,
+                   session: fleetSession({ status: 'busy', bucket: 'working', bucketSince: at }) });
+    expect(screen.getByText(/working · 1:12:0\d/)).toBeInTheDocument();
+  });
+});
+
+describe('the session menu', () => {
+  it('opens, offers History, and closes on the scrim without acting', () => {
+    // The menu's own `onClose` was an uncovered function, and so was the
+    // History row's handler. A menu that cannot be dismissed is a menu that
+    // owns the screen.
+    const p = renderHeader();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByText('History'));
+    expect(p.onOpenHistory).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    expect(p.onOpenHistory, 'the dismissal acted on the menu').toHaveBeenCalledTimes(1);
+    // The FLAG has to come down with the content: vaul closes its own view on
+    // a scrim click whatever `onClose` does, and a sheet still told `open`
+    // puts itself straight back up. So the claim is that the rows are gone
+    // and STAY gone (measured — asserting only the callback left a no-op
+    // `onClose` green).
+    return waitFor(() => expect(screen.queryByText('History')).toBeNull());
+  });
+});
+
+describe('the Escape binding ignores every other key', () => {
+  it('a keystroke that is not Escape does not interrupt the turn', () => {
+    // The handler is on the DOCUMENT while a turn is running, so every
+    // keystroke in the app reaches it. Without the key check, typing would
+    // kill the turn.
+    stubPointer(true);
+    const p = props({ status: 'busy' });
+    render(<SessionHeader {...p} />);
+    fireEvent.keyDown(document, { key: 'a' });
+    fireEvent.keyDown(document, { key: 'Enter' });
+    expect(p.onInterrupt, 'an ordinary keystroke interrupted the turn').not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(p.onInterrupt, 'the control: Escape still interrupts').toHaveBeenCalledTimes(1);
   });
 });

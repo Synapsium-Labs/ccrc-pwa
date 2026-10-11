@@ -18,6 +18,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { componentFamily } from './sourceScan.js';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
@@ -690,7 +691,7 @@ describe('Build 7 nouns', () => {
     // call shape rather than its line: this sentence used to say "line 167",
     // and the very commit that wrote that number had already pushed the guard
     // off it.
-    const strip = readFileSync(path.join(ccrcRoot, 'pwa/src/session/MailStrip.tsx'), 'utf8');
+    const strip = readFileSync(path.join(ccrcRoot, 'ui/src/components/mail-strip.tsx'), 'utf8');
     expect(strip).toMatch(
       /if \(\(TERMINAL_DELIVERY_STATES as readonly string\[\]\)\.includes\(item\.state\)\) return null;/);
   });
@@ -2701,7 +2702,14 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
       // deliberately not scanned: those members answer "who sent this", a
       // different question from "who pressed the key".
       expect(read('server/src/server.ts')).not.toMatch(/'operator'/);
-      expect(read('pwa/src/fleet/SessionLine.tsx')).not.toMatch(/'operator'/);
+      // THE ROW'S FAMILY, not one path. This was `read('…/SessionLine.tsx')`
+      // until the row's meta line — the half that renders the ask chip and so
+      // the half this negative is about — moved to `SessionMeta.tsx`. A
+      // negative assertion against a file the code has left does not go red;
+      // it goes VACUOUS, which is worse. `componentFamily` follows what the
+      // row renders.
+      expect(componentFamily(ccrcRoot, 'pwa/src/fleet/SessionLine.tsx'))
+        .not.toMatch(/'operator'/);
     });
   });
 });
@@ -5586,5 +5594,45 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
     const files = l4();
     expect(files.map(([n]) => n)).toEqual(L4_FILES);
     expect(files.flatMap(([n, t]) => quotedWords(t, words).map((w) => `${n}: '${w}'`))).toEqual([]);
+  });
+});
+
+// APPENDED AT THE END OF THE FILE, DELIBERATELY. `session-hook.test.ts` pins a
+// measured census of how many line citations in two frozen corpus documents
+// fail to anchor, grouped by the file they cite — and this file is one of
+// them. Inserting a describe block in the MIDDLE shifts every line below it
+// and moved that census from 8 to 15 (measured, on CI and locally). The
+// citations are frozen by design and Task 11 owns repairing them; a new guard
+// is not a reason to re-measure someone else's debt, so it goes where it
+// shifts nothing.
+
+describe("one 'tmux unreachable' sentence (design-system wave)", () => {
+  // SEVEN COPIES, and three of them carried a comment saying the string was
+  // "SessionLine's chip's own `tmux unreachable — <reason>`, never a second
+  // copy". Every one of those was the second copy. The sentence is operator
+  // COPY, so it lives in the PWA (`pwa/src/fleet/substrateWords.ts`) rather
+  // than beside `substrateFault` in L0, and this is what keeps it there.
+  //
+  // Invisible to every census on this branch by construction: it is not a
+  // stylesheet rule, not an element, not a two-word class literal and not a
+  // leaf's attribute set — one template literal, in seven files.
+  const SENTENCE = /`tmux unreachable — \$\{/;
+
+  it('is composed in exactly one file, and that file is substrateWords.ts', () => {
+    const holders = ALL.filter((f) => SENTENCE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['pwa/src/fleet/substrateWords.ts']);
+  });
+
+  it('and every surface that showed it still reaches it', () => {
+    // The other direction: a fold that deleted the callers instead of pointing
+    // them at the word would satisfy the test above and lose the tooltip.
+    for (const f of [
+      'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
+      'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/screens/SessionScreen.tsx',
+      'pwa/src/session/SessionHeader.tsx', 'pwa/src/session/PrSheet.tsx',
+    ]) {
+      expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
+        .toMatch(/substrateFaultT(ext|itle)\(/);
+    }
   });
 });

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, PrState, PrView, RunSummary } from '../../shared/api';
+import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { PrSheet } from '../src/session/PrSheet';
 import { checkPhrase, prSentence, tooltipSentence } from '../src/session/PrKeycap';
 import { ApiError, UNSUPPORTED_VERB_TEXT, type api } from '../src/lib/api';
@@ -12,15 +13,7 @@ const pr = (over: Partial<PrState> = {}): PrState => ({
   ahead: 3, reason: null, checkedAt: Date.now() - 60_000, mergedAt: null, retryAt: null, ...over,
 });
 
-const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
-  id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo',
-  workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
-  limits: null, dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: pr(), archivedAt: null, archivedBytes: null,
-  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
-  bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
-});
+const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', branch: 'ws/quiet-basin', pr: pr(), ...over }));
 
 const view = (over: Partial<PrView> = {}): PrView => ({
   pr: pr(),
@@ -823,5 +816,66 @@ describe('the substrate gate — this sheet refuses its archive and reap doors u
     fetched = view({ pr: pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 }), draft: null });
     open(mergedUnarchived());
     expect(await screen.findByRole('button', { name: /archive now/i })).toBeEnabled();
+  });
+});
+
+// — the conflict door's own two exits, and the refresh that fails —
+describe('the claimed-workspace door, from this sheet', () => {
+  const runOpen = (): ReturnType<typeof vi.fn> => vi.fn().mockRejectedValue(
+    new ApiError(409, { ok: false, error: 'run-open', runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }] }));
+
+  it('Cancel on the claim leaves the PR sheet where it was', async () => {
+    // `onClose` on the nested sheet was an uncovered function: every case
+    // above opens the claim and none of them closes it. A claim that cannot
+    // be dismissed sits over the sheet that raised it, and the operator's
+    // only way out is the one door that acts.
+    const archive = runOpen();
+    open(mergedUnarchived(), () => {}, { archive: archive as unknown as typeof api.archive });
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText(/This workspace is claimed/)).toBeNull());
+    // Still the PR sheet, and Archive now is live again rather than left busy.
+    expect(screen.getByRole('button', { name: 'Archive now' })).not.toBeDisabled();
+  });
+
+  it('“Archive anyway” drops the claim and re-reads the PR', async () => {
+    // `onDone` — the other exit, and the one that must also `load()`: the
+    // forced archive changed the session on the box, so the lede this sheet
+    // is showing is now the stale half.
+    //
+    // The FORCED archive goes through `api.archive`, not the injected one:
+    // `ArchiveConflictSheet` has its own default and this sheet passes it
+    // none, so the second call is read off `fetch` (measured — asserting the
+    // injected spy expected a call it never gets).
+    const archive = runOpen();
+    open(mergedUnarchived(), () => {}, { archive: archive as unknown as typeof api.archive });
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive now' }));
+    await waitFor(() => expect(screen.getByText(/This workspace is claimed/)).toBeTruthy());
+
+    const calls = (): unknown[][] =>
+      (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const before = calls().length;
+    fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
+
+    await waitFor(() => expect(calls().some((c) => String(c[0]).endsWith('/archive')),
+      'the forced archive never reached the box').toBe(true));
+    await waitFor(() => expect(screen.queryByText(/This workspace is claimed/)).toBeNull());
+    expect(calls().length,
+      'the forced archive changed the box and the sheet did not re-read').toBeGreaterThan(before + 1);
+  });
+
+  it('a refresh that fails leaves the CACHED values on screen', async () => {
+    // `load`'s `.catch` is deliberately empty, and that is the behaviour: the
+    // fleet sweep's cached `pr` is already rendered, so a failed refresh must
+    // leave it alone rather than blank the sheet. Nothing had ever made the
+    // read fail.
+    const merged = pr({ phase: 'merged', number: 42, url: 'u', mergedAt: Date.now() - 12 * 60_000 });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 502 })));
+    open(sess({ pr: merged, archivedAt: null }));
+    // The cached phase is on screen, from the fleet row rather than the read.
+    expect(await screen.findByText(/#42/)).toBeInTheDocument();
+    expect(screen.queryByText(/failed/i), 'a failed refresh is not an error the reader can act on').toBeNull();
   });
 });

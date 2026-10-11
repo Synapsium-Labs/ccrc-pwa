@@ -1995,3 +1995,13 @@ The operator was shown the designs as mockups: the halt banner, Update all, the 
 - **Reading 18:** the census as drafted.
 
 No reading changes the plan's code or its Deviations found.
+
+## Design
+
+**Posture:** offer
+
+A NEW banner on the home screen, with an Ack in place and a second banner re-pointed at it. Three banners now compete for the top of that screen — a canvas would have ruled on their order before the code did.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

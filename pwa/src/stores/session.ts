@@ -215,7 +215,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'tasks':
       return { ...s, tasks: msg.tasks };
     // Build 7 Task 6: the session's own outstanding mail, one row above the
-    // plan (`session/MailStrip.tsx`). Same replace-wholesale rule as `tasks`
+    // plan (`@ccrc/ui` mail-strip.tsx). Same replace-wholesale rule as `tasks`
     // just above.
     case 'mail':
       return { ...s, mail: msg.mail };
@@ -645,14 +645,4 @@ export function getSessionStore(id: string): SessionStore {
     stores.set(id, s);
   }
   return s;
-}
-
-export function useSessionStore(id: string): SessionState;
-export function useSessionStore<T>(id: string, selector: (s: SessionState) => T): T;
-export function useSessionStore<T>(
-  id: string,
-  selector?: (s: SessionState) => T,
-): SessionState | T {
-  const store = getSessionStore(id);
-  return selector ? store(selector) : store();
 }

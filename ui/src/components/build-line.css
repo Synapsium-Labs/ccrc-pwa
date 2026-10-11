@@ -1,0 +1,44 @@
+/* ------------------------------------------------------------------ *
+ *  BuildLine (build-line.tsx). These rules moved here with the        *
+ *  component in the composite-migration wave: they lived in fleet.css *
+ *  only because FleetScreen was their one consumer, and that stopped  *
+ *  being true the moment the component became the design system's —   *
+ *  the same reason typed-label.css exists. A rule that travels with   *
+ *  its component cannot be left behind by a later move.               *
+ *                                                                     *
+ *  @layer components, because a stylesheet imported from a .tsx is    *
+ *  injected UNLAYERED and would therefore beat @layer utilities: the  *
+ *  moment one of these rules sets a property a Tailwind utility also  *
+ *  sets, this file would win over a `className` passed by the call    *
+ *  site and tailwind-merge could not see the conflict. Layering keeps *
+ *  the other direction too — unlayered APP sheets still beat this     *
+ *  one, which is what keeps scoped overrides working.                 *
+ *                                                                     *
+ *  The audit keys moved with the rules: design/audit.mjs's            *
+ *  INHERITED_GROUNDS keys are `<sheet> <selector>`, so all three now  *
+ *  read `build-line.css …`. The grounds themselves did not change —   *
+ *  .shell-nav still paints --bg-surface at the desktop breakpoint.    *
+ * ------------------------------------------------------------------ */
+@layer components {
+  /* BuildLine — the foot-of-screen one-liner (release/rollout design §6).
+   * Quiet by default; a side that is unversioned, dirty or unknown borrows
+   * the warn banner's attention-text token so a deploy.sh box LOOKS
+   * second-class without a banner that fires when nothing is wrong. */
+  .build-line {
+    padding: 6px 16px;
+    font-size: 12px;
+    color: var(--ink-tertiary);
+    text-align: center;
+  }
+  .build-line-side--warn {
+    color: var(--status-attention-text);
+  }
+
+  /* BuildLine's affix (centralised-update design 2026-09-20 §13): " → v0.0.9"
+   * after a side whose node the inventory says should move up (`pendingTag`).
+   * Amber like the warn side — something to do, not a fault — and a rule of its
+   * own, so the contrast audit measures it (audit.mjs INHERITED_GROUNDS). */
+  .build-line-next {
+    color: var(--status-attention-text);
+  }
+}

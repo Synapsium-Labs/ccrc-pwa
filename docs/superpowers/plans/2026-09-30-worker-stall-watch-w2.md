@@ -13958,3 +13958,13 @@ git rev-parse HEAD                             # expect: the same sha as the ls-
 If the pre-push hook refuses, for example on identity residue, read its message and fix the cause. Never pass `--no-verify`.
 
 Report to the coordinator: the pushed sha, each shard's result with any isolated re-runs, and the citation audit's counts. Part B's PR opens only after the capture checkpoint's C1–C5 PASS, with C6 and C7 recorded, the checkpoint's amendments made and `main` merged in. That is the orchestrator's decision, and this task opens none.
+
+## Design
+
+**Posture:** none
+
+The wave's work is a per-session marker on the fleet box. `MailStrip` is named as a reader, not reshaped.
+
+Declared retrospectively: this plan shipped before the posture convention
+reached its programme (`server/test/design-declaration.test.ts`). The guard
+asks that the question be answered, never which answer is given.

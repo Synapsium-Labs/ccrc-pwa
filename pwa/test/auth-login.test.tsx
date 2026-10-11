@@ -22,15 +22,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { AUTH_VERDICTS, type AuthVerdict } from '../../shared/api';
 import { App } from '../src/app';
-import { LoginScreen, VERDICT_TEXT } from '../src/components/LoginScreen';
-import { ToastHost, toast } from '../src/components/Toast';
+import { LoginScreen, UNREACHABLE_TEXT, VERDICT_TEXT } from '../src/components/LoginScreen';
+import { ToastHost, toast } from '@ccrc/ui';
 import { ApiError, createApi } from '../src/lib/api';
 import {
   authLost, checkAuth, clearAuthLost, isAuthLost, onAuthRegained, raiseAuthLost,
 } from '../src/lib/auth';
 import { navigate } from '../src/lib/router';
 import { ReconnectingSocket, type AuthGate } from '../src/lib/ws';
-import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer } from '../src/session/TerminalDrawer';
+import type { DrawerTerm } from '../src/session/terminalFactory';
 
 // — fixtures —
 
@@ -605,5 +606,91 @@ describe('with `CCRC_AUTH` off the PWA behaves exactly as it does today', () => 
     raiseAuthLost('no-session');
     checkAuth();
     await waitFor(() => expect(isAuthLost()).toBe(false));
+  });
+});
+
+// — the box that never answered, and the two guards behind a disabled button —
+describe('a login the box could not answer at all', () => {
+  it('says the box is unreachable rather than inventing a refusal', () => {
+    // `verdictOf` answers `null` for a body carrying no verdict, and the
+    // screen must then say what actually happened: "the box did not answer"
+    // is a different fact from "the passphrase is wrong", and showing the
+    // second for the first sends the operator to re-type a passphrase that
+    // was never read. A 502 from a proxy in front of the box is the ordinary
+    // producer, and nothing had ever sent one.
+    vi.stubGlobal('fetch', statusFetch({ authed: false, passkeysEnrolled: 0, mode: 'passphrase' },
+      () => json(502, { ok: false, error: 'bad-gateway' })));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+
+    fireEvent.change(screen.getByLabelText(/passphrase/i), { target: { value: 'open sesame' } });
+    return act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
+    }).then(async () => {
+      // Not a verdict sentence — none of them applies.
+      for (const text of Object.values(VERDICT_TEXT)) {
+        expect(screen.queryByText(text), 'a refusal was invented for a box that said nothing').toBeNull();
+      }
+      expect(await screen.findByText(UNREACHABLE_TEXT)).toBeInTheDocument();
+      expect(isAuthLost()).toBe(true);
+    });
+  });
+
+  it('a rejection that is not an ApiError at all is read the same way', async () => {
+    // `fetch` rejecting with a `TypeError` — the box is off the network. Same
+    // honest answer, by the same `null` verdict.
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+      if (String(url).startsWith('/api/auth/status')) {
+        return json(200, { authed: false, passkeysEnrolled: 0, mode: 'passphrase' });
+      }
+      throw new TypeError('Failed to fetch');
+    }));
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+
+    fireEvent.change(screen.getByLabelText(/passphrase/i), { target: { value: 'open sesame' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
+    });
+    expect(await screen.findByText(UNREACHABLE_TEXT)).toBeInTheDocument();
+  });
+
+  it('an empty field submits nothing, however the form is submitted', async () => {
+    // NOT merely a guard behind a disabled button — measured: deleting it
+    // reds this case. A form submits on Enter in the FIELD as well as on the
+    // button, and that path never consults the button's disabled state, so
+    // this `if` is the only thing standing between an empty box and a request
+    // that spends one of the rate limiter's attempts on nothing.
+    const fetchImpl = statusFetch({ authed: false, passkeysEnrolled: 0, mode: 'passphrase' },
+      () => json(204));
+    vi.stubGlobal('fetch', fetchImpl);
+    raiseAuthLost('no-session');
+    render(<LoginScreen />);
+
+    const field = screen.getByLabelText(/passphrase/i);
+    await act(async () => { fireEvent.submit(field.closest('form')!); });
+    expect(fetchImpl.mock.calls.some(([u]) => String(u) === '/api/auth/login'),
+      'an empty passphrase was sent to the box').toBe(false);
+  });
+
+  it('a status read that lands after the screen is gone sets nothing', async () => {
+    // The `live` flag. The screen unmounts the moment the signal clears —
+    // which `clearAuthLost` does from the status read itself — so the read
+    // CAN land into an unmounted component.
+    let land!: (r: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(async (url: unknown) =>
+      String(url).startsWith('/api/auth/status')
+        ? new Promise<Response>((res) => { land = res; })
+        : refusal('no-session')));
+    raiseAuthLost('no-session');
+    const { unmount } = render(<LoginScreen />);
+    unmount();
+    await act(async () => {
+      land(json(200, { authed: true, passkeysEnrolled: 1, mode: 'passphrase' }));
+      await Promise.resolve();
+    });
+    // The retirement is the thing the flag gates: an `authed: true` read for a
+    // screen nobody is looking at must not clear a signal raised since.
+    expect(isAuthLost(), 'an unmounted screen retired the signal').toBe(true);
   });
 });

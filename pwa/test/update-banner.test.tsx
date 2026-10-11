@@ -16,14 +16,20 @@ import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
+import { buttonVariants } from '@ccrc/ui';
 import { useFleetStore } from '../src/stores/fleet';
 import { UPDATES_POLL_MS } from '../src/fleet/useUpdatesView';
 import { bannerRelease, UpdateBanner, updateBannerText } from '../src/fleet/UpdateBanner';
 import { declValue, ruleIn } from './cssRule';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
-const primitivesCss = readFileSync(
-  path.join(import.meta.dirname, '..', 'src', 'components', 'primitives.css'), 'utf8');
+// primitives.css retired in wave 2; the sheet's own styling is the primitive's
+// cva in @ccrc/ui. What this file needs from it is the panel rule, which now
+// lives as utilities on the component.
+const buttonSrc = readFileSync(
+  path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'primitives', 'button.tsx'), 'utf8');
+const themeCss = readFileSync(
+  path.join(import.meta.dirname, '..', '..', 'ui', 'src', 'styles', 'theme.css'), 'utf8');
 const bannerSrc = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'UpdateBanner.tsx'), 'utf8');
 
 afterEach(() => {
@@ -368,13 +374,24 @@ describe('UpdateBanner — a class of its own, a tap floor, and text only', () =
   });
 
   it('keeps the shared buttons at the tap floor: the banner override resizes their width, never their height', () => {
-    expect(declValue(ruleIn(primitivesCss, '.btn-primary'), 'min-height')).toBe('var(--tap-min)');
-    expect(declValue(ruleIn(primitivesCss, '.btn-ghost'), 'min-height')).toBe('var(--tap-min)');
+    // The tap floor moved from a `min-height` declaration to the `min-h-tap`
+    // utility on Button's cva base, so BOTH variants inherit it from one place
+    // instead of repeating it. The chain is pinned end to end — the class on
+    // the component, and the mapping that gives it the token — so breaking
+    // either link still reds this.
+    expect(buttonSrc, 'the shared button no longer carries the tap floor')
+      .toContain('min-h-tap');
+    expect(themeCss, '--spacing-tap no longer maps to --tap-min')
+      .toContain('--spacing-tap:  var(--tap-min)');
+    // Both action buttons sized to their label through a fleet.css rule. That
+    // rule is gone: it was Button's `fit` written out, in one of six sheets
+    // that each wrote it out. Asserted on the cva, and on the rule's absence.
+    const fit = buttonVariants({ size: 'fit' });
+    expect(fit).toContain('w-auto');
+    expect(fit).toContain('min-h-tap');
+    expect(fit).not.toMatch(/\bh-\d|max-h-/);
     for (const sel of ['.update-banner-actions .btn-primary', '.update-banner-actions .btn-ghost']) {
-      const rule = ruleIn(fleetCss, sel);
-      expect(declValue(rule, 'width'), sel).toBe('auto');
-      expect(declValue(rule, 'min-height'), sel).toBeNull();
-      expect(declValue(rule, 'height'), sel).toBeNull();
+      expect(() => ruleIn(fleetCss, sel), sel).toThrow();
     }
   });
 

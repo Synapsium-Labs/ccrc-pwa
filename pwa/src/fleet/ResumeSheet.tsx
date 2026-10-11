@@ -20,8 +20,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, TextInput } from '@ccrc/ui';
+import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -42,7 +42,7 @@ export const RECLAIM_COPY: Record<
   | 'unknown-run' | 'unknown-session' | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
   string
 > = {
-  'unknown-run': 'that run is gone — the board will catch up',
+  'unknown-run': UNKNOWN_RUN_TEXT,
   // NOT folded with `unknown-run` even though both arrive at 404: the two have
   // opposite remedies (wait for the board vs. type a different id), and the id
   // in question is one the operator just typed.
@@ -284,7 +284,7 @@ export function ResumeSheet({
   return (
     <Sheet open onClose={onClose} title="The coordinator is gone">
       <div className="abandon-sheet">
-        <p className="qc-consequence">
+        <p className={QC_CONSEQUENCE}>
           {claimedBy === null
             // Unreachable from the board (the row's gate needs a claimant to
             // measure), and stated rather than collapsed into `return null`:
@@ -294,45 +294,42 @@ export function ResumeSheet({
             : `${claimedBy} claims run ${run.id} — ${run.program}, wave ${run.wave} — and this box measured it dead. Cheapest door first: bring the pane back, tell it to pick the wave up, or hand the program to another session.`}
         </p>
         {claimedBy !== null && (
-          <div className="qc-actions">
-            <button type="button" className="btn-primary" disabled={busy !== null} onClick={revive}>
+          <div className={QC_ACTIONS}>
+            <Button variant="primary" disabled={busy !== null} onClick={revive}>
               {busy === 'revive' ? 'Reviving…' : `Revive ${claimedBy}`}
-            </button>
-            <button type="button" className="btn-ghost" disabled={busy !== null} onClick={reKickoff}>
+            </Button>
+            <Button variant="ghost" disabled={busy !== null} onClick={reKickoff}>
               {busy === 'kickoff' ? 'Queueing…' : 'Re-kickoff'}
-            </button>
+            </Button>
             {reclaimOpen ? (
               <>
-                {/* `.sess-hold-input` verbatim, not a new class: the same
-                    object — a single-line id field inside a fleet sheet — and
-                    it is already self-grounded, tap-floored and carries the
-                    ::placeholder ink. The identical reuse `.run-row` already
-                    makes of `.sess-unmeasured`. */}
-                <input
-                  type="text"
-                  className="sess-hold-input"
+                {/* The same object `.sess-hold-input` was: a single-line id
+                    field inside a fleet sheet, self-grounded, tap-floored, with
+                    the ::placeholder ink. It is `TextInput` now rather than a
+                    third copy of those ten declarations. */}
+                <TextInput
                   aria-label={`Hand run ${run.id} to this session id`}
                   placeholder="session id"
                   value={to}
                   onChange={(e) => setTo(e.target.value)}
                 />
-                <button type="button" className="btn-ghost"
+                <Button variant="ghost"
                         disabled={busy !== null || to.trim() === ''} onClick={reclaim}>
                   {busy === 'reclaim' ? 'Handing over…' : 'Reclaim'}
-                </button>
+                </Button>
               </>
             ) : (
-              <button type="button" className="btn-ghost" disabled={busy !== null}
+              <Button variant="ghost" disabled={busy !== null}
                       onClick={() => setReclaimOpen(true)}>
                 That id cannot be revived
-              </button>
+              </Button>
             )}
-            <button type="button" className="btn-ghost" disabled={busy !== null} onClick={onClose}>
+            <Button variant="ghost" disabled={busy !== null} onClick={onClose}>
               Cancel
-            </button>
+            </Button>
           </div>
         )}
-        {note !== null && <p className="qc-consequence">{note}</p>}
+        {note !== null && <p className={QC_CONSEQUENCE}>{note}</p>}
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>

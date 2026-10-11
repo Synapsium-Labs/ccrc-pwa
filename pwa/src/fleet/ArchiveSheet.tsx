@@ -27,14 +27,15 @@ import {
   ARCHIVE_REFUSALS, ARCHIVE_STOP_ONLY, TERMINAL_RUN_STATES, archiveInterrupts, inArchivedFold, isArchiveRefusal,
   substrateFault, type ArchiveRefusal, type FleetSession,
 } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
+import { Button, Sheet, toast } from '@ccrc/ui';
 import { ARCHIVE_REFUSAL_TEXT, ApiError, api, apiErrorText, archivePartial } from '../lib/api';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
-  CLAIMED_CONSEQUENCE, claimedSentence, isArchiveConflictRun, runPhrase, type ArchiveConflictRun,
+  CLAIMED_CONSEQUENCE, CLAIMED_TITLE, claimedSentence, isArchiveConflictRun, runPhrase,
+  type ArchiveConflictRun,
 } from './ArchiveConflictSheet';
 import './fleet.css';
+import { substrateFaultText } from './substrateWords';
 
 /** Whether a session is already put away, so its menu and its actions sheet offer Restore where every other session
  *  offers Archive (spec §5.2). Every row the Archived fold holds (`inArchivedFold`, the ONE predicate — never
@@ -149,7 +150,7 @@ export function ArchiveSheet({
     // re-read at the moment of firing and the refusal named rather than swallowed.
     const fault = substrateFault(session);
     if (fault !== null) {
-      setError(`tmux unreachable — ${fault.text}`);
+      setError(substrateFaultText(fault));
       return;
     }
     const mine = gen.current;
@@ -245,7 +246,7 @@ export function ArchiveSheet({
       primary = { label: 'End programme and archive', next: { ...consent, programme: true } };
       break;
     case 'claimed':
-      title = 'This workspace is claimed';
+      title = CLAIMED_TITLE;
       body = (
         <>
           <p className="qc-consequence">{claimedSentence(ask.runs.length > 0 ? ask.runs : null)}</p>
@@ -282,20 +283,20 @@ export function ArchiveSheet({
         )}
         <div className="qc-actions">
           {primary !== null && (
-            <button type="button" className="btn-primary" disabled={busy} onClick={() => send(primary!.next)}>
+            <Button variant="primary" disabled={busy} onClick={() => send(primary!.next)}>
               {busy ? 'Archiving…' : primary.label}
-            </button>
+            </Button>
           )}
           {stopOnly && (
-            <button type="button" className="btn-primary" disabled={stopFault !== null}
-                    title={stopFault !== null ? `tmux unreachable — ${stopFault.text}` : undefined}
+            <Button variant="primary" disabled={stopFault !== null}
+                    title={stopFault === null ? undefined : substrateFaultText(stopFault)}
                     onClick={() => { onStopOnly!(sid); onClose(); }}>
               Stop only
-            </button>
+            </Button>
           )}
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             {primary === null && !stopOnly ? 'Close' : 'Cancel'}
-          </button>
+          </Button>
         </div>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>

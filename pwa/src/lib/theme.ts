@@ -1,11 +1,17 @@
-// Theme reachability — the "true light theme" in tokens.css must actually be
-// applied, not just defined. Dark stays the identity default; the app follows
-// the system setting: `prefers-color-scheme: light` stamps
-// `data-theme="light"` on the root (the selector every light token hangs off)
-// and live setting changes flow through without a reload. The browser-chrome
-// `theme-color` meta re-reads --bg-page after every flip so installed-app
-// chrome always matches the glass — values come from the loaded tokens, never
-// hardcoded here.
+// Theme reachability — a palette defined in tokens.css must actually be
+// APPLIED, not just defined.
+//
+// This file owns three things and nothing else: the stored preference, the
+// system media query, and keeping the browser-chrome `theme-color` meta on the
+// page's own background. WHICH palettes exist, what they are called, and what
+// stamping one means are all @ccrc/ui's (`styles/themes.ts`) — this app picks
+// among them, it does not enumerate them.
+//
+// The default is SYSTEM: follow `prefers-color-scheme` between the two
+// Phosphor palettes, which is exactly what the app did before any of this was
+// selectable. A pinned palette ignores the OS entirely — someone on a light
+// desktop who chose Nord gets Nord after dark too.
+import { THEME_STORAGE_KEY, SYSTEM, applyTheme, resolveTheme } from '@ccrc/ui';
 
 /** The slice of MediaQueryList the theme needs — injectable for tests. */
 export interface ThemeMedia {
@@ -13,11 +19,30 @@ export interface ThemeMedia {
   addEventListener(type: 'change', cb: (e: { matches: boolean }) => void): void;
 }
 
-function apply(light: boolean): void {
-  const root = document.documentElement;
-  if (light) root.setAttribute('data-theme', 'light');
-  else root.removeAttribute('data-theme');
+/** The stored choice, or SYSTEM when there is none or it is unreadable.
+ *
+ *  Storage throws in a private window and in some embedded WebViews, and this
+ *  runs before first paint — an exception here is a blank app, so the read is
+ *  guarded and a failure is simply "no preference". */
+export function storedTheme(): string {
+  try {
+    return resolveTheme(localStorage.getItem(THEME_STORAGE_KEY));
+  } catch {
+    return SYSTEM;
+  }
+}
 
+/** Remember a choice. A failed write is not an error the user needs: the theme
+ *  still applies for this session, it just will not survive a reload. */
+export function rememberTheme(choice: string): void {
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, choice);
+  } catch {
+    /* private window, blocked storage — the session keeps the theme anyway */
+  }
+}
+
+function chrome(root: HTMLElement): void {
   // Keep the browser/PWA chrome on the page's own background. Guarded: in
   // environments without the tokens stylesheet (unit tests) the var resolves
   // empty and the meta is left alone.
@@ -26,10 +51,31 @@ function apply(light: boolean): void {
   if (bg !== '' && meta !== null) meta.content = bg;
 }
 
-/** Wire the theme to the system setting; call once at boot (main.tsx). */
+/** Apply a choice now, and remember it. Used by the picker. */
+export function setTheme(
+  choice: string,
+  mq: ThemeMedia = window.matchMedia('(prefers-color-scheme: light)'),
+): void {
+  const root = document.documentElement;
+  applyTheme(resolveTheme(choice), root, mq.matches);
+  rememberTheme(choice);
+  chrome(root);
+}
+
+/** Wire the theme at boot (main.tsx).
+ *
+ *  The media subscription stays live even when a palette is PINNED, and that
+ *  is deliberate rather than wasteful: the listener re-reads the stored choice
+ *  each time, so a user who switches back to "System" later gets the current
+ *  OS answer without a reload, and a pinned palette simply ignores the event. */
 export function initTheme(
   mq: ThemeMedia = window.matchMedia('(prefers-color-scheme: light)'),
 ): void {
-  apply(mq.matches);
-  mq.addEventListener('change', (e) => apply(e.matches));
+  const root = document.documentElement;
+  applyTheme(storedTheme(), root, mq.matches);
+  chrome(root);
+  mq.addEventListener('change', (e) => {
+    applyTheme(storedTheme(), root, e.matches);
+    chrome(root);
+  });
 }
