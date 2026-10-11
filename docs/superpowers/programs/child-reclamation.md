@@ -47,6 +47,21 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 01:04 — wave 8's overlap with workspace-lifecycle wave 6 (run 358) is agreed (4200, 4202), and one Task 6 ruling is sent (4203).**
+  - **The split.** Wave 6 edits `_ws_expire_locked` (ccd/ccd), `parseExpireResult` in `archivedExpiry.ts` (not Task 1's
+    move), `deadCoordinator.ts`, `watch.ts`'s `sweepArchivedExpiry` and dead-coordinator pass only, and at most
+    `ExpiryAttention`'s kind union. Wave 8 touches nothing under `ccd/`. The second lander merges main and re-points
+    by content (R56).
+  - **Readers.** Each verb keeps its own crumb reader: wave 8's `childReclaimFailedResume` is module-private, and
+    `childReclaimFailedTail` is the reclaim feed's tail, not verb-neutral. Wave 6 reads the L0 `containment-refuted`
+    and imports nothing from `coord/childReclaim.ts`. `CHILD_RECLAIM_STUCK_TOKENS` lives in that coord module, and
+    single-definition names neither.
+  - **The ruling.** Wave 6 moves its `parseExpireResult` case into its own describe in
+    `containment-refuted-word.test.ts`. That would falsify Task 6 Step 5's title "…the expiry parser as resumable"
+    and its comment, so whichever lands second makes the shared describe reclaim-only. If wave 8 lands first, wave 6
+    may edit exactly those lines. It is a plan-text correction inside Task 6, `shared-describe-made-reclaim-only`,
+    with no new number.
+
 - **2026-10-11 01:00 — WAVE 7 IS MERGED: #344 is `7609221a4` (prerelease v0.0.145). Run 347 is closed `done`, final, released. Wave 8 (run 348) is dispatched.**
   - **Review 376** (brisk-ridge, on an Anthropic account with no swap) was closed `done`: the held-out panel, the
     mandatory SAFETY lens on the `chmod` line, three Sonnet refuters per finding, 16 agents, 0 errors. SAFETY found
