@@ -1416,6 +1416,38 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Fix round progress, read-only:** F1 is committed (`6028dacf4`): the breaker's held set is recorded as a
     `run_events` observation row and seeded at restart. So are §5.4/§12 (`250fc91fd`) and F3–F9 (`33a5198e2`). Work
     continues.
+- **2026-10-11 16:40 — run 358's fix round 1 done at `6fe190710` (plain-ridge's 4240), re-measured; at `awaiting-review`; scoped
+  review run 382 opened and dispatched.**
+  - **F1 (4820, `the-breaker-hold-survives-a-restart`), with no migration:**
+    - The held set is a `run_events` OBSERVATION row (`fromState = toState`). Its detail is
+      `dead-coordinator-breaker-held:` plus the percent-escaped `id@firstDeadAt` list. It is written on every change,
+      in shadow too, and the latest row wins.
+    - A process's first pass seeds from that row. An unreadable or malformed row stops the lane for that pass, never
+      seeding an empty set.
+    - Releases and the anchor logic are unchanged.
+    - The invariant went red first: A was ended after the restart, lane 7F/35P. It is green at 42. Mutations M1–M6
+      are red.
+    - §12 and §5.4 say what a restart keeps (the anchor, re-anchored only after a gap over 10 minutes, and the hold)
+      and loses (the crashed-pass run, and the backoff after a stuck or thrown act).
+  - **F10** (the two comments).
+  - **F3 (4821, `a-halted-box-says-so-on-every-standing-row`):** the halt words go on stuck, tier, AND non-final
+    ladder `failing` rows. The last is the worker's extension in F3's own direction, for the attention sentence only.
+  - **F4–F7, F9 and §12's observations:** done. F5 is worded deliberately: "ccd's stopping before an attempt began does
+    not end it", because a SERVER restart does drop the in-memory entry.
+  - 4822 and 4823 are UNUSED. F2 and F8 are not touched. Main's #352 (docs only) was not absorbed, and `merge-tree`
+    is clean. The worker's LATER nits: two "standing" phrasings, §12's one-tick looseness, and a repeating
+    lone-surrogate warning.
+  - **Re-measured:** the branch, PR #351's head and the fingerprint are all `6fe190710`, OPEN and MERGEABLE. 5 commits,
+    no merge, 15 files, +649/−45. Advanced to `awaiting-review`.
+  - **Review run 382** (`kind:'review'`, reviews 358). The brief (6.0 KB) asks for:
+    - F1's invariant, releases and fail-shut read;
+    - the carrier against EVERY `run_events` reader (pushNewRuns, the stall watch, runSignals, the route trail,
+      reclaim, strands, the feed, the PWA timeline), and for a carrier run that is gone or pruned;
+    - no schema change;
+    - the truth of the words;
+    - the numbers and the scope;
+    - M1–M6 plus the F3 and prose rows.
+    Dispatched at 16:44 to `ccrc-pwa-amber-canyon` on the first try (`skillState: present`), with workflow on.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
