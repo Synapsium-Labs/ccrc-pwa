@@ -331,6 +331,46 @@ describe('the act’s own re-measure', () => {
     expect(f.stateOf(r), 'the mirror is fresh again: the hour it kept is due on the next pass').toBe('failed');
   });
 
+  it('a mirror that goes STALE DURING the claimant’s measure stops the act as a hold: the anchor and the run of passes stand (wave 6; review 355, F7)', async () => {
+    let armed = false;
+    let inAct = false;
+    const f: Fixture = await fixture({ beforeAct: () => { inAct = armed; },
+      onHasSession: () => { if (inAct) { inAct = false; f.advance(20_000); } } });   // three sweep intervals and more
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A);
+    await f.pass(); await walk(f, HOUR - 60_000);
+    const anchor = f.anchorOf(A);
+    armed = true;
+    f.next(); await f.pass();
+    armed = false;
+    expect(f.acts(), 'the act was asked').toBe(1);
+    expect(f.stateOf(r), 'nothing ended').toBe('working');
+    expect(f.calls, 'nothing composed').toEqual([]);
+    expect(f.anchorOf(A), 'a slow mirror never deletes an anchor').toMatchObject({ firstDeadAt: (anchor as { firstDeadAt: number }).firstDeadAt });
+    expect(f.watcher().currentDeadCoordinators().get(A)?.crashedPasses, 'nor the run of passes').toBeGreaterThanOrEqual(2);
+    f.next(); await f.pass();
+    expect(f.stateOf(r), 'the mirror is fresh again: the hour it kept is due on the next pass').toBe('failed');
+  });
+
+  it('a gap the mirror records DURING the claimant’s measure is read before the commit: nothing ends (wave 6; review 355, F7)', async () => {
+    let armed = false;
+    let inAct = false;
+    const f: Fixture = await fixture({ beforeAct: () => { inAct = armed; }, onHasSession: () => {
+      if (inAct) { inAct = false; f.coord.recordGap({ at: T0, gen: '1790000000000000000', reason: 'shrank', detail: 'd', lostFrom: 0, lostTo: 9 }); }
+    } });
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A);
+    f.journal(A, 'spawn', { meas: { rc: '0' } });
+    await f.pass(); await walk(f, HOUR - 60_000);
+    armed = true;
+    f.next(); await f.pass();
+    expect(f.acts(), 'the act was asked').toBe(1);
+    expect(f.stateOf(r), 'a gap since its last start may hide a deliberate act: nothing ends').toBe('working');
+    expect(f.calls, 'nothing composed').toEqual([]);
+  });
+
   it('a revive that lands AFTER the worker was released is recorded: a feed row and an attention entry, though no run was closed', async () => {
     const f: Fixture = await fixture({ onCcd: (args) => { if (args[0] === 'ws-release') f.live.add(A); } });
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);

@@ -3,12 +3,15 @@
 // fixture registry answer; `closeRun` is the real one (so the compare-and-set is the real one) over a fixture store;
 // nothing reaches a box.
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { closeRun, type CloseOutcome } from '../src/coord/close.js';
-import { DeadCoordinatorActThrew, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorFeed, type EndDeadCoordinatorDeps } from '../src/coord/endDeadCoordinator.js';
+import {
+  DeadCoordinatorActThrew, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorFeed, rereadDeadCoordinatorJournalTrust,
+  type EndDeadCoordinatorDeps,
+} from '../src/coord/endDeadCoordinator.js';
 import {
   DEAD_COORDINATOR_JOURNAL_TRUSTED, DEAD_COORDINATOR_LANE_LIVE_MARKER, type DeadCoordinatorJournalTrust,
 } from '../src/deadCoordinator.js';
@@ -20,6 +23,7 @@ import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../shared/
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
+import { codeOnly } from './sourceScan.js';
 
 const CRASHED = 'demo-coord-crashed';
 const HEIR = 'demo-coord-heir';
@@ -40,6 +44,8 @@ interface Opts {
   hold?: string;
   /** The executor's clock at each re-measure (default: the pass's own instant, `NOW`). */
   clockAt?: number;
+  /** The journal's trust as it is READ AGAIN after the claimant's measure (default: the early read's, unchanged). */
+  reread?: (early: DeadCoordinatorJournalTrust) => { hold: string | null; trust: DeadCoordinatorJournalTrust };
 }
 
 const rig = async (o: Opts = {}) => {
@@ -64,6 +70,7 @@ const rig = async (o: Opts = {}) => {
     io: o.unlistable === true ? { ...base.io, readdir: async () => null } : base.io,
     tmux: { sessionVerdict: async () => { asked += 1; o.onMeasure?.(asked); return o.verdict?.(asked) ?? { verdict: 'gone' }; } },
     journalTrust: async () => ({ hold: o.hold ?? null, trust: o.trust ?? DEAD_COORDINATOR_JOURNAL_TRUSTED }),
+    journalReread: (early) => o.reread?.(early) ?? { hold: null, trust: early },
     now: () => o.clockAt ?? NOW,
     // The sweep's abandon exactly as the serialiser's handle runs it (`routes.ts`'s `withSweepAbandon`): the REAL
     // `closeRun`, `'sweep'`, the crashed id and the executor's re-measure.
@@ -302,6 +309,101 @@ describe('LIVE — each run re-measured inside the arm, then the abandon with th
     const b = r.working('alpha', 'demo-w2');
     expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toEqual({ kind: 'ended', programmes: [{ slug: 'alpha', runIds: [b] }],
       open: [{ slug: 'alpha', runIds: [a] }], stuck: [{ runId: a, why: 'bad-transition: closing → closing' }], stoppedBy: null });
+  });
+});
+
+describe('the journal’s trust is READ AGAIN after the claimant’s measure (wave 6; review 355, F7)', () => {
+  it('a mirror that turns stale DURING the measure stops the act as a hold — before the fleet act, nothing closed', async () => {
+    let measured = false;
+    const r = await rig({ onMeasure: () => { measured = true; },
+      reread: (early) => (measured ? { hold: 'the lifecycle mirror turned stale during the claimant’s measure',
+        trust: { untrusted: 'the lifecycle mirror turned stale during the claimant’s measure', gapGens: [], lastWriteErrorAt: null } }
+        : { hold: null, trust: early }) });
+    const a = r.working('alpha', 'demo-w1');
+    expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toMatchObject({ kind: 'ended', programmes: [],
+      stoppedBy: { kind: 'hold', why: 'the lifecycle mirror turned stale during the claimant’s measure — the act waits, and its hour stands' } });
+    expect(r.calls, 'nothing composed').toEqual([]);
+    expect(r.stateOf(a)).toBe('working');
+  });
+
+  it('a gap recorded DURING the measure is read before the commit: re-measured unmeasured — nothing closed', async () => {
+    let measured = false;
+    const r = await rig({ onMeasure: () => { measured = true; },
+      reread: (early) => ({ hold: null, trust: measured ? { ...early, gapGens: ['1790000000000000000'] } : early }) });
+    const a = r.working('alpha', 'demo-w1');
+    expect(await endDeadCoordinator(r.deps, CRASHED, NOW)).toMatchObject({ kind: 'ended', programmes: [],
+      stoppedBy: { kind: 'remeasured', why: expect.stringContaining('lost journal bytes in generation 1790000000000000000') } });
+    expect(r.calls, 'nothing composed').toEqual([]);
+    expect(r.stateOf(a)).toBe('working');
+  });
+
+  it('the re-read is the last read, and nothing awaits after the claimant’s measure — in stillCrashed, nor in close between it and the commit', () => {
+    const src = (f: string): string => codeOnly(readFileSync(path.join(import.meta.dirname, '..', 'src', 'coord', f), 'utf8'));
+    const exec = src('endDeadCoordinator.ts');
+    const from = exec.indexOf('export async function stillCrashed(');
+    const body = exec.slice(from, exec.indexOf('\n}\n', from));
+    const measure = body.indexOf('await measureClaimant(');
+    expect(measure, 'the claimant’s measure').toBeGreaterThan(-1);
+    const after = body.slice(measure + 'await measureClaimant('.length);
+    expect(after, 'no await after the measure: the revive window stays its round trip').not.toMatch(/\bawait\b/);
+    expect(after.indexOf('deps.journalReread(journal.trust)'), 'the re-read, after the measure').toBeGreaterThan(-1);
+    const close = src('close.ts');
+    const last = close.indexOf('const stop = await sweep.stillCrashed();');
+    expect(last, 'close’s re-measure after the fleet act').toBeGreaterThan(-1);
+    const commit = close.indexOf('const closed = coord.closeRun({', last);
+    expect(commit, 'then the commit').toBeGreaterThan(last);
+    // Between them sits only the arm with NO fleet act (`} else if (sweep !== undefined) { … }`), which a run whose fleet act
+    // ran never enters: nothing awaits on the path from the re-measure to the commit.
+    const between = close.slice(last + 'const stop = await sweep.stillCrashed();'.length, commit);
+    const noFleetAct = between.indexOf('    } else if (sweep !== undefined) {\n');
+    expect(noFleetAct, 'the arm with no fleet act').toBeGreaterThan(-1);
+    expect(between.slice(0, noFleetAct), 'nothing awaits after the re-measure').not.toMatch(/\bawait\b/);
+    expect(between.slice(between.indexOf('\n    }\n', noFleetAct)), 'nor after that arm, up to the commit').not.toMatch(/\bawait\b/);
+  });
+});
+
+describe('the journal-trust re-read adapter (wave 6; review 355, F7)', () => {
+  const OK: LifecycleHealth = { state: 'ok', newestAt: 1, horizon: 1, rows: 1, generations: 1, gaps: 0, writeErrors: null, lastOk: 1 };
+  const EARLY: DeadCoordinatorJournalTrust = { untrusted: null, gapGens: ['1790000000000000000'], lastWriteErrorAt: 5 };
+
+  it('a mirror now stale or unknown is a HOLD; one with no store is a hold too', async () => {
+    const r = await rig();
+    for (const state of ['stale', 'unknown'] as const) {
+      expect(rereadDeadCoordinatorJournalTrust(r.coord, { ...OK, state }, EARLY).hold, state)
+        .toBe(`the lifecycle mirror turned ${state} during the claimant’s measure`);
+    }
+    expect(rereadDeadCoordinatorJournalTrust(r.coord, null, EARLY).hold).toBe('there is no coordination store to mirror the journal into');
+  });
+
+  it('a gap recorded since the early read JOINS its gaps; the write-error instant stays the early read’s', async () => {
+    const r = await rig();
+    r.coord.recordGap({ at: NOW, gen: '1790000000000000001', reason: 'shrank', detail: 'd', lostFrom: 0, lostTo: 9 });
+    expect(rereadDeadCoordinatorJournalTrust(r.coord, OK, EARLY)).toEqual({ hold: null,
+      trust: { untrusted: null, gapGens: ['1790000000000000000', '1790000000000000001'], lastWriteErrorAt: 5 } });
+  });
+
+  it('a mirror now unavailable (the fleet’s ccd no longer journals) is untrusted — never the early read’s trust', async () => {
+    const r = await rig();
+    expect(rereadDeadCoordinatorJournalTrust(r.coord, { ...OK, state: 'unavailable' }, EARLY)).toEqual({ hold: null,
+      trust: { untrusted: 'the fleet box’s ccd does not journal (no lifecycle-v1)', gapGens: [], lastWriteErrorAt: null } });
+  });
+
+  it('a write failure ccd counted DURING the measure is read too: where the early read saw none, its instant is unknown', async () => {
+    const r = await rig();
+    const none: DeadCoordinatorJournalTrust = { untrusted: null, gapGens: [], lastWriteErrorAt: null };
+    expect(rereadDeadCoordinatorJournalTrust(r.coord, { ...OK, writeErrors: 1 }, none)).toEqual({ hold: null,
+      trust: { untrusted: null, gapGens: [], lastWriteErrorAt: 'unknown' } });
+    expect(rereadDeadCoordinatorJournalTrust(r.coord, { ...OK, writeErrors: 0 }, none), 'the CONTROL: none counted').toEqual({ hold: null, trust: none });
+    expect(rereadDeadCoordinatorJournalTrust(r.coord, { ...OK, writeErrors: 2 }, EARLY), 'a count the early read placed keeps its instant')
+      .toEqual({ hold: null, trust: EARLY });
+  });
+
+  it('it never trusts more than the early read did: an untrusted early read stays untrusted, and a gap list it cannot read is untrust', async () => {
+    const r = await rig();
+    const untrusted: DeadCoordinatorJournalTrust = { untrusted: 'the lifecycle mirror is unavailable', gapGens: [], lastWriteErrorAt: null };
+    expect(rereadDeadCoordinatorJournalTrust(r.coord, OK, untrusted)).toEqual({ hold: null, trust: untrusted });
+    r.coord.lifecycleGapGens = () => { throw new Error('database disk image is malformed'); };
+    expect(rereadDeadCoordinatorJournalTrust(r.coord, OK, EARLY).trust.untrusted).toContain('database disk image is malformed');
   });
 });
 
