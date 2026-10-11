@@ -47,6 +47,30 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 12:41 — wave 9's pre-flight is measured; its draft rulings (contract §16, R82–R92) are under attack.**
+  - **The pre-flight.** Workflow `wf_4de39178-36a`: four Opus readers (the composer, SAFETY, attention and pacing,
+    overlaps and size) and a completeness critic, read-only at `d0c2b7803`. 5 agents, 0 errors. Evidence:
+    `ccr15-evidence-archive/wave9-preflight/preflight.json`.
+  - **What wave 7 left for the lane.** The builders, `COLLECT_CAP`, the agent grant and the 240 s runner row exist, and
+    nothing composes them. The agent's read grant already covers both listings, so the wave needs no agent, ccd or PWA
+    edit: collector attention can ride `ChildReclaimAttention`, whose PWA reader keeps any item whatever its `kind`.
+  - **A SAFETY break, measured by the critic.** `cmd_ws_collect`'s flag loop consumes flags from any position, including
+    `--session`'s value, and the id predicate on both sides admits a leading `-`. A planted witness named `--actor`,
+    `--surface` or `--reason` composes an argv that ccd runs against the id `agent`. It fails closed today only because
+    the token binds the id. The draft makes refusing a leading `-` a SAFETY rule in the one L0 id predicate, before any
+    argv, and carries ccd's own refusal to the path-identity follow-up.
+  - **Live counts.** 9 witnesses (4 live sessions, 5 orphans); `tmpquarantine` is absent; no dot- or dash-leading name.
+  - **The draft's main rulings.** The lane ships SHADOWED behind a hand-touched `collect-lane-live` marker with no writer,
+    on workspace-lifecycle's precedent, and arming is the operator's. The population is the two listings, read exactly. A
+    spend needs two observations of one token, the second being the executor's own audit, at least 60 s apart on the
+    monotonic clock and consecutive. Both caps are required. `reclaim-paused` is read three times, an open minting run
+    holds, and a presence-visible id defers. Pacing is one total table: box-wide probes are neutral, per-leaf standing
+    ones go on the tier at once, terminal words enter the tier at once, and `changed-recently` waits for ccd's `idleAt`.
+    Wave 8's tier is reused by import. Attention is one item per id, carrying the clips clause. The collector gets its own
+    one-act slot.
+  - **The attack.** Workflow `wf_5cb3e8a1-c6d`: four Opus attackers (SAFETY at xhigh, pacing and attention, feasibility,
+    SECURITY), and two Sonnet refuters for every break.
+
 - **2026-10-11 12:23 — wave 8 is DEPLOYED on both boxes by ccrc's own updater; no hand rollout.** Observed read-only with
   `ccrc rollout --to v0.0.147 --check` every two minutes. The fleet box was current at v0.0.147 (`d0c2b780`) by
   12:21, and the server box by 12:23. The fleet box's `~/ccrc` points at `ccrc-versions/v0.0.147`, and its
