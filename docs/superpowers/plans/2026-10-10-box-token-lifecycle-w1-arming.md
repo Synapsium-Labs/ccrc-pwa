@@ -24,7 +24,7 @@ The coordinator split this plan on 2026-10-10 at 22:15 UTC, because only the fli
 
 **Trigger and bound (ledger row 2a):** The trigger was the GPT-lane lane-1 B4 soak gate, which passed on 2026-10-08 at 11:20 UTC. The PR must merge before row 3's first PR (the weekly schedule). **Another soak is open now.** The GPT-lane programme's Plan 4 soak clock started on 2026-10-09 at 13:50 UTC and runs to about 2026-10-21. Its go needs both lanes' `b4-sample.sh` samples to exit 0. Criterion 4 of that sampler STOPs on any doctor FAIL, and on a WARN from a check that did not WARN in its baseline. The ledger's carried constraint forbids a new doctor WARN while a GPT-lane soak gate is open. **So Task 12 is dispatched only after a written answer from the GPT-lane coordinator or the operator.** The answer must say either that Plan 4's samples do not bind this arming, or that the operator amends the sampler's baseline by name for `box-token`, or that the merge waits for the Plan 4 window to close. Record the answer here, in place of this paragraph.
 
-**Recorded 2026-10-11 (coordinator, run 377 brief):** the Plan 4 gate is at the merge, not at the dispatch. Task 12 is built in full on the branch, and the coordinator holds the merge until the operator rules on the soak sampler's baseline. The operator's answer replaces this paragraph when it comes.
+**Recorded 2026-10-11 (coordinator, run 377 brief):** the Plan 4 gate is at the merge, not at the dispatch. Task 12 is built in full on the branch, and the coordinator holds the merge until the operator rules on the soak sampler's baseline. **Answered 2026-10-11 (the operator, relayed in the coordinator's mail 4229):** option 2, `WARN-ACCEPTED-BOXTOKEN` under D-4673. A `box-token` WARN is accepted by name on the Plan 4 soak sampler's doctor baseline, so the merge does not wait on the soak. A `box-token` FAIL still stops a soak sample, which is one more reason the arming release must leave a `PASS` box at `PASS`.
 
 ## Operator decision 1: how an armed `retired-presented` FAIL clears
 
@@ -232,7 +232,7 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
 
 **Files:** `ccd/ccrc-doctor-checks` (the state validator at `:7488`, the finding at `:7531-7532`, the parser at `:7748`, `_bt_find`'s arm at `:7688-7690`), and `server/test/doctor-box-token.test.ts` (ROWS at `:212-262`, the `retired-presented` row at `:246`, `healthyState` at `:88`).
 
-- [ ] **Step 1: Write the failing rows.** Replace the single row at `:246` with four ROWS entries. Each still SKIPs on the shipped file and FAILs on `armed()`:
+- [x] **Step 1: Write the failing rows.** Replace the single row at `:246` with four ROWS entries. Each still SKIPs on the shipped file and FAILs on `armed()`:
   - `'retired-presented (unanswered: newer than the last rotation)'`: `counters = { previousPresented: 0, retiredPresented: 2, retiredPresentedAt: lastRotationAt + MIN }`.
   - `'retired-presented (a state from before 4552: a count, no stamp)'`: `retiredPresented: 2`, no key.
   - `'retired-presented (after a restart: count 0, the stamp unanswered)'`: `{ retiredPresented: 0, retiredPresentedAt: lastRotationAt + MIN }`.
@@ -244,8 +244,8 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
   - Edge: a stamp 30 s before `lastRotationAt` gives PASS. A stamp 30 s after it is a finding (SKIP on the shipped file, FAIL on `armed()`).
   - `retiredPresentedAt: 'x'` gives `server: state-unreadable`.
   - The armed sentence for the stamped row contains `ago and no rotation has completed since`. The legacy row's and the null row's contain `records no time for it`.
-- [ ] **Step 2: Run them RED:** `cd server && ./node_modules/.bin/vitest run test/doctor-box-token.test.ts`.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2: Run them RED:** `cd server && ./node_modules/.bin/vitest run test/doctor-box-token.test.ts`.
+- [x] **Step 3: Implement.**
   - Validator (`:7488`): add `and ("retiredPresentedAt" not in k or on(k["retiredPresentedAt"]))`.
   - Finding (`:7531`), branching on presence first:
     ```python
@@ -263,8 +263,8 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
     - When `$b` is `-`: `say="a retired value was presented $a time(s) since the server started, and this state records no time for it"`.
     - Otherwise: `say="a retired value was presented $(_bt_age "$b") ago and no rotation has completed since ($a since the server started)"`.
     - `fix="the server owes a forward rotation for it, at most one an hour, and this line clears when that rotation completes; if it stays past an hour, read the server's log for the lane that presented it"`. The fix names no hand rotation.
-- [ ] **Step 4: Run GREEN:** `test/doctor-box-token.test.ts`, then `test/ccrc-doctor.test.ts`, one call each.
-- [ ] **Step 5: Commit** (`feat(doctor): retired-presented clears when a rotation answers it (4552)`).
+- [x] **Step 4: Run GREEN:** `test/doctor-box-token.test.ts`, then `test/ccrc-doctor.test.ts`, one call each.
+- [x] **Step 5: Commit** (`feat(doctor): retired-presented clears when a rotation answers it (4552)`).
 
 | Mutation in `ccd/ccrc-doctor-checks` | Must red |
 |---|---|
@@ -380,11 +380,11 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
 
 **Files:** `ccd/ccrc` (`cmd_token` at `:5271-5275`), `server/test/ccrc-cli.test.ts` (beside the adopt case at `:396`), `agent/test/deploy-verify.test.ts` (`:1531-1540`), `README.md`.
 
-- [ ] **Step 1 (residue 2), red first.** In `ccrc-cli.test.ts`, add a row: a fixture tree with `ccrc-token-sync` removed, then `ccrc token sync --from agent`. Expect a non-zero exit, and expect the first stderr line to start with one of `TOKEN_VERB_MISSING_PREFIXES` (`shared/agent-protocol.ts:717`), imported, not copied. Run `cd server && ./node_modules/.bin/vitest run test/ccrc-cli.test.ts`: red.
-- [ ] **Step 2:** In `cmd_token`, change the refusal to `_ccrc_die "unknown argument: token — its script is missing: $body; is this a complete ccrc install?"`, which prints `ccrc: unknown argument: token — …`. D-4395 classes that line as `verb-missing`, and its remedy (install a release that has the verb) is the right one for a missing script. Run the file: green.
-- [ ] **Step 3 (residue 4):** Rewrite the `ship_secret` prose at `agent/test/deploy-verify.test.ts:1531-1540` as history. `deploy.sh` no longer ships the token, and the rsync exclude still keeps a stray `deploy/ccrc-mail.token` off both boxes. This is prose only. Run `cd agent && ./node_modules/.bin/vitest run test/deploy-verify.test.ts`.
-- [ ] **Step 4 (residue 6(a)):** Add a README sentence where the box-token holds are described: a two-box fleet placed by `deploy.sh` alone has no `~/.ccrc/node-id`, so the rotation gate holds `node-id-unmeasured`, and `ccrc install` (or `ccrc update`) mints the node id. Run `test/readme-*.test.ts` and any README citation scan the worker finds with `git grep -ln README.md server/test`, one call each.
-- [ ] **Step 5: Commit** (`fix(ccrc): residue 2, 4 and 6(a) on the files claim 1141 held`).
+- [x] **Step 1 (residue 2), red first.** In `ccrc-cli.test.ts`, add a row: a fixture tree with `ccrc-token-sync` removed, then `ccrc token sync --from agent`. Expect a non-zero exit, and expect the first stderr line to start with one of `TOKEN_VERB_MISSING_PREFIXES` (`shared/agent-protocol.ts:717`), imported, not copied. Run `cd server && ./node_modules/.bin/vitest run test/ccrc-cli.test.ts`: red.
+- [x] **Step 2:** In `cmd_token`, change the refusal to `_ccrc_die "unknown argument: token — its script is missing: $body; is this a complete ccrc install?"`, which prints `ccrc: unknown argument: token — …`. D-4395 classes that line as `verb-missing`, and its remedy (install a release that has the verb) is the right one for a missing script. Run the file: green.
+- [x] **Step 3 (residue 4):** Rewrite the `ship_secret` prose at `agent/test/deploy-verify.test.ts:1531-1540` as history. `deploy.sh` no longer ships the token, and the rsync exclude still keeps a stray `deploy/ccrc-mail.token` off both boxes. This is prose only. Run `cd agent && ./node_modules/.bin/vitest run test/deploy-verify.test.ts`.
+- [x] **Step 4 (residue 6(a)):** Add a README sentence where the box-token holds are described: a two-box fleet placed by `deploy.sh` alone has no `~/.ccrc/node-id`, so the rotation gate holds `node-id-unmeasured`, and `ccrc install` (or `ccrc update`) mints the node id. Run `test/readme-*.test.ts` and any README citation scan the worker finds with `git grep -ln README.md server/test`, one call each.
+- [x] **Step 5: Commit** (`fix(ccrc): residue 2, 4 and 6(a) on the files claim 1141 held`).
 
 | Mutation | Must red |
 |---|---|
