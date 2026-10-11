@@ -155,6 +155,16 @@ describe('childReclaimLeafKept — one item per id, from its latest reclaim row 
     expect(run('41')).toBe(41);
     for (const v of ['0', 'x', '12345678901', undefined]) expect(run(v), String(v)).toBeNull();
   });
+
+  it('lists nothing for a row whose id is not a session id\'s shape, so no feed row is written for it; a well-shaped id still lists', () => {
+    // Any session can append a journal line, so the mirror's id is attribution, never a path to name on the
+    // banner. These ids would put a path outside ~/.cc-clips, a second line, or a reordered line before a person.
+    const kept = { childOf: '41', clipsKept: 'refused', tmpRootKept: 'in-use' };
+    const forged = ['x/../../.ssh', 'demo-gone\nccd kept nothing else', 'demo-‮gone', 'demo gone', ''];
+    expect(derive(forged.map((sessionId) => src({ sessionId, meas: kept })))).toEqual([]);
+    const got = derive([...forged.map((sessionId) => src({ sessionId, meas: kept })), src({ meas: kept })]);
+    expect(got.map((k) => k.item.sessionId)).toEqual([ID]);
+  });
 });
 
 describe('how the item ends', () => {
@@ -184,6 +194,12 @@ describe('how the item ends', () => {
     const cut = src({ truncated: true, meas: null, detail: 'clips kept (refused)' });
     expect(derive([cut], ends([{ id: cut.id + 1, act: 'collect', at: null }])).map((k) => k.item.sentence))
       .toEqual([TRUNCATED_COLLECTED]);
+    // A cut line with no detail names where to look, and a collected temp root is no longer one of the places.
+    const bare = src({ truncated: true, meas: null });
+    expect(derive([bare], ends([{ id: bare.id + 1, act: 'collect', at: null }])).map((k) => k.item.sentence))
+      .toEqual(['The reclaim of this child completed, but the journal line ccd wrote for it was cut to fit, so whether '
+        + "its clips directory or its temp root was kept is not known; ccd's line kept no detail either, so the feed "
+        + `cannot name it; look for ~/.cc-clips/demo-gone on the fleet box. Its temp root has since been collected. ${HORIZON}`]);
   });
 
   it('a collect that does not follow the row ends nothing', () => {

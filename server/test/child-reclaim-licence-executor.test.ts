@@ -58,7 +58,7 @@ interface RigOpts {
 
 /** `child-reclaim.test.ts`'s `rig`, cut down: one child of a CLOSED minting run, a real CoordStore, a
  *  feed log, and the ccd above. `mint` writes the row as ws-add does. A second call is the SAME run
- *  minting the slug again, with a new uuid and the generation given. */
+ *  minting the slug again, with a new uuid and the generation given, unless `childOf` names another run. */
 const rig = async (over: RigOpts = {}) => {
   const home = mkTmp('ccrc-child-reclaim-licence-');
   const reg = path.join(home, '.cc-sessions');
@@ -72,11 +72,11 @@ const rig = async (over: RigOpts = {}) => {
     viaClosing: false }).ok).toBe(true);
   const genPath = path.join(reg, `${ID}.generation`);
   let mints = 0;
-  const mint = (generation: string | null | 'dir'): void => {
+  const mint = (generation: string | null | 'dir', childOf: number = runId): void => {
     mints += 1;
     const fields: Record<string, string> = { wrapper: 'claude', project: 'demo', workdir: `/w/${ID}`,
       uuid: `u-${ID}-${mints}`, started: '1', workspace: ID, branch: 'ws/quiet-basin', base: 'origin/main',
-      child: String(runId) };
+      child: String(childOf) };
     for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${ID}.${k}`), v);
     rmSync(genPath, { recursive: true, force: true });
     if (generation === 'dir') mkdirSync(genPath);
@@ -278,6 +278,41 @@ describe('two requests queued for one id', () => {
       expect(s.verbs(), 'the second asked the box nothing').toEqual(['ws-audit', 'ws-reclaim']);
       expect(s.listed(), 'the new workspace stands').toContain(`${ID}.uuid`);
     }
+  });
+
+  // The pair production can form: the lane sends one sweep request per id, so the second request for an id is
+  // close's. Close queues only when the minting run names this session and no other open run does, so that run is
+  // the one being closed or is already terminal, and no re-mint of the slug by it can follow (spec §5.5). Both
+  // requests wait on the session's queue while the slug is minted again.
+  const queuedPair = async (s: Awaited<ReturnType<typeof rig>>, remint: () => void) => {
+    let open = (): void => undefined;
+    const gate = new Promise<void>((r) => { open = r; });
+    const q = new KeyedQueue();
+    const sweep = q.run(ID, async () => { await gate; return reclaimChild(s.deps, s.req(value(G1), { licensed: true })); });
+    const close = q.run(ID, () => reclaimChild(s.deps, s.req(NONE)));
+    remint();
+    open();
+    return { sweep: await sweep, close: await close };
+  };
+
+  it('a licensed sweep request, then close\'s, with the slug minted again by ANOTHER run between: neither asks the box anything', async () => {
+    for (const wave7 of [false, true]) {
+      const s = await rig({ wave7 });
+      const got = await queuedPair(s, () => s.mint(G2, s.runId + 1));
+      expect(got.sweep, `wave7: ${String(wave7)}`).toMatchObject({ kind: 'deferred', why: 'marker-mismatch' });
+      expect(got.close, `wave7: ${String(wave7)}`).toMatchObject({ kind: 'deferred', why: 'marker-mismatch' });
+      expect(s.verbs(), 'no ws-audit, no ws-reclaim').toEqual([]);
+      expect(s.listed(), 'the new workspace stands').toContain(`${ID}.uuid`);
+    }
+  });
+
+  it('the same-run re-mint the spec rules out for close: the sweep request still defers generation-changed before any argv, and close\'s none reads no generation and spends the audit\'s token', async () => {
+    const s = await rig();
+    const got = await queuedPair(s, () => s.mint(G2));
+    expect(got.sweep).toMatchObject({ kind: 'deferred', why: 'generation-changed' });
+    expect(got.close).toMatchObject({ kind: 'reclaimed' });
+    expect(s.generationReads(), 'the sweep request read the generation once; close read none').toBe(1);
+    expect(s.verbs(), 'every argv is close\'s').toEqual(['ws-audit', 'ws-reclaim']);
   });
 });
 

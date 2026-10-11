@@ -30,7 +30,7 @@ describe('leafKeptWord, the one kept-leaf classifier (spec §5.6)', () => {
 
   it.each<readonly [unknown, string]>([
     ['refused', 'refused'], ['unmeasured', 'unmeasured'], ['in-use', 'in-use'],
-    [null, 'unmeasured'], // null is each carrier's to read, never the word half's (H8, after 4045)
+    [null, 'unmeasured'], // null is each carrier's to read, never the word half's (spec §5.6)
     ['kept', 'unmeasured'], ['', 'unmeasured'], ['REFUSED', 'unmeasured'], ['toString', 'unmeasured'],
     [3, 'unmeasured'], [true, 'unmeasured'], [{}, 'unmeasured'], [undefined, 'unmeasured'],
   ])('%j -> %j', (v, word) => {
@@ -45,7 +45,7 @@ describe('leafKeptWord, the one kept-leaf classifier (spec §5.6)', () => {
     expect(SET("const W = ['refused', 'unmeasured', 'in-use'];"), 'CONTROL').toBe(true);
     const holders = ALL.filter((f) => codeOnly(readFileSync(f, 'utf8')).split('\n').some(SET)).map(rel);
     expect(holders).toEqual(['shared/api.ts']);
-    // H8: workspace lifecycle's word half, by NAME (its list, its word type, its reader), so a copy wrapped over
+    // Workspace lifecycle's word half (spec §5.6), by NAME (its list, its word type, its reader), so a copy wrapped over
     // two lines is caught, and so is one the move left behind.
     expect(ALL.filter((f) => /\b(?:EXPIRE_LEAF_WORDS|KEPT_LEAF_WORDS|KeptLeafWord|keptLeafWord)\b/
       .test(codeOnly(readFileSync(f, 'utf8')))).map(rel),

@@ -775,7 +775,7 @@ async function childGateAtClose(
   // after the mark/minting checks, never ahead of them.
   let hasCoordinated: boolean | 'unreadable';
   try {
-    // The birth is told the row this mark read read (spec §5.6): its own unfinished purge never unplaces it.
+    // The birth is told the row that this close read (spec §5.7): its own unfinished purge never unplaces it.
     // An unplaced birth with an earlier claim declines `has-coordinated` here. That is fail-safe: the sweep
     // judges the child again on its next pass.
     hasCoordinated = childReclaimHasCoordinated(deps.coord, sessionId, Date.now(), read.found ? childReclaimRowUuid(read.record) : null);

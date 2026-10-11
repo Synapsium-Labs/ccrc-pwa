@@ -187,7 +187,7 @@ export function childReclaimLatest(events: readonly MirroredLifecycleEvent[]): M
   return null;
 }
 
-/** The listed row's current `.uuid`, as the birth's own-purge test reads it (spec §5.1, §5.6). It is the measured
+/** The listed row's current `.uuid`, as the birth's own-purge test reads it (spec §5.7). It is the measured
  *  value, or null when this read could not measure the uuid. A caller with no row at all passes null too.
  *  Both nulls are handled ONE way: every `purge` counts, which is the doubt direction. Only the uuid's own doubt
  *  matters here. Another identity field's does not. */
@@ -202,7 +202,7 @@ export function childReclaimRowUuid(rec: Pick<SessionRecord, 'uuid' | 'unmeasure
  *  THE OPENING CREATE is the placed `done` create (`at !== null`, `at <= nowMs`) with the highest mirror id. That
  *  is the create `childReclaimGeneration` opens the generation at, over the same creates.
  *
- *  A REMOVAL UNPLACES IT (spec §5.6: slugs recycle). A recycled slug's new `create` can be missing from the mirror
+ *  A REMOVAL UNPLACES IT (spec §5.7). A recycled slug's new `create` can be missing from the mirror
  *  while its row and marker are already listed: it is not ingested yet, or its `at` is ahead of this server's
  *  clock. The older generation's create would then stand in for the birth. So the answer is null (doubt) when a
  *  `purge` FOLLOWS the opening create, which means all three of these hold:
@@ -440,7 +440,7 @@ export type ChildReclaimOutcome =
   | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number;
       readonly resume: ChildReclaimResume; readonly detail: string; readonly token: string | null };
 
-/** The executor's answer as the sweep's memory needs it (spec §5.9, the persistent tier). The ONE projection:
+/** The executor's answer as the sweep's memory needs it (spec §5.7, the persistent tier). The ONE projection:
  *  `failed` carries ccd's own word and whether it is in the stuck class, decided HERE by the class's one spelling
  *  (`isChildReclaimStuckToken`). The lane hands the same predicate, and the same token kind the executor's
  *  refusal arm reads (`childReclaimTokenKind`), to the restart seed (`childReclaimTierSeed`), so the live memory
@@ -1130,13 +1130,14 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   // generation (`licenceGeneration`, the sweep's own byte-exact read of `<id>.generation`), and it may
   // have waited on the session's queue since. The same run can remove the slug and mint it again
   // meanwhile, and every check above passes for the new workspace. So EVERY sweep request, licensed
-  // or not, re-reads it here: after the switch, and BEFORE presence, so that no presence answer
-  // measured on a new workspace is credited to the old one's episode. A different value, or `absent`
-  // against a value, is `generation-changed`. A read that failed is `marker-unreadable`, never
-  // "changed": it says the box could not be read, not that the workspace moved. Close's requests carry
-  // `none`, and skip this step and step 5a's comparison. Close queues only when the minting run names
-  // this session and no other open run does, so that run is the one being closed or is already
-  // terminal, and no re-mint by it can follow.
+  // or not, re-reads it here: after the switch, and BEFORE presence, so that a licence never reaches a
+  // re-minted workspace. It does not promise more: a re-mint that lands between this read and step 3 can
+  // still credit that one presence answer to the old entry, and the next pass reads the new generation
+  // and replaces that entry. A different value, or `absent` against a value, is `generation-changed`.
+  // A read that failed is `marker-unreadable`, never "changed": it says the box could not be read, not
+  // that the workspace moved. Close's requests carry `none`, and skip this step and step 5a's
+  // comparison. Close queues only when the minting run names this session and no other open run does,
+  // so that run is the one being closed or is already terminal, and no re-mint by it can follow.
   const licence = req.licenceGeneration;
   if (licence.kind !== 'none') {
     let current: ChildReclaimGeneration;
@@ -1397,11 +1398,14 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  *      `changed`; `unmeasurable` answers `failed`.
  *   7. the generation (`childReclaimGenerationRead`, the read the executor's
  *      own step 2c makes) — still the one both sightings were made under (spec
- *      §5.6). Read LAST, nearest the argv: a same-run re-mint carries the same
- *      hold text, rendered from the same run, so steps 1 and 2 pass it, and
- *      only this read tells the two workspaces apart. A different value, or
- *      `absent` against a value, answers `changed`; an unreadable read answers
- *      `failed`.
+ *      §5.6). Read LAST, nearest the argv. It is defence in depth: the job is
+ *      queued only once the minting run is terminal, so that run cannot mint
+ *      the slug again, and a re-mint by any other run fails step 1. The read
+ *      binds the job to the generation its sightings were made under all the
+ *      same, so a workspace they never judged (a run id reused after coord.db
+ *      was rebuilt, say) answers `changed`, never `released`. A different
+ *      value, or `absent` against a value, answers `changed`; an unreadable
+ *      read answers `failed`.
  * A throw or an `ok:false` from any of these answers `failed` and composes no
  * argv — never a guess standing in for a read this process could not finish.
  * Only once every one of them agrees does it compose `ws-release`, gated by
@@ -1524,8 +1528,10 @@ export async function releaseRetiredChildHold(
   if (pause !== 'clear') return 'failed';
 
   // 7 — the generation: still the one both sightings were made under (spec §5.6, §5.7). Read LAST,
-  // nearest the argv: a same-run re-mint carries the same hold text, rendered from the same run, so
-  // steps 1 and 2 pass it, and only this read tells the two workspaces apart.
+  // nearest the argv. Defence in depth: `hold-retired` needs the minting run terminal, so that run cannot
+  // mint the slug again, and a re-mint by any other run fails step 1. This read binds the job to the
+  // generation it was judged under whatever else could put the same marker and hold text on another
+  // workspace (a run id reused after coord.db was rebuilt, say).
   let current: ChildReclaimGeneration;
   try {
     current = await childReclaimGenerationRead(deps.io, deps.cfg.registryDir, sessionId);

@@ -1,4 +1,4 @@
-// The persistent tier, wired (child-reclamation spec §5.9, "the persistent tier"). The L1 rows
+// The persistent tier, wired (child-reclamation spec §5.7, "the persistent tier"). The L1 rows
 // (`child-reclaim-persistent-tier.test.ts`) pin the memory. Only the lane can show these:
 //   - a LOST memory (a restart, a raised switch) is re-seeded from the mirror at the next first sighting;
 //   - the re-seeded child is asked once on its next due pass, then waits the tier pace, never the 15-minute ramp;

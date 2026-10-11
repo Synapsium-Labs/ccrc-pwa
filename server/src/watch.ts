@@ -3334,6 +3334,12 @@ export class FleetWatcher {
     // per-child loop below stays synchronous: no await sits between a row's
     // entry read and its write. A pass that a newer one OVERTOOK while it
     // gathered (a read slower than the throttle) decides nothing.
+    // THE RECORDS ARE OLDER THAN THE GATHER, A STATED RESIDUAL (spec §7): the tick read `records` before it
+    // awaited its other lanes, and the generation is read only here. So a re-mint inside that gap gives one
+    // of the new workspace's two sightings the OLD row's fields (its hold, workspace and identity) under the
+    // new generation, and the twice-observed rule covers the new row's fields on one pass, not two. Safe for
+    // the licence: the request carries the generation it was judged under, which the executor re-reads
+    // before presence and compares with the audit's, and ccd re-reads the hold inside its lock.
     const pass = ++this.childReclaimPassSeq;
     const regGenerations = await this.childReclaimGatherGenerations(records);
     if (pass !== this.childReclaimPassSeq) return;
@@ -3388,7 +3394,7 @@ export class FleetWatcher {
     // asked on the strength of a partial measurement.
     let latest: ChildReclaimJournalRow[];
     let claims: ReadonlyMap<string, ChildReclaimCoordinatorClaim>;
-    // THE PERSISTENT TIER'S SEED (spec §5.9) reads each child's CURRENT generation, the slice this read already
+    // THE PERSISTENT TIER'S SEED (spec §5.7) reads each child's CURRENT generation, the slice this read already
     // cuts: kept per id for the first sightings below, never read again.
     const tierGenerations = new Map<string, readonly MirroredLifecycleEvent[]>();
     try {
@@ -3581,7 +3587,7 @@ export class FleetWatcher {
           // coincidence with a run this rebuilt database never actually
           // minted this workspace with. The child's own birth is the OPENING
           // `create` of its current generation, unless a `purge` that is not
-          // this row's own follows it (spec §5.1, §5.6). It is read uncapped
+          // this row's own follows it (spec §5.7). It is read uncapped
           // by `lifecycleBirthEventsFor`, so a failing child's `create` is
           // findable for the life of the workspace. It is placed through
           // `childReclaimBornAt`, the ONE placement that this fence, the
@@ -3692,9 +3698,10 @@ export class FleetWatcher {
       // the new marker before the mirror can place the new birth.
       // `v.runId` is the marker's own (`childReclaimSweepVerdict`).
       if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt, v.runId, regGeneration)) {
-        // A LOST MEMORY NEVER RESETS THE PERSISTENT TIER (spec §5.9): the sighting is seeded from the mirror's
+        // A LOST MEMORY NEVER RESETS THE PERSISTENT TIER (spec §5.7): the sighting is seeded from the mirror's
         // current generation, with `lastFailedAt` left null, so a tier child is asked once on its next due pass
-        // and then waits its tier pace. It never waits a fresh tier pace, and never falls back to the 15-minute ramp.
+        // and then waits its tier pace. It never waits a fresh tier pace, and never falls back to the 15-minute ramp
+        // unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice windowed short).
         this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, v.runId, regGeneration,
           childReclaimTierSeed(tierGenerations.get(r.id) ?? [], childBornAt, isChildReclaimStuckToken, childReclaimTokenKind)));
         continue;

@@ -12,7 +12,7 @@
 // at the instant of deletion — this file narrows the window, it does not close it.
 import {
   CHILD_RECLAIM_KEPT_WORDS, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord, lcRefusalWord,
-  CHILD_RUN_ID, LC_LINE_MAX, leafKeptWord,
+  CHILD_RUN_ID, LC_LINE_MAX, isSessionIdShape, leafKeptWord,
   type ChildMark, type ChildReclaimAttention, type ChildReclaimGeneration, type ChildReclaimGenerationKey,
   type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
   type ChildReclaimLeafKeptAttention, type ChildReclaimLeafKeptMany, type LeafKeptWord, type LifecycleMeas,
@@ -60,7 +60,8 @@ export interface ChildReclaimAsk {
  *  never cause one. The persistent tier is the one part a first sighting reads
  *  back: it is seeded from the mirror's current generation
  *  (`childReclaimTierSeed`), so a lost memory costs a tier child one extra ask,
- *  never a fresh tier wait and never a fall back to the ordinary ramp. TWO deferral clocks, never folded into one, because they
+ *  never a fresh tier wait, and never a fall back to the ordinary ramp unless the seed cannot read it (no placed
+ *  birth, a reclaim done/unknown line, or a slice windowed short). TWO deferral clocks, never folded into one, because they
  *  answer two questions: how long has this child been waiting (any deferral —
  *  spec §5.9 shows a deferral "with its elapsed time"), and how long has a
  *  continuous PRESENCE episode kept it (the only thing the 15-minute ceiling
@@ -756,7 +757,7 @@ const childReclaimPresenceWithin = (entry: ChildReclaimSweepEntry, now: ChildRec
  *  asked. A DEFERRAL ends any run of failures and clears `refusedAt`, and
  *  starts the any-kind clock once.
  *
- *  The persistent tier (spec §5.9, `childReclaimTierAfterFailure`) moves only
+ *  The persistent tier (spec §5.7, `childReclaimTierAfterFailure`) moves only
  *  on a failure, ends on a refusal, and is kept by a deferral.
  *
  *  The PRESENCE clock is an EPISODE (spec §5.7). Every outcome other than a
@@ -818,7 +819,7 @@ export function childReclaimNextEntry(
       // the lease: an unlicensed presence answer keeps the child in line or puts it at the back,
       // EXCEPT that a holder whose answer does not continue its episode forfeits
       const inLine = presence && !ask.licensed && (continues || !ask.asHolder);
-      // THE PERSISTENT TIER STANDS (spec §5.9): `...entry` keeps its membership, its word, j and its run. The ramp
+      // THE PERSISTENT TIER STANDS (spec §5.7): `...entry` keeps its membership, its word, j and its run. The ramp
       // is cleared exactly as it always was (`consecutiveFailures`, `lastFailedAt`), so a deferred tier child is due
       // on its next pass, and the presence lease, its episode and its licence are unchanged (spec §5.7).
       return {
@@ -868,7 +869,7 @@ export function childReclaimBackoffMs(consecutiveFailures: number, passIntervalM
   return Math.min(CHILD_RECLAIM_DEFER_CEILING_MS, passIntervalMs * 2 ** consecutiveFailures);
 }
 
-/** THE PERSISTENT TIER (spec §5.9, "the persistent tier"). The ordinary ramp
+/** THE PERSISTENT TIER (spec §5.7, "the persistent tier"). The ordinary ramp
  *  asks a child whose every attempt fails about once a ceiling, for ever. A
  *  word that will not heal by itself gains nothing at that pace but feed and
  *  journal rows. Such a word is a tree ccd proved is not the child's own (the
@@ -954,7 +955,7 @@ const childReclaimBackoffOver = (entry: ChildReclaimSweepEntry, monoMs: number, 
 /** May the lane ask for this child again — THE ONE "may I ask" question a
  *  caller outside this file uses, folding BOTH pacings this memory tracks
  *  (spec §5.9): the failure backoff (above, the persistent tier's pace
- *  included), and — separately — a TERMINAL refusal's own wait, never
+ *  included, spec §5.7), and — separately — a TERMINAL refusal's own wait, never
  *  sooner than the defer ceiling after `refusedAt`.
  *  The refusal wait exists because the executor's answer and the lifecycle
  *  mirror's ingest of the same refusal are two different writers on two
@@ -1122,7 +1123,7 @@ export function childReclaimJournalRow(
   return { sessionId: latest.id, outcome: latest.outcome, refusal: latest.refusal, at: latest.at, failingSince, detail: latest.detail };
 }
 
-/** THE PERSISTENT TIER'S RESTART SEED (spec §5.9). The memory is lost on a restart, a raised switch, a missing
+/** THE PERSISTENT TIER'S RESTART SEED (spec §5.7). The memory is lost on a restart, a raised switch, a missing
  *  capability, a mirror fail-shut and every pass that does not find the child eligible. So every first sighting
  *  reads the tier back from ccd's own journal of the CURRENT generation:
  *  - it walks back over `reclaim` lines, reading past `intent`s and other acts;
@@ -1649,6 +1650,10 @@ const leafRunOf = (childOf: string | null): number | null =>
  *    new workspace now.
  *  - A later `collect` `done` ends the temp-root half only. The collector never takes a clips directory.
  *
+ *  A row whose id is not a session id's shape (`isSessionIdShape`) lists nothing, so no feed row is written
+ *  for it: any session can append a journal line, so the mirror's id is attribution, and this item puts it
+ *  in a path a person is told to remove.
+ *
  *  `runId` is `meas.childOf` read through `CHILD_RUN_ID`, else null. The purge failures do not carry it,
  *  and a cut line has no `meas` at all. Ordered by session id. Pure and deterministic, so the coord frame's
  *  byte-equality guard emits once per change. */
@@ -1660,7 +1665,7 @@ export function childReclaimLeafKept(i: {
   const since = childReclaimLeafKeptSince(i.nowMs);
   const latest = new Map<string, ChildReclaimLeafSourceRow>();
   for (const r of i.rows) {
-    if (r.at < since || !childReclaimLeafSource(r)) continue;
+    if (r.at < since || !childReclaimLeafSource(r) || !isSessionIdShape(r.sessionId)) continue;
     const had = latest.get(r.sessionId);
     if (had === undefined || r.id > had.id) latest.set(r.sessionId, r);
   }

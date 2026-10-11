@@ -1529,7 +1529,7 @@ function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
   return out;
 }
 
-/** The acts the birth read returns (spec §5.1's birth; spec §5.6, slugs recycle). `create` opens a generation,
+/** The acts the birth read returns (spec §5.7: a creation is placed, or it is doubt). `create` opens a generation,
  *  and `purge` is the one removal. Every removal of a row ends in ccd's `_reg_purge`, which journals `purge done`
  *  BEFORE it unlinks the row's files, and that line carries the row's `meas.uuid`. `collect` never purges: it
  *  removes the leftover temp root of a row that is already gone. So it is not here, by construction. The
@@ -5797,8 +5797,8 @@ export class CoordStore {
    *    `create` in days of retried refusals, and the attention list's generation needs that row for the LIFE
    *    of the workspace.
    *  - Its one caller is the sweep's attention rows (`childReclaimAttentionGenerationRows`), which merge it into
-   *    the window. The birth reads `lifecycleBirthEventsFor` instead, which adds the `purge` rows (spec §5.1,
-   *    §5.6).
+   *    the window. The birth reads `lifecycleBirthEventsFor` instead, which adds the `purge` rows
+   *    (spec §5.7).
    *  - Cost: bounded to one ACT. `lifecycle_by_session` is `(sessionId, id)`, so this still walks every row of
    *    the session (it filters `act` after the index narrows to the session), not a narrower index on `act`.
    *    The bound is on the SESSION, never the whole table.
@@ -5828,7 +5828,7 @@ export class CoordStore {
     `WHERE sessionId = ? AND act IN (${placeholders(LIFECYCLE_BIRTH_ACTS.length)}) AND outcome = ? ` +
     'ORDER BY id ASC';
 
-  /** The birth's rows for one session (spec §5.1, §5.6): every `done` `create` and every `done` `purge`, oldest
+  /** The birth's rows for one session (spec §5.7): every `done` `create` and every `done` `purge`, oldest
    *  first by the mirror's own `id`.
    *  - UNCAPPED, like `lifecycleCreatesFor` and for its reason: the opening create must stay findable for the
    *    life of the workspace.

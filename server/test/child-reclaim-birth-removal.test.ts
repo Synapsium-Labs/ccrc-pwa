@@ -118,6 +118,7 @@ const TABLE: readonly (readonly [string, readonly LifecycleBirthEvent[], string 
   ['one placed create is the birth', [c(1, T0)], ROW_UUID, T0],
   ['a clockless create places nothing', [c(1, null)], ROW_UUID, null],
   ['a create ahead of the server clock places nothing', [c(1, NOW + 1)], ROW_UUID, null],
+  ['a create AT the server clock is placed', [c(1, NOW)], ROW_UUID, NOW],
   ['a purge of ANOTHER uuid after the create unplaces it', [c(1, T0), p(2, T0 + 5, OLD_UUID)], ROW_UUID, null],
   ['the row\'s OWN purge never unplaces it', [c(1, T0), p(2, T0 + 5, ROW_UUID)], ROW_UUID, T0],
   ['a purge with no meas.uuid counts', [c(1, T0), p(2, T0 + 5, null)], ROW_UUID, null],
@@ -152,7 +153,7 @@ describe('childReclaimBornAt — the opening create, unless a purge that is not 
     });
     const lists: readonly LifecycleBirthEvent[][] = [
       [], [c(1, T0)], [c(1, null)], [c(1, T0), c(2, T0 + 10)], [c(1, T0), c(2, null)], [c(1, T0), c(2, NOW + 1)],
-      [c(1, T0 + 10), c(2, T0)], [c(1, null), c(2, T0), c(3, NOW + 5), c(4, T0 + 3)],
+      [c(1, T0 + 10), c(2, T0)], [c(1, null), c(2, T0), c(3, NOW + 5), c(4, T0 + 3)], [c(1, NOW)],
     ];
     for (const rows of lists) {
       expect(childReclaimBornAt(fake(rows), ID, NOW, ROW_UUID), JSON.stringify(rows))

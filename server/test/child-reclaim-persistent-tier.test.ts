@@ -1,4 +1,4 @@
-// The persistent tier (child-reclamation spec §5.9, "the persistent tier"). A failure that will not heal by itself
+// The persistent tier (child-reclamation spec §5.7, "the persistent tier"). A failure that will not heal by itself
 // (the stuck class, or the same word four times running) is asked about ever more slowly, but is never given up on:
 // min(4 h, ceiling × 2^j). These rows pin the memory (L1, pure), the restart seed that rebuilds it from the
 // mirror, and the ONE projection (coord/childReclaim.ts) that carries the stuck class to it. The lane's wiring
