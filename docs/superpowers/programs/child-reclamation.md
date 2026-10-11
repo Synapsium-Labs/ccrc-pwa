@@ -59,7 +59,9 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     on the safe side and is a named residual's text. Its correction is carried to wave 9's pre-flight list, where the
     lane sets its deadlines, and it is not reopened in this wave.
   - **Review run 376** reads `aa1c06c4a..337e48ab2` only, against `wave7/fix-round-2-rulings.md`. It runs the held-out
-    panel, plus the SAFETY lens on the `chmod` line with both pins reverted.
+    panel, plus the SAFETY lens on the `chmod` line with both pins reverted. It was dispatched at 00:06 to
+    `brisk-ridge`, on an Anthropic account with no swap, and advanced to `working`. Its brief is `review-376-brief.md`
+    in the evidence archive.
 
 - **2026-10-10 23:32 — review 374 is accepted and closed `done`, and wave 7 fix round 2 is sent (4189). Run 347 is back at `working`.**
   - **How it ran.** brisk-canyon, on an Anthropic account with no swap: the held-out panel, the SAFETY lens once per
