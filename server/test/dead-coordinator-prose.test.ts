@@ -55,14 +55,19 @@ describe('README: a coordinator that crashed', () => {
 
 describe('the spec says what a restart does to the dead-coordinator lane (review 381, F1)', () => {
   const spec = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
-  it('§5.4: the breaker\'s hold survives, the run of passes restarts, and the lost backoff is the one thing that can bring an act sooner', () => {
+  it('§5.4: the breaker\'s hold survives, the run of passes restarts, an unreadable record seeds a fallback and the lost backoff is the one way a restarted lane acts sooner (review 382, R2, R3)', () => {
     const at = spec.indexOf('- **The attention list is the lane\'s own memory** (the expiry lane\'s shape)');
     expect(at, '§5.4\'s attention-list bullet is there').toBeGreaterThan(-1);
     const para = spec.slice(at, spec.indexOf('- **The lane never pushes.**', at));
     expect(para.length, 'the bullet is bounded').toBeGreaterThan(100);
     expect(para).not.toContain('never cause one');
-    for (const item of ['A restart keeps the lane\'s first-dead anchor (a gap of more than ten minutes re-anchors it, as above)', 'and the breaker\'s hold (the record above, read back at the first pass', 'a record it cannot read makes that pass act on nothing',
-      'restarts the run of crashed passes, which delays an act', 'drops the backoff after a stuck or thrown act, the one thing that can bring an act sooner',
+    expect(para, 'an unreadable record no longer stops the lane (review 382, R2)').not.toContain('a record it cannot read makes that pass act on nothing');
+    expect(para).not.toContain('the next pass tries again');
+    expect(para, 'the lost backoff is no longer called the one thing (review 382, R3)').not.toContain('the one thing that can bring an act sooner');
+    for (const item of ['A restart keeps the lane\'s first-dead anchor (a gap of more than ten minutes re-anchors it, as above)', 'and the breaker\'s hold (the record above, read back at the first pass',
+      'a record it cannot read makes the lane hold every claimant that pass does not release, at that pass\'s instant, and write a fresh record, with a warn line and a feed row saying so',
+      'restarts the run of crashed passes, which delays an act', 'drops the backoff after a stuck or thrown act, the one way a restarted lane can act sooner',
+      'the lane composes no act on a pass whose held-set record did not land, so the record never lags an act',
       're-measure before and after the fleet act']) expect(para, item).toContain(item);
   });
   it('§5.4\'s breaker bullet names the record: a run_events observation row, written when the set changes, shadow included, no migration', () => {
@@ -72,19 +77,23 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
     for (const item of ['a `run_events` observation row', 'written whenever the held set changes, in shadow too', 'no new table or column',
       'first-dead instants', 'ids percent-escaped, so any claimant id is carried']) expect(para, item).toContain(item);
   });
-  it('§12 says it per lane: the anchor and the hold survive, an unreadable record stops the lane and is logged, and the lost backoff can bring an abandon sooner', () => {
+  it('§12 says it per lane: the anchor and the hold survive, an unreadable record seeds a fallback and is logged, no act waits on an unrecorded hold, and the lost backoff can bring an abandon sooner', () => {
     const at = spec.indexOf('- **Their memory is in memory.**');
     expect(at, '§12\'s memory bullet is there').toBeGreaterThan(-1);
     const para = spec.slice(at, spec.indexOf('- **`$REG/reclaim-paused` stops both lanes at once**', at));
     expect(para).not.toContain('never cause one');
     expect(para, 'the anchor survives a restart too (§5.4)').not.toContain('is the one thing a restart keeps');
     expect(para, 'the lead sentence no longer claims every instant is re-learned').not.toContain('re-learns every instant');
+    expect(para, 'an unreadable record no longer stops the lane (review 382, R2)').not.toContain('stops the lane for that pass');
+    expect(para, 'the lost backoff is not the only way, now it is (review 382, R3)').not.toContain('the one way a restart can bring an act forward, still behind');
     for (const item of ['The dead-coordinator lane keeps two things across a restart',
       'One is its first-dead anchor (`dead_claimants`), which is re-anchored only after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the claimant crashed, so a restart shorter than that keeps the hour',
       'The other is the breaker\'s hold: its held set is a `run_events` row in `coord.db`, written when the set changes (in shadow too) and read back at the lane\'s first pass',
-      'A record the lane cannot read stops the lane for that pass (nothing is measured or acted on, and its attention list is empty) and the server logs a `ccrc-server: sweepDeadCoordinators could not read the breaker\'s held set` warning naming the failure, which is the operator\'s sign',
+      'A record the lane cannot read does not stop it: for that pass the lane holds every claimant the pass does not release, each at that pass\'s instant, which can only hold more than a readable record would, and writes a fresh record over the bad one, so the bad row is never read again',
+      'The server logs a `ccrc-server: sweepDeadCoordinators could not read the breaker\'s record of its hold` warning, once per bad row, and writes one feed row, "dead coordinator: breaker record unreadable", which is the operator\'s sign',
       'releases on what releases it without a restart', 'the run of crashed passes starts again, which delays an act',
-      'a restarted lane can ask for that abandon SOONER than an unrestarted one would', 'still behind the claimant\'s re-measure before and after the fleet act']) {
+      'a restarted lane can ask for that abandon SOONER than an unrestarted one would: the one way a restart can bring an act forward',
+      'The lane composes no act on a pass whose held-set record did not land, so the record never lags an act, and every act is still behind the claimant\'s re-measure before and after the fleet act']) {
       expect(para, item).toContain(item);
     }
   });

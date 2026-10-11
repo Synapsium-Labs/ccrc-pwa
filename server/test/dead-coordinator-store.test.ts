@@ -186,11 +186,13 @@ describe('the breaker’s held set — a run_events observation, no migration (r
     expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: [], runId: null });
   });
 
-  it('EVERY id is carried: the separators, a space, a percent sign and a non-ASCII character round-trip exactly (percent-escaped on write, decoded on read)', () => {
+  it('EVERY id is carried: the separators, a space, a percent sign, a non-ASCII character and a leading byte-order mark round-trip exactly (percent-escaped on write, decoded on read)', () => {
     const { s, open } = store();
     const run = open('demo-c-a');
     const odd = [{ id: 'a b', firstDeadAt: 5 }, { id: 'a,b@1', firstDeadAt: 6 }, { id: 'caf\u00e9\u{1F600}', firstDeadAt: 7 },
-      { id: 'p%41', firstDeadAt: 8 }, { id: 'x:y', firstDeadAt: 9 }, { id: '', firstDeadAt: 11 }];
+      { id: 'p%41', firstDeadAt: 8 }, { id: 'x:y', firstDeadAt: 9 }, { id: '', firstDeadAt: 11 },
+      // a LEADING byte-order mark: a default `TextDecoder` strips it, so it must be decoded with `ignoreBOM` (review 382, R1)
+      { id: '\uFEFFx', firstDeadAt: 12 }];
     const w = s.recordDeadCoordinatorBreakerHeld(run, odd, 100);
     expect(w).toMatchObject({ recorded: true });
     const row = s.runEvents(run).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:')).pop()!;
@@ -208,7 +210,12 @@ describe('the breaker’s held set — a run_events observation, no migration (r
     for (const bad of ['demo-c-a@soon', 'demo-c-a@10,demo-c-b', 'demo-c-b@20,demo-c-a@10', 'demo-c-a@10,demo-c-a@10', 'demo c@5', 'demo-c-a@010', ',',
       'demo%ZZ@5', 'demo%@5', 'demo%4@5', 'demo%41@5', 'demo%e9@5', '%C3@5', 'a@b@5', 'demo-c-a@10,@5']) {
       db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (${run}, 300, 'planned', 'planned', 'operator', 'dead-coordinator-breaker-held:${bad}')`);
-      expect(s.deadCoordinatorBreakerHeldLatest(), bad).toMatchObject({ ok: false });
+      const got = s.deadCoordinatorBreakerHeldLatest();
+      expect(got, bad).toMatchObject({ ok: false });
+      // The unreadable answer names the row and the run it sits on (review 382, R2): the lane warns once per row, and an
+      // empty fallback set is written on that run.
+      const id = (db.prepare('SELECT MAX(id) AS id FROM run_events').get() as { id: number }).id;
+      expect(got, bad).toMatchObject({ ok: false, eventId: id, runId: run });
       db.exec('DELETE FROM run_events WHERE id = (SELECT MAX(id) FROM run_events)');
     }
     expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: members, runId: run });

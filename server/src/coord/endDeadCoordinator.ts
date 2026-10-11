@@ -9,7 +9,7 @@ import { measureClaimant, type ReclaimDeps } from './reclaim.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../../shared/api.js';
 import {
-  DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
+  DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerUnreadableFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
   deadCoordinatorJournal, deadCoordinatorThrewFeedRow,
   type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorJournal,
   type DeadCoordinatorJournalTrust, type DeadCoordinatorProgramme, type DeadCoordinatorStop,
@@ -308,4 +308,13 @@ export function recordDeadCoordinatorBreaker(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, b: Extract<DeadCoordinatorBreaker, { tripped: true }>,
 ): void {
   recordRows(deps, b.claimants[0] ?? 'fleet', [deadCoordinatorBreakerFeedRow(b)], 'breaker');
+}
+
+/** The feed row for a pass that could not read its record of the breaker's hold (review 382, R2), written once per bad
+ *  row under the first claimant the fallback held (else the first of the population, else `fleet`). */
+export function recordDeadCoordinatorBreakerUnreadable(
+  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, held: readonly string[], population: readonly string[],
+  eventId: number | null, reason: string,
+): void {
+  recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerUnreadableFeedRow(held, eventId, reason)], 'breaker record unreadable');
 }

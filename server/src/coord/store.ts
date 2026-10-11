@@ -3354,7 +3354,8 @@ export class CoordStore {
    *  (`deadCoordinatorBreakerHeldLatest`). The carrier is ANY existing run, whatever its state — the detail carries the
    *  whole set. Ids are percent-escaped, so every claimant id is carried. `run-gone` is an absent run; `unencodable` is
    *  an instant that is not a positive safe integer or an id with no UTF-8 spelling (a lone surrogate): nothing is
-   *  written then, and the in-memory hold stands for that process alone. Synchronous, like every write on this store. */
+   *  written then, the in-memory hold stands for that process alone, and the lane composes no act on that pass (review
+   *  382, R3). Synchronous, like every write on this store. */
   recordDeadCoordinatorBreakerHeld(
     runId: number, held: readonly DeadCoordinatorBreakerMember[], at: number,
   ): { recorded: true; eventId: number } | { recorded: false; why: 'run-gone' | 'unencodable' } {
@@ -3371,29 +3372,39 @@ export class CoordStore {
   /** The LATEST held-set row (`ORDER BY id DESC LIMIT 1` over the head): the members and the run that carries it. No row
    *  at all is `{ ok: true, held: [], runId: null }`; a row this build cannot parse, or whose integers it cannot prove
    *  (`persistedInt`, D-2545's rule), is `{ ok: false }` — ALL-OR-FAILURE like `deadAnchors`, never an empty set and
-   *  never an older row's: the lane acts on nothing that pass. A thrown statement is `{ ok: false }` too. */
+   *  never an older row's. The lane then seeds its hold CONSERVATIVELY and writes a fresh record (review 382, R2), so it
+   *  never reads that row twice. The unreadable answer carries the row it could not read, `eventId` (`null` for a read
+   *  that threw before any row was found) and the `runId` it sits on (`null` when none, or when the run id itself cannot
+   *  be proved) — the lane warns once per row, and writes an empty set on that run. A thrown statement is `{ ok: false }`
+   *  too. */
   deadCoordinatorBreakerHeldLatest():
-    { ok: true; held: DeadCoordinatorBreakerMember[]; runId: number | null } | { ok: false; detail: string } {
+    { ok: true; held: DeadCoordinatorBreakerMember[]; runId: number | null }
+    | { ok: false; detail: string; eventId: number | null; runId: number | null } {
+    let eventId: number | null = null;
+    let runId: number | null = null;
     try {
       const row = this.db.prepare(
-        'SELECT CAST(runId AS TEXT) AS runText, CAST(detail AS TEXT) AS detail FROM run_events ' +
+        'SELECT CAST(id AS TEXT) AS idText, CAST(runId AS TEXT) AS runText, CAST(detail AS TEXT) AS detail FROM run_events ' +
         "WHERE causedBy = 'operator' AND substr(detail, 1, ?) = ? ORDER BY id DESC LIMIT 1",
       ).get(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length, DEAD_COORDINATOR_BREAKER_HELD_HEAD) as
-        { runText: string; detail: string } | undefined;
+        { idText: string; runText: string; detail: string } | undefined;
       if (row === undefined) return { ok: true, held: [], runId: null };
+      const ev = persistedInt(row.idText, 'run_events id');
+      if (ev.ok) eventId = ev.value;
       const run = persistedInt(row.runText, 'run_events runId');
-      if (!run.ok) return { ok: false, detail: run.detail };
+      if (!run.ok) return { ok: false, detail: run.detail, eventId, runId };
+      runId = run.value;
       const parts = splitDeadCoordinatorBreakerHeld(row.detail);
-      if (parts === null) return { ok: false, detail: 'the breaker held-set row is malformed' };
+      if (parts === null) return { ok: false, detail: 'the breaker held-set row is malformed', eventId, runId };
       const held: DeadCoordinatorBreakerMember[] = [];
       for (const p of parts) {
         const at = persistedInt(p.text, 'breaker held firstDeadAt');
-        if (!at.ok) return { ok: false, detail: at.detail };
+        if (!at.ok) return { ok: false, detail: at.detail, eventId, runId };
         held.push({ id: p.id, firstDeadAt: at.value });
       }
       return { ok: true, held, runId: run.value };
     } catch (err) {
-      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+      return { ok: false, detail: err instanceof Error ? err.message : String(err), eventId, runId };
     }
   }
 

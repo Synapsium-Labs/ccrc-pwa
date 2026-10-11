@@ -121,7 +121,7 @@ import {
   type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal, type DeadCoordinatorJournalTrust,
 } from './deadCoordinator.js';
 import {
-  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker,
+  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker, recordDeadCoordinatorBreakerUnreadable,
   recordDeadCoordinatorFeed, recordDeadCoordinatorThrew, rereadDeadCoordinatorJournalTrust,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
@@ -1194,10 +1194,19 @@ export class FleetWatcher {
   /** The held set SURVIVES A RESTART (review 381, F1): a `run_events` observation row (`recordDeadCoordinatorBreakerHeld`),
    *  written whenever the set the lane hands to the next pass CHANGES, read back ONCE per process at the first pass that
    *  reaches step three. `Seeded` is that once; `HeldKey` is the key of the set the record last carried (so an
-   *  unchanged set writes nothing), and `HeldRunId` the run that record sits on (where an empty set is written). */
+   *  unchanged set writes nothing), and `HeldRunId` the run that record sits on (where an empty set is written).
+   *  A record that cannot be READ seeds the fallback instead (review 382, R2): every claimant the pass does not release,
+   *  held at the pass's own instant, and a fresh record written over the bad one. And the lane ACTS only on a pass whose
+   *  durable record matches the held set it just computed (review 382, R3): a write that did not land withholds the act,
+   *  so the record never lags it. */
   private deadCoordinatorBreakerSeeded = false;
-  private deadCoordinatorBreakerHeldKey = '';
+  /** `null` is a key that matches NO set: the record is unreadable (the fallback seed), so the next write runs whatever
+   *  the new set is and supersedes the bad row (review 382, R2). */
+  private deadCoordinatorBreakerHeldKey: string | null = '';
   private deadCoordinatorBreakerHeldRunId: number | null = null;
+  /** The bad rows already warned about (`row <eventId>`; a read that threw before any row is `read`) — ONE warn line and
+   *  ONE feed row per bad row (review 382, R2). */
+  private readonly deadCoordinatorUnreadableWarned = new Set<string>();
   private deadCoordinatorAttentionList: readonly DeadCoordinatorAttention[] = [];
   /** The coordination serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`), handed over by `buildServer`
    *  once `registerCoordRoutes` has built it. Until then the lane measures and records, and ends nothing. */
@@ -4262,19 +4271,20 @@ export class FleetWatcher {
       return;
     }
     // ...and, ONCE per process, the breaker's held set from its durable record (review 381, F1). A record this pass cannot
-    // read is a hold it cannot know: the lane measures, records and acts on NOTHING, and asks again next pass — never an
-    // empty seed, which would let a restart dissolve the very cluster the breaker exists to hold.
+    // read is a hold it cannot know, and an EMPTY seed would let a restart dissolve the very cluster the breaker exists to
+    // hold — but stopping the lane would freeze it for good: step six is the only writer that could supersede the bad row.
+    // So the pass notes the failure and goes on; step six seeds the fallback, where `released` is known (review 382, R2).
+    let unreadable: { eventId: number | null; runId: number | null; detail: string } | null = null;
     if (!this.deadCoordinatorBreakerSeeded) {
       const seed = coord.deadCoordinatorBreakerHeldLatest();
-      if (!seed.ok) {
-        console.warn(`ccrc-server: sweepDeadCoordinators could not read the breaker's held set (${seed.detail}) — no decisions this pass`);
-        forget();
-        return;
+      if (seed.ok) {
+        this.deadCoordinatorBreakerHeld = seed.held;
+        this.deadCoordinatorBreakerHeldKey = deadCoordinatorBreakerHeldKey(seed.held);
+        this.deadCoordinatorBreakerHeldRunId = seed.runId;
+        this.deadCoordinatorBreakerSeeded = true;
+      } else {
+        unreadable = { eventId: seed.eventId, runId: seed.runId, detail: seed.detail };
       }
-      this.deadCoordinatorBreakerHeld = seed.held;
-      this.deadCoordinatorBreakerHeldKey = deadCoordinatorBreakerHeldKey(seed.held);
-      this.deadCoordinatorBreakerHeldRunId = seed.runId;
-      this.deadCoordinatorBreakerSeeded = true;
     }
     // FOUR — each claimant, measured by the reclaim door's own ladder, one at a time, through a tmux port that notes
     // a tmux that did not answer (a FLEET-wide doubt the breaker reads); then the journal clause for the dead ones in
@@ -4347,13 +4357,36 @@ export class FleetWatcher {
     }
     // SIX — the circuit breaker, evaluated in shadow too, WITH ITS MEMORY: a member stays held until this pass gave
     // evidence about it or it left the population; a pass that only doubted it keeps it, at its first instant.
-    const held = this.deadCoordinatorBreakerHeld.filter((m) => ids.includes(m.id) && !released.has(m.id));
+    let held: readonly DeadCoordinatorBreakerMember[];
+    if (unreadable === null) {
+      held = this.deadCoordinatorBreakerHeld.filter((m) => ids.includes(m.id) && !released.has(m.id));
+    } else {
+      // THE FALLBACK SEED (review 382, R2): the record could not be read, so hold EVERY claimant of this pass's population
+      // that this pass does not release (alive, stopped, deliberate), each at the pass's own instant. It never loosens:
+      //  - a real held set is always a subset of the unreleased population (step six filters it that way), and the
+      //    breaker's instants are only ever compared with each other;
+      //  - with two or more unreleased claimants every member of the fallback shares ONE instant, so any two cluster and
+      //    the breaker trips — a correct seed holds that cluster, or a subset of it, so the fallback holds at least it;
+      //  - with at most one unreleased claimant, `crashed`, a correct seed's held set and the fallback all name that one
+      //    claimant at most, and one member cannot cluster (clustering needs two): the verdict is identical, and the
+      //    unmeasurable and fleet-wide arms of `deadCoordinatorBreaker` read `unmeasurable`/`measured`, not `held`;
+      //  - a LATER crash clusters with the fallback instant whenever it would have clustered with any earlier remembered
+      //    one, since the fallback instant is the later of the two.
+      // So no claimant a correct seed would hold can be ended. The seed is then this pass's result: `Seeded`, and a key
+      // that matches no set, so the write below runs whatever the set is and the bad row is never read again.
+      held = ids.filter((id) => !released.has(id)).map((id) => ({ id, firstDeadAt: now }));
+      this.deadCoordinatorBreakerHeldKey = null;
+      this.deadCoordinatorBreakerHeldRunId = unreadable.runId;
+      this.deadCoordinatorBreakerSeeded = true;
+    }
     const breaker = deadCoordinatorBreaker(crashed, held, unmeasurable, ids.length,
       fleetDoubt.length === 0 ? null : fleetDoubt.join('; '), now);
     this.deadCoordinatorBreakerState = breaker;
     const before = this.deadCoordinatorBreakerHeld;
     this.deadCoordinatorBreakerHeld = breaker.tripped ? breaker.members : [];
-    this.recordDeadCoordinatorBreakerHeldChange(coord, before, ids, now);
+    // R3: the act waits for a pass whose durable record matches the hold it just computed.
+    const recorded = this.recordDeadCoordinatorBreakerHeldChange(coord, before, ids, now);
+    if (unreadable !== null) this.noteDeadCoordinatorRecordUnreadable(coord, unreadable, held.map((m) => m.id), ids);
     const key = deadCoordinatorBreakerKey(breaker);
     if (breaker.tripped && key !== this.deadCoordinatorBreakerRecorded) {
       recordDeadCoordinatorBreaker({ coord, notifyLog: this.deps.notifyLog }, breaker);
@@ -4362,8 +4395,9 @@ export class FleetWatcher {
     // SEVEN — the act, never while the breaker stands, the longest dead first. ARMED, at most ONE claimant a pass. In
     // SHADOW every due claimant is recorded — a would-end touches nothing on the box, and the shadow list is what the
     // operator arms on (the shadow half of `one-dead-coordinator-per-pass`). The executor decides shadow from its own listing, so
-    // an outcome that is not a would-end ends the pass however this pass's listing read.
-    if (!breaker.tripped) {
+    // an outcome that is not a would-end ends the pass however this pass's listing read. And never on a pass whose held-set
+    // record did not land (`recorded`, review 382, R3): shadow would-ends included, so the record never lags an act.
+    if (!breaker.tripped && recorded) {
       const due = crashed.filter((c) => {
         const e = this.deadCoordinatorState.get(c.id)!;
         return deadCoordinatorDue(c.since, e.crashedPasses, now) && now >= e.nextAskAt;
@@ -4381,14 +4415,17 @@ export class FleetWatcher {
   /** The breaker's held set, recorded when it CHANGED (review 381, F1) — in shadow too: a `coord.db` row, not a fleet act.
    *  The carrier is any run that exists: for a set, the lowest open run a member coordinates; for an empty set, the run the
    *  last record sits on, else a run any claimant in the population (the members `before` the change first) coordinates.
-   *  A write that cannot land (no carrier, a throw, a set with no spelling) is warned, leaves the key unchanged
-   *  so the next pass tries again, and leaves the in-memory hold standing for this process. */
+   *  Answers whether the durable record NOW matches the held set (review 382, R3): `true` when the set did not change
+   *  (its key is what the record carries) or the write landed; `false` for a write that cannot land (no carrier, a throw,
+   *  a set with no spelling). The caller composes NO act on a `false` pass — the record never lags an act, so a restart
+   *  cannot seed an older set under it. A `false` is warned, leaves the key unchanged so the next pass tries again, and
+   *  leaves the in-memory hold standing for this process. */
   private recordDeadCoordinatorBreakerHeldChange(
     coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], now: number,
-  ): void {
+  ): boolean {
     const held = this.deadCoordinatorBreakerHeld;
     const key = deadCoordinatorBreakerHeldKey(held);
-    if (key === this.deadCoordinatorBreakerHeldKey) return;
+    if (key === this.deadCoordinatorBreakerHeldKey) return true;
     try {
       const candidates: number[] = [];
       if (held.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) candidates.push(this.deadCoordinatorBreakerHeldRunId);
@@ -4401,14 +4438,30 @@ export class FleetWatcher {
         if (w.recorded) {
           this.deadCoordinatorBreakerHeldKey = key;
           this.deadCoordinatorBreakerHeldRunId = runId;
-          return;
+          return true;
         }
         if (w.why === 'unencodable') break;
       }
-      console.warn('ccrc-server: sweepDeadCoordinators could not record the breaker\'s held set — it stands in memory until the next pass');
+      console.warn('ccrc-server: sweepDeadCoordinators could not record the breaker\'s held set — no act this pass; it stands in memory until a pass records it');
     } catch (err) {
-      console.warn(`ccrc-server: sweepDeadCoordinators could not record the breaker's held set (${err instanceof Error ? err.message : String(err)})`);
+      console.warn(`ccrc-server: sweepDeadCoordinators could not record the breaker's held set (${err instanceof Error ? err.message : String(err)}) — no act this pass`);
     }
+    return false;
+  }
+
+  /** The words for a record the lane could not read (review 382, R2): ONE warn line and ONE feed row per bad row — keyed on
+   *  the row's event id, or `read` for a read that threw before any row — naming the row and the reason (a bounded prefix,
+   *  never the row's content), through `recordRows`. No new attention kind, no wire word. */
+  private noteDeadCoordinatorRecordUnreadable(
+    coord: CoordStore, u: { eventId: number | null; detail: string }, held: readonly string[], ids: readonly string[],
+  ): void {
+    const key = u.eventId === null ? 'read' : `row ${u.eventId}`;
+    if (this.deadCoordinatorUnreadableWarned.has(key)) return;
+    this.deadCoordinatorUnreadableWarned.add(key);
+    const reason = u.detail.slice(0, 64);
+    console.warn(`ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold (${u.eventId === null ? 'no row' : `event ${u.eventId}`}: ${reason}) `
+      + '— it holds every coordinator this pass did not see released, and writes a fresh record');
+    recordDeadCoordinatorBreakerUnreadable({ coord, notifyLog: this.deps.notifyLog }, held, ids, u.eventId, reason);
   }
 
   /** The act — or its shadow — for one due claimant, on the coordination serialiser. Its outcome, or `null` when it

@@ -349,8 +349,8 @@ export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held
 
 /** THE ID IS PERCENT-ESCAPED (review 381, part A review item 2): every UTF-8 byte outside `[A-Za-z0-9._-]` is `%` and two
  *  UPPERCASE hex digits, `%` itself included, so no claimant id can break the separators (`@`, `,`, the head's `:`) and
- *  no id is unwritable — `claimedBy` is not shape-checked at `POST /api/runs`, and a set that dropped to memory alone
- *  for one odd id would be the restart hole again. The empty id is the empty string. The one string with no spelling is a
+ *  every id with a UTF-8 spelling is writable and reads back as written, a leading U+FEFF included — `claimedBy` is not
+ *  shape-checked at `POST /api/runs`, and a set that dropped to memory alone for one odd id would be the restart hole again. The empty id is the empty string. The one string with no spelling is a
  *  lone surrogate (UTF-8 cannot carry it, so it would not read back). Ids ascend by the DECODED string's code units,
  *  on write and on read alike. */
 const BREAKER_HELD_SAFE = /^[A-Za-z0-9._-]*$/;
@@ -378,7 +378,9 @@ const unescapeBreakerHeldId = (text: string): string | null => {
     if (text[i] === '%') { bytes.push(parseInt(text.slice(i + 1, i + 3), 16)); i += 2; } else bytes.push(text.charCodeAt(i));
   }
   let id: string;
-  try { id = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes)); } catch { return null; }
+  // `ignoreBOM: true` keeps a LEADING U+FEFF as part of the id — the default strips it, and an id that begins with one
+  // would be written and then read as unreadable (review 382, R1).
+  try { id = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Uint8Array.from(bytes)); } catch { return null; }
   return escapeBreakerHeldId(id) === text ? id : null;
 };
 
@@ -499,8 +501,10 @@ export type DeadCoordinatorReport =
 
 /** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half). A restart drops the run of
  *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
- *  SOONER after a stuck or thrown act (review 381, F10); the act is still behind the claimant's re-measure before and
- *  after the fleet act. The breaker's hold is not in this entry: it survives a restart (review 381, F1). */
+ *  SOONER after a stuck or thrown act (review 381, F10) — the one way a restarted lane acts sooner, since the lane
+ *  composes no act on a pass whose held-set record did not land (review 382, R3); the act is still behind the claimant's
+ *  re-measure before and after the fleet act. The breaker's hold is not in this entry: it survives a restart (review
+ *  381, F1), and an unreadable record of it seeds a conservative fallback (review 382, R2). */
 export interface DeadCoordinatorEntry {
   /** Consecutive passes that measured it crashed. */
   readonly crashedPasses: number;
@@ -724,6 +728,18 @@ export function deadCoordinatorBreakerSentence(b: Extract<DeadCoordinatorBreaker
  *  held, outlive the in-memory list (spec §9's stage-4 row: "breaker trips … reported"). */
 export function deadCoordinatorBreakerFeedRow(b: Extract<DeadCoordinatorBreaker, { tripped: true }>): { readonly title: string; readonly body: string } {
   return { title: 'dead coordinator: breaker tripped', body: `${deadCoordinatorBreakerSentence(b)} (holding since ${iso(b.since)})` };
+}
+
+/** The feed row for a pass that could not read its record of the breaker's hold (review 382, R2): written once per bad row,
+ *  through `recordRows` — a record, never a push, and no new attention kind. `held` is who the fallback held (every
+ *  claimant the pass did not release); `reason` is already a bounded string, never the row's content. */
+export function deadCoordinatorBreakerUnreadableFeedRow(
+  held: readonly string[], eventId: number | null, reason: string,
+): { readonly title: string; readonly body: string } {
+  return { title: 'dead coordinator: breaker record unreadable',
+    body: `The lane could not read its record of the breaker's hold (${eventId === null ? 'no row' : `event ${eventId}`}: ${reason}), `
+      + `so it held every coordinator this pass did not see alive, stopped or put down on purpose (${held.length === 0 ? 'none' : held.join(', ')}) `
+      + 'as one cluster and writes a fresh record. It ends nothing until that record is written; the hold clears on evidence, as always.' };
 }
 
 /** THE ATTENTION LIST, from the lane's memory alone, the breaker's item first. */

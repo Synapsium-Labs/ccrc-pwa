@@ -667,8 +667,8 @@ each item is a departure named there).
 - **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
   breaker, rebuilt over the passes after a restart. A restart keeps the lane's first-dead anchor (a gap of more than ten
   minutes re-anchors it, as above) and the breaker's hold (the record above, read back at the first pass; a record it
-  cannot read makes that pass act on nothing, and the next pass tries again), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, the one thing that can
-  bring an act sooner. Every act is still behind the claimant's re-measure before and after the fleet act.
+  cannot read makes the lane hold every claimant that pass does not release, at that pass's instant, and write a fresh record, with a warn line and a feed row saying so), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, the one way a restarted lane can act sooner:
+  the lane composes no act on a pass whose held-set record did not land, so the record never lags an act. Every act is still behind the claimant's re-measure before and after the fleet act.
 - **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
   (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
   coordinator; this lane's feed rows (each with the claimant's first-dead instant, and one per breaker trip) are records
@@ -850,13 +850,16 @@ collects them.
   re-anchored only after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the
   claimant crashed, so a restart shorter than that keeps the hour. The other is the breaker's hold: its held set is a
   `run_events` row in `coord.db`, written when the set changes (in shadow too) and read back at the lane's first pass.
-  A record the lane cannot read stops the lane for that pass (nothing is measured or acted on, and its attention list is
-  empty) and the server logs a `ccrc-server: sweepDeadCoordinators could not read the breaker's held set` warning naming
-  the failure, which is the operator's sign. The hold releases on what releases it without a restart: evidence that the
+  A record the lane cannot read does not stop it: for that pass the lane holds every claimant the pass does not release,
+  each at that pass's instant, which can only hold more than a readable record would, and writes a fresh record over the
+  bad one, so the bad row is never read again. The server logs a `ccrc-server: sweepDeadCoordinators could not read the
+  breaker's record of its hold` warning, once per bad row, and writes one feed row, "dead coordinator: breaker record
+  unreadable", which is the operator's sign. The hold releases on what releases it without a restart: evidence that the
   claimant is alive, stopped or was stopped on purpose, or the claimant leaving the population. For that lane a restart
   also means the run of crashed passes starts again, which delays an act, and the backoff after a stuck or thrown act
   (`nextAskAt`, `attempts`) is lost, so a restarted lane can ask for that abandon SOONER than an unrestarted one would:
-  the one way a restart can bring an act forward, still behind the claimant's re-measure before and after the fleet act.
+  the one way a restart can bring an act forward. The lane composes no act on a pass whose held-set record did not land,
+  so the record never lags an act, and every act is still behind the claimant's re-measure before and after the fleet act.
 - **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
 
 **The expiry lane (`$REG/expire-lane-live`).**
