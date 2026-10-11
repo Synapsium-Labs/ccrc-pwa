@@ -1202,13 +1202,10 @@ export class FleetWatcher {
    *  ACTS only on a pass whose durable record matches the held set it just computed (review 382, R3): a write that did
    *  not land withholds the act, so the record never lags it. */
   private deadCoordinatorBreakerSeeded = false;
-  /** `null` is a key that matches NO set: the record is unreadable (the fallback seed), so the next write runs whatever
-   *  the new set is and supersedes the bad row (review 382, R2). */
-  private deadCoordinatorBreakerHeldKey: string | null = '';
+  /** Unseeded, the key is `''`, which matches no set's key (every key starts with the record's head, or with `[`), so the
+   *  fallback seed's first write always runs and supersedes the bad row (review 382, R2). */
+  private deadCoordinatorBreakerHeldKey = '';
   private deadCoordinatorBreakerHeldRunId: number | null = null;
-  /** The bad rows already warned about (`row <eventId>`; a read that threw before any row is `read`) — ONE warn line and
-   *  ONE feed row per bad row (review 382, R2). */
-  private readonly deadCoordinatorUnreadableWarned = new Set<string>();
   private deadCoordinatorAttentionList: readonly DeadCoordinatorAttention[] = [];
   /** The coordination serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`), handed over by `buildServer`
    *  once `registerCoordRoutes` has built it. Until then the lane measures and records, and ends nothing. */
@@ -4369,10 +4366,10 @@ export class FleetWatcher {
       // loosens: a wildcard only adds clustered pairs, adding entries never breaks a within-window adjacency, and a real
       // held set is always a subset of the unreleased population, so the fallback lane trips whenever a correct-seed lane
       // would, for every member that one holds). The instant is `now` and is compared with nothing. The flag is written
-      // into the fresh record, so a restart seeds it too. The seed is this pass's result: `Seeded`, and a key that matches
-      // no set, so the write below runs whatever the set is and the bad row is never read again.
+      // into the fresh record, so a restart seeds it too. The seed is this pass's result: `Seeded` (so the bad row is never read
+      // again, and the words below are said once), and the unseeded key `''` matches no set, so the write below runs
+      // whatever the set is.
       held = ids.filter((id) => !released.has(id)).map((id) => ({ id, firstDeadAt: now, fallback: true as const }));
-      this.deadCoordinatorBreakerHeldKey = null;
       this.deadCoordinatorBreakerHeldRunId = unreadable.runId;
       this.deadCoordinatorBreakerSeeded = true;
     }
@@ -4414,8 +4411,9 @@ export class FleetWatcher {
    *  last record sits on, else a run any claimant in the population (the members `before` the change first) coordinates.
    *  Answers whether the durable record NOW matches the held set (review 382, R3): `true` when the set did not change
    *  (its key is what the record carries) or the write landed; `false` for a write that cannot land (no carrier, a throw,
-   *  a set with no spelling). The caller composes NO act on a `false` pass — the record never lags an act, so a restart
-   *  cannot seed an older set under it. A `false` is warned, leaves the key unchanged so the next pass tries again, and
+   *  a set with no spelling). The caller composes NO act on a `false` pass, so the record never lags an act. A restart that
+   *  lands while writes keep failing still seeds the older record, which can hold less than the process did (review 382,
+   *  R3's residual: it needs a store whose writes keep failing at that moment). A `false` is warned, leaves the key unchanged so the next pass tries again, and
    *  leaves the in-memory hold standing for this process. */
   private recordDeadCoordinatorBreakerHeldChange(
     coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], now: number,
@@ -4446,15 +4444,12 @@ export class FleetWatcher {
     return false;
   }
 
-  /** The words for a record the lane could not read (review 382, R2): ONE warn line and ONE feed row per bad row — keyed on
-   *  the row's event id, or `read` for a read that threw before any row — naming the row and the reason (a bounded prefix,
-   *  never the row's content), through `recordRows`. No new attention kind, no wire word. */
+  /** The words for a record the lane could not read (review 382, R2): ONE warn line and ONE feed row, naming the row and
+   *  the reason (a bounded prefix, never the row's content), through `recordRows`. They are said once because the pass that
+   *  finds the bad row seeds (`Seeded`) and the row is never read again. No new attention kind, no wire word. */
   private noteDeadCoordinatorRecordUnreadable(
     coord: CoordStore, u: { eventId: number | null; detail: string }, held: readonly string[], tripped: boolean, ids: readonly string[],
   ): void {
-    const key = u.eventId === null ? 'read' : `row ${u.eventId}`;
-    if (this.deadCoordinatorUnreadableWarned.has(key)) return;
-    this.deadCoordinatorUnreadableWarned.add(key);
     const reason = u.detail.slice(0, 64);
     console.warn(`ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold (${u.eventId === null ? 'no row' : `event ${u.eventId}`}: ${reason}) `
       + '— it holds every coordinator this pass did not see released, and writes a fresh record');

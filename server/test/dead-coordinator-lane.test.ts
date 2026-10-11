@@ -836,7 +836,7 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     expect(breakerItem(f)).toEqual([['breaker', [U, Z]]]);
   };
   it('THE FALLBACK NEVER LOOSENS (the reviewer\'s probe): a member the true record would not hold cannot let U and Z be ended once V is released (review 382, R2)', async () => { await probe(false); });
-  it('...and the FLAG is durable: a restart after the fallback record was written, before Z crashes, still does not end U (review 382, R2)', async () => { await probe(true); });
+  it('...and a restart after the fallback record was written, before Z crashes, still does not end U (review 382, R2; the flag itself is pinned by the store and the breaker\'s cases)', async () => { await probe(true); });
 
   it('A claimant SWEPT INTO a flagged trip is flagged too: its crash instant never becomes an ordinary hold that a later re-anchor loosens (review 382, N1)', async () => {
     const f = await fixture();
@@ -941,6 +941,67 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     expect(seen.ok && seen.rows.some((r) => (r.detail ?? '').startsWith('dead-coordinator-breaker-held:'))).toBe(true);
     expect(stallNoticeCounts(seen.ok ? seen.rows : []).every((c) => c.sent === 0 && c.shadow === 0)).toBe(true);
   });
+});
+
+/** The reviewer's probes (review 384, F1), adapted: one scripted world, run twice with the lane ARMED. The only difference
+ *  is that the second run's lane restarts — over an unreadable record (the fallback seed), or over a readable one (a PLAIN
+ *  restart) — while the first never does. Every event is ordinary: a pane dying or returning, a registry row absent for
+ *  one pass. Whatever the restarted lane ends, the unrestarted lane's breaker must not be standing over: Q is due at the
+ *  end, and the unrestarted lane's breaker holds it, so the restarted lane must not end it. */
+describe('a restarted lane never ends a claimant the unrestarted lane\'s breaker holds (review 384, F1)', () => {
+  const scenario = async (restart: 'none' | 'fallback' | 'plain') => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const [U, X, Y, Z, Q] = ['demo-coord-u', 'demo-coord-x', 'demo-coord-y', 'demo-coord-z', 'demo-coord-q'];
+    for (const id of [X, Y, Z, Q]) f.plant(id);                 // U has no registry row: unmeasurable
+    for (const id of [Y, Z, Q]) f.live.add(id);                 // X is crashed from minute 0
+    const r = Object.fromEntries([U, X, Y, Z, Q].map((id) => [id, f.working(id)])) as Record<string, number>;
+    let m = 0;
+    const to = async (target: number): Promise<void> => {
+      while (m < target) { const d = Math.min(9, target - m); f.advance(d * 60_000); m += d; await f.pass(); }
+    };
+    const breaker = () => f.attention().filter(([k]) => k === 'breaker');
+    await f.pass();                                             // m0: X crashes; U unmeasurable
+    if (restart === 'fallback') {
+      const db = (f.coord as unknown as { db: { exec(sql: string): void } }).db;
+      db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) SELECT id, ${T0}, state, state, 'operator', ` +
+        `'dead-coordinator-breaker-held:${X}@soon' FROM runs WHERE id = ${r[X]}`);
+      f.restart();
+    }
+    await to(1);                                                // the fallback holds {U*, X*}; a plain lane trips on nothing yet
+    if (restart === 'plain') { await to(55); f.restart(); }     // a PLAIN restart over a READABLE record at 55
+    await to(64);                                               // the unrestarted lane ends X at its hour; the restarted one holds it
+    f.plant(U); f.live.add(U);
+    rmSync(path.join(f.reg, `${X}.uuid`));
+    await to(70);                                               // U back; X doubted (its anchor goes)
+    f.live.delete(Q);
+    await to(72);                                               // Q crashes at 72
+    await to(79);
+    writeFileSync(path.join(f.reg, `${X}.uuid`), `u-${X}`);
+    f.live.delete(Y);
+    await to(88);                                               // X re-anchored at 88; Y crashes at 88
+    rmSync(path.join(f.reg, `${Y}.uuid`));
+    await to(97);                                               // Y doubted
+    writeFileSync(path.join(f.reg, `${Y}.uuid`), `u-${Y}`);
+    f.live.delete(Z);
+    await to(106);                                              // Y crashes again, Z crashes beside it: {Y, Z} cluster
+    await to(133);                                              // Q is due
+    f.live.add(X);
+    await to(136);                                              // X is back
+    return { q: f.stateOf(r[Q]!), breaker: breaker(), states: [U, X, Y, Z, Q].map((id) => f.stateOf(r[id]!)) };
+  };
+  const against = async (restart: 'fallback' | 'plain'): Promise<void> => {
+    const c = await scenario('none');
+    vi.restoreAllMocks();
+    const rs = await scenario(restart);
+    expect(c.q, 'the unrestarted lane holds Q: its breaker stands on {Y, Z}').toBe('working');
+    expect(c.breaker).toEqual([['breaker', ['demo-coord-y', 'demo-coord-z']]]);
+    expect(rs.q, 'the restarted lane must not end Q while that breaker stands').toBe('working');
+    expect(rs.breaker, 'and its breaker stands too').toEqual(c.breaker);
+  };
+  it('after a restart over an UNREADABLE record (the fallback seed), once its flags clear', async () => { await against('fallback'); });
+  it('after a PLAIN restart over a readable record, a delayed act leaves a claimant the unrestarted lane already ended', async () => { await against('plain'); });
 });
 
 describe('the one cleanup switch', () => {

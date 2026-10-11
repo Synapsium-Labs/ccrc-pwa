@@ -307,60 +307,78 @@ export interface DeadCoordinatorBreakerMember {
   readonly fallback?: true;
 }
 
-/** `crashed`: this pass's crashed claimants with their durable `firstDeadAt`. `held`: the members the last trip held
- *  that no answer has released since, with their remembered instants (they win over a re-anchored one). `unmeasurable`:
- *  the ids this pass could not measure, of `measured` asked. `fleetDoubt`: a fleet-wide fact this pass measured — tmux
- *  did not answer — or `null`. A fleet-wide doubt trips it whatever the count: one claimant whose row is gone still
- *  reads crashed while tmux is down for every other, and that pass is exactly the box fault the breaker exists for. So
- *  does a pass that could measure none of two or more claimants.
+/** `crashed`: this pass's crashed claimants with their durable `firstDeadAt` (the CURRENT anchor). `held`: the members the
+ *  last trip held that no answer has released since, with their REMEMBERED instants. `unmeasurable`: the ids this pass
+ *  could not measure, of `measured` asked. `fleetDoubt`: a fleet-wide fact this pass measured — tmux did not answer — or
+ *  `null`. A fleet-wide doubt trips it whatever the count: one claimant whose row is gone still reads crashed while tmux
+ *  is down for every other, and that pass is exactly the box fault the breaker exists for. So does a pass that could
+ *  measure none of two or more claimants.
  *
- *  A held member FLAGGED `fallback` (review 382, R2) is a WILDCARD: it clusters with every other entry, crashed or held,
- *  whatever the instants. When at least two entries stand and one is flagged, the breaker trips with EVERY entry as a
- *  member, and EVERY member of that trip carries the flag (review 382, N1) — the swept-in ones, a claimant that crashed
- *  while the hold stood, included, on the clustered arm and on the unmeasurable arm alike, since both build `members`
- *  the same way. Ordinary members' clustering is unchanged — held still wins over a re-anchored instant for them, which
- *  is review 382's R5 corner, ruled out of scope: a flagged member never meets it.
- *  WHY THE FALLBACK NEVER LOOSENS. The lane seeds flagged members only when its record of the hold cannot be read: every
- *  claimant of the pass's population the pass does not release. A correct seed's held set H_c is a subset of that, since a
- *  held member is always unreleased and in the population. The claim, by induction over the passes that follow: the
- *  fallback lane's held ids H_f are a SUPERSET of H_c, and H_f is either empty or flagged throughout. It holds at the
- *  seed. Each pass both lanes see the same crashed claimants and release the same members on the same evidence (alive,
- *  stopped, deliberate, left the population), so the entries E_f = crashed ∪ H_f are a superset of E_c = crashed ∪ H_c, as
- *  ids. A trip needs two entries (clustering needs two; the unmeasurable arm names a superset likewise). If E_f has at
- *  least two entries and a flagged member, the fallback trips, with every entry a member; a correct lane that trips has
- *  at least two entries in E_c ⊆ E_f, and its members are a subset of E_c ⊆ E_f, so H_c' ⊆ H_f'. If E_f has at most one
- *  entry, `members` is empty, and E_c ⊆ E_f has at most one too: both hold nothing. Once H_f is empty so is H_c, and the
- *  two lanes are identical from then on (the anchors are durable and shared). The instants play no part for flagged
- *  members: no instant of theirs is compared with a remembered one, so a clock stepping back across a restart, or a
- *  step-five anchor delete that threw, does not matter. The cost: while a flagged member stands, a coordinator that
- *  crashes is swept into the hold and is flagged itself, a wildcard, until evidence releases it or fewer than two entries
- *  stand. */
+ *  THE CLUSTERING IS MONOTONE (review 384, F1). Each entry is an id, and it carries up to TWO instants — its remembered
+ *  held instant and its current anchor — and a flag. No instant replaces another (a held instant used to beat a
+ *  re-anchored one, which is not monotone and let a restarted lane end a claimant during a pass an unrestarted lane's
+ *  breaker stood over). Two DISTINCT entries cluster when ANY instant of one is within the window of ANY instant of the
+ *  other; an id's own two instants never cluster it with itself. A sorted sweep over the (id, instant) points, comparing
+ *  consecutive points of different ids, finds exactly the clustered ids: on a within-window run from a point of A to a
+ *  point of B, the first change of id leaves A beside a consecutive different-id point and the last change lands on B
+ *  beside one. Members are the clustered ids. A member's `firstDeadAt` for the next pass is its remembered instant when it
+ *  had one, else its anchor (the anchor itself stays durable in `dead_claimants`).
+ *
+ *  A held member FLAGGED `fallback` (review 382, R2) is a WILDCARD: it clusters with every other entry, whatever the
+ *  instants. When at least two entries stand and one is flagged, the breaker trips with EVERY entry as a member, and
+ *  EVERY member of that trip carries the flag (review 382, N1) — a claimant that crashed while the hold stood included,
+ *  on the clustered and the unmeasurable arm alike, since both build `members` the same way.
+ *
+ *  THE PROPERTY. Let L and L' be two inputs of one pass such that every (id, instant) pair of L, and every flag, is also
+ *  in L'. Then every id L clusters, L' clusters: a wildcard in L' clusters every id of L', and without one, adding a
+ *  point P between two consecutive points a and b of different ids within the window leaves a consecutive different-id
+ *  pair within the window beside P (P's id is a's, b's, or another's, and each case keeps both ids paired), so no id
+ *  unclusters; adding an id, an instant or a flag therefore never untrips the clustered arm and never drops a member. The
+ *  unmeasurable arm names `unmeasurable ∪ crashed ∪ members`, and its trigger (`fleetDoubt`, `allUnmeasurable`) reads
+ *  only the pass's own measurements, so the superset stays a superset there too.
+ *  WHAT IT GIVES A RESTARTED LANE R against an unrestarted one U over one world. The seed: for a plain restart R reads
+ *  U's own record, equal to U's held set; for the fallback R holds every claimant the pass does not release, flagged, a
+ *  superset of anything U holds (a held member is always unreleased and in the population). The step: both see the same
+ *  crashed anchors (durable) and release the same members on the same evidence, so R's entries are a superset of U's and,
+ *  by the property, R trips whenever U does with members ⊇ U's. Held instants stay equal for ids both hold (a member keeps
+ *  its remembered instant, else takes the anchor), and a flagged one is a wildcard that covers any instant. R's population
+ *  can differ from U's in one way: U ended a claimant that R, its act delayed by the lost backoff, has not yet; that id
+ *  only ADDS entries to R, and R can end it, never a claimant U's breaker holds. The invariant is not argued for an id U
+ *  ended that then returns under a NEW run while R still holds the old one (R's remembered instant may be older than U's):
+ *  that corner is open and named in the spec. The all-unmeasurable arm diverges the same way, as measured: R's extra
+ *  claimant can be measured while all of U's are not, so R does not trip there, but every other claimant is as
+ *  unmeasured in R as in U, so R can act there only on the claimant U already ended. The cost of more instants is more
+ *  holding: a member held at an old instant that crashes anew also clusters near its new instant, and while a flagged
+ *  member stands a coordinator that crashes is swept into the hold and flagged itself, until evidence releases it or fewer
+ *  than two entries stand. */
 export function deadCoordinatorBreaker(
   crashed: readonly DeadCoordinatorBreakerMember[], held: readonly DeadCoordinatorBreakerMember[],
   unmeasurable: readonly string[], measured: number, fleetDoubt: string | null, nowMs: number,
 ): DeadCoordinatorBreaker {
-  const entries = new Map<string, DeadCoordinatorBreakerMember>(
-    crashed.map((c) => [c.id, { id: c.id, firstDeadAt: c.firstDeadAt }]));
-  for (const h of held) {
-    entries.set(h.id, h.fallback === true ? { id: h.id, firstDeadAt: h.firstDeadAt, fallback: true } : { id: h.id, firstDeadAt: h.firstDeadAt });
+  const anchor = new Map(crashed.map((c) => [c.id, c.firstDeadAt]));
+  const remembered = new Map(held.map((h) => [h.id, h.firstDeadAt]));
+  const flagged = new Set(held.filter((h) => h.fallback === true).map((h) => h.id));
+  const ids = [...new Set([...anchor.keys(), ...remembered.keys()])];
+  const points: { id: string; at: number }[] = [];
+  for (const id of ids) {
+    for (const at of new Set([anchor.get(id), remembered.get(id)])) if (at !== undefined) points.push({ id, at });
   }
-  const byTime = [...entries.values()]
-    .sort((a, b) => a.firstDeadAt - b.firstDeadAt || (a.id < b.id ? -1 : 1));
+  points.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // A trip a flagged entry took part in flags EVERY member (review 382, N1).
+  const wild = ids.length >= 2 && flagged.size > 0;
   const clustered = new Set<string>();
-  if (byTime.length >= 2 && byTime.some((e) => e.fallback === true)) {
-    for (const e of byTime) clustered.add(e.id);
+  if (wild) {
+    for (const id of ids) clustered.add(id);
   } else {
-    for (let i = 1; i < byTime.length; i += 1) {
-      if (byTime[i]!.firstDeadAt - byTime[i - 1]!.firstDeadAt <= DEAD_COORDINATOR_BREAKER_WINDOW_MS) {
-        clustered.add(byTime[i - 1]!.id); clustered.add(byTime[i]!.id);
-      }
+    for (let i = 1; i < points.length; i += 1) {
+      const a = points[i - 1]!; const b = points[i]!;
+      if (a.id !== b.id && b.at - a.at <= DEAD_COORDINATOR_BREAKER_WINDOW_MS) { clustered.add(a.id); clustered.add(b.id); }
     }
   }
-  // A trip a flagged entry took part in flags EVERY member (review 382, N1): an unflagged member would be held at its
-  // crash instant, which beats a later re-anchor, and loosen once the flagged members were released.
-  const wild = byTime.length >= 2 && byTime.some((e) => e.fallback === true);
-  const members = byTime.filter((c) => clustered.has(c.id))
-    .map((c) => (wild ? { id: c.id, firstDeadAt: c.firstDeadAt, fallback: true as const } : c));
+  const members: DeadCoordinatorBreakerMember[] = ids.filter((id) => clustered.has(id))
+    .map((id) => ({ id, firstDeadAt: (remembered.get(id) ?? anchor.get(id))! }))
+    .sort((a, b) => a.firstDeadAt - b.firstDeadAt || (a.id < b.id ? -1 : 1))
+    .map((m) => (wild ? { ...m, fallback: true as const } : m));
   const allUnmeasurable = measured >= 2 && unmeasurable.length === measured;
   if (fleetDoubt !== null || allUnmeasurable) {
     const named = [...new Set([...unmeasurable, ...crashed.map((c) => c.id), ...members.map((c) => c.id)])].sort();
@@ -395,8 +413,9 @@ export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held
 const BREAKER_HELD_SAFE = /^[A-Za-z0-9._-]*$/;
 const BREAKER_HELD_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 /** A fallback member's mark, after its instant (review 382, R2): `id@<instant>*`. `*` is outside the escaped-id alphabet
- *  and is not a digit, so it can never be part of an id or an instant. An OLDER build's parser reads `<instant>*` as no
- *  instant, so its read is `ok:false` — fail-shut, as for any record it cannot read. */
+ *  and is not a digit, so it can never be part of an id or an instant. No released build reads this record at all (the
+ *  build that first had a reader, before the mark, never shipped), so a rollback to a released build starts with no hold,
+ *  failing open: the spec's §12 says to disarm the lane before rolling back. */
 const BREAKER_HELD_FALLBACK_MARK = '*';
 const BREAKER_HELD_ESCAPED = /^(?:[A-Za-z0-9._-]|%[0-9A-F]{2})*$/;
 
@@ -546,7 +565,7 @@ export type DeadCoordinatorReport =
 
 /** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half). A restart drops the run of
  *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
- *  SOONER after a stuck or thrown act (review 381, F10). The other way a restarted lane acts sooner is a restart while a
+ *  SOONER after a stuck or thrown act (review 381, F10). Another way a restarted lane acts sooner is a restart while a
  *  held-set write is failing: it seeds the older record, which can hold less than the process did (review 382, R3's
  *  residual). The lane composes no act on a pass whose held-set record did not land, so the record never lags an act; the
  *  act is still behind the claimant's re-measure before and after the fleet act. The breaker's hold is not in this entry: it survives a restart (review

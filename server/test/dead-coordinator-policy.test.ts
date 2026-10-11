@@ -251,6 +251,60 @@ describe('the circuit breaker (spec §5.4)', () => {
     expect(deadCoordinatorBreaker([at('c-z', far)], [at('c-a', NOW)], [], 2, null, far + PASS)).toEqual({ tripped: false });
   });
 
+  it('R5\'s corner is CLOSED: X held at its old instant and re-anchored at T_new beside Y at T_new trips — a held instant never replaces the current anchor (review 384, F1)', () => {
+    const old = NOW;
+    const fresh = NOW + 5 * 3_600_000;
+    const b = deadCoordinatorBreaker([at('c-x', fresh), at('c-y', fresh)], [at('c-x', old)], [], 2, null, fresh + PASS);
+    expect(b).toMatchObject({ tripped: true, why: 'clustered', claimants: ['c-x', 'c-y'] });
+    // The member keeps its REMEMBERED instant for the next pass; Y, never held, its anchor.
+    expect(b.tripped && b.members).toEqual([at('c-x', old), at('c-y', fresh)]);
+    expect(b.tripped && b.since, 'since is the earliest member instant, as before').toBe(old);
+    // An id\'s own two instants never cluster it with itself.
+    expect(deadCoordinatorBreaker([at('c-x', fresh)], [at('c-x', old)], [], 1, null, fresh)).toEqual({ tripped: false });
+    // ...and the remembered instant still clusters on its own, as before (IT REMEMBERS).
+    expect(deadCoordinatorBreaker([at('c-y', old + PASS)], [at('c-x', old)], [], 2, null, fresh)).toMatchObject({ tripped: true, claimants: ['c-x', 'c-y'] });
+  });
+
+  it('MONOTONE (review 384, F1): adding an entry, an instant or a flag never turns `tripped` false and never drops a member — a seeded grid', () => {
+    let seed = 20261011;
+    const rnd = (n: number): number => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed >>> 8) % n; };
+    const ids = ['c-a', 'c-b', 'c-c', 'c-d', 'c-e'];
+    const instants = [0, 4, 9, 11, 21, 40, 41, 90].map((m) => NOW + m * 60_000);
+    type In = { crashed: Map<string, number>; held: Map<string, { at: number; fallback: boolean }> };
+    const run = (i: In) => deadCoordinatorBreaker([...i.crashed].map(([id, firstDeadAt]) => ({ id, firstDeadAt })),
+      [...i.held].map(([id, h]) => (h.fallback ? { id, firstDeadAt: h.at, fallback: true as const } : { id, firstDeadAt: h.at })),
+      [], 0, null, NOW + 200 * 60_000);
+    const members = (b: ReturnType<typeof run>): string[] => (b.tripped ? b.members.map((m) => m.id) : []);
+    const clone = (i: In): In => ({ crashed: new Map(i.crashed), held: new Map(i.held) });
+    let checked = 0; let tripped = 0;
+    for (let k = 0; k < 600; k += 1) {
+      const base: In = { crashed: new Map(), held: new Map() };
+      for (const id of ids) {
+        if (rnd(3) === 0) base.crashed.set(id, instants[rnd(instants.length)]!);
+        if (rnd(4) === 0) base.held.set(id, { at: instants[rnd(instants.length)]!, fallback: rnd(6) === 0 });
+      }
+      const before = run(base);
+      const supers: In[] = [];
+      for (const id of ids) {
+        if (!base.crashed.has(id)) { const s = clone(base); s.crashed.set(id, instants[rnd(instants.length)]!); supers.push(s); }   // an entry (or an instant, when held)
+        if (!base.held.has(id)) { const s = clone(base); s.held.set(id, { at: instants[rnd(instants.length)]!, fallback: false }); supers.push(s); }   // an entry (or an instant, when crashed)
+        const h = base.held.get(id);
+        if (h !== undefined && !h.fallback) { const s = clone(base); s.held.set(id, { at: h.at, fallback: true }); supers.push(s); }   // a flag
+      }
+      for (const sup of supers) {
+        const after = run(sup);
+        checked += 1;
+        if (before.tripped) {
+          tripped += 1;
+          expect(after.tripped, JSON.stringify({ base: [...base.crashed, ...base.held], sup: [...sup.crashed, ...sup.held] })).toBe(true);
+          for (const m of members(before)) expect(members(after), `${m} dropped`).toContain(m);
+        }
+      }
+    }
+    expect(checked, 'a vacuous grid would pass').toBeGreaterThan(1000);
+    expect(tripped, 'and so would one that never trips').toBeGreaterThan(200);
+  });
+
   it('a FLEET-WIDE doubt (tmux did not answer) trips it whatever the count, naming every claimant it could not clear', () => {
     // One claimant reads crashed (its row is gone: the ladder answers before tmux), the other could not be measured.
     expect(deadCoordinatorBreaker([at('c-a', NOW)], [], ['c-b'], 2, 'tmux did not answer for c-b: no server', NOW))
