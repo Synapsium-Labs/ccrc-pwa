@@ -786,7 +786,11 @@ export class FleetWatcher {
   private lastDivergenceSweep = 0;
   private lastDivergenceJson: string | null = null;
   /** The child-reclaim lane's clock (child-reclamation wave 4): the MONOTONIC
-   *  time of the last pass, `null` before the first. Not the other lanes' `0`
+   *  time of the last pass, `null` before the first. Two writers stamp it
+   *  (spec §5.5, §5.7): the gate stamp of a pass that the throttle let in,
+   *  which is all a pass still gathering or overtaken during its gather ever
+   *  writes; and the decision clock of the last pass that was NOT overtaken,
+   *  which re-stamps it after the gather. Not the other lanes' `0`
    *  never-run idiom, because a monotonic source may start at 0, which would
    *  make `0` a real stamp. Monotonic so that a backward wall step cannot
    *  freeze the lane, and a forward one cannot run a pass early: the

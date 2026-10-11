@@ -223,7 +223,7 @@ describe('an unreadable generation is identity-unmeasured, and seeds nothing (sp
   });
 });
 
-describe('a rejecting generation read is that row’s doubt, never the pass’s failure (spec §5.5, H5)', () => {
+describe('a rejecting generation read is that row’s doubt, never the pass’s failure (spec §5.5)', () => {
   it('the row reads identity-unmeasured and seeds nothing; the other rows proceed, and the pass resolves', async () => {
     const f = fixture();
     f.plant('demo-a', f.finishedRun().id, G1);
