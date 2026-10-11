@@ -480,7 +480,8 @@ each item is a departure named there).
 - **The attention list is the lane's own memory.** Child reclamation derives its list from the lifecycle mirror alone; the
   expiry's entries (a shadow `would-expire`, a `held` row past its instant, a standing `in-use`, a refusal, a failure, no
   evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the list over
-  the next ones, which can delay an expiry and never cause one.
+  the next ones, which can delay an expiry and can ask again a row the lane had stopped asking, always behind a fresh
+  audit whose token ccd proves again inside its lock (§12).
 - **As wave 5 closes the lane's follow-ups** (each a departure named in the wave-5 plan,
   `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`).
   - **The consent binds the branch.** Inside its lock `ws-expire` reads the branch three ways at the recompute and
@@ -830,10 +831,10 @@ collects them.
 - **The recommended order.** Arm the expiry lane first, once this release is deployed and its shadow list has been read;
   then the dead-coordinator lane, after its own shadow list has been read and any breaker trip worked through.
 - **Their memory is in memory.** A server restart re-learns every instant, sighting, run of failures and attention
-  entry. So a restart forgets the lane's memory, so it can delay an act and can ask again a row the lane had stopped
-  asking (a halted box, a failure the box said will not resume, the unreadable-breadcrumb row below), always behind a
-  fresh audit whose token ccd proves again inside its lock; it never acts without one. A kept-leaf entry is lost with
-  it (question (i)).
+  entry. So a restart can delay an act and can ask again a row the lane had stopped asking (a halted box, a failure the
+  box said will not resume, the unreadable-breadcrumb row below), always behind the lane's own guard: for the expiry
+  lane a fresh audit whose token ccd proves again inside its lock, for the dead-coordinator lane the claimant measured
+  again before and after the fleet act; neither acts without it. A kept-leaf entry is lost with it (question (i)).
 - **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
 
 **The expiry lane (`$REG/expire-lane-live`).**

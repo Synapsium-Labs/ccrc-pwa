@@ -135,6 +135,15 @@ describe('the specs', () => {
       'It never reaches the persistent tier, since nothing it started stands',
       'gets no cleanup composed at all, for any workspace, until the server restarts', 'it never says nothing was deleted']) expect(w6).toContain(item);
   });
+  it('§5.3\'s attention-list paragraph says a restart can ask again, behind a fresh audit (whole-branch re-review)', () => {
+    const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    const at = s.indexOf('- **The attention list is the lane\'s own memory.** Child reclamation derives');
+    expect(at, 'the §5.3 attention-list paragraph is there').toBeGreaterThan(-1);
+    const para = s.slice(at, s.indexOf('- **As wave 5 closes the lane\'s follow-ups**', at));
+    expect(para.length, 'the paragraph is bounded').toBeGreaterThan(100);
+    expect(para).toContain('which can delay an expiry and can ask again a row the lane had stopped asking, always behind a fresh audit whose token ccd proves again inside its lock (§12)');
+    expect(para).not.toContain('never cause one');
+  });
   it('§12 says what to know before arming the expiry lane, and the questions still open', () => {
     const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
     const at = s.indexOf('## 12. Before arming');
@@ -151,8 +160,9 @@ describe('the specs', () => {
       'the feed shows the dead-coordinator lane\'s shadow rows', 'and a fresh one\'s is audited afresh, counted',
       '**One residual of question (k).**', 'leaves `crumb` unsaid, as on the reclaim side, so that `probe-unmeasured` is read by its word',
       // Whole-branch review, item 3: the restart sentence and the residual's own restart clause.
-      'a restart forgets the lane\'s memory, so it can delay an act and can ask again a row the lane had stopped asking',
-      'always behind a fresh audit whose token ccd proves again inside its lock; it never acts without one',
+      'So a restart can delay an act and can ask again a row the lane had stopped asking',
+      'for the expiry lane a fresh audit whose token ccd proves again inside its lock',
+      'for the dead-coordinator lane the claimant measured again before and after the fleet act; neither acts without it',
       'listed at once and not asked again for that archive until the server restarts',
       '**One archived tree holds a leaked test tmux server**', 'unless a standing entry stands there',
       '**Questions still open**', '(b) The archive-confirm copy', '(i) A kept-leaf entry lives until a server restart',
