@@ -1404,7 +1404,7 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Next:** the fix round's wave-done, then a NEW scoped review run, then the merge. This is the programme's last
     wave.
 - **2026-10-11 16:30 — consent to CCR-15 wave 9 (run 380, plan #352) for line-disjoint edits under run 358's claims (calm-mesa's
-  4235, answered in 4236).**
+  4235, answered in 4237).**
   - `store.ts` (claim 1158): wave 9 edits the `shared/api.js` import (:79) and the session-id cap's mentions
     (:1478-1525, :3430). The fix round's lines are the `./deadCoordinator.js` import (:43-50) and one new method after
     :3346 (`recordDeadCoordinatorBreakerHeld`, a `run_events` observation row, no migration).
