@@ -43,7 +43,7 @@ describe('childReclaimSameGenerationKey, the one generation predicate (spec §5.
   });
 });
 
-describe('the entry describes one workspace generation by THREE keys (spec §5.5, §5.6)', () => {
+describe('the entry describes one workspace generation by THREE keys (spec §5.5, §5.7)', () => {
   const BORN = 1_789_000_000_000;
   const RUN = 7;
 

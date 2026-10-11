@@ -1,4 +1,4 @@
-// Child reclamation wave 8 (spec §5.5, §5.6, §5.7): what the generation cases share —
+// Child reclamation wave 8 (spec §5.5, §5.7): what the generation cases share —
 // `child-reclaim-licence-executor.test.ts`, `child-reclaim-licence-lane.test.ts` and
 // `child-reclaim-hold-retired-generation.test.ts`. Two generations of one workspace name; a MODEL of the
 // fleet box's two reclaim verbs, wave 7's and an older ccd's; and a compact lane rig.
@@ -191,7 +191,7 @@ export const laneFixture = (opts: LaneOpts = {}) => {
     return r;
   };
   /** The SAME row with its generation re-minted: a same-run re-mint, in the window where only the
-   *  generation tells it apart (spec §5.6). */
+   *  generation tells it apart (spec §5.5). */
   const remint = (id: string, g: string): void => { writeFileSync(path.join(reg, `${id}.generation`), g); };
   /** One ccd journal line for `id`, mirrored at the rig's wall clock. `over` is spread last, so
    *  `{ meas: { uuid } }` carries `_reg_purge`'s uuid and `{ at }` sets the line's own clock. */

@@ -1,4 +1,4 @@
-// Child reclamation wave 8 (spec §5.6, §5.7). The lane's hold-retired memory is keyed by the workspace
+// Child reclamation wave 8 (spec §5.7). The lane's hold-retired memory is keyed by the workspace
 // generation each sighting was made under, and the release job re-reads that generation nearest its argv.
 // There are three layers: L1's `childReclaimHoldRetiredStep` decides what one sighting does to the memory;
 // the release job's step 7 re-reads; and the lane applies the step and carries the generation on the
@@ -152,7 +152,7 @@ describe('releaseRetiredChildHold — step 7, the generation, re-read nearest th
   });
 });
 
-describe('the hold-retired memory at the lane: keyed by generation (spec §5.6, §5.7)', () => {
+describe('the hold-retired memory at the lane: keyed by generation (spec §5.7)', () => {
   /** demo-a under its own run's close-claim hold, that run's programme closed: `hold-retired` every pass. */
   const heldChild = (f: Lane, generation: string | null): void => {
     const r = f.openRun(); f.abandon(r);

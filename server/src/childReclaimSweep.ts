@@ -222,8 +222,8 @@ export const isChildReclaimGenerationKey = (g: ChildReclaimGeneration): g is Chi
   g.kind !== 'unreadable';
 
 /** Does this entry, or the lane's hold-retired memory, describe the workspace generation born at `bornAt`, whose
- *  `.child` marker names run `markerRunId` and whose registry row carries `generation` (spec §5.5; §5.6: slugs
- *  recycle)? ALL THREE keys must match, the generation through `childReclaimSameGenerationKey`. A null birth never
+ *  `.child` marker names run `markerRunId` and whose registry row carries `generation` (spec §5.5, §5.7)? ALL
+ *  THREE keys must match, the generation through `childReclaimSameGenerationKey`. A null birth never
  *  matches.
  *
  *  WHY THREE. A recycled slug's new row and marker are listed before its new birth can be placed, so the birth
@@ -1375,7 +1375,7 @@ const childReclaimBySession = (a: { readonly sessionId: string }, b: { readonly 
  *  null when the row is no longer a child) whose marker still names the run the verdict was judged
  *  under, and that has no `terminal` or `stuck` item, because ccd's own word outranks the sweep's, as on
  *  the chip. A stuck child is therefore never a kept or a kept-many member. A marker naming another run
- *  is a recycled slug's next workspace (spec §5.6): the old workspace's kept verdict, which a pass that
+ *  is a recycled slug's next workspace (spec §5.9): the old workspace's kept verdict, which a pass that
  *  judged nothing keeps, is not listed for it, and the next judging pass judges it afresh. Doubt words, `held` and the ordinary words never reach it.
  *  The sentence is the sweep table's, so the banner and the chip say the same thing. Ordered by session
  *  id. Pure and deterministic: the coord frame's byte-equality guard emits once per change. */
@@ -1445,7 +1445,7 @@ export function childReclaimAttentionWithKept(
     ...mirrorArms.filter((a) => !(a.kind === 'failing' && (keptIds.has(a.sessionId) || heldIds.has(a.sessionId))))
       .map((a) => {
         // A STUCK item for a child the sweep KEEPS under the run the item names (spec §5.9): its retry
-        // clause gives way to the kept reason. A kept verdict under another run is a recycled slug's (§5.6).
+        // clause gives way to the kept reason. A kept verdict under another run is a recycled slug's (§5.9).
         // A STUCK item for a child the sweep HOLDS (spec §5.9): its retry clause gives way to the hold's,
         // because a held child is never asked while the hold stands. No run to match: a held verdict
         // carries none, and `heldIds` withholds the failing item on the same reading.
@@ -1656,7 +1656,8 @@ const leafRunOf = (childOf: string | null): number | null =>
  *  A row whose id fails ccd's own id rule lists nothing, so no feed row is written for it: any session can
  *  append a journal line, so the mirror's id is attribution, and this item puts it in a path a person is told
  *  to remove. The rule is ccd's `_ws_tmproot_id_ok`: a session id's shape (`isSessionIdShape`) and no leading
- *  `.`, so neither `.` nor `..` can name a directory above `~/.cc-clips` or `~/.cc-tmp`. It sets no length cap
+ *  `.`. Without the second clause `.` would name `~/.cc-clips` (or `~/.cc-tmp`) itself, and `..` the directory
+ *  above it, as the thing a person removes. It sets no length cap
  *  of its own: the id rides one journal line, and ccd writes every line within `LC_LINE_MAX`. A line appended
  *  by hand is not cut by the mirror's ingest, so a forged id's length is bounded only by one read of the
  *  journal (a stated residual): it is still one plain line, with no separator and no dot-leading name.

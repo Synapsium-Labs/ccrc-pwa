@@ -1219,7 +1219,9 @@ registry row, so no listing names the child. The item is therefore derived from 
   `purge-refused`). One bounded read finds them, over the last seven days of ccd's own dates. A row ccd journaled with no
   date is outside it, and so is never listed. The item is never filtered by the registry listing, and it is derived on every
   pass past the pass's fail-shut read, so a paused pass and one without the capabilities list it too, and a restart rebuilds
-  it.
+  it. A row whose session id is not one ccd could have minted lists nothing, and writes no feed row: the id must have the
+  session-id shape and must never lead with a dot, which is ccd's own rule for its temp roots, because any session can
+  append a journal line and the item names the id in a path a person is told to remove.
 - **What it reads.** The mirror reader answers one of three for each leaf: kept, with ccd's word; nothing kept or not
   reported, which are one fact on this carrier; or truncated. A line cut to fit that kept its measurements is read from
   them. One that lost them all reads truncated, and its item is raised on that: the sentence says the line was cut, so
@@ -1822,10 +1824,13 @@ approved on a narrow one.
    - The gather's load on the agent is unmeasured. Each pass reads every marked row's generation, concurrently, through the
      fleet's read path; on a remote fleet that is one agent request per marked child per pass, and nothing has measured what
      that costs the agent (§5.7).
-   - The registry records are read before the generation is gathered, so one of a re-mint's two sightings can judge the old
+   - The registry records are read before the generation is gathered, so a re-mint's first sighting can judge the old
      row's fields (its hold, workspace and identity) under the new generation, and the twice-observed rule then covers the
-     new row's fields on one pass, not two; the licence is unaffected, because the request carries the generation, which
-     the executor re-reads, and ccd re-reads the hold inside its lock (§5.5).
+     new row's own fields on one pass, not two. The executor's generation re-read cannot tell this apart, because both
+     sightings carry the new generation. What keeps the licence safe is that the pass that asks judges the new row's own
+     records in full, the entry and its presence episode are keyed to the generation (§5.7), the executor re-reads the
+     row's marker, open runs, switch and presence, and ccd's audit judges the row's own hold, attachment and tree and
+     re-proves them inside its lock (§5.5).
    - A lost new creation reads as doubt. A recycled slug whose new creation line was never journaled (ccd's journal writer
      never gates the act, so a full disk can lose it) leaves the old creation followed by a removal that no newer creation
      replaces, so the child reads `child-birth-unplaced` until a later creation is mirrored. It read

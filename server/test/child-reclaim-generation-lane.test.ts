@@ -160,7 +160,7 @@ describe('every sweep request carries the generation it was judged under (spec �
   });
 });
 
-describe('the generation is the entry’s third key (spec §5.5, §5.6)', () => {
+describe('the generation is the entry’s third key (spec §5.5)', () => {
   it('a generation that moves under the same birth and the same marker run is a NEW workspace: sighted afresh', async () => {
     const f = fixture();
     f.plant('demo-a', f.finishedRun().id, G1);

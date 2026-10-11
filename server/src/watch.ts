@@ -3306,7 +3306,7 @@ export class FleetWatcher {
    * "no hold" conjunct) — never reaches the ordinary reclaim path directly:
    * `ws-reclaim`'s own rung 4 refuses any hold. Instead, on the SECOND
    * consecutive pass this pass answers it for the SAME workspace generation
-   * (spec §5.6), the child's own `release` payload is queued as its own job
+   * (spec §5.7), the child's own `release` payload is queued as its own job
    * (`releaseRetiredChildHold`, `coord/childReclaim.
    * ts`) on the child's `KeyedQueue` key — which re-proves every fact it
    * relies on before it ever composes `ws-release`, and whose own outcome
@@ -3335,11 +3335,14 @@ export class FleetWatcher {
     // entry read and its write. A pass that a newer one OVERTOOK while it
     // gathered (a read slower than the throttle) decides nothing.
     // THE RECORDS ARE OLDER THAN THE GATHER, A STATED RESIDUAL (spec §7): the tick read `records` before it
-    // awaited its other lanes, and the generation is read only here. So a re-mint inside that gap gives one
-    // of the new workspace's two sightings the OLD row's fields (its hold, workspace and identity) under the
-    // new generation, and the twice-observed rule covers the new row's fields on one pass, not two. Safe for
-    // the licence: the request carries the generation it was judged under, which the executor re-reads
-    // before presence and compares with the audit's, and ccd re-reads the hold inside its lock.
+    // awaited its other lanes, and the generation is read only here. So a re-mint inside that gap gives the
+    // new workspace's FIRST sighting the OLD row's fields (its hold, workspace and identity) under the new
+    // generation, and the twice-observed rule covers the new row's own fields on one pass, not two. The
+    // executor's generation re-read cannot tell this case apart: both sightings carry the new generation.
+    // What keeps it safe: the pass that asks judges the new row's own records in full; the entry and its
+    // presence episode are keyed to the generation, so no episode the old workspace ripened licenses the
+    // new one; the executor re-reads the row's marker, open runs, switch and presence before it asks the
+    // box; and ccd's audit judges the row's own hold, attachment and tree, and re-proves them in its lock.
     const pass = ++this.childReclaimPassSeq;
     const regGenerations = await this.childReclaimGatherGenerations(records);
     if (pass !== this.childReclaimPassSeq) return;
@@ -3627,7 +3630,7 @@ export class FleetWatcher {
         // too would let an overlapping pass turn two sightings into one.
         if (v.why === 'hold-retired') {
           if (!this.childReclaimInFlight.has(r.id)) {
-            // TWO SIGHTINGS OF ONE GENERATION (spec §5.6, §5.7). L1 decides what this sighting does to the
+            // TWO SIGHTINGS OF ONE GENERATION (spec §5.7). L1 decides what this sighting does to the
             // memory (`childReclaimHoldRetiredStep`). A `first` stores its key, REPLACING whatever an
             // earlier generation left. A `second` or a `forget` deletes it. Only a `second` queues the
             // job, and the job carries the generation.
@@ -3692,7 +3695,7 @@ export class FleetWatcher {
       const entry = this.childReclaimSweepState.get(r.id);
       // A birth this entry does not describe, a marker naming a run it was not
       // sighted under, or a registry generation it does not carry, is a
-      // recycled slug's NEW workspace (spec §5.5, §5.6): it starts from a first
+      // recycled slug's NEW workspace (spec §5.5, §5.7): it starts from a first
       // sighting, never from the old workspace's sighting or presence. The run
       // and the generation change first: ws-add mints the generation and writes
       // the new marker before the mirror can place the new birth.

@@ -241,7 +241,7 @@ describe('precedence: stuck outranks kept, kept-many and failing, and held never
     expect(own).toEqual([{ ...arms[0]!, sentence: childReclaimStuckSentence(W, DETAIL, refusalSentence, 'coordinating') }]);
     expect(own[0]!.sentence).not.toContain(CHILD_RECLAIM_STUCK_RETRY);
     expect(own[0]!.sentence).toContain(CHILD_RECLAIM_SKIP.coordinating.sentence);
-    // A kept verdict judged under ANOTHER run's marker is a recycled slug's (spec §5.6): it says nothing of this item.
+    // A kept verdict judged under ANOTHER run's marker is a recycled slug's (spec §5.9): it says nothing of this item.
     expect(banner(new Map<string, ChildReclaimSweepVerdict>([[ID, { eligible: false, why: 'coordinating', runId: RUN + 1 }]])))
       .toEqual(arms);
     // `held` drops the retry clause too, for the hold's (spec §5.9), with no run to match: a held

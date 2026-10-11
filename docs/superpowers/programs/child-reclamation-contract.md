@@ -2580,6 +2580,10 @@ and §5.9, with edits to §5.6, §7 and §8.
   listed, since the horizon cannot place it.
 - `leaf-kept-feed-memory-unpruned`: the set of source rows already fed is never pruned, because an ended item never
   returns and a prune would be a branch with no observable effect to pin.
+- `leaf-kept-session-id-follows-ccds-rule`: a source row whose session id fails ccd's own id rule for its temp roots (the
+  session-id shape, never dot-leading) lists nothing and writes no feed row, because the item names the id in a path a
+  person is told to remove. Residual: ccd writes every journal line within `LC_LINE_MAX`, but the mirror's ingest does not
+  cut a line, so a hand-appended line can carry a long id; it is still one plain line with no separator.
 - `leaf-kept-phrase-second-table`: the reclaim lane's `LEAF_PHRASE` keeps its own phrasing of the three kept-leaf words
   beside workspace lifecycle's `LEAF_KEPT_WHY`, two surfaces both keyed by `LeafKeptWord`, so a word added to L0 reds both
   under the compiler.

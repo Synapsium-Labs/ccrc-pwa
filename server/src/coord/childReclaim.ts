@@ -255,7 +255,7 @@ export function childReclaimHasCoordinated(
  *  seven retryable box words — exactly the `retry` rows above, so a deferral
  *  always says which condition it is waiting on. `generation-changed` is the
  *  server's own word too: the workspace under this name is not the generation
- *  the request was judged under (spec §5.5, §5.6), found by the executor's
+ *  the request was judged under (spec §5.5), found by the executor's
  *  re-read or in the audit's own `generation`. */
 export type ChildReclaimDeferWhy =
   | 'presence' | 'siblings-open' | 'siblings-unreadable' | 'marker-unreadable' | 'marker-mismatch'
@@ -273,7 +273,7 @@ export function isChildReclaimDeferWhy(v: unknown): v is ChildReclaimDeferWhy {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_DEFER_WHY, v);
 }
 
-/** `generation-changed`'s sentence (spec §5.5, §5.6): what the feed row says after the word, wherever the
+/** `generation-changed`'s sentence (spec §5.5): what the feed row says after the word, wherever the
  *  executor finds it. Defined once; each detail that carries it first says what was measured. Worded by what
  *  was MEASURED, never by a cause: the executor sees only that the generation file now reads differently from
  *  the licence. ccd can change that file with no removal (`_reg_generation_init` minting into an absence on a
@@ -1126,7 +1126,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
       ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
       : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
   }
-  // 2c — THE GENERATION, RE-READ (spec §5.5, §5.6). A sweep request was judged over ONE workspace
+  // 2c — THE GENERATION, RE-READ (spec §5.5). A sweep request was judged over ONE workspace
   // generation (`licenceGeneration`, the sweep's own byte-exact read of `<id>.generation`), and it may
   // have waited on the session's queue since. The same run can remove the slug and mint it again
   // meanwhile, and every check above passes for the new workspace. So EVERY sweep request, licensed
@@ -1335,7 +1335,7 @@ export interface ChildReclaimReleaseRequest {
   readonly reason: string;
   readonly program: string;
   readonly accountedRunId: number;
-  /** The workspace generation both `hold-retired` sightings were made under (spec §5.6, §5.7): the sweep's
+  /** The workspace generation both `hold-retired` sightings were made under (spec §5.7): the sweep's
    *  own byte-exact read, a value or `absent`, never unreadable. Step 7 re-reads it. */
   readonly generation: ChildReclaimGenerationKey;
 }
@@ -1398,7 +1398,7 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  *      `changed`; `unmeasurable` answers `failed`.
  *   7. the generation (`childReclaimGenerationRead`, the read the executor's
  *      own step 2c makes) — still the one both sightings were made under (spec
- *      §5.6). Read LAST, nearest the argv. It is defence in depth: the job is
+ *      §5.7). Read LAST, nearest the argv. It is defence in depth: the job is
  *      queued only once the minting run is terminal, so that run cannot mint
  *      the slug again, and a re-mint by any other run fails step 1. The read
  *      binds the job to the generation its sightings were made under all the
@@ -1527,7 +1527,7 @@ export async function releaseRetiredChildHold(
   if (pause === 'set') return 'changed';
   if (pause !== 'clear') return 'failed';
 
-  // 7 — the generation: still the one both sightings were made under (spec §5.6, §5.7). Read LAST,
+  // 7 — the generation: still the one both sightings were made under (spec §5.7). Read LAST,
   // nearest the argv. Defence in depth: `hold-retired` needs the minting run terminal, so that run cannot
   // mint the slug again, and a re-mint by any other run fails step 1. This read binds the job to the
   // generation it was judged under whatever else could put the same marker and hold text on another

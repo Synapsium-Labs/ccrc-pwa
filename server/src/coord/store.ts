@@ -5802,7 +5802,7 @@ export class CoordStore {
    *  - Cost: bounded to one ACT. `lifecycle_by_session` is `(sessionId, id)`, so this still walks every row of
    *    the session (it filters `act` after the index narrows to the session), not a narrower index on `act`.
    *    The bound is on the SESSION, never the whole table.
-   *  - It never answers the oldest `create`, which would skip every recycled slug (spec §5.6).
+   *  - It never answers the oldest `create`, which would skip every recycled slug (spec §5.7).
    *    `childReclaimGeneration` cuts "every create this session ever had" down to the CURRENT generation.
    *  - Same column set and same reviver as `lifecycleFor`: `reviveLifecycleRow` is the one definition both share. */
   lifecycleCreatesFor(sessionId: string): MirroredLifecycleEvent[] {
