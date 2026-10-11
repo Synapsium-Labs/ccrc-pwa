@@ -161,13 +161,43 @@ describe('a failed state-changed is audited afresh (wave 5)', () => {
       .toContain('ccd stopped before this attempt started anything (state-changed: ws/demo-a read present');
     const audits = f.verbsFor('ws-audit').length;
     f.next(); await f.pass();
-    expect(f.verbsFor('ws-audit'), 'the next pass learns the instant afresh').toHaveLength(audits + 1);
+    expect(f.verbsFor('ws-audit'), 'counted (wave 6, ruling C): backed off one wait').toHaveLength(audits);
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-audit'), 'the pass after its backoff learns the instant afresh').toHaveLength(audits + 1);
     f.next(); await f.pass();
     expect(f.verbsFor('ws-expire'), 'seen eligible once: not yet').toEqual(['demo-a']);
     f.next(); await f.pass();
     expect(f.verbsFor('ws-expire'), 'seen twice: composed again, with its own fresh audit’s token').toEqual(['demo-a', 'demo-a']);
     expect(f.verbsFor('ws-audit'), 'the act audited first').toHaveLength(audits + 2);
     expect(f.entry('demo-a'), 'and finished').toBeUndefined();
+  });
+});
+
+describe('a RECURRING restart is counted (wave 6, ruling C)', () => {
+  it('it backs off as any failure does and is listed after the hour — where today it composed every third pass, unlisted, for ever', async () => {
+    const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'state-changed', detail: 'moved' }), stderr: '' }) });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    const acts: number[] = [];
+    let listedAt = -1;
+    for (let k = 1; k <= 180; k += 1) {
+      const before = f.verbsFor('ws-expire').length;
+      await f.pass();
+      if (f.verbsFor('ws-expire').length > before) acts.push(k);
+      if (listedAt < 0 && f.entry('demo-a')?.report != null) listedAt = k;
+      f.next();
+    }
+    expect(acts[0], 'the first act on the third pass, as ever').toBe(3);
+    expect(acts[1], 'the second waits out its backoff: never the third pass after').toBeGreaterThan(6);
+    expect(acts.length, 'three hours of passes: far fewer acts than one every third pass').toBeLessThan(15);
+    const gaps = acts.slice(1).map((a, i) => a - acts[i]!);
+    expect(gaps, 'each wait as long as the last or longer').toEqual([...gaps].sort((a, b) => a - b));
+    expect(listedAt, 'listed once its run has lasted the hour').toBeGreaterThan(60);
+    expect(listedAt).toBeLessThanOrEqual(150);
+    await f.watcher.tick();
+    const list = f.watcher.currentCoord()?.expiryAttention ?? [];
+    expect(list.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
+    expect(list[0]!.sentence).toBe('cleanup keeps failing: state-changed: moved. It is retried, backing off in between.');
   });
 });
 

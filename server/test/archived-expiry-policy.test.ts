@@ -559,15 +559,48 @@ describe('the lane’s memory of one row', () => {
     expect(c.report).toMatchObject({ kind: 'failing' });
   });
 
-  it('a failed state-changed (`restart`) starts over: the instant and the sightings are forgotten and learned afresh — no report, never final (wave 5)', () => {
+  it('a failed state-changed (`restart`) starts over: the instant and the sightings are forgotten and learned afresh — never final (wave 5), and COUNTED on the shared run (wave 6, ruling C)', () => {
     // The coordinator's ruling on the wave-5 plan's question (h): the reclaim side's "not resumable" means start over.
-    // Nothing was deleted, so nothing is listed; a run of failures before it is about a state that no longer stands.
+    // Nothing this attempt started stands, so it is never final and never the persistent tier; but it is a failure of
+    // the act, so it climbs the shared ladder (ruling C) — backed off, and listed once the run has lasted the ceiling.
+    const first = archivedExpiryNextEntry(e(), { kind: 'restart', detail: 'state-changed: moved' }, NOW, PASS)!;
+    expect(first).toMatchObject({ expiresAt: null, eligibleSince: null, nextAskAt: NOW + 2 * PASS, report: null, failures: 1,
+      failingSince: NOW, verbFailures: 0, verbFailingSince: null, lastOutcome: 'restart' });
+    expect(archivedExpiryDue(first, NOW + 2 * PASS), 'not due: it is learned again first').toBe(false);
     const failing = archivedExpiryNextEntry(e(), { kind: 'failed', resumable: true, detail: 'pin-failed' }, NOW - EXPIRE_FAILURE_CEILING_MS, PASS)!;
-    const x = archivedExpiryNextEntry({ ...failing, report: { kind: 'failing', at: NOW - EXPIRE_FAILURE_CEILING_MS, detail: 'pin-failed' } },
-      { kind: 'restart', detail: 'state-changed: moved' }, NOW, PASS)!;
-    expect(x).toMatchObject({ expiresAt: null, eligibleSince: null, nextAskAt: NOW + PASS, report: null, failures: 0,
-      failingSince: null, lastOutcome: 'restart' });
-    expect(archivedExpiryDue(x, NOW + PASS), 'not due: it is learned again first').toBe(false);
+    const x = archivedExpiryNextEntry(failing, { kind: 'restart', detail: 'state-changed: moved' }, NOW, PASS)!;
+    expect(x, 'an hour into the shared run: listed, still asked').toMatchObject({ expiresAt: null, eligibleSince: null, failures: 2,
+      failingSince: NOW - EXPIRE_FAILURE_CEILING_MS, verbFailures: 0, verbFailingSince: null,
+      report: { kind: 'failing', at: NOW - EXPIRE_FAILURE_CEILING_MS, detail: 'state-changed: moved' } });
+    expect(x.report, 'never final, never the tier').not.toHaveProperty('final');
+    expect(x.report).not.toHaveProperty('attempts');
+    expect(x.nextAskAt).toBe(NOW + 4 * PASS);
+  });
+
+  it('a RECURRING restart climbs the ladder across its fresh audits — the learn carries the run — and is listed after the hour, never stranded (wave 6, ruling C)', () => {
+    const restart = { kind: 'restart', detail: 'pin-failed: HEAD names a branch that is gone' } as const;
+    const learnedAt = (expiresAt: number) => parseExpireAudit(ID, true, JSON.stringify({ session: ID, mode: 'expire',
+      archivedAt: 1_789_000_000, expiresAt, sensitive: [], verdict: 'expirable', token: TOK }));
+    let x = e();
+    let t = NOW;
+    const waits: number[] = [];
+    while (t - NOW < EXPIRE_FAILURE_CEILING_MS) {
+      x = archivedExpiryNextEntry(x, restart, t, PASS)!;
+      waits.push(x.nextAskAt - t);
+      t = x.nextAskAt;
+      x = archivedExpiryLearned(x, learnedAt(1_789_604_800), t, PASS);
+      expect(x.expiresAt, 'learned afresh').toBe(1_789_604_800);
+      expect(x.failures, 'the learn after a restart carries the run').toBe(waits.length);
+    }
+    expect(waits, 'each restart waits longer: the shared backoff').toEqual([...waits].sort((a, b) => a - b));
+    expect(Math.max(...waits), 'up to the ceiling, never more').toBeLessThanOrEqual(EXPIRE_FAILURE_CEILING_MS);
+    x = archivedExpiryNextEntry(x, restart, t, PASS)!;
+    expect(x.report, 'listed once the run has lasted the hour').toEqual({ kind: 'failing', at: NOW, detail: restart.detail });
+    expect(x.nextAskAt, 'and still asked').toBeLessThan(Number.POSITIVE_INFINITY);
+    expect(archivedExpiryLearned(x, learnedAt(1_789_604_800), x.nextAskAt, PASS).report, 'its report survives the learn').toEqual(x.report);
+    // A learn after anything else still clears the run, as before (the control).
+    const other = archivedExpiryNextEntry(e(), { kind: 'audit-failed', detail: 'x' }, NOW, PASS)!;
+    expect(archivedExpiryLearned(other, learnedAt(1_789_604_800), NOW + PASS, PASS).failures, 'the control').toBe(0);
   });
 
   it('a `not-expired` at the act learns the AUDIT’s instant and starts the twice-observed rule again', () => {
@@ -658,9 +691,12 @@ describe('the lane’s memory of one row', () => {
         .toMatchObject({ report: later.report, failures: attempts + 1, failingSince: NOW, expiresAt: later.expiresAt });
     }
     // A failed state-changed shows that none had begun (the fresh arm runs only while no breadcrumb stands): it ends the
-    // entry and starts over.
-    expect(archivedExpiryNextEntry(later, { kind: 'restart', detail: 'state-changed: moved' }, later.nextAskAt, PASS),
-      'a restart ends it').toMatchObject({ report: null, failures: 0, failingSince: null, expiresAt: null });
+    // entry and starts over — counted on the shared run (wave 6, ruling C), so a day of failures is still listed, with
+    // the hour-ceiling report and never the tier's.
+    const restarted = archivedExpiryNextEntry(later, { kind: 'restart', detail: 'state-changed: moved' }, later.nextAskAt, PASS)!;
+    expect(restarted, 'a restart ends it').toMatchObject({ report: { kind: 'failing', at: NOW, detail: 'state-changed: moved' },
+      verbFailures: 0, verbFailingSince: null, expiresAt: null });
+    expect(restarted.report, 'no longer standing').not.toHaveProperty('attempts');
     // A hold never takes its place nor resets its cadence; an attempt that completes finishes the row; a new archive starts afresh.
     const held = archivedExpirySighted(later, { eligible: false, why: 'held' }, 'h', later.nextAskAt - PASS);
     expect(held.report, 'a hold never hides it').toEqual(later.report);
@@ -803,7 +839,6 @@ describe('the lane’s memory of one row', () => {
 
   it('the STEADY reset: a restart, or any answer that ends the run, resets the verb’s run with the shared one (review 356, F2)', () => {
     const steadies: ReadonlyArray<readonly [string, Parameters<typeof archivedExpiryNextEntry>[1]]> = [
-      ['a restart', { kind: 'restart', detail: 'state-changed: moved' }],
       ['a retryable not-expired refusal', { kind: 'refused', token: 'not-expired', detail: 'young', inUse: [] }],
       ['a deferral', { kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' }],
       ['a shadow audit', { kind: 'would-expire', sensitive: 0 }],
@@ -815,6 +850,14 @@ describe('the lane’s memory of one row', () => {
       expect(between, `${what} resets both runs`).toMatchObject({ failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null });
       startsAfresh(oneLater(between), `${what}, then one verb failure two days later`);
     }
+  });
+
+  it('the RESTART reset: a restart resets the verb’s run, and counts on the shared one (review 356, F2; wave 6, ruling C)', () => {
+    const between = archivedExpiryNextEntry(twoVerbFailures(), { kind: 'restart', detail: 'state-changed: moved' }, NOW + 2 * PASS, PASS)!;
+    expect(between).toMatchObject({ failures: 3, failingSince: NOW, verbFailures: 0, verbFailingSince: null });
+    expect((oneLater(between).report as { attempts?: number } | null)?.attempts, 'a restart, then one verb failure two days later: no tier')
+      .toBeUndefined();
+    expect(oneLater(between), 'the verb’s run starts afresh').toMatchObject({ verbFailures: 1, verbFailingSince: NOW + TWO_DAYS });
   });
 
   it('the IN-USE reset: an in-use answer resets the verb’s run with the shared one (review 356, F2)', () => {

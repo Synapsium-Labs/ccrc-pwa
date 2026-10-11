@@ -509,8 +509,10 @@ export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAu
       report: { kind: 'failing', at: failingSince, detail: `its expiry could not be learned — ${why}` } };
   }
   if (read.archivedAt !== entry.archivedAt) return { ...entry, nextAskAt: nowMs + passMs };
-  const learned = { failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null,
-    report: entry.report?.kind === 'failing' ? null : entry.report };
+  // A learn after a RESTART carries the shared run and its report (wave 6, ruling C): the restart sent the row back to
+  // learning, and a learn that cleared the run would make a recurring restart start its ladder again every time.
+  const learned = entry.lastOutcome === 'restart' ? { report: entry.report }
+    : { failures: 0, failingSince: null, verbFailures: 0, verbFailingSince: null, report: entry.report?.kind === 'failing' ? null : entry.report };
   if (read.expiresAt.kind !== 'at') {
     return { ...entry, ...learned, nextAskAt: nowMs + EXPIRE_NO_EVIDENCE_RETRY_MS,
       report: read.expiresAt.kind === 'absent' ? { kind: 'no-evidence', at: nowMs } : learned.report };
@@ -758,11 +760,20 @@ export function archivedExpiryNextEntry(
       if (entry.report?.kind === 'stuck') {
         return { ...base, inUseRun: 0, inUse: [], eligibleSince: null, nextAskAt: nowMs + EXPIRE_PERSISTENT_RETRY_MS, report: entry.report };
       }
-      // START OVER (wave 5, question (h) ruled): ccd stopped before anything started because what the expiry consented
-      // to changed. The instant learned and the sightings are forgotten — the row goes back to learning, on the
-      // learning audit's own cadence and backoff, and is asked again only once seen eligible twice past its instant,
-      // with a token a fresh audit minted over what stands. No report: nothing was deleted (the feed row says so).
-      return { ...base, ...steady, expiresAt: null, eligibleSince: null, nextAskAt: nowMs + passMs, report: null };
+      // START OVER (wave 5, question (h) ruled): ccd stopped before this attempt started anything. The instant learned and
+      // the sightings are forgotten — the row goes back to learning, and is asked again only once seen eligible twice past
+      // its instant, with a token a fresh audit minted over what stands. COUNTED (wave 6, ruling C): a restart that recurs
+      // — a racing actor, or a fresh pin that fails every time — climbs the SHARED ladder, as any failure of the act does
+      // (the learn after it carries the run): backed off, and listed once the run has lasted the ceiling. Never the
+      // persistent tier, whose sentence says an attempt may have stopped part-way: nothing this one started stands. The
+      // verb's run is reset, so a later verb failure starts the tier's clock afresh.
+      {
+        const failures = entry.failures + 1;
+        const failingSince = entry.failingSince ?? nowMs;
+        return { ...base, inUseRun: 0, inUse: [], failures, failingSince, verbFailures: 0, verbFailingSince: null,
+          expiresAt: null, eligibleSince: null, nextAskAt: nowMs + archivedExpiryBackoffMs(failures, passMs),
+          report: nowMs - failingSince >= EXPIRE_FAILURE_CEILING_MS ? { kind: 'failing', at: failingSince, detail: o.detail } : null };
+      }
     case 'composition':
       return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
         report: { kind: 'failing', at: nowMs, detail: `the server composed a call ccd rejected: ${o.detail}`, final: true } };
