@@ -1328,6 +1328,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
       byte, and only the "So …" sentence is replaced. Accepted; Task 1's commit says so.
     - Block 1 (the crumb test's FILE HEADER bullet, outside the consented describe) is held. Consent was asked of
       CCR-15 in 4213. If no answer arrives by Task 12, the PR says the bullet is stale.
+    - **CCR-15 consents (4215), relayed to the worker:** replace that one bullet with the plan's wording, keeping the
+      three pre-breadcrumb word names. Comment only, every other header line byte for byte, and it must agree with the
+      ccd comment.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
