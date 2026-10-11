@@ -3352,8 +3352,9 @@ export class CoordStore {
    *  `pushNewRuns` skips it), `causedBy` `operator`, `detail` `deadCoordinatorBreakerHeldDetail`'s encoding. NO dedupe
    *  on `(runId, detail)`: a held set can recur after a clear, and the LATEST row is the truth
    *  (`deadCoordinatorBreakerHeldLatest`). The carrier is ANY existing run, whatever its state — the detail carries the
-   *  whole set. `run-gone` is an absent run; `unencodable` is a member the encoding cannot carry exactly (nothing is
-   *  written, so the in-memory hold stands for that process alone). Synchronous, like every write on this store. */
+   *  whole set. Ids are percent-escaped, so every claimant id is carried. `run-gone` is an absent run; `unencodable` is
+   *  an instant that is not a positive safe integer or an id with no UTF-8 spelling (a lone surrogate): nothing is
+   *  written then, and the in-memory hold stands for that process alone. Synchronous, like every write on this store. */
   recordDeadCoordinatorBreakerHeld(
     runId: number, held: readonly DeadCoordinatorBreakerMember[], at: number,
   ): { recorded: true; eventId: number } | { recorded: false; why: 'run-gone' | 'unencodable' } {

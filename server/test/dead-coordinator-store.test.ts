@@ -177,20 +177,36 @@ describe('the breaker’s held set — a run_events observation, no migration (r
     }
   });
 
-  it('an absent run writes nothing; an id the encoding cannot carry writes nothing — both said out loud', () => {
+  it('an absent run writes nothing; an instant or a string the encoding cannot carry exactly writes nothing — both said out loud', () => {
     const { s, open } = store();
     const run = open('demo-c-a');
     expect(s.recordDeadCoordinatorBreakerHeld(999, members, 100)).toEqual({ recorded: false, why: 'run-gone' });
-    expect(s.recordDeadCoordinatorBreakerHeld(run, [{ id: 'demo,c', firstDeadAt: 10 }], 100)).toEqual({ recorded: false, why: 'unencodable' });
     expect(s.recordDeadCoordinatorBreakerHeld(run, [{ id: 'demo-c-a', firstDeadAt: 0 }], 100)).toEqual({ recorded: false, why: 'unencodable' });
+    expect(s.recordDeadCoordinatorBreakerHeld(run, [{ id: 'demo-\ud800', firstDeadAt: 10 }], 100), 'a lone surrogate has no UTF-8 spelling').toEqual({ recorded: false, why: 'unencodable' });
     expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: [], runId: null });
+  });
+
+  it('EVERY id is carried: the separators, a space, a percent sign and a non-ASCII character round-trip exactly (percent-escaped on write, decoded on read)', () => {
+    const { s, open } = store();
+    const run = open('demo-c-a');
+    const odd = [{ id: 'a b', firstDeadAt: 5 }, { id: 'a,b@1', firstDeadAt: 6 }, { id: 'caf\u00e9\u{1F600}', firstDeadAt: 7 },
+      { id: 'p%41', firstDeadAt: 8 }, { id: 'x:y', firstDeadAt: 9 }, { id: '', firstDeadAt: 11 }];
+    const w = s.recordDeadCoordinatorBreakerHeld(run, odd, 100);
+    expect(w).toMatchObject({ recorded: true });
+    const row = s.runEvents(run).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:')).pop()!;
+    expect(row.detail, 'safe characters stay as they are; every other byte is %XX').toContain('p%2541@8');
+    expect(row.detail).toContain('caf%C3%A9%F0%9F%98%80@7');
+    const got = s.deadCoordinatorBreakerHeldLatest();
+    expect(got.ok && [...got.held].sort((a, b) => (a.id < b.id ? -1 : 1))).toEqual([...odd].sort((a, b) => (a.id < b.id ? -1 : 1)));
+    expect(got.ok && got.runId).toBe(run);
   });
 
   it('a malformed LATEST row fails the WHOLE read — never a partial set, never an older row’s', () => {
     const { db, s, open } = store();
     const run = open('demo-c-a');
     s.recordDeadCoordinatorBreakerHeld(run, members, 100);
-    for (const bad of ['demo-c-a@soon', 'demo-c-a@10,demo-c-b', 'demo-c-b@20,demo-c-a@10', 'demo-c-a@10,demo-c-a@10', '@5', 'demo c@5', 'demo-c-a@010', ',']) {
+    for (const bad of ['demo-c-a@soon', 'demo-c-a@10,demo-c-b', 'demo-c-b@20,demo-c-a@10', 'demo-c-a@10,demo-c-a@10', 'demo c@5', 'demo-c-a@010', ',',
+      'demo%ZZ@5', 'demo%@5', 'demo%4@5', 'demo%41@5', 'demo%e9@5', '%C3@5', 'a@b@5', 'demo-c-a@10,@5']) {
       db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (${run}, 300, 'planned', 'planned', 'operator', 'dead-coordinator-breaker-held:${bad}')`);
       expect(s.deadCoordinatorBreakerHeldLatest(), bad).toMatchObject({ ok: false });
       db.exec('DELETE FROM run_events WHERE id = (SELECT MAX(id) FROM run_events)');

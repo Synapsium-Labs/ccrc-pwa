@@ -61,7 +61,7 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
     const para = spec.slice(at, spec.indexOf('- **The lane never pushes.**', at));
     expect(para.length, 'the bullet is bounded').toBeGreaterThan(100);
     expect(para).not.toContain('never cause one');
-    for (const item of ['A restart keeps the breaker\'s hold', 'read back at the first pass', 'a record it cannot read makes that pass act on nothing',
+    for (const item of ['A restart keeps the lane\'s first-dead anchor (a gap of more than ten minutes re-anchors it, as above)', 'and the breaker\'s hold (the record above, read back at the first pass', 'a record it cannot read makes that pass act on nothing',
       'restarts the run of crashed passes, which delays an act', 'drops the backoff after a stuck or thrown act, the one thing that can bring an act sooner',
       're-measure before and after the fleet act']) expect(para, item).toContain(item);
   });
@@ -70,14 +70,19 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
     expect(at).toBeGreaterThan(-1);
     const para = spec.slice(at, spec.indexOf('- **One claimant a pass**', at));
     for (const item of ['a `run_events` observation row', 'written whenever the held set changes, in shadow too', 'no new table or column',
-      'first-dead instants']) expect(para, item).toContain(item);
+      'first-dead instants', 'ids percent-escaped, so any claimant id is carried']) expect(para, item).toContain(item);
   });
-  it('§12 says it per lane: the hold is the one thing a restart keeps, and the lost backoff can bring an abandon sooner', () => {
+  it('§12 says it per lane: the anchor and the hold survive, an unreadable record stops the lane and is logged, and the lost backoff can bring an abandon sooner', () => {
     const at = spec.indexOf('- **Their memory is in memory.**');
     expect(at, '§12\'s memory bullet is there').toBeGreaterThan(-1);
     const para = spec.slice(at, spec.indexOf('- **`$REG/reclaim-paused` stops both lanes at once**', at));
     expect(para).not.toContain('never cause one');
-    for (const item of ['The dead-coordinator breaker\'s hold is the one thing a restart keeps', 'a record the lane cannot read makes that pass act on nothing',
+    expect(para, 'the anchor survives a restart too (§5.4)').not.toContain('is the one thing a restart keeps');
+    expect(para, 'the lead sentence no longer claims every instant is re-learned').not.toContain('re-learns every instant');
+    for (const item of ['The dead-coordinator lane keeps two things across a restart',
+      'One is its first-dead anchor (`dead_claimants`), which is re-anchored only after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the claimant crashed, so a restart shorter than that keeps the hour',
+      'The other is the breaker\'s hold: its held set is a `run_events` row in `coord.db`, written when the set changes (in shadow too) and read back at the lane\'s first pass',
+      'A record the lane cannot read stops the lane for that pass (nothing is measured or acted on, and its attention list is empty) and the server logs a `ccrc-server: sweepDeadCoordinators could not read the breaker\'s held set` warning naming the failure, which is the operator\'s sign',
       'releases on what releases it without a restart', 'the run of crashed passes starts again, which delays an act',
       'a restarted lane can ask for that abandon SOONER than an unrestarted one would', 'still behind the claimant\'s re-measure before and after the fleet act']) {
       expect(para, item).toContain(item);

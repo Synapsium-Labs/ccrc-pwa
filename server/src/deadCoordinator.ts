@@ -347,25 +347,60 @@ export const deadCoordinatorBreakerKey = (b: DeadCoordinatorBreaker): string | n
  *  with other than four colon-separated parts as null, and this one has two, so the stall count never sees it. */
 export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held:';
 
-/** A claimant id is a session id. The encoding's separators (`@`, `,`, and the head's `:`) are outside this set, so an
- *  id that is not in it is NOT written (`null`), never escaped: the in-memory hold still stands for that process. */
-const BREAKER_HELD_ID = /^[A-Za-z0-9._-]+$/;
+/** THE ID IS PERCENT-ESCAPED (review 381, part A review item 2): every UTF-8 byte outside `[A-Za-z0-9._-]` is `%` and two
+ *  UPPERCASE hex digits, `%` itself included, so no claimant id can break the separators (`@`, `,`, the head's `:`) and
+ *  no id is unwritable — `claimedBy` is not shape-checked at `POST /api/runs`, and a set that dropped to memory alone
+ *  for one odd id would be the restart hole again. The empty id is the empty string. The one string with no spelling is a
+ *  lone surrogate (UTF-8 cannot carry it, so it would not read back). Ids ascend by the DECODED string's code units,
+ *  on write and on read alike. */
+const BREAKER_HELD_SAFE = /^[A-Za-z0-9._-]*$/;
+const BREAKER_HELD_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const BREAKER_HELD_ESCAPED = /^(?:[A-Za-z0-9._-]|%[0-9A-F]{2})*$/;
 
-/** The held set's detail, or `null` when a member cannot be carried exactly (an id outside the encoding's alphabet, or an
+const escapeBreakerHeldId = (id: string): string | null => {
+  if (BREAKER_HELD_LONE_SURROGATE.test(id)) return null;
+  if (BREAKER_HELD_SAFE.test(id)) return id;
+  let out = '';
+  for (const b of new TextEncoder().encode(id)) {
+    const c = String.fromCharCode(b);
+    out += b < 128 && /[A-Za-z0-9._-]/.test(c) ? c : `%${b.toString(16).toUpperCase().padStart(2, '0')}`;
+  }
+  return out;
+};
+
+/** The id an escaped text spells, or `null` for anything that is not exactly what `escapeBreakerHeldId` writes: a
+ *  character outside the alphabet, a lowercase or short escape, bytes that are not UTF-8, or an escape of a character
+ *  that is written plain (the decode must re-encode to the same text). */
+const unescapeBreakerHeldId = (text: string): string | null => {
+  if (!BREAKER_HELD_ESCAPED.test(text)) return null;
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '%') { bytes.push(parseInt(text.slice(i + 1, i + 3), 16)); i += 2; } else bytes.push(text.charCodeAt(i));
+  }
+  let id: string;
+  try { id = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes)); } catch { return null; }
+  return escapeBreakerHeldId(id) === text ? id : null;
+};
+
+/** The held set's detail, or `null` when a member cannot be carried exactly (a string with no UTF-8 spelling, or an
  *  instant that is not a positive safe integer) or two members share an id. */
 export function deadCoordinatorBreakerHeldDetail(members: readonly DeadCoordinatorBreakerMember[]): string | null {
   const sorted = [...members].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const parts: string[] = [];
   for (let i = 0; i < sorted.length; i += 1) {
     const m = sorted[i]!;
-    if (!BREAKER_HELD_ID.test(m.id) || !Number.isSafeInteger(m.firstDeadAt) || m.firstDeadAt < 1) return null;
+    const id = escapeBreakerHeldId(m.id);
+    if (id === null || !Number.isSafeInteger(m.firstDeadAt) || m.firstDeadAt < 1) return null;
     if (i > 0 && sorted[i - 1]!.id === m.id) return null;
+    parts.push(`${id}@${m.firstDeadAt}`);
   }
-  return `${DEAD_COORDINATOR_BREAKER_HELD_HEAD}${sorted.map((m) => `${m.id}@${m.firstDeadAt}`).join(',')}`;
+  return `${DEAD_COORDINATOR_BREAKER_HELD_HEAD}${parts.join(',')}`;
 }
 
-/** A held-set detail split into its members' ids and UNPROVEN instant texts, strictly: the head, then nothing or
- *  `id@digits` joined by commas with ids strictly ascending. Anything else is `null` — a malformed row, which the store
- *  reads as a failed read, never as a smaller set. The store proves each instant (`persistedInt`). */
+/** A held-set detail split into its members' DECODED ids and UNPROVEN instant texts, strictly: the head, then nothing or
+ *  `escapedId@digits` joined by commas with decoded ids strictly ascending. Anything else — a malformed escape included —
+ *  is `null`: a malformed row, which the store reads as a failed read, never as a smaller set. The store proves each
+ *  instant (`persistedInt`). */
 export function splitDeadCoordinatorBreakerHeld(detail: string): { id: string; text: string }[] | null {
   if (!detail.startsWith(DEAD_COORDINATOR_BREAKER_HELD_HEAD)) return null;
   const body = detail.slice(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length);
@@ -374,17 +409,20 @@ export function splitDeadCoordinatorBreakerHeld(detail: string): { id: string; t
   for (const part of body.split(',')) {
     const at = part.split('@');
     if (at.length !== 2) return null;
-    const [id, text] = at as [string, string];
-    if (!BREAKER_HELD_ID.test(id) || !/^[1-9][0-9]*$/.test(text)) return null;
+    const [escaped, text] = at as [string, string];
+    const id = unescapeBreakerHeldId(escaped);
+    if (id === null || !/^[1-9][0-9]*$/.test(text)) return null;
     if (out.length > 0 && !(out[out.length - 1]!.id < id)) return null;
     out.push({ id, text });
   }
   return out;
 }
 
-/** The held set's key, for "write its record only when it CHANGES": the sorted `id@firstDeadAt` list. */
+/** The held set's key, for "write its record only when it CHANGES": the encoded detail itself (its sorted, escaped,
+ *  unambiguous spelling), or — for a set with no spelling — the JSON of the sorted members. */
 export const deadCoordinatorBreakerHeldKey = (members: readonly DeadCoordinatorBreakerMember[]): string =>
-  [...members].map((m) => `${m.id}@${m.firstDeadAt}`).sort().join(',');
+  deadCoordinatorBreakerHeldDetail(members)
+  ?? JSON.stringify([...members].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
 
 // ── the act's answer, and the lane's memory ──────────────────────────────────
 

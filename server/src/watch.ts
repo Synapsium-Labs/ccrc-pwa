@@ -4381,7 +4381,7 @@ export class FleetWatcher {
   /** The breaker's held set, recorded when it CHANGED (review 381, F1) — in shadow too: a `coord.db` row, not a fleet act.
    *  The carrier is any run that exists: for a set, the lowest open run a member coordinates; for an empty set, the run the
    *  last record sits on, else a run any claimant in the population (the members `before` the change first) coordinates.
-   *  A write that cannot land (no carrier, the encoding cannot carry an id, a throw) is warned, leaves the key unchanged
+   *  A write that cannot land (no carrier, a throw, a set with no spelling) is warned, leaves the key unchanged
    *  so the next pass tries again, and leaves the in-memory hold standing for this process. */
   private recordDeadCoordinatorBreakerHeldChange(
     coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], now: number,
