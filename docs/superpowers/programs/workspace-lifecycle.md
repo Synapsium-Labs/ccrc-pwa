@@ -1228,6 +1228,41 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     for a record that is truly absent; the change only moves the empty-gitdir shape to the retry path.
   - Wave 6's plan checks that no lane test or journal word pins the old terminal answer, or a blank-head token, for an
     empty gitdir. calm-mesa mails when #344 merges; wave 6 still waits on it.
+- **2026-10-11 01:00 — CCR-15 wave 7 MERGED (#344 → `7609221a4`, v0.0.145; calm-mesa's mail 4198, acked), so wave 6 (run 358) is
+  unblocked. Its plan is being drafted.**
+  - What #344 lands for this programme: wave 7's `crumb` field on the failed documents, rung 8's empty-gitdir retry
+    (the 10-10 21:50 entry), and the reclaim token bound to the row's generation. `_ws_expire_locked` and
+    `_ws_expire_cwd_users` are byte-unchanged (R72; reviews 369, 374 and 376). `ws-collect` is inert.
+  - **The split with CCR-15 wave 8 (run 348), proposed in mail 4200 and not yet answered:**
+    - Wave 6's regions are `_ws_expire_locked` in `ccd/ccd`, `parseExpireResult` and the expiry lane's attention arms,
+      `stillCrashed`, and in `watch.ts` only `sweepArchivedExpiry` and the dead-coordinator pass.
+    - Wave 8 moves `keptLeafWord` to L0 (Order A of R81), not this wave.
+    - In `containment-refuted-word.test.ts`, wave 8 flips the reclaim assertion and retitles the shared describe.
+      Wave 6 moves its `parseExpireResult` case into a describe of its own and flips it there.
+    - One crumb reader per verb document. Wave 6 reads the stuck word from its L0 home, never re-listing it.
+    - Whichever lands second merges main, as R56 has it.
+  - **The plan:** workflow wf_2172eb2d-87f. Like wave 5's: an Opus drafter prototypes on `origin/main`, four Opus lenses
+    review (spec, act safety, replay, test honesty), an Opus reviser applies or rejects each finding, and a Sonnet replay
+    verifier checks the result. The plan is
+    `docs/superpowers/plans/2026-10-11-workspace-lifecycle-wave6-resumed-expiry-and-arming-close-out.md` on branch
+    `docs/workspace-lifecycle-wave6-plan`. Its rulings, in task order:
+    - (A) question (k) first: ws-expire's resumed arm prints `"crumb":true`, and a pre-breadcrumb failure prints `false`
+      if that measures clean. `parseExpireResult` reads in R76's order, and an absent key falls back to `main`'s word
+      rule exactly.
+    - (B) `containment-refuted` is stuck: attention at once, the persistent tier, never +∞.
+    - (C) a recurring `restart` is counted on the shared run.
+    - (D) the symbolic-HEAD control case, and F2's ccd comment.
+    - (E) `stillCrashed` re-reads the mirror's health and gap list, with no new await.
+    - (F) the worker's residuals.
+    - (G) rung 8's old answer is pinned nowhere.
+    - (H) 4458's pin.
+    - (I) the close-out: one "Before arming" section in the spec, per lane, with the open operator questions.
+    - (J) the overlaps.
+    - (K) both lanes stay SHADOWED.
+    The wave is AGENT-FIRST.
+  - **Claims at drafting:** run 354 (ccrc-history, brisk-meadow) holds `README.md`, `CLAUDE.md` and the three prose
+    tests (claims 1140 and 1141, hard cap 04:34Z). Claim 1142 (run 347) outlives its merge until calm-mesa closes the
+    run. Re-read at dispatch.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
@@ -1330,8 +1365,8 @@ operator creates `$REG/expire-lane-live` by hand. The dead-coordinator lane reco
 the operator creates `$REG/dead-coordinator-lane-live` by hand.
 
 **Wave 6 is run 358**, opened 2026-10-09 08:20 (planned; the run's wave 7 of 7), with numbers 4617–4632, written
-bare. It waits on CCR-15 wave 7 (run 347, PR #344, fix round awaiting a scoped review) reaching `main`. Then its plan is drafted from the wave 6 bullet
-below and the carried items in the 10-09 entries. Wave 5 (run 345) merged as #335 (`6fc7ef115`, the 10-09 08:20
+bare. CCR-15 wave 7 merged as #344 (`7609221a4`), so it is unblocked, and its plan is being drafted from the wave 6 bullet
+below, the carried items in the 10-09 entries and the 10-11 01:00 entry (workflow wf_2172eb2d-87f). Wave 5 (run 345) merged as #335 (`6fc7ef115`, the 10-09 08:20
 entry). Its evidence and reviews 355–357 are in `.superpowers/sdd/coordinator-evidence/run345/`.
 - **Wave 5 deploys AGENT-FIRST through ccrc's updater** (the operator applies it from the console). Afterwards, check
   that both boxes report v0.0.134 (the release that carries `6fc7ef115`) or later. v0.0.134 also carries wave 4, so
