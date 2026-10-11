@@ -1472,6 +1472,32 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - **R6–R10:** words. The expiry lane's lost backoff; F9's learned and unlearned shapes; README's end rule and its
       antecedent; the spec's halted-row set.
     - **R5 (pre-existing clustering corner):** out of scope. §12 states it as a known residual before arming.
+- **2026-10-11 19:25 — run 358's fix round 2 done at `3f5eefe0d` (plain-ridge's 4247), re-measured; at `awaiting-review`. R2's
+  change of shape is CONFIRMED (4249). Scoped review run 384 is dispatched.**
+  - **R2 (4822) changed shape against the ruling, and rightly.** The worker's Opus reviewer measured that the ruled
+    fallback (hold every unreleased claimant at the pass's instant) LOOSENS. A member pinned at that instant cannot
+    cluster with a later crash: in the probe, a correct seed holds [U, Z], and the ruled one ends both.
+    - The ruling's stop clause applied only if no fallback could avoid loosening. One could, so it was built.
+    - A fallback-held claimant is FLAGGED, durably (`id@instant*`; an older parser fails shut on it). A flagged
+      member clusters with every breaker entry, and every member of a trip a flagged entry joins is flagged too. A
+      flag ends as a hold ends.
+    - The proof is by induction, in `deadCoordinatorBreaker`'s docstring: the held ids are a superset of a correct
+      lane's, empty or all flagged.
+    - **The cost, stated in §5.4, §12 and 4822:** while a flagged claimant stands, every new crash is swept into the
+      hold until evidence releases it. The remedy is the existing operator doors.
+    - Ordinary clustering is unchanged (R5).
+  - **R3 (4823):** step seven composes nothing on a pass whose held-set write did not land. The residual is named: a
+    restart while writes keep failing seeds the older record, a second sooner-path beside the lost backoff.
+  - **R1, R4, R5's words, R6–R10, and part B's corrections:** done. README is +0 lines.
+  - Every mutation is red: R1, R2.a–f, R3.a, R4.a, M1–M6. The guards and the `run_events` readers' suites are green.
+    Scope: no ccd, `shared/`, PWA, schema or `ledger.ts` change.
+  - **Re-measured:** the branch, PR #351's head and the fingerprint are all `3f5eefe0d`, OPEN and MERGEABLE. 6
+    commits, no merge, 13 files, +582/−113. `merge-tree` with `d9647b76b` is clean. Advanced to `awaiting-review`.
+  - **Review run 384** (reviews 358). The brief (5.6 KB) asks first for an ATTACK on R2's induction: release, leave and
+    re-enter; a restart mid-wildcard; a second bad record; fleet-doubt and all-unmeasurable trips; re-anchoring; the
+    U/V/Z probe; and the unflagged clustering unchanged. Then the record's flag round-trip and fail-shut read; R3's
+    residual; the pins, words, numbers and scope; and every mutation.
+    Dispatched at 19:29 to `ccrc-pwa-amber-basin` on the first try (`skillState: present`), with workflow on.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
