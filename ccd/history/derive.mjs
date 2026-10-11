@@ -603,7 +603,7 @@ function parentStmts(db) {
       epochTranscripts: db.prepare('SELECT t.transcript_pk AS transcript_pk FROM epochs e JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid '
         + "WHERE e.session_pk = ? AND e.seq = ? AND t.agent_id = '' ORDER BY t.transcript_pk"),
       bounds: db.prepare('SELECT entry_id, transcript_pk FROM boundaries WHERE transcript_pk = ? ORDER BY ord'),
-      leafAt: db.prepare('SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0'),
+      leafAt: db.prepare('SELECT node_id FROM nodes WHERE boundary_entry_id = ? AND depth = 0 AND rowid <= ?'),
       exists: db.prepare('SELECT 1 AS x FROM nodes WHERE node_id = ?'),
       node: db.prepare('SELECT node_id, session_pk, epoch_seq, transcript_pk, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars FROM nodes WHERE node_id = ?'),
       refs: db.prepare('SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid'),
@@ -705,7 +705,7 @@ function fanInLevels(db, ictx, level0, budget) {
  *  - The split is read when a parent is minted. A parent minted earlier keeps its children: they read parented
  *    (parentOf), and planFanIn never regroups a parented slot.
  *  The lists run in ascending file_id. Returns the parents made and whether the complete epoch fit its budget. */
-function deriveEpochParents(db, ictx, sessionPk, epochSeq, budget) {
+function deriveEpochParents(db, ictx, sessionPk, epochSeq, top, budget) {
   const s = parentStmts(db);
   const ds = stmts(db);
   const pass = { files: new Map() };
@@ -717,7 +717,7 @@ function deriveEpochParents(db, ictx, sessionPk, epochSeq, budget) {
       if (holding === null) continue;
       const copyKey = holding.file_id;
       if (!copies.has(copyKey)) copies.set(copyKey, []);
-      const leaf = s.leafAt.get(b.entry_id);
+      const leaf = s.leafAt.get(b.entry_id, top);
       copies.get(copyKey).push(leaf === undefined ? null : leaf.node_id);
     }
   }
@@ -741,7 +741,7 @@ export function deriveParents(db, ictx, budget) {
   let made = 0;
   for (const e of s.touched.all(from, top)) {
     if (!parentsBudgetLeft(budget)) return made;
-    const r = deriveEpochParents(db, ictx, e.session_pk, e.epoch_seq, budget);
+    const r = deriveEpochParents(db, ictx, e.session_pk, e.epoch_seq, top, budget);
     made += r.made;
     if (!r.complete) return made;
     setStep(db, PARENTS_STEP, NODE_PARSER_VERSION, String(e.leaf_top), null);

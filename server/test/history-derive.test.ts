@@ -935,8 +935,8 @@ function interleavedEpochs9(prefix: string, n = 32): { db: Db9; first: string[];
     const a = lib9.leafId(ID9, E9, `span-${k}`);
     const b = lib9.leafId(secondId, secondEpoch, `span-${k}`);
     first.push(a); second.push(b);
-    leaf.run(a, 1, 1, `First leaf ${k}.`, aEntry, 1000 * k, 1000 * k + 500);
     leaf.run(b, 2, 2, `Second leaf ${k}.`, bEntry, 1000 * k, 1000 * k + 500);
+    leaf.run(a, 1, 1, `First leaf ${k}.`, aEntry, 1000 * k, 1000 * k + 500);
   }
   db.exec('COMMIT');
   return { db, first, second };
@@ -1109,7 +1109,7 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
         const rid = (fx.db.prepare('SELECT rowid AS rid FROM nodes WHERE node_id = ?').get(id) as { rid: number }).rid;
         const fts = fx.db.prepare('SELECT gist FROM nodes_fts WHERE rowid = ?').get(rid) as { gist: string };
         v9.expect(fts.gist).toContain('Leaf 3 fresh reroll content.');
-        v9.expect(fts.gist).not.toBe(`old-${id}`);
+        v9.expect(fts.gist).not.toContain(`old-${id}`);
       }
       v9.expect(children9(fx.db, branch)).toEqual([fx.leafIds[2]!]);
       v9.expect(children9(fx.db, branchTop)).toEqual([branch]);
@@ -1143,22 +1143,35 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
   v9.it('a numeric parent cursor resumes interleaved epochs by each completed leaf_top', async () => {
     const d = await derive9();
     const s = await sweep9();
-    const fx = interleavedEpochs9('ccrc-hist-parents-numeric-cursor-');
+    const fx = interleavedEpochs9('ccrc-hist-parents-numeric-cursor-', 32);
     try {
       const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
-      const firstTop = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes WHERE depth = 0 AND session_pk = 1').get() as { r: number }).r);
-      let clock = 0;
-      const firstBudget = s.newBudget(() => ++clock, { maxMs: 70 });
-      const first = d.deriveParents(fx.db, ictx, firstBudget);
-      v9.expect(first).toBe(5);
-      v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor).toBe(String(firstTop));
-      const laterBudget = () => {
+      const initialTop = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r);
+      const firstTop = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes WHERE depth = 0 AND session_pk = 2').get() as { r: number }).r);
+      const sameTinyBudget = () => {
         let calls = 0;
-        return s.newBudget(() => (++calls <= 50 ? 0 : 1), { maxMs: 1 });
+        return s.newBudget(() => ++calls, { maxMs: 36 });
       };
-      for (let tries = 0; tries < 4 && parents9(fx.db, 2).length < 2; tries += 1) d.deriveParents(fx.db, ictx, laterBudget());
-      v9.expect(parents9(fx.db, 1)).toHaveLength(8);
-      v9.expect(parents9(fx.db, 2)).toHaveLength(2);
+      const cursors: Array<string | undefined> = [];
+      const expectedCursors = [undefined, undefined, String(firstTop), String(firstTop), String(firstTop), '73', '74'];
+      const capturedTops: number[] = [];
+      for (const expectedCursor of expectedCursors) {
+        capturedTops.push(Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r));
+        d.deriveParents(fx.db, ictx, sameTinyBudget());
+        const cursor = store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor ?? undefined;
+        cursors.push(cursor);
+        v9.expect(cursor).toBe(expectedCursor);
+      }
+      const firstLevel = [fx.first, fx.second].flatMap((leaves) => [0, 8, 16, 24].map((i) => lib9.parentId(leaves.slice(i, i + 8))));
+      const secondLevel = [fx.first, fx.second].map((leaves) => lib9.parentId([0, 8, 16, 24].map((i) => lib9.parentId(leaves.slice(i, i + 8)))));
+      v9.expect(cursors).toEqual(expectedCursors);
+      v9.expect(parents9(fx.db, 1).map((p) => p.node_id).sort()).toEqual([...firstLevel].sort());
+      v9.expect(parents9(fx.db, 2).map((p) => p.node_id).sort()).toEqual([...secondLevel].sort());
+      const edgeSets = (fx.db.prepare("SELECT group_concat(child_id, ',') AS children FROM (SELECT node_id, child_id, ord FROM node_children ORDER BY node_id, ord) GROUP BY node_id").all() as { children: string }[]).map((r) => r.children);
+      v9.expect(new Set(edgeSets).size, 'no duplicate child-edge set is minted across retries').toBe(edgeSets.length);
+      v9.expect(new Set([...firstLevel, ...secondLevel]).size, 'every expected parent id is unique').toBe(10);
+      v9.expect(initialTop).toBe(64);
+      v9.expect(cursors.at(-2), 'the completing pass ends at its captured top').toBe(String(capturedTops.at(-2)));
     } finally {
       fx.db.close();
     }
@@ -1167,7 +1180,7 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
   v9.it('a stored decimal parent cursor finishes at its captured top before a leaf added mid-pass', async () => {
     const d = await derive9();
     const s = await sweep9();
-    const fx = epochFixture9('ccrc-hist-parents-captured-top-', 8, new Set());
+    const fx = epochFixture9('ccrc-hist-parents-captured-top-', 8, new Set([8]));
     try {
       const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
       const top = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r);
@@ -1175,15 +1188,17 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
       let calls = 0;
       const budget = s.newBudget(() => {
         calls += 1;
-        if (calls === 2) fx.db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms) VALUES ('post-snapshot-leaf', 1, 1, 1, 'native_leaf', 0, 'not-requested', 'post snapshot', '[]', 1, 1, 0, 0, 0, 1, 1)").run();
+        if (calls === 2) addLeaf9(fx.db, 8, fx.leafIds[7]!);
         return 0;
       }, { maxMs: 1 });
-      v9.expect(d.deriveParents(fx.db, ictx, budget)).toBe(1);
-      const post = Number((fx.db.prepare("SELECT rowid AS r FROM nodes WHERE node_id = 'post-snapshot-leaf'").get() as { r: number }).r);
+      v9.expect(d.deriveParents(fx.db, ictx, budget)).toBe(0);
+      const post = Number((fx.db.prepare('SELECT rowid AS r FROM nodes WHERE node_id = ?').get(fx.leafIds[7]!) as { r: number }).r);
       v9.expect(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor).toBe(String(top));
       v9.expect(post).toBeGreaterThan(top);
-      d.deriveParents(fx.db, ictx, s.newBudget());
-      v9.expect(Number(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor)).toBeGreaterThanOrEqual(post);
+      v9.expect(parents9(fx.db, 1), 'the post-snapshot leaf cannot complete the current snapshot').toEqual([]);
+      v9.expect(d.deriveParents(fx.db, ictx, s.newBudget())).toBe(1);
+      v9.expect(parents9(fx.db, 1).map((p) => p.node_id)).toEqual([lib9.parentId(fx.leafIds)]);
+      v9.expect(Number(store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor)).toBe(post);
     } finally {
       fx.db.close();
     }
@@ -1233,7 +1248,11 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
       v9.expect(d.indexNodesFts(fx.db, ictx, oneRowBudget())).toBe(0);
       v9.expect(store9.getStep(fx.db, 'nodes-fts', 1)?.cursor).toBe(String(firstRid));
       v9.expect(d.indexNodesFts(fx.db, ictx, oneRowBudget())).toBe(1);
-      v9.expect((fx.db.prepare('SELECT count(*) AS n FROM nodes_fts').get() as { n: number }).n).toBe(2);
+      const secondRid = (fx.db.prepare('SELECT rowid AS rid FROM nodes WHERE node_id = ?').get(fx.leafIds[1]!) as { rid: number }).rid;
+      v9.expect(store9.getStep(fx.db, 'nodes-fts', 1)?.cursor).toBe(String(secondRid));
+      v9.expect(d.indexNodesFts(fx.db, ictx, oneRowBudget())).toBe(0);
+      const indexed = fx.db.prepare('SELECT count(*) AS n, count(DISTINCT rowid) AS distinct_n FROM nodes_fts').get() as { n: number; distinct_n: number };
+      v9.expect(indexed).toEqual({ n: 2, distinct_n: 2 });
     } finally {
       fx.db.close();
     }
