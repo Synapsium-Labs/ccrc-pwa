@@ -68,7 +68,11 @@ export interface BoxTokenState {
   failures: number; lastFailure: string | null;
   hold: TokenHold | null; holdNode: string | null;
   lastSync: { at: number; word: string; transport: TokenTransport | 'unmeasured' } | null;
-  counters: { previousPresented: number; retiredPresented: number };
+  /** `retiredPresented` is the retired presentations counted since the server started. `retiredPresentedAt` (4552) has
+   *  three readings and every reader branches on presence first: ABSENT is a state written before 4552 (a count with no
+   *  stamp is unanswered, never clear); `null` is no retired presentation recorded; a number is the driver's `now()` on
+   *  the tick that first saw the latest presentation, and it survives a restart (the count does not). */
+  counters: { previousPresented: number; retiredPresented: number; retiredPresentedAt?: number | null };
   retiredRefusedAt: number | null;
   mintFailedAt: number | null;
   lastBootRecovery: { at: number; source: 'pending' | 'previous' } | null;
@@ -94,7 +98,7 @@ export function mintedState(now: number, write: WriteRecord, prior: BoxTokenStat
     pending: prior?.pending ?? [], previous: prior?.previous ?? null, promoting: null, recovering: null,
     fleetConfirmed: null, nextSeq: seq + 1, lastRotationAt: prior?.lastRotationAt ?? null,
     failures: 0, lastFailure: null, hold: null, holdNode: null, lastSync: prior?.lastSync ?? null,
-    counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0 },
+    counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: null },
     retiredRefusedAt: prior?.retiredRefusedAt ?? null, mintFailedAt: null,
     lastBootRecovery: prior?.lastBootRecovery ?? null,
     ...(prior?.retiring ? { retiring: prior.retiring } : {}),   // D-4410: a digest awaiting its append survives a re-mint
@@ -110,7 +114,7 @@ export function adoptedState(now: number, prior: BoxTokenState | null): BoxToken
     pending: prior?.pending ?? [], previous: prior?.previous ?? null, promoting: null, recovering: null,
     fleetConfirmed: null, nextSeq: seq + 1, lastRotationAt: prior?.lastRotationAt ?? null,
     failures: 0, lastFailure: null, hold: null, holdNode: null, lastSync: prior?.lastSync ?? null,
-    counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0 },
+    counters: prior?.counters ?? { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: null },
     retiredRefusedAt: prior?.retiredRefusedAt ?? null, mintFailedAt: null,
     lastBootRecovery: prior?.lastBootRecovery ?? null,
     ...(prior?.retiring ? { retiring: prior.retiring } : {}),   // D-4410: a digest awaiting its append survives a re-mint
@@ -146,15 +150,24 @@ export function foreignUnderUnusableRetired(i: { retiredUnusable: boolean; state
 }
 
 // ── D-4412: a retired value presented on a box-token lane owes one forward rotation, bounded ────────────────
-/** `fresh` is the retired presentations the holder counted since the driver last asked. The state returned owes a
- *  rotation for the word `retired-presented`, or null when nothing new is owed: no new presentation; a rotation
+/** 4552: a retired presentation is unanswered while its stamp is newer than the last completed rotation (or no rotation
+ *  has completed). A `null` or absent stamp is never unanswered here: the driver stamps a pre-4552 count itself. */
+export function retiredUnanswered(s: BoxTokenState): boolean {
+  const at = s.counters.retiredPresentedAt;
+  return typeof at === 'number' && (s.lastRotationAt === null || at > s.lastRotationAt);
+}
+
+/** The input is `fresh`, the retired presentations the holder counted since the driver last asked, or a presentation
+ *  still unanswered (`retiredUnanswered`: 4552, so one made inside the bound below is owed once the bound passes). The
+ *  state returned owes a rotation for the word `retired-presented`, or null when nothing is owed: neither a new nor an
+ *  unanswered presentation; a rotation
  *  already owed, staged, handed out or promoting; or one already owed for this word within `HOLD_REPROBE_MS`. "Or
  *  running" needs no input of its own: the driver asks only between ticks, and ticks are single-flight, so a send or
  *  a promotion that runs has already left its mark in `pending` or `promoting` (review 352, F9). The server cannot tell
  *  the fleet from the holder of the leaked value, so this bound is the protection: the gate, the one-rotation-at-a-time rule and the backoff then apply as to every rotation. */
 export function oweForRetiredPresentation(i: { state: BoxTokenState; fresh: number; lastOwedAt: number | null; now: number }): BoxTokenState | null {
   const s = i.state;
-  if (i.fresh <= 0 || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
+  if ((i.fresh <= 0 && !retiredUnanswered(s)) || s.rotationOwed || s.pending.length > 0 || s.promoting !== null) return null;
   if (i.lastOwedAt !== null && i.now - i.lastOwedAt < HOLD_REPROBE_MS) return null;
   return owe(s, 'retired-presented');
 }

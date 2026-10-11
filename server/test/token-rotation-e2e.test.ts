@@ -1721,6 +1721,124 @@ describe('a retired presentation on a box-token lane owes one forward rotation, 
       expect(r.driver.view()).toMatchObject({ hold: 'agent-predates-op', rotationOwed: true, owedWhy: 'retired-presented' });
     } finally { await r.app.close(); }
   });
+
+  // ── 4552 (the operator's Decision 1, Option A): a retired presentation is stamped and owes a rotation until one answers it
+  /** The persisted counters, read from the file the driver writes (never a value or a digest). */
+  const countersOf = async (r: Rig) => (await stateOf(r)).counters;
+  /** Rewrite the persisted counters of a stopped box, the way an older build left them. */
+  const plantCounters = async (r: Rig, counters: Record<string, unknown>): Promise<void> => {
+    const file = tokPaths(r).state;
+    const j = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...j, counters }), { mode: 0o600 });
+  };
+
+  it('a retired presentation is stamped, answered by the rotation it owes, and the stamp outlives a restart (4552)', async () => {
+    const { r, L } = await idleAfterRetirement();
+    let r2: Rig | null = null;
+    try {
+      r.rows.linkUp = false;                                             // hold the gate so the owed rotation stands
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();
+      const owed = await stateOf(r);
+      expect(owed.rotationOwed).toBe(true);
+      expect(typeof owed.counters.retiredPresentedAt).toBe('number');
+      expect(owed.counters.retiredPresentedAt as number).toBeGreaterThan(owed.lastRotationAt as number);
+      const stamp = owed.counters.retiredPresentedAt as number;
+      r.rows.linkUp = true;
+      await r.driver.tick();                                             // the owed rotation completes
+      const answered = await stateOf(r);
+      expect(answered.rotationOwed).toBe(false);
+      expect(answered.lastRotationAt as number).toBeGreaterThanOrEqual(stamp);
+      expect(answered.counters.retiredPresentedAt).toBe(stamp);          // the stamp stays; the rotation answers it
+      await r.app.close();
+      r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+      await r2.driver.tick();
+      const after = await countersOf(r2);
+      expect(after.retiredPresented).toBe(0);                            // the count is since the server started
+      expect(after.retiredPresentedAt).toBe(stamp);                      // the stamp is lifetime
+      expect(r2.driver.view()).toMatchObject({ rotationOwed: false });
+      expect(r2.agent.calls).toBe(0);
+    } finally { if (r2 !== null) await r2.app.close(); else await r.app.close(); }
+  });
+
+  it('a presentation inside the re-probe hour is not lost: it owes once the hour has passed, with no further presentation (4552)', async () => {
+    const { r, L } = await idleAfterRetirement();
+    try {
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();                                             // one rotation is owed and completes
+      const c0 = r.agent.calls;
+      expect(r.driver.view()).toMatchObject({ rotationOwed: false });
+      r.clock.offset += 10 * 60_000;
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();
+      expect(r.agent.calls, 'inside the bound').toBe(c0);
+      await r.driver.tick();                                             // a quiet tick (fresh 0) inside the hour is bound too
+      expect(r.agent.calls, 'the bound holds for an unanswered stamp as it does for a new presentation').toBe(c0);
+      const inside = await stateOf(r);
+      expect(inside.counters.retiredPresentedAt as number).toBeGreaterThan(inside.lastRotationAt as number);
+      const stamp = inside.counters.retiredPresentedAt as number;
+      r.clock.offset += HOLD_REPROBE_MS;
+      await r.driver.tick();                                             // no presentation this time
+      expect(r.agent.calls, 'owed once the hour has passed').toBe(c0 + 1);
+      expect((await stateOf(r)).lastRotationAt as number).toBeGreaterThanOrEqual(stamp);
+      await r.driver.tick();
+      await r.driver.tick();
+      expect(r.agent.calls, 'answered: no more').toBe(c0 + 1);
+    } finally { await r.app.close(); }
+  });
+
+  it('a restart over an unanswered stamp owes one rotation on its first tick (4552)', async () => {
+    const { r, L } = await idleAfterRetirement();
+    let r2: Rig | null = null;
+    try {
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();
+      r.clock.offset += 10 * 60_000;
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();                                             // stamped inside the hour: unanswered, not owed
+      const inside = await stateOf(r);
+      expect(inside.counters.retiredPresentedAt as number).toBeGreaterThan(inside.lastRotationAt as number);
+      const calls = r.agent.calls;
+      await r.app.close();
+      r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+      r2.clock.offset = r.clock.offset + 1000;                           // the same driver clock the stamp was taken on
+      await r2.driver.tick();
+      expect(r2.agent.calls, 'one rotation, at once: a restart loses retiredOwedAt').toBe(1);
+      await r2.driver.tick();
+      await r2.driver.tick();
+      expect(r2.agent.calls).toBe(1);
+      expect(calls).toBeGreaterThan(0);
+    } finally { if (r2 !== null) await r2.app.close(); else await r.app.close(); }
+  });
+
+  it('a state from before 4552 with a count is stamped as unanswered, never cleared (4552)', async () => {
+    const { r } = await idleAfterRetirement();
+    await r.app.close();
+    await plantCounters(r, { previousPresented: 0, retiredPresented: 1 });   // no retiredPresentedAt key at all
+    const r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+    try {
+      r2.clock.offset = r.clock.offset + 1000;
+      r2.rows.linkUp = false;                                            // hold the gate so the owed word stands
+      await r2.driver.tick();
+      const c = await countersOf(r2);
+      expect(c.retiredPresented).toBe(0);
+      expect(typeof c.retiredPresentedAt).toBe('number');
+      expect(r2.driver.view()).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
+      expect(r2.printed.some((l) => l.includes('a retired presentation is still unanswered'))).toBe(true);
+    } finally { await r2.app.close(); }
+    // a legacy state with a count of 0 reads as clear: null, and nothing is owed
+    const { r: r3 } = await idleAfterRetirement();
+    await r3.app.close();
+    await plantCounters(r3, { previousPresented: 0, retiredPresented: 0 });
+    const r4 = await rig({ home: r3.home, fleetHome: r3.fleetHome });
+    try {
+      r4.clock.offset = r3.clock.offset + 1000;
+      r4.rows.linkUp = false;
+      await r4.driver.tick();
+      expect((await countersOf(r4)).retiredPresentedAt).toBeNull();
+      expect(r4.driver.view()).toMatchObject({ rotationOwed: false });
+    } finally { await r4.app.close(); }
+  });
 });
 
 // ── D-4414 (review 352 F2, F3, F6): no path retires or drops a value without its durable digest, and no failure makes

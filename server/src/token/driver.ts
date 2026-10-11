@@ -82,6 +82,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
   // owed flag is what survives a restart).
   private retiredSeen = 0;
   private retiredOwedAt: number | null = null;
+  // 4552: the retired count `noteCounters` last stamped against; a count above it is a new presentation, so a restart's
+  // 1-to-0 count change is never one.
+  private retiredStampSeen = 0;
   // D-4410: a retired digest whose append keeps failing is warned about once while it stands.
   private retiringWarned = false;
   private retiredUnreadableWarned = false;
@@ -234,7 +237,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     await this.loadPrevious();
     await this.settleRetiring();
     await this.drainDoorAlerts();
-    await this.noteCounters();
+    await this.noteCounters(this.now());
     await this.noteRetiredPresentations(this.now());
     await this.reread(this.now());
     this.noteUnaccounted(this.now());
@@ -575,11 +578,13 @@ export class BoxTokenDriver implements TokenRouteDriver {
     const total = this.deps.holder.counters().retired;
     const fresh = total - this.retiredSeen;
     this.retiredSeen = total;
-    if (this.state === null || fresh <= 0) return;
+    if (this.state === null) return;
     const next = oweForRetiredPresentation({ state: this.state, fresh, lastOwedAt: this.retiredOwedAt, now });
     if (next === null) return;
     this.retiredOwedAt = now;
-    this.warn('ccrc-server: box token: a retired value was presented on a box-token lane; a forward rotation is owed (retired-presented)');
+    this.warn(fresh > 0
+      ? 'ccrc-server: box token: a retired value was presented on a box-token lane; a forward rotation is owed (retired-presented)'
+      : 'ccrc-server: box token: a retired presentation is still unanswered; a forward rotation is owed (retired-presented)');
     await this.commit(next);
   }
 
@@ -667,7 +672,7 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (drop.length > 0 || misbound) await this.commit(this.mustState());
   }
 
-  private async noteCounters(): Promise<void> {
+  private async noteCounters(now: number): Promise<void> {
     const s = this.state;
     if (s === null) return;
     this.attributePending();
@@ -676,8 +681,16 @@ export class BoxTokenDriver implements TokenRouteDriver {
     if (s.previous !== null && !s.previous.currentPresented && c.matched.current > this.presentedBase) {
       next = { ...next, previous: { ...s.previous, currentPresented: true } };
     }
-    if (s.counters.previousPresented !== c.matched.previous || s.counters.retiredPresented !== c.retired) {
-      next = { ...next, counters: { previousPresented: c.matched.previous, retiredPresented: c.retired } };
+    // 4552: the stamp is the driver's clock at the tick that first saw the latest retired presentation. It survives a
+    // restart (the count does not), and a state written before 4552 with a count is unanswered, never clear.
+    const known = 'retiredPresentedAt' in s.counters;
+    const at = c.retired > this.retiredStampSeen ? now
+      : known ? (s.counters.retiredPresentedAt ?? null)
+      : s.counters.retiredPresented > 0 ? now : null;   // 4552: a pre-4552 count is unanswered, never clear
+    this.retiredStampSeen = c.retired;
+    if (s.counters.previousPresented !== c.matched.previous || s.counters.retiredPresented !== c.retired
+      || !known || s.counters.retiredPresentedAt !== at) {
+      next = { ...next, counters: { previousPresented: c.matched.previous, retiredPresented: c.retired, retiredPresentedAt: at } };
     }
     if (next !== s) await this.commit(next);
   }

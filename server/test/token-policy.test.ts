@@ -11,7 +11,7 @@ import {
   HOLD_REPROBE_MS, MAX_PENDING, PENDING_HARD_CAP, applySyncResult, backoffMs, bothRoleWriterArmed, claimVerdict, codeExpiresAt,
   confirmedGeneration, extendedGraceState, handedOutState, mintedState, nextAction, phaseOf, promotedState,
   pendingExitOpen, recoveryPlan, retireDue, rotationGate, stagedState,
-  adoptedState, foreignUnderUnusableRetired, oweForRetiredPresentation, retiringDigests, retiringLanded, retiringRecorded,
+  adoptedState, foreignUnderUnusableRetired, oweForRetiredPresentation, retiredUnanswered, retiringDigests, retiringLanded, retiringRecorded,
   type BoxTokenState, type ClaimDoorState, type FileMetaLike, type GateInput, type GateNode, type GateVerdict,
 } from '../src/token/policy.js';
 import { CLAIM_CODE_TTL_MS } from '../../shared/agent-protocol.js';
@@ -690,5 +690,49 @@ describe('D-4412: a retired presentation owes one forward rotation, bounded', ()
     const last = 8_000_000;
     expect(ask({ lastOwedAt: last, now: last + HOLD_REPROBE_MS - 1 })).toBeNull();
     expect(ask({ lastOwedAt: last, now: last + HOLD_REPROBE_MS })).toMatchObject({ owedWhy: 'retired-presented' });
+  });
+
+  // 4552: a retired presentation is stamped and stays owed until a completed rotation answers it.
+  describe('an unanswered stamp owes with no new presentation (4552)', () => {
+    const stamped = (at: number | null | undefined, lastRotationAt: number | null): BoxTokenState => {
+      const s = idle();
+      const counters: BoxTokenState['counters'] = { ...s.counters, retiredPresented: 1 };
+      if (at === undefined) delete counters.retiredPresentedAt; else counters.retiredPresentedAt = at;
+      return { ...s, lastRotationAt, counters };
+    };
+    const quiet = (state: BoxTokenState, over: Partial<Parameters<typeof oweForRetiredPresentation>[0]> = {}) =>
+      oweForRetiredPresentation({ state, fresh: 0, lastOwedAt: null, now: 10_000_000, ...over });
+
+    it('retiredUnanswered: true only for a numeric stamp newer than the last rotation (or with no rotation)', () => {
+      expect(retiredUnanswered(stamped(5000, null))).toBe(true);
+      expect(retiredUnanswered(stamped(5000, 4000))).toBe(true);
+      expect(retiredUnanswered(stamped(5000, 5000))).toBe(false);
+      expect(retiredUnanswered(stamped(5000, 6000))).toBe(false);
+      expect(retiredUnanswered(stamped(null, null))).toBe(false);
+      expect(retiredUnanswered(stamped(undefined, null))).toBe(false);
+    });
+
+    it('an unanswered stamp with nothing owed in this process owes retired-presented, with fresh 0', () => {
+      expect(quiet(stamped(9_000_000, 8_000_000))).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
+      expect(quiet(stamped(9_000_000, null))).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
+    });
+
+    it('the bound applies to this arm: an owe 10 minutes before now gives null, HOLD_REPROBE_MS after it owes', () => {
+      const s = stamped(9_000_000, 8_000_000);
+      expect(quiet(s, { lastOwedAt: 10_000_000 - 10 * 60_000 })).toBeNull();
+      expect(quiet(s, { lastOwedAt: 10_000_000 - HOLD_REPROBE_MS })).toMatchObject({ owedWhy: 'retired-presented' });
+    });
+
+    it('an answered stamp, a null stamp and an absent key give null', () => {
+      expect(quiet(stamped(8_000_000, 9_000_000))).toBeNull();
+      expect(quiet(stamped(9_000_000, 9_000_000))).toBeNull();
+      expect(quiet(stamped(null, null))).toBeNull();
+      expect(quiet(stamped(undefined, null))).toBeNull();
+    });
+
+    it('an unanswered stamp still owes nothing while a rotation is owed or in flight', () => {
+      expect(quiet({ ...stamped(9_000_000, null), rotationOwed: true, owedWhy: 'adopted' })).toBeNull();
+      expect(quiet({ ...stamped(9_000_000, null), promoting: { id: '1'.repeat(16) } })).toBeNull();
+    });
   });
 });
