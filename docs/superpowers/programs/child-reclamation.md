@@ -47,6 +47,27 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 11:32 — review 378 is accepted and closed `done`, and wave 8 fix round 1 is sent (4218). Run 348 is back at `working`.**
+  - **How it ran.** soft-meadow, on an Anthropic account with no swap: the held-out panel plus the plan's four lenses,
+    models literal. 108 agents, 0 errors, 132 mutation rows. SAFETY (Opus xhigh) found no path that acts on a
+    workspace other than the one judged, with 15 of 15 mutants red. The `leafKeptWord` move is a true move with no
+    null arm, and the HARD BOUNDARY is clean. Suites: the server's 641 files at 1/48; its reds are the known
+    main-reds, one load flake and CI's pools-prose case.
+  - **Findings.** No class (a); seven (b) and five (c). The rulings are `wave8/fix-round-1-rulings.md` in the evidence
+    archive. An attack (two Opus lenses, two Sonnet refuters per finding) kept 10 of 11 findings, all folded in.
+    - Prose: F1 (line-neutral), F2, F3, F4 (spec §5.7: the code's reason, and step 7's remaining job) and F5.
+    - F6: a derived `CHILD_RECLAIM_DEFER_WHYS` export drives the sweep-policy loop.
+    - F7: the census widened if it stays exact, otherwise its claim narrowed.
+    - Pins: F8 (`detailUnsafe`'s classes) and F9 (the carried `pin-failed` path).
+    - Records: F10 a residual; F11 the account's corrections.
+    - F12: CLAUDE.md's README size numeral re-measured. The boundary grows by that one numeral; claim 1141 had lapsed.
+  - **Numbers.** Four more were allocated for this round (4784, 4785, 4786 and 4787). 36 are assigned singly in the rulings
+    file: 26 substantive, and one entry for each task's plan-text corrections and extra pins, Tasks 1 to 10. There is
+    no reserve. `born-at-opens-through-generation` and `leaf-kept-phrase-second-table` are plan-identical and take no
+    number.
+  - **Run 358 is now in flight** (plain-ridge). The workspace-lifecycle conditional (4209) applies to whichever lands
+    second; the coordinator re-measures main before #349 merges.
+
 - **2026-10-11 08:49 — consent to workspace-lifecycle wave 6 (plan #350) for two edits in wave 7's files (4207, answered in 4208).**
   1. **ccd/ccd.** The `_WS_RCL_CRUMB` comment block above `_ws_reclaim_failed_json` changes only the sentence that says
      ws-expire's documents carry no key: `_ws_expire_locked` becomes a setter (true when resumed, false before its own
