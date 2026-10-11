@@ -984,7 +984,8 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
 
   it('wide node-bearing scope: bounded metadata leaves a useful deterministic common retained prefix, truthful shown/total, continuation, and a final JSON envelope inside OUTPUT_CAP', () => {
     const box = makeHistoryBox('ccrc-hist-rcl-wide-');
-    seedRoots(box, 100, (n) => `root ${n}: ${'payload '.repeat(35)}`);
+    const rootIds = seedRoots(box, 100, (n) => `root ${n}: ${'payload '.repeat(35)}`);
+    const wideNodeIds: string[] = [];
     const w = new DatabaseSync(hist(box, 'db', 'history.db'));
     try {
       const family = w.prepare('SELECT session_pk, generation FROM sessions WHERE ccrc_id = ? AND generation = ?').get(ID, G1) as { session_pk: number; generation: string };
@@ -1004,7 +1005,9 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
         const sessionPk = Number(row.lastInsertRowid);
         const uuid = `c${k.toString(16).padStart(7, '0')}-0000-4000-8000-${k.toString(16).padStart(12, '0')}`;
         epochs.run(sessionPk, uuid, 'fixture-wide', 'fixture', T0 + k, '/fixture/wide', '/fixture/wide', T0 + k);
-        nodes.run(`W${k.toString(16).padStart(20, '0')}`, sessionPk, transcript.transcript_pk, `wide ${k}: ${'payload '.repeat(35)}`, T0 + k, T0 + k, Date.now());
+        const nodeId = `N${k.toString(16).padStart(6, '0')}${'0'.repeat(14)}`;
+        wideNodeIds.push(nodeId);
+        nodes.run(nodeId, sessionPk, transcript.transcript_pk, `wide ${k}: ${'payload '.repeat(35)}`, T0 + k, T0 + k, Date.now());
       }
       w.exec('COMMIT');
       void family; void epoch;
@@ -1027,7 +1030,16 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
     const humanShown = Number(/shown (\d+) of 400/.exec(human.stdout)?.[1] ?? '-1');
     expect(humanShown, 'human and JSON retain the same shown count').toBe(items.length);
     expect(human.stdout).toContain(`shown ${items.length} of 400`);
-    for (const item of items) expect(human.stdout).toContain(item.node_id.slice(0, 6));
+    const display = libRead.displayPrefixes([...rootIds, ...wideNodeIds]);
+    const fullIdByDisplay = new Map([...display.entries()].map(([id, shown]) => [shown, id]));
+    const humanNodeIds = [...human.stdout.matchAll(/^    ([LN][0-9a-f]+) native_leaf\b/gm)].map((match) => {
+      const id = fullIdByDisplay.get(match[1]!);
+      expect(id, `human node prefix ${match[1]} resolves inside the widened fixture scope`).toBeDefined();
+      return id!;
+    });
+    expect(humanNodeIds.slice(0, items.length), 'human and JSON retain the same node ids in the same order').toEqual(
+      items.map((item) => item.node_id),
+    );
     const repeat = treeJson(box, ID, ['--project']);
     expect((repeat.json?.['items'] as { node_id: string }[]).map((item) => item.node_id), 'repeated reads retain the same prefix').toEqual(
       items.map((item) => item.node_id),
