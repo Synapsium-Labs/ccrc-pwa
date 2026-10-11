@@ -5629,3 +5629,50 @@ describe('child reclamation wave 9: the temp-root id predicate and its cap are d
       .map(rel)).toEqual([]);
   });
 });
+
+// CHILD RECLAMATION WAVE 9 (spec 2026-09-22 §5.10). APPENDED, for the reason the blocks above state: `session-hook.test.ts`'s
+// citation audit cites this file by line. The temp-root collector's lane SHIPS SHADOWED: until `$REG/collect-lane-live`
+// exists it audits and records "would collect" and never composes `ws-collect`. The file is the operator's to touch BY
+// HAND on the fleet box, as `expire-lane-live` is, so no line of shell names it. Its one TS spelling is its definer, an
+// L1 file that reaches no `node:` module and so cannot write it.
+describe('child reclamation wave 9: the collector lane’s live switch has no writer in the tree', () => {
+  const NAME = 'collect-lane-live';
+  const DEFINER = 'server/src/collectLane.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
+  // without spelling its name. The files whose code names the constant are the definer and the executor, which reads
+  // it from the registry listing alone, and neither reaches a write. The lane's feed and attention writes live in
+  // watch.ts, which never names the constant.
+  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/coord/collectTempRoot.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// CHILD RECLAMATION WAVE 9 (spec 2026-09-22 §5.10, "The population"). Task 1's wave-9 describe ("the temp-root id
+// predicate and its cap are defined once, in shared/api.ts") holds the predicate's one L0 definer, its forerunners'
+// absence, and the kept-leaf reader's and the store's use. This block adds the collector's two files: the lane and the
+// executor each import the L0 predicate and CALL it, so the population and the job's step 1 cannot drift to a private
+// copy under a new name, which a scan of declarations would not see. KNOWN WIDTH: a call kept beside a private copy
+// still passes here.
+describe('child reclamation wave 9: the collector’s lane and executor call the temp-root id predicate from L0', () => {
+  it('its readers import it: the lane and the executor import isTmpRootId from shared/api.js and call it', () => {
+    const code = (r: string): string => stallCode(path.join(ccrcRoot, r));
+    for (const r of ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts']) {
+      expect(code(r), r).toMatch(/\bisTmpRootId\s*\(/);
+      expect(code(r), `${r} does not import it from L0`)
+        .toMatch(/import\s*(?:type\s*)?\{[^}]*\bisTmpRootId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/);
+    }
+  });
+});

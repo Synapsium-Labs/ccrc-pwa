@@ -1,9 +1,9 @@
-// The collector's server and agent wiring (child reclamation spec 2026-09-22 §5.10, §8's wave 7), AGENT-FIRST and
-// INERT: the agent grants `ws-collect` on its confirmation token and nothing else new — `ws-audit --collect` rides the
-// existing `['ws-audit','--session']` prefix — and `CCD_ARGV` declares the two builders and `COLLECT_CAP` while NO
-// server source composes either. The collector's lane is the builders' one future caller, behind
-// `capSupported(COLLECT_CAP)`; the wave that adds it replaces the INERT case below with `verb-gate.test.ts`'s
-// `CAP_GATED_VERBS` entry for `ws-collect`.
+// The collector's server and agent wiring (child reclamation spec 2026-09-22 §5.10, §8's waves 7 and 9). The agent grants
+// `ws-collect` on its confirmation token and nothing else new: `ws-audit --collect` rides the existing
+// `['ws-audit','--session']` prefix. `CCD_ARGV` declares the two builders and `COLLECT_CAP`, and wave 9's lane is their ONE
+// composer, behind `capSupported(COLLECT_CAP)` (`verb-gate.test.ts`'s `CAP_GATED_VERBS` entry for `ws-collect`). The lane
+// ships shadowed behind `$REG/collect-lane-live`. The ONE LANE case below names the lane's files as the only holders, and
+// keeps the verb and its mode flag spelled exactly where wave 7 put them.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,7 +42,7 @@ describe('the builders — the exact argv, the confirmation token leading', () =
   });
 });
 
-describe('INERT — no server source composes the collector', () => {
+describe('ONE LANE — the collector’s lane is the only server source that composes the collector', () => {
   /** Whole-line and trailing `// ` comments dropped (whitelist-subset layer 4's cut), so prose naming a builder is
    *  never read as a call. An alias (`const A = CCD_ARGV`) or a table lookup is invisible to this scan, as it is to
    *  `verb-gate.test.ts`'s; it catches the honest composer, not someone routing around it. */
@@ -59,10 +59,10 @@ describe('INERT — no server source composes the collector', () => {
     expect(holders(/\bCCD_ARGV\s*\.\s*wsExpire\s*\(/)).toEqual(['coord/expireArchived.ts']);
   });
 
-  it('the builders, the verb, its mode flag and its token stand only where they are declared', () => {
-    expect(holders(/\bwsCollect(?:Audit)?\b/), 'a reference to either builder').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts']);
+  it('the builders and the token are named only where declared and by the lane’s files; the verb and its mode flag stand where they were', () => {
+    expect(holders(/\bwsCollect(?:Audit)?\b/), 'a reference to either builder: the declaration, and the lane’s executor').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts']);
     expect(holders(/['"`]ws-collect['"`]/), 'the verb as a literal: the builder, and the budget row').toEqual(['ccdargv.ts', 'remote/runner.ts']);
     expect(holders(/['"`]--collect['"`]/), 'the audit mode flag').toEqual(['ccdargv.ts']);
-    expect(holders(/\bCOLLECT_CAP\b|['"`]collect-v1['"`]/), 'the capability token: declared, read by nothing').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts', 'watch.ts']);
+    expect(holders(/\bCOLLECT_CAP\b|['"`]collect-v1['"`]/), 'the capability token: declared, and asked by the executor and by the pass').toEqual(['ccdargv.ts', 'coord/collectTempRoot.ts', 'watch.ts']);
   });
 });
