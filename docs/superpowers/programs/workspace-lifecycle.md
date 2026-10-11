@@ -1498,6 +1498,32 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     U/V/Z probe; and the unflagged clustering unchanged. Then the record's flag round-trip and fail-shut read; R3's
     residual; the pins, words, numbers and scope; and every mutation.
     Dispatched at 19:29 to `ccrc-pwa-amber-basin` on the first try (`skillState: present`), with workflow on.
+- **2026-10-11 20:45 — review 384 accepted and ruled (amber-basin's 4250). Run 358 is back at `working`; fix round 3 is sent
+  (mail 4252). R5 is REVERSED.**
+  - **The review:** report `.superpowers/sdd/coordinator-evidence/run358/review-384-3f5eefe0.md`, with two probe tests.
+    - The held-out panel ran in full: 30 agents, 0 unverified, 0 unexamined.
+    - Inside R2's wildcard phase, every attack held: release, leave and re-enter, a restart mid-wildcard, a second bad
+      record, fleet-doubt and all-unmeasurable, re-anchoring, and U/V/Z.
+    - Every mutation reproduces the worker's counts. Review run 384 closed `done`.
+  - **F1 (important).** In an ARMED lane, once the flags clear, or after a PLAIN restart over a readable record, a
+    restarted lane's population can differ from an unrestarted lane's. R5's "held wins over a re-anchored instant" is
+    not monotone, so the restarted lane can end a third coordinator during a pass the unrestarted lane's breaker holds.
+    Both probes reproduce it. This cannot happen in shadow.
+    - **Ruled (4824):** close R5's corner in the breaker. A held member clusters at its remembered instant AND at its
+      current anchor instant. Instants are never replaced. The breaker is monotone: a superset of `(id, instant)`
+      entries and flags never untrips it and never drops a member.
+    - Red-first: the two probes become lane cases, plus a policy property case and R5's corner as a policy case.
+    - **R5's out-of-scope ruling (17:20) is REVERSED, because its premise ("a lane never restarted behaves the same")
+      is measured false.**
+  - **F2:** no released build reads the held-set record, so a rollback below this release drops the hold (fails OPEN).
+    §12 says: arm the dead-coordinator lane only on a release that carries the reader, and remove
+    `$REG/dead-coordinator-lane-live` before rolling back below it. 4822's text and two comments are corrected.
+  - **F3** (a stale docstring) and **F6** (drop the once-per-row Set, which cannot go red): fixed.
+  - **F4 and F5** (commit-message red counts that do not reproduce; the tests do go red): record only. The squash
+    message carries the reviewer's counts.
+  - **CI:** server 5/5 was red on `ccrc-codex` L0d, which the PR does not touch and which is green alone. The fix
+    round's push re-runs it.
+  - Numbers 4824 and 4825 were allocated, with 4825 spare.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
