@@ -5,7 +5,7 @@
 // executes a read over the ReadContext cli.mjs hands it. It runs on the read-only handle and returns a
 // VerbResult for cli.mjs to render. Every cap, envelope, display prefix and lag below is a lib function.
 //
-// Every select names its columns, never SELECT * (C43). A column a later schema version added is named through
+// Every select names its columns, never a wildcard projection (C43). A column a later schema version added is named through
 // selectColumns(rc.version, …), so a store older than this code answers with that field null (§6.11).
 // Merged families and unconfirmed epochs are never read (§6.1, DM46).
 // Every recalled field is redacted on its raw text BEFORE any cut or escape, then wrapped in a <ccrc-recall>
@@ -14,8 +14,9 @@
 // It reads no environment variable and has no entry guard: cli.mjs imports it.
 import {
   EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
+  REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, queryTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
 } from './lib.mjs';
-import { childrenOf, parentOf } from './store.mjs';
+import { childrenOf, parentOf, probeFts5, blobPlainText, lineageEntries } from './store.mjs';
 
 /**
  * @typedef {object} ScopeFamily
@@ -285,4 +286,176 @@ export function runTree(rc, a) {
   const items = keptNodes.map((n) => nodeItem(n, parentById, family, rc));
   const next = nextFor(keptNodes.length);
   return { exit: EXIT.OK, header: head.line, blocks: retained.map((o) => o.text), items, shown: keptNodes.length, total: nodes.length, next };
+}
+
+// ── grep, the FTS path (W1-B2 Task 12; spec §8.4, §9.1) ───────────────────────────────────────────
+
+const REFERRER_ENTRY_COLS = Object.freeze(['entry_id', 'uuid', 'transcript_pk', 'ts_ms', 'role', 'provenance', 'tool_name', 'blob_id']);
+const FTS_MATCH = 'SELECT rowid, rank FROM blobs_fts WHERE blobs_fts MATCH :q';
+const GREP_FILTER = `r.transcript_pk IN (SELECT value FROM json_each(:tpks))
+      AND r.provenance IN (SELECT value FROM json_each(:provs))
+      AND (:role IS NULL OR r.role = :role)
+      AND (:tool IS NULL OR r.tool_name = :tool)
+      AND (:since IS NULL OR r.ts_ms >= :since)
+      AND (:before IS NULL OR r.ts_ms < :before)
+      AND (:nodes IS NULL OR r.entry_id IN (SELECT value FROM json_each(:nodes)))`;
+
+function grepVersioned(rc, table, alias, cols) {
+  return `(SELECT ${selectColumns(rc.version, table, cols, rc.schema)} FROM ${table}) AS ${alias}`;
+}
+
+function bindFor(sql, all) {
+  const out = {};
+  for (const [k, v] of Object.entries(all)) if (new RegExp(`:${k}(?![A-Za-z0-9_])`).test(sql)) out[k] = v;
+  return out;
+}
+
+function referrerSql(rc, matchSql) {
+  const e = (alias) => grepVersioned(rc, 'entries', alias, REFERRER_ENTRY_COLS);
+  return `WITH m(blob_id, rank) AS (${matchSql}),
+  refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank) AS (
+    SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank
+      FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id
+    UNION ALL
+    SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank
+      FROM m JOIN ${grepVersioned(rc, 'entry_variants', 'v', ['entry_id', 'blob_id'])} ON v.blob_id = m.blob_id
+        JOIN ${e('e')} ON e.entry_id = v.entry_id
+      WHERE v.blob_id <> e.blob_id
+    UNION ALL
+    SELECT 'sidecar', s.entry_id, se.uuid, s.transcript_pk, COALESCE(se.ts_ms, s.first_seen_ms), NULL, 'tool', NULL,
+        m.blob_id, s.name, m.rank
+      FROM m JOIN ${grepVersioned(rc, 'sidecars', 's', ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'])} ON s.blob_id = m.blob_id
+        LEFT JOIN ${grepVersioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id
+  )`;
+}
+
+function rankedSql(rc, matchSql, sort) {
+  return `${referrerSql(rc, matchSql)}
+  SELECT r.via AS via, r.entry_id AS entry_id, r.uuid AS uuid, r.ts_ms AS ts_ms, r.role AS role,
+      r.provenance AS provenance, r.blob_id AS blob_id, r.name AS name
+    FROM refs r WHERE ${GREP_FILTER}
+    ORDER BY ${ftsOrderBy(sort, 'r.ts_ms')}, r.blob_id, r.entry_id LIMIT :pool`;
+}
+
+function countSql(rc, matchSql) {
+  return `${referrerSql(rc, matchSql)}
+  SELECT count(*) AS n FROM refs r WHERE ${GREP_FILTER}`;
+}
+
+function grepRefusal(reason, hint = null) {
+  return { exit: REASONS[reason], reason, header: null, blocks: [], items: [], shown: 0, total: 0, next: null, ...(hint === null ? {} : { hint }) };
+}
+
+function grepNotFound() {
+  return { exit: EXIT.NOT_FOUND, header: null, blocks: [], items: [], shown: 0, total: 0, next: null, hint: SEARCH_REACH };
+}
+
+function grepHint(text) {
+  return text.startsWith('hint: ') ? text.slice('hint: '.length) : text;
+}
+
+/** A node id, prefix, or pasted line is always resolved against the scope before its entries are used. */
+export function resolveNodeInScope(rc, wanted) {
+  const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'session_pk'], rc.schema)} FROM nodes
+    WHERE node_id >= ? AND node_id < ?`).all(wanted, `${wanted}g`);
+  const mine = new Set(rc.scope.sessionPks);
+  const verdict = resolveScopedId({
+    wanted,
+    inScope: rows.filter((x) => mine.has(x.session_pk)).map((x) => x.node_id),
+    outOfScope: rows.filter((x) => !mine.has(x.session_pk)).map((x) => x.node_id),
+  });
+  switch (verdict.kind) {
+    case 'ok': return { ok: true, id: verdict.id };
+    case 'out-of-scope': return { ok: false, result: grepRefusal('out-of-scope') };
+    case 'not-found': return { ok: false, result: { exit: EXIT.NOT_FOUND, header: null, blocks: [], items: [], shown: 0, total: 0, next: null } };
+    case 'ambiguous': return { ok: false, result: grepRefusal('bad-args', `${wanted} names ${verdict.candidates.length} nodes in this scope (${verdict.candidates.slice(0, 5).join(', ')}); give more of the id`) };
+    default: return { ok: false, result: grepRefusal('bad-args') };
+  }
+}
+
+function nodeEntries(rc, raw) {
+  const ex = extractNodeId(raw);
+  if (!ex.ok) return { ok: false, result: grepRefusal('bad-args', grepHint(redactField(ex.error, rc.pairIdx))) };
+  const found = resolveNodeInScope(rc, ex.id);
+  if (!found.ok) return found;
+  return { ok: true, entries: lineageEntries(rc.db, found.id).map((x) => x.entryId) };
+}
+
+function grepParams(rc, a, nodes, extra) {
+  return {
+    ...extra,
+    tpks: JSON.stringify(rc.scope.transcriptPks),
+    provs: JSON.stringify(a.includeRecall ? INDEXED_PROVENANCE : SEARCHABLE_PROVENANCE),
+    role: a.role, tool: a.tool, since: a.sinceMs, before: a.beforeMs,
+    nodes: nodes === null ? null : JSON.stringify(nodes), pool: RANK_POOL, now_ms: rc.nowMs,
+  };
+}
+
+function rankedAndCounted(rc, matchSql, sort, all) {
+  try {
+    const rs = rankedSql(rc, matchSql, sort);
+    const cs = countSql(rc, matchSql);
+    const pool = rc.db.prepare(rs).all(bindFor(rs, all));
+    const total = Number(rc.db.prepare(cs).get(bindFor(cs, all)).n);
+    return { pool, total };
+  } catch (e) {
+    if (/no such table: (?:main\.)?blobs_fts\b/.test(String(e?.message))) return { result: grepRefusal('fts-pending') };
+    throw e;
+  }
+}
+
+function indexGate(rc) {
+  let probe;
+  try { probe = probeFts5(rc.db); } catch { probe = 'threw'; }
+  const table = probe === 'present'
+    && rc.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'").get() !== undefined;
+  const row = table
+    ? rc.db.prepare(`SELECT ${selectColumns(rc.version, 'derivation_state', ['completed_ms'], rc.schema)} FROM derivation_state
+        WHERE step = ? AND version = 1`).get(FTS_STEP)
+    : undefined;
+  return decideGrepIndex({ probe, table, completed: row !== undefined && row.completed_ms !== null });
+}
+
+function hitSnippet(rc, hit, terms) {
+  const b = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z', 'raw_len', 'pruned_ms'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(hit.blob_id);
+  if (b === undefined) return '';
+  if (b.z === null) return `content pruned on ${b.pruned_ms === null ? '?' : new Date(b.pruned_ms).toISOString().slice(0, 10)}`;
+  return snippetLine(displaySnippet(blobPlainText(b.z, hit.via === 'sidecar', rc.pairIdx, Number(b.raw_len)), terms, rc.pairIdx).replace(/\s+/g, ' '));
+}
+
+function renderHits(rc, pool, terms, a, total) {
+  const page = pool.slice(0, a.limit);
+  const snippets = page.map((h) => hitSnippet(rc, h, terms));
+  return {
+    exit: EXIT.OK, header: null,
+    blocks: page.map((h, i) => `  ${recallEnvelope({ src: h.provenance, id: h.uuid ?? `sidecar:${h.name}`, ts: h.ts_ms, role: h.role, text: snippets[i] })}`),
+    items: page.map((h, i) => ({ entry_uuid: h.uuid, node_id: null, ts_ms: h.ts_ms, role: h.role, provenance: h.provenance, snippet: snippets[i], sidecar: h.name, trust: 'untrusted' })),
+    shown: page.length, total, next: null,
+  };
+}
+
+/** `grep <words>` refuses plain regex syntax before preparing any statement, then scopes referrers before rank. */
+export function runGrep(rc, a, deps = {}) {
+  if (a.regex !== null) return grepRefusal('bad-args', '--regex is not served by this build');
+  const raw = a.words.join(' ');
+  const syntax = regexSyntaxIn(raw);
+  if (syntax !== null) return grepRefusal('regex-syntax', grepHint(regexSyntaxHint(escapeXmlText(redactField(raw, rc.pairIdx)), syntax)));
+  const gate = indexGate(rc);
+  if (!gate.ok) return grepRefusal(gate.reason);
+  let nodes = null;
+  if (a.node !== null) {
+    const ne = nodeEntries(rc, a.node);
+    if (!ne.ok) return ne.result;
+    nodes = ne.entries;
+  }
+  const found = rankedAndCounted(rc, FTS_MATCH, a.sort, grepParams(rc, a, nodes, { q: sanitizeFtsQuery(raw) }));
+  if ('result' in found) return found.result;
+  if (found.total === 0) return grepNotFound();
+  return renderHits(rc, found.pool, queryTerms(raw), a, found.total);
+}
+
+/** CLI dispatcher for grep's post-whitelist value grammar. */
+export function grepVerb(rc, argv) {
+  const g = parseGrepArgs(argv, rc.nowMs);
+  return g.ok ? runGrep(rc, g.args) : grepRefusal('bad-args');
 }

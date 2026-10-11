@@ -2065,7 +2065,7 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     } finally { db.close(); }
   });
 
-  it('DM28 and DM32 (store halves): summary, harness and recall-echo text is not indexed; operator, model and tool text is, a cat of <ccrc-recall included', () => {
+  it('DM28 and DM32 (store halves): summary and harness text is not indexed; operator, model and tool text is, a cat of <ccrc-recall and a recall echo included', () => {
     const box = IX.newBox('ccrc-hist-dm28-');
     IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
       IX.user(IX.uuidN(1), null, 'zqoperator words', 1),
@@ -2083,10 +2083,53 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     IX.sweepTwice(box);
     const db = openStoreRO(box);
     try {
-      expect({ operator: matches(db, 'zqoperator'), model: matches(db, 'zqmodel'), tool: matches(db, 'zqtool'), cat: matches(db, 'zqcatbody') })
-        .toEqual({ operator: 1, model: 1, tool: 1, cat: 1 });
-      expect({ harness: matches(db, 'zqharness'), meta: matches(db, 'zqmeta'), summary: matches(db, 'zqsummary'), echo: matches(db, 'zqecho') })
-        .toEqual({ harness: 0, meta: 0, summary: 0, echo: 0 });
+      // A recall echo is indexed for grep --include-recall, while default grep filters its provenance.
+      expect({ operator: matches(db, 'zqoperator'), model: matches(db, 'zqmodel'), tool: matches(db, 'zqtool'), cat: matches(db, 'zqcatbody'), echo: matches(db, 'zqecho') })
+        .toEqual({ operator: 1, model: 1, tool: 1, cat: 1, echo: 1 });
+      expect({ harness: matches(db, 'zqharness'), meta: matches(db, 'zqmeta'), summary: matches(db, 'zqsummary') })
+        .toEqual({ harness: 0, meta: 0, summary: 0 });
+      expect((db.prepare("SELECT count(*) AS n FROM entries WHERE provenance = 'recall-echo'").get() as { n: number }).n).toBe(1);
+    } finally { db.close(); }
+  });
+
+  it('history-recall-echo-indexed on a store B1 backfilled: the first B2 tick re-opens the completed backfill once, from 0, and indexes the old echo', () => {
+    const box = IX.newBox('ccrc-hist-echo-b1-');
+    IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+      IX.user(IX.uuidN(1), null, 'zqopener words', 1),
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01RB', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }], 2),
+      IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: 'toolu_01RB', content: 'zqoldecho words' }], 3),
+    ]));
+    IX.sweepTwice(box);
+    // The store as B1 leaves it: the echo's blob unindexed, the ('fts', 1) backfill complete, no meta fts_provenance.
+    const w = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const echo = (w.prepare("SELECT blob_id FROM entries WHERE provenance = 'recall-echo'").get() as { blob_id: number }).blob_id;
+      w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(echo);
+      w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(echo);
+      w.prepare("DELETE FROM meta WHERE k = 'fts_provenance'").run();
+    } finally { closeWriter(w); }
+    const doneAt = (db: DatabaseSync): number | null =>
+      (db.prepare("SELECT completed_ms FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { completed_ms: number | null }).completed_ms;
+    let db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqoldecho'), 'CONTROL: the echo is out of the index, as B1 left it').toBe(0);
+      expect(doneAt(db), 'CONTROL: the backfill is complete').not.toBeNull();
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    let first: number | null;
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqoldecho'), 'the re-opened backfill indexed the old echo').toBe(1);
+      expect(matches(db, 'zqopener'), 'and kept what was indexed').toBe(1);
+      expect(metaV(db, 'fts_provenance')).toBe('operator,model,tool,recall-echo');
+      expect(metaV(db, 'fts')).toBe('ready');
+      first = doneAt(db);
+      expect(first).not.toBeNull();
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(doneAt(db), 'once only: a tick on a recorded set re-opens nothing').toBe(first);
     } finally { db.close(); }
   });
 

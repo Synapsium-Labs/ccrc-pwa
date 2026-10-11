@@ -24,7 +24,7 @@ import {
 import { dirname } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, UUID_RE, WRITER_RE, historyPaths, newSha256 } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, blobOverDecodeCap, ftsTextOf, historyPaths, jsonWithinStructureBound, newSha256, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -855,6 +855,7 @@ export function clearDoneMarkers(home, version) {
   return removed;
 }
 
+
 /** Throws unless `next` keeps every table and column `prev` had: migrations add
  *  tables, columns and indexes, and never rename or drop (§6.11, DM44; D-4212
  *  history-cli-reads-store-version), because
@@ -1046,4 +1047,18 @@ export function childrenOf(db, nodeId) {
 export function parentOf(db, nodeId) {
   const r = db.prepare('SELECT node_id FROM node_children WHERE child_id = ? ORDER BY node_id LIMIT 1').get(nodeId);
   return r === undefined ? null : r.node_id;
+}
+
+/** A stored blob's plain text for synchronous read verbs. Sidecars use the same redacted index text as FTS; bodies
+ * remain plain for the caller's bounded display window. Malformed, oversized, or undecodable data stays absent. */
+export function blobPlainText(z, isSidecar, idx, rawLen) {
+  try {
+    if (isSidecar) return rawLen <= SIDECAR_WHOLE_MAX ? sidecarIndexText(unbrotli(z, rawLen), idx) : '';
+    if (blobOverDecodeCap(rawLen)) return '';
+    const bytes = unbrotli(z, rawLen);
+    if (!jsonWithinStructureBound(bytes)) return '';
+    return ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry');
+  } catch {
+    return '';
+  }
 }

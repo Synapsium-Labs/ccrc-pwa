@@ -747,3 +747,26 @@ export function decideRecallOffPreflight(i: { args: readonly string[]; generatio
 
 // --- W1-B2 Task 11: the --json scope's family bound
 export const SCOPE_FAMILIES_JSON_MAX: 3;
+
+// --- W1-B2 Task 12: grep's arguments and index gate
+export const INDEXED_PROVENANCE: readonly Provenance[];
+export const FTS_STEP: 'fts';
+export function reachSize(n: number): string;
+export const SEARCH_REACH: string;
+export type GrepIndexVerdict =
+  | { ok: true }
+  | { ok: false; exit: 5 | 7; reason: 'probe-failed' | 'fts5-absent' | 'fts-pending' };
+export function decideGrepIndex(i: { probe: 'present' | 'absent' | 'threw'; table: boolean; completed: boolean }): GrepIndexVerdict;
+export interface GrepArgs {
+  words: string[]; regex: string | null; role: string | null; tool: string | null; sinceMs: number | null; beforeMs: number | null;
+  node: string | null; sort: 'recency' | 'relevance' | 'hybrid'; limit: number; cursor: string | null; includeRecall: boolean; json: boolean;
+}
+export function parseGrepArgs(argv: readonly string[], nowMs: number): { ok: true; args: GrepArgs } | { ok: false; reason: 'bad-args' };
+
+// --- W1-B2 Task 12: a window of a longer text, redacted for display
+export function snippetSpan(text: string, terms: readonly string[]): { at: number; len: number };
+export const DISPLAY_WINDOW_MAX: number;
+export const DISPLAY_EDGE_SLACK: 32;
+export const DISPLAY_INEXACT_NOTE: string;
+export function redactDisplayWindow(text: string, from: number, to: number, idx: PairIndex): string;
+export function displaySnippet(text: string, terms: readonly string[], idx: PairIndex): string;

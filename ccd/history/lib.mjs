@@ -3761,39 +3761,7 @@ function cutBefore(s, n) {
  *  displayed window's indices. */
 export function snippetWindow(text, terms) {
   const content = String(text);
-  let at = -1;
-  let len = 0;
-  const candidates = unicode61Words(content);
-  const phraseTokens = (term) => unicode61Words(String(term).replace(/\*+$/, '')).map(({ text }) => text.toLowerCase());
-  // A phrase needs adjacent matching tokens; a single matching word is not its hit.
-  for (const term of terms) {
-    const raw = String(term);
-    const prefix = raw.endsWith('*');
-    const needles = phraseTokens(raw);
-    if (needles.length === 0) continue;
-    for (let index = 0; index < candidates.length; index += 1) {
-      const first = candidates[index];
-      const lowered = first.text.toLowerCase();
-      const firstMatches = prefix
-        ? lowered.startsWith(needles[0])
-        : porterStem(lowered) === porterStem(needles[0]);
-      if (!firstMatches || index + needles.length > candidates.length) continue;
-      let matches = true;
-      for (let offset = 1; offset < needles.length; offset += 1) {
-        if (porterStem(candidates[index + offset].text.toLowerCase()) !== porterStem(needles[offset])) {
-          matches = false;
-          break;
-        }
-      }
-      if (!matches) continue;
-      const matchAt = first.at;
-      const matchLen = candidates[index + needles.length - 1].end - matchAt;
-      if (at === -1 || matchAt < at || (matchAt === at && matchLen > len)) {
-        at = matchAt;
-        len = matchLen;
-      }
-    }
-  }
+  const { at, len } = snippetSpan(content, terms);
   if (at === -1) {
     const head = content.trim();
     return head.length <= 80 ? head : `${head.slice(0, cutBefore(head, 77)).trimEnd()}...`;
@@ -5871,4 +5839,431 @@ export function decideRecallOffPreflight(i) {
   if (i.generation === null) return { done: false, id: a[0] };
   if (i.generation.state === 'unreadable') return done('generation-unreadable');
   return done('bad-args');
+}
+
+
+// ── grep: arguments and the index gate (W1-B2 Task 12; spec §8.4, §9.1) ──────────────────────────────
+
+/** What the sweep indexes and grep may search: the searchable provenances plus recall-echo. Default grep
+ *  filters to SEARCHABLE_PROVENANCE at query time; `--include-recall` widens it to this list (§8.4
+ *  "Recall echoes … are stored, excluded from default search, and found with --include-recall").
+ *  D-4712 (history-recall-echo-indexed) */
+export const INDEXED_PROVENANCE = Object.freeze([...SEARCHABLE_PROVENANCE, 'recall-echo']);
+
+/** derivation_state's FTS step (§9.1): the sweep creates and backfills the FTS tables under ('fts', 1), and
+ *  grep's index gate reads the same row. Spelled once, here. */
+export const FTS_STEP = 'fts';
+
+/** A byte count as SEARCH_REACH spells it: whole MiB, else whole KiB, else bytes. */
+export function reachSize(n) {
+  if (n % 1048576 === 0) return `${n / 1048576} MiB`;
+  if (n % 1024 === 0) return `${n / 1024} KiB`;
+  return `${n} bytes`;
+}
+
+/** How far grep reaches. Grep's exit 3 prints these words on its hint line (recall.mjs `grepNotFound`), and the skill
+ *  (section 9) and README's history section quote them verbatim (spec §6.2 and §8.4, rev 3.5). The index holds at
+ *  most an entry's first ENTRY_FTS_BYTES and a sidecar's first SIDECAR_FTS_BYTES of redacted text (B1's
+ *  history-entry-index-text-windowed and history-sidecar-redact-before-cut), and --regex scans that same text (Task 14,
+ *  spec §8.4), so no grep form finds a word past it. The sentence is built from the two
+ *  constants, so changing a window changes it, and the skill's and README's pins go red until their text follows.
+ *  "At most": the cut can fall short of the window (cutIndexText's margin and trailing-run rules), and a read verb
+ *  never decompresses a sidecar past SIDECAR_WHOLE_MAX (D-4713 (history-read-skips-oversize-sidecar)). */
+export const SEARCH_REACH = `grep reaches at most the first ${reachSize(ENTRY_FTS_BYTES)} of each message's redacted text and the first ${reachSize(SIDECAR_FTS_BYTES)} of each tool output Claude Code saved to its own file; text past that is stored but not searched`;
+
+/** grep's index gate (§9.1, §8.3 exit 7), over what the reader measured:
+ *  - a probe that THREW is 5 probe-failed, never folded into absent;
+ *  - an absent module is 7 fts5-absent;
+ *  - no blobs_fts yet, or a backfill ('fts', 1) that has not completed, is 7 fts-pending, so a partial index
+ *    never answers 3 for text the store holds but has not indexed yet.
+ *  D-4714 (history-grep-pending-until-backfilled) */
+export function decideGrepIndex({ probe, table, completed }) {
+  if (probe === 'threw') return { ok: false, exit: EXIT.DB, reason: 'probe-failed' };
+  if (probe !== 'present') return { ok: false, exit: EXIT.FTS_UNAVAILABLE, reason: 'fts5-absent' };
+  if (!table || !completed) return { ok: false, exit: EXIT.FTS_UNAVAILABLE, reason: 'fts-pending' };
+  return { ok: true };
+}
+
+/** grep's option grammar (§8.4), over the argv after the verb word. Every value is checked here, before any
+ *  identity or store read. The scope flags (--project, --workspace, --session <id>) are consumed and passed
+ *  over: readContext decides them (Task 10). `--` ends the options, so a word that begins with `--` can be
+ *  searched. With --regex there are no positional words and no rank to sort by (Task 14). */
+export function parseGrepArgs(argv, nowMs) {
+  const a = {
+    words: [], regex: null, role: null, tool: null, sinceMs: null, beforeMs: null, node: null,
+    sort: 'recency', limit: GREP_LIMIT_DEFAULT, cursor: null, includeRecall: false, json: false,
+  };
+  const bad = { ok: false, reason: 'bad-args' };
+  const seen = new Set();
+  for (let i = 0; i < argv.length; i += 1) {
+    const t = argv[i];
+    if (t === '--') { a.words.push(...argv.slice(i + 1)); break; }
+    if (!t.startsWith('--')) { a.words.push(t); continue; }
+    if (seen.has(t)) return bad;
+    seen.add(t);
+    if (t === '--json') { a.json = true; continue; }
+    if (t === '--include-recall') { a.includeRecall = true; continue; }
+    if (t === '--project' || t === '--workspace') continue;
+    if (i + 1 >= argv.length) return bad;
+    i += 1;
+    const v = argv[i];
+    switch (t) {
+      case '--session': break;
+      case '--regex': a.regex = v; break;
+      case '--role': if (!/^[a-z]{1,16}$/.test(v)) return bad; a.role = v; break;
+      case '--tool': if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(v)) return bad; a.tool = v; break;
+      case '--since': a.sinceMs = parseTimeBound(v, nowMs); if (a.sinceMs === null) return bad; break;
+      case '--before': a.beforeMs = parseTimeBound(v, nowMs); if (a.beforeMs === null) return bad; break;
+      case '--node': a.node = v; break;
+      case '--sort': if (!GREP_SORTS.includes(v)) return bad; a.sort = v; break;
+      case '--limit': {
+        if (!/^[1-9][0-9]{0,5}$/.test(v) || Number(v) > GREP_LIMIT_MAX) return bad;
+        a.limit = Number(v);
+        break;
+      }
+      case '--cursor': a.cursor = v; break;
+      default: return bad;
+    }
+  }
+  if (a.regex === null ? a.words.length === 0 : a.words.length > 0 || a.sort !== 'recency') return bad;
+  return { ok: true, args: a };
+}
+
+// ── a window of a longer text, redacted for display (W1-B2 Task 12; coordinator rulings R-display-window, R-window2) ──
+// A read verb that shows a window of a longer text (grep's snippet, describe's excerpt and --full page, expand's cut,
+// page and outline input) redacts that window and ENTRY_REDACT_MARGIN on each side of it, never the whole text, so
+// one snippet's or one page's cost is bounded by the window, whatever the field's length: B1's D-4419
+// (`history-entry-index-text-windowed`) bound, carried to display (spec §8.3 and §8.4, rev 3.5).
+
+/** Where grep's snippet sits (§8.4, §11 P9): the earliest FTS5-compatible Porter-stem or explicit-prefix hit.
+ *  `at` is -1 when no term is found. The locator is Task 2's search, moved here so snippetWindow and
+ *  displaySnippet have one spelling and preserve raw code-unit spans. */
+export function snippetSpan(text, terms) {
+  const content = String(text);
+  let at = -1;
+  let len = 0;
+  const phraseTokens = (term) => unicode61Words(String(term).replace(/\*+$/, '')).map(({ text }) => text.toLowerCase());
+  for (const term of terms) {
+    const raw = String(term);
+    const prefix = raw.endsWith('*');
+    const needles = phraseTokens(raw);
+    if (needles.length === 0) continue;
+    const words = /[\p{L}\p{N}]+/gu;
+    for (let first = words.exec(content); first !== null; first = words.exec(content)) {
+      const lowered = first[0].toLowerCase();
+      const firstMatches = prefix
+        ? lowered.startsWith(needles[0])
+        : porterStem(lowered) === porterStem(needles[0]);
+      if (!firstMatches) continue;
+      // Probe the phrase with a separate cursor, so its later words remain candidate starts in the main scan.
+      const phrase = /[\p{L}\p{N}]+/gu;
+      phrase.lastIndex = first.index + first[0].length;
+      let last = first;
+      let matches = true;
+      for (let offset = 1; offset < needles.length; offset += 1) {
+        const next = phrase.exec(content);
+        if (next === null || porterStem(next[0].toLowerCase()) !== porterStem(needles[offset])) {
+          matches = false;
+          break;
+        }
+        last = next;
+      }
+      if (!matches) continue;
+      const matchAt = first.index;
+      const matchLen = last.index + last[0].length - matchAt;
+      if (at === -1 || matchAt < at || (matchAt === at && matchLen > len)) {
+        at = matchAt;
+        len = matchLen;
+      }
+      // This term's first matching candidate is its earliest; later starts cannot improve the global hit.
+      break;
+    }
+  }
+  return { at, len };
+}
+
+/** The longest window redactDisplayWindow cuts from its redacted context: with ENTRY_REDACT_MARGIN on each side, the
+ *  text read is at most DISPLAY_READINGS_MAX, where redactForDisplay IS redactForIndex (Task 7A). Every caller's
+ *  window is far shorter (EXPLORE_READ_MAX, 256 KiB, is the longest); a longer one is shown inexact, unless it is the
+ *  whole text (displayWindow's step 0). */
+export const DISPLAY_WINDOW_MAX = DISPLAY_READINGS_MAX - 2 * ENTRY_REDACT_MARGIN;
+
+/** How many characters that are not a mark a window edge's cut may sit short of a margin's own reading and still
+ *  count as exact (*chosen*). A JSON escape the edge splits (`\` on one side, `n` or `u0041` on the other, once per
+ *  decode level) is decoded in the read text but stays as written in the margin read alone; measured on the
+ *  prototype, 0 left 118 of 120 such page edges inexact and 32 left none. */
+export const DISPLAY_EDGE_SLACK = 32;
+
+/** The one line an inexact window is shown under (spec §8.3; coordinator ruling R-window2). It holds no `"`, `\`,
+ *  `<`, `>` or `&`, as REDACTED_MARK holds none, so it prints as it is in every form. */
+export const DISPLAY_INEXACT_NOTE = '[window redacted alone: every word of 8 or more characters masked]';
+
+/** A mark, or a maximal span of `[A-Za-z0-9_-]` characters, backslashes and ANSI sequences: the unit an inexact
+ *  window masks (coordinator ruling on final-check W1). A mark is matched first and kept whole. Each arm opens on a
+ *  character no other arm opens on, so the scan is linear (D-4306). */
+const DISPLAY_SPAN_RE = new RegExp(`${MARK_RE_SRC}|(?:[A-Za-z0-9_\\\\-]|(?:${ANSI_ESCAPE_RE.source}))+`, 'g');
+
+/** A run of 8 or more `[A-Za-z0-9_-]` characters: a word an inexact window masks. */
+const DISPLAY_WORD_RE = /[A-Za-z0-9_-]{8,}/;
+
+/** Whether a DISPLAY_SPAN_RE span holds a word of 8 or more characters in any of the readings redactForDisplay takes:
+ *  the span with its ANSI sequences removed (B1's joined reading), then each JSON-escape decode of that, up to
+ *  INDEX_UNESCAPE_PASSES, its sequences removed again. A value printed one coloured character at a time, or as one
+ *  JSON unicode escape per character, is a word only in those readings (final-check W1: the raw text's runs were 5
+ *  characters or fewer, and 30 of a value's 48 showed). Linear in the span, once per pass. */
+function spanHoldsWord(span) {
+  let s = span.replace(ANSI_ESCAPE_RE, '');
+  if (DISPLAY_WORD_RE.test(s)) return true;
+  for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
+    const u = unescapeJsonText(s);
+    if (u === s) return false;
+    s = u.replace(ANSI_ESCAPE_RE, '');
+    if (DISPLAY_WORD_RE.test(s)) return true;
+  }
+  return false;
+}
+
+/** A break between token spans: whitespace, or one of `"`, `'`, `` ` ``, `,`, `;` and `&`, the characters that end
+ *  a value in layer 2's `NAME=` form (coordinator ruling on final-check W2). */
+const TOKEN_BREAK_RE = /[\s"'`,;&]/;
+
+/** A code unit of a token span (`[^\s"'`,;&]`): a margin's far end moves off one, and a partial one that reaches the
+ *  window is dropped. Every `[A-Za-z0-9_-]` run lies inside one, and so does a `NAME=` value with `+` or `/` in it,
+ *  a dotted Bearer token or JWT, and a `?token=` value. */
+function isTokenByte(c) {
+  return !TOKEN_BREAK_RE.test(String.fromCharCode(c));
+}
+
+/** What ends an inexact window's edge drop: whitespace, or one of `"`, `'`, `` ` ``, `,` and `&`. */
+const INEXACT_EDGE_BREAK_RE = /[\s"'`,&]/;
+
+/** A code unit an inexact window's edge drop reads as part of a span: every run byte, the backslash, ESC and every
+ *  other character a colour sequence holds (`;` among its parameters), so an edge that cuts a word a sequence or an
+ *  escape split drops the window's part of it, however few of its characters are inside (final-check W1 and W3).
+ *  A superset of the readings spanHoldsWord takes, so the drop fails closed. */
+function isInexactEdgeByte(c) {
+  return !INEXACT_EDGE_BREAK_RE.test(String.fromCharCode(c));
+}
+
+/** `s` without its leading run of `pred` code units, by a forward scan (linear; B1's dropTrailingRun, mirrored). */
+function dropLeadingWhile(s, pred) {
+  let k = 0;
+  while (k < s.length && pred(s.charCodeAt(k))) k += 1;
+  return k === 0 ? s : s.slice(k);
+}
+
+/** `s` without its trailing run of `pred` code units, by a backward scan (linear, as B1's dropTrailingRun). */
+function dropTrailingWhile(s, pred) {
+  let k = s.length;
+  while (k > 0 && pred(s.charCodeAt(k - 1))) k -= 1;
+  return k === s.length ? s : s.slice(0, k);
+}
+
+/** `k` moved back off the low half of a surrogate pair, so no slice at `k` splits the pair. */
+function pairStart(t, k) {
+  if (k <= 0 || k >= t.length) return k;
+  const c = t.charCodeAt(k);
+  const p = t.charCodeAt(k - 1);
+  return c >= 0xdc00 && c <= 0xdfff && p >= 0xd800 && p <= 0xdbff ? k - 1 : k;
+}
+
+/** `s`'s length without its marks: the characters of `s` that came from text, not from a redaction. */
+function unmarkedLength(s) {
+  let n = s.length;
+  for (let k = s.indexOf(REDACTED_MARK); k !== -1; k = s.indexOf(REDACTED_MARK, k + REDACTED_MARK.length)) n -= REDACTED_MARK.length;
+  return n;
+}
+
+/** redactForDisplay's reading of `text` (at most DISPLAY_READINGS_MAX long, where redactForDisplay IS redactForIndex),
+ *  with the reading it chose: `levels` JSON-escape decodes, and `bound` when it reached INDEX_UNESCAPE_PASSES and
+ *  marked the escape-glued spans. redactForIndex's own loop, step for step, so the window knows which reading it is
+ *  cut from; Step 1's case `a whole text's window is redactForDisplay's, …` pins the two equal on every reading, through
+ *  each text's window inside a longer one (a whole text's window no longer reaches this function). */
+function displayReading(text, idx) {
+  let t = redactIndexReading(text, idx);
+  let keep = t;
+  let levels = 0;
+  for (let pass = 0; pass < INDEX_UNESCAPE_PASSES; pass += 1) {
+    const deeper = unescapeJsonText(t);
+    if (deeper === t) return { text: keep, levels, bound: false };
+    t = redactIndexReading(deeper, idx);
+    if (t !== deeper) {
+      keep = t;
+      levels = pass + 1;
+    }
+  }
+  return { text: markEscapeGluedSpans(t), levels: INDEX_UNESCAPE_PASSES, bound: true };
+}
+
+/** `text` read through exactly the reading displayReading chose for the text around it: the same decodes, each
+ *  redacted, and the escape-glued spans marked when that reading marked them. A margin read so is comparable with the
+ *  read text whichever reading the read text's content chose (finding V15: a margin read through its own choice stays
+ *  raw while the read text is shown decoded). */
+function readingAt(text, idx, levels, bound) {
+  let t = redactIndexReading(text, idx);
+  for (let pass = 0; pass < levels; pass += 1) t = redactIndexReading(unescapeJsonText(t), idx);
+  return bound ? markEscapeGluedSpans(t) : t;
+}
+
+/** A margin's reading, and the same with its ANSI sequences removed when that differs. B1's redactField returns its
+ *  joined reading, every sequence of the text removed, when that reading finds something anywhere in the text, so the
+ *  read text can drop a margin's sequences that the margin read alone keeps (finding V18). ANSI_ESCAPE_RE never takes a
+ *  mark's first character, so the removal leaves every mark whole. */
+function marginReadings(m) {
+  if (!ESCAPE_INTRODUCER_RE.test(m)) return [m];
+  const plain = m.replace(ANSI_ESCAPE_RE, '');
+  return plain === m ? [m] : [m, plain];
+}
+
+/** Where the window starts in `d`, the read text's reading, given the left margin's readings. Rank 1: the end of the
+ *  longest prefix `d` shares with one of them, when that is the whole margin. Otherwise the reading whose shared prefix
+ *  reaches furthest decides, when it is either of: rank 2, the start of the mark `d` holds where the two part, so a
+ *  match straddling the edge shows as its whole mark; rank 3, the end of the shared prefix, when what the margin has
+ *  left past it is at most DISPLAY_EDGE_SLACK characters and no mark (an escape the edge split). -1 when none holds:
+ *  the cut cannot be shown exact. */
+function windowStart(d, lefts) {
+  let best = -1;
+  let reach = -1;
+  for (const l of lefts) {
+    const n = Math.min(d.length, l.length);
+    let s = 0;
+    while (s < n && d.charCodeAt(s) === l.charCodeAt(s)) s += 1;
+    if (s === l.length) return s;
+    if (s <= reach) continue;
+    const j = d.lastIndexOf(REDACTED_MARK, s);
+    if (j !== -1 && j + REDACTED_MARK.length > s) {
+      best = j;
+      reach = s;
+    } else if (l.length - s <= DISPLAY_EDGE_SLACK && l.indexOf(REDACTED_MARK, s) === -1) {
+      best = s;
+      reach = s;
+    }
+  }
+  return best;
+}
+
+/** Where the window ends in `d`, at or past `s`, given the right margin's readings: windowStart's rule, mirrored, over
+ *  the longest shared suffix. -1 when none holds. */
+function windowEnd(d, rights, s) {
+  let best = -1;
+  let reach = -1;
+  for (const r of rights) {
+    const n = Math.min(d.length - s, r.length);
+    let k = 0;
+    while (k < n && d.charCodeAt(d.length - 1 - k) === r.charCodeAt(r.length - 1 - k)) k += 1;
+    const e = d.length - k;
+    if (k === r.length) return e;
+    if (k <= reach) continue;
+    const j = e > 0 ? d.lastIndexOf(REDACTED_MARK, e - 1) : -1;
+    if (j !== -1 && j + REDACTED_MARK.length >= e && j + REDACTED_MARK.length > s) {
+      best = j + REDACTED_MARK.length;
+      reach = k;
+    } else if (r.length - k <= DISPLAY_EDGE_SLACK && r.lastIndexOf(REDACTED_MARK, r.length - k - 1) === -1) {
+      best = e;
+      reach = k;
+    }
+  }
+  return best;
+}
+
+/** An inexact window (coordinator ruling R-window2, the fail-closed display, and the ruling on final-check W1):
+ *  `text[lo, hi)` alone, the span either window edge cuts dropped (isInexactEdgeByte, so a word joined across
+ *  sequences or escapes at the edge goes with it), through redactForDisplay, then every span (DISPLAY_SPAN_RE) that
+ *  holds a word of 8 or more characters in its own readings (spanHoldsWord) replaced by the mark. It reads the window
+ *  and the one character beyond each edge, and nothing else. */
+function inexactWindow(t, lo, hi, idx) {
+  let w = t.slice(lo, hi);
+  if (lo > 0 && isInexactEdgeByte(t.charCodeAt(lo - 1)) && isInexactEdgeByte(t.charCodeAt(lo))) w = dropLeadingWhile(w, isInexactEdgeByte);
+  if (hi < t.length && hi > 0 && isInexactEdgeByte(t.charCodeAt(hi - 1)) && isInexactEdgeByte(t.charCodeAt(hi))) w = dropTrailingWhile(w, isInexactEdgeByte);
+  return { text: redactForDisplay(w, idx).replace(DISPLAY_SPAN_RE, (s) => (s !== REDACTED_MARK && spanHoldsWord(s) ? REDACTED_MARK : s)), exact: false };
+}
+
+/** text[from, to) as a read verb shows it, and whether it was cut exactly (spec §8.3 and §8.4; coordinator rulings
+ *  R-display-window and R-window2). In order:
+ *  0. A window of the whole text (`from` at or before 0, `to` at or past its length) has no margin: it is
+ *     redactForDisplay's reading of the text, exact, whatever its length (final-check W4). Any other window longer
+ *     than DISPLAY_WINDOW_MAX is shown inexact.
+ *  1. The margins. [a, b) is the window widened by ENTRY_REDACT_MARGIN each way, each end moved off a token span
+ *     (`[^\s"'`,;&]`, isTokenByte) before anything is redacted, so the text read never starts or ends inside one: B1's
+ *     cut rule (D-4419's cutIndexText), widened from `[A-Za-z0-9_-]` runs to token spans (final-check W2), so a
+ *     `NAME=` value with `+` or `/`, a dotted Bearer token or JWT and a `?token=` value are read whole or not at all.
+ *     A token span longer than the margin stops the move at the window's edge, and that partial span is dropped from
+ *     what is shown, as B1's cut drops a trailing run. A match that is not one token span (it holds whitespace or a
+ *     break: a PEM body, a quoted value) and begins more than ENTRY_REDACT_MARGIN before the window is read only from
+ *     a break inside it: spec §8.3's residual.
+ *  2. The read text's reading. [a, b) is read through redactForDisplay's reading (displayReading), so every layer and
+ *     reading (the pairs, the belt, the context forms and their JSON-escaped form, the shapes, the escape readings,
+ *     the joined reading) sees the margins with the window. What is shown is a slice of that reading and nothing
+ *     else: a match straddling an edge was made whole there, so it shows only as its whole mark.
+ *  3. The cut back. Each margin is read alone through the SAME reading (readingAt: the decodes the read text took),
+ *     and also with its ANSI sequences removed (marginReadings). The window is what the read text leaves between the
+ *     longest prefix it shares with a left reading and the longest suffix it shares with a right one (windowStart,
+ *     windowEnd; of the readings, the one whose shared part reaches furthest). The cut is exact when that shared part
+ *     is the whole margin, or ends at a mark the read text holds there, or leaves at most DISPLAY_EDGE_SLACK
+ *     characters of an escape the edge split; and the slice then holds at
+ *     most (to - from) + 2 × DISPLAY_EDGE_SLACK characters that are not a mark, since a redaction, a decode and a
+ *     removed sequence each leave at most one character per character read.
+ *  4. Otherwise the cut cannot be shown exact (B1's redactField is not local: its joined reading returns the whole
+ *     text without its sequences), and the window is shown inexact (inexactWindow), never margin text.
+ *  Each reading reads at most (to - from) + 2 × ENTRY_REDACT_MARGIN characters, through at most
+ *  INDEX_UNESCAPE_PASSES + 1 redactions; an inexact window reads the window once more. No slice splits a surrogate
+ *  pair. `idx` is the read's pair index, with its belt (Task 7A). */
+function displayWindow(text, from, to, idx) {
+  const t = String(text);
+  const lo = pairStart(t, Math.max(0, Math.min(from, t.length)));
+  const hi = Math.max(lo, pairStart(t, Math.max(0, Math.min(to, t.length))));
+  if (lo === 0 && hi === t.length) return { text: redactForDisplay(t, idx), exact: true };
+  if (hi - lo > DISPLAY_WINDOW_MAX) return inexactWindow(t, lo, hi, idx);
+  let a = pairStart(t, Math.max(0, lo - ENTRY_REDACT_MARGIN));
+  while (a > 0 && a < lo && isTokenByte(t.charCodeAt(a - 1)) && isTokenByte(t.charCodeAt(a))) a += 1;
+  let b = pairStart(t, Math.min(t.length, hi + ENTRY_REDACT_MARGIN));
+  while (b < t.length && b > hi && isTokenByte(t.charCodeAt(b - 1)) && isTokenByte(t.charCodeAt(b))) b -= 1;
+  const leadCut = a > 0 && isTokenByte(t.charCodeAt(a - 1)) && isTokenByte(t.charCodeAt(a));
+  const tailCut = b < t.length && b > 0 && isTokenByte(t.charCodeAt(b - 1)) && isTokenByte(t.charCodeAt(b));
+  const read = displayReading(t.slice(a, b), idx);
+  const d = read.text;
+  const lefts = lo > a ? marginReadings(readingAt(t.slice(a, lo), idx, read.levels, read.bound)) : [''];
+  const rights = b > hi ? marginReadings(readingAt(t.slice(hi, b), idx, read.levels, read.bound)) : [''];
+  const s0 = windowStart(d, lefts);
+  const e0 = s0 === -1 ? -1 : windowEnd(d, rights, s0);
+  if (s0 === -1 || e0 === -1) return inexactWindow(t, lo, hi, idx);
+  const s = pairStart(d, s0);
+  const e = Math.max(s, pairStart(d, e0));
+  let out = d.slice(s, e);
+  if (leadCut) out = dropLeadingWhile(out, isTokenByte);
+  if (tailCut) out = dropTrailingWhile(out, isTokenByte);
+  if (unmarkedLength(out) > (hi - lo) + 2 * DISPLAY_EDGE_SLACK) return inexactWindow(t, lo, hi, idx);
+  return { text: out, exact: true };
+}
+
+/** text[from, to) as a read verb shows it (displayWindow): the exact cut of its redacted context, or an inexact window
+ *  under DISPLAY_INEXACT_NOTE's one line. Describe's excerpt and --full pages (Task 15) and expand's cuts, pages and
+ *  outline input (Task 16) call it; grep's snippet calls displayWindow itself. A window of the whole text
+ *  (`from` at or before 0, `to` at or past its length) has no margin, so it is always exact and IS redactForDisplay's
+ *  reading, whatever its length (displayWindow's step 0, ahead of the DISPLAY_WINDOW_MAX guard). */
+export function redactDisplayWindow(text, from, to, idx) {
+  const w = displayWindow(text, from, to, idx);
+  return w.exact ? w.text : `${DISPLAY_INEXACT_NOTE}\n${w.text}`;
+}
+
+/** How far past the snippet's hit, each way, grep's snippet reads its RAW window (*chosen*): SNIPPET_MAX, more than
+ *  snippetWindow's 24 before and 40 after, so a mark that shortens the text near the hit still leaves snippetWindow
+ *  its whole window. */
+const SNIPPET_READ = SNIPPET_MAX;
+
+/** grep's snippet over a body or sidecar of any length (§8.4, §11 P9; §8.3, rev 3.5):
+ *  the earliest hit is found in the RAW text (snippetSpan), the window around it is cut from its redacted context by
+ *  displayWindow, and snippetWindow cuts that window, `...` marking a cut at either end of the text. With no hit the
+ *  text's first 2 × SNIPPET_READ characters are read, and snippetWindow takes its first 80 of them. An inexact window
+ *  is shown with DISPLAY_INEXACT_NOTE ahead of the snippet, on the snippet's one line. */
+export function displaySnippet(text, terms, idx) {
+  const content = String(text);
+  const { at, len } = snippetSpan(content, terms);
+  const from = at === -1 ? 0 : Math.max(0, at - SNIPPET_READ);
+  const to = at === -1 ? Math.min(content.length, 2 * SNIPPET_READ) : Math.min(content.length, at + Math.max(len, 1) + SNIPPET_READ);
+  const w = displayWindow(content, from, to, idx);
+  const shown = snippetWindow(w.text, terms);
+  const prefix = from > 0 && !shown.startsWith('...') ? '...' : '';
+  const suffix = to < content.length && !shown.endsWith('...') ? '...' : '';
+  return `${w.exact ? '' : `${DISPLAY_INEXACT_NOTE} `}${prefix}${shown}${suffix}`;
 }

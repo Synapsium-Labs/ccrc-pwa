@@ -49,7 +49,7 @@ import {
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
   SECRET_SOURCES, SECRET_MIN_LEN, extractSecretValues, secretPairs, secretUnits, sessionHashPairs, makePairIndex, secretKindOf,
-  SEARCHABLE_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, entryIndexText, HEALTH_COUNTERS, RETENTION_STATE_META,
+  FTS_STEP, INDEXED_PROVENANCE, SIDECAR_FTS_BYTES, SIDECAR_REDACT_MARGIN, sidecarIndexText, ftsPhrase, entryIndexText, HEALTH_COUNTERS, RETENTION_STATE_META,
   makeProbeIndex, parseRederiveState, formatRederiveState, rederivePlan, phraseValues,
   makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
@@ -2724,7 +2724,8 @@ export function prepareLines(lines, ctx, st) {
       kept = { sha: sha256Bytes(keptJson), json: keptJson };
     }
     const provenance = provenanceOf(row, { pairedToolUse: paired });
-    // The index text, only for a searchable row and only when this tick may index (§6.2). A recall echo is
+    // The index text, only for an indexed row (the searchable three, and recall echoes, which only `grep --include-recall`
+    // reads: history-recall-echo-indexed) and only when this tick may index (§6.2). A recall echo is
     // classified by the paired tool_use in provenanceOf, never by its text (D-4197, history-recall-echo-by-structure).
     // The index text is a function of the STORED blob, not of the parsed row: canonicalJson sorts keys, and
     // ftsTextOf joins tool_use.input leaves in key order, so the row's own key order would give a text whose
@@ -2735,7 +2736,8 @@ export function prepareLines(lines, ctx, st) {
     // The length is the one compressMissing stores as the blob's raw_len (rowRawLen), and the gate precedes the parse.
     // `ftsOverCap` is the row-level word the gate sets: writeChunk marks such a blob indexed and inserts NO row, the state
     // the re-derivation leaves it in (B3M3, FU5); the text stays '' so the mark is still taken, and is never read as the flag.
-    const indexable = ctx.fts === true && SEARCHABLE_PROVENANCE.includes(provenance);
+    // History-recall-echo-indexed (W1-B2 Task 12): the searchable three plus recall echoes (read only by grep --include-recall).
+    const indexable = ctx.fts === true && INDEXED_PROVENANCE.includes(provenance);
     const ftsOverCap = indexable && blobOverDecodeCap(rowRawLen(json));
     const ftsText = !indexable ? null : ftsOverCap ? '' : ftsTextOf(JSON.parse(json), 'entry');
     rows.push({ kind: 'row', at, entry, provenance, sha: sha256Bytes(json), json, boundary, kept, ftsText, ftsOverCap });
@@ -3695,7 +3697,6 @@ export function secretsStep(db, ctx, secretFiles) {
 // scheduled pass.
 // ---------------------------------------------------------------------------------------------
 
-const FTS_STEP = 'fts';
 const MERGE_STEP = 'fts-merge';
 /** meta key: every FTS-indexed blob has been re-derived against every pair up to this redact_hashes rowid
  *  (rederiveFts, D-4344, history-reindex-mark-by-rederivation). Only a completed re-derivation moves it. */
@@ -3741,7 +3742,7 @@ const FTS_STMTS = new WeakMap();
 function ftsStmts(db) {
   let f = FTS_STMTS.get(db);
   if (f !== undefined) return f;
-  const ph = SEARCHABLE_PROVENANCE.map(() => '?').join(', ');
+  const ph = INDEXED_PROVENANCE.map(() => '?').join(', ');
   f = {
     ins: db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)'),
     del: db.prepare('DELETE FROM blobs_fts WHERE rowid = ?'),
@@ -3808,12 +3809,20 @@ export function ftsPrepare(db, nowMs) {
   const d = derivStmts(db);
   let state;
   if (probe === 'present') {
-    const row = d.sel.get(FTS_STEP, 1);
+    let row = d.sel.get(FTS_STEP, 1);
     if (row === undefined) {
       withTx(db, 'NORMAL', () => {
         createFtsTables(db);
         d.ins.run(FTS_STEP, 1, '0');
+        setMeta(db, 'fts_provenance', INDEXED_PROVENANCE.join(','));
       });
+    } else if (getMeta(db, 'fts_provenance') !== INDEXED_PROVENANCE.join(',')) {
+      // A completed B1 backfill missed recall echoes. Reopen once from zero while recording this provenance set.
+      withTx(db, 'NORMAL', () => {
+        db.prepare("UPDATE derivation_state SET completed_ms = NULL, cursor = '0' WHERE step = ? AND version = ?").run(FTS_STEP, 1);
+        setMeta(db, 'fts_provenance', INDEXED_PROVENANCE.join(','));
+      });
+      row = d.sel.get(FTS_STEP, 1);
     }
     state = row !== undefined && row.completed_ms !== null ? 'ready' : 'fts-pending';
   } else {
@@ -3852,7 +3861,7 @@ export async function deriveFts(db, ctx, budget) {
   const f = ftsStmts(db);
   let cursor = Number(row.cursor ?? 0);
   while (budgetLeft(budget)) {
-    const batch = f.backfill.all(cursor, ...SEARCHABLE_PROVENANCE, ...SEARCHABLE_PROVENANCE, BACKFILL_BATCH);
+    const batch = f.backfill.all(cursor, ...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE, BACKFILL_BATCH);
     const last = batch.length < BACKFILL_BATCH;
     let group = [];
     let chars = 0;

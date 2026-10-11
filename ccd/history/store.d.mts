@@ -2,7 +2,7 @@
 // compact-card.d.mts precedent). Hand-written; grows with each task. Nothing
 // machine-checks it against store.mjs, so every export is declared here.
 import type { DatabaseSync } from 'node:sqlite';
-import type { MigrationVerdict, Presence, StoreFacts } from './lib.mjs';
+import type { MigrationVerdict, PairIndex, Presence, StoreFacts } from './lib.mjs';
 
 export const CODEC: 'br5';
 export class StoreError extends Error {
@@ -18,6 +18,7 @@ export function withTx<T>(db: DatabaseSync, sync: 'NORMAL' | 'FULL', fn: () => T
 export function brotli(buf: Uint8Array): Buffer;
 export function unbrotli(z: Uint8Array, maxLen: number): Buffer;
 export function unbrotliPrefix(z: Uint8Array, max: number): Promise<{ bytes: Buffer; decoded: number; whole: boolean }>;
+export function blobPlainText(z: Uint8Array, isSidecar: boolean, idx: PairIndex | null, rawLen: number): string;
 export function measuredSize(db: DatabaseSync, dbPath: string): number;
 export function getMeta(db: DatabaseSync, k: string): string | null;
 export function setMeta(db: DatabaseSync, k: string, v: string | number): void;

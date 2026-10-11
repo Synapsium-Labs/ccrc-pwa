@@ -43,6 +43,9 @@ import * as libOps from '../../ccd/history/lib.mjs';
 import * as libReplay from '../../ccd/history/lib.mjs';
 import * as replayStore from '../../ccd/history/store.mjs';
 import { DatabaseSync as ReplaySqlite } from 'node:sqlite';
+import * as libGrep from '../../ccd/history/lib.mjs';
+import { randomBytes as libGrepRandom } from 'node:crypto';
+import { spawnSync as libGrepSpawn } from 'node:child_process';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -5069,5 +5072,441 @@ describe('lib: nodeIndexTexts and redactForDisplay read every escape level the i
     const fields = { gist: `zqgist ${glued}`, topics: [], refs: [] };
     expect(libRedact.nodeIndexTexts(fields, probe)).toEqual(libRedact.nodeIndexTexts(fields, idx));
     expect(probe.probe.hits, 'the owed pair was asked and answered yes').toBeGreaterThan(0);
+  });
+});
+
+describe('lib: grep\'s arguments and index gate (W1-B2 task 12)', () => {
+  const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
+
+  it('INDEXED_PROVENANCE is the searchable three plus recall-echo, frozen, each a PROVENANCE word; FTS_STEP is the backfill\'s step', () => {
+    expect([...libGrep.INDEXED_PROVENANCE]).toEqual([...libGrep.SEARCHABLE_PROVENANCE, 'recall-echo']);
+    expect(Object.isFrozen(libGrep.INDEXED_PROVENANCE)).toBe(true);
+    for (const p of libGrep.INDEXED_PROVENANCE) expect(libGrep.PROVENANCE).toContain(p);
+    expect(libGrep.INDEXED_PROVENANCE).not.toContain('summary');
+    expect(libGrep.INDEXED_PROVENANCE).not.toContain('harness');
+    expect(libGrep.FTS_STEP).toBe('fts');
+  });
+
+  it('decideGrepIndex: a thrown probe is 5 probe-failed, absent is 7 fts5-absent, no table or a backfill still running is 7 fts-pending', () => {
+    const d = libGrep.decideGrepIndex;
+    expect(d({ probe: 'threw', table: true, completed: true })).toEqual({ ok: false, exit: 5, reason: 'probe-failed' });
+    expect(d({ probe: 'absent', table: true, completed: true })).toEqual({ ok: false, exit: 7, reason: 'fts5-absent' });
+    expect(d({ probe: 'present', table: false, completed: false })).toEqual({ ok: false, exit: 7, reason: 'fts-pending' });
+    expect(d({ probe: 'present', table: true, completed: false })).toEqual({ ok: false, exit: 7, reason: 'fts-pending' });
+    expect(d({ probe: 'present', table: true, completed: true })).toEqual({ ok: true });
+    // Every refusal's word maps to its exit in REASONS (C16's rule, held here for the gate's three words).
+    for (const v of [d({ probe: 'threw', table: false, completed: false }), d({ probe: 'absent', table: false, completed: false }),
+      d({ probe: 'present', table: true, completed: false })]) {
+      expect(v.ok).toBe(false);
+      if (!v.ok) expect(libGrep.REASONS[v.reason]).toBe(v.exit);
+    }
+  });
+
+  it('parseGrepArgs: the defaults, every value checked, the scope flags passed over, and -- ending the options', () => {
+    const ok = (argv: string[]) => {
+      const r = libGrep.parseGrepArgs(argv, NOW);
+      expect(r.ok, argv.join(' ')).toBe(true);
+      return r.ok ? r.args : null;
+    };
+    expect(ok(['zqword'])).toEqual({
+      words: ['zqword'], regex: null, role: null, tool: null, sinceMs: null, beforeMs: null, node: null,
+      sort: 'recency', limit: libGrep.GREP_LIMIT_DEFAULT, cursor: null, includeRecall: false, json: false,
+    });
+    expect(ok(['a', 'b', '--json', '--include-recall', '--sort', 'hybrid', '--limit', String(libGrep.GREP_LIMIT_MAX),
+      '--role', 'user', '--tool', 'Bash', '--node', 'L0123456789abcdef0123', '--cursor', 'abc', '--project'])).toEqual({
+      words: ['a', 'b'], regex: null, role: 'user', tool: 'Bash', sinceMs: null, beforeMs: null, node: 'L0123456789abcdef0123',
+      sort: 'hybrid', limit: libGrep.GREP_LIMIT_MAX, cursor: 'abc', includeRecall: true, json: true,
+    });
+    expect(ok(['--session', 'claude-b-demo', '--workspace', 'zq'])?.words).toEqual(['zq']);
+    expect(ok(['--', '--force', 'x'])?.words).toEqual(['--force', 'x']);
+    expect(ok(['--since', '2d', 'zq'])?.sinceMs).toBe(libGrep.parseTimeBound('2d', NOW));
+    expect(ok(['--before', '2026-10-01T00:00:00Z', 'zq'])?.beforeMs).toBe(libGrep.parseTimeBound('2026-10-01T00:00:00Z', NOW));
+    expect(ok(['--regex', 'zq[0-9]+x'])).toMatchObject({ words: [], regex: 'zq[0-9]+x', sort: 'recency' });
+    for (const bad of [
+      [], ['--json'], ['--limit', '0', 'zq'], ['--limit', String(libGrep.GREP_LIMIT_MAX + 1), 'zq'], ['--limit', 'x', 'zq'],
+      ['--sort', 'best', 'zq'], ['--since', 'yesterday', 'zq'], ['--before', 'soon', 'zq'], ['--role', 'User!', 'zq'],
+      ['--tool', 'a b', 'zq'], ['--json', '--json', 'zq'], ['--frob', 'zq'], ['zq', '--role'],
+      ['--regex', 'x', 'word'], ['--regex', 'x', '--sort', 'relevance'],
+    ]) {
+      expect(libGrep.parseGrepArgs(bad, NOW), JSON.stringify(bad)).toEqual({ ok: false, reason: 'bad-args' });
+    }
+  });
+
+  it("SEARCH_REACH says how far grep reaches, from the two window constants (B1's history-entry-index-text-windowed and history-sidecar-redact-before-cut)", () => {
+    expect(libGrep.ENTRY_FTS_BYTES).toBe(1024 * 1024);
+    expect(libGrep.SIDECAR_FTS_BYTES).toBe(512 * 1024);
+    expect(libGrep.SEARCH_REACH).toBe("grep reaches at most the first 1 MiB of each message's redacted text and the first 512 KiB of each tool output Claude Code saved to its own file; text past that is stored but not searched");
+    expect([libGrep.reachSize(3 * 1024 * 1024), libGrep.reachSize(1536 * 1024), libGrep.reachSize(1000)])
+      .toEqual(['3 MiB', '1536 KiB', '1000 bytes']);
+  });
+});
+
+describe('lib: a window of a longer text, redacted for display (W1-B2 task 12; coordinator rulings R-display-window and R-window2)', () => {
+  /** A pair-only value: makePairIndex without belt units, so only the pair, shape and escape-reading layers can mask it. */
+  const V = libGrepRandom(32).toString('hex');
+  const idx = libGrep.makePairIndex(libGrep.secretPairs([V]).pairs);
+  /** No value at all: only the shape and context layers can redact. */
+  const none = libGrep.makePairIndex(libGrep.secretPairs([]).pairs);
+  const M = libGrep.REDACTED_MARK;
+  const NOTE = libGrep.DISPLAY_INEXACT_NOTE;
+  // Built from code points, so nothing here is an escape in transit.
+  const ESC = String.fromCharCode(27);
+  const BS = String.fromCharCode(92);
+  const Q = String.fromCharCode(34);
+  const NL = String.fromCharCode(10);
+  const alnum = (n: number): string => Array.from(libGrepRandom(n), (b) => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[b % 62]!).join('');
+  /** Each text holding 8 consecutive characters of `secret`, by index. */
+  const pieces = (texts: readonly string[], secret: string): string[] => {
+    const out: string[] = [];
+    texts.forEach((t, i) => {
+      for (let k = 0; k + 8 <= secret.length; k += 1) if (t.includes(secret.slice(k, k + 8))) { out.push(`#${i}: ${secret.slice(k, k + 8)}`); break; }
+    });
+    return out;
+  };
+  /** Whether a window was shown inexact: its first line is DISPLAY_INEXACT_NOTE. */
+  const inexact = (s: string): boolean => s.startsWith(`${NOTE}${NL}`);
+  /** The escaped-JSON command of findings V15 and V37: the key in quotes a decode removes, the value four words. */
+  const CURL = `curl -d '{${BS}${Q}password${BS}${Q}: ${BS}${Q}correct horse battery staple${BS}${Q}}'`;
+
+  it('redactDisplayWindow: text with nothing to redact comes back as its slice, and pages of it join to the text exactly', () => {
+    const words = Array.from({ length: 30_000 }, (_, i) => `w${i % 97}`).join(' ');
+    for (const [f, t] of [[0, 10], [5, 5], [1234, 1300], [40_000, 58_000], [words.length - 7, words.length + 9]] as const) {
+      expect(libGrep.redactDisplayWindow(words, f, t, idx), `[${f}, ${t})`).toBe(words.slice(f, t));
+    }
+    let joined = '';
+    for (let f = 0; f < words.length; f += 18_000) joined += libGrep.redactDisplayWindow(words, f, f + 18_000, idx);
+    expect(joined === words, 'pages cut inside words join exactly').toBe(true);
+  });
+
+  it('a value or a PEM block straddling either window edge leaves no piece on either side; the value\'s mark is shown whole, and the cut is exact', () => {
+    const text = `${'p '.repeat(40_000)}${V} ${'q '.repeat(40_000)}`;
+    const at = text.indexOf(V);
+    for (let cut = at - 2; cut <= at + V.length + 2; cut += 1) {
+      const before = libGrep.redactDisplayWindow(text, cut - 500, cut, idx);
+      const after = libGrep.redactDisplayWindow(text, cut, cut + 500, idx);
+      expect(pieces([before, after, before + after], V), `cut at ${cut - at}`).toEqual([]);
+      expect(before + after, `cut at ${cut - at}: the mark is shown on one side`).toContain(M);
+      expect(inexact(before) || inexact(after), `cut at ${cut - at}: both sides are cut exactly`).toBe(false);
+    }
+    // A PEM block is a shape, matched only with its BEGIN line: a window inside its body sees that line only in the margin.
+    const LINES = [`MII${alnum(40)}`, alnum(43), alnum(43)];
+    const PEM = ['-----BEGIN ', 'RSA PRIVATE KEY-----\n', LINES.join('\n'), '\n-----END RSA PRIVATE KEY-----'].join('');
+    const pem = `${'p '.repeat(40_000)}${PEM}\n${'q '.repeat(40_000)}`;
+    const p0 = pem.indexOf(PEM);
+    const shown: string[] = [];
+    for (let cut = p0; cut <= p0 + PEM.length; cut += 7) {
+      shown.push(libGrep.redactDisplayWindow(pem, cut - 500, cut, idx), libGrep.redactDisplayWindow(pem, cut, cut + 500, idx));
+    }
+    for (const l of LINES) expect(pieces(shown, l), l.slice(0, 6)).toEqual([]);
+  });
+
+  it('a pair-only value behind a literal \\n is masked through the escape readings: inside the window, across either edge, and in a JSON key', () => {
+    const glued = JSON.stringify({ text: `\n${V}` });
+    const keyed = JSON.stringify({ headers: { [`\n${V}`]: 'x' } });
+    const text = `${'r '.repeat(40_000)}x ${glued} y ${keyed} ${'s '.repeat(40_000)}`;
+    const g = text.indexOf(V);
+    expect(pieces([libGrep.redactField(text.slice(g - 10, g + 80), idx)], V), 'CONTROL: one reading cannot separate it').toHaveLength(1);
+    for (let cut = g - 4; cut <= g + V.length + 2; cut += 1) {
+      const sides = [libGrep.redactDisplayWindow(text, cut - 300, cut, idx), libGrep.redactDisplayWindow(text, cut, cut + 300, idx)];
+      expect(pieces(sides, V), `cut at ${cut - g}`).toEqual([]);
+    }
+    const k = text.indexOf('headers');
+    const key = libGrep.redactDisplayWindow(text, k - 50, k + 120, idx);
+    expect(key, 'CONTROL: the window holds the key').toContain('headers');
+    expect(pieces([key], V)).toEqual([]);
+  });
+
+  it('a [A-Za-z0-9_-] run longer than the margin that reaches the window is dropped, never shown in part; no slice splits a surrogate pair', () => {
+    const text = `head ${'A'.repeat(3 * libGrep.ENTRY_REDACT_MARGIN)} tail`;
+    expect(libGrep.redactDisplayWindow(text, 100_000, 100_050, idx)).toBe('');
+    expect(libGrep.redactDisplayWindow(text, 0, 20, idx)).toBe('head ');
+    const P = String.fromCharCode(0xd83d, 0xde00);
+    const astral = `${'a '.repeat(10)}${P.repeat(50)}${' b'.repeat(10)}`;
+    /** Whether `s` holds half a surrogate pair, by code units (no regex escapes in transit). */
+    const lone = (s: string): boolean => {
+      for (let k = 0; k < s.length; k += 1) {
+        const c = s.charCodeAt(k);
+        if (c >= 0xd800 && c <= 0xdbff) {
+          const n = s.charCodeAt(k + 1);
+          if (!(n >= 0xdc00 && n <= 0xdfff)) return true;
+          k += 1;
+        } else if (c >= 0xdc00 && c <= 0xdfff) return true;
+      }
+      return false;
+    };
+    for (let f = 0; f < astral.length; f += 1) {
+      for (const w of [1, 2, 3, 7]) expect(lone(libGrep.redactDisplayWindow(astral, f, f + w, idx)), `[${f}, ${f + w})`).toBe(false);
+    }
+  });
+
+  it('displaySnippet finds the hit in the raw text and redacts only the window around it: a value straddling the snippet\'s cut leaves no piece', () => {
+    const far = `${'v '.repeat(100_000)}zqhit after ${V} end ${'w '.repeat(10)}`;
+    expect(libGrep.snippetSpan(far, ['zqhit']).at).toBe(far.indexOf('zqhit'));
+    expect(libGrep.displaySnippet(far, ['zqhit'], idx), 'what the whole text redacted would show').toBe(libGrep.snippetWindow(libGrep.redactField(far, idx), ['zqhit']));
+    expect(libGrep.displaySnippet(far, ['zqhit'], idx)).toContain(`zqhit after ${M} end`);
+    const outs: string[] = [];
+    const raws: string[] = [];
+    for (let pad = 20; pad <= 50; pad += 1) {
+      const t = `zqhit ${'u'.repeat(pad)} ${V} tail ${'z '.repeat(200)}`;
+      outs.push(libGrep.displaySnippet(t, ['zqhit'], idx));
+      raws.push(libGrep.snippetWindow(t, ['zqhit']));
+    }
+    expect(pieces(raws, V).length, 'CONTROL: a cut of the raw text leaves pieces of the value').toBeGreaterThan(0);
+    expect(pieces(outs, V)).toEqual([]);
+  });
+
+  it('displaySnippet costs the window, not the body: a 16 MiB escape-dense body\'s snippet stays under 5,000 ms and 512 MiB of RSS (a child process)', () => {
+    // The body is built in the child from code points, so nothing here is an escape in transit. ESC and literal
+    // backslash escapes on every run make each JSON-escape reading of the whole text a full rewrite. Each unit ends in
+    // a space, so the margins' far ends find a token break (final-check W2's rule) and both margins are read whole:
+    // without it the body is one token span, the margin's end moves back to the window, and nothing is measured.
+    const SCRIPT = [
+      'const L = await import(process.argv[1]);',
+      "const { randomBytes } = await import('node:crypto');",
+      "const idx = L.makePairIndex(L.secretPairs([randomBytes(32).toString('hex')]).pairs);",
+      'const E = String.fromCharCode(27);',
+      'const B = String.fromCharCode(92);',
+      "const unit = E + '[31mzq' + B + 'nab' + E + '[0m' + B + 't ';",
+      "const body = 'zqdense12 start ' + unit.repeat(Math.floor((16 * 1024 * 1024 - 64) / unit.length));",
+      'const t0 = performance.now();',
+      "const out = L.displaySnippet(body, ['zqdense12'], idx);",
+      'process.stdout.write(JSON.stringify({ ms: Math.round(performance.now() - t0), rss: process.resourceUsage().maxRSS, chars: body.length, head: out.slice(0, 15) }));',
+    ].join('\n');
+    const lib = new URL('../../ccd/history/lib.mjs', import.meta.url).href;
+    const r = libGrepSpawn(process.execPath, ['--no-warnings', '--input-type=module', '-e', SCRIPT, lib], { encoding: 'utf8', timeout: 240_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const m = JSON.parse(r.stdout) as { ms: number; rss: number; chars: number; head: string };
+    expect(m.chars, 'CONTROL: the body is 16 MiB').toBeGreaterThan(16 * 1024 * 1024 - 64);
+    expect(m.head, 'CONTROL: the snippet shows the hit').toBe('zqdense12 start');
+    expect(m.ms < 5_000, `displaySnippet took ${m.ms} ms`).toBe(true);
+    expect(m.rss < 524_288, `peak RSS ${m.rss} KiB`).toBe(true);
+  }, 300_000);
+
+  it('a whole text\'s window is redactForDisplay\'s, and so is that text\'s window inside a longer one: every layer and reading at once, the bound\'s marked spans included', () => {
+    let nested = `\n${V}`;
+    for (let k = 0; k < 9; k += 1) nested = JSON.stringify(nested);
+    const texts = [
+      `plain ${V} text`, JSON.stringify({ a: `\n${V}`, b: 'x' }), nested,
+      `x ${V.slice(0, 12)}${ESC}[31m${V.slice(12)}${ESC}[0m y`, `${ESC}[1mbold${ESC}[0m nothing`, CURL,
+    ];
+    texts.forEach((t, i) => expect(libGrep.redactDisplayWindow(t, 0, t.length, idx), `text #${i}`).toBe(libGrep.redactForDisplay(t, idx)));
+    // A whole text's window is redactForDisplay's by its first line (final-check W4); inside a longer text the same
+    // window is cut from displayReading's reading, so this half pins that reading equal to redactForDisplay's.
+    texts.forEach((t, i) => expect(libGrep.redactDisplayWindow(`p ${t} q`, 2, 2 + t.length, idx), `text #${i} inside a longer text`).toBe(libGrep.redactForDisplay(t, idx)));
+    expect(pieces([libGrep.redactForDisplay(nested, idx)], V), 'CONTROL: nine levels reach the bound, which marks V').toEqual([]);
+  });
+
+  it('a value only a decoded reading\'s context form sees, its key in the margin: no window starting at, inside or ending inside it prints it (findings V15, V37)', () => {
+    const text = `${'p '.repeat(40_000)}${CURL} ${'q '.repeat(40_000)}`;
+    const v = text.indexOf('correct');
+    expect(libGrep.redactForDisplay(text, none), 'CONTROL: the whole text masks the value').not.toMatch(/correct|horse|battery|staple/);
+    const outs: string[] = [];
+    for (let k = -2; k <= 28; k += 1) {
+      outs.push(libGrep.redactDisplayWindow(text, v + k, v + k + 300, none), libGrep.redactDisplayWindow(text, v + k - 300, v + k, none));
+    }
+    expect(['correct', 'horse', 'battery', 'staple'].filter((w) => outs.some((o) => o.includes(w)))).toEqual([]);
+    expect(outs.filter(inexact), 'every window is cut exactly').toEqual([]);
+    const api = `zq${alnum(24)}`;
+    for (const shape of [
+      `{${BS}${Q}api_key${BS}${Q}:${BS}${Q}${api}${BS}${Q}}`,
+      `payload: {${BS}${Q}api_key${BS}${Q}: ${BS}${Q}${api}${BS}${Q}, ${BS}${Q}n${BS}${Q}: 1}`,
+    ]) {
+      const t2 = `${'p '.repeat(40_000)}${shape} ${'q '.repeat(40_000)}`;
+      const k0 = t2.indexOf('api_key');
+      const at = t2.indexOf(api);
+      expect(pieces([libGrep.redactForDisplay(t2, none)], api), 'CONTROL: the whole text masks the token').toEqual([]);
+      const o2: string[] = [];
+      for (let c = k0; c <= at + api.length + 3; c += 1) o2.push(libGrep.redactDisplayWindow(t2, c, c + 300, none), libGrep.redactDisplayWindow(t2, c - 300, c, none));
+      expect(pieces(o2, api), shape.slice(0, 12)).toEqual([]);
+      expect(o2.filter(inexact), `${shape.slice(0, 12)}: every window is cut exactly`).toEqual([]);
+    }
+  });
+
+  it('an escape-split value where a margin starts, another inside the window: the window is cut where it is, never from the margin (finding V18)', () => {
+    const m = libGrep.ENTRY_REDACT_MARGIN;
+    const V2 = `QP${alnum(45)}7`;
+    const W2 = `QP${alnum(45)}7`;
+    const i2 = libGrep.makePairIndex(libGrep.secretPairs([V2, W2]).pairs);
+    const fill = (n: number): string => 'f '.repeat(Math.ceil(n / 2)).slice(0, n);
+    // Left: the margin starts on the ESC that splits V2, and W2 is split by another inside a 78-character window.
+    const head = `${'h '.repeat(1000)}x ${V2.slice(0, 10)}`;
+    const lo = head.length + m;
+    const mid = `${ESC}[31m${V2.slice(10)} `;
+    const win = ` w ${W2.slice(0, 20)}${ESC}[32m${W2.slice(20)} e `.padEnd(78, '.');
+    const left = head + mid + fill(m - mid.length) + win + ` ${'t '.repeat(40_000)}`;
+    expect(left.charCodeAt(lo - m), 'CONTROL: the margin starts on the ESC').toBe(27);
+    expect(pieces([libGrep.redactForDisplay(left, i2)], V2), 'CONTROL: the whole text masks V2').toEqual([]);
+    const outL = libGrep.redactDisplayWindow(left, lo, lo + 78, i2);
+    expect(pieces([outL], V2)).toEqual([]);
+    expect(pieces([outL], W2)).toEqual([]);
+    expect(outL.length, 'the window, never the margin').toBeLessThanOrEqual(78 + 2 * M.length);
+    expect(inexact(outL), 'cut exactly').toBe(false);
+    // Right: an 18,000-character window holding W2's split, the margin ending on the ESC that splits V2.
+    const lo2 = 2000;
+    const hi2 = lo2 + 18_000;
+    const winR = `a ${W2.slice(0, 20)}${ESC}[32m${W2.slice(20)} b `.padEnd(18_000, '.');
+    const right = `${'g '.repeat(lo2 / 2)}${winR} ${fill(m - 12)} ${V2.slice(0, 10)}${ESC}[31m${V2.slice(10)} ${'u '.repeat(40_000)}`;
+    expect(right.charCodeAt(hi2 + m), 'CONTROL: the margin ends on the ESC').toBe(27);
+    const outR = libGrep.redactDisplayWindow(right, lo2, hi2, i2);
+    expect(pieces([outR], V2)).toEqual([]);
+    expect(pieces([outR], W2)).toEqual([]);
+    expect(outR.length, 'the window, never the margin').toBeLessThanOrEqual(18_000 + 2 * M.length);
+    expect(inexact(outR), 'cut exactly').toBe(false);
+  });
+
+  it('a page edge inside a word near an escape-glued value: the word prints whole across the two pages, the value on neither (finding V17)', () => {
+    const text = `${JSON.stringify({ a: `\n${V}` })} ${'filler '.repeat(500)}importantword ${'tail '.repeat(500)}`;
+    const mid = text.indexOf('importantword') + 6;
+    const p1 = libGrep.redactDisplayWindow(text, 0, mid, idx);
+    const p2 = libGrep.redactDisplayWindow(text, mid, text.length, idx);
+    expect(p1 + p2).toContain('importantword');
+    expect(pieces([p1, p2, p1 + p2], V)).toEqual([]);
+  });
+
+  it('a page edge between a backslash and its escape letter is cut exactly, within DISPLAY_EDGE_SLACK, and shows no piece of the value', () => {
+    const body = JSON.stringify({ k: `\n${V}`, lines: Array.from({ length: 400 }, (_, i) => `line ${i}`).join('\n') });
+    const text = `${body} ${'z '.repeat(1000)}`;
+    const all: string[] = [];
+    for (let at = text.indexOf('line 1'), n = 0; n < 60; at = text.indexOf(`${BS}n`, at + 1), n += 1) {
+      const cut = at + 1;
+      all.push(libGrep.redactDisplayWindow(text, cut - 400, cut, idx), libGrep.redactDisplayWindow(text, cut, cut + 400, idx));
+    }
+    expect(pieces(all, V)).toEqual([]);
+    expect(all.filter(inexact).length, 'inexact windows').toBe(0);
+  });
+
+  it('a cut that cannot be shown exact fails closed: the window alone, every run of 8 or more masked, under one note line; never margin text', () => {
+    const run = 'AKIAABCDEFGHIJKLMNOP';
+    const text = `${'p '.repeat(40_000)}${run}QRSTUVWXYZ0123 rest of it longwordhere ${'q '.repeat(40_000)}`;
+    const lo = text.indexOf('QRSTU');
+    const out = libGrep.redactDisplayWindow(text, lo, lo + 60, idx);
+    expect(out.startsWith(`${NOTE}${NL}`), 'inexact, under its note line').toBe(true);
+    expect(out, 'no margin text').not.toContain('AKIA');
+    expect(out, 'the long word masked').not.toContain('longwordhere');
+    expect(out).toContain(` rest of it ${M} q q`);
+    expect(out.split(NL), 'one note line, then the window').toHaveLength(2);
+    // grep's snippet over the same cut shows the note on its one line.
+    const hit = `${'p '.repeat(40_000)}${run}QRSTUVWXYZ0123 ${'x'.repeat(184)} zqfb5 ${'q '.repeat(500)}`;
+    expect(hit.indexOf('zqfb5') - libGrep.SNIPPET_MAX, 'CONTROL: the snippet window starts inside the run').toBe(hit.indexOf('QRSTU'));
+    const snip = libGrep.displaySnippet(hit, ['zqfb5'], idx);
+    expect(snip.startsWith(`${NOTE} `), 'the note leads the snippet').toBe(true);
+    expect(snip).not.toContain('AKIA');
+    expect(snip).not.toContain(NL);
+    expect(snip).toContain('zqfb5');
+  });
+
+  it('a literal mark after a colour sequence where a margin starts does not move the cut into the margin', () => {
+    const W = `QP${alnum(29)}8`;
+    const i2 = libGrep.makePairIndex(libGrep.secretPairs([W]).pairs);
+    const tok = `tk${alnum(30)}`;
+    const m = libGrep.ENTRY_REDACT_MARGIN;
+    const head = `${'h '.repeat(1000)}Authorization: Bearer `;
+    const left = `${tok} ${ESC}[0m${M} ${'f '.repeat(m)}`.slice(0, m);
+    const lo = head.length + left.length;
+    const win = ` w ${W.slice(0, 12)}${ESC}[32m${W.slice(12)} e `.padEnd(80, '.');
+    const text = head + left + win + ` ${'t '.repeat(40_000)}`;
+    expect(text.indexOf(tok), 'CONTROL: the margin starts on the token').toBe(lo - m);
+    expect(pieces([libGrep.redactForDisplay(text, i2)], tok), 'CONTROL: the whole text masks the token').toEqual([]);
+    const out = libGrep.redactDisplayWindow(text, lo, lo + 80, i2);
+    expect(pieces([out], tok)).toEqual([]);
+    expect(pieces([out], W)).toEqual([]);
+    expect(out.length, 'the window, never the margin').toBeLessThanOrEqual(80 + 2 * M.length);
+    expect(inexact(out), 'cut exactly').toBe(false);
+    // The same margin, now ending on the head of a value whose rest starts the window: of the margin's two readings, the
+    // one with its sequences removed reaches the value, so it decides, and the value shows as its whole mark.
+    const Z = `QP${alnum(29)}9`;
+    const i3 = libGrep.makePairIndex(libGrep.secretPairs([W, Z]).pairs);
+    const left3 = `${left.slice(0, m - 11)} ${Z.slice(0, 10)}`;
+    const win3 = `${Z.slice(10)} w ${W.slice(0, 12)}${ESC}[32m${W.slice(12)} e `.padEnd(80, '.');
+    const text3 = head + left3 + win3 + ` ${'t '.repeat(40_000)}`;
+    expect(text3.indexOf(tok), 'CONTROL: the margin starts on the token').toBe(lo - m);
+    const out3 = libGrep.redactDisplayWindow(text3, lo, lo + 80, i3);
+    for (const s of [tok, W, Z]) expect(pieces([out3], s), s.slice(0, 4)).toEqual([]);
+    expect(out3.length, 'the window, never the margin').toBeLessThanOrEqual(80 + 2 * M.length);
+    expect(inexact(out3), 'cut exactly').toBe(false);
+    expect(out3.startsWith(`${M} w `), 'the straddling value shows as its whole mark').toBe(true);
+  });
+
+  it('an inexact window reads an escape-split value as the readings do: a coloured or JSON-escaped value at its end leaves no 8-character stretch, and a coloured or escaped word inside it is masked whole (final check W1)', () => {
+    const W = `QW${alnum(30)}`;
+    /** V pair-only, W loaded in the belt: `ab_<W>_tail`, Task 7A's glue shape, makes a window starting in W inexact. */
+    const i2 = libGrep.makePairIndex(libGrep.secretPairs([V, W]).pairs, libGrep.makeBelt(libGrep.beltUnits([W])));
+    /** A colour sequence before every character, as lolcat prints. */
+    const lolcat = (s: string): string[] => s.split('').map((c, k) => `${ESC}[38;5;${16 + k}m${c}`);
+    /** Every character as a JSON unicode escape (a backslash, `u00`, two hex digits), built from code points. */
+    const uesc = (s: string): string[] => s.split('').map((c) => `${BS}u00${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+    const plain = (s: string): string => s.replace(new RegExp(`${ESC}${BS}[[0-9;]*m`, 'g'), '');
+    const decoded = (s: string): string => s.replace(new RegExp(`${BS}${BS}u00([0-9a-f]{2})`, 'g'), (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+    const word = `zq${alnum(14)}`;
+    for (const [form, parts] of [['coloured', lolcat], ['escaped', uesc]] as const) {
+      const build = (glued: string): { text: string; lo: number; hi: number } => {
+        const head = `${'p '.repeat(40_000)}note ab_${glued}_tail and ${parts(word).join('')} rest of it `;
+        const vp = parts(V);
+        const text = `${head}${vp.join('')}${form === 'coloured' ? `${ESC}[0m` : ''} tail ${'q '.repeat(40_000)}`;
+        return { text, lo: head.indexOf(`${glued}_tail`) + glued.length - 5, hi: head.length + vp.slice(0, 30).join('').length };
+      };
+      const hit = build(W);
+      const whole = libGrep.redactForDisplay(hit.text, i2);
+      expect(pieces([plain(whole), decoded(whole)], V), `${form}: CONTROL: the whole text masks V`).toEqual([]);
+      const out = libGrep.redactDisplayWindow(hit.text, hit.lo, hit.hi, i2);
+      expect(inexact(out), `${form}: CONTROL: the glued belt unit at the start makes the window inexact`).toBe(true);
+      expect(pieces([out, plain(out), decoded(out)], V), `${form}: V at the window's end`).toEqual([]);
+      expect(pieces([out, plain(out), decoded(out)], word), `${form}: the word inside the window`).toEqual([]);
+      const ctl = build('x'.repeat(W.length));
+      const outC = libGrep.redactDisplayWindow(ctl.text, ctl.lo, ctl.hi, i2);
+      expect(inexact(outC), `${form}: CONTROL: without the glued unit the same window is exact`).toBe(false);
+      expect(pieces([outC, plain(outC), decoded(outC)], V), `${form}: the exact window`).toEqual([]);
+    }
+  });
+
+  it('an inexact window whose edge cuts a value leaves none of its characters, however few (final check W3)', () => {
+    const run = 'AKIAABCDEFGHIJKLMNOP';
+    const colour = (s: string): string => s.split('').map((c, k) => `${ESC}[38;5;${16 + k}m${c}`).join('');
+    for (const [form, enc] of [['plain', (s: string): string => s], ['coloured', colour]] as const) {
+      const head = `${'p '.repeat(40_000)}${run}QRSTUVWXYZ0123 rest of it `;
+      const text = `${head}${enc(V)} tail ${'q '.repeat(40_000)}`;
+      const lo = head.indexOf('QRSTU');
+      for (let k = 1; k <= 7; k += 1) {
+        const hi = head.length + enc(V.slice(0, k)).length;
+        expect(libGrep.redactDisplayWindow(text, lo, hi, idx), `${form}, ${k} of V's characters inside`).toBe(`${NOTE}${NL} rest of it `);
+      }
+    }
+  });
+
+  it('a match that is one token span and begins beyond the margin is dropped where it reaches the window; one that holds a space is the named residual (final check W2)', () => {
+    const b64 = (n: number): string => Array.from(libGrepRandom(n), (b) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'[b % 64]!).join('');
+    const seg = (n: number): string => Array.from({ length: n }, () => alnum(9)).join('.');
+    const closed: [string, string, string][] = [
+      ['NAME= base64', 'SECRET_TOKEN=', b64(120_000)],
+      ['Bearer, dotted', 'Authorization: Bearer ', seg(11_000)],
+      ['JWT, first segment past the margin', 'jwt ', `eyJ${alnum(120_000)}.eyJzdWIiOiJ6cSJ9.${alnum(43)}`],
+      ['?token=', 'GET https://h.example/cb?token=', b64(120_000)],
+    ];
+    for (const [form, key, value] of closed) {
+      const text = `log start${NL}${key}${value}${NL}after ${'q '.repeat(1000)}`;
+      const at = text.indexOf(value);
+      const whole = libGrep.redactForDisplay(text, none);
+      for (const lo of [at + 100_000, at + value.length - 20]) {
+        const shown = value.slice(lo - at - 8, lo - at + 300);
+        expect(pieces([whole], shown), `${form}: CONTROL: the whole text masks it`).toEqual([]);
+        expect(pieces([libGrep.redactDisplayWindow(text, lo, lo + 300, none)], shown), `${form}: window at ${lo - at}`).toEqual([]);
+      }
+    }
+    // The residual (spec §8.3): a match that holds a space, its key more than the margin before the window, is read
+    // only from a break inside it, so the window shows what the whole text masks. Pinned so that a change is seen.
+    const words = Array.from({ length: 20_000 }, (_, i) => `word${i}`).join(' ');
+    const pw = `{${Q}password${Q}: ${Q}${words}${Q}}`;
+    expect(libGrep.redactForDisplay(pw, none), 'residual: CONTROL: the whole text masks it').not.toContain('word11119');
+    const lo = pw.indexOf('word11119');
+    expect(libGrep.redactDisplayWindow(pw, lo, lo + 40, none), 'residual: the window shows it').toContain('word11119');
+  });
+
+  it('a window longer than DISPLAY_WINDOW_MAX is shown inexact unless it is the whole text, which is redactForDisplay\'s (final check W4)', () => {
+    const big = Array.from({ length: 85_000 }, (_, i) => `w${i % 997}xyzabcd`).join(' ');
+    const out = libGrep.redactDisplayWindow(big, 1, big.length, idx);
+    expect(big.length - 1, 'CONTROL: the window is longer than DISPLAY_WINDOW_MAX').toBeGreaterThan(libGrep.DISPLAY_WINDOW_MAX);
+    expect(big.length, 'CONTROL: the text is within DISPLAY_READINGS_MAX').toBeLessThanOrEqual(libGrep.DISPLAY_READINGS_MAX);
+    expect(inexact(out), 'a window past the bound that is not the whole text').toBe(true);
+    expect(libGrep.redactDisplayWindow(big, 0, big.length, idx) === libGrep.redactForDisplay(big, idx), 'the whole text').toBe(true);
   });
 });
