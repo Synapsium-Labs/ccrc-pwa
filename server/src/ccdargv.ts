@@ -453,9 +453,9 @@ export const CCD_ARGV = {
    *  `ws-audit --collect`'s, recomputed and compared by ccd inside the reap lock BEFORE anything moves. It is a
    *  `CollectToken` (`shared/api.ts`, spec §5.10), which only the collect audit's reader casts to, so a string from
    *  anywhere else does not compile here. The confirmation token LEADS (`['ws-collect','--expect']` is the grant); the
-   *  dec trails, and ccd strips it before it binds a positional. Composed by NOTHING in this build: the collector's lane
-   *  is its one caller, behind `COLLECT_CAP`, and `ws-collect-wiring.test.ts` pins that no server source composes it
-   *  until then. */
+   *  dec trails, and ccd strips it before it binds a positional. Its ONE composer is the collector's executor
+   *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed only by `$REG/collect-lane-live`;
+   *  `ws-collect-wiring.test.ts` pins that no other server source composes it. */
   wsCollect: (token: CollectToken, id: string, dec: ActorFlags | null) =>
     argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
@@ -894,8 +894,8 @@ export const DOCS_CAP = 'docs-v1';
  *  are the other two spellings, held equal by that test's `toContain`.
  *
  *  READ IT WITH `capSupported`, NEVER `verbSupported`: the verb it gates deletes a directory, and a destructive verb sent
- *  to a box with no evidence it exists is the failure the capability reader was built to prevent. Nothing reads it in
- *  this build — the collector's lane does, before its first audit (`ws-collect-wiring.test.ts` pins that). */
+ *  to a box with no evidence it exists is the failure the capability reader was built to prevent. The collector's lane
+ *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
 export const COLLECT_CAP = 'collect-v1';
 
 /**

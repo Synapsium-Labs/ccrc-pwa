@@ -102,7 +102,7 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * that arm by behaviour.
  */
 const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
-  'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch',
+  'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch',
 ]);
 
 /**
