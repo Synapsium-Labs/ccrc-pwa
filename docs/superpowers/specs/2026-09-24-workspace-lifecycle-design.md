@@ -671,7 +671,7 @@ each item is a departure named there).
 - **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
   breaker, rebuilt over the passes after a restart. A restart keeps the lane's first-dead anchor (a gap of more than ten
   minutes re-anchors it, as above) and the breaker's hold (the record above, read back at the first pass; a record it
-  cannot read makes the lane hold every claimant that pass does not release, each flagged, and write a fresh record, with a warn line and a feed row saying so: a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, at the cost that while one stands any other crashed claimant is held with it), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, the one way a restarted lane can act sooner:
+  cannot read makes the lane hold every claimant that pass does not release, each flagged, and write a fresh record, with a warn line and a feed row saying so: a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, at the cost that while one stands a claimant that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two stand), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, the one way a restarted lane can act sooner:
   the lane composes no act on a pass whose held-set record did not land, so the record never lags an act. Every act is still behind the claimant's re-measure before and after the fleet act.
 - **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
   (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
@@ -860,8 +860,9 @@ collects them.
   A record the lane cannot read does not stop it: for that pass the lane holds every claimant the pass does not release,
   each flagged in the new record (a `*` after its instant), and writes that record over the bad one, so the bad row is
   never read again. A flagged claimant clusters with any other crashed or held claimant, whatever the instants, until
-  evidence releases it, so every claimant a readable record would hold is held too; the cost is that while one stands any
-  other crashed claimant is held with it, and an older build reads the flagged record as unreadable and stops. The server logs a `ccrc-server: sweepDeadCoordinators could not read the
+  evidence releases it, so every claimant a readable record would hold is held too; the cost is that while one stands a
+  coordinator that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two
+  entries stand, and an older build reads the flagged record as unreadable and stops. The server logs a `ccrc-server: sweepDeadCoordinators could not read the
   breaker's record of its hold` warning, once per bad row, and writes one feed row, "dead coordinator: breaker record
   unreadable", which is the operator's sign. The hold releases on what releases it without a restart: evidence that the
   claimant is alive, stopped or was stopped on purpose, or the claimant leaving the population. For that lane a restart
@@ -929,12 +930,13 @@ collects them.
   shadow evidence.
 - **Three residuals stand.** A lane gap of over ten minutes re-anchors every crashed coordinator on the same pass, so the
   breaker holds and no shadow row is written until all but one are revived, reclaimed or abandoned. A revive of the same
-  id inside the act's last re-measure window, sub-second to one agent round trip, can still lose its runs. A third
-  corner predates the restart fix: the breaker's hold wins over a re-anchored instant, and that can keep a fresh cluster
-  from forming. With X held at an old instant and re-anchored later as Y crashes, once the other held member is released
-  X@old and Y@new lie outside the window, so the breaker does not trip and X or Y can be ended once its own hour is up,
-  though X's new anchor and Y's crash fall within the window. A lane that was never restarted behaves the same, and the
-  clustering is unchanged.
+  id inside the act's last re-measure window, sub-second to one agent round trip, can still lose its runs. A third, a
+  breaker corner, predates the restart fix: the breaker's hold wins over a re-anchored instant, and that can keep a fresh
+  cluster from forming. With X held, unflagged, at an old instant and re-anchored later as Y crashes, once the other held
+  member is released X@old and Y@new lie outside the window, so the breaker does not trip and X or Y can be ended once its
+  own hour is up, though X's new anchor and Y's crash fall within the window. A lane that was never restarted behaves the
+  same; the time-window clustering of unflagged members is unchanged, and a flagged fallback member clusters with any
+  other, so it never meets this corner.
 - **A permanently unreadable generation pins the mirror `stale`**, with no diagnostic of its own: the lane then decides
   nothing at all, which fails shut. `/api/fleet/health`'s lifecycle state shows it.
 - **An accepted abstention** (§5.4): a child's pre-start `reclaim` failure reads as a deliberate act.

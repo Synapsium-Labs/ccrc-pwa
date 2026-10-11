@@ -838,6 +838,51 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
   it('THE FALLBACK NEVER LOOSENS (the reviewer\'s probe): a member the true record would not hold cannot let U and Z be ended once V is released (review 382, R2)', async () => { await probe(false); });
   it('...and the FLAG is durable: a restart after the fallback record was written, before Z crashes, still does not end U (review 382, R2)', async () => { await probe(true); });
 
+  it('A claimant SWEPT INTO a flagged trip is flagged too: its crash instant never becomes an ordinary hold that a later re-anchor loosens (review 382, N1)', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const [U, V, W, X, Z] = ['demo-coord-u', 'demo-coord-v', 'demo-coord-w', 'demo-coord-x', 'demo-coord-z'];
+    for (const id of [W, X, Z]) { f.plant(id); f.live.add(id); }        // U and V have no registry row: unmeasurable
+    const ru = f.working(U); const rv = f.working(V); const rw = f.working(W); const rx = f.working(X); const rz = f.working(Z);
+    let m = 0;
+    const to = async (target: number): Promise<void> => {
+      while (m < target) { const d = Math.min(9, target - m); f.advance(d * 60_000); m += d; await f.pass(); }
+    };
+    await f.pass();
+    plantMalformed(f, ru);
+    f.restart();                                        // the restart lands on a record it cannot read
+    await to(1);                                        // fallback: U and V held, flagged
+    f.live.delete(Z);
+    await to(10);                                       // Z crashes at 10: swept into the trip
+    rmSync(path.join(f.reg, `${Z}.uuid`));
+    await to(19);                                       // Z unmeasurable: its anchor goes
+    writeFileSync(path.join(f.reg, `${Z}.uuid`), `u-${Z}`);
+    f.live.delete(W);
+    await to(28);                                       // Z crashes again, re-anchored at 28; W crashes at 28
+    await to(100);
+    for (const id of [U, V]) { f.plant(id); f.live.add(id); }
+    await to(110);                                      // U and V are back: released
+    await to(110 + 150);                                // far past W's hour and Z's
+    expect([ru, rv, rw, rx, rz].map(f.stateOf), 'nothing ends: the true held set is empty, and {W, Z} cluster').toEqual(['working', 'working', 'working', 'working', 'working']);
+    expect(f.calls, 'nothing composed on the box').toEqual([]);
+    expect(breakerItem(f)).toEqual([['breaker', [W, Z]]]);
+  });
+
+  it('the unreadable-record feed row keys its words on the breaker: tripped on a fleet-wide doubt it never says "nothing was held" (review 382, N3)', async () => {
+    const f = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(B);
+    const rb = f.working(B);
+    plantMalformed(f, rb);
+    f.setTmuxDown(true);                                // one claimant and a tmux that does not answer: the unmeasurable arm
+    await f.pass();
+    expect(f.attention(), 'the breaker tripped on the doubt').toEqual([['breaker', [B]]]);
+    const body = unreadableBody(f);
+    expect(body).not.toContain('nothing was held');
+    expect(body).toContain('fleet-wide doubt');
+  });
+
   it('NO ACT until the hold is recorded: a pass whose held-set write fails composes nothing — a claimant due, the breaker clear — and a later pass whose write lands acts (review 382, R3)', async () => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);

@@ -313,8 +313,8 @@ export function recordDeadCoordinatorBreaker(
 /** The feed row for a pass that could not read its record of the breaker's hold (review 382, R2), written once per bad
  *  row under the first claimant the fallback held (else the first of the population, else `fleet`). */
 export function recordDeadCoordinatorBreakerUnreadable(
-  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, held: readonly string[], population: readonly string[],
+  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, held: readonly string[], tripped: boolean, population: readonly string[],
   eventId: number | null, reason: string,
 ): void {
-  recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerUnreadableFeedRow(held, eventId, reason)], 'breaker record unreadable');
+  recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerUnreadableFeedRow(held, tripped, eventId, reason)], 'breaker record unreadable');
 }

@@ -233,8 +233,15 @@ describe('the circuit breaker (spec §5.4)', () => {
     const b = deadCoordinatorBreaker([at('c-z', far)], [wild], [], 2, null, far + PASS);
     expect(b).toMatchObject({ tripped: true, why: 'clustered', claimants: ['c-a', 'c-z'], since: NOW });
     const members = b.tripped ? b.members : [];
-    expect(members).toEqual([{ id: 'c-a', firstDeadAt: NOW, fallback: true }, at('c-z', far)]);
-    expect(members[1], 'only the fallback member carries the flag').not.toHaveProperty('fallback');
+    expect(members, 'EVERY member of a trip a flag took part in carries the flag — the swept-in one too (review 382, N1)')
+      .toEqual([{ id: 'c-a', firstDeadAt: NOW, fallback: true }, { id: 'c-z', firstDeadAt: far, fallback: true }]);
+    // ...on the unmeasurable arm, which builds `members` the same way.
+    const u = deadCoordinatorBreaker([at('c-z', far)], [wild], ['c-z'], 2, 'tmux did not answer for c-z: x', far + PASS);
+    expect(u).toMatchObject({ tripped: true, why: 'unmeasurable' });
+    expect(u.tripped && u.members).toEqual([{ id: 'c-a', firstDeadAt: NOW, fallback: true }, { id: 'c-z', firstDeadAt: far, fallback: true }]);
+    // An ordinary trip carries no flag on anyone.
+    const ord = deadCoordinatorBreaker([at('c-a', NOW), at('c-b', NOW + PASS)], [], [], 2, null, NOW + PASS);
+    expect(ord.tripped && ord.members.some((m) => 'fallback' in m)).toBe(false);
     // Two held, one flagged and one not, hours apart: they cluster too.
     expect(deadCoordinatorBreaker([], [wild, at('c-b', far)], [], 2, null, far)).toMatchObject({ tripped: true, claimants: ['c-a', 'c-b'] });
     // A lone entry is no cluster, flagged or not: the flag is lost with the hold.

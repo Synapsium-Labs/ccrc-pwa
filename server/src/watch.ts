@@ -4383,7 +4383,7 @@ export class FleetWatcher {
     this.deadCoordinatorBreakerHeld = breaker.tripped ? breaker.members : [];
     // R3: the act waits for a pass whose durable record matches the hold it just computed.
     const recorded = this.recordDeadCoordinatorBreakerHeldChange(coord, before, ids, now);
-    if (unreadable !== null) this.noteDeadCoordinatorRecordUnreadable(coord, unreadable, this.deadCoordinatorBreakerHeld.map((m) => m.id), ids);
+    if (unreadable !== null) this.noteDeadCoordinatorRecordUnreadable(coord, unreadable, this.deadCoordinatorBreakerHeld.map((m) => m.id), breaker.tripped, ids);
     const key = deadCoordinatorBreakerKey(breaker);
     if (breaker.tripped && key !== this.deadCoordinatorBreakerRecorded) {
       recordDeadCoordinatorBreaker({ coord, notifyLog: this.deps.notifyLog }, breaker);
@@ -4450,7 +4450,7 @@ export class FleetWatcher {
    *  the row's event id, or `read` for a read that threw before any row — naming the row and the reason (a bounded prefix,
    *  never the row's content), through `recordRows`. No new attention kind, no wire word. */
   private noteDeadCoordinatorRecordUnreadable(
-    coord: CoordStore, u: { eventId: number | null; detail: string }, held: readonly string[], ids: readonly string[],
+    coord: CoordStore, u: { eventId: number | null; detail: string }, held: readonly string[], tripped: boolean, ids: readonly string[],
   ): void {
     const key = u.eventId === null ? 'read' : `row ${u.eventId}`;
     if (this.deadCoordinatorUnreadableWarned.has(key)) return;
@@ -4458,7 +4458,7 @@ export class FleetWatcher {
     const reason = u.detail.slice(0, 64);
     console.warn(`ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold (${u.eventId === null ? 'no row' : `event ${u.eventId}`}: ${reason}) `
       + '— it holds every coordinator this pass did not see released, and writes a fresh record');
-    recordDeadCoordinatorBreakerUnreadable({ coord, notifyLog: this.deps.notifyLog }, held, ids, u.eventId, reason);
+    recordDeadCoordinatorBreakerUnreadable({ coord, notifyLog: this.deps.notifyLog }, held, tripped, ids, u.eventId, reason);
   }
 
   /** The act — or its shadow — for one due claimant, on the coordination serialiser. Its outcome, or `null` when it
