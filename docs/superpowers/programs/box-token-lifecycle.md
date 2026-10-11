@@ -18,8 +18,8 @@ spec's after wave 1.
 |---|---|---|---|---|---|
 | 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGED** `f82cb9fbc` (PR #330, 2026-10-09 06:44:52 UTC; run 320 done, child reclaim queued; released as v0.0.133 at 06:45:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `d9adc2c5a` onto `main` at `d33a566bb` (`4512d88d`). That tip is `fa384df19`, which review 352 read, plus a clean merge of `main`. Every Linux leg was green. Was: **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **LANDED LIVE** 2026-10-10 21:10:39 UTC: the first rotation retired the leaked value with no human act, and the §10.3 proof passed (`probe: 401 refused`). **MERGED** `928f5938b` (PR #341, 2026-10-10 20:39:50 UTC; run 350 done) on the operator's "merge now, pin in row 2a". Its tree is byte-identical to the merge-tree of the reviewed tip `7424434c6` onto `main` at `5c922c866`, which was tested before the merge. Was: **TO THE OPERATOR** 2026-10-09 17:26 UTC: scoped review 365 found R1 and R2, class 11 (pins short of a near variant; code correct; live rotation 29 of 29). Was: **FIX ROUND 1 DONE** 2026-10-09 16:10 UTC at `7424434c6` (mail 4134; six fix commits and a merge of `main` at `7c71244db`); no number spent, reserve 4552 to 4560 untouched. Scoped review run 365 dispatched 16:13 UTC to `ccrc-pwa-keen-cove`. Was: **FIX ROUND 1 SENT** 2026-10-09 14:32 UTC (mail 4124, `rulings-run350-fix1.md`) on review 362 at `569bb148c`: F1 meets class 6, so the bar gives the one round; no number assigned (reserve 4552 to 4560). A scoped review follows. Was: **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; numbers 4414 and 4551 defined, bare until #341 merges; review run 362 dispatched 12:04 UTC to `ccrc-pwa-brisk-delta` (the held-out panel plus three lenses: security; the first live rotation; what the operator sees). Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
-| 2a | 1, follow-up | Part 1 of the arming plan (`docs/superpowers/plans/2026-10-10-box-token-lifecycle-w1-arming.md`): review 365's R1 and R2 pins, red-first; R3 and R4; review 362's R-f and R-g; the token-line stripper's quote state; the 12:00 entry's residue 3 and 5, and residue 2, 4 and 6(a) if claim 1141 is gone. The arms stay off | 370 | #348 | **IN REVIEW** 2026-10-10 23:59 UTC: wave-done at `b747f3681` (mail 4193), re-measured; review run 375 dispatched 10-11 00:02 UTC to `ccrc-pwa-warm-summit`; Task 11 not taken (claim 1141 live), so it moves to part 2; the bar is in the 23:59 entry. Was: **DISPATCHED** 2026-10-10 22:20 UTC to `ccrc-pwa-amber-harbor` (9 items: Tasks 1, 2, 5 to 10, and 11 only if claim 1141 is gone; route Opus·high / Sonnet / workflow off / compact 40). The plan reached `main` in #347. Was: **PLANNED** 2026-10-10 22:15 UTC: the plan was drafted, attacked (26 breaks: 23 applied, 1 risk note, 1 rejected) and split. The brief goes out once the plan reaches `main`. Was: **Run 370 open, planned** 2026-10-10 20:33 UTC, before run 350 closed |
-| 2b | 1, follow-up | Part 2 of the arming plan: `retired-presented` clears when a rotation answers it (number 4552), then the flip, `_BT_ARMS_ON` 0 to 1, with the fresh-box classes (number 4553 if ruled). Bound: merged before row 3's first PR | — | — | waits on: part 1's merge; the operator's Decisions 1 and 2; the operator's ruling on the GPT-lane Plan 4 soak (`ccrc-pwa-clear-mesa` recommends accepting `box-token` WARNs by name on the sampler's doctor baseline; the window closes about 10-21 10:31 UTC); rulings on residue 8(a) and R-i; claim 1141 |
+| 2a | 1, follow-up | Part 1 of the arming plan (`docs/superpowers/plans/2026-10-10-box-token-lifecycle-w1-arming.md`): review 365's R1 and R2 pins, red-first; R3 and R4; review 362's R-f and R-g; the token-line stripper's quote state; the 12:00 entry's residue 3 and 5, and residue 2, 4 and 6(a) if claim 1141 is gone. The arms stay off | 370 | #348 | **MERGED** `c6e8c5d8d` (PR #348, 2026-10-11 00:43:17 UTC; run 370 done) on review 375, clean by the 23:59 bar. Its tree is byte-identical to the reviewed tip `b747f3681`, since `main` had not moved. Was: **IN REVIEW** 2026-10-10 23:59 UTC: wave-done at `b747f3681` (mail 4193), re-measured; review run 375 dispatched 10-11 00:02 UTC to `ccrc-pwa-warm-summit`; Task 11 not taken (claim 1141 live), so it moves to part 2; the bar is in the 23:59 entry. Was: **DISPATCHED** 2026-10-10 22:20 UTC to `ccrc-pwa-amber-harbor` (9 items: Tasks 1, 2, 5 to 10, and 11 only if claim 1141 is gone; route Opus·high / Sonnet / workflow off / compact 40). The plan reached `main` in #347. Was: **PLANNED** 2026-10-10 22:15 UTC: the plan was drafted, attacked (26 breaks: 23 applied, 1 risk note, 1 rejected) and split. The brief goes out once the plan reaches `main`. Was: **Run 370 open, planned** 2026-10-10 20:33 UTC, before run 350 closed |
+| 2b | 1, follow-up | Part 2 of the arming plan: `retired-presented` clears when a rotation answers it (number 4552), then the flip, `_BT_ARMS_ON` 0 to 1, with the fresh-box classes (number 4553 if ruled). Bound: merged before row 3's first PR | 377 | — | **Run 377 open, planned** 2026-10-11 00:42 UTC, before run 370 closed. waits on: part 1's merge; the operator's Decisions 1 and 2; the operator's ruling on the GPT-lane Plan 4 soak (`ccrc-pwa-clear-mesa` recommends accepting `box-token` WARNs by name on the sampler's doctor baseline; the window closes about 10-21 10:31 UTC); rulings on residue 8(a) and R-i; claim 1141 |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
 
@@ -678,6 +678,50 @@ spec's after wave 1.
       symlinked, relative, slashed and symlink-target paths;
     - **pin teeth:** the worker's mutant rows reproduced, and near variants of N1c and M6;
     - **secrets and notify.**
+- **2026-10-11 00:43 UTC: review 375 closed (row 2a at `b747f3681`), clean by the bar; #348 merged; row 2b is run
+  377.**
+  - **The panel:** the held-out three lenses and the brief's three. 36 agents ran, with none dead, none unexamined
+    and no lens unverified. 10 findings were raised: 9 survived the refute pass, and 1 was refuted 3/3.
+  - **The live rotation (class 1):** none found. Review 362's simulation passes at the tip: round 1's 11 cases,
+    round 2's 18, and a server-first set of 16 the reviewer built. There is no stray 401 outside number 4414's
+    window, and the old value is never adopted. The new guard is lexical, but it is unreachable live: both paths
+    share one literal `$SECRETS` prefix, and 15 HOME shapes match `main` row for row.
+  - **Pin teeth (class 4):** none found. Every claimed mutant row reproduces: R1 under N1c, R2 under M6, Tasks 5,
+    6, 8, 9 and 10, and all 15 of Task 7's spellings. Two near variants each of N1c and M6 red too.
+  - **Rulings:**
+    - **F1 meets no class for this merge; it is part 2 residue.** A placeholder preceded by a UTF-8 BOM or a no-break
+      space is still POSTed by notify.sh, because `tr -d '[:space:]'` is byte-wise while the server's
+      `extractToken` trims those characters. The line is identical at `main`, where every placeholder spelling was
+      POSTed, so the merge narrows the gap and opens none. Reaching it takes a hand-edited fleet file, since the
+      verb's writer emits ASCII only. The POST carries the public placeholder and draws a 401. Part 2 makes
+      notify.sh's trim match `extractToken`'s, with a pin.
+    - **F2 to F7 meet no class.** All go to part 2's residue:
+      - F2: the new advice's `ccrc token probe --file …` needs `--url` on a both-role box, which has no
+        `agent.env`;
+      - F3: the guard is lexical; whether to compare real paths is for part 2;
+      - F4: the advice pin holds only its probe half;
+      - F5: R3's docstring says "any spelling", but the scanner counts quantified classes only;
+      - F6: R4's cited describe title wraps, so it does not grep verbatim;
+      - F7: R2's plant is redundant, and its comment's reason is wrong.
+  - **Every Linux leg of both runs is green.** The full run's `full-suite` is red only through macOS, on files
+    outside this diff.
+  - **Run 377 opened at 00:42 UTC, before run 370 closed,** as wave 4 of 6 (row 2b), planned and with no session.
+    The machinery's wave count rises to 6 because row 2b was inserted.
+  - **Merged** at 00:43:17 UTC as `c6e8c5d8d`, with `--squash --admin --match-head-commit`. The tree, `3b9d46412`,
+    is byte-identical to the reviewed tip's. **Run 370 closed** (prPhase merged, final). Its child reclaim is
+    deferred by the programme's hold.
+  - **The live effect:** the release carries the verb's guard to both boxes. The next rotation is the first to run
+    through it. The hourly checks confirm that the token holds steady, and no hand rotation is made to test it.
+  - **Part 2's residue, now complete:**
+    - from the plan: Task 11 (residue 2, 4 and 6(a)) and its rulings;
+    - the worker's finding: a placeholder fleet token file gives no signal anywhere, so a fleet-side `placeholder`
+      word belongs in doctor;
+    - review 375's F1 to F7.
+  - **Part 2 still waits on:**
+    - the operator's Decisions 1 and 2;
+    - the operator's ruling on the GPT-lane Plan 4 baseline;
+    - rulings on residue 8(a) and R-i;
+    - claim 1141.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
