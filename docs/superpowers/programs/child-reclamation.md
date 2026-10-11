@@ -67,6 +67,13 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     `wave7-header-comment-stale`, `verdict-readers-pin-stale-after-leaf-writer`, `leaf-kept-phrase-second-table`,
     `brief-labels-reworded-to-spec-citations`, `held-verdict-case-narrows-kept-many`,
     `as-built-note-carries-slugs-not-numbers` and `leaf-kept-session-id-follows-ccds-rule`.
+  - **CI on #349 is red in the required `test (server)` on ONE case:** pools-prose's "README size claim within 100
+    lines". The final fix wave's README edit took README to 6002 lines, while CLAUDE.md still says ~5900 (main is at
+    5994). The fix is one numeral in CLAUDE.md, outside wave 8's boundary and inside claim 1141 (brisk-meadow). It goes
+    into the fix round, with a boundary ruling and that holder's consent. The tip is held still under the review.
+  - **Review run 378** was dispatched at 08:11 to `soft-meadow`, on an Anthropic account with no swap, and advanced to
+    `working`. Its brief is `review-378-brief.md` in the evidence archive: the held-out panel, plus the plan's SAFETY
+    (Opus xhigh) and SECURITY lenses, both mandatory.
 
 - **2026-10-11 01:33 — wave 7 is DEPLOYED on the fleet box by ccrc's own updater; no hand rollout.** `~/ccrc` now points at
   v0.0.145 (`7609221a4`). `~/.ccrc/update.json` records the auto move (`from: pwa`, phase `done`, 01:10:35–01:12:06).
