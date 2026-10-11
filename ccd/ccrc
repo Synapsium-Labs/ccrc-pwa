@@ -5270,8 +5270,10 @@ cmd_adopt() {
 # (the claim, the atomic write, the proof) is one reviewable unit there.
 cmd_token() {
   local body="$CCRC_HERE/ccrc-token-sync"
+  # The refusal's first words are `unknown argument: token` on purpose: the
+  # agent classes that line as `verb-missing` (D-4395), the named hold.
   [[ -f "$body" ]] \
-    || _ccrc_die "token's script is missing: $body — is this a complete ccrc install?"
+    || _ccrc_die "unknown argument: token — its script is missing: $body; is this a complete ccrc install?"
   exec "$BASH" "$body" "$@"
 }
 

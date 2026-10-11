@@ -27,6 +27,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
+import { TOKEN_VERB_MISSING_PREFIXES } from '../../shared/agent-protocol.js';
 import { assertNoRealTool } from './containedTools.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -395,6 +396,24 @@ describe('ccrc: adopt', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: adopt's script is missing/m);
     expect(r.stderr).toContain('ccrc-adopt');
+  });
+
+  it("`token` with its script missing refuses in the verb-missing class, so the server holds `verb-missing` and does not fail the sync (residue 2)", () => {
+    // `cmd_token` execs `ccrc-token-sync` beside `ccrc`. A box whose copy of
+    // `ccrc` lacks that sibling cannot do the verb, and the server must read
+    // that as the named hold D-4395 gives an older ccrc, not as a failure.
+    // The agent folds the spawned child's first stderr line through
+    // `isTokenVerbMissing` (`TOKEN_VERB_MISSING_PREFIXES`, imported, never
+    // copied), so the refusal's first line must start with one of them.
+    // Red before the change: the line read `ccrc: token's script is missing`.
+    const lone = join(mkTmp('ccrc-cli-token-lonely-'), 'ccrc');
+    writeFileSync(lone, readFileSync(CCRC, 'utf8'), { mode: 0o755 });
+    const home = mkTmp('ccrc-cli-token-lonely-home-');
+    const r = spawnSync('bash', [lone, 'token', 'sync', '--from', 'agent'], { env: ccrcEnv(home), encoding: 'utf8', timeout: 60_000 });
+    expect(r.status).not.toBe(0);
+    const first = r.stderr.split('\n')[0];
+    expect(TOKEN_VERB_MISSING_PREFIXES.some((p) => first.startsWith(p)), `first stderr line: ${first}`).toBe(true);
+    expect(r.stderr).toContain('ccrc-token-sync');
   });
 
   it('resolves its own location via BASH_SOURCE, not $0+dirname — a lying dirname on PATH cannot derail a symlinked invocation', () => {
