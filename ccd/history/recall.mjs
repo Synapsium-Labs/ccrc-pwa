@@ -337,35 +337,40 @@ function bindFor(sql, all) {
 }
 
 /** `refs`: every referrer of a blob `matchSql` selects as (blob_id, rank). That is the FTS MATCH here, and the
- *  regex child's blob list in Task 14. A variant whose blob is the entry's first body is that entry's own row
+ *  regex child's blob list in Task 14. `ref_key` is the referrer's own immutable identity, unique across the three
+ *  routes (an entry by its id, a variant by its entry and blob, a sidecar by its primary key: transcript, name,
+ *  blob), so the ranked order can be total. A variant whose blob is the entry's first body is that entry's own row
  *  (§6.2: the first body also gets a variant row once a second appears), so it is not counted twice. */
 function referrerSql(rc, matchSql) {
   const e = (alias) => versioned(rc, 'entries', alias, REFERRER_ENTRY_COLS);
   return `WITH m(blob_id, rank) AS (${matchSql}),
-  refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank) AS (
-    SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank
+  refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank, ref_key) AS (
+    SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
+        'entry:' || e.entry_id
       FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id
     UNION ALL
-    SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank
+    SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
+        'variant:' || e.entry_id || ':' || v.blob_id
       FROM m JOIN ${versioned(rc, 'entry_variants', 'v', ['entry_id', 'blob_id'])} ON v.blob_id = m.blob_id
         JOIN ${e('e')} ON e.entry_id = v.entry_id
       WHERE v.blob_id <> e.blob_id
     UNION ALL
     SELECT 'sidecar', s.entry_id, se.uuid, s.transcript_pk, COALESCE(se.ts_ms, s.first_seen_ms), NULL, 'tool', NULL,
-        m.blob_id, s.name, m.rank
+        m.blob_id, s.name, m.rank, 'sidecar:' || s.transcript_pk || ':' || s.name || ':' || s.blob_id
       FROM m JOIN ${versioned(rc, 'sidecars', 's', ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'])} ON s.blob_id = m.blob_id
         LEFT JOIN ${versioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id
   )`;
 }
 
 /** The top RANK_POOL in-scope referrers in `sort` order. The scope sits in this statement's WHERE, before its
- *  LIMIT (C27). The tie-break makes the order total, so a cursor's position means one hit. */
+ *  LIMIT (C27). The tie-break makes the order total (the last term, `ref_key`, is unique per referrer), so a
+ *  cursor's position means one hit even among sidecars that share rank, time, blob and a NULL entry. */
 function rankedSql(rc, matchSql, sort) {
   return `${referrerSql(rc, matchSql)}
   SELECT r.via AS via, r.entry_id AS entry_id, r.uuid AS uuid, r.ts_ms AS ts_ms, r.role AS role,
       r.provenance AS provenance, r.blob_id AS blob_id, r.name AS name
     FROM refs r WHERE ${GREP_FILTER}
-    ORDER BY ${ftsOrderBy(sort, 'r.ts_ms')}, r.blob_id, r.entry_id LIMIT :pool`;
+    ORDER BY ${ftsOrderBy(sort, 'r.ts_ms')}, r.blob_id, r.entry_id, r.ref_key LIMIT :pool`;
 }
 
 /** The true in-scope count, the same filter with no LIMIT. */

@@ -1405,3 +1405,78 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
     expect((src.match(/\bblobOf\(/g) ?? []).length, 'blobOf is declared once and called by hitSnippet only').toBe(2);
   });
 });
+
+describe("grep's total referrer order and true referrer counts (W1-B2 task 12 fix round 1, phase B)", () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const T = 0x2b;
+  const BODY = 'zqtiebody one shared sidecar body\n';
+  let box: rH.HistoryBox;
+  beforeAll(async () => {
+    if (process.platform === 'darwin') return;
+    box = rH.makeHistoryBox('ccrc-hist-grep-ties-');
+    GRX.seed(box, T, GRX.idA, 'demo', [GRX.user(T, 1, 'zqtieopener plain words')]);
+    // Three sidecars of one byte-identical body, planted out of name order: one blob, three referrers.
+    const dir = path.join(box.accountHome['claude-a']!, 'projects', SEED_SLUG, GRX.file(T), 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const n of ['c.txt', 'a.txt', 'b.txt']) fs.writeFileSync(path.join(dir, n), BODY);
+    rH.spoolLine(box, GRX.idA, { v: 1, ev: 'Stop', id: GRX.idA });
+    for (let i = 0; i < 2; i += 1) expect(rH.runSweep(box).code).toBe(0);
+    // Equal rank (one blob), equal time and equal (NULL) entry id: only the sidecars' own identities differ.
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile);
+    try { w.prepare('UPDATE sidecars SET entry_id = NULL, first_seen_ms = ?').run(GRX.t0); } finally { store.closeWriter(w); }
+  }, HEAVY);
+
+  const sidecarsOf = async (sort: string, extra: string[] = []): Promise<{ names: unknown[]; total: number; shown: number }> => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const r = recall.runGrep(rc, await GRX.grepArgs(['zqtiebody', '--sort', sort, ...extra]));
+      expect(r.exit, sort).toBe(0);
+      return { names: r.items.map((x) => x.sidecar), total: r.total, shown: r.shown };
+    } finally { rc.db.close(); }
+  };
+
+  it('F4: tied sidecars (equal rank, time, blob and entry) come back in one exact order on every sort, however often it runs', async () => {
+    const sidecarRows = rH.openStoreRO(box);
+    try {
+      expect((sidecarRows.prepare('SELECT count(DISTINCT blob_id) AS b, count(*) AS n, count(entry_id) AS e FROM sidecars').get() as { b: number; n: number; e: number }),
+        'CONTROL: three sidecars, one blob, no entry').toMatchObject({ b: 1, n: 3, e: 0 });
+    } finally { sidecarRows.close(); }
+    for (const sort of ['recency', 'relevance', 'hybrid']) {
+      for (let k = 0; k < 3; k += 1) expect((await sidecarsOf(sort)).names, `${sort} #${k}`).toEqual(['a.txt', 'b.txt', 'c.txt']);
+    }
+  }, HEAVY);
+
+  it('F4: the ranked statement ends its ORDER BY in a unique referrer key every refs arm projects (pinned through the prepare seam)', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const calls: string[] = [];
+      expect(recall.runGrep({ ...rc, db: GRX.spyDb(rc.db, calls) }, await GRX.grepArgs(['zqtiebody'])).exit).toBe(0);
+      const ranked = calls.filter((s) => /LIMIT :pool/.test(s));
+      expect(ranked).toHaveLength(1);
+      const sql = ranked[0]!;
+      expect(sql).toMatch(/ORDER BY [^;]*, r\.blob_id, r\.entry_id, r\.ref_key LIMIT :pool/);
+      expect(sql).toMatch(/refs\([^)]*\bref_key\b[^)]*\) AS/);
+      for (const arm of ["'entry:'", "'variant:'", "'sidecar:'"]) expect(sql, arm).toContain(arm);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('F6: one blob with three eligible in-scope referrers counts three referrers, not one blob: shown K of N, JSON shown/total/items, distinct items', async () => {
+    const full = await sidecarsOf('recency');
+    expect([full.shown, full.total, new Set(full.names).size]).toEqual([3, 3, 3]);
+    const cut = await sidecarsOf('recency', ['--limit', '2']);
+    expect([cut.shown, cut.total, cut.names.length]).toEqual([2, 3, 2]);
+    const human = GRX.cli(box, GRX.idA, ['grep', 'zqtiebody']);
+    expect(human.code, human.stderr).toBe(0);
+    expect(human.stdout).toContain('shown 3 of 3');
+    const humanCut = GRX.cli(box, GRX.idA, ['grep', 'zqtiebody', '--limit', '2']);
+    expect(humanCut.stdout).toContain('shown 2 of 3');
+    const j = GRX.cli(box, GRX.idA, ['grep', 'zqtiebody', '--limit', '2', '--json']);
+    expect([j.json?.shown, j.json?.total, GRX.items(j).length]).toEqual([2, 3, 2]);
+    const all = GRX.cli(box, GRX.idA, ['grep', 'zqtiebody', '--json']);
+    expect([all.json?.shown, all.json?.total]).toEqual([3, 3]);
+    expect(new Set(GRX.items(all).map((x) => x.sidecar)).size, 'distinct retained referrer items').toBe(3);
+  }, HEAVY);
+});

@@ -2133,6 +2133,61 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     } finally { db.close(); }
   });
 
+  it('F3: a rolled-back B1 leaves an eligible recall echo unindexed under the CURRENT fts_provenance; the next tick re-opens from 0 once, indexes it, and then leaves a healthy store alone', () => {
+    const box = IX.newBox('ccrc-hist-echo-rollback-');
+    const p = IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqopener words', 1)]));
+    IX.sweepTwice(box);
+    const stamp = (db: DatabaseSync): { completed: number | null; cursor: string | null; prov: string | undefined } => {
+      const r = db.prepare("SELECT completed_ms AS c, cursor AS k FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { c: number | null; k: string | null };
+      return { completed: r.c, cursor: r.k, prov: metaV(db, 'fts_provenance') };
+    };
+    let db = openStoreRO(box);
+    try { expect(stamp(db).completed, 'CONTROL: the backfill is complete').not.toBeNull(); } finally { db.close(); }
+    // After the completed backfill a row is appended that B2 would index (a recall echo) and one it never indexes (isMeta
+    // harness text): B1 rolled back over this store ingests both and writes neither to the index.
+    fs.appendFileSync(p, IX.jsonl([
+      IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: 'toolu_01RR', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }], 2),
+      IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: 'toolu_01RR', content: 'zqrollecho words' }], 3),
+      IX.user(IX.uuidN(4), IX.uuidN(3), 'zqrollmeta words', 4, { isMeta: true }),
+    ]));
+    hint(box);
+    expect(runSweep(box).code).toBe(0);
+    const w = openWriter(historyPaths(box.home).dbFile);
+    let echo: number;
+    try {
+      echo = (w.prepare("SELECT blob_id FROM entries WHERE provenance = 'recall-echo' AND uuid = ?").get(IX.uuidN(3)) as { blob_id: number }).blob_id;
+      w.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(echo);
+      w.prepare('UPDATE blobs SET fts_indexed = 0 WHERE blob_id = ?').run(echo);
+    } finally { closeWriter(w); }
+    let before: ReturnType<typeof stamp>;
+    db = openStoreRO(box);
+    try {
+      before = stamp(db);
+      expect(matches(db, 'zqrollecho'), 'CONTROL: the echo is out of the index').toBe(0);
+      expect(before.completed, 'CONTROL: the backfill is complete').not.toBeNull();
+      expect(before.prov, 'CONTROL: the marker is the current set').toBe('operator,model,tool,recall-echo');
+      expect(Number(before.cursor), 'CONTROL: the echo lies past the completed cursor').toBeLessThan(echo);
+      expect((db.prepare("SELECT fts_indexed AS f FROM blobs b JOIN entries e ON e.blob_id = b.blob_id WHERE e.uuid = ?").get(IX.uuidN(4)) as { f: number }).f, 'CONTROL: harness text is never indexed').toBe(0);
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    let repaired: ReturnType<typeof stamp>;
+    db = openStoreRO(box);
+    try {
+      expect(matches(db, 'zqrollecho'), 'the owed echo is indexed again').toBe(1);
+      expect(matches(db, 'zqrollmeta'), 'an excluded source class is not broadened in').toBe(0);
+      repaired = stamp(db);
+      expect(repaired.completed).not.toBeNull();
+      expect(repaired.prov).toBe(before.prov);
+      expect(metaV(db, 'fts')).toBe('ready');
+    } finally { db.close(); }
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    db = openStoreRO(box);
+    try {
+      expect(stamp(db), 'a healthy complete store is not re-opened on later ticks').toEqual(repaired);
+      expect(matches(db, 'zqrollecho')).toBe(1);
+    } finally { db.close(); }
+  });
+
   it('DM29 (store half): a sidecar indexes its first 512 KB only; the text past it stays in the blob', () => {
     const box = IX.newBox('ccrc-hist-dm29-');
     IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));

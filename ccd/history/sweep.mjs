@@ -3737,12 +3737,23 @@ function derivStmts(db) {
 }
 
 const FTS_STMTS = new WeakMap();
+/** The ONE eligibility relation of the FTS backfill (§6.2, D-4712): a blob some sidecar, or some entry or entry
+ *  variant of an INDEXED_PROVENANCE row, references. `b` is blobs; it binds INDEXED_PROVENANCE twice, in order.
+ *  Both the backfill writer and ftsOwesRow's measurement read it, so what is owed and what is written cannot drift. */
+const FTS_ELIGIBLE_SQL = (() => {
+  const ph = INDEXED_PROVENANCE.map(() => '?').join(', ');
+  return `b.z IS NOT NULL
+        AND (EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id)
+          OR EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id AND e.provenance IN (${ph}))
+          OR EXISTS (SELECT 1 FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
+                     WHERE v.blob_id = b.blob_id AND e.provenance IN (${ph})))`;
+})();
+
 /** Statements over the FTS tables. These are prepared only once ftsPrepare has made the tables:
  *  node:sqlite refuses to prepare against a table that does not exist. */
 function ftsStmts(db) {
   let f = FTS_STMTS.get(db);
   if (f !== undefined) return f;
-  const ph = INDEXED_PROVENANCE.map(() => '?').join(', ');
   f = {
     ins: db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)'),
     del: db.prepare('DELETE FROM blobs_fts WHERE rowid = ?'),
@@ -3754,15 +3765,22 @@ function ftsStmts(db) {
     backfill: db.prepare(`SELECT b.blob_id AS blob_id, length(b.z) AS zlen,
         EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id) AS is_sidecar
       FROM blobs b
-      WHERE b.blob_id > ? AND b.fts_indexed = 0 AND b.z IS NOT NULL
-        AND (EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id)
-          OR EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id AND e.provenance IN (${ph}))
-          OR EXISTS (SELECT 1 FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
-                     WHERE v.blob_id = b.blob_id AND e.provenance IN (${ph})))
+      WHERE b.blob_id > ? AND b.fts_indexed = 0 AND ${FTS_ELIGIBLE_SQL}
       ORDER BY b.blob_id LIMIT ?`),
   };
   FTS_STMTS.set(db, f);
   return f;
+}
+
+/** Whether a COMPLETED ('fts', 1) backfill owes the index a row: an eligible blob (FTS_ELIGIBLE_SQL, the backfill's own
+ *  relation) lies past the cursor the backfill completed at, still unindexed. A rolled-back build ingests recall echoes
+ *  without indexing them and without touching meta `fts_provenance`, so the provenance marker alone cannot see them.
+ *  Only past the cursor: a complete backfill left no eligible unindexed blob up to it except those it passed over as
+ *  undecodable (D-4346, fts_indexed left 0), which would re-open it on every tick; blob ids only grow, so every blob
+ *  written since lies past it. */
+function ftsOwesRow(db, row) {
+  // Prepared here, not in ftsStmts: it reads no FTS table, and ftsStmts cannot be prepared where the tables are gone.
+  return db.prepare(`SELECT 1 AS one FROM blobs b WHERE b.blob_id > ? AND b.fts_indexed = 0 AND ${FTS_ELIGIBLE_SQL} LIMIT 1`).get(Number(row.cursor ?? 0), ...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE) !== undefined;
 }
 
 /** What ftsTextOfBlob answers for a blob whose stored bytes do not decode (D-4346, history-permanent-failures-classified). */
@@ -3821,6 +3839,17 @@ export function ftsPrepare(db, nowMs) {
       withTx(db, 'NORMAL', () => {
         db.prepare("UPDATE derivation_state SET completed_ms = NULL, cursor = '0' WHERE step = ? AND version = ?").run(FTS_STEP, 1);
         setMeta(db, 'fts_provenance', INDEXED_PROVENANCE.join(','));
+      });
+      row = d.sel.get(FTS_STEP, 1);
+    } else if (row.completed_ms !== null && ftsOwesRow(db, row)) {
+      // The marker is current but a blob an INDEXED_PROVENANCE row references is unindexed past the completed cursor
+      // (a rollback to a build that ingests recall echoes without indexing them). Reopen once from zero, in one
+      // transaction that measures again, so a concurrent repair is not undone.
+      withTx(db, 'NORMAL', () => {
+        const now = d.sel.get(FTS_STEP, 1);
+        if (now !== undefined && now.completed_ms !== null && ftsOwesRow(db, now)) {
+          db.prepare("UPDATE derivation_state SET completed_ms = NULL, cursor = '0' WHERE step = ? AND version = ?").run(FTS_STEP, 1);
+        }
       });
       row = d.sel.get(FTS_STEP, 1);
     }
