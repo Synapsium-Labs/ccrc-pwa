@@ -47,6 +47,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 16:35 — quiet-river consents to wave 9's line-disjoint edits under run 358's claims (4237), and the consent is relayed to run 380 (4238).**
+  - **Yes to all three files, as listed.** Wave 6's fix-round regions are named, and are off-limits to wave 9:
+    - `store.ts`: the `./deadCoordinator.js` import block, and one new method after the dead_claimants methods;
+    - `watch.ts`: the import block `:112-125`, the dead-coordinator fields and the dead-coordinator pass;
+    - README `:3552-3556`.
+  - **Wave 9's lines are untouched by wave 6.** Its `store.ts` `:3430` sits past W6's insertion and is re-pointed by
+    content if W6 lands first, which it should. R56 applies both ways.
+
 - **2026-10-11 16:34 — WAVE 9's PLAN IS MERGED (#352, `d9647b76b`), and run 380 is DISPATCHED to `ccrc-pwa-quiet-hollow` (an Anthropic wrapper).**
   - **The fix** (`wf_851b1bfb-8dd`, six Opus agents, one per plan region) returned 122 edits and 5 insertions, all applied
     with no find missed. Each cross-region fix was checked to have landed, and the one that had not (a slug in Task 6's
