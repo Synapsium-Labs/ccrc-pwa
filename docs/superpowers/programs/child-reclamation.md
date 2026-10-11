@@ -47,6 +47,20 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 00:05 — fix round 2's wave-done (4192) is verified at `337e48ab2`. CI's required checks are green. Run 347 is at `awaiting-review`, and short scoped review run 376 is opened.**
+  - **The round.** Seven commits over `aa1c06c4a`, eight files, no merge. The one code line is `13e2d8602`'s
+    `chmod -- g-s "$q"`, with the test that pinned the old order changed in the same commit. The rest is pins (F6, F7,
+    F10), comments (F2, F9) and F3's clause-by-clause prose. No new number, and R72 holds.
+  - **Measured.** origin's tip equals the fingerprint. PR #344 is MERGEABLE, and merge-tree against origin/main
+    (`562ef658c`) exits 0. CI's required checks on `337e48ab2` are all green, `test (server)` included. The macOS legs
+    are advisory and were still running.
+  - **The worker's open question, ruled.** `g9-kill-grace-residual`'s text over-counts the kill graces: a fresh probe
+    that hits its bound ends the evaluation, so one grace is paid (about 73 s, or 78 s), under the 90 s row. It errs
+    on the safe side and is a named residual's text. Its correction is carried to wave 9's pre-flight list, where the
+    lane sets its deadlines, and it is not reopened in this wave.
+  - **Review run 376** reads `aa1c06c4a..337e48ab2` only, against `wave7/fix-round-2-rulings.md`. It runs the held-out
+    panel, plus the SAFETY lens on the `chmod` line with both pins reverted.
+
 - **2026-10-10 23:32 — review 374 is accepted and closed `done`, and wave 7 fix round 2 is sent (4189). Run 347 is back at `working`.**
   - **How it ran.** brisk-canyon, on an Anthropic account with no swap: the held-out panel, the SAFETY lens once per
     code fix with each mutation row reverted, and three Sonnet refuters per finding. 127 agents, 0 errors. It
