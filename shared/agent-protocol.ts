@@ -98,7 +98,8 @@ export interface AgentHello { t: 'hello'; token: string }
 export interface AgentReady {
   t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
   observedEpoch?: number | null;
-  /** The one op word defined for this list is `UPDATE_OP` (`'update'`), which programme wave 5's agent sends; `readReadyOps` reads it. */
+  /** The op words defined for this list are `UPDATE_OP` (`'update'`), which programme wave 5's agent sends, and
+   *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1); `readReadyOps` reads them. */
   ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
 }
 
@@ -152,14 +153,23 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * server process writes its OWN box's `update-intent` from W2, and W4's
  * `ccd-update-sync` writes a fleet node's. A name read before its writer
  * exists answers `absent`, which is the truth about that node.
+ *
+ * `tokenGeneration` (`box-token-generation`, box-token lifecycle wave 1, spec
+ * 4.5) is the ninth: one line, the 16-hex id of the box-token generation the
+ * node last wrote (`ccrc token sync` on a fleet node, the server's both-role
+ * writer on a both box). It holds an id, never a value, which is the only
+ * reason it may join this object. The server's token driver reads it on its
+ * own tick (D-4389), so the inventory sweep's `MEASURED_FILE_KEYS` leaves it
+ * out, as it leaves out `projection`.
  */
 export const CCRC_DIR_NAME = '.ccrc';
 export const NODE_FILES = {
   stamp: 'build.json', installed: 'installed', caps: 'ccrc-caps', floor: 'floor', previous: 'previous',
   nodeId: 'node-id', report: 'update.json', projection: 'update-intent',
+  tokenGeneration: 'box-token-generation',
 } as const;
 export type NodeFileKey = keyof typeof NODE_FILES;
-/** The eight names as one list, DERIVED — the agent's admission set and every
+/** The nine names as one list, DERIVED — the agent's admission set and every
  *  scan over it read this, never a restatement. */
 export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
 
@@ -326,10 +336,14 @@ export interface PtyOpenReq  { t: 'req'; id: number; op: 'ptyOpen'; sessionId: s
  *  failure answers `bad-tag`, never `bad-request`, which from this op means
  *  exactly one thing: the agent predates it. */
 export interface UpdateReq { t: 'req'; id: number; op: 'update'; tag: string; kind?: RequestKind }
+/** Box-token lifecycle spec 4.4: ONE member of the `req` envelope. `code` is the only field and passes `isClaimCode`
+ *  in the agent's `validateReq` before any case body sees it; a failure answers `bad-code`, never `bad-request`. It
+ *  carries no URL, path, value or argv: the fleet box reaches the server at the address it already has. */
+export interface TokenSyncReq { t: 'req'; id: number; op: 'token-sync'; code: string }
 export interface PtyInput    { t: 'pty'; ptyId: number; ev: 'input'; dataB64: string }
 export interface PtyResize   { t: 'pty'; ptyId: number; ev: 'resize'; cols: number; rows: number }
 export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -345,6 +359,7 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?:
 //   silence for `regular` — the D-114 shape, in the one direction that matters here, because
 //   `regular` is the only answer that lets a caller condemn anything.
 // writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}; update → {accepted: true, detail?: string} (D-3413: `detail` only from the bound's arms B and D)
+// token-sync → {synced: <16 hex>, transport?: 'http'|'https'} (transport ADDITIVE; its one reader is readTokenTransport)
 
 // ── the `update` op (design 2026-09-20 §10) ─────────────────────────────────
 // Everything both ends of the op must agree on is declared here, once. The
@@ -622,6 +637,86 @@ export function decideKilledSpawn(i: {
     text = `${seen[0]!.slice(0, Math.max(0, budget - more.length - 3))}...${more}`;
   } else if (taken < seen.length) text += ` (+${seen.length - taken} more)`;
   return { arm: 'D', detail: head + text + tail };
+}
+
+// ── the `token-sync` op (box-token lifecycle spec 2026-10-07 §4.4) ─────────────
+// Everything both ends of the op agree on, declared once. The agent
+// (`agent/src/tokensync.ts`, `agent/src/server.ts`) spawns from the template and
+// maps the child's answer with these words; the server's link
+// (`server/src/token/link.ts`) reads the result with them; bash cannot import
+// this, so `ccd/ccrc-token-sync` spells its side itself and Part B's text scan
+// holds those spellings to these values.
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const TOKEN_SYNC_OP = 'token-sync';
+
+/** The ONLY words the op refuses with. `bad-request` is deliberately NOT a member: from this op it keeps meaning
+ *  "the agent predates it" (the envelope's word for an op `validateReq` does not know). There is no insecure-url
+ *  word: a plain-http install rotates (R2). `busy` and `spawn-failed` are the agent's own; the rest are the verb's. */
+export const TOKEN_SYNC_OP_ERRORS = ['bad-code', 'busy', 'spawn-failed', 'claim-refused', 'code-used',
+  'write-failed', 'proof-failed', 'proof-unmeasured', 'stale-client'] as const;
+export type TokenSyncOpError = (typeof TOKEN_SYNC_OP_ERRORS)[number];
+/** Use THIS, never `TOKEN_SYNC_OP_ERRORS.includes(x as TokenSyncOpError)` — `isRunState`'s rule. */
+export function isTokenSyncOpError(v: unknown): v is TokenSyncOpError {
+  return typeof v === 'string' && (TOKEN_SYNC_OP_ERRORS as readonly string[]).includes(v);
+}
+
+/** The verb's own refusal words and their exit codes; `busy` and `spawn-failed` are the agent's, never the verb's.
+ *  The agent maps a child's answer to a word only when BOTH the exit code and the first stderr line agree. */
+export const TOKEN_SYNC_EXIT: Readonly<Record<Exclude<TokenSyncOpError, 'busy' | 'spawn-failed'>, number>> = Object.freeze({
+  'bad-code': 20, 'claim-refused': 21, 'code-used': 22, 'write-failed': 23,
+  'proof-failed': 24, 'proof-unmeasured': 25, 'stale-client': 26,
+});
+/** First stderr line of a refusal: `ccrc: token sync: <word>: <sentence>`. */
+export const TOKEN_SYNC_STDERR_PREFIX = 'ccrc: token sync: ';
+
+/** The generation id's shape, as a regex BODY: 8 random bytes as 16 lowercase hex. The ONE spelling;
+ *  `GENERATION_ID_RE` (`shared/box-token.ts`) and `TOKEN_SYNC_SYNCED_RE` below are built from it. */
+export const GENERATION_ID_HEX = '[0-9a-f]{16}';
+
+export const TOKEN_TRANSPORTS = ['http', 'https'] as const;
+export type TokenTransport = (typeof TOKEN_TRANSPORTS)[number];
+/** The ONE reader of the op result's additive `transport` field: anything else, including absence, is
+ *  `'unmeasured'` — never folded into `https`, because an older agent's silence proves nothing about the wire. */
+export function readTokenTransport(raw: unknown): TokenTransport | 'unmeasured' {
+  return typeof raw === 'string' && (TOKEN_TRANSPORTS as readonly string[]).includes(raw) ? (raw as TokenTransport) : 'unmeasured';
+}
+
+/** The verb's ONE stdout line on success: `synced <generation> <transport>`. */
+export const TOKEN_SYNC_SYNCED_RE = new RegExp(`^synced (${GENERATION_ID_HEX}) (${TOKEN_TRANSPORTS.join('|')})$`);
+
+/** 32 random bytes as unpadded base64url = 43 characters. */
+export const CLAIM_CODE_RE = /^[A-Za-z0-9_-]{43}$/;
+/** The ONE code guard: the agent's `validateReq` and the server's claim door both call it. */
+export function isClaimCode(v: unknown): v is string {
+  return typeof v === 'string' && CLAIM_CODE_RE.test(v);
+}
+
+/** The `--from` word the agent's spawn carries; the verb refuses any other at exit 2. */
+export const TOKEN_SYNC_FROM = 'agent';
+/** THE template: `ccrc token sync --from agent`, no variable token (the code rides stdin). The file is
+ *  `updateLauncherPath(home)`, the same absolute shim the update op spawns. Frozen: a caller cannot append a flag. */
+export function tokenSyncSpawnArgv(): readonly string[] {
+  return Object.freeze(['token', 'sync', '--from', TOKEN_SYNC_FROM]);
+}
+
+/** The agent's bound on the verb: SIGTERM to the child's process group at this bound, so its trap removes its temps. */
+export const TOKEN_SYNC_SPAWN_TIMEOUT_MS = 40_000;
+/** Then SIGKILL, this long after the SIGTERM. */
+export const TOKEN_SYNC_KILL_GRACE_MS = 2_000;
+/** ONE drain deadline, armed by the child's exit or by the SIGKILL, whichever comes first, never restarted. */
+export const TOKEN_SYNC_DRAIN_MS = 2_000;
+/** The server's `FleetClient.request` deadline for this op (the client's default is 15 s). */
+export const TOKEN_SYNC_OP_TIMEOUT_MS = 50_000;
+/** A claim code's life. Pinned: SPAWN + KILL_GRACE + DRAIN < OP_TIMEOUT < CLAIM_CODE_TTL (44 000 < 50 000 < 60 000),
+ *  by `server/test/token-shared.test.ts`, so the agent always answers first and a lost answer is never a live code. */
+export const CLAIM_CODE_TTL_MS = 60_000;
+
+/** A `spawn-failed` detail that means "this ccrc has no `token` verb" (a named hold, never a failure, D-4395):
+ *  `_ccrc_usage_die`'s line from an older `ccrc`, or the agent's own sentence when no launcher is there at all. */
+export const TOKEN_VERB_MISSING_PREFIXES = ['ccrc: unknown argument: token', 'could not start the launcher'] as const;
+export function isTokenVerbMissing(detail: string | null | undefined): boolean {
+  return typeof detail === 'string' && TOKEN_VERB_MISSING_PREFIXES.some((p) => detail.startsWith(p));
 }
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —

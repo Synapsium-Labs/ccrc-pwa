@@ -5,6 +5,12 @@
 import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 import { ARCHIVE_REFUSALS, isArchiveRefusal, type ArchiveAnswer, type ArchiveBody, type ArchiveRefusal } from '../../../shared/api';
+import { isNodeRole } from '../../../shared/api';
+import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
+import {
+  BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, type BoxTokenView,
+  type RotateAnswer,
+} from '../../../shared/box-token';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -461,6 +467,70 @@ export function moveSkipText(why: MoveSkipWhy | (string & {})): string {
     : `An update reason this build doesn't recognise (${printableSkipWord(why)}).`;
 }
 
+// ── The box-token card's wire (box-token lifecycle wave 1, Task B6, D-4392) ──
+// `UpdatesView.boxToken` is ADDITIVE: absent from an older server and from one
+// that runs no driver. `readBoxTokenView` is its ONE reader, and every enumerated
+// field is checked against the L0 list that declares it (`shared/box-token.ts`,
+// `shared/agent-protocol.ts`, `shared/api.ts`), never a list spelled here, so a
+// word a newer server adds reads as "not reported" rather than as a state this
+// build would have to guess at. Malformed is null; the card says "not reported".
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isWord = <T extends string>(list: readonly T[], v: unknown): v is T =>
+  typeof v === 'string' && (list as readonly string[]).includes(v);
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+const isInstant = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const orNull = (v: unknown, ok: (x: unknown) => boolean): boolean => v === null || ok(v);
+/** `BoxTokenView['fleetConfirmed']` keyed once, so a word added to the type is a compile error here. */
+const FLEET_CONFIRMED_WORDS: Record<BoxTokenView['fleetConfirmed'], true> = {
+  current: true, behind: true, absent: true, unreadable: true, 'own-write': true, unknown: true,
+};
+const BOOT_RECOVERY_SOURCES: Record<NonNullable<BoxTokenView['lastBootRecovery']>['source'], true> = { pending: true, previous: true };
+/** Plan assembly: the two additive fields, keyed once. Absent (an older server) reads as null, never as a refusal. */
+const STALL_WHYS: Record<NonNullable<BoxTokenView['stalled']>['why'], true> = { 'mint-failed': true, owed: true };
+const FILE_SLOTS: Record<NonNullable<BoxTokenView['fileProblem']>['file'], true> = { current: true, pending: true, previous: true };
+
+export function readBoxTokenView(raw: unknown): BoxTokenView | null {
+  if (!isRecord(raw)) return null;
+  const v = raw;
+  const ok = isWord(BOX_TOKEN_PHASES, v.phase)
+    && orNull(v.origin, (x) => isWord(TOKEN_ORIGINS, x))
+    && orNull(v.currentSeq, isCount) && orNull(v.currentSince, isInstant) && orNull(v.lastRotationAt, isInstant)
+    && typeof v.rotationOwed === 'boolean' && orNull(v.owedWhy, (x) => isWord(OWED_REASONS, x))
+    && orNull(v.hold, (x) => isWord(TOKEN_HOLDS, x)) && orNull(v.holdNode, (x) => typeof x === 'string')
+    && isCount(v.failures) && orNull(v.lastFailure, (x) => typeof x === 'string') && typeof v.banner === 'boolean'
+    && typeof v.fleetConfirmed === 'string' && Object.hasOwn(FLEET_CONFIRMED_WORDS, v.fleetConfirmed)
+    && orNull(v.fleetTransport, (x) => x === 'unmeasured' || isWord(TOKEN_TRANSPORTS, x))
+    && orNull(v.lastSync, (x) => isRecord(x) && isInstant(x.at) && typeof x.word === 'string')
+    && isCount(v.previousPresented) && isCount(v.retiredPresented) && typeof v.retiredRefused === 'boolean'
+    && orNull(v.lastBootRecovery, (x) => isRecord(x) && isInstant(x.at)
+      && typeof x.source === 'string' && Object.hasOwn(BOOT_RECOVERY_SOURCES, x.source))
+    && (v.stalled === undefined || orNull(v.stalled, (x) => isRecord(x) && isInstant(x.since)
+      && typeof x.why === 'string' && Object.hasOwn(STALL_WHYS, x.why)))
+    && (v.fileProblem === undefined || orNull(v.fileProblem, (x) => isRecord(x) && isInstant(x.at)
+      && typeof x.file === 'string' && Object.hasOwn(FILE_SLOTS, x.file) && isWord(TOKEN_FILE_PROBLEMS, x.word)))
+    && isNodeRole(v.role);
+  return ok ? { ...(v as unknown as BoxTokenView), stalled: (v.stalled ?? null) as BoxTokenView['stalled'],
+    fileProblem: (v.fileProblem ?? null) as BoxTokenView['fileProblem'] } : null;
+}
+
+/** A refusal `POST /api/token/rotate` answers (409, 429, 501) read back as the `RotateAnswer` it is, or null for
+ *  anything else — the caller then rethrows the `ApiError` it caught. */
+function rotateRefusalOf(err: unknown): RotateAnswer | null {
+  if (!(err instanceof ApiError) || !isRecord(err.body) || err.body.ok !== false) return null;
+  const b = err.body;
+  if (err.status === 409 && b.error === 'held' && isWord(TOKEN_HOLDS, b.hold)
+    && orNull(b.node, (x) => typeof x === 'string')) {
+    const view = readBoxTokenView(b.view);
+    return view === null ? null : { ok: false, error: 'held', hold: b.hold, node: (b.node as string | null), view };
+  }
+  if (err.status === 429 && b.error === 'rate-limited' && isCount(b.retryAfterS)) {
+    return { ok: false, error: 'rate-limited', retryAfterS: b.retryAfterS };
+  }
+  if (err.status === 501 && b.error === 'not-configured') return { ok: false, error: 'not-configured' };
+  return null;
+}
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit): Promise<Response> => {
@@ -700,6 +770,27 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `sendMove`). `postJsonOr` for `applyUpdate`'s reason. */
     rollbackUpdate: (body: RollbackUpdateBody) =>
       postJsonOr<MoveRequestAnswer | 'unreadable'>('/api/updates/rollback', 'unreadable', body),
+
+    /** `POST /api/token/rotate` — the card's "Rotate now" (box-token lifecycle wave 1, Task B6). Session-only
+     *  route, no body. Its three refusals (409 `held`, 429 `rate-limited`, 501 `not-configured`) are ANSWERS the
+     *  card renders in place, so they resolve as the `RotateAnswer` they carry; any other failure (a 401 included,
+     *  which still raises the one login screen through `request`) rejects with its `ApiError`. `postJsonOr` for
+     *  `setUpdateIntent`'s reason (D-1150): a 2xx that cannot be read may still have started a rotation. */
+    rotateBoxToken: async (): Promise<RotateAnswer | 'unreadable'> => {
+      let answer: unknown;
+      try {
+        answer = await postJsonOr<unknown>(TOKEN_ROTATE_PATH, 'unreadable');
+      } catch (err) {
+        const refusal = rotateRefusalOf(err);
+        if (refusal !== null) return refusal;
+        throw err;
+      }
+      if (!isRecord(answer) || answer.ok !== true || (answer.outcome !== 'started' && answer.outcome !== 'joined')) {
+        return 'unreadable';
+      }
+      const view = readBoxTokenView(answer.view);
+      return view === null ? 'unreadable' : { ok: true, outcome: answer.outcome, view };
+    },
 
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster

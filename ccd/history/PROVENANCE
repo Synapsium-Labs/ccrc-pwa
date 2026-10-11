@@ -1,0 +1,46 @@
+ccd/history/PROVENANCE: where the third-party material in ccrc history came from.
+
+This is THIRD-PARTY CODE PROVENANCE, not release provenance: ccrc's own release
+tarballs are attested and checked by deploy/verify-provenance.mjs and doctor's
+`provenance` check, which never read this file. Everything listed here is
+lossless-claw (Martian Engineering, MIT); its licence is LICENSE.lossless-claw,
+byte for byte, in every directory that holds copied material.
+
+One entry per copied item, entries separated by a blank line, six fields each:
+  item             what was copied, with its harvest id (spec 2026-10-05 §11)
+  ours             the repo-relative file that holds it now
+  upstream         the upstream file's path inside lossless-claw
+  commit           the upstream commit it was copied from
+  upstream-sha256  sha256 of that whole upstream file at that commit
+  changed          what this copy changed, or "nothing"
+The file named by `ours` carries a one-line rationale comment of the form
+"derived from lossless-claw <upstream> @ <commit>, MIT, see LICENSE.lossless-claw";
+server/test/license.test.ts pins both directions.
+
+item: digestText (V3)
+ours: ccd/history/lib.mjs
+upstream: src/pending-summary-projection.ts
+commit: e05d8d3
+upstream-sha256: 0d4833ab872b41666b13bd9c0c5a7db1896d6bd0e39e06a39313d56b2a14aeaa
+changed: JavaScript without the TypeScript annotations; `parts` is any readonly array of strings; otherwise line for line
+
+item: secret identifier and value patterns (V5)
+ours: ccd/history/lib.mjs
+upstream: src/prompt-recall.ts
+commit: e05d8d3
+upstream-sha256: 8267a6480b02386789b8213fecdfbedd4fd47d39a0dae1083a4d0eda2a069c7b
+changed: IDENTIFIER_RE is PROMPT_RECALL_SENSITIVE_IDENTIFIER_PATTERN (:23-24) verbatim; SECRET_SHAPE_RES is PROMPT_RECALL_SENSITIVE_VALUE_PATTERN (:26-27) split into its arms, each made global for replacement, both the - and _ arms of sk|rk|pk kept, the PEM arm widened from the header line to the whole block; the JWT shape (not upstream, eyJ then two more dot-separated parts) is not in the list but applied after it by the linear redactJwtShapes (D-4306)
+
+item: writer connection pragmas (V6)
+ours: ccd/history/store.mjs
+upstream: src/db/connection.ts
+commit: e05d8d3
+upstream-sha256: 0ea8572327226b8af35cdcc7924bed674cfa85ee11cd7e8f3ab2b0ecd2e02f15
+changed: upstream lines 51-61 and 111, as WRITER_PRAGMAS and closeWriter; journal_size_limit added; journal_mode set and then asserted at every open (store-not-wal) rather than set blind; no allowExtension handle is ever opened; auto_vacuum=INCREMENTAL is set once, at creation (createStore)
+
+item: read-only reader with query_only (V4)
+ours: ccd/history/store.mjs
+upstream: src/cli/database.ts
+commit: e05d8d3
+upstream-sha256: 968f1886124603ebe9af0a1e41b97e45488433ee620f6bd2db02a983de3484a9
+changed: upstream lines 24-25, as openReader; node:sqlite imported statically; upstream's guard before the open (existsSync and statSync(...).isFile(): a missing or non-regular path refused as one CliError DATABASE_NOT_FOUND, exit 3, a symlink followed) is RETAINED as refuseUnlessPresent's refusal of every non-regular path and REPLACED in two ways: the path is lstat'd, so a symlink at the DB file is refused rather than followed (only db/ may be a link, spec §9.3), and the one not-found answer is three StoreError words, store-missing (absent), store-zero-byte (0 bytes) and store-unmeasured (not a regular file, or not measurable); upstream's CliError DATABASE_OPEN_FAILED (exit 5) around the open is REPLACED: openReader does not wrap a failing open (node:sqlite's own error leaves it) and each caller answers it in its own terms, status's readStore as exit 5 store-read-failed (review 316 F11); busy_timeout set

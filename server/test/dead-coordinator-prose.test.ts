@@ -91,6 +91,19 @@ describe('the specs', () => {
       expect(s).toContain(item);
     }
   });
+  it('§5.4 says both measured facts of an abandoned programme, records wave 5’s corrections and the accepted abstention (review 339, F5)', () => {
+    const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    expect(s, 'the old absolute is gone').not.toContain('The programme retires as `abandoned`, permanently.');
+    expect(s).toContain('while that run is open the programme row still reads `abandoned`');
+    expect(s).toContain('The row is rewritten only when a later close ends the programme\'s last open run');
+    expect(s).toContain('**As wave 5 corrects the lane**');
+    for (const item of ['**A second crash is a second record.**', '**A release and a re-hold are two acts.**',
+      '**Every thrown act is recorded.**', '**A generation the mirror could not read is not a successful sweep.**',
+      '**A mirror gone stale at the act is a hold.**', '**An accepted abstention.**']) expect(s).toContain(item);
+  });
+  it('README says a stale mirror at the act keeps the hour, and every failed act is recorded (wave 5)', () => {
+    expect(flat('README.md')).toContain('A mirror that goes stale between the pass and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done.');
+  });
   it('CCR-15 §5.8: the one cleanup switch stops the dead-coordinator lane too', () => {
     expect(flat('docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md'))
       .toContain('the expiry of archived workspaces too, and — since wave 4 — the dead-coordinator lane');

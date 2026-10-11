@@ -77,7 +77,7 @@ describe('delegation-census (read-only, path-free)', () => {
     expect(r.status, r.stderr).toBe(0);
     const out = JSON.parse(r.stdout);
     expect(out.adminRead).toBe('ok');
-    expect(out.totals).toMatchObject({ records: 3, agent: 1, wf: 1, other: 1, metaFound: 2, metaMissing: 0, metaMalformed: 0, metaPathless: 0, homesUnreadable: 0, multiHome: 1, worktreeAbsent: 1 });
+    expect(out.totals).toMatchObject({ records: 3, agent: 1, wf: 1, other: 1, metaFound: 2, metaMissing: 0, metaMalformed: 0, metaUnreadable: 0, metaPathless: 0, homesUnreadable: 0, multiHome: 1, worktreeAbsent: 1, worktreeUnreadable: 0 });
     const agent = out.records.find((x: { kind: string }) => x.kind === 'agent');
     expect(agent).toMatchObject({ head: 'detached', claudeBase: 'ok', baseAgreesFirstLog: true, movedFromBase: true, locked: false, worktreeDir: 'present' });
     expect(agent.meta).toMatchObject({ found: true, homes: 2, uuids: 1, worktreePathEquals: true, parentCwdClass: 'main-checkout' });
@@ -137,10 +137,10 @@ describe('delegation-census (read-only, path-free)', () => {
     fs.writeFileSync(bad, '{not json');
     w.meta(w.h1, munge(w.repo), 'u1/subagents/agent-nop.meta.json', { agentType: 'g' });
     const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
-    expect(out.records[0].meta).toMatchObject({ found: true, malformed: true, worktreePathEquals: null, keys: [] });
-    expect(out.records[1].meta).toMatchObject({ found: true, malformed: false, pathless: true, worktreePathEquals: false, keys: ['agentType'] });
+    expect(out.records[0].meta).toMatchObject({ found: true, malformed: true, unreadable: false, worktreePathEquals: null, keys: [] });   // F8's control: unparsable is still malformed, never unreadable
+    expect(out.records[1].meta).toMatchObject({ found: true, malformed: false, unreadable: false, pathless: true, worktreePathEquals: false, keys: ['agentType'] });
     expect(out.records[0].meta.pathless).toBe(false);   // the unparsable one is corruption, not the path-less shape
-    expect(out.totals).toMatchObject({ metaMalformed: 1, metaPathless: 1, metaFound: 2 });
+    expect(out.totals).toMatchObject({ metaMalformed: 1, metaUnreadable: 0, metaPathless: 1, metaFound: 2 });
   });
 
   it('marks a malformed workflow meta and a path-less one on their runs, separately; a differing path is simply not found', () => {
@@ -162,11 +162,105 @@ describe('delegation-census (read-only, path-free)', () => {
     wfm('wf_diff', 'a.meta.json', JSON.stringify({ workflowPhase: 'p', worktreePath: `${w.wt('wt-w3')}-other` }));
     const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
     const [bad, diff, nop, ok] = out.records;   // sorted by admin name: wf_bad-1, wf_diff-1, wf_nop-1, wf_ok-1
-    expect(bad.meta).toMatchObject({ found: false, malformed: true, pathless: false });
-    expect(diff.meta).toMatchObject({ found: false, malformed: false, pathless: false });
-    expect(nop.meta).toMatchObject({ found: false, malformed: false, pathless: true });
-    expect(ok.meta).toMatchObject({ found: true, malformed: false, pathless: false, worktreePathEquals: true });
-    expect(out.totals).toMatchObject({ wf: 4, metaFound: 1, metaMissing: 3, metaMalformed: 1, metaPathless: 1 });
+    expect(bad.meta).toMatchObject({ found: false, malformed: true, unreadable: false, pathless: false });   // F8's control: unparsable is still malformed, never unreadable
+    expect(diff.meta).toMatchObject({ found: false, malformed: false, unreadable: false, pathless: false });
+    expect(nop.meta).toMatchObject({ found: false, malformed: false, unreadable: false, pathless: true });
+    expect(ok.meta).toMatchObject({ found: true, malformed: false, unreadable: false, pathless: false, worktreePathEquals: true });
+    expect(out.totals).toMatchObject({ wf: 4, metaFound: 1, metaMissing: 3, metaMalformed: 1, metaUnreadable: 0, metaPathless: 1 });
+  });
+
+  // F8 (review 304): a meta that cannot be READ is not a meta that does not PARSE. The census gave both `malformed`, which
+  // the header reserves for an unparsable one; a read failure (EISDIR, EACCES) is its own marker, `meta.unreadable` /
+  // `totals.metaUnreadable`, and is neither malformed nor path-less (there is no content to be either). A DIRECTORY named
+  // `<x>.meta.json` is the fixture that works as root too (reading it is EISDIR); the mode-000 rows skip as root.
+  const metaDirAt = (home: string, repo: string, rel: string): string => path.join(home, 'projects', munge(repo), rel);
+  const putRaw = (f: string, body: string): void => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, body); };
+
+  it('marks an agent meta that cannot be READ unreadable: not malformed, not path-less, no keys and no path comparison (review 304 F8)', () => {
+    const w = mini([
+      { name: 'agent-dir', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-dir' },
+      { name: 'agent-bad', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-bad' },
+      { name: 'agent-ok', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-ok' },
+    ]);
+    fs.mkdirSync(metaDirAt(w.h1, w.repo, 'u1/subagents/agent-dir.meta.json'), { recursive: true });   // reading a directory fails EISDIR
+    putRaw(metaDirAt(w.h1, w.repo, 'u1/subagents/agent-bad.meta.json'), '{not json');
+    w.meta(w.h1, munge(w.repo), 'u1/subagents/agent-ok.meta.json', { agentType: 'g', worktreePath: w.wt('wt-ok') });
+    const r = census(['--repo', w.repo, '--home', w.h1]);
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout);
+    const [bad, dir, ok] = out.records;   // sorted by admin name: agent-bad, agent-dir, agent-ok
+    expect(dir.meta).toMatchObject({ found: true, malformed: false, unreadable: true, pathless: false, worktreePathEquals: null, keys: [], homes: 1 });
+    expect(bad.meta).toMatchObject({ found: true, malformed: true, unreadable: false, pathless: false });   // the control: an unparsable meta is still malformed
+    expect(ok.meta).toMatchObject({ found: true, malformed: false, unreadable: false, pathless: false, worktreePathEquals: true });
+    expect(out.totals).toMatchObject({ metaFound: 3, metaMalformed: 1, metaUnreadable: 1, metaPathless: 0 });
+    for (const leak of ['agent-dir', '.meta.json', w.h1]) expect(r.stdout.includes(leak), leak).toBe(false);   // the marker is a boolean, never the name
+  });
+
+  it('marks a workflow meta that cannot be READ on its run as unreadable, apart from malformed and path-less (review 304 F8)', () => {
+    const w = mini([
+      { name: 'wf_dir-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-w1' },
+      { name: 'wf_bad-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-w2' },
+      { name: 'wf_ok-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-w3' },
+    ]);
+    const wfm = (run: string, file: string): string => path.join(w.h1, 'projects', munge(w.repo), 'u1', 'subagents', 'workflows', run, file);
+    fs.mkdirSync(wfm('wf_dir', 'a.meta.json'), { recursive: true });   // EISDIR
+    putRaw(wfm('wf_bad', 'a.meta.json'), '{oops');
+    putRaw(wfm('wf_ok', 'a.meta.json'), JSON.stringify({ workflowPhase: 'p', worktreePath: w.wt('wt-w3') }));
+    const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+    const [bad, dir, ok] = out.records;   // sorted: wf_bad-1, wf_dir-1, wf_ok-1
+    expect(dir.meta).toMatchObject({ found: false, malformed: false, unreadable: true, pathless: false });
+    expect(bad.meta).toMatchObject({ found: false, malformed: true, unreadable: false, pathless: false });   // the control
+    expect(ok.meta).toMatchObject({ found: true, malformed: false, unreadable: false, pathless: false, worktreePathEquals: true });
+    expect(out.totals).toMatchObject({ wf: 3, metaFound: 1, metaMissing: 2, metaMalformed: 1, metaUnreadable: 1, metaPathless: 0 });
+  });
+
+  it('a workflow run that holds a good meta beside an unreadable one and an unparsable one marks the record it names with both (review 304 F8)', () => {
+    const w = mini([{ name: 'wf_mix-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-wx' }]);
+    const wfm = (file: string): string => path.join(w.h1, 'projects', munge(w.repo), 'u1', 'subagents', 'workflows', 'wf_mix', file);
+    putRaw(wfm('a.meta.json'), JSON.stringify({ workflowPhase: 'p', worktreePath: w.wt('wt-wx') }));   // names this record
+    putRaw(wfm('b.meta.json'), '{oops');
+    fs.mkdirSync(wfm('c.meta.json'));   // EISDIR
+    const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+    expect(out.records[0].meta).toMatchObject({ found: true, malformed: true, unreadable: true, pathless: false, worktreePathEquals: true, keys: ['workflowPhase', 'worktreePath'] });
+    expect(out.totals).toMatchObject({ metaFound: 1, metaMissing: 0, metaMalformed: 1, metaUnreadable: 1, metaPathless: 0 });
+  });
+
+  it('marks an agent meta and a workflow meta whose file refuses to be read (mode 000) unreadable, not malformed (review 304 F8)', () => {
+    if (process.getuid?.() === 0) return;   // root reads through mode 000
+    const w = mini([
+      { name: 'agent-mode', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-am' },
+      { name: 'wf_mode-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-wm' },
+    ]);
+    const a = metaDirAt(w.h1, w.repo, 'u1/subagents/agent-mode.meta.json');
+    const f = metaDirAt(w.h1, w.repo, 'u1/subagents/workflows/wf_mode/a.meta.json');
+    putRaw(a, JSON.stringify({ agentType: 'g', worktreePath: w.wt('wt-am') }));   // valid JSON: it would parse if it could be read
+    putRaw(f, JSON.stringify({ workflowPhase: 'p', worktreePath: w.wt('wt-wm') }));
+    fs.chmodSync(a, 0o000);
+    fs.chmodSync(f, 0o000);
+    try {
+      const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+      const [agent, wf] = out.records;   // sorted: agent-mode, wf_mode-1
+      expect(agent.meta).toMatchObject({ found: true, malformed: false, unreadable: true, pathless: false, worktreePathEquals: null, keys: [] });
+      expect(wf.meta).toMatchObject({ found: false, malformed: false, unreadable: true, pathless: false });
+      expect(out.totals).toMatchObject({ metaFound: 1, metaMissing: 1, metaMalformed: 0, metaUnreadable: 2, metaPathless: 0 });
+    } finally { fs.chmodSync(a, 0o600); fs.chmodSync(f, 0o600); }
+  });
+
+  it('an unreadable meta contributes no keys and no path comparison, and is counted beside a malformed one, never as it (review 304 F8)', () => {
+    const w = mini([
+      { name: 'agent-mixa', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-xa' },
+      { name: 'agent-mixb', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-xb' },
+    ]);
+    // mixa: a valid meta in h1 whose path matches, an unreadable one in h2; mixb: an unparsable one in h1, an unreadable one in h2.
+    w.meta(w.h1, munge(w.repo), 'u1/subagents/agent-mixa.meta.json', { agentType: 'g', worktreePath: w.wt('wt-xa') });
+    fs.mkdirSync(metaDirAt(w.h2, w.repo, 'u1/subagents/agent-mixa.meta.json'), { recursive: true });
+    putRaw(metaDirAt(w.h1, w.repo, 'u1/subagents/agent-mixb.meta.json'), '{nope');
+    fs.mkdirSync(metaDirAt(w.h2, w.repo, 'u1/subagents/agent-mixb.meta.json'), { recursive: true });
+    const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1, '--home', w.h2]).stdout);
+    const [a, b] = out.records;
+    expect(a.meta).toMatchObject({ found: true, homes: 2, malformed: false, unreadable: true, pathless: false, worktreePathEquals: true, keys: ['agentType', 'worktreePath'] });
+    expect(b.meta).toMatchObject({ found: true, homes: 2, malformed: true, unreadable: true, pathless: false, worktreePathEquals: null, keys: [] });
+    expect(out.totals).toMatchObject({ metaMalformed: 1, metaUnreadable: 2, metaPathless: 0, multiHome: 2 });
   });
 
   it('counts an unreadable projects directory as an unreadable home, not as nothing there', () => {
@@ -208,6 +302,144 @@ describe('delegation-census (read-only, path-free)', () => {
     expect(head).toMatchObject({ locked: false, head: 'malformed', claudeBase: 'malformed', baseAgreesFirstLog: null, movedFromBase: null });
   });
 
+  // F10 (review 304): `worktreeDir` and `claudeBase` no longer fold a failure into "nothing there". A worktree directory
+  // whose stat fails with anything but ENOENT/ENOTDIR is 'unreadable' (`totals.worktreeUnreadable`), and a CLAUDE_BASE
+  // whose read fails with anything but ENOENT/ENOTDIR is `claudeBase: 'unreadable'`, with `movedFromBase: 'unmeasured'`
+  // (null means ONLY "no valid CLAUDE_BASE", and an unreadable one may be valid). A DIRECTORY named CLAUDE_BASE is the
+  // fixture that works as root too (reading it is EISDIR); the mode-000 rows skip as root.
+  it("reads a worktree directory that cannot be examined (its parent refuses search) as 'unreadable', never 'absent' (review 304 F10)", () => {
+    if (process.getuid?.() === 0) return;   // root searches through mode 000
+    const w = mini([{ name: 'agent-wu', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-wu' }]);
+    const parent = path.dirname(w.wt('wt-wu'));
+    fs.chmodSync(parent, 0o000);
+    try {
+      const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+      expect(out.records[0].worktreeDir).toBe('unreadable');
+      expect(out.totals).toMatchObject({ worktreeUnreadable: 1, worktreeAbsent: 0 });
+    } finally { fs.chmodSync(parent, 0o755); }
+  });
+
+  it("reads a worktree path under a regular file (ENOTDIR) and a missing one (ENOENT) as 'absent': nothing there, not unreadable (review 304 F10)", () => {
+    const w = mini([
+      { name: 'agent-wn', files: { HEAD: `${SHA_A}\n` }, wt: null },
+      { name: 'agent-wo', files: { HEAD: `${SHA_A}\n` }, wt: null },
+    ]);
+    fs.writeFileSync(path.join(w.repo, 'a-file'), 'x');
+    fs.writeFileSync(path.join(w.repo, '.git', 'worktrees', 'agent-wn', 'gitdir'), `${w.repo}/a-file/wt/.git\n`);   // stat: ENOTDIR
+    fs.writeFileSync(path.join(w.repo, '.git', 'worktrees', 'agent-wo', 'gitdir'), `${w.repo}/no-such-dir/.git\n`);   // stat: ENOENT
+    const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+    expect(out.records.map((x: { worktreeDir: string }) => x.worktreeDir)).toEqual(['absent', 'absent']);
+    expect(out.totals).toMatchObject({ worktreeAbsent: 2, worktreeUnreadable: 0 });
+  });
+
+  describe('a CLAUDE_BASE that cannot be read (review 304 F10)', () => {
+    const LOG = `${'0'.repeat(40)} ${SHA_A} Rig <you@example.com> 1 +0000\tbranch: Created\n`;   // a valid first log line: baseAgreesFirstLog could be answered
+    // A detached HEAD and a ref HEAD, both resolvable, so only the CLAUDE_BASE is in doubt.
+    function baseWorld(): ReturnType<typeof mini> & { admin: (n: string) => string } {
+      const w = mini([
+        { name: 'b-det', files: { HEAD: `${SHA_B}\n`, 'logs/HEAD': LOG }, wt: 'wt-b1' },
+        { name: 'b-ref', files: { HEAD: 'ref: refs/heads/wt-bq\n', 'logs/HEAD': LOG }, wt: 'wt-b2' },
+      ]);
+      putRaw(path.join(w.repo, '.git', 'refs', 'heads', 'wt-bq'), `${SHA_B}\n`);
+      return { ...w, admin: (n) => path.join(w.repo, '.git', 'worktrees', n) };
+    }
+    const expectUnreadable = (w: ReturnType<typeof mini>): void => {
+      const r = census(['--repo', w.repo, '--home', w.h1]);
+      expect(r.status, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout);
+      for (const rec of out.records) {
+        expect(rec).toMatchObject({ claudeBase: 'unreadable', baseAgreesFirstLog: null, movedFromBase: 'unmeasured' });
+      }
+      expect(out.records.map((x: { head: string }) => x.head)).toEqual(['detached', 'ref']);   // sorted: b-det, b-ref; the HEADs were measured fine
+    };
+
+    it("is 'unreadable' when CLAUDE_BASE is a directory (EISDIR), its movedFromBase 'unmeasured' and not null", () => {
+      const w = baseWorld();
+      for (const n of ['b-det', 'b-ref']) fs.mkdirSync(path.join(w.admin(n), 'CLAUDE_BASE'));
+      expectUnreadable(w);
+    });
+
+    it("is 'unreadable' when the CLAUDE_BASE file refuses to be read (mode 000), its movedFromBase 'unmeasured' and not null", () => {
+      if (process.getuid?.() === 0) return;   // root reads through mode 000
+      const w = baseWorld();
+      const files = ['b-det', 'b-ref'].map((n) => path.join(w.admin(n), 'CLAUDE_BASE'));
+      for (const f of files) { fs.writeFileSync(f, SHA_A); fs.chmodSync(f, 0o000); }
+      try { expectUnreadable(w); } finally { for (const f of files) fs.chmodSync(f, 0o600); }
+    });
+
+    it("is 'absent' when there is no CLAUDE_BASE (ENOENT) or the record is not a directory (ENOTDIR), its movedFromBase null", () => {
+      const w = baseWorld();
+      fs.writeFileSync(path.join(w.repo, '.git', 'worktrees', 'agent-file'), 'x');   // an admin entry that is a regular file: CLAUDE_BASE under it is ENOTDIR
+      const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+      const [file, det, ref] = out.records;   // sorted: agent-file, b-det, b-ref
+      expect(file).toMatchObject({ kind: 'agent', claudeBase: 'absent', movedFromBase: null });
+      expect(det).toMatchObject({ claudeBase: 'absent', baseAgreesFirstLog: null, movedFromBase: null });   // ENOENT
+      expect(ref).toMatchObject({ claudeBase: 'absent', movedFromBase: null });
+    });
+  });
+
+  // KNOWN LIMIT (the header names it), pinned so that closing it is a visible edit and never an accident: three per-record
+  // reads still fold a failure into their "nothing there" value. `locked` is false when its stat fails (the record directory
+  // refuses search), `baseAgreesFirstLog` is null when `logs/HEAD` cannot be read, as it is when it is absent, and an
+  // unreadable `gitdir` reads as an absent one: `worktreeDir: 'unmeasured'` and, for a workflow record, `meta.found: false`
+  // (counted in `totals.metaMissing`) although its meta is on disk.
+  it('KNOWN LIMIT: locked reads false when its stat fails, baseAgreesFirstLog null when logs/HEAD cannot be read, and an unreadable gitdir reads as an absent one (review 304 F10)', () => {
+    if (process.getuid?.() === 0) return;   // root reads through mode 000
+    const LOG = `${'0'.repeat(40)} ${SHA_A} Rig <you@example.com> 1 +0000\tbranch: Created\n`;
+    const w = mini([
+      { name: 'agent-lg', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A, 'logs/HEAD': LOG }, wt: 'wt-lg' },
+      { name: 'agent-lk', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A, 'logs/HEAD': LOG, locked: '' }, wt: 'wt-lk' },
+      { name: 'agent-ok', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A, 'logs/HEAD': LOG, locked: '' }, wt: 'wt-ok' },
+      { name: 'wf_gd-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-gd' },   // gitdir at mode 000
+      { name: 'wf_gdabs-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: null },   // no gitdir at all
+      { name: 'wf_gdok-1', files: { HEAD: 'ref: refs/heads/x\n' }, wt: 'wt-gdok' },   // the control: a readable gitdir
+    ]);
+    const admin = (n: string): string => path.join(w.repo, '.git', 'worktrees', n);
+    for (const [run, wt] of [['wf_gd', 'wt-gd'], ['wf_gdabs', 'wt-gdabs'], ['wf_gdok', 'wt-gdok']]) {
+      w.meta(w.h1, munge(w.repo), `u1/subagents/workflows/${run}/a.meta.json`, { workflowPhase: 'p', worktreePath: w.wt(wt) });   // each meta is on disk
+    }
+    const gitdir = path.join(admin('wf_gd-1'), 'gitdir');
+    fs.chmodSync(path.join(admin('agent-lg'), 'logs', 'HEAD'), 0o000);
+    fs.chmodSync(admin('agent-lk'), 0o400);   // listable, not searchable: `locked` (and every read inside) fails EACCES
+    fs.chmodSync(gitdir, 0o000);
+    try {
+      const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1]).stdout);
+      const [lg, lk, ok, gd, gdabs, gdok] = out.records;   // sorted: agent-lg, agent-lk, agent-ok, wf_gd-1, wf_gdabs-1, wf_gdok-1
+      expect(ok).toMatchObject({ locked: true, baseAgreesFirstLog: true });   // the controls: both are measurable
+      expect(lg).toMatchObject({ locked: false, baseAgreesFirstLog: null });
+      expect(lk).toMatchObject({ locked: false, worktreeDir: 'unmeasured', claudeBase: 'unreadable' });   // locked is on disk, and reads false
+      expect(gdok).toMatchObject({ worktreeDir: 'present', meta: { found: true } });
+      expect(gd).toMatchObject({ worktreeDir: 'unmeasured', meta: { found: false } });
+      expect(gd.worktreeDir).toBe(gdabs.worktreeDir);   // an unreadable gitdir and an absent one read alike
+      expect(gd.meta).toEqual(gdabs.meta);
+      expect(out.totals.metaFound).toBe(1);   // only wf_gdok-1's meta is found; wf_gd-1's is on disk, and counted in metaMissing with the rest
+    } finally { fs.chmodSync(admin('agent-lk'), 0o755); fs.chmodSync(path.join(admin('agent-lg'), 'logs', 'HEAD'), 0o600); fs.chmodSync(gitdir, 0o600); }
+  });
+
+  // Root-proof (EISDIR fails for root too): `text` is the convenience read that folds an unreadable file to null, so a
+  // DIRECTORY where `gitdir`, `HEAD`, `logs/HEAD` or `packed-refs` belongs reads as an absent one and the census still answers.
+  // Without that fold the UNREADABLE symbol reaches a `.trim()`, a regex or a `.split`, and the census dies on a TypeError.
+  it('reads a gitdir, HEAD, logs/HEAD or packed-refs that is a DIRECTORY (EISDIR) as an unreadable one, and still answers (review 304 F10)', () => {
+    const w = mini([
+      { name: 'agent-hd', files: { CLAUDE_BASE: SHA_A }, wt: 'wt-hd' },   // HEAD is a directory
+      { name: 'agent-gd', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A }, wt: null },   // gitdir is a directory
+      { name: 'agent-lh', files: { HEAD: `${SHA_A}\n`, CLAUDE_BASE: SHA_A }, wt: 'wt-lh' },   // logs/HEAD is a directory
+      { name: 'agent-pr', files: { HEAD: 'ref: refs/heads/wt-pr\n', CLAUDE_BASE: SHA_A }, wt: 'wt-pr' },   // no loose ref, and packed-refs is a directory
+    ]);
+    const admin = (n: string): string => path.join(w.repo, '.git', 'worktrees', n);
+    fs.mkdirSync(path.join(admin('agent-hd'), 'HEAD'));
+    fs.mkdirSync(path.join(admin('agent-gd'), 'gitdir'));
+    fs.mkdirSync(path.join(admin('agent-lh'), 'logs', 'HEAD'));
+    fs.mkdirSync(path.join(w.repo, '.git', 'packed-refs'));
+    const r = census(['--repo', w.repo, '--home', w.h1]);
+    expect(r.status, r.stderr).toBe(0);
+    const [gd, hd, lh, pr] = JSON.parse(r.stdout).records;   // sorted: agent-gd, agent-hd, agent-lh, agent-pr
+    expect(gd).toMatchObject({ worktreeDir: 'unmeasured' });
+    expect(hd).toMatchObject({ head: 'unreadable', movedFromBase: 'unmeasured' });
+    expect(lh).toMatchObject({ head: 'detached', baseAgreesFirstLog: null, movedFromBase: false });
+    expect(pr).toMatchObject({ head: 'ref', movedFromBase: 'unmeasured' });
+  });
+
   // F11(a): a real config home's project dir holds <uuid>.jsonl FILES beside the <uuid>/ dirs, so listing
   // `<file>/subagents` fails ENOTDIR. That is "nothing there", never an unreadable home.
   it('treats a <uuid>.jsonl file beside a <uuid>/ dir as nothing there, not as an unreadable home', () => {
@@ -238,6 +470,34 @@ describe('delegation-census (read-only, path-free)', () => {
     const both = JSON.parse(census(['--repo', w.repo, '--ccd-root', w.ccd, '--home', w.h1, '--home', w.h2]).stdout);
     expect(both.records[0].meta.homes).toBe(2);
     expect(both.totals.multiHome).toBe(1);
+  });
+
+  // F9 (review 304): `--home` is resolved like `--repo` and `--ccd-root`. `homes` counts DISTINCT homes, and one home
+  // spelled two ways (`<h>` and `<h>/`) is one home: it read every meta twice and counted its record in `multiHome`.
+  it('resolves --home like --repo: one home spelled two ways is one home, not multiHome (review 304 F9)', () => {
+    const w = mini([{ name: 'agent-hs', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-hs' }]);
+    w.meta(w.h1, munge(w.repo), 'u1/subagents/agent-hs.meta.json', { agentType: 'g', worktreePath: w.wt('wt-hs') });
+    for (const homes of [[w.h1, `${w.h1}/`], [`${w.h1}/`, w.h1], [w.h1, `${w.h1}/.`]]) {
+      const out = JSON.parse(census(['--repo', w.repo, ...homes.flatMap((h) => ['--home', h])]).stdout);
+      expect(out.records[0].meta, homes.join(' ')).toMatchObject({ found: true, homes: 1, uuids: 1 });
+      expect(out.totals.multiHome, homes.join(' ')).toBe(0);
+    }
+    w.meta(w.h2, munge(w.repo), 'u1/subagents/agent-hs.meta.json', { agentType: 'g', worktreePath: w.wt('wt-hs') });
+    const two = JSON.parse(census(['--repo', w.repo, '--home', w.h1, '--home', `${w.h1}/`, '--home', w.h2]).stdout);
+    expect(two.records[0].meta.homes).toBe(2);   // the control: a second, different home still counts
+    expect(two.totals.multiHome).toBe(1);
+  });
+
+  it('counts one unreadable home spelled two ways once (review 304 F9)', () => {
+    if (process.getuid?.() === 0) return;   // root reads through mode 000
+    const w = mini([{ name: 'agent-hu', files: { HEAD: `${SHA_A}\n` }, wt: 'wt-hu' }]);
+    const projects = path.join(w.h1, 'projects');
+    fs.mkdirSync(projects);
+    fs.chmodSync(projects, 0o000);
+    try {
+      const out = JSON.parse(census(['--repo', w.repo, '--home', w.h1, '--home', `${w.h1}/`]).stdout);
+      expect(out.totals.homesUnreadable).toBe(1);
+    } finally { fs.chmodSync(projects, 0o700); }
   });
 
   // F14: movedFromBase for every HEAD shape. null means ONLY "no valid CLAUDE_BASE to compare against"; a HEAD

@@ -253,6 +253,20 @@ describe('_operator_choice_keep writes the operator\'s own /model and /effort to
     expect(h.reg(ID, 'class')).toBe('default');
   });
 
+  it('ONE reader, two questions: its `ran-model` line (the read-back\'s — what RAN) beside the keep\'s line (what was CHOSEN), and the keep reads only its own', () => {
+    seed(); record({ class: 'fable' }); const t = now() - 600;
+    const p = writeTranscript([cmd(t, 'model'), ack(t, MODEL_ACK('Sonnet 5 (default)'))]);
+    const typed = h.reg(ID, 'typed')!;
+    expect(h.sh(`_operator_choice_read ${JSON.stringify(p)} ${JSON.stringify(typed)}`).split('\n')).toEqual([
+      `model default ${t} 7`,
+      `ran-model Sonnet ${t} Sonnet 5 (default)`,
+    ]);
+    keep();
+    expect(h.reg(ID, 'class'), 'the keep still writes the chosen row').toBe('default');
+    expect(routeLines()).toHaveLength(1);
+    expect(swapLog(), 'and says nothing about the line it does not read').not.toMatch(/operator-choice/);
+  });
+
   it('/effort high, and both kinds in one transcript', () => {
     seed(); record({ class: 'fable', effort: 'ultracode' }); const t = now() - 600;
     writeTranscript([cmd(t, 'model', 'sonnet'), ack(t, MODEL_ACK('Sonnet 5')), cmd(t + 30, 'effort'), ack(t + 30, EFFORT_ACK('high'))]);

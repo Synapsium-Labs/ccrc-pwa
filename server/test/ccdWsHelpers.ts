@@ -492,6 +492,19 @@ export const WIDE_PANE_IF_UP =
  *  rather than through a file. */
 export const DEAD_PANE = 'case "$*" in *pane_active*) return 1 ;; esac;';
 
+/** THE MOUNT TABLE EVERY `sh()` HANDS ccd, relative to the fixture HOME
+ *  (D-4500). The sidecar carry's link route reads `CCD_MOUNTINFO`, else
+ *  `/proc/self/mountinfo`, the moment a link fails, and decides link-or-copy
+ *  from it. Left to the default, a verdict would depend on the HOST — a Linux
+ *  runner answers from its own table, macOS from none — so the same case would
+ *  log one cause on CI and another on a laptop, and a test that names a cause
+ *  would be measuring the machine. The harness therefore points every snippet at
+ *  this path inside HOME, which is ABSENT until a test writes a table there
+ *  (`fixtures/fakeMountKernel.ts`): the route answers `mounts-absent` on every
+ *  host alike. A snippet's own `CCD_MOUNTINFO` wins over it; `''` restores the
+ *  real table, which only the probe-gated real-kernel case asks for. */
+export const FIXTURE_MOUNTINFO = '.fixture-mountinfo';
+
 export interface CcdHarness {
   home: string;
   sh(snippet: string, env?: NodeJS.ProcessEnv): string;
@@ -584,7 +597,10 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
         { encoding: 'utf8', cwd: home,
-          env: ghContainedEnv(home, { ...inheritedEnv(), HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
+          // `CCD_MOUNTINFO` sits BEFORE `...env` so a snippet can override it:
+          // see `FIXTURE_MOUNTINFO` for why the host's table never decides a verdict.
+          env: ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
+            CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), ...env }, { systemd: true, tmux: true }) }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;

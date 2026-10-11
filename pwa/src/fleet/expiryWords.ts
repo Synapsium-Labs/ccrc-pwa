@@ -14,6 +14,7 @@ export const EXPIRY_KIND_WORD: Readonly<Record<ExpiryAttention['kind'], string>>
   refused: 'refused',
   failing: 'failing',
   'no-evidence': 'no evidence',
+  kept: 'cleaned up, kept',
 };
 
 export const expiryKindWord = (kind: string): string =>

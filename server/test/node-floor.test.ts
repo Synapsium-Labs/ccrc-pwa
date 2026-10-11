@@ -136,3 +136,21 @@ describe('the node floor, assertion 4: what ccrc history needs from node:sqlite'
     expect(r.status).toBe(0);
   });
 });
+
+describe('D-4296 is cited where its remedy text lives (review 316 F32)', () => {
+  it('the doctor remedy line and the install.sh floor comment each cite D-4296', () => {
+    const doctor = readFileSync(path.join(root, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');
+    const start = doctor.indexOf('_check_node() {');
+    expect(start, '_check_node() is gone from ccd/ccrc-doctor-checks').toBeGreaterThan(-1);
+    const body = doctor.slice(start, doctor.indexOf('}', start));
+    const remedy = body.filter((l) => l.includes('a node:sqlite without FTS5'));
+    expect(remedy).toHaveLength(1);
+    expect(remedy[0]).toMatch(/# D-4296\b/);
+    const install = readFileSync(path.join(root, 'install.sh'), 'utf8').split('\n');
+    const at = install.findIndex((l) => l.startsWith('floor="$(node -e'));
+    expect(at, 'install.sh no longer reads the floor with node -e').toBeGreaterThan(-1);
+    const above: string[] = [];
+    for (let i = at - 1; i >= 0 && install[i]!.startsWith('#'); i -= 1) above.unshift(install[i]!);
+    expect(above.join('\n')).toMatch(/\bD-4296\b/);
+  });
+});

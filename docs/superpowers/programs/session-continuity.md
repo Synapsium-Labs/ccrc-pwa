@@ -525,6 +525,15 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   from the console. The fleet box finished at 23:16:17 and the server box at 23:16:50 (each box's `update.json`, phase
   `done`; `ccrc version` reads `1bb88d5e` on both). Baseline B's week ends 2026-10-13 23:16 UTC. Wave 4b (run 308) is
   planned after that reading, and the stop stays shadowed until the operator arms `scope-sweep-live`.
+- **2026-10-08 — issue #317 amends stage 1, off-wave: a link `EXDEV` refused goes through a common mount, and a copy
+  says why and how much.** Items 1–2 of the issue, the scope the operator set in its comment; items 3–4 (drop the
+  source, `carry-dedupe`) are not part of it. Plan `docs/superpowers/plans/2026-10-08-carry-link-via-mount.md` defines
+  D-4500 (`carry-links-through-common-mount`) and D-4501 (`carry-copy-says-why`), issued by the allocator; the spec's
+  rev 9 carries them into §1.2 item 1, §5.1, §8 and §9. The plan's doctor `carry` check was dropped at dispatch and
+  follows separately. Deploy **AGENT-FIRST** (ccd and the instrument), after the read-only pre-check: each account
+  root and its path under the whole-volume mount share one `dev:inode`, the mount is read-write for the fleet user,
+  and no unit has a private mount namespace (verified by the operator at dispatch). Afterwards, stage 1's
+  `--stage 1 --json` should show `link_via_mount` rising and no `exdev-*` key in `copy_by_cause`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

@@ -6256,6 +6256,17 @@ git commit -m "server: docs blob cache, listing map, draft sizes and index micro
    "test/docs-cache.test.ts"
   ],
   "red": "server docs-cache: 3 failed | 24 passed (27) — each docsCaches() call is its own set: nothing is shared at module scope; a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length; a base64 answer is charged its decoded bytes plus its b64 text"
+ },
+ {
+  "id": "W3-T5-M30",
+  "pkg": "server",
+  "file": "server/src/docs/cache.ts",
+  "old": "      const count = Math.max(1, listed.count);",
+  "new": "      const count = listed.count;",
+  "tests": [
+   "test/docs-cache.test.ts"
+  ],
+  "red": "server docs-cache: 1 failed | 27 passed (28) — a commit with no committed rows is charged at least one: DOCS_LISTING_MAP_ENTRIES + 1 of them evict the oldest (added at run time by Task 5's review fix; D-4470)"
  }
 ]
 ```
@@ -9884,12 +9895,12 @@ Measured, not a row: the shell list's Docs URL (Step 4) reds only with a built b
   "id": "W3-T8-M6",
   "pkg": "server",
   "file": "server/src/auth/gate.ts",
-  "old": " * THE GATE. One `onRequest` hook stands in front of all 90 routes, the static\n",
+  "old": " * THE GATE. One `onRequest` hook stands in front of all 92 routes, the static\n",
   "new": " * THE GATE. One `onRequest` hook stands in front of all 86 routes, the static\n",
   "tests": [
    "test/auth-gate.test.ts"
   ],
-  "red": "server auth-gate: 1 failed | 161 passed (162) — gate.ts's own docstring names the HTTP-route count it stands in front of"
+  "red": "server auth-gate: 1 failed | 163 passed (164) — gate.ts's own docstring names the HTTP-route count it stands in front of (re-spelled at run time: #320 added two routes to main after this plan was written, so the measured numeral is 92, not 90)"
  },
  {
   "id": "W3-T8-M7",
@@ -11965,10 +11976,498 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 232 plus the ids Step 5 ad
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: <n> (fixed <a>, carried <b>, not a defect <c>, ruled departures <d>). Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).`, and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-07-native-docs-reader-w3-routes/task-11-review/`. Task 12 Step 4's Notes cite the record's last line and its Carried list takes every CARRIED line. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them.
+Two rows re-anchored at run time after the merge of `main` (#330, the box-token lifecycle): W3-T8-M6 (gate.ts's numeral is 94 on the merged tree) and W3-T8-M12 (`SESSION_ONLY_ALL` gained `...TOKEN_DOORS`); same ids, the last occurrence wins.
+
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Review 3-2 re-spelled the blob cache's charge line and routes.ts's fill line, so `W3-T5-M7`, `W3-T5-M18`, `W3-T5-M19` and `W3-T6-M27` are repeated below with the same ids and the new `old`, each measured red in a fresh copy of the fix commit.
+
+Fix round 1 (review 361, coordinator mail 4110) appends its rows to this block as `W3-FR1-M<k>` (M1-M8 pin guards the review found unrowed, M9 the blob cache's own copy of the bytes, M10-M15 the lane verdicts that moved to L1), and repeats `W3-T4-M4`, `W3-T4-M8`, `W3-T4-M9`, `W3-T4-M10`, `W3-T4-M31` and `W3-T4-M32` with the same ids and the new `old`, because that move re-spelled their anchors; each was measured red in a fresh copy of its fix commit.
 
 ```json
-[]
+[
+{
+ "id": "W3-T11-M1",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  const typed = payloadAbsent && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;\n",
+ "new": "  const typed = false && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;\n",
+ "tests": [
+  "test/docs-policy.test.ts",
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-policy + docs-headers: 7 failed | 641 passed (648) \u2014 the gate's bodiless 401 passes with the four headers and no-store; the gate's bodiless 403 passes with the four headers and no-store; a bodiless 500 passes with the four headers and no-store; a bodiless 200 with no cache-control is no-store too, and a route-set value is kept; a bodiless pass carries no content-type header: it decorates, it does not type; an upgrade with no cookie and the right Origin: the gate's 401, the four headers, no-store, no defect line; an upgrade from a foreign Origin: the gate's 403, decorated, no defect line"
+},
+{
+ "id": "W3-T11-M2",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (answer.project === project) return { ok: true };\n",
+ "new": "  if (true) return { ok: true };\n",
+ "tests": [
+  "test/docs-policy.test.ts",
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-policy + docs-routes: 14 failed | 707 passed (721) \u2014 another project: ok is demo only for exactly the requested project; a case-different project: ok is Demo only for exactly the requested project; a padded project: ok is a  only for exactly the requested project; an empty project: ok is  only for exactly the requested project; an absent project: ok is undefined only for exactly the requested project; null: ok is null only for exactly the requested project; an array holding the project: ok is a only for exactly the requested project; a number: ok is 1 only for exactly the requested project; GET /api/docs/a/tree answered with project demo: 502 malformed-answer {why: pin}, logged, nothing recorded under a or demo; a tree for a answered with an other project is refused the same way; a tree for a answered with an absent project is refused the same way; a tree for a answered with a non-string project is refused the same way; the refresh's tree half: a tree answered with another project is the tree half's failure, nothing recorded; review 1-1: a tree for b naming a never poisons a's listing, so no cache hit serves another file's bytes"
+},
+{
+ "id": "W3-T5-M7",
+ "pkg": "server",
+ "file": "server/src/docs/cache.ts",
+ "old": "    return value.bytes.byteLength + Buffer.byteLength((encoding === 'base64' ? b64 : text) ?? '');\n",
+ "new": "    return value.bytes.byteLength;\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 7 failed | 34 passed (41) \u2014 a value charged exactly the budget is stored and evicts everything else; the text counts toward the charge: bytes of budget - 4 and 5 bytes of text are never stored; a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length; a base64 answer is charged its decoded bytes plus its b64 text; M6.11: the blob LRU evicts at DOCS_CACHE_BYTES, least recently used first; a non-empty file with an unknown key: the charge is the bytes plus the one content field held; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
+},
+{
+ "id": "W3-T5-M18",
+ "pkg": "server",
+ "file": "server/src/docs/cache.ts",
+ "old": "    return value.bytes.byteLength + Buffer.byteLength((encoding === 'base64' ? b64 : text) ?? '');\n",
+ "new": "    return value.bytes.byteLength + ((encoding === 'base64' ? b64 : text) ?? '').length;\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 1 failed | 40 passed (41) \u2014 a value whose utf8 text is n bytes (and n decoded bytes) is charged 2n, by byte length, not by length"
+},
+{
+ "id": "W3-T5-M19",
+ "pkg": "server",
+ "file": "server/src/docs/cache.ts",
+ "old": "Buffer.byteLength((encoding === 'base64' ? b64 : text) ?? '')",
+ "new": "Buffer.byteLength(text ?? '')",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 3 failed | 38 passed (41) \u2014 a base64 answer is charged its decoded bytes plus its b64 text; M6.11: the blob LRU evicts at DOCS_CACHE_BYTES, least recently used first; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
+},
+{
+ "id": "W3-T6-M27",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    const answer = docsStoredShow(got.answer, got.bytes);\n    at.caches.blobs.set(node, listed.repoKey, listed.file.blob, { answer, bytes: got.bytes });\n",
+ "new": "    void listed;\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 10 failed | 31 passed (41) \u2014 row 52: a second committed GET costs zero execs and is marked from: cache, onRef: contains, with no mode; row 52: the same blob under a new commit, and under a new path, costs zero execs and answers that commit and path; M6.11: a failure is never cached; the success after it is; M6.11: a served ref recorded DOCS_LISTING_PROVENANCE_MS ago vouches for nothing: ccd again; M6.11: with no listing entry the answer is served but not cached; after the tree it fills, then hits; M6.11: the blob LRU evicts at DOCS_CACHE_BYTES, least recently used first; refinement (k): a cache hit is served under a full read lane, before any flight or lane; an empty file whose show answer carries a large unknown key: the entry holds no such key; a non-empty file with an unknown key: the charge is the bytes plus the one content field held; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
+},
+{
+ "id": "W3-T11-M3",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    const answer = docsStoredShow(got.answer, got.bytes);\n",
+ "new": "    const answer = got.answer;\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 3 failed | 38 passed (41) \u2014 an empty file whose show answer carries a large unknown key: the entry holds no such key; a non-empty file with an unknown key: the charge is the bytes plus the one content field held; a base64 answer with a stray text: \"\" is charged bytes plus its b64 length, and holds no text"
+},
+{
+ "id": "W3-T11-M4",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "  if (half.kind === 'half') fetchSettled(at, src);\n",
+ "new": "  fetchSettled(at, src);\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 3 failed | 121 passed (124) \u2014 a caps-unknown 503 and an unsupported 501 refresh leave the index micro-cache standing: the next projects GET is a hit with one docs-index exec; a refresh the full fetch lane answers docs-busy 503 leaves the index micro-cache standing; a refresh refused before any exec bumps no generation: a tree GET begun before it is still joined by the next one"
+},
+{
+ "id": "W3-T11-M5",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    const run = await at.flights.join(docsIndexFlightKey(node, gen), clientGone(reply),\n",
+ "new": "    const run = await at.flights.join(docsIndexFlightKey(node, gen), new AbortController().signal,\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 125 passed (126) \u2014 a projects GET whose client goes while it is queued is dequeued over a real socket, and its docs-index never runs"
+},
+{
+ "id": "W3-T11-M6",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "      (flight) => at.read.run(LISTING_JOB, flight,\n        async () => believeIndex(at, node, gen, await reader.index({ node }))));\n",
+ "new": "      async () => ({ kind: 'ran' as const,\n        value: await believeIndex(at, node, gen, await reader.index({ node })) }) as never);\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 2 failed | 124 passed (126) \u2014 a cold projects GET under two held reads queues (no third exec), and runs once a slot frees; a projects GET whose client goes while it is queued is dequeued over a real socket, and its docs-index never runs"
+},
+{
+ "id": "W3-T11-M7",
+ "pkg": "server",
+ "file": "server/src/docs/hooks.ts",
+ "old": "    if (v.ok) return;\n    const now = nowMs();\n",
+ "new": "    if (v.ok || req.headers.upgrade !== undefined) return;\n    const now = nowMs();\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 2 failed | 60 passed (62) \u2014 (a) dark: a browser-shaped upgrade (same origin, no marker) is refused 403 foreign-request {why:marker}, decorated, no exec; (a) armed, with a session: the same browser-shaped upgrade is refused by provenance, decorated, no exec"
+},
+{
+ "id": "W3-T11-M8",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  const typed = payloadAbsent && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;\n",
+ "new": "  const typed = false && contentType === '' ? DOCS_JSON_CONTENT_TYPE : contentType;\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 3 failed | 59 passed (62) \u2014 an upgrade with no cookie and the right Origin: the gate's 401, the four headers, no-store, no defect line; an upgrade from a foreign Origin: the gate's 403, decorated, no defect line; (b) armed, no session: the gate refuses the upgrade 401 before provenance, and the refusal carries the four headers (the same mutation as W3-T11-M1, repeated under this id because no other W3 file can red (b) alone)"
+},
+{
+ "id": "W3-T11-M9",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "  app.addHook('onClose', async () => {\n",
+ "new": "  app.addHook('onRequest', async (req) => {\n    if (req.headers.upgrade !== undefined) await reader.index({ node });\n  });\n  app.addHook('onClose', async () => {\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 1 failed | 61 passed (62) \u2014 (c) an upgrade that passes the gate and provenance gets 101 and runs ZERO docs execs: no body, the socket closed (the mutation adds a docs-index exec to the read plugin's onRequest for an upgrade: no W3 handler runs on an upgrade, so a plugin hook is the closest W3-file mutation that makes an upgrade exec)"
+},
+{
+ "id": "W3-T11-M10",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "  return at.flights.join(docsTreeFlightKey(src.node, src.project, ref, gen), signal,\n",
+ "new": "  return ((_key: string, s: AbortSignal, start: (f: AbortSignal) => Promise<DocsLaneRun<DocsTreeRead>>) => start(s))(docsTreeFlightKey(src.node, src.project, ref, gen), signal,\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 4 failed | 122 passed (126) \u2014 row 51: two concurrent refreshes of one (project, branch) make exactly ONE docs-fetch and share one tree; both 200 with the same halves; M6.9: two concurrent tree GETs for one (project, ref): one exec, two equal answers; M6.9: a refresh's tree half is a SECOND docs-tree, never the tree GET in flight before its fetch; a tree GET after the bump joins the refresh's tree; a refresh refused before any exec bumps no generation: a tree GET begun before it is still joined by the next one"
+},
+{
+ "id": "W3-T11-M11",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    const run = await at.flights.join(docsShowFlightKey(node, src.project, pin, plan.maxBytes), clientGone(reply),\n",
+ "new": "    const run = await ((_key: string, s: AbortSignal, start: (f: AbortSignal) => Promise<unknown>) => start(s) as never)(docsShowFlightKey(node, src.project, pin, plan.maxBytes), clientGone(reply),\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 125 passed (126) \u2014 M6.9: two concurrent file GETs for one pin: one docs-show exec"
+},
+{
+ "id": "W3-T11-M12",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "    (flight) => at.read.run(LISTING_JOB, flight, async () => believeTree(at, src, await reader.tree(src, ref))));\n",
+ "new": "    (_flight) => (async (_job: unknown, _s: AbortSignal, exec: () => Promise<DocsTreeRead>) => ({ kind: 'ran' as const, value: await exec() }))(LISTING_JOB, _flight, async () => believeTree(at, src, await reader.tree(src, ref))));\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 8 failed | 118 passed (126) \u2014 the 33rd queued read answers docs-busy 503 Retry-After 2 with zero extra execs; a non-docs route is unaffected; closing answers every queued read busy; a read queued for DOCS_LANE_MAX_WAIT_MS answers docs-busy, and its show never runs; refinement (j): a client that goes while its read is queued is dequeued over a real socket, and its show never runs; refinement (j): a client that went before the handler ran starts no exec; a tree half the full read lane refuses rides the 200 as its body, docs-busy {lane: read}, with no Retry-After header; row 51: at most 2 reads in flight under refresh load: the tree halves ride the read lane; a cold projects GET under two held reads queues (no third exec), and runs once a slot frees; a projects GET whose client goes while it is queued is dequeued over a real socket, and its docs-index never runs"
+},
+{
+ "id": "W3-T11-M13",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (!DOCS_ALLOWED_CONTENT_TYPES.includes(contentType)) {\n",
+ "new": "  if (!DOCS_ALLOWED_CONTENT_TYPES.includes(contentType) && !contentType.startsWith('image/')) {\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 3 failed | 59 passed (62) \u2014 M5.5 svg (image/svg+xml) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 png-spaced (image/png ; x) is refused: 500 response-type-refused, JSON, no-store, logged once; M5.5 bmp (image/bmp) is refused: 500 response-type-refused, JSON, no-store, logged once"
+},
+{
+ "id": "W3-T11-M14",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (statusCode !== 200 || cacheControl === undefined) headers['cache-control'] = DOCS_CACHE_NO_STORE;\n",
+ "new": "  if (cacheControl === undefined) headers['cache-control'] = DOCS_CACHE_NO_STORE;\n",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 1 failed | 61 passed (62) \u2014 json-404-immutable: a non-200 is always no-store"
+},
+{
+ "id": "W3-T11-M15",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  return pin.kind === 'committed' && cls === 'raster' ? DOCS_CACHE_IMMUTABLE : DOCS_CACHE_NO_STORE;\n",
+ "new": "  return cls === 'raster' ? DOCS_CACHE_IMMUTABLE : DOCS_CACHE_NO_STORE;\n",
+ "tests": [
+  "test/docs-file-bytes.test.ts"
+ ],
+ "red": "server docs-file-bytes: 1 failed | 42 passed (43) \u2014 a draft raster 200, a committed JSON 200 and a draft JSON 200 are no-store"
+},
+{
+ "id": "W3-T11-M16",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  const committed = sameKeys(pinKeys, COMMITTED_PIN_KEYS);\n",
+ "new": "  const committed = COMMITTED_PIN_KEYS.every((k) => pinKeys.includes(k));\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 125 passed (126) \u2014 file: a mixed pin"
+},
+{
+ "id": "W3-T8-M6",
+ "pkg": "server",
+ "file": "server/src/auth/gate.ts",
+ "old": " * THE GATE. One `onRequest` hook stands in front of all 94 routes, the static\n",
+ "new": " * THE GATE. One `onRequest` hook stands in front of all 86 routes, the static\n",
+ "tests": [
+  "test/auth-gate.test.ts"
+ ],
+ "red": "server auth-gate: 1 failed | 165 passed (166) — gate.ts's own docstring names the HTTP-route count it stands in front of (re-anchored after the merge of main, #330)"
+},
+{
+ "id": "W3-T8-M12",
+ "pkg": "server",
+ "file": "server/test/box-token-census.test.ts",
+ "old": "const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS, ...TOKEN_DOORS];\n",
+ "new": "const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, ...UPDATE_DOORS, ...TOKEN_DOORS, '/api/docs/:project/refresh'];\n",
+ "tests": [
+  "test/box-token-census.test.ts"
+ ],
+ "red": "server box-token-census: 2 failed | 35 passed (37) — CLAUDE.md's box-token bullet is TRUE, not merely present; DOCS_DOORS joins neither the session-only coordination writes nor the box-token lanes (re-anchored after the merge of main, #330)"
+},
+{
+ "id": "W3-FR1-M1",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "const shape = docsAnswerShape('docs-show', got.answer);",
+ "new": "const shape = { ok: true } as ReturnType<typeof docsAnswerShape>;",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 126 passed (127) — FR1 review F1: a listed a.md whose show line carries a 500 000-deep unknown key: 502 schema on both reads"
+},
+{
+ "id": "W3-FR1-M2",
+ "pkg": "server",
+ "file": "server/src/docs/hooks.ts",
+ "old": "app.addHook('onRequest', async (req, reply) => {\n    const v = docsProvenance",
+ "new": "app.addHook('preHandler', async (req, reply) => {\n    const v = docsProvenance",
+ "tests": [
+  "test/docs-headers.test.ts"
+ ],
+ "red": "server docs-headers: 2 failed | 62 passed (64) — FR1 review F2: a marker-less POST refresh with an invalid JSON body / a 2 MiB body answers 403 foreign-request, not 400"
+},
+{
+ "id": "W3-FR1-M3",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "        return sendFile(reply,\n          docsFileReply(pin, docsCacheHitAnswer(hit.answer, pin, listed.file.blob), hit.bytes, 'cache'));",
+ "new": "        if (pin.path.endsWith('.png')) {\n          return reply.code(200).type('image/png').header('cache-control', 'private, max-age=31536000, immutable')\n            .send(Buffer.from(hit.bytes.buffer, hit.bytes.byteOffset, hit.bytes.byteLength));\n        }\n        return sendFile(reply,\n          docsFileReply(pin, docsCacheHitAnswer(hit.answer, pin, listed.file.blob), hit.bytes, 'cache'));",
+ "tests": [
+  "test/docs-file-bytes.test.ts"
+ ],
+ "red": "server docs-file-bytes: 1 failed | 44 passed (45) — FR1 review F3: a .png holding SVG text answers 422 raster-mismatch on BOTH reads (the cache hit)"
+},
+{
+ "id": "W3-FR1-M4",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "docsFileReply(pin, docsCacheHitAnswer(",
+ "new": "docsFileReply({ ...pin, kind: 'draft' } as unknown as typeof pin, docsCacheHitAnswer(",
+ "tests": [
+  "test/docs-file-bytes.test.ts"
+ ],
+ "red": "server docs-file-bytes: 1 failed | 44 passed (45) — FR1 review F3: a true committed .png answers raw immutable on BOTH reads, the second with zero execs"
+},
+{
+ "id": "W3-FR1-M5",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "Number.isFinite(own(s, 'attemptAgeMs'))",
+ "new": "typeof own(s, 'attemptAgeMs') === 'number'",
+ "tests": [
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-policy: 2 failed | 606 passed (608) — FR1 review F4: stamp.attemptAgeMs Infinity / NaN is schema"
+},
+{
+ "id": "W3-FR1-M6",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "!isKeyText(own(e, 'path'))",
+ "new": "!isText(own(e, 'path'))",
+ "tests": [
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-policy: 2 failed | 606 passed (608) — FR1 review F4: an entry whose path is empty / holds a NUL is schema"
+},
+{
+ "id": "W3-FR1-M7",
+ "pkg": "server",
+ "file": "server/src/docs/routes.ts",
+ "old": "function abandon(reply: FastifyReply): FastifyReply {\n  reply.hijack();\n  if (!reply.raw.destroyed) reply.raw.destroy();\n",
+ "new": "function abandon(reply: FastifyReply): FastifyReply {\n",
+ "tests": [
+  "test/docs-routes.test.ts"
+ ],
+ "red": "server docs-routes: 1 failed | 127 passed (128) — a queued tree GET whose response closes unfinished is dequeued, its reply hijacked and its raw response destroyed, and no hook runs for it"
+},
+{
+ "id": "W3-FR1-M8",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "        for (const d of f.detach.splice(0)) d();\n",
+ "new": "",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 2 failed | 39 passed (41) — a joiner whose signal aborts AFTER a fulfilled / a rejected flight settled leaves the flight's own signal unaborted"
+},
+{
+ "id": "W3-T4-M4",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "      if (laneOverflow('read', queue.length + 1)) return Promise.resolve(busy('read'));",
+ "new": "      if (laneOverflow('read', queue.length)) return Promise.resolve(busy('read'));",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 2 failed | 663 passed (665) — with 2 running and 32 queued, the next is docs-busy {lane:'read'} at once; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-T4-M8",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "fetchAdmit(running, runningKeys.has(queue[i].key))",
+ "new": "fetchAdmit(running, false)",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 5 failed | 660 passed (665) — the same key twice: the second waits behind the first though a global slot is free; a job waiting behind its own key never holds back another key: the later key starts on a free slot; 8 queued behind one running key with a global slot free: a job on an idle key starts at once; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a job waiting behind its key is docs-busy at 20000 ms and never runs when its key frees"
+},
+{
+ "id": "W3-T4-M9",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (running >= DOCS_FETCH_GLOBAL) return 'full';",
+ "new": "  if (running >= DOCS_FETCH_GLOBAL + 1) return 'full';",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 9 failed | 656 passed (665) — fetchAdmit: 2 running, key running=false is full (full wins over skip); fetchAdmit: 2 running, key running=true is full (full wins over skip); three keys: 2 run and the third waits for a global slot; with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a job waiting for a global slot is docs-busy at its wait, never runs, and frees its place; aborting a queued fetch answers abandoned and dequeues it, behind its key or the global bound; close answers every queued fetch busy, leaves no timer, and refuses a later run; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-T4-M10",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));\n",
+ "new": "",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 3 failed | 38 passed (41) — with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-T4-M31",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "        queue.push(w);\n        pump();\n        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));\n",
+ "new": "        queue.push(w);\n        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));\n        pump();\n",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 2 failed | 39 passed (41) — 8 queued behind one running key with a global slot free: a job on an idle key starts at once; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer"
+},
+{
+ "id": "W3-T4-M32",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "        if (laneOverflow('fetch', queue.length)) leave(w, busy('fetch'));\n",
+ "new": "        if (laneOverflow('fetch', queue.length + 1)) leave(w, busy('fetch'));\n",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 4 failed | 661 passed (665) — with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}; 8 queued behind one running key with a global slot free: a job on an idle key starts at once; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-FR1-M10",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  return job.raw > DOCS_LANE_LARGE_RAW;",
+ "new": "  return job.raw >= DOCS_LANE_LARGE_RAW;",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 3 failed | 662 passed (665) — an answer of exactly 1 MiB beside a large one admits (over, not at); laneLarge: raw 1048576 is large=false (exactly at the bound is not large); a second large job waits; exactly DOCS_LANE_LARGE_RAW is not large"
+},
+{
+ "id": "W3-FR1-M11",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  return waiting > (lane === 'read' ? DOCS_LANE_QUEUE : DOCS_FETCH_QUEUE);",
+ "new": "  return waiting > (lane === 'read' ? DOCS_FETCH_QUEUE : DOCS_LANE_QUEUE);",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 7 failed | 658 passed (665) — laneOverflow: the read lane with 31 waiting overflows=false; laneOverflow: the read lane with 32 waiting overflows=false; laneOverflow: the fetch lane with 9 waiting overflows=true; with 2 running and 32 queued, the next is docs-busy {lane:'read'} at once; with 2 running and 8 queued across keys, the next is docs-busy {lane:'fetch'}; the same queue with the global bound reached: the next job would be the ninth not started, so it is docs-busy at once, starts nothing and leaves no timer; a full read lane leaves a fetch untouched, and a read admits from its queue while the fetch lane is at its bound"
+},
+{
+ "id": "W3-FR1-M12",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (running >= DOCS_FETCH_GLOBAL) return 'full';\n  if (keyRunning) return 'skip';\n",
+ "new": "  if (keyRunning) return 'skip';\n  if (running >= DOCS_FETCH_GLOBAL) return 'full';\n",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 2 failed | 663 passed (665) — fetchAdmit: 2 running, key running=true is full (full wins over skip); fetchAdmit: 3 running, key running=true is full (full wins over skip)"
+},
+{
+ "id": "W3-FR1-M13",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "    if (laneLarge(job)) load.large += 1;\n",
+ "new": "",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 4 failed | 37 passed (41) — a second large job waits; exactly DOCS_LANE_LARGE_RAW is not large; a large head blocks a small job behind it that would admit on its own; a new job queues behind a waiting head even when the lane would admit it; abandoning a blocking head lets the job behind it start at once"
+},
+{
+ "id": "W3-FR1-M14",
+ "pkg": "server",
+ "file": "server/src/docs/lane.ts",
+ "old": "    if (laneLarge(job)) load.large -= 1;\n",
+ "new": "",
+ "tests": [
+  "test/docs-lanes.test.ts"
+ ],
+ "red": "server docs-lanes: 2 failed | 39 passed (41) — a second large job waits; exactly DOCS_LANE_LARGE_RAW is not large; a large head blocks a small job behind it that would admit on its own"
+},
+{
+ "id": "W3-FR1-M15",
+ "pkg": "server",
+ "file": "server/src/docs/policy.ts",
+ "old": "  if (laneLarge(job) && load.large > 0) return false;",
+ "new": "  if (job.raw >= DOCS_LANE_LARGE_RAW && load.large > 0) return false;",
+ "tests": [
+  "test/docs-lanes.test.ts",
+  "test/docs-policy.test.ts"
+ ],
+ "red": "server docs-lanes + docs-policy: 1 failed | 664 passed (665) — an answer of exactly 1 MiB beside a large one admits (over, not at)"
+},
+{
+ "id": "W3-FR1-M9",
+ "pkg": "server",
+ "file": "server/src/docs/cache.ts",
+ "old": "      const own = Buffer.allocUnsafeSlow(value.bytes.byteLength);\n      own.set(value.bytes);\n      slots.set(at, { value: { answer: value.answer, bytes: own }, charge: c });\n",
+ "new": "      slots.set(at, { value, charge: c });\n",
+ "tests": [
+  "test/docs-cache.test.ts"
+ ],
+ "red": "server docs-cache: 1 failed | 41 passed (42) — a small pooled source is stored as the cache's own copy: its buffer is exactly its length, and the source is not shared"
+}
+]
 ```
 
 ### Task 12: Close the wave: the W3 suites and the full server suite, the census-free invariants, the mutation table, the results record, the push, the ONE pull request, the fingerprint and the wave-done
@@ -13676,3 +14175,439 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 ```json
 []
 ```
+
+## Deviations found
+
+- **D-4464 (2026-10-09)** — a `:project` over 100 characters and a malformed percent escape in the path are refused by Fastify's router before any hook runs: `414 FST_ERR_MAX_PARAM_LENGTH` and `400 FST_ERR_BAD_URL`, in Fastify's own body, with no gate verdict, none of the four docs headers and no `bad-project` (spec §3.4: "`:project` failing the grammar gives `bad-project` with zero execs"; §5.3 and M5.4: "every docs response" carries the four headers). Zero execs still holds, and L0's project grammar admits at most 100 characters, so no valid project is affected; raising `maxParamLength` or adding `frameworkErrors` would change every route of a server that sets no router option today. Measured on the docs plugin by Task 6 and on the real server, armed and with no cookie, by Task 9. Refinement (d); Tasks 6 and 9.
+- **D-4465 (2026-10-09)** — the Docs composition is built in `buildServer`, beside the plugin's registration, over a getter on `deps.fleetState`, and `server/src/index.ts` is not edited (spec §7.7's W3 row: "wiring in `index.ts`"). `composeDocs({ runCcd: deps.runCcd, get fleetState() { return deps.fleetState; } })` runs once per `buildServer`, so production has one lane per link and two test servers share nothing. The getter closes W2's "captured by reference" carry: the adapter reads the state object the link mutates in place (Task 6) and one assigned after `buildServer` (Task 9). No `Deps` field is added, so the plugin registers unconditionally and `update-routes.test.ts`'s two-literal pin on `index.ts` stays untouched. Refinement (i); Tasks 8 and 9.
+- **D-4466 (2026-10-09)** — a queued docs job is abandoned when every request joined to it has gone, measured on the RESPONSE: `reply.raw`'s `close` while `writableFinished` is still false, not "`req.raw` `close`" (spec §6.3). Fastify 5.10's `request.signal` listens to the request stream's `close`, which current node can emit once the request body has been consumed, before any reply; the response closing unfinished is the one condition that means the client left (Task 6's real-socket cases measure it). Single-flight aborts a flight's own signal only when every joiner's signal has aborted, so one tab closing never cancels another tab's answer; the lane then removes the queued job, and a running exec is never cancelled. Refinement (j); Tasks 4, 6 and 7.
+- **D-4467 (2026-10-09)** — the console-latency test (M6.12) mounts the Docs plugin on a bare Fastify for both its real run and its control, registered exactly as `server.ts` registers it, through `composeDocs`'s `readLane` option, not through `buildServer` (spec §6.8's setup: "`buildServer` with `ccdRunner(fleet.runner, cfg)` and `fleet.state`"). `buildServer` composes the read lane itself and `Deps` has no field through which a test could hand it the control's pass-through lane (refinement (i) adds none: a new optional field with a local fallback is what `Deps.queue`'s docstring warns against), so a control built through `buildServer` could not differ from the real run in the lane alone; what `buildServer` adds over the plugin (the session gate, the other routes) is nothing the probes measure. The link stays §6.8's: a real agent behind `throttledProxy`, the docs composition over `ccdRunner(fleet.runner, cfg)` and `fleet.state` itself. Refinement (s); Task 10.
+- **D-4468 (2026-10-09)** — the fetch lane serialises per (node, project) with ONE FIFO of accepted, not-yet-started jobs and a set of keys with a running job, not "a `KeyedQueue` (`server/src/inject/queue.ts:6`) per (node, project)" (spec §6.4). `single-definition.test.ts`'s "one KeyedQueue for the process" holds `new KeyedQueue(` to `server/src/index.ts`, the composition root, so a `KeyedQueue` in `lane.ts` reds it (measured), and refinement (n) rules out the process's own queue, which serialises session operations by session id. The behaviour §6.4 states holds exactly: serial and in acceptance order per key, at most `DOCS_FETCH_GLOBAL` = 2 at once, a queue of 8 jobs that have not started (a new job is pumped first and refused only when it is left waiting as the ninth), a 20 s wait from acceptance, and `docs-busy {lane:'fetch'}` past either. Refinement (v); Task 4.
+- **D-4469 (2026-10-09)** — a JSON file reply's `show` carries the bytes check 8 verified, not the answer's own content field verbatim (spec §3.5: "wraps these answers unchanged"): a `utf8` `text` is the verified bytes decoded (a lone surrogate, which passes check 8 as U+FFFD's three bytes, is served as U+FFFD), a `base64` `b64` is the canonical one check 8 proved, and a stray second content field is dropped. For every answer within ccd's contract the served `show` equals the answer field for field; it differs only for an answer outside that contract. Raised by W2's review 317 (its note 1 for W3); refinement (w); pinned by W3-T2-M39, W3-T2-M40 and Task 6's two `docs-file-bytes` route cases.
+- **D-4470 (2026-10-09)** — the listing map charges each recorded commit at least one toward `DOCS_LISTING_MAP_ENTRIES` (its charge is `max(1, file entries)`), not its file entries alone (this plan's refinement (l): "counts FILE entries toward its 50 000"). A tree with no committed file rows (a project with no docs at that commit, or one whose rows are all drafts) still records a commit and its `refsAt`; charged zero, such commits never reached the bound, so a long-lived server kept one entry per branch-tip commit of a doc-less project without limit, against spec §6.5's "at most 50 000 entries in total". The floor keeps §6.5's bound true; every hit, fill and answer is unchanged. Raised by Task 5's task review and ruled by the worker's controller; pinned by Task 5's `a commit with no committed rows is charged at least one` case and W3-T5-M30.
+- **D-4471 (2026-10-09)** — a WebSocket upgrade to a docs route that passes the session gate and provenance is answered `101 Switching Protocols` by `@fastify/websocket`, which the server registers at the root and which wraps every route's handler, docs routes included: the reply is hijacked before the plugin's `onSend`, so the 101 carries none of the four §5.3 headers (spec §5.3 and M5.4: "every docs response" carries them). Three conditions make it safe, each pinned: the gate and provenance run first, so a browser-shaped upgrade (which cannot set `x-ccrc-docs`) is refused `403 foreign-request {why:'marker'}` with the four headers, and an upgrade with no session is refused by the gate, decorated; the hijacked socket is closed at once with no body; and such an upgrade runs zero docs execs and reaches no lane, cache or flight. The four headers are browser protections and no browser reaches the 101. The same shape as refinement (d)'s router-level refusals (D-4464); refusing the upgrade would add a fourth `why` to an L0 vocabulary W3 must not edit, and decorating the 101 would edit `server.ts` outside W3's block. Ruled by the coordinator (mail 4082, option A); Task 11 review 2-2.
+
+## Wave 3 results
+
+Measured 2026-10-09 13:27 UTC on the tree at `e3bd8859ef41` (base `5a6e5d3d7ef5`, 39 W3 commits on the first-parent line). Every number below was printed by a Task 12 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+
+Deviation numbers spent (issued block 4464-4479): D-4464, D-4465, D-4466, D-4467, D-4468, D-4469, D-4470, D-4471.
+
+### Suites
+
+The every-wave, W3 and existing suites (spec section 7.9), run in the foreground:
+
+| # | Command | Test Files | Tests | s | rc |
+|---|---|---|---|---|---|
+| 01 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )` | 1 passed (1) | 55 passed (55) | 14 | 0 |
+| 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 530 passed (530) | 17 | 0 |
+| 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` | 2 passed (2) | 32 passed (32) | 13 | 0 |
+| 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 58 | 0 |
+| 05 | `( cd server && ./node_modules/.bin/vitest run test/docs-routes.test.ts test/docs-cache.test.ts test/docs-lanes.test.ts test/docs-headers.test.ts test/docs-file-bytes.test.ts test/docs-policy.test.ts )` | 6 passed (6) | 944 passed (944) | 4 | 0 |
+| 06 | `( cd server && ./node_modules/.bin/vitest run test/docs-console-latency.test.ts )` | 1 passed (1) | 4 passed (4) | 11 | 0 |
+| 07 | `( cd server && ./node_modules/.bin/vitest run test/auth-gate.test.ts test/box-token-census.test.ts test/coord-routes-single-file.test.ts test/coord-pause-route.test.ts test/verb-gate.test.ts test/whitelist-subset.test.ts )` | 6 passed (6) | 346 passed (346) | 6 | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/capsupported.test.ts test/routes.test.ts test/update-routes.test.ts test/boot.test.ts test/auth-passkey.test.ts test/auth-wire.test.ts )` | 6 passed (6) | 308 passed (308) | 24 | 0 |
+| 09 | `( cd server && ./node_modules/.bin/vitest run test/docs-source.test.ts test/docs-budget.test.ts test/docs-shared.test.ts test/docs-parity.test.ts )` | 4 passed (4) | 471 passed (471) | 6 | 0 |
+| 10 | `( cd server && ./node_modules/.bin/vitest run -t 'every line citation is anchored' test/session-hook.test.ts )` | 1 passed (1) | 13 passed \| 437 skipped (450) | 4 | 0 |
+
+The full server suite, in 53 batches that hold every file vitest's include reaches exactly once (files one call cannot hold run as `-t` pieces of their top-level describes). This run's first pass: red (red on the first run: F17, F24, F25). First full run of this wave: **red** (at `87126057c672`).
+
+| # | Command | Test Files | Tests | s | rc |
+|---|---|---|---|---|---|
+| F01 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-a/> )` | 11 passed (11) | 548 passed (548) | 88 | 0 |
+| F02 | `( cd server && ./node_modules/.bin/vitest run <the 27 files whose name matches /^ccd-(b\|c[a-h])/> )` | 27 passed (27) | 997 passed \| 1 skipped (998) | 390 | 0 |
+| F03 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-c/> )` | 5 passed (5) | 178 passed (178) | 61 | 0 |
+| F04 | `( cd server && ./node_modules/.bin/vitest run <the 11 files whose name matches /^ccd-[d-h]/> )` | 11 passed (11) | 683 passed (683) | 57 | 0 |
+| F05 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-[i-o]/> )` | 14 passed (14) | 584 passed (584) | 105 | 0 |
+| F06 | `( cd server && ./node_modules/.bin/vitest run <the 14 files whose name matches /^ccd-p/> )` | 14 passed (14) | 408 passed (408) | 105 | 0 |
+| F07 | `( cd server && ./node_modules/.bin/vitest run <the 13 files whose name matches /^ccd-r[a-e]/> )` | 13 passed (13) | 245 passed (245) | 80 | 0 |
+| F08 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccd-r/> )` | 9 passed (9) | 246 passed (246) | 59 | 0 |
+| F09 | `( cd server && ./node_modules/.bin/vitest run <the 16 files whose name matches /^ccd-s/> )` | 16 passed (16) | 389 passed \| 8 skipped (397) | 37 | 0 |
+| F10 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-[t-v]/> )` | 6 passed (6) | 119 passed (119) | 10 | 0 |
+| F11 | `( cd server && ./node_modules/.bin/vitest run <the 6 files whose name matches /^ccd-ws-expire/> )` | 6 passed (6) | 135 passed (135) | 133 | 0 |
+| F12 | `( cd server && ./node_modules/.bin/vitest run <the 5 files whose name matches /^ccd-(w[a-r]\|wsa\|ws-[a-g])/> )` | 5 passed (5) | 191 passed (191) | 79 | 0 |
+| F13 | `( cd server && ./node_modules/.bin/vitest run <the 4 files whose name matches /^ccd-/> )` | 4 passed (4) | 82 passed (82) | 41 | 0 |
+| F14 | `( cd server && ./node_modules/.bin/vitest run <the 34 files whose name matches /^[ab]/> )` | 34 passed (34) | 1088 passed (1088) | 48 | 0 |
+| F15 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^(ca\|ccdargv\|ccg)/> )` | 9 passed (9) | 274 passed \| 5 skipped (279) | 22 | 0 |
+| F16 | `( cd server && ./node_modules/.bin/vitest run <the 1 files whose name matches /^ccrc-install-graphify\./> )` | 1 passed (1) | 58 passed (58) | 152 | 0 |
+| F17 | `( cd server && ./node_modules/.bin/vitest run <the 9 files whose name matches /^ccrc-[a-h]/> )` | 9 passed (9) | 562 passed \| 3 skipped (565) | 203 | 1; re-run alone: 0 |
+| F18 | `( cd server && ./node_modules/.bin/vitest run <the 10 files whose name matches /^ccrc-/> )` | 10 passed (10) | 562 passed \| 4 skipped (566) | 81 | 0 |
+| F19 | `( cd server && ./node_modules/.bin/vitest run <the 23 files whose name matches /^ch/> )` | 23 passed (23) | 1072 passed (1072) | 175 | 0 |
+| F20 | `( cd server && ./node_modules/.bin/vitest run <the 47 files whose name matches /^c/> )` | 47 passed (47) | 5885 passed (5885) | 141 | 0 |
+| F21 | `( cd server && ./node_modules/.bin/vitest run <the 78 files whose name matches /^[d-k]/> )` | 78 passed (78) | 4551 passed \| 3 skipped (4554) | 178 | 0 |
+| F22 | `( cd server && ./node_modules/.bin/vitest run <the 59 files whose name matches /^[l-o]/> )` | 59 passed (59) | 1405 passed \| 11 skipped (1416) | 141 | 0 |
+| F23 | `( cd server && ./node_modules/.bin/vitest run <the 65 files whose name matches /^[p-r]/> )` | 65 passed (65) | 1877 passed \| 5 skipped (1882) | 170 | 0 |
+| F24 | `( cd server && ./node_modules/.bin/vitest run <the 54 files whose name matches /^[st]/> )` | 1 failed \| 53 passed (54) | 1 failed \| 3566 passed \| 3 skipped (3570) | 239 | 1; re-run alone: 1 |
+|  | FAIL: test/tmp-sweep.test.ts > ccd-tmp-sweep: refusals and brakes > FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed |  |  |  |  |
+| F25 | `( cd server && ./node_modules/.bin/vitest run <the 50 files whose name matches no earlier pattern> )` | 1 failed \| 49 passed (50) | 1 failed \| 1367 passed (1368) | 114 | 1; re-run alone: 0 |
+| F26 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part1 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 58 passed \| 87 skipped (145) | 211 | 0 |
+| F27 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: part2 of its top-level describes>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 77 passed \| 68 skipped (145) | 215 | 0 |
+| F28 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-audit: rest>' test/ccd-ws-audit.test.ts )` | 1 passed (1) | 6 passed \| 139 skipped (145) | 2 | 0 |
+| F29 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part1 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 65 passed \| 49 skipped (114) | 259 | 0 |
+| F30 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: part2 of its top-level describes>' test/ccd-ws-reap.test.ts )` | 1 passed (1) | 49 passed \| 65 skipped (114) | 246 | 0 |
+| F31 | `( cd server && ./node_modules/.bin/vitest run -t '<ccd-ws-reap: rest>' test/ccd-ws-reap.test.ts )` | 1 skipped (1) | 114 skipped (114) | 4 | 0 |
+| F32 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part1 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 96 passed \| 261 skipped (357) | 40 | 0 |
+| F33 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part2 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 156 passed \| 201 skipped (357) | 169 | 0 |
+| F34 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part3 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 44 passed \| 313 skipped (357) | 32 | 0 |
+| F35 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: part4 of its top-level describes>' test/ccrc-account.test.ts )` | 1 passed (1) | 59 passed \| 298 skipped (357) | 81 | 0 |
+| F36 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-account: rest>' test/ccrc-account.test.ts )` | 1 passed (1) | 2 passed \| 355 skipped (357) | 8 | 0 |
+| F37 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part1 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 73 passed \| 815 skipped (888) | 90 | 0 |
+| F38 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part2 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 125 passed \| 763 skipped (888) | 162 | 0 |
+| F39 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part3 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 127 passed \| 761 skipped (888) | 169 | 0 |
+| F40 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part4 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 185 passed \| 703 skipped (888) | 178 | 0 |
+| F41 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part5 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 97 passed \| 791 skipped (888) | 103 | 0 |
+| F42 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part6 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 113 passed \| 775 skipped (888) | 39 | 0 |
+| F43 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: rest>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 153 passed \| 735 skipped (888) | 236 | 0 |
+| F44 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part1 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 60 passed \| 258 skipped (318) | 176 | 0 |
+| F45 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part2 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 63 passed \| 255 skipped (318) | 253 | 0 |
+| F46 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part3 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 68 passed \| 250 skipped (318) | 264 | 0 |
+| F47 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part4 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 73 passed \| 245 skipped (318) | 91 | 0 |
+| F48 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: rest>' test/ccrc-install.test.ts )` | 1 passed (1) | 34 passed \| 284 skipped (318) | 280 | 0 |
+| F49 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part1 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 99 passed \| 415 skipped (514) | 164 | 0 |
+| F50 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part2 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 156 passed \| 358 skipped (514) | 111 | 0 |
+| F51 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part3 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 94 passed \| 420 skipped (514) | 175 | 0 |
+| F52 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part4 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 153 passed \| 361 skipped (514) | 256 | 0 |
+| F53 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: rest>' test/ccrc-update.test.ts )` | 1 skipped (1) | 514 skipped (514) | 3 | 0 |
+
+```text
+FULL 53 batches
+OK test/ccd-ws-audit.test.ts: 141 tests ran once each across its pieces, 4 skipped in every piece, of 145
+OK test/ccd-ws-reap.test.ts: 114 tests ran once each across its pieces, 0 skipped in every piece, of 114
+OK test/ccrc-account.test.ts: 357 tests ran once each across its pieces, 0 skipped in every piece, of 357
+OK test/ccrc-doctor.test.ts: 873 tests ran once each across its pieces, 15 skipped in every piece, of 888
+OK test/ccrc-install.test.ts: 298 tests ran once each across its pieces, 20 skipped in every piece, of 318
+OK test/ccrc-update.test.ts: 502 tests ran once each across its pieces, 12 skipped in every piece, of 514
+```
+
+### Invariants
+
+From `w3-invariants.py` (scope from W3's own commits; net shapes against the base, or the last merge of main):
+
+```text
+base 5a6e5d3d7ef5, ref f82cb9fbcabf, tip e3bd8859ef41, 39 W3 commits, 1 merges of main
+PASS scope          20 files touched by W3 commits; outside the scope: none; scope files untouched: none
+PASS untouched      ccd/, shared/, pwa/, agent/, index.ts, docs/ports.ts, docs/ccdsource.ts, lifecycle.ts, ccdargv.ts, remote/runner.ts, README.md, CLAUDE.md changed vs ref: none
+PASS docs-files     tracked ['cache.ts', 'ccdsource.ts', 'hooks.ts', 'lane.ts', 'policy.ts', 'ports.ts', 'routes.ts']; on disk ['cache.ts', 'ccdsource.ts', 'hooks.ts', 'lane.ts', 'policy.ts', 'ports.ts', 'routes.ts']
+PASS exec-surface   EXEC_COMMANDS = ['tmux', 'ccd'] x1
+PASS fleet-proto    FLEET_PROTO = 1 x1; FLEET_PROTO_MIN = 1 x1
+PASS cap-literal    'docs-v1' quoted under server/src: {'server/src/ccdargv.ts': 1}
+PASS builder-calls  CCD_ARGV.docs under server/src: ['server/src/docs/ccdsource.ts']
+PASS no-l4-ccd      CCD_ARGV in routes.ts, hooks.ts, lane.ts, cache.ts: none
+PASS no-req-log     req.log or request.log under server/src/docs: none
+PASS no-box-token   requireMailToken or checkMailToken under server/src/docs: none
+PASS gate-shape     gate.ts vs ref: ['-8,1 +8,1']
+PASS sd-shape       single-definition.test.ts vs ref (5455 lines): 1 DOCS_RING_FLOOR line in place, 1 EOF append (135 lines), other hunks: none
+PASS deviations     ## Deviations found x1; defined ['D-4464', 'D-4465', 'D-4466', 'D-4467', 'D-4468', 'D-4469', 'D-4470', 'D-4471'] (issued 4464-4479; the first 8 expected in order); malformed definition lines: 0
+13 invariants, 13 PASS
+```
+
+### Mutation table
+
+Every `W3-T<n>-M<k>` row of Tasks 1-11 and every `W3-FR<r>-M<k>` row of a fix round (carried in Task 11's block), extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `e3bd8859ef41`, one row at a time, each file restored byte for byte after its row.
+
+| Row | Task | File | Result | First red case (measured) |
+|---|---|---|---|---|
+| W3-T1-M1 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the fetch-lane, cache, index and log constants (refinement (b), section 6.4, section 6.5) > each has the value the spec gives  |
+| W3-T1-M2 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsBusyBody, the one docs-busy producer (section 6.3, section 6.4, section 3.7) > the read lane answers {"ok":false,"failure" |
+| W3-T1-M3 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsRetryAfterSeconds is finite and positive or absent (refinement (h), W2's carry) > docs-busy with retryAfterMs NaN sends no |
+| W3-T1-M4 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsRetryAfterSeconds is finite and positive or absent (refinement (h), W2's carry) > docs-busy with retryAfterMs -5000 sends  |
+| W3-T1-M5 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsForeignRequestBody, the 403 for a refused provenance verdict (section 3.7, section 3.8) > navigation |
+| W3-T1-M6 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsBodyErrorVerdict, a refused request body (refinement (e)) > "FST_ERR_BAD_URL" is a defect: re-thrown to the default handle |
+| W3-T1-M7 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsLogDue, at most one refusal line a minute per reason (refinement (o), section 3.8) > exactly a minute |
+| W3-T1-M8 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsRefreshFetchHalf, the refresh's fetch half (refinement (m), section 3.4) > docs-busy ends the request with its own status: |
+| W3-T1-M9 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsRefreshFetchHalf, the refresh's fetch half (refinement (m), section 3.4) > fetch-too-soon with its wait is a failed half c |
+| W3-T1-M10 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half) > every key is its kind tag, the n |
+| W3-T1-M11 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half) > every key is its kind tag, the n |
+| W3-T1-M12 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half) > every key is its kind tag, the n |
+| W3-T1-M13 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half) > every key is its kind tag, the n |
+| W3-T1-M14 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the fetch-lane, cache, index and log constants (refinement (b), section 6.4, section 6.5) > DOCS_LISTING_PROVENANCE_MS is DOCS |
+| W3-T1-M15 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsRefreshFetchHalf, the refresh's fetch half (refinement (m), section 3.4) > DOCS_REFRESH_SKIPPED is the local-ref half, fro |
+| W3-T1-M16 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsBodyErrorVerdict, a refused request body (refinement (e)) > "X_FST_ERR_CTP_INVALID_JSON_BODY" is a defect: re-thrown to th |
+| W3-T1-M17 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsLogDue, at most one refusal line a minute per reason (refinement (o), section 3.8) > never logged, at time 0 |
+| W3-T1-M18 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half) > every key is its kind tag, the n |
+| W3-T1-M19 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half) > every key is its kind tag, the n |
+| W3-T1-M20 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsRefreshFetchHalf, the refresh's fetch half (refinement (m), section 3.4) > caps-unknown ends the request with its own stat |
+| W3-T1-M21 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half) > every key is its kind tag, the n |
+| W3-T1-M22 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: the node-first keys (refinement (p), section 3.12, section 6.4, section 6.5; M3.13 L1 half) > every key is its kind tag, the n |
+| W3-T1-M23 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsRefreshAnswer, a refresh that ran no exec at all (refinement (m), section 3.4) > a ran fetch made an exec: a pre-exec tree |
+| W3-T1-M24 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsRefreshAnswer, a refresh that ran no exec at all (refinement (m), section 3.4) > a skipped fetch and a tree that failed af |
+| W3-T1-M25 | T1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T1: docsIndexCacheable, a micro-cache fill only at the flight's own generation (section 6.5) > a refresh settled after the flight  |
+| W3-T2-M1 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the depth bound (refinement (f), W2 carry) > docs-tree: a 17-deep nest under an unknown key is schema |
+| W3-T2-M2 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the depth bound (refinement (f), W2 carry) > docs-tree: a 17-deep nest under an unknown key is schema |
+| W3-T2-M3 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > freshness deleted is schema |
+| W3-T2-M4 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > stamp.attemptAgeMs the string '1' is schema |
+| W3-T2-M5 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > an entry that is null is schema |
+| W3-T2-M6 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the index (refinement (f), W2 carry) > projects not an array is schema |
+| W3-T2-M7 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsShowBound, decoded show bytes held to the bound the server declared (refinement (g)) > exactly raw bytes is ok; one more i |
+| W3-T2-M8 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsShowBound, decoded show bytes held to the bound the server declared (refinement (g)) > exactly raw bytes is ok; one more i |
+| W3-T2-M9 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2) > a.png holding JPEG bytes is refused |
+| W3-T2-M10 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2) > a.svg is DocsFileResponse JSON of c |
+| W3-T2-M11 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2) > a.html is DocsFileResponse JSON of  |
+| W3-T2-M12 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: rasterVerdict, the declared type against the bytes (section 5.2 step 5; M5.2's L1 half) > declared png over the bytes of jpeg: |
+| W3-T2-M13 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsKnownSize, a size the server holds (section 6.2: never the request) > committed, listed size 0: a fact |
+| W3-T2-M14 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsCacheVerdict and docsCacheFill (section 6.5; refinement (l)) > a file recorded 600 000 ms ago |
+| W3-T2-M15 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsCacheVerdict and docsCacheFill (section 6.5; refinement (l)) > a symlink entry |
+| W3-T2-M16 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsCacheVerdict and docsCacheFill (section 6.5; refinement (l)) > fill: draft, listed file |
+| W3-T2-M17 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsCacheHitAnswer, the request's pin over the stored content (section 6.5; refinement (l)) > answers the pin's commit, sectio |
+| W3-T2-M18 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsCacheHitAnswer, the request's pin over the stored content (section 6.5; refinement (l)) > answers the pin's commit, sectio |
+| W3-T2-M19 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the depth bound (refinement (f), W2 carry) > the answer itself must be a plain object: an array is schema for |
+| W3-T2-M20 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > ref.served holding a NUL is schema |
+| W3-T2-M21 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsRasterType, the declared raster type of a path (section 5.2 step 5) > A.PNG is png, agreeing with contentClass |
+| W3-T2-M22 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsRasterType, the declared raster type of a path (section 5.2 step 5) > .png is null, agreeing with contentClass |
+| W3-T2-M23 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsCacheVerdict and docsCacheFill (section 6.5; refinement (l)) > a clock that went back: a negative age |
+| W3-T2-M24 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsCacheHitAnswer, the request's pin over the stored content (section 6.5; refinement (l)) > answers the pin's commit, sectio |
+| W3-T2-M25 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the depth bound (refinement (f), W2 carry) > docs-tree: a 17-deep nest under an unknown key is schema |
+| W3-T2-M26 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > ref.commit absent is schema |
+| W3-T2-M27 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > an entry whose committed kind is 'tree' is schema |
+| W3-T2-M28 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > an entry whose committed blob is not a sha is schema |
+| W3-T2-M29 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > an entry whose committed size is -1 is schema |
+| W3-T2-M30 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > an entry whose draft.fp is 'x', not a fingerprint is sc |
+| W3-T2-M31 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > ref.requested 7 is schema |
+| W3-T2-M32 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > freshness.remote 'upstream' is schema |
+| W3-T2-M33 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > an entry with section 'docs' is schema |
+| W3-T2-M34 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > an entry with no committed key at all is schema |
+| W3-T2-M35 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the tree fields W3 reads (refinement (f), W2 carry) > stamp.lastOutcome 7 is schema |
+| W3-T2-M36 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsAnswerShape, the depth bound (refinement (f), W2 carry) > DOCS_ANSWER_MAX_DEPTH is 16, its own literal on exactly one line |
+| W3-T2-M37 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2) > a committed a.png holding png bytes |
+| W3-T2-M38 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsCacheHitAnswer, the request's pin over the stored content (section 6.5; refinement (l)) > answers the pin's commit, sectio |
+| W3-T2-M39 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: docsFileReply, the representation by contentClass(path) alone (section 3.6, section 5.2) > a.md is DocsFileResponse JSON of cl |
+| W3-T2-M40 | T2 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > W3 T2: the JSON show is the verified bytes, never the answer's content field (W2 review, check 8) > a leading byte-order mark is one  |
+| W3-T3-M1 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.5 a top-level navigation is 403 foreign-request {why:nav |
+| W3-T3-M2 | T3 | `server/src/docs/policy.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.5 a top-level navigation is 403 foreign-request {why:nav |
+| W3-T3-M3 | T3 | `server/src/docs/policy.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.6 sec-fetch-site same-site is 403 foreign-request {why:s |
+| W3-T3-M4 | T3 | `server/src/docs/policy.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.7 no marker and no Sec-Fetch-* is 403 foreign-request {w |
+| W3-T3-M5 | T3 | `server/src/docs/policy.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.7 the marker alone, from a browser that sends no Sec-Fet |
+| W3-T3-M6 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: the refusal log, at most one line a minute per why (refinement (o), section 3.8) > logs a navigation refusal once in a minute |
+| W3-T3-M7 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: the refusal log, at most one line a minute per why (refinement (o), section 3.8) > logs a navigation refusal once in a minute |
+| W3-T3-M8 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.5 a top-level navigation is 403 foreign-request {why:nav |
+| W3-T3-M9 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: the response policy (M5.5, section 5.3) > M5.5 html (text/html) is refused: 500 response-type-refused, JSON, no-store, logged |
+| W3-T3-M10 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: the response policy (M5.5, section 5.3) > M5.5 attachment (text/html) is refused: 500 response-type-refused, JSON, no-store,  |
+| W3-T3-M11 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: request-body refusals are bad-query {why:body} (refinement (e)) > invalid JSON |
+| W3-T3-M12 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: request-body refusals are bad-query {why:body} (refinement (e)) > a defect stays Fastify's default 500, still decorated, neve |
+| W3-T3-M13 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: sendDocsFailure, the status and Retry-After from L1 (section 3.7) > busy-read answers 503, Retry-After 2 |
+| W3-T3-M14 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: the response policy (M5.5, section 5.3) > M5.5 html (text/html) is refused: 500 response-type-refused, JSON, no-store, logged |
+| W3-T3-M15 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: hooks.ts spells none of the response-policy headers (it sets what the verdict carries) > no quoted header name or value from  |
+| W3-T3-M16 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.5 a top-level navigation is 403 foreign-request {why:nav |
+| W3-T3-M17 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.5 a top-level navigation is 403 foreign-request {why:nav |
+| W3-T3-M18 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: request-body refusals are bad-query {why:body} (refinement (e)) > invalid JSON |
+| W3-T3-M19 | T3 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: request-body refusals are bad-query {why:body} (refinement (e)) > a defect stays Fastify's default 500, still decorated, neve |
+| W3-T4-M1 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane admits by laneAdmit, applied to its head (section 6.3) > 2 small jobs start at once and the third waits for a slo |
+| W3-T4-M2 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane is strict FIFO (section 6.3) > jobs start in the order they were queued |
+| W3-T4-M3 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane is strict FIFO (section 6.3) > a large head blocks a small job behind it that would admit on its own |
+| W3-T4-M4 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane refuses past its queue and its wait (M6.2, section 6.3) > with 2 running and 32 queued, the next is docs-busy {la |
+| W3-T4-M5 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane refuses past its queue and its wait (M6.2, section 6.3) > a queued job still waits at 9999 ms, is docs-busy at 10 |
+| W3-T4-M6 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: abandonment in the read lane (refinement (j), section 6.3) > aborting a queued job answers abandoned, dequeues it, and it never |
+| W3-T4-M7 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane releases a slot on every settle, once (section 6.3) > a rejected exec frees its slot (the next queued starts) and |
+| W3-T4-M8 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > the same key twice: the second waits behind |
+| W3-T4-M9 | T4 (re-anchored in T11) | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F8: lane verdicts are L1's > fetchAdmit: 2 running, key running=false is full (full wins over skip) |
+| W3-T4-M10 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > with 2 running and 8 queued across keys, th |
+| W3-T4-M11 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > the same queue with the global bound reache |
+| W3-T4-M12 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: single-flight (section 6.4, refinement (j)) > two joins on one key start once and both receive the one value |
+| W3-T4-M13 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: single-flight (section 6.4, refinement (j)) > a settled flight frees its key: a third join starts again |
+| W3-T4-M14 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: single-flight (section 6.4, refinement (j)) > the flight's signal aborts only when EVERY joiner's signal has aborted |
+| W3-T4-M15 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: closing the read lane (the plugin onClose, Task 6) > answers every queued job busy, leaves no timer, and refuses a later run wi |
+| W3-T4-M16 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: single-flight (section 6.4, refinement (j)) > a join on an abandoned flight starts a NEW flight; the old one settles alone |
+| W3-T4-M17 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: abandonment in the read lane (refinement (j), section 6.3) > a signal already aborted answers abandoned at once, even on an idl |
+| W3-T4-M18 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: abandonment in the read lane (refinement (j), section 6.3) > abandoning a blocking head lets the job behind it start at once |
+| W3-T4-M19 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane is strict FIFO (section 6.3) > a new job queues behind a waiting head even when the lane would admit it |
+| W3-T4-M20 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: closing the read lane (the plugin onClose, Task 6) > answers every queued job busy, leaves no timer, and refuses a later run wi |
+| W3-T4-M21 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane refuses past its queue and its wait (M6.2, section 6.3) > admission clears the wait timer: a job that starts is n |
+| W3-T4-M22 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > a job waiting behind its own key never hold |
+| W3-T4-M23 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > a signal already aborted answers abandoned  |
+| W3-T4-M24 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > aborting a queued fetch answers abandoned a |
+| W3-T4-M25 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > a job waiting behind its key is docs-busy a |
+| W3-T4-M26 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > a rejected fetch frees its key and its glob |
+| W3-T4-M27 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > close answers every queued fetch busy, leav |
+| W3-T4-M28 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > close answers every queued fetch busy, leav |
+| W3-T4-M29 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the generation counter (section 6.4) > starts at 0 per key, bump answers the new value, and keys are independent |
+| W3-T4-M30 | T4 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: single-flight (section 6.4, refinement (j)) > a lone joiner whose signal is already aborted starts a flight whose signal is abo |
+| W3-T4-M31 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > 8 queued behind one running key with a glob |
+| W3-T4-M32 | T4 (re-anchored in T11) | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the fetch lane, serial per key under a global bound (section 6.4, refinement (n)) > with 2 running and 8 queued across keys, th |
+| W3-T5-M1 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > blob cache: the same (repoKey, blob) under two nodes  |
+| W3-T5-M2 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > listing map: the same tree under two nodes is two com |
+| W3-T5-M3 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > 65 values of 1 MiB stay within DOCS_CACHE_BYTES: the first is evi |
+| W3-T5-M4 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > 65 values of 1 MiB stay within DOCS_CACHE_BYTES: the first is evi |
+| W3-T5-M5 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > LRU, not FIFO: a get on the second before the 65th set keeps it,  |
+| W3-T5-M6 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > a value of DOCS_CACHE_BYTES + 1 in bytes alone is never stored an |
+| W3-T5-M7 | T5 (re-anchored in T11) | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > a value charged exactly the budget is stored and evicts everythin |
+| W3-T5-M8 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the listing map (section 6.5; refinement (l)) > 11 trees of 5000 committed rows: at most DOCS_LISTING_MAP_ENTRIES, 10 co |
+| W3-T5-M9 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the listing map (section 6.5; refinement (l)) > records committed rows only, copying exactly {blob, size, kind}; a liste |
+| W3-T5-M10 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the listing map (section 6.5; refinement (l)) > re-recording a known commit counts its rows once and stamps each served  |
+| W3-T5-M11 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the draft size map (section 6.5, section 3.12) > 10001 distinct fingerprints keep DOCS_DRAFT_SIZE_ENTRIES; the first is  |
+| W3-T5-M12 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the index micro-cache (section 6.5) > a hit carries its age until DOCS_INDEX_CACHE_MS; at the bound it is gone |
+| W3-T5-M13 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the index micro-cache (section 6.5) > drop forgets the node at once and leaves every other node; a set after it is a fre |
+| W3-T5-M14 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > draft sizes: one fingerprint under two nodes keeps tw |
+| W3-T5-M15 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > index micro-cache: one node's index is not another's |
+| W3-T5-M16 | T5 | `server/src/docs/policy.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > single-flight: the same tree or show under two nodes  |
+| W3-T5-M17 | T5 | `server/src/docs/policy.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > single-flight: the same tree or show under two nodes  |
+| W3-T5-M18 | T5 (re-anchored in T11) | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > a value whose utf8 text is n bytes (and n decoded bytes) is charg |
+| W3-T5-M19 | T5 (re-anchored in T11) | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > a base64 answer is charged its decoded bytes plus its b64 text |
+| W3-T5-M20 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the committed blob LRU (section 6.5; refinement (l)) > re-setting a key replaces its charge, never adds to it |
+| W3-T5-M21 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the listing map (section 6.5; refinement (l)) > records committed rows only, copying exactly {blob, size, kind}; a liste |
+| W3-T5-M22 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the listing map (section 6.5; refinement (l)) > re-recording a known commit counts its rows once and stamps each served  |
+| W3-T5-M23 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the listing map (section 6.5; refinement (l)) > a commit alone above the bound is kept by its own record (the newest is  |
+| W3-T5-M24 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the listing map (section 6.5; refinement (l)) > LRU by commit: a lookup on the first before the 11th record keeps it, an |
+| W3-T5-M25 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the draft size map (section 6.5, section 3.12) > LRU: a get on the first before one more record keeps it, and the second |
+| W3-T5-M26 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the draft size map (section 6.5, section 3.12) > a draft whose fp or size is null, and a committed-only row, record noth |
+| W3-T5-M27 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the draft size map (section 6.5, section 3.12) > a draft whose fp or size is null, and a committed-only row, record noth |
+| W3-T5-M28 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the index micro-cache (section 6.5) > a clock that went back vouches for nothing |
+| W3-T5-M29 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — every key carries the node (spec 2026-10-01 M3.13, section 3.12) > each docsCaches() call is its own set: nothing is sha |
+| W3-T5-M30 | T5 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > docs caches — the listing map (section 6.5; refinement (l)) > a commit with no committed rows is charged at least one: DOCS_LISTING_MA |
+| W3-T6-M1 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > M3.4 — every refusal before an exec answers its word and status, with zero execs > tree: an unknown key node |
+| W3-T6-M2 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > M3.4 — every refusal before an exec answers its word and status, with zero execs > refinement (c): HEAD /api/docs/projects matches no |
+| W3-T6-M3 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > M3.4 — every refusal before an exec answers its word and status, with zero execs > refinement (c): HEAD /api/docs/demo/tree matches n |
+| W3-T6-M4 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > M3.4 — every refusal before an exec answers its word and status, with zero execs > refinement (c): HEAD /api/docs/demo/file?commit=aa |
+| W3-T6-M5 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > answers, ccd failures and the gate (section 3.4, section 3.5) > projects: 200 {ok, index, cacheAgeMs: null}; within DOCS_INDEX_CACHE_ |
+| W3-T6-M6 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > answers, ccd failures and the gate (section 3.4, section 3.5) > projects: 200 {ok, index, cacheAgeMs: null}; within DOCS_INDEX_CACHE_ |
+| W3-T6-M7 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > answers, ccd failures and the gate (section 3.4, section 3.5) > projects: 200 {ok, index, cacheAgeMs: null}; within DOCS_INDEX_CACHE_ |
+| W3-T6-M8 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > an ok answer the adapter passed is shape-checked before it is believed (refinement (f); W2 carry) > a tree without freshness: 502 mal |
+| W3-T6-M9 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > an ok answer the adapter passed is shape-checked before it is believed (refinement (f); W2 carry) > a tree without freshness: 502 mal |
+| W3-T6-M10 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > an ok answer the adapter passed is shape-checked before it is believed (refinement (f); W2 carry) > an index whose projects is not an |
+| W3-T6-M11 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > answers, ccd failures and the gate (section 3.4, section 3.5) > a ccd failure line (ref-locked with lockAgeMs ABSENT) answers its sta |
+| W3-T6-M12 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > M6.2 at the routes — the read lane: two in flight, a strict queue, its wait, and a client that left > refinement (j): a client that g |
+| W3-T6-M13 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > M6.2 at the routes — the read lane: two in flight, a strict queue, its wait, and a client that left > refinement (j): a client that w |
+| W3-T6-M14 | T6 | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l)) > refinement (k): a cache hit is served under a fu |
+| W3-T6-M15 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > M6.2 at the routes — the read lane: two in flight, a strict queue, its wait, and a client that left > the 33rd queued read answers do |
+| W3-T6-M16 | T6 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > answers, ccd failures and the gate (section 3.4, section 3.5) > composeDocs builds the reader and the fetcher over the SAME source: a |
+| W3-T6-M17 | T6 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > the show bound: decoded bytes are held to the bound the server declared (refinement (g); W2 carry) > a committed .md answer of DO |
+| W3-T6-M18 | T6 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > the show bound: decoded bytes are held to the bound the server declared (refinement (g); W2 carry) > a draft whose fp -> size map |
+| W3-T6-M19 | T6 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > the show bound: decoded bytes are held to the bound the server declared (refinement (g); W2 carry) > a listed size of 5: a 6-byte |
+| W3-T6-M20 | T6 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > M5.2 — a raster's declared type must be true of its bytes > declared a.png, actual jpeg |
+| W3-T6-M21 | T6 | `server/src/docs/policy.ts` | red | test/docs-file-bytes.test.ts > M5.1 — the representation is a function of the path's class: only a raster is raw bytes > a.svg answers 200 JSON {ok, contentClas |
+| W3-T6-M22 | T6 | `server/src/docs/policy.ts` | red | test/docs-file-bytes.test.ts > M5.1 — the representation is a function of the path's class: only a raster is raw bytes > a.html answers 200 JSON {ok, contentCla |
+| W3-T6-M23 | T6 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > M5.1 — the representation is a function of the path's class: only a raster is raw bytes > a.md answers 200 JSON {ok, contentClass |
+| W3-T6-M24 | T6 | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l)) > refinement (k): a cache hit is served under a fu |
+| W3-T6-M25 | T6 | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l)) > M6.11: a served ref recorded DOCS_LISTING_PROVEN |
+| W3-T6-M26 | T6 | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l)) > row 52: a second committed GET costs zero execs  |
+| W3-T6-M27 | T6 (re-anchored in T11) | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l)) > row 52: a second committed GET costs zero execs  |
+| W3-T6-M28 | T6 | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l)) > the listing's blob rides the ask: a show answeri |
+| W3-T6-M29 | T6 | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l)) > M6.11: a served ref recorded DOCS_LISTING_PROVEN |
+| W3-T6-M30 | T6 | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > docs caches at the routes — row 52 and M6.11 (section 6.5; refinements (k) and (l)) > row 52: a second committed GET costs zero execs  |
+| W3-T6-M31 | T6 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > the show bound: decoded bytes are held to the bound the server declared (refinement (g); W2 carry) > a draft whose fp -> size map |
+| W3-T7-M1 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: fetchBranchFor maps the request onto one docs-fetch, then a docs-tree of the requested ref (section 3.4) > bare ws/a: docs-fetch  |
+| W3-T7-M2 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: row 51 and M6.9 — single-flight, and a refresh's tree never joins a flight begun before its fetch > row 51: two concurrent refres |
+| W3-T7-M3 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: M6.10 — the fetch lane at the route: serial per project, 2 globally, 8 queued, then docs-busy {lane: fetch} > two refreshes of on |
+| W3-T7-M4 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: row 51 and M6.9 — single-flight, and a refresh's tree never joins a flight begun before its fetch > M6.9: a refresh's tree half i |
+| W3-T7-M5 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: row 51 and M6.9 — single-flight, and a refresh's tree never joins a flight begun before its fetch > row 51: two concurrent refres |
+| W3-T7-M6 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: row 51 and M6.9 — single-flight, and a refresh's tree never joins a flight begun before its fetch > M6.9: a skipped fetch (a loca |
+| W3-T7-M7 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > caps-unknown (ccdVe |
+| W3-T7-M8 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > a failed fetch (fet |
+| W3-T7-M9 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: the index micro-cache is dropped by a refresh, when its fetch settles and again when it completes (section 6.4; refinement (m)) > |
+| W3-T7-M10 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: the index micro-cache is dropped by a refresh, when its fetch settles and again when it completes (section 6.4; refinement (m)) > |
+| W3-T7-M11 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: M6.10 — the fetch lane at the route: serial per project, 2 globally, 8 queued, then docs-busy {lane: fetch} > two refreshes of on |
+| W3-T7-M12 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > a failed fetch (fet |
+| W3-T7-M13 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > a fetch answer nest |
+| W3-T7-M14 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > a tree half the ful |
+| W3-T7-M15 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > a failed tree half  |
+| W3-T7-M16 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: M6.10 — the fetch lane at the route: serial per project, 2 globally, 8 queued, then docs-busy {lane: fetch} > refinement (j): a r |
+| W3-T7-M17 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > a failed refresh lo |
+| W3-T7-M18 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: a refresh body or :project that fails its parser is refused before any exec (section 3.4; refinement (e)) > a text/plain body |
+| W3-T7-M19 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: a refresh body or :project that fails its parser is refused before any exec (section 3.4; refinement (e)) > :project -x with a va |
+| W3-T7-M20 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: an index flight begun before a refresh's fetch neither answers a later GET nor fills the micro-cache (section 6.5: "dropped by an |
+| W3-T7-M21 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: an index flight begun before a refresh's fetch neither answers a later GET nor fills the micro-cache (section 6.5: "dropped by an |
+| W3-T7-M22 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: an index flight begun before a refresh's fetch neither answers a later GET nor fills the micro-cache (section 6.5: "dropped by an |
+| W3-T7-M23 | T7 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: each half carries its own word; a refusal before any exec is the whole answer (section 3.4; refinement (m)) > a local ref (no fet |
+| W3-T8-M1 | T8 | `server/test/auth-gate.test.ts` | red | test/auth-gate.test.ts > the scanner is looking at something > found all five files, and EXACTLY the route count the surface has |
+| W3-T8-M2 | T8 | `server/src/server.ts` | red | test/auth-gate.test.ts > the scanner is COMPLETE — measured against Fastify's own route table > …and in the other direction: nothing the scan found is a phantom |
+| W3-T8-M3 | T8 | `server/src/server.ts` | red | test/auth-gate.test.ts > the scanner is COMPLETE — measured against Fastify's own route table > …and in the other direction: nothing the scan found is a phantom |
+| W3-T8-M4 | T8 | `server/src/server.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > every /api/docs route lives i |
+| W3-T8-M5 | T8 | `server/src/auth/gate.ts` | red | test/auth-gate.test.ts > EXEMPT is complete in both directions > exempts exactly the seven classes the plan names — nothing has crept in |
+| W3-T8-M6 | T8 (re-anchored in T11) | `server/src/auth/gate.ts` | red | test/auth-gate.test.ts > the gate sweep states the route counts it derives > gate.ts's own docstring names the HTTP-route count it stands in front of |
+| W3-T8-M7 | T8 | `server/src/docs/routes.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > no docs file consults the box |
+| W3-T8-M8 | T8 | `server/src/docs/hooks.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > no docs file consults the box |
+| W3-T8-M9 | T8 | `server/test/box-token-census.test.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > docs/routes.ts registers what |
+| W3-T8-M10 | T8 | `server/src/docs/routes.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > docs/routes.ts registers what |
+| W3-T8-M11 | T8 | `server/src/docs/routes.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > docs/routes.ts registers what |
+| W3-T8-M12 | T8 (re-anchored in T11) | `server/test/box-token-census.test.ts` | red | test/box-token-census.test.ts > the box-token surface is derived, and no prose site under-claims it > CLAUDE.md's box-token bullet is TRUE, not merely present |
+| W3-T8-M13 | T8 | `server/test/box-token-census.test.ts` | red | test/box-token-census.test.ts > the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13) > docs/routes.ts registers what |
+| W3-T9-M1 | T9 | `server/src/server.ts` | red | test/docs-routes.test.ts > T9: the real server — the composition reads deps.fleetState through a getter (refinement (i); W2 carry) > no fleet state: caps-unknow |
+| W3-T9-M2 | T9 | `server/src/docs/routes.ts` | red | test/typecheck-tests.test.ts > every test file typechecks — the directory the gates could not see > server/test/ is clean under a tests-inclusive project |
+| W3-T9-M3 | T9 | `server/src/server.ts` | red | test/docs-routes.test.ts > T9: the real server — the composition reads deps.fleetState through a getter (refinement (i); W2 carry) > no fleet state: caps-unknow |
+| W3-T9-M4 | T9 | `server/src/docs/routes.ts` | red | test/single-definition.test.ts > docs W2 names are defined once (spec 2026-10-01 section 1, M7.10) > the docs builders have one caller across the four roots: th |
+| W3-T9-M5 | T9 | `server/src/docs/routes.ts` | red | test/single-definition.test.ts > docs W3 — GET never fetches, and the L4 files quote no failure word (spec 2026-10-01 §2 row 49, §3.13) > row 49, widened by ide |
+| W3-T9-M6 | T9 | `server/src/docs/routes.ts` | red | test/single-definition.test.ts > docs W3 — GET never fetches, and the L4 files quote no failure word (spec 2026-10-01 §2 row 49, §3.13) > row 49, widened by use |
+| W3-T9-M7 | T9 | `server/src/docs/routes.ts` | red | test/single-definition.test.ts > docs W3 — GET never fetches, and the L4 files quote no failure word (spec 2026-10-01 §2 row 49, §3.13) > row 49, widened by ide |
+| W3-T9-M8 | T9 | `server/src/server.ts` | red | test/docs-routes.test.ts > T9: row 50 — the refresh is gated (section 2 (j) row 50, section 3.4) > armed: no session 401; a foreign Origin 403; the session with |
+| W3-T9-M9 | T9 | `server/src/server.ts` | red | test/docs-headers.test.ts > M5.4 — every docs route in the real server's table carries the four headers (section 5.3, section 5.8) > the derived set: the real t |
+| W3-T9-M10 | T9 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > W3 T3: provenance, refused before any handler (M3.5-M3.7, section 3.8) > M3.5 a top-level navigation is 403 foreign-request {why:nav |
+| W3-T9-M11 | T9 | `server/src/server.ts` | red | test/docs-headers.test.ts > M5.4 — every docs route in the real server's table carries the four headers (section 5.3, section 5.8) > a 200: dark, the PWA header |
+| W3-T9-M12 | T9 | `server/src/auth/gate.ts` | red | test/docs-routes.test.ts > T9: row 50 — the refresh is gated (section 2 (j) row 50, section 3.4) > armed: no session 401; a foreign Origin 403; the session with |
+| W3-T9-M13 | T9 | `server/src/docs/lane.ts` | red | test/single-definition.test.ts > docs W3 — GET never fetches, and the L4 files quote no failure word (spec 2026-10-01 §2 row 49, §3.13) > L4 decides nothing (th |
+| W3-T9-M14 | T9 | `server/test/single-definition.test.ts` | red | test/single-definition.test.ts > the docs ring — server/src/docs is classified by its imports (spec 2026-10-01 M7.10) > covers the directory — every floor file  |
+| W3-T10-M1 | T10 | `server/src/docs/lane.ts` | red | test/docs-console-latency.test.ts > Docs never starves the console (section 6.8, M6.12) > through the real read lane, all 13 files answer 200 while pty echo p95 |
+| W3-T10-M2 | T10 | `server/test/docs-console-latency.test.ts` | red | test/docs-console-latency.test.ts > Docs never starves the console (section 6.8, M6.12) > the control: the same load through a pass-through lane pushes pty echo |
+| W3-T10-M3 | T10 | `server/test/docs-console-latency.test.ts` | red | test/docs-console-latency.test.ts > Docs never starves the console (section 6.8, M6.12) > the control ran its starvation check (the meta-check) |
+| W3-T10-M4 | T10 | `server/test/throttledLink.ts` | red | test/docs-console-latency.test.ts > Docs never starves the console (section 6.8, M6.12) > through the real read lane, all 13 files answer 200 while pty echo p95 |
+| W3-T10-M5 | T10 | `server/src/docs/policy.ts` | red | test/docs-console-latency.test.ts > Docs never starves the console (section 6.8, M6.12) > HOL_LIMIT_MS is derived from the read lane budget, 528 ms at 100 Mbit |
+| W3-T10-M6 | T10 | `server/test/docs-console-latency.test.ts` | red | test/docs-console-latency.test.ts > Docs never starves the console (section 6.8, M6.12) > through the real read lane, all 13 files answer 200 while pty echo p95 |
+| W3-T11-M1 | T11 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > T11 review 2-1: docsHookVerdict passes a response with no payload and no content type, decorated > the gate's bodiless 401 passes wit |
+| W3-T11-M2 | T11 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > T11 review 3-1: a tree answer naming another project is refused, never filed under it > another project: ok is demo only for exactly  |
+| W3-T11-M3 | T11 | `server/src/docs/routes.ts` | red | test/docs-cache.test.ts > T11 review 3-2: the blob cache holds and charges only the verified content > an empty file whose show answer carries a large unknown k |
+| W3-T11-M4 | T11 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T11 review 1-3: a refused refresh settles nothing (refinement (m)) > a caps-unknown 503 and an unsupported 501 refresh leave the inde |
+| W3-T11-M5 | T11 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T11 review 4-3: the projects route rides the read lane and leaves with its client > a projects GET whose client goes while it is queu |
+| W3-T11-M6 | T11 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T11 review 4-3: the projects route rides the read lane and leaves with its client > a cold projects GET under two held reads queues ( |
+| W3-T11-M7 | T11 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > T11 review 2-2: a WebSocket upgrade to a docs route escapes onSend only after the gate and provenance, with zero execs > (a) dark: a |
+| W3-T11-M8 | T11 | `server/src/docs/policy.ts` | red | test/docs-headers.test.ts > T11 review 2-1: a bodiless gate refusal on a docs route keeps its status, decorated > an upgrade with no cookie and the right Origin |
+| W3-T11-M9 | T11 | `server/src/docs/routes.ts` | red | test/docs-headers.test.ts > T11 review 2-2: a WebSocket upgrade to a docs route escapes onSend only after the gate and provenance, with zero execs > (c) an upgr |
+| W3-T11-M10 | T11 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: row 51 and M6.9 — single-flight, and a refresh's tree never joins a flight begun before its fetch > row 51: two concurrent refres |
+| W3-T11-M11 | T11 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > T7: row 51 and M6.9 — single-flight, and a refresh's tree never joins a flight begun before its fetch > M6.9: two concurrent file GET |
+| W3-T11-M12 | T11 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > M6.2 at the routes — the read lane: two in flight, a strict queue, its wait, and a client that left > the 33rd queued read answers do |
+| W3-T11-M13 | T11 | `server/src/docs/policy.ts` | red | test/docs-headers.test.ts > W3 T3: the response policy (M5.5, section 5.3) > M5.5 svg (image/svg+xml) is refused: 500 response-type-refused, JSON, no-store, log |
+| W3-T11-M14 | T11 | `server/src/docs/policy.ts` | red | test/docs-headers.test.ts > W3 T3: the response policy (M5.5, section 5.3) > json-404-immutable: a non-200 is always no-store |
+| W3-T11-M15 | T11 | `server/src/docs/policy.ts` | red | test/docs-file-bytes.test.ts > M5.6 — Cache-Control: immutable only on a committed raster 200 > a draft raster 200, a committed JSON 200 and a draft JSON 200 ar |
+| W3-T11-M16 | T11 | `server/src/docs/policy.ts` | red | test/docs-routes.test.ts > M3.4 — every refusal before an exec answers its word and status, with zero execs > file: a mixed pin |
+| W3-FR1-M1 | FR1 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > FR1 review F1: a committed show line that passes check 8 and carries a deep unknown key is a 502 schema, never cached, never a 500 >  |
+| W3-FR1-M2 | FR1 | `server/src/docs/hooks.ts` | red | test/docs-headers.test.ts > FR1 review F2: provenance runs at onRequest, so an unproven request's body is never parsed > a marker-less POST refresh with an inva |
+| W3-FR1-M3 | FR1 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > FR1 review F3: the blob-cache hit branch of the file route, on ONE app with two GETs each > a .png holding SVG text answers 422 r |
+| W3-FR1-M4 | FR1 | `server/src/docs/routes.ts` | red | test/docs-file-bytes.test.ts > FR1 review F3: the blob-cache hit branch of the file route, on ONE app with two GETs each > a true committed .png answers raw ima |
+| W3-FR1-M5 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F4: the tree shape guard refuses a non-finite attemptAgeMs and an entry path that is not key text > stamp.attemptAgeMs Inf |
+| W3-FR1-M6 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F4: the tree shape guard refuses a non-finite attemptAgeMs and an entry path that is not key text > an entry whose path is |
+| W3-FR1-M7 | FR1 | `server/src/docs/routes.ts` | red | test/docs-routes.test.ts > FR1 review F5: a read whose every requester left is taken from Fastify and its socket ended, never answered late > a queued tree GET  |
+| W3-FR1-M8 | FR1 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > FR1 review F6: a settled flight detaches its joiners, so a joiner that goes later touches nothing of the dead flight > a joiner whose  |
+| W3-FR1-M10 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > an answer of exactly 1 MiB beside a large one admits (over, not at) |
+| W3-FR1-M11 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F8: lane verdicts are L1's > laneOverflow: the read lane with 31 waiting overflows=false |
+| W3-FR1-M12 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > FR1 review F8: lane verdicts are L1's > fetchAdmit: 2 running, key running=true is full (full wins over skip) |
+| W3-FR1-M13 | FR1 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane admits by laneAdmit, applied to its head (section 6.3) > a second large job waits; exactly DOCS_LANE_LARGE_RAW is |
+| W3-FR1-M14 | FR1 | `server/src/docs/lane.ts` | red | test/docs-lanes.test.ts > W3 T4: the read lane admits by laneAdmit, applied to its head (section 6.3) > a second large job waits; exactly DOCS_LANE_LARGE_RAW is |
+| W3-FR1-M15 | FR1 | `server/src/docs/policy.ts` | red | test/docs-policy.test.ts > laneAdmit (M6.1): section 6.3's four clauses, in order > an answer of exactly 1 MiB beside a large one admits (over, not at) |
+| W3-FR1-M9 | FR1 | `server/src/docs/cache.ts` | red | test/docs-cache.test.ts > FR1 review F9: a stored entry owns its bytes > a small pooled source is stored as the cache's own copy: its buffer is exactly its leng |
+
+264 rows; 264 measured as expected.
+
+### Notes
+
+- Task 11: Findings: 16 (fixed 14, carried 0, not a defect 1, ruled departures 1). Commits: 7fbb195b2 0102095ed fabb83849 79651fb14 4380db8a6 f419310a3 8e663c862 0b1367fb0 e1ae037d2 90642272c 0bb98422b 7f19adbd3 87126057c. Panel tip 7a1936dd4e640610931b1ec596f1c656a9ce323a; fix-wave tip 87126057c672d90dd06e11f3cf5ac14983201e76.
+- Merged origin/main (#330) at a316d60b3 under worker clause 16 (merge-tree conflict); counts re-derived; W3-T8-M6 and W3-T8-M12 re-anchored at 8fff7c916.
+- This section replaces the one written at 77862e265 (before fix round 1); the wave's FIRST full-run verdict (`red`, at 87126057c672) is unchanged and was never rewritten. This re-run is on the fix-round tip.
+- suite F17 full-ccrc-a-h: red on this run's first pass (rc=1; `Test Files  9 passed (9)`, `Tests  562 passed | 3 skipped (565)`, `Errors  1 error`: an unhandled `write EPIPE` raised from test/ccrc-api.test.ts:109, no test failed), green re-run alone (`Test Files  9 passed (9)`, `Tests  562 passed | 3 skipped (565)`, rc=0); a load flake.
+- suite F25 full-rest: red on this run's first pass (`Tests  1 failed | 1367 passed (1368)`: test/update-store-nodes.test.ts, the `heir guard IS isHalting` case, Test timed out in 20000ms under load), green re-run alone (`Tests  43 passed (43)` in 52 s); a load flake.
+- suite F24 full-s-t: test/tmp-sweep.test.ts `FAILS CLOSED: claude is running and no sessions dir is readable, so nothing is removed` red on this run's first pass (`Tests  1 failed | 3566 passed | 3 skipped (3570)`) and red alone (`Tests  1 failed | 13 passed (14)`); it was measured red in a `git archive` copy of the base (5a6e5d3d7) on the wave's first full run; main-red, not W3's.
+- Coordinator ruling (mail 4080, 2026-10-09) on main-red tmp-sweep: the wave brief lists tmp-sweep's FAILS CLOSED row as a known red; recorded, not fixed by W3 (red at the base 5a6e5d3d7 too).
+- Mutation rows: 264 ids from 276 rows in 12 blocks (T1 25, T2 40, T3 19, T4 32, T5 30, T6 31, T7 23, T8 13, T9 14, T10 6, T11 43, T12 0); the extractor reports 12 re-anchors by Task 11 (W3-T5-M7, W3-T5-M18, W3-T5-M19, W3-T6-M27, W3-T8-M6, W3-T8-M12, W3-T4-M4, W3-T4-M8, W3-T4-M9, W3-T4-M10, W3-T4-M31, W3-T4-M32); no row needed a re-anchor in this task; mutate.py ended `264 rows; 264 measured as expected.`
+- Route counts on the merged tree (re-derived by the coordinator at a316d60b3): ROUTES.length 97 = 51+33+7+2+4, HTTP 94, gated 61, exempt-HTTP 33, gate.ts numeral 94; the plan's arithmetic gave ROUTES 93, HTTP 90, gated 58 on its base, and the difference is main's own routes (#320 stall-watch, #330 box-token lifecycle). The `gate-shape` and `sd-shape` invariants are judged against the merge's second parent (main), so main's edits do not count as W3's.
+- Deviation count: the plan's "five deviations" reads six (brief override), and the section holds eight entries, D-4464..D-4471 (six refinements, D-4470 the listing-map floor from Task 5's review, D-4471 the WebSocket-upgrade escape from Task 11's review 2-2).
+- 43 per-task minors (Tasks 1-10) were deferred, none load-bearing, listed in the worker's SDD ledger.
+- Fix round 1 (review 361, coordinator mail 4110): F1-F6 pinned with rows W3-FR1-M1..M8; F7 tightened D-4471's three tests (gate-before-provenance ordering shown, the file route upgraded, lane/flight/cache asserted directly); F8 moved fetch admission (`fetchAdmit`), both queue overflows (`laneOverflow`) and the large-job predicate (`laneLarge`) into L1, with `laneAdmit`'s fourth clause calling `laneLarge` (one in-place line in W2's function, behaviour unchanged), rows W3-T4-M4/M8/M9/M10/M31/M32 re-anchored and W3-FR1-M10..M15 added; F9 made the blob cache hold its own copy of the bytes (W3-FR1-M9); F10 joins the carried list with its measured number; F11-F13 corrected words and this record. No D-number was spent.
+- The plan's Task 4 Decision 1 says the lane's "one comparison" is `isLarge`; after fix round 1 the lane makes none: every lane verdict is L1's (`laneAdmit`, `fetchAdmit`, `laneOverflow`, `laneLarge`). The code now follows the spec's rings rather than that text; no D-number, by the coordinator's ruling (mail 4110).
+- W2's plan (`2026-10-06-native-docs-reader-w2-grants-and-adapter.md`) has mutation rows anchored on `laneAdmit`'s old inline fourth clause, which fix round 1's ruled in-place edit replaced with a `laneLarge` call; that plan is closed and its anchors are snapshots, so W2's table is not re-runnable against this tree as written. Two W3 rows' `red` text (W3-T11-M9, W3-T8-M1) quotes case titles fix round 1 retitled; both rows still measure red.
+
+### Carried, not fixed
+
+- The JSON.parse cost of a hostile ok answer (about 230 ms of event loop for a 1 MiB line nested 500 000 deep) stays in L3's `parseLine`: `docsAnswerShape` (Task 2) keeps it from reaching `refreshDue`, a cache or the reply, but bounding the parse itself needs a pre-parse scan in `ccdsource.ts`, outside W3's row. DEFERRED to a later adapter change.
+- `GithubTarget` cannot express `resolveDocRef`'s `repo` kind. No W3 route consumes either, so it is DEFERRED to W5, with its consumer.
+- Local mode: a failed boot caps probe leaves `ccdVerbs` null for the process lifetime, so every docs call answers `caps-unknown` (auto retry) until a restart. DEFERRED to W5 (the PWA's retry backoff) and W7 (README).
+- W7 prose: two test comments (`coord-store.test.ts`, `run-routes.test.ts`) still say no `app.setErrorHandler` exists in `server/src`; after W3 one does, plugin-scoped (`hooks.ts`). CLAUDE.md's known-load-flakes bullet gains `docs-console-latency`. DEFERRED to W7 (refinement (u): no README or CLAUDE.md edit here).
+- SEC-3 (a killed helper orphans git's process group; the lane holds a slot until the runner budget and never kills), SEC-4 (fetch stamps accumulate, one per branch name) and the missing stamp after a failed post-fetch `for-each-ref`: CARRIED to W5 and ccd, not fixed.
+- `branch: null` means detached OR unmeasured; the partial-clone word pair (`git-failed {step:'cat-file'}` on git 2.43, `unknown-commit` on 2.55); `too-many-entries` read by `count`: each CARRIED verbatim by every route, never mapped or defaulted.
+- The generation map (`docsGenerations`, `lane.ts`) gains one entry per (node, project) ever refreshed and one per node, and nothing bounds how many project names there are (the grammar bounds a name's length only). The growth is one short key and one number per new name, each a session-gated POST; an entry cannot be dropped safely, since a counter reset to 0 lets a request join a flight keyed on the old value. Review 361 F10 measured it: 20 000 refreshes of distinct names grew the heap about 11.3 MB after GC, about 560 B per name. CARRIED as accepted.
+- `policy.ts`'s `lowerAscii` twins `shared/docs.ts`'s module-private ASCII lowering, because W3 must not edit `shared/`; Task 2's parity describe pins both homes to `DOCS_RASTER_EXT`. CARRIED to W7's residue.
+- W7 spec pass: section 5.3's "every docs response" should name both escapes: refinement (d)'s router-level refusals (D-4464) and the WebSocket upgrade (D-4471).
+- The adapter's second redaction pass rewrites values, not key names (review 317). W3 sends every failure body as the adapter returns it and builds none from ccd's keys; the fix is L3's `redactBody`, outside W3's row, and the path is latent (no W1 ccd verb writes untrusted text into a key). CARRIED to a later adapter change.
+
+### Post-merge acts, not this wave's
+
+1. The merge becomes a prerelease (`release-main.yml`), the `dev` channel.
+2. The dark rollout moves BOTH boxes, fleet first, through ccrc's own update mechanism (spec section 7.7: boxes move only through `ccrc rollout`; never a hand copy). The Docs API is then live and session-gated, with no UI door.
+3. R2, fetch authentication through the agent's environment (operator; spec section 7.8). Group the fleet's projects by the shape of `remote.origin.url`, read-only (https with a credential helper, ssh, a `url.insteadOf` rewrite, other). For one project per class, from the ccrc origin's devtools console (same origin, so the cookie and `Origin` are right), POST `/api/docs/<project>/refresh` with `content-type: application/json`, the marker header and the body `{ref: null, reason: 'manual'}`. PASS: every class answers `fetch.state === 'ran'`. FAIL (`fetch-auth-failed` or `fetch-transport`): contingency `docs-fetch-keeplist` fires, widening the fetch environment's keep-list for that class, then R2 is re-measured.
+4. R1, head-of-line blocking on the shared socket (operator; spec sections 6.9 and 7.8). On the fleet box, `git init` a scratch project under ccd's projects root and commit 20 distinct files of exactly `DOCS_MAX_DOC_BYTES` of incompressible text as `docs/superpowers/specs/p<n>.md`. Sample `GET /api/sessions/<id>/pane/history` of a live session every 200 ms: 30 s idle, then 30 s while a loop fetches the 20 files through the file route with the marker header, 4 at a time. Remove the scratch project. PASS: p95 under load minus p95 idle is at most 250 ms. FAIL: contingency `docs-chunked-reads` fires: a `docs-show-range` run (W3b) becomes a precondition of W5's merge, and R1 is re-measured once it lands.
+5. Both R2 and R1 gate W5's MERGE, never this wave's; W5 merges only with both recorded as passing in its plan.

@@ -148,8 +148,9 @@ describe('install-worker-skill.sh default homes are the roster, behaviourally', 
 });
 
 describe('the deploy ships the worker skill too — the fleet lane, in order', () => {
-  // install-coordinator-skill.test.ts:207-233's idiom, with this skill's own
-  // tokens. Nothing else in this repository reads `deploy/deploy.sh`'s skill
+  // The idiom of install-coordinator-skill.test.ts's describe "the deploy ships
+  // the skill, agent-side — and no longer ships the token (its rsync excludes
+  // are kept)", with this skill's own tokens. Nothing else in this repository reads `deploy/deploy.sh`'s skill
   // lanes, so without these two assertions the four lines that ship this skill
   // to the fleet host can be deleted, reordered or stripped of `--delete` and
   // every suite stays green — the deploy is the only thing that ever runs them,

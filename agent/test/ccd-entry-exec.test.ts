@@ -68,6 +68,10 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
       [['ws-audit', '--session', 'demo-x', '--reclaim'], true],
       [['ws-audit', '--session', 'demo-x', '--reclaim', '--defer-expired'], true],
       [['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'demo-x'], true],
+      // Child reclamation wave 7: the collector's audit rides the existing `['ws-audit','--session']` grant and the
+      // verb its own `['ws-collect','--expect']` — both protected shapes, both through the real exec op.
+      [['ws-audit', '--session', 'demo-x', '--collect'], true],
+      [['ws-collect', '--expect', 'a'.repeat(64), '--session', 'demo-x'], true],
       [['ensure', 'demo-x'], false],
     ];
     let id = 0;

@@ -174,6 +174,21 @@ describe('the lane SHIPS SHADOWED', () => {
     expect(f.watcher().currentCoord()?.expiryAttention, 'never the expiry lane’s list').toEqual([]);
   });
 
+  it('a coordinator that crashes, is revived and crashes again is recorded TWICE in shadow — one row per episode (review 339, F2)', async () => {
+    const f = await fixture();
+    f.plant(A);
+    f.working(A, 'alpha');
+    await anHourDead(f);
+    const rows = () => f.feed().filter(([, t]) => t === 'dead coordinator: programme would be ended');
+    expect(rows(), 'the first episode').toHaveLength(1);
+    f.live.add(A);
+    f.next(); await f.pass();                      // revived: the episode ends, and its anchor with it
+    expect(f.anchorOf(A)).toBeNull();
+    f.live.delete(A);                              // and it crashes again
+    f.next(); await anHourDead(f);
+    expect(rows(), 'the second episode is the operator’s arming evidence too').toHaveLength(2);
+  });
+
   it('with the live file, the programme is ENDED after the hour and two crashed passes — failed, by the sweep, one row per programme', async () => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
@@ -296,6 +311,26 @@ describe('the act’s own re-measure', () => {
       .toMatchObject({ firstDeadAt: T0 + HOUR - 60_000 + 2 * (CHILD_RECLAIM_SWEEP_MS + 1) });
   });
 
+  it('a mirror that goes STALE between the pass and the act stops it as a hold: the anchor and the run of passes stand (review 339, F4)', async () => {
+    let slow = false;
+    const f: Fixture = await fixture({ beforeAct: () => { if (slow) f.advance(20_000); } });   // three sweep intervals and more
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A);
+    await f.pass(); await walk(f, HOUR - 60_000);
+    const anchor = f.anchorOf(A);
+    slow = true;
+    f.next(); await f.pass();
+    slow = false;
+    expect(f.acts(), 'the act was asked').toBe(1);
+    expect(f.stateOf(r), 'nothing ended').toBe('working');
+    expect(f.calls, 'nothing composed').toEqual([]);
+    expect(f.anchorOf(A), 'a slow mirror never deletes an anchor').toMatchObject({ firstDeadAt: (anchor as { firstDeadAt: number }).firstDeadAt });
+    expect(f.watcher().currentDeadCoordinators().get(A)?.crashedPasses, 'nor the run of passes').toBeGreaterThanOrEqual(2);
+    f.next(); await f.pass();
+    expect(f.stateOf(r), 'the mirror is fresh again: the hour it kept is due on the next pass').toBe('failed');
+  });
+
   it('a revive that lands AFTER the worker was released is recorded: a feed row and an attention entry, though no run was closed', async () => {
     const f: Fixture = await fixture({ onCcd: (args) => { if (args[0] === 'ws-release') f.live.add(A); } });
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
@@ -311,6 +346,27 @@ describe('the act’s own re-measure', () => {
     expect(note[0]!.sentence).toContain('the programme is NOT ended');
     expect(note[0]!.sentence).toContain(`released the worker of run ${r} of programme alpha`);
     expect(f.anchorOf(A), 'evidence it came back: the anchor goes').toBeNull();
+  });
+
+  it('the act re-measures at ITS OWN instant: a heartbeat stamped after the pass measured is a restarting coordinator — nothing ends (review 339, F1)', async () => {
+    let beat = false;
+    const f: Fixture = await fixture({ beforeAct: () => {
+      if (!beat) return;
+      // The pass measured A crashed at its own instant. Three seconds later, inside the serialiser and before the act's
+      // first re-measure, A's supervisor beats: a stamp AFTER the pass's instant and not after the act's.
+      f.advance(3000);
+      writeFileSync(path.join(f.reg, `${A}.supervised`), String(Math.floor(Date.now() / 1000)));
+    } });
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A);
+    await f.pass(); await walk(f, HOUR - 60_000);
+    beat = true;
+    f.next(); await f.pass();
+    expect(f.acts(), 'the act was asked').toBe(1);
+    expect(f.stateOf(r), 'restarting is no crash: the run stays open').toBe('working');
+    expect(f.calls, 'nothing composed on the box').toEqual([]);
+    expect(f.anchorOf(A), 're-measured restarting — evidence: the anchor goes').toBeNull();
   });
 
   it('an act that THROWS after closing a programme keeps that programme’s feed row, and the attention entry says what closed', async () => {
@@ -329,6 +385,21 @@ describe('the act’s own re-measure', () => {
     expect(note[0]!.sentence).toContain('closed failed 1 run of programme alpha');
   });
 
+  it('an act that RELEASED a worker and then THREW, closing nothing, is recorded — a feed row, not only memory (review 339, F13)', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A, 'alpha');
+    // The commit throws AFTER the fleet act ran: the release happened, the close did not.
+    f.coord.closeRun = () => { throw new Error('database or disk is full'); };
+    await anHourDead(f);
+    expect(f.calls.filter((c) => c[0] === 'ws-release'), 'the CONTROL: the fleet act ran').toHaveLength(1);
+    expect(f.stateOf(r)).toBe('working');
+    const rows = f.coord.feedEvents(50).filter((e) => e.title === 'dead coordinator: act failed');
+    expect(rows.map((e) => e.sessionId), 'one row, in the coordination store — not only in the watcher memory a restart drops').toEqual([A]);
+    expect(rows[0]!.body).toContain(`before it closed any run; run ${r}'s abandon is the one that failed`);
+  });
+
   it('an act that THROWS is asked again only after the backoff, and listed', async () => {
     const f = await fixture({ throwAct: true });
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
@@ -338,6 +409,7 @@ describe('the act’s own re-measure', () => {
     const counts = [f.acts()];
     for (let k = 0; k < 2; k += 1) { f.next(); await f.pass(); counts.push(f.acts()); }
     expect(counts, 'once, then not on the next pass, then again after two minutes').toEqual([1, 1, 2]);
+    expect(f.feed().filter(([, t]) => t === 'dead coordinator: act failed'), 'each thrown act is one row').toHaveLength(2);
     expect(f.attention()).toEqual([['stuck', [A]]]);
   });
 });

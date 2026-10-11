@@ -99,7 +99,7 @@ describe('closeRun’s abandon arm, as the sweep runs it', () => {
     const revived: SweepCloseGuard = { claimedBy: CRASHED,
       stillCrashed: async () => { asked += 1; return { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' }; } };
     expect(await closeRun(b.deps, id, { intent: 'abandon' }, 'sweep', revived)).toEqual({ ok: false, kind: 'sweep-stopped',
-      stop: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' }, released: false });
+      stop: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' }, fleetAct: null });
     expect(asked).toBe(1);
     expect(b.calls, 'no release: the revived coordinator’s worker keeps its hold').toEqual([]);
     expect(okRun(b.coord.run(id))!.state).toBe('working');
@@ -113,9 +113,26 @@ describe('closeRun’s abandon arm, as the sweep runs it', () => {
     const guard: SweepCloseGuard = { claimedBy: CRASHED,
       stillCrashed: async () => (released ? { kind: 'remeasured', why: 're-measured alive' } : null) };
     expect(await closeRun(b.deps, id, { intent: 'abandon' }, 'sweep', guard)).toEqual({ ok: false, kind: 'sweep-stopped',
-      stop: { kind: 'remeasured', why: 're-measured alive' }, released: true });
+      stop: { kind: 'remeasured', why: 're-measured alive' }, fleetAct: 'released' });
     expect(okRun(b.coord.run(id))!.state, 'the run stays open under its revived coordinator').toBe('working');
     expect(b.handed, 'nothing closed, so nothing is reclaimed').toEqual([]);
+  });
+
+  it('THE RE-MEASURE, after a RE-HOLD: the stop says the worker was re-held under the surviving run — not released (review 339, F3)', async () => {
+    let held = false;
+    const b = build((verb) => { if (verb === 'ws-hold') held = true; });
+    const id = b.working();
+    // A second open run on the same workspace, another programme's: it survives the abandon, so the arm re-holds.
+    const s = b.coord.openRun({ program: 'q', title: 'q', project: 'demo', wave: 1, waveOf: 2, claimedBy: HEIR });
+    if (!('id' in s)) throw new Error('openRun refused');
+    b.coord.markDispatched(s.id, W, W, `ws/${W}`, false);
+    for (const to of ['dispatched', 'working'] as const) expect(b.coord.advance(s.id, to, 'coordinator').ok).toBe(true);
+    const guard: SweepCloseGuard = { claimedBy: CRASHED,
+      stillCrashed: async () => (held ? { kind: 'remeasured', why: 're-measured alive' } : null) };
+    expect(await closeRun(b.deps, id, { intent: 'abandon' }, 'sweep', guard)).toEqual({ ok: false, kind: 'sweep-stopped',
+      stop: { kind: 'remeasured', why: 're-measured alive' }, fleetAct: 're-held' });
+    expect(b.calls.map((c) => c[0]), 'the CONTROL: the fleet act was a hold, not a release').toEqual(['ws-hold']);
+    expect(okRun(b.coord.run(id))!.state).toBe('working');
   });
 
   it('THE RE-MEASURE, for a run with NO session (planned, never dispatched): a revive of the SAME id keeps it open — nothing is acted on', async () => {
@@ -127,7 +144,7 @@ describe('closeRun’s abandon arm, as the sweep runs it', () => {
     const revived: SweepCloseGuard = { claimedBy: CRASHED,
       stillCrashed: async () => { asked += 1; return { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' }; } };
     expect(await closeRun(b.deps, r.id, { intent: 'abandon' }, 'sweep', revived)).toEqual({ ok: false, kind: 'sweep-stopped',
-      stop: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' }, released: false });
+      stop: { kind: 'remeasured', why: 're-measured alive: tmux reports the pane live' }, fleetAct: null });
     expect(asked).toBe(1);
     expect(okRun(b.coord.run(r.id))!.state, 'the run stays planned under its revived coordinator').toBe('planned');
     expect(b.coord.runEvents(r.id).some((e) => e.causedBy === 'sweep'), 'no sweep run event').toBe(false);
@@ -171,7 +188,7 @@ describe('the coordination serialiser’s sweep handle (`registerCoordRoutes`)',
     const id3 = third.working();
     expect(await routes(third).withSweepAbandon(third.coord, (abandon) => abandon(id3, CRASHED,
       async () => ({ kind: 'switch', why: 'reclaim-paused was raised during the act' }))))
-      .toMatchObject({ ok: false, kind: 'sweep-stopped', released: false });
+      .toMatchObject({ ok: false, kind: 'sweep-stopped', fleetAct: null });
     expect(third.calls, 'the handle hands the re-measure to the arm').toEqual([]);
   });
 

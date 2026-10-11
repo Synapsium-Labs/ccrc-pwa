@@ -32,6 +32,8 @@ import { CCD } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
+// A generation wave 7's ccd binds into its token (spec §5.5); a licensed request is judged under it. The one shared lane rig's G1.
+import { G1 as GEN_W8 } from './childReclaimGenerationFixture.js';
 
 const ID = 'demo-quiet-basin';
 const TOK = 'a'.repeat(64);
@@ -114,7 +116,7 @@ const rig = async (over: { mark?: string | null; markSymlink?: 'dangling' | 'liv
            req: (deferExpired = false, deferredSinceMs: number | null = null,
                  feedQuiet: ChildReclaimFeedQuiet = CHILD_RECLAIM_FEED_QUIET_NONE): ChildReclaimRequest =>
              ({ sessionId: ID, runId, trigger: deferredSinceMs === null ? 'close' as const : 'sweep' as const,
-                deferExpired, deferredSinceMs, feedQuiet }) };
+                deferExpired, deferredSinceMs, feedQuiet, licenceGeneration: deferredSinceMs === null ? { kind: 'none' } : { kind: 'absent' } }) };
 };
 
 describe('the fourteen words', () => {
@@ -187,7 +189,7 @@ describe('the fourteen words', () => {
 describe('parseChildReclaimAudit', () => {
   it('reads a token and the run the marker names', () => {
     expect(parseChildReclaimAudit(ID, auditDoc(7, 'reclaimable', { token: TOK })))
-      .toEqual({ kind: 'token', token: TOK, childOf: 7 });
+      .toEqual({ kind: 'token', token: TOK, childOf: 7, generation: { kind: 'unprinted' } });
   });
   it('reads a refusal by its word', () => {
     expect(parseChildReclaimAudit(ID, auditDoc(7, 'attached', { detail: 'a client' })))
@@ -819,8 +821,12 @@ describe('reclaimChild — the one executor', () => {
   });
 
   it('a CEILING-EXPIRED reclaim states the wait it ended and why it went ahead', async () => {
-    const s = await rig({ visible: true, now: T0 + 16 * 60_000 });
-    expect((await reclaimChild(s.deps, s.req(true, T0))).kind).toBe('reclaimed');
+    const s = await rig({ visible: true, now: T0 + 16 * 60_000, script: (runId) => ({
+      audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK, generation: GEN_W8 }) },
+      verb: { code: 0, stdout: reclaimedDoc(runId) } }) });
+    writeFileSync(path.join(s.reg, `${ID}.generation`), GEN_W8);
+    expect((await reclaimChild(s.deps, { ...s.req(true, T0), licenceGeneration: { kind: 'value', v: GEN_W8 } })).kind)
+      .toBe('reclaimed');
     expect(s.feed()).toEqual(['child reclaimed']);
     expect(s.bodies()[0]).toContain('The defer ceiling was reached after 16 minutes of deferral');
     expect(s.bodies()[0]).toContain('no longer held it back');
@@ -1013,7 +1019,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('released');
     expect(f.calls).toEqual([['ws-release', '--session', RID,
       '--surface', 'agent', '--actor', `run:${runId} reclaim sweep: program demo retired`]]);
@@ -1033,7 +1039,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     db.prepare('UPDATE runs SET program = ? WHERE id = ?').run(program, runId);
     const reason = holdReason(program, 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program, accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program, accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('released');
     const actor = f.calls[0]![f.calls[0]!.indexOf('--actor') + 1]!;
     expect(Buffer.byteLength(actor, 'utf8')).toBeLessThanOrEqual(LC_REASON_MAX_BYTES);
@@ -1047,7 +1053,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('not-held');
   });
 
@@ -1056,7 +1062,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('failed');
   });
 
@@ -1066,7 +1072,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('failed');
     expect(f.calls).toEqual([]);
   });
@@ -1080,7 +1086,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     // or a fresh dispatch re-held it — after this job was queued with the
     // OLDER `reason` byte-captured at the deciding pass.
     writeFileSync(path.join(f.reg, `${RID}.hold`), 'a human wrote this over it');
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls, 'no argv composed once the byte re-check disagreed').toEqual([]);
   });
@@ -1096,7 +1102,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const r2 = f.coord.openRun({ program: 'demo', title: 'demo', project: 'demo', wave: 2, waveOf: null,
       claimedBy: 'demo-coord' });
     if (!('id' in r2)) throw new Error(`openRun r2 refused: ${JSON.stringify(r2)}`);
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls, 'no argv composed once the count re-check disagreed').toEqual([]);
   });
@@ -1114,7 +1120,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     // the row's current text) would release against evidence that no longer
     // proves anything once R's own row has moved on.
     f.coord.db.prepare('UPDATE runs SET wave = ? WHERE id = ?').run(5, runId);
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls, 'no argv composed once the re-derived rendering disagreed').toEqual([]);
   });
@@ -1123,7 +1129,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const f = await rrig();
     const reason = 'program:ghost wave:2';
     f.writeRow({ child: '999', hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId: 999, reason, program: 'ghost', accountedRunId: 999 };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId: 999, reason, program: 'ghost', accountedRunId: 999, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls).toEqual([]);
   });
@@ -1134,14 +1140,14 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const other = terminalRun(f.coord, 'demo-other');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(other), hold: reason });   // re-bound to a different run since
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
   it('the row is gone entirely — a listable registry that no longer names this session — no release', async () => {
     const f = await rrig({ row: false });
     const req: ChildReclaimReleaseRequest = { sessionId: RID, runId: 1, reason: 'program:demo wave:2',
-      program: 'demo', accountedRunId: 1 };
+      program: 'demo', accountedRunId: 1, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
@@ -1151,7 +1157,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
     const deps: ChildReclaimDeps = { ...f.deps, io: { ...f.deps.io, readdir: async () => null } };
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(deps, req)).toBe('failed');
   });
 
@@ -1164,7 +1170,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
       claimedBy: 'demo-coord' });
     if (!('id' in sib)) throw new Error(`openRun sib refused: ${JSON.stringify(sib)}`);
     f.coord.markDispatched(sib.id, RID, RID, 'ws/quiet-basin', false);
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
@@ -1187,7 +1193,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const born = read.run.closedAt + CHILD_BIRTH_SKEW_MS + 1;
     const line = JSON.stringify({ uid: 'k7.1.1', at: born, act: 'create', outcome: 'done', verb: 'ws-add', id: RID });
     f.coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: 200, size: 200, at: born });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold({ ...f.deps, now: () => born + 1_000 }, req)).toBe('released');
     expect(f.calls.map((c) => c[0])).toEqual(['ws-release']);
   });
@@ -1222,7 +1228,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const line = JSON.stringify({ uid: `k7b.1.${k7n}`, at: closedAt, act: 'create', outcome: 'done', verb: 'ws-add', id: RID });
     f.coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: k7n * 200,
       size: k7n * 200, at: closedAt });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold({ ...f.deps, now: () => closedAt + 1_000 }, req)).toBe('changed');
     expect(f.calls).toEqual([]);
   });
@@ -1235,7 +1241,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const closedAt = closedClaim(f.coord, 'demo-earlier');
     // No `create` is mirrored at all, and the clock is a month past the claim:
     // with no birth to compare against, doubt keeps the child.
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold({ ...f.deps, now: () => closedAt + 30 * 24 * 3_600_000 }, req)).toBe('changed');
     expect(f.calls).toEqual([]);
   });
@@ -1248,7 +1254,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const coordRun = f.coord.openRun({ program: 'demo-coordinated', title: 't', project: 'demo', wave: 1,
       waveOf: null, claimedBy: RID });
     if (!('id' in coordRun)) throw new Error(`openRun coordRun refused: ${JSON.stringify(coordRun)}`);
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
@@ -1261,7 +1267,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
     writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls).toEqual([]);
   });
@@ -1279,7 +1285,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const deps: ChildReclaimDeps = { ...f.deps, io: { ...f.deps.io,
       readdir: async (dir: string, timeoutMs?: number, signal?: AbortSignal) =>
         (pastStep5 ? null : f.deps.io.readdir(dir, timeoutMs, signal)) } };
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(deps, req)).toBe('failed');
     expect(pastStep5).toBe(true);
     expect(f.calls).toEqual([]);
@@ -1291,7 +1297,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
     const spy = vi.spyOn(f.coord, 'openRunsForSession').mockImplementation(() => { throw new Error('boom'); });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     await expect(releaseRetiredChildHold(f.deps, req)).resolves.toBe('failed');
     expect(f.calls).toEqual([]);
     spy.mockRestore();
@@ -1317,7 +1323,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
       if (id !== runId || !r.ok || r.run === null) return r;
       return { ok: true as const, run: { ...r.run, state: 'working' as const } };
     });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls).toEqual([]);
     spy.mockRestore();
@@ -1330,7 +1336,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
 describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclaimChild and the failure token', () => {
   const REQ = (over: Partial<ChildReclaimRequest> & { feedQuiet?: ChildReclaimFeedQuiet } = {}): ChildReclaimRequest =>
     ({ sessionId: ID, runId: 7, trigger: 'sweep', deferExpired: false, deferredSinceMs: 1,
-       feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, ...over });
+       feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' }, ...over });
   const quiet = (deferWhy: string | null, failureToken: string | null = null): ChildReclaimFeedQuiet => ({ deferWhy, failureToken });
   const deferredOf = (why: string): Exclude<ChildReclaimOutcome, { kind: 'gone' }> =>
     ({ kind: 'deferred', sessionId: ID, runId: 7, why: why as never, detail: 'd' });
@@ -1387,8 +1393,10 @@ describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclai
     const s = await rig({ script: pinFailed });
     expect(await reclaimChild(s.deps, s.req(false, 1, listed))).toMatchObject({ kind: 'failed', token: 'pin-failed' });
     expect(s.feed(), 'the attention list already says it').toEqual([]);
-    const expired = await rig({ script: pinFailed });
-    await reclaimChild(expired.deps, expired.req(true, 1, listed));
+    const expired = await rig({ script: (runId) => ({ ...pinFailed(runId),
+      audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK, generation: GEN_W8 }) } }) });
+    writeFileSync(path.join(expired.reg, `${ID}.generation`), GEN_W8);
+    await reclaimChild(expired.deps, { ...expired.req(true, 1, listed), licenceGeneration: { kind: 'value', v: GEN_W8 } });
     expect(expired.feed(), 'the row that ends a wait').toEqual(['child reclaim failed']);
     expect(expired.bodies()[0]).toContain('The defer ceiling was reached');
     const other = await rig({ script: pinFailed });

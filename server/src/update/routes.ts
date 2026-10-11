@@ -585,6 +585,9 @@ export function registerUpdateRoutes(
       releases: deps.coord.releases().map(toReleaseWire),
       nodes: deps.coord.nodes().map(toNodeWire),
       intent: deps.coord.intents().map(toIntentWire),
+      // Box-token lifecycle wave 1 (D-4392): the console card's one object, the driver's own view, read at
+      // request time. No driver, no field — an absent `boxToken` is how an older server already answers.
+      ...(deps.tokenDriver ? { boxToken: deps.tokenDriver.view() } : {}),
     };
     return view;
   });
@@ -776,7 +779,7 @@ export function registerUpdateRoutes(
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
-        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/updates/intent/:nodeId');
         if (token !== 'ok') {
           return refuse(reply, 401, { error: 'unauthenticated', verdict: session.verdict });
         }
