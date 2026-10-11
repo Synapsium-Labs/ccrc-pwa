@@ -1236,6 +1236,11 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         - So wave 15 waits for wave 6's `ccd/ccd` edit to land.
       - STATUS: fleet and server v0.0.147, newest v0.0.147, backups fleet 166M/server 631M, disk free fleet 219G/work
         volume 246G/server 33G, no anomalies.
+    - **2026-10-11 16:42 UTC: v0.0.148 published at 16:33:03; not yet moved, inside the usual lag.** No action was
+      taken. It is #352, child reclamation's wave 9 plan and contract (docs). Wave 15 (run 300) is still held by claim
+      1149 (`ccd/ccd`, workspace lifecycle's wave 6) and claim 1155 (`ccd/ccrc`, box-token row 2b, run 377).
+      - STATUS: fleet and server v0.0.147, newest v0.0.148, backups fleet 166M/server 631M, disk free fleet 219G/work
+        volume 243G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
