@@ -2,9 +2,9 @@
 // tail's word for a PROVEN refusal at its removal-time re-ask. It is declared
 // with its ccd emission (`_ws_reclaim_tail`'s literal `_ws_reclaim_fail …
 // containment-refuted`). Its sentence says only what is true under any server.
-// Until a server classes it, both parsers read it as the resumable failure it
-// is, so it is retried. Wave 8's `stuck` class changes the parser pins below on
-// purpose.
+// Wave 8's `stuck` class reads it in the reclaim parser as `stuck`; until a
+// server classes it, the expiry parser reads it as the resumable failure it is,
+// so it is retried. Wave 8 changed the reclaim parser's pin below on purpose.
 import { describe, it, expect } from 'vitest';
 import { LC_REFUSAL_WORD, isLcRefusalToken, lcRefusalWord } from '../../shared/api.js';
 import { SENTENCES, refusalSentence } from '../src/wsaudit.js';
@@ -34,10 +34,13 @@ describe('the word', () => {
   });
 });
 
-describe('today’s parsers read it as a resumable failure — retried', () => {
-  it('parseChildReclaimResult: failed, resumable, with its token', () => {
+// Wave 8 retitles this describe and flips ONE assertion in it on purpose (spec
+// §5.6, the stuck class): the reclaim parser reads the word as `stuck`.
+// `parseExpireResult`'s, below, is workspace-lifecycle's and is left as found.
+describe('the parsers read it as a failure: the reclaim parser as stuck, the expiry parser as resumable', () => {
+  it('parseChildReclaimResult: failed, stuck, with its token', () => {
     expect(parseChildReclaimResult('demo-quiet-basin', DOC, '')).toEqual({
-      kind: 'failed', resume: 'resumable', detail: `${W}: d`, token: W });
+      kind: 'failed', resume: 'stuck', detail: `${W}: d`, token: W });
   });
 
   it('parseExpireResult: failed, resumable — the expiry lane asks again on its backoff, never at +∞', () => {

@@ -56,9 +56,9 @@ describe('parseChildReclaimResult: a failed word printed before the breadcrumb i
     }
   });
 
-  it('the kebab scanner’s guard admits both pre-breadcrumb words and not pin-failed', () => {
+  it('the kebab scanner’s guard admits probe-unmeasured and the stuck word, and not pin-failed', () => {
     expect(isChildReclaimKebab('probe-unmeasured')).toBe(true);
-    expect(isChildReclaimKebab('state-changed')).toBe(true);
+    expect(isChildReclaimKebab('containment-refuted'), 'admitted only by the stuck set').toBe(true);
     expect(isChildReclaimKebab('pin-failed')).toBe(false);
   });
 });
@@ -91,7 +91,7 @@ const rig = async (verb: { code: number; stdout: string }) => {
   const deps: ChildReclaimDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd, fleetState: CAPS,
     presence: { isVisible: () => false }, notifyLog };
   const req: ChildReclaimRequest = { sessionId: ID, runId, trigger: 'close' as const, deferExpired: false,
-    deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE };
+    deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } };
   const bodies = () => coord.feedEvents(50).filter((e) => e.sessionId === ID).map((e) => e.body);
   return { deps, req, bodies };
 };

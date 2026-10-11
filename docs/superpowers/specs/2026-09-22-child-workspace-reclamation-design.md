@@ -337,6 +337,46 @@ could invalidate. That liveness residual is zero today: all 35 live `.child` row
 does, by design. The audit took no compaction lock before; its acquire may now publish
 `$REG/.<id>.compactions.lock` where none stands yet, and it waits up to five seconds for a contended one.
 
+**A request that waited is held to the row it was judged over.** The token binds the row at the instant the audit
+mints it, but a sweep request is judged earlier and can wait on the session's queue before anything is spent. In that
+wait the same run can remove the slug and mint it again, and every check the executor makes would then pass for the new
+workspace: a licence earned over the old workspace's presence episode would be spent on it. So the generation is read and
+compared at four points, and a request is spent only if every one agrees.
+1. **The sweep's read.** On each pass, before it judges anything, the sweep reads `$REG/<id>.generation` for every row
+   whose marker reads as a child, all concurrently, and the per-child loop after it awaits nothing. The read is
+   byte-exact: nothing is trimmed, no newline or NUL is stripped, and a value is exactly the 36-character lowercase UUID
+   that ccd's own reader accepts. It answers `value`, `absent` (a proven ENOENT and nothing else) or `unreadable`. A row
+   whose generation cannot be read has an unmeasured identity: the sweep judges it `identity-unmeasured` (§5.9), seeds no
+   memory for it, and drops any it held. A row whose marker does not read as a child is not read, because its verdict
+   answers before identity is asked.
+2. **The sighting's key.** The generation is the third key of a child's memory, beside its birth and the run its marker
+   names (§5.7). Every sweep request carries the key its memory holds, the value or `absent`, as the generation it was
+   judged under, licensed or not.
+3. **The executor's re-read.** After the switch is read and before presence is asked, the executor reads the generation
+   again. A different value, or `absent` where there was a value, defers the request as `generation-changed`. A read that
+   fails defers it as `marker-unreadable` and never as a change: it says the box could not be read, not that the workspace
+   moved. The re-read comes before presence so that a licence never reaches a re-minted workspace. It promises no more than
+   that: a re-mint that lands between the re-read and the presence answer can still credit that one answer to the old
+   entry, and the next pass reads the new generation and replaces the entry.
+4. **The audit's.** `ws-audit --reclaim` prints the generation it bound into the token. The executor compares it with the
+   request's, and a different value defers `generation-changed`: the slug was minted again between the re-read and the
+   audit, and the token is over the new workspace. A token-bearing document whose `generation` is null, or is not exactly
+   one valid generation, is unreadable and its token is never spent. A document with no `generation` key at all is an
+   older ccd's. A licensed request is never spent on its token, because it would skip presence on the strength of a
+   judgement nothing on the box would hold to that generation, so it defers `unsupported` until the fleet host's ccd is
+   updated. An unlicensed request relies on the re-read in step 3, and its residual is the gap from that read to the act
+   (§7). A refused document's key gates nothing, and an audit that exits non-zero is never spent, whatever its document
+   holds.
+
+Close's request carries no generation (`none`), and neither the re-read nor the audit's comparison is made for it. Close
+queues only when the minting run names this session and no other open run does, so that run is the one being closed or is
+already terminal, and no re-mint of the slug by it can follow.
+
+`generation-changed` is worded by what was measured: the workspace under this name no longer carries the generation the
+sweep judged it under, so the request is not used and the sweep judges the workspace afresh. It never says the workspace
+was removed and made again, because ccd can change that file with no removal. It mints a generation into an absence on a
+standing row, and the purge unlinks it last, while the row is still listed.
+
 **Why a separate verb rather than a flag on `ws-reap`.** They accept opposite evidence. `ws-reap` refuses
 `dirty-tree`, `sensitive-ignored`, `unpushed-commits`, `no-upstream` and `not-merged`; reclaim's whole
 purpose is to proceed through the first two and to ignore the last three. Folding both into one verb makes
@@ -575,8 +615,11 @@ proves absent keeps nothing, and the witness is dropped. If that absence cannot 
 recorded unmeasured, and its witness stays. The act completes, and its `done` row records what was kept and why.
 The tail's stdout done document, on both verbs, carries the same two words as additive keys, `clipsKept` and
 `tmpRootKept`: the kept word (`refused`, `unmeasured` or `in-use`), or `null` when nothing was kept. A document from
-an older ccd omits both keys, and a reader treats absence as unmeasured, never as gone. Each kept reason is cut at
-300 bytes of printable ASCII
+an older ccd omits both keys, and a reader of that document treats absence as unmeasured, never as gone. The lifecycle
+mirror is a second carrier of the same words and cannot tell an omitted key from a null value, because the encoder omits
+an empty one, so the server reads both there as nothing kept or not reported, and tells a line cut to fit apart from
+both (§5.9). The word classifier, which reads any value but ccd's three as `unmeasured`, is what the two carriers share.
+Each kept reason is cut at 300 bytes of printable ASCII
 and marked with a trailing "…". That is not a refusal. What the worktree removal deletes is unchanged. Every
 deleting git call the tail makes
 runs under the reclaim's git containment: the worktree removal, `update-ref -d` and the branch delete. So
@@ -601,8 +644,9 @@ moved-tree check's own unmeasured answer, and a tree that stands with no worktre
 Both stop in the place the tail always stopped, with nothing further deleted, the breadcrumb standing and no later
 step run, and every refusal arm keeps a non-zero status. The operator's sentence says only what is true under any
 server: the session was stopped, nothing further was deleted, and a retry finds the same thing until the other tree
-or row is moved or removed. Until the server gives the word a class of its own (§8, wave 8), its parsers read it as
-any other resumable failure and retry it, which is safe because the resumed tail deletes nothing before this check.
+or row is moved or removed. The server's reclaim reader gives the word a class of its own, stuck (§5.9), and retries it
+on a long, capped tier (§5.7). `ws-expire`'s reader is workspace lifecycle's, and reads it as any other resumable failure
+and retries it, which is safe because the resumed tail deletes nothing before this check.
 
 **The branch delete is a compare-and-swap, and the all-zero id is no compare.** `update-ref -d --no-deref <ref>
 <old>` deletes the ref only if it holds `<old>`, except that an all-zero `<old>` is no compare at all: measured on
@@ -672,8 +716,9 @@ started. The server reads those two words as not resumable, and its feed says th
 that the box resumes where it stopped. The consent binding's `state-changed` is printed on the fresh arm only,
 because only the fresh arm runs the pin phase. `probe-unmeasured` is pre-breadcrumb on the fresh arm only: the
 locked recomputation prints it on the resumed arm too, where an earlier attempt's breadcrumb stands (§7).
-`pin-failed` and `tombstone-unwritable` stay resumable, because each is printed once in the pin phase, before the
-breadcrumb, and also by the tail after it, so the word alone cannot tell the two apart (§7).
+`pin-failed` and `tombstone-unwritable` stay resumable on the word alone, because each is printed once in the pin phase,
+before the breadcrumb, and also by the tail after it. Where the document carries `crumb` (below), the server reads that
+instead, and the word is only the fallback for a document without it (§5.9, §7).
 
 **`crumb`: whether a failure was printed past the breadcrumb.** The failed document carries an additive key
 `crumb`, `false` before the act's breadcrumb was written and `true` once it was, which tells apart the words that are
@@ -793,10 +838,27 @@ skipped; the orphans that motivated it are reached through the bullet above inst
 a child alone for the same reason. Run ids restart when the database is rebuilt, so a minting run that opened
 more than 120 seconds after the child was created (the dated `create` row opening its current generation
 in the lifecycle journal) cannot be the run that made it; a fleet box whose clock runs behind the server's
-gives the same answer. And a child whose creation the journal does not date cannot be matched to its run
+gives the same answer. And a child whose creation cannot be placed cannot be matched to its run
 at all. The first of these two is kept, never reclaimed automatically, and reported (§5.9). The second,
 `child-birth-unplaced`, is doubt, not a keep: the sweep looks for the creation again on its next pass, and
 the child reads `deferred` meanwhile (§5.9).
+
+**A creation is placed, or it is doubt.** The birth is the opening `create` of the workspace's current generation: the
+placed `done` create with the highest mirror id, placed meaning ccd dated it and the date is not ahead of the server's
+clock. It is null, and the child is `child-birth-unplaced`, for either of two causes. The journal holds no dated creation
+of the workspace. Or the journal holds a removal of the id after that creation that no newer creation has replaced. The
+second is a recycled slug whose new creation is not mirrored yet, or is dated ahead of the server's clock, while its row
+and marker are already listed: the older workspace's creation would otherwise stand in for the new one's birth. A removal
+is a `purge` that is journaled after the creation by the mirror's own order, that ccd's own clock does not place before the
+creation, and that is not the row's own. ccd journals `purge done` before it unlinks the row's files, so a purge that died
+part way, or stopped at a non-zero status, leaves this same workspace's row listed with its own purge after its own
+creation. A purge whose uuid equals the listed row's uuid is that one, and it leaves the birth placed: the sweep asks
+again, and ccd resumes from its breadcrumb. A purge with no uuid counts, and so does every purge when the row's uuid could
+not be read, because doubt is the safe direction. The same birth serves the sweep, the executor's coordination re-read,
+close and the hold's release, each told the uuid of the row it read itself. While it is unplaced, an earlier coordinator
+claim on the id reads as coordinated, and every consumer fails safe: the sweep shows `child-birth-unplaced` first, the
+executor defers `siblings-open`, close declines `has-coordinated`, and the release answers `changed`. Each ends once the new
+creation is placed.
 
 **A programme's own hold ends with the programme.** The close holds a child it cannot prove finished
 (§5.3), and no later close decides a child an earlier run minted, so "no hold" alone would keep such a
@@ -808,8 +870,36 @@ so a person's hold is never released, even one written in a programme's grammar,
 cannot be read. The sweep releases such a hold in its own job, which re-reads everything first and deletes
 nothing but the hold, and the child is judged afresh on the passes after.
 
+**The release waits on two sightings of one workspace generation.** The job is queued on the second consecutive pass that
+finds the hold retired, and "consecutive" has to mean the same workspace. The lane remembers, for each such child, the
+three keys under which it made the first sighting: its birth, its marker's run and its registry generation (§5.5). A
+sighting under an equal key is the second, and queues the release. A sighting under another key is a first sighting, and
+its key replaces whatever an earlier workspace of the id left, so the next sighting of this one is the second. Any other
+verdict, and a generation that cannot be read, delete the memory. One pure function decides which of the three a sighting
+is, and the lane applies it. The job carries the generation and reads it again after every other check, nearest the argv. That read is defence in
+depth, and no earlier check leans on it. The job is queued only once the minting run is terminal, since `hold-retired`
+needs that, so the run cannot mint the slug again. A re-mint by any other run fails the first check, because the
+marker then names that other run, and a dispatch, which is what mints, runs under the coordination mutex. What the read
+still does is bind the release to the generation its sightings judged: a workspace they never judged, such as one made
+under a run id that was reused after coord.db was rebuilt, answers `changed`, never `released`. A different value, or
+`absent` where there was a value, answers `changed`; an unreadable read answers `failed`. The first check must not be
+loosened on the strength of this read. The gap from that read to ccd's unlink remains, because `ws-release` carries no
+token and no generation. Releasing the hold of a re-minted workspace that way cannot reclaim it, since its own minting
+run is live and the sweep answers `minting-run-open`.
+
 The lane runs on a pass that already reads the registry, so it costs one predicate rather than a new timer;
 the plan names which pass, under the constraint that it must not race the write routes.
+
+**One pass, one decision clock.** A pass has exactly one await before its loop: the gather of every marked row's
+generation (§5.5). The throttle is stamped from the monotonic clock before the gather, so a tick that lands while a pass
+gathers is throttled and no second pass starts within the interval. A pass counter is bumped as each gather begins, and a
+pass whose gather settles after a newer pass has begun was overtaken and decides nothing: its loop would be a second
+sighting on evidence the newer pass has already read. A pass that was not overtaken then reads its decision clock, after
+the gather, so no decision clock is older than the evidence it judges, and it re-stamps the throttle with that clock. The
+next pass must start a whole interval after this one decided, not after it began. Together these keep any two passes that
+decide at least one interval apart on the monotonic clock, so one interval never counts as two sightings, however long a
+gather takes. Only the remote adapter's read has a timer, its request timeout; a local read has none, and the pass rule
+is what bounds a slow gather.
 
 **Presence, and its bound.** The defer is a union of the two signals that exist, each measured where it
 lives:
@@ -888,8 +978,53 @@ answering presence until it is licensed, and the sweep's memory is not cleared. 
 switch, a missing capability, a failed read and a restart clear it, and every episode and lease then starts
 again. A violation forfeits the lease and fails closed: on a box so slow that a pass and an answer exceed
 G, no presence-held child is licensed, as no lone child would be, and every other due child is still
-asked. And that memory holds one workspace generation per child: a slug minted again is a new child,
-sighted afresh.
+asked. And that memory holds one workspace generation per child, told by three keys: its birth, the run its marker names,
+and its registry row's generation (§5.5). A slug minted again is a new child, sighted afresh. The birth alone can still
+read the old workspace's, and the marker can name the same run when one run mints the slug twice, but the generation file
+is minted with the row, before any other field, is never rewritten in place, is removed last when the row ends, and ccd
+refuses a new row while any field of an old one stands, so a slug minted again carries a new value. Two rows with no
+generation at all, which only a `ws-add` older than the generation's minting could write, are not told apart, and a ccd
+that binds the generation audits such a row `unmeasured` and spends nothing on it. A request already queued when the slug
+is minted again is out of the memory's reach, which is why it carries its key and has it re-proved (§5.5).
+
+**The persistent tier.** A failed attempt backs off from two pass intervals, doubling, up to the 15-minute ceiling, and
+a child whose every attempt fails is then asked about once a ceiling, for ever. For a failure that will not heal by itself
+that pace buys repeated attempts and journal lines and nothing else. So a child can enter a second, slower tier, which never stops asking.
+- **Entry.** Two ways. The first is a stuck answer (§5.9): ccd proved that a tree or row which is not the child's own lies
+  in the way, and the child enters at the first such answer. The second is the fourth consecutive failure carrying the same
+  word, four being where the ordinary ramp first reaches the ceiling. Only a word ccd named counts. A failure with no word
+  (a request that threw, or a call cut short) and the four pre-lock dies (`flock-unavailable`, `lock-unopenable`,
+  `token-malformed`, `run-id-malformed`), which hit every child alike, neither enter, count, advance nor end the tier.
+  Those are failures the journal records as a refusal line, or with no word, or not at all, and the restart seed below must
+  read back exactly what the memory held.
+- **Exit.** A reclaim, a gone row, a terminal refusal, or a failure carrying a different countable word ends it, and a
+  different word starts its own run of one. A refusal the box retries is answered as a deferral, and keeps the tier.
+- **Deferral.** A deferral keeps the child's place on the tier, its word and its count. It clears the ordinary ramp as it
+  always did, so a deferred tier child is due on the next pass, and the presence lease, its episode and its licence are
+  unchanged.
+- **Pace.** After a tier failure the wait is the ceiling doubled j times, capped at four hours, where j is the count of
+  consecutive failures beyond the fourth, and zero up to it. A child therefore waits 15 minutes through its fourth failure,
+  then 30, 60, 120 and 240 minutes, and stays at 240. A stuck child, which enters at its first answer, is paced the same
+  way. The cap is finite on purpose, so the tier never stops asking, and the pace is never shorter than the ordinary ramp.
+  Every count lives in the sweep's memory, and no clock decides membership.
+- **Restart.** The memory is lost with a restart, a raised switch, a missing capability, a failed mirror read and every
+  pass that does not find the child eligible. So a first sighting reads the tier back from ccd's own journal of the
+  child's current generation. It walks back over the `reclaim` lines, past intents and other acts, past a refusal the box
+  retries or one this build cannot classify (the live memory is neutral to both), and past a failure whose word is not
+  countable, and it counts the latest run of one countable word, ending at any other outcome or another word. Membership and
+  j come from the same derivation the live memory uses. The seed also carries the word and run of a child not yet on the
+  tier, so the fourth failure is the same failure live or after a restart. It reads the journal only when the slice's opening
+  creation is the sighting's own birth, so with no placed birth it seeds nothing, and another workspace's rows never seed
+  this one. It carries no failure instant, so a seeded child is asked once on its next due pass and its tier pace applies from
+  that answer on. A lost memory therefore costs a tier child one extra ask, never a fresh four-hour wait, and never a fall
+  back to the ordinary ramp unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice
+  windowed short).
+- **A held stuck child.** A child under a hold is never asked, and its memory is dropped. When the hold lifts it is sighted
+  afresh and seeded like a restart's, so the sweep sights it on the first pass after the hold lifts and asks it once on the
+  next, before the tier's pace resumes from that answer.
+- **What the pace costs, stated.** A cure that is not the child's own, a fleet update for one, is noticed only at the tier's
+  next ask, up to four hours after the last. The seed reads a slice the mirror may have windowed short, which only makes a
+  run look younger, and a recycled slug's rows are read before its new creation is placed. Each affects pacing only.
 
 **Presence never authorises deletion.** `--defer-expired` changes the fingerprint and skips the presence
 rungs. It never skips the ownership comparison with other rows (§5.5, D-3731). The converse holds too: no
@@ -933,7 +1068,34 @@ presence writes one row per episode, not one per pass. A failure the attention i
 no further row until its word changes or it leaves the list. A presence deferral writes its row on every
 pass, and an attempt the ceiling licensed always writes, because its row states the wait it ended. A child
 the sweep keeps for a person (below) writes one `child reclaim kept` row per word, once in each server
-process.
+process. A reclaim deferred because the workspace under the name no longer carries the generation the sweep judged it
+under (`generation-changed`, §5.5) is a deferral for a reason but presence, so it writes one row for its episode, and its
+detail says what was measured.
+
+**What a failed row promises next.** One decision, the word first and then ccd's `crumb`, and each value is spoken by its
+own sentence, so a value added without a sentence is a compile error and never a silent "retried from the start".
+- **`purge-incomplete` is decided by its word.** The reclaim completed and its registry row was purged, and ccd's detail,
+  rendered just before, names what still stands. The sentence is conditional: the sweep asks again only if the row's own
+  files still stand, so it neither says that nothing retries it nor that the box resumes.
+- **A stuck word is stuck** whatever `crumb` says (below).
+- **Otherwise `crumb` decides, read strictly.** Only the two booleans count, and any other value, absent included, is
+  absence. `false` is not resumable and says "It is retried from the start." `true` is resumable and says the box resumes
+  where it stopped, because it says the act's breadcrumb was written, never that it stands now. With no usable `crumb`, the
+  words printed before the breadcrumb on the fresh arm (`probe-unmeasured` and `state-changed`) read not resumable and every
+  other word reads resumable, the fallback for an older ccd and for a breadcrumb that stood but could not be read.
+- **A pre-lock die** keeps its own sentence: ccd refused the call before anything started, and refuses the same way every
+  time until that changes.
+The reader is `ws-reclaim`'s alone. A `ws-collect` document carries no `crumb`, and this reader is never applied to it.
+
+**An audit that exits 1 is read, and never spent.** `ws-audit --reclaim` prints its `unmeasured` document, journals a
+`failed` `probe-unmeasured` line and exits 1. The server reads that document only when it is a JSON object naming the
+session, with mode `reclaim` and verdict `unmeasured`. It answers a failure carrying the word `probe-unmeasured`, the word
+the mirror holds, so the feed's repeat check and the tier's count see the word the journal does. It is resumable when the
+document's `resume` is a non-empty string, which ccd prints only for a breadcrumb phase, when a breadcrumb stood as the
+audit read it; the server does not check the phase. It is not resumable otherwise. Every other exit-1 shape is unreadable
+with no word. The reader has no token arm and no refused arm, so no exit-1 document is spent, a token-bearing one
+included, and that holds by type and not by convention. The audit has no value for a breadcrumb it could not read, so an
+audit over one prints no `resume` and reads not resumable (§7).
 
 **A chip on the closed run's row**, reading the lifecycle mirror rather than the registry row that no longer
 exists, and the sweep's last verdict on a child that still stands: reclaimed, pending, deferred, paused, or
@@ -969,8 +1131,10 @@ answer must not promise a retry the sweep will not make.
   child.
 - A child the sweep could not judge because a read failed (`marker-unreadable`, `identity-unmeasured`,
   `hold-unmeasured`, `minting-run-unreadable`, `reviewed-run-unreadable`, `siblings-unreadable`), or
-  because the lifecycle journal holds no dated creation of its workspace (`child-birth-unplaced`), reads
-  `deferred`, with a sentence naming the read and saying the sweep reads it again on its next pass. A held
+  because its creation cannot be placed (`child-birth-unplaced`: the lifecycle journal holds no dated creation of its
+  workspace, or holds a removal after that creation that no newer creation has replaced, §5.7), reads
+  `deferred`, with a sentence naming the read and saying the sweep reads it again on its next pass. An unreadable
+  generation (§5.5) is `identity-unmeasured`, and shows here and nowhere else. A held
   child, under a person's hold or a programme's while that programme is open, reads `deferred` with the
   hold's sentence. The switch turns both to `paused`.
 - Where nothing else answers, a child with no verdict yet reads `pending` with a sentence of its own, never
@@ -978,6 +1142,10 @@ answer must not promise a retry the sweep will not make.
   after a restart until the first judging pass, and every child but the kept ones after a pass that judged
   nothing (the switch raised, a capability missing, a read failed).
 - The four pre-lock refusals the attention item reads as failures (below) read `deferred` on the chip too.
+- A child whose latest reclaim line is a stuck failure (below) reads `deferred`, with the stuck item's own sentence at the
+  line's time. It answers ahead of the sweep's verdict, because the stuck item outranks a kept or held one on the banner,
+  and it is never `refused`: the board treats `refused` as settled and never re-reads it, and a tree that is fixed
+  completes on a later pass. Like every failure line it speaks only for a child that still stands as this run's.
 
 There is no sixth word: the chip keeps its five.
 
@@ -985,9 +1153,10 @@ There is no sixth word: the chip keeps its five.
 Archive (workspace lifecycle §5.2), so a child can be archived like any workspace; "Archive all" skips children
 (workspace lifecycle §5.1, §6 item 3).
 
-**One fleet-level attention item** collects children under a terminal refusal, children whose reclaim
-has kept failing past the defer ceiling (retries back off in between), and children the sweep keeps for a
-person, with each one's sentence. A failure includes the four refusals ccd journals before it takes the
+**One fleet-level attention item** collects children under a terminal refusal, children whose reclaim ccd proved
+cannot finish as things stand (stuck, below), children whose reclaim
+has kept failing past the defer ceiling (retries back off in between), children the sweep keeps for a
+person, and reclaimed children whose clips directory or temp root ccd kept (below), with each one's sentence. A failure includes the four refusals ccd journals before it takes the
 reclaim's lock. Two are written when it cannot take the lock (`flock-unavailable` and `lock-unopenable`),
 and two when the server's argv carries a malformed token or run id beside a valid session id
 (`token-malformed` and `run-id-malformed`). ccd records them as refusals, but the server retries them, so
@@ -1008,12 +1177,79 @@ derived from the lifecycle mirror so a restart does not lose it. Its kept childr
 last judging pass, which reads only durable state (the registry listing, the coordination database and the
 mirror); they stay listed across a pass that judged nothing, a paused one included, and a restart lists
 them again at its first judging pass. A child has one item: a kept item replaces a failing one, and a
-terminal item stands, with no kept item beside it. More than five children answering one kept word, which
+terminal item stands, with no kept item beside it. A stuck item stands as well, with neither a kept nor a failing item
+beside it, and so does any item the list already holds for a child that a kept-leaf item (below) would name. More than five children answering one kept word, which
 is what a lost or rebuilt coordination database produces, render as one line with the count and the list
 behind it. A failed read never lists a child by itself. A child whose last verdict is a hold is not listed
 for a failure, though its terminal item stands; with no verdict recorded, a failing child is listed as before.
 It is **not** a divergence pattern: nothing in the PWA reads divergences today, so one there would be a
 report nobody receives.
+
+**A stuck child is listed at once.** ccd proves, at the tail's removal-time ownership check, that a tree or registry row
+which is not the child's own lies at, inside or through what it would delete (`containment-refuted`, §5.6). It stops the
+session, deletes nothing further, and journals the word as a failure, never a refusal. The server calls that word, and any
+word added to its one set, stuck. It is the class of a failure that nothing a wait can change will end, so it is listed
+with no ceiling, on its first answer, for as long as the child's row stands.
+- **The sentence.** It is ccd's word for the token, then what ccd recorded as standing in the way, then the retry clause.
+  The retry clause is conditional, like the failing sentence, because while the switch is raised or the fleet box lacks the
+  reclaim capabilities the item stays listed and nothing retries it: "While automatic reclamation runs, ccrc retries it on
+  its long backoff; the box resumes from its breadcrumb once the tree or row is fixed." That long backoff is the persistent
+  tier: a stuck child is retried on the persistent tier (§5.7) from its first answer. The recorded detail names the tree or
+  row to fix. It is carried as one bounded plain line, because any session can append a journal line: each run of control
+  characters (the C0 and C1 controls, DEL, the line and paragraph separators) and of bidirectional embeddings, overrides and
+  isolates becomes one space, the ends are trimmed, and past `LC_LINE_MAX` characters it is cut and marked with an ellipsis.
+  A line with no detail, or none left once made one line, says the record was cut and points to the child's "child reclaim
+  failed" row in the feed, which names it. The item's time is the line's own, or none when ccd placed none: a stuck line
+  needs no clock to be listed.
+- **Precedence.** A terminal refusal outranks it, because it is ccd's settled word, and a refusal and a failure are never
+  the same line. It outranks a kept item, a collapsed kept line, a failing item and a kept-leaf item, and a held verdict
+  does not withhold it, so a stuck child is never a member of a kept or kept-many line.
+- **The feed.** A listed stuck item is read as a failing one is, so a retry that finds the same word writes no new row.
+- **A stuck child the sweep keeps, or holds, promises no retry.** For a kept child the retry clause gives way to the kept
+  reason: "The sweep keeps this child for a person:" and the kept word's own sentence, which promises no retry because a
+  kept child is never asked. For a held child it gives way to "This workspace carries a hold, so ccrc does not retry it
+  while the hold stands; its long backoff resumes once the hold lifts." One rewrite serves the banner and the chip, so they
+  say the same thing, and the banner applies the kept rewrite only to a verdict under the run the item names, because
+  another run's is a recycled slug's. On the chip the switch never replaces the kept answer, as it replaces none of a kept
+  child's, and it turns the held one to `paused`, as it turns the hold's own deferred answer.
+- **What the kept variant leaves, stated.** A stuck child the sweep keeps never gets a kept feed row, because it is
+  excluded from the kept items. The feed's latest line for it stays the stuck line, and the banner names the kept reason.
+
+**A kept leaf outlives its row.** The reclaim tail keeps a clips directory or a temp root that ccd's removal helper
+refused, could not measure, or found in use, and the act still completes (§5.5, §5.6). After a `done`, ccd has purged the
+registry row, so no listing names the child. The item is therefore derived from the lifecycle mirror alone.
+- **Source.** For each id, its latest `reclaim` row in the mirror that carries the two kept-leaf keys: the `done` row, or a
+  failure whose act completed and only the purge after it failed (`purge-incomplete`, `purge-mechanism-absent` and
+  `purge-refused`). One bounded read finds them, over the last seven days of ccd's own dates. A row ccd journaled with no
+  date is outside it, and so is never listed. The item is never filtered by the registry listing, and it is derived on every
+  pass past the pass's fail-shut read, so a paused pass and one without the capabilities list it too, and a restart rebuilds
+  it. A row whose session id is not one ccd could have minted lists nothing, and writes no feed row: the id must have the
+  session-id shape and must never lead with a dot, which is ccd's own rule for its temp roots, because any session can
+  append a journal line and the item names the id in a path a person is told to remove.
+- **What it reads.** The mirror reader answers one of three for each leaf: kept, with ccd's word; nothing kept or not
+  reported, which are one fact on this carrier; or truncated. A line cut to fit that kept its measurements is read from
+  them. One that lost them all reads truncated, and its item is raised on that: the sentence says the line was cut, so
+  whether a leaf was kept is not known, and points to the feed row when the row carries ccd's detail. ccd's last-resort line
+  keeps neither, and then the sentence names `~/.cc-clips/<id>` and `~/.cc-tmp/<id>` on the fleet box as where to look. An
+  item is raised on a kept word for either leaf, or on a truncated line. The run it names is the one the line records, and
+  none for a purge failure or a cut line.
+- **How it ends.** An end must follow the row: a higher mirror id, and not a time ccd's own clock puts before the row's, so
+  doubt keeps the item listed. A later placed `create` of the id, dated and not ahead of the server's clock, ends both
+  halves, because the id is a new workspace now. A later `collect` `done` ends the temp-root half only, and the collector
+  never takes a clips directory. Seven days after the row's time, the item ends too, and its sentence names that horizon.
+  The ends come from a second bounded read, over the asked ids' own histories, because a later creation can lie outside the
+  time window. The horizon and the guard on a placed create read ccd's wall-clock time, as the mirror's other arms do, and
+  the item gates no decision.
+- **Collapse and precedence.** More than five items that have a run render as one `kept-many` line under a word no other
+  kept line uses. An item with no run always stays single, because the board drops a member whose run is not a number. A
+  child has one item across every arm: a kept-leaf item yields to any item the list already holds for the id, a collapsed
+  line's member included, because that item is about the row that stands now. It can meet one only when the row still
+  stands (a purge failure) or a recycled slug's creation is not placed yet.
+- **The feed.** One `child reclaim leaf kept` row is written for each source row, once in each server process, recorded and
+  never pushed, carrying the item's sentence and ccd's own line as one bounded plain line. After the item has ended, that
+  row is the record.
+- **It gates nothing.** No verdict, due set, lease or request reads it, and a failed read keeps the last items and never
+  fails the pass.
 
 ### 5.10 The temp-root collector
 
@@ -1452,7 +1688,7 @@ approved on a narrow one.
      time is never the only guard of a race case there.
    - A clips leaf the helper refuses or cannot measure is kept, recorded, and collected by nothing: the collector
      takes a witnessed temp root only (§5.10) and no clips witness is planned, so such a leaf is the operator's, and
-     reaches them through the server's report of what a tail kept (wave 8, §8).
+     reaches them through the server's report of what a tail kept (§5.9).
    - A temp-root leaf re-created between the tail's proof that it is absent and the drop of its witness, or by a
      process that outlives the wait after `done`, is a leaf with no witness. It is a leak, never a loss, because the
      collector takes only a witnessed leaf.
@@ -1499,25 +1735,24 @@ approved on a narrow one.
      foreign tree that stands in the child's worktree at the tail's moved-tree check, are proofs, not unanswered
      questions: they fail as `containment-refuted` (§5.6), and a retry meets the same thing until the other row or
      tree is moved or removed. Nothing is deleted in either case, and a fresh reclaim is held at the ladder. These are
-     persistent per-child failures that retry for ever. Wave 7 names the proven ones; the server's own reading of
-     `containment-refuted`, with attention at once and a long, capped retry tier, is wave 8's (§8).
+     persistent per-child failures that retry for ever. Wave 7 names the proven ones, and wave 8 reads `containment-refuted`
+     with attention at once and a long, capped retry tier (§5.7, §5.9).
    - A `pin-failed` or `tombstone-unwritable` printed in the pin phase, before the breadcrumb, reads resumable to the
-     server (§5.6), so the feed says the box resumes where it stopped of an act that is retried from the start.
-     `ws-expire`'s pin phase prints the same two words before its own breadcrumb, and its reader reads them the same
-     way. The additive `crumb` field on ccd's document now tells the two cases apart (§5.6); the server's reader of
-     it is wave 8's (§8).
-   - A `probe-unmeasured` printed on the resumed arm reads not resumable to the server (§5.6), though an earlier
-     attempt's breadcrumb stands. The locked recomputation prints it for any unmeasured verdict, and on a resume that
-     verdict can come from the resume's own reads (an unreadable tombstone, for one). The feed says the act is retried
-     from the start, but the box's next attempt resumes from that breadcrumb and completes.
+     server when the document carries no `crumb` key, so the feed says the box resumes where it stopped of an act that
+     is retried from the start. Wave 8's reader of `crumb` (§5.9) tells the two cases apart for a ccd that prints it, so
+     this now holds only for an older ccd, or a breadcrumb that stood but could not be read. `ws-expire`'s pin phase
+     prints the same two words before its own breadcrumb, with no key, and its reader is workspace lifecycle's.
+   - A `probe-unmeasured` printed on the resumed arm, with an earlier attempt's breadcrumb standing, reads not resumable
+     to the server when the document carries no `crumb` key. The locked recomputation prints it for any unmeasured
+     verdict, and on a resume that verdict can come from the resume's own reads (an unreadable tombstone, for one). The
+     feed then says the act is retried from the start, but the box's next attempt resumes from that breadcrumb and
+     completes. Where ccd prints `crumb`, it says true on the resumed arm and the server reads it resumable (§5.9).
      - The audit path reaches it too, and first. `ws-audit --reclaim` runs before the verb and goes through the same
        `_ws_reclaim_resume_eval`. Over a standing breadcrumb with an unreadable tombstone it exits 1 with
-       `{"resume":…,"verdict":"unmeasured"}` and journals `probe-unmeasured`. The server maps the audit's non-zero
-       exit to `unreadable` (`childReclaimAudit`), and the executor then reads not resumable. So the feed says the act
-       is retried from the start on every attempt while the tombstone stays unreadable, yet ccd's next attempt resumes
-       from the breadcrumb. The verb arm is reached only in an audit-to-verb race.
-     - This is the mirror image of the residual above: the same kind of fault, a wrong sentence and never a wrong act,
-       and the same additive field (`crumb`) tells the cases apart (§5.6); the server's reader of it is wave 8's.
+       `{"resume":…,"verdict":"unmeasured"}` and journals `probe-unmeasured`. Wave 8 reads that document (§5.9): a
+       non-empty `resume` reads resumable, and the feed no longer says the act is retried from the start.
+     - What stays is the audit over a breadcrumb it could not read, which prints no `resume`: see wave 8's residuals,
+       below.
    - The in-use probe reads each process's environment as exec'd, so a TMPDIR set after exec is not seen.
      - A cwd or fd reached through another mount of the same directory has a spelling neither of its compared
        spellings names. `~/.cc-tmp` is a bind mount on the fleet box, and the TMPDIR arm compares ccd's own
@@ -1577,6 +1812,45 @@ approved on a narrow one.
      `lreal`), and others are label prefixes only (the pin's `wdreal` and rung 9's), any refusal there coming later
      from the tail's containment proof.
 
+   Wave 8 carries these residuals as well, and amends the ones above.
+   - An older ccd's unlicensed gap. A `ws-audit` that prints no generation cannot bind its token to one. A licensed
+     request is never spent on such a token (it defers `unsupported`), but an unlicensed request then relies on the
+     executor's re-read alone, so the gap from that read to the act stays, as it was before this wave. It ends when the
+     fleet host's ccd binds the generation (§5.5).
+   - The generation read follows symlinks, where ccd's own read refuses every link. The local adapter follows the link: one
+     to a valid file reads as that value, and a dangling one reads `absent`. The remote adapter's agent resolves the link
+     before its read whitelist: a link whose target stays under a read root reads as that value, one whose target leaves
+     every read root reads unreadable, and a dangling one reads `absent`. ccd writes none of these shapes, and a ccd that
+     binds the generation audits such a row `unmeasured`, so nothing is spent on it.
+   - An unreadable generation shows on the chip only. The row's identity is unmeasured, its verdict is
+     `identity-unmeasured`, a doubt word the chip reads `deferred` and the banner never lists, and the sweep reads it again
+     on every pass (§5.9).
+   - The gather's load on the agent is unmeasured. Each pass reads every marked row's generation, concurrently, through the
+     fleet's read path; on a remote fleet that is one agent request per marked child per pass, and nothing has measured what
+     that costs the agent (§5.7).
+   - The registry records are read before the generation is gathered, so a re-mint's first sighting can judge the old
+     row's fields (its hold, workspace and identity) under the new generation, and the twice-observed rule then covers the
+     new row's own fields on one pass, not two. The executor's generation re-read cannot tell this apart, because both
+     sightings carry the new generation. What keeps the licence safe is that the pass that asks judges the new row's own
+     records in full, the entry and its presence episode are keyed to the generation (§5.7), the executor re-reads the
+     row's marker, open runs, switch and presence, and ccd's audit judges the row's own hold, attachment and tree and
+     re-proves them inside its lock (§5.5).
+   - A lost new creation reads as doubt. A recycled slug whose new creation line was never journaled (ccd's journal writer
+     never gates the act, so a full disk can lose it) leaves the old creation followed by a removal that no newer creation
+     replaces, so the child reads `child-birth-unplaced` until a later creation is mirrored. It read
+     `minting-run-postdates-child` before, a kept word with a banner item. Now it is doubt, shown on the chip only. The
+     consumers of an unplaced birth all fail safe (§5.7).
+   - The audit has no value for a breadcrumb it could not read. An exit-1 audit prints `resume` only over a breadcrumb it
+     read, so an audit over a breadcrumb it could not read names none, and the server reads it not resumable: the feed says
+     the act is retried from the start of an act the box's next attempt resumes. A wrong sentence, never a wrong act.
+   - A box-level cure can wait up to the tier's cap. A child already on the persistent tier is asked next at most four
+     hours after its last failure, so a fix that is not the child's own (a fleet update, say) is noticed that late. The
+     tier's word `probe-unmeasured` is shared by the box-wide presence probe and the per-child rung 8, so a long tmux-probe
+     outage can put children on the tier (§5.7).
+   - The seed's windowed slice and the recycled-slug window affect pacing only. The slice the mirror windowed short makes a
+     run look younger, and a recycled slug's rows are read before its new creation is placed, so a child may be paced by the
+     ordinary ramp for a while longer than it should be, and is never missed (§5.7).
+
 ---
 
 ## 8. The waves
@@ -1594,7 +1868,7 @@ unbindable — without any destructive verb existing yet.
 | 5 | server + pwa | the run-row chip and its sentences; the sweep's verdicts on the chip and the attention item; feed rows that do not repeat; the presence lease and its bound; "has coordinated" fenced to the workspace's current generation | the operator can read what became of a child, and why the sweep keeps one; a presence-held child is licensed within the stated bound |
 | 6 | both (agent first) | what `ws-reclaim` deletes, repaired: after the kill the tail waits, bounded, until no process uses the temp root, removes it through one removal helper or keeps it and records why; the temp root's positive witness; the tail's deleting git calls contained, and git's inherited config dropped inside the containment; ccd journaling the failures the lifecycle mirror never saw; the pin for a child whose branch is already gone; recovery from a registry row whose directory is gone; the board's second re-read trigger | a child whose branch is gone is reclaimed rather than failing; a reclaimed child's temp root does not come back; a gone row no longer holds the children it cannot reach; an unmeasured probe and an id-tied pre-lock die each leave a journal line |
 | 7 | agent (inert) | the collector verb for a witnessed child temp root that a human verb or a kept tail left behind: `ws-audit --collect` and `ws-collect`, the quarantine record, the `collect` act and its words, the `collect-v1` capability token and the agent grant on `--expect`; and the reclaim tail's ccd corrections, which `ws-expire` shares: `containment-refuted`, `crumb`, rung 8's reading of git's silent omission, the capped permission-pass reason, and the reclaim token's binding to the row's generation | the fleet's `ccd caps` advertises the collector's token, and nothing composes it yet |
-| 8 | server | reclaim's server half: the queued licence keyed on the row's generation, the reader of `crumb` on the verb's failed document, the audit arm that reads an exit-1 audit document's `resume`, `containment-refuted` as a class of its own on a persistent retry tier, and the report of what a tail kept (`clipsKept`, `tmpRootKept`) | a licence minted for one row is never spent on a re-mint of its id; a proven, persistent failure is listed at once and retried slowly, never given up |
+| 8 | server | reclaim's server half, as built: the queued licence keyed on the row's generation and re-proved at the executor's re-read and the audit's key (§5.5); the hold-retired memory keyed the same way (§5.7); a birth that a later removal unplaces unless it is the row's own (§5.7); the reader of `crumb` on the verb's failed document and the audit arm that reads an exit-1 audit document's `resume` (§5.9); `containment-refuted` as the stuck class, listed at once and retried on a persistent tier that never stops (§5.7, §5.9); and the report of what a tail kept (`clipsKept`, `tmpRootKept`), which outlives the purged row (§5.9) | a licence minted for one row is never spent on a re-mint of its id; a proven, persistent failure is listed at once and retried slowly, never given up; a kept leaf is reported after its row is purged |
 | 9 | server | the collector's lane in the sweep, under `reclaim-pause` and the sweep's pacing | an orphaned temp root is collected with no human act |
 
 Wave 3 built the destructive verb, and it is the one to review hardest. Every later wave that changes what
