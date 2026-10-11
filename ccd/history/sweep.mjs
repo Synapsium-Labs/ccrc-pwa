@@ -3749,6 +3749,26 @@ const FTS_ELIGIBLE_SQL = (() => {
                      WHERE v.blob_id = b.blob_id AND e.provenance IN (${ph})))`;
 })();
 
+/** The decoder mode a blob is read in (deriveFts's `is_sidecar`): `sidecar` while any sidecar references it, else `entry`.
+ *  `b` is blobs. The ONE spelling of the decision, for the backfill's select and for the owed relation below. */
+const FTS_IS_SIDECAR_SQL = 'EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id)';
+/** meta key prefix of a permanent decode failure's classification (D-4346, F3): `fts_undecodable:<blob_id>` holds the decoder
+ *  mode (`entry` or `sidecar`) whose attempt did not decode the blob, and nothing else: no text, error, path or secret.
+ *  Sparse (a row per failing blob only), in schema v1's meta table. */
+const FTS_UNDECODABLE_META = 'fts_undecodable:';
+/** The classification key of a blob id; the SQL below builds the same text with `||`, which renders an integer as decimal. */
+function ftsUndecodableKey(blobId) {
+  if (!Number.isSafeInteger(blobId) || blobId < 1) throw new TypeError('ftsUndecodableKey: blob id');
+  return `${FTS_UNDECODABLE_META}${blobId}`;
+}
+/** The ONE owed-row relation, read by the backfill's select and by ftsOwesRow's measurement so they cannot drift: an
+ *  unindexed blob that FTS_ELIGIBLE_SQL admits and that carries no failure classification matching its CURRENT decoder
+ *  mode. A permanently undecodable blob keeps fts_indexed = 0 (D-4346) and is not owed in the mode that failed it, but a
+ *  change of mode (a sidecar now references it) makes it owed again. `b` is blobs; binds INDEXED_PROVENANCE twice. */
+const FTS_OWED_SQL = `b.fts_indexed = 0 AND ${FTS_ELIGIBLE_SQL}
+        AND NOT EXISTS (SELECT 1 FROM meta m WHERE m.k = '${FTS_UNDECODABLE_META}' || b.blob_id
+                          AND m.v = CASE WHEN ${FTS_IS_SIDECAR_SQL} THEN 'sidecar' ELSE 'entry' END)`;
+
 /** Statements over the FTS tables. These are prepared only once ftsPrepare has made the tables:
  *  node:sqlite refuses to prepare against a table that does not exist. */
 function ftsStmts(db) {
@@ -3758,29 +3778,30 @@ function ftsStmts(db) {
     ins: db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)'),
     del: db.prepare('DELETE FROM blobs_fts WHERE rowid = ?'),
     mark: db.prepare('UPDATE blobs SET fts_indexed = 1 WHERE blob_id = ?'),
+    unclassify: db.prepare('DELETE FROM meta WHERE k = ?'),
     match: db.prepare('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH ?'),
     merge: db.prepare("INSERT INTO blobs_fts (blobs_fts, rank) VALUES ('merge', ?)"),
     total: db.prepare('SELECT total_changes() AS n'),
     rederive: db.prepare('SELECT blob_id, length(z) AS zlen FROM blobs WHERE blob_id > ? AND blob_id <= ? AND fts_indexed = 1 ORDER BY blob_id LIMIT ?'),
     backfill: db.prepare(`SELECT b.blob_id AS blob_id, length(b.z) AS zlen,
-        EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id) AS is_sidecar
+        ${FTS_IS_SIDECAR_SQL} AS is_sidecar
       FROM blobs b
-      WHERE b.blob_id > ? AND b.fts_indexed = 0 AND ${FTS_ELIGIBLE_SQL}
+      WHERE b.blob_id > ? AND ${FTS_OWED_SQL}
       ORDER BY b.blob_id LIMIT ?`),
   };
   FTS_STMTS.set(db, f);
   return f;
 }
 
-/** Whether a COMPLETED ('fts', 1) backfill owes the index a row: an eligible blob (FTS_ELIGIBLE_SQL, the backfill's own
- *  relation) lies past the cursor the backfill completed at, still unindexed. A rolled-back build ingests recall echoes
- *  without indexing them and without touching meta `fts_provenance`, so the provenance marker alone cannot see them.
- *  Only past the cursor: a complete backfill left no eligible unindexed blob up to it except those it passed over as
- *  undecodable (D-4346, fts_indexed left 0), which would re-open it on every tick; blob ids only grow, so every blob
- *  written since lies past it. */
-function ftsOwesRow(db, row) {
+/** Whether a COMPLETED ('fts', 1) backfill owes the index a row: any blob id satisfies FTS_OWED_SQL, the backfill's own
+ *  relation. A rolled-back build ingests recall echoes without indexing them and without touching meta `fts_provenance`,
+ *  so the provenance marker alone cannot see them; and it can make an OLD blob (one at or below the completed cursor,
+ *  deduplicated onto a new referrer) eligible without storing anything. Every id is measured, because the owed relation
+ *  already excludes what the backfill passed over as undecodable (D-4346): that blob is classified by the mode that
+ *  failed it, so a healthy tick neither re-opens nor recounts it. */
+function ftsOwesRow(db) {
   // Prepared here, not in ftsStmts: it reads no FTS table, and ftsStmts cannot be prepared where the tables are gone.
-  return db.prepare(`SELECT 1 AS one FROM blobs b WHERE b.blob_id > ? AND b.fts_indexed = 0 AND ${FTS_ELIGIBLE_SQL} LIMIT 1`).get(Number(row.cursor ?? 0), ...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE) !== undefined;
+  return db.prepare(`SELECT 1 AS one FROM blobs b WHERE ${FTS_OWED_SQL} LIMIT 1`).get(...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE) !== undefined;
 }
 
 /** What ftsTextOfBlob answers for a blob whose stored bytes do not decode (D-4346, history-permanent-failures-classified). */
@@ -3841,13 +3862,13 @@ export function ftsPrepare(db, nowMs) {
         setMeta(db, 'fts_provenance', INDEXED_PROVENANCE.join(','));
       });
       row = d.sel.get(FTS_STEP, 1);
-    } else if (row.completed_ms !== null && ftsOwesRow(db, row)) {
-      // The marker is current but a blob an INDEXED_PROVENANCE row references is unindexed past the completed cursor
-      // (a rollback to a build that ingests recall echoes without indexing them). Reopen once from zero, in one
+    } else if (row.completed_ms !== null && ftsOwesRow(db)) {
+      // The marker is current but an eligible blob is owed (unindexed and not classified undecodable in its current mode),
+      // at any id: a rollback to a build that ingests recall echoes without indexing them. Reopen once from zero, in one
       // transaction that measures again, so a concurrent repair is not undone.
       withTx(db, 'NORMAL', () => {
         const now = d.sel.get(FTS_STEP, 1);
-        if (now !== undefined && now.completed_ms !== null && ftsOwesRow(db, now)) {
+        if (now !== undefined && now.completed_ms !== null && ftsOwesRow(db)) {
           db.prepare("UPDATE derivation_state SET completed_ms = NULL, cursor = '0' WHERE step = ? AND version = ?").run(FTS_STEP, 1);
         }
       });
@@ -3871,6 +3892,7 @@ export function indexBlob(db, blobId, text, pairIdx, overCap = false) {
   const f = ftsStmts(db);
   if (!overCap) f.ins.run(blobId, entryIndexText(text, pairIdx));   // an over-cap body gets no row, only the mark (B3M3, FU5: the state rederiveFts leaves it in)
   f.mark.run(blobId);
+  f.unclassify.run(ftsUndecodableKey(blobId));   // F3: a stale failure classification dies with the blob's first success
 }
 
 /** Derivation ('fts', 1)'s backfill (§9.1). Every blob still unindexed that a searchable row (or a
@@ -3894,12 +3916,13 @@ export async function deriveFts(db, ctx, budget) {
     const last = batch.length < BACKFILL_BATCH;
     let group = [];
     let chars = 0;
-    let undecodable = 0;   // blobs of this batch passed over undecoded, counted in the commit that moves the cursor past them (D-4346)
+    let failed = [];   // blobs of this batch passed over undecoded, with the decoder mode that failed: classified and counted in the commit that moves the cursor past them (D-4346)
     let reached = cursor;   // the last blob of this batch taken, indexed or skipped
     const commit = (done) => {
       withTx(db, 'NORMAL', () => {
         for (const g of group) indexBlob(db, g.id, g.text, ctx.pairIdx, g.overCap === true);
-        if (undecodable > 0) bump(db, HEALTH_COUNTERS.blobUndecodable, undecodable);
+        for (const x of failed) setMeta(db, ftsUndecodableKey(x.id), x.mode);
+        if (failed.length > 0) bump(db, HEALTH_COUNTERS.blobUndecodable, failed.length);
         cursor = reached;
         if (done) {
           d.done.run(ctx.nowMs, String(cursor), FTS_STEP, 1);
@@ -3910,7 +3933,7 @@ export async function deriveFts(db, ctx, budget) {
       });
       group = [];
       chars = 0;
-      undecodable = 0;
+      failed = [];
     };
     for (const b of batch) {
       if (!budgetLeft(budget)) { if (reached !== cursor) commit(false); return; }
@@ -3920,7 +3943,7 @@ export async function deriveFts(db, ctx, budget) {
       const t = await ftsTextOfBlob(z, b.is_sidecar === 1, ctx.pairIdx, zr.raw_len);
       budget.bytes += b.zlen;
       reached = b.blob_id;
-      if (t.undecodable) { undecodable += 1; continue; }   // D-4346 (history-permanent-failures-classified): passed over, its fts_indexed left 0
+      if (t.undecodable) { failed.push({ id: b.blob_id, mode: b.is_sidecar === 1 ? 'sidecar' : 'entry' }); continue; }   // D-4346 (history-permanent-failures-classified): passed over, its fts_indexed left 0, classified by the mode that failed
       group.push({ id: b.blob_id, text: t.text, overCap: t.overCap === true });
       chars += t.text.length;
       if (chars >= FTS_GROUP_CHARS) commit(false);

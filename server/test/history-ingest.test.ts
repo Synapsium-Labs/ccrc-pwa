@@ -2188,6 +2188,77 @@ describe('history ingest: the FTS index (plan task 23)', () => {
     } finally { db.close(); }
   });
 
+  it('F3 (relation only): a rolled-back build re-labels an OLD deduplicated harness-only blob as a recall echo at or below the completed cursor; the next tick re-opens from 0, indexes it once, and then leaves a healthy store alone', async () => {
+    const { sweep: S, lib } = await IX.api();
+    const box = IX.newBox('ccrc-hist-echo-oldblob-');
+    try {
+      const call = [{ type: 'tool_use', id: 'toolu_01OB', name: 'Bash', input: { command: 'ccrc history grep zqasked' } }];
+      const result = [{ type: 'tool_result', tool_use_id: 'toolu_01OB', content: 'zqoldecho words' }];
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([
+        IX.user(IX.uuidN(1), null, 'zqopener words', 1),
+        IX.assistant(IX.uuidN(2), IX.uuidN(1), call, 2),
+        IX.user(IX.uuidN(3), IX.uuidN(2), result, 3, { isMeta: true }),   // harness: its blob is not eligible
+        IX.user(IX.uuidN(4), IX.uuidN(3), 'zqlater words', 4),            // a later eligible blob, so the cursor passes the harness one
+      ]));
+      const { db, ids } = await IX.openFixtureStore(box);
+      try {
+        await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick: nothing indexed
+        const cycle = async (k: number): Promise<string> => {
+          const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000 + k * 60_000, ids);
+          const p = S.ftsPrepare(db, c.nowMs);
+          c.fts = p.tables;
+          c.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, c, S.newBudget());
+          return p.state;
+        };
+        const stamp = (): { completed: number | null; cursor: string | null; prov: string | undefined; undec: number | undefined } => {
+          const r = db.prepare("SELECT completed_ms AS c, cursor AS k FROM derivation_state WHERE step = 'fts' AND version = 1").get() as { c: number | null; k: string | null };
+          return { completed: r.c, cursor: r.k, prov: metaV(db, 'fts_provenance'), undec: (db.prepare('SELECT n FROM counters WHERE name = ?').get(HEALTH_COUNTERS.blobUndecodable) as { n: number } | undefined)?.n };
+        };
+        const entryOf = (n: number): { blob_id: number; provenance: string } =>
+          db.prepare('SELECT blob_id, provenance FROM entries WHERE uuid = ?').get(IX.uuidN(n)) as { blob_id: number; provenance: string };
+        const old = entryOf(3);
+        expect(old.provenance, 'CONTROL: the entry is harness').toBe('harness');
+        await cycle(0);
+        const done = stamp();
+        expect(done.completed, 'CONTROL: the backfill is complete').not.toBeNull();
+        expect(Number(done.cursor), 'CONTROL: the cursor passed the harness blob').toBeGreaterThanOrEqual(old.blob_id);
+        expect(matches(db, 'zqoldecho'), 'CONTROL: harness text is not indexed').toBe(0);
+        // The rolled-back build ingests a newer-ranked copy of the same uuid and the same canonical body, whose structural
+        // pairing makes it a recall echo. ENTRY_UPSERT retains blob_id; no blob is stored; the build indexes nothing.
+        const blobsBefore = IX.count(db, 'blobs');
+        const second = IX.plantCopy(box.homes[1]!, IX.U, IX.jsonl([
+          IX.assistant(IX.uuidN(2), IX.uuidN(1), call, 2),
+          IX.user(IX.uuidN(3), IX.uuidN(2), result, 3),
+        ]));
+        fs.utimesSync(second, new Date('2099-01-01T00:00:00Z'), new Date('2099-01-01T00:00:00Z'));
+        const r = await S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 90_000, ids), { path: second, uuid: IX.U, home: box.homes[1]! }, S.newBudget());
+        expect(r, 'the second copy was ingested').not.toBeNull();
+        const now = entryOf(3);
+        expect(now.provenance, 'the same entry is now a recall echo').toBe('recall-echo');
+        expect(now.blob_id, 'and keeps its old blob').toBe(old.blob_id);
+        expect(IX.count(db, 'blobs'), 'the body deduplicated').toBe(blobsBefore);
+        expect(old.blob_id).toBeLessThanOrEqual(Number(done.cursor));
+        expect(IX.count(db, 'blobs', `blob_id = ${old.blob_id} AND fts_indexed = 0`)).toBe(1);
+        expect(hasFtsRow(db, old.blob_id)).toBe(false);
+        expect(stamp(), 'the completed state and its marker are untouched').toEqual(done);
+        // The next B2 tick measures the relation from 0.
+        expect(await cycle(1)).toBe('fts-pending');
+        expect(matches(db, 'zqoldecho'), 'the old echo is indexed again').toBe(1);
+        expect(hasFtsRow(db, old.blob_id)).toBe(true);
+        const repaired = stamp();
+        expect(repaired.completed).not.toBeNull();
+        expect(repaired.prov).toBe(done.prov);
+        expect(repaired.undec).toBe(done.undec);
+        for (let k = 2; k < 5; k += 1) {
+          expect(await cycle(k), 'a healthy complete store is not re-opened').toBe('ready');
+          expect(stamp()).toEqual(repaired);
+        }
+        expect(matches(db, 'zqoldecho')).toBe(1);
+      } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+
   it('DM29 (store half): a sidecar indexes its first 512 KB only; the text past it stays in the blob', () => {
     const box = IX.newBox('ccrc-hist-dm29-');
     IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'go', 1)]));
@@ -2992,6 +3063,114 @@ describe('history ingest: the FTS index (plan task 23)', () => {
           expect(matches(db, 'zqentry')).toBe(0);
           await S.deriveFts(db, ctx, S.newBudget());
           expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(2);   // a second pass does not recount
+          // F3: each pass-over is classified by the decoder mode that failed it, in a sparse meta row that holds the blob id and
+          // the mode word only; the blob stays unindexed (D-4346), and the classification is what keeps it from being owed.
+          const classes = db.prepare("SELECT k, v FROM meta WHERE k LIKE 'fts\\_undecodable:%' ESCAPE '\\' ORDER BY k").all() as { k: string; v: string }[];
+          expect(Object.fromEntries(classes.map((c) => [c.k, c.v]))).toEqual({ [`fts_undecodable:${entryBlob}`]: 'entry', [`fts_undecodable:${sideBlob}`]: 'sidecar' });
+          expect(classes).toHaveLength(2);
+          const stamp = (): unknown => db.prepare("SELECT cursor, completed_ms FROM derivation_state WHERE step = 'fts' AND version = 1").get();
+          const done = stamp();
+          expect((done as { completed_ms: number | null }).completed_ms).not.toBeNull();
+          // Repeated healthy ticks (ftsPrepare, then deriveFts) neither re-open the store nor recount the same mode.
+          for (let k = 1; k <= 3; k += 1) {
+            const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000 + k * 60_000, ids);
+            const prep = S.ftsPrepare(db, c.nowMs);
+            expect(prep.state, `tick ${k}: not re-opened`).toBe('ready');
+            c.fts = prep.tables;
+            c.pairIdx = lib.makePairIndex([]);
+            await S.deriveFts(db, c, S.newBudget());
+            expect(stamp(), `tick ${k}`).toEqual(done);
+            expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable), `tick ${k}`).toBe(2);
+            expect(IX.count(db, 'blobs', `fts_indexed = 0 AND blob_id IN (${entryBlob}, ${sideBlob})`)).toBe(2);
+          }
+          // An unclassified legacy pass-over is retried once, classified, and then left alone.
+          db.prepare("DELETE FROM meta WHERE k LIKE 'fts\\_undecodable:%' ESCAPE '\\'").run();
+          const legacy = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 600_000, ids);
+          const prepL = S.ftsPrepare(db, legacy.nowMs);
+          expect(prepL.state, 'an unclassified failure is owed once').toBe('fts-pending');
+          legacy.fts = prepL.tables;
+          legacy.pairIdx = lib.makePairIndex([]);
+          await S.deriveFts(db, legacy, S.newBudget());
+          expect(db.prepare("SELECT k, v FROM meta WHERE k LIKE 'fts\\_undecodable:%' ESCAPE '\\' ORDER BY k").all()).toEqual(classes);
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(4);
+          const legacyDone = stamp();
+          for (let k = 1; k <= 2; k += 1) {
+            const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 700_000 + k * 60_000, ids);
+            expect(S.ftsPrepare(db, c.nowMs).state).toBe('ready');
+            c.fts = true;
+            c.pairIdx = lib.makePairIndex([]);
+            await S.deriveFts(db, c, S.newBudget());
+            expect(stamp()).toEqual(legacyDone);
+            expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(4);
+          }
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    /** One tick's FTS half as the sweep runs it: ftsPrepare (which may re-open), then deriveFts, on a clock that advances. */
+    const ftsCycle = async (S: Awaited<ReturnType<typeof IX.api>>['sweep'], lib: Awaited<ReturnType<typeof IX.api>>['lib'], db: DatabaseSync, box: HistoryBox, ids: Parameters<typeof S.makeIngestCtx>[3], k: number): Promise<string> => {
+      const c = S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 120_000 + k * 60_000, ids);
+      const p = S.ftsPrepare(db, c.nowMs);
+      c.fts = p.tables;
+      c.pairIdx = lib.makePairIndex([]);
+      await S.deriveFts(db, c, S.newBudget());
+      return p.state;
+    };
+    const classOf = (db: DatabaseSync, blobId: number): string | undefined => metaV(db, `fts_undecodable:${blobId}`);
+
+    it('F3: an entry-mode failure classified `entry` does not suppress the sidecar attempt once a sidecar references the same blob: the bounded decode succeeds, the blob is indexed, and its classification is cleared', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-undec-mode-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqmode words', 1), IX.user(IX.uuidN(2), IX.uuidN(1), 'zqother words', 2)]));
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick
+          const blob = (db.prepare('SELECT blob_id AS id FROM entries WHERE uuid = ?').get(IX.uuidN(1)) as { id: number }).id;
+          // Whole brotli bytes whose stored raw_len is short of them: the whole-entry decode (bounded by raw_len) refuses, the sidecar's bounded prefix decode does not.
+          db.prepare('UPDATE blobs SET raw_len = 1 WHERE blob_id = ?').run(blob);
+          const z = (db.prepare('SELECT z FROM blobs WHERE blob_id = ?').get(blob) as { z: Uint8Array }).z;
+          const idx = lib.makePairIndex([]);
+          await expect(S.ftsTextOfBlob(z, false, idx, 1), 'CONTROL: entry mode cannot decode it').resolves.toMatchObject({ undecodable: true });
+          const bounded = await S.ftsTextOfBlob(z, true, idx, 1);
+          expect(bounded.undecodable, 'CONTROL: sidecar mode can').toBe(false);
+          expect(bounded.text).toContain('zqmode');
+          expect(await ftsCycle(S, lib, db, box, ids, 0)).toBe('fts-pending');
+          expect(classOf(db, blob), 'classified by the mode that failed').toBe('entry');
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(1);
+          expect(IX.count(db, 'blobs', `blob_id = ${blob} AND fts_indexed = 0`)).toBe(1);
+          expect(await ftsCycle(S, lib, db, box, ids, 1), 'a healthy tick leaves the classified failure alone').toBe('ready');
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable)).toBe(1);
+          // A sidecar whose bytes are the entry's canonical body deduplicates onto the very same blob.
+          fs.writeFileSync(path.join(sideDir(box), 'mode.txt'), JSON.stringify('zqmode words'));
+          await S.ingestSidecars(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 300_000, ids), S.newBudget(), [IX.U]);
+          expect(IX.count(db, 'sidecars', `blob_id = ${blob}`), 'CONTROL: the sidecar references the same blob').toBe(1);
+          expect(classOf(db, blob), 'CONTROL: still classified entry').toBe('entry');
+          expect(await ftsCycle(S, lib, db, box, ids, 5), 'the current mode is sidecar, so the entry classification does not suppress it').toBe('fts-pending');
+          expect(IX.count(db, 'blobs', `blob_id = ${blob} AND fts_indexed = 1`)).toBe(1);
+          expect(matches(db, 'zqmode')).toBe(1);
+          expect(classOf(db, blob), 'the stale classification is cleared').toBeUndefined();
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable), 'a successful attempt counts nothing').toBe(1);
+          expect(await ftsCycle(S, lib, db, box, ids, 6)).toBe('ready');
+        } finally { db.close(); }
+      } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+    });
+
+    it('F3: a successful index of a blob clears a stale failure classification (a classification of the other mode keeps it owed)', async () => {
+      const { sweep: S, lib } = await IX.api();
+      const box = IX.newBox('ccrc-hist-undec-stale-');
+      try {
+        IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqstale words', 1)]));
+        const { db, ids } = await IX.openFixtureStore(box);
+        try {
+          await S.ingestTick(db, S.makeIngestCtx(box.home, box.homes, IX.tsMs(0) + 60_000, ids), S.newBudget());   // no FTS this tick
+          const blob = (db.prepare('SELECT blob_id AS id FROM entries').get() as { id: number }).id;
+          db.prepare("INSERT INTO meta (k, v) VALUES (?, 'sidecar')").run(`fts_undecodable:${blob}`);   // a mode this entry blob is no longer read in
+          expect(classOf(db, blob), 'CONTROL: planted').toBe('sidecar');
+          expect(await ftsCycle(S, lib, db, box, ids, 0)).toBe('fts-pending');
+          expect(matches(db, 'zqstale'), 'indexed').toBe(1);
+          expect(classOf(db, blob), 'and the stale classification is gone').toBeUndefined();
+          expect(counterOf(db, HEALTH_COUNTERS.blobUndecodable) ?? 0).toBe(0);
         } finally { db.close(); }
       } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
     });
