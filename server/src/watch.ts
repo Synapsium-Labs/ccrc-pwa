@@ -104,7 +104,7 @@ import {
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
-  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, CHILD_RECLAIM_COLLECT_NONE,
+  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed,
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
@@ -134,6 +134,23 @@ import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
+// THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
+// changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
+import { COLLECT_CAP } from './ccdargv.js';
+import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
+import {
+  COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence,
+  collectAfterWouldCollect, collectAttentionItems, collectAttentionViewOf, collectBoxProbesAfter, collectCandidateOf,
+  collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody, collectFeedCueOfAct, collectFeedCueOfAudit,
+  collectFeedStep, collectFeedSwitchBody, collectFeedWouldCollectBody, collectFirstSighting, collectForgets, collectFresh,
+  collectJobEffects, collectOffers, collectPassClass, collectPopulation, collectWouldCollectKey,
+  type CollectAttentionView, type CollectAudit, type CollectEntry, type CollectFeedCue,
+  type CollectPassClass, type CollectPopulation, type CollectResult, type CollectStep, type CollectUnsettledKind,
+} from './collectLane.js';
+import {
+  collectSwitches, collectTempRoot, learnCollect, readCollectPopulation,
+  type CollectClock, type CollectGenerations, type CollectJobOutcome, type CollectLanePort,
+} from './coord/collectTempRoot.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
@@ -177,6 +194,12 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  constant. */
 export const CHILD_RECLAIM_SWEEP_MS = 60_000;
 
+/** The temp-root collector's observation interval (spec §5.10): the lane spends a token only when its executor's own
+ *  audit ARRIVED at least this long after an earlier audit of the id answered that same token, on this process's
+ *  monotonic clock. The child lane's cadence, for that lane's reason, and DERIVED from it, never a second literal; L1
+ *  takes it as an argument (it imports no L4 constant). EXPORTED for its suite. */
+export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
+
 /** At most this many lane-asked reclaims outstanding at once. Close-path
  *  reclaims are not counted, and neither is a hold-release job: the bound is
  *  the LANE's own concurrency, not the fleet's — one destructive verb from
@@ -194,6 +217,35 @@ export const CHILD_RECLAIM_MAX_IN_FLIGHT = 1;
  *  logged once, not once a pass, so a fleet host that never answers does not
  *  fill the log forever. */
 export const CHILD_RECLAIM_STALL_MS = 480_000;
+
+/** How long a collector AUDIT (`ws-audit --collect`, a learning audit or the executor's own) may stay unsettled before
+ *  the lane lists it (spec §5.10): twice `ws-audit`'s remote runner row, 90 s (`remote/runner.ts`, whose table is not
+ *  exported, so the suite reads the row and pins this against it). Local mode's runner has no timeout, so a call can
+ *  hang for ever; the id is never asked again until it settles. An act JOB's bound, whatever it has out (its act, its
+ *  own audit, or nothing yet), is `CHILD_RECLAIM_STALL_MS`, asked first. Counted from when the lane QUEUED the call
+ *  (`unsettled-bound-counts-from-the-queue`).
+ *  EXPORTED for its suite. */
+export const COLLECT_AUDIT_STALL_MS = 2 * 90_000;
+
+/** One collector call or job the lane has queued and not heard back on (spec §5.10), with the monotonic instant it
+ *  was QUEUED:
+ *  - `learn`: a learning audit;
+ *  - `act`: the executor's job, whose `phase` says what is out: `queued` (waiting on the id's key, or between its
+ *    calls), `audit` (its own `ws-audit`) or `act` (its `ws-collect`). The runner the lane hands the executor sets it
+ *    (`collectRunCcd`), so the unsettled line can list the executor's own audit at the audit's bound; at STALL the job
+ *    is listed as holding the act slot, whatever is out. */
+export interface CollectFlight {
+  readonly kind: 'learn' | 'act';
+  readonly sinceMono: number;
+  readonly phase: 'queued' | 'audit' | 'act';
+}
+
+/** The collector's fleet-wide act slot (spec §5.10): free; taken by the act job queued for `id`; or KEPT, with its id,
+ *  until `untilMono`, after an act that may have acted. */
+export type CollectSlot =
+  | { readonly kind: 'free' }
+  | { readonly kind: 'job'; readonly id: string; readonly sinceMono: number }
+  | { readonly kind: 'kept'; readonly id: string; readonly untilMono: number };
 
 /** How long the FIRST fleet assembly after boot waits for the first HEAD
  *  sweep (`headBranches`) before shipping without it. Bounded because that
@@ -914,6 +966,51 @@ export class FleetWatcher {
    *  Kept, never erased, across a read that failed. `[]` until the first pass. Derived from the mirror on
    *  every pass that gets past the fail-shut try, so a restart rebuilds them on its first pass. */
   private childReclaimLeaves: readonly ChildReclaimLeafKept[] = [];
+  /** THE TEMP-ROOT COLLECTOR'S LANE (spec §5.10, child reclamation wave 9): its clocks and memory, its OWN — never the
+   *  child lane's, the expiry lane's or the dead-coordinator lane's. IN MEMORY ONLY, deliberately: a restart loses all of
+   *  it, and losing it can only DELAY a collection (two fresh observations, the start hold-off), never cause one. STATED
+   *  RESIDUAL (R87): a restart re-enters each terminal and verb-failed id at j = 0, about eight extra terminal audits or
+   *  failing acts per such id after it.
+   *  - `lastCollectSweep`: the throttle, on the MONOTONIC clock; `null` before the first pass.
+   *  - `collectSweeping`: one pass at a time (`sweepTempRootCollect`), over the gather and the decide-and-enqueue only.
+   *  - `collectStartMono`: this lane's start (the watcher's construction), monotonic. No act job is offered until
+   *    `CHILD_RECLAIM_STALL_MS` after it.
+   *  - `collectGen`: the ONE counter every generation is drawn from, the lane-wide one and every id's (Task 4).
+   *  - `collectLaneGen`: the lane-wide clear generation (`collectClearPairs`).
+   *  - `collectState`: per id, `CollectEntry` (L1): the observation pair and its generation, the deferral count, the
+   *    failing, verb-failed and terminal runs, the continuity clocks, the latest document's evidence and the feed
+   *    episode. An entry is created only when a call for the id is queued.
+   *  - `collectInFlight`: per id, the ONE call or job queued and not heard back on (`CollectFlight`). No further call is
+   *    queued for an id in it.
+   *  - `collectSlot`: the fleet-wide act slot (`CollectSlot`).
+   *  - `collectUnsettledLogged`: the ids whose call this process has logged as unsettled, once.
+   *  - `collectFlockLatched`: an act answered ccd's `flock-unavailable`: no act job is offered again in this process, and
+   *    a box-wide line says so, so an armed lane is never silently off.
+   *  - `collectLastSeenLive`: the live marker as the last act job read it. It starts SHADOWED, so an arming made while the
+   *    server was down, or before a restart no job saw, is still a flip, and still writes its row.
+   *  - `collectPop`: the last measured pass's population, for the box-wide listing and refused-name lines; `null` before
+   *    one.
+   *  - `collectBoxProbes`: the box-wide probes standing (Task 5's `collectBoxProbesAfter`, over every answer).
+   *  - `collectPassSeq`, `collectPassTally`, `collectPassPublished`, `collectPassAudits`: each pass's audits by class
+   *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
+   *    the one the pass-scoped box lines read. */
+  private lastCollectSweep: number | null = null;
+  private collectSweeping = false;
+  private readonly collectStartMono: number;
+  private collectGen = 0;
+  private collectLaneGen = 0;
+  private collectState = new Map<string, CollectEntry>();
+  private collectInFlight = new Map<string, CollectFlight>();
+  private collectSlot: CollectSlot = { kind: 'free' };
+  private collectUnsettledLogged = new Set<string>();
+  private collectFlockLatched = false;
+  private collectLastSeenLive = false;
+  private collectPop: CollectPopulation | null = null;
+  private collectBoxProbes: ReadonlyMap<string, string> = new Map();
+  private collectPassSeq = 0;
+  private collectPassTally = new Map<number, { pending: number; readonly audits: Map<string, CollectPassClass> }>();
+  private collectPassPublished = 0;
+  private collectPassAudits: ReadonlyMap<string, CollectPassClass> = new Map();
   /** The mirror rows (`ChildReclaimLeafKept.source`) whose kept-leaf feed row this process has written: one
    *  row per source row per process, so a restart writes it once more. Never pruned, because an ended item
    *  never returns. */
@@ -1157,6 +1254,8 @@ export class FleetWatcher {
    *  - Its `leaf-kept` items, and their `kept-many` collapse, come from the mirror on every pass that gets
    *    past the fail-shut try. They are never filtered by the listing, and they yield to any other item
    *    for the same child.
+   *  - Its `collect` items come from the temp-root collector's memory, read at the same one write (spec §5.10): that lane
+   *    never assigns this list, and its items reach the frame only when the child lane publishes.
    *  `[]` until the first sweep — which runs on the first tick after a restart, so the mirror arms are
    *  rebuilt within one tick, and the kept arm at the first judging pass, rather than lost. */
   private childReclaimAttentionList: readonly ChildReclaimAttention[] = [];
@@ -1240,6 +1339,8 @@ export class FleetWatcher {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
     this.transcripts = new TranscriptResolver(deps.io);
     this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });
+    // The collector lane's start (spec §5.10): its act hold-off counts from here, on the lane's monotonic clock.
+    this.collectStartMono = deps.monotonicMs?.() ?? performance.now();
   }
 
   start(): void {
@@ -1697,6 +1798,16 @@ export class FleetWatcher {
     return this.mirror?.childReclaimDoneAt() ?? null;
   }
 
+  /** The collector lane's memory, read-only (child reclamation wave 9, spec §5.10) — for its tests. No decision outside
+   *  the lane reads it. */
+  currentCollectLane(): {
+    readonly entries: ReadonlyMap<string, CollectEntry>; readonly inFlight: ReadonlyMap<string, CollectFlight>;
+    readonly slot: CollectSlot; readonly laneGen: number; readonly lastSeenLive: boolean; readonly flockLatched: boolean;
+  } {
+    return { entries: this.collectState, inFlight: this.collectInFlight, slot: this.collectSlot,
+      laneGen: this.collectLaneGen, lastSeenLive: this.collectLastSeenLive, flockLatched: this.collectFlockLatched };
+  }
+
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
    *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
    *  restart, by design: see `childReclaimSweepState`'s own docstring. Its
@@ -1950,6 +2061,11 @@ export class FleetWatcher {
       // this tick's registry read, cadence and switch, sharing nothing else; its act waits on the coordination
       // serialiser behind whatever write route is running.
       void this.sweepDeadCoordinators(records, registryRead.names)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the TEMP-ROOT COLLECTOR's lane (child reclamation wave 9, spec §5.10) — a fourth
+      // sibling at this tick's cadence and under its switch. Its population is its own two listings, read in its own
+      // gather; this listing feeds its pre-filter, which is economy and never a permission.
+      void this.sweepTempRootCollect(records, registryRead.names)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
@@ -3959,14 +4075,15 @@ export class FleetWatcher {
   /** THE ONE WRITE of the attention list (spec §5.9): the mirror arms this pass derived, then the kept
    *  arm from the verdicts as they stand (the last judging pass's, or its kept verdicts alone), filtered
    *  to this listing and to the verdicts judged under the run its marker names, with no failing item for
-   *  a child whose recorded verdict is `held`. L1 decides every item; this method only assigns. Returns
-   *  the kept items it listed, for the feed row. */
+   *  a child whose recorded verdict is `held`; then the kept leaves, and the temp-root collector's items, read from that
+   *  lane's memory here (spec §5.10). L1 decides every item and the precedence between them; this method only assigns.
+   *  Returns the kept items it listed, for the feed row. */
   private childReclaimPublishAttention(mirrorArms: readonly ChildReclaimJournalAttention[],
     live: ReadonlyMap<string, number | null>): ChildReclaimKeptAttention[] {
     const verdicts = this.childReclaimJudged ?? new Map<string, ChildReclaimSweepVerdict>();
     const kept = childReclaimKeptItems({ verdicts, live, mirrorArms });
     this.childReclaimAttentionList = childReclaimAttentionWithLeaves(
-      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves, CHILD_RECLAIM_COLLECT_NONE);
+      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves, this.collectAttention());
     return kept;
   }
 
@@ -4040,6 +4157,429 @@ export class FleetWatcher {
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
       fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
     }, req));
+  }
+
+  /**
+   * THE TEMP-ROOT COLLECTOR'S LANE (spec §5.10; child reclamation wave 9): the first AUTOMATIC composer of `ws-collect`.
+   * A FOURTH sibling of `sweepChildReclaim` on the tick, at its cadence (`CHILD_RECLAIM_SWEEP_MS`) and under its switch
+   * (`reclaim-paused`, the fleet's one cleanup switch), and nothing else: its own population (`$REG/tmproots` and
+   * `$REG/tmpquarantine`, read in its own gather, never the registry rows and never `~/.cc-tmp`), its own memory, its
+   * executor (`collectTempRoot`), its feed rows, and its attention items, which reach the frame only through the child
+   * lane's one write (`childReclaimPublishAttention`).
+   *
+   * IT SHIPS SHADOWED. Until the operator touches the live marker by hand, a token the lane would spend is RECORDED — a
+   * feed row once per (id, token) episode, and an attention item — and nothing is composed. The marker is read by the
+   * executor alone, nearest the argv; this pass never reads it.
+   *
+   * WHAT IT ASKS. Each pass, at most ONE ACT JOB and at most `COLLECT_AUDITS_PER_PASS` LEARNING audits, chosen by
+   * `collectOffers` (L1): the act first, to the earliest ripe id by ripening instant; then learning audits to due ids by
+   * next-ask instant; each by id after that, and each skipping an id with a call pending. Every call rides the id's
+   * `KeyedQueue` key, the key the reclaim and expiry executors use, so no two lanes touch one id at once, and no further
+   * call is queued for an id whose last call has not settled (`collectInFlight`). The executor captures each request's
+   * generations when it is COMPOSED; its answer is an OBSERVATION only if both still stand when it arrives (L1's
+   * `collectFresh`). The act job spends only its OWN audit's token (observation 2), the token an earlier audit answered
+   * (observation 1) at least `COLLECT_OBSERVE_INTERVAL_MS` before it, with only that token answered between.
+   *
+   * IT NEVER AWAITS A CALL IT QUEUED. `collectSweeping` spans the gather and the decide-and-enqueue only. Each call is
+   * tracked by its queued-at stamp (`collectInFlight`), and every pass derives the unsettled lines from those stamps, so a
+   * call or job that never settles never stops a later pass.
+   *
+   * THE SLOT. At most one act job in flight fleet-wide. It is taken when the job is queued; `collectJobEffects` (L1) says
+   * whether the settled job frees it or keeps it, with its id, until `CHILD_RECLAIM_STALL_MS` after an act that may have
+   * acted. A job that never settles keeps it for as long as it stands, and is listed. No act job is offered until
+   * `CHILD_RECLAIM_STALL_MS` after this lane's start, because a restart forgets the slot while the previous process's
+   * act may still be running on the box. STATED RESIDUALS (spec §7): in local mode that rests on the server unit's
+   * default `KillMode=control-group`; and a killed ccd's orphaned children are not counted against the slot (they hold
+   * the id's reap lock, so ccd answers `in-progress` for it).
+   *
+   * PUBLIC for `sweepDivergences`'s reason: `tick()` dispatches it with `void`. `records` is NOT read — the population is
+   * the two listings — and is kept for the siblings' signature. `names` is the tick's listing, which feeds the
+   * pre-filter alone: economy, never permission.
+   */
+  async sweepTempRootCollect(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.collectSweeping) return;
+    // THE THROTTLE, on the MONOTONIC clock (spec §5.10): stamped BEFORE the gather, so a pass a gate stops still spends
+    // its interval, and re-stamped after it (`collectPass`) with the pass's decision clock.
+    const gate = this.childReclaimLaneNow().monoMs;
+    if (this.lastCollectSweep !== null && gate - this.lastCollectSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastCollectSweep = gate;
+    // ONE PASS AT A TIME (spec §5.10): held over the gather and the decide-and-enqueue, so no pass is ever overtaken
+    // while it gathers. The calls a pass queues are NOT under it, and are never awaited: they settle on their own.
+    this.collectSweeping = true;
+    try {
+      await this.collectPass(coord, names);
+    } finally {
+      this.collectSweeping = false;
+    }
+  }
+
+  /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
+   *  calls and never awaits them (`sweepTempRootCollect`). */
+  private async collectPass(coord: CoordStore, names: readonly string[]): Promise<void> {
+    // ONE — the capabilities (spec §5.10): both, or the lane never runs — never an automatic destructive lane on a box the
+    // phone cannot pause. A missing one clears every pair, so each id needs two FRESH observations once it returns.
+    if (!capSupported(this.deps.fleetState, COLLECT_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)) {
+      this.collectClearPairs();
+      return;
+    }
+    // TWO — THE ONE GATHER (spec §5.10): the population's two listings and the switches' own registry listing, together.
+    // The pause is read from THIS listing, not the tick's, because the tick never hands a lane a registry that did not
+    // list, and this lane must read one as a pause. Neither read rejects: a port that does makes THAT listing unmeasured,
+    // or the registry paused. So no catch stands here: a guard no case can reach has no red (H13).
+    const gathered = await Promise.all([
+      readCollectPopulation(this.deps.io, this.deps.cfg.registryDir),
+      collectSwitches(this.deps.io, this.deps.cfg.registryDir),
+    ]);
+    // The pass's decision clock, read AFTER the gather; the throttle re-stamped with it, so any two deciding passes are at
+    // least one interval apart however long a gather takes.
+    const mono = this.childReclaimLaneNow().monoMs;
+    this.lastCollectSweep = mono;
+    const [listings, switches] = gathered;
+    // THREE — the switch: a raised pause, or a registry that did not list, stops the pass before any audit and clears
+    // every pair. Only `paused` is read: the live marker in the same listing is the executor's, at its act.
+    if (switches.paused) {
+      this.collectClearPairs();
+      return;
+    }
+    // FOUR — the population (L1): the ids to consider, from the MEASURED listings only, pre-filtered on the tick's exact
+    // `<id>.child` and `<id>.uuid` names unless a measured record names the id. Kept for the box-wide lines. An id is
+    // forgotten — its pacing and episodes with it, and no feed row — only when `collectForgets` says so (both listings
+    // measured, neither names it); an answer still out for it then finds no entry, and is dropped.
+    const pop = collectPopulation({ ...listings, registryNames: new Set(names) });
+    this.collectPop = pop;
+    for (const id of [...this.collectState.keys()]) if (collectForgets(pop, id)) this.collectState.delete(id);
+    // FIVE — the slot's kept deadline, and each call past its bound, logged once (its line is derived at the publish).
+    if (this.collectSlot.kind === 'kept' && mono >= this.collectSlot.untilMono) this.collectSlot = { kind: 'free' };
+    this.collectLogUnsettled(mono);
+    // SIX — who is asked (L1), and the calls, each on its id's queue key, the act first. None is awaited.
+    const busy = new Set<string>(this.collectInFlight.keys());
+    if (this.collectSlot.kind === 'kept') busy.add(this.collectSlot.id);
+    const offers = collectOffers({
+      candidates: pop.candidates.map((id) => collectCandidateOf(id, this.collectState.get(id), mono,
+        CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS)),
+      busy, nowMono: mono, auditsMax: COLLECT_AUDITS_PER_PASS,
+      act: { slotFree: this.collectSlot.kind === 'free', flockLatched: this.collectFlockLatched,
+        startMono: this.collectStartMono, holdOffMs: CHILD_RECLAIM_STALL_MS },
+    });
+    const calls = offers.learn.length + (offers.act === null ? 0 : 1);
+    if (calls === 0) return;
+    const pass = ++this.collectPassSeq;
+    this.collectPassTally.set(pass, { pending: calls, audits: new Map() });
+    if (offers.act !== null) this.collectAct(coord, offers.act, pass, mono);
+    for (const id of offers.learn) this.collectLearn(coord, id, pass, mono);
+  }
+
+  /** One LEARNING audit (spec §5.10): `learnCollect` on the id's queue key, never awaited. The executor captures the
+   *  generations as it composes, through the port. An answer folds through Task 4's `collectAfterAudit`, an observation
+   *  only under its capture; a missing capability is a lane-wide clear; a rejection is a defect the reader could not
+   *  name, folded as an audit with no document that observes nothing (`a-thrown-job-reads-as-no-document`). */
+  private collectLearn(coord: CoordStore, id: string, pass: number, mono: number): void {
+    this.collectEntryOf(id);
+    this.collectInFlight.set(id, { kind: 'learn', sinceMono: mono, phase: 'queued' });
+    void this.deps.queue.run(id, () => learnCollect({
+      runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState, lane: this.collectPortFor(coord, id),
+    }, id))
+      .then((answer) => {
+        if (answer.kind === 'not-asked') { this.collectClearPairs(); return; }
+        this.collectFoldAudit(coord, id, pass, answer.audit.value, answer.audit.arrived, answer.audit.composed);
+      }, (err: unknown) => {
+        this.collectFoldAudit(coord, id, null, { kind: 'no-document', stderr: err instanceof Error ? err.message : String(err) },
+          this.collectClock(), null);
+      })
+      .catch((err: unknown) => {
+        console.warn(`ccrc-server: sweepTempRootCollect: folding the learning audit for ${id} failed (${err instanceof Error ? err.message : String(err)})`);
+      })
+      .finally(() => { this.collectSettled(id, pass); });
+  }
+
+  /** The ONE act job (spec §5.10): `collectTempRoot`'s six steps on the id's queue key, the fleet-wide slot taken as it
+   *  is queued, never awaited. The deps are composed INSIDE the queue callback, `execChildReclaim`'s idiom, so the job
+   *  reads `deps`'s current answer when it runs. It reaches this lane's memory through `collectPortFor` alone. Its
+   *  answer is folded for the LANE first (`collectJobEffects`: the slot, the latch), then for its id
+   *  (`collectFoldJob`). */
+  private collectAct(coord: CoordStore, id: string, pass: number, mono: number): void {
+    this.collectEntryOf(id);
+    this.collectInFlight.set(id, { kind: 'act', sinceMono: mono, phase: 'queued' });
+    this.collectSlot = { kind: 'job', id, sinceMono: mono };
+    void this.deps.queue.run(id, () => collectTempRoot({
+      coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
+      presence: this.deps.presence, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
+    }, { id }))
+      .then((outcome) => { this.collectSettleJob(coord, id, pass, outcome); }, (err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.warn(`ccrc-server: sweepTempRootCollect: the collector's job for ${id} threw (${detail}) — read as one that may have acted: the act slot and ${id} wait CHILD_RECLAIM_STALL_MS`);
+        this.collectSettleJob(coord, id, pass, { kind: 'threw', detail });
+      })
+      .catch((err: unknown) => {
+        console.warn(`ccrc-server: sweepTempRootCollect: folding the collector's job for ${id} failed (${err instanceof Error ? err.message : String(err)})`);
+      })
+      .finally(() => { this.collectSettled(id, pass); });
+  }
+
+  /** A settled act job (spec §5.10): its LANE effects first (L1's `collectJobEffects`: the slot, the latch), then its
+   *  fold for the id. A lane-wide clear the job saw was applied through the port the instant it saw it, never here. */
+  private collectSettleJob(coord: CoordStore, id: string, pass: number,
+    s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }): void {
+    const clock = this.collectClock();
+    const fx = collectJobEffects(s, clock.mono, CHILD_RECLAIM_STALL_MS);
+    this.collectSlot = fx.keptUntilMono === null ? { kind: 'free' } : { kind: 'kept', id, untilMono: fx.keptUntilMono };
+    if (fx.latchFlock) this.collectFlockLatched = true;
+    this.collectFoldJob(coord, id, pass, s, clock);
+  }
+
+  /** THE FOLD TABLE (spec §5.10): each of the executor's outcome arms through Task 4's transitions, each transition at
+   *  the answer's ARRIVAL under a generation the lane never used before. Nothing here decides a pace; L1 does.
+   *  - `not-asked`: caps and paused were cleared through the port already, and a refused id has nothing to pace;
+   *    presence (step 3) is `collectAfterPresence`.
+   *  - every arm that carries observation 2's answer folds it first (`collectFoldAudit`): an observation only under its
+   *    capture, so a stale, paused, flipped, capability-less or cleared job's answer paces and never observes; then
+   *    `answered` presence (step 6) is `collectAfterPresence`, `held` is `collectAfterHold`, `would-collect` is
+   *    `collectAfterWouldCollect` with its once-per-(id, token) row, and `acted` is `collectAfterAct` with its row.
+   *  - `threw`: an audit with no document, which observes nothing. */
+  private collectFoldJob(coord: CoordStore, id: string, pass: number,
+    s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }, clock: CollectClock): void {
+    if (s.kind === 'threw') {
+      this.collectFoldAudit(coord, id, null, { kind: 'no-document', stderr: s.detail }, clock, null);
+      return;
+    }
+    if (s.kind === 'not-asked') {
+      const e = this.collectState.get(id);
+      if (s.why === 'presence' && e !== undefined) this.collectState.set(id, collectAfterPresence(e, this.collectStepAt(clock)));
+      return;
+    }
+    const e = this.collectFoldAudit(coord, id, pass, s.audit.value, s.audit.arrived, s.audit.composed);
+    if (e === null) return;
+    const at = this.collectStepAt(s.audit.arrived);
+    switch (s.kind) {
+      case 'answered':
+        if (s.why === 'presence') this.collectState.set(id, collectAfterPresence(e, at));
+        return;
+      case 'held':
+        this.collectState.set(id, collectAfterHold(e, s.hold.why, at));
+        return;
+      case 'would-collect': {
+        const next = collectAfterWouldCollect(e, at);
+        this.collectFeedAfter(coord, id, next, { kind: 'row', key: collectWouldCollectKey(s.audit.value.token) },
+          () => ({ title: COLLECT_FEED_TITLE['would-collect'],
+            body: collectFeedWouldCollectBody(id, next.evidence.runId, next.evidence.leaf) }));
+        return;
+      }
+      case 'acted': {
+        this.collectBoxProbes = collectBoxProbesAfter(this.collectBoxProbes, s.result);
+        const next = collectAfterAct(e, s.result, this.collectStepAt(s.arrived));
+        this.collectFeedAfter(coord, id, next, collectFeedCueOfAct(s.result), () => this.collectActRow(id, next, s.result));
+        return;
+      }
+      default: { const unnamed: never = s; return unnamed; }
+    }
+  }
+
+  /** Folds one AUDIT answer (spec §5.10). What it says of the BOX counts whatever became of the id: the box-wide probes
+   *  (Task 5's `collectBoxProbesAfter`) and, for an answer a pass queued, that pass's tally (`collectPassClass`). Then
+   *  the id's entry, through Task 4's `collectAfterAudit`: an OBSERVATION only when `composed` is given and both
+   *  generations it captured still stand (`collectFresh`); then the feed cue. An id forgotten while the call was out has
+   *  no entry, and the answer is dropped for it (`an-answer-for-a-forgotten-id-is-dropped`): the entry written, or
+   *  null. */
+  private collectFoldAudit(coord: CoordStore, id: string, pass: number | null, a: CollectAudit, arrived: CollectClock,
+    composed: CollectGenerations | null): CollectEntry | null {
+    this.collectBoxProbes = collectBoxProbesAfter(this.collectBoxProbes, a);
+    if (pass !== null) this.collectPassTally.get(pass)?.audits.set(id, collectPassClass(a));
+    const entry = this.collectState.get(id);
+    if (entry === undefined) return null;
+    const observes = composed !== null && collectFresh(composed, this.collectLaneGen, entry);
+    const next = collectAfterAudit(entry, a, this.collectStepAt(arrived), observes);
+    return this.collectFeedAfter(coord, id, next, collectFeedCueOfAudit(a), () => ({ title: COLLECT_FEED_TITLE.answer,
+      body: this.collectAuditBody(id, next, a) }));
+  }
+
+  /** Writes `next` back after one step's feed cue (Task 4's `collectFeedStep`, over Task 5's cue), and writes the
+   *  episode's ONE row only when the step opened one: a repeat is quiet. */
+  private collectFeedAfter(coord: CoordStore, id: string, next: CollectEntry, cue: CollectFeedCue,
+    row: () => { readonly title: string; readonly body: string }): CollectEntry {
+    const stepped = collectFeedStep(next, cue);
+    this.collectState.set(id, stepped.entry);
+    if (stepped.opened !== null) {
+      const r = row();
+      this.collectRecordFeed(coord, { sessionId: id, runId: stepped.entry.evidence.runId, title: r.title, body: r.body });
+    }
+    return stepped.entry;
+  }
+
+  /** An audit answer's row body, worded by Task 5's builder (spec §5.10). A collectable answer opens no row. */
+  private collectAuditBody(id: string, e: CollectEntry, a: CollectAudit): string {
+    const runId = e.evidence.runId;
+    switch (a.kind) {
+      case 'verdict': return collectFeedAnswerBody(id, runId, a.verdict, a.detail, []);
+      case 'unmeasured': return collectFeedAnswerBody(id, runId, a.probe, a.detail, []);
+      case 'no-document': return collectFeedAnswerBody(id, runId, a.kind, a.stderr, []);
+      case 'unreadable': return collectFeedAnswerBody(id, runId, a.kind, a.detail, []);
+      case 'collectable': return collectFeedAnswerBody(id, runId, a.kind, null, []);
+      default: { const unnamed: never = a; return unnamed; }
+    }
+  }
+
+  /** An act's row, titled and worded by Task 5 (spec §5.10): `collected` its own; every other outcome ccd's word. */
+  private collectActRow(id: string, e: CollectEntry, r: CollectResult): { readonly title: string; readonly body: string } {
+    const runId = e.evidence.runId;
+    switch (r.kind) {
+      case 'collected':
+        return { title: COLLECT_FEED_TITLE.collected, body: collectFeedCollectedBody(id, runId, e.evidence.leaf, r) };
+      case 'refused': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.word, r.detail, r.paths) };
+      case 'failed': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.token, r.detail, []) };
+      case 'die': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.word, null, []) };
+      case 'no-document': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.kind, r.stderr, []) };
+      default: { const unnamed: never = r; return unnamed; }
+    }
+  }
+
+  /** The collector's feed rows (spec §5.10, R82): written HERE, never by the definer (`collectLane.ts`) or the executor
+   *  (`coord/collectTempRoot.ts`), in `recordExpireFeed`'s idiom — a `run` row, recorded and archived, never pushed; a
+   *  failed archive write is said and never stops the lane; the log is flushed whatever happened. */
+  private collectRecordFeed(coord: CoordStore, row: {
+    readonly sessionId: string; readonly runId: number | null; readonly title: string; readonly body: string;
+  }): void {
+    const log = this.deps.notifyLog;
+    if (!log) return;
+    try {
+      const ev = log.record({ kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body });
+      coord.recordFeedEvent(log.epoch, ev);
+    } catch (err) {
+      console.warn('ccrc-server: recordFeedEvent failed '
+        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${row.title}, feed archive degraded`);
+    } finally {
+      void log.flush();
+    }
+  }
+
+  /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
+   *  synchronous, so the executor's step 6 reads observation 1 with no await between that read and its argv, and its step
+   *  5 records the marker with none between the read and the flip. `id` is the job's, which the flip's row names. */
+  private collectPortFor(coord: CoordStore, id: string): CollectLanePort {
+    return {
+      clock: () => this.collectClock(),
+      generations: (of) => ({ lane: this.collectLaneGen, id: this.collectState.get(of)?.idGen ?? -1 }),
+      observation: (of) => this.collectState.get(of)?.obs ?? null,
+      cleared: () => { this.collectClearPairs(); },
+      flipped: (live) => {
+        // THE LAST-SEEN-LIVE FLAG (spec §5.10). A change either way is a FLIP: every pair clears, ONE feed row says so —
+        // any same-uid session can touch the marker, so the operator sees every change — and the job that saw it
+        // composes nothing. It starts SHADOWED, so an arming the lane never saw is a flip too.
+        if (live === this.collectLastSeenLive) return false;
+        this.collectLastSeenLive = live;
+        this.collectClearPairs();
+        this.collectRecordFeed(coord, { sessionId: id, runId: null, title: COLLECT_FEED_TITLE.switch,
+          body: collectFeedSwitchBody(live) });
+        return true;
+      },
+    };
+  }
+
+  /** The runner the lane hands its calls (spec §5.10): `deps.runCcd`, marking the id's flight with what is out — an
+   *  audit (`argv[0]` is `ws-audit`) or the act (anything else the executor composes) — and back to `queued` when the
+   *  call settles, so the unsettled line can tell the executor's audit from its act and from a job that has composed
+   *  nothing. It decides nothing and composes nothing. */
+  private collectRunCcd(id: string): Deps['runCcd'] {
+    return async (argv) => {
+      this.collectPhase(id, argv[0] === 'ws-audit' ? 'audit' : 'act');
+      try {
+        return await this.deps.runCcd(argv);
+      } finally {
+        this.collectPhase(id, 'queued');
+      }
+    };
+  }
+
+  private collectPhase(id: string, phase: CollectFlight['phase']): void {
+    const f = this.collectInFlight.get(id);
+    if (f !== undefined) this.collectInFlight.set(id, { ...f, phase });
+  }
+
+  /** The lane's two clocks, read together (Task 6's `CollectClock`). */
+  private collectClock(): CollectClock {
+    const n = this.childReclaimLaneNow();
+    return { mono: n.monoMs, wall: n.wallMs };
+  }
+
+  /** One transition's context (Task 4's `CollectStep`): the answer's ARRIVAL, and a generation drawn from the ONE
+   *  counter, never used before. */
+  private collectStepAt(arrived: CollectClock): CollectStep {
+    return { now: { monoMs: arrived.mono, wallMs: arrived.wall }, gen: ++this.collectGen, passIntervalMs: CHILD_RECLAIM_SWEEP_MS };
+  }
+
+  /** The id's entry, a first sighting (L1) the first time the lane queues a call for it, under a fresh generation. */
+  private collectEntryOf(id: string): CollectEntry {
+    const known = this.collectState.get(id);
+    if (known !== undefined) return known;
+    const fresh = collectFirstSighting(++this.collectGen);
+    this.collectState.set(id, fresh);
+    return fresh;
+  }
+
+  /** A LANE-WIDE CLEAR (spec §5.10): a raised pause or an unlistable registry, a missing capability, a marker flip.
+   *  The lane's generation moves to a value never used before, so the answer to any call composed
+   *  before it is no observation, and every entry goes through Task 4's `collectClearPair`: the PAIRS only. Each id's
+   *  next ask, its runs, its clocks and its feed episodes survive; only a restart loses them. */
+  private collectClearPairs(): void {
+    this.collectLaneGen = ++this.collectGen;
+    for (const [id, e] of this.collectState) this.collectState.set(id, collectClearPair(e));
+  }
+
+  /** One call or job settled: its flight ends, and its pass's tally counts it. The latest pass whose calls have all
+   *  settled becomes the one the pass-scoped box lines read; an older pass still open is dropped then. */
+  private collectSettled(id: string, pass: number): void {
+    this.collectInFlight.delete(id);
+    this.collectUnsettledLogged.delete(id);
+    const t = this.collectPassTally.get(pass);
+    if (t === undefined) return;
+    t.pending -= 1;
+    if (t.pending > 0) return;
+    this.collectPassTally.delete(pass);
+    if (pass < this.collectPassPublished) return;
+    this.collectPassPublished = pass;
+    this.collectPassAudits = t.audits;
+    for (const p of [...this.collectPassTally.keys()]) if (p < pass) this.collectPassTally.delete(p);
+  }
+
+  /** The ids whose collector call or job has not settled within its bound (spec §5.10), by kind, each counted from when
+   *  it was QUEUED. An act JOB not settled `CHILD_RECLAIM_STALL_MS` after it took the slot is asked FIRST, whatever it
+   *  has out: its `ws-collect` (`act`), or its own audit or nothing yet (`job`) — R85's "even if it never composed a
+   *  call" — and Task 5's line says the act slot is held for both. Short of that, an audit (a learning audit, or the
+   *  job's own) is listed at `COLLECT_AUDIT_STALL_MS`. The two kinds differ only in the process log's noun. */
+  private collectUnsettled(mono: number): Map<string, CollectUnsettledKind> {
+    const out = new Map<string, CollectUnsettledKind>();
+    for (const [id, f] of [...this.collectInFlight].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      const age = mono - f.sinceMono;
+      if (f.kind === 'act' && age >= CHILD_RECLAIM_STALL_MS) out.set(id, f.phase === 'act' ? 'act' : 'job');
+      else if ((f.kind === 'learn' || f.phase === 'audit') && age >= COLLECT_AUDIT_STALL_MS) out.set(id, 'audit');
+    }
+    return out;
+  }
+
+  /** Each unsettled call is logged ONCE per process (spec §5.10); its attention line is derived at the publish. */
+  private collectLogUnsettled(mono: number): void {
+    for (const [id, kind] of this.collectUnsettled(mono)) {
+      if (this.collectUnsettledLogged.has(id)) continue;
+      this.collectUnsettledLogged.add(id);
+      console.warn(`ccrc-server: sweepTempRootCollect: the collector's ${kind === 'job' ? 'job' : 'call'} for ${id} has not `
+        + `settled within its bound — nothing further is queued for ${id} until it does`
+        + `${this.collectSlot.kind === 'job' && this.collectSlot.id === id ? ', and the act slot stays taken' : ''}`);
+    }
+  }
+
+  /** The collector's attention (spec §5.10), derived from this lane's memory when the child lane publishes its list:
+   *  each entry through Task 5's projection, and the box facts. L1 decides every item; the list's ONE write merges them
+   *  (`childReclaimPublishAttention`). A stated residual: they reach the frame only at that publish, and stand unchanged
+   *  while the child lane's pass fails shut. */
+  private collectAttention(): ChildReclaimCollectInput {
+    const nowMono = this.collectClock().mono;
+    const entries = new Map<string, CollectAttentionView>();
+    for (const [id, e] of this.collectState) entries.set(id, collectAttentionViewOf(e));
+    return collectAttentionItems({ entries, nowMono, box: {
+      unmeasured: this.collectPop?.unmeasured ?? [], refusedNames: this.collectPop?.refusedNames ?? 0,
+      boxProbes: this.collectBoxProbes, passAudits: this.collectPassAudits, flockLatched: this.collectFlockLatched,
+      unsettled: this.collectUnsettled(nowMono),
+    } });
   }
 
   /**

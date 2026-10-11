@@ -1320,3 +1320,117 @@ export function collectFeedCueOfAct(r: CollectResult): CollectFeedCue {
     case 'no-document': return { kind: 'row', key: 'act no-document' };
   }
 }
+
+// ── The lane's bounds (spec §5.10): what the watcher's pass applies, decided here so it decides nothing ──────────────
+
+/** At most this many LEARNING audits a pass (spec §5.10), besides the one act job. Declared here, in L1, so the offer
+ *  and every suite read one number; the act job's own audit is not one of them. */
+export const COLLECT_AUDITS_PER_PASS = 2;
+
+/** One id as a pass sees it (spec §5.10): when it may next be asked; its RIPENING instant, observation 1's arrival
+ *  plus the interval, or null when it holds no observation; and whether it is ripe for the act now (Task 4's
+ *  `collectRipe`). Plain facts, so who is asked (`collectOffers`) is decided over them alone. */
+export interface CollectCandidate {
+  readonly id: string;
+  readonly nextAskMono: number;
+  readonly ripeningMono: number | null;
+  readonly ripe: boolean;
+}
+
+/** `id`'s facts from its entry, through Task 4's rules (spec §5.10). An id with no entry has never been asked, and an
+ *  entry with no wait is due at once: both read `-Infinity`. */
+export function collectCandidateOf(
+  id: string, entry: CollectEntry | undefined, nowMono: number, passIntervalMs: number, observeIntervalMs: number,
+): CollectCandidate {
+  if (entry === undefined) return { id, nextAskMono: Number.NEGATIVE_INFINITY, ripeningMono: null, ripe: false };
+  return {
+    id,
+    nextAskMono: collectNextAskMono(entry, passIntervalMs, observeIntervalMs) ?? Number.NEGATIVE_INFINITY,
+    ripeningMono: entry.obs === null ? null : entry.obs.arrivedMono + observeIntervalMs,
+    ripe: collectRipe(entry, nowMono, passIntervalMs, observeIntervalMs),
+  };
+}
+
+/** What one pass may ask for. `busy` holds every id with a collector call or job not yet settled, and the id the slot
+ *  is kept for. `act` is the fleet-wide slot, the `flock-unavailable` latch and the start hold-off, as the watcher
+ *  holds them. */
+export interface CollectOfferInput {
+  readonly candidates: readonly CollectCandidate[];
+  readonly busy: ReadonlySet<string>;
+  readonly nowMono: number;
+  readonly auditsMax: number;
+  readonly act: {
+    readonly slotFree: boolean; readonly flockLatched: boolean; readonly startMono: number; readonly holdOffMs: number;
+  };
+}
+
+/** The pass's asks: the one id offered the act job, or none, and the ids to audit to learn. */
+export interface CollectOffers { readonly learn: readonly string[]; readonly act: string | null }
+
+/** WHO ONE PASS ASKS (spec §5.10). An id with a call or job pending (`busy`) is skipped by both offers.
+ *  - THE ACT FIRST: to the earliest RIPE id (Task 4's `collectRipe`, which is due by its own next ask), by ripening
+ *    instant and then id, so a ripe id whose call never settles never stops another's act. Only while the slot is
+ *    free, no `flock-unavailable` is latched, and the lane is past its start hold-off, shadow's would-collect included
+ *    (`start-hold-off-asked-at-the-offer`), because a restart forgets the slot while the previous process's act may
+ *    still be running on the box.
+ *  - THEN at most `auditsMax` LEARNING audits, to DUE ids holding no observation, by next-ask instant and then id —
+ *    never by observation age or listing order, so an id a deferral moved out cannot take every pass. An id holding an
+ *    observation is never learned: its next ask is its ripening instant, and its act's job audits it itself. */
+export function collectOffers(i: CollectOfferInput): CollectOffers {
+  const byId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  const byInstant = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
+  const free = i.candidates.filter((c) => !i.busy.has(c.id));
+  const due = (c: CollectCandidate): boolean => c.nextAskMono <= i.nowMono;
+  const open = i.act.slotFree && !i.act.flockLatched && i.nowMono - i.act.startMono >= i.act.holdOffMs;
+  const ripe = free.flatMap((c) => (c.ripe && c.ripeningMono !== null ? [{ id: c.id, at: c.ripeningMono }] : []))
+    .sort((a, b) => byInstant(a.at, b.at) || byId(a.id, b.id));
+  return {
+    act: open ? (ripe[0]?.id ?? null) : null,
+    learn: free.filter((c) => c.ripeningMono === null && due(c))
+      .sort((a, b) => byInstant(a.nextAskMono, b.nextAskMono) || byId(a.id, b.id))
+      .slice(0, i.auditsMax).map((c) => c.id),
+  };
+}
+
+/** A settled act job as the LANE folds it (spec §5.10): the executor's outcome, by its kind, or a job that THREW — a
+ *  defect, since the executor names every condition it meets — which may have acted. Declared STRUCTURALLY: L1 may not
+ *  import the executor's L3 `CollectJobOutcome` (H2), which is assignable to this (a compile pin holds it). */
+export type CollectJobSettled =
+  | { readonly kind: 'not-asked' | 'answered' | 'held' | 'would-collect' }
+  | { readonly kind: 'acted'; readonly composedMono: number; readonly result: CollectResult }
+  | { readonly kind: 'threw'; readonly detail: string };
+
+/** What a settled act job does to the LANE (spec §5.10). What it does to its id is Task 4's transitions'. A lane-wide
+ *  clear is not here: the executor applies one through the port the instant it sees it, and it is never folded twice. */
+export interface CollectJobEffects {
+  /** The slot, and its id with it, kept until this monotonic instant; `null` frees it. */
+  readonly keptUntilMono: number | null;
+  /** ccd's `flock-unavailable` die: latched for the process. */
+  readonly latchFlock: boolean;
+}
+
+const COLLECT_SLOT_FREED: CollectJobEffects = { keptUntilMono: null, latchFlock: false };
+
+/** THE SLOT'S LIFE (spec §5.10). FREED by a job that composed no `ws-collect`, at any step — a switch, presence, the hold,
+ *  a cleared pair, the capability re-check, a marker flip and shadow's would-collect alike — and by an act that answered
+ *  a document or a recognised pre-lock die, which acted nothing. ONLY an act that answered no document (a runner kill, a
+ *  timeout, a client wait expiry, a link failure, or anything unrecognised), which MAY have acted, keeps the slot and
+ *  its id until `stallMs` after the act was COMPOSED; a job that threw keeps them until `stallMs` after it SETTLED, the
+ *  later instant, since when it composed is not known. Every arm is named, so a new one is a compile error here before
+ *  it is a slot nobody frees. */
+export function collectJobEffects(s: CollectJobSettled, settledMono: number, stallMs: number): CollectJobEffects {
+  switch (s.kind) {
+    case 'not-asked': case 'answered': case 'held': case 'would-collect':
+      return COLLECT_SLOT_FREED;
+    case 'acted':
+      switch (s.result.kind) {
+        case 'no-document': return { ...COLLECT_SLOT_FREED, keptUntilMono: s.composedMono + stallMs };
+        case 'die': return s.result.word === 'flock-unavailable' ? { ...COLLECT_SLOT_FREED, latchFlock: true } : COLLECT_SLOT_FREED;
+        case 'collected': case 'refused': case 'failed': return COLLECT_SLOT_FREED;
+        default: { const unnamed: never = s.result; return unnamed; }
+      }
+    case 'threw':
+      return { ...COLLECT_SLOT_FREED, keptUntilMono: settledMono + stallMs };
+    default: { const unnamed: never = s; return unnamed; }
+  }
+}
