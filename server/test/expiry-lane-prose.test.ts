@@ -30,10 +30,23 @@ describe('README: what happens to an archived workspace now', () => {
     expect(para).toContain('is listed, saying what was kept and why, until the server restarts');
     expect(para).toContain('a fleet box whose ccd predates that report says so in the feed row only');
     // Listed from the ladder's hour (a box answer at once); the day is when it STANDS (review 355, F6).
-    expect(para).toContain('is listed after an hour (a box answer at once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last error, asked again every four hours, never stopping.');
+    expect(para).toContain('is listed after an hour (a box answer at once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last error, asked again four hours after each failed attempt (sooner after an answer that ends no attempt), never stopping.');
     expect(para).not.toContain('is retried, backing off, for a day;');
     expect(para).toContain('The entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again');
     expect(para).not.toContain('stops asking for that archive');
+  });
+  it('says a stuck cleanup is listed at once, a cleanup that never began is audited afresh and counted, and a box with no flock halts the lane (wave 6)', () => {
+    const at = readme.indexOf('**Archived workspaces are cleaned up after seven days**');
+    const para = readme.slice(at, at + 5200);
+    expect(para).toContain('One that met `containment-refuted` is listed at once on that cadence;');
+    expect(para).toContain('one ccd stopped before it began is audited afresh, and listed after an hour if that recurs;');
+    expect(para).toContain('a box with no `flock` gets no cleanup at all until the server restarts.');
+    expect(para).toContain('The spec\'s §12 lists what to know before arming this lane or the next.');
+    expect(para).not.toContain('asked again every four hours');
+  });
+  it('README says ws-expire’s own documents carry crumb since wave 6 — never that they omit it', () => {
+    expect(readme).toContain('every `ws-collect` document; `ws-expire` says it too since workspace lifecycle wave 6)');
+    expect(readme).not.toContain('`ws-expire`\'s own pre-breadcrumb documents, its resumed arm\'s `probe-unmeasured`, every `ws-collect` document');
   });
   it('the coordinator’s own workspace: by a human — or, with no child marker, by the server seven days after its archive', () => {
     expect(readme).toContain('a coordinator\'s own workspace is still cleaned up by a human — or, when it carries no child marker, by the server seven days after it is archived, once the operator has armed the expiry lane with `$REG/expire-lane-live` (until then the lane only records what it would expire)');
@@ -102,12 +115,44 @@ describe('the specs', () => {
     for (const item of ['**The consent binds the branch.**', '**A `failed` `state-changed` is audited afresh.**', '**A kept leaf is listed.**',
       '**A day of resumable failures slows the asking.**', 'A branch already absent when the token was minted reads absent twice and expires with its work in the attic',
       'An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing',
-      'mints a fresh token over what stands', 'The lane asks again every four hours, never stopping',
+      'mints a fresh token over what stands', 'The lane asks again four hours after each failed attempt, never stopping',
       'No answer that ends no attempt replaces the entry or resets its run', 'finds that none had begun',
       // The attached shape is the pin's to refuse (review 355, F2), and the tier's clock is the verb's alone (F3).
-      'With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as `pin-failed`, which is resumable',
+      'With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as `pin-failed`, before the breadcrumb: resumable on a ccd older than wave 6, audited afresh since (below)',
       "A failure of the act's own audit never reaches the persistent tier, only the verb's does"]) expect(s).toContain(item);
     for (const gone of ['is final.**', 'stops the asking.**', 'The lane does not ask again until the archive changes',
-      '(a branch deleted, or made, in between)']) expect(s).not.toContain(gone);
+      '(a branch deleted, or made, in between)', 'The lane asks again every four hours', 'and an arming blocker for the lane until then',
+      'its feed row\'s "nothing was deleted" is about that audit alone']) expect(s).not.toContain(gone);
+  });
+  it('§5.3 records wave 6: ws-expire says crumb and the lane reads it first, containment-refuted is stuck, a recurring restart is counted, and the words say when', () => {
+    const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    const w6 = s.slice(s.indexOf('- **As wave 6 closes the lane**'), s.indexOf('### 5.4 Stage 4'));
+    expect(w6.length, 'the wave-6 bullet sits in §5.3').toBeGreaterThan(100);
+    for (const item of ['**`ws-expire` says `crumb`, and the lane reads it first.**', '**`containment-refuted` is stuck.**',
+      '**A restart that recurs is counted.**', '**The words say when.**',
+      'The parser reads the word, then `crumb`: `false` is audited afresh, `true` is resumed, and an absent or non-boolean `crumb` (an older ccd) falls back to the word rule above, exactly',
+      'goes straight to the persistent tier', 'a terminal verdict still outranks it', 'On the wire it is a `failing` entry: no new word',
+      'It never reaches the persistent tier, since nothing it started stands',
+      'gets no cleanup composed at all, for any workspace, until the server restarts', 'it never says nothing was deleted']) expect(w6).toContain(item);
+  });
+  it('§12 says what to know before arming the expiry lane, and the questions still open', () => {
+    const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    const at = s.indexOf('## 12. Before arming');
+    expect(at, '§12 is there').toBeGreaterThan(-1);
+    const b = s.slice(at);
+    for (const item of ['Nothing in this tree arms either lane, and nothing writes either live file',
+      '**Deploy first, the fleet box first.**', '**Their memory is in memory.**', '**The expiry lane (`$REG/expire-lane-live`).**',
+      '**Its arming blockers are closed.**', '`_ws_expire_cwd_users` resolves its parent through `_ws_dir_physical`',
+      '**A branch already gone now expires.**', 'its ignored and secret-shaped files go with the tree',
+      '**A branch deleted or made inside the lock stops the act**', 'never `no-worktree-record`',
+      '**`flock-unavailable` halts the lane**', '**The first armed pass faces the backlog**',
+      '**The recommended order.**', 'Arm the expiry lane first, once this release is deployed and its shadow list has been read',
+      'after its own shadow list has been read and any breaker trip worked through',
+      'the feed shows the dead-coordinator lane\'s shadow rows', 'and a fresh one\'s is audited afresh, counted',
+      '**One residual of question (k).**', 'leaves `crumb` unsaid, as on the reclaim side, so that `probe-unmeasured` is read by its word',
+      '**One archived tree holds a leaked test tmux server**', 'unless a standing entry stands there',
+      '**Questions still open**', '(b) The archive-confirm copy', '(i) A kept-leaf entry lives until a server restart',
+      '(j) `ws-expire` refuses a branch made inside the lock as well as one deleted', 'Wave 2\'s three:']) expect(b).toContain(item);
+    expect(b, 'never a destructive verb as advice').not.toMatch(/run `ccd ws-(reap|expire|reclaim|rm)/);
   });
 });

@@ -3599,7 +3599,7 @@ Named by slug, in the order the brief's numbers are written against them (the ca
 - **D-4629** `flock-unavailable-is-final-for-the-row` (Task 8) — `flock-unavailable` gives a row with no standing entry a final `halted` report (never asked again by the process, which already halts every act) whose sentence says the lane composes nothing on that box until the server restarts, where wave 5 reported it as retried; a standing entry keeps its place, and the feed row says the halt either way.
 - **D-4630** `a-shadow-row-over-a-standing-entry-says-this-pass` (Task 8) — a shadow feed row over a standing entry says that pass deleted nothing and an earlier attempt may have stopped part-way, never "nothing was deleted".
 - `the-census-bounds-at-the-tombstone` (Task 9) — the census holds the expiry's `failed` `state-changed` producer before `_ws_tombstone`, where wave 5 bounded it at the breadcrumb.
-- `before-arming-is-section-12` (Task 11) — the spec gains §12 "Before arming", per lane, with the open operator questions: words only.
+- **D-4632** `before-arming-is-section-12` (Task 11) — the spec gains §12 "Before arming", per lane, with the open operator questions: words only.
 
 ## Deploy note
 

@@ -101,6 +101,31 @@ describe('the specs', () => {
       '**Every thrown act is recorded.**', '**A generation the mirror could not read is not a successful sweep.**',
       '**A mirror gone stale at the act is a hold.**', '**An accepted abstention.**']) expect(s).toContain(item);
   });
+  it('§5.4 records wave 6: the journal’s trust read again after the claimant’s measure, and a hold after the fleet act', () => {
+    const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    const w6 = s.slice(s.indexOf('**As wave 6 closes the lane** (each a departure named in the wave-6 plan', s.indexOf('### 5.4 Stage 4')),
+      s.indexOf('## 6. What this changes outside itself'));
+    for (const item of ['**The journal\'s trust is read again after the claimant\'s measure.**',
+      'with nothing awaited between that read and the commit, so the revive window stays the measure\'s own round trip',
+      'a failure counted during the measure where the early read saw none makes it unknown, and the claimant unmeasured',
+      'A further failure on top of one already counted is not seen before the commit.', '**A hold met after the fleet act is recorded.**'])
+      expect(w6).toContain(item);
+  });
+  it('§12 says what to know before arming the dead-coordinator lane: the early reads, the residuals, the stale mirror', () => {
+    const s = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    const b = s.slice(s.indexOf('## 12. Before arming'));
+    for (const item of ['**The dead-coordinator lane (`$REG/dead-coordinator-lane-live`).**',
+      '**Arm it after the expiry lane**, once its own shadow list is read and any breaker trip is worked through.',
+      '**The three early reads, and what wave 6 closes.**', 'One thing stays early', 'is not seen before the commit',
+      '**The journal-gap trade.**', 'stays listed as unmeasured, never ended, until it spawns again', 'Ageing a gap out is carried',
+      '**Two residuals stand.**', 'A lane gap of over ten minutes re-anchors every crashed coordinator on the same pass',
+      'sub-second to one agent round trip, can still lose its runs', '**A permanently unreadable generation pins the mirror `stale`**',
+      '(f) Should a new run under an abandoned programme return its row to active?',
+      '(g) A stale mirror at the act keeps the run of crashed passes']) expect(b).toContain(item);
+  });
+  it('README says the act reads the mirror again after it measures the coordinator (wave 6)', () => {
+    expect(flat('README.md')).toContain('A mirror gone stale, or a gap recorded, while the act measures the coordinator stops it too: the act reads both again after it.');
+  });
   it('README says a stale mirror at the act keeps the hour, and every failed act is recorded (wave 5)', () => {
     expect(flat('README.md')).toContain('A mirror that goes stale between the pass and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done.');
   });
