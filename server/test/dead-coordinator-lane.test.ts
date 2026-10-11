@@ -371,6 +371,27 @@ describe('the act’s own re-measure', () => {
     expect(f.calls, 'nothing composed').toEqual([]);
   });
 
+  it('a HOLD met at the re-measure AFTER the fleet act: the released worker is recorded, the run stays open, the anchor stands — and the next pass ends it (wave 6; wave 5 Task 6’s residual)', async () => {
+    let armed = false;
+    const f: Fixture = await fixture({ onCcd: (args) => { if (armed && args[0] === 'ws-release') { armed = false; f.advance(20_000); } } });
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A, 'alpha');
+    await f.pass(); await walk(f, HOUR - 60_000);
+    const anchor = f.anchorOf(A);
+    armed = true;
+    f.next(); await f.pass();
+    expect(f.calls.filter((c) => c[0] === 'ws-release'), 'its worker WAS released').toHaveLength(1);
+    expect(f.stateOf(r), 'the mirror went stale before the commit: the run stays open').toBe('working');
+    expect(f.feed().filter(([, t]) => t.startsWith('dead coordinator: programme'))).toEqual([[A, 'dead coordinator: programme partly ended']]);
+    const note = (f.watcher() as unknown as { deadCoordinatorAttentionList: readonly { kind: string; sentence: string }[] }).deadCoordinatorAttentionList;
+    expect(note.map((a) => a.kind)).toEqual(['stuck']);
+    expect(note[0]!.sentence).toContain(`released the worker of run ${r} of programme alpha`);
+    expect(f.anchorOf(A), 'a hold is no evidence: the anchor stands').toMatchObject({ firstDeadAt: (anchor as { firstDeadAt: number }).firstDeadAt });
+    f.next(); await f.pass();
+    expect(f.stateOf(r), 'the mirror is fresh again: the next pass ends it').toBe('failed');
+  });
+
   it('a revive that lands AFTER the worker was released is recorded: a feed row and an attention entry, though no run was closed', async () => {
     const f: Fixture = await fixture({ onCcd: (args) => { if (args[0] === 'ws-release') f.live.add(A); } });
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
