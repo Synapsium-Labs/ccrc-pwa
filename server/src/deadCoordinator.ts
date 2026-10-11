@@ -299,26 +299,56 @@ export type DeadCoordinatorBreaker =
       /** For `unmeasurable`: what the pass could not measure. */
       readonly detail?: string };
 
-export interface DeadCoordinatorBreakerMember { readonly id: string; readonly firstDeadAt: number }
+export interface DeadCoordinatorBreakerMember {
+  readonly id: string;
+  readonly firstDeadAt: number;
+  /** A member the FALLBACK seed holds (review 382, R2) — the lane could not read its record of the hold, so it holds every
+   *  claimant the pass does not release. Absent on every ordinary member, never `false`. See `deadCoordinatorBreaker`. */
+  readonly fallback?: true;
+}
 
 /** `crashed`: this pass's crashed claimants with their durable `firstDeadAt`. `held`: the members the last trip held
  *  that no answer has released since, with their remembered instants (they win over a re-anchored one). `unmeasurable`:
  *  the ids this pass could not measure, of `measured` asked. `fleetDoubt`: a fleet-wide fact this pass measured — tmux
  *  did not answer — or `null`. A fleet-wide doubt trips it whatever the count: one claimant whose row is gone still
  *  reads crashed while tmux is down for every other, and that pass is exactly the box fault the breaker exists for. So
- *  does a pass that could measure none of two or more claimants. */
+ *  does a pass that could measure none of two or more claimants.
+ *
+ *  A held member FLAGGED `fallback` (review 382, R2) is a WILDCARD: it clusters with every other entry, crashed or held,
+ *  whatever the instants, so a flagged member plus at least one other entry trips the breaker and every entry is a member
+ *  (the flag carried forward in `members`). Ordinary members' clustering is unchanged — held still wins over a
+ *  re-anchored instant for them, which is review 382's R5 corner, ruled out of scope.
+ *  WHY THE FALLBACK NEVER LOOSENS. The lane seeds flagged members only when its record of the hold cannot be read: every
+ *  claimant of the pass's population the pass does not release. A correct seed's held set is a subset of that, since a
+ *  held member is always unreleased and in the population, and so are the claimants a pass crashes. So at every pass the
+ *  entries (crashed ∪ held) of the fallback lane are a SUPERSET of a correct-seed lane's — by induction: both release a
+ *  member on the same evidence, and each pass's held set is the previous breaker's `members`, which are a subset of its
+ *  entries. A wildcard can only ADD clustered pairs, and adding entries never breaks a within-window adjacency (an entry
+ *  inserted between two adjacent instants leaves each gap smaller), so whenever a correct-seed lane trips, with any
+ *  members, the fallback lane trips with at least those members. The `unmeasurable` arm names crashed, unmeasurable and
+ *  member ids, a superset likewise. When the fallback lane does not trip it has at most one entry, and so has a correct
+ *  one: both hold nothing, and the flag is lost the way any hold is. No instant is compared with a remembered one, so
+ *  the fallback does not depend on the clock across a restart or on a step-five anchor delete that threw. The cost: while
+ *  a flagged member stands, any other crashed claimant is held with it. */
 export function deadCoordinatorBreaker(
   crashed: readonly DeadCoordinatorBreakerMember[], held: readonly DeadCoordinatorBreakerMember[],
   unmeasurable: readonly string[], measured: number, fleetDoubt: string | null, nowMs: number,
 ): DeadCoordinatorBreaker {
-  const firstDead = new Map(crashed.map((c) => [c.id, c.firstDeadAt]));
-  for (const h of held) firstDead.set(h.id, h.firstDeadAt);
-  const byTime = [...firstDead].map(([id, at]) => ({ id, firstDeadAt: at }))
+  const entries = new Map<string, DeadCoordinatorBreakerMember>(
+    crashed.map((c) => [c.id, { id: c.id, firstDeadAt: c.firstDeadAt }]));
+  for (const h of held) {
+    entries.set(h.id, h.fallback === true ? { id: h.id, firstDeadAt: h.firstDeadAt, fallback: true } : { id: h.id, firstDeadAt: h.firstDeadAt });
+  }
+  const byTime = [...entries.values()]
     .sort((a, b) => a.firstDeadAt - b.firstDeadAt || (a.id < b.id ? -1 : 1));
   const clustered = new Set<string>();
-  for (let i = 1; i < byTime.length; i += 1) {
-    if (byTime[i]!.firstDeadAt - byTime[i - 1]!.firstDeadAt <= DEAD_COORDINATOR_BREAKER_WINDOW_MS) {
-      clustered.add(byTime[i - 1]!.id); clustered.add(byTime[i]!.id);
+  if (byTime.length >= 2 && byTime.some((e) => e.fallback === true)) {
+    for (const e of byTime) clustered.add(e.id);
+  } else {
+    for (let i = 1; i < byTime.length; i += 1) {
+      if (byTime[i]!.firstDeadAt - byTime[i - 1]!.firstDeadAt <= DEAD_COORDINATOR_BREAKER_WINDOW_MS) {
+        clustered.add(byTime[i - 1]!.id); clustered.add(byTime[i]!.id);
+      }
     }
   }
   const members = byTime.filter((c) => clustered.has(c.id));
@@ -343,7 +373,7 @@ export const deadCoordinatorBreakerKey = (b: DeadCoordinatorBreaker): string | n
 
 /** The head of the `run_events` observation row that carries the breaker's held set across a restart (the stall watch's
  *  "Durable dedupe, no migration" shape: `fromState = toState`, so nothing pushes it). After the head: the members as
- *  `id@firstDeadAt`, comma-joined, ids ascending; an EMPTY list is the hold cleared. `parseStallDetail` reads any detail
+ *  `id@firstDeadAt` (a fallback member, review 382, R2, with a `*` after the instant), comma-joined, ids ascending; an EMPTY list is the hold cleared. `parseStallDetail` reads any detail
  *  with other than four colon-separated parts as null, and this one has two, so the stall count never sees it. */
 export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held:';
 
@@ -355,6 +385,10 @@ export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held
  *  on write and on read alike. */
 const BREAKER_HELD_SAFE = /^[A-Za-z0-9._-]*$/;
 const BREAKER_HELD_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+/** A fallback member's mark, after its instant (review 382, R2): `id@<instant>*`. `*` is outside the escaped-id alphabet
+ *  and is not a digit, so it can never be part of an id or an instant. An OLDER build's parser reads `<instant>*` as no
+ *  instant, so its read is `ok:false` — fail-shut, as for any record it cannot read. */
+const BREAKER_HELD_FALLBACK_MARK = '*';
 const BREAKER_HELD_ESCAPED = /^(?:[A-Za-z0-9._-]|%[0-9A-F]{2})*$/;
 
 const escapeBreakerHeldId = (id: string): string | null => {
@@ -394,28 +428,30 @@ export function deadCoordinatorBreakerHeldDetail(members: readonly DeadCoordinat
     const id = escapeBreakerHeldId(m.id);
     if (id === null || !Number.isSafeInteger(m.firstDeadAt) || m.firstDeadAt < 1) return null;
     if (i > 0 && sorted[i - 1]!.id === m.id) return null;
-    parts.push(`${id}@${m.firstDeadAt}`);
+    parts.push(`${id}@${m.firstDeadAt}${m.fallback === true ? BREAKER_HELD_FALLBACK_MARK : ''}`);
   }
   return `${DEAD_COORDINATOR_BREAKER_HELD_HEAD}${parts.join(',')}`;
 }
 
 /** A held-set detail split into its members' DECODED ids and UNPROVEN instant texts, strictly: the head, then nothing or
- *  `escapedId@digits` joined by commas with decoded ids strictly ascending. Anything else — a malformed escape included —
+ *  `escapedId@digits` (a `*` after the digits marks a fallback member) joined by commas with decoded ids strictly ascending. Anything else — a malformed escape included —
  *  is `null`: a malformed row, which the store reads as a failed read, never as a smaller set. The store proves each
  *  instant (`persistedInt`). */
-export function splitDeadCoordinatorBreakerHeld(detail: string): { id: string; text: string }[] | null {
+export function splitDeadCoordinatorBreakerHeld(detail: string): { id: string; text: string; fallback: boolean }[] | null {
   if (!detail.startsWith(DEAD_COORDINATOR_BREAKER_HELD_HEAD)) return null;
   const body = detail.slice(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length);
   if (body === '') return [];
-  const out: { id: string; text: string }[] = [];
+  const out: { id: string; text: string; fallback: boolean }[] = [];
   for (const part of body.split(',')) {
     const at = part.split('@');
     if (at.length !== 2) return null;
-    const [escaped, text] = at as [string, string];
+    const [escaped, marked] = at as [string, string];
+    const fallback = marked.endsWith(BREAKER_HELD_FALLBACK_MARK);
+    const text = fallback ? marked.slice(0, -BREAKER_HELD_FALLBACK_MARK.length) : marked;
     const id = unescapeBreakerHeldId(escaped);
     if (id === null || !/^[1-9][0-9]*$/.test(text)) return null;
     if (out.length > 0 && !(out[out.length - 1]!.id < id)) return null;
-    out.push({ id, text });
+    out.push({ id, text, fallback });
   }
   return out;
 }
@@ -731,15 +767,20 @@ export function deadCoordinatorBreakerFeedRow(b: Extract<DeadCoordinatorBreaker,
 }
 
 /** The feed row for a pass that could not read its record of the breaker's hold (review 382, R2): written once per bad row,
- *  through `recordRows` — a record, never a push, and no new attention kind. `held` is who the fallback held (every
- *  claimant the pass did not release); `reason` is already a bounded string, never the row's content. */
+ *  through `recordRows` — a record, never a push, and no new attention kind. `held` is who the breaker held that pass
+ *  (empty when fewer than two claimants stood unreleased, so no cluster formed and nothing was held); `reason` is already
+ *  a bounded string, never the row's content. */
 export function deadCoordinatorBreakerUnreadableFeedRow(
   held: readonly string[], eventId: number | null, reason: string,
 ): { readonly title: string; readonly body: string } {
+  const lead = `The lane could not read its record of the breaker's hold (${eventId === null ? 'no row' : `event ${eventId}`}: ${reason}), `;
   return { title: 'dead coordinator: breaker record unreadable',
-    body: `The lane could not read its record of the breaker's hold (${eventId === null ? 'no row' : `event ${eventId}`}: ${reason}), `
-      + `so it held every coordinator this pass did not see alive, stopped or put down on purpose (${held.length === 0 ? 'none' : held.join(', ')}) `
-      + 'as one cluster and writes a fresh record. It ends nothing until that record is written; the hold clears on evidence, as always.' };
+    body: held.length === 0
+      ? `${lead}so it held every coordinator this pass did not see alive, stopped or put down on purpose, but fewer than two stood, `
+        + 'so no cluster formed and nothing was held. It writes a fresh record, and ends nothing until that record is written.'
+      : `${lead}so it held every coordinator this pass did not see alive, stopped or put down on purpose (${held.join(', ')}), `
+        + 'each flagged: a flagged coordinator clusters with any other crashed or held coordinator until evidence releases it, '
+        + 'so while one stands any other crashed coordinator is held with it. It writes a fresh record, and ends nothing until that record is written.' };
 }
 
 /** THE ATTENTION LIST, from the lane's memory alone, the breaker's item first. */

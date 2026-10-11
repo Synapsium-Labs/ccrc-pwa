@@ -203,12 +203,24 @@ describe('the breaker’s held set — a run_events observation, no migration (r
     expect(got.ok && got.runId).toBe(run);
   });
 
+  it('a FALLBACK member is carried with its flag — a `*` after the instant — and reads back flagged; an unflagged member reads back without the key (review 382, R2)', () => {
+    const { s, open } = store();
+    const run = open('demo-c-a');
+    const set = [{ id: 'demo-c-a', firstDeadAt: 10, fallback: true as const }, { id: 'demo-c-b', firstDeadAt: 20 }];
+    expect(s.recordDeadCoordinatorBreakerHeld(run, set, 100)).toMatchObject({ recorded: true });
+    const row = s.runEvents(run).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:')).pop()!;
+    expect(row.detail).toBe('dead-coordinator-breaker-held:demo-c-a@10*,demo-c-b@20');
+    const got = s.deadCoordinatorBreakerHeldLatest();
+    expect(got).toEqual({ ok: true, runId: run, held: set });
+    expect(got.ok && got.held[1], 'no flag key on an ordinary member').not.toHaveProperty('fallback');
+  });
+
   it('a malformed LATEST row fails the WHOLE read — never a partial set, never an older row’s', () => {
     const { db, s, open } = store();
     const run = open('demo-c-a');
     s.recordDeadCoordinatorBreakerHeld(run, members, 100);
     for (const bad of ['demo-c-a@soon', 'demo-c-a@10,demo-c-b', 'demo-c-b@20,demo-c-a@10', 'demo-c-a@10,demo-c-a@10', 'demo c@5', 'demo-c-a@010', ',',
-      'demo%ZZ@5', 'demo%@5', 'demo%4@5', 'demo%41@5', 'demo%e9@5', '%C3@5', 'a@b@5', 'demo-c-a@10,@5']) {
+      'demo-c-a@10**', 'demo-c-a@*', 'demo-c-a@10*x', 'demo-c-a@0*', 'demo-c-a@10 *', 'demo%ZZ@5', 'demo%@5', 'demo%4@5', 'demo%41@5', 'demo%e9@5', '%C3@5', 'a@b@5', 'demo-c-a@10,@5']) {
       db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (${run}, 300, 'planned', 'planned', 'operator', 'dead-coordinator-breaker-held:${bad}')`);
       const got = s.deadCoordinatorBreakerHeldLatest();
       expect(got, bad).toMatchObject({ ok: false });

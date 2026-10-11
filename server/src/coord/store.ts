@@ -3375,8 +3375,10 @@ export class CoordStore {
    *  never an older row's. The lane then seeds its hold CONSERVATIVELY and writes a fresh record (review 382, R2), so it
    *  never reads that row twice. The unreadable answer carries the row it could not read, `eventId` (`null` for a read
    *  that threw before any row was found) and the `runId` it sits on (`null` when none, or when the run id itself cannot
-   *  be proved) — the lane warns once per row, and writes an empty set on that run. A thrown statement is `{ ok: false }`
-   *  too. */
+   *  be proved) — the lane warns once per row, and, when the fallback's set comes out empty, writes that empty set on
+   *  that run (a non-empty set goes on the lowest open run a member coordinates). A member the fallback held carries a
+   *  `*` after its instant and reads back `fallback: true`; an older build's parser rejects that spelling, so its read is
+   *  `{ ok: false }` — fail-shut. A thrown statement is `{ ok: false }` too. */
   deadCoordinatorBreakerHeldLatest():
     { ok: true; held: DeadCoordinatorBreakerMember[]; runId: number | null }
     | { ok: false; detail: string; eventId: number | null; runId: number | null } {
@@ -3400,7 +3402,7 @@ export class CoordStore {
       for (const p of parts) {
         const at = persistedInt(p.text, 'breaker held firstDeadAt');
         if (!at.ok) return { ok: false, detail: at.detail, eventId, runId };
-        held.push({ id: p.id, firstDeadAt: at.value });
+        held.push(p.fallback ? { id: p.id, firstDeadAt: at.value, fallback: true } : { id: p.id, firstDeadAt: at.value });
       }
       return { ok: true, held, runId: run.value };
     } catch (err) {

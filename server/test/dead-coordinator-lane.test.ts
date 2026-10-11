@@ -710,6 +710,8 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
   };
   const heldRows = (f: Fixture, runId: number) =>
     f.coord.runEvents(runId).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:'));
+  const unreadableBody = (f: Fixture): string =>
+    f.coord.feedEvents(50).find((e) => e.title === 'dead coordinator: breaker record unreadable')?.body ?? '';
   const unreadableRows = (f: Fixture) => f.feed().filter(([, t]) => t === 'dead coordinator: breaker record unreadable');
 
   it('an UNREADABLE record never freezes the lane: it holds every claimant this pass does not release, writes a READABLE record, and the next pass reads it (review 382, R2)', async () => {
@@ -733,13 +735,13 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     expect(f.calls, 'nothing composed on the box').toEqual([]);
     const fresh = heldRows(f, ra).filter((e) => !(e.detail ?? '').endsWith('@soon'));
     expect(fresh, 'ONE readable record, not rewritten each pass').toHaveLength(1);
-    expect(fresh[0]!.detail, 'exactly A and B (C lives), at one instant').toMatch(new RegExp(`^dead-coordinator-breaker-held:${A}@(\\d+),${B}@\\1$`));
+    expect(fresh[0]!.detail, 'exactly A and B (C lives), at one instant, each flagged').toMatch(new RegExp(`^dead-coordinator-breaker-held:${A}@(\\d+)\\*,${B}@\\1\\*$`));
     expect(f.coord.deadCoordinatorBreakerHeldLatest()).toMatchObject({ ok: true, runId: ra, held: [{ id: A }, { id: B }] });
     const warned = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('record of its hold'));
     expect(warned, 'ONE warn line for the bad row').toHaveLength(1);
     expect(warned[0], 'names the row').toMatch(/event \d+/);
-    expect(warned[0], 'never the row\'s content beyond a bounded prefix').not.toContain('soon');
     expect(unreadableRows(f), 'and ONE feed row').toEqual([[A, 'dead coordinator: breaker record unreadable']]);
+    expect(unreadableBody(f), 'the row says who was held, flagged').toContain(`(${A}, ${B}), each flagged`);
     warn.mockClear();
     f.restart();                                        // a fresh watcher over the same store reads the record: no fallback
     await walk(f, HOUR);
@@ -771,21 +773,70 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     await anHourDead(f);
     expect(f.stateOf(ra)).toBe('failed');
     expect(f.coord.deadCoordinatorBreakerHeldLatest(), 'the carrier is the bad row\'s own run').toEqual({ ok: true, runId: ra, held: [] });
+    expect(unreadableBody(f), 'a lone unreleased claimant: the row says nothing was held').toContain('nothing was held');
+    expect(unreadableBody(f)).not.toContain('flagged');
   });
 
-  it('a read that THROWS seeds the fallback too, and warns once per process (review 382, R2)', async () => {
+  it('a read that THROWS seeds the fallback too, and warns once per process, its reason bounded to 64 characters (review 382, R2)', async () => {
     const f = await fixture();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(f.coord, 'deadCoordinatorBreakerHeldLatest').mockReturnValue({ ok: false, detail: 'database is locked', eventId: null, runId: null });
+    vi.spyOn(f.coord, 'deadCoordinatorBreakerHeldLatest').mockReturnValue({ ok: false, detail: 'x'.repeat(200), eventId: null, runId: null });
     f.plant(A); f.plant(B);
     const ra = f.working(A); f.working(B);
     await anHourDead(f);
     expect(f.attention(), 'both held as one cluster').toEqual([['breaker', [A, B]]]);
     expect(f.coord.deadCoordinatorBreakerHeldLatest).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('record of its hold'))).toHaveLength(1);
+    const warned = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('record of its hold'));
+    expect(warned).toHaveLength(1);
+    expect(warned[0], 'the reason is cut at 64 characters').toContain(`: ${'x'.repeat(64)})`);
+    expect(warned[0]).not.toContain('x'.repeat(65));
     expect(unreadableRows(f)).toHaveLength(1);
+    expect(f.coord.feedEvents(50).find((e) => e.title === 'dead coordinator: breaker record unreadable')?.body, 'the feed row bounds it too')
+      .not.toContain('x'.repeat(65));
     expect(f.stateOf(ra)).toBe('working');
   });
+
+  /** The reviewer's probe (review 382, R2 follow-up): U crashes at minute 0, V at 32, Z lives; a malformed record and a restart
+   *  at 32; U reads unmeasurable at 40 (its anchor goes), crashes again at 48 (a fresh anchor); Z crashes at 53; V is back at
+   *  143. The TRUE held set at the restart is empty, so a correct seed trips the breaker on {U, Z} and nothing ends. The
+   *  fallback must hold at least that: a flagged member clusters with every other entry whatever the instants. */
+  const probe = async (restartAgain: boolean): Promise<void> => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const U = 'demo-coord-u'; const V = 'demo-coord-v'; const Z = 'demo-coord-z';
+    f.plant(U); f.plant(V); f.plant(Z);
+    f.live.add(V); f.live.add(Z);
+    const ru = f.working(U); const rv = f.working(V); const rz = f.working(Z);
+    let m = 0;
+    const to = async (target: number): Promise<void> => {
+      while (m < target) { const d = Math.min(9, target - m); f.advance(d * 60_000); m += d; await f.pass(); }
+    };
+    await f.pass();                                     // minute 0: U crashes
+    await to(31);
+    f.live.delete(V);
+    await to(32);                                       // minute 32: V crashes
+    plantMalformed(f, ru);
+    f.restart();                                        // the restart, over a record it cannot read
+    await to(33);                                       // the fallback pass: {U, V} held, a fresh record written
+    expect(f.coord.deadCoordinatorBreakerHeldLatest(), 'the fresh record is readable').toMatchObject({ ok: true, held: [{ id: U }, { id: V }] });
+    if (restartAgain) { f.restart(); await to(34); }    // seeded from the record: the flag must be in it
+    rmSync(path.join(f.reg, `${U}.uuid`));
+    await to(40);                                       // U unmeasurable: its anchor is deleted
+    writeFileSync(path.join(f.reg, `${U}.uuid`), `u-${U}`);
+    await to(48);                                       // U crashes again, re-anchored at 48
+    f.live.delete(Z);
+    await to(53);                                       // Z crashes at 53
+    await to(140);
+    f.live.add(V);
+    await to(143);                                      // V is back: released
+    await to(143 + 120);                                // far past U's hour and Z's
+    expect([ru, rv, rz].map(f.stateOf), 'nothing ends: the true held set is empty, and {U, Z} cluster').toEqual(['working', 'working', 'working']);
+    expect(f.calls, 'nothing composed on the box').toEqual([]);
+    expect(breakerItem(f)).toEqual([['breaker', [U, Z]]]);
+  };
+  it('THE FALLBACK NEVER LOOSENS (the reviewer\'s probe): a member the true record would not hold cannot let U and Z be ended once V is released (review 382, R2)', async () => { await probe(false); });
+  it('...and the FLAG is durable: a restart after the fallback record was written, before Z crashes, still does not end U (review 382, R2)', async () => { await probe(true); });
 
   it('NO ACT until the hold is recorded: a pass whose held-set write fails composes nothing — a claimant due, the breaker clear — and a later pass whose write lands acts (review 382, R3)', async () => {
     const f = await fixture();

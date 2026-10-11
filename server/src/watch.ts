@@ -1198,9 +1198,9 @@ export class FleetWatcher {
    *  reaches step three. `Seeded` is that once; `HeldKey` is the key of the set the record last carried (so an
    *  unchanged set writes nothing), and `HeldRunId` the run that record sits on (where an empty set is written).
    *  A record that cannot be READ seeds the fallback instead (review 382, R2): every claimant the pass does not release,
-   *  held at the pass's own instant, and a fresh record written over the bad one. And the lane ACTS only on a pass whose
-   *  durable record matches the held set it just computed (review 382, R3): a write that did not land withholds the act,
-   *  so the record never lags it. */
+   *  held FLAGGED (a wildcard in the breaker), and a fresh record, flags included, written over the bad one. And the lane
+   *  ACTS only on a pass whose durable record matches the held set it just computed (review 382, R3): a write that did
+   *  not land withholds the act, so the record never lags it. */
   private deadCoordinatorBreakerSeeded = false;
   /** `null` is a key that matches NO set: the record is unreadable (the fallback seed), so the next write runs whatever
    *  the new set is and supersedes the bad row (review 382, R2). */
@@ -4364,19 +4364,14 @@ export class FleetWatcher {
       held = this.deadCoordinatorBreakerHeld.filter((m) => ids.includes(m.id) && !released.has(m.id));
     } else {
       // THE FALLBACK SEED (review 382, R2): the record could not be read, so hold EVERY claimant of this pass's population
-      // that this pass does not release (alive, stopped, deliberate), each at the pass's own instant. It never loosens:
-      //  - a real held set is always a subset of the unreleased population (step six filters it that way), and the
-      //    breaker's instants are only ever compared with each other;
-      //  - with two or more unreleased claimants every member of the fallback shares ONE instant, so any two cluster and
-      //    the breaker trips — a correct seed holds that cluster, or a subset of it, so the fallback holds at least it;
-      //  - with at most one unreleased claimant, `crashed`, a correct seed's held set and the fallback all name that one
-      //    claimant at most, and one member cannot cluster (clustering needs two): the verdict is identical, and the
-      //    unmeasurable and fleet-wide arms of `deadCoordinatorBreaker` read `unmeasurable`/`measured`, not `held`;
-      //  - a LATER crash clusters with the fallback instant whenever it would have clustered with any earlier remembered
-      //    one, since the fallback instant is the later of the two.
-      // So no claimant a correct seed would hold can be ended. The seed is then this pass's result: `Seeded`, and a key
-      // that matches no set, so the write below runs whatever the set is and the bad row is never read again.
-      held = ids.filter((id) => !released.has(id)).map((id) => ({ id, firstDeadAt: now }));
+      // that this pass does not release (alive, stopped, deliberate), each FLAGGED `fallback`. A flagged member clusters
+      // with every other entry whatever the instants (`deadCoordinatorBreaker`, which carries the proof that this never
+      // loosens: a wildcard only adds clustered pairs, adding entries never breaks a within-window adjacency, and a real
+      // held set is always a subset of the unreleased population, so the fallback lane trips whenever a correct-seed lane
+      // would, for every member that one holds). The instant is `now` and is compared with nothing. The flag is written
+      // into the fresh record, so a restart seeds it too. The seed is this pass's result: `Seeded`, and a key that matches
+      // no set, so the write below runs whatever the set is and the bad row is never read again.
+      held = ids.filter((id) => !released.has(id)).map((id) => ({ id, firstDeadAt: now, fallback: true as const }));
       this.deadCoordinatorBreakerHeldKey = null;
       this.deadCoordinatorBreakerHeldRunId = unreadable.runId;
       this.deadCoordinatorBreakerSeeded = true;
@@ -4388,7 +4383,7 @@ export class FleetWatcher {
     this.deadCoordinatorBreakerHeld = breaker.tripped ? breaker.members : [];
     // R3: the act waits for a pass whose durable record matches the hold it just computed.
     const recorded = this.recordDeadCoordinatorBreakerHeldChange(coord, before, ids, now);
-    if (unreadable !== null) this.noteDeadCoordinatorRecordUnreadable(coord, unreadable, held.map((m) => m.id), ids);
+    if (unreadable !== null) this.noteDeadCoordinatorRecordUnreadable(coord, unreadable, this.deadCoordinatorBreakerHeld.map((m) => m.id), ids);
     const key = deadCoordinatorBreakerKey(breaker);
     if (breaker.tripped && key !== this.deadCoordinatorBreakerRecorded) {
       recordDeadCoordinatorBreaker({ coord, notifyLog: this.deps.notifyLog }, breaker);

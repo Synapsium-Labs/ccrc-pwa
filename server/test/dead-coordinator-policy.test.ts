@@ -227,6 +227,23 @@ describe('the circuit breaker (spec §5.4)', () => {
       .toEqual({ tripped: false });
   });
 
+  it('a FALLBACK member clusters with every other entry whatever the instants: it plus one other trips, all named, the flag carried; alone it trips nothing (review 382, R2)', () => {
+    const wild = { id: 'c-a', firstDeadAt: NOW, fallback: true as const };
+    const far = NOW + 5 * 3_600_000;
+    const b = deadCoordinatorBreaker([at('c-z', far)], [wild], [], 2, null, far + PASS);
+    expect(b).toMatchObject({ tripped: true, why: 'clustered', claimants: ['c-a', 'c-z'], since: NOW });
+    const members = b.tripped ? b.members : [];
+    expect(members).toEqual([{ id: 'c-a', firstDeadAt: NOW, fallback: true }, at('c-z', far)]);
+    expect(members[1], 'only the fallback member carries the flag').not.toHaveProperty('fallback');
+    // Two held, one flagged and one not, hours apart: they cluster too.
+    expect(deadCoordinatorBreaker([], [wild, at('c-b', far)], [], 2, null, far)).toMatchObject({ tripped: true, claimants: ['c-a', 'c-b'] });
+    // A lone entry is no cluster, flagged or not: the flag is lost with the hold.
+    expect(deadCoordinatorBreaker([], [wild], [], 1, null, NOW)).toEqual({ tripped: false });
+    expect(deadCoordinatorBreaker([at('c-z', far)], [{ ...wild, id: 'c-z', firstDeadAt: far }], [], 1, null, far)).toEqual({ tripped: false });
+    // The same two WITHOUT the flag, hours apart, do not trip: ordinary clustering is unchanged.
+    expect(deadCoordinatorBreaker([at('c-z', far)], [at('c-a', NOW)], [], 2, null, far + PASS)).toEqual({ tripped: false });
+  });
+
   it('a FLEET-WIDE doubt (tmux did not answer) trips it whatever the count, naming every claimant it could not clear', () => {
     // One claimant reads crashed (its row is gone: the ladder answers before tmux), the other could not be measured.
     expect(deadCoordinatorBreaker([at('c-a', NOW)], [], ['c-b'], 2, 'tmux did not answer for c-b: no server', NOW))

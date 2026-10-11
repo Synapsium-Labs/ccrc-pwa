@@ -661,8 +661,8 @@ each item is a departure named there).
   any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs. The held
   set is kept in `coord.db` as a `run_events` observation row (the stall watch's "Durable dedupe, no migration" shape: no
   new table or column; `fromState = toState`, so nothing pushes it; ids percent-escaped, so any claimant id is
-  carried), written whenever the held set changes, in shadow too, with each member's first-dead instants, and read back
-  once per process at the first pass (review 381, F1).
+  carried), written whenever the held set changes, in shadow too, with each member's first-dead instants (a member the
+  fallback below holds carries a `*` after its instant), and read back once per process at the first pass (review 381, F1).
 - **One claimant a pass**, the longest dead first, ARMED; in shadow every due claimant is recorded.
 - **The re-measure runs inside the arm.** A compare-and-set on `claimedBy` cannot see a revive of the same id, so the
   abandon arm re-measures the claimant immediately before each run's fleet act and again after it, before the commit;
@@ -671,7 +671,7 @@ each item is a departure named there).
 - **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
   breaker, rebuilt over the passes after a restart. A restart keeps the lane's first-dead anchor (a gap of more than ten
   minutes re-anchors it, as above) and the breaker's hold (the record above, read back at the first pass; a record it
-  cannot read makes the lane hold every claimant that pass does not release, at that pass's instant, and write a fresh record, with a warn line and a feed row saying so), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, the one way a restarted lane can act sooner:
+  cannot read makes the lane hold every claimant that pass does not release, each flagged, and write a fresh record, with a warn line and a feed row saying so: a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, at the cost that while one stands any other crashed claimant is held with it), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, the one way a restarted lane can act sooner:
   the lane composes no act on a pass whose held-set record did not land, so the record never lags an act. Every act is still behind the claimant's re-measure before and after the fleet act.
 - **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
   (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
@@ -858,8 +858,10 @@ collects them.
   claimant crashed, so a restart shorter than that keeps the hour. The other is the breaker's hold: its held set is a
   `run_events` row in `coord.db`, written when the set changes (in shadow too) and read back at the lane's first pass.
   A record the lane cannot read does not stop it: for that pass the lane holds every claimant the pass does not release,
-  each at that pass's instant, which can only hold more than a readable record would, and writes a fresh record over the
-  bad one, so the bad row is never read again. The server logs a `ccrc-server: sweepDeadCoordinators could not read the
+  each flagged in the new record (a `*` after its instant), and writes that record over the bad one, so the bad row is
+  never read again. A flagged claimant clusters with any other crashed or held claimant, whatever the instants, until
+  evidence releases it, so every claimant a readable record would hold is held too; the cost is that while one stands any
+  other crashed claimant is held with it, and an older build reads the flagged record as unreadable and stops. The server logs a `ccrc-server: sweepDeadCoordinators could not read the
   breaker's record of its hold` warning, once per bad row, and writes one feed row, "dead coordinator: breaker record
   unreadable", which is the operator's sign. The hold releases on what releases it without a restart: evidence that the
   claimant is alive, stopped or was stopped on purpose, or the claimant leaving the population. For that lane a restart
