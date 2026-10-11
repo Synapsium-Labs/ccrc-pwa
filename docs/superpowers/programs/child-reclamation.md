@@ -47,6 +47,15 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 08:49 — consent to workspace-lifecycle wave 6 (plan #350) for two edits in wave 7's files (4207, answered in 4208).**
+  1. **ccd/ccd.** The `_WS_RCL_CRUMB` comment block above `_ws_reclaim_failed_json` changes only the sentence that says
+     ws-expire's documents carry no key: `_ws_expire_locked` becomes a setter (true when resumed, false before its own
+     breadcrumb, keyless over an unreadable one). Every reclaim and collect sentence stays. It is comment only, with no
+     code line outside `_ws_expire_locked`, and ccd/ccd is restamped.
+  2. **server/test/ccd-child-reclaim-crumb.test.ts.** Only its ws-expire describe is rewritten and retitled; the
+     printer and ws-reclaim describes stay byte for byte.
+  Wave 8 overlaps neither file.
+
 - **2026-10-11 07:57 — wave 8's wave-done (4205) is verified at `0511d5370`, PR #349. Run 348 is at `awaiting-review`, and review run 378 is opened.**
   - **Measured.** origin's tip equals the fingerprint. PR #349 is MERGEABLE over main `7609221a4`, which has not moved,
     and merge-tree exits 0. 18 commits, no merge. The range touches nothing under `ccd/`, `agent/`, `pwa/` or
