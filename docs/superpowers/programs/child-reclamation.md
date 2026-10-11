@@ -47,6 +47,29 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 14:24 — wave 9's plan is DRAFTED (six Opus drafters, `wf_6c6a5efb-807`) and ruled. 32 numbers are issued. The reconcile runs.**
+  - **§16's last check** (`wf_f0df68c6-d21`, 22 agents) found no route that composes when a gate forbids it, and 9 more
+    items, three of them silent-wedge paths. They are folded into the contract (`c6fa95441`):
+    - the pass guard never awaits what it enqueued;
+    - the act is offered first, and an id holding an observation waits for its ripening;
+    - an executor job queued behind another lane raises the slot-held line;
+    - an unknown verdict counts as failing;
+    - a verb's terminal refusal joins the terminal run;
+    - the restart residual is stated honestly.
+  - **The drafts.** About 700k characters over Tasks 1 to 9, with 76 open issues and 36 named departures. Tasks 3 and 4
+    were also built and run on a scratch copy (163 cases green, and 76 mutation rows each red alone).
+  - **The rulings on the drafts** (H1 to H12, `wave9/drafts-rulings.md`):
+    - §16's final text binds;
+    - `collectLane.ts` may import `childReclaimSweep.ts` (L1 to L1, one way);
+    - one canonical spelling for every cross-task name, and `CollectAudit`'s verdict arms carry `witnessRun` and `leaf`;
+    - the start hold-off is asked at the offer;
+    - no commit is red: the wiring test's INERT case moves with Task 6;
+    - the first-argument scan matches the executor's shape;
+    - the reader choices, the attention wording and 29 departures, each accepted by slug.
+  - **Numbers.** Two blocks of 16 were issued by the allocator for run 380: 4788 to 4819, listed singly in
+    `wave9/block-numbers.txt`. The coordinator assigns them at the fix round.
+  - **Next:** apply the reconcile's edits, then assemble, attack and fix the plan. Then the docs PR.
+
 - **2026-10-11 13:29 — wave 9's rulings are RULED: contract §16, R82 to R92 (`59f098cb5`). Its plan is being drafted.**
   - **Two attacks.** The draft was attacked by `wf_5cb3e8a1-c6d`: four Opus attackers (SAFETY at xhigh, pacing and
     attention, feasibility, SECURITY) and two Sonnet refuters for every break, 68 agents. 28 breaks survived. The
