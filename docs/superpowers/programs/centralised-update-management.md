@@ -1218,6 +1218,24 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       still held by claims 1142 and 1141.
       - STATUS: fleet and server v0.0.143, newest v0.0.144, backups fleet 164M/server 626M, disk free fleet 215G/work
         volume 250G/server 33G, no anomalies.
+    - **2026-10-11 13:15 UTC: v0.0.144 to v0.0.147 converged unattended.** No action was taken. The hourly checks
+      paused for about 12 hours while this session waited on an operator answer. The moves were measured afterwards.
+      - The releases:
+        - v0.0.144 was #348 (box-token row 2a), published 00:44.
+        - v0.0.145 was #344 (child reclamation's wave 7, `ccd/ccd`), published 00:56.
+        - v0.0.146 was workspace lifecycle's wave 6 plan (docs), published 08:59.
+        - v0.0.147 was child reclamation's wave 8 server half, published 12:14.
+      - Both boxes and `/health` read v0.0.147.
+      - The box token held through every restart. Doctor reads `PASS … generation #3, rotated 16 h ago, fleet
+        confirmed, retired value refused`, with no hold, no failure and no fleet 401.
+      - **Wave 15 (run 300) has a new blocker.**
+        - Claims 1142 and 1141 have ended, and #344 has landed.
+        - Claim 1149 (workspace lifecycle's wave 6, run 358) now holds `ccd/ccd`, and `ccd/ccd` edits merge serially.
+        - `ccd/ccrc` and `server/test/macos-platform.test.ts` are free. Claim 1141's run 354 touches only
+          `ccd/history/*` and the history tests, measured in its workspace read-only.
+        - So wave 15 waits for wave 6's `ccd/ccd` edit to land.
+      - STATUS: fleet and server v0.0.147, newest v0.0.147, backups fleet 166M/server 631M, disk free fleet 219G/work
+        volume 246G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
