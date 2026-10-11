@@ -2,14 +2,13 @@
 // tail's word for a PROVEN refusal at its removal-time re-ask. It is declared
 // with its ccd emission (`_ws_reclaim_tail`'s literal `_ws_reclaim_fail …
 // containment-refuted`). Its sentence says only what is true under any server.
-// The expiry lane classes it `stuck` (workspace lifecycle wave 6, ruling B), in
-// a describe of its own below. Until the reclaim side classes it, its parser
-// reads it as the resumable failure it is, so it is retried; wave 8's `stuck`
-// class changes that pin on purpose.
+// Both parsers class it `stuck`: the reclaim parser since CCR-15 wave 8, the
+// expiry parser since workspace lifecycle wave 6 (ruling B), in a describe of
+// its own below. Wave 8 changed the reclaim parser's pin below on purpose.
 import { describe, it, expect } from 'vitest';
 import { LC_REFUSAL_WORD, isLcRefusalToken, lcRefusalWord } from '../../shared/api.js';
 import { SENTENCES, refusalSentence } from '../src/wsaudit.js';
-import { childReclaimTokenKind, parseChildReclaimResult } from '../src/coord/childReclaim.js';
+import { CHILD_RECLAIM_STUCK_TOKENS, childReclaimTokenKind, parseChildReclaimResult } from '../src/coord/childReclaim.js';
 import { EXPIRE_STUCK_WORD, parseExpireResult } from '../src/archivedExpiry.js';
 import { childReclaimFailureLine, childReclaimTerminalRefusal } from '../src/childReclaimSweep.js';
 
@@ -35,10 +34,12 @@ describe('the word', () => {
   });
 });
 
-describe('today’s parsers read it as a resumable failure — retried', () => {
-  it('parseChildReclaimResult: failed, resumable, with its token', () => {
+// Wave 8 retitles this describe and flips ONE assertion in it on purpose (spec
+// §5.6, the stuck class): the reclaim parser reads the word as `stuck`.
+describe('the reclaim parser reads it as a stuck failure', () => {
+  it('parseChildReclaimResult: failed, stuck, with its token', () => {
     expect(parseChildReclaimResult('demo-quiet-basin', DOC, '')).toEqual({
-      kind: 'failed', resume: 'resumable', detail: `${W}: d`, token: W });
+      kind: 'failed', resume: 'stuck', detail: `${W}: d`, token: W });
   });
 
   it('the sweep reads its journal line as a FAILURE line, never a terminal refusal', () => {
@@ -61,5 +62,9 @@ describe('the expiry lane reads it as STUCK, whatever crumb says (workspace life
   it('reads the word from its L0 home: the expiry’s stuck word IS the journal-only token, typed against it', () => {
     expect(EXPIRE_STUCK_WORD).toBe(W);
     expect(isLcRefusalToken(EXPIRE_STUCK_WORD)).toBe(true);
+  });
+
+  it('the expiry lane\'s stuck word is the reclaim lane\'s stuck class — one class, two carriers', () => {
+    expect([EXPIRE_STUCK_WORD]).toEqual([...CHILD_RECLAIM_STUCK_TOKENS]);
   });
 });

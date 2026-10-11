@@ -1,4 +1,4 @@
-// X1's ccd half (child reclamation wave 7, spec 2026-09-22 §5.5): the reclaim
+// The same-run re-mint, ccd's half (child reclamation wave 7, spec 2026-09-22 §5.5): the reclaim
 // token binds the ROW'S GENERATION — `$REG/<id>.generation`, minted once by row
 // creation (`cmd_ws_add`, before any row field), removed last by `_reg_purge`,
 // and rewritten by nothing else — so a token `ws-audit --reclaim` minted over
@@ -236,12 +236,16 @@ describe('the read runs under the row\'s compaction lock, as every other generat
 describe('the server reads the additive key absence-permits', () => {
   const TOK = 'a'.repeat(64);
   const base = { id: CHILD_ID, mode: 'reclaim', childOf: CHILD_RUN };
-  it('parseChildReclaimAudit answers the same with the key, with null, and without it (an older ccd)', () => {
-    const want = { kind: 'token', token: TOK, childOf: CHILD_RUN };
-    for (const extra of [{}, { generation: '0123abcd-0123-4567-89ab-0123456789ab' }, { generation: null }]) {
-      expect(parseChildReclaimAudit(CHILD_ID, JSON.stringify({ ...base, ...extra, verdict: 'reclaimable', detail: '', token: TOK })))
-        .toEqual(want);
-    }
+  it('parseChildReclaimAudit reads the key absence-permits: no key is unprinted, a value is carried, and null with a token is never spent', () => {
+    const doc = (extra: Record<string, unknown>): string =>
+      JSON.stringify({ ...base, ...extra, verdict: 'reclaimable', detail: '', token: TOK });
+    const G = '0123abcd-0123-4567-89ab-0123456789ab';
+    expect(parseChildReclaimAudit(CHILD_ID, doc({})), 'an older ccd: no key')
+      .toEqual({ kind: 'token', token: TOK, childOf: CHILD_RUN, generation: { kind: 'unprinted' } });
+    expect(parseChildReclaimAudit(CHILD_ID, doc({ generation: G })))
+      .toEqual({ kind: 'token', token: TOK, childOf: CHILD_RUN, generation: { kind: 'value', v: G } });
+    expect(parseChildReclaimAudit(CHILD_ID, doc({ generation: null })), 'null with a token is never spent (wave 8)')
+      .toMatchObject({ kind: 'unreadable' });
     expect(parseChildReclaimAudit(CHILD_ID, JSON.stringify({ ...base, generation: null, verdict: 'not-a-child', detail: 'd' })))
       .toEqual({ kind: 'refused', token: 'not-a-child', detail: 'd' });
   });
@@ -250,6 +254,6 @@ describe('the server reads the additive key absence-permits', () => {
     makeChild(h);
     const out = auditRun().stdout.trim();
     expect(parseChildReclaimAudit(CHILD_ID, out))
-      .toEqual({ kind: 'token', token: (JSON.parse(out) as { token: string }).token, childOf: CHILD_RUN });
+      .toEqual({ kind: 'token', token: (JSON.parse(out) as { token: string }).token, childOf: CHILD_RUN, generation: { kind: 'value', v: gen() } });
   }, 60_000);
 });

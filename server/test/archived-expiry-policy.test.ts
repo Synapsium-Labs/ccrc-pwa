@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { leafKeptWord } from '../../shared/api.js';
 import { CCD } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { EXP_ID, expireVerb, makeArchived } from './wsExpireFixture.js';
@@ -14,7 +15,7 @@ import {
   EXPIRE_PERSISTENT_RETRY_MS,
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
-  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, keptLeafWord, parseExpireAudit, parseExpireResult, reviewKeeps,
+  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
   type ArchivedExpiryEntry, type ArchivedExpiryInput,
 } from '../src/archivedExpiry.js';
 
@@ -523,9 +524,9 @@ describe('the lane’s memory of one row', () => {
   const e = (over: Partial<ArchivedExpiryEntry> = {}): ArchivedExpiryEntry =>
     ({ ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW - PASS, ...over });
 
-  it('keptLeafWord is the ONE word reader of a kept leaf: ccd’s three words are themselves, any other value is a leaf that stood (wave 5)', () => {
-    for (const w of ['refused', 'unmeasured', 'in-use'] as const) expect(keptLeafWord(w)).toBe(w);
-    for (const v of ['gone-sideways', '', 'IN-USE', ' in-use', 7, true, null, {}, []]) expect(keptLeafWord(v), JSON.stringify(v)).toBe('unmeasured');
+  it('leafKeptWord is the ONE word reader of a kept leaf: ccd’s three words are themselves, any other value is a leaf that stood (wave 5)', () => {
+    for (const w of ['refused', 'unmeasured', 'in-use'] as const) expect(leafKeptWord(w)).toBe(w);
+    for (const v of ['gone-sideways', '', 'IN-USE', ' in-use', 7, true, null, {}, []]) expect(leafKeptWord(v), JSON.stringify(v)).toBe('unmeasured');
   });
 
   it('THE KEPT-LEAF READER: clipsKept and tmpRootKept are read by name — a word, null, or ABSENT (an older ccd: unreported, never null) (wave 5)', () => {

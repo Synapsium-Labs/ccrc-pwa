@@ -4203,8 +4203,16 @@ hold, a human's included, keeps the child. The sweep's switch is
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, `ws-reclaim` itself
 refuses `paused` on the box, and the expiry of archived workspaces stops too, as does the dead-coordinator lane. The same row lists the children that need a
-human's eye: each under a terminal refusal, each whose reclaim has kept failing
-for 15 minutes, and each the sweep keeps for a person while its reason stands.
+human's eye: each under a terminal refusal, each whose reclaim ccd proved is blocked by a tree or registry
+row that is not the child's own (`containment-refuted`, listed at once and retried on a persistent tier that
+waits up to four hours between asks), each whose reclaim has kept failing for 15 minutes, each the sweep
+keeps for a person while its reason stands, and each reclaimed child whose clips directory or temp root ccd
+kept (listed from the lifecycle journal for seven days, after the registry row is gone). A request that
+waited in the queue is spent only on the workspace it was judged over: the sweep binds it to the registry
+row's generation, and the executor and the audit re-prove it, so a slug minted again is never reclaimed on
+the old licence by a licensed request, nor by any request on a ccd whose audit binds the generation. On an
+older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
+residual.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one

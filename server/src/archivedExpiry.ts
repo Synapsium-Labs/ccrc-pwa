@@ -13,7 +13,8 @@
 // EVERY UNCERTAIN ANSWER IS "NOT THIS PASS". The path these verdicts feed asks for a deletion with no human in it;
 // the executor re-reads, and ccd re-proves inside its lock at the instant of deletion. This file narrows the window.
 import {
-  TERMINAL_RUN_STATES, type ChildMark, type ExpiryAttention, type LcRefusalToken, type RunState,
+  TERMINAL_RUN_STATES, leafKeptWord, type ChildMark, type ExpiryAttention, type LcRefusalToken, type LeafKeptWord,
+  type RunState,
 } from '../../shared/api.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
@@ -217,26 +218,15 @@ function lockUnopenable(err: string): string | null {
  *  which says nothing either way: `unreported`, never folded into `null` (that would read "removed"). A value this
  *  build does not know is a kept leaf, `unmeasured` — ccd prints only its three words, and any other value means a
  *  leaf stood. Named keys only, so a newer ccd's other keys change nothing here (agent-first stays safe). */
-export type ExpireLeafKept = KeptLeafWord | null | 'unreported';
-const KEPT_LEAF_WORDS = ['refused', 'unmeasured', 'in-use'] as const;
-/** ccd's three words for a leaf it kept. */
-export type KeptLeafWord = typeof KEPT_LEAF_WORDS[number];
-
-/** THE WORD HALF: the ONE word reader of `clipsKept`/`tmpRootKept`. ccd's three words map to themselves; any other
- *  value is `unmeasured` — a leaf stood. `null` and an absent key are the carrier's to tell, never this reader's: the
- *  caller asks them first (`expireLeafKept`, the done document's carrier). CCR-15 wave 8's mirror carrier (a word,
- *  `unreported` or `truncated`) imports this, or moves it to a neutral L1 home — a move, never a second copy. */
-export function keptLeafWord(v: unknown): KeptLeafWord {
-  return typeof v === 'string' && (KEPT_LEAF_WORDS as readonly string[]).includes(v) ? v as KeptLeafWord : 'unmeasured';
-}
+export type ExpireLeafKept = LeafKeptWord | null | 'unreported';
 
 /** THE ONE READER of a kept-leaf key on the `expired` document — the done document's CARRIER composed with
- *  `keptLeafWord`, the one word reader of `clipsKept`/`tmpRootKept`: `null` → `null` (removed), ABSENT → `unreported`
- *  (an older ccd), and any other value → its word. */
+ *  `leafKeptWord` (`shared/api.ts`), the one word reader of `clipsKept`/`tmpRootKept`: `null` → `null` (removed),
+ *  ABSENT → `unreported` (an older ccd), and any other value → its word. */
 export function expireLeafKept(doc: Record<string, unknown>, key: 'clipsKept' | 'tmpRootKept'): ExpireLeafKept {
   if (!Object.prototype.hasOwnProperty.call(doc, key)) return 'unreported';
   const v = doc[key];
-  return v === null ? null : keptLeafWord(v);
+  return v === null ? null : leafKeptWord(v);
 }
 
 /** What an expiry kept of its two leaves. */
@@ -823,7 +813,7 @@ export function expiryInUseSentence(inUse: readonly ExpireInUse[], passes: numbe
 }
 
 /** Why ccd kept a leaf, in words — the done document's word, never more (the reason itself is in the journal row). */
-const LEAF_KEPT_WHY: Readonly<Record<KeptLeafWord, string>> = {
+const LEAF_KEPT_WHY: Readonly<Record<LeafKeptWord, string>> = {
   refused: 'ccd’s removal helper refused it',
   unmeasured: 'whether it could be removed could not be measured',
   'in-use': 'a process still used it after the bounded wait',
