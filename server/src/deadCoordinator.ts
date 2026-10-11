@@ -546,9 +546,10 @@ export type DeadCoordinatorReport =
 
 /** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half). A restart drops the run of
  *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
- *  SOONER after a stuck or thrown act (review 381, F10) — the one way a restarted lane acts sooner, since the lane
- *  composes no act on a pass whose held-set record did not land (review 382, R3); the act is still behind the claimant's
- *  re-measure before and after the fleet act. The breaker's hold is not in this entry: it survives a restart (review
+ *  SOONER after a stuck or thrown act (review 381, F10). The other way a restarted lane acts sooner is a restart while a
+ *  held-set write is failing: it seeds the older record, which can hold less than the process did (review 382, R3's
+ *  residual). The lane composes no act on a pass whose held-set record did not land, so the record never lags an act; the
+ *  act is still behind the claimant's re-measure before and after the fleet act. The breaker's hold is not in this entry: it survives a restart (review
  *  381, F1), and an unreadable record of it seeds a conservative fallback (review 382, R2). */
 export interface DeadCoordinatorEntry {
   /** Consecutive passes that measured it crashed. */
