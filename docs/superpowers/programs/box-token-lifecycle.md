@@ -872,6 +872,12 @@ spec's after wave 1.
     Also, every Linux leg of both runs must stay green.
   - **The rounds:** one bar-class finding gets one fix round, then a scoped review. After that review, a bar-class
     finding stops the merge and goes to the operator. Coverage and prose findings become residue for row 3.
+  - **Review run 383** was dispatched at 18:08:30 UTC to `ccrc-pwa-amber-hollow`, after run 377 was advanced to
+    `awaiting-review` at `f167754b1`. It runs the held-out panel plus three lenses:
+    - **the live boxes after the release:** today's live shape in fixtures stays `PASS` armed, its first tick owes
+      nothing, and review 362's 29 cases re-run at the tip;
+    - **the driver's new owe rule:** storm, wedge, restart, legacy and clock;
+    - **doctor's classes and the kill switch,** plus secrets and notify.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
