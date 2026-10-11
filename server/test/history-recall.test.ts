@@ -616,3 +616,269 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
     expect(String(shallow['next'])).toContain('history tree --depth 2');
   }, HEAVY);
 });
+
+// ── W1-B2 Task 11: widened scopes, the header's lag, the counter line, recall-off honoured ──────────────────
+// Pins C5, C24, C39, C40, C44, C46, C47b, C53 and C68's CLI half (spec 2026-10-05 §8.1, §8.2, §8.3, §8.8, §9.7).
+// Also: recall_off_stale is counted at the drain and never by a replay, and a widened scope's --json stays
+// inside §8.3's cap.
+const ID_C11 = 'claude-c-other';
+const ID_D11 = 'claude-d-demo';
+const G3_11 = '0189abcd-1234-4678-9abc-0123456789ad';
+const G4_11 = '0189abcd-1234-4678-9abc-0123456789ae';
+const TC11 = 'c3c3c3c3-3333-4333-8333-333333333333';
+const TD11 = 'd4d4d4d4-4444-4444-8444-444444444444';
+const spoolOf11 = (box: HistoryBox, id = ID): string => hist(box, 'spool', `${id}.jsonl`);
+interface RecallRow11 { ccrc_id: string; generation: string; verb: string; rc: number; arm: string | null }
+function recallRows11(box: HistoryBox): RecallRow11[] {
+  const db = openStoreRO(box);
+  try {
+    return (db.prepare('SELECT ccrc_id, generation, verb, rc, arm FROM recall_calls ORDER BY ts_ms, event_key').all() as unknown as RecallRow11[]).map((r) => ({ ...r }));
+  } finally {
+    db.close();
+  }
+}
+
+describe('the read verbs: --session, --project, --workspace, lag, the counter line, recall-off (W1-B2 Task 11)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+
+  it('C5: --session of another project is 2 cross-project; of this project, it reads that id\'s family', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c5-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    seedFamily(box, { id: ID_B, project: PROJECT, uuid: TB, generation: G2, rows: turns(TB, 2) });
+    seedFamily(box, { id: ID_C11, project: 'other', uuid: TC11, generation: G3_11, rows: turns(TC11, 2) });
+    expect(answer(treeJson(box, ID, ['--session', ID_C11]))).toEqual([2, 'cross-project']);
+    const same = treeJson(box, ID, ['--session', ID_B]);
+    expect(same.code, `${same.stderr}${same.stdout}`).toBe(0);
+    expect(scopeOf(same).families.map((f) => [f.ccrc_id, f.generation])).toEqual([[ID_B, G2]]);
+  }, HEAVY);
+
+  it('C39: --project widens to the project\'s families; unreadable $REG/<id>.project is 2 project-unreadable; with --workspace, bad-args', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c39-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    seedFamily(box, { id: ID_B, project: PROJECT, uuid: TB, generation: G2, rows: turns(TB, 2) });
+    seedFamily(box, { id: ID_C11, project: 'other', uuid: TC11, generation: G3_11, rows: turns(TC11, 2) });
+    const wide = treeJson(box, ID, ['--project']);
+    expect(wide.code, `${wide.stderr}${wide.stdout}`).toBe(0);
+    expect(scopeOf(wide).kind).toBe('project');
+    expect(scopeOf(wide).families.map((f) => f.ccrc_id).sort()).toEqual([ID, ID_B]);
+    const human = runCli(box, ['tree', '--project'], { env: withPane(box, ID) });
+    expect(human.stdout.split('\n')[0]).toMatch(/^scope=project\(demo, 2 families\) coverage=this-box /);
+    expect(answer(treeJson(box, ID, ['--project', '--workspace']))).toEqual([2, 'bad-args']);
+    const project = path.join(box.reg, `${ID}.project`);
+    fs.rmSync(project);
+    fs.mkdirSync(project);   // present, and no read of it succeeds
+    const r = treeJson(box, ID, ['--project']);
+    expect(answer(r)).toEqual([2, 'project-unreadable']);
+    expect(r.json?.['items'], 'no hits from any fallback scope').toEqual([]);
+  }, HEAVY);
+
+  it('C46: two ids, one project, one workdir — the default scope sees its own family; --workspace sees both and prints each', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c46-');
+    const w = path.join(box.home, 'work', 'w');
+    fs.mkdirSync(w, { recursive: true });
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, workdir: w, rows: turns(TA, 2, w) });
+    seedFamily(box, { id: ID_B, project: PROJECT, uuid: TB, generation: G2, workdir: w, rows: turns(TB, 2, w) });
+    const own = treeJson(box);
+    expect(own.code, `${own.stderr}${own.stdout}`).toBe(0);
+    expect(scopeOf(own).kind).toBe('family');
+    expect(scopeOf(own).families.map((f) => f.ccrc_id)).toEqual([ID]);
+    const human = runCli(box, ['tree', '--workspace'], { env: withPane(box, ID) });
+    expect(human.code, human.stderr).toBe(0);
+    const lines = human.stdout.split('\n');
+    expect(lines[0]).toMatch(/^scope=workspace\(demo, 2 families\) coverage=this-box /);
+    expect(lines.filter((l) => l.startsWith('family ')).map((l) => l.split(' ')[1]).sort()).toEqual([ID, ID_B]);
+  }, HEAVY);
+
+  it('C47b: --workspace matches cwd_real through a symlinked workdir, and the verbatim cwd of a path that no longer resolved', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c47b-');
+    const real = path.join(box.home, 'work', 'real-w');
+    const link = path.join(box.home, 'work', 'link-w');
+    const gone = path.join(box.home, 'work', 'gone');   // never created: realpath fails at ingest
+    fs.mkdirSync(real, { recursive: true });
+    fs.symlinkSync(real, link);
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, workdir: link, rows: turns(TA, 2, link) });
+    seedFamily(box, { id: ID_B, project: PROJECT, uuid: TB, generation: G2, workdir: real, rows: turns(TB, 2, real) });
+    seedFamily(box, { id: ID_C11, project: PROJECT, uuid: TC11, generation: G3_11, workdir: gone, rows: turns(TC11, 2, gone) });
+    expect(counters(box)['cwd_unresolved'] ?? 0, 'the gone path was measured unresolved at ingest').toBeGreaterThanOrEqual(1);
+    const viaLink = treeJson(box, ID, ['--workspace']);
+    expect(viaLink.code, `${viaLink.stderr}${viaLink.stdout}`).toBe(0);
+    expect(scopeOf(viaLink).families.map((f) => f.ccrc_id).sort(), 'the link\'s target is the other epoch\'s cwd_real').toEqual([ID, ID_B]);
+    plantSession(box, ID_D11, { project: PROJECT, workdir: gone });   // a pane whose own family has no row yet
+    const verbatim = treeJson(box, ID_D11, ['--workspace']);
+    expect(verbatim.code, `${verbatim.stderr}${verbatim.stdout}`).toBe(0);
+    expect(scopeOf(verbatim).families.map((f) => f.ccrc_id), 'cwd_real NULL: matched by its verbatim cwd').toEqual([ID_C11]);
+  }, HEAVY);
+
+  it('C53: an unreadable $REG/<id>.workdir refuses --workspace: 2 workspace-unreadable, no hits, never a wider or narrower scope', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c53-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    fs.mkdirSync(path.join(box.reg, `${ID}.workdir`));   // present, and no read of it succeeds
+    const r = treeJson(box, ID, ['--workspace']);
+    expect(answer(r)).toEqual([2, 'workspace-unreadable']);
+    expect(r.json?.['items']).toEqual([]);
+    expect(runCli(box, ['tree', '--workspace'], { env: withPane(box, ID) }).stdout).not.toMatch(/^family /m);
+  }, HEAVY);
+
+  it('C44: lag reads `unmeasured` while any file in scope has no end-of-file tick, and while a recovery step is registered', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c44-');
+    const accounts = Object.keys(box.accountHome);
+    plantTranscript(box, accounts[1]!, SEED_SLUG, TA, turns(TA, 2));   // a second copy of the transcript, in a second home
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    expect(runSweep(box).code, 'one more tick, so both copies have reached end-of-file').toBe(0);
+    const dbPath = hist(box, 'db', 'history.db');
+    const header = (): string => runCli(box, ['tree'], { env: withPane(box, ID) }).stdout.split('\n')[0] ?? '';
+    const live = new DatabaseSync(dbPath, { readOnly: true });
+    const files = (live.prepare("SELECT file_id, eof_ms FROM ingest_files WHERE source_key = '' ORDER BY file_id").all() as { file_id: number; eof_ms: number | null }[]).map((r) => ({ ...r }));
+    live.close();
+    expect(files.length, 'both copies are cursored files of one transcript').toBe(2);
+    expect(files.every((f) => f.eof_ms !== null)).toBe(true);
+    expect(header()).toMatch(/ lag=(?!unmeasured)\S+$/);
+    const w = new DatabaseSync(dbPath);
+    w.prepare('UPDATE ingest_files SET eof_ms = NULL WHERE file_id = ?').run(files[0]!.file_id);
+    w.close();
+    expect(header(), 'one copy never reached end-of-file').toMatch(/ lag=unmeasured$/);
+    const w2 = new DatabaseSync(dbPath);
+    w2.prepare('UPDATE ingest_files SET eof_ms = ? WHERE file_id = ?').run(files[0]!.eof_ms, files[0]!.file_id);
+    w2.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 1, NULL, NULL)").run();
+    w2.close();
+    expect(header(), 'a recovery step is registered').toMatch(/ lag=unmeasured$/);
+  }, HEAVY);
+
+  it('C24: a read verb writes ONE fenced recall line (cmd, rc, ms; no argv, no query text), drained to one recall_calls row; none under history-off; none from status', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c24-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    expect(fs.existsSync(spoolOf11(box)), 'the seed\'s own line was drained').toBe(false);
+    const r = runCli(box, ['tree', '--depth', '3'], { env: withPane(box, ID) });
+    expect(r.code, r.stderr).toBe(0);
+    const text = fs.readFileSync(spoolOf11(box), 'utf8');
+    expect(text.startsWith('\n') && text.endsWith('\n'), 'fenced as the hook fences (§5.1)').toBe(true);
+    const lines = text.split('\n').filter((l) => l !== '');
+    expect(lines).toHaveLength(1);
+    const rec = JSON.parse(lines[0]!) as Record<string, unknown>;
+    expect(Object.keys(rec).sort()).toEqual(['cmd', 'ev', 'gen', 'id', 'ms', 'rc', 'ts', 'v']);
+    expect(rec).toMatchObject({ v: 1, ev: 'recall', id: ID, gen: G1, cmd: 'tree', rc: 0 });
+    expect(text).not.toContain('depth');
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);   // tick N renames the counter line, tick N+1 drains it
+    expect(recallRows11(box)).toEqual([{ ccrc_id: ID, generation: G1, verb: 'tree', rc: 0, arm: null }]);
+    fs.writeFileSync(path.join(box.home, '.ccrc', 'history-off'), '');
+    expect(runCli(box, ['tree'], { env: withPane(box, ID) }).code, 'the CLI still reads under the switch').toBe(0);
+    expect(fs.existsSync(spoolOf11(box)), 'and writes no line').toBe(false);
+    fs.rmSync(path.join(box.home, '.ccrc', 'history-off'));
+    expect(runCli(box, ['status', '--json']).code).toBe(0);
+    expect(fs.existsSync(spoolOf11(box)), 'a box verb writes no line').toBe(false);
+    expect(answer(treeJson(box, ID, ['--session', '..'])), 'a refusal after the identity is counted too').toEqual([2, 'bad-id']);
+    const refused = fs.readFileSync(spoolOf11(box), 'utf8').split('\n').filter((l) => l !== '');
+    expect(refused.map((l) => (JSON.parse(l) as { rc: number }).rc)).toEqual([2]);
+  }, HEAVY);
+
+  it('C40: a counter line that cannot be written changes nothing: the verb\'s exit code stands', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c40-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    fs.mkdirSync(spoolOf11(box));   // a directory where the spool file would be: not a regular file, so never appended to
+    const r = treeJson(box);
+    expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    expect(r.json?.['exit']).toBe(0);
+    expect(fs.statSync(spoolOf11(box)).isDirectory()).toBe(true);
+    fs.rmSync(hist(box, 'spool'), { recursive: true });   // no spool/ at all: the write's first measure throws
+    const gone = treeJson(box);
+    expect(gone.code, `${gone.stderr}${gone.stdout}`).toBe(0);
+    expect(gone.json?.['exit']).toBe(0);
+    expect(fs.existsSync(hist(box, 'spool')), 'the CLI never makes spool/').toBe(false);
+  }, HEAVY);
+
+  it('a FIFO at the spool path: the append opens nothing it would block on (the hook\'s regular-file rule); the verb answers at once and writes nothing', () => {
+    // B1's slug history-spool-append-regular-file-only: whatever appends to spool/<id>.jsonl appends to a regular
+    // file or to nothing. history-cli.test.ts plants the same FIFO for status's spool/.draining read.
+    const box = makeHistoryBox('ccrc-hist-rcl-c40f-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    const mk = spawnSync('mkfifo', [spoolOf11(box)], { encoding: 'utf8' });
+    expect(mk.status, mk.stderr).toBe(0);
+    const r = runCli(box, ['tree', '--json'], { env: withPane(box, ID), timeoutMs: 30_000 });
+    expect(r.code, `${r.stderr}${r.signal ?? ''}`).toBe(0);
+    expect(r.json?.['exit']).toBe(0);
+    expect(r.ms, 'no open(2) blocked on the FIFO').toBeLessThan(15_000);
+    expect(fs.lstatSync(spoolOf11(box)).isFIFO(), 'the FIFO is left as it was').toBe(true);
+  }, HEAVY);
+
+  it('C68 (CLI half): recall-off/<id> naming this generation answers 8, counted; one naming another generation reads, and the drain counts recall_off_stale', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-c68-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    fs.mkdirSync(hist(box, 'recall-off'), { recursive: true });
+    fs.writeFileSync(hist(box, 'recall-off', ID), G1);
+    const off = treeJson(box);
+    expect(answer(off)).toEqual([8, undefined]);
+    expect(off.json?.['coverage']).toBe('this-box');
+    // Two ticks per CLI line (tick N renames it, tick N+1 drains it), so each line is drained while recall-off/<id>
+    // still holds the content this step set: the drain-time stale check reads that file.
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(recallRows11(box).map((x) => [x.verb, x.rc])).toEqual([['tree', 8]]);
+    expect(counters(box)['recall_off_stale'] ?? 0).toBe(0);
+    fs.writeFileSync(hist(box, 'recall-off', ID), G4_11);   // the id's generation changed: the file is stale
+    expect(treeJson(box).code).toBe(0);
+    for (let i = 0; i < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(recallRows11(box).map((x) => x.rc)).toEqual([8, 0]);
+    expect(counters(box)['recall_off_stale']).toBe(1);
+  }, HEAVY);
+
+  it('C68 (newest family): an invalid env generation and an unreadable $REG/<id>.generation resolve to the newest family (id, G); recall-off/<id> holding G answers 8', () => {
+    // Spec §8.8's Generation row: the scope is the id's newest family; §8.2 and §9.7: recall-off/<id> is honoured
+    // only when it equals the RESOLVED generation, which here only the store knows (review R26).
+    const box = makeHistoryBox('ccrc-hist-rcl-c68n-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    fs.rmSync(path.join(box.reg, `${ID}.generation`));
+    plantSession(box, ID, { generation: 'unreadable' });   // present, and no read of it succeeds
+    const badEnv = { CCRC_SESSION_GENERATION: 'not-a-generation' };
+    const control = treeJson(box, ID, [], badEnv);
+    expect(control.code, `CONTROL: no recall-off file, the newest family reads. ${control.stderr}${control.stdout}`).toBe(0);
+    expect(scopeOf(control).families.map((f) => [f.ccrc_id, f.generation]), 'CONTROL: the scope is (id, G)').toEqual([[ID, G1]]);
+    fs.mkdirSync(hist(box, 'recall-off'), { recursive: true });
+    fs.writeFileSync(hist(box, 'recall-off', ID), G1);
+    expect(answer(treeJson(box, ID, [], badEnv)), 'recall-off names the resolved generation').toEqual([8, undefined]);
+    fs.writeFileSync(hist(box, 'recall-off', ID), '');
+    const legacy = treeJson(box, ID, [], badEnv);
+    expect(legacy.code, `a file holding '' is stale for a family whose generation is G. ${legacy.stderr}`).toBe(0);
+  }, HEAVY);
+
+  it('C68 (replay half): recall_off_stale is a drain-time observation; a replayed recall line never reads recall-off/<id>', async () => {
+    const sweep11 = (await import('../../ccd/history/sweep.mjs')) as unknown as { applyEventLine(db: DatabaseSync, c: object, ev: object): unknown };
+    const box = boundBox('ccrc-hist-rcl-c68r-');
+    fs.mkdirSync(hist(box, 'recall-off'), { recursive: true });
+    fs.writeFileSync(hist(box, 'recall-off', ID), G4_11);   // names another generation than the line's G1: stale
+    const db = new DatabaseSync(hist(box, 'db', 'history.db'));
+    try {
+      const ev = (key: string): object => ({
+        key, rec: { v: 1, ev: 'recall', id: ID, gen: G1, cmd: 'tree', rc: 0, ms: 1, ts: T0 }, recvMs: T0, tsMs: T0,
+        obs: { generation: { state: 'absent' } },
+      });
+      const stale = (): number => Number((db.prepare("SELECT n FROM counters WHERE name = 'recall_off_stale'").get() as { n: number } | undefined)?.n ?? 0);
+      sweep11.applyEventLine(db, { home: box.home, now: () => T0, replay: true }, ev('replayed.1.1:1'));
+      expect(stale(), 'a replayed line reads no live recall-off file').toBe(0);
+      sweep11.applyEventLine(db, { home: box.home, now: () => T0 }, ev('drained.1.1:1'));
+      expect(stale(), 'the drain counts it').toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('wide scope: the --json scope names at most SCOPE_FAMILIES_JSON_MAX families and counts them all, so the envelope stays inside OUTPUT_CAP', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-wide-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    // 300 more families of the project, written straight into the store (no process holds it between ticks).
+    // Listed whole, they would add about 31,000 chars to every --json envelope of a --project read.
+    const w = new DatabaseSync(hist(box, 'db', 'history.db'));
+    try {
+      const ins = w.prepare('INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms) VALUES (?, ?, ?, ?)');
+      w.exec('BEGIN');
+      for (let k = 1; k <= 300; k += 1) ins.run(`claude-w${k}-demo`, `0189abcd-1234-4678-9abc-${k.toString(16).padStart(12, '0')}`, PROJECT, k);
+      w.exec('COMMIT');
+    } finally {
+      w.close();
+    }
+    const r = treeJson(box, ID, ['--project']);
+    expect(r.code, `${r.stderr}${r.stdout.slice(0, 400)}`).toBe(0);
+    expect(r.stdout.length, 'the envelope stays inside OUTPUT_CAP').toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    const scope = scopeOf(r) as ScopeJson & { families_total: number };
+    expect(scope.families_total).toBe(301);
+    expect(scope.families).toHaveLength(libRead.SCOPE_FAMILIES_JSON_MAX);
+  }, HEAVY);
+});

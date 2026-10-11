@@ -5031,7 +5031,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
   const EV_MJS = /\bev\s*:\s*['"`]([A-Za-z]+)['"`]/g;
   /** SPOOL_EVENTS members whose emitter ships in a later PR. A member found emitted while listed here reds, so
    *  the PR that adds the emitter removes its line. */
-  const PENDING_EMITTERS: Record<string, string> = { recall: 'B2 (cli.mjs read verbs)', steer: 'W3 (the steering hook)' };
+  const PENDING_EMITTERS: Record<string, string> = { steer: 'W3 (the steering hook)' };
   type Lib = Record<string, unknown>;
   const lib = async (): Promise<Lib> => (await import('../../ccd/history/lib.mjs')) as unknown as Lib;
 

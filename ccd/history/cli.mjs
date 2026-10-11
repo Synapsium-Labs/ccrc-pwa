@@ -51,12 +51,13 @@ import * as healthPath from 'node:path';
 // decideStatusReadFailure by B1's './lib.mjs' import: importing a binding twice is a SyntaxError.
 // loadSecrets is imported statically: B1's ring census reds on any import() in a shipped module, and sweep.mjs's
 // entry guard keys on process.argv[1], so importing it runs nothing.
-import { closeSync, constants as FS, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants as FS, fstatSync, openSync, readSync, writeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import {
   REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinal, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
   decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, decideRecallOffPreflight, paneOk,
+  decideRecallOff, recallOffPath, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
 import { loadSecrets } from './sweep.mjs';
@@ -423,7 +424,7 @@ export function render(env) {
 const USAGE = [
   'usage: ccrc history <verb> [options]',
   '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>',
-  '    each also takes: --session <id>, and --json',
+  '    each also takes one of: --session <id> | --project | --workspace; and --json',
   '  box verbs: status [--json]',
   '  every exit code and reason: the ccrc-history skill',
 ].join('\n');
@@ -526,6 +527,62 @@ function scopeArgsOf(o) {
   return [];
 }
 
+/** The CLI's one write (§8.1): `{v, ev:'recall', id, gen?, cmd, rc, ms, ts}`, fenced like the hook's lines.
+ *  It carries no query text and no argument (G5). `gen` rides only when it has the UUID grammar. A line the
+ *  spool grammar would reject (parseSpoolLine) is never written: the answer is null. */
+export function recallLine(i) {
+  const rec = { v: 1, ev: 'recall', id: i.id };
+  if (typeof i.gen === 'string' && UUID_RE.test(i.gen)) rec.gen = i.gen;
+  rec.cmd = i.cmd;
+  rec.rc = i.rc;
+  rec.ms = i.ms;
+  rec.ts = i.ts;
+  const line = JSON.stringify(rec);
+  return parseSpoolLine(line).ok ? line : null;
+}
+
+/** Append `\n<line>\n` to spool/<id>.jsonl in ONE write on an O_APPEND descriptor (§5.1).
+ *  It writes only into a pre-existing real spool directory and appends only to a regular file. O_NOFOLLOW and
+ *  O_NONBLOCK reject a link or a swapped FIFO; any accounting failure leaves the read answer unchanged. */
+export function writeRecallLine(home, id, line) {
+  const P = historyPaths(home);
+  try {
+    if (!lstatSync(P.spool).isDirectory()) return;
+    const p = `${P.spool}/${id}.jsonl`;
+    let st = null;
+    try {
+      st = lstatSync(p);
+    } catch (e) {
+      if (!(e !== null && typeof e === 'object' && e.code === 'ENOENT')) return;
+    }
+    if (st !== null && !st.isFile()) return;
+    const fd = openSync(p, FS.O_WRONLY | FS.O_APPEND | FS.O_CREAT | FS.O_NOFOLLOW | FS.O_NONBLOCK, 0o600);
+    try {
+      if (!fstatSync(fd).isFile()) return;
+      writeSync(fd, `\n${line}\n`);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // Counter accounting is deliberately best-effort.
+  }
+}
+
+/** One counter line per identity-resolved read call, whatever its exit. */
+function countRecall(home, i) {
+  if (existsSync(historyPaths(home).off)) return;
+  const line = recallLine(i);
+  if (line !== null) writeRecallLine(home, i.id, line);
+}
+
+function realOrNull(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
 /** The read context: every step of the order above through the scope, or the refusal that stopped it.
  *  On success the caller owns `rc.db` and closes it. */
 export async function readContext(home, verb, parsed, nowMs = Date.now()) {
@@ -544,6 +601,11 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
     envGen: process.env.CCRC_SESSION_GENERATION ?? null, regGen: regPresence(P, id, 'generation'),
   });
   let gen = generation.value;
+  const offFile = presenceOf(recallOffPath(home, id));
+  const offNow = generation.value !== null || offFile.state !== 'value';
+  if (offNow && decideRecallOff({ file: offFile, generation: generation.value ?? '' }) === 'off') {
+    return refusal(EXIT.RECALL_OFF, undefined, null, id, gen);
+  }
   const reach = await measureReach(home);
   const d = decideCliStore(cliFactsOf(reach));
   if (!d.read) return refusal(d.exit, d.reason, refusalStoreId(reach, P), id, gen);
@@ -565,6 +627,15 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
     const version = userVersion(db);
     const rd = decideStatusRead({ userVersion: version, journalMode: mode, recordedMigration: undefined });
     if (rd.reason !== undefined) return refusal(rd.exit, rd.reason, storeId, id, gen);
+    if (generation.value === null) {
+      // 'newest' is a store fact. Use its actual family generation for recall-off and counter accounting.
+      const own = familiesOf(db, { kind: 'family', id, generation: null, project: null, workdir: null, workdirReal: null });
+      const ownGen = own.length === 1 ? own[0].generation : '';
+      if (UUID_RE.test(ownGen)) gen = ownGen;
+      if (!offNow && decideRecallOff({ file: offFile, generation: ownGen }) === 'off') {
+        return refusal(EXIT.RECALL_OFF, undefined, storeId, id, gen);
+      }
+    }
     const o = parsed.opts;
     const session = typeof o.session === 'string' ? o.session : null;
     const scopeInputs = {
@@ -581,8 +652,10 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
     // --session names another id's family: read with that id's own registry generation (§8.2).
     const famGen = session === null ? verdict.generation
       : resolveGeneration({ envGen: null, regGen: regPresence(P, verdict.id, 'generation') }).value;
+    // The workspace match compares realpaths; a workdir that no longer resolves matches only verbatim.
+    const workdirReal = verdict.kind === 'workspace' && typeof verdict.workdir === 'string' ? realOrNull(verdict.workdir) : null;
     const families = familiesOf(db, {
-      kind: verdict.kind, id: verdict.id, generation: famGen, project: verdict.project, workdir: verdict.workdir, workdirReal: null,
+      kind: verdict.kind, id: verdict.id, generation: famGen, project: verdict.project, workdir: verdict.workdir, workdirReal,
     });
     if (session === null && verdict.kind === 'family' && families.length === 1 && UUID_RE.test(families[0].generation)) {
       gen = families[0].generation;
@@ -636,12 +709,13 @@ function emitRefusal(r, json, pairIdx) {
   return r.exit;
 }
 
-/** The --json scope object. In this task a scope holds at most one family (familiesOf answers the own family
- *  only); Task 11, which widens scopes to a project or a workspace, bounds the list it names. */
+/** The --json scope object (§8.3). A widened scope names only a bounded prefix; `families_total` is complete. */
 function scopeJson(rc) {
   return {
     kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
-    families: rc.scope.families.map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
+    families: rc.scope.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
+      .map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
+    families_total: rc.scope.families.length,
     transcripts: rc.scope.transcriptPks.length,
   };
 }
@@ -670,6 +744,7 @@ function emitResult(rc, res, json) {
 }
 
 async function readVerb(home, verb, argv) {
+  const t0 = Date.now();
   const parsed = parseReadArgs(verb, argv);
   const json = parsed.ok ? parsed.opts.json === true : argv.includes('--json');
   if (!parsed.ok) {
@@ -681,22 +756,28 @@ async function readVerb(home, verb, argv) {
     process.stderr.write(`ccrc history: ${verb} is not in this build\n${USAGE}\n`);
     return emitRefusal({ exit: EXIT.REFUSED, reason: 'bad-args', storeId: null }, json, NO_PAIRS);
   }
-  const ctx = await readContext(home, verb, parsed);
-  if (!('db' in ctx)) return emitRefusal(ctx, json, NO_PAIRS);
-  try {
-    let res;
+  const ctx = await readContext(home, verb, parsed, t0);
+  let exit;
+  if (!('db' in ctx)) {
+    exit = emitRefusal(ctx, json, NO_PAIRS);
+  } else {
     try {
-      res = runner(ctx, parsed, argv);
-    } catch (e) {
-      // The verb's own read failed (a missing table or column, a corrupt page): the same ONE exit-5 answer.
-      const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen);
-      if (f === null) throw e;
-      return emitRefusal(f, json, ctx.pairIdx);
+      let res = null;
+      let failed = null;
+      try {
+        res = runner(ctx, parsed, argv);
+      } catch (e) {
+        const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen);
+        if (f === null) throw e;
+        failed = f;
+      }
+      exit = failed === null ? emitResult(ctx, res, json) : emitRefusal(failed, json, ctx.pairIdx);
+    } finally {
+      ctx.db.close();
     }
-    return emitResult(ctx, res, json);
-  } finally {
-    ctx.db.close();
   }
+  if (typeof ctx.id === 'string') countRecall(home, { id: ctx.id, gen: ctx.gen, cmd: verb, rc: exit, ms: Date.now() - t0, ts: Date.now() });
+  return exit;
 }
 
 /** An unknown verb, or a box verb's argv off its grammar: B1's bad-args answer, the status-shaped envelope

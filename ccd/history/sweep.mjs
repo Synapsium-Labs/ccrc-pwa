@@ -56,6 +56,7 @@ import {
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
+  decideRecallOff, recallOffPath,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -782,6 +783,27 @@ export function journalFile(home, ids, name, nowMs) {
   return { obs, text };
 }
 
+/** `recall-off/<id>` as a Presence, read bounded: the file holds one generation (§9.7). ENOENT is absent; any
+ *  other failure, a symlink or a non-regular file is unreadable. W1-B2 (Task 11). */
+function recallOffPresence(home, id) {
+  let fd;
+  try {
+    fd = openSync(recallOffPath(home, id), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' };
+  }
+  try {
+    if (!fstatSync(fd).isFile()) return { state: 'unreadable' };
+    const b = Buffer.alloc(128);
+    const n = readSync(fd, b, 0, b.length, 0);
+    return { state: 'value', value: b.subarray(0, n).toString('utf8').trim() };
+  } catch {
+    return { state: 'unreadable' };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** What one fresh receipt does besides being received (slug history-event-tables-v1, D-4213; a CLI's counters are
  *  recall lines folded here, history-cli-counts-via-spool, D-4228).
  *  - recall: a recall_calls row (W1-f, the W2 gate).
@@ -794,6 +816,8 @@ export function applyEventLine(db, c, ev) {
   if (rec.ev === 'SessionStart') return applyEpochLine(db, c, ev);
   if (rec.ev === 'recall') {
     const g = joinGeneration({ lineGen: rec.gen ?? null, observedGen: ev.obs.generation });
+    // This is a live drain observation after line/registry generation joining; replay never re-observes controls.
+    if (c.replay !== true && decideRecallOff({ file: recallOffPresence(c.home, rec.id), generation: g.generation }) === 'stale') bump(db, 'recall_off_stale');
     db.prepare('INSERT INTO recall_calls (event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (event_key) DO NOTHING')
       .run(ev.key, rec.id, g.generation, ev.tsMs, rec.cmd, rec.rc, rec.ms, rec.arm ?? null);
     return g.via === 'line' ? [] : [journalRecord('verdict', c.now(), { event_key: ev.key, kind: 'generation-joined', ccrc_id: rec.id, generation: g.generation, via: g.via })];

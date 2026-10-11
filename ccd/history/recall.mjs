@@ -13,7 +13,7 @@
 //
 // It reads no environment variable and has no entry guard: cli.mjs imports it.
 import {
-  EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
+  EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
 } from './lib.mjs';
 import { childrenOf, parentOf } from './store.mjs';
 
@@ -82,9 +82,32 @@ function ownFamily(db, id, generation) {
   return live === undefined ? [] : [familyOf(live)];
 }
 
-/** The scope's families (§8.2). `sel` is decideScope's verdict with the generation to read: { kind, id,
- *  generation, project, workdir, workdirReal }. */
+const PROJECT_FAMILIES_SQL = 'SELECT session_pk, ccrc_id, generation, first_seen_ms, merged_into FROM sessions '
+  + 'WHERE project = ? AND merged_into IS NULL ORDER BY first_seen_ms, session_pk';
+/** The workspace match (§8.2; slug history-epoch-cwd-real). An epoch matches when either:
+ *   - its cwd_real equals realpath(workdir); or
+ *   - its cwd_real is NULL (the path no longer resolved at ingest) and its verbatim cwd equals the workdir.
+ *  In both cases the family's project must equal this one's. A NULL realpath binds NULL, and NULL = NULL is not
+ *  true, so the first arm never matches an unresolved workdir. Only confirmed epochs count. */
+const WORKSPACE_FAMILIES_SQL = 'SELECT DISTINCT s.session_pk AS session_pk, s.ccrc_id AS ccrc_id, s.generation AS generation, '
+  + 's.first_seen_ms AS first_seen_ms, s.merged_into AS merged_into '
+  + 'FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk '
+  + 'WHERE e.confirmed_ms IS NOT NULL AND s.merged_into IS NULL AND s.project = ? '
+  + 'AND (e.cwd_real = ? OR (e.cwd_real IS NULL AND e.cwd = ?)) '
+  + 'ORDER BY s.first_seen_ms, s.session_pk';
+
+/** The scope's families (§8.2). `sel` is decideScope's verdict plus what the read needs: { kind, id, generation,
+ *  project, workdir, workdirReal }.
+ *   - family: this id's row-life (ownFamily).
+ *   - project: every unmerged family of the project.
+ *   - workspace: every unmerged family of the project with a confirmed epoch launched in this workdir.
+ *  It is strictly narrower than project, and never reached by default (ruled Q12). */
 export function familiesOf(db, sel) {
+  if (sel.kind === 'project') return sel.project === null ? [] : db.prepare(PROJECT_FAMILIES_SQL).all(sel.project).map(familyOf);
+  if (sel.kind === 'workspace') {
+    if (sel.project === null || sel.workdir === null) return [];
+    return db.prepare(WORKSPACE_FAMILIES_SQL).all(sel.project, sel.workdirReal, sel.workdir).map(familyOf);
+  }
   return ownFamily(db, sel.id, sel.generation);
 }
 
@@ -153,11 +176,13 @@ function nodeItem(n, parentById, family, rc) {
   };
 }
 
-/** The JSON scope mirrors cli.mjs's scopeJson exactly. */
+/** The JSON scope mirrors cli.mjs's scopeJson exactly, including its cap-fitting family prefix. */
 function jsonScope(rc) {
   return {
     kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
-    families: rc.scope.families.map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
+    families: rc.scope.families.slice(0, SCOPE_FAMILIES_JSON_MAX)
+      .map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
+    families_total: rc.scope.families.length,
     transcripts: rc.scope.transcriptPks.length,
   };
 }

@@ -744,3 +744,6 @@ export type RecallOffPreflight =
   | { done: true; exit: 2; reason: 'bad-args' | 'bad-id' | 'generation-unreadable' }
   | { done: false; id: string };
 export function decideRecallOffPreflight(i: { args: readonly string[]; generation: Presence<string> | null }): RecallOffPreflight;
+
+// --- W1-B2 Task 11: the --json scope's family bound
+export const SCOPE_FAMILIES_JSON_MAX: 3;

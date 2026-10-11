@@ -5712,11 +5712,17 @@ export const AROUND_DEFAULT = 5;
 export const AROUND_MAX = 50;
 
 const readOpt = (kind, key, extra = {}) => Object.freeze({ kind, key, ...extra });
-/** Options every read verb takes (§8.2). */
+/** Options every read verb takes (§8.2). `--project` and `--workspace` both given is decideScope's bad-args. */
 const COMMON_READ_OPTIONS = Object.freeze({
   '--json': readOpt('flag', 'json'),
   '--session': readOpt('value', 'session'),
+  '--project': readOpt('flag', 'project'),
+  '--workspace': readOpt('flag', 'workspace'),
 });
+/** The most families a `--json` scope object names (§8.3's cap; chosen). A `--project` or `--workspace` scope can
+ *  hold hundreds of families, and the envelope is part of every call's 20,000 chars: three objects keep the whole
+ *  frame near 700 chars, inside the frame reserve each paging verb holds back. `families_total` counts them all. */
+export const SCOPE_FAMILIES_JSON_MAX = 3;
 const ANY_COUNT = Number.POSITIVE_INFINITY;
 export const READ_OPTIONS = Object.freeze({
   grep: Object.freeze({
