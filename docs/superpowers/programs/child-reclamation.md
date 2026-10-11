@@ -47,6 +47,21 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 15:22 — wave 9's plan is ASSEMBLED and reconciled (`c8c719805`); its attack runs.**
+  - **The plan** is `docs/superpowers/plans/2026-10-11-child-reclamation-wave9-collector-lane.md`, about 11,100 lines:
+    the frame, rulings H1 to H13, Review Focus, File Structure, Tasks 0 to 10, the lenses, and the 32 numbers listed
+    singly.
+  - **The reconcile.** Workflow `wf_90db5b44-07e`: an Opus reconciler at xhigh (47 canonical concepts, 39 gaps) and six
+    apply agents. 448 edits and 6 insertions were applied, with no find missed and none matched twice. Their 39
+    unresolved notes are ruled in H13.
+  - **One near miss, caught at assembly.** A mutation row spelled a literal deviation token with four digits. That would
+    have turned deviation-refs red and raised this project's ledger floor for good. The row now describes the token
+    without spelling it.
+  - **The attack.** Workflow `wf_1f046ac4-d37`: five Opus lenses (SAFETY at xhigh, executability, security, pacing and
+    attention, docs and overlaps), and two Sonnet refuters for every finding.
+  - **Run 358** (workspace-lifecycle wave 6) went to awaiting-review by 14:58, so it will likely land before wave 9
+    dispatches (R91).
+
 - **2026-10-11 14:24 — wave 9's plan is DRAFTED (six Opus drafters, `wf_6c6a5efb-807`) and ruled. 32 numbers are issued. The reconcile runs.**
   - **§16's last check** (`wf_f0df68c6-d21`, 22 agents) found no route that composes when a gate forbids it, and 9 more
     items, three of them silent-wedge paths. They are folded into the contract (`c6fa95441`):
