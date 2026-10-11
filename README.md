@@ -3551,10 +3551,10 @@ the feed row only. A cleanup the box keeps failing in a way it says it can resum
 once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last
 error, asked again four hours after each failed attempt (sooner after an answer that ends no attempt), never stopping. The
 entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that
-none had begun or stops for good, or the workspace is archived again. One that met `containment-refuted` is listed at once on
-that cadence, and ccd's stopping before an attempt began does not end it (an attempt completing, a verdict stopping it, or a
-fresh archive does, and a server restart drops it, as it drops every entry); one ccd stopped before it began is audited
-afresh, and listed after an hour if that recurs; a box with no `flock` gets no cleanup at all until the server restarts. The spec's §12 lists what to know before arming this lane or the next.
+none had begun or stops for good, or the workspace is archived again (a server restart drops it too). One that met
+`containment-refuted` is listed at once on that cadence, and ccd's stopping before an attempt began does not end it (an
+attempt completing, a verdict stopping it, or a fresh archive does, and a server restart drops it, as it drops every
+entry); one ccd stopped before it began is audited afresh, and listed after an hour if that recurs; a box with no `flock` gets no cleanup at all until the server restarts. The spec's §12 lists what to know before arming this lane or the next.
 
 **A coordinator that crashed is ended after an hour** (workspace lifecycle spec §5.4). A coordinator whose pane is
 gone with nothing bringing it back (`orphan`, `never-started`), or whose registry row is gone, with no deliberate act

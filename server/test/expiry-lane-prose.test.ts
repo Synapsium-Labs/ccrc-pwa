@@ -32,7 +32,7 @@ describe('README: what happens to an archived workspace now', () => {
     // Listed from the ladder's hour (a box answer at once); the day is when it STANDS (review 355, F6).
     expect(para).toContain('is listed after an hour (a box answer at once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last error, asked again four hours after each failed attempt (sooner after an answer that ends no attempt), never stopping.');
     expect(para).not.toContain('is retried, backing off, for a day;');
-    expect(para).toContain('The entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again');
+    expect(para).toContain('The entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again (a server restart drops it too)');
     expect(para).not.toContain('stops asking for that archive');
   });
   it('says a stuck cleanup is listed at once, a cleanup that never began is audited afresh and counted, and a box with no flock halts the lane (wave 6)', () => {
@@ -193,7 +193,7 @@ describe('the spec says what the lane does, no more and no less (review 381, F3,
     expect(spec).not.toContain('(a `failed` `state-changed`, which ccd prints only before the breadcrumb)');
     const w6 = spec.slice(spec.indexOf('- **As wave 6 closes the lane**'), spec.indexOf('### 5.4 Stage 4'));
     // Review 382, R10: every row whose sentence promises another ask, not only the standing ones.
-    expect(w6).toContain('every row whose sentence promises another ask says the halt in its own sentence while it stands (a stuck entry, a tier entry and the hourly ladder\'s non-final `failing` row, `lock-unopenable` included), with no new kind and no new word');
+    expect(w6).toContain('a stuck or tier entry keeps its place, and every row whose sentence promises another ask says the halt in its own sentence while it stands (a stuck entry, a tier entry and the hourly ladder\'s non-final `failing` row, `lock-unopenable` included), with no new kind and no new word');
     expect(w6).not.toContain('a standing entry (stuck or tier)');
     expect(w6).not.toContain('unless a standing entry stands there');
   });
@@ -201,12 +201,12 @@ describe('the spec says what the lane does, no more and no less (review 381, F3,
     const w6 = spec.slice(spec.indexOf('- **As wave 6 closes the lane**'), spec.indexOf('### 5.4 Stage 4'));
     expect(w6).toContain('a `probe-unmeasured` over a breadcrumb that turns unreadable between the act\'s audit and the fork\'s in-lock read');
     // Review 382, R7: what the unmeasured audit does depends on whether the row's instant is learned.
-    expect(w6).toContain('A breadcrumb already unreadable at the lane\'s audit never gets that far, and what the lane does with it depends on whether it has learned the row\'s instant. On a learned row the act\'s own audit answers `unmeasured` (exit 1), read as `audit-failed`: backed off and listed after the hour. On a row not yet learned (every row after a server restart or a `restart` answer), `learnExpiry` meets it first and lists it at once as a non-final `failing` ("its expiry could not be learned"). Neither is final, and nothing is deleted');
+    expect(w6).toContain('A breadcrumb already unreadable at the lane\'s audit never gets that far, and what the lane does with it depends on whether it has learned the row\'s instant. On a learned row the act\'s own audit answers `unmeasured` (exit 1), read as `audit-failed`: backed off and listed after the hour. On a row not yet learned (every row after a server restart, and any but a stuck one after a `restart` answer), `learnExpiry` meets it first and lists it at once as a non-final `failing` ("its expiry could not be learned"). Neither is final, and nothing is deleted');
     expect(w6).not.toContain('read as `audit-failed`, backed off and listed after the hour, never final');
     expect(w6).not.toContain('over a breadcrumb that cannot be read: nothing is deleted');
   });
   it('§12: the residual says the same window (F9), and the questions list (p) as narrowed', () => {
-    expect(s12).toContain('If it is already unreadable at the lane\'s audit, `ws-audit --expire` answers `unmeasured` (exit 1): on a learned row that is read as `audit-failed`, backed off and listed after the hour; on a row not yet learned (every row after a server restart or a `restart` answer), `learnExpiry` lists it at once as a non-final `failing` ("its expiry could not be learned"). Neither is final');
+    expect(s12).toContain('If it is already unreadable at the lane\'s audit, `ws-audit --expire` answers `unmeasured` (exit 1): on a learned row that is read as `audit-failed`, backed off and listed after the hour; on a row not yet learned (every row after a server restart, and any but a stuck one after a `restart` answer), `learnExpiry` lists it at once as a non-final `failing` ("its expiry could not be learned"). Neither is final');
     expect(s12).not.toContain('read as `audit-failed`: backed off and listed after the hour, never final');
     expect(s12).toContain('Only a breadcrumb that turns unreadable between the act\'s audit and the in-lock fork leaves a `probe-unmeasured` read by its word');
     expect(s12).toContain('(p) Should a breadcrumb that turns unreadable between the act\'s audit and the in-lock fork');
@@ -217,7 +217,7 @@ describe('the spec says what the lane does, no more and no less (review 381, F3,
     expect(s12).toContain('it keeps its entry, its first instant and the tier\'s cadence');
     expect(s12).toContain('a server restart drops it, as it drops every entry');
     expect(s12).toContain('**`flock-unavailable` halts the lane\'s act** on that box until the server restarts. The halt is one process-wide field gating only the act: learn audits go on.');
-    expect(s12).toContain('every row whose sentence promises another ask (a stuck entry, a tier entry, the hourly ladder\'s non-final `failing` row, `lock-unopenable` included) says the halt in its own sentence while it stands');
+    expect(s12).toContain('a stuck or tier entry keeps its place, and every row whose sentence promises another ask (a stuck entry, a tier entry, the hourly ladder\'s non-final `failing` row, `lock-unopenable` included) says the halt in its own sentence while it stands');
     expect(s12).not.toContain('a standing entry (stuck or');
     expect(s12).toContain('is refused `in-use` each time the row is asked (the lane makes at most one act per pass, fleet-wide)');
     expect(s12).not.toContain('refused every pass');

@@ -177,14 +177,17 @@ describe('the specs', () => {
       '**Arm it after the expiry lane**, once its own shadow list is read and any breaker trip is worked through.',
       '**The three early reads, and what wave 6 closes.**', 'One thing stays early', 'is not seen before the commit',
       '**The journal-gap trade.**', 'stays listed as unmeasured, never ended, until it spawns again', 'Ageing a gap out is carried',
-      '**Two residuals stand.**', 'A lane gap of over ten minutes re-anchors every crashed coordinator on the same pass',
+      '**Three residuals stand.**', 'A lane gap of over ten minutes re-anchors every crashed coordinator on the same pass',
       'sub-second to one agent round trip, can still lose its runs', '**A permanently unreadable generation pins the mirror `stale`**',
       // Review 382, R5: a pre-existing breaker corner, stated before arming.
-      '**One breaker corner predates the restart fix.**',
-      'The breaker\'s hold wins over a re-anchored instant, and that can keep a fresh cluster from forming: with X held at an old instant and re-anchored later as Y crashes, once the other held member is released X@old and Y@new lie outside the window, so the breaker does not trip and X or Y can be ended once its own hour is up, though they crashed together',
-      'This corner predates the restart fix, and a lane that was never restarted behaves the same; the clustering is unchanged',
+      'A third corner predates the restart fix: the breaker\'s hold wins over a re-anchored instant, and that can keep a fresh cluster from forming. With X held at an old instant and re-anchored later as Y crashes, once the other held member is released X@old and Y@new lie outside the window, so the breaker does not trip and X or Y can be ended once its own hour is up, though X\'s new anchor and Y\'s crash fall within the window',
+      'A lane that was never restarted behaves the same, and the clustering is unchanged',
       '(f) Should a new run under an abandoned programme return its row to active?',
       '(g) A stale mirror at the act keeps the run of crashed passes']) expect(b).toContain(item);
+    // Review 382, R5 follow-up: the count is true (one bullet), and X crashed at the old instant.
+    expect(b).not.toContain('**Two residuals stand.**');
+    expect(b).not.toContain('**One breaker corner predates the restart fix.**');
+    expect(b).not.toContain('though they crashed together');
   });
   it('README says the act reads the mirror again after it measures the coordinator (wave 6)', () => {
     expect(flat('README.md')).toContain('A mirror gone stale, or a gap recorded, while the act measures the coordinator stops it too: the act reads both again after it.');

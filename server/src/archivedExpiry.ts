@@ -415,7 +415,9 @@ export const reviewKeeps = (reviewed: { readonly kind: 'run'; readonly state: Ru
 /** IN MEMORY ONLY: a restart loses it, so it can DELAY an expiry (the instant is learned again, and eligibility must be
  *  seen twice again) and can ask again a row the lane had stopped asking (a halted box, a failure the box said will not
  *  resume, an unreadable breadcrumb) — always behind a fresh audit whose token ccd proves again inside its lock; it never
- *  acts without one (whole-branch review, item 3). Keyed by the ARCHIVE: a row whose `archivedAt` changes (returned and
+ *  acts without one (whole-branch review, item 3). It also loses `nextAskAt` (a fresh entry's is `0`) and `failures`, so a
+ *  tier or stuck row and a row backing off on the ladder are asked again SOONER (review 382, R6) — every ask still behind
+ *  a fresh audit and ccd's in-lock re-proof. Keyed by the ARCHIVE: a row whose `archivedAt` changes (returned and
  *  archived again) starts a fresh entry, so nothing learned about one archive is applied to another. */
 export interface ArchivedExpiryEntry {
   readonly archivedAt: number;
@@ -804,7 +806,7 @@ export const EXPIRE_ASKS_AGAIN_CADENCE = `${EXPIRE_PERSISTENT_RETRY_MS / 3_600_0
 const STANDING_ASKS_AGAIN = `The lane asks again ${EXPIRE_ASKS_AGAIN_CADENCE} —`;
 
 /** THE HALT, in words (review 381, F3): said by the feed row of the act that met `flock-unavailable` and, while the
- *  halt stands, by the attention sentence of every STANDING row — one place, so the two cannot drift. */
+ *  halt stands, by the attention sentence of every row whose sentence promises another ask (`promisesAnotherAsk`) — one place, so the two cannot drift. */
 export const EXPIRE_HALT_WORDS = 'The lane composes no cleanup on that box, for any archived workspace, until the server restarts.';
 
 /** WHAT A PROCESS IS, before anything suggests ending it (the coordinator's ruling (G)): the fleet's own tmux server
