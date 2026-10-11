@@ -40,8 +40,8 @@ export const ROTATE_NOW_MIN_INTERVAL_MS = 60_000;
 /** The driver's run-time re-read of the server's token files, at the readiness sweep's cadence (spec 4.2; watch.ts's
  *  READINESS_SWEEP_MS is 600 s, which this ring cannot import). Added at plan assembly. */
 export const TOKEN_FILE_REREAD_MS = 10 * 60_000;
-/** A rotation owed and not completed this long raises the console's stall alert (BoxTokenView.stalled): wave 1's
- *  doctor reports the state as SKIP, which no exit code counts. Added at plan assembly. */
+/** A rotation owed and not completed this long raises the console's stall alert (BoxTokenView.stalled): doctor's
+ *  box-token WARN reports the same state, and this alert backs it on the console. Added at plan assembly. */
 export const STALL_ALERT_MS = 24 * 60 * 60_000;
 
 // ── persisted state (`<dir>/box-token.json`, 0600, no secret) ────────────────

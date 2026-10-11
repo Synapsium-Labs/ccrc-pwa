@@ -76,7 +76,7 @@ import {
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
@@ -86,6 +86,8 @@ import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm, IS
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { verifyMarker } from '../../shared/mark.mjs';
+import { FLEET_TOKEN_FILE_COMMENT } from '../../shared/box-token.js';
+import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, spawnListener, adoptPlantedSystemd,
   assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, SPINE_CONTAINMENT_PROBE, managerCalls,
@@ -5345,7 +5347,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(r.stdout).toMatch(/^PASS tmux_skew: client 9\.9, running server 9\.9 — versions agree$/m);
   });
 
-  it('ends with doctor, and a box that passes every check exits 0', () => {
+  it('ends with doctor, and a fresh box whose one Linux warn is the ruled box-token WARN exits 0 with 0 failed', () => {
     const home = freshBox('ccrc-install-doctor-ok-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
@@ -5367,9 +5369,15 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // this verb could have avoided: `linger` has no counterpart on a platform
     // where a LaunchAgent lives and dies with the login session. `0 failed` is
     // the part that means "this install worked", and it holds on both.
-    const warned = process.platform === 'darwin' ? 1 : 0;
+    // Since the box-token arming (row 2a, 4553) a fresh BOTH-role install carries one more warn, and it is the ruled
+    // one (operator, Decision 2 (a)): this box has neither the server's token and state files nor a fleet token file, so
+    // `box-token` WARNs (never FAILs, so the exit code stays 0) until the server's first boot writes them (on a both-role
+    // box that boot writes the fleet copy too). Still `0 failed`.
+    const warned = (process.platform === 'darwin' ? 1 : 0) + 1;
     expect(r.stdout).toMatch(new RegExp(
       `^summary: \\d+ checks \\(\\d+ skipped\\), \\d+ verdicts — \\d+ passed, ${warned} warned, 0 failed$`, 'm'));
+    expect(r.stdout, 'the one fresh-box warn is box-token').toMatch(/^WARN box-token: server: token-absent — .*; server: state-absent — /m);
+    expect(r.stdout.split('\n').filter((l) => /^WARN /.test(l)).filter((l) => !l.startsWith('WARN box-token: ') && !l.startsWith('WARN linger: '))).toEqual([]);
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
@@ -8303,6 +8311,15 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  three maps each gained `"box-token": "SKIP"` (wave 1 reports a box with no token
  *  subject, and every state that will be a FAIL or WARN once armed, as SKIP; the live
  *  shape's own word was not read off the case) and nothing else moved.
+ *  RE-MEASURED once more when doctor's `box-token` arms went on (row 2a), by Step 3's
+ *  case on a disposable copy of the tip (the copy's own `liveBox`, which now holds the
+ *  fleet side part B leaves on every live fleet box: the fleet token file, the
+ *  generation file and the proved sync report, plus the upstream account's setup-token
+ *  file once `~/.cc-secrets` exists): the three maps each moved `"box-token"` from `SKIP`
+ *  to `PASS` and `"credentials"` from `SKIP` to `PASS` (the second only because that
+ *  directory now exists, which ends `credentials`' fresh-box SKIP), nothing else; both
+ *  refreshes, all three codes and every other class are equal. A box without the fleet
+ *  files is a fresh box, `box-token` WARN, and its own case below keeps that measured.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8322,13 +8339,13 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
-        "box-token": "SKIP",
+        "box-token": "PASS",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
         "cert": "SKIP",
         "config": "PASS",
-        "credentials": "SKIP",
+        "credentials": "PASS",
         "disk": "PASS",
         "docs": "PASS",
         "exposure": "SKIP",
@@ -8373,13 +8390,13 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
-        "box-token": "SKIP",
+        "box-token": "PASS",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
         "cert": "SKIP",
         "config": "PASS",
-        "credentials": "SKIP",
+        "credentials": "PASS",
         "disk": "PASS",
         "docs": "PASS",
         "exposure": "SKIP",
@@ -8494,13 +8511,13 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
     "classes": {
       "accounts": "PASS",
       "auth": "SKIP",
-      "box-token": "SKIP",
+      "box-token": "PASS",
       "build": "PASS",
       "caddy": "SKIP",
       "caddyfile": "SKIP",
       "cert": "SKIP",
       "config": "PASS",
-      "credentials": "SKIP",
+      "credentials": "PASS",
       "disk": "PASS",
       "docs": "PASS",
       "exposure": "SKIP",
@@ -8580,13 +8597,35 @@ const usageRow = (): string =>
  *  reason: with no stamp `_inst_installed` writes no record), and its agent env
  *  is present so `--role fleet` never prompts. The runtime template is planted
  *  so that a later flip can build; with no codex lane it is never used. Step 3's
- *  MEASURE case builds its box with exactly these calls. */
-function liveBox(prefix: string, opts: { systemd?: boolean } = {}): string {
+ *  MEASURE case builds its box with exactly these calls.
+ *
+ *  Since the box-token arming (row 2a) the box also holds what part B leaves on
+ *  every live fleet box, because doctor's `box-token` FAIL and WARN arms are on and
+ *  a fleet box without them reads WARN (a fresh box, never handed a value): the
+ *  fleet token file (0600: the comment line, then a runtime-random 64-hex value, so
+ *  no fixture value is a literal here), the generation file (16 hex) and the proved
+ *  sync report. `{ fleetFiles: false }` is the fresh box, and `liveBoxFresh` below
+ *  keeps its class measured. */
+function liveBox(prefix: string, opts: { systemd?: boolean; fleetFiles?: boolean } = {}): string {
   const home = freshBox(prefix);
   gitInit(treeRoot(home));
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'agent.env'),
     'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+  if (opts.fleetFiles !== false) {
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    // The directory's existence is what ends `credentials`' fresh-box SKIP ("no $HOME/.cc-secrets directory"): a box that
+    // holds the fleet token file is provisioned, and the roster's one upstream account then owes its own setup-token file
+    // (a runtime-random value, never a literal), exactly as a live fleet box holds it.
+    writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
+      `CLAUDE_CODE_OAUTH_TOKEN=${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'),
+      `${FLEET_TOKEN_FILE_COMMENT}\n${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    const generation = randomBytes(8).toString('hex');
+    writeFileSync(join(home, '.ccrc', NODE_FILES.tokenGeneration), `${generation}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.ccrc', 'token-sync.json'),
+      JSON.stringify({ v: 1, at: epochS() - 3600, result: 'synced', generation, transport: 'https', proof: 'proved' }), { mode: 0o600 });
+  }
   plantLiveShape(home, (argv) => runInstall(home, argv, REHEARSAL_ENV, { from: REPO_CCRC }));
   plantRuntimeTemplate(home, { verdict: 'pass', version: '1.101.0' });
   if (opts.systemd === true) plantSystemd(home, { userManager: true });
@@ -8663,6 +8702,19 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
       expect(o.probeCalls.map((c) => c.env['CHATGPT_TOKEN_DIR']),
         'the base did not probe the external lane through its default token directory').toEqual(['~/.handoff/chatgpt-auth']);
     }
+  });
+
+  it('a fresh fleet box (the live shape without the fleet token file, generation file and sync report) keeps box-token measured: WARN with a remedy, never FAIL, and the install still exits 0 (4553)', () => {
+    const home = liveBox('ccrc-rehearsal-fresh-', { fleetFiles: false });
+    homes.push(home);
+    const r = runInstall(home, ['install', '--role', 'fleet'], REHEARSAL_ENV);
+    expect(r.code, `a fresh box's install:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toMatch(/^WARN box-token: fleet: fleet-token-absent — .*; fleet: no-generation — .*; fleet: never-synced — /m);
+    expect(r.stdout).toMatch(/^WARN box-token: .*\n {2}remedy: \S/m);
+    expect(r.stdout).not.toMatch(/^FAIL /m);
+    expect(doctorClasses(r.stdout), 'only box-token and credentials differ from the live shape').toEqual({
+      ...BASE_LIVE_SHAPE.install[0]!.classes, 'box-token': 'WARN', credentials: 'SKIP', codex: 'SKIP',
+    });
   });
 
   it('live shape: two installs, both hourly refreshes, doctor and uninstall do exactly what the base did, and init codex on an external lane refuses (rulings Z1, Z3, Z7)', async () => {

@@ -7394,13 +7394,17 @@ _check_history() {
 # child, hashed or kept. The two JSON files hold no secret and are read by `python3 -I -c` (isolated: no cwd or environment on its path), whose output is
 # words and numbers this function validates again before any of it reaches a line.
 #
-# WAVE 1 PRINTS PASS OR SKIP ONLY (D-4391; the operator's ruling of 2026-10-07, 15:30). Every state that will
-# be a FAIL or a WARN prints `SKIP box-token: <arm>: <word> — <sentence>; reported as SKIP until the FAIL and
-# WARN arms ship`, never PASS: a PASS there is the one way an operator reads a stalled first retirement as
-# healthy. The arms are compiled in behind `_BT_ARMS_ON` and proven by `doctor-box-token.test.ts`, which flips
-# it in a copy of this file; the follow-up PR flips it here, before the weekly schedule ships. There is no
-# flag file, because a flag nobody writes is a hand step. `transport http` is printed on a PASS line and is
-# never a verdict.
+# THE FAIL AND WARN ARMS ARE ON (row 2a; wave 1 shipped them off, D-4391, the operator's ruling of 2026-10-07,
+# 15:30). Every finding prints `FAIL` or `WARN box-token: <arm>: <word> — <sentence>` with a `remedy:` line, and a
+# FAIL counts in doctor's exit code. `_BT_ARMS_ON` stays as a one-line kill switch: set to 0 it prints `SKIP`
+# with the same words and a tail saying so, never PASS (a PASS there is the one way an operator reads a stalled
+# first retirement as healthy), and `doctor-box-token.test.ts` pins that branch in a disarmed copy of this file.
+# There is no flag file, because a flag nobody writes is a hand step. A box that is healthy reads PASS, and a
+# FRESH box (never handed a value) reads WARN, never FAIL: an absent token takes its class from the box's
+# history (4553; `_bt_server_arm`, `_bt_fleet_arm`): it WARNs until the server's first boot (server side) or the fleet's
+# first sync (fleet side). An absent token on a box without `python3` FAILs, by fail-closed design: nothing can be
+# read to class it lower.
+# `transport http` is printed on a PASS line and is never a verdict.
 #
 # THE WORDS ARE L0's, pinned by `doctor-box-token.test.ts`: `_BT_HOLDS` is `TOKEN_HOLDS`, `_BT_OWED` is
 # `OWED_REASONS`, `_BT_ORIGINS` is `TOKEN_ORIGINS` (`shared/box-token.ts`); `_BT_SYNC_ERRORS` is
@@ -7417,9 +7421,9 @@ _check_history() {
 # `set +x` is the function's first statement, not the file's: this file is sourced into `ccrc`, and doctor runs
 # each check in its own `$( … )`, so it cannot leak; it writes nothing, so it sets no umask (a file-level
 # `umask 077` would reach every `--fix` writer).
-_BT_ARMS_ON=0
+_BT_ARMS_ON=1
 # The value line `deploy/ccrc-mail.token.example` ships. A copy of `PLACEHOLDER_TOKEN` (`server/src/coord/token.ts`),
-# held to it by a text pin in `coord-token.test.ts`. The fleet reader only: a fleet file carrying it is no token.
+# held to it by a text pin in `coord-token.test.ts`. Both arms read it: a token file carrying it is no token.
 _BT_PLACEHOLDER='REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32'
 # What `String.prototype.trim` strips beyond ASCII (`extractToken` trims with it), as byte sequences: no-break space,
 # BOM, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000. Used only to compare a value line to the placeholder.
@@ -7436,7 +7440,7 @@ _BT_LOST_WORDS=(timeout disconnected aborted mint-failed)
 _BT_FAIL_AT=3
 _BT_PENDING_CAP=3
 _BT_TICK_MS=60000
-_BT_SKIP_TAIL='; reported as SKIP until the FAIL and WARN arms ship'
+_BT_SKIP_TAIL='; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)'
 
 # The server's state record, read strictly: any field missing or of the wrong kind is `unreadable`, never a
 # default. Prints `absent`, `unreadable`, or `ok` then `<key> <value>` lines and `finding <word> [<n>] [<node>]`.
@@ -7631,7 +7635,7 @@ _bt_age() {   # <seconds> -> "45 s", "12 min", "3 h", "2 d"
 
 # <path> -> BT_TF: ok | absent | not-regular | unreadable | no-value, and BT_TF_MODE (octal, empty if unread).
 # Also BT_TF_PLACEHOLDER (1 when BT_TF is ok and the value line, trimmed as `extractToken` trims, is the shipped
-# placeholder; else 0). It is a measurement: only the fleet arm acts on it.
+# placeholder; else 0). It is a measurement: both arms act on it.
 # Absent is `! -e` AND `! -L`: a dangling link is present and not a regular file, never absent.
 _bt_value_file() {
   local p="$1" line="" t="" u="" w=""
@@ -7758,7 +7762,10 @@ _bt_server_arm() {   # <token path> <state path>
   _bt_value_file "$tok"
   case "$BT_TF" in
     absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
-    ok) [ "$BT_TF_MODE" = 600 ] || _bt_find server token-mode "$tok" "${BT_TF_MODE:-unreadable}" ;;
+    # A placeholder `mail.token` is a file the server refuses to boot on (`MailTokenPlaceholderUnedited`), so it is never a PASS
+    # (final review, Minor 2); it takes the fleet arm's sentence, tested before the mode as that arm tests it.
+    ok) if [ "$BT_TF_PLACEHOLDER" = 1 ]; then _bt_find server token-unusable "$tok" placeholder
+        elif [ "$BT_TF_MODE" != 600 ]; then _bt_find server token-mode "$tok" "${BT_TF_MODE:-unreadable}"; fi ;;
     *) _bt_find server token-unusable "$tok" "$BT_TF" ;;
   esac
   if ! command -v python3 >/dev/null 2>&1; then _bt_find server state-unreadable "$state" no-python; return 0; fi

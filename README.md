@@ -588,7 +588,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
-| `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). PASS or SKIP only in wave 1: a finding that will be a FAIL or WARN prints as a SKIP with its word, and a SKIP is never counted in doctor's exit code |
+| `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). The FAIL and WARN arms are on: a FAIL counts in doctor's exit code and a WARN does not. A fresh box that was never handed a value (no fleet generation file and sync report, or no server state file) WARNs rather than FAILs, until the server's first boot (server side) or the fleet's first sync (fleet side) |
 
 `ccrc doctor --fix` cures the failing checks that know how — `skills`, `wrappers` and `codex`, each by
 the shipped tree's own installer — and measures them again; the second verdict is the one that counts (D-3113). Without the flag

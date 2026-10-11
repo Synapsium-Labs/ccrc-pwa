@@ -411,12 +411,12 @@ One commit per item, before Task 12, red-first where it is behaviour.
 
 The constant and the SKIP branch stay as a one-line kill switch. A disarmed copy of the file keeps the branch pinned.
 
-- [ ] **Step 0: Measure the blast radius before writing anything.** Apply `_BT_ARMS_ON=1` in the working tree (save a copy first). Run each of these, one call each: `ccrc-install`, `ccrc-update`, `ccrc-account`, `ccrc-uninstall`, `install-census`, `ccrc-doctor-graphify`, `ccrc-doctor`, `doctor-box-token`, `token-rotation-real-verb`. Restore, then `cmp`. List every red with its armed class and word. Send the list to the coordinator, who puts Decision 2 to the operator and scopes the fixture files the reds name into this table (re-reading claims). Nothing in this task proceeds until both are back.
+- [x] **Step 0: Measure the blast radius before writing anything.** Apply `_BT_ARMS_ON=1` in the working tree (save a copy first). Run each of these, one call each: `ccrc-install`, `ccrc-update`, `ccrc-account`, `ccrc-uninstall`, `install-census`, `ccrc-doctor-graphify`, `ccrc-doctor`, `doctor-box-token`, `token-rotation-real-verb`. Restore, then `cmp`. List every red with its armed class and word. Send the list to the coordinator, who puts Decision 2 to the operator and scopes the fixture files the reds name into this table (re-reading claims). Nothing in this task proceeds until both are back.
   **Done 2026-10-11** (the ledger's 01:30 entry). Its three corrections bind the rest of this task:
   - **The fixture `python3`** in `server/test/ccrc-install.test.ts` and `server/test/ccrc-update.test.ts` refuses `python3 -I -c`, so the box-token readers (`$_BT_PY_STATE`, `$_BT_PY_FLEET`) return nothing there: the server arm reads `state-unreadable` and the fleet arm `sync-unreadable`. Let those two programs through to the real interpreter, as the stub already does for its other pass-through arms. Both files join this task's table.
   - **(a)'s history is decided after the state read** in `_bt_server_arm`, not at the `token-absent` finding.
   - **The measured fallout is 196 reds:** 76 in `doctor-box-token` (Step 1 absorbs them), 96 in `ccrc-install` and 24 in `ccrc-update`, all exit codes from fresh fixture HOMEs, which (a) plus the stub fix should clear. They are re-measured on the final tip, never trusted.
-- [ ] **Step 1: Write the armed pins on the shipped file (red now).** In `doctor-box-token.test.ts`:
+- [x] **Step 1: Write the armed pins on the shipped file (red now).** In `doctor-box-token.test.ts`:
   - Replace `armedCopy()`/`armed()` (`:52-60`) with `disarmedCopy()`/`disarmed()`. It flips `^_BT_ARMS_ON=1$` to `0` in a copy, and throws if no such line exists.
   - The describe at `:264` runs ROWS against `disarmed()` and keeps every SKIP assertion. Retitle it `disarmed in a copy, every armed state is SKIP with its word (the kill switch)`.
   - The describe at `:283` runs against `CHECKS_SRC`.
@@ -431,15 +431,15 @@ The constant and the SKIP branch stay as a one-line kill switch. A disarmed copy
   In `ccrc-doctor.test.ts`, `:13705`/`:13709` become the armed class of `token-absent` (FAIL, or WARN under Decision 2 (a) when the state is also absent), followed by a `remedy:` line. Rewrite `:13692-13694`'s "counted as a skip". The no-role case at `:13696-13703` is unchanged.
 
   Run `test/doctor-box-token.test.ts` and `test/ccrc-doctor.test.ts`, one call each: red.
-- [ ] **Step 2: Flip.** Set `_BT_ARMS_ON=1` at `:7420`. Rewrite the header at `:7397-7403`: the arms are on (row 2a), and the constant is a kill switch whose SKIP branch `doctor-box-token.test.ts` pins in a disarmed copy. `_BT_SKIP_TAIL` becomes `'; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)'`. Rewrite `README.md:589`: the FAIL and WARN arms are on, and a FAIL counts in doctor's exit code. Rewrite `policy.ts:43-44`'s "wave 1's doctor reports the state as SKIP" to say the alert backs doctor's WARN. Run the two files from Step 1: green.
-- [ ] **Step 3 (only if Decision 2 is ruled (a)): the fresh-box classes.** Red first: add four ROWS rows.
+- [x] **Step 2: Flip.** Set `_BT_ARMS_ON=1` at `:7420`. Rewrite the header at `:7397-7403`: the arms are on (row 2a), and the constant is a kill switch whose SKIP branch `doctor-box-token.test.ts` pins in a disarmed copy. `_BT_SKIP_TAIL` becomes `'; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)'`. Rewrite `README.md:589`: the FAIL and WARN arms are on, and a FAIL counts in doctor's exit code. Rewrite `policy.ts:43-44`'s "wave 1's doctor reports the state as SKIP" to say the alert backs doctor's WARN. Run the two files from Step 1: green.
+- [x] **Step 3 (only if Decision 2 is ruled (a)): the fresh-box classes.** Red first: add four ROWS rows.
   - Fleet with no token, no generation file and no `token-sync.json`: WARN.
   - Fleet with no token but a `token-sync.json`: FAIL.
   - Server with no token and no state: WARN.
   - Server with no token and a state: FAIL.
 
   Then make `_bt_find`'s two arms take their class from that history. The arms read the presence of the generation file and the report, or of the state file, through the arm's existing reads. Run `test/doctor-box-token.test.ts`: green. Define 4553 in Deviations found.
-- [ ] **Step 4: The live-shape golden.** Run `test/ccrc-install.test.ts`. The case that reds is the live-shape case at `:8652` (`doctorClasses(r.stdout)` against `base.classes`, plus the install and doctor codes). `:8629` reads only the constant, and it reds only if the re-measured golden still holds a FAIL.
+- [x] **Step 4: The live-shape golden.** Run `test/ccrc-install.test.ts`. The case that reds is the live-shape case at `:8652` (`doctorClasses(r.stdout)` against `base.classes`, plus the install and doctor codes). `:8629` reads only the constant, and it reds only if the re-measured golden still holds a FAIL.
   - Give `liveBox()` the fleet side that part B leaves on every live fleet box:
     - `~/.cc-secrets/ccrc-mail.token`, mode 0600, holding `FLEET_TOKEN_FILE_COMMENT` and then a runtime-random 64-hex value;
     - `~/.ccrc/box-token-generation` (16 hex);
@@ -448,8 +448,8 @@ The constant and the SKIP branch stay as a one-line kill switch. A disarmed copy
   - Re-check the live-shape case's uninstall assertions. Uninstall removes `token-sync.json` and `box-token-generation` as node records, so their lists may move.
   - Add one row that keeps a fresh box measured, not hidden: a `liveBox()` without the fleet files gives `box-token`'s class as ruled in Decision 2 (WARN under (a), FAIL under (b)), with the matching install exit code.
   - Update the comment at `:8283-8296` to say what moved and why.
-- [ ] **Step 5: Every doctor-running suite on the armed tree,** one call each: the Step 0 list. Fix only fixture fallout in files this task's table lists after Step 0. Fallout anywhere else stops the task and goes to the coordinator.
-- [ ] **Step 6: Mutation checks.** Apply each mutant, run `test/doctor-box-token.test.ts` (and `test/ccrc-doctor.test.ts` for the first), see red, then restore and `cmp`:
+- [x] **Step 5: Every doctor-running suite on the armed tree,** one call each: the Step 0 list. Fix only fixture fallout in files this task's table lists after Step 0. Fallout anywhere else stops the task and goes to the coordinator.
+- [x] **Step 6: Mutation checks.** Apply each mutant, run `test/doctor-box-token.test.ts` (and `test/ccrc-doctor.test.ts` for the first), see red, then restore and `cmp`:
 
 | Mutation in `ccd/ccrc-doctor-checks` | Must red |
 |---|---|
@@ -458,7 +458,7 @@ The constant and the SKIP branch stay as a one-line kill switch. A disarmed copy
 | `_dr_skip box-token "$detail$_BT_SKIP_TAIL"; return 3` becomes `_dr_pass box-token "$detail"; return 0` | The disarmed-copy describe (the kill switch never prints PASS) |
 | (Decision 2 (a) only) the history test dropped, so both words are always WARN | The two "with history" FAIL rows |
 
-- [ ] **Step 7: Commit** (`feat(doctor): arm box-token's FAIL and WARN (row 2a)`). Before committing, run `git fetch origin main`, then `test/deviation-refs.test.ts` and `test/dtbd.test.ts`, because this plan defines 4552 (and 4553 under (a)).
+- [x] **Step 7: Commit** (`feat(doctor): arm box-token's FAIL and WARN (row 2a)`). Before committing, run `git fetch origin main`, then `test/deviation-refs.test.ts` and `test/dtbd.test.ts`, because this plan defines 4552 (and 4553 under (a)).
 
 ## Not in this PR (owner, why)
 

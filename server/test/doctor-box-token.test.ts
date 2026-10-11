@@ -1,12 +1,14 @@
-// `ccrc doctor`'s `box-token` check (box-token lifecycle, wave 1, Task B5; spec 4.8; D-4391).
+// `ccrc doctor`'s `box-token` check (box-token lifecycle, wave 1, Task B5; spec 4.8; D-4391; armed by row 2a).
 //
-// WAVE 1 PRINTS PASS OR SKIP ONLY. Every state that will be a FAIL or a WARN once the arms ship (held, failed,
-// a pending value past its deadline, an owed rotation, proof-unmeasured, a failed boot mint, a boot recovery not
-// yet followed by a rotation, a retired value presented, a broken file) prints `SKIP box-token: …` with its
-// reason word, never PASS: a PASS there is the one way an operator reads a stalled first retirement as healthy
-// (Review Focus 4). The FAIL and WARN arms are compiled in behind the file-level constant `_BT_ARMS_ON=0`; this
-// file proves they are reachable by running the same fixtures against a COPY of the checks file with the
-// constant flipped, so the follow-up PR that flips it ships arms that already ran.
+// THE ARMS ARE ON. Every state that is a FAIL or a WARN (held, failed, a pending value past its deadline, an owed
+// rotation, proof-unmeasured, a failed boot mint, a boot recovery not yet followed by a rotation, a retired value
+// presented, a broken file, an absent token) prints `FAIL box-token: …` or `WARN box-token: …` with its reason word and
+// a `remedy:` line, and a FAIL counts in doctor's exit code. Wave 1 shipped them switched off (`_BT_ARMS_ON=0`, printing
+// `SKIP` with its word, never PASS); row 2a flipped the constant. It stays in the file as a one-line kill switch, and
+// this file keeps the SKIP branch pinned by running the same fixtures against a COPY of the checks file with the
+// constant flipped back to 0 (`disarmed()`): the kill switch must print SKIP with its word, and never PASS.
+// What must stay PASS is the healthy box, server, fleet and both, which the first describe measures on the shipped
+// (armed) file, and a fresh box (no token, no history) is a WARN, never a FAIL (4553).
 //
 // HOW THE CHECK IS RUN. `ccd/ccrc` is sourced (it is source-able: its dispatch sits under the `BASH_SOURCE`
 // guard), then the checks file, then `_check_box-token` alone, under a fixture HOME and a PATH holding only
@@ -41,7 +43,7 @@ const realBin = (name: string): string => {
   return p;
 };
 
-const SKIP_TAIL = '; reported as SKIP until the FAIL and WARN arms ship';
+const SKIP_TAIL = '; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)';
 const ID_OLD = 'a1b2c3d4e5f60718';
 const ID_CUR = '0123456789abcdef';
 const MIN = 60_000;
@@ -49,17 +51,17 @@ const MIN = 60_000;
 interface Box { home: string; value: string; fleetValue: string }
 interface Run { code: number; stdout: string; stderr: string }
 
-/** The shipped checks file, or a copy of it with `_BT_ARMS_ON=0` flipped to 1 (exactly one line moves). */
-function armedCopy(): string {
+/** A copy of the shipped checks file with `_BT_ARMS_ON=1` flipped to 0 (exactly one line moves): the kill switch. */
+function disarmedCopy(): string {
   const src = readFileSync(CHECKS_SRC, 'utf8');
-  const flipped = src.replace(/^_BT_ARMS_ON=0$/m, '_BT_ARMS_ON=1');
-  if (flipped === src) throw new Error('the checks file carries no `_BT_ARMS_ON=0` line to flip');
-  const d = mkTmp('ccrc-bt-armed-');
+  const flipped = src.replace(/^_BT_ARMS_ON=1$/m, '_BT_ARMS_ON=0');
+  if (flipped === src) throw new Error('the checks file carries no `_BT_ARMS_ON=1` line to flip');
+  const d = mkTmp('ccrc-bt-disarmed-');
   writeFileSync(join(d, 'ccrc-doctor-checks'), flipped);
   return join(d, 'ccrc-doctor-checks');
 }
-let ARMED: string | null = null;
-const armed = (): string => (ARMED ??= armedCopy());
+let DISARMED: string | null = null;
+const disarmed = (): string => (DISARMED ??= disarmedCopy());
 
 function runCheck(b: Box, checks = CHECKS_SRC): Run {
   const bin = join(b.home, 'bt-bin');
@@ -195,11 +197,11 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
     expect(runCheck(b).stdout).toBe('PASS box-token: server: generation #1, minted 60 min ago (no rotation yet), fleet confirmed\n');
   });
 
-  it('transport http is printed on the PASS line and never changes the verdict, armed or not', () => {
+  it('transport http is printed on the PASS line and never changes the verdict, armed or disarmed', () => {
     const b = box({ role: 'fleet' });
     plantReport(b, { transport: 'http' });
     const want = 'PASS box-token: fleet: token file 0600, generation recorded, last sync proved, transport http\n';
-    for (const checks of [CHECKS_SRC, armed()]) {
+    for (const checks of [CHECKS_SRC, disarmed()]) {
       const r = runCheck(b, checks);
       expect(r.stdout).toBe(want);
       expect(r.code).toBe(0);
@@ -207,7 +209,7 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
   });
 });
 
-// ── every armed-later state: SKIP now, FAIL or WARN once armed ─────────────
+// ── every armed state: FAIL or WARN with its word (SKIP only in the disarmed copy) ──
 
 interface Row { label?: string; word: string; arm: 'server' | 'fleet'; armedClass: 'FAIL' | 'WARN'; plant: (b: Box) => void }
 const now = (): number => Date.now();
@@ -222,6 +224,8 @@ const ROWS: Row[] = [
     plant: (b) => { rmSync(dot(b, 'mail.token')); rmSync(dot(b, 'box-token.json')); } },
   { arm: 'server', word: 'token-mode', armedClass: 'FAIL', plant: (b) => chmodSync(dot(b, 'mail.token'), 0o644) },
   { arm: 'server', word: 'token-unusable', armedClass: 'FAIL', plant: (b) => writeFileSync(dot(b, 'mail.token'), '# no value line\n\n', { mode: 0o600 }) },
+  { arm: 'server', word: 'token-unusable', label: 'token-unusable (the shipped placeholder)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(dot(b, 'mail.token'), `# comment first\n${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 }) },
   { arm: 'server', word: 'state-absent', armedClass: 'WARN', plant: (b) => rmSync(dot(b, 'box-token.json')) },
   { arm: 'server', word: 'state-unreadable', armedClass: 'FAIL', plant: (b) => plantState(b, '{"v":1,') },
   // Fix round 1 (minor 4): `v` must be the integer 1, and a `retiring` entry must be {sha256: 64 hex, at: number}.
@@ -260,6 +264,9 @@ const ROWS: Row[] = [
     plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: s.lastRotationAt! + MIN }; }) },
   { arm: 'server', word: 'retired-presented', label: 'retired-presented (a count with a null stamp)', armedClass: 'FAIL',
     plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 1, retiredPresentedAt: null }; }) },
+  // `lr is None or rp > lr`: a server that has never completed a rotation has no answer to a stamped presentation.
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (no rotation has completed: a stamp, lastRotationAt null)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.lastRotationAt = null; s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: now() - MIN }; }) },
   { arm: 'server', word: 'fleet-behind', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.fleetConfirmed = ID_OLD; }) },
   // Added at plan assembly (review findings):
   { arm: 'server', word: 'fleet-unconfirmed', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.current.id = null; s.fleetConfirmed = null; }) },
@@ -305,12 +312,12 @@ const ROWS: Row[] = [
   { arm: 'fleet', word: 'sync-unreadable', armedClass: 'WARN', plant: (b) => plantReport(b, '{"v":2}') },
 ];
 
-describe('doctor box-token: every armed-later state is SKIP with its reason word, never PASS (D-4391)', () => {
+describe('doctor box-token: disarmed in a copy, every armed state is SKIP with its word (the kill switch)', () => {
   for (const row of ROWS) {
     it(`${row.arm}: ${row.label ?? row.word}`, () => {
       const b = box({ role: row.arm });
       row.plant(b);
-      const r = runCheck(b);
+      const r = runCheck(b, disarmed());
       const lines = r.stdout.split('\n').filter(Boolean);
       expect(lines, r.stdout).toHaveLength(1);
       expect(lines[0]).toMatch(/^SKIP box-token: /);
@@ -335,15 +342,17 @@ describe('doctor box-token: a rotation answers a retired presentation (4552)', (
     return lines[0] ?? '';
   };
 
-  for (const [name, checks] of [['shipped', CHECKS_SRC], ['armed', armed()]] as const) {
+  for (const name of ['shipped (armed)', 'disarmed'] as const) {
     describe(name, () => {
+      // Resolved per case, so a checks file with no `_BT_ARMS_ON=1` line reds the cases instead of the whole collection.
+      const checksFile = (): string => (name === 'disarmed' ? disarmed() : CHECKS_SRC);
       const wantFinding = (line: string): void => {
-        if (checks === CHECKS_SRC) expect(line).toMatch(/^SKIP box-token: /);
-        else expect(line).toMatch(/^FAIL box-token: /);
+        if (name !== 'disarmed') expect(line).toMatch(/^FAIL box-token: /);
+        else expect(line).toMatch(/^SKIP box-token: /);
         expect(line).toContain('server: retired-presented — ');
       };
       const wantPass = (b: Box): void => {
-        const r = runCheck(b, checks);
+        const r = runCheck(b, checksFile());
         expect(r.stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
         expect(r.code).toBe(0);
       };
@@ -367,7 +376,7 @@ describe('doctor box-token: a rotation answers a retired presentation (4552)', (
         plantCounters(b, (lr) => ({ retiredPresented: 0, retiredPresentedAt: lr - 30_000 }));
         wantPass(b);
         plantCounters(b, (lr) => ({ retiredPresented: 0, retiredPresentedAt: lr + 30_000 }));
-        wantFinding(finding(b, checks));
+        wantFinding(finding(b, checksFile()));
       });
 
       // 'x' alone would also red with the validator gone (a str-int comparison crashes the reader into the same
@@ -376,7 +385,7 @@ describe('doctor box-token: a rotation answers a retired presentation (4552)', (
         for (const bad of ['x', true, -5, 1.5]) {
           const b = box({ role: 'server' });
           editState(b, (s) => { (s.counters as unknown as Record<string, unknown>).retiredPresentedAt = bad; });
-          const line = finding(b, checks);
+          const line = finding(b, checksFile());
           expect(line, String(bad)).toContain('server: state-unreadable — ');
           expect(line, String(bad)).not.toContain('retired-presented');
         }
@@ -384,59 +393,65 @@ describe('doctor box-token: a rotation answers a retired presentation (4552)', (
     });
   }
 
-  it('the armed sentence: a stamped finding says how long ago and that no rotation has completed; a stampless one says it records no time', () => {
+  it('the sentence: a stamped finding says how long ago and that no rotation has completed; a stampless one says it records no time', () => {
     const stamped = box({ role: 'server' });
     plantCounters(stamped, (lr) => ({ retiredPresented: 2, retiredPresentedAt: lr + MIN }));
-    const a = runCheck(stamped, armed());
+    const a = runCheck(stamped, CHECKS_SRC);
     expect(a.stdout).toContain('ago and no rotation has completed since');
     expect(a.stdout).toContain('(2 since the server started)');
     const legacy = box({ role: 'server' });
     plantCounters(legacy, () => ({ retiredPresented: 2 }));
-    expect(runCheck(legacy, armed()).stdout).toContain('records no time for it');
+    expect(runCheck(legacy, CHECKS_SRC).stdout).toContain('records no time for it');
     const nul = box({ role: 'server' });
     plantCounters(nul, () => ({ retiredPresented: 1, retiredPresentedAt: null }));
-    expect(runCheck(nul, armed()).stdout).toContain('records no time for it');
+    expect(runCheck(nul, CHECKS_SRC).stdout).toContain('records no time for it');
   });
 
   it('the remedy names no hand rotation and says what clears the line', () => {
     const b = box({ role: 'server' });
     plantCounters(b, (lr) => ({ retiredPresented: 2, retiredPresentedAt: lr + MIN }));
-    const r = runCheck(b, armed());
+    const r = runCheck(b, CHECKS_SRC);
     expect(r.stdout).toMatch(/remedy: .*this line clears when that rotation completes/);
     expect(r.stdout).not.toMatch(/resync that box/);
+    expect(r.stdout).not.toMatch(/Rotate now/);
   });
 });
 
 describe('doctor box-token: the placeholder fleet file (R.1)', () => {
-  it('armed, the sentence names the placeholder, not a missing value line; the server arm is untouched', () => {
+  it('the sentence names the placeholder, not a missing value line; a fleet-role box runs no server arm', () => {
     const b = box({ role: 'fleet' });
     writeFileSync(fleetFile(b), `# comment first\n${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 });
-    const r = runCheck(b, armed());
+    const r = runCheck(b, CHECKS_SRC);
     expect(r.stdout).toContain('fleet: fleet-token-unusable — ');
     expect(r.stdout).toContain('placeholder');
     expect(r.stdout).not.toContain('carries no value line');
     expect(r.stdout).not.toContain(PLACEHOLDER_TOKEN);
   });
 
-  it('a server-role mail.token holding the placeholder is NOT read by this arm (it is the fleet reader\'s word)', () => {
+  it('a server-role mail.token holding the placeholder is FAIL token-unusable, never PASS: the server refuses to boot on it (final review, Minor 2)', () => {
     const b = box({ role: 'server' });
     writeFileSync(dot(b, 'mail.token'), `${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 });
-    expect(runCheck(b, armed()).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: server: token-unusable — /);
+    expect(r.stdout).toContain('placeholder');
+    expect(r.stdout).not.toMatch(/^PASS /m);
+    expect(r.stdout).not.toContain(PLACEHOLDER_TOKEN);
+    expect(r.code).toBe(1);
   });
 
   it('a real-looking value that merely starts like the placeholder is still ok', () => {
     const b = box({ role: 'fleet' });
     writeFileSync(fleetFile(b), `${PLACEHOLDER_TOKEN}-x\n`, { mode: 0o600 });
-    expect(runCheck(b, armed()).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
+    expect(runCheck(b, CHECKS_SRC).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
   });
 });
 
-describe('doctor box-token: the FAIL and WARN arms are compiled in (the constant flipped in a copy)', () => {
+describe('doctor box-token: the FAIL and WARN arms are on in the shipped file', () => {
   for (const row of ROWS) {
     it(`${row.arm}: ${row.label ?? row.word} -> ${row.armedClass}`, () => {
       const b = box({ role: row.arm });
       row.plant(b);
-      const r = runCheck(b, armed());
+      const r = runCheck(b, CHECKS_SRC);
       const lines = r.stdout.split('\n').filter(Boolean);
       expect(lines, r.stdout).toHaveLength(2);
       expect(lines[0]).toMatch(new RegExp(`^${row.armedClass} box-token: `));
@@ -447,9 +462,9 @@ describe('doctor box-token: the FAIL and WARN arms are compiled in (the constant
     });
   }
 
-  it('the shipped file carries the constant once, off', () => {
+  it('the shipped file carries the constant once, on', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');
-    expect(src.match(/^_BT_ARMS_ON=.*$/gm)).toEqual(['_BT_ARMS_ON=0']);
+    expect(src.match(/^_BT_ARMS_ON=.*$/gm)).toEqual(['_BT_ARMS_ON=1']);
   });
 });
 
@@ -462,15 +477,17 @@ describe('doctor box-token: which arm runs', () => {
     expect(r.stdout).not.toMatch(/hosts no sessions/);
   });
 
-  it('both arms on one line, the worse verdict wins: a healthy server and a never-synced fleet is SKIP, armed WARN', () => {
+  it('both arms on one line, the worse verdict wins: a healthy server and a never-synced fleet is WARN, rc 2 and no SKIP tail; disarmed it is SKIP, rc 3', () => {
     const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
     rmSync(dot(b, 'token-sync.json'));
     const r = runCheck(b);
-    expect(r.stdout).toMatch(new RegExp(`^SKIP box-token: ${SERVER_PASS}; fleet: never-synced — .*${SKIP_TAIL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`));
-    expect(r.code).toBe(3);
-    const a = runCheck(b, armed());
-    expect(a.stdout).toMatch(/^WARN box-token: server: generation #2.*; fleet: never-synced — /);
-    expect(a.code).toBe(2);
+    expect(r.stdout).toMatch(/^WARN box-token: server: generation #2.*; fleet: never-synced — /);
+    expect(r.stdout).not.toContain(SKIP_TAIL);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(2);
+    const d = runCheck(b, disarmed());
+    expect(d.stdout).toMatch(new RegExp(`^SKIP box-token: ${SERVER_PASS}; fleet: never-synced — .*${SKIP_TAIL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`));
+    expect(d.code).toBe(3);
   });
 
   it('no role recorded: the server arm when a server-side file exists, the fleet arm when agent.env does', () => {
@@ -480,8 +497,8 @@ describe('doctor box-token: which arm runs', () => {
     expect(runCheck(f).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
   });
 
-  it('no role recorded and nothing of either side: SKIP no-role, and it stays SKIP when armed', () => {
-    for (const checks of [CHECKS_SRC, armed()]) {
+  it('no role recorded and nothing of either side: SKIP no-role, armed or disarmed', () => {
+    for (const checks of [CHECKS_SRC, disarmed()]) {
       const r = runCheck(box({ role: null }), checks);
       expect(r.stdout).toMatch(/^SKIP box-token: no-role — /);
       expect(r.stdout).not.toContain(SKIP_TAIL);
@@ -502,7 +519,7 @@ describe('doctor box-token: the state shape is the merged one', () => {
       s.retiring = [{ sha256: 'ab'.repeat(32), at: now() }];   // fresh: the append is about to land
     });
     const r = runCheck(b);
-    expect(r.stdout).toMatch(/^SKIP box-token: server: pending-overdue — /);
+    expect(r.stdout).toMatch(/^WARN box-token: server: pending-overdue — /);
     expect(r.stdout).not.toContain('state-unreadable');
   });
 
@@ -512,7 +529,7 @@ describe('doctor box-token: the state shape is the merged one', () => {
       const t = now() - 20 * MIN;
       s.pending = Array.from({ length: PENDING_HARD_CAP + 1 }, (_, k) => k + 1).map((i) => ({ id: `${i}`.repeat(16), seq: 2 + i, stagedAt: t, handedOutAt: t, confirmBy: t + 5 * MIN, write: { dev: 1, ino: 10 + i, writtenAtMs: t } }));
     });
-    expect(runCheck(b).stdout).toMatch(/^SKIP box-token: server: state-unreadable — /);
+    expect(runCheck(b).stdout).toMatch(/^FAIL box-token: server: state-unreadable — /);
   });
 });
 
@@ -540,10 +557,11 @@ describe('doctor box-token: a retirement in grace is not a retirement past its h
     expect(runCheck(b).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
   });
 
-  it('retire-overdue wins over a PASS tail and is never "in grace": the SKIP line names it and has no PASS part', () => {
+  it('retire-overdue wins over a PASS tail and is never "in grace": the FAIL line names it and has no PASS part', () => {
     const b = box({ role: 'server' });
     editState(b, (s) => { s.previous = prev(now() - 90 * MIN, now() - 30 * MIN); });
     const out = runCheck(b).stdout;
+    expect(out).toMatch(/^FAIL box-token: server: retire-overdue:30 — /);
     expect(out).not.toContain('in grace');
     expect(out).not.toContain('retired value refused');
   });
@@ -591,11 +609,11 @@ describe('doctor box-token: where the files are, and what marks a fleet box (D-4
 });
 
 // 4553: the history is read from the arm's own reads, so it holds on the both-role box whose fleet file is its server's own write.
-describe('doctor box-token: a fresh box WARNs, a box that lost its value FAILs (4553, armed in a copy)', () => {
+describe('doctor box-token: a fresh box WARNs, a box that lost its value FAILs (4553)', () => {
   it('both role, local: no fleet file, no generation file, no state and no mail.token is two WARN findings, rc 2', () => {
     const b = box({ role: 'both' });
     for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json'), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
-    const r = runCheck(b, armed());
+    const r = runCheck(b, CHECKS_SRC);
     expect(r.stdout).toMatch(/^WARN box-token: server: token-absent — .*; server: state-absent — .*; fleet: fleet-token-absent — /);
     expect(r.stdout).not.toMatch(/^FAIL /m);
     expect(r.code).toBe(2);
@@ -603,14 +621,14 @@ describe('doctor box-token: a fresh box WARNs, a box that lost its value FAILs (
   it('both role, local: the same box with a generation file left behind is a FAIL on the fleet arm', () => {
     const b = box({ role: 'both' });
     for (const f of [fleetFile(b), dot(b, 'token-sync.json'), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
-    const r = runCheck(b, armed());
+    const r = runCheck(b, CHECKS_SRC);
     expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .*; fleet: fleet-token-absent — /);
     expect(r.code).toBe(1);
   });
   it('both role, remote: the worse arm wins, so a fresh server with a fleet that lost its value is a FAIL', () => {
     const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
     for (const f of [fleetFile(b), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
-    const r = runCheck(b, armed());
+    const r = runCheck(b, CHECKS_SRC);
     expect(r.stdout).toMatch(/^FAIL box-token: /);
     expect(r.code).toBe(1);
   });
