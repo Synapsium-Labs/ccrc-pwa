@@ -10,7 +10,7 @@
 // - a `ws-collect` document carries no `crumb`;
 // - its refusal words are not reclaim's;
 // - its audit is keyed `session`, not `id`.
-import { CHILD_RUN_ID, type CollectToken } from '../../shared/api.js';
+import { CHILD_RUN_ID, isTmpRootId, type CollectToken } from '../../shared/api.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -303,3 +303,116 @@ export function parseCollectResult(sessionId: string, ok: boolean, stdout: strin
   }
   return { kind: 'no-document', stderr: err };
 }
+
+// ── the population (spec §5.10, "the population") ───────────────────────────────────────────────────────────────
+//
+// The lane finds the temp roots it may collect by listing `$REG/tmproots` (one witness per id) and `$REG/tmpquarantine`
+// (one record per collection begun and not finished), never `~/.cc-tmp`. This block decides, purely, which names
+// become ids, which ids are audited this pass and which are forgotten. The executor's `readCollectPopulation`
+// (`coord/collectTempRoot.ts`) makes the two reads; nothing here reads a file.
+
+/** The most names one listing may carry before the lane reads it as unmeasured (spec §5.10, the population). A
+ *  session of this uid can write any number of names into either directory; past this many, the lane neither audits
+ *  nor forgets from that listing, and says the count alone. Counted over the RAW listing, dot-leading names included,
+ *  because they cost the lane's memory as much as any other name. STATED RESIDUAL: the cap bounds what the lane
+ *  audits and remembers, not the listing itself: the agent's readdir returns every name in one frame, as the
+ *  registry's own $REG listing already does every tick. */
+export const COLLECT_POPULATION_MAX = 1024;
+
+/** The two registry subdirectories the lane lists, by the name its box-wide line gives each. */
+export type CollectListingName = 'tmproots' | 'tmpquarantine';
+
+/** One listing as the executor measured it (spec §5.10): `listed` (a real directory, read), `absent` (a PROVEN
+ *  absence, an empty listing that is MEASURED), or `unmeasured` (a link, a file, a FIFO, a read that failed: the
+ *  listing says nothing about any id, and `why` says which). Never folded: an `unmeasured` listing is never empty. */
+export type CollectListing =
+  | { readonly kind: 'listed'; readonly names: readonly string[] }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unmeasured'; readonly why: string };
+
+/** Why one listing gave the lane no ids this pass: the executor could not measure it, or it carried more than
+ *  `COLLECT_POPULATION_MAX` names (`count`, the raw count, the only thing said of them). */
+export type CollectListingDoubt =
+  | { readonly listing: CollectListingName; readonly kind: 'unmeasured'; readonly why: string }
+  | { readonly listing: CollectListingName; readonly kind: 'over-cap'; readonly count: number };
+
+/** One pass's population (spec §5.10).
+ *  - `ids`: every id a MEASURED listing names, as a witness or as a record's id, sorted. What forgetting reads.
+ *  - `candidates`: the ids this pass may audit: `ids` less the pre-filter, sorted.
+ *  - `recordIds`: the ids a record in the MEASURED `tmpquarantine` listing names.
+ *  - `refusedNames`: how many names, dot-leading ones aside, are no id the lane may take. The names themselves are
+ *    never carried: they are untrusted same-uid input, and a sentence says the count alone.
+ *  - `unmeasured`: each listing that gave no ids, and why.
+ *  - `bothMeasured`: neither listing is in `unmeasured`, so an id neither names is gone from both. */
+export interface CollectPopulation {
+  readonly ids: readonly string[];
+  readonly candidates: readonly string[];
+  readonly recordIds: ReadonlySet<string>;
+  readonly refusedNames: number;
+  readonly unmeasured: readonly CollectListingDoubt[];
+  readonly bothMeasured: boolean;
+}
+
+/** A quarantine record's name, `<id>.<ns>.<pid>` (spec §5.10, the quarantine record): ccd's own `_ws_collect_rec_id`
+ *  grammar, held equal to its text by a test. GREEDY: the id is what the two trailing all-digit dot-fields leave,
+ *  never an `<id>.*` prefix, because ids admit dots. No flag: `g` would make `.exec` stateful. */
+export const COLLECT_RECORD_NAME_RE = /^(.+)\.([0-9]+)\.([0-9]+)$/;
+
+/** The id a quarantine record's name is for, or null when the name is no record's: it does not match the grammar,
+ *  or what it names is not an id the lane may take (`isTmpRootId`, L0's ONE temp-root id predicate). */
+export function parseCollectRecordName(name: string): string | null {
+  const id = COLLECT_RECORD_NAME_RE.exec(name)?.[1];
+  return id !== undefined && isTmpRootId(id) ? id : null;
+}
+
+/** The pass's population from its two listings and the tick's registry names (spec §5.10, the population). Pure.
+ *  - A proven-absent listing is empty and MEASURED. An unmeasured listing, or one of more than
+ *    `COLLECT_POPULATION_MAX` names, gives NO ids, and the other listing is still read: the lane audits the measured
+ *    side only, and never reads a name's absence from an unmeasured listing.
+ *  - A name that is not a string, or that leads with `.` (a writer's temp file), is dropped uncounted.
+ *  - Every other name must be an id (`isTmpRootId`) in `tmproots`, or a record's name for one
+ *    (`parseCollectRecordName`) in `tmpquarantine`, or it is counted in `refusedNames` and never becomes an id. This
+ *    is the gate before any argv: a name that fails it is never audited and never composed.
+ *  - THE PRE-FILTER is economy, never permission: an id is not a candidate while its EXACT `<id>.child` or `<id>.uuid`
+ *    is among `registryNames`, unless a record in the measured `tmpquarantine` names it, because a kept record is
+ *    never silent. Never a prefix: a row of `a.b` filters nothing of `a`. A row's absence licenses nothing: ccd's own
+ *    `registered` rung decides. */
+export function collectPopulation(input: {
+  readonly tmproots: CollectListing;
+  readonly tmpquarantine: CollectListing;
+  readonly registryNames: ReadonlySet<string>;
+}): CollectPopulation {
+  const unmeasured: CollectListingDoubt[] = [];
+  let refusedNames = 0;
+  /** A listing's readable names, or null when it gives no ids this pass. */
+  const namesOf = (listing: CollectListingName, l: CollectListing): readonly string[] | null => {
+    switch (l.kind) {
+      case 'absent': return [];
+      case 'unmeasured': unmeasured.push({ listing, kind: 'unmeasured', why: l.why }); return null;
+      case 'listed':
+        if (l.names.length > COLLECT_POPULATION_MAX) {
+          unmeasured.push({ listing, kind: 'over-cap', count: l.names.length });
+          return null;
+        }
+        return l.names.filter((n) => typeof n === 'string' && !n.startsWith('.'));
+    }
+  };
+  const witnessed = new Set<string>();
+  for (const n of namesOf('tmproots', input.tmproots) ?? []) {
+    if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;
+  }
+  const recordIds = new Set<string>();
+  for (const n of namesOf('tmpquarantine', input.tmpquarantine) ?? []) {
+    const id = parseCollectRecordName(n);
+    if (id !== null) recordIds.add(id); else refusedNames += 1;
+  }
+  const ids = [...new Set([...witnessed, ...recordIds])].sort();
+  const rowStands = (id: string): boolean =>
+    input.registryNames.has(`${id}.child`) || input.registryNames.has(`${id}.uuid`);
+  const candidates = ids.filter((id) => recordIds.has(id) || !rowStands(id));
+  return { ids, candidates, recordIds, refusedNames, unmeasured, bothMeasured: unmeasured.length === 0 };
+}
+
+/** Is `id` forgotten this pass, its pacing and feed episodes dropped without a feed row (spec §5.10)? Only when BOTH
+ *  listings were measured and neither names it: an unmeasured listing never says an id is gone. */
+export const collectForgets = (pop: CollectPopulation, id: string): boolean => pop.bothMeasured && !pop.ids.includes(id);
