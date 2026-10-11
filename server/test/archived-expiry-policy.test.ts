@@ -665,8 +665,8 @@ describe('the lane’s memory of one row', () => {
     expect(expiryReportSentence(x.report!, null)).toBe('cleanup has failed for a day in ways the box said it could resume: the '
       + `first at 2026-09-21 14:13 UTC, ${attempts} attempts, the last: cannot open the reap lock at /r. It may have stopped part-way — `
       + 'the box does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane asks again '
-      + 'every 4 hours and keeps this entry until an attempt completes, finds that none had begun or stops for good, or the '
-      + 'workspace is archived again.');
+      + '4 hours after each failed attempt — sooner after an answer that ends no attempt, never while the workspace is held — and '
+      + 'keeps this entry until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again.');
     expect(expiryReportSentence(x.report!, null), 'it never suggests a destructive verb').not.toMatch(/ws-reap|ws-rm|ws-expire|delete|remove/);
     // Each later failure updates the entry and keeps the cadence; the first failure's instant stands.
     const later = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'worktree-remove-failed: still busy' }, x.nextAskAt, PASS)!;
@@ -933,6 +933,35 @@ describe('the lane’s memory of one row', () => {
   it('a box word is reported at once — flock-unavailable will not pass by waiting', () => {
     const x = archivedExpiryNextEntry(e(), { kind: 'box', word: 'flock-unavailable', detail: 'flock …' }, NOW, PASS)!;
     expect(x.report).toMatchObject({ kind: 'failing' });
+  });
+
+  it('flock-unavailable says what it does: the lane composes NO cleanup on that box until the server restarts — never "retried" (wave 6)', () => {
+    const detail = 'flock (util-linux) is unavailable — refusing to run the destructive verb unserialised';
+    const x = archivedExpiryNextEntry(e(), { kind: 'box', word: 'flock-unavailable', detail }, NOW, PASS)!;
+    expect(x.nextAskAt, 'not asked again by this process').toBe(Number.POSITIVE_INFINITY);
+    expect(x.report).toEqual({ kind: 'failing', at: NOW, detail, final: true, halted: true });
+    const sentence = expiryReportSentence(x.report!, null);
+    expect(sentence).toBe(`cleanup stopped: ${detail}. The fleet box cannot serialise a cleanup, so the lane composes none there, `
+      + 'for any archived workspace, until the server restarts; nothing is deleted meanwhile.');
+    expect(sentence, 'never a promise it breaks').not.toMatch(/retried|backing off/);
+    expect(archivedExpirySighted(x, { eligible: false, why: 'held' }, 'h', NOW + PASS).report, 'a hold never hides it').toEqual(x.report);
+    const lock = archivedExpiryNextEntry(e(), { kind: 'box', word: 'lock-unopenable', detail: 'cannot open the reap lock at /r' }, NOW, PASS)!;
+    expect(lock.report, 'the CONTROL: lock-unopenable is retried, as before').toEqual({ kind: 'failing', at: NOW, detail: 'cannot open the reap lock at /r' });
+    expect(lock.nextAskAt).toBeLessThan(Number.POSITIVE_INFINITY);
+  });
+
+  it('flock-unavailable under a STANDING entry keeps it: a stuck entry stands, and a tier entry counts the attempt (wave 6, ruling B)', () => {
+    const flock = { kind: 'box', word: 'flock-unavailable', detail: 'flock (util-linux) is unavailable' } as const;
+    const { x: tier, t } = aDayOf(verbFailed);
+    const stuck = archivedExpiryNextEntry(tier, { kind: 'stuck', detail: 'containment-refuted: d' }, t, PASS)!;
+    const s = archivedExpiryNextEntry(stuck, flock, t + PASS, PASS)!;
+    expect(s.report, 'the stuck entry stands').toEqual(stuck.report);
+    expect(s.nextAskAt, 'on its own cadence, never +∞').toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
+    const f = archivedExpiryNextEntry(tier, flock, t + PASS, PASS)!;
+    const before = tier.report as { at: number; attempts: number };
+    expect(f.report, 'the tier entry stands, the attempt counted').toEqual({ kind: 'failing', at: before.at, detail: flock.detail,
+      attempts: before.attempts + 1 });
+    expect(f.nextAskAt).toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
   });
 
   it('in shadow, "would expire" is recorded — and the row is audited again only after the shadow interval', () => {

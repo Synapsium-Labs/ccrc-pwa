@@ -297,7 +297,7 @@ describe('a failure that keeps resuming (wave 5)', () => {
     const list = f.watcher.currentCoord()?.expiryAttention ?? [];
     expect(list.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
     expect(list[0]!.sentence).toContain(`${asked} attempts, the last: worktree-remove-failed: the tree is busy`);
-    expect(list[0]!.sentence).toContain('The lane asks again every 4 hours');
+    expect(list[0]!.sentence).toContain('The lane asks again 4 hours after each failed attempt');
     // The operator takes the arming away to look into it: the next act stops at the shadow, and the entry STANDS — never
     // replaced by a "nothing was deleted" said of a workspace that may be part-cleaned.
     rmSync(path.join(f.reg, EXPIRE_LANE_LIVE_MARKER));
@@ -306,6 +306,10 @@ describe('a failure that keeps resuming (wave 5)', () => {
     expect(f.verbsFor('ws-audit'), 'the act audited').toHaveLength(audits + 1);
     expect(f.verbsFor('ws-expire'), 'and composed nothing: shadow').toHaveLength(asked);
     expect(f.entry('demo-a')?.report, 'a shadow audit ends nothing').toMatchObject({ kind: 'failing', attempts: asked });
+    const shadow = f.coord.feedEvents(5).find((e) => e.title === 'archived workspace would be cleaned up');
+    expect(shadow?.body, 'and its feed row never says nothing was deleted of a workspace that may be part-cleaned (wave 6)')
+      .toContain('an earlier attempt may have stopped part-way');
+    expect(shadow?.body).not.toContain('nothing was deleted');
   });
 
   it('a day in SHADOW of the act’s own audit unreadable never reaches the tier: once the audit recovers, would-expire is listed again (final review I1)', async () => {

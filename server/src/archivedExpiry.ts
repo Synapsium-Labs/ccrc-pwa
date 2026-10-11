@@ -460,6 +460,10 @@ export type ExpiryReport =
   /** `final`: the row is not asked again for this archive — a composition error, or a failure the box said will not
    *  resume — so its sentence never promises a retry. Absent on a failure that is still being retried. */
   | { readonly kind: 'failing'; readonly at: number; readonly detail: string; readonly final?: true;
+      /** Set, with `final`, only on `flock-unavailable` over a row with no standing entry (wave 6): the lane then composes
+       *  NO cleanup on that box for the rest of this process (`watch.ts`), whatever row, so its sentence says that, and
+       *  that a restart is what asks again. */
+      readonly halted?: true;
       /** Set only on the PERSISTENT TIER — a row past `EXPIRE_FAILURE_GIVE_UP_MS` of resumable failures, asked every
        *  `EXPIRE_PERSISTENT_RETRY_MS` — whose report is a STANDING entry: how many attempts failed (`at` is the first
        *  failure, `detail` the last), counted on the verb's run alone (review 355, F1). Never with `final`: the row is still asked. */
@@ -714,8 +718,15 @@ export function archivedExpiryNextEntry(
         return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
           report: { kind: 'failing', at: nowMs, detail: o.detail, final: true } };
       }
-      // `flock-unavailable` is the BOX's, and the lane stops asking that box at all (`watch.ts`); for the row it is
-      // a failure like `lock-unopenable`, backed off and reported past the ceiling.
+      // `flock-unavailable` is the BOX's, and the lane stops asking that box at all (`watch.ts`) until the server restarts.
+      // So the row says THAT, and is not asked again by this process: a final report, `halted` — never "retried", which the
+      // halt would make untrue (wave 6). `lock-unopenable` is a failure, backed off and reported at once. Under a STANDING
+      // entry (stuck, or the tier's) the entry stands instead, as under any failure of the verb (ruling B), and the halt is
+      // the feed row's to say (`expireFeedBody`): the record of a workspace that may be part-cleaned is never replaced.
+      if (o.kind === 'box' && o.word === 'flock-unavailable' && !expiryReportStands(entry.report)) {
+        return { ...base, ...steady, nextAskAt: Number.POSITIVE_INFINITY,
+          report: { kind: 'failing', at: nowMs, detail: o.detail, final: true, halted: true } };
+      }
       const failures = entry.failures + 1;
       const failingSince = entry.failingSince ?? nowMs;
       // Only a failure of the VERB — `failed`, or a box word, which only the verb meets — can have stopped part-way, so
@@ -785,6 +796,13 @@ export function archivedExpiryNextEntry(
 const iso = (epochS: number): string => new Date(epochS * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 const isoMs = (ms: number): string => iso(Math.floor(ms / 1000));
 
+/** WHEN A STANDING ENTRY IS ASKED AGAIN, in words that hold (wave 6; the worker's residual from wave 5): the cadence is
+ *  the wait after a FAILED attempt. An answer that ends no attempt asks sooner (a deferral, the next pass), and a hold
+ *  keeps the row from being asked at all while it stands. (A box that answered flock-unavailable is asked nothing, by
+ *  any row, until the server restarts — that row's own report says so.) */
+const STANDING_ASKS_AGAIN = `The lane asks again ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours after each failed attempt — sooner `
+  + 'after an answer that ends no attempt, never while the workspace is held —';
+
 /** WHAT A PROCESS IS, before anything suggests ending it (the coordinator's ruling (G)): the fleet's own tmux server
  *  is a `tmux: server` too, and ending THAT ends every session on the box. So the sentence names the pid AND its
  *  command AND where it stands, and says to find out what it is first — it never says to kill. */
@@ -831,9 +849,13 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
       if (r.attempts !== undefined) {
         return `cleanup has failed for a day in ways the box said it could resume: the first at ${isoMs(r.at)}, `
           + `${r.attempts} ${r.attempts === 1 ? 'attempt' : 'attempts'}, the last: ${r.detail}. It may have stopped part-way — the box `
-          + 'does not yet say whether an attempt began its cleanup — so what is left on disk is not known. The lane asks again '
-          + `every ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours and keeps this entry until an attempt completes, finds `
-          + 'that none had begun or stops for good, or the workspace is archived again.';
+          + `does not yet say whether an attempt began its cleanup — so what is left on disk is not known. ${STANDING_ASKS_AGAIN} `
+          + 'and keeps this entry until an attempt completes, finds that none had begun or stops for good, or the workspace is '
+          + 'archived again.';
+      }
+      if (r.halted === true) {
+        return `cleanup stopped: ${r.detail}. The fleet box cannot serialise a cleanup, so the lane composes none there, `
+          + 'for any archived workspace, until the server restarts; nothing is deleted meanwhile.';
       }
       return r.final === true ? `cleanup stopped: ${r.detail}. It is not asked again for this archive.`
         : `cleanup keeps failing: ${r.detail}. It is retried, backing off in between.`;
@@ -844,8 +866,7 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
       return `cleanup stopped part-way: ${r.detail}. ccd found that what it would remove is not only this workspace’s own `
         + `(first at ${isoMs(r.at)}, ${r.attempts} ${r.attempts === 1 ? 'attempt' : 'attempts'}). The session was stopped and nothing `
         + 'further was deleted; what is left on disk stays as it is, and a retry finds the same thing until that other tree or row '
-        + `is moved. The lane asks again every ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours and keeps this entry until an attempt `
-        + 'completes or the workspace is archived again.';
+        + `is moved. ${STANDING_ASKS_AGAIN} and keeps this entry until an attempt completes or the workspace is archived again.`;
     case 'kept':
       return `cleaned up, but ccd kept ${expireKeptParts(r).join(' and ')}. The worktree, the branch and the registry row are `
         + 'gone and its commits are in the attic; what was kept stays on disk, and the lane deletes nothing more of it. '

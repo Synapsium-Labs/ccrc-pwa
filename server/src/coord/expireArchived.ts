@@ -228,8 +228,10 @@ const FEED_TITLE: Readonly<Record<ArchivedExpiryOutcome['kind'], string>> = {
   'no-evidence': 'archived workspace cleanup has no evidence',
 };
 
-/** The feed row's words: what happened, to which archive, and when it was due. */
-export function expireFeedBody(r: ExpireArchivedResult): string {
+/** The feed row's words: what happened, to which archive, and when it was due. `standing`: the row's attention entry
+ *  STANDS (`expiryReportStands`) — an earlier attempt may have stopped part-way — so a shadow row over it never says that
+ *  nothing was deleted, only that THIS pass deleted nothing (wave 6; the standing entry's own words). */
+export function expireFeedBody(r: ExpireArchivedResult, standing = false): string {
   const who = `${r.sessionId} (archived ${iso(r.archivedAt)}, due ${iso(r.expiresAt)})`;
   switch (r.kind) {
     case 'expired': {
@@ -247,7 +249,9 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
       return `${who} was cleaned up: its commits are kept in the attic (ccd ws-attic --session ${r.sessionId}), ${wip}${secrets}${leaves}.`;
     }
     case 'would-expire':
-      return `${who} would be cleaned up now — the cleanup is not armed (shadow), so nothing was deleted`
+      return `${who} would be cleaned up now — the cleanup is not armed (shadow), so `
+        + `${standing ? 'this pass deleted nothing — but an earlier attempt may have stopped part-way, so what is left on disk is '
+          + 'not known, and its attention entry stands' : 'nothing was deleted'}`
         + `${r.sensitive > 0 ? `; ${r.sensitive} secret-shaped ${r.sensitive === 1 ? 'file' : 'files'} would be dropped` : ''}.`;
     case 'deferred': return `${who}: deferred (${r.why}) — ${r.detail}.`;
     case 'refused': return `${who}: ccd refused (${r.token}) — ${r.detail}`;
@@ -263,7 +267,10 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
     case 'stuck': return `${who}: ccd stopped part-way (${r.detail}) — the session was stopped and nothing further was `
       + `deleted. It is listed at once, and asked again ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours after each failed attempt, `
       + 'until an attempt completes or the workspace is archived again.';
-    case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.`;
+    // `flock-unavailable` halts the lane on that box until the server restarts (`watch.ts`): the row says so, whatever the
+    // row's own attention entry says (a standing one stands through it; wave 6).
+    case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.` + (r.word === 'flock-unavailable'
+      ? ' The lane composes no cleanup on that box, for any archived workspace, until the server restarts.' : '');
     case 'composition': return `${who}: ccd rejected the call this server composed — ${r.detail}. It is not retried.`;
     case 'no-evidence': return `${who}: the fleet box's ccd does not say when this archive expires; nothing was composed.`;
   }
@@ -272,11 +279,11 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
 /** ONE feed row for an outcome — written by the LANE, and only when the row's outcome CHANGED, so a refusal that
  *  stands is one row, not one a minute. `kind: 'run'` with no run: recorded, never pushed, in the unfiltered feed.
  *  A missing log degrades the record and never the act. */
-export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult): void {
+export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult, standing = false): void {
   const log = deps.notifyLog;
   if (!log) return;
   try {
-    const ev = log.record({ kind: 'run', sessionId: r.sessionId, runId: null, title: FEED_TITLE[r.kind], body: expireFeedBody(r) });
+    const ev = log.record({ kind: 'run', sessionId: r.sessionId, runId: null, title: FEED_TITLE[r.kind], body: expireFeedBody(r, standing) });
     deps.coord.recordFeedEvent(log.epoch, ev);
   } catch (err) {
     console.warn('ccrc-server: recordFeedEvent failed '

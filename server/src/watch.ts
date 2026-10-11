@@ -105,7 +105,7 @@ import {
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
   EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
-  archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention,
+  archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention, expiryReportStands,
   type ArchivedExpiryEntry, type ExpiryStoreRead,
 } from './archivedExpiry.js';
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
@@ -4021,7 +4021,10 @@ export class FleetWatcher {
           presence: this.deps.presence, notifyLog: this.deps.notifyLog,
         }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt! }));
         if (result.kind === 'box' && result.word === 'flock-unavailable') this.archivedExpiryBoxRefused = result.detail;
-        if (archivedExpiryOutcomeKey(result) !== entry.lastOutcome) recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, result);
+        // Whether the row's entry STANDS rides the feed row, so a shadow row over it never says nothing was deleted (wave 6).
+        if (archivedExpiryOutcomeKey(result) !== entry.lastOutcome) {
+          recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, result, expiryReportStands(entry.report));
+        }
         const next = archivedExpiryNextEntry(entry, result, Date.now(), CHILD_RECLAIM_SWEEP_MS);
         if (next === null) this.archivedExpiryState.delete(id); else this.archivedExpiryState.set(id, next);
       } catch (err) {
