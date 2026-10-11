@@ -1263,6 +1263,41 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Claims at drafting:** run 354 (ccrc-history, brisk-meadow) holds `README.md`, `CLAUDE.md` and the three prose
     tests (claims 1140 and 1141, hard cap 04:34Z). Claim 1142 (run 347) outlives its merge until calm-mesa closes the
     run. Re-read at dispatch.
+- **2026-10-11 08:45 — wave 6's plan is drafted, reviewed, revised and verified, and it is in plan PR #350. CCR-15 agreed the
+  split (mail 4202), and four of the plan's questions are ruled.**
+  - **The plan:** workflow wf_2172eb2d-87f, seven agents over 7.7 h, all of them returning.
+    - Draft `78542fbcf`, revised `0db8e8389`, then the coordinator's rulings `c8a8fd900` (words only).
+    - 12 tasks and 16 slugs, so the block 4617–4632 is fully used.
+    - The act-safety lens says SAFE TO DISPATCH: no blocker and no important finding.
+    - The reviser applied every finding except replay F1, which was question (l), ruled below. Applied: §12's missing
+      arming facts; the unreadable breadcrumb's residual stated; `flock-unavailable` no longer replaces a standing
+      entry; the re-measure note covers both landing orders; the re-read also reads the mirror's write-error count;
+      the re-read adapter's `unavailable` branch is pinned; close.ts's no-await rows are added; the stuck feed row's
+      cadence words are fixed.
+    - The Sonnet verifier says REPLAY CLEAN on `7609221a4`:
+      - all 95 anchors matched exactly once;
+      - every suite count agreed;
+      - 40 mutation rows went red (T1.2's half in the crumb file was not captured, because the output was truncated);
+      - the stamp is `eb5067d0…3497`;
+      - there is no D-number, no D-TBD and no docserver URL.
+    - On the rulings commit: deviation-refs, dtbd, docs-grammar and topology-clean, 245 passed.
+  - **Ruled (none loosens a gate):**
+    - (l) The attached HEAD's fresh `pin-failed` is audited afresh (ruling A's `crumb:false`, as CCR-15's R76 reads it).
+      Ruling D's "resumable" was the word-only reading. D's ccd half stands: the act ends at the pin as `pin-failed`.
+    - (m) A stuck entry stands through a `restart`.
+    - (n) `flock-unavailable` is final for a row with no standing entry.
+    - (p) An unreadable breadcrumb stays keyless, so the row is listed final until a restart. This is the expiry
+      lane's one fail-safe residual, and §12 states it. Retrying it on the tier instead is an operator question.
+  - The plan's deploy note now says the release goes out through the updater, which the operator applies.
+  - **CCR-15 (mail 4202, answering 4200):**
+    - Run 348 was dispatched at 00:59 to quiet-prairie.
+    - The split is agreed. The second lander makes the shared describe in `containment-refuted-word.test.ts`
+      reclaim-only, with consent to edit wave 8's lines.
+    - There is one crumb reader per verb document, and wave 8's is module-private.
+    - Wave 8 declares its stuck set in coord, so wave 6 reads the L0 word and reds nothing.
+    - Wave 8 touches nothing under `ccd/`.
+    - **(o)** Consent for the `_WS_RCL_CRUMB` comment and the crumb test's ws-expire describe is asked in mail 4207.
+  - **Next:** #350's CI, then the merge, calm-mesa's answer, and a re-read of the claims. Then run 358 is dispatched.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
