@@ -1152,26 +1152,34 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
         let calls = 0;
         return s.newBudget(() => ++calls, { maxMs: 36 });
       };
-      const cursors: Array<string | undefined> = [];
-      const expectedCursors = [undefined, undefined, String(firstTop), String(firstTop), String(firstTop), '73', '74'];
-      const capturedTops: number[] = [];
-      for (const expectedCursor of expectedCursors) {
-        capturedTops.push(Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r));
-        d.deriveParents(fx.db, ictx, sameTinyBudget());
+      const trace: Array<{ capturedTop: number; made: number; cursor: string | undefined }> = [];
+      const expectedTrace = [
+        { capturedTop: 64, made: 2, cursor: undefined },
+        { capturedTop: 66, made: 2, cursor: undefined },
+        { capturedTop: 68, made: 1, cursor: String(firstTop) },
+        { capturedTop: 69, made: 2, cursor: String(firstTop) },
+        { capturedTop: 71, made: 2, cursor: String(firstTop) },
+        { capturedTop: 73, made: 1, cursor: '73' },
+        { capturedTop: 74, made: 0, cursor: '74' },
+      ];
+      for (const expected of expectedTrace) {
+        const capturedTop = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r);
+        const made = d.deriveParents(fx.db, ictx, sameTinyBudget());
         const cursor = store9.getStep(fx.db, 'parents', lib9.NODE_PARSER_VERSION)?.cursor ?? undefined;
-        cursors.push(cursor);
-        v9.expect(cursor).toBe(expectedCursor);
+        trace.push({ capturedTop, made, cursor });
+        v9.expect({ capturedTop, made, cursor }).toEqual(expected);
       }
       const firstLevel = [fx.first, fx.second].flatMap((leaves) => [0, 8, 16, 24].map((i) => lib9.parentId(leaves.slice(i, i + 8))));
       const secondLevel = [fx.first, fx.second].map((leaves) => lib9.parentId([0, 8, 16, 24].map((i) => lib9.parentId(leaves.slice(i, i + 8)))));
-      v9.expect(cursors).toEqual(expectedCursors);
+      v9.expect(trace).toEqual(expectedTrace);
       v9.expect(parents9(fx.db, 1).map((p) => p.node_id).sort()).toEqual([...firstLevel].sort());
       v9.expect(parents9(fx.db, 2).map((p) => p.node_id).sort()).toEqual([...secondLevel].sort());
       const edgeSets = (fx.db.prepare("SELECT group_concat(child_id, ',') AS children FROM (SELECT node_id, child_id, ord FROM node_children ORDER BY node_id, ord) GROUP BY node_id").all() as { children: string }[]).map((r) => r.children);
       v9.expect(new Set(edgeSets).size, 'no duplicate child-edge set is minted across retries').toBe(edgeSets.length);
       v9.expect(new Set([...firstLevel, ...secondLevel]).size, 'every expected parent id is unique').toBe(10);
       v9.expect(initialTop).toBe(64);
-      v9.expect(cursors.at(-2), 'the completing pass ends at its captured top').toBe(String(capturedTops.at(-2)));
+      v9.expect(trace.at(-2)?.cursor, 'the completing pass ends at that invocation\'s captured top').toBe(String(trace.at(-2)?.capturedTop));
+      v9.expect(trace.at(-1), 'the no-trigger cleanup consumes the final parent output at its own captured top').toEqual({ capturedTop: 74, made: 0, cursor: '74' });
     } finally {
       fx.db.close();
     }
