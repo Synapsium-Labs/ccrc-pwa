@@ -187,6 +187,19 @@ describe('the one executor', () => {
       .toMatchObject({ kind: 'audit-failed' });
   });
 
+  it('containment-refuted comes back STUCK, and its feed row says the act stopped part-way and when it is asked again (wave 6, ruling B)', async () => {
+    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'a row outside the tree', crumb: true }) } } });
+    const out = await expireArchived(s.deps, s.req);
+    expect(out).toMatchObject({ kind: 'stuck', detail: 'containment-refuted: a row outside the tree' });
+    recordExpireFeed(s.deps, out);
+    const ev = s.coord.feedEvents(10).filter((e) => e.sessionId === ID);
+    expect(ev.map((e) => e.title)).toEqual(['archived workspace cleanup stuck']);
+    expect(ev[0]!.body).toContain('ccd stopped part-way (containment-refuted: a row outside the tree) — the session was stopped and '
+      + 'nothing further was deleted. It is listed at once, and asked again 4 hours after each failed attempt');
+    expect(ev[0]!.body, 'never the cadence the standing words retired (wave 6)').not.toContain('every four hours');
+  });
+
   it('a refusal at audit carries its word — in-use with the processes; a GONE word is gone', async () => {
     const inUse = [{ pid: 7, comm: 'tmux: server', cwd: '/w' }];
     const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('in-use', { detail: 'process 7 …', inUse }) } } });

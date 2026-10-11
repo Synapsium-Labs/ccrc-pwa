@@ -8,7 +8,8 @@ import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit, parseExpireResult, reviewKeeps,
+  EXPIRE_LANE_LIVE_MARKER, EXPIRE_PERSISTENT_RETRY_MS, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
+  parseExpireResult, reviewKeeps,
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
 
@@ -120,6 +121,7 @@ export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchiv
         : answer({ kind: 'refused', token: verb.token, detail: verb.detail, inUse: [] });
     case 'failed': return answer({ kind: 'failed', resumable: verb.resumable, detail: verb.detail });
     case 'restart': return answer({ kind: 'restart', detail: verb.detail });
+    case 'stuck': return answer({ kind: 'stuck', detail: verb.detail });
     case 'box': return answer({ kind: 'box', word: verb.word, detail: verb.detail });
     case 'composition': return answer({ kind: 'composition', detail: verb.detail });
   }
@@ -220,6 +222,7 @@ const FEED_TITLE: Readonly<Record<ArchivedExpiryOutcome['kind'], string>> = {
   failed: 'archived workspace cleanup failed',
   'audit-failed': 'archived workspace cleanup failed',
   restart: 'archived workspace cleanup stopped before it began',
+  stuck: 'archived workspace cleanup stuck',
   box: 'archived workspace cleanup failed',
   composition: 'archived workspace cleanup failed',
   'no-evidence': 'archived workspace cleanup has no evidence',
@@ -257,6 +260,9 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
     // sentence about one cause, since a fresh pin's failure says the same (wave 6).
     case 'restart': return `${who}: ccd stopped before this attempt started anything (${r.detail}) — nothing was deleted, `
       + 'and the lane audits it afresh.';
+    case 'stuck': return `${who}: ccd stopped part-way (${r.detail}) — the session was stopped and nothing further was `
+      + `deleted. It is listed at once, and asked again ${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours after each failed attempt, `
+      + 'until an attempt completes or the workspace is archived again.';
     case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.`;
     case 'composition': return `${who}: ccd rejected the call this server composed — ${r.detail}. It is not retried.`;
     case 'no-evidence': return `${who}: the fleet box's ccd does not say when this archive expires; nothing was composed.`;

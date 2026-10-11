@@ -833,6 +833,47 @@ describe('the lane’s memory of one row', () => {
     }
   });
 
+  it('containment-refuted is STUCK: listed AT ONCE, on the persistent tier from its first answer, never +∞ (wave 6, ruling B)', () => {
+    const stuck = { kind: 'stuck', detail: 'containment-refuted: demo-other’s registry row lies inside /w/demo-quiet-dune' } as const;
+    const x = archivedExpiryNextEntry(e(), stuck, NOW, PASS)!;
+    expect(x.nextAskAt, 'the persistent tier at once: four hours, never +∞').toBe(NOW + EXPIRE_PERSISTENT_RETRY_MS);
+    expect(x.report).toEqual({ kind: 'stuck', at: NOW, detail: stuck.detail, attempts: 1 });
+    const sentence = expiryReportSentence(x.report!, null);
+    expect(sentence).toContain(`cleanup stopped part-way: ${stuck.detail}.`);
+    expect(sentence).toContain('The session was stopped and nothing further was deleted');
+    expect(sentence, 'it never suggests a destructive verb').not.toMatch(/ws-reap|ws-rm|ws-expire|delete it|remove it/);
+    expect(expiryAttention(new Map([[ID, x]])).map((a) => [a.kind, a.at]), 'on the wire: a failing entry, at once').toEqual([['failing', NOW]]);
+    const again = archivedExpiryNextEntry(x, stuck, x.nextAskAt, PASS)!;
+    expect(again.report, 'a later stuck answer keeps the first instant and counts the attempt')
+      .toEqual({ kind: 'stuck', at: NOW, detail: stuck.detail, attempts: 2 });
+    expect(again.nextAskAt).toBe(x.nextAskAt + EXPIRE_PERSISTENT_RETRY_MS);
+  });
+
+  it('a STUCK entry outranks a failing one and stands until an attempt completes or the archive changes — a terminal verdict still outranks it (wave 6, ruling B)', () => {
+    const stuck = { kind: 'stuck', detail: 'containment-refuted: d' } as const;
+    const { x: tier, t } = aDayOf(verbFailed);
+    const x = archivedExpiryNextEntry(tier, stuck, t, PASS)!;
+    expect(x.report, 'it takes the place of the tier’s failing entry').toEqual({ kind: 'stuck', at: t, detail: stuck.detail, attempts: 1 });
+    const failed = archivedExpiryNextEntry(x, verbFailed, t + PASS, PASS)!;
+    expect(failed.report, 'a later resumable failure does not replace it').toEqual(x.report);
+    expect(failed.nextAskAt, 'and keeps its cadence').toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
+    const box = archivedExpiryNextEntry(x, { kind: 'box', word: 'lock-unopenable', detail: 'cannot open the reap lock at /r' }, t + PASS, PASS)!;
+    expect(box.report, 'nor does a box word').toEqual(x.report);
+    const restart = archivedExpiryNextEntry(x, { kind: 'restart', detail: 'pin-failed: x' }, t + PASS, PASS)!;
+    expect(restart.report, 'nor a restart').toEqual(x.report);
+    expect(restart.nextAskAt, 'which keeps the cadence too').toBe(t + PASS + EXPIRE_PERSISTENT_RETRY_MS);
+    for (const [what, o] of [...TIER_ANSWERS, ['an audit failure', { kind: 'audit-failed', detail: 'unreadable' }]] as const) {
+      expect(archivedExpiryNextEntry(x, o, t + PASS, PASS)!.report, what).toEqual(x.report);
+    }
+    expect(archivedExpirySighted(x, { eligible: false, why: 'held' }, 'on hold', t + PASS).report, 'a hold').toEqual(x.report);
+    expect(archivedExpiryNextEntry(x, { kind: 'expired', kept: { clips: null, tmpRoot: null } }, t + PASS, PASS), 'completed').toBeNull();
+    expect(archivedExpiryNextEntry(x, { kind: 'expired', kept: { clips: 'in-use', tmpRoot: null } }, t + PASS, PASS)!.report, 'completed, kept')
+      .toMatchObject({ kind: 'kept' });
+    expect(archivedExpiryEntryFor(x, x.archivedAt + 60).report, 'a new archive').toBeNull();
+    expect(archivedExpiryNextEntry(x, { kind: 'refused', token: 'containment-unproven', detail: 'd', inUse: [] }, t + PASS, PASS)!.report,
+      'a terminal refusal (CCR-15’s R77: terminal outranks stuck)').toMatchObject({ kind: 'refused' });
+  });
+
   it('a failure the box says will NOT resume stops at once: reported, never asked again for this archive (review 313, parked item 4)', () => {
     // `ExpireVerbRead.failed.resumable` is carried through the outcome, never narrowed: a wrong-row `expired`, a word
     // this build does not know, or `probe-unmeasured` is not something waiting cures — no hour of retries first.

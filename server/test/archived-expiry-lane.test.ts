@@ -17,6 +17,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { ACTOR_FLAGS_CAP, EXPIRE_CAP } from '../src/ccdargv.js';
 import {
   EXPIRE_AUDITS_PER_PASS, EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
+  EXPIRE_PERSISTENT_RETRY_MS,
 } from '../src/archivedExpiry.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -197,6 +198,36 @@ describe('`crumb` decides a failed document (wave 6, question (k))', () => {
     expect(f.entry('demo-a'), 'back to learning').toMatchObject({ expiresAt: null, eligibleSince: null, report: null });
     expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace cleanup stopped before it began')?.body)
       .toContain('ccd stopped before this attempt started anything (pin-failed: the disk is full)');
+  });
+});
+
+describe('containment-refuted is STUCK (wave 6, ruling B)', () => {
+  it('listed AT ONCE, asked again every four hours, never stopping, one feed row — and an attempt that completes ends it', async () => {
+    let stuck = true;
+    const f = await fixture({ expire: (id) => stuck
+      ? { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'demo-other’s registry row lies inside /w/demo-a', crumb: true }), stderr: '' }
+      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    await f.watcher.tick();
+    const list = f.watcher.currentCoord()?.expiryAttention ?? [];
+    expect(list.map((a) => [a.sessionId, a.kind]), 'at once — never after the hour or the day').toEqual([['demo-a', 'failing']]);
+    expect(list[0]!.sentence).toContain('cleanup stopped part-way: containment-refuted: demo-other’s registry row lies inside /w/demo-a.');
+    f.advance(EXPIRE_PERSISTENT_RETRY_MS - 2 * CHILD_RECLAIM_SWEEP_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'not before four hours').toEqual(['demo-a']);
+    f.advance(2 * CHILD_RECLAIM_SWEEP_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'then asked again').toEqual(['demo-a', 'demo-a']);
+    f.advance(EXPIRE_PERSISTENT_RETRY_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'and again, never stopping').toHaveLength(3);
+    expect(f.feed().filter(([, t]) => t === 'archived workspace cleanup stuck'), 'one feed row, not one per ask').toHaveLength(1);
+    stuck = false;
+    f.advance(EXPIRE_PERSISTENT_RETRY_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire')).toHaveLength(4);
+    expect(f.entry('demo-a'), 'the attempt completed: finished with').toBeUndefined();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention ?? []).toEqual([]);
   });
 });
 
