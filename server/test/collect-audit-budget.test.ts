@@ -16,7 +16,7 @@ const readRel = (r: string): string => readFileSync(path.join(ROOT, r), 'utf8');
 /** The one match of `re` (a `g` regex) in `text`; throws on zero or on more than one. */
 function exactlyOne(text: string, re: RegExp, what: string): RegExpMatchArray {
   const hits = [...text.matchAll(re)];
-  if (hits.length !== 1) throw new Error(`${what}: ${hits.length} matches; the contract is one`);
+  if (hits.length !== 1) throw new Error(`${what}: ${hits.length} matches; exactly one is expected`);
   return hits[0]!;
 }
 

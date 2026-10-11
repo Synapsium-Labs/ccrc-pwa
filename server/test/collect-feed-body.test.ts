@@ -64,7 +64,7 @@ describe('the collector feed bodies (spec §5.10)', () => {
   });
 });
 
-describe('the feed cue of each answer (spec §5.10, R88): an observation writes no row; every other answer is a row keyed by its word', () => {
+describe('the feed cue of each answer (spec §5.10): an observation writes no row; every other answer is a row keyed by its word', () => {
   it('audits', () => {
     expect(collectFeedCueOfAudit(collectable(T1))).toEqual({ kind: 'observe', token: T1 });
     expect(collectFeedCueOfAudit(verdict('in-use'))).toEqual({ kind: 'row', key: 'in-use' });

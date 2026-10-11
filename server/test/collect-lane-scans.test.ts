@@ -91,7 +91,7 @@ describe('the collect token reaches ws-collect only from the act job’s own aud
     expect(enclosingFunction(sites[0]!.text, sites[0]!.at)?.name).toBe('collectTempRoot');
   });
 
-  it('its first argument is <obs>.token, <obs> bound ONCE as <answer>.value, <answer> the job’s one collectAudit( answer, before the act (H6)', () => {
+  it('its first argument is <obs>.token, <obs> bound ONCE as <answer>.value, <answer> the job’s one collectAudit( answer, before the act', () => {
     const [s] = sitesOf('wsCollect');
     const fn = enclosingFunction(s!.text, s!.at)!;
     const site = s!.at - fn.start;
@@ -133,6 +133,9 @@ describe('the collect token reaches ws-collect only from the act job’s own aud
 describe('no other destructive builder is handed a collector value (spec §5.10)', () => {
   const COLLECTOR = /\b(?:Collect(?:Token|Audit|Result|Entry|Listing|Population)|parseCollect(?:Audit|Result)|collectTempRoot|learnCollect|collectOpenRunHold)\b/;
   const LANE_IMPORT = /\bfrom\s*['"][^'"]*\/(?:collectLane|collectTempRoot)\.js['"]/;
+  /** A collector name anywhere in a scanned file's CODE: the site's function, a same-file caller that hands it a value,
+   *  or a type. Strictly stronger than the function's body alone, which cannot see a caller. */
+  const fileHit = (code: string): string | null => code.match(COLLECTOR)?.[0] ?? null;
 
   it('CONTROL: a collector type in a signature and a lane import are seen; a plain string is not', () => {
     expect(COLLECTOR.test('async function childReclaimAct(deps: D, req: R, token: CollectToken) {')).toBe(true);
@@ -140,7 +143,24 @@ describe('no other destructive builder is handed a collector value (spec §5.10)
     expect(LANE_IMPORT.test("import { learnCollect } from './collectTempRoot.js';")).toBe(true);
   });
 
-  it('each ws-reclaim and ws-expire site lies in a file that imports no lane module, in a function that names no collector type, reader or the act’s observation', () => {
+  it('CONTROL: a collector type at a same-file CALLER is unseen by the site’s function and seen by the whole-file read', () => {
+    const planted = [
+      'export async function childReclaimOutcome(deps: D, req: R, audit: { token: CollectToken }) {',
+      '  return childReclaimAct(deps, req, audit.token);',
+      '}',
+      'async function childReclaimAct(deps: D, req: R, token: string) {',
+      '  await deps.runCcd(CCD_ARGV.wsReclaim(token, req.id));',
+      '}',
+      '',
+    ].join('\n');
+    const fn = enclosingFunction(planted, planted.indexOf('CCD_ARGV.wsReclaim('));
+    expect(fn?.name).toBe('childReclaimAct');
+    expect(fn!.body.match(COLLECTOR)?.[0] ?? null, 'the site’s function alone names nothing').toBeNull();
+    expect(fileHit(planted), 'the file names the brand at its caller').toBe('CollectToken');
+    expect(fileHit(planted.replace('CollectToken', 'string')), 'a plain string is not').toBeNull();
+  });
+
+  it('each ws-reclaim and ws-expire site lies in a file that imports no lane module and names no collector type or reader anywhere, and none spends the act’s observation', () => {
     const obs = spentObservation();
     const sites = [...sitesOf('wsReclaim'), ...sitesOf('wsExpire')];
     expect(sites.map((s) => s.file).sort()).toEqual(['server/src/coord/childReclaim.ts', 'server/src/coord/expireArchived.ts']);
@@ -149,6 +169,7 @@ describe('no other destructive builder is handed a collector value (spec §5.10)
       const fn = enclosingFunction(s.text, s.at);
       expect(fn, `${s.file}: the site's function was not found`).not.toBeNull();
       expect(fn!.body.match(COLLECTOR)?.[0] ?? null, `${s.file} ${fn!.name}`).toBeNull();
+      expect(fileHit(s.text), `${s.file}: a collector name in the file, a same-file caller included`).toBeNull();
       if (obs !== null) {
         expect(new RegExp(`(?<![\\w$.])${obs}\\b`).test(firstArg(s.text, s.open)), `${s.file} spends ${obs}`).toBe(false);
       }

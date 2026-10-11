@@ -7,7 +7,7 @@
 //   - no open run holds the id;
 //   - each of those is re-read with no await between the re-read and the argv;
 //   - the lane is live.
-// The lane's start hold-off is asked at its offer (Task 7's collectOffers), never by this job (H4).
+// The lane's start hold-off is asked at its offer (Task 7's collectOffers), never by this job.
 // FIXTURE HOME ONLY.
 import { describe, it, expect } from 'vitest';
 import { COLLECT_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
@@ -275,7 +275,7 @@ describe('step 5 — the switches once more, with the live marker: the job’s l
 });
 
 describe('step 6 — synchronous from the last await to the argv', () => {
-  it('a pair cleared during the last await (a pass that saw a pause, or failed shut) composes nothing, even re-seeded', async () => {
+  it('a pair cleared during the last await (a lane-wide clear, or a reset of the id’s own pair) composes nothing, even re-seeded', async () => {
     for (const [clear, reseed] of [['lane', false], ['lane', true], ['id', false], ['id', true]] as const) {
       const r = rig();
       r.hooks.listing = (n) => {

@@ -93,7 +93,7 @@ describe('collectAttentionItems — one item per id, each at its own threshold (
     }
   });
 
-  it('a terminal answer is listed at once with what ccd last answered, never that it refuses now (H8), and outranks a standing in-use', () => {
+  it('a terminal answer is listed at once with what ccd last answered, never that it refuses now, and outranks a standing in-use', () => {
     const terminal = runOf('terminal', 'witness-mismatch', 1, true, 'witness unreadable');
     expect(one(view({ witnessRun: null, terminal }))).toEqual({ kind: 'collect', sessionId: 'demo-a', runId: null,
       word: 'witness-mismatch', sentence: 'Its temp root /h/tmp-root/demo-a: ccd’s last terminal answer for it was '
@@ -115,7 +115,7 @@ describe('collectAttentionItems — one item per id, each at its own threshold (
     expect(a.sentence, 'a flip to live does not end the episode, so no present-tense shadow').not.toMatch(/is shadowed|arms it by hand/);
   });
 
-  it('a pre-lock die recurring past the ceiling is listed, naming ccd’s word; nothing was removed (H1)', () => {
+  it('a pre-lock die recurring past the ceiling is listed, naming ccd’s word; nothing was removed', () => {
     const a = one(view({ die: { word: 'lock-unopenable', since: 0 } }))!;
     expect(a.word).toBe('die');
     expect(a.sentence).toContain('(lock-unopenable)');
@@ -180,7 +180,7 @@ describe('box-wide lines: single items under fixed labels (spec §5.10)', () => 
     expect(pa({ a: 'lock', b: 'lock', c: 'no-document' })).toEqual([]);
   });
 
-  it('the flock latch and unsettled calls or jobs each raise one line; unsettled names its ids, and a job says the act slot is held, its act out or not (H1, R85)', () => {
+  it('the flock latch and unsettled calls or jobs each raise one line; unsettled names its ids, and a job says the act slot is held, its act out or not', () => {
     expect(items({}, { flockLatched: true }).box.map((a) => a.word)).toEqual(['flock']);
     const two = items({}, { unsettled: new Map([['demo-b', 'audit'], ['demo-a', 'audit']]) }).box;
     expect(two.map((a) => a.word)).toEqual(['unsettled']);
@@ -188,7 +188,7 @@ describe('box-wide lines: single items under fixed labels (spec §5.10)', () => 
     expect(two[0]!.sentence, 'audits alone hold no slot').not.toContain('act slot');
     const u = items({}, { unsettled: new Map([['demo-b', 'audit'], ['demo-a', 'act']]) }).box;
     expect(u[0]!.sentence).toContain('within its bound for demo-b.');
-    expect(u[0]!.sentence, 'a job whose act is out holds the slot too (R85)').toContain('act slot is held by the job for demo-a');
+    expect(u[0]!.sentence, 'a job whose act is out holds the slot too').toContain('act slot is held by the job for demo-a');
     const j = items({}, { unsettled: new Map([['demo-b', 'audit'], ['demo-c', 'job']]) }).box;
     expect(j.map((a) => a.word)).toEqual(['unsettled']);
     expect(j[0]!.sentence).toContain('within its bound for demo-b.');
@@ -230,7 +230,7 @@ describe('collectPassClass and collectBoxProbesAfter (spec §5.10)', () => {
   });
 });
 
-describe('collectAttentionViewOf — Task 4’s causes decide what stands, first answer to latest, inclusive (spec §5.10, H3, H9)', () => {
+describe('collectAttentionViewOf — Task 4’s causes decide what stands, first answer to latest, inclusive (spec §5.10)', () => {
   const after = (answers: readonly (readonly [number, CollectAudit])[]): CollectEntry =>
     answers.reduce((e, [mono, a], k) => collectAfterAudit(e, a, step(mono, k + 2), true), collectFirstSighting(1));
 
@@ -264,7 +264,7 @@ describe('collectAttentionViewOf — Task 4’s causes decide what stands, first
     expect(collectAttentionViewOf(present(CEIL)).presenceSince).toBe(0);
   });
 
-  it('a pre-lock die recurring for a ceiling, first answer to latest, stands; a shorter recurrence does not (H1)', () => {
+  it('a pre-lock die recurring for a ceiling, first answer to latest, stands; a shorter recurrence does not', () => {
     const died = (gap: number): CollectEntry =>
       collectAfterAct(collectAfterAct(collectFirstSighting(1), DIE, step(0, 2)), DIE, step(gap, 3));
     expect(collectAttentionViewOf(died(CEIL - 1)).die).toBeNull();

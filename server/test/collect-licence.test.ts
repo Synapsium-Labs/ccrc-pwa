@@ -76,7 +76,7 @@ const RESETTING: readonly (readonly [string, (l: ReturnType<typeof lane>, mono: 
 
 /** Every reset that makes an earlier request stale. The five lane-wide ones are one mechanism here. */
 const RESETS: readonly (readonly [string, (l: ReturnType<typeof lane>, mono: number) => void])[] = [
-  ...['a marker flip', 'a raised pause', 'a missing capability', 'a pass that failed shut', 'an unlistable registry']
+  ...['a marker flip', 'a raised pause', 'a missing capability', 'a learning audit the box refused', 'an unlistable registry']
     .map((k) => [k, (l: ReturnType<typeof lane>) => { l.clearLane(); }] as const),
   ['the open-run hold', (l, m) => { l.hold(m); }],
   ['the presence defer', (l, m) => { l.presence(m); }],

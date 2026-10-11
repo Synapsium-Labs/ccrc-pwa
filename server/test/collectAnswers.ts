@@ -20,8 +20,8 @@ export const T1 = tok('a');
 export const T2 = tok('b');
 
 type Collectable = Extract<CollectAudit, { kind: 'collectable' }>;
-/** Every document's evidence (R88): its witness's run and its leaf, ccd's path. The verdict and unmeasured documents
- *  carry them too (H3). */
+/** Every document's evidence (spec §5.10): its witness's run and its leaf, ccd's path. The verdict and unmeasured documents
+ *  carry them too. */
 const LEAF = '/home/u/.cc-tmp/demo-a';
 export const collectable = (token: CollectToken, over: Partial<Omit<Collectable, 'kind' | 'token'>> = {}): CollectAudit =>
   ({ kind: 'collectable', token, resume: null, witnessRun: 7, witnessAt: WALL0, leaf: LEAF, detail: '', ...over });

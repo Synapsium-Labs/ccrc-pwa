@@ -53,11 +53,11 @@ import { TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, isTmpRootId, type RunState }
 export interface CollectClock { readonly mono: number; readonly wall: number }
 
 /** The lane's two clear generations for one id (spec §5.10):
- *  - the lane-wide one moves on a raised pause or an unlistable registry, a missing capability, a pass that failed
- *    shut, or a marker flip;
+ *  - the lane-wide one moves on a raised pause or an unlistable registry, a missing capability (at a pass, a job or a
+ *    learning audit), or a marker flip;
  *  - the id's own moves on any reset of its pair.
  *  Both are captured when a call is composed. Its answer is an observation only if both still stand when it arrives.
- *  It is L1's `CollectCapture`, spelled once there (H3). */
+ *  It is L1's `CollectCapture`, spelled once there. */
 export type CollectGenerations = CollectCapture;
 
 /** An answer, with the generations it was composed under and the instant it arrived. */
@@ -98,7 +98,7 @@ export interface CollectLanePort {
  *  - `io` to the one listing the switches read;
  *  - `presence` to its one question.
  *  `observeIntervalMs` is the lane's `COLLECT_OBSERVE_INTERVAL_MS`, passed in, as the L1 licence takes it. `runCcd` is
- *  the lane's stamping wrapper (Task 7), which reads `argv[0]` to tell this job's audit from its act (H1). */
+ *  the lane's stamping wrapper (Task 7), which reads `argv[0]` to tell this job's audit from its act. */
 export interface CollectTempRootDeps {
   coord: Pick<CoordStore, 'run' | 'openRunsForSession' | 'openRunsClaimedBy'>;
   io: Pick<FleetIO, 'readdir'>;
@@ -125,7 +125,10 @@ export type CollectAnsweredWhy =
   | 'stale' | 'not-collectable' | 'not-licensed' | 'paused' | 'marker-flip' | 'pair-cleared' | 'presence' | 'caps';
 
 /** What one job did (spec §5.10), for the lane to fold. Only `acted` composed the collector's verb. Every other arm
- *  composed none, and the lane frees the slot on it. Each arm says what was measured, never what to do next. */
+ *  composed none, and the lane frees the slot on it. Each arm says what was measured, never what to do next.
+ *  `detail` is DIAGNOSTIC: tests and reports read it, and the lane surfaces no sentence from it. So the distinctions
+ *  it alone words (a raised pause from an unlistable registry, a missing capability from a missing verb) are carried
+ *  to the lane, not shown to the operator. */
 export type CollectJobOutcome =
   /** Nothing was asked of the box: at step 1, 2 or 3, or at step 4 when the audit's own gate refused. */
   | { readonly kind: 'not-asked'; readonly step: 1 | 2 | 3 | 4; readonly why: 'caps' | 'id-refused' | 'paused' | 'presence';
@@ -368,7 +371,7 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
   const obs2 = audit.value;
   if (obs2.kind !== 'collectable') return answered(4, 'not-collectable', `ws-audit answered ${obs2.kind}`);
   const observed: CollectAnswer<CollectAuditCollectable> = { ...audit, value: obs2 };
-  // The licence is R85's ONE L1 rule, `collectLicence`, against observation 1 read from the lane's memory. `observes`
+  // The licence is the ONE L1 rule, `collectLicence`, against observation 1 read from the lane's memory. `observes`
   // is true: the stale check above has already asked whether this answer is an observation.
   const licence = collectLicence(deps.lane.observation(job.id), obs2, audit.arrived.mono, deps.observeIntervalMs, true);
   const hold = collectOpenRunHold(deps.coord, job.id, obs2);
@@ -425,8 +428,8 @@ export async function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob
  *    (a) to (e): it finishes an act that began under these same gates, and (d) alone holds it. The stated residual is
  *    that a record's own run is not on the wire;
  *  - (f) any of these reads fails.
- *  It counts nothing. The lane clears the pair, and the id's next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS` flat (R87,
- *  H1). */
+ *  It counts nothing. The lane clears the pair, and the id's next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS`
+ *  flat. */
 export function collectOpenRunHold(
   coord: CollectTempRootDeps['coord'], id: string, doc: Pick<CollectAuditCollectable, 'resume' | 'witnessRun' | 'witnessAt'>,
 ): CollectHoldRead {

@@ -140,11 +140,11 @@ import { COLLECT_CAP } from './ccdargv.js';
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence,
-  collectAfterWouldCollect, collectAttentionItems, collectAttentionViewOf, collectBoxProbesAfter, collectCandidateOf,
-  collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody, collectFeedCueOfAct, collectFeedCueOfAudit,
-  collectFeedStep, collectFeedSwitchBody, collectFeedWouldCollectBody, collectFirstSighting, collectForgets, collectFresh,
-  collectJobEffects, collectOffers, collectPassClass, collectPopulation, collectWouldCollectKey,
-  type CollectAttentionView, type CollectAudit, type CollectEntry, type CollectFeedCue,
+  collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
+  collectBoxProbesAfter, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
+  collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedStep, collectFeedSwitchBody, collectFeedWouldCollectBody,
+  collectFirstSighting, collectForgets, collectForgottenActRow, collectFresh, collectJobEffects, collectOffers,
+  collectPassClass, collectPopulation, collectWouldCollectKey, type CollectAudit, type CollectEntry, type CollectFeedCue,
   type CollectPassClass, type CollectPopulation, type CollectResult, type CollectStep, type CollectUnsettledKind,
 } from './collectLane.js';
 import {
@@ -969,8 +969,8 @@ export class FleetWatcher {
   /** THE TEMP-ROOT COLLECTOR'S LANE (spec §5.10, child reclamation wave 9): its clocks and memory, its OWN — never the
    *  child lane's, the expiry lane's or the dead-coordinator lane's. IN MEMORY ONLY, deliberately: a restart loses all of
    *  it, and losing it can only DELAY a collection (two fresh observations, the start hold-off), never cause one. STATED
-   *  RESIDUAL (R87): a restart re-enters each terminal and verb-failed id at j = 0, about eight extra terminal audits or
-   *  failing acts per such id after it.
+   *  RESIDUAL (spec §5.10, pacing): a restart re-enters each terminal and verb-failed id at j = 0, about eight extra
+   *  terminal audits or failing acts per such id after it.
    *  - `lastCollectSweep`: the throttle, on the MONOTONIC clock; `null` before the first pass.
    *  - `collectSweeping`: one pass at a time (`sweepTempRootCollect`), over the gather and the decide-and-enqueue only.
    *  - `collectStartMono`: this lane's start (the watcher's construction), monotonic. No act job is offered until
@@ -989,7 +989,7 @@ export class FleetWatcher {
    *  - `collectLastSeenLive`: the live marker as the last act job read it. It starts SHADOWED, so an arming made while the
    *    server was down, or before a restart no job saw, is still a flip, and still writes its row.
    *  - `collectPop`: the last measured pass's population, for the box-wide listing and refused-name lines; `null` before
-   *    one.
+   *    one. `collectPopNames`: the registry listing that pass's pre-filter read, for attention's projection.
    *  - `collectBoxProbes`: the box-wide probes standing (Task 5's `collectBoxProbesAfter`, over every answer).
    *  - `collectPassSeq`, `collectPassTally`, `collectPassPublished`, `collectPassAudits`: each pass's audits by class
    *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
@@ -1006,6 +1006,7 @@ export class FleetWatcher {
   private collectFlockLatched = false;
   private collectLastSeenLive = false;
   private collectPop: CollectPopulation | null = null;
+  private collectPopNames: ReadonlySet<string> = new Set();
   private collectBoxProbes: ReadonlyMap<string, string> = new Map();
   private collectPassSeq = 0;
   private collectPassTally = new Map<number, { pending: number; readonly audits: Map<string, CollectPassClass> }>();
@@ -4226,7 +4227,7 @@ export class FleetWatcher {
     // TWO — THE ONE GATHER (spec §5.10): the population's two listings and the switches' own registry listing, together.
     // The pause is read from THIS listing, not the tick's, because the tick never hands a lane a registry that did not
     // list, and this lane must read one as a pause. Neither read rejects: a port that does makes THAT listing unmeasured,
-    // or the registry paused. So no catch stands here: a guard no case can reach has no red (H13).
+    // or the registry paused. So no catch stands here: a guard no case can reach has no red.
     const gathered = await Promise.all([
       readCollectPopulation(this.deps.io, this.deps.cfg.registryDir),
       collectSwitches(this.deps.io, this.deps.cfg.registryDir),
@@ -4245,10 +4246,16 @@ export class FleetWatcher {
     // FOUR — the population (L1): the ids to consider, from the MEASURED listings only, pre-filtered on the tick's exact
     // `<id>.child` and `<id>.uuid` names unless a measured record names the id. Kept for the box-wide lines. An id is
     // forgotten — its pacing and episodes with it, and no feed row — only when `collectForgets` says so (both listings
-    // measured, neither names it); an answer still out for it then finds no entry, and is dropped.
+    // measured, neither names it); an answer still out for it then finds no entry, and is dropped, save a `collected`
+    // act's row (`collectForgottenActRow`). The box-wide lines whose ids have all left are dropped with them (L1's
+    // `collectBoxAfterPopulation`), so no line stands on evidence no later answer can clear.
     const pop = collectPopulation({ ...listings, registryNames: new Set(names) });
     this.collectPop = pop;
+    this.collectPopNames = new Set(names);
     for (const id of [...this.collectState.keys()]) if (collectForgets(pop, id)) this.collectState.delete(id);
+    const box = collectBoxAfterPopulation(pop, this.collectPassAudits, this.collectBoxProbes);
+    this.collectPassAudits = box.passAudits;
+    this.collectBoxProbes = box.boxProbes;
     // FIVE — the slot's kept deadline, and each call past its bound, logged once (its line is derived at the publish).
     if (this.collectSlot.kind === 'kept' && mono >= this.collectSlot.untilMono) this.collectSlot = { kind: 'free' };
     this.collectLogUnsettled(mono);
@@ -4336,6 +4343,8 @@ export class FleetWatcher {
    *    capture, so a stale, paused, flipped, capability-less or cleared job's answer paces and never observes; then
    *    `answered` presence (step 6) is `collectAfterPresence`, `held` is `collectAfterHold`, `would-collect` is
    *    `collectAfterWouldCollect` with its once-per-(id, token) row, and `acted` is `collectAfterAct` with its row.
+   *  - an id forgotten while the job was out: every fold is dropped but an `acted` outcome's word about the box and a
+   *    `collected` act's row (`collectForgottenActRow`), worded from the job's own observation-2 document.
    *  - `threw`: an audit with no document, which observes nothing. */
   private collectFoldJob(coord: CoordStore, id: string, pass: number,
     s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }, clock: CollectClock): void {
@@ -4349,7 +4358,14 @@ export class FleetWatcher {
       return;
     }
     const e = this.collectFoldAudit(coord, id, pass, s.audit.value, s.audit.arrived, s.audit.composed);
-    if (e === null) return;
+    // What an act says of the BOX counts whatever became of its id, as an audit's does (`collectFoldAudit`).
+    if (s.kind === 'acted') this.collectBoxProbes = collectBoxProbesAfter(this.collectBoxProbes, s.result);
+    if (e === null) {
+      // The id was forgotten while the job was out: its fold is dropped, save the row L1 says a deletion still owes.
+      const row = collectForgottenActRow(id, s, s.audit.value);
+      if (row !== null) this.collectRecordFeed(coord, { sessionId: id, ...row });
+      return;
+    }
     const at = this.collectStepAt(s.audit.arrived);
     switch (s.kind) {
       case 'answered':
@@ -4366,7 +4382,6 @@ export class FleetWatcher {
         return;
       }
       case 'acted': {
-        this.collectBoxProbes = collectBoxProbesAfter(this.collectBoxProbes, s.result);
         const next = collectAfterAct(e, s.result, this.collectStepAt(s.arrived));
         this.collectFeedAfter(coord, id, next, collectFeedCueOfAct(s.result), () => this.collectActRow(id, next, s.result));
         return;
@@ -4433,7 +4448,7 @@ export class FleetWatcher {
     }
   }
 
-  /** The collector's feed rows (spec §5.10, R82): written HERE, never by the definer (`collectLane.ts`) or the executor
+  /** The collector's feed rows (spec §5.10): written HERE, never by the definer (`collectLane.ts`) or the executor
    *  (`coord/collectTempRoot.ts`), in `recordExpireFeed`'s idiom — a `run` row, recorded and archived, never pushed; a
    *  failed archive write is said and never stops the lane; the log is flushed whatever happened. */
   private collectRecordFeed(coord: CoordStore, row: {
@@ -4543,9 +4558,10 @@ export class FleetWatcher {
 
   /** The ids whose collector call or job has not settled within its bound (spec §5.10), by kind, each counted from when
    *  it was QUEUED. An act JOB not settled `CHILD_RECLAIM_STALL_MS` after it took the slot is asked FIRST, whatever it
-   *  has out: its `ws-collect` (`act`), or its own audit or nothing yet (`job`) — R85's "even if it never composed a
-   *  call" — and Task 5's line says the act slot is held for both. Short of that, an audit (a learning audit, or the
-   *  job's own) is listed at `COLLECT_AUDIT_STALL_MS`. The two kinds differ only in the process log's noun. */
+   *  has out: its `ws-collect` (`act`), or its own audit or nothing yet (`job`) — spec §5.10: "whether or not the job's
+   *  `ws-collect` is out" — and Task 5's line says the act slot is held for both. Short of that, an audit (a learning
+   *  audit, or the job's own) is listed at `COLLECT_AUDIT_STALL_MS`. The two kinds differ only in the process log's
+   *  noun. */
   private collectUnsettled(mono: number): Map<string, CollectUnsettledKind> {
     const out = new Map<string, CollectUnsettledKind>();
     for (const [id, f] of [...this.collectInFlight].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
@@ -4556,7 +4572,9 @@ export class FleetWatcher {
     return out;
   }
 
-  /** Each unsettled call is logged ONCE per process (spec §5.10); its attention line is derived at the publish. */
+  /** Each unsettled call is logged ONCE per unsettled episode (spec §5.10): when it first passes its bound, and again
+   *  only after it has settled and a later call for that id passes its bound. Its attention line is derived at the
+   *  publish. */
   private collectLogUnsettled(mono: number): void {
     for (const [id, kind] of this.collectUnsettled(mono)) {
       if (this.collectUnsettledLogged.has(id)) continue;
@@ -4568,13 +4586,12 @@ export class FleetWatcher {
   }
 
   /** The collector's attention (spec §5.10), derived from this lane's memory when the child lane publishes its list:
-   *  each entry through Task 5's projection, and the box facts. L1 decides every item; the list's ONE write merges them
-   *  (`childReclaimPublishAttention`). A stated residual: they reach the frame only at that publish, and stand unchanged
-   *  while the child lane's pass fails shut. */
+   *  each remembered id L1 projects (`collectAttentionViews`: all but a re-registered id), and the box facts. L1
+   *  decides every item; the list's ONE write merges them (`childReclaimPublishAttention`). A stated residual: they
+   *  reach the frame only at that publish, and stand unchanged while the child lane's pass fails shut. */
   private collectAttention(): ChildReclaimCollectInput {
     const nowMono = this.collectClock().mono;
-    const entries = new Map<string, CollectAttentionView>();
-    for (const [id, e] of this.collectState) entries.set(id, collectAttentionViewOf(e));
+    const entries = collectAttentionViews(this.collectState, this.collectPop, this.collectPopNames);
     return collectAttentionItems({ entries, nowMono, box: {
       unmeasured: this.collectPop?.unmeasured ?? [], refusedNames: this.collectPop?.refusedNames ?? 0,
       boxProbes: this.collectBoxProbes, passAudits: this.collectPassAudits, flockLatched: this.collectFlockLatched,

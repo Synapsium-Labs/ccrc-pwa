@@ -1,7 +1,7 @@
 // The temp-root collector's server lane: its PURE half (child reclamation spec 2026-09-22 §5.10; attention, §5.9).
 //
 // L1. This file imports `shared/api.js` and `./childReclaimSweep.js` only (L1 to L1, one way: `childReclaimSweep.ts`
-// never imports this file), ONE import statement each, and every later block merges its names into those two (H2).
+// never imports this file), ONE import statement each, and every later block merges its names into those two.
 // The readers need the first alone. It reaches no file, process, timer or clock: every instant and interval
 // a rule here decides with is an argument. The executor (`coord/collectTempRoot.ts`, L3) runs ccd and hands its answers
 // here, and the watcher (`watch.ts`, L4) wires the pass and decides nothing.
@@ -25,9 +25,9 @@ const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnPropert
 const isObject = (v: unknown): v is Readonly<Record<string, unknown>> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-// ── the live switch (spec §5.10, R82) ───────────────────────────────────────────────────────────────────────────
+// ── the live switch (spec §5.10) ────────────────────────────────────────────────────────────────────────────────
 
-/** The lane's live switch: the marker FILE `$REG/collect-lane-live` (R82). The lane composes `ws-collect` only while it
+/** The lane's live switch: the marker FILE `$REG/collect-lane-live`. The lane composes `ws-collect` only while it
  *  exists. Without it the lane audits under every rule, and records "would collect" where it would spend (shadow).
  *  - Nothing in the tree writes it. It is hand-touched, on the `expire-lane-live` precedent.
  *  - It is spelled ONCE, here, in an L1 file with no `node:` import. Its code holders are this file and the executor
@@ -122,7 +122,7 @@ export type CollectAudit =
 
 /** `collect.witness` as the document prints it: `null`, or ccd's five fields, each a string, with `run` in the one
  *  run-id grammar and `at` thirteen digits. Anything else, an absent key included, is `bad`. A `collectable` hands its
- *  key over as it stands, so an absent one is `bad` there (H7); a `verdict` or `unmeasured` hands an absent key over
+ *  key over as it stands, so an absent one is `bad` there; a `verdict` or `unmeasured` hands an absent key over
  *  as `null`, so it reads as none. */
 type WitnessRead =
   | { readonly kind: 'none' }
@@ -167,8 +167,8 @@ export function parseCollectAudit(sessionId: string, ok: boolean, stdout: string
   const collect = isObject(v.collect) ? v.collect : null;
   const detail = typeof v.detail === 'string' ? v.detail : '';
   const leaf = collect !== null && typeof collect.leaf === 'string' ? collect.leaf : null;
-  /** The witness as a `verdict` or `unmeasured` document carries it: an absent key reads as none (H3). A `collectable`
-   *  reads its own, stricter (H7). */
+  /** The witness as a `verdict` or `unmeasured` document carries it: an absent key reads as none. A `collectable`
+   *  reads its own, stricter. */
   const seen = readWitness(collect?.witness ?? null);
   if (!ok) {
     const probe = collect === null ? undefined : collect.unmeasured;
@@ -415,11 +415,15 @@ export function collectPopulation(input: {
     if (id !== null) recordIds.add(id); else refusedNames += 1;
   }
   const ids = [...new Set([...witnessed, ...recordIds])].sort();
-  const rowStands = (id: string): boolean =>
-    input.registryNames.has(`${id}.child`) || input.registryNames.has(`${id}.uuid`);
-  const candidates = ids.filter((id) => recordIds.has(id) || !rowStands(id));
+  const candidates = ids.filter((id) => recordIds.has(id) || !collectRowStands(input.registryNames, id));
   return { ids, candidates, recordIds, refusedNames, unmeasured, bothMeasured: unmeasured.length === 0 };
 }
+
+/** Does `id`'s registry row stand in the tick's listing (spec §5.10, the pre-filter)? Its EXACT `<id>.child` or
+ *  `<id>.uuid`, never a prefix: a row of `a.b` says nothing of `a`. The ONE spelling of the rule, which the pre-filter
+ *  and attention's projection both read. */
+export const collectRowStands = (registryNames: ReadonlySet<string>, id: string): boolean =>
+  registryNames.has(`${id}.child`) || registryNames.has(`${id}.uuid`);
 
 /** Is `id` forgotten this pass, its pacing and feed episodes dropped without a feed row (spec §5.10)? Only when BOTH
  *  listings were measured and neither names it: an unmeasured listing never says an id is gone. */
@@ -491,7 +495,7 @@ export const COLLECT_HOLD_WHYS: readonly CollectHoldWhy[] = Object.keys(COLLECT_
  *  - `defer`: a deferral, neutral to every run; `listedAfterMs` is how long it must answer without a break before the
  *    id is listed (`0`: at once), or null for never by its own continuity.
  *  - `schedule`: `changed-recently`, re-asked from ccd's `idleAt`, and listed after `listedAfterMs` without a break.
- *  - `silent`: `not-witnessed`, which clears the three runs, advances the deferral count, and raises nothing (R87).
+ *  - `silent`: `not-witnessed`, which clears the three runs, advances the deferral count, and raises nothing.
  *  - `terminal`: the terminal run.
  *  A verdict word NOT in this table is read as a failure (the failing run): never spent, and listed at the tier. */
 export type CollectVerdictRow =
@@ -520,11 +524,11 @@ export interface CollectStreak {
   readonly word: CollectVerdictWord; readonly sinceMono: number; readonly lastMono: number; readonly detail: string;
 }
 /** The open-run hold's continuity: first at `sinceMono`, last at `atMono`, latest for `why`. It keeps NO count: the
- *  hold's next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS` flat (R87). Task 6's `CollectHeld` is the hold's RESULT. */
+ *  hold's next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS` flat. Task 6's `CollectHeld` is the hold's RESULT. */
 export interface CollectHoldClock {
   readonly why: CollectHoldWhy; readonly sinceMono: number; readonly atMono: number;
 }
-/** A recognised pre-lock die other than `flock-unavailable`, recurring with ONE word (R87): from the first such die's
+/** A recognised pre-lock die other than `flock-unavailable`, recurring with ONE word: from the first such die's
  *  arrival to the latest's. `collectable` observations, the hold and presence continue it; any other answer, act
  *  outcome or would-collect ends it. */
 export interface CollectDieStreak {
@@ -532,9 +536,15 @@ export interface CollectDieStreak {
 }
 /** The presence defer's continuity and count: deferred `count` times, first at `sinceMono`, last at `atMono`. */
 export interface CollectPresence { readonly count: number; readonly sinceMono: number; readonly atMono: number }
-/** The LATEST document's own evidence (R88, H3): its witness's run and its leaf (ccd's path, display only). A
+/** The LATEST document's own evidence (spec §5.10): its witness's run and its leaf (ccd's path, display only). A
  *  collectable, verdict or unmeasured document brings its own; no document and an unreadable one bring none. */
 export interface CollectEvidence { readonly runId: number | null; readonly leaf: string | null }
+
+/** The evidence one audit document brings (spec §5.10): a collectable, verdict or unmeasured document brings its own;
+ *  no document and an unreadable one bring none (null), and the last evidence stands. The ONE derivation: the per-id
+ *  fold (`collectAfterAudit`) and a forgotten id's collected row (`collectForgottenActRow`) both read it. */
+export const collectEvidenceOf = (a: CollectAudit): CollectEvidence | null =>
+  (a.kind === 'no-document' || a.kind === 'unreadable' ? null : { runId: a.witnessRun, leaf: a.leaf });
 
 /** THE LANE'S MEMORY OF ONE ID (spec §5.10). Memory only.
  *  - `idGen`: the id's clear generation. Every reset of the pair stamps a generation the lane never used before, so a
@@ -600,9 +610,9 @@ export const collectCapture = (laneGen: number, e: CollectEntry): CollectCapture
 export const collectFresh = (cap: CollectCapture, laneGen: number, e: CollectEntry | undefined): boolean =>
   e !== undefined && cap.lane === laneGen && cap.id === e.idGen;
 
-/** A lane-wide clear (a raised pause, an unlistable registry, a missing capability, a pass that failed shut, a flip
- *  of the live marker): the OBSERVATION PAIR only. The pacing, every run, the continuity clocks and the feed episode
- *  stand (spec §5.10). The caller moves the lane-wide generation in the same act. */
+/** A lane-wide clear (a raised pause, an unlistable registry, a missing capability at a pass, a job or a learning
+ *  audit, a flip of the live marker): the OBSERVATION PAIR only. The pacing, every run, the continuity clocks and the
+ *  feed episode stand (spec §5.10). The caller moves the lane-wide generation in the same act. */
 export const collectClearPair = (e: CollectEntry): CollectEntry => (e.obs === null ? e : { ...e, obs: null });
 
 /** A `changed-recently` answer's next ask (spec §5.10, pacing): `arrival.monoMs + clamp(idleAt·1000 − arrival.wallMs,
@@ -626,7 +636,7 @@ export function collectIdleSchedule(idleAt: number | null, arrival: ChildReclaim
  *  - A `defer` word, and an `unmeasured` box-wide probe: a deferral.
  *  - `changed-recently`: clears the deferral count and the failing run, and schedules from `idleAt`; without one it is
  *    a deferral.
- *  - `not-witnessed`: clears the three runs and ADVANCES the deferral count, so it is asked no sooner than the ramp (R87).
+ *  - `not-witnessed`: clears the three runs and ADVANCES the deferral count, so it is asked no sooner than the ramp.
  *  - A terminal word: the terminal run, on the tier at once.
  *  - An `unmeasured` per-leaf or load-sensitive probe (an unknown probe word is load-sensitive), `no-document`,
  *    `unreadable` and a verdict word the table does not know: the failing run, a per-leaf probe on the tier at once.
@@ -635,9 +645,9 @@ export function collectIdleSchedule(idleAt: number | null, arrival: ChildReclaim
  *  collectable, verdict or unmeasured document brings its own evidence; no document and an unreadable one keep the last. */
 export function collectAfterAudit(e: CollectEntry, a: CollectAudit, s: CollectStep, observes: boolean): CollectEntry {
   const t = s.now.monoMs;
-  // the LATEST document's evidence (R88, H3): every document that carries one brings it; the rest keep the last
-  const d: CollectEntry = a.kind === 'no-document' || a.kind === 'unreadable'
-    ? e : { ...e, evidence: { runId: a.witnessRun, leaf: a.leaf } };
+  // the LATEST document's evidence (spec §5.10): every document that carries one brings it; the rest keep the last
+  const brought = collectEvidenceOf(a);
+  const d: CollectEntry = brought === null ? e : { ...e, evidence: brought };
   // EVERY answer but a fresh observation of the token held resets the pair, under a new generation (spec §5.10)
   const reset = { obs: null, idGen: s.gen } as const;
   const ended = { held: null, presence: null, streak: null, scheduleMono: null, die: null } as const;
@@ -686,13 +696,13 @@ export function collectAfterAudit(e: CollectEntry, a: CollectAudit, s: CollectSt
  *  a recurring die's.
  *  - `collected`: every run, count and floor clears, as at a first sighting.
  *  - `refused`, of any word, retryable included: a deferral, and the refusal floor. A terminal word (the verb's
- *    refusal table, `collectRefusalClass`) also advances the terminal run, ahead of the refusal row (R87). A
- *    `not-witnessed` reads as the audit's (H7): the three runs clear, beside the deferral and the floor.
- *  - `failed` whose word is terminal (`failed quarantine-kept`): the terminal run, ahead of the verb-failed row (R87).
+ *    refusal table, `collectRefusalClass`) also advances the terminal run, ahead of the refusal row. A
+ *    `not-witnessed` reads as the audit's: the three runs clear, beside the deferral and the floor.
+ *  - `failed` whose word is terminal (`failed quarantine-kept`): the terminal run, ahead of the verb-failed row.
  *  - Any other `failed`, a reader-made `''` included, and `no-document` (an act that MAY have acted): the verb-failed run.
  *  - `die` (a recognised pre-lock die, which acted nothing): a deferral, neutral to every run. Every word but
  *    `flock-unavailable`, which latches box-wide instead (Task 7), also takes the refusal floor (`dieAtMono`) and
- *    continues a die streak of its own word, which attention reads past the ceiling (R87). */
+ *    continues a die streak of its own word, which attention reads past the ceiling. */
 export function collectAfterAct(e: CollectEntry, r: CollectResult, s: CollectStep): CollectEntry {
   const t = s.now.monoMs;
   const after: CollectEntry = {
@@ -727,7 +737,7 @@ export function collectAfterAct(e: CollectEntry, r: CollectResult, s: CollectSte
 
 /** The memory after the open-run hold stood (spec §5.10, the gates): the pair resets, and the hold's continuity runs
  *  on. It counts nothing: no run, not the deferral count, and no count of its own. Its next ask waits
- *  `CHILD_RECLAIM_DEFER_CEILING_MS` flat (R87). */
+ *  `CHILD_RECLAIM_DEFER_CEILING_MS` flat. */
 export function collectAfterHold(e: CollectEntry, why: CollectHoldWhy, s: CollectStep): CollectEntry {
   const t = s.now.monoMs;
   return { ...e, obs: null, idGen: s.gen, presence: null, held: { why, sinceMono: e.held?.sinceMono ?? t, atMono: t } };
@@ -751,7 +761,7 @@ export function collectAfterWouldCollect(e: CollectEntry, s: CollectStep): Colle
  *  - the deferral wait, `childReclaimBackoffMs` over the deferral count;
  *  - each run's wait (`collectRunWaitMs`);
  *  - the `changed-recently` schedule;
- *  - the hold's wait: the ceiling, flat (R87: no count of its own);
+ *  - the hold's wait: the ceiling, flat (no count of its own);
  *  - presence's wait: the ramp over its own count;
  *  - the refusal, die and shadow floors, the ceiling after each;
  *  - while observation 1 stands, the observation interval after its arrival, so a holder is not offered again
@@ -813,7 +823,7 @@ export function collectLicence(
 
 /** Step 6's re-read (spec §5.10): after the job's last await, the licence still stands only while neither generation
  *  captured when observation 2 was composed (`composed`) has moved by `now`, and memory still holds the very
- *  observation 1 the licence was judged on (`obs`). The executor calls it through its port (H3): `now` is
+ *  observation 1 the licence was judged on (`obs`). The executor calls it through its port: `now` is
  *  `lane.generations(id)`, whose `id` is -1 for a forgotten id (a generation no entry carries), and `obs` is
  *  `lane.observation(id)`. */
 export const collectLicenceStands = (
@@ -829,7 +839,7 @@ export const collectLicenceStands = (
  *  - `in-use`: at once. `registered`, `in-progress`: answered without a break for the ceiling. `changed-recently`: for
  *    24 hours. Each measured from the streak's first answer to its latest.
  *  - `held`, `presence`: deferred so for the ceiling, first to latest.
- *  - `die`: one pre-lock die word recurring for the ceiling, first to latest (R87). */
+ *  - `die`: one pre-lock die word recurring for the ceiling, first to latest. */
 export type CollectAttentionCause =
   | { readonly kind: 'terminal' | 'failing' | 'verb-failed'; readonly word: string; readonly detail: string }
   | { readonly kind: CollectVerdictWord; readonly detail: string; readonly sinceMono: number }
@@ -875,7 +885,7 @@ export type CollectFeedCue =
 const COLLECT_WOULD_COLLECT_PREFIX = 'would-collect ';
 export const collectWouldCollectKey = (token: CollectToken): string => `${COLLECT_WOULD_COLLECT_PREFIX}${token}`;
 
-/** Does a would-collect episode stand for this id? Task 5's projection reads it (R82's shadow item), so no token is
+/** Does a would-collect episode stand for this id? Task 5's projection reads it (shadow's item), so no token is
  *  carried or cast to answer it: true while the feed episode is a would-collect key. */
 export const collectWouldCollectStands = (e: CollectEntry): boolean =>
   e.feedEpisode !== null && e.feedEpisode.startsWith(COLLECT_WOULD_COLLECT_PREFIX);
@@ -915,7 +925,7 @@ export interface CollectRunView {
 }
 
 /** What attention reads of one id's lane memory (spec §5.10), PROJECTED from Task 4's `CollectEntry` by
- *  `collectAttentionViewOf` (H3). Each clock field is non-null only while Task 4's `collectAttentionCauses` says that
+ *  `collectAttentionViewOf`. Each clock field is non-null only while Task 4's `collectAttentionCauses` says that
  *  cause stands. All instants are on the monotonic clock. */
 export interface CollectAttentionView {
   /** The latest document's `collect.witness.run`, or null. */
@@ -931,7 +941,7 @@ export interface CollectAttentionView {
   readonly presenceSince: number | null;
   readonly hold: { readonly why: CollectHoldWhy; readonly since: number } | null;
   readonly changedRecentlySince: number | null;
-  /** A recognised arm-1 die other than `flock-unavailable`, recurring for the ceiling (H1), or null. */
+  /** A recognised arm-1 die other than `flock-unavailable`, recurring for the ceiling, or null. */
   readonly die: { readonly word: CollectDieWord; readonly since: number } | null;
   /** A shadow would-collect episode stands (Task 4's `collectWouldCollectStands`). No token is carried: the shipped
    *  tree's one `as CollectToken` stays the audit reader's. */
@@ -943,7 +953,7 @@ const collectRunView = (r: CollectRun, token: CollectRunToken): CollectRunView =
   tier: collectRunTier(r, token), word: r.kind === 'run' ? r.word : null, detail: r.kind === 'run' ? r.detail : null,
 });
 
-/** THE PROJECTION (H3): Task 4's entry as attention reads it. It decides NO threshold. Every clock field is copied from
+/** THE PROJECTION: Task 4's entry as attention reads it. It decides NO threshold. Every clock field is copied from
  *  the cause Task 4's `collectAttentionCauses` says stands (first answer to latest, inclusive), and is null otherwise;
  *  the runs are projected whole; the evidence is the latest document's. */
 export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
@@ -968,10 +978,30 @@ export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
   };
 }
 
+/** WHICH remembered ids attention projects (spec §5.10): every one, save an id whose exact registry row stands again
+ *  in the listing the last measured pass's pre-filter read (`registryNames`, through `collectRowStands`) while no
+ *  quarantine record in that population names it. Such an id (a reused slug) is never asked and never forgotten, and
+ *  an item it carried (would-collect, in-use, a terminal word) would describe what is now a live workspace, so it
+ *  projects none. A record keeps it listed, as it keeps it a candidate: a kept record is never silent. Nothing is ever
+ *  hidden because an id is merely absent from a listing that is unmeasured or over its cap: attention must not vanish
+ *  exactly when a listing is in doubt. Pacing memory is KEPT, untouched: once the row goes, the item returns as it
+ *  stood. With no population measured yet, no id is projected (and none is remembered). Pure: the watcher hands its
+ *  memory and that pass's listing over, and publishes what comes back. */
+export function collectAttentionViews(entries: ReadonlyMap<string, CollectEntry>, pop: CollectPopulation | null,
+  registryNames: ReadonlySet<string>): Map<string, CollectAttentionView> {
+  const out = new Map<string, CollectAttentionView>();
+  if (pop === null) return out;
+  for (const [id, e] of entries) {
+    if (collectRowStands(registryNames, id) && !pop.recordIds.has(id)) continue;
+    out.set(id, collectAttentionViewOf(e));
+  }
+  return out;
+}
+
 /** How one pass's audit counts for the two pass-scoped box lines (spec §5.10). */
 export type CollectPassClass = 'no-document' | 'lock' | 'other';
 
-/** Which collector work is unsettled past its bound (spec §5.10, H1, R85): `'audit'`, a learning audit past twice the
+/** Which collector work is unsettled past its bound (spec §5.10): `'audit'`, a learning audit past twice the
  *  90 s row, or an executor job's own audit past it and short of `CHILD_RECLAIM_STALL_MS`; or an executor JOB that took the act
  *  slot and has not settled in `CHILD_RECLAIM_STALL_MS`, whether or not it composed a call: `'act'` when its
  *  `ws-collect` is out, `'job'` otherwise. The job's bound is checked first, and the box line says the act slot is
@@ -1014,6 +1044,27 @@ export function collectBoxProbesAfter(prev: ReadonlyMap<string, string>, a: Coll
   const passed = a.kind === 'collectable' || a.kind === 'collected'
     || (a.kind === 'verdict' && a.verdict === COLLECT_CHANGED_RECENTLY);
   return passed ? new Map() : prev;
+}
+
+/** The box-wide lines' evidence after a pass measured its population (spec §5.10): no line outlives the ids behind it.
+ *  - The pass-scoped lines (`no-document`, `lock`) read the last finished pass's audits. Once NONE of the ids those
+ *    audits were for is still a candidate, they are dropped: the ids left (removed by hand, or registered again), no
+ *    call will be queued for them, and no later pass would publish over them. While any is still a candidate, merely
+ *    waiting its pace, they stand, so a paced id never makes a line flicker.
+ *  - The box-wide probes are cleared when the population holds no ids at all: no answer will come to clear them.
+ *  Both read absence, so both need BOTH listings measured (`bothMeasured`), as forgetting does: an unmeasured listing
+ *  changes nothing. Pure; the watcher applies what it returns. */
+export function collectBoxAfterPopulation(pop: CollectPopulation, passAudits: ReadonlyMap<string, CollectPassClass>,
+  boxProbes: ReadonlyMap<string, string>): {
+  readonly passAudits: ReadonlyMap<string, CollectPassClass>; readonly boxProbes: ReadonlyMap<string, string>;
+} {
+  if (!pop.bothMeasured) return { passAudits, boxProbes };
+  const candidates = new Set(pop.candidates);
+  const counted = [...passAudits.keys()].some((id) => candidates.has(id));
+  return {
+    passAudits: passAudits.size === 0 || counted ? passAudits : new Map(),
+    boxProbes: boxProbes.size === 0 || pop.ids.length > 0 ? boxProbes : new Map(),
+  };
 }
 
 const CEILING_MIN = CHILD_RECLAIM_DEFER_CEILING_MS / 60_000;
@@ -1071,7 +1122,7 @@ interface CollectItemText { readonly word: string; readonly sentence: string; re
 function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boolean): CollectItemText | 'unvouched' | null {
   const tmp = collectTmp(v.leaf);
   if (v.terminal.tier.tier && v.terminal.word !== null) {
-    // H8: true in every state. It says what ccd answered at the run's LAST terminal answer, never that the id is
+    // True in every state. It says what ccd answered at the run's LAST terminal answer, never that the id is
     // refused now: in shadow, ccd may answer `collectable` again while the terminal run stands.
     const w = childReclaimDetailText(v.terminal.word);
     const lead = lcRefusalWord(v.terminal.word);
@@ -1201,7 +1252,7 @@ function collectBoxItems(b: CollectBoxFacts, unvouched: readonly string[]): Chil
   const calls = [...b.unsettled].filter(([, k]) => k === 'audit').map(([id]) => id).sort();
   const jobs = [...b.unsettled].filter(([, k]) => k === 'job' || k === 'act').map(([id]) => id).sort();
   if (calls.length + jobs.length > 0) {
-    // H1, R85: an unsettled audit call OR executor job; a job's clause, its act out or not, says the act slot is held.
+    // An unsettled audit call OR executor job; a job's clause, its act out or not, says the act slot is held.
     const said = [
       ...(calls.length === 0 ? [] : [`A temp-root collector call to ccd has not settled within its bound for `
         + `${childReclaimIdsNamed(calls)}.`]),
@@ -1296,7 +1347,7 @@ export function collectFeedAnswerBody(id: string, runId: number | null, word: st
   return `${collectWho(id, runId)}: ccd answered ${childReclaimStuckEnd(said)}`;
 }
 
-/** The feed cue of one AUDIT answer (spec §5.10; R88: one row per (id, word) episode, quiet on repeats), which the lane
+/** The feed cue of one AUDIT answer (spec §5.10: one row per (id, word) episode, quiet on repeats), which the lane
  *  hands Task 4's `collectFeedStep` after each fold. A `collectable` answer is an observation: no row, and a
  *  would-collect episode of its own token stands. Every other answer is a row keyed by its word. A key is memory
  *  only, compared and never shown. A shadow would-collect is `{ kind: 'row', key: collectWouldCollectKey(token) }`. */
@@ -1394,7 +1445,7 @@ export function collectOffers(i: CollectOfferInput): CollectOffers {
 
 /** A settled act job as the LANE folds it (spec §5.10): the executor's outcome, by its kind, or a job that THREW — a
  *  defect, since the executor names every condition it meets — which may have acted. Declared STRUCTURALLY: L1 may not
- *  import the executor's L3 `CollectJobOutcome` (H2), which is assignable to this (a compile pin holds it). */
+ *  import the executor's L3 `CollectJobOutcome`, which is assignable to this (a compile pin holds it). */
 export type CollectJobSettled =
   | { readonly kind: 'not-asked' | 'answered' | 'held' | 'would-collect' }
   | { readonly kind: 'acted'; readonly composedMono: number; readonly result: CollectResult }
@@ -1433,4 +1484,19 @@ export function collectJobEffects(s: CollectJobSettled, settledMono: number, sta
       return { ...COLLECT_SLOT_FREED, keptUntilMono: settledMono + stallMs };
     default: { const unnamed: never = s; return unnamed; }
   }
+}
+
+/** The ONE row a settled act job still writes for an id FORGOTTEN while it was out (spec §5.10). Every other
+ *  per-id fold for such an id is dropped (`an-answer-for-a-forgotten-id-is-dropped`); a `collected` act's row is not.
+ *  It is the operator's record of a deletion the server made, and ccd drops the quarantine record as the LAST step of
+ *  a collection, so a gather landing between that drop and the fold forgets the id the act just collected. The row is
+ *  the one a remembered id gets: worded from the job's own observation-2 document (`obs2`, its witness's run and its
+ *  leaf), under the collected title. null for every other outcome. */
+export function collectForgottenActRow(id: string, s: CollectJobSettled, obs2: CollectAudit): {
+  readonly runId: number | null; readonly title: string; readonly body: string;
+} | null {
+  if (s.kind !== 'acted' || s.result.kind !== 'collected') return null;
+  const ev = collectEvidenceOf(obs2) ?? { runId: null, leaf: null };
+  return { runId: ev.runId, title: COLLECT_FEED_TITLE.collected,
+    body: collectFeedCollectedBody(id, ev.runId, ev.leaf, s.result) };
 }

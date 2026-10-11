@@ -111,7 +111,7 @@ describe('collectCandidateOf: an id’s facts through Task 4’s rules', () => {
 });
 
 describe('collectJobEffects: the slot’s life, and the latch (spec §5.10)', () => {
-  // Task 6's outcome is a CollectJobSettled: L1 declares the shape structurally, because it may not import L3 (H2).
+  // Task 6's outcome is a CollectJobSettled: L1 declares the shape structurally, because it may not import L3.
   const settles = (o: CollectJobOutcome): CollectJobSettled => o;
   void settles;
   const FREE: CollectJobEffects = { keptUntilMono: null, latchFlock: false };

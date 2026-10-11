@@ -89,7 +89,7 @@ const diesFromCcd = (): string[] => {
     return d === -1 ? t : t.slice(0, d);
   }));
 };
-/** The four dec dies. R84 does not list them, so they read as arm 3 (MAY have acted). The server's dec is a constant
+/** The four dec dies. The reader does not recognise them, so they read as arm 3 (MAY have acted). The server's dec is a constant
  *  that never reaches them. */
 const DEC_DIES = ['--actor is longer than ', '--actor must be non-blank', '--reason is longer than ', '--reason must be non-blank'];
 
@@ -138,7 +138,7 @@ describe('parseCollectAudit — exit 0: only an exact collectable with a 64-hex 
     ['a null resume', audit({ resume: null })],
     ['no collect block', audit({ collect: undefined })],
     ['no witness key', audit({}, { witness: undefined })],
-    ['a resume with no witness key (H7: the stricter reading)', audit({ resume: 'moved' }, { witness: undefined })],
+    ['a resume with no witness key (the stricter reading)', audit({ resume: 'moved' }, { witness: undefined })],
     ['a witness that is an array', audit({}, { witness: [] })],
     ['a witness run of 0', audit({}, { witness: { ...WIT, run: '0' } })],
     ['a witness run that is a number', audit({}, { witness: { ...WIT, run: 41 } })],
@@ -159,7 +159,7 @@ describe('parseCollectAudit — exit 0: only an exact collectable with a 64-hex 
       .toEqual({ kind: 'verdict', verdict: 'changed-recently', idleAt: 1790076400, witnessRun: 41, leaf: LEAF, detail: 'young' });
   });
 
-  // H3: ccd prints `collect.witness` and `collect.leaf` on every document, and R88's runId and leaf sentence read the
+  // ccd prints `collect.witness` and `collect.leaf` on every document, and attention's runId and leaf sentence read the
   // LATEST document, so a verdict carries them too. A null witness carries no run; a malformed one is never read.
   it('a verdict whose witness is null or absent, or whose leaf is not a string, carries null for each', () => {
     expect(A(audit({ verdict: 'in-use', token: undefined }, { witness: null, leaf: 3 })))
@@ -211,7 +211,7 @@ describe('parseCollectAudit — exit 1: only unmeasured, with its probe word (sp
       .toEqual({ kind: 'unmeasured', probe, witnessRun: 41, leaf: LEAF, detail: 'why' });
   });
 
-  it('unmeasured with a null witness carries no run, and keeps its leaf (H3)', () => {
+  it('unmeasured with a null witness carries no run, and keeps its leaf', () => {
     expect(A(unmeasured('witness', {}, { witness: null }), false))
       .toMatchObject({ kind: 'unmeasured', probe: 'witness', witnessRun: null, leaf: LEAF });
   });
@@ -423,18 +423,18 @@ describe('the collect readers are their own (spec §5.10)', () => {
     expect(laneFiles().filter((f) => BORROW.test(codeOnly(readFileSync(f, 'utf8')))).map(rel)).toEqual([]);
   });
 
-  it('collectLane.ts is L1: it imports shared/api.js and childReclaimSweep.js only (H2), and no module at run time', () => {
+  it('collectLane.ts is L1: it imports shared/api.js and childReclaimSweep.js only, and no module at run time', () => {
     const code = codeOnly(readFileSync(path.join(SRC, 'collectLane.ts'), 'utf8'));
     const specs = uniq([...code.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!));
     // Task 4 adds `./childReclaimSweep.js` (L1 to L1, one way), and its pacing suite pins the exact pair. This case
-    // refuses only a third specifier, so it stays green at Task 4's commit (H5: no commit is red).
+    // refuses only a third specifier, so it stays green at Task 4's commit (no commit is red).
     expect(specs).toContain('../../shared/api.js');
-    expect(specs.filter((s) => s !== '../../shared/api.js' && s !== './childReclaimSweep.js'), 'a specifier outside H2’s pair')
+    expect(specs.filter((s) => s !== '../../shared/api.js' && s !== './childReclaimSweep.js'), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);
   });
 
-  it('the live switch’s marker is spelled here: collect-lane-live (R82, H11)', () => {
+  it('the live switch’s marker is spelled here: collect-lane-live (spec §5.10)', () => {
     expect(COLLECT_LANE_LIVE_MARKER).toBe('collect-lane-live');
   });
 

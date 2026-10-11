@@ -54,7 +54,7 @@ describe('what the hold keys on, as the collect audit reader hands it over', () 
     expect(parseCollectAudit(ID, true, auditDoc({ witness: w, resume: 'moved' }), '')).toMatchObject({ kind: 'collectable', resume: 'moved' });
     expect(parseCollectAudit(ID, true, auditDoc({ witness: null }), '')).toMatchObject({ kind: 'collectable', witnessRun: null, witnessAt: null });
     expect(parseCollectAudit(ID, true, auditDoc({ witness: { run: 'x7', at: '1789000000000' } }), '').kind,
-      'a witness run that is no canonical integer (H3)').toBe('unreadable');
+      'a witness run that is no canonical integer').toBe('unreadable');
   });
 });
 

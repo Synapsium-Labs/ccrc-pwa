@@ -75,7 +75,7 @@ export interface FakeLane {
   /** Every flip the executor saw: the marker as it read it. */
   readonly flips: boolean[];
   advance(ms: number): void;
-  /** What a pass does on a lane-wide clear (a pause it saw, a pass that failed shut): every pair goes. */
+  /** What the lane does on a lane-wide clear (a pause or a missing capability it saw, a marker flip): every pair goes. */
   clearAll(): void;
   /** What any reset of one id's pair does: the pair goes, and the id's generation moves. */
   resetId(id: string): void;
