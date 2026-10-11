@@ -302,67 +302,79 @@ export type DeadCoordinatorBreaker =
 export interface DeadCoordinatorBreakerMember {
   readonly id: string;
   readonly firstDeadAt: number;
+  /** Every anchor instant a HELD member has carried while held (review 384, F1-N1), ascending and without repeats, the
+   *  first of them `firstDeadAt`. Absent when it carries one. `crashed` entries never have it. */
+  readonly instants?: readonly number[];
   /** A member the FALLBACK seed holds (review 382, R2) — the lane could not read its record of the hold, so it holds every
    *  claimant the pass does not release. Absent on every ordinary member, never `false`. See `deadCoordinatorBreaker`. */
   readonly fallback?: true;
 }
 
 /** `crashed`: this pass's crashed claimants with their durable `firstDeadAt` (the CURRENT anchor). `held`: the members the
- *  last trip held that no answer has released since, with their REMEMBERED instants. `unmeasurable`: the ids this pass
+ *  last trip held that no answer has released since, with every instant they carry. `unmeasurable`: the ids this pass
  *  could not measure, of `measured` asked. `fleetDoubt`: a fleet-wide fact this pass measured — tmux did not answer — or
  *  `null`. A fleet-wide doubt trips it whatever the count: one claimant whose row is gone still reads crashed while tmux
  *  is down for every other, and that pass is exactly the box fault the breaker exists for. So does a pass that could
  *  measure none of two or more claimants.
  *
- *  THE CLUSTERING IS MONOTONE (review 384, F1). Each entry is an id, and it carries up to TWO instants — its remembered
- *  held instant and its current anchor — and a flag. No instant replaces another (a held instant used to beat a
- *  re-anchored one, which is not monotone and let a restarted lane end a claimant during a pass an unrestarted lane's
- *  breaker stood over). Two DISTINCT entries cluster when ANY instant of one is within the window of ANY instant of the
- *  other; an id's own two instants never cluster it with itself. A sorted sweep over the (id, instant) points, comparing
- *  consecutive points of different ids, finds exactly the clustered ids: on a within-window run from a point of A to a
- *  point of B, the first change of id leaves A beside a consecutive different-id point and the last change lands on B
- *  beside one. Members are the clustered ids. A member's `firstDeadAt` for the next pass is its remembered instant when it
- *  had one, else its anchor (the anchor itself stays durable in `dead_claimants`).
+ *  THE CLUSTERING IS MONOTONE (review 384, F1). Each entry is an id, and it carries a SET of instants — every instant it
+ *  carried while held, plus its current anchor when it is crashed and anchored this pass — and a flag. No instant
+ *  replaces another and none is dropped while the member stays held. Two DISTINCT entries cluster when ANY instant of one
+ *  is within the window of ANY instant of the other; an id's own instants never cluster it with itself. A sorted sweep
+ *  over the (id, instant) points, comparing consecutive points of different ids, finds exactly the clustered ids: on a
+ *  within-window run from a point of A to a point of B, the first change of id leaves A beside a consecutive different-id
+ *  point and the last change lands on B beside one. Members are the clustered ids, and a member's instants for the next
+ *  pass are those it carried plus this pass's anchor (so they grow by one per re-anchor while it is held, bounded by its
+ *  unmeasurable episodes, and the record grows with them); its `firstDeadAt` is the earliest. The anchor itself stays
+ *  durable in `dead_claimants`.
  *
  *  A held member FLAGGED `fallback` (review 382, R2) is a WILDCARD: it clusters with every other entry, whatever the
  *  instants. When at least two entries stand and one is flagged, the breaker trips with EVERY entry as a member, and
  *  EVERY member of that trip carries the flag (review 382, N1) — a claimant that crashed while the hold stood included,
  *  on the clustered and the unmeasurable arm alike, since both build `members` the same way.
  *
- *  THE PROPERTY. Let L and L' be two inputs of one pass such that every (id, instant) pair of L, and every flag, is also
- *  in L'. Then every id L clusters, L' clusters: a wildcard in L' clusters every id of L', and without one, adding a
- *  point P between two consecutive points a and b of different ids within the window leaves a consecutive different-id
- *  pair within the window beside P (P's id is a's, b's, or another's, and each case keeps both ids paired), so no id
- *  unclusters; adding an id, an instant or a flag therefore never untrips the clustered arm and never drops a member. The
- *  unmeasurable arm names `unmeasurable ∪ crashed ∪ members`, and its trigger (`fleetDoubt`, `allUnmeasurable`) reads
- *  only the pass's own measurements, so the superset stays a superset there too.
- *  WHAT IT GIVES A RESTARTED LANE R against an unrestarted one U over one world. The seed: for a plain restart R reads
- *  U's own record, equal to U's held set; for the fallback R holds every claimant the pass does not release, flagged, a
- *  superset of anything U holds (a held member is always unreleased and in the population). The step: both see the same
- *  crashed anchors (durable) and release the same members on the same evidence, so R's entries are a superset of U's and,
- *  by the property, R trips whenever U does with members ⊇ U's. Held instants stay equal for ids both hold (a member keeps
- *  its remembered instant, else takes the anchor), and a flagged one is a wildcard that covers any instant. R's population
- *  can differ from U's in one way: U ended a claimant that R, its act delayed by the lost backoff, has not yet; that id
- *  only ADDS entries to R, and R can end it, never a claimant U's breaker holds. The invariant is not argued for an id U
- *  ended that then returns under a NEW run while R still holds the old one (R's remembered instant may be older than U's):
- *  that corner is open and named in the spec. The all-unmeasurable arm diverges the same way, as measured: R's extra
- *  claimant can be measured while all of U's are not, so R does not trip there, but every other claimant is as
- *  unmeasured in R as in U, so R can act there only on the claimant U already ended. The cost of more instants is more
- *  holding: a member held at an old instant that crashes anew also clusters near its new instant, and while a flagged
- *  member stands a coordinator that crashes is swept into the hold and flagged itself, until evidence releases it or fewer
- *  than two entries stand. */
+ *  THE PROPERTY (about this function). Let L and L' be two inputs of one pass such that every (id, instant) pair of L, and
+ *  every flag, is also in L'. Then every id L clusters, L' clusters: a wildcard in L' clusters every id of L', and
+ *  without one, adding a point P between two consecutive points a and b of different ids within the window leaves a
+ *  consecutive different-id pair within the window beside P (P's id is a's, b's, or another's, and each case keeps both
+ *  ids paired), so no id unclusters; adding an id, an instant or a flag therefore never untrips the clustered arm and
+ *  never drops a member. The unmeasurable arm names `unmeasurable ∪ crashed ∪ members`, and its trigger (`fleetDoubt`,
+ *  `allUnmeasurable`) reads only the pass's own measurements, so the superset stays a superset there too.
+ *  WHAT IT GIVES A RESTARTED LANE R against an unrestarted one U, UNDER TWO ASSUMPTIONS. (A1) Both read the same durable
+ *  anchors (a restart longer than the episode gap re-anchors every crashed coordinator, which the spec's residuals
+ *  already name, and which this does not argue about). (A2) R's population differs from U's only by claimants U has
+ *  ended and R, its act delayed by the lost backoff, has not yet — extra ids, never an id that returns. THE HYPOTHESIS:
+ *  every id U holds, R holds with at least U's instants, or flagged. At the seed it holds: a plain restart reads U's own
+ *  record, and the fallback holds every claimant the pass does not release, flagged, a superset of anything U holds (a
+ *  held member is always unreleased and in the population). Each step: both see the same anchors and release the same
+ *  members on the same evidence (alive, stopped, deliberate, left the population), so R's entries are a superset of U's
+ *  as (id, instant) pairs and flags; by the property R trips whenever U does, with members ⊇ U's; and each member's next
+ *  instants are its held instants plus this pass's anchor on both sides, so R's remain ⊇ U's (or R's is flagged, and
+ *  every member of a flagged trip is). So U's breaker standing implies R's stands, and R acts only when U's would. The
+ *  all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of U's are not, so R does not
+ *  trip there, but every other claimant is as unmeasured in R as in U, so R can act there only on the claimant U already
+ *  ended. OPEN, NOT ARGUED, and not claimed to be the only one: an id that U ended and that RETURNS under a new run while
+ *  R still holds or anchors the old episode (A2 fails: R's instants for it are the old episode's, U's are fresh, and R
+ *  may lack U's). The cost of the accumulation is more holding: a member held at an old instant that crashes anew also
+ *  clusters near its new instant, and while a flagged member stands a coordinator that crashes is swept into the hold and
+ *  flagged itself, until evidence releases it or fewer than two entries stand. */
 export function deadCoordinatorBreaker(
   crashed: readonly DeadCoordinatorBreakerMember[], held: readonly DeadCoordinatorBreakerMember[],
   unmeasurable: readonly string[], measured: number, fleetDoubt: string | null, nowMs: number,
 ): DeadCoordinatorBreaker {
   const anchor = new Map(crashed.map((c) => [c.id, c.firstDeadAt]));
-  const remembered = new Map(held.map((h) => [h.id, h.firstDeadAt]));
+  const carried = new Map(held.map((h) => [h.id, [h.firstDeadAt, ...(h.instants ?? [])]]));
   const flagged = new Set(held.filter((h) => h.fallback === true).map((h) => h.id));
-  const ids = [...new Set([...anchor.keys(), ...remembered.keys()])];
+  const ids = [...new Set([...anchor.keys(), ...carried.keys()])];
+  // Every instant of an id, ascending, no repeats: what it carried while held, then this pass's anchor.
+  const instantsOf = (id: string): number[] => {
+    const all = [...(carried.get(id) ?? [])];
+    const a = anchor.get(id);
+    if (a !== undefined) all.push(a);
+    return [...new Set(all)].sort((x, y) => x - y);
+  };
   const points: { id: string; at: number }[] = [];
-  for (const id of ids) {
-    for (const at of new Set([anchor.get(id), remembered.get(id)])) if (at !== undefined) points.push({ id, at });
-  }
+  for (const id of ids) for (const at of instantsOf(id)) points.push({ id, at });
   points.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   // A trip a flagged entry took part in flags EVERY member (review 382, N1).
   const wild = ids.length >= 2 && flagged.size > 0;
@@ -376,7 +388,10 @@ export function deadCoordinatorBreaker(
     }
   }
   const members: DeadCoordinatorBreakerMember[] = ids.filter((id) => clustered.has(id))
-    .map((id) => ({ id, firstDeadAt: (remembered.get(id) ?? anchor.get(id))! }))
+    .map((id) => {
+      const all = instantsOf(id);
+      return { id, firstDeadAt: all[0]!, ...(all.length > 1 ? { instants: all } : {}) };
+    })
     .sort((a, b) => a.firstDeadAt - b.firstDeadAt || (a.id < b.id ? -1 : 1))
     .map((m) => (wild ? { ...m, fallback: true as const } : m));
   const allUnmeasurable = measured >= 2 && unmeasurable.length === measured;
@@ -400,7 +415,7 @@ export const deadCoordinatorBreakerKey = (b: DeadCoordinatorBreaker): string | n
 
 /** The head of the `run_events` observation row that carries the breaker's held set across a restart (the stall watch's
  *  "Durable dedupe, no migration" shape: `fromState = toState`, so nothing pushes it). After the head: the members as
- *  `id@firstDeadAt` (a fallback member, review 382, R2, with a `*` after the instant), comma-joined, ids ascending; an EMPTY list is the hold cleared. `parseStallDetail` reads any detail
+ *  `id@firstDeadAt` (several instants `+`-joined, review 384, F1-N1; a fallback member, review 382, R2, with a `*` after the list), comma-joined, ids ascending; an EMPTY list is the hold cleared. `parseStallDetail` reads any detail
  *  with other than four colon-separated parts as null, and this one has two, so the stall count never sees it. */
 export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held:';
 
@@ -417,6 +432,9 @@ const BREAKER_HELD_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD
  *  build that first had a reader, before the mark, never shipped), so a rollback to a released build starts with no hold,
  *  failing open: the spec's §12 says to disarm the lane before rolling back. */
 const BREAKER_HELD_FALLBACK_MARK = '*';
+/** Several instants of one member (review 384, F1-N1): `id@t1+t2+t3`, ascending, no repeats; the mark, if any, after the
+ *  whole list. `+` is outside the escaped-id alphabet and is not a digit. A row with one instant is the old spelling. */
+const BREAKER_HELD_INSTANT_JOIN = '+';
 const BREAKER_HELD_ESCAPED = /^(?:[A-Za-z0-9._-]|%[0-9A-F]{2})*$/;
 
 const escapeBreakerHeldId = (id: string): string | null => {
@@ -454,32 +472,39 @@ export function deadCoordinatorBreakerHeldDetail(members: readonly DeadCoordinat
   for (let i = 0; i < sorted.length; i += 1) {
     const m = sorted[i]!;
     const id = escapeBreakerHeldId(m.id);
-    if (id === null || !Number.isSafeInteger(m.firstDeadAt) || m.firstDeadAt < 1) return null;
+    const ats = [...new Set([m.firstDeadAt, ...(m.instants ?? [])])].sort((x, y) => x - y);
+    if (id === null || ats.some((at) => !Number.isSafeInteger(at) || at < 1)) return null;
     if (i > 0 && sorted[i - 1]!.id === m.id) return null;
-    parts.push(`${id}@${m.firstDeadAt}${m.fallback === true ? BREAKER_HELD_FALLBACK_MARK : ''}`);
+    parts.push(`${id}@${ats.join(BREAKER_HELD_INSTANT_JOIN)}${m.fallback === true ? BREAKER_HELD_FALLBACK_MARK : ''}`);
   }
   return `${DEAD_COORDINATOR_BREAKER_HELD_HEAD}${parts.join(',')}`;
 }
 
 /** A held-set detail split into its members' DECODED ids and UNPROVEN instant texts, strictly: the head, then nothing or
- *  `escapedId@digits` (a `*` after the digits marks a fallback member) joined by commas with decoded ids strictly ascending. Anything else — a malformed escape included —
+ *  `escapedId@digits` — several instants `+`-joined, strictly ascending, and a `*` after the list marking a fallback member — joined by commas with decoded ids strictly ascending. Anything else — a malformed escape included —
  *  is `null`: a malformed row, which the store reads as a failed read, never as a smaller set. The store proves each
  *  instant (`persistedInt`). */
-export function splitDeadCoordinatorBreakerHeld(detail: string): { id: string; text: string; fallback: boolean }[] | null {
+export function splitDeadCoordinatorBreakerHeld(detail: string): { id: string; texts: string[]; fallback: boolean }[] | null {
   if (!detail.startsWith(DEAD_COORDINATOR_BREAKER_HELD_HEAD)) return null;
   const body = detail.slice(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length);
   if (body === '') return [];
-  const out: { id: string; text: string; fallback: boolean }[] = [];
+  const out: { id: string; texts: string[]; fallback: boolean }[] = [];
   for (const part of body.split(',')) {
     const at = part.split('@');
     if (at.length !== 2) return null;
     const [escaped, marked] = at as [string, string];
     const fallback = marked.endsWith(BREAKER_HELD_FALLBACK_MARK);
-    const text = fallback ? marked.slice(0, -BREAKER_HELD_FALLBACK_MARK.length) : marked;
+    const list = fallback ? marked.slice(0, -BREAKER_HELD_FALLBACK_MARK.length) : marked;
+    const texts = list.split(BREAKER_HELD_INSTANT_JOIN);
     const id = unescapeBreakerHeldId(escaped);
-    if (id === null || !/^[1-9][0-9]*$/.test(text)) return null;
+    if (id === null || !texts.every((t) => /^[1-9][0-9]*$/.test(t))) return null;
+    // Strictly ascending: canonical positive decimals compare by length, then by text.
+    for (let k = 1; k < texts.length; k += 1) {
+      const p = texts[k - 1]!; const q = texts[k]!;
+      if (!(p.length < q.length || (p.length === q.length && p < q))) return null;
+    }
     if (out.length > 0 && !(out[out.length - 1]!.id < id)) return null;
-    out.push({ id, text, fallback });
+    out.push({ id, texts, fallback });
   }
   return out;
 }

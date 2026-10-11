@@ -215,12 +215,28 @@ describe('the breaker’s held set — a run_events observation, no migration (r
     expect(got.ok && got.held[1], 'no flag key on an ordinary member').not.toHaveProperty('fallback');
   });
 
+  it('a member carries SEVERAL instants — `id@t1+t2+t3`, ascending, the flag after the list — and reads back with its `instants`; a single-instant row still parses (review 384, F1-N1)', () => {
+    const { s, open } = store();
+    const run = open('demo-c-a');
+    const set = [{ id: 'demo-c-a', firstDeadAt: 10, instants: [10, 15, 30], fallback: true as const }, { id: 'demo-c-b', firstDeadAt: 20, instants: [20, 25] }, { id: 'demo-c-c', firstDeadAt: 40 }];
+    expect(s.recordDeadCoordinatorBreakerHeld(run, set, 100)).toMatchObject({ recorded: true });
+    const row = s.runEvents(run).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:')).pop()!;
+    expect(row.detail).toBe('dead-coordinator-breaker-held:demo-c-a@10+15+30*,demo-c-b@20+25,demo-c-c@40');
+    const got = s.deadCoordinatorBreakerHeldLatest();
+    expect(got).toEqual({ ok: true, runId: run, held: set });
+    expect(got.ok && got.held[2], 'a single instant carries no `instants`').not.toHaveProperty('instants');
+    // An unsorted or repeating `instants` is written as the ascending set.
+    expect(s.recordDeadCoordinatorBreakerHeld(run, [{ id: 'demo-c-a', firstDeadAt: 15, instants: [30, 10, 15, 10] }], 200)).toMatchObject({ recorded: true });
+    expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, runId: run, held: [{ id: 'demo-c-a', firstDeadAt: 10, instants: [10, 15, 30] }] });
+    expect(s.recordDeadCoordinatorBreakerHeld(run, [{ id: 'demo-c-a', firstDeadAt: 10, instants: [10, 0] }], 300), 'an instant that is not a positive safe integer').toEqual({ recorded: false, why: 'unencodable' });
+  });
+
   it('a malformed LATEST row fails the WHOLE read — never a partial set, never an older row’s', () => {
     const { db, s, open } = store();
     const run = open('demo-c-a');
     s.recordDeadCoordinatorBreakerHeld(run, members, 100);
     for (const bad of ['demo-c-a@soon', 'demo-c-a@10,demo-c-b', 'demo-c-b@20,demo-c-a@10', 'demo-c-a@10,demo-c-a@10', 'demo c@5', 'demo-c-a@010', ',',
-      'demo-c-a@10**', 'demo-c-a@*', 'demo-c-a@10*x', 'demo-c-a@0*', 'demo-c-a@10 *', 'demo%ZZ@5', 'demo%@5', 'demo%4@5', 'demo%41@5', 'demo%e9@5', '%C3@5', 'a@b@5', 'demo-c-a@10,@5']) {
+      'demo-c-a@10+10', 'demo-c-a@15+10', 'demo-c-a@10+', 'demo-c-a@+10', 'demo-c-a@10++15', 'demo-c-a@10+0', 'demo-c-a@10+15+*', 'demo-c-a@10*+15', 'demo-c-a@10+015', 'demo-c-a@10**', 'demo-c-a@*', 'demo-c-a@10*x', 'demo-c-a@0*', 'demo-c-a@10 *', 'demo%ZZ@5', 'demo%@5', 'demo%4@5', 'demo%41@5', 'demo%e9@5', '%C3@5', 'a@b@5', 'demo-c-a@10,@5']) {
       db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (${run}, 300, 'planned', 'planned', 'operator', 'dead-coordinator-breaker-held:${bad}')`);
       const got = s.deadCoordinatorBreakerHeldLatest();
       expect(got, bad).toMatchObject({ ok: false });

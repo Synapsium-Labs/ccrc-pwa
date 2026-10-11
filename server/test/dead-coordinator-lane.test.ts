@@ -735,7 +735,7 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     expect(f.calls, 'nothing composed on the box').toEqual([]);
     const fresh = heldRows(f, ra).filter((e) => !(e.detail ?? '').endsWith('@soon'));
     expect(fresh, 'ONE readable record, not rewritten each pass').toHaveLength(1);
-    expect(fresh[0]!.detail, 'exactly A and B (C lives), at one instant, each flagged').toMatch(new RegExp(`^dead-coordinator-breaker-held:${A}@(\\d+)\\*,${B}@\\1\\*$`));
+    expect(fresh[0]!.detail, 'exactly A and B (C lives), each flagged, each at the instants it carries (its anchor, and the pass\'s)').toMatch(new RegExp(`^dead-coordinator-breaker-held:${A}@[0-9+]+\\*,${B}@[0-9+]+\\*$`));
     expect(f.coord.deadCoordinatorBreakerHeldLatest()).toMatchObject({ ok: true, runId: ra, held: [{ id: A }, { id: B }] });
     const warned = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('record of its hold'));
     expect(warned, 'ONE warn line for the bad row').toHaveLength(1);
@@ -836,7 +836,7 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     expect(breakerItem(f)).toEqual([['breaker', [U, Z]]]);
   };
   it('THE FALLBACK NEVER LOOSENS (the reviewer\'s probe): a member the true record would not hold cannot let U and Z be ended once V is released (review 382, R2)', async () => { await probe(false); });
-  it('...and a restart after the fallback record was written, before Z crashes, still does not end U (review 382, R2; the flag itself is pinned by the store and the breaker\'s cases)', async () => { await probe(true); });
+  it('...and a restart after the fallback record was written, before Z crashes, still does not end U (review 382, R2)', async () => { await probe(true); });
 
   it('A claimant SWEPT INTO a flagged trip is flagged too: its crash instant never becomes an ordinary hold that a later re-anchor loosens (review 382, N1)', async () => {
     const f = await fixture();
@@ -949,7 +949,7 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
  *  one pass. Whatever the restarted lane ends, the unrestarted lane's breaker must not be standing over: Q is due at the
  *  end, and the unrestarted lane's breaker holds it, so the restarted lane must not end it. */
 describe('a restarted lane never ends a claimant the unrestarted lane\'s breaker holds (review 384, F1)', () => {
-  const scenario = async (restart: 'none' | 'fallback' | 'plain') => {
+  const scenario = async (restart: 'none' | 'fallback' | 'plain', tail: boolean, again = false) => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -989,12 +989,18 @@ describe('a restarted lane never ends a claimant the unrestarted lane\'s breaker
     await to(133);                                              // Q is due
     f.live.add(X);
     await to(136);                                              // X is back
+    if (tail) {                                                 // review 384, F1-N1: a member keeps EVERY instant it carried
+      rmSync(path.join(f.reg, `${Y}.uuid`));
+      await to(140);                                            // Y is unmeasurable (its anchor goes): held by its instants alone
+      if (again) f.restart();                                   // a second restart now: the RECORD is the only place Y's later instant lives
+      await to(142);
+    }
     return { q: f.stateOf(r[Q]!), breaker: breaker(), states: [U, X, Y, Z, Q].map((id) => f.stateOf(r[id]!)) };
   };
-  const against = async (restart: 'fallback' | 'plain'): Promise<void> => {
-    const c = await scenario('none');
+  const against = async (restart: 'fallback' | 'plain', tail = false, again = false): Promise<void> => {
+    const c = await scenario('none', tail, again);
     vi.restoreAllMocks();
-    const rs = await scenario(restart);
+    const rs = await scenario(restart, tail, again);
     expect(c.q, 'the unrestarted lane holds Q: its breaker stands on {Y, Z}').toBe('working');
     expect(c.breaker).toEqual([['breaker', ['demo-coord-y', 'demo-coord-z']]]);
     expect(rs.q, 'the restarted lane must not end Q while that breaker stands').toBe('working');
@@ -1002,6 +1008,9 @@ describe('a restarted lane never ends a claimant the unrestarted lane\'s breaker
   };
   it('after a restart over an UNREADABLE record (the fallback seed), once its flags clear', async () => { await against('fallback'); });
   it('after a PLAIN restart over a readable record, a delayed act leaves a claimant the unrestarted lane already ended', async () => { await against('plain'); });
+  it('...and when a member made one by an EARLIER anchor is later unmeasurable, its LATER instant still clusters (plain restart; review 384, F1-N1)', async () => { await against('plain', true); });
+  it('...the same after a restart over an unreadable record (review 384, F1-N1)', async () => { await against('fallback', true); });
+  it('...and the instants are DURABLE: a restart after the anchor is gone, when only the record carries the later instant, changes nothing (review 384, F1-N1)', async () => { await against('plain', true, true); });
 });
 
 describe('the one cleanup switch', () => {

@@ -81,9 +81,11 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
     for (const item of ['a `run_events` observation row', 'written whenever the held set changes, in shadow too', 'no new table or column',
       'first-dead instants', 'ids percent-escaped, so any claimant id is carried',
       // Review 384, F1: the clustering is monotone, and its cost.
-      'Its clustering is monotone: a member keeps its remembered first-dead instant and, while it is also crashed, clusters at its current anchor too, and two entries cluster when any instant of one is within the window of any instant of the other',
-      'so a held instant never replaces a re-anchored one, and a restarted lane\'s breaker stands wherever an unrestarted lane\'s does',
-      'the cost is that a member held at an old instant that crashes anew also clusters near its new instant']) expect(para, item).toContain(item);
+      'Its clustering is monotone: a member keeps every first-dead instant it has carried while held, adds its current anchor each time it is crashed and anchored, and clusters at all of them, and two entries cluster when any instant of one is within the window of any instant of the other',
+      'so a held instant never replaces a re-anchored one, and a restarted lane\'s breaker stands wherever an unrestarted lane\'s does, but for the open corner named in §12 (review 384, F1)',
+      'the cost is that a member held at an old instant that crashes anew also clusters near its new instant, and a held member\'s instants, and its record, grow by one per re-anchor while it is held',
+      '(several instants of one member are `+`-joined; a member the fallback below holds carries a `*` after the list)']) expect(para, item).toContain(item);
+    expect(para, 'a member no longer keeps only its first instant (review 384, F1-N1)').not.toContain('keeps its remembered first-dead instant and, while it is also crashed');
     expect(para, 'the held instant no longer wins over a re-anchored one').not.toContain('held wins');
   });
   it('§12 says it per lane: the anchor and the hold survive, an unreadable record seeds a fallback and is logged, no act waits on an unrecorded hold, and the lost backoff can bring an abandon sooner', () => {
@@ -108,7 +110,7 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
       'The server logs a `ccrc-server: sweepDeadCoordinators could not read the breaker\'s record of its hold` warning, once per bad row, and writes one feed row, "dead coordinator: breaker record unreadable", which is the operator\'s sign',
       'releases on what releases it without a restart', 'the run of crashed passes starts again, which delays an act',
       'a restarted lane can ask for that abandon SOONER than an unrestarted one would, and a server that restarts while a held-set write is failing seeds the older record, which can hold less than the process did, which needs a store whose writes keep failing at that moment',
-      'The breaker\'s clustering is monotone (§5.4), so after a restart its breaker stands wherever an unrestarted lane\'s does, but for one open corner: a claimant the unrestarted lane already ended can come back under a new run while the restarted lane, its act delayed by the lost backoff, still holds the old one at an older instant',
+      'The breaker\'s clustering is monotone (§5.4), so after a restart its breaker stands wherever an unrestarted lane\'s does when both read the same anchors and the restarted lane\'s population differs only by claimants the unrestarted lane has already ended. One case is open, not argued, and not claimed to be the only one: a claimant the unrestarted lane ended that returns under a new run while the restarted lane, its act delayed by the lost backoff, still holds or anchors the old episode',
 
       'The lane composes no act on a pass whose held-set record did not land, so the record never lags an act, and every act is still behind the claimant\'s re-measure before and after the fleet act']) {
       expect(para, item).toContain(item);

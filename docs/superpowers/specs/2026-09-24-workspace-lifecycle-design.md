@@ -661,13 +661,14 @@ each item is a departure named there).
   any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs. The held
   set is kept in `coord.db` as a `run_events` observation row (the stall watch's "Durable dedupe, no migration" shape: no
   new table or column; `fromState = toState`, so nothing pushes it; ids percent-escaped, so any claimant id is
-  carried), written whenever the held set changes, in shadow too, with each member's first-dead instants (a member the
-  fallback below holds carries a `*` after its instant), and read back once per process at the first pass (review 381, F1).
-  Its clustering is monotone: a member keeps its remembered first-dead instant and, while it is also crashed, clusters at
-  its current anchor too, and two entries cluster when any instant of one is within the window of any instant of the
-  other, so a held instant never replaces a re-anchored one, and a restarted lane's breaker stands wherever an
-  unrestarted lane's does (review 384, F1); the cost is that a member held at an old instant that crashes anew also
-  clusters near its new instant.
+  carried), written whenever the held set changes, in shadow too, with each member's first-dead instants (several instants of one member are `+`-joined; a member the
+  fallback below holds carries a `*` after the list), and read back once per process at the first pass (review 381, F1).
+  Its clustering is monotone: a member keeps every first-dead instant it has carried while held, adds its current anchor
+  each time it is crashed and anchored, and clusters at all of them, and two entries cluster when any instant of one is
+  within the window of any instant of the other, so a held instant never replaces a re-anchored one, and a restarted
+  lane's breaker stands wherever an unrestarted lane's does, but for the open corner named in §12 (review 384, F1); the
+  cost is that a member held at an old instant that crashes anew also clusters near its new instant, and a held member's
+  instants, and its record, grow by one per re-anchor while it is held.
 - **One claimant a pass**, the longest dead first, ARMED; in shadow every due claimant is recorded.
 - **The re-measure runs inside the arm.** A compare-and-set on `claimedBy` cannot see a revive of the same id, so the
   abandon arm re-measures the claimant immediately before each run's fleet act and again after it, before the commit;
@@ -875,9 +876,10 @@ collects them.
   (`nextAskAt`, `attempts`) is lost, so a restarted lane can ask for that abandon SOONER than an unrestarted one would,
   and a server that restarts while a held-set write is failing seeds the older record, which can hold less than the
   process did, which needs a store whose writes keep failing at that moment. The breaker's clustering is monotone (§5.4),
-  so after a restart its breaker stands wherever an unrestarted lane's does, but for one open corner: a claimant the
-  unrestarted lane already ended can come back under a new run while the restarted lane, its act delayed by the lost
-  backoff, still holds the old one at an older instant. The lane composes no act on a pass whose held-set record did not land,
+  so after a restart its breaker stands wherever an unrestarted lane's does when both read the same anchors and the
+  restarted lane's population differs only by claimants the unrestarted lane has already ended. One case is open, not
+  argued, and not claimed to be the only one: a claimant the unrestarted lane ended that returns under a new run while
+  the restarted lane, its act delayed by the lost backoff, still holds or anchors the old episode. The lane composes no act on a pass whose held-set record did not land,
   so the record never lags an act, and every act is still behind the claimant's re-measure before and after the fleet act.
 - **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
 

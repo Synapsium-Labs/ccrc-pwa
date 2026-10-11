@@ -256,8 +256,8 @@ describe('the circuit breaker (spec §5.4)', () => {
     const fresh = NOW + 5 * 3_600_000;
     const b = deadCoordinatorBreaker([at('c-x', fresh), at('c-y', fresh)], [at('c-x', old)], [], 2, null, fresh + PASS);
     expect(b).toMatchObject({ tripped: true, why: 'clustered', claimants: ['c-x', 'c-y'] });
-    // The member keeps its REMEMBERED instant for the next pass; Y, never held, its anchor.
-    expect(b.tripped && b.members).toEqual([at('c-x', old), at('c-y', fresh)]);
+    // The member keeps its REMEMBERED instant AND accumulates its current anchor (review 384, F1-N1); Y, never held, has its anchor.
+    expect(b.tripped && b.members).toEqual([{ id: 'c-x', firstDeadAt: old, instants: [old, fresh] }, at('c-y', fresh)]);
     expect(b.tripped && b.since, 'since is the earliest member instant, as before').toBe(old);
     // An id\'s own two instants never cluster it with itself.
     expect(deadCoordinatorBreaker([at('c-x', fresh)], [at('c-x', old)], [], 1, null, fresh)).toEqual({ tripped: false });
@@ -265,38 +265,62 @@ describe('the circuit breaker (spec §5.4)', () => {
     expect(deadCoordinatorBreaker([at('c-y', old + PASS)], [at('c-x', old)], [], 2, null, fresh)).toMatchObject({ tripped: true, claimants: ['c-x', 'c-y'] });
   });
 
+  it('a held member ACCUMULATES every anchor instant it carries while held, and clusters at all of them (review 384, F1-N1)', () => {
+    const t1 = NOW; const t2 = NOW + 5 * 3_600_000; const t3 = t2 + 4 * PASS;
+    // Held at t1 and t2 (two episodes while held), crashed again at t3, and beside Y at t3: instants dedupe, ascending.
+    const b = deadCoordinatorBreaker([at('c-x', t3), at('c-y', t3)], [{ id: 'c-x', firstDeadAt: t1, instants: [t1, t2] }], [], 2, null, t3);
+    expect(b).toMatchObject({ tripped: true, claimants: ['c-x', 'c-y'], since: t1 });
+    expect(b.tripped && b.members).toEqual([{ id: 'c-x', firstDeadAt: t1, instants: [t1, t2, t3] }, at('c-y', t3)]);
+    // The probe: Y was made a member at 88, was re-anchored at 106 beside Z, and is now unmeasurable (no anchor): it still
+    // clusters with Z at its LATER instant, which a member that remembered only its first would not.
+    const m88 = NOW + 88 * 60_000; const m106 = NOW + 106 * 60_000;
+    expect(deadCoordinatorBreaker([at('c-z', m106)], [{ id: 'c-y', firstDeadAt: m88, instants: [m88, m106] }], ['c-y'], 3, null, m106 + PASS))
+      .toMatchObject({ tripped: true, claimants: ['c-y', 'c-z'] });
+    expect(deadCoordinatorBreaker([at('c-z', m106)], [at('c-y', m88)], ['c-y'], 3, null, m106 + PASS), 'the first instant alone is 18 minutes away')
+      .toEqual({ tripped: false });
+    // A repeated instant is one instant; an unflagged single-instant member carries no `instants`.
+    const one = deadCoordinatorBreaker([at('c-x', t1), at('c-y', t1)], [at('c-x', t1)], [], 2, null, t1);
+    expect(one.tripped && one.members).toEqual([at('c-x', t1), at('c-y', t1)]);
+  });
+
   it('MONOTONE (review 384, F1): adding an entry, an instant or a flag never turns `tripped` false and never drops a member — a seeded grid', () => {
     let seed = 20261011;
     const rnd = (n: number): number => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed >>> 8) % n; };
     const ids = ['c-a', 'c-b', 'c-c', 'c-d', 'c-e'];
     const instants = [0, 4, 9, 11, 21, 40, 41, 90].map((m) => NOW + m * 60_000);
-    type In = { crashed: Map<string, number>; held: Map<string, { at: number; fallback: boolean }> };
+    type In = { crashed: Map<string, number>; held: Map<string, { ats: number[]; fallback: boolean }> };
     const run = (i: In) => deadCoordinatorBreaker([...i.crashed].map(([id, firstDeadAt]) => ({ id, firstDeadAt })),
-      [...i.held].map(([id, h]) => (h.fallback ? { id, firstDeadAt: h.at, fallback: true as const } : { id, firstDeadAt: h.at })),
+      [...i.held].map(([id, h]) => {
+        const ats = [...new Set(h.ats)].sort((x, y) => x - y);
+        return { id, firstDeadAt: ats[0]!, ...(ats.length > 1 ? { instants: ats } : {}), ...(h.fallback ? { fallback: true as const } : {}) };
+      }),
       [], 0, null, NOW + 200 * 60_000);
     const members = (b: ReturnType<typeof run>): string[] => (b.tripped ? b.members.map((m) => m.id) : []);
-    const clone = (i: In): In => ({ crashed: new Map(i.crashed), held: new Map(i.held) });
+    const clone = (i: In): In => ({ crashed: new Map(i.crashed), held: new Map([...i.held].map(([id, h]) => [id, { ats: [...h.ats], fallback: h.fallback }])) });
     let checked = 0; let tripped = 0;
     for (let k = 0; k < 600; k += 1) {
       const base: In = { crashed: new Map(), held: new Map() };
       for (const id of ids) {
         if (rnd(3) === 0) base.crashed.set(id, instants[rnd(instants.length)]!);
-        if (rnd(4) === 0) base.held.set(id, { at: instants[rnd(instants.length)]!, fallback: rnd(6) === 0 });
+        if (rnd(4) === 0) base.held.set(id, { ats: [instants[rnd(instants.length)]!, ...(rnd(3) === 0 ? [instants[rnd(instants.length)]!] : [])], fallback: rnd(6) === 0 });
       }
       const before = run(base);
       const supers: In[] = [];
       for (const id of ids) {
-        if (!base.crashed.has(id)) { const s = clone(base); s.crashed.set(id, instants[rnd(instants.length)]!); supers.push(s); }   // an entry (or an instant, when held)
-        if (!base.held.has(id)) { const s = clone(base); s.held.set(id, { at: instants[rnd(instants.length)]!, fallback: false }); supers.push(s); }   // an entry (or an instant, when crashed)
+        if (!base.crashed.has(id)) { const s2 = clone(base); s2.crashed.set(id, instants[rnd(instants.length)]!); supers.push(s2); }   // an entry (or an instant, when held)
         const h = base.held.get(id);
-        if (h !== undefined && !h.fallback) { const s = clone(base); s.held.set(id, { at: h.at, fallback: true }); supers.push(s); }   // a flag
+        if (h === undefined) { const s2 = clone(base); s2.held.set(id, { ats: [instants[rnd(instants.length)]!], fallback: false }); supers.push(s2); }   // an entry (or an instant, when crashed)
+        else {
+          const s2 = clone(base); s2.held.get(id)!.ats.push(instants[rnd(instants.length)]!); supers.push(s2);   // another remembered instant
+          if (!h.fallback) { const s3 = clone(base); s3.held.get(id)!.fallback = true; supers.push(s3); }   // a flag
+        }
       }
       for (const sup of supers) {
         const after = run(sup);
         checked += 1;
         if (before.tripped) {
           tripped += 1;
-          expect(after.tripped, JSON.stringify({ base: [...base.crashed, ...base.held], sup: [...sup.crashed, ...sup.held] })).toBe(true);
+          expect(after.tripped, JSON.stringify({ base: [[...base.crashed], [...base.held]], sup: [[...sup.crashed], [...sup.held]] })).toBe(true);
           for (const m of members(before)) expect(members(after), `${m} dropped`).toContain(m);
         }
       }

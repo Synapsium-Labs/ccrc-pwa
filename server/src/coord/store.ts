@@ -3402,9 +3402,13 @@ export class CoordStore {
       if (parts === null) return { ok: false, detail: 'the breaker held-set row is malformed', eventId, runId };
       const held: DeadCoordinatorBreakerMember[] = [];
       for (const p of parts) {
-        const at = persistedInt(p.text, 'breaker held firstDeadAt');
-        if (!at.ok) return { ok: false, detail: at.detail, eventId, runId };
-        held.push(p.fallback ? { id: p.id, firstDeadAt: at.value, fallback: true } : { id: p.id, firstDeadAt: at.value });
+        const ats: number[] = [];
+        for (const text of p.texts) {
+          const at = persistedInt(text, 'breaker held firstDeadAt');
+          if (!at.ok) return { ok: false, detail: at.detail, eventId, runId };
+          ats.push(at.value);
+        }
+        held.push({ id: p.id, firstDeadAt: ats[0]!, ...(ats.length > 1 ? { instants: ats } : {}), ...(p.fallback ? { fallback: true as const } : {}) });
       }
       return { ok: true, held, runId: run.value };
     } catch (err) {
