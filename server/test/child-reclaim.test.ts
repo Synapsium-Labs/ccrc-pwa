@@ -32,6 +32,8 @@ import { CCD } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
+// A generation wave 7's ccd binds into its token (spec §5.5); a licensed request is judged under it. The shared fixture's G1 (H7).
+import { G1 as GEN_W8 } from './childReclaimGenerationFixture.js';
 
 const ID = 'demo-quiet-basin';
 const TOK = 'a'.repeat(64);
@@ -187,7 +189,7 @@ describe('the fourteen words', () => {
 describe('parseChildReclaimAudit', () => {
   it('reads a token and the run the marker names', () => {
     expect(parseChildReclaimAudit(ID, auditDoc(7, 'reclaimable', { token: TOK })))
-      .toEqual({ kind: 'token', token: TOK, childOf: 7 });
+      .toEqual({ kind: 'token', token: TOK, childOf: 7, generation: { kind: 'unprinted' } });
   });
   it('reads a refusal by its word', () => {
     expect(parseChildReclaimAudit(ID, auditDoc(7, 'attached', { detail: 'a client' })))
@@ -819,8 +821,12 @@ describe('reclaimChild — the one executor', () => {
   });
 
   it('a CEILING-EXPIRED reclaim states the wait it ended and why it went ahead', async () => {
-    const s = await rig({ visible: true, now: T0 + 16 * 60_000 });
-    expect((await reclaimChild(s.deps, s.req(true, T0))).kind).toBe('reclaimed');
+    const s = await rig({ visible: true, now: T0 + 16 * 60_000, script: (runId) => ({
+      audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK, generation: GEN_W8 }) },
+      verb: { code: 0, stdout: reclaimedDoc(runId) } }) });
+    writeFileSync(path.join(s.reg, `${ID}.generation`), GEN_W8);
+    expect((await reclaimChild(s.deps, { ...s.req(true, T0), licenceGeneration: { kind: 'value', v: GEN_W8 } })).kind)
+      .toBe('reclaimed');
     expect(s.feed()).toEqual(['child reclaimed']);
     expect(s.bodies()[0]).toContain('The defer ceiling was reached after 16 minutes of deferral');
     expect(s.bodies()[0]).toContain('no longer held it back');
@@ -1387,8 +1393,10 @@ describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclai
     const s = await rig({ script: pinFailed });
     expect(await reclaimChild(s.deps, s.req(false, 1, listed))).toMatchObject({ kind: 'failed', token: 'pin-failed' });
     expect(s.feed(), 'the attention list already says it').toEqual([]);
-    const expired = await rig({ script: pinFailed });
-    await reclaimChild(expired.deps, expired.req(true, 1, listed));
+    const expired = await rig({ script: (runId) => ({ ...pinFailed(runId),
+      audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK, generation: GEN_W8 }) } }) });
+    writeFileSync(path.join(expired.reg, `${ID}.generation`), GEN_W8);
+    await reclaimChild(expired.deps, { ...expired.req(true, 1, listed), licenceGeneration: { kind: 'value', v: GEN_W8 } });
     expect(expired.feed(), 'the row that ends a wait').toEqual(['child reclaim failed']);
     expect(expired.bodies()[0]).toContain('The defer ceiling was reached');
     const other = await rig({ script: pinFailed });

@@ -12,8 +12,8 @@ import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
 import {
   CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_SKIP, childReclaimCoordinated, childReclaimFailingPastCeiling,
   childReclaimFailingSentence, childReclaimFailingWord, childReclaimFailureLine, childReclaimJournalRow,
-  isChildReclaimKeptVerdict, type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention, type ChildReclaimPreLockToken,
-  type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
+  childReclaimSameGenerationKey, isChildReclaimKeptVerdict, type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention,
+  type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -200,15 +200,18 @@ export function childReclaimHasCoordinated(
 
 /** Why a reclaim did not happen YET. The server's own reasons first, then the
  *  seven retryable box words — exactly the `retry` rows above, so a deferral
- *  always says which condition it is waiting on. */
+ *  always says which condition it is waiting on. `generation-changed` is the
+ *  server's own word too: the workspace under this name is not the generation
+ *  the request was judged under (spec §5.5, §5.6), found by the executor's
+ *  re-read or in the audit's own `generation`. */
 export type ChildReclaimDeferWhy =
   | 'presence' | 'siblings-open' | 'siblings-unreadable' | 'marker-unreadable' | 'marker-mismatch'
-  | 'unsupported' | 'paused-at-server'
+  | 'unsupported' | 'paused-at-server' | 'generation-changed'
   | Extract<ChildReclaimToken, 'paused' | 'held' | 'attached' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress'>;
 
 const CHILD_RECLAIM_DEFER_WHY: Readonly<Record<ChildReclaimDeferWhy, true>> = {
   presence: true, 'siblings-open': true, 'siblings-unreadable': true, 'marker-unreadable': true,
-  'marker-mismatch': true, unsupported: true, 'paused-at-server': true,
+  'marker-mismatch': true, unsupported: true, 'paused-at-server': true, 'generation-changed': true,
   paused: true, held: true, attached: true, 'tree-busy': true, 'state-changed': true, 'in-progress': true,
   'reap-in-progress': true,
 };
@@ -216,6 +219,25 @@ const CHILD_RECLAIM_DEFER_WHY: Readonly<Record<ChildReclaimDeferWhy, true>> = {
 export function isChildReclaimDeferWhy(v: unknown): v is ChildReclaimDeferWhy {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_DEFER_WHY, v);
 }
+
+/** `generation-changed`'s sentence (spec §5.5, §5.6): what the feed row says after the word, wherever the
+ *  executor finds it. Defined once; each detail that carries it first says what was measured. Worded by what
+ *  was MEASURED, never by a cause: the executor sees only that the generation file now reads differently from
+ *  the licence. ccd can change that file with no removal (`_reg_generation_init` minting into an absence on a
+ *  standing row; `_reg_purge` unlinking `.generation` last with the row still listed), so "removed and made
+ *  again" would be a false cause on those rows. */
+export const CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE =
+  'The workspace under this name no longer carries the generation the sweep judged it under, so this request '
+  + 'is not used, and the sweep judges the workspace afresh.';
+
+/** A generation key, in a detail's words. */
+const childReclaimGenerationWords = (g: ChildReclaimGenerationKey): string =>
+  (g.kind === 'value' ? `generation ${g.v}` : 'no generation');
+
+/** Step 5a's `unsupported` detail (spec §5.5): a licensed request is never spent on a token that binds
+ *  no generation. */
+const CHILD_RECLAIM_AUDIT_UNBOUND = 'this fleet host’s ws-audit prints no generation, so the licence cannot be '
+  + 'bound to one; a licensed reclaim waits until the fleet host’s ccd is updated';
 
 /** `wip`, discriminated (review 170 F21): a bare `string | null | 'unreadable'`
  *  collapses in TypeScript to `string | null` — the `'unreadable'` sentinel is
@@ -602,11 +624,20 @@ const TOKEN_SHAPE = /^[0-9a-f]{64}$/;
  *  "no WIP was pinned" (fix round 1, review minor #2). */
 const WIP_SHAPE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
+/** What a token-bearing `ws-audit --reclaim` document says of the row's generation (spec §5.5): the value
+ *  ccd bound into the token it minted, or `unprinted`, an older ccd's document with no `generation` key at
+ *  all. Never folded into the generation file's own `absent` (`ChildReclaimGenerationKey`), which is a
+ *  different fact from a different read: wave 7's ccd mints no token over a row with no generation. */
+export type ChildReclaimAuditGeneration =
+  | { readonly kind: 'value'; readonly v: string }
+  | { readonly kind: 'unprinted' };
+
 /** `ccd ws-audit --session <id> --reclaim [--defer-expired]`'s answer, read
  *  for exactly what the executor needs. `unreadable` is its own arm: a
  *  document this build cannot read is not a refusal and never a token. */
 export type ChildReclaimAuditRead =
-  | { readonly kind: 'token'; readonly token: string; readonly childOf: number }
+  | { readonly kind: 'token'; readonly token: string; readonly childOf: number;
+      readonly generation: ChildReclaimAuditGeneration }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
   | { readonly kind: 'unreadable'; readonly detail: string };
 
@@ -640,7 +671,23 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
     if (typeof v.childOf !== 'number' || !CHILD_RUN_ID.test(String(v.childOf))) {
       return { kind: 'unreadable', detail: 'ws-audit --reclaim said reclaimable with no childOf run id' };
     }
-    return { kind: 'token', token: v.token, childOf: v.childOf };
+    // THE GENERATION (spec §5.5), in four arms decided by `hasOwnProperty`, never by `?? null`. An older
+    // ccd prints no key at all (`unprinted`). That is not the null wave 7's ccd prints, and it prints null
+    // only on a document that mints no token. On a token-bearing document, a null, or a value that is not
+    // exactly one generation (`REG_GENERATION_SHAPE`, 36 characters, nothing trimmed), makes the WHOLE
+    // document unreadable, so its token is never spent. The executor compares a value with the
+    // request's licence (`childReclaimOutcome`'s step 5a). A refused document's key gates nothing.
+    if (!Object.prototype.hasOwnProperty.call(v, 'generation')) {
+      return { kind: 'token', token: v.token, childOf: v.childOf, generation: { kind: 'unprinted' } };
+    }
+    if (v.generation === null) {
+      return { kind: 'unreadable', detail: 'ws-audit --reclaim said reclaimable with a null generation' };
+    }
+    if (typeof v.generation !== 'string' || !REG_GENERATION_SHAPE.test(v.generation)) {
+      return { kind: 'unreadable',
+        detail: 'ws-audit --reclaim said reclaimable with a generation that is not one 36-character lowercase UUID' };
+    }
+    return { kind: 'token', token: v.token, childOf: v.childOf, generation: { kind: 'value', v: v.generation } };
   }
   if (isChildReclaimToken(v.verdict)) {
     return { kind: 'refused', token: v.verdict, detail: typeof v.detail === 'string' ? v.detail : '' };
@@ -801,11 +848,12 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
 /**
  * Reclaim ONE child, from either trigger (spec §5.7). Re-reads everything it
  * decides on — the marker against `req.runId`, the open siblings, the
- * reclaim switch (`childReclaimPauseRead`, wave 4), presence, the
- * capability — then `ws-audit --reclaim` → token → `ws-reclaim`. On
- * `reclaimed` — and on a row step 1 measures ABSENT, whose earlier attempt's
- * box half finished without its cancel — it cancels every outstanding
- * delivery addressed to the child.
+ * reclaim switch (`childReclaimPauseRead`, wave 4), a sweep request's
+ * workspace generation (spec §5.5), presence, the capability — then
+ * `ws-audit --reclaim` → token, its generation held to the request's →
+ * `ws-reclaim`. On `reclaimed` — and on a row step 1 measures ABSENT, whose
+ * earlier attempt's box half finished without its cancel — it cancels every
+ * outstanding delivery addressed to the child.
  * Every outcome but `gone` writes one feed row, unless it repeats the deferral
  * episode or the listed failure the request names (`childReclaimFeedSkips`),
  * HERE — this function is the single exit every outcome takes, so a new
@@ -953,6 +1001,35 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
       ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
       : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
   }
+  // 2c — THE GENERATION, RE-READ (spec §5.5, §5.6). A sweep request was judged over ONE workspace
+  // generation (`licenceGeneration`, the sweep's own byte-exact read of `<id>.generation`), and it may
+  // have waited on the session's queue since. The same run can remove the slug and mint it again
+  // meanwhile, and every check above passes for the new workspace. So EVERY sweep request, licensed
+  // or not, re-reads it here: after the switch, and BEFORE presence, so that no presence answer
+  // measured on a new workspace is credited to the old one's episode. A different value, or `absent`
+  // against a value, is `generation-changed`. A read that failed is `marker-unreadable`, never
+  // "changed": it says the box could not be read, not that the workspace moved. Close's requests carry
+  // `none`, and skip this step and step 5a's comparison. Close queues only when the minting run names
+  // this session and no other open run does, so that run is the one being closed or is already
+  // terminal, and no re-mint by it can follow.
+  const licence = req.licenceGeneration;
+  if (licence.kind !== 'none') {
+    let current: ChildReclaimGeneration;
+    try {
+      current = await childReclaimGenerationRead(deps.io, deps.cfg.registryDir, sessionId);
+    } catch (err) {
+      return deferred('marker-unreadable', `${sessionId}.generation could not be read `
+        + `(${err instanceof Error ? err.message : String(err)}), so which workspace stands under this name cannot be said`);
+    }
+    if (current.kind === 'unreadable') {
+      return deferred('marker-unreadable',
+        `${sessionId}.generation could not be read, so which workspace stands under this name cannot be said`);
+    }
+    if (!childReclaimSameGenerationKey(licence, current)) {
+      return deferred('generation-changed', `the workspace now carries ${childReclaimGenerationWords(current)}, `
+        + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
+    }
+  }
   // 3 — a human looking at it, unless the defer's ceiling was reached.
   if (!req.deferExpired && deps.presence?.isVisible(sessionId) === true) {
     return deferred('presence', 'someone is viewing this session');
@@ -970,6 +1047,23 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail);
   if (audit.childOf !== runId) {
     return deferred('marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${runId}`);
+  }
+  // 5a — THE AUDIT'S GENERATION (spec §5.5): the generation ccd bound into the token it just minted,
+  // against the one this request was judged under. A different value, `absent` against a value
+  // included, is `generation-changed`: the slug was minted again between step 2c and the audit, and the
+  // token is over the new workspace. An older ccd prints no generation (`unprinted`). A LICENSED request
+  // is never spent on such a token: it skips presence on the strength of a judgement over one
+  // generation, and nothing on the box would hold it to that generation. So it defers `unsupported`
+  // until the fleet host's ccd is updated. An unlicensed request relies on step 2c. Its stated
+  // residual, on an older ccd only, is the gap from step 2c's read to the act (spec §5.5). Close's
+  // `none` is never compared.
+  if (licence.kind !== 'none') {
+    if (audit.generation.kind === 'unprinted') {
+      if (req.deferExpired) return deferred('unsupported', CHILD_RECLAIM_AUDIT_UNBOUND);
+    } else if (!childReclaimSameGenerationKey(licence, audit.generation)) {
+      return deferred('generation-changed', `ws-audit minted its token over ${childReclaimGenerationWords(audit.generation)}, `
+        + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
+    }
   }
   // 6 — the act. ccd re-proves the token inside the reap lock.
   const act = await childReclaimAct(deps, req, audit.token);
