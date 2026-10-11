@@ -543,8 +543,9 @@ export function recallLine(i) {
 
 /** Append `\n<line>\n` to spool/<id>.jsonl in ONE write on an O_APPEND descriptor (§5.1).
  *  It writes only into a pre-existing real spool directory and appends only to a regular file. O_NOFOLLOW and
- *  O_NONBLOCK reject a link or a swapped FIFO; any accounting failure leaves the read answer unchanged. */
-export function writeRecallLine(home, id, line) {
+ *  O_NONBLOCK reject a link or a swapped FIFO; any accounting failure leaves the read answer unchanged.
+ *  `afterPrecheck` exists only to make the pre-open/post-open replacement race fixture deterministic. */
+export function writeRecallLine(home, id, line, afterPrecheck = null) {
   const P = historyPaths(home);
   try {
     if (!lstatSync(P.spool).isDirectory()) return;
@@ -556,6 +557,7 @@ export function writeRecallLine(home, id, line) {
       if (!(e !== null && typeof e === 'object' && e.code === 'ENOENT')) return;
     }
     if (st !== null && !st.isFile()) return;
+    if (typeof afterPrecheck === 'function') afterPrecheck(p);
     const fd = openSync(p, FS.O_WRONLY | FS.O_APPEND | FS.O_CREAT | FS.O_NOFOLLOW | FS.O_NONBLOCK, 0o600);
     try {
       if (!fstatSync(fd).isFile()) return;
