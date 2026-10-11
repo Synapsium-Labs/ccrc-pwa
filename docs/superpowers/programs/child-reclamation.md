@@ -24,7 +24,7 @@ removed on 2026-09-10 was not.
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **deployed** fleet box v0.0.145 (`7609221a4`, merged 2026-10-11 00:55; the updater's auto move 01:10–01:12, agent restarted 01:10:52; `ccd caps` advertises `collect-v1` and `ws-collect`) — run 347, reviews 369, 374, 376 |
-| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **dispatched** 2026-10-11 00:59 — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; dispatched after wave 7 merges (H1) |
+| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **in review** — run 348 (`ccrc-pwa-quiet-prairie`, dispatched 2026-10-11 00:59), plan `0d9f1b042`; PR #349 at `4b5a94ac1` after fix round 1; reviews 378, 379 |
 | 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -58,6 +58,9 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - **The worker's own re-review left two notes**, which review 379 judges: the census title's literal "no other file"
     claim, and the `runId` sentence at `shared/api.ts:3832-3834`, which does not hold for a leaf-kept item.
   - **CI** is my re-measure, and it was still running at the advance.
+  - **Review run 379 is dispatched** at 11:54 to `ccrc-pwa-swift-meadow` (an Anthropic wrapper), and it is at `working`.
+    The brief (`review-379-brief.md` in the evidence archive) is scoped to `0511d5370..4b5a94ac1`. It checks each
+    ruling, runs the SAFETY lens on F6's export and F9's pins, and has the panel judge the worker's two notes.
 
 - **2026-10-11 11:32 — review 378 is accepted and closed `done`, and wave 8 fix round 1 is sent (4218). Run 348 is back at `working`.**
   - **How it ran.** soft-meadow, on an Anthropic account with no swap: the held-out panel plus the plan's four lenses,
