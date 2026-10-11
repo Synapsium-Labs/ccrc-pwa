@@ -270,6 +270,15 @@ const ROWS: Row[] = [
     plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
   { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (the placeholder behind a no-break space)', armedClass: 'FAIL',
     plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\u00A0${PLACEHOLDER_TOKEN}\u00A0\n`), { mode: 0o600 }) },
+  // Review I1 (Task R): extractToken trims FIRST and only then tells a blank or `#` line apart, so a BOM ahead of the
+  // preamble (or of a blank line) still leaves the placeholder as the value line it picks. The first row reads the
+  // actual shipped example, so the shipped bytes themselves are under test.
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM, then the actual shipped example file)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.concat([Buffer.from('\uFEFF'), readFileSync(join(REPO, 'deploy', 'ccrc-mail.token.example'))]), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM before the # comment line)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF# comment\n${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM-only line before the placeholder)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF\n${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
   { arm: 'fleet', word: 'no-generation', armedClass: 'WARN', plant: (b) => rmSync(dot(b, NODE_FILES.tokenGeneration)) },
   { arm: 'fleet', word: 'generation-malformed', armedClass: 'WARN', plant: (b) => writeFileSync(dot(b, NODE_FILES.tokenGeneration), 'not-an-id\n') },
   { arm: 'fleet', word: 'never-synced', armedClass: 'WARN', plant: (b) => rmSync(dot(b, 'token-sync.json')) },
