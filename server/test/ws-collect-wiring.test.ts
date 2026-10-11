@@ -10,9 +10,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EXEC_WHITELIST, REQUIRED_VERB_FLAG, UNGRANTABLE_VERBS, isExecAllowed } from '../../agent/src/whitelist.js';
 import { CCD_ARGV, COLLECT_CAP } from '../src/ccdargv.js';
+import type { CollectToken } from '../../shared/api.js';
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
-const TOKEN = 'a'.repeat(64);
+const TOKEN = 'a'.repeat(64) as CollectToken;
 const ID = 'demo-quiet-dune';
 
 describe('the agent grant — ws-collect on its confirmation token, the audit on the existing prefix', () => {

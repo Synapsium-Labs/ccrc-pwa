@@ -5588,3 +5588,44 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
     expect(files.flatMap(([n, t]) => quotedWords(t, words).map((w) => `${n}: '${w}'`))).toEqual([]);
   });
 });
+
+// CHILD RECLAMATION WAVE 9 (spec 2026-09-22 §5.10): the temp-root id predicate and its cap are ONE L0 function and ONE
+// L0 constant. This block is APPENDED for the reason the blocks above state: `session-hook.test.ts`'s citation audit
+// cites this file by line. Before this wave the kept-leaf reader held a private copy (`leafIdOk`) and the store a
+// private cap (`CHILD_RECLAIM_MAX_SESSION_ID_CHARS`). A third copy is how the dash and length clauses would be lost
+// again, so it reds here.
+describe('child reclamation wave 9: the temp-root id predicate and its cap are defined once, in shared/api.ts', () => {
+  const DEF_FN = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${n}\\b`, 'm');
+  const DEF_VAL = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${n}\\b`, 'm');
+  const definers = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel).sort();
+  /** The session-id shape and a leading-dot or leading-dash test on one code line: a re-derived predicate under a new name. */
+  const REDERIVED = /\bisSessionIdShape\s*\(.*startsWith\(\s*['"][.-]['"]\s*\)|startsWith\(\s*['"][.-]['"]\s*\).*\bisSessionIdShape\s*\(/;
+
+  it('CONTROL: the patterns see a declaration, an un-exported copy and a re-derivation, and not an import or a call', () => {
+    expect(DEF_FN('isTmpRootId').test('export function isTmpRootId(id: unknown): id is string {')).toBe(true);
+    expect(DEF_VAL('leafIdOk').test('const leafIdOk = (id: string): boolean => isTmpRootId(id);')).toBe(true);
+    expect(DEF_VAL('TMPROOT_ID_MAX_CHARS').test("import { TMPROOT_ID_MAX_CHARS } from '../../../shared/api.js';")).toBe(false);
+    expect(DEF_FN('isTmpRootId').test('  if (!isTmpRootId(id)) return;')).toBe(false);
+    expect(REDERIVED.test("const ok = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('.');")).toBe(true);
+    expect(REDERIVED.test("const ok = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('-');")).toBe(true);
+    expect(REDERIVED.test('if (!isSessionIdShape(sid)) {')).toBe(false);
+  });
+
+  it('isTmpRootId and TMPROOT_ID_MAX_CHARS are declared in shared/api.ts and nowhere else', () => {
+    expect(definers(DEF_FN('isTmpRootId'))).toEqual(['shared/api.ts']);
+    expect(definers(DEF_VAL('isTmpRootId'))).toEqual([]);
+    expect(definers(DEF_VAL('TMPROOT_ID_MAX_CHARS'))).toEqual(['shared/api.ts']);
+  });
+
+  it('the two private copies are gone, and the two files that held them use the L0 names', () => {
+    expect(definers(DEF_VAL('leafIdOk')), 'leafIdOk').toEqual([]);
+    expect(definers(DEF_VAL('CHILD_RECLAIM_MAX_SESSION_ID_CHARS')), 'the store cap').toEqual([]);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/childReclaimSweep.ts'))).toMatch(/\bisTmpRootId\s*\(/);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/coord/store.ts'))).toMatch(/\bTMPROOT_ID_MAX_CHARS\b/);
+  });
+
+  it('no code line outside shared/api.ts re-derives it from the session-id shape and a leading-dot or leading-dash test', () => {
+    expect(ALL.filter((f) => rel(f) !== 'shared/api.ts' && stallCode(f).split('\n').some((l) => REDERIVED.test(l)))
+      .map(rel)).toEqual([]);
+  });
+});

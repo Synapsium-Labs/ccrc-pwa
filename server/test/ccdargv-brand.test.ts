@@ -76,6 +76,7 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   'b4-renamed-identifier.ts': { what: "a rename onto runCcd's own parameter name", codes: ['TS2339', 'TS2345'] },
   'b5-aliased-namespace.ts':  { what: 'the CCD_ARGV namespace aliased, argv still raw', codes: ['TS2345'] },
   'b6-no-run-on-deps.ts':     { what: 'Deps carries no raw runner at all', codes: ['TS2339'] },
+  'b7-collect-token-plain-string.ts': { what: "a plain string as ws-collect's token (spec §5.10)", codes: ['TS2345'] },
 };
 
 describe('the CcdArgv brand — every historical layer-2b bypass now fails to COMPILE', () => {

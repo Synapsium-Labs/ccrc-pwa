@@ -12,7 +12,7 @@
 // at the instant of deletion — this file narrows the window, it does not close it.
 import {
   CHILD_RECLAIM_KEPT_WORDS, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord, lcRefusalWord,
-  CHILD_RUN_ID, LC_LINE_MAX, isSessionIdShape, leafKeptWord,
+  CHILD_RUN_ID, LC_LINE_MAX, isTmpRootId, leafKeptWord,
   type ChildMark, type ChildReclaimAttention, type ChildReclaimGeneration, type ChildReclaimGenerationKey,
   type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
   type ChildReclaimLeafKeptAttention, type ChildReclaimLeafKeptMany, type LeafKeptWord, type LifecycleMeas,
@@ -1639,9 +1639,6 @@ export interface ChildReclaimLeafKept {
   readonly detail: string | null;
 }
 
-/** ccd's own id rule (`_ws_tmproot_id_ok`): a session id's shape, and no leading `.`. */
-const leafIdOk = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('.');
-
 const leafRunOf = (childOf: string | null): number | null =>
   (childOf !== null && CHILD_RUN_ID.test(childOf) ? Number(childOf) : null);
 
@@ -1654,14 +1651,13 @@ const leafRunOf = (childOf: string | null): number | null =>
  *    new workspace now.
  *  - A later `collect` `done` ends the temp-root half only. The collector never takes a clips directory.
  *
- *  A row whose id fails ccd's own id rule lists nothing, so no feed row is written for it: any session can
+ *  A row whose id fails the temp-root id rule lists nothing, so no feed row is written for it. Any session can
  *  append a journal line, so the mirror's id is attribution, and this item puts it in a path a person is told
- *  to remove. The rule is ccd's `_ws_tmproot_id_ok`: a session id's shape (`isSessionIdShape`) and no leading
- *  `.`. Without the second clause `.` would name `~/.cc-clips` (or `~/.cc-tmp`) itself, and `..` the directory
- *  above it, as the thing a person removes. It sets no length cap
- *  of its own: the id rides one journal line, and ccd writes every line within `LC_LINE_MAX`. A line appended
- *  by hand is not cut by the mirror's ingest, so a forged id's length is bounded only by one read of the
- *  journal (a stated residual): it is still one plain line, with no separator and no dot-leading name.
+ *  to remove. The rule is L0's `isTmpRootId` (spec §5.10):
+ *  - ccd's `_ws_tmproot_id_ok`, a session id's shape and no leading `.`. Without the dot clause, `.` would name
+ *    `~/.cc-clips` (or `~/.cc-tmp`) itself as the thing a person removes, and `..` the directory above it;
+ *  - no leading `-`, and at most 255 characters. These two clauses are the collector's, and here they change only
+ *    what is listed: an id the collector never audits is not listed either.
  *
  *  `runId` is `meas.childOf` read through `CHILD_RUN_ID`, else null. The purge failures do not carry it,
  *  and a cut line has no `meas` at all. Ordered by session id. Pure and deterministic, so the coord frame's
@@ -1674,7 +1670,7 @@ export function childReclaimLeafKept(i: {
   const since = childReclaimLeafKeptSince(i.nowMs);
   const latest = new Map<string, ChildReclaimLeafSourceRow>();
   for (const r of i.rows) {
-    if (r.at < since || !childReclaimLeafSource(r) || !leafIdOk(r.sessionId)) continue;
+    if (r.at < since || !childReclaimLeafSource(r) || !isTmpRootId(r.sessionId)) continue;
     const had = latest.get(r.sessionId);
     if (had === undefined || r.id > had.id) latest.set(r.sessionId, r);
   }
