@@ -1524,6 +1524,22 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **CI:** server 5/5 was red on `ccrc-codex` L0d, which the PR does not touch and which is green alone. The fix
     round's push re-runs it.
   - Numbers 4824 and 4825 were allocated, with 4825 spare.
+- **2026-10-11 21:36 — fix round 3 follow-up ruling (plain-ridge's 4255; answer 4256): close the returning-id episode seam.**
+  - The first monotone change made the breaker function monotone, and both review-384 probes went red then green. An
+    internal Opus review then measured a deeper plain-restart sequence: a restarted lane can make Y a member at an older
+    instant than the unrestarted lane; after Y's anchor is deleted, the restarted lane can end Q while the unrestarted
+    lane's breaker `[Y,Z]` stands. Accumulating every anchor instant while a member stays held closes that sequence.
+  - The same review identified one more seam: after one lane ends an old episode, the same claimant id can return under a
+    new run while the delayed lane still holds the old episode. The breaker theorem's one-world premise no longer orders
+    those inputs, but this is still a known armed-lane divergence. §12 is the final before-arming checklist, so merely
+    naming it would leave an explicit `DO NOT ARM` blocker without an operator acceptance.
+  - **Ruled (b), narrowly; 4825:** when a held id has a later successful-spawn/new-run episode, the current crash starts a
+    fresh anchor and contributes its new instant beside every remembered instant. The old episode may not suppress the new
+    episode's breaker membership, including across restart. Use already measured journal/run evidence and the held record;
+    no schema migration and no general id-recycling redesign. Red-first: the returning-id sequence, including the lane that
+    missed the alive pass, plus a restart/durable-record case. If existing evidence cannot expose and preserve that boundary
+    without a migration or new durable identity, stop and report; do not silently fall back to documenting it.
+  - Both lanes remain SHADOWED.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
