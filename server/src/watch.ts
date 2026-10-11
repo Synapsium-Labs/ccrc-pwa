@@ -4172,7 +4172,7 @@ export class FleetWatcher {
       }
     }
     // FIVE — the attention list, from the lane's memory alone.
-    this.expiryAttentionList = expiryAttention(this.archivedExpiryState);
+    this.expiryAttentionList = expiryAttention(this.archivedExpiryState, this.archivedExpiryBoxRefused !== null);
   }
 
   /** One archived row's store answers in the lane's pass (spec §5.3's run conjuncts). `reviewing` — a REVIEW run

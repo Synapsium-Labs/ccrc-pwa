@@ -514,8 +514,8 @@ each item is a departure named there).
     again four hours after each failed attempt, never stopping. No answer that ends no attempt replaces the entry or resets its run: a
     hold, a deferral, a shadow audit (its feed row then says only that this pass deleted nothing), a refusal the
     box retries, an in-use, ccd's "not yet", an older ccd's silence.
-    The entry goes when an attempt completes, finds that none had begun (a `failed` `state-changed`, which ccd prints
-    only before the breadcrumb) or stops for good, or when the workspace is archived again; a restart re-learns. A
+    The entry goes when an attempt completes, finds that none had begun (any failed document ccd marks `crumb: false`,
+    or an older ccd's `state-changed`) or stops for good, or when the workspace is archived again; a restart re-learns. A
     terminal refusal and a composition error are still never asked again.
 - **As wave 6 closes the lane** (each a departure named in the wave-6 plan,
   `docs/superpowers/plans/2026-10-11-workspace-lifecycle-wave6-resumed-expiry-and-arming-close-out.md`).
@@ -528,7 +528,9 @@ each item is a departure named there).
     resumed expiry's `probe-unmeasured` is retried, never final; a fresh one's, which was final before, is audited
     afresh and counted; and a fresh pin's `pin-failed`, a symbolic HEAD's deleted branch among them, is audited afresh
     rather than resumed. The one document still read final by its word is a `probe-unmeasured` over a breadcrumb that
-    cannot be read: nothing is deleted, and the row is listed and not asked again until the server restarts.
+    turns unreadable between the act's audit and the fork's in-lock read: nothing is deleted, and the row is listed and
+    not asked again until the server restarts. A breadcrumb already unreadable at the lane's audit never gets that far:
+    the audit answers `unmeasured` (exit 1), read as `audit-failed`, backed off and listed after the hour, never final.
   - **`containment-refuted` is stuck.** The shared tail prints it, past the breadcrumb, when its removal-time re-ask
     proves that what it would remove is not only this workspace's own. Whatever `crumb` says, the row is listed at
     once, saying the expiry stopped part-way and nothing further was deleted, and goes straight to the persistent
@@ -540,7 +542,8 @@ each item is a departure named there).
   - **The words say when.** A standing entry is asked again four hours after each failed attempt, sooner after an
     answer that ends no attempt and never while the workspace is held. A fleet box that answers `flock-unavailable`
     gets no cleanup composed at all, for any workspace, until the server restarts. Its feed row says so, and so does
-    the row's entry, unless a standing entry stands there, which keeps its place. A shadow feed row over a standing
+    the row's entry; a standing entry (stuck or tier) keeps its place and says the halt in its own sentence while it
+    stands, with no new kind and no new word. A shadow feed row over a standing
     entry says that pass deleted nothing and that an earlier attempt may have stopped part-way; it never says nothing
     was deleted.
 
@@ -856,12 +859,14 @@ collects them.
   the hour if it recurs, where it was final before. `_ws_expire_cwd_users` resolves its parent through
   `_ws_dir_physical`, so a parent whose physical path holds a newline is unmeasured, never "nobody" (CCR-15 wave 6; its
   case in `ccd-leaf-root-newline.test.ts` goes red when the bare `pwd -P` is put back, measured in wave 6).
-- **One residual of question (k).** A breadcrumb that stands but cannot be read (a `$REG/<id>.reaping` that is not a
-  readable file) leaves `crumb` unsaid, as on the reclaim side, so that `probe-unmeasured` is read by its word: listed
-  at once and not asked again for that archive until the server restarts. Nothing is deleted meanwhile; read what
-  stands in that row before anything else.
+- **One residual of question (k), in a narrow window.** A breadcrumb that stands but cannot be read (a
+  `$REG/<id>.reaping` that is not a readable file) leaves `crumb` unsaid, as on the reclaim side. If it is already
+  unreadable at the lane's audit, `ws-audit --expire` answers `unmeasured` (exit 1), read as `audit-failed`: backed off
+  and listed after the hour, never final. Only a breadcrumb that turns unreadable between the act's audit and the
+  in-lock fork leaves a `probe-unmeasured` read by its word: listed at once and not asked again for that archive until
+  the server restarts. Nothing is deleted either way; read what stands in that row before anything else.
 - **One archived tree holds a leaked test tmux server** (the ledger's pre-arming item (d)). The lane refuses that row
-  `in-use` on every pass and lists it after three, naming the process; it never ends it. End that server first, once
+  `in-use` each time it is asked and lists it after three, naming the process; it never ends it. End that server first, once
   you know what it is, or arm knowing the row stays listed.
 - **A branch already gone now expires.** Since CCR-15 wave 6, an archived workspace whose branch is gone when its token
   is minted expires with its work in the attic, where `main` stopped at `pin-failed`, and its ignored and secret-shaped
@@ -872,14 +877,20 @@ collects them.
 - **An archive whose admin `gitdir` names no path** is unmeasured and retried, never `no-worktree-record` (CCR-15
   wave 7, rung 8); a record that is truly absent stays terminal.
 - **What each answer does to a row.** A person viewing it defers it with no ceiling. A process working in it is refused
-  every pass and listed after three, naming the process; the lane never kills. A held row past its instant is listed,
+  `in-use` each time the row is asked (the lane makes at most one act per pass, fleet-wide) and listed after three, naming
+  the process; the lane never kills. A held row past its instant is listed,
   never touched. A terminal refusal, or a failure the box says will not resume, is listed and never asked again for that
-  archive. A resumable failure backs off and is listed after the hour; after a day of the verb's failures it becomes a
+  archive. A resumable failure backs off and is listed after the hour (a box answer such as `lock-unopenable` at once); after a day of the verb's failures it becomes a
   standing entry, asked again four hours after each failed attempt. `containment-refuted` is listed at once on that
   tier. A failure ccd printed before the breadcrumb is audited afresh, counted, and listed after the hour if it keeps
   happening. A completed expiry that kept a leaf is listed until a restart.
-- **`flock-unavailable` halts the lane** on that box until the server restarts; its feed row says so, and so does the
-  row's entry, unless a standing entry stands there.
+- **A stuck entry stands through a `restart` answer** (ruling (m)). An act whose document says ccd stopped before it began
+  (`crumb: false`) ends a tier entry, but not a stuck one: it keeps its entry, its first instant and the tier's cadence,
+  because a restart says nothing about whether the leaf that refused containment is gone. Only an attempt that completes,
+  a verdict that stops the row for good, or a fresh archive ends it (a server restart drops it, as it drops every entry).
+- **`flock-unavailable` halts the lane's act** on that box until the server restarts. The halt is one process-wide field
+  gating only the act: learn audits go on. Its feed row says so, and so does the row's entry; a standing entry (stuck or
+  tier) keeps its place and says the halt in its own sentence while it stands.
 - **The first armed pass faces the backlog** at one expiry a pass, fleet-wide. The operator expired fifteen archives by
   hand on 2026-10-07; raise `WS_EXPIRE_AFTER_S` first if what remains is too many at that pace.
 
@@ -901,7 +912,10 @@ collects them.
 - **A permanently unreadable generation pins the mirror `stale`**, with no diagnostic of its own: the lane then decides
   nothing at all, which fails shut. `/api/fleet/health`'s lifecycle state shows it.
 - **An accepted abstention** (§5.4): a child's pre-start `reclaim` failure reads as a deliberate act.
-- **An abandoned programme's row** stays `abandoned` while a revived coordinator's new run is open (§5.4; question (f)).
+- **An abandoned programme's row** stays `abandoned` while a revived coordinator's new run is open (§5.4; question
+  (f)). The consequence: `toId:'coordinator'` mail that carries no `runId` is refused while nothing else is active, and
+  goes to ANOTHER programme's coordinator when exactly one other programme is active; mail naming a `runId` still
+  resolves.
 
 **Questions still open**, lettered as the programme's ledger letters them.
 - (b) The archive-confirm copy: the ledger holds it open; wave 4 hedged both confirms to a sentence true before and
@@ -910,6 +924,9 @@ collects them.
 - (g) A stale mirror at the act keeps the run of crashed passes, where the switch resets it. Keep, or reset?
 - (i) A kept-leaf entry lives until a server restart. Is that the life you want?
 - (j) `ws-expire` refuses a branch made inside the lock as well as one deleted. Keep both directions?
+- (p) Should a breadcrumb that turns unreadable between the act's audit and the in-lock fork (the only shape left once
+  an unreadable one at the audit is backed off) be retried on the persistent tier, rather than listed at once and not
+  asked again until the server restarts?
 - Wave 2's three: the PR sheet's "Archive now" offers no consent for a busy or coordinating workspace; a real worktree
   check in remote mode needs an agent-first probe; L5's "Its workers will be cleaned up" is true only for CCR-15's
   children.

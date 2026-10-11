@@ -690,6 +690,33 @@ describe('the box words', () => {
   });
 });
 
+describe('the halt is on EVERY standing row (review 381, F3)', () => {
+  it('a stuck entry, and a flock-unavailable answer for another row: the stuck row’s attention sentence says the lane composes nothing until a restart', async () => {
+    const f = await fixture({ expire: (id) => id === 'demo-a'
+      ? { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'demo-other’s registry row lies inside /w/demo-a', crumb: true }), stderr: '' }
+      : { code: 1, stdout: '', stderr: 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire'), 'only the stuck row has been asked, so far').toEqual(['demo-a']);
+    await f.watcher.tick();
+    const before = f.watcher.currentCoord()?.expiryAttention ?? [];
+    expect(before.map((a) => a.sessionId)).toEqual(['demo-a']);
+    expect(before[0]!.sentence, 'no halt yet, no words about it').not.toContain('flock-unavailable');
+    f.plant('demo-b');
+    for (let k = 0; k < 6 && f.verbsFor('ws-expire').length < 2; k += 1) { f.next(); await f.pass(); }
+    expect(f.verbsFor('ws-expire'), 'the other row met the halt').toEqual(['demo-a', 'demo-b']);
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    const list = f.watcher.currentCoord()?.expiryAttention ?? [];
+    const stuck = list.find((a) => a.sessionId === 'demo-a')!;
+    expect(stuck.kind, 'on the wire: still the failing entry, no new word').toBe('failing');
+    expect(stuck.sentence).toContain('cleanup stopped part-way: containment-refuted');
+    expect(stuck.sentence).toContain('The lane composes no cleanup on that box, for any archived workspace, until the server restarts.');
+    expect(f.entry('demo-a')?.report?.kind, 'the entry keeps its place (ruling (n))').toBe('stuck');
+  });
+});
+
 describe('a standing in-use refusal is EXPECTED — reported, naming what it is, and never killed', () => {
   it(`after ${EXPIRE_IN_USE_ATTENTION_PASSES} refusals the row is listed with the pid, its command and the path`, async () => {
     const inUse = [{ pid: 3453108, comm: 'tmux: server', cwd: '/w/demo-a' }];

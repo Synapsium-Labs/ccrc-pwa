@@ -793,12 +793,18 @@ const isoMs = (ms: number): string => iso(Math.floor(ms / 1000));
 /** WHEN A STANDING ENTRY IS ASKED AGAIN, in words that hold (wave 6; the worker's residual from wave 5): the cadence is
  *  the wait after a FAILED attempt. An answer that ends no attempt asks sooner (a deferral, the next pass), and a hold
  *  keeps the row from being asked at all while it stands. (A box that answered flock-unavailable is asked nothing, by
- *  any row, until the server restarts — that row's own report says so.) */
+ *  any row, until the server restarts. The row that met it says so in its own report, unless a standing entry kept its
+ *  place; and every OTHER standing row's attention sentence says so while the halt stands — `expiryAttention`'s `halted`
+ *  (review 381, F3) — since this cadence is then not true of it.) */
 export const EXPIRE_ASKS_AGAIN_CADENCE = `${EXPIRE_PERSISTENT_RETRY_MS / 3_600_000} hours after each failed attempt — sooner `
   + 'after an answer that ends no attempt, never while the workspace is held';
 // The ONE place the persistent tier's hours and its cadence phrase are written: the standing sentences below and the stuck
 // feed row (`expireFeedBody`) both say it from here (whole-branch review, item 4).
 const STANDING_ASKS_AGAIN = `The lane asks again ${EXPIRE_ASKS_AGAIN_CADENCE} —`;
+
+/** THE HALT, in words (review 381, F3): said by the feed row of the act that met `flock-unavailable` and, while the
+ *  halt stands, by the attention sentence of every STANDING row — one place, so the two cannot drift. */
+export const EXPIRE_HALT_WORDS = 'The lane composes no cleanup on that box, for any archived workspace, until the server restarts.';
 
 /** WHAT A PROCESS IS, before anything suggests ending it (the coordinator's ruling (G)): the fleet's own tmux server
  *  is a `tmux: server` too, and ending THAT ends every session on the box. So the sentence names the pid AND its
@@ -863,7 +869,7 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
       return `cleanup stopped part-way: ${r.detail}. ccd found that what it would remove is not only this workspace’s own `
         + `(first at ${isoMs(r.at)}, ${r.attempts} ${r.attempts === 1 ? 'attempt' : 'attempts'}). The session was stopped and nothing `
         + 'further was deleted; what is left on disk stays as it is, and a retry finds the same thing until that other tree or row '
-        + `is moved. ${STANDING_ASKS_AGAIN} and keeps this entry until an attempt completes or the workspace is archived again.`;
+        + `is moved. ${STANDING_ASKS_AGAIN} and keeps this entry until an attempt completes, a verdict stops it for good, or the workspace is archived again.`;
     case 'kept':
       return `cleaned up, but ccd kept ${expireKeptParts(r).join(' and ')}. The worktree, the branch and the registry row are `
         + 'gone and its commits are in the attic; what was kept stays on disk, and the lane deletes nothing more of it. '
@@ -871,16 +877,29 @@ export function expiryReportSentence(r: ExpiryReport, expiresAt: number | null):
   }
 }
 
+/** The two reports whose sentence promises that the lane asks again (a stuck entry, and the persistent tier's `failing`
+ *  with `attempts`): the ones a halted box makes untrue. A final report says it is not asked again; the halted report
+ *  says the halt itself. */
+const promisesAnotherAsk = (r: ExpiryReport): boolean => r.kind === 'stuck' || (r.kind === 'failing' && r.attempts !== undefined);
+
 /** THE ATTENTION LIST, derived from the lane's memory alone, newest first. A row in memory with a report is listed;
- *  a held row past its instant is listed by the lane as a `held` report. */
+ *  a held row past its instant is listed by the lane as a `held` report. `halted` is the process-wide halt a
+ *  `flock-unavailable` answer sets (`watch.ts`'s `archivedExpiryBoxRefused`, review 381, F3): while it stands, a standing
+ *  row's sentence says so, because its own "asks again" is not true of a lane that composes nothing on that box. The
+ *  sentence only — no report kind, no wire word. */
 export function expiryAttention(
   entries: ReadonlyMap<string, ArchivedExpiryEntry>,
+  halted = false,
 ): ExpiryAttention[] {
   const out: ExpiryAttention[] = [];
   for (const [sessionId, e] of entries) {
     if (e.report === null) continue;
+    const base = expiryReportSentence(e.report, e.expiresAt);
+    const sentence = halted && promisesAnotherAsk(e.report)
+      ? `${base} The fleet box has since refused to serialise a cleanup (flock-unavailable). ${EXPIRE_HALT_WORDS}`
+      : base;
     // A stuck entry rides the wire as `failing` (wave 6): no new word, so an older PWA reads it as it reads any failure.
-    out.push({ sessionId, kind: e.report.kind === 'stuck' ? 'failing' : e.report.kind, sentence: expiryReportSentence(e.report, e.expiresAt),
+    out.push({ sessionId, kind: e.report.kind === 'stuck' ? 'failing' : e.report.kind, sentence,
       archivedAt: e.archivedAt, expiresAt: e.expiresAt, at: e.report.at });
   }
   return out.sort((a, b) => b.at - a.at || (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0));

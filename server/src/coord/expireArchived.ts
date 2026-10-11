@@ -8,7 +8,7 @@ import { CCD_ARGV, EXPIRE_CAP, capSupported, sweepDec, verbSupported } from '../
 import type { CoordStore } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
+  EXPIRE_ASKS_AGAIN_CADENCE, EXPIRE_HALT_WORDS, EXPIRE_LANE_LIVE_MARKER, EXPIRE_TOKEN_KIND, archivedExpiryStoreSkip, expireKeptParts, parseExpireAudit,
   parseExpireResult, reviewKeeps,
   type ArchivedExpiryOutcome, type ExpireAuditRead, type ExpiryStoreRead,
 } from '../archivedExpiry.js';
@@ -266,11 +266,11 @@ export function expireFeedBody(r: ExpireArchivedResult, standing = false): strin
       + 'and the lane audits it afresh.';
     case 'stuck': return `${who}: ccd stopped part-way (${r.detail}) — the session was stopped and nothing further was `
       + `deleted. It is listed at once, and asked again ${EXPIRE_ASKS_AGAIN_CADENCE}, `
-      + 'until an attempt completes or the workspace is archived again.';
+      + 'until an attempt completes, a verdict stops it for good, or the workspace is archived again.';
     // `flock-unavailable` halts the lane on that box until the server restarts (`watch.ts`): the row says so, whatever the
     // row's own attention entry says (a standing one stands through it; wave 6).
     case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.` + (r.word === 'flock-unavailable'
-      ? ' The lane composes no cleanup on that box, for any archived workspace, until the server restarts.' : '');
+      ? ` ${EXPIRE_HALT_WORDS}` : '');
     case 'composition': return `${who}: ccd rejected the call this server composed — ${r.detail}. It is not retried.`;
     case 'no-evidence': return `${who}: the fleet box's ccd does not say when this archive expires; nothing was composed.`;
   }

@@ -85,6 +85,14 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
   });
 });
 
+describe('§12 says the ledger\'s consequence of an abandoned programme\'s row (review 381, §12 observation on (f))', () => {
+  it('mail to the coordinator with no runId is refused while nothing else is active, and goes to ANOTHER programme\'s coordinator when exactly one other is', () => {
+    const spec = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    const b = spec.slice(spec.indexOf('## 12. Before arming'));
+    expect(b).toContain('The consequence: `toId:\'coordinator\'` mail that carries no `runId` is refused while nothing else is active, and goes to ANOTHER programme\'s coordinator when exactly one other programme is active; mail naming a `runId` still resolves.');
+  });
+});
+
 describe('the skill corpora', () => {
   it('the coordinator’s resume runbook says, in WORDS, what an armed lane does to a programme whose coordinator stays dead', () => {
     const r = flat('ccd/coordinator-skill/references/resume.md');

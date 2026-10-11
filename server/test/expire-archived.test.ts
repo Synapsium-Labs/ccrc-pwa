@@ -201,7 +201,7 @@ describe('the one executor', () => {
     // Whole-branch review, item 4: the row says the cadence in the standing sentences' own words, from one place.
     expect(ev[0]!.body, 'sooner after an answer that ends no attempt, never while held (whole-branch review, item 4)')
       .toContain('asked again 4 hours after each failed attempt — sooner after an answer that ends no attempt, never while the workspace is held, '
-        + 'until an attempt completes or the workspace is archived again.');
+        + 'until an attempt completes, a verdict stops it for good, or the workspace is archived again.');
   });
 
   it('a refusal at audit carries its word — in-use with the processes; a GONE word is gone', async () => {

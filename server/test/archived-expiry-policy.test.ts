@@ -672,6 +672,10 @@ describe('the lane’s memory of one row', () => {
       + '4 hours after each failed attempt — sooner after an answer that ends no attempt, never while the workspace is held — and '
       + 'keeps this entry until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again.');
     expect(expiryReportSentence(x.report!, null), 'it never suggests a destructive verb').not.toMatch(/ws-reap|ws-rm|ws-expire|delete|remove/);
+    // Review 381, F3: the tier's entry says the halt too while it stands (the same sentence as the stuck entry's).
+    expect(expiryAttention(new Map([[ID, x]]), true)[0]!.sentence).toBe(`${expiryReportSentence(x.report!, null)} The fleet box has since `
+      + 'refused to serialise a cleanup (flock-unavailable). The lane composes no cleanup on that box, for any archived workspace, '
+      + 'until the server restarts.');
     // Each later failure updates the entry and keeps the cadence; the first failure's instant stands.
     const later = archivedExpiryNextEntry(x, { kind: 'failed', resumable: true, detail: 'worktree-remove-failed: still busy' }, x.nextAskAt, PASS)!;
     expect(later.nextAskAt, 'and again four hours on').toBe(x.nextAskAt + EXPIRE_PERSISTENT_RETRY_MS);
@@ -888,12 +892,33 @@ describe('the lane’s memory of one row', () => {
     const sentence = expiryReportSentence(x.report!, null);
     expect(sentence).toContain(`cleanup stopped part-way: ${stuck.detail}.`);
     expect(sentence).toContain('The session was stopped and nothing further was deleted');
+    // Review 381, F4: the stuck entry's end rule is the whole of it — a verdict that stops the row for good ends it too.
+    expect(sentence).toContain('and keeps this entry until an attempt completes, a verdict stops it for good, or the workspace is archived again.');
+    expect(sentence).not.toContain('until an attempt completes or the workspace');
     expect(sentence, 'it never suggests a destructive verb').not.toMatch(/ws-reap|ws-rm|ws-expire|delete it|remove it/);
     expect(expiryAttention(new Map([[ID, x]])).map((a) => [a.kind, a.at]), 'on the wire: a failing entry, at once').toEqual([['failing', NOW]]);
+    // Review 381, F3: while the box's halt stands, a STANDING row's sentence says that nothing is composed on that box until
+    // the server restarts — its own "asks again" is not true then. No new kind, no new word: the sentence only.
+    const halted = expiryAttention(new Map([[ID, x]]), true);
+    expect(halted.map((a) => [a.kind, a.at]), 'on the wire: the same failing entry').toEqual([['failing', NOW]]);
+    expect(halted[0]!.sentence).toBe(`${sentence} The fleet box has since refused to serialise a cleanup (flock-unavailable). `
+      + 'The lane composes no cleanup on that box, for any archived workspace, until the server restarts.');
+    expect(expiryAttention(new Map([[ID, x]]), false)[0]!.sentence, 'no halt, no words').toBe(sentence);
     const again = archivedExpiryNextEntry(x, stuck, x.nextAskAt, PASS)!;
     expect(again.report, 'a later stuck answer keeps the first instant and counts the attempt')
       .toEqual({ kind: 'stuck', at: NOW, detail: stuck.detail, attempts: 2 });
     expect(again.nextAskAt).toBe(x.nextAskAt + EXPIRE_PERSISTENT_RETRY_MS);
+  });
+
+  it('the halt is said by a STANDING row only: a row that already says it, or that stands for nothing, is read as it was (review 381, F3)', () => {
+    const t = NOW;
+    const flock = { kind: 'box', word: 'flock-unavailable', detail: 'flock (util-linux) is unavailable' } as const;
+    const halted = archivedExpiryNextEntry(e(), flock, t, PASS)!;
+    expect(expiryAttention(new Map([[ID, halted]]), true)[0]!.sentence, 'the halted report says it itself, once')
+      .toBe(expiryAttention(new Map([[ID, halted]]), false)[0]!.sentence);
+    const shadow = archivedExpiryNextEntry(e(), { kind: 'would-expire', sensitive: 0 }, t, PASS)!;
+    expect(expiryAttention(new Map([[ID, shadow]]), true)[0]!.sentence, 'a row that stands for nothing is read as it was')
+      .toBe(expiryAttention(new Map([[ID, shadow]]), false)[0]!.sentence);
   });
 
   it('a STUCK entry outranks a failing one and stands until an attempt completes or the archive changes — a terminal verdict still outranks it (wave 6, ruling B)', () => {

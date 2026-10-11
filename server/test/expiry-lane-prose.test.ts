@@ -38,9 +38,11 @@ describe('README: what happens to an archived workspace now', () => {
   it('says a stuck cleanup is listed at once, a cleanup that never began is audited afresh and counted, and a box with no flock halts the lane (wave 6)', () => {
     const at = readme.indexOf('**Archived workspaces are cleaned up after seven days**');
     const para = readme.slice(at, at + 5200);
-    expect(para).toContain('One that met `containment-refuted` is listed at once on that cadence;');
+    // Review 381, F5 (ruling (m)): the stuck entry has an end rule of its own, and an answer that ccd stopped before an attempt began is not it.
+    expect(para).toContain('One that met `containment-refuted` is listed at once on that cadence, and ccd’s stopping before an attempt began does not end it (an attempt completing, a verdict stopping it, or a fresh archive does);');
     expect(para).toContain('one ccd stopped before it began is audited afresh, and listed after an hour if that recurs;');
     expect(para).toContain('a box with no `flock` gets no cleanup at all until the server restarts.');
+    expect(para).not.toContain('a restart does not end it');
     expect(para).toContain('The spec\'s §12 lists what to know before arming this lane or the next.');
     expect(para).not.toContain('asked again every four hours');
   });
@@ -154,21 +156,60 @@ describe('the specs', () => {
       '**Its arming blockers are closed.**', '`_ws_expire_cwd_users` resolves its parent through `_ws_dir_physical`',
       '**A branch already gone now expires.**', 'its ignored and secret-shaped files go with the tree',
       '**A branch deleted or made inside the lock stops the act**', 'never `no-worktree-record`',
-      '**`flock-unavailable` halts the lane**', '**The first armed pass faces the backlog**',
+      '**`flock-unavailable` halts the lane\'s act**', '**The first armed pass faces the backlog**',
       '**The recommended order.**', 'Arm the expiry lane first, once this release is deployed and its shadow list has been read',
       'after its own shadow list has been read and any breaker trip worked through',
       'the feed shows the dead-coordinator lane\'s shadow rows', 'and a fresh one\'s is audited afresh, counted',
-      '**One residual of question (k).**', 'leaves `crumb` unsaid, as on the reclaim side, so that `probe-unmeasured` is read by its word',
+      '**One residual of question (k), in a narrow window.**', 'leaves `crumb` unsaid, as on the reclaim side',
       // Whole-branch review, item 3: the restart sentence and the residual's own restart clause.
       'So a restart can delay an act and can ask again a row the lane had stopped asking',
       'for the expiry lane a fresh audit whose token ccd proves again inside its lock',
       'for the dead-coordinator lane the claimant measured again before and after the fleet act; neither acts without it',
       'listed at once and not asked again for that archive until the server restarts',
-      '**One archived tree holds a leaked test tmux server**', 'unless a standing entry stands there',
+      '**One archived tree holds a leaked test tmux server**',
       '**Questions still open**', '(b) The archive-confirm copy', '(i) A kept-leaf entry lives until a server restart',
       '(j) `ws-expire` refuses a branch made inside the lock as well as one deleted', 'Wave 2\'s three:']) expect(b).toContain(item);
+    expect(b, 'the unreadable-breadcrumb residual is not the whole of the shape any more (review 381, F9)')
+      .not.toContain('A breadcrumb that stands but cannot be read (a `$REG/<id>.reaping` that is not a readable file) leaves `crumb` unsaid, as on the reclaim side, so that');
     expect(b.slice(0, b.indexOf('**The expiry lane (`$REG/expire-lane-live`).**')),
       'a restart also asks again what the lane had stopped asking (whole-branch review, item 3)').not.toContain('never cause one');
     expect(b, 'never a destructive verb as advice').not.toMatch(/run `ccd ws-(reap|expire|reclaim|rm)/);
+  });
+});
+
+// Review 381, fix round 1 (F3, F4, F6, F9 and the §12 observations): the words that were more than the code does.
+describe('the spec says what the lane does, no more and no less (review 381, F3, F6, F9, §12 observations)', () => {
+  const spec = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+  const s12 = spec.slice(spec.indexOf('## 12. Before arming'));
+  it('§5.3: the standing-entry bullet names every failed document ccd marks crumb: false (F6), and the halt reaches every standing entry (F3)', () => {
+    expect(spec).toContain('finds that none had begun (any failed document ccd marks `crumb: false`, or an older ccd\'s `state-changed`) or stops for good');
+    expect(spec).not.toContain('(a `failed` `state-changed`, which ccd prints only before the breadcrumb)');
+    const w6 = spec.slice(spec.indexOf('- **As wave 6 closes the lane**'), spec.indexOf('### 5.4 Stage 4'));
+    expect(w6).toContain('a standing entry (stuck or tier) keeps its place and says the halt in its own sentence while it stands, with no new kind and no new word');
+    expect(w6).not.toContain('unless a standing entry stands there');
+  });
+  it('§5.3: the unreadable breadcrumb is final only between the act\'s audit and the in-lock fork; already unreadable at the audit, it is backed off (F9)', () => {
+    const w6 = spec.slice(spec.indexOf('- **As wave 6 closes the lane**'), spec.indexOf('### 5.4 Stage 4'));
+    expect(w6).toContain('a `probe-unmeasured` over a breadcrumb that turns unreadable between the act\'s audit and the fork\'s in-lock read');
+    expect(w6).toContain('A breadcrumb already unreadable at the lane\'s audit never gets that far: the audit answers `unmeasured` (exit 1), read as `audit-failed`, backed off and listed after the hour, never final');
+    expect(w6).not.toContain('over a breadcrumb that cannot be read: nothing is deleted');
+  });
+  it('§12: the residual says the same window (F9), and the questions list (p) as narrowed', () => {
+    expect(s12).toContain('If it is already unreadable at the lane\'s audit, `ws-audit --expire` answers `unmeasured` (exit 1), read as `audit-failed`: backed off and listed after the hour, never final');
+    expect(s12).toContain('Only a breadcrumb that turns unreadable between the act\'s audit and the in-lock fork leaves a `probe-unmeasured` read by its word');
+    expect(s12).toContain('(p) Should a breadcrumb that turns unreadable between the act\'s audit and the in-lock fork');
+    expect(s12.slice(s12.indexOf('**Questions still open**'))).toContain('(p) Should a breadcrumb');
+  });
+  it('§12: a stuck entry stands through a `restart` answer (m), the halt is one process-wide field gating only the act, and the per-pass words are exact (F3, observations)', () => {
+    expect(s12).toContain('**A stuck entry stands through a `restart` answer** (ruling (m)).');
+    expect(s12).toContain('it keeps its entry, its first instant and the tier\'s cadence');
+    expect(s12).toContain('a server restart drops it, as it drops every entry');
+    expect(s12).toContain('**`flock-unavailable` halts the lane\'s act** on that box until the server restarts. The halt is one process-wide field gating only the act: learn audits go on.');
+    expect(s12).toContain('a standing entry (stuck or tier) keeps its place and says the halt in its own sentence while it stands');
+    expect(s12).toContain('is refused `in-use` each time the row is asked (the lane makes at most one act per pass, fleet-wide)');
+    expect(s12).not.toContain('refused every pass');
+    expect(s12).not.toContain('refuses that row `in-use` on every pass');
+    expect(s12).toContain('a box answer such as `lock-unopenable` at once');
+    expect(s12).not.toContain('halts the lane** on that box');
   });
 });
