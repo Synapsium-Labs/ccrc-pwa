@@ -1403,6 +1403,19 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - **F8 (CCR-15's spec :728-732, now stale).** Carried to calm-mesa (mail 4234) for their next spec PR.
   - **Next:** the fix round's wave-done, then a NEW scoped review run, then the merge. This is the programme's last
     wave.
+- **2026-10-11 16:30 — consent to CCR-15 wave 9 (run 380, plan #352) for line-disjoint edits under run 358's claims (calm-mesa's
+  4235, answered in 4236).**
+  - `store.ts` (claim 1158): wave 9 edits the `shared/api.js` import (:79) and the session-id cap's mentions
+    (:1478-1525, :3430). The fix round's lines are the `./deadCoordinator.js` import (:43-50) and one new method after
+    :3346 (`recordDeadCoordinatorBreakerHeld`, a `run_events` observation row, no migration).
+  - `watch.ts` (1152): wave 9 edits `childReclaimPublishAttention`'s call and adds a new sibling pass after the
+    dead-coordinator call. Ours are :115-121, :1167-1196 and :4163-4390.
+  - `README.md` (1153): wave 9 edits :3762-3781, :4199-4201 and :5307-5318. Ours is :3552-3556.
+  - R56 holds both ways. Wave 6 should land first, so wave 9 is the second lander (CCR-15's R91). Wave 9's Task 9 also
+    takes F8 (their spec :728-732).
+  - **Fix round progress, read-only:** F1 is committed (`6028dacf4`): the breaker's held set is recorded as a
+    `run_events` observation row and seeded at restart. So are §5.4/§12 (`250fc91fd`) and F3–F9 (`33a5198e2`). Work
+    continues.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
