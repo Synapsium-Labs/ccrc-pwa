@@ -219,7 +219,7 @@ const FEED_TITLE: Readonly<Record<ArchivedExpiryOutcome['kind'], string>> = {
   gone: 'archived workspace gone',
   failed: 'archived workspace cleanup failed',
   'audit-failed': 'archived workspace cleanup failed',
-  restart: 'archived workspace changed under its cleanup',
+  restart: 'archived workspace cleanup stopped before it began',
   box: 'archived workspace cleanup failed',
   composition: 'archived workspace cleanup failed',
   'no-evidence': 'archived workspace cleanup has no evidence',
@@ -253,8 +253,10 @@ export function expireFeedBody(r: ExpireArchivedResult): string {
       : 'It is not retried: the box said it will not resume, so the lane stops asking for this archive.'}`;
     case 'audit-failed': return `${who}: its expiry's own audit could not be read (${r.detail}), so no verb ran. `
       + 'It is retried, backing off in between.';
-    case 'restart': return `${who}: the workspace changed under the expiry's consent — its branch was deleted or made `
-      + `inside the lock (${r.detail}) — so nothing was deleted, and the lane audits it afresh.`;
+    // ccd said it stopped before this attempt's breadcrumb (`crumb: false`, or an older ccd's `state-changed`): never a
+    // sentence about one cause, since a fresh pin's failure says the same (wave 6).
+    case 'restart': return `${who}: ccd stopped before this attempt started anything (${r.detail}) — nothing was deleted, `
+      + 'and the lane audits it afresh.';
     case 'box': return `${who}: the fleet box refused before it started (${r.word}) — ${r.detail}.`;
     case 'composition': return `${who}: ccd rejected the call this server composed — ${r.detail}. It is not retried.`;
     case 'no-evidence': return `${who}: the fleet box's ccd does not say when this archive expires; nothing was composed.`;

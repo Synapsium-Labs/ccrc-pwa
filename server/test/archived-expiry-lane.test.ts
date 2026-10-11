@@ -156,8 +156,8 @@ describe('a failed state-changed is audited afresh (wave 5)', () => {
     expect(f.entry('demo-a'), 'back to learning').toMatchObject({ expiresAt: null, eligibleSince: null, report: null });
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.expiryAttention ?? [], 'nothing was deleted: nothing is listed').toEqual([]);
-    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace changed under its cleanup')?.body)
-      .toContain('its branch was deleted or made inside the lock (state-changed: ws/demo-a read present');
+    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace cleanup stopped before it began')?.body)
+      .toContain('ccd stopped before this attempt started anything (state-changed: ws/demo-a read present');
     const audits = f.verbsFor('ws-audit').length;
     f.next(); await f.pass();
     expect(f.verbsFor('ws-audit'), 'the next pass learns the instant afresh').toHaveLength(audits + 1);
@@ -167,6 +167,36 @@ describe('a failed state-changed is audited afresh (wave 5)', () => {
     expect(f.verbsFor('ws-expire'), 'seen twice: composed again, with its own fresh audit’s token').toEqual(['demo-a', 'demo-a']);
     expect(f.verbsFor('ws-audit'), 'the act audited first').toHaveLength(audits + 2);
     expect(f.entry('demo-a'), 'and finished').toBeUndefined();
+  });
+});
+
+describe('`crumb` decides a failed document (wave 6, question (k))', () => {
+  it('a RESUMED expiry’s probe-unmeasured (crumb true) is retried on the backoff and listed past the hour — never stopped for good', async () => {
+    const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'probe-unmeasured',
+      detail: 'whether cc-demo-a is up could not be asked — tmux answered: nothing', crumb: true }), stderr: '' }) });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.entry('demo-a')?.report, 'retried, so not listed at once').toBeNull();
+    for (let k = 0; k < 70; k += 1) { f.next(); await f.pass(); }   // well past the one-hour ceiling
+    expect(f.verbsFor('ws-expire').length, 'asked again, backing off').toBeGreaterThan(1);
+    expect(f.entry('demo-a')?.report).toMatchObject({ kind: 'failing' });
+    expect(f.entry('demo-a')?.report, 'still asked: never a final report').not.toHaveProperty('final');
+  });
+
+  it('a FRESH expiry’s pin-failed (crumb false) is audited afresh — nothing was deleted, nothing is listed', async () => {
+    let n = 0;
+    const f = await fixture({ expire: (id) => (n += 1) === 1
+      ? { code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'the disk is full', crumb: false }), stderr: '' }
+      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.entry('demo-a'), 'back to learning').toMatchObject({ expiresAt: null, eligibleSince: null, report: null });
+    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace cleanup stopped before it began')?.body)
+      .toContain('ccd stopped before this attempt started anything (pin-failed: the disk is full)');
   });
 });
 

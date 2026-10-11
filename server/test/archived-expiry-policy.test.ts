@@ -192,6 +192,26 @@ describe('the verb’s answer — box words told apart from composition errors (
     expect([...EXPIRE_PRE_CRUMB_FAILED].sort()).toEqual(['probe-unmeasured', 'state-changed']);
   });
 
+  it('reads the WORD, then `crumb`: false audits afresh, true resumes — an absent or non-boolean crumb is main’s word rule exactly (wave 6, question (k))', () => {
+    const doc = (failed: string, extra: Record<string, unknown> = {}): string => JSON.stringify({ failed, detail: 'x', ...extra });
+    // `false`: printed before this attempt's breadcrumb, so nothing it started stands — the lane audits afresh.
+    for (const w of ['probe-unmeasured', 'pin-failed', 'state-changed', 'tombstone-unwritable']) {
+      expect(parseExpireResult(ID, doc(w, { crumb: false }), ''), w).toEqual({ kind: 'restart', detail: `${w}: x` });
+    }
+    // `true`: printed past a breadcrumb — the resumed arm's probe-unmeasured among them — so the next attempt resumes it.
+    for (const w of ['probe-unmeasured', 'pin-failed', 'worktree-remove-failed']) {
+      expect(parseExpireResult(ID, doc(w, { crumb: true }), ''), w).toEqual({ kind: 'failed', resumable: true, detail: `${w}: x` });
+    }
+    // Absent (an older ccd) or not a boolean: the word rule `main` reads, exactly — agent-first skew changes nothing.
+    for (const extra of [{}, { crumb: 'true' }, { crumb: 'false' }, { crumb: 1 }, { crumb: 0 }, { crumb: null }]) {
+      const why = JSON.stringify(extra);
+      expect(parseExpireResult(ID, doc('state-changed', extra), ''), why).toEqual({ kind: 'restart', detail: 'state-changed: x' });
+      expect(parseExpireResult(ID, doc('probe-unmeasured', extra), ''), why)
+        .toEqual({ kind: 'failed', resumable: false, detail: 'probe-unmeasured: x' });
+      expect(parseExpireResult(ID, doc('pin-failed', extra), ''), why).toEqual({ kind: 'failed', resumable: true, detail: 'pin-failed: x' });
+    }
+  });
+
   it('THE CENSUS: every site of either word in ccd/ccd is placed, and the expiry’s failed state-changed is on its FRESH arm, before the breadcrumb (wave 5)', () => {
     // A STOPPING LINE, not a spelling. EVERY non-comment occurrence of either word anywhere in ccd/ccd is placed: by the
     // function that holds it, and by what the line does with it — `failed` (`_ws_reclaim_fail "<id>" "<lctx>" <word>`

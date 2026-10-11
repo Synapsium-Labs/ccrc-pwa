@@ -248,16 +248,15 @@ export const expireKeptAny = (k: ExpireKept): boolean =>
   (k.clips !== null && k.clips !== 'unreported') || (k.tmpRoot !== null && k.tmpRoot !== 'unreported');
 
 /** The ws-expire `{"failed":…}` words that ccd prints before THIS attempt's tombstone and breadcrumb — so this attempt
- *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Each is
- *  READ its own way (`parseExpireResult`):
+ *  started nothing, and neither is retried from where it stopped (the reclaim side's twin is CCR-15's 4457). Since
+ *  wave 6 this is the FALLBACK: a document that carries `crumb` is read by it (`parseExpireResult`), and these words
+ *  decide only a document without it — an older ccd's. Each is READ its own way there:
  *   - `probe-unmeasured`: `_ws_expire_locked`'s unmeasured verdict, printed at its verdict point, before any intent —
  *     on EVERY arm. Read FINAL: reported at once and not asked again for this archive (review 313's parked item 4).
  *     On a fresh expiry nothing stands. On a RESUMED one an earlier attempt's breadcrumb stands and its tree may be
  *     part-deleted (`_ws_expire_resume_eval`'s unmeasured exits: a tombstone it cannot read, or a tmux probe that did
- *     not answer), and the word reads final there too. That is main's reading, kept in this wave: the fix is this
- *     programme's wave 6, once CCR-15 wave 7 is on main — `_ws_expire_locked` sets wave 7's `crumb` on its resumed
- *     arm, and a failed document with `crumb: true` reads resumable — and until then it is an ARMING BLOCKER for the
- *     expiry lane;
+ *     not answer), and an older ccd's word reads final there too. A current ccd says `crumb` on both arms (wave 6,
+ *     question (k)): `false` on the fresh one, read as a fresh audit, and `true` on the resumed one, read resumable;
  *   - `state-changed`: the consent binding — the in-lock recompute and the pin read the branch differently — printed
  *     on the FRESH arm only, after the pin (which only keeps) and before the tombstone and the breadcrumb (workspace
  *     lifecycle wave 5). Read `restart`: the reclaim side's "not resumable", which means START OVER, never final —
@@ -267,7 +266,7 @@ export const expireKeptAny = (k: ExpireKept): boolean =>
  *  MEASURED, not assumed: `archived-expiry-policy.test.ts` places every occurrence of either word in ccd/ccd, by its
  *  function and its shape, and holds the expiry's `failed` `state-changed` on its fresh arm, before the breadcrumb.
  *  `pin-failed` and `tombstone-unwritable` are NOT here: the shared tail prints each after the breadcrumb (eight and
- *  five producers), so the word alone cannot say nothing started — they stay resumable until that `crumb` field. */
+ *  five producers), so the word alone cannot say nothing started — without `crumb` they stay resumable. */
 export const EXPIRE_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const;
 
 /** Is this `{"failed":…}` word one printed before this attempt's tombstone and breadcrumb (`EXPIRE_PRE_CRUMB_FAILED`)? */
@@ -283,8 +282,9 @@ export type ExpireVerbRead =
   | { readonly kind: 'refused'; readonly token: ExpireToken; readonly detail: string }
   | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string }
   /** A `failed` document the lane must START OVER from (wave 5, the coordinator's ruling on question (h)): ccd printed
-   *  it before anything started, and what it consented to has changed, so neither a retry of this attempt nor a final
-   *  report is the truth — a fresh audit of what stands is (`state-changed`, `EXPIRE_PRE_CRUMB_FAILED`). */
+   *  it before this attempt's breadcrumb, so nothing it started stands, and neither a retry of this attempt nor a final
+   *  report is the truth — a fresh audit of what stands is. Any failed document with `crumb: false` (wave 6), or, from
+   *  an older ccd that prints no `crumb`, a `state-changed` (`EXPIRE_PRE_CRUMB_FAILED`). */
   | { readonly kind: 'restart'; readonly detail: string }
   | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
   | { readonly kind: 'composition'; readonly detail: string };
@@ -311,6 +311,12 @@ export function parseExpireResult(sessionId: string, stdout: string, stderr: str
     if (typeof v.failed === 'string') {
       const detail = typeof v.detail === 'string' ? v.detail : '';
       const said = detail === '' ? v.failed : `${v.failed}: ${detail}`;
+      // `crumb` (CCR-15 spec §5.6; its R76 order, workspace lifecycle wave 6, question (k)): `false` — printed before this
+      // attempt's breadcrumb, so nothing it started stands — audits afresh, whatever the word; `true` — printed past a
+      // breadcrumb, the resumed arm's `probe-unmeasured` among them — is resumed. Only the two booleans are read: an
+      // absent key (an older ccd) or any other value falls back to the word rule below, exactly as `main` reads it.
+      if (v.crumb === false) return { kind: 'restart', detail: said };
+      if (v.crumb === true) return { kind: 'failed', resumable: true, detail: said };
       if (!isExpirePreCrumbFailed(v.failed)) return { kind: 'failed', resumable: true, detail: said };
       // Printed before this attempt's tombstone and breadcrumb: `state-changed` starts over, `probe-unmeasured` is final.
       return v.failed === 'state-changed' ? { kind: 'restart', detail: said } : { kind: 'failed', resumable: false, detail: said };
@@ -584,8 +590,8 @@ export type ArchivedExpiryOutcome =
    *  backoff and reported past its ceiling, as before wave 5, and NEVER a `failed` — only the verb's failure can have
    *  stopped part-way, so only it may move a row onto the persistent tier. Two conditions, two values at this seam. */
   | { readonly kind: 'audit-failed'; readonly detail: string }
-  /** ccd stopped before anything started because what the expiry consented to changed (`ExpireVerbRead.restart`):
-   *  the lane forgets what it learned of the row and audits it afresh (wave 5). */
+  /** ccd stopped before this attempt started anything (`ExpireVerbRead.restart`): the lane forgets what it learned of
+   *  the row and audits it afresh (wave 5; since wave 6 any failed document with `crumb: false`). */
   | { readonly kind: 'restart'; readonly detail: string }
   | { readonly kind: 'box'; readonly word: ExpireBoxWord; readonly detail: string }
   | { readonly kind: 'composition'; readonly detail: string }
