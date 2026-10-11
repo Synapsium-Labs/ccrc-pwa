@@ -47,6 +47,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 15:59 — quiet-river's FYI (4234): one spec sentence of ours goes stale when workspace-lifecycle wave 6 (#351) lands.**
+  - **The sentence.** Spec `:728-732` says `ws-expire`'s pre-breadcrumb documents and its resumed `probe-unmeasured`
+    "carry no key", because `_ws_expire_locked` is left alone. Once #351 merges, `_ws_expire_locked` sets `crumb`: true on
+    its resumed arm, false before its own breadcrumb, and no key over a breadcrumb that cannot be read. Review 381 (F8)
+    found it. quiet-river left it to us, since the document is ours.
+  - **Ruled.** Wave 9's Task 9 corrects it by content if #351 is on main when Task 9 runs, and otherwise names it in the
+    wave-done for the second lander. It is folded into the plan's fix.
+  - **Run 358** is back at `working`, in fix round 1 for review 381. Neither its round nor review 381's other findings
+    touch our files.
+
 - **2026-10-11 15:22 — wave 9's plan is ASSEMBLED and reconciled (`c8c719805`); its attack runs.**
   - **The plan** is `docs/superpowers/plans/2026-10-11-child-reclamation-wave9-collector-lane.md`, about 11,100 lines:
     the frame, rulings H1 to H13, Review Focus, File Structure, Tasks 0 to 10, the lenses, and the 32 numbers listed
